@@ -1,0 +1,32 @@
+{
+  "name": "@catamorphic/server",
+  "version": "0.0.1",
+  "private": true,
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "import": "./dist/index.js",
+      "types": "./dist/index.d.ts"
+    }
+  },
+  "scripts": {
+    "build": "tsup",
+    "dev": "bun --watch src/server.ts",
+    "test": "vitest run --passWithNoTests",
+    "typecheck": "tsgo --project ./tsconfig.json",
+    "generate-spec": "bun run scripts/generate-spec.ts"
+  },
+  "dependencies": {
+    "@catamorphic/db": "workspace:*",
+    "@catamorphic/parser": "workspace:*",
+    "@fastify/cors": "^11.2.0",
+    "@fastify/swagger": "^9.7.0",
+    "@fastify/swagger-ui": "^5.2.5",
+    "fastify": "^5.8.4",
+    "fastify-type-provider-zod": "^6.1.0",
+    "kysely": "^0.28.15",
+    "zod": "^4.3.6"
+  }
+}

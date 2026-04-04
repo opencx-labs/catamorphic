@@ -1,0 +1,668 @@
+@import "@xyflow/react/dist/style.css";
+
+.catamorphic-editor {
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  height: 100%;
+  background: #0a0a0a;
+  color: #fafafa;
+  font-family: system-ui, -apple-system, sans-serif;
+}
+
+/* Toolbar */
+.catamorphic-toolbar {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 8px 16px;
+  border-bottom: 1px solid #262626;
+  background: #0f0f0f;
+}
+
+.catamorphic-toolbar-left,
+.catamorphic-toolbar-right {
+  display: flex;
+  gap: 8px;
+}
+
+.catamorphic-toolbar-btn {
+  padding: 6px 12px;
+  border-radius: 6px;
+  border: 1px solid #333;
+  background: #1a1a1a;
+  color: #a3a3a3;
+  font-size: 13px;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+
+.catamorphic-toolbar-btn:hover {
+  background: #262626;
+  color: #fafafa;
+}
+
+.catamorphic-toolbar-btn-active {
+  background: #1e293b;
+  border-color: #334155;
+  color: #94a3b8;
+}
+
+.catamorphic-toolbar-run {
+  background: #1d4ed8;
+  border-color: #2563eb;
+  color: #fff;
+}
+
+.catamorphic-toolbar-run:hover {
+  background: #2563eb;
+}
+
+/* Layout: Canvas left, Detail panel right */
+.catamorphic-editor-body {
+  display: flex;
+  flex: 1;
+  overflow: hidden;
+}
+
+.catamorphic-editor-canvas {
+  flex: 1;
+  min-width: 0;
+}
+
+/* Detail Panel (right side) */
+.catamorphic-detail-panel {
+  width: 420px;
+  min-width: 340px;
+  border-left: 1px solid #262626;
+  display: flex;
+  flex-direction: column;
+  background: #0f0f0f;
+}
+
+.catamorphic-detail-panel-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  border-bottom: 1px solid #262626;
+  padding: 0 8px 0 0;
+}
+
+.catamorphic-detail-tabs {
+  display: flex;
+}
+
+.catamorphic-detail-tab {
+  padding: 10px 20px;
+  font-size: 13px;
+  color: #737373;
+  background: none;
+  border: none;
+  border-bottom: 2px solid transparent;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+
+.catamorphic-detail-tab:hover {
+  color: #a3a3a3;
+}
+
+.catamorphic-detail-tab-active {
+  color: #fafafa;
+  border-bottom-color: #3b82f6;
+}
+
+.catamorphic-detail-close {
+  width: 28px;
+  height: 28px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 6px;
+  border: none;
+  background: none;
+  color: #525252;
+  cursor: pointer;
+  font-size: 14px;
+  transition: all 0.15s;
+}
+
+.catamorphic-detail-close:hover {
+  background: #262626;
+  color: #a3a3a3;
+}
+
+.catamorphic-detail-panel-body {
+  flex: 1;
+  overflow-y: auto;
+}
+
+.catamorphic-detail-content {
+  padding: 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.catamorphic-detail-header-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.catamorphic-detail-type-tag {
+  font-size: 11px;
+  font-weight: 600;
+  padding: 3px 10px;
+  border-radius: 100px;
+  border: 1px solid;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.catamorphic-detail-icon {
+  font-size: 14px;
+  color: #a3a3a3;
+}
+
+.catamorphic-detail-title {
+  font-size: 18px;
+  font-weight: 600;
+  margin: 0;
+  color: #fafafa;
+}
+
+.catamorphic-detail-description {
+  font-size: 14px;
+  color: #a3a3a3;
+  line-height: 1.5;
+  margin: 0;
+}
+
+.catamorphic-detail-section {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.catamorphic-detail-section-label {
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: #525252;
+}
+
+.catamorphic-detail-code-inline {
+  font-family: "Fira Code", "SF Mono", "JetBrains Mono", monospace;
+  font-size: 13px;
+  color: #e5e5e5;
+  background: #1a1a1a;
+  padding: 6px 10px;
+  border-radius: 6px;
+  border: 1px solid #262626;
+  display: block;
+  word-break: break-all;
+}
+
+.catamorphic-detail-source-range {
+  font-size: 13px;
+  color: #737373;
+  font-family: "Fira Code", "SF Mono", "JetBrains Mono", monospace;
+}
+
+.catamorphic-detail-params {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.catamorphic-detail-param {
+  padding: 10px 12px;
+  background: #1a1a1a;
+  border: 1px solid #262626;
+  border-radius: 8px;
+}
+
+.catamorphic-detail-param-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.catamorphic-detail-param-name {
+  font-family: "Fira Code", "SF Mono", "JetBrains Mono", monospace;
+  font-size: 13px;
+  color: #e5e5e5;
+  font-weight: 500;
+}
+
+.catamorphic-detail-param-type {
+  font-size: 11px;
+  padding: 2px 6px;
+  background: #262626;
+  border-radius: 4px;
+  color: #3b82f6;
+  font-family: "Fira Code", "SF Mono", "JetBrains Mono", monospace;
+}
+
+.catamorphic-detail-param-optional {
+  font-size: 10px;
+  color: #525252;
+  font-style: italic;
+}
+
+.catamorphic-detail-param-desc {
+  font-size: 12px;
+  color: #737373;
+  margin: 4px 0 0;
+  line-height: 1.4;
+}
+
+.catamorphic-detail-param-default {
+  font-size: 11px;
+  color: #a3a3a3;
+  margin: 3px 0 0;
+  font-style: italic;
+}
+
+.catamorphic-detail-args {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.catamorphic-detail-arg {
+  padding: 10px 12px;
+  background: #1a1a1a;
+  border: 1px solid #262626;
+  border-radius: 8px;
+}
+
+.catamorphic-detail-arg-header {
+  margin-bottom: 6px;
+}
+
+.catamorphic-detail-arg-name {
+  font-size: 13px;
+  color: #e5e5e5;
+  font-weight: 500;
+}
+
+.catamorphic-detail-arg-value {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.catamorphic-detail-arg-value code {
+  font-family: "Fira Code", "SF Mono", "JetBrains Mono", monospace;
+  font-size: 12px;
+  color: #a3a3a3;
+  background: #0f0f0f;
+  padding: 3px 8px;
+  border-radius: 4px;
+  border: 1px solid #1a1a1a;
+}
+
+.catamorphic-detail-arg-source {
+  font-size: 11px;
+  color: #3b82f6;
+  white-space: nowrap;
+}
+
+.catamorphic-detail-pretty-condition {
+  font-size: 14px;
+  color: #c084fc;
+  line-height: 1.5;
+  margin: 0;
+}
+
+.catamorphic-detail-branch-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.catamorphic-detail-branch-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  background: #1a1a1a;
+  border: 1px solid #262626;
+  border-radius: 8px;
+}
+
+.catamorphic-detail-branch-type {
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  padding: 2px 8px;
+  border-radius: 4px;
+  background: rgba(168, 85, 247, 0.15);
+  color: #c084fc;
+  flex-shrink: 0;
+}
+
+.catamorphic-detail-branch-cond {
+  font-size: 12px;
+  color: #a3a3a3;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.catamorphic-detail-code-panel {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+}
+
+/* Legacy code editor (textarea fallback) */
+.catamorphic-code-textarea {
+  flex: 1;
+  padding: 16px;
+  font-family: "Fira Code", "SF Mono", "JetBrains Mono", monospace;
+  font-size: 13px;
+  line-height: 1.6;
+  background: #0a0a0a;
+  color: #e5e5e5;
+  border: none;
+  outline: none;
+  resize: none;
+  tab-size: 2;
+  width: 100%;
+  height: 100%;
+}
+
+/* Node styles */
+.catamorphic-node {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 12px 16px;
+  border-radius: 10px;
+  border: 1.5px solid #333;
+  background: #171717;
+  min-width: 180px;
+  max-width: 280px;
+  box-shadow: 0 2px 12px rgba(0, 0, 0, 0.4);
+  transition:
+    border-color 0.15s,
+    box-shadow 0.15s;
+  cursor: pointer;
+}
+
+.catamorphic-node:hover {
+  border-color: #525252;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.5);
+}
+
+.catamorphic-node-icon {
+  font-size: 18px;
+  flex-shrink: 0;
+}
+
+.catamorphic-node-content {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  overflow: hidden;
+}
+
+.catamorphic-node-label {
+  font-size: 13px;
+  font-weight: 500;
+  color: #fafafa;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.catamorphic-node-description {
+  font-size: 11px;
+  color: #737373;
+}
+
+.catamorphic-node-subtitle {
+  font-size: 11px;
+  color: #525252;
+  font-family: monospace;
+}
+
+.catamorphic-node-params {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-top: 4px;
+}
+
+.catamorphic-param-badge {
+  font-size: 10px;
+  padding: 2px 6px;
+  background: #262626;
+  border-radius: 4px;
+  color: #a3a3a3;
+}
+
+.catamorphic-trigger-node {
+  border-color: #ca8a04;
+  background: linear-gradient(135deg, #1c1a0f, #171717);
+}
+
+.catamorphic-step-node {
+  border-color: #2563eb;
+  background: linear-gradient(135deg, #0f172a, #171717);
+}
+
+/* Branch container (if/else branch) */
+.catamorphic-branch-node {
+  border: 1.5px dashed rgba(168, 85, 247, 0.3);
+  border-radius: 12px;
+  background: rgba(168, 85, 247, 0.03);
+  position: relative;
+  box-sizing: border-box;
+}
+
+.catamorphic-branch-header {
+  position: absolute;
+  top: 8px;
+  right: 10px;
+  left: 10px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  pointer-events: auto;
+  z-index: 1;
+}
+
+.catamorphic-branch-badge {
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  padding: 2px 8px;
+  border-radius: 4px;
+  background: rgba(168, 85, 247, 0.15);
+  color: #c084fc;
+  flex-shrink: 0;
+}
+
+.catamorphic-branch-badge-else {
+  background: rgba(161, 161, 170, 0.12);
+  color: #a1a1aa;
+}
+
+.catamorphic-branch-condition {
+  font-size: 11px;
+  color: #a1a1aa;
+  font-family: "Fira Code", "SF Mono", "JetBrains Mono", monospace;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* Loop-block container */
+.catamorphic-loop-block-node {
+  border: 1.5px dashed rgba(249, 115, 22, 0.3);
+  border-radius: 12px;
+  background: rgba(249, 115, 22, 0.03);
+  position: relative;
+  box-sizing: border-box;
+}
+
+.catamorphic-loop-block-header {
+  position: absolute;
+  top: 8px;
+  left: 10px;
+  right: 10px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  pointer-events: auto;
+  z-index: 1;
+}
+
+.catamorphic-loop-block-icon {
+  font-size: 12px;
+  flex-shrink: 0;
+}
+
+.catamorphic-loop-block-label {
+  font-size: 11px;
+  color: #fb923c;
+  font-family: "Fira Code", "SF Mono", "JetBrains Mono", monospace;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.catamorphic-parallel-node {
+  border-color: #06b6d4;
+  background: linear-gradient(135deg, #0c1a1f, #171717);
+}
+
+.catamorphic-delay-node {
+  border-color: #737373;
+  background: linear-gradient(135deg, #171717, #171717);
+}
+
+.catamorphic-return-node {
+  border-color: #22c55e;
+  background: linear-gradient(135deg, #0f1f14, #171717);
+}
+
+/* AI Bar */
+.catamorphic-ai-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 12px 16px;
+  border-top: 1px solid #262626;
+  background: #0f0f0f;
+}
+
+.catamorphic-ai-input {
+  flex: 1;
+  padding: 10px 16px;
+  border-radius: 8px;
+  border: 1px solid #333;
+  background: #1a1a1a;
+  color: #fafafa;
+  font-size: 14px;
+  outline: none;
+}
+
+.catamorphic-ai-input:focus {
+  border-color: #525252;
+}
+
+.catamorphic-ai-input::placeholder {
+  color: #525252;
+}
+
+.catamorphic-ai-send {
+  padding: 10px 20px;
+  border-radius: 8px;
+  border: none;
+  background: #2563eb;
+  color: #fff;
+  font-size: 14px;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+
+.catamorphic-ai-send:hover {
+  background: #3b82f6;
+}
+
+.catamorphic-ai-send:disabled {
+  background: #1e3a5f;
+  cursor: not-allowed;
+}
+
+/* Hide handle dots on all nodes */
+.react-flow .react-flow__handle {
+  background: transparent;
+  border: none;
+  width: 8px;
+  height: 8px;
+}
+
+/* React Flow dark theme overrides */
+.react-flow__background {
+  background: #0a0a0a;
+}
+
+.react-flow__edge-path {
+  stroke: #737373;
+  stroke-width: 1.5;
+}
+
+.react-flow__edge.animated .react-flow__edge-path {
+  animation: catamorphic-dash 0.6s linear infinite;
+}
+
+@keyframes catamorphic-dash {
+  to {
+    stroke-dashoffset: -18;
+  }
+}
+
+.react-flow__edge:hover .react-flow__edge-path {
+  stroke-width: 2.5;
+  filter: brightness(1.3);
+}
+
+.react-flow__controls {
+  background: #171717;
+  border: 1px solid #333;
+  border-radius: 8px;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
+}
+
+.react-flow__controls-button {
+  background: #171717;
+  color: #a3a3a3;
+  border-bottom: 1px solid #262626;
+}
+
+.react-flow__controls-button:hover {
+  background: #262626;
+}
+
+.react-flow__minimap {
+  background: #0f0f0f;
+  border: 1px solid #333;
+  border-radius: 8px;
+}
+
+/* Selected node highlight */
+.react-flow__node.selected .catamorphic-node {
+  box-shadow:
+    0 0 0 2px #3b82f6,
+    0 4px 16px rgba(59, 130, 246, 0.2);
+}

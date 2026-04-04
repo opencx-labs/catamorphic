@@ -1,0 +1,32 @@
+{
+  "name": "@catamorphic/ui",
+  "version": "0.0.1",
+  "private": true,
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "import": "./dist/index.js",
+      "types": "./dist/index.d.ts"
+    },
+    "./styles.css": "./src/styles.css"
+  },
+  "scripts": {
+    "build": "tsup",
+    "dev": "tsup --watch",
+    "test": "vitest run --passWithNoTests",
+    "typecheck": "tsgo --project ./tsconfig.json"
+  },
+  "dependencies": {
+    "@catamorphic/parser": "workspace:*",
+    "@xyflow/react": "*",
+    "jotai": "*",
+    "react": "*",
+    "react-dom": "*"
+  },
+  "devDependencies": {
+    "@types/react": "*",
+    "@types/react-dom": "*"
+  }
+}

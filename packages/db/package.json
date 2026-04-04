@@ -1,0 +1,31 @@
+{
+  "name": "@catamorphic/db",
+  "version": "0.0.1",
+  "private": true,
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "import": "./dist/index.js",
+      "types": "./dist/index.d.ts"
+    }
+  },
+  "scripts": {
+    "build": "tsup",
+    "dev": "tsup --watch",
+    "test": "vitest run --passWithNoTests",
+    "typecheck": "tsgo --project ./tsconfig.json",
+    "db:migrate": "bun run src/migrate.ts",
+    "db:codegen": "kysely-codegen --out-file src/generated/db.d.ts",
+    "db:reset": "bun run src/reset.ts"
+  },
+  "dependencies": {
+    "kysely": "^0.28.15",
+    "pg": "^8.20.0"
+  },
+  "devDependencies": {
+    "@types/pg": "^8.20.0",
+    "kysely-codegen": "^0.20.0"
+  }
+}

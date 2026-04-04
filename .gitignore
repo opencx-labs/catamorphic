@@ -1,11 +1,27 @@
+# Dependencies
+node_modules/
+
+# Build outputs
+dist/
+.next/
+.turbo/
+
+# Environment
+.env
+.env.local
+
+# OS files
+.DS_Store
+
 # Temporary files
 *.tmp.*
 *.tmp
 *.log
 
-# OS files
-.DS_Store
+# Generated files
+packages/api-client/src/schema.d.ts
+packages/api-client/openapi.json
+packages/db/src/generated/
 
-# Node.js files
-node_modules/
-dist/
+# Postgres data (docker)
+pgdata/
