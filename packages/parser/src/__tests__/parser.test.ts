@@ -110,11 +110,15 @@ export async function myWorkflow() {
 `;
     const graph = parseWorkflow(source);
 
-    const parallelNodes = graph.nodes.filter((n) => n.type === "parallel");
-    expect(parallelNodes.length).toBeGreaterThanOrEqual(1);
+    const parallelBlocks = graph.nodes.filter(
+      (n) => n.type === "parallel-block",
+    );
+    expect(parallelBlocks.length).toBe(1);
 
-    const parallelEdges = graph.edges.filter((e) => e.type === "parallel");
-    expect(parallelEdges.length).toBeGreaterThanOrEqual(2);
+    const childSteps = graph.nodes.filter(
+      (n) => n.type === "step" && n.parentId === parallelBlocks[0]?.id,
+    );
+    expect(childSteps.length).toBeGreaterThanOrEqual(2);
   });
 
   it("extracts JSDoc metadata from workflow function", () => {

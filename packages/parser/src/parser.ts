@@ -283,6 +283,70 @@ function collectIfBranches(stmt: IfStatement): IfBranch[] {
   return branches;
 }
 
+function extractIIFECall(
+  expr: Node,
+): { body: Node; stmt: Node } | undefined {
+  let callExpr: CallExpression | undefined;
+  if (Node.isAwaitExpression(expr)) {
+    const inner = expr.getExpression();
+    if (Node.isCallExpression(inner)) callExpr = inner;
+  } else if (Node.isCallExpression(expr)) {
+    callExpr = expr;
+  }
+  if (!callExpr) return undefined;
+
+  const callee = callExpr.getExpression();
+  if (Node.isParenthesizedExpression(callee)) {
+    const inner = callee.getExpression();
+    if (Node.isArrowFunction(inner) || Node.isFunctionExpression(inner)) {
+      const body = inner.getBody();
+      if (Node.isBlock(body)) {
+        return { body, stmt: expr };
+      }
+    }
+  }
+  if (Node.isArrowFunction(callee) || Node.isFunctionExpression(callee)) {
+    const body = callee.getBody();
+    if (Node.isBlock(body)) {
+      return { body, stmt: expr };
+    }
+  }
+  return undefined;
+}
+
+function parseScopeBlock(
+  ctx: ParseContext,
+  block: Node,
+  previousIds: string[],
+  parentId?: string,
+  sourceNode?: Node,
+): string[] {
+  const stmtNode = sourceNode ?? block;
+  const displayName = Node.isStatement(stmtNode)
+    ? extractLeadingDisplayName(stmtNode)
+    : undefined;
+  const blockId = nextId();
+  ctx.nodes.push({
+    id: blockId,
+    type: "scope-block",
+    label: displayName ?? "Block",
+    sourceRange: getSourceRange(stmtNode),
+    metadata: {},
+    parentId,
+  });
+
+  addEdgesFromPrevious(ctx, previousIds, blockId);
+
+  if (Node.isBlock(block)) {
+    const stmts = block.getStatements();
+    if (stmts.length > 0) {
+      parseStatements(ctx, stmts, [], blockId);
+    }
+  }
+
+  return [blockId];
+}
+
 function parseStatements(
   ctx: ParseContext,
   statements: Statement[],
@@ -380,6 +444,26 @@ function parseStatements(
       );
       currentIds = [nodeId];
       continue;
+    }
+
+    if (Node.isBlock(stmt)) {
+      currentIds = parseScopeBlock(ctx, stmt, currentIds, parentId);
+      continue;
+    }
+
+    if (Node.isExpressionStatement(stmt)) {
+      const expr = stmt.getExpression();
+      const iifeCall = extractIIFECall(expr);
+      if (iifeCall) {
+        currentIds = parseScopeBlock(
+          ctx,
+          iifeCall.body,
+          currentIds,
+          parentId,
+          iifeCall.stmt,
+        );
+        continue;
+      }
     }
 
     if (Node.isVariableStatement(stmt)) {
@@ -481,26 +565,7 @@ function parseLoopStatement(
   if (Node.isBlock(body)) {
     const bodyStatements = body.getStatements();
     if (bodyStatements.length > 0) {
-      const bodyExits = parseStatements(ctx, bodyStatements, [loopId], loopId);
-
-      const firstLoopEdge = ctx.edges.find(
-        (e) => e.source === loopId && e.target !== loopId,
-      );
-      if (firstLoopEdge) {
-        firstLoopEdge.type = "loop-body";
-        const firstBodyId = firstLoopEdge.target;
-
-        for (const exit of bodyExits) {
-          if (exit !== loopId) {
-            ctx.edges.push({
-              id: `${exit}->${firstBodyId}_back`,
-              source: exit,
-              target: firstBodyId,
-              type: "loop-back",
-            });
-          }
-        }
-      }
+      parseStatements(ctx, bodyStatements, [], loopId);
     }
   }
 
@@ -514,17 +579,18 @@ function parsePromiseAll(
   previousIds: string[],
   parentId?: string,
 ): string[] {
-  const forkId = nextId();
+  const blockId = nextId();
+  const displayName = extractLeadingDisplayName(stmt);
   ctx.nodes.push({
-    id: forkId,
-    type: "parallel",
-    label: "Parallel",
+    id: blockId,
+    type: "parallel-block",
+    label: displayName ?? "Parallel",
     sourceRange: getSourceRange(stmt),
     metadata: {},
     parentId,
   });
 
-  addEdgesFromPrevious(ctx, previousIds, forkId);
+  addEdgesFromPrevious(ctx, previousIds, blockId);
 
   const args = callNode.getArguments();
   const arrayArg = args[0];
@@ -532,6 +598,27 @@ function parsePromiseAll(
 
   if (arrayArg && Node.isArrayLiteralExpression(arrayArg)) {
     for (const element of arrayArg.getElements()) {
+      const iifeCall = extractIIFECall(element);
+      if (iifeCall) {
+        const scopeId = nextId();
+        ctx.nodes.push({
+          id: scopeId,
+          type: "scope-block",
+          label: "Block",
+          sourceRange: getSourceRange(element),
+          metadata: {},
+          parentId: blockId,
+        });
+        if (Node.isBlock(iifeCall.body)) {
+          const stmts = iifeCall.body.getStatements();
+          if (stmts.length > 0) {
+            parseStatements(ctx, stmts, [], scopeId);
+          }
+        }
+        branchExitIds.push(scopeId);
+        continue;
+      }
+
       let fnName = element.getText();
       let actualCall: CallExpression | undefined;
       if (Node.isCallExpression(element)) {
@@ -558,14 +645,7 @@ function parsePromiseAll(
         metadata: stepMeta.metadata,
         functionName: fnName,
         arguments: stepArgs,
-        parentId,
-      });
-
-      ctx.edges.push({
-        id: `${forkId}->${stepId}`,
-        source: forkId,
-        target: stepId,
-        type: "parallel",
+        parentId: blockId,
       });
 
       branchExitIds.push(stepId);
@@ -595,30 +675,7 @@ function parsePromiseAll(
     }
   }
 
-  if (branchExitIds.length === 0) {
-    return [forkId];
-  }
-
-  const joinId = nextId();
-  ctx.nodes.push({
-    id: joinId,
-    type: "parallel",
-    label: "Join",
-    sourceRange: getSourceRange(stmt),
-    metadata: {},
-    parentId,
-  });
-
-  for (const branchExit of branchExitIds) {
-    ctx.edges.push({
-      id: `${branchExit}->${joinId}`,
-      source: branchExit,
-      target: joinId,
-      type: "parallel",
-    });
-  }
-
-  return [joinId];
+  return [blockId];
 }
 
 function collectStepFunctions(

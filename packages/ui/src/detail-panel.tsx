@@ -92,6 +92,8 @@ const NODE_TYPE_LABELS: Record<string, string> = {
   "if-block": "Condition",
   "loop-block": "Loop",
   parallel: "Parallel",
+  "parallel-block": "Parallel",
+  "scope-block": "Block",
   delay: "Delay",
   return: "Return",
 };
@@ -103,6 +105,8 @@ const NODE_TYPE_COLORS: Record<string, string> = {
   "if-block": "#a855f7",
   "loop-block": "#f97316",
   parallel: "#06b6d4",
+  "parallel-block": "#06b6d4",
+  "scope-block": "#94a3b8",
   delay: "#737373",
   return: "#22c55e",
 };

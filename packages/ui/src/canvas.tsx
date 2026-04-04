@@ -67,6 +67,8 @@ const MINIMAP_NODE_COLORS: Record<string, string> = {
   "if-block": "transparent",
   "loop-block": "#f97316",
   parallel: "#06b6d4",
+  "parallel-block": "#06b6d4",
+  "scope-block": "#94a3b8",
   delay: "#737373",
   return: "#22c55e",
 };

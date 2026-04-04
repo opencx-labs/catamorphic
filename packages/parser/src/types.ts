@@ -5,6 +5,8 @@ export type WorkflowNodeType =
   | "if-block"
   | "loop-block"
   | "parallel"
+  | "parallel-block"
+  | "scope-block"
   | "delay"
   | "return";
 
@@ -67,9 +69,7 @@ export interface WorkflowEdge {
     | "sequential"
     | "branch-true"
     | "branch-false"
-    | "parallel"
-    | "loop-body"
-    | "loop-back";
+    | "parallel";
 }
 
 export interface WorkflowGraph {

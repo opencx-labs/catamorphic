@@ -2,16 +2,14 @@ import dagre from "dagre";
 import type { WorkflowEdge, WorkflowNode } from "./types.js";
 
 const NODE_WIDTH = 240;
-const BASE_HEIGHT = 52;
-const LINE_HEIGHT = 18;
-const BADGE_ROW_HEIGHT = 28;
-const RANK_SEP = 60;
-const NODE_SEP = 30;
-const BRANCH_GAP = 24;
-const GROUP_PAD_X = 20;
+const BASE_HEIGHT = 44;
+const RANK_SEP = 48;
+const NODE_SEP = 36;
+const BRANCH_GAP = 28;
+const GROUP_PAD_X = 24;
 const GROUP_PAD_TOP = 40;
-const GROUP_PAD_BOTTOM = 20;
-const CHILD_GAP = 40;
+const GROUP_PAD_BOTTOM = 24;
+const CHILD_GAP = 36;
 
 export interface LayoutedNode extends WorkflowNode {
   position: { x: number; y: number };
@@ -29,20 +27,8 @@ interface SizeInfo {
   height: number;
 }
 
-function estimateNodeHeight(node: WorkflowNode): number {
-  let h = BASE_HEIGHT;
-  if (node.description) {
-    const chars = node.description.length;
-    const lines = Math.min(Math.ceil(chars / 35), 3);
-    h += lines * LINE_HEIGHT;
-  }
-  if (node.parameters && node.parameters.length > 0) {
-    h += BADGE_ROW_HEIGHT;
-  }
-  if (node.returnExpression) {
-    h += LINE_HEIGHT;
-  }
-  return h;
+function estimateNodeHeight(_node: WorkflowNode): number {
+  return BASE_HEIGHT;
 }
 
 function buildMaps(nodes: WorkflowNode[]) {
@@ -97,7 +83,27 @@ function calculateSize(
       const maxHeight = Math.max(...childSizes.map((c) => c.height));
       size = { width: totalWidth, height: maxHeight };
     }
-  } else if (node.type === "branch" || node.type === "loop-block") {
+  } else if (node.type === "parallel-block") {
+    if (children.length === 0) {
+      size = { width: NODE_WIDTH, height: BASE_HEIGHT };
+    } else {
+      const childSizes = children.map((c) =>
+        calculateSize(c.id, nodeMap, childrenOf, cache),
+      );
+      const totalWidth =
+        childSizes.reduce((s, c) => s + c.width, 0) +
+        (children.length - 1) * BRANCH_GAP;
+      const maxHeight = Math.max(...childSizes.map((c) => c.height));
+      size = {
+        width: Math.max(totalWidth, NODE_WIDTH) + GROUP_PAD_X * 2,
+        height: GROUP_PAD_TOP + maxHeight + GROUP_PAD_BOTTOM,
+      };
+    }
+  } else if (
+    node.type === "branch" ||
+    node.type === "loop-block" ||
+    node.type === "scope-block"
+  ) {
     if (children.length === 0) {
       size = {
         width: NODE_WIDTH + GROUP_PAD_X * 2,
@@ -169,7 +175,29 @@ function positionChildrenRecursive(
         );
       }
     }
-  } else if (parent.type === "branch" || parent.type === "loop-block") {
+  } else if (parent.type === "parallel-block") {
+    let x = GROUP_PAD_X;
+    for (const child of children) {
+      const childSize = sizeCache.get(child.id);
+      if (!childSize) continue;
+      positions.set(child.id, { x, y: GROUP_PAD_TOP });
+      x += childSize.width + BRANCH_GAP;
+
+      if (childrenOf.has(child.id)) {
+        positionChildrenRecursive(
+          child.id,
+          nodeMap,
+          childrenOf,
+          sizeCache,
+          positions,
+        );
+      }
+    }
+  } else if (
+    parent.type === "branch" ||
+    parent.type === "loop-block" ||
+    parent.type === "scope-block"
+  ) {
     let y = GROUP_PAD_TOP;
     for (const child of children) {
       const childSize = sizeCache.get(child.id);
@@ -187,6 +215,59 @@ function positionChildrenRecursive(
           positions,
         );
       }
+    }
+  }
+}
+
+function centerAlignSpine(
+  rootNodes: WorkflowNode[],
+  remappedEdges: Map<string, { source: string; target: string }>,
+  positions: Map<string, { x: number; y: number }>,
+  sizeCache: Map<string, SizeInfo>,
+): void {
+  const outEdges = new Map<string, string[]>();
+  const inEdges = new Map<string, string[]>();
+  for (const node of rootNodes) {
+    outEdges.set(node.id, []);
+    inEdges.set(node.id, []);
+  }
+  for (const edge of remappedEdges.values()) {
+    outEdges.get(edge.source)?.push(edge.target);
+    inEdges.get(edge.target)?.push(edge.source);
+  }
+
+  const aligned = new Set<string>();
+
+  for (const node of rootNodes) {
+    if (aligned.has(node.id)) continue;
+    if ((inEdges.get(node.id)?.length ?? 0) !== 0) continue;
+
+    const spine: string[] = [];
+    let current: string = node.id;
+    for (;;) {
+      spine.push(current);
+      aligned.add(current);
+      const outs: string[] = outEdges.get(current) ?? [];
+      if (outs.length !== 1) break;
+      const next: string = outs[0]!;
+      const nextIns: string[] = inEdges.get(next) ?? [];
+      if (nextIns.length !== 1 || aligned.has(next)) break;
+      current = next;
+    }
+
+    if (spine.length < 2) continue;
+
+    const firstPos = positions.get(spine[0]!);
+    const firstSize = sizeCache.get(spine[0]!);
+    if (!firstPos || !firstSize) continue;
+    const spineCenterX = firstPos.x + firstSize.width / 2;
+
+    for (let i = 1; i < spine.length; i++) {
+      const id = spine[i]!;
+      const pos = positions.get(id);
+      const size = sizeCache.get(id);
+      if (!pos || !size) continue;
+      pos.x = spineCenterX - size.width / 2;
     }
   }
 }
@@ -251,6 +332,8 @@ export function layoutGraph({
       y: graphNode.y - size.height / 2,
     });
   }
+
+  centerAlignSpine(rootNodes, remappedEdges, positions, sizeCache);
 
   for (const node of rootNodes) {
     if (childrenOf.has(node.id)) {

@@ -40,7 +40,13 @@ function findNodeAtPosition({
   column: number;
   nodes: WorkflowNode[];
 }): WorkflowNode | null {
-  const CONTAINER_TYPES = new Set(["if-block", "branch", "loop-block"]);
+  const CONTAINER_TYPES = new Set([
+    "if-block",
+    "branch",
+    "loop-block",
+    "parallel-block",
+    "scope-block",
+  ]);
   let best: WorkflowNode | null = null;
   let bestSpan = Infinity;
 

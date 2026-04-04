@@ -104,7 +104,11 @@ export async function processOrder({
   }
 
   const [shipment, invoice] = await Promise.all([
-    createShipment({ orderId, items }),
+    (async () => {
+      const shipResult = await createShipment({ orderId, items });
+      await notifyWarehouse({ shipmentId: shipResult.trackingId });
+      return shipResult;
+    })(),
     generateInvoice({ orderId, amount: order.total }),
   ]);
 
@@ -154,6 +158,14 @@ async function chargePayment({ orderId, amount }: { orderId: string; amount: num
 async function createShipment({ orderId, items }: { orderId: string; items: string[] }) {
   "use step";
   return { trackingId: "TRACK_123" };
+}
+
+/**
+ * @displayname Notify Warehouse
+ * @icon truck
+ */
+async function notifyWarehouse({ shipmentId }: { shipmentId: string }) {
+  "use step";
 }
 
 /**
