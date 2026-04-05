@@ -92,6 +92,38 @@ bun run db:migrate && bun run db:codegen
 
 Do not run `git add`, `git commit`, or `git push`. Leave all changes unstaged for the user to review and commit manually. Only create commits if the user explicitly asks.
 
+## Design Principles
+
+These are settled design decisions. Do not deviate without explicit user approval. Detailed rules live in `.cursor/rules/`.
+
+### Canvas (graph-design.mdc)
+
+- **Vertical layout** (top-to-bottom), not horizontal. Allows natural scrolling.
+- **Non-technical audience**: Canvas nodes show only icon + label. No function names, no descriptions, no parameter badges, no return payloads on the canvas itself. All detail lives in the right panel.
+- **Read-only canvas**: Users cannot drag, connect, or delete nodes.
+- **Fixed 240px width** for all non-container nodes. Ensures straight edges and consistent handle alignment.
+- **Animated dashed edges** with smooth curves. Straight edges for linear sequences (spine alignment).
+- **Hidden handle dots** — handles exist in the DOM for edge routing but are invisible.
+- **Translate extent** keeps at least one node in view at all times.
+
+### Parser & Graph Structure (parser-conventions.mdc)
+
+- **Container node types**: `if-block` (invisible wrapper), `branch`, `loop-block`, `parallel-block`, `scope-block`.
+- **if-block**: Branches rendered side by side. Edges go directly to each branch, not to the if-block. Bypass edge only when all branches return and there's no else.
+- **loop-block**: No internal edges (`loop-body`/`loop-back` are removed). The loop's nature is shown by the container label.
+- **parallel-block**: Wraps `Promise.all`. IIFEs inside become `scope-block` children.
+- **scope-block**: Wraps IIFEs or bare `{ }` blocks. Supports `@displayname` metadata.
+- **Source ranges** include column information for precise bidirectional code ↔ canvas linking.
+- **Argument provenance**: Step arguments trace values back to trigger params, other steps, or variables.
+
+### Detail Panel & Code Editor (panel-editor.mdc)
+
+- Right panel with **Details** and **Code** tabs.
+- Details: No "Function" section, no "Source" section. Merged "Parameters" section with provenance. Friendly type names.
+- Code: Monaco editor with syntax highlighting, inline errors, type-on-hover.
+- **Bidirectional linking**: Clicking a node scrolls editor to exact position; placing cursor in editor highlights the corresponding node.
+- **Panel state**: If already open on Code tab, clicking a node keeps Code tab active (does not switch to Details).
+
 ## Code Conventions
 
 ### Workflow Code Format

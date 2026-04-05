@@ -1,0 +1,61 @@
+---
+description: Detail panel and code editor behavior conventions
+globs: ["packages/ui/src/detail-panel.tsx", "apps/playground/src/components/monaco-editor.tsx", "packages/ui/src/canvas.tsx", "packages/ui/src/atoms.ts"]
+alwaysApply: false
+---
+
+# Detail Panel & Code Editor
+
+## Right Panel Structure
+
+The right panel has two tabs: **Details** and **Code**. It opens when a node is clicked.
+
+### Details Tab
+
+Shows human-readable information about the selected node.
+
+- **No "Function" section** — don't show the raw function name for steps.
+- **No "Source" section** — don't show source range info on any node type.
+- **Single "Parameters" section** — "Inputs" and "Parameters" are merged. Show argument values with provenance alongside parameter definitions.
+- **Argument provenance**: For each argument, show where the value comes from (e.g., "from Validate Order" or "from trigger parameter").
+- **Friendly types**: `string` → "Text", `boolean` → "True or False", `number` → "Number", `string[]` → "Text List", etc. Non-technical users read this.
+- **Default values**: Show when a parameter has a TypeScript default.
+
+### Code Tab
+
+Wraps a Monaco editor. Clicking the Code tab (or selecting a node while already on Code) scrolls to and highlights the node's source.
+
+## Bidirectional Code ↔ Canvas Linking
+
+### Canvas → Code
+
+When a node is selected and the Code tab is active, the Monaco editor:
+1. Scrolls to `sourceRange.startLine` (via `revealLineInCenter`)
+2. Sets the selection from `(startLine, startColumn)` to `(endLine, endColumn)`
+3. Places the cursor at `(startLine, startColumn)`
+4. Focuses the editor
+
+### Code → Canvas
+
+When the cursor moves in Monaco:
+1. `onDidChangeCursorPosition` fires
+2. `findNodeAtPosition` finds the smallest-span non-container node whose `sourceRange` contains the cursor
+3. That node's ID is set as the selected node, highlighting it in the canvas
+
+### Preventing Feedback Loops
+
+Two flags prevent infinite loops between programmatic and user-driven changes:
+- `programmaticReveal` — set when code triggers editor scroll/selection (suppresses cursor-change handler)
+- `cursorDrivenRef` — set when cursor change triggers node selection (suppresses the effect that scrolls editor to selected node)
+
+## Panel State Behavior
+
+- Clicking a node when the panel is **closed**: opens panel, switches to Details tab.
+- Clicking a node when the panel is **already open**: keeps the **current tab** (Details or Code). Does NOT switch back to Details.
+- Clicking empty canvas: deselects node (panel can stay open).
+- Node selection state is managed via `selectedNodeIdAtom` (Jotai). The canvas synchronizes React Flow's internal `selected` property with this atom via a `useEffect`.
+
+## Monaco Editor Configuration
+
+- TypeScript language with syntax highlighting, inline errors, and type-on-hover.
+- `CodeEditorRenderProps` passes `allNodes` and `onSelectNode` for bidirectional linking.

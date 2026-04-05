@@ -1,0 +1,83 @@
+---
+description: Parser and graph structure conventions for workflow AST mapping
+globs: ["packages/parser/**/*.ts"]
+alwaysApply: false
+---
+
+# Parser — Graph Structure Conventions
+
+## Node Types
+
+| Type | What it represents | Container? | Children layout |
+|------|--------------------|------------|-----------------|
+| `trigger` | The workflow function itself | No | — |
+| `step` | An `await fn(...)` call to a `"use step"` function | No | — |
+| `delay` | A `sleep(...)` call | No | — |
+| `return` | A `return` statement | No | — |
+| `if-block` | Invisible wrapper around an entire if/else-if/else chain | Yes | Horizontal (branches side by side) |
+| `branch` | One arm of an if-block (if / else-if / else) | Yes | Vertical (steps stacked) |
+| `loop-block` | A for/for-of/for-in/while loop | Yes | Vertical |
+| `parallel-block` | A `Promise.all([...])` call | Yes | Horizontal |
+| `scope-block` | An IIFE or bare `{ }` block | Yes | Vertical |
+
+## Container Semantics
+
+Containers use `parentId` to express nesting. All children of a container have `parentId` set to the container's id.
+
+### if-block
+
+- The `if-block` node is an invisible structural wrapper — it has no edges TO it from previous nodes. Instead, edges go from previous nodes **directly to each branch** child.
+- Branches are rendered **side by side** (left to right): if → else-if → else.
+- Each branch has `metadata.branchType` set to `"if"`, `"else if"`, or `"else"`.
+- The branch's `label` is the condition text (or `"Otherwise"` for else).
+- **Bypass edge**: If the if-block has no `else` clause and ALL branches' steps end with `return` (empty exit IDs), a bypass edge from the previous node is added so the flow can continue past the if-block.
+- Conditions should be **pretty-printed** where possible (e.g., `===` → `is`, `.includes` → `includes`, `&&` → `and`, `||` → `or`).
+
+### loop-block
+
+- The loop block is a container. Label is the loop expression (e.g., `"for item of items"`).
+- **No internal edges**: Pass `[]` as `previousIds` to `parseStatements` for the loop body. The loop's nature is shown by the container label and icon, not by edge arrows. Do not create `loop-body` or `loop-back` edges.
+- Returns `[loopId]` so the flow continues from the loop container.
+
+### parallel-block
+
+- Wraps `Promise.all([...])`. Label is `"Parallel"` (or a JSDoc `@displayname`).
+- Children are the individual parallel tasks, laid out horizontally.
+- IIFEs within the array elements are parsed as `scope-block` children.
+- Simple call expressions become direct `step` children.
+- **No internal edges** between children — they run in parallel.
+- Variable bindings from array destructuring (e.g., `const [a, b] = await Promise.all(...)`) are registered for provenance tracking.
+
+### scope-block
+
+- Represents IIFEs (`(async () => { ... })()`) or bare block statements (`{ ... }`).
+- Label comes from a leading JSDoc `@displayname` comment, or defaults to `"Block"`.
+- Children are parsed with `[]` as `previousIds`.
+
+## Edge Types
+
+| Type | Color | When used |
+|------|-------|-----------|
+| `sequential` | `#737373` (grey) | Default flow between steps |
+| `branch-true` | `#22c55e` (green) | Edge into a truthy branch |
+| `branch-false` | `#ef4444` (red) | Edge into a falsy branch |
+| `parallel` | `#3b82f6` (blue) | Edges in parallel blocks |
+
+Removed types (do not re-add): `loop-body`, `loop-back`.
+
+## Source Ranges
+
+Every node has a `sourceRange` with `start`, `end`, `startLine`, `startColumn`, `endLine`, `endColumn`. These enable bidirectional code ↔ canvas linking. Always extract column information via `sf.getLineAndColumnAtPos()`.
+
+## JSDoc Metadata
+
+- `@displayname` — human-readable label shown in UI
+- `@description` — longer description for detail panel
+- `@icon` — icon identifier for the node
+- `@param name - @displayname Label | @description Text` — per-parameter metadata
+- Variables (`const`/`let`) can also have `@displayname` via leading JSDoc comment
+- IIFEs and bare blocks can have `@displayname` via leading JSDoc comment
+
+## Argument Provenance
+
+When parsing step call arguments, trace each argument's value back to its source variable. The `StepArgumentSource` records which variable, its display name, the source step's node ID, and the source step's label. This powers the "where does this value come from?" display in the detail panel.

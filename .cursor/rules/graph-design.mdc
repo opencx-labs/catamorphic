@@ -1,0 +1,69 @@
+---
+description: Visual design decisions for the workflow graph canvas
+globs: ["packages/ui/**/*.ts", "packages/ui/**/*.tsx", "packages/ui/**/*.css", "packages/parser/src/layout.ts"]
+alwaysApply: false
+---
+
+# Workflow Graph — Visual Design
+
+## Target Audience
+
+The canvas is viewed by **non-technical users**. No code artifacts (function names, return expressions, raw types) should appear on rendered nodes. All technical detail lives in the detail panel.
+
+## Node Rendering
+
+- **All non-container nodes** have a fixed width of 240px (`width: 240px; box-sizing: border-box` in CSS). This ensures straight edges and consistent handle alignment.
+- **Canvas nodes show only**: icon + label. Nothing else.
+  - Step nodes: no function name subtitle.
+  - Trigger nodes: no description, no parameter badges.
+  - Return nodes: no return expression payload.
+- Descriptions, parameters, arguments, and provenance are shown **only in the detail panel**.
+
+## Layout
+
+- **Vertical (top-to-bottom)** layout — allows natural scrolling. Not horizontal.
+- **Dagre** positions root-level nodes; custom recursive logic positions children inside containers.
+- **Spine alignment**: After Dagre layout, a post-processing pass center-aligns nodes in linear sequences (1-to-1 chains) so edges between them are perfectly straight.
+- **`estimateNodeHeight`** should match actual rendered height. Since nodes only show icon + label, height is `BASE_HEIGHT` for all non-container nodes.
+
+## Layout Constants (packages/parser/src/layout.ts)
+
+When adjusting spacing, change these constants — don't hardcode numbers elsewhere:
+
+- `NODE_WIDTH = 240` — fixed non-container node width
+- `BASE_HEIGHT = 44` — non-container node height
+- `RANK_SEP = 48` — vertical gap between root-level nodes
+- `NODE_SEP = 36` — horizontal gap between sibling root nodes
+- `BRANCH_GAP = 28` — gap between branches in if-block / parallel-block
+- `GROUP_PAD_X = 24` — horizontal padding inside containers
+- `GROUP_PAD_TOP = 40` — top padding inside containers (below header)
+- `GROUP_PAD_BOTTOM = 24` — bottom padding inside containers
+- `CHILD_GAP = 36` — vertical gap between children inside containers
+
+## Edges
+
+- All edges are **animated and dashed** (`strokeDasharray: "6 3"`, `animated: true`).
+- Edges should **curve smoothly** — no sharp right-angle bends. Use React Flow's default edge type.
+- Edges between consecutive nodes in a linear sequence must be **perfectly straight** (achieved by spine alignment + fixed node width).
+- **Edge colors**: branch-true `#22c55e`, branch-false `#ef4444`, parallel `#3b82f6`, default `#737373`.
+
+## Handles
+
+- React Flow handle dots are **hidden** via CSS (opacity: 0 or display: none). The handles must still exist in the DOM for edge routing, but should be invisible.
+
+## Canvas Behavior
+
+- The graph is **read-only**: `nodesDraggable={false}`, `nodesConnectable={false}`, `deleteKeyCode={null}`. Also set `draggable: false`, `connectable: false`, `deletable: false` on each node object, and filter `position` changes from `onNodesChange`.
+- **Translate extent**: An invisible boundary keeps at least one node always in view — prevents panning into empty space. Computed dynamically from node bounding box with generous padding.
+- **Fit view** is enabled on load.
+
+## Container Nodes (Group Nodes)
+
+Containers have explicit `width`/`height` via `style` prop. Non-container nodes do NOT get explicit width/height (React Flow measures them from DOM).
+
+- **Nesting depth** affects border opacity: `0.3 + depth * 0.12` (capped at depth 3).
+
+## Minimap
+
+Color-coded by node type:
+- trigger: `#ca8a04`, step: `#2563eb`, branch: `#a855f7`, loop-block: `#f97316`, parallel-block: `#06b6d4`, scope-block: `#94a3b8`, delay: `#737373`, return: `#22c55e`, if-block: `transparent`.
