@@ -28,5 +28,7 @@ export default defineConfig({
   test: {
     passWithNoTests: true,
     env: loadDotEnv(),
+    pool: "threads",
+    fileParallelism: true,
   },
 });
