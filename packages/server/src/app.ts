@@ -1,3 +1,4 @@
+import type { ProjectManager } from "@catamorphic/git";
 import fastifyCors from "@fastify/cors";
 import fastifySwagger from "@fastify/swagger";
 import fastifySwaggerUi from "@fastify/swagger-ui";
@@ -6,14 +7,15 @@ import {
   jsonSchemaTransform,
   serializerCompiler,
   validatorCompiler,
-  type ZodTypeProvider,
 } from "fastify-type-provider-zod";
 import type { Kysely } from "kysely";
+import { registerProjectRoutes } from "./routes/projects.js";
 import { registerRunRoutes } from "./routes/runs.js";
 import { registerWorkflowRoutes } from "./routes/workflows.js";
 
 export interface AppConfig {
   db?: Kysely<Record<string, unknown>>;
+  projectManager?: ProjectManager;
 }
 
 export function createApp(config: AppConfig = {}) {
@@ -44,11 +46,12 @@ export function createApp(config: AppConfig = {}) {
   });
 
   app.decorate("db", config.db);
+  app.decorate("projectManager", config.projectManager);
 
   app.after(() => {
-    const typedApp = app.withTypeProvider<ZodTypeProvider>();
-    registerWorkflowRoutes(typedApp);
-    registerRunRoutes(typedApp);
+    registerProjectRoutes(app, config.projectManager);
+    registerWorkflowRoutes(app);
+    registerRunRoutes(app);
   });
 
   return app;

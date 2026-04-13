@@ -1,35 +1,36 @@
 "use client";
 
 import { WorkflowEditor } from "@catamorphic/ui";
-import { useParams } from "next/navigation";
 import { useCallback, useState } from "react";
 import "@catamorphic/ui/styles.css";
 import { MonacoCodeEditor } from "@/components/monaco-editor";
 import { generateWorkflowCode } from "@/lib/ai-action";
 import { parseWorkflowAction } from "@/lib/parse-action";
-import { SAMPLE_WORKFLOWS } from "@/lib/sample-workflows";
 
-export default function WorkflowEditorPage() {
-  const params = useParams<{ id: string }>();
-  const sample = SAMPLE_WORKFLOWS[params.id];
+const STARTER_CODE = `/**
+ * @displayname My Workflow
+ * @description A new workflow
+ */
+export async function myWorkflow({ input }: { input: string }) {
+  "use workflow";
 
-  const [code, setCode] = useState(sample?.code ?? "");
+  return { result: input };
+}
+`;
+
+export default function NewProjectPage() {
+  const [code, setCode] = useState(STARTER_CODE);
 
   const handleCodeChange = useCallback((newCode: string) => {
     setCode(newCode);
   }, []);
 
-  const handleRun = useCallback(() => {
-    console.log("Run workflow:", params.id);
-  }, [params.id]);
-
   const handleAIPrompt = useCallback(
     async (prompt: string) => {
-      const result = await generateWorkflowCode({
+      return generateWorkflowCode({
         prompt,
         currentCode: code,
       });
-      return result;
     },
     [code],
   );
@@ -43,7 +44,6 @@ export default function WorkflowEditorPage() {
         renderCodeEditor={(props) => <MonacoCodeEditor {...props} />}
         showCodeEditor={true}
         showMinimap={true}
-        onRun={handleRun}
         aiEnabled={true}
         onAIPrompt={handleAIPrompt}
       />

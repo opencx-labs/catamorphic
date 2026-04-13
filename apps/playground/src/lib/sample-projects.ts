@@ -1,11 +1,38 @@
-export const SAMPLE_WORKFLOWS: Record<
-  string,
-  { name: string; description: string; code: string }
-> = {
+export interface SampleProject {
+  name: string;
+  description: string;
+  files: Record<string, string>;
+  defaultWorkflow: string;
+}
+
+const SHARED_PACKAGE_JSON = ({ name }: { name: string }) => `{
+  "name": "${name}",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module"
+}`;
+
+const SHARED_TSCONFIG = `{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "strict": true,
+    "esModuleInterop": true,
+    "noEmit": true
+  },
+  "include": ["src"]
+}`;
+
+export const SAMPLE_PROJECTS: Record<string, SampleProject> = {
   "welcome-user": {
     name: "Welcome New User",
     description: "Onboard a new user with welcome email and follow-up",
-    code: `/**
+    defaultWorkflow: "welcomeUser",
+    files: {
+      "package.json": SHARED_PACKAGE_JSON({ name: "welcome-user" }),
+      "tsconfig.json": SHARED_TSCONFIG,
+      "src/welcome.ts": `/**
  * @displayname Welcome New User
  * @description Onboard a new user with welcome email and follow-up
  */
@@ -68,13 +95,18 @@ async function sendFollowUpEmail({ to }: { to: string }) {
 
 function sleep(duration: string) {}
 `,
+    },
   },
 
   "order-processing": {
     name: "Order Processing",
     description:
       "Process an e-commerce order with parallel fulfillment and notifications",
-    code: `/**
+    defaultWorkflow: "processOrder",
+    files: {
+      "package.json": SHARED_PACKAGE_JSON({ name: "order-processing" }),
+      "tsconfig.json": SHARED_TSCONFIG,
+      "src/process-order.ts": `/**
  * @displayname Process Order
  * @description Process an e-commerce order end-to-end with payment, fulfillment, and notifications
  */
@@ -197,13 +229,23 @@ async function notifyCustomer({ customerId, message }: { customerId: string; mes
 
 function sleep(duration: string) {}
 `,
+    },
   },
 
   "data-pipeline": {
     name: "Data Sync Pipeline",
     description:
       "ETL pipeline with parallel extraction, transformation, and loading",
-    code: `/**
+    defaultWorkflow: "dataSyncPipeline",
+    files: {
+      "package.json": SHARED_PACKAGE_JSON({ name: "data-pipeline" }),
+      "tsconfig.json": SHARED_TSCONFIG,
+      "src/pipeline.ts": `import { extractFromSource } from "./steps/extract";
+import { validateSchema, transformData } from "./steps/transform";
+import { loadToDatabase, verifySync } from "./steps/load";
+import { acquireLock, releaseLock, sendAlert } from "./steps/infra";
+
+/**
  * @displayname Data Sync Pipeline
  * @description Extract, transform, and load data from multiple sources in parallel
  */
@@ -247,30 +289,24 @@ export async function dataSyncPipeline({
   return { status: "synced", rows: transformed.rowCount };
 }
 
-/**
- * @displayname Acquire Lock
- * @icon settings
- */
-async function acquireLock({ resource }: { resource: string }) {
-  "use step";
-}
-
-/**
+function sleep(duration: string) {}
+`,
+      "src/steps/extract.ts": `/**
  * @displayname Extract from Source
  * @icon database
  * @param source - @displayname Data Source | @description Source system identifier
  * @param format - @displayname Format | @description Data format (json, csv, parquet)
  */
-async function extractFromSource({ source, format }: { source: string; format: string }) {
+export async function extractFromSource({ source, format }: { source: string; format: string }) {
   "use step";
   return { rows: 10000, source };
 }
-
-/**
+`,
+      "src/steps/transform.ts": `/**
  * @displayname Validate Schema
  * @icon shield
  */
-async function validateSchema({ source, strict }: { source: string; strict: boolean }) {
+export async function validateSchema({ source, strict }: { source: string; strict: boolean }) {
   "use step";
 }
 
@@ -280,24 +316,16 @@ async function validateSchema({ source, strict }: { source: string; strict: bool
  * @param datasets - @displayname Datasets | @description List of dataset names to transform
  * @param rules - @displayname Rules | @description Comma-separated transformation rules
  */
-async function transformData({ datasets, rules }: { datasets: string[]; rules: string }) {
+export async function transformData({ datasets, rules }: { datasets: string[]; rules: string }) {
   "use step";
   return { rowCount: 25000, errors: 0 };
 }
-
-/**
- * @displayname Send Alert
- * @icon bell
- */
-async function sendAlert({ channel, message }: { channel: string; message: string }) {
-  "use step";
-}
-
-/**
+`,
+      "src/steps/load.ts": `/**
  * @displayname Load to Database
  * @icon database
  */
-async function loadToDatabase({ targetDb, batchSize }: { targetDb: string; batchSize: number }) {
+export async function loadToDatabase({ targetDb, batchSize }: { targetDb: string; batchSize: number }) {
   "use step";
 }
 
@@ -305,7 +333,15 @@ async function loadToDatabase({ targetDb, batchSize }: { targetDb: string; batch
  * @displayname Verify Sync
  * @icon shield
  */
-async function verifySync({ targetDb, expectedCount }: { targetDb: string; expectedCount: number }) {
+export async function verifySync({ targetDb, expectedCount }: { targetDb: string; expectedCount: number }) {
+  "use step";
+}
+`,
+      "src/steps/infra.ts": `/**
+ * @displayname Acquire Lock
+ * @icon settings
+ */
+export async function acquireLock({ resource }: { resource: string }) {
   "use step";
 }
 
@@ -313,19 +349,30 @@ async function verifySync({ targetDb, expectedCount }: { targetDb: string; expec
  * @displayname Release Lock
  * @icon settings
  */
-async function releaseLock({ resource }: { resource: string }) {
+export async function releaseLock({ resource }: { resource: string }) {
   "use step";
 }
 
-function sleep(duration: string) {}
+/**
+ * @displayname Send Alert
+ * @icon bell
+ */
+export async function sendAlert({ channel, message }: { channel: string; message: string }) {
+  "use step";
+}
 `,
+    },
   },
 
   "support-routing": {
     name: "Support Ticket Routing",
     description:
       "Route incoming support tickets based on priority with nested branching",
-    code: `/**
+    defaultWorkflow: "routeSupportTicket",
+    files: {
+      "package.json": SHARED_PACKAGE_JSON({ name: "support-routing" }),
+      "tsconfig.json": SHARED_TSCONFIG,
+      "src/route-ticket.ts": `/**
  * @displayname Route Support Ticket
  * @description Route incoming support tickets to the right team based on priority level
  */
@@ -439,8 +486,25 @@ async function sendAcknowledgment({ to, ticketId }: { to: string; ticketId: stri
   "use step";
 }
 `,
+    },
   },
 };
 
-export const SAMPLE_WORKFLOW_CODE =
-  SAMPLE_WORKFLOWS["welcome-user"]?.code ?? "";
+export function findWorkflowFile({
+  files,
+  workflowName,
+}: {
+  files: Record<string, string>;
+  workflowName: string;
+}): string | null {
+  for (const [path, content] of Object.entries(files)) {
+    if (!path.endsWith(".ts") && !path.endsWith(".tsx")) continue;
+    const fnPattern = new RegExp(
+      `(?:export\\s+)?async\\s+function\\s+${workflowName}\\s*\\(`,
+    );
+    if (fnPattern.test(content) && content.includes('"use workflow"')) {
+      return path;
+    }
+  }
+  return null;
+}

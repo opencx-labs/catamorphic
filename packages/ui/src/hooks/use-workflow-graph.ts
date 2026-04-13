@@ -90,9 +90,7 @@ export function useWorkflowGraph({ onParse }: { onParse?: OnParseCallback }) {
               depth,
             },
             ...(n.parentId ? { parentId: n.parentId } : {}),
-            ...(isGroup
-              ? { style: { width: n.width, height: n.height } }
-              : {}),
+            ...(isGroup ? { style: { width: n.width, height: n.height } } : {}),
           };
         });
 

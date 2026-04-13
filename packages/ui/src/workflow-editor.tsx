@@ -35,6 +35,7 @@ export interface WorkflowEditorProps {
   showRunsPanel?: boolean;
   showMinimap?: boolean;
   onRun?: () => void;
+  onExpandEditor?: () => void;
 }
 
 function WorkflowEditorInner({
@@ -48,6 +49,7 @@ function WorkflowEditorInner({
   onRun,
   aiEnabled = false,
   onAIPrompt,
+  onExpandEditor,
 }: WorkflowEditorProps) {
   const [currentCode, setCode] = useAtom(codeAtom);
   const setExecutionState = useSetAtom(executionStateAtom);
@@ -98,6 +100,7 @@ function WorkflowEditorInner({
           renderCodeEditor={renderCodeEditor}
           code={currentCode}
           onCodeChange={handleCodeChange}
+          onExpandEditor={onExpandEditor}
         />
       </div>
       <AIBar enabled={aiEnabled} onAIPrompt={onAIPrompt} />

@@ -369,12 +369,14 @@ export interface DetailPanelProps {
   renderCodeEditor?: (props: CodeEditorRenderProps) => ReactNode;
   code: string;
   onCodeChange: (code: string) => void;
+  onExpandEditor?: () => void;
 }
 
 export function DetailPanel({
   renderCodeEditor,
   code,
   onCodeChange,
+  onExpandEditor,
 }: DetailPanelProps) {
   const [isOpen, setIsOpen] = useAtom(rightPanelOpenAtom);
   const [activeTab, setActiveTab] = useAtom(activePanelTabAtom);
@@ -404,14 +406,43 @@ export function DetailPanel({
             </button>
           ))}
         </div>
-        <button
-          type="button"
-          className="catamorphic-detail-close"
-          onClick={() => setIsOpen(false)}
-          aria-label="Close panel"
-        >
-          ✕
-        </button>
+        <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
+          {onExpandEditor && activeTab === "code" && (
+            <button
+              type="button"
+              className="catamorphic-detail-close"
+              onClick={onExpandEditor}
+              aria-label="Expand editor"
+              title="Open full project editor"
+            >
+              <svg
+                width="14"
+                height="14"
+                viewBox="0 0 16 16"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="1.5"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                role="img"
+                aria-label="Expand"
+              >
+                <polyline points="4 1 1 1 1 4" />
+                <polyline points="12 15 15 15 15 12" />
+                <line x1="1" y1="1" x2="6" y2="6" />
+                <line x1="15" y1="15" x2="10" y2="10" />
+              </svg>
+            </button>
+          )}
+          <button
+            type="button"
+            className="catamorphic-detail-close"
+            onClick={() => setIsOpen(false)}
+            aria-label="Close panel"
+          >
+            ✕
+          </button>
+        </div>
       </div>
 
       <div className="catamorphic-detail-panel-body">

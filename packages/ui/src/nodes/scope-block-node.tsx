@@ -17,7 +17,7 @@ export function ScopeBlockNode({ data }: NodeProps) {
     >
       <Handle type="target" position={Position.Top} />
       <div className="catamorphic-scope-block-header">
-        <span className="catamorphic-scope-block-icon">{ }</span>
+        <span className="catamorphic-scope-block-icon">{}</span>
         <span className="catamorphic-scope-block-label">{node.label}</span>
       </div>
       <Handle type="source" position={Position.Bottom} />

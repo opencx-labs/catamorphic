@@ -25,3 +25,6 @@ packages/db/src/generated/
 
 # Postgres data (docker)
 pgdata/
+
+# Project repos (local dev storage)
+data/

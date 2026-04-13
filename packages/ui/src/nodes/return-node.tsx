@@ -2,7 +2,7 @@ import type { WorkflowNode } from "@catamorphic/parser";
 import { Handle, type NodeProps, Position } from "@xyflow/react";
 
 export function ReturnNode({ data }: NodeProps) {
-  const node = data as unknown as WorkflowNode;
+  const _node = data as unknown as WorkflowNode;
 
   return (
     <div className="catamorphic-node catamorphic-return-node">

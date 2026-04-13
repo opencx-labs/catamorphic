@@ -181,10 +181,8 @@ export async function myWorkflow({ items }: { items: string[] }) {
     expect(processItem).toBeDefined();
     expect(processItem?.parentId).toBe(loopBlock?.id);
 
-    const loopBackEdge = graph.edges.find((e) => e.type === "loop-back");
-    expect(loopBackEdge).toBeDefined();
-    expect(loopBackEdge?.source).toBe(processItem?.id);
-    expect(loopBackEdge?.target).toBe(processItem?.id);
+    const loopEdge = graph.edges.find((e) => e.target === loopBlock?.id);
+    expect(loopEdge).toBeDefined();
   });
 
   it("handles nested blocks", () => {

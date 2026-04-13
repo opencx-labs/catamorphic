@@ -1,120 +1,29 @@
 import type { FastifyInstance } from "fastify";
 import type { ZodTypeProvider } from "fastify-type-provider-zod";
 import {
-  CreateRunSchema,
-  CreateWorkflowSchema,
   ErrorSchema,
   ListSchema,
-  ParseResultSchema,
-  UpdateWorkflowSchema,
-  WorkflowIdParamsSchema,
-  WorkflowRunSchema,
-  WorkflowSchema,
+  PaginationQuerySchema,
+  ProjectIdParamsSchema,
+  RefQuerySchema,
+  RunSchema,
+  TriggerRunSchema,
+  WorkflowGraphSchema,
+  WorkflowNameParamsSchema,
+  WorkflowSummarySchema,
 } from "../schemas.js";
 
-export function registerWorkflowRoutes(
-  app: FastifyInstance & {
-    withTypeProvider: () => ReturnType<FastifyInstance["withTypeProvider"]>;
-  },
-) {
-  const typed = (app as FastifyInstance).withTypeProvider<ZodTypeProvider>();
-
-  typed.route({
-    method: "POST",
-    url: "/api/workflows",
-    schema: {
-      body: CreateWorkflowSchema,
-      response: {
-        201: WorkflowSchema,
-        400: ErrorSchema,
-      },
-    },
-    handler: async (_request, reply) => {
-      return reply.status(501).send({ error: "Not implemented" });
-    },
-  });
+export function registerWorkflowRoutes(app: FastifyInstance) {
+  const typed = app.withTypeProvider<ZodTypeProvider>();
 
   typed.route({
     method: "GET",
-    url: "/api/workflows",
+    url: "/api/projects/:projectId/workflows",
     schema: {
+      params: ProjectIdParamsSchema,
+      querystring: RefQuerySchema,
       response: {
-        200: ListSchema(WorkflowSchema),
-      },
-    },
-    handler: async (_request, reply) => {
-      return reply.send({ items: [], total: 0 });
-    },
-  });
-
-  typed.route({
-    method: "GET",
-    url: "/api/workflows/:id",
-    schema: {
-      params: WorkflowIdParamsSchema,
-      response: {
-        200: WorkflowSchema,
-        404: ErrorSchema,
-      },
-    },
-    handler: async (_request, reply) => {
-      return reply.status(404).send({ error: "Not found" });
-    },
-  });
-
-  typed.route({
-    method: "PUT",
-    url: "/api/workflows/:id",
-    schema: {
-      params: WorkflowIdParamsSchema,
-      body: UpdateWorkflowSchema,
-      response: {
-        200: WorkflowSchema,
-        404: ErrorSchema,
-      },
-    },
-    handler: async (_request, reply) => {
-      return reply.status(404).send({ error: "Not found" });
-    },
-  });
-
-  typed.route({
-    method: "DELETE",
-    url: "/api/workflows/:id",
-    schema: {
-      params: WorkflowIdParamsSchema,
-      response: {
-        404: ErrorSchema,
-      },
-    },
-    handler: async (_request, reply) => {
-      return reply.status(404).send({ error: "Not found" });
-    },
-  });
-
-  typed.route({
-    method: "POST",
-    url: "/api/workflows/:id/parse",
-    schema: {
-      params: WorkflowIdParamsSchema,
-      response: {
-        200: ParseResultSchema,
-        404: ErrorSchema,
-      },
-    },
-    handler: async (_request, reply) => {
-      return reply.status(404).send({ error: "Not found" });
-    },
-  });
-
-  typed.route({
-    method: "POST",
-    url: "/api/workflows/:id/run",
-    schema: {
-      params: WorkflowIdParamsSchema,
-      body: CreateRunSchema,
-      response: {
-        201: WorkflowRunSchema,
+        200: WorkflowSummarySchema.array(),
         404: ErrorSchema,
       },
     },
@@ -125,13 +34,37 @@ export function registerWorkflowRoutes(
 
   typed.route({
     method: "GET",
-    url: "/api/workflows/:id/runs",
+    url: "/api/projects/:projectId/workflows/:name",
     schema: {
-      params: WorkflowIdParamsSchema,
-      response: {
-        200: ListSchema(WorkflowRunSchema),
-        404: ErrorSchema,
-      },
+      params: WorkflowNameParamsSchema,
+      querystring: RefQuerySchema,
+      response: { 200: WorkflowGraphSchema, 404: ErrorSchema },
+    },
+    handler: async (_request, reply) => {
+      return reply.status(404).send({ error: "Not found" });
+    },
+  });
+
+  typed.route({
+    method: "POST",
+    url: "/api/projects/:projectId/workflows/:name/runs",
+    schema: {
+      params: WorkflowNameParamsSchema,
+      body: TriggerRunSchema,
+      response: { 201: RunSchema, 404: ErrorSchema },
+    },
+    handler: async (_request, reply) => {
+      return reply.status(404).send({ error: "Not found" });
+    },
+  });
+
+  typed.route({
+    method: "GET",
+    url: "/api/projects/:projectId/workflows/:name/runs",
+    schema: {
+      params: WorkflowNameParamsSchema,
+      querystring: PaginationQuerySchema,
+      response: { 200: ListSchema(RunSchema), 404: ErrorSchema },
     },
     handler: async (_request, reply) => {
       return reply.send({ items: [], total: 0 });

@@ -13,6 +13,9 @@ import {
 } from "ts-morph";
 import { extractJsDocMetadata, extractParameterInfo } from "./jsdoc.js";
 import type {
+  DiscoveredWorkflow,
+  ParseError,
+  ProjectParseResult,
   SourceRange,
   StepArgument,
   StepArgumentSource,
@@ -22,6 +25,7 @@ import type {
 } from "./types.js";
 
 let nodeCounter = 0;
+let currentWorkflowFile: string | undefined;
 
 function nextId(): string {
   return `node_${++nodeCounter}`;
@@ -33,6 +37,11 @@ function getSourceRange(node: Node): SourceRange {
   const end = node.getEnd();
   const startPos = sf.getLineAndColumnAtPos(start);
   const endPos = sf.getLineAndColumnAtPos(end);
+  const filePath = sf.getFilePath();
+  const file =
+    currentWorkflowFile && filePath !== currentWorkflowFile
+      ? filePath
+      : undefined;
   return {
     start,
     end,
@@ -40,6 +49,7 @@ function getSourceRange(node: Node): SourceRange {
     startColumn: startPos.column,
     endLine: endPos.line,
     endColumn: endPos.column,
+    file,
   };
 }
 
@@ -103,6 +113,7 @@ interface ParseContext {
   sourceFile: SourceFile;
   stepFunctions: Map<string, FunctionDeclaration>;
   variables: Map<string, VariableInfo>;
+  workflowFile?: string;
 }
 
 function lookupStepMetadata(
@@ -283,9 +294,7 @@ function collectIfBranches(stmt: IfStatement): IfBranch[] {
   return branches;
 }
 
-function extractIIFECall(
-  expr: Node,
-): { body: Node; stmt: Node } | undefined {
+function extractIIFECall(expr: Node): { body: Node; stmt: Node } | undefined {
   let callExpr: CallExpression | undefined;
   if (Node.isAwaitExpression(expr)) {
     const inner = expr.getExpression();
@@ -679,33 +688,58 @@ function parsePromiseAll(
 }
 
 function collectStepFunctions(
-  sourceFile: SourceFile,
+  sourceFiles: readonly SourceFile[],
 ): Map<string, FunctionDeclaration> {
   const map = new Map<string, FunctionDeclaration>();
-  for (const fn of sourceFile.getFunctions()) {
-    const name = fn.getName();
-    if (!name) continue;
-    map.set(name, fn);
+  for (const sf of sourceFiles) {
+    for (const fn of sf.getFunctions()) {
+      const name = fn.getName();
+      if (!name) continue;
+      map.set(name, fn);
+    }
   }
   return map;
 }
 
-export function parseWorkflow(source: string): WorkflowGraph {
-  nodeCounter = 0;
+interface FoundWorkflow {
+  fn: FunctionDeclaration;
+  sourceFile: SourceFile;
+  filePath: string;
+}
 
-  const project = new Project({
-    useInMemoryFileSystem: true,
-    compilerOptions: { strict: true },
-  });
-  const sourceFile = project.createSourceFile("workflow.ts", source);
-
-  const workflowFn = findWorkflowFunction(sourceFile);
-  if (!workflowFn) {
-    throw new Error('No function with "use workflow" directive found');
+function findAllWorkflowFunctions(
+  sourceFiles: readonly SourceFile[],
+): FoundWorkflow[] {
+  const results: FoundWorkflow[] = [];
+  for (const sf of sourceFiles) {
+    for (const fn of sf.getFunctions()) {
+      const body = fn.getBody();
+      if (!body || !Node.isBlock(body)) continue;
+      const statements = body.getStatements();
+      if (statements.length === 0) continue;
+      const first = statements[0];
+      if (
+        Node.isExpressionStatement(first) &&
+        first.getText().includes('"use workflow"')
+      ) {
+        results.push({
+          fn,
+          sourceFile: sf,
+          filePath: sf.getFilePath(),
+        });
+      }
+    }
   }
+  return results;
+}
 
+function buildWorkflowGraph(
+  workflowFn: FunctionDeclaration,
+  stepFunctions: Map<string, FunctionDeclaration>,
+  opts?: { filePath?: string; projectFiles?: string[]; sourceCode?: string },
+): WorkflowGraph {
   const jsdoc = extractJsDocMetadata(workflowFn);
-  const stepFunctions = collectStepFunctions(sourceFile);
+  const sourceFile = workflowFn.getSourceFile();
 
   const ctx: ParseContext = {
     nodes: [],
@@ -713,7 +747,10 @@ export function parseWorkflow(source: string): WorkflowGraph {
     sourceFile,
     stepFunctions,
     variables: new Map(),
+    workflowFile: sourceFile.getFilePath(),
   };
+
+  currentWorkflowFile = ctx.workflowFile;
 
   const triggerParams = extractParameterInfo(workflowFn, jsdoc.paramMetadata);
   const triggerLabel = jsdoc.displayName ?? workflowFn.getName() ?? "Trigger";
@@ -748,6 +785,129 @@ export function parseWorkflow(source: string): WorkflowGraph {
     trigger: { parameters: triggerParams },
     nodes: ctx.nodes,
     edges: ctx.edges,
-    sourceCode: source,
+    sourceCode: opts?.sourceCode ?? workflowFn.getSourceFile().getFullText(),
+    filePath: opts?.filePath,
+    projectFiles: opts?.projectFiles,
   };
+}
+
+function createMultiFileProject(files: Record<string, string>): Project {
+  const project = new Project({
+    useInMemoryFileSystem: true,
+    compilerOptions: {
+      strict: true,
+      target: 99, // ESNext
+      module: 199, // ESNext
+      moduleResolution: 100, // Bundler
+      esModuleInterop: true,
+      skipLibCheck: true,
+    },
+  });
+
+  project.createSourceFile(
+    "tsconfig.json",
+    JSON.stringify({
+      compilerOptions: {
+        strict: true,
+        moduleResolution: "bundler",
+      },
+    }),
+  );
+
+  for (const [filePath, content] of Object.entries(files)) {
+    if (filePath.endsWith(".ts") || filePath.endsWith(".tsx")) {
+      project.createSourceFile(filePath, content);
+    }
+  }
+
+  project.resolveSourceFileDependencies();
+  return project;
+}
+
+export function parseProject(
+  files: Record<string, string>,
+): ProjectParseResult {
+  nodeCounter = 0;
+
+  const project = createMultiFileProject(files);
+  const sourceFiles = project
+    .getSourceFiles()
+    .filter((sf) => !sf.getFilePath().endsWith("tsconfig.json"));
+  const fileNames = Object.keys(files);
+
+  const allSteps = collectStepFunctions(sourceFiles);
+  const workflows = findAllWorkflowFunctions(sourceFiles);
+
+  const discovered: DiscoveredWorkflow[] = [];
+  const errors: ParseError[] = [];
+
+  for (const wf of workflows) {
+    try {
+      nodeCounter = 0;
+      const graph = buildWorkflowGraph(wf.fn, allSteps, {
+        filePath: wf.filePath,
+        projectFiles: fileNames,
+        sourceCode: wf.sourceFile.getFullText(),
+      });
+      discovered.push({
+        functionName: wf.fn.getName() ?? "unnamed",
+        filePath: wf.filePath,
+        graph,
+      });
+    } catch (err) {
+      errors.push({
+        file: wf.filePath,
+        message: err instanceof Error ? err.message : String(err),
+      });
+    }
+  }
+
+  return { workflows: discovered, errors };
+}
+
+export function parseWorkflowFromProject(
+  files: Record<string, string>,
+  workflowName: string,
+): WorkflowGraph | null {
+  nodeCounter = 0;
+
+  const project = createMultiFileProject(files);
+  const sourceFiles = project
+    .getSourceFiles()
+    .filter((sf) => !sf.getFilePath().endsWith("tsconfig.json"));
+  const fileNames = Object.keys(files);
+
+  const allSteps = collectStepFunctions(sourceFiles);
+  const workflows = findAllWorkflowFunctions(sourceFiles);
+
+  const target = workflows.find((w) => w.fn.getName() === workflowName);
+  if (!target) return null;
+
+  return buildWorkflowGraph(target.fn, allSteps, {
+    filePath: target.filePath,
+    projectFiles: fileNames,
+    sourceCode: target.sourceFile.getFullText(),
+  });
+}
+
+export function parseWorkflow(source: string): WorkflowGraph {
+  nodeCounter = 0;
+  currentWorkflowFile = undefined;
+
+  const project = new Project({
+    useInMemoryFileSystem: true,
+    compilerOptions: { strict: true },
+  });
+  const sourceFile = project.createSourceFile("workflow.ts", source);
+
+  const workflowFn = findWorkflowFunction(sourceFile);
+  if (!workflowFn) {
+    throw new Error('No function with "use workflow" directive found');
+  }
+
+  const stepFunctions = collectStepFunctions([sourceFile]);
+
+  return buildWorkflowGraph(workflowFn, stepFunctions, {
+    sourceCode: source,
+  });
 }

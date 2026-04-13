@@ -164,44 +164,50 @@ export function MonacoCodeEditor({
   const cursorDrivenRef = useRef(false);
   const lastCursorSelectedId = useRef<string | null>(null);
 
-  const revealNode = useCallback((editor: MinimalEditor, node: typeof selectedNode) => {
-    if (!node) return;
-    programmaticReveal.current = true;
-    const { startLine, startColumn, endLine, endColumn } = node.sourceRange;
-    editor.revealLineInCenter(startLine);
-    editor.setSelection({
-      startLineNumber: startLine,
-      startColumn,
-      endLineNumber: endLine,
-      endColumn,
-    });
-    editor.setPosition({ lineNumber: startLine, column: startColumn });
-    editor.focus();
-    requestAnimationFrame(() => {
-      programmaticReveal.current = false;
-    });
-  }, []);
-
-  const handleEditorMount = useCallback((editor: MinimalEditor) => {
-    editorRef.current = editor;
-    revealNode(editor, pendingNodeRef.current);
-
-    editor.onDidChangeCursorPosition((e) => {
-      if (programmaticReveal.current) return;
-      const match = findNodeAtPosition({
-        line: e.position.lineNumber,
-        column: e.position.column,
-        nodes: allNodesRef.current,
+  const revealNode = useCallback(
+    (editor: MinimalEditor, node: typeof selectedNode) => {
+      if (!node) return;
+      programmaticReveal.current = true;
+      const { startLine, startColumn, endLine, endColumn } = node.sourceRange;
+      editor.revealLineInCenter(startLine);
+      editor.setSelection({
+        startLineNumber: startLine,
+        startColumn,
+        endLineNumber: endLine,
+        endColumn,
       });
-      const matchId = match?.id ?? null;
-      lastCursorSelectedId.current = matchId;
-      cursorDrivenRef.current = true;
-      onSelectNodeRef.current(matchId);
+      editor.setPosition({ lineNumber: startLine, column: startColumn });
+      editor.focus();
       requestAnimationFrame(() => {
-        cursorDrivenRef.current = false;
+        programmaticReveal.current = false;
       });
-    });
-  }, [revealNode]);
+    },
+    [],
+  );
+
+  const handleEditorMount = useCallback(
+    (editor: MinimalEditor) => {
+      editorRef.current = editor;
+      revealNode(editor, pendingNodeRef.current);
+
+      editor.onDidChangeCursorPosition((e) => {
+        if (programmaticReveal.current) return;
+        const match = findNodeAtPosition({
+          line: e.position.lineNumber,
+          column: e.position.column,
+          nodes: allNodesRef.current,
+        });
+        const matchId = match?.id ?? null;
+        lastCursorSelectedId.current = matchId;
+        cursorDrivenRef.current = true;
+        onSelectNodeRef.current(matchId);
+        requestAnimationFrame(() => {
+          cursorDrivenRef.current = false;
+        });
+      });
+    },
+    [revealNode],
+  );
 
   useEffect(() => {
     if (cursorDrivenRef.current) return;

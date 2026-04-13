@@ -17,6 +17,7 @@ export interface SourceRange {
   startColumn: number;
   endLine: number;
   endColumn: number;
+  file?: string;
 }
 
 export interface ParameterInfo {
@@ -65,11 +66,7 @@ export interface WorkflowEdge {
   source: string;
   target: string;
   label?: string;
-  type:
-    | "sequential"
-    | "branch-true"
-    | "branch-false"
-    | "parallel";
+  type: "sequential" | "branch-true" | "branch-false" | "parallel";
 }
 
 export interface WorkflowGraph {
@@ -80,4 +77,22 @@ export interface WorkflowGraph {
   nodes: WorkflowNode[];
   edges: WorkflowEdge[];
   sourceCode: string;
+  filePath?: string;
+  projectFiles?: string[];
+}
+
+export interface DiscoveredWorkflow {
+  functionName: string;
+  filePath: string;
+  graph: WorkflowGraph;
+}
+
+export interface ParseError {
+  file?: string;
+  message: string;
+}
+
+export interface ProjectParseResult {
+  workflows: DiscoveredWorkflow[];
+  errors: ParseError[];
 }

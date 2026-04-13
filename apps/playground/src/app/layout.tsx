@@ -25,7 +25,7 @@ export default function RootLayout({
             </a>
             <nav className="flex items-center gap-6 text-sm text-neutral-400">
               <a href="/" className="hover:text-neutral-100 transition-colors">
-                Workflows
+                Projects
               </a>
               <a
                 href="http://localhost:3001/docs"
