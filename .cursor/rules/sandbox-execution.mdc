@@ -1,0 +1,42 @@
+---
+description: Workflow execution architecture — Daytona sandboxes, run lifecycle, and instrumentation constraints
+globs: ["packages/sandbox/**", "packages/runtime/**", "packages/server/src/services/**", "packages/server/src/routes/playground.ts"]
+alwaysApply: false
+---
+
+# Sandbox & Execution Architecture
+
+## Sandbox Provider Interface
+
+Execution is abstracted behind `SandboxProvider` / `SandboxManager` so the underlying provider (currently Daytona) can be swapped later. Never call the Daytona SDK directly from routes — go through the service layer.
+
+## Execution Model
+
+1. **Pre-generate the run ID** before entering the sandbox. The run row is inserted into `workflow_runs` with status `running` before the sandbox call.
+2. Pass project files + run ID + trigger data into the sandbox.
+3. The sandbox runs `bun` to execute the workflow function.
+4. On completion (or error), update the run row with the result and final status.
+5. Step rows are written to `workflow_run_steps` if step instrumentation is active.
+
+## Two-Sandbox Model (Planned)
+
+- **Execution sandbox**: immutable snapshot tied to a specific git commit. Versioned with the project. Used to run workflows reliably.
+- **Coding agent sandbox**: mutable, per-user session. The coding agent (Codex SDK) has read/write access to the project's working tree. Sessions are correlated with git commit metadata so every AI conversation is traceable to a code version.
+
+## Step Instrumentation Constraints
+
+**Do NOT** use:
+- Regex-based source-level code transformation to inject instrumentation.
+- Global variable / module-level monkey-patching of ES module exports (ES modules are immutable after evaluation — monkey-patching silently fails).
+
+The correct approach (future work) is a clean compile-time transform or a VM context that wraps step calls at a lower level. Until that is implemented, `steps` on run records will be an empty array.
+
+## Daytona Availability
+
+The server degrades gracefully when `DAYTONA_API_KEY` is absent: the `/api/playground/run` route returns `503 Service Unavailable`. The client surfaces this as a user-visible error, not a crash. Integration tests that require the key use the `describeIf` skip pattern.
+
+## Coding Agent (Future)
+
+First implementation targets **OpenAI Codex SDK** (client-side, no hosted server required). The agent interface will be behind an abstraction so other backends (Claude Code, etc.) can be plugged in. Sessions must store:
+- The git commit SHA at session start
+- Per-message deltas (commit SHA at time of each response)

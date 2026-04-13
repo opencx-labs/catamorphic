@@ -1,0 +1,50 @@
+---
+description: Playground app UI conventions — run panel, history sidebar, state management
+globs: ["apps/playground/**", "packages/ui/src/runs-panel.tsx", "packages/ui/src/history-sidebar.tsx", "packages/ui/src/run-trigger-dialog.tsx", "packages/ui/src/toolbar.tsx", "packages/ui/src/atoms.ts"]
+alwaysApply: false
+---
+
+# Playground UI Conventions
+
+## API-Only Rule
+
+The playground app (`apps/playground`) **must only communicate with the server API**. It never imports from `@catamorphic/db` or connects to the database directly. All data fetching goes through `src/lib/api.ts` or Next.js Server Actions that call the API.
+
+## Run Execution Flow
+
+1. User clicks **▶ Run** → `RunTriggerDialog` opens with a form built from `triggerParameters`.
+2. On submit, a local pending `PlaygroundRun` is added to `runsAtom` (status `running`).
+3. The **History sidebar** opens automatically and the running run is expanded.
+4. `onRun(triggerData)` fires the server action → `POST /api/playground/run`.
+5. On completion, the local run is updated with the server's `runId`, result, and status.
+6. If the server persisted the run to the DB, `runId` is the DB-assigned UUID (replaces the local temp ID).
+
+## History Sidebar
+
+- Opened by the **⏱ History** toolbar button (not a tab inside the right panel).
+- Has two tabs: **Runs** and **Versions** (code history).
+- The run count is **not** shown on the button.
+- Closed by: clicking the button again, clicking ✕ inside the sidebar, or pressing **Escape** (Escape closes history sidebar first; pressing again closes the right detail panel).
+
+## Runs Panel Behavior
+
+- Runs start **collapsed by default** — DB-loaded history is never auto-expanded.
+- Only the run triggered in the **current session** (`activeRunIdAtom`) auto-expands.
+- Runs are paginated: 20 per page. An `IntersectionObserver` sentinel at the bottom triggers `onLoadMoreRuns(offset)` when scrolled into view, appending more items to `runsAtom`.
+
+## State Management Rules
+
+- `runsAtom` — plain Jotai atom, **in-memory only** (no sessionStorage, no localStorage). Seeded from DB on page load via `initialRuns` prop.
+- `lastTriggerDataAtom` — plain Jotai atom, **in-memory only**. Remembers the last trigger data values to pre-fill the dialog on next run. Never persist to storage.
+- `loadMoreRunsAtom` — holds the `onLoadMoreRuns` callback, set from `WorkflowEditorProps`. Allows `RunsPanel` to fetch additional pages without knowing the API URL.
+
+## Canvas Interaction Rules
+
+- Edge interaction paths (`react-flow__edge-interaction`) have `pointer-events: none` — dragging on an edge pans the canvas instead of initiating an edge interaction.
+- The graph is read-only; users cannot drag, connect, or delete nodes or edges.
+
+## Detail Panel (Right Panel)
+
+- Shows **Details** and **Code** tabs.
+- **Node count is not shown** on the workflow overview (trigger details). Only trigger parameters and description are shown.
+- See `panel-editor.mdc` for full bidirectional code ↔ canvas linking conventions.

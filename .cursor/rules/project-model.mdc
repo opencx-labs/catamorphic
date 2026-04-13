@@ -1,0 +1,79 @@
+---
+description: Project model, git versioning, multi-tenancy, and templates
+globs: "packages/git/**/*.ts,packages/server/src/routes/projects.ts,packages/db/migrations/*.sql"
+alwaysApply: false
+---
+
+# Project Model
+
+## There Is No "Workflow ID"
+
+A workflow is identified by its **exported function name** inside a project. There is no separate workflow table or workflow UUID. When referencing a workflow, use `(projectId, workflowName)`.
+
+A **project** is an npm package — a git repository — that can export many workflow functions. The project is the unit of versioning, storage, and access control.
+
+## Multi-Tenancy
+
+The hierarchy is: **tenant → project → workflow**.
+
+- `tenants` table is the top-level isolation boundary.
+- All projects belong to a tenant.
+- The playground uses a fixed default tenant (`00000000-0000-0000-0000-000000000001`, seeded in migration `005`).
+- Multi-tenant APIs pass `tenantId` through the storage backend; path containment checks in `FsBackend` enforce isolation (`<basePath>/<tenantId>/<projectId>`).
+
+## Git Is the Version Control
+
+Every project **is** a git repository. Version control is not bolted on — it is the storage model:
+
+- `ProjectManager.create` writes `package.json` + `tsconfig.json` (ES2022, strict) and makes an **initial commit** authored as the system user.
+- Every subsequent edit that should be versioned produces a commit. Playground test runs commit with message `"Test run <ISO timestamp>"` before executing.
+- **Runs store the commit SHA**. `workflow_runs.commit_sha` is non-nullable; there is no such thing as a run without a version.
+- `isomorphic-git` is used for all git operations — portable, no native CLI dependency, works inside Daytona sandboxes.
+- Default branch is **`main`**.
+
+## Storage Backends
+
+`StorageBackend` is an interface with two concrete implementations:
+
+| Backend | Used for |
+|---------|----------|
+| `FsBackend` | Local dev, CI — stores repos under a base path on disk |
+| `DaytonaBackend` | Cloud — creates a Daytona sandbox per project, stores the repo inside it |
+
+Path safety rules are enforced in both: no absolute paths, no `..`, no `.git` access in file APIs.
+
+## Templates
+
+Templates are pre-defined project skeletons (not in-memory state). When a user creates a project from a template:
+
+1. A real project is created (DB row + git repo).
+2. Template files are written.
+3. An **initial commit** is made — the project has at least one commit before any run.
+
+This ensures `commit_sha` is always available on runs and avoids special-casing "unsaved" projects.
+
+## Playground Uses the API Only
+
+The playground (`apps/playground`) must talk to the server API exclusively. It must **never** import from `packages/db` or query the database directly. All data access goes through API routes.
+
+## Project Discovery
+
+Workflows in a project are discovered at parse time by `packages/parser`: the parser scans exported async functions with a `"use workflow"` directive. There is no workflow registry file or manifest — the TypeScript source is the registry.
+
+## Database Type Conventions
+
+Generated types live in `packages/db/src/generated/db.ts` (a `.ts` source file, not `.d.ts`). Regenerate with:
+
+```bash
+DATABASE_URL="..." kysely-codegen --out-file src/generated/db.ts
+```
+
+When querying with Kysely, use `Selectable<DB["table_name"]>` — never write manual interface duplicates or `as unknown as` casts. Kysely infers row types correctly from the generated file.
+
+JSONB columns (`trigger_data`, `result`, `input`, `output`) type as:
+- **Kysely side**: `Json` / `JsonValue` (from `@catamorphic/db`)
+- **Zod schema side**: `z.unknown().nullable()` — not `z.record(z.string(), z.unknown())`, since JSONB can hold any JSON value (arrays, primitives, etc.), not just objects
+
+## Test Run Marking
+
+Playground / manual runs from the UI are stored with `is_test = true` in `workflow_runs`. Production workflow invocations leave it `false`.

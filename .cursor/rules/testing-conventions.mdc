@@ -1,0 +1,70 @@
+---
+description: Test parallelism, structure, and isolation conventions
+globs: "**/*.test.ts"
+alwaysApply: false
+---
+
+# Testing Conventions
+
+## Parallelism Architecture
+
+Tests run in parallel at two levels:
+
+1. **Package level** — Turbo runs each package's `test` task concurrently. `test.dependsOn` is `["^build"]` (caret prefix), meaning a package only waits for its *dependencies* to be built, not its own build. Leaf packages (`parser`, `git`, `runtime`, `sandbox`, `db`) therefore start testing immediately with no build wait. Dependent packages (`server`, `ui`, `playground`) wait only for their upstream packages.
+
+2. **File level** — Within each package, Vitest runs test files concurrently using Node.js worker threads (`pool: "threads"`, `fileParallelism: true` in root `vitest.config.ts`).
+
+**Do not** set `test.dependsOn: ["build"]` (without the caret). That would force every package to build itself before testing, serializing the pipeline for no benefit.
+
+## Reading Parallel Output
+
+Vitest buffers output per file and flushes it atomically when the file finishes. This means:
+
+- Parallel files will *appear* sequential in the terminal — the fastest file's output prints first, the slowest last.
+- Seeing file A's output followed immediately by file B's output does **not** mean they ran sequentially. Check elapsed time or use `--reporter=verbose` to confirm.
+
+## Test Isolation Requirements
+
+**Unit tests** — must be fully isolated. Use `beforeEach` with a fresh temp directory per test:
+
+```typescript
+beforeEach(async () => {
+  tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "catamorphic-"));
+  manager = new ProjectManager(new FsBackend(tmpDir));
+});
+```
+
+This allows parallel execution without any shared state.
+
+**Integration tests** — may share a single external resource (e.g., one Daytona sandbox) set up once in `beforeAll` for efficiency. Because subsequent tests depend on the side effects of earlier ones, tests within the file run sequentially by Vitest's default. Do **not** mark these `concurrent` — the sequential ordering is intentional and load-bearing.
+
+```typescript
+// ✅ Correct: shared sandbox, sequential tests
+describe("DaytonaProjectRepo (integration)", () => {
+  let repo: DaytonaProjectRepo; // shared, mutated across tests
+
+  beforeAll(async () => {
+    // create sandbox once
+  }, 120_000);
+
+  it("initialises", async () => { … });
+  it("commits after init", async () => { … }); // depends on previous test's side effect
+});
+```
+
+## Skip Pattern for Optional Integrations
+
+Integration tests that require external credentials should be skipped when the key is absent, not fail:
+
+```typescript
+const describeIf = (condition: boolean) =>
+  condition ? describe : describe.skip;
+
+const DAYTONA_API_KEY = process.env.DAYTONA_API_KEY ?? "";
+describeIf(!!DAYTONA_API_KEY)("DaytonaProjectRepo (integration)", () => { … });
+```
+
+## File Naming
+
+- `*.test.ts` — unit tests, run in CI always.
+- `*.integration.test.ts` — integration tests, may be slow or require credentials.
