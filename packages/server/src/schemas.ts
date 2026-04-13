@@ -23,6 +23,15 @@ export const PaginationQuerySchema = z.object({
   offset: z.coerce.number().int().min(0).default(0),
 });
 
+// --- Templates ---
+export const TemplateSchema = z.object({
+  id: z.string(),
+  name: z.string(),
+  description: z.string(),
+  defaultWorkflow: z.string(),
+  fileCount: z.number(),
+});
+
 // --- Projects ---
 export const ProjectSchema = z.object({
   id: z.string().uuid(),
@@ -36,6 +45,7 @@ export const ProjectSchema = z.object({
 
 export const CreateProjectSchema = z.object({
   name: z.string().min(1),
+  templateId: z.string().optional(),
 });
 
 export const UpdateProjectSchema = z.object({
@@ -86,6 +96,7 @@ export const WorkflowGraphSchema = z.object({
   description: z.string().nullable(),
   filePath: z.string(),
   projectFiles: z.array(z.string()).optional(),
+  allFiles: z.record(z.string(), z.string()).optional(),
   trigger: z.object({
     parameters: z.array(
       z.object({
@@ -111,8 +122,12 @@ export const WorkflowGraphSchema = z.object({
       metadata: z.record(z.string(), z.unknown()),
       sourceRange: z
         .object({
-          start: z.object({ line: z.number(), column: z.number() }),
-          end: z.object({ line: z.number(), column: z.number() }),
+          start: z.number(),
+          end: z.number(),
+          startLine: z.number(),
+          startColumn: z.number(),
+          endLine: z.number(),
+          endColumn: z.number(),
           file: z.string().optional(),
         })
         .optional(),
@@ -136,9 +151,10 @@ export const RunSchema = z.object({
   projectId: z.string().uuid(),
   workflowName: z.string(),
   commitSha: z.string().length(40),
+  isTest: z.boolean(),
   status: z.enum(["pending", "running", "completed", "failed", "cancelled"]),
-  triggerData: z.record(z.string(), z.unknown()).nullable(),
-  result: z.record(z.string(), z.unknown()).nullable(),
+  triggerData: z.unknown().nullable(),
+  result: z.unknown().nullable(),
   error: z.string().nullable(),
   startedAt: z.string().datetime().nullable(),
   completedAt: z.string().datetime().nullable(),
@@ -151,8 +167,8 @@ export const RunStepSchema = z.object({
   nodeId: z.string(),
   name: z.string(),
   status: z.enum(["pending", "running", "completed", "failed", "skipped"]),
-  input: z.record(z.string(), z.unknown()).nullable(),
-  output: z.record(z.string(), z.unknown()).nullable(),
+  input: z.unknown().nullable(),
+  output: z.unknown().nullable(),
   error: z.string().nullable(),
   startedAt: z.string().datetime().nullable(),
   completedAt: z.string().datetime().nullable(),
@@ -268,6 +284,24 @@ export const RunReportSchema = z.object({
   status: z.enum(["completed", "failed"]),
   result: z.unknown().optional(),
   error: z.string().optional(),
+  steps: z.array(RunReportStepSchema),
+  startedAt: z.string(),
+  completedAt: z.string(),
+});
+
+// --- Playground Run ---
+export const PlaygroundRunRequestSchema = z.object({
+  projectId: z.string().uuid().optional(),
+  files: z.record(z.string(), z.string()),
+  workflowName: z.string().min(1),
+  triggerData: z.record(z.string(), z.unknown()).optional(),
+});
+
+export const PlaygroundRunResponseSchema = z.object({
+  runId: z.string().uuid().nullable(),
+  status: z.enum(["completed", "failed"]),
+  result: z.unknown().nullable(),
+  error: z.string().nullable(),
   steps: z.array(RunReportStepSchema),
   startedAt: z.string(),
   completedAt: z.string(),

@@ -103,6 +103,7 @@
         "@catamorphic/db": "workspace:*",
         "@catamorphic/git": "workspace:*",
         "@catamorphic/parser": "workspace:*",
+        "@catamorphic/sandbox": "workspace:*",
         "@fastify/cors": "^11.2.0",
         "@fastify/swagger": "^9.7.0",
         "@fastify/swagger-ui": "^5.2.5",

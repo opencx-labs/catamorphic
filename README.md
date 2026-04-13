@@ -31,15 +31,15 @@ TypeScript Code → ts-morph Parser → WorkflowGraph → React Flow Canvas
 
 ## Packages
 
-| Package | Description |
-|---------|-------------|
-| `@catamorphic/parser` | ts-morph AST → WorkflowGraph parser |
-| `@catamorphic/ui` | React Flow editor, embeddable component |
-| `@catamorphic/server` | Fastify API + Zod + OpenAPI |
-| `@catamorphic/db` | Kysely + PostgreSQL + migrations |
-| `@catamorphic/runtime` | Vercel Workflow SDK adapter |
-| `@catamorphic/sandbox` | sandbox-agent wrapper for AI |
-| `@catamorphic/api-client` | Generated type-safe API client |
+| Package                   | Description                             |
+| ------------------------- | --------------------------------------- |
+| `@catamorphic/parser`     | ts-morph AST → WorkflowGraph parser     |
+| `@catamorphic/ui`         | React Flow editor, embeddable component |
+| `@catamorphic/server`     | Fastify API + Zod + OpenAPI             |
+| `@catamorphic/db`         | Kysely + PostgreSQL + migrations        |
+| `@catamorphic/runtime`    | Vercel Workflow SDK adapter             |
+| `@catamorphic/sandbox`    | sandbox-agent wrapper for AI            |
+| `@catamorphic/api-client` | Generated type-safe API client          |
 
 ## Workflow Code Format
 
@@ -48,7 +48,13 @@ TypeScript Code → ts-morph Parser → WorkflowGraph → React Flow Canvas
  * @displayname Welcome New User
  * @description Onboard a new user
  */
-export async function welcomeUser({ email, name }: { email: string; name: string }) {
+export async function welcomeUser({
+  email,
+  name,
+}: {
+  email: string;
+  name: string;
+}) {
   "use workflow";
 
   const user = await createUser({ email, name });
@@ -90,6 +96,7 @@ bun run db:codegen # Regenerate database types
 - **Turborepo** — build orchestration
 
 # TODO
+
 - Make the graph and code editor easily embeddable
   - Extract the rendering and editor logic from the playground app into an installable package
   - Should be highly configurable
@@ -98,3 +105,10 @@ bun run db:codegen # Regenerate database types
 - Implement Git workflow
   - Create branches for new edits, merge them to main to deploy
   - Handle versions, conflicts, sync (pull/push) in the UI
+- Implement sleeps
+  - Might require an abstraction that lets users return from steps - returned value is delayed and put on a queue
+  - Abstraction must be minimal and must render well in the graph
+- Make execution really efficient
+  - Maybe run persistent server sandboxes for each project
+  - Make sure managing sandboxes is simple
+    - Take into account both scale-to-zero AND scale-up

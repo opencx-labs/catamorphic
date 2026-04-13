@@ -347,12 +347,6 @@ function WorkflowOverview() {
           </div>
         </div>
       )}
-      <div className="catamorphic-detail-section">
-        <span className="catamorphic-detail-section-label">Nodes</span>
-        <span className="catamorphic-detail-source-range">
-          {graph.nodes.length} nodes
-        </span>
-      </div>
     </div>
   );
 }

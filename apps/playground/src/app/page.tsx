@@ -1,78 +1,123 @@
 import Link from "next/link";
-import { SAMPLE_PROJECTS } from "@/lib/sample-projects";
+import { api, type Project, type Template } from "@/lib/api";
+import { createProjectFromTemplateAction } from "@/lib/project-actions";
 
-const PROJECT_ICONS: Record<string, string> = {
-  "welcome-user": "\u{1F44B}",
-  "order-processing": "\u{1F4E6}",
-  "data-pipeline": "\u{1F504}",
-  "support-routing": "\u{1F3AB}",
+const TEMPLATE_ICONS: Record<string, string> = {
+  "welcome-user": "👋",
+  "order-processing": "📦",
+  "data-pipeline": "🔄",
+  "support-routing": "🎫",
 };
 
-export default function Home() {
-  const projects = Object.entries(SAMPLE_PROJECTS);
+async function getPageData(): Promise<{
+  templates: Template[];
+  projects: Project[];
+}> {
+  try {
+    const [templates, projectsResult] = await Promise.all([
+      api.getTemplates(),
+      api.getProjects(),
+    ]);
+    return { templates, projects: projectsResult.items };
+  } catch {
+    return { templates: [], projects: [] };
+  }
+}
+
+export default async function Home() {
+  const { templates, projects } = await getPageData();
 
   return (
     <main className="max-w-screen-2xl mx-auto px-6 py-12">
-      <div className="flex items-center justify-between mb-8">
+      {projects.length > 0 && (
+        <section className="mb-12">
+          <div className="flex items-center justify-between mb-6">
+            <h2 className="text-xl font-semibold">Your Projects</h2>
+          </div>
+          <div className="grid gap-3">
+            {projects.map((project) => (
+              <Link
+                key={project.id}
+                href={`/projects/${project.id}`}
+                className="border border-neutral-800 rounded-lg p-5 hover:border-neutral-600 transition-colors group block"
+              >
+                <div className="flex items-center justify-between">
+                  <div>
+                    <h3 className="font-medium group-hover:text-blue-400 transition-colors">
+                      {project.name}
+                    </h3>
+                    <p className="text-xs text-neutral-500 mt-1 font-mono">
+                      {project.id.slice(0, 8)}&hellip;
+                    </p>
+                  </div>
+                  <span className="text-neutral-600 text-sm group-hover:text-neutral-400 transition-colors">
+                    Open &rarr;
+                  </span>
+                </div>
+              </Link>
+            ))}
+          </div>
+        </section>
+      )}
+
+      <div className="flex items-center justify-between mb-6">
         <div>
-          <h1 className="text-3xl font-bold">Projects</h1>
-          <p className="text-neutral-400 mt-1">
-            Create and manage workflow projects
+          <h1 className="text-2xl font-bold">
+            {projects.length === 0 ? "Start from a template" : "Templates"}
+          </h1>
+          <p className="text-neutral-400 mt-1 text-sm">
+            Pick a template to create a new project with an initial git commit
           </p>
         </div>
         <Link
           href="/projects/new"
-          className="px-4 py-2 bg-blue-600 hover:bg-blue-500 rounded-lg text-sm font-medium transition-colors"
+          className="px-3 py-1.5 border border-neutral-700 hover:border-neutral-500 rounded text-sm transition-colors"
         >
-          New Project
+          Blank editor
         </Link>
       </div>
 
-      <div className="grid gap-4">
-        {projects.map(([id, project]) => {
-          const fileCount = Object.keys(project.files).filter(
-            (f) => f.endsWith(".ts") || f.endsWith(".tsx"),
-          ).length;
-
-          return (
-            <Link
-              key={id}
-              href={`/projects/${id}`}
-              className="border border-neutral-800 rounded-lg p-6 hover:border-neutral-600 transition-colors group block"
+      <div className="grid sm:grid-cols-2 gap-4">
+        {templates.map((template) => (
+          <form
+            key={template.id}
+            action={createProjectFromTemplateAction.bind(
+              null,
+              template.id,
+              template.name,
+              template.defaultWorkflow,
+            )}
+          >
+            <button
+              type="submit"
+              className="w-full text-left border border-neutral-800 rounded-lg p-6 hover:border-neutral-600 transition-colors group block"
             >
-              <div className="flex items-center justify-between">
-                <div className="flex items-center gap-4">
-                  <span className="text-2xl">
-                    {PROJECT_ICONS[id] ?? "\u26A1"}
-                  </span>
-                  <div>
-                    <h3 className="font-medium text-lg group-hover:text-blue-400 transition-colors">
-                      {project.name}
-                    </h3>
-                    <p className="text-neutral-400 text-sm mt-1">
-                      {project.description}
-                    </p>
-                    <div className="flex items-center gap-3 mt-2 text-xs text-neutral-500">
-                      <span>
-                        {fileCount} source file{fileCount !== 1 ? "s" : ""}
-                      </span>
-                    </div>
-                  </div>
-                </div>
-                <span className="text-neutral-600 text-sm group-hover:text-neutral-400 transition-colors">
-                  Open &rarr;
+              <div className="flex items-start gap-4">
+                <span className="text-2xl shrink-0">
+                  {TEMPLATE_ICONS[template.id] ?? "⚡"}
                 </span>
+                <div className="min-w-0">
+                  <h3 className="font-medium group-hover:text-blue-400 transition-colors">
+                    {template.name}
+                  </h3>
+                  <p className="text-neutral-400 text-sm mt-1">
+                    {template.description}
+                  </p>
+                  <p className="text-neutral-600 text-xs mt-2">
+                    {template.fileCount} source file
+                    {template.fileCount !== 1 ? "s" : ""}
+                  </p>
+                </div>
               </div>
-            </Link>
-          );
-        })}
+            </button>
+          </form>
+        ))}
 
-        <Link
-          href="/projects/new"
-          className="border border-dashed border-neutral-800 rounded-lg p-8 flex items-center justify-center text-neutral-500 hover:border-neutral-600 hover:text-neutral-400 transition-colors"
-        >
-          <span className="text-sm">+ Create a new project</span>
-        </Link>
+        {templates.length === 0 && (
+          <div className="col-span-2 text-center text-neutral-500 py-12 text-sm">
+            Could not load templates. Make sure the server is running.
+          </div>
+        )}
       </div>
     </main>
   );

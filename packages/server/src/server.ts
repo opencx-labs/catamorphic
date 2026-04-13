@@ -1,6 +1,22 @@
+import { createDatabase } from "@catamorphic/db";
+import { FsBackend, ProjectManager } from "@catamorphic/git";
+import { DaytonaSandboxProvider } from "@catamorphic/sandbox";
 import { createApp } from "./app.js";
 
-const app = createApp();
+const DATABASE_URL =
+  process.env.DATABASE_URL ??
+  "postgresql://catamorphic:catamorphic@localhost:5432/catamorphic";
+
+const PROJECTS_PATH = process.env.PROJECTS_PATH ?? "/tmp/catamorphic-projects";
+
+const db = createDatabase({ connectionString: DATABASE_URL });
+const projectManager = new ProjectManager(new FsBackend(PROJECTS_PATH));
+
+const sandboxProvider = process.env.DAYTONA_API_KEY
+  ? new DaytonaSandboxProvider({ apiKey: process.env.DAYTONA_API_KEY })
+  : undefined;
+
+const app = createApp({ db, projectManager, sandboxProvider });
 
 let shuttingDown = false;
 
@@ -11,6 +27,7 @@ async function shutdown(signal: string) {
   app.log.info(`Received ${signal}, shutting down gracefully...`);
   try {
     await app.close();
+    await db.destroy();
   } catch (err) {
     app.log.error(err, "Error during shutdown");
   }

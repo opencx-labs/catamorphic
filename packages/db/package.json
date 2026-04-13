@@ -17,7 +17,7 @@
     "test": "vitest run --config ../../vitest.config.ts",
     "typecheck": "tsgo --project ./tsconfig.json",
     "db:migrate": "bun run src/migrate.ts",
-    "db:codegen": "kysely-codegen --out-file src/generated/db.d.ts",
+    "db:codegen": "kysely-codegen --out-file src/generated/db.ts",
     "db:reset": "bun run src/reset.ts"
   },
   "dependencies": {

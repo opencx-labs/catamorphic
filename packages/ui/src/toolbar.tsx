@@ -1,18 +1,23 @@
 import { useAtom } from "jotai";
 import {
   activePanelTabAtom,
+  historySidebarOpenAtom,
   panelVisibilityAtom,
   rightPanelOpenAtom,
 } from "./atoms.js";
 
 export interface ToolbarProps {
   onRun?: () => void;
+  isRunning?: boolean;
 }
 
-export function Toolbar({ onRun }: ToolbarProps) {
-  const [panelVisibility, setPanelVisibility] = useAtom(panelVisibilityAtom);
+export function Toolbar({ onRun, isRunning }: ToolbarProps) {
+  const [, setPanelVisibility] = useAtom(panelVisibilityAtom);
   const [rightPanelOpen, setRightPanelOpen] = useAtom(rightPanelOpenAtom);
   const [, setActiveTab] = useAtom(activePanelTabAtom);
+  const [historySidebarOpen, setHistorySidebarOpen] = useAtom(
+    historySidebarOpenAtom,
+  );
 
   return (
     <div className="catamorphic-toolbar">
@@ -38,17 +43,25 @@ export function Toolbar({ onRun }: ToolbarProps) {
             setPanelVisibility((v) => ({ ...v, minimap: !v.minimap }))
           }
         >
-          {panelVisibility.minimap ? "⊡ Minimap" : "⊡ Minimap"}
+          ⊡ Minimap
         </button>
       </div>
       <div className="catamorphic-toolbar-right">
+        <button
+          type="button"
+          className={`catamorphic-toolbar-btn ${historySidebarOpen ? "catamorphic-toolbar-btn-active" : ""}`}
+          onClick={() => setHistorySidebarOpen((v) => !v)}
+        >
+          ⏱ History
+        </button>
         {onRun && (
           <button
             type="button"
             className="catamorphic-toolbar-btn catamorphic-toolbar-run"
             onClick={onRun}
+            disabled={isRunning}
           >
-            ▶ Run
+            {isRunning ? "⟳ Running..." : "▶ Run"}
           </button>
         )}
       </div>
