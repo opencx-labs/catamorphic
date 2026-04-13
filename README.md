@@ -88,3 +88,13 @@ bun run db:codegen # Regenerate database types
 - **Next.js** — playground app
 - **Jotai** — state management
 - **Turborepo** — build orchestration
+
+# TODO
+- Make the graph and code editor easily embeddable
+  - Extract the rendering and editor logic from the playground app into an installable package
+  - Should be highly configurable
+    - Theme and UI
+    - Toggles for minimap, code editor, AI input box, etc
+- Implement Git workflow
+  - Create branches for new edits, merge them to main to deploy
+  - Handle versions, conflicts, sync (pull/push) in the UI

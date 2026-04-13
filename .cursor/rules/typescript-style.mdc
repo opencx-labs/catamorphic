@@ -1,0 +1,42 @@
+---
+description: TypeScript coding style — type safety and parameter conventions
+globs: "**/*.{ts,tsx}"
+alwaysApply: false
+---
+
+# TypeScript Style
+
+## Object (named) parameters over positional
+
+Prefer a single destructured object parameter so call sites are self-documenting and order-independent.
+
+```typescript
+// ❌ BAD — positional params
+function createUser(name: string, email: string, isAdmin: boolean) { … }
+createUser("Ada", "ada@example.com", true); // what is `true`?
+
+// ✅ GOOD — named params
+function createUser({ name, email, isAdmin }: { name: string; email: string; isAdmin: boolean }) { … }
+createUser({ name: "Ada", email: "ada@example.com", isAdmin: true });
+```
+
+Exception: single-argument helpers where meaning is unambiguous (e.g., `slugify(text)`).
+
+## No `any`, no unnecessary `as` casts
+
+- Never use `any`. Use `unknown` when the type is truly unknown, then narrow.
+- Avoid `as` type assertions. Prefer Zod `.parse()`, type guards, or generics.
+
+```typescript
+// ❌ BAD
+const data = JSON.parse(raw) as Order;
+function handle(input: any) { … }
+
+// ✅ GOOD
+const data = OrderSchema.parse(JSON.parse(raw));
+function handle(input: unknown) {
+  const order = OrderSchema.parse(input);
+}
+```
+
+`as const` and `as` in test fixtures where the type system can't infer are acceptable exceptions.

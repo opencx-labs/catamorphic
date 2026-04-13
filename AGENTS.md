@@ -67,6 +67,7 @@ cd apps/playground && bun run dev
 ```
 
 Open `http://localhost:3000` and verify:
+
 - All sample workflows render correctly (welcome-user, order-processing, data-pipeline)
 - No errors in the browser console (open DevTools → Console)
 - The Next.js dev indicator (bottom-left "N" icon) shows **zero issues**
@@ -76,6 +77,7 @@ Open `http://localhost:3000` and verify:
 ### 6. Keep Next.js dev clean
 
 The Next.js dev overlay (bottom-left indicator in dev mode) must show zero issues at all times. Common issues to watch for:
+
 - **Hydration mismatches**: Ensure client components (`"use client"`) don't produce different HTML on server vs client. Use dynamic imports with `ssr: false` for browser-only components.
 - **Console errors**: React Flow edge/handle errors, missing keys, etc. all show up in the indicator.
 - **Import errors**: Ensure Node.js-only modules (ts-morph, fs, path) are never imported in client components — use Server Actions instead.
@@ -157,6 +159,7 @@ async function sendWelcomeEmail({ to, name }: { to: string; name: string }) {
 ```
 
 Guidelines for display names:
+
 - **Step display names**: Short action phrases (e.g., "Send Email", "Create User", "Validate Order")
 - **Parameter display names**: Descriptive labels (e.g., `orderId` → "Order ID", `emailAddress` → "Email Address", `isActive` → "Is Active"). If no `@displayname` is provided, the UI auto-generates one from the camelCase name, but an explicit one is always preferred.
 - **Parameter descriptions**: Explain what the parameter does in plain language
@@ -165,8 +168,8 @@ Guidelines for display names:
 
 ### TypeScript Style
 
-- Use objects as function parameters, not positional params
-- Avoid `any` type
+- Prefer **object (named) parameters** over positional - consider refactoring existing functions if encountered
+- Never use `any` or `as` type casting unless absolutely needed — prefer `unknown`, generics, or Zod `.parse()`
 - Minimize `let` and mutable state
 - Do not add obvious/narrating comments
 
