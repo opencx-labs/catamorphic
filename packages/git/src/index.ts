@@ -1,3 +1,5 @@
+export { DaytonaBackend } from "./daytona-backend.js";
+export { DaytonaProjectRepo } from "./daytona-project-repo.js";
 export { FsBackend } from "./fs-backend.js";
 export { migrateWorkflowToProject } from "./migrate-workflow.js";
 export { ProjectManager } from "./project-manager.js";

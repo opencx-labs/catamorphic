@@ -9,6 +9,7 @@ import {
   validatorCompiler,
 } from "fastify-type-provider-zod";
 import type { Kysely } from "kysely";
+import { registerAgentRoutes } from "./routes/agent.js";
 import { registerProjectRoutes } from "./routes/projects.js";
 import { registerRunRoutes } from "./routes/runs.js";
 import { registerWorkflowRoutes } from "./routes/workflows.js";
@@ -52,6 +53,7 @@ export function createApp(config: AppConfig = {}) {
     registerProjectRoutes(app, config.projectManager);
     registerWorkflowRoutes(app);
     registerRunRoutes(app);
+    registerAgentRoutes(app);
   });
 
   return app;

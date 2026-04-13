@@ -14,7 +14,7 @@
   "scripts": {
     "build": "tsup",
     "dev": "tsup --watch",
-    "test": "vitest run --passWithNoTests",
+    "test": "vitest run --config ../../vitest.config.ts",
     "typecheck": "tsgo --project ./tsconfig.json",
     "db:migrate": "bun run src/migrate.ts",
     "db:codegen": "kysely-codegen --out-file src/generated/db.d.ts",

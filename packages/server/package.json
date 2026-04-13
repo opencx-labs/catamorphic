@@ -14,7 +14,7 @@
   "scripts": {
     "build": "tsup",
     "dev": "bun --watch src/server.ts",
-    "test": "vitest run --passWithNoTests",
+    "test": "vitest run --config ../../vitest.config.ts",
     "typecheck": "tsgo --project ./tsconfig.json",
     "generate-spec": "bun run scripts/generate-spec.ts"
   },

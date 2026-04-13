@@ -178,6 +178,101 @@ export const SetRemoteSchema = z.object({
   url: z.string().url(),
 });
 
+// --- Users ---
+export const UserSchema = z.object({
+  id: z.string().uuid(),
+  email: z.string().email(),
+  displayName: z.string(),
+  createdAt: z.string().datetime(),
+});
+
+// --- Project Members ---
+export const ProjectMemberSchema = z.object({
+  projectId: z.string().uuid(),
+  userId: z.string().uuid(),
+  role: z.enum(["owner", "editor", "viewer"]),
+  createdAt: z.string().datetime(),
+});
+
+// --- Sandboxes ---
+export const SandboxSchema = z.object({
+  id: z.string().uuid(),
+  projectId: z.string().uuid(),
+  provider: z.string(),
+  providerId: z.string(),
+  sandboxType: z.enum(["execution", "dev"]),
+  commitSha: z.string().length(40).nullable(),
+  userId: z.string().uuid().nullable(),
+  status: z.string(),
+  snapshotName: z.string().nullable(),
+  createdAt: z.string().datetime(),
+  lastUsedAt: z.string().datetime(),
+});
+
+// --- Agent Sessions ---
+export const AgentSessionSchema = z.object({
+  id: z.string().uuid(),
+  projectId: z.string().uuid(),
+  userId: z.string().uuid(),
+  provider: z.string(),
+  providerSessionId: z.string().nullable(),
+  sandboxId: z.string().uuid().nullable(),
+  title: z.string().nullable(),
+  status: z.enum(["active", "closed"]),
+  baseCommitSha: z.string().length(40).nullable(),
+  createdAt: z.string().datetime(),
+  updatedAt: z.string().datetime(),
+});
+
+export const AgentSessionIdParamsSchema = ProjectIdParamsSchema.extend({
+  sessionId: z.string().uuid(),
+});
+
+export const CreateAgentSessionSchema = z.object({
+  userId: z.string().uuid(),
+  systemPrompt: z.string().optional(),
+});
+
+export const AgentMessageSchema = z.object({
+  id: z.string().uuid(),
+  sessionId: z.string().uuid(),
+  role: z.enum(["user", "assistant", "system"]),
+  content: z.string(),
+  commitSha: z.string().length(40).nullable(),
+  metadata: z.record(z.string(), z.unknown()).nullable(),
+  createdAt: z.string().datetime(),
+});
+
+export const SendMessageSchema = z.object({
+  message: z.string().min(1),
+});
+
+export const AgentSessionDetailSchema = AgentSessionSchema.extend({
+  messages: z.array(AgentMessageSchema),
+});
+
+// --- Run Report (from sandbox harness) ---
+export const RunReportStepSchema = z.object({
+  nodeId: z.string(),
+  name: z.string(),
+  status: z.enum(["completed", "failed", "skipped"]),
+  input: z.unknown().optional(),
+  output: z.unknown().optional(),
+  error: z.string().optional(),
+  startedAt: z.string(),
+  completedAt: z.string(),
+});
+
+export const RunReportSchema = z.object({
+  runId: z.string().uuid(),
+  status: z.enum(["completed", "failed"]),
+  result: z.unknown().optional(),
+  error: z.string().optional(),
+  steps: z.array(RunReportStepSchema),
+  startedAt: z.string(),
+  completedAt: z.string(),
+});
+
 // --- Generic ---
 export const ErrorSchema = z.object({
   error: z.string(),

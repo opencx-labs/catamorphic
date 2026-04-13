@@ -4,6 +4,7 @@ import {
   ErrorSchema,
   RunDetailSchema,
   RunIdParamsSchema,
+  RunReportSchema,
   RunSchema,
 } from "../schemas.js";
 
@@ -31,6 +32,19 @@ export function registerRunRoutes(app: FastifyInstance) {
     },
     handler: async (_request, reply) => {
       return reply.status(404).send({ error: "Not found" });
+    },
+  });
+
+  typed.route({
+    method: "POST",
+    url: "/api/runs/:runId/report",
+    schema: {
+      params: RunIdParamsSchema,
+      body: RunReportSchema,
+      response: { 200: RunDetailSchema, 404: ErrorSchema },
+    },
+    handler: async (_request, reply) => {
+      return reply.status(404).send({ error: "Not implemented" });
     },
   });
 }
