@@ -37,9 +37,11 @@ async function shutdown(signal: string) {
 process.on("SIGTERM", () => shutdown("SIGTERM"));
 process.on("SIGINT", () => shutdown("SIGINT"));
 
+const PORT = Number(process.env.PORT ?? 3001);
+
 try {
   await app.ready();
-  await app.listen({ port: 3001, host: "0.0.0.0" });
+  await app.listen({ port: PORT, host: "0.0.0.0" });
 } catch (err) {
   app.log.error(err, "Failed to start server");
   process.exit(1);

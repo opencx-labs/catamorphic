@@ -42,7 +42,7 @@ export function createApp(config: AppConfig = {}) {
         version: "0.0.1",
         description: "Code-first workflow builder API",
       },
-      servers: [{ url: "http://localhost:3001" }],
+      servers: [{ url: `http://localhost:${process.env.PORT ?? 3001}` }],
     },
     transform: jsonSchemaTransform,
   });

@@ -28,7 +28,7 @@ export default function RootLayout({
                 Projects
               </a>
               <a
-                href="http://localhost:3001/docs"
+                href={`${process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:3001"}/docs`}
                 target="_blank"
                 rel="noreferrer"
                 className="hover:text-neutral-100 transition-colors"
