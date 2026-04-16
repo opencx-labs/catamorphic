@@ -8,13 +8,24 @@ Code-first workflow builder that parses TypeScript into visual workflow graphs.
 # Install dependencies
 bun install
 
+# Copy and edit env (DATABASE_URL, etc.) — see .env.example
+# cp .env.example .env
+
 # Start Postgres
 docker compose up -d
 
 # Run migrations
 bun run db:migrate
 
-# Start dev servers
+# Regenerate Kysely types from the database (requires DATABASE_URL in the environment)
+bun run db:codegen
+# If codegen cannot see your .env, pass the URL explicitly, e.g.:
+# DATABASE_URL="postgresql://catamorphic:catamorphic@localhost:5432/catamorphic" bun run db:codegen
+
+# Build workspace packages the API imports (@catamorphic/db, parser, git, sandbox, …)
+bunx turbo build --filter=@catamorphic/server...
+
+# Start dev servers (use two terminals)
 cd packages/server && bun run dev    # API on :3001
 cd apps/playground && bun run dev    # UI on :3000
 ```
