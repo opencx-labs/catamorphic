@@ -14,6 +14,7 @@ import {
   ListSchema,
   PaginationQuerySchema,
   ProjectDetailSchema,
+  ProjectFileParamsSchema,
   ProjectIdParamsSchema,
   ProjectSchema,
   SetRemoteSchema,
@@ -293,7 +294,7 @@ export function registerProjectRoutes(
     method: "GET",
     url: "/api/projects/:projectId/files/*",
     schema: {
-      params: ProjectIdParamsSchema,
+      params: ProjectFileParamsSchema,
       response: { 200: FileContentSchema, 404: ErrorSchema, 503: ErrorSchema },
     },
     handler: async (request, reply) => {
@@ -302,7 +303,7 @@ export function registerProjectRoutes(
       }
 
       const { projectId } = request.params;
-      const filePath = (request.params as Record<string, string>)["*"] ?? "";
+      const filePath = request.params["*"];
 
       const exists = await db
         .selectFrom("projects")
@@ -330,7 +331,7 @@ export function registerProjectRoutes(
     method: "PUT",
     url: "/api/projects/:projectId/files/*",
     schema: {
-      params: ProjectIdParamsSchema,
+      params: ProjectFileParamsSchema,
       body: WriteFileSchema,
       response: { 200: FileContentSchema, 404: ErrorSchema, 503: ErrorSchema },
     },
@@ -340,7 +341,7 @@ export function registerProjectRoutes(
       }
 
       const { projectId } = request.params;
-      const filePath = (request.params as Record<string, string>)["*"] ?? "";
+      const filePath = request.params["*"];
       const { content, commitMessage } = request.body;
 
       const exists = await db

@@ -103,6 +103,13 @@ async function apiFetch<T>(path: string, options?: RequestInit): Promise<T> {
   return res.json() as Promise<T>;
 }
 
+function encodeProjectFilePath(filePath: string): string {
+  return filePath
+    .split("/")
+    .map((segment) => encodeURIComponent(segment))
+    .join("/");
+}
+
 export const api = {
   getTemplates: () => apiFetch<Template[]>("/api/templates"),
 
@@ -127,11 +134,28 @@ export const api = {
     opts?: { limit?: number; offset?: number },
   ) => {
     const params = new URLSearchParams();
-    if (opts?.limit !== undefined) params.set("limit", String(opts.limit));
-    if (opts?.offset !== undefined) params.set("offset", String(opts.offset));
+    if (opts?.limit !== undefined && Number.isFinite(opts.limit)) {
+      params.set("limit", String(opts.limit));
+    }
+    if (opts?.offset !== undefined && Number.isFinite(opts.offset)) {
+      params.set("offset", String(opts.offset));
+    }
     const qs = params.size > 0 ? `?${params}` : "";
     return apiFetch<{ items: Run[]; total: number }>(
       `/api/projects/${projectId}/workflows/${workflowName}/runs${qs}`,
     );
   },
+
+  writeProjectFile: (
+    projectId: string,
+    filePath: string,
+    body: { content: string; commitMessage?: string },
+  ) =>
+    apiFetch<{ path: string; content: string }>(
+      `/api/projects/${projectId}/files/${encodeProjectFilePath(filePath)}`,
+      {
+        method: "PUT",
+        body: JSON.stringify(body),
+      },
+    ),
 };
