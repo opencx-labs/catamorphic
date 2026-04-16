@@ -95,13 +95,48 @@ export async function welcomeUser({
 
 ```bash
 bun run build      # Build all packages
-bun run test       # Run all tests
+bun run test       # Run all tests (specs)
 bun run typecheck  # Typecheck all packages with tsgo
 bun run lint       # Lint with Biome
 bun run lint:fix   # Auto-fix lint issues
 bun run db:migrate # Run database migrations
 bun run db:codegen # Regenerate database types
 ```
+
+## Testing (Specs)
+
+Specs are written with **Vitest** and run through Turborepo from the root.
+
+### Run all specs
+
+```bash
+bun run test
+```
+
+### Run specs for one workspace package
+
+```bash
+# Playground app specs
+bun run --filter @catamorphic/playground test
+
+# Parser package specs
+bun run --filter @catamorphic/parser test
+
+# Server package specs
+bun run --filter @catamorphic/server test
+```
+
+### Run one spec file
+
+```bash
+cd apps/playground
+bun run test src/lib/workflow-helpers.test.ts
+```
+
+### Notes
+
+- Some integration specs (e.g. Daytona-backed tests in `packages/git` / `packages/sandbox`) require external services or network access and may fail locally without the required environment.
+- Unit specs (parser/runtime/playground helpers, etc.) should run locally with no special setup.
 
 ## Tech Stack
 

@@ -9,6 +9,10 @@ export const WorkflowNameParamsSchema = ProjectIdParamsSchema.extend({
   name: z.string().min(1),
 });
 
+export const ProjectFileParamsSchema = ProjectIdParamsSchema.extend({
+  "*": z.string().min(1),
+});
+
 export const RunIdParamsSchema = z.object({
   runId: z.string().uuid(),
 });
