@@ -39,7 +39,7 @@ export default async function Home() {
               <Link
                 key={project.id}
                 href={`/projects/${project.id}`}
-                className="border border-neutral-800 rounded-lg p-5 hover:border-neutral-600 transition-colors group block"
+                className="cursor-pointer border border-neutral-800 rounded-lg p-5 hover:border-neutral-600 transition-colors group block"
               >
                 <div className="flex items-center justify-between">
                   <div>
@@ -71,9 +71,9 @@ export default async function Home() {
         </div>
         <Link
           href="/projects/new"
-          className="px-3 py-1.5 border border-neutral-700 hover:border-neutral-500 rounded text-sm transition-colors"
+          className="cursor-pointer px-3 py-1.5 border border-neutral-700 hover:border-neutral-500 rounded text-sm transition-colors"
         >
-          Blank editor
+          New project
         </Link>
       </div>
 
@@ -90,7 +90,7 @@ export default async function Home() {
           >
             <button
               type="submit"
-              className="w-full text-left border border-neutral-800 rounded-lg p-6 hover:border-neutral-600 transition-colors group block"
+              className="w-full cursor-pointer text-left border border-neutral-800 rounded-lg p-6 hover:border-neutral-600 transition-colors group block"
             >
               <div className="flex items-start gap-4">
                 <span className="text-2xl shrink-0">
