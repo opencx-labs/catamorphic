@@ -2,17 +2,12 @@
 
 import { redirect } from "next/navigation";
 import { api } from "./api";
-
-const WORKFLOW_STARTER_CODE = `/**
- * @displayname __DISPLAY_NAME__
- * @description A new workflow
- */
-export async function __WORKFLOW_NAME__() {
-  "use workflow";
-
-  return { success: true };
-}
-`;
+import {
+  buildUntitledWorkflowName,
+  displayNameFromWorkflowName,
+  starterCodeForWorkflow,
+  workflowFilePathFromName,
+} from "./workflow-helpers";
 
 export async function createProjectFromTemplateAction(
   templateId: string,
@@ -21,42 +16,6 @@ export async function createProjectFromTemplateAction(
 ) {
   const project = await api.createProject({ name: templateName, templateId });
   redirect(`/projects/${project.id}/workflows/${defaultWorkflow}`);
-}
-
-function workflowFilePathFromName(workflowName: string): string {
-  const fileSafe = workflowName
-    .replace(/([a-z0-9])([A-Z])/g, "$1-$2")
-    .replace(/[^a-zA-Z0-9-]/g, "-")
-    .toLowerCase();
-  return `src/${fileSafe}.ts`;
-}
-
-function starterCodeForWorkflow(
-  workflowName: string,
-  displayName: string,
-): string {
-  return WORKFLOW_STARTER_CODE.replace(
-    "__WORKFLOW_NAME__",
-    workflowName,
-  ).replace("__DISPLAY_NAME__", displayName);
-}
-
-function buildUntitledWorkflowName(existingWorkflowNames: Set<string>): string {
-  const baseName = "untitledWorkflow";
-  if (!existingWorkflowNames.has(baseName)) return baseName;
-
-  let suffix = 2;
-  while (existingWorkflowNames.has(`${baseName}${suffix}`)) {
-    suffix += 1;
-  }
-  return `${baseName}${suffix}`;
-}
-
-function displayNameFromWorkflowName(workflowName: string): string {
-  const spaced = workflowName
-    .replace(/([a-z0-9])([A-Z])/g, "$1 $2")
-    .replace(/^./, (char) => char.toUpperCase());
-  return spaced;
 }
 
 export async function createProjectFromScratchAction(formData: FormData) {
