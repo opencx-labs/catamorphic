@@ -10,6 +10,10 @@ import { generateWorkflowCode } from "@/lib/ai-action";
 import { api, type WorkflowGraph } from "@/lib/api";
 import { parseWorkflowFromProjectAction } from "@/lib/parse-action";
 import { runWorkflowAction } from "@/lib/run-action";
+import {
+  readWorkflowDisplayName,
+  upsertWorkflowDisplayName,
+} from "@/lib/workflow-helpers";
 
 const PAGE_SIZE = 20;
 
@@ -35,59 +39,6 @@ function findWorkflowFile(
     }
   }
   return null;
-}
-
-function escapeRegExp(value: string): string {
-  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-}
-
-function readWorkflowDisplayName(
-  source: string,
-  workflowName: string,
-): string | null {
-  const escapedName = escapeRegExp(workflowName);
-  const docAndFnPattern = new RegExp(
-    `\\/\\*\\*[\\s\\S]*?\\*\\/\\s*export\\s+async\\s+function\\s+${escapedName}\\s*\\(`,
-  );
-  const match = source.match(docAndFnPattern);
-  if (!match) return null;
-
-  const displayMatch = match[0].match(/@displayname\s+([^\n\r*]+)/);
-  const displayName = displayMatch?.[1]?.trim() ?? "";
-  return displayName.length > 0 ? displayName : null;
-}
-
-function upsertWorkflowDisplayName(
-  source: string,
-  workflowName: string,
-  displayName: string,
-): string {
-  const escapedName = escapeRegExp(workflowName);
-  const fnPattern = new RegExp(
-    `(\\/\\*\\*[\\s\\S]*?\\*\\/\\s*)?(export\\s+async\\s+function\\s+${escapedName}\\s*\\()`,
-  );
-  const match = source.match(fnPattern);
-  if (!match) return source;
-
-  const existingDoc = match[1];
-  const fnSignature = match[2];
-  let nextDoc: string;
-
-  if (existingDoc) {
-    const trimmedDoc = existingDoc.replace(/\s*$/, "");
-    if (/@displayname\s+([^\n\r*]+)/.test(trimmedDoc)) {
-      nextDoc = `${trimmedDoc.replace(
-        /@displayname\s+([^\n\r*]+)/,
-        `@displayname ${displayName}`,
-      )}\n`;
-    } else {
-      nextDoc = `${trimmedDoc.replace(/\*\/$/, ` * @displayname ${displayName}\n */`)}\n`;
-    }
-  } else {
-    nextDoc = `/**\n * @displayname ${displayName}\n */\n`;
-  }
-
-  return source.replace(fnPattern, `${nextDoc}${fnSignature}`);
 }
 
 export function WorkflowPageClient({
