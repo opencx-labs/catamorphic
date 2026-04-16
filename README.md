@@ -22,13 +22,22 @@ bun run db:codegen
 # If codegen cannot see your .env, pass the URL explicitly, e.g.:
 # DATABASE_URL="postgresql://catamorphic:catamorphic@localhost:5432/catamorphic" bun run db:codegen
 
-# Build workspace packages the API imports (@catamorphic/db, parser, git, sandbox, …)
+# Build shared packages the API needs so tooling can load workspace deps (dist/)
 bunx turbo build --filter=@catamorphic/server...
+
+# OpenAPI spec → api-client types (gitignored; required before @catamorphic/api-client can build)
+cd packages/server && bun run generate-spec
+cd ../api-client && bun run generate
+
+# Build the whole monorepo (includes @catamorphic/ui, api-client, playground, …)
+bun run build
 
 # Start dev servers (use two terminals)
 cd packages/server && bun run dev    # API on :3001
 cd apps/playground && bun run dev    # UI on :3000
 ```
+
+Workspace packages expose compiled `dist/` entry points. The playground imports `@catamorphic/ui` and `@catamorphic/api-client`; without a full build (and the `generate-spec` / `generate` step for the client’s OpenAPI types), Next.js can report “module not found” for those packages.
 
 ## Architecture
 
