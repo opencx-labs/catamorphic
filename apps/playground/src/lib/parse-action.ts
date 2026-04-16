@@ -31,12 +31,16 @@ export async function parseWorkflowAction(
 export async function parseWorkflowFromProjectAction({
   files,
   workflowName,
+  preferredFilePath,
 }: {
   files: Record<string, string>;
   workflowName: string;
+  preferredFilePath?: string;
 }): Promise<ParseResult | null> {
   try {
-    const graph = parseWorkflowFromProject(files, workflowName);
+    const graph = parseWorkflowFromProject(files, workflowName, {
+      preferredFilePath,
+    });
     if (!graph) return null;
     const layouted = layoutGraph({
       nodes: graph.nodes,

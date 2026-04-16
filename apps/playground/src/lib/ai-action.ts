@@ -1,6 +1,7 @@
 "use server";
 
 import OpenAI from "openai";
+import { ensurePrimaryWorkflowExportName } from "./workflow-helpers";
 
 function getClient() {
   const apiKey = process.env.OPENAI_API_KEY;
@@ -10,7 +11,8 @@ function getClient() {
   return new OpenAI({ apiKey });
 }
 
-const SYSTEM_PROMPT = `You are a workflow code generator for Catamorphic AI. You write TypeScript workflow code.
+function buildSystemPrompt(workflowExportName: string): string {
+  return `You are a workflow code generator for Catamorphic AI. You write TypeScript workflow code.
 
 RULES:
 1. The main function MUST have \`"use workflow"\` as the first statement
@@ -27,6 +29,8 @@ RULES:
 8. Use for...of loops for iteration
 9. Export only the main workflow function
 10. Step functions should be declared at module level (not nested)
+11. The workflow function body must only orchestrate by awaiting step functions (plus sleep, Promise.all, branches, loops). Do not call console.log, fetch, or other side effects directly in the workflow body — those belong inside a step function with "use step". For "hello world" or logging, define a step (e.g. printHello) and await it from the workflow.
+12. The exported workflow entry MUST be named exactly \`${workflowExportName}\`: \`export async function ${workflowExportName}(...) { "use workflow"; ... }\`. Never rename this identifier — the app URL, graph, and sandbox run use this exact name.
 
 RESPONSE FORMAT:
 Return ONLY the TypeScript code. No markdown, no explanation, no backticks.
@@ -72,24 +76,29 @@ async function sendEmail({ to, subject, body }: { to: string; subject: string; b
 async function sendPush({ userId, message }: { userId: string; message: string }) {
   "use step";
 }`;
+}
 
 export async function generateWorkflowCode({
   prompt,
   currentCode,
+  workflowFunctionName,
 }: {
   prompt: string;
   currentCode: string;
+  workflowFunctionName: string;
 }): Promise<string> {
   const client = getClient();
 
+  const nameReminder = `Required exported workflow function name: ${workflowFunctionName} (must match exactly).\n\n`;
+
   const userMessage = currentCode.trim()
-    ? `Current workflow code:\n\`\`\`typescript\n${currentCode}\n\`\`\`\n\nUser request: ${prompt}`
-    : `User request: ${prompt}`;
+    ? `${nameReminder}Current workflow code:\n\`\`\`typescript\n${currentCode}\n\`\`\`\n\nUser request: ${prompt}`
+    : `${nameReminder}User request: ${prompt}`;
 
   const response = await client.chat.completions.create({
     model: "gpt-4.1",
     messages: [
-      { role: "system", content: SYSTEM_PROMPT },
+      { role: "system", content: buildSystemPrompt(workflowFunctionName) },
       { role: "user", content: userMessage },
     ],
     temperature: 0.3,
@@ -100,9 +109,7 @@ export async function generateWorkflowCode({
   const codeBlockMatch = content.match(
     /```(?:typescript|ts)?\s*\n([\s\S]*?)\n```/,
   );
-  if (codeBlockMatch?.[1]) {
-    return codeBlockMatch[1].trim();
-  }
+  const raw = codeBlockMatch?.[1] ? codeBlockMatch[1].trim() : content.trim();
 
-  return content.trim();
+  return ensurePrimaryWorkflowExportName(raw, workflowFunctionName);
 }

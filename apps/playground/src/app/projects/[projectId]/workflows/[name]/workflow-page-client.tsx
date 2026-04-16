@@ -25,18 +25,26 @@ interface Props {
   initialRuns: PlaygroundRun[];
 }
 
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
 function findWorkflowFile(
   files: Record<string, string>,
   workflowName: string,
+  filePathHint?: string | null,
 ): string | null {
   for (const [path, content] of Object.entries(files)) {
     if (!path.endsWith(".ts") && !path.endsWith(".tsx")) continue;
     const fnPattern = new RegExp(
-      `(?:export\\s+)?async\\s+function\\s+${workflowName}\\s*\\(`,
+      `(?:export\\s+)?async\\s+function\\s+${escapeRegExp(workflowName)}\\s*\\(`,
     );
     if (fnPattern.test(content) && content.includes('"use workflow"')) {
       return path;
     }
+  }
+  if (filePathHint && files[filePathHint]?.includes('"use workflow"')) {
+    return filePathHint;
   }
   return null;
 }
@@ -53,8 +61,13 @@ export function WorkflowPageClient({
     useState<Record<string, string>>(initialFiles);
 
   const workflowFilePath = useMemo(
-    () => findWorkflowFile(projectFiles, workflowName),
-    [projectFiles, workflowName],
+    () =>
+      findWorkflowFile(
+        projectFiles,
+        workflowName,
+        initialGraph.filePath || null,
+      ),
+    [projectFiles, workflowName, initialGraph.filePath],
   );
 
   const workflowCode = workflowFilePath
@@ -94,16 +107,25 @@ export function WorkflowPageClient({
       const files = { ...projectFilesRef.current };
       const path = workflowFilePath ?? initialGraph.filePath;
       files[path] = source;
-      return parseWorkflowFromProjectAction({ files, workflowName });
+      return parseWorkflowFromProjectAction({
+        files,
+        workflowName,
+        preferredFilePath:
+          workflowFilePath ?? initialGraph.filePath ?? undefined,
+      });
     },
     [workflowFilePath, initialGraph.filePath, workflowName],
   );
 
   const handleAIPrompt = useCallback(
     async (prompt: string) => {
-      return generateWorkflowCode({ prompt, currentCode: workflowCode });
+      return generateWorkflowCode({
+        prompt,
+        currentCode: workflowCode,
+        workflowFunctionName: workflowName,
+      });
     },
-    [workflowCode],
+    [workflowCode, workflowName],
   );
 
   const handleRun = useCallback(

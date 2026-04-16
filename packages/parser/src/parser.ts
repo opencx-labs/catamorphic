@@ -707,6 +707,58 @@ interface FoundWorkflow {
   filePath: string;
 }
 
+/** Matches app convention: `src/<kebab>.ts` for a workflow identifier. */
+export function defaultWorkflowSourcePath(workflowName: string): string {
+  const fileSafe = workflowName
+    .replace(/([a-z0-9])([A-Z])/g, "$1-$2")
+    .replace(/[^a-zA-Z0-9-]/g, "-")
+    .toLowerCase();
+  return `src/${fileSafe}.ts`;
+}
+
+function normalizeProjectPath(p: string): string {
+  return p.replace(/\\/g, "/").replace(/^\/+/, "");
+}
+
+function projectPathsEqual(a: string, b: string): boolean {
+  return normalizeProjectPath(a) === normalizeProjectPath(b);
+}
+
+/**
+ * When the workflow function was renamed in source but the route still uses the
+ * original identifier, resolve the graph from the expected workflow file (single
+ * `"use workflow"` in that file).
+ */
+function resolveWorkflowByFilePathHint(
+  workflows: FoundWorkflow[],
+  workflowName: string,
+  preferredFilePath: string | undefined,
+  files: Record<string, string>,
+): FoundWorkflow | undefined {
+  const hintsInOrder: string[] = [];
+  if (preferredFilePath) hintsInOrder.push(preferredFilePath);
+  hintsInOrder.push(defaultWorkflowSourcePath(workflowName));
+
+  const uniqueHints = [...new Set(hintsInOrder.map(normalizeProjectPath))];
+
+  for (const hint of uniqueHints) {
+    const matches = workflows.filter((w) =>
+      projectPathsEqual(w.filePath, hint),
+    );
+    if (matches.length === 1) return matches[0];
+
+    const fileKey = Object.keys(files).find((k) => projectPathsEqual(k, hint));
+    if (fileKey) {
+      const keyMatches = workflows.filter((w) =>
+        projectPathsEqual(w.filePath, fileKey),
+      );
+      if (keyMatches.length === 1) return keyMatches[0];
+    }
+  }
+
+  return undefined;
+}
+
 function findAllWorkflowFunctions(
   sourceFiles: readonly SourceFile[],
 ): FoundWorkflow[] {
@@ -868,6 +920,7 @@ export function parseProject(
 export function parseWorkflowFromProject(
   files: Record<string, string>,
   workflowName: string,
+  options?: { preferredFilePath?: string },
 ): WorkflowGraph | null {
   nodeCounter = 0;
 
@@ -880,7 +933,14 @@ export function parseWorkflowFromProject(
   const allSteps = collectStepFunctions(sourceFiles);
   const workflows = findAllWorkflowFunctions(sourceFiles);
 
-  const target = workflows.find((w) => w.fn.getName() === workflowName);
+  const target =
+    workflows.find((w) => w.fn.getName() === workflowName) ??
+    resolveWorkflowByFilePathHint(
+      workflows,
+      workflowName,
+      options?.preferredFilePath,
+      files,
+    );
   if (!target) return null;
 
   return buildWorkflowGraph(target.fn, allSteps, {
