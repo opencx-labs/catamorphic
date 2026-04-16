@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { api } from "@/lib/api";
+import { createWorkflowInProjectAction } from "@/lib/project-actions";
 
 const WORKFLOW_ICON = "🎯";
 
@@ -21,7 +22,10 @@ export default async function ProjectPage({
   return (
     <main className="max-w-screen-2xl mx-auto px-6 py-12">
       <div className="flex items-center gap-2 text-sm text-neutral-400 mb-6">
-        <Link href="/" className="hover:text-neutral-200 transition-colors">
+        <Link
+          href="/"
+          className="cursor-pointer hover:text-neutral-200 transition-colors"
+        >
           Projects
         </Link>
         <span className="text-neutral-600">/</span>
@@ -33,15 +37,27 @@ export default async function ProjectPage({
           <h1 className="text-2xl font-bold">{project.name}</h1>
           <p className="text-xs text-neutral-500 mt-1 font-mono">{projectId}</p>
         </div>
+        <form
+          action={createWorkflowInProjectAction}
+          className="flex items-center gap-2"
+        >
+          <input type="hidden" name="projectId" value={projectId} />
+          <button
+            type="submit"
+            className="h-9 cursor-pointer rounded border border-blue-600 bg-blue-600/20 px-3 text-sm font-medium text-blue-300 transition-colors hover:bg-blue-600/30 hover:text-blue-200"
+          >
+            New Workflow
+          </button>
+        </form>
       </div>
 
       <section className="mb-10">
         <h2 className="text-lg font-semibold mb-4">Workflows</h2>
         {project.workflows.length === 0 ? (
           <div className="border border-dashed border-neutral-800 rounded-lg p-8 text-center text-neutral-500 text-sm">
-            No workflows found. Add a function with{" "}
-            <code className="text-neutral-300">&quot;use workflow&quot;</code>{" "}
-            to get started.
+            No workflows found. Use{" "}
+            <span className="text-neutral-300">New Workflow</span> to create
+            your first one.
           </div>
         ) : (
           <div className="grid gap-3">
@@ -49,7 +65,7 @@ export default async function ProjectPage({
               <Link
                 key={wf.name}
                 href={`/projects/${projectId}/workflows/${wf.name}`}
-                className="border border-neutral-800 rounded-lg p-5 hover:border-neutral-600 transition-colors group block"
+                className="cursor-pointer border border-neutral-800 rounded-lg p-5 hover:border-neutral-600 transition-colors group block"
               >
                 <div className="flex items-center justify-between">
                   <div className="flex items-center gap-3">

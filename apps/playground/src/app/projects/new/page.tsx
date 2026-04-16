@@ -1,79 +1,52 @@
-"use client";
-
-import { WorkflowEditor } from "@catamorphic/ui";
-import { useCallback, useRef, useState } from "react";
-import "@catamorphic/ui/styles.css";
-import { MonacoCodeEditor } from "@/components/monaco-editor";
-import { generateWorkflowCode } from "@/lib/ai-action";
-import { parseWorkflowAction } from "@/lib/parse-action";
-import { runWorkflowAction } from "@/lib/run-action";
-
-const STARTER_CODE = `/**
- * @displayname My Workflow
- * @description A new workflow
- */
-export async function myWorkflow({ input }: { input: string }) {
-  "use workflow";
-
-  return { result: input };
-}
-`;
+import Link from "next/link";
+import { createProjectFromScratchAction } from "@/lib/project-actions";
 
 export default function NewProjectPage() {
-  const [code, setCode] = useState(STARTER_CODE);
-  const codeRef = useRef(code);
-
-  const handleCodeChange = useCallback((newCode: string) => {
-    setCode(newCode);
-    codeRef.current = newCode;
-  }, []);
-
-  const handleAIPrompt = useCallback(
-    async (prompt: string) => {
-      return generateWorkflowCode({
-        prompt,
-        currentCode: code,
-      });
-    },
-    [code],
-  );
-
-  const handleRun = useCallback(
-    async (triggerData: Record<string, unknown>) => {
-      const fnMatch = codeRef.current.match(
-        /export\s+async\s+function\s+(\w+)/,
-      );
-      const workflowName = fnMatch?.[1] ?? "myWorkflow";
-      const result = await runWorkflowAction({
-        files: { "src/workflow.ts": codeRef.current },
-        workflowName,
-        triggerData,
-      });
-      return {
-        status: result.status,
-        result: result.result,
-        error: result.error,
-        steps: result.steps,
-        startedAt: result.startedAt,
-        completedAt: result.completedAt,
-      };
-    },
-    [],
-  );
-
   return (
-    <div className="h-[calc(100vh-3.5rem)]">
-      <WorkflowEditor
-        code={code}
-        onCodeChange={handleCodeChange}
-        onParse={parseWorkflowAction}
-        renderCodeEditor={(props) => <MonacoCodeEditor {...props} />}
-        showCodeEditor={true}
-        showMinimap={true}
-        aiEnabled={true}
-        onAIPrompt={handleAIPrompt}
-        onRun={handleRun}
-      />
-    </div>
+    <main className="max-w-3xl mx-auto px-6 py-12">
+      <div className="flex items-center gap-2 text-sm text-neutral-400 mb-6">
+        <Link
+          href="/"
+          className="cursor-pointer hover:text-neutral-200 transition-colors"
+        >
+          Projects
+        </Link>
+        <span className="text-neutral-600">/</span>
+        <span className="text-neutral-200">New Project</span>
+      </div>
+
+      <h1 className="text-2xl font-bold mb-2">Create Project</h1>
+      <p className="text-sm text-neutral-400 mb-6">
+        Create a project first, then add one or more workflows inside it.
+      </p>
+
+      <form
+        action={createProjectFromScratchAction}
+        className="border border-neutral-800 rounded-lg p-6 bg-neutral-950/50"
+      >
+        <label
+          htmlFor="projectName"
+          className="block text-sm font-medium text-neutral-200 mb-2"
+        >
+          Project name
+        </label>
+        <input
+          id="projectName"
+          type="text"
+          name="projectName"
+          defaultValue="Untitled Project"
+          className="h-10 w-full rounded border border-neutral-700 bg-neutral-900 px-3 text-sm text-neutral-100 placeholder:text-neutral-500 focus:border-blue-500 focus:outline-none"
+        />
+
+        <div className="mt-4">
+          <button
+            type="submit"
+            className="h-10 cursor-pointer rounded border border-blue-600 bg-blue-600/20 px-4 text-sm font-medium text-blue-300 transition-colors hover:bg-blue-600/30 hover:text-blue-200"
+          >
+            Create Project
+          </button>
+        </div>
+      </form>
+    </main>
   );
 }
