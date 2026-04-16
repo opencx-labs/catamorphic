@@ -272,6 +272,12 @@ export async function workflowA() {
   await doThing();
 }
 `,
+      "src/b.ts": `
+export async function workflowB() {
+  "use workflow";
+  await other();
+}
+`,
     };
 
     const graph = parseWorkflowFromProject(files, "nonExistent");
@@ -304,5 +310,30 @@ async function sendNotification({ to }: { to: string }) {
     );
     expect(step).toBeDefined();
     expect(step?.label).toBe("Send Notification");
+  });
+
+  it("resolves by workflow file path when the exported function was renamed", () => {
+    const files = {
+      "src/untitled-workflow2.ts": `
+/**
+ * @displayname Hello
+ */
+export async function helloWorldWorkflow() {
+  "use workflow";
+  await printHelloWorld();
+  return { success: true };
+}
+async function printHelloWorld() {
+  "use step";
+}
+`,
+    };
+
+    const graph = parseWorkflowFromProject(files, "untitledWorkflow2");
+    expect(graph).not.toBeNull();
+    expect(graph!.name).toBe("helloWorldWorkflow");
+
+    const step = graph!.nodes.find((n) => n.type === "step");
+    expect(step?.functionName).toBe("printHelloWorld");
   });
 });

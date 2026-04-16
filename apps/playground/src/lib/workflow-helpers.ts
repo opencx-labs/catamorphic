@@ -50,6 +50,24 @@ function escapeRegExp(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
+/**
+ * Ensures the primary `export async function` matches the project workflow
+ * identifier so routing and the sandbox harness resolve the entry point.
+ */
+export function ensurePrimaryWorkflowExportName(
+  source: string,
+  workflowName: string,
+): string {
+  const expected = new RegExp(
+    `export\\s+async\\s+function\\s+${escapeRegExp(workflowName)}\\s*\\(`,
+  );
+  if (expected.test(source)) return source;
+  return source.replace(
+    /export\s+async\s+function\s+\w+\s*\(/,
+    `export async function ${workflowName}(`,
+  );
+}
+
 export function readWorkflowDisplayName(
   source: string,
   workflowName: string,

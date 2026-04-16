@@ -287,7 +287,18 @@ function WorkflowEditorInner({
         />
         {historySidebarOpen && <HistorySidebar />}
       </div>
-      <AIBar enabled={aiEnabled} onAIPrompt={onAIPrompt} />
+      <AIBar
+        enabled={aiEnabled}
+        onAIPrompt={onAIPrompt}
+        onApplyGeneratedCode={
+          aiEnabled && onAIPrompt
+            ? (newCode) => {
+                setCode(newCode);
+                onCodeChange(newCode);
+              }
+            : undefined
+        }
+      />
       {showDialog && (
         <RunTriggerDialog
           parameters={params}

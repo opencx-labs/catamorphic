@@ -4,10 +4,16 @@ import { aiLoadingAtom, codeAtom } from "./atoms.js";
 
 export interface AIBarProps {
   onAIPrompt?: (prompt: string) => Promise<string>;
+  /** When set, called with generated code so parent state (e.g. project files) stays in sync with the editor atom. */
+  onApplyGeneratedCode?: (code: string) => void;
   enabled?: boolean;
 }
 
-export function AIBar({ onAIPrompt, enabled = true }: AIBarProps) {
+export function AIBar({
+  onAIPrompt,
+  onApplyGeneratedCode,
+  enabled = true,
+}: AIBarProps) {
   const [prompt, setPrompt] = useState("");
   const setCode = useSetAtom(codeAtom);
   const setLoading = useSetAtom(aiLoadingAtom);
@@ -26,7 +32,11 @@ export function AIBar({ onAIPrompt, enabled = true }: AIBarProps) {
 
       try {
         const updatedCode = await onAIPrompt(prompt);
-        setCode(updatedCode);
+        if (onApplyGeneratedCode) {
+          onApplyGeneratedCode(updatedCode);
+        } else {
+          setCode(updatedCode);
+        }
         setPrompt("");
       } catch (err) {
         setError(err instanceof Error ? err.message : "AI request failed");
@@ -35,7 +45,7 @@ export function AIBar({ onAIPrompt, enabled = true }: AIBarProps) {
         setLocalLoading(false);
       }
     },
-    [prompt, onAIPrompt, loading, setLoading, setCode],
+    [prompt, onAIPrompt, onApplyGeneratedCode, loading, setLoading, setCode],
   );
 
   if (!enabled || !onAIPrompt) return null;
