@@ -1,6 +1,6 @@
 # Git Commit Command
 
-Create a git commit following Conventional Commits format with optional Linear ticket reference.
+Create a git commit following [Conventional Commits](https://www.conventionalcommits.org/) with an optional Linear ticket reference. This repo is the **Catamorphic** Turborepo (`packages/*`, `apps/*`); scopes should reflect where the change lives.
 
 ## Usage
 
@@ -9,137 +9,106 @@ Create a git commit following Conventional Commits format with optional Linear t
 ```
 
 **Examples:**
-- `/commit` - Create commit without ticket reference
-- `/commit DX-523` - Create commit referencing Linear ticket DX-523
-- `/commit` these changes to fix the bug
-- `/commit DX-523` implement semantic search feature
+
+- `/commit` — commit without a ticket line
+- `/commit CM-42` — add `Linear: CM-42` to the commit body
+- `/commit CM-42` fix parser crash on empty workflow
 
 ## Workflow
 
-1. **Check for project conventions** - Check `AGENTS.md` and `.cursor/rules/` for project-specific commit conventions
-2. **Review all changes** - Show unstaged changes with `git diff`
-3. **Stage changes atomically** using `git add -p` (interactive patch mode):
-   - Review each hunk/chunk of changes
-   - Only stage changes that belong together logically
-   - Create separate commits for unrelated changes
-   - **NEVER** use `git add -A` or `git add .` - always use `git add -p` for atomic commits
-4. **Review staged changes** - Verify what will be committed with `git diff --staged`
-5. **Determine commit type and scope** from staged files:
-   - Files in `backend/` → scope: `backend`
-   - Files in `dashboard/` → scope: `dashboard`
-   - Files in `docs/` → scope: `docs`
-   - If multiple scopes → use multi-scope format: `feat(backend, dashboard):`
-5. **Identify sub-scope** (feature module) from file paths:
-   - `ai-instructions`, `ai-training`, `agent-v2`, `airbyte`, `knowledge-base`, `inbox`, `workflow`, `integration`, etc.
-6. **Generate commit message** following format:
-   ```
-   type(scope, sub-scope): subject
-   
-   Body explaining HOW and WHY (if complex change).
-   
-   Linear: DX-523
-   ```
-7. **Create the commit** using `git commit -m`
+1. **Read project conventions** — `AGENTS.md` and `.cursor/rules/` (especially after substantive code changes, run the verification checklist there before considering work done).
+2. **Review changes** — `git diff` (and `git status` for untracked files).
+3. **Stage atomically** with `git add -p` (interactive patch mode):
+   - Stage hunks that belong to one logical change; split with `s` when needed.
+   - Prefer **separate commits** for unrelated changes.
+   - **Do not** use `git add -A` or `git add .` for routine staging.
+4. **Confirm staged diff** — `git diff --staged`.
+5. **Pick `type` and `scope(s)`** from staged paths (see below).
+6. **Write the message** — subject + optional body; add `Linear: TICKET` when the user supplied a ticket.
+7. **Commit** — `git commit` (or `git commit -m` with `-m` for body if needed).
 
-## Commit Format
+For **new untracked files**, use `git add -N <path>` then `git add -p <path>` so patch mode still applies.
 
-**Format**: `type(scope, sub-scope): subject`
+## Commit format
 
-### Main Scopes (Required)
-- `backend` - Backend/nestjs API changes
-- `dashboard` - Dashboard/Next.js frontend changes  
-- `docs` - Documentation changes
+**Shape:** `type(scope): subject` or `type(scope, scope): subject` when multiple areas are equally involved.
 
-### Sub-Scopes (Optional, feature module)
-Examples: `ai-instructions`, `ai-training`, `agent-v2`, `airbyte`, `SourceCard`, `voc`, `knowledge-base`, `inbox`, `workflow`, `integration`, etc.
+**Common scopes (from repo layout)**
 
-### Commit Types
-- `feat` - New feature
-- `fix` - Bug fix
-- `refactor` - Code refactoring
-- `perf` - Performance improvement
-- `test` - Test changes
-- `ci` - CI/CD changes
-- `docs` - Documentation
-- `chore` - Maintenance
-- `style` - Formatting
-- `security` - Security fixes
-- `hotfix` - Critical production fix
+| Scope | Paths / meaning |
+| ----- | --------------- |
+| `parser` | `packages/parser` |
+| `ui` | `packages/ui` |
+| `server` | `packages/server` |
+| `db` | `packages/db` (migrations, Kysely) |
+| `runtime` | `packages/runtime` |
+| `sandbox` | `packages/sandbox` |
+| `api-client` | `packages/api-client` |
+| `playground` | `apps/playground` |
+| `repo` | Root config only (`package.json`, `turbo.json`, `biome.json`, CI, workspace tooling) |
+| `docs` | `README.md`, `AGENTS.md`, `.cursor/` docs, other top-level docs |
 
-### Subject Rules
-- Max 50 characters after colon
-- Present tense imperative: add, implement, fix, improve, enhance, refactor, remove
-- NO period at end
-- Specific and descriptive
+If a change is clearly owned by one package, use that package’s scope. Use two scopes only when the commit genuinely crosses those areas (e.g. `feat(server, api-client): add projects list endpoint` after regenerating the client).
 
-## Linear Ticket Integration
+**Types**
 
-If Linear ticket number provided (e.g., `DX-523`):
-- Add `Linear: DX-523` at end of commit body
-- If no body, create minimal body with just the Linear reference
+- `feat` — new behavior
+- `fix` — bug fix
+- `refactor` — behavior-preserving restructure
+- `perf` — performance
+- `test` — tests only
+- `ci` — CI/CD
+- `docs` — documentation
+- `chore` — maintenance, deps, tooling
+- `style` — formatting / lint-only
+- `security` — security-sensitive fix
 
-**Example:**
-```
-feat(dashboard, ai-instructions): enhance EditorSidebar with collapsible sections
+**Subject**
 
-Added collapsible sections with scroll indicators for better UX.
+- After `type(scope):`, keep the subject **≤ 50 characters**, imperative mood (*add*, *fix*, *wire*), no trailing period.
 
-Linear: DX-523
-```
+## Linear ticket
+
+If the user passes a ticket id (e.g. `CM-42`):
+
+- Add a line at the **end of the body**: `Linear: CM-42`
+- If there is no other body, the commit body can be just that line.
 
 ## Examples
 
-**Simple commit:**
-```
-fix(dashboard, ai-instructions): truncate long breadcrumb titles
-```
+**Single package:**
 
-**Commit with Linear ticket:**
 ```
-feat(backend, dashboard): implement semantic search for AI Instructions
-
-Added semantic search endpoint and dashboard integration.
-
-Linear: DX-523
+fix(parser): handle empty step body in workflow graph
 ```
 
-**Multi-scope commit:**
+**App + UI:**
+
 ```
-feat(backend, dashboard): implement semantic search for AI Instructions
-
-Linear: DX-523
+feat(playground): show run errors in side panel
 ```
 
-## Atomic Commit Principles
+**Server + generated client:**
 
-- **ONE logical change per commit** - Each commit should represent a single, complete change
-- **Use `git add -p`** - Always use interactive patch mode to select specific changes
-- **Review before staging** - Review each hunk and only stage related changes
-- **Separate unrelated changes** - If you have multiple unrelated changes, create multiple commits
-- **Testable commits** - Each commit should leave the codebase in a working state
+```
+feat(server, api-client): expose workflow run status
 
-**Using `git add -p` effectively:**
-- `y` - Stage this hunk (if it belongs with current commit)
-- `n` - Skip this hunk (commit separately later)
-- `s` - Split large hunk into smaller pieces
-- `e` - Manually edit hunk boundaries
-- `q` - Quit (remaining hunks stay unstaged)
+Regenerated OpenAPI client after route change.
 
-**Example:** If a file has both feature code and formatting fixes:
-1. Use `git add -p` on the file
-2. Stage feature hunks → commit as `feat(...)`
-3. Stage formatting hunks → commit as `style(...)`
+Linear: CM-42
+```
 
-## Important Rules
+**Repo / tooling:**
 
-- **ALWAYS** check project conventions (`AGENTS.md` and `.cursor/rules/`) first
-- **ALWAYS** use `git add -p` for staging (interactive patch mode)
-- **ALWAYS** review changes before staging
-- **ALWAYS** include main scope: `backend`, `dashboard`, or `docs`
-- **ALWAYS** include sub-scope when identifiable from file paths
-- **NEVER** use `git add -A` or `git add .` - breaks atomic commit principle
-- **NEVER** commit secrets (`.env`, credentials)
-- **NEVER** use generic messages
-- **NEVER** exceed 50 chars in subject line
-- **NEVER** mix unrelated changes in one commit
-- One logical change = one commit
+```
+chore(repo): tighten biome ignore for generated files
+```
+
+## Atomic commits
+
+- One logical change per commit; each commit should leave the repo in a sensible state.
+- Use `git add -p` so unrelated hunks can land in separate commits.
+- **Do not** commit secrets (`.env`, keys, tokens).
+- **Do not** run `git commit` or `git push` unless the user asked (see `AGENTS.md`).
+
+**`git add -p` prompts:** `y` stage hunk, `n` skip, `s` split, `e` edit, `q` quit (rest stays unstaged).
