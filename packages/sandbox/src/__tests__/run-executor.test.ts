@@ -9,6 +9,7 @@ function createMockProvider(
   },
 ): SandboxProvider {
   return {
+    workspaceRoot: "/home/daytona",
     createSandbox: vi.fn(async () => ({
       id: "sb-1",
       providerId: "sb-1",

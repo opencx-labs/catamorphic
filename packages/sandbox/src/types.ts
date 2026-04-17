@@ -41,6 +41,13 @@ export interface GitCloneOpts {
 }
 
 export interface SandboxProvider {
+  /**
+   * Absolute directory inside the sandbox where provider-agnostic callers
+   * should upload project files / run commands. Each provider's container
+   * image convention wins (Daytona: `/home/daytona`, Cloudflare: `/workspace`).
+   */
+  readonly workspaceRoot: string;
+
   createSandbox(opts: CreateSandboxOpts): Promise<SandboxHandle>;
   startSandbox(sandboxId: string): Promise<void>;
   stopSandbox(sandboxId: string): Promise<void>;

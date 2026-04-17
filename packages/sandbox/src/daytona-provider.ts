@@ -30,6 +30,7 @@ function mapDaytonaState(state: string | undefined): SandboxStatus {
 }
 
 export class DaytonaSandboxProvider implements SandboxProvider {
+  readonly workspaceRoot = "/home/daytona";
   private client: Daytona;
 
   constructor(config?: { apiKey?: string; apiUrl?: string; target?: string }) {
