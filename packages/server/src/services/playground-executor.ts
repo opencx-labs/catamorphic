@@ -4,6 +4,12 @@ export interface PlaygroundRunRequest {
   files: Record<string, string>;
   workflowName: string;
   triggerData?: Record<string, unknown>;
+  /**
+   * Deterministic commit SHA for the working tree being executed. Passed to
+   * the harness via `CATAMORPHIC_COMMIT_SHA` so runtime code can correlate
+   * with the storage backend.
+   */
+  commitSha?: string | null;
 }
 
 export interface PlaygroundRunResult {
@@ -152,7 +158,7 @@ export class PlaygroundExecutor {
     });
 
     try {
-      const projectDir = "/home/daytona/project";
+      const projectDir = `${this.provider.workspaceRoot}/project`;
       await this.provider.uploadFiles(
         sandbox.providerId,
         request.files,
@@ -164,10 +170,13 @@ export class PlaygroundExecutor {
         projectDir,
       );
 
-      const env = {
+      const env: Record<string, string> = {
         CATAMORPHIC_WORKFLOW_NAME: request.workflowName,
         CATAMORPHIC_TRIGGER_DATA: JSON.stringify(request.triggerData ?? {}),
       };
+      if (request.commitSha) {
+        env.CATAMORPHIC_COMMIT_SHA = request.commitSha;
+      }
 
       const envFlags = Object.entries(env)
         .map(([k, v]) => `${k}=${JSON.stringify(v)}`)

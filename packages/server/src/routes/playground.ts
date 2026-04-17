@@ -87,6 +87,7 @@ export function registerPlaygroundRoutes(
         files: resolvedFiles,
         workflowName,
         triggerData,
+        commitSha,
       });
 
       if (runId && db) {

@@ -13,6 +13,7 @@ function createMockProvider(): SandboxProvider {
   const statuses = new Map<string, SandboxStatus>();
 
   return {
+    workspaceRoot: "/home/daytona",
     createSandbox: vi.fn(
       async (_opts: CreateSandboxOpts): Promise<SandboxHandle> => {
         const id = `sandbox-${nextId++}`;

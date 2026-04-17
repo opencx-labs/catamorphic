@@ -1,0 +1,23 @@
+{
+  "name": "@catamorphic/cloudflare-sandbox-bridge",
+  "version": "0.0.1",
+  "private": true,
+  "type": "module",
+  "description": "Cloudflare Worker that exposes Cloudflare Sandbox as an HTTP API consumed by the Fastify server.",
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy",
+    "start": "wrangler dev",
+    "typecheck": "tsgo --project ./tsconfig.json",
+    "cf-typegen": "wrangler types",
+    "test": "vitest run --config ../../vitest.config.ts"
+  },
+  "dependencies": {
+    "@cloudflare/sandbox": "^0.8.11",
+    "hono": "^4.7.11"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^4.20251126.0",
+    "wrangler": "^4.76.0"
+  }
+}

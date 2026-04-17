@@ -1,3 +1,8 @@
+export type { CloudflareSandboxProviderOpts } from "./cloudflare-provider.js";
+export {
+  CloudflareSandboxError,
+  CloudflareSandboxProvider,
+} from "./cloudflare-provider.js";
 export { CodexAgent } from "./coding-agent/codex-agent.js";
 export type { CodingAgentProvider } from "./coding-agent/types.js";
 export { DaytonaSandboxProvider } from "./daytona-provider.js";

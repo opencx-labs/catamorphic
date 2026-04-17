@@ -1,0 +1,4 @@
+# Local development secrets for `wrangler dev`.
+# Copy to `.dev.vars` (gitignored) and adjust. When SANDBOX_API_KEY is empty
+# the bridge skips auth — convenient for local dev, NEVER do this in prod.
+SANDBOX_API_KEY=local-dev

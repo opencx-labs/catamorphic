@@ -1,6 +1,10 @@
 import { createDatabase } from "@catamorphic/db";
 import { FsBackend, ProjectManager } from "@catamorphic/git";
-import { DaytonaSandboxProvider } from "@catamorphic/sandbox";
+import {
+  CloudflareSandboxProvider,
+  DaytonaSandboxProvider,
+  type SandboxProvider,
+} from "@catamorphic/sandbox";
 import { createApp } from "./app.js";
 
 const DATABASE_URL =
@@ -12,9 +16,25 @@ const PROJECTS_PATH = process.env.PROJECTS_PATH ?? "/tmp/catamorphic-projects";
 const db = createDatabase({ connectionString: DATABASE_URL });
 const projectManager = new ProjectManager(new FsBackend(PROJECTS_PATH));
 
-const sandboxProvider = process.env.DAYTONA_API_KEY
-  ? new DaytonaSandboxProvider({ apiKey: process.env.DAYTONA_API_KEY })
-  : undefined;
+function resolveSandboxProvider(): SandboxProvider | undefined {
+  // Cloudflare is the default when both the bridge URL and shared key are
+  // configured; Daytona is the fallback. See CLOUDFLARE.md.
+  const cfUrl = process.env.CLOUDFLARE_SANDBOX_API_URL;
+  const cfKey = process.env.CLOUDFLARE_SANDBOX_API_KEY;
+  if (cfUrl && cfKey) {
+    return new CloudflareSandboxProvider({ apiUrl: cfUrl, apiKey: cfKey });
+  }
+
+  if (process.env.DAYTONA_API_KEY) {
+    return new DaytonaSandboxProvider({
+      apiKey: process.env.DAYTONA_API_KEY,
+    });
+  }
+
+  return undefined;
+}
+
+const sandboxProvider = resolveSandboxProvider();
 
 const app = createApp({ db, projectManager, sandboxProvider });
 
