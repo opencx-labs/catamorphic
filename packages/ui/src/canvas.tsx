@@ -156,6 +156,10 @@ export function WorkflowCanvas() {
         edgesFocusable={false}
         elementsSelectable={true}
         deleteKeyCode={null}
+        selectionKeyCode={null}
+        multiSelectionKeyCode={null}
+        panActivationKeyCode={null}
+        zoomActivationKeyCode={null}
         proOptions={{ hideAttribution: true }}
       >
         <Background />

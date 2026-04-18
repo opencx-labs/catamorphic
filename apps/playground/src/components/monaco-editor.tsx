@@ -161,8 +161,7 @@ export function MonacoCodeEditor({
   allNodesRef.current = allNodes;
   const onSelectNodeRef = useRef(onSelectNode);
   onSelectNodeRef.current = onSelectNode;
-  const cursorDrivenRef = useRef(false);
-  const lastCursorSelectedId = useRef<string | null>(null);
+  const lastRevealedNodeIdRef = useRef<string | null>(null);
 
   const revealNode = useCallback(
     (editor: MinimalEditor, node: typeof selectedNode) => {
@@ -188,7 +187,9 @@ export function MonacoCodeEditor({
   const handleEditorMount = useCallback(
     (editor: MinimalEditor) => {
       editorRef.current = editor;
-      revealNode(editor, pendingNodeRef.current);
+      const pending = pendingNodeRef.current;
+      lastRevealedNodeIdRef.current = pending?.id ?? null;
+      revealNode(editor, pending);
 
       editor.onDidChangeCursorPosition((e) => {
         if (programmaticReveal.current) return;
@@ -198,19 +199,23 @@ export function MonacoCodeEditor({
           nodes: allNodesRef.current,
         });
         const matchId = match?.id ?? null;
-        lastCursorSelectedId.current = matchId;
-        cursorDrivenRef.current = true;
+        // Record the cursor-driven selection so the downstream effect does not
+        // treat it as an external selection change and reset the cursor.
+        lastRevealedNodeIdRef.current = matchId;
         onSelectNodeRef.current(matchId);
-        requestAnimationFrame(() => {
-          cursorDrivenRef.current = false;
-        });
       });
     },
     [revealNode],
   );
 
+  // Only re-reveal when the selected node id changes (e.g. user clicked a
+  // canvas node). Typing in the editor causes the graph to re-parse, producing
+  // a new WorkflowNode object for the same selection — comparing by id prevents
+  // the cursor from being reset on every keystroke.
   useEffect(() => {
-    if (cursorDrivenRef.current) return;
+    const currentId = selectedNode?.id ?? null;
+    if (currentId === lastRevealedNodeIdRef.current) return;
+    lastRevealedNodeIdRef.current = currentId;
     if (selectedNode && editorRef.current) {
       revealNode(editorRef.current, selectedNode);
     }
