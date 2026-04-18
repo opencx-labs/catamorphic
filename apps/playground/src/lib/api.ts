@@ -91,14 +91,86 @@ export interface Run {
   createdAt: string;
 }
 
+export interface RepoStatus {
+  branch: string;
+  dirty: boolean;
+  modifiedFiles: string[];
+  ahead: number;
+  behind: number;
+  baseCommit: string | null;
+  remoteHead: string | null;
+  remoteHeadTimestamp: number | null;
+}
+
+export interface BranchInfo {
+  name: string;
+  commit: string;
+  isCurrent: boolean;
+  createdAt: number | null;
+}
+
+export interface DiffEntry {
+  path: string;
+  kind: "added" | "modified" | "deleted";
+  before: string | null;
+  after: string | null;
+}
+
+export interface ConflictEntry {
+  path: string;
+  base: string | null;
+  ours: string | null;
+  theirs: string | null;
+}
+
+export interface CommitInfo {
+  sha: string;
+  message: string;
+  author: { name: string; email: string };
+  timestamp: number;
+}
+
+export interface DeployResult {
+  status: "deployed" | "nothing-to-deploy" | "conflict";
+  commitSha: string | null;
+  remoteSha: string | null;
+  conflicts: ConflictEntry[];
+}
+
+export interface PullResult {
+  status: "clean" | "conflict" | "up-to-date";
+  mergeCommit: string | null;
+  conflicts: ConflictEntry[];
+}
+
+export class ApiError extends Error {
+  readonly status: number;
+  constructor({ status, message }: { status: number; message: string }) {
+    super(message);
+    this.name = "ApiError";
+    this.status = status;
+  }
+}
+
 async function apiFetch<T>(path: string, options?: RequestInit): Promise<T> {
+  const headers: Record<string, string> = {
+    "Content-Type": "application/json",
+  };
+  if (typeof window !== "undefined") {
+    const userId = window.localStorage.getItem("catamorphic.externalUserId");
+    if (userId) headers["X-External-User-Id"] = userId;
+  }
+  const mergedHeaders = { ...headers, ...(options?.headers as object) };
   const res = await fetch(`${API_URL}${path}`, {
     ...options,
-    headers: { "Content-Type": "application/json", ...options?.headers },
+    headers: mergedHeaders,
   });
   if (!res.ok) {
     const text = await res.text().catch(() => "");
-    throw new Error(`API ${res.status}: ${text}`);
+    throw new ApiError({
+      status: res.status,
+      message: `API ${res.status}: ${text}`,
+    });
   }
   return res.json() as Promise<T>;
 }
@@ -125,8 +197,12 @@ export const api = {
   getProject: (projectId: string) =>
     apiFetch<ProjectDetail>(`/api/projects/${projectId}`),
 
-  getWorkflow: (projectId: string, name: string) =>
-    apiFetch<WorkflowGraph>(`/api/projects/${projectId}/workflows/${name}`),
+  getWorkflow: (projectId: string, name: string, opts?: { ref?: string }) => {
+    const qs = opts?.ref ? `?ref=${encodeURIComponent(opts.ref)}` : "";
+    return apiFetch<WorkflowGraph>(
+      `/api/projects/${projectId}/workflows/${name}${qs}`,
+    );
+  },
 
   getRuns: (
     projectId: string,
@@ -157,5 +233,93 @@ export const api = {
         method: "PUT",
         body: JSON.stringify(body),
       },
+    ),
+
+  getStatus: (projectId: string) =>
+    apiFetch<RepoStatus>(`/api/projects/${projectId}/status`),
+
+  getBranches: (projectId: string) =>
+    apiFetch<BranchInfo[]>(`/api/projects/${projectId}/branches`),
+
+  createBranch: (
+    projectId: string,
+    body: { name?: string; fromRef?: string },
+  ) =>
+    apiFetch<{ branch: string; created: boolean }>(
+      `/api/projects/${projectId}/branches`,
+      {
+        method: "POST",
+        body: JSON.stringify(body),
+      },
+    ),
+
+  checkout: (projectId: string, ref: string) =>
+    apiFetch<RepoStatus>(`/api/projects/${projectId}/checkout`, {
+      method: "POST",
+      body: JSON.stringify({ ref }),
+    }),
+
+  getCommits: (projectId: string, limit = 50) =>
+    apiFetch<{ items: CommitInfo[]; total: number }>(
+      `/api/projects/${projectId}/commits?limit=${limit}`,
+    ),
+
+  getWorkdirDiff: (projectId: string) =>
+    apiFetch<DiffEntry[]>(`/api/projects/${projectId}/workdir`),
+
+  deploy: (
+    projectId: string,
+    body?: {
+      message?: string;
+      files?: Record<string, string>;
+    },
+  ) =>
+    apiFetch<DeployResult>(`/api/projects/${projectId}/deploy`, {
+      method: "POST",
+      body: JSON.stringify(body ?? {}),
+    }),
+
+  pull: (projectId: string, body?: { files?: Record<string, string> }) =>
+    apiFetch<PullResult>(`/api/projects/${projectId}/pull`, {
+      method: "POST",
+      body: JSON.stringify(body ?? {}),
+    }),
+
+  aiResolveConflicts: (
+    projectId: string,
+    body: { conflicts: ConflictEntry[] },
+  ) =>
+    apiFetch<{ resolutions: Record<string, string>; notes?: string }>(
+      `/api/projects/${projectId}/ai-resolve-conflicts`,
+      {
+        method: "POST",
+        body: JSON.stringify(body),
+      },
+    ),
+
+  discard: (projectId: string) =>
+    apiFetch<{ discarded: boolean; branch: string }>(
+      `/api/projects/${projectId}/discard`,
+      {
+        method: "POST",
+        body: JSON.stringify({}),
+      },
+    ),
+
+  resolveConflicts: (
+    projectId: string,
+    body: { resolutions: Record<string, string>; message?: string },
+  ) =>
+    apiFetch<{ commitSha: string }>(
+      `/api/projects/${projectId}/resolve-conflicts`,
+      {
+        method: "POST",
+        body: JSON.stringify(body),
+      },
+    ),
+
+  getFilesAtRef: (projectId: string, ref: string) =>
+    apiFetch<Record<string, string>>(
+      `/api/projects/${projectId}/files-at-ref?ref=${encodeURIComponent(ref)}`,
     ),
 };

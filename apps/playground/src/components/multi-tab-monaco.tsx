@@ -1,7 +1,11 @@
 "use client";
 
 import dynamic from "next/dynamic";
-import { useCallback, useRef } from "react";
+import { useCallback, useEffect, useRef } from "react";
+import {
+  findWorkflowDefinitions,
+  type WorkflowDefinition,
+} from "@/lib/find-workflow-definitions";
 
 const Editor = dynamic(() => import("@monaco-editor/react"), { ssr: false });
 
@@ -14,6 +18,51 @@ interface WorkflowContext {
 }
 `;
 
+interface MinimalEditor {
+  updateOptions(options: Record<string, unknown>): void;
+  onMouseDown(
+    listener: (e: {
+      target: {
+        type: number;
+        position: { lineNumber: number; column: number } | null;
+      };
+    }) => void,
+  ): { dispose(): void };
+  deltaDecorations(
+    oldIds: string[],
+    newDecorations: Array<{
+      range: {
+        startLineNumber: number;
+        startColumn: number;
+        endLineNumber: number;
+        endColumn: number;
+      };
+      options: {
+        glyphMarginClassName?: string;
+        glyphMarginHoverMessage?: { value: string };
+        stickiness?: number;
+      };
+    }>,
+  ): string[];
+}
+
+interface MonacoNamespace {
+  editor: {
+    MouseTargetType: { GUTTER_GLYPH_MARGIN: number };
+  };
+  Range: new (
+    startLine: number,
+    startColumn: number,
+    endLine: number,
+    endColumn: number,
+  ) => {
+    startLineNumber: number;
+    startColumn: number;
+    endLineNumber: number;
+    endColumn: number;
+  };
+}
+
 function getLanguage({ path }: { path: string }): string {
   if (path.endsWith(".ts") || path.endsWith(".tsx")) return "typescript";
   if (path.endsWith(".js") || path.endsWith(".jsx")) return "javascript";
@@ -21,6 +70,15 @@ function getLanguage({ path }: { path: string }): string {
   if (path.endsWith(".md")) return "markdown";
   if (path.endsWith(".css")) return "css";
   return "plaintext";
+}
+
+function isSourceFile({ path }: { path: string }): boolean {
+  return (
+    path.endsWith(".ts") ||
+    path.endsWith(".tsx") ||
+    path.endsWith(".js") ||
+    path.endsWith(".jsx")
+  );
 }
 
 function basename({ path }: { path: string }): string {
@@ -35,6 +93,12 @@ export interface MultiTabMonacoProps {
   onSelectTab: (path: string) => void;
   onCloseTab: (path: string) => void;
   onChange: (params: { path: string; content: string }) => void;
+  readOnly?: boolean;
+  /**
+   * Fired when the user clicks the gutter "Run" glyph next to a workflow
+   * definition in the currently-active tab.
+   */
+  onRunWorkflow?: (params: { name: string }) => void;
 }
 
 export function MultiTabMonaco({
@@ -45,10 +109,21 @@ export function MultiTabMonaco({
   onSelectTab,
   onCloseTab,
   onChange,
+  readOnly = false,
+  onRunWorkflow,
 }: MultiTabMonacoProps) {
   const monacoConfigured = useRef(false);
+  const monacoRef = useRef<MonacoNamespace | null>(null);
+  const editorRef = useRef<MinimalEditor | null>(null);
+  const decorationIdsRef = useRef<string[]>([]);
+  const definitionsByLineRef = useRef<Map<number, WorkflowDefinition>>(
+    new Map(),
+  );
+  const onRunWorkflowRef = useRef(onRunWorkflow);
+  onRunWorkflowRef.current = onRunWorkflow;
 
   const handleBeforeMount = useCallback((monaco: Record<string, unknown>) => {
+    monacoRef.current = monaco as unknown as MonacoNamespace;
     if (monacoConfigured.current) return;
     monacoConfigured.current = true;
 
@@ -126,6 +201,73 @@ export function MultiTabMonaco({
 
   const activeContent = activeTab ? (files[activeTab] ?? "") : "";
 
+  const renderDecorations = useCallback(() => {
+    const editor = editorRef.current;
+    const monaco = monacoRef.current;
+    if (!editor || !monaco) return;
+
+    const newDecorations = [...definitionsByLineRef.current.values()].map(
+      (def) => ({
+        range: new monaco.Range(def.line, 1, def.line, 1),
+        options: {
+          glyphMarginClassName: "catamorphic-run-glyph",
+          glyphMarginHoverMessage: {
+            value: `Run workflow \`${def.name}\``,
+          },
+          stickiness: 1,
+        },
+      }),
+    );
+
+    decorationIdsRef.current = editor.deltaDecorations(
+      decorationIdsRef.current,
+      newDecorations,
+    );
+  }, []);
+
+  useEffect(() => {
+    if (!activeTab || !isSourceFile({ path: activeTab })) {
+      definitionsByLineRef.current = new Map();
+      renderDecorations();
+      return;
+    }
+
+    const defs = findWorkflowDefinitions({ source: activeContent });
+    const map = new Map<number, WorkflowDefinition>();
+    for (const def of defs) map.set(def.line, def);
+    definitionsByLineRef.current = map;
+    renderDecorations();
+  }, [activeTab, activeContent, renderDecorations]);
+
+  const handleGlyphClick = useCallback((line: number) => {
+    const def = definitionsByLineRef.current.get(line);
+    if (!def) return;
+    onRunWorkflowRef.current?.({ name: def.name });
+  }, []);
+
+  const handleEditorMount = useCallback(
+    (editor: MinimalEditor) => {
+      editorRef.current = editor;
+      editor.updateOptions({ glyphMargin: true });
+      renderDecorations();
+
+      editor.onMouseDown((e) => {
+        const monaco = monacoRef.current;
+        if (!monaco) return;
+        if (
+          e.target.type !== monaco.editor.MouseTargetType.GUTTER_GLYPH_MARGIN
+        ) {
+          return;
+        }
+        const line = e.target.position?.lineNumber;
+        if (!line) return;
+        if (!definitionsByLineRef.current.has(line)) return;
+        handleGlyphClick(line);
+      });
+    },
+    [renderDecorations, handleGlyphClick],
+  );
+
   return (
     <div className="flex flex-col h-full bg-neutral-950">
       <div className="flex border-b border-neutral-800 overflow-x-auto shrink-0">
@@ -185,17 +327,20 @@ export function MultiTabMonaco({
               }
             }}
             beforeMount={handleBeforeMount}
+            onMount={handleEditorMount}
             loading={
               <div style={{ padding: 20, color: "#525252", fontSize: 13 }}>
                 Loading editor...
               </div>
             }
             options={{
+              readOnly,
               minimap: { enabled: false },
               fontSize: 13,
               fontFamily: '"Fira Code", "SF Mono", "JetBrains Mono", monospace',
               fontLigatures: true,
               lineNumbers: "on",
+              glyphMargin: true,
               scrollBeyondLastLine: false,
               automaticLayout: true,
               tabSize: 2,

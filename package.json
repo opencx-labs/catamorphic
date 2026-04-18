@@ -8,6 +8,7 @@
   ],
   "scripts": {
     "build": "turbo build",
+    "predev": "bun run scripts/kill-dev-ports.ts && bun run db:setup",
     "dev": "turbo dev",
     "test": "turbo test",
     "typecheck": "turbo typecheck",
@@ -16,7 +17,8 @@
     "format": "biome format --write .",
     "db:migrate": "bun run --filter @catamorphic/db db:migrate",
     "db:codegen": "bun run --filter @catamorphic/db db:codegen",
-    "db:reset": "bun run --filter @catamorphic/db db:reset"
+    "db:reset": "bun run --filter @catamorphic/db db:reset",
+    "db:setup": "docker compose up -d postgres && bun run db:migrate"
   },
   "devDependencies": {
     "@biomejs/biome": "^2.4.10",

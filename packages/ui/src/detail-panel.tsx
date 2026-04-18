@@ -7,6 +7,7 @@ import { useAtom, useAtomValue, useSetAtom } from "jotai";
 import type { ReactNode } from "react";
 import {
   activePanelTabAtom,
+  codeEditorReadOnlyAtom,
   graphAtom,
   type PanelTab,
   rightPanelOpenAtom,
@@ -357,6 +358,7 @@ export interface CodeEditorRenderProps {
   selectedNode: WorkflowNode | null;
   allNodes: WorkflowNode[];
   onSelectNode: (nodeId: string | null) => void;
+  readOnly?: boolean;
 }
 
 export interface DetailPanelProps {
@@ -377,6 +379,7 @@ export function DetailPanel({
   const selectedNode = useAtomValue(selectedNodeAtom);
   const graph = useAtomValue(graphAtom);
   const setSelectedNodeId = useSetAtom(selectedNodeIdAtom);
+  const readOnly = useAtomValue(codeEditorReadOnlyAtom);
 
   if (!isOpen) return null;
 
@@ -458,11 +461,13 @@ export function DetailPanel({
                 selectedNode,
                 allNodes: graph?.nodes ?? [],
                 onSelectNode: setSelectedNodeId,
+                readOnly,
               })
             ) : (
               <textarea
                 className="catamorphic-code-textarea"
                 value={code}
+                readOnly={readOnly}
                 onChange={(e) => onCodeChange(e.target.value)}
                 spellCheck={false}
               />

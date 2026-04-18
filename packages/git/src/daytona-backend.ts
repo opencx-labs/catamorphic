@@ -11,30 +11,51 @@ export class DaytonaBackend implements StorageBackend {
     this.client = new Daytona(config);
   }
 
-  private key(tenantId: string, projectId: string): string {
-    return `${tenantId}/${projectId}`;
+  private key(
+    tenantId: string,
+    projectId: string,
+    externalUserId?: string,
+  ): string {
+    return externalUserId
+      ? `${tenantId}/${projectId}/${externalUserId}`
+      : `${tenantId}/${projectId}`;
   }
 
-  async initProject(tenantId: string, projectId: string): Promise<string> {
+  async initProject(
+    tenantId: string,
+    projectId: string,
+    externalUserId?: string,
+  ): Promise<string> {
     const sandbox = await this.client.create({
       language: "typescript",
       autoStopInterval: 15,
-      labels: { tenantId, projectId, purpose: "dev" },
+      labels: {
+        tenantId,
+        projectId,
+        purpose: "dev",
+        ...(externalUserId ? { externalUserId } : {}),
+      },
     });
 
     await sandbox.process.executeCommand(
       `git init --initial-branch=main ${PROJECT_DIR}`,
     );
 
-    this.sandboxIds.set(this.key(tenantId, projectId), sandbox.id);
+    this.sandboxIds.set(
+      this.key(tenantId, projectId, externalUserId),
+      sandbox.id,
+    );
     return PROJECT_DIR;
   }
 
   async acquireProject(
     tenantId: string,
     projectId: string,
+    externalUserId?: string,
   ): Promise<{ repoPath: string; release: () => Promise<void> }> {
-    const sandboxId = this.sandboxIds.get(this.key(tenantId, projectId));
+    const sandboxId = this.sandboxIds.get(
+      this.key(tenantId, projectId, externalUserId),
+    );
     if (!sandboxId) {
       throw new Error(`Project not found: ${projectId}`);
     }
@@ -51,19 +72,32 @@ export class DaytonaBackend implements StorageBackend {
   }
 
   async deleteProject(tenantId: string, projectId: string): Promise<void> {
-    const sandboxId = this.sandboxIds.get(this.key(tenantId, projectId));
-    if (sandboxId) {
+    const prefix = `${tenantId}/${projectId}`;
+    const matchingKeys = [...this.sandboxIds.keys()].filter(
+      (k) => k === prefix || k.startsWith(`${prefix}/`),
+    );
+    for (const key of matchingKeys) {
+      const sandboxId = this.sandboxIds.get(key);
+      if (!sandboxId) continue;
       const sandbox = await this.client.get(sandboxId);
       await this.client.delete(sandbox);
-      this.sandboxIds.delete(this.key(tenantId, projectId));
+      this.sandboxIds.delete(key);
     }
   }
 
-  async exists(tenantId: string, projectId: string): Promise<boolean> {
-    return this.sandboxIds.has(this.key(tenantId, projectId));
+  async exists(
+    tenantId: string,
+    projectId: string,
+    externalUserId?: string,
+  ): Promise<boolean> {
+    return this.sandboxIds.has(this.key(tenantId, projectId, externalUserId));
   }
 
-  getSandboxId(tenantId: string, projectId: string): string | undefined {
-    return this.sandboxIds.get(this.key(tenantId, projectId));
+  getSandboxId(
+    tenantId: string,
+    projectId: string,
+    externalUserId?: string,
+  ): string | undefined {
+    return this.sandboxIds.get(this.key(tenantId, projectId, externalUserId));
   }
 }

@@ -1,5 +1,5 @@
 import type { DB } from "@catamorphic/db";
-import type { ProjectManager } from "@catamorphic/git";
+import type { ProjectManager, ProjectRepo } from "@catamorphic/git";
 import {
   layoutGraph,
   parseProject,
@@ -8,6 +8,7 @@ import {
 import type { FastifyInstance } from "fastify";
 import type { ZodTypeProvider } from "fastify-type-provider-zod";
 import type { Kysely, Selectable } from "kysely";
+import { DEFAULT_TENANT_ID, getExternalUserId } from "../identity.js";
 import {
   ErrorSchema,
   ListSchema,
@@ -19,8 +20,6 @@ import {
   WorkflowNameParamsSchema,
   WorkflowSummarySchema,
 } from "../schemas.js";
-
-const DEFAULT_TENANT_ID = "00000000-0000-0000-0000-000000000001";
 
 type RunRow = Selectable<DB["workflow_runs"]>;
 
@@ -71,6 +70,7 @@ export function registerWorkflowRoutes(
       }
 
       const { projectId } = request.params;
+      const externalUserId = getExternalUserId(request);
 
       const exists = await db
         .selectFrom("projects")
@@ -82,7 +82,11 @@ export function registerWorkflowRoutes(
       if (!exists)
         return reply.status(404).send({ error: "Project not found" });
 
-      const repo = await projectManager.open(DEFAULT_TENANT_ID, projectId);
+      const repo = await projectManager.openDev(
+        DEFAULT_TENANT_ID,
+        projectId,
+        externalUserId,
+      );
       try {
         const files = await repo.readAllFiles();
         const { workflows } = parseProject(files);
@@ -119,6 +123,8 @@ export function registerWorkflowRoutes(
       }
 
       const { projectId, name } = request.params;
+      const { ref } = request.query;
+      const externalUserId = getExternalUserId(request);
 
       const exists = await db
         .selectFrom("projects")
@@ -130,9 +136,15 @@ export function registerWorkflowRoutes(
       if (!exists)
         return reply.status(404).send({ error: "Project not found" });
 
-      const repo = await projectManager.open(DEFAULT_TENANT_ID, projectId);
+      const repo = await projectManager.openDev(
+        DEFAULT_TENANT_ID,
+        projectId,
+        externalUserId,
+      );
       try {
-        const allFiles = await repo.readAllFiles();
+        const allFiles = ref
+          ? await readAtRef(repo, ref)
+          : await repo.readAllFiles();
         const graph = parseWorkflowFromProject(allFiles, name);
 
         if (!graph) {
@@ -219,4 +231,11 @@ export function registerWorkflowRoutes(
       return reply.send({ items: rows.map(mapRun), total });
     },
   });
+}
+
+async function readAtRef(
+  repo: ProjectRepo,
+  ref: string,
+): Promise<Record<string, string>> {
+  return repo.readAllFilesAtRef(ref);
 }

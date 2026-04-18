@@ -1,4 +1,5 @@
 import { useAtom, useSetAtom } from "jotai";
+import type { ReactNode } from "react";
 import {
   activeHistoryTabAtom,
   type HistoryTab,
@@ -6,7 +7,7 @@ import {
 } from "./atoms.js";
 import { RunsPanel } from "./runs-panel.js";
 
-function VersionsPanel() {
+function DefaultVersionsPanel() {
   return (
     <div className="catamorphic-versions-empty">
       <div className="catamorphic-versions-empty-icon">⎇</div>
@@ -18,7 +19,13 @@ function VersionsPanel() {
   );
 }
 
-export function HistorySidebar() {
+export interface HistorySidebarProps {
+  renderVersionsPanel?: () => ReactNode;
+}
+
+export function HistorySidebar({
+  renderVersionsPanel,
+}: HistorySidebarProps = {}) {
   const setOpen = useSetAtom(historySidebarOpenAtom);
   const [activeTab, setActiveTab] = useAtom(activeHistoryTabAtom);
 
@@ -53,7 +60,12 @@ export function HistorySidebar() {
       </div>
       <div className="catamorphic-history-sidebar-body">
         {activeTab === "runs" && <RunsPanel />}
-        {activeTab === "versions" && <VersionsPanel />}
+        {activeTab === "versions" &&
+          (renderVersionsPanel ? (
+            renderVersionsPanel()
+          ) : (
+            <DefaultVersionsPanel />
+          ))}
       </div>
     </div>
   );
