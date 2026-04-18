@@ -1,1 +1,43 @@
 @import "tailwindcss";
+
+/*
+ * Monaco gutter "Run workflow" glyph. A decoration with this class is added on
+ * every line that defines an `async function` whose body starts with
+ * `"use workflow"`. Clicking it opens the Run dialog via the editor host.
+ *
+ * Monaco gives the decoration an absolutely-positioned cell sized to the
+ * editor's line height. We draw the play icon via a centered ::before
+ * pseudo-element (overflow allowed to visually extend beyond the narrow
+ * glyph-margin column) so the icon is always centered on its line. The SVG
+ * path fills almost the entire viewBox so the triangle doesn't look tiny.
+ */
+.catamorphic-run-glyph {
+  position: relative;
+  overflow: visible;
+  cursor: pointer;
+}
+
+.catamorphic-run-glyph::before {
+  content: "";
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 20px;
+  height: 20px;
+  transform: translate(-50%, -50%);
+  background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><path fill='%2334d399' d='M2.5 1.5v13l11-6.5z'/></svg>");
+  background-repeat: no-repeat;
+  background-position: center;
+  background-size: contain;
+  opacity: 0.85;
+  transition:
+    opacity 120ms ease-in,
+    width 120ms ease-in,
+    height 120ms ease-in;
+}
+
+.catamorphic-run-glyph:hover::before {
+  opacity: 1;
+  width: 24px;
+  height: 24px;
+}

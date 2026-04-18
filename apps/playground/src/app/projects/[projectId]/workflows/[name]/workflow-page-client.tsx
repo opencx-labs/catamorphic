@@ -2,14 +2,18 @@
 
 import { type PlaygroundRun, WorkflowEditor } from "@catamorphic/ui";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import "@catamorphic/ui/styles.css";
 import { MonacoCodeEditor } from "@/components/monaco-editor";
+import { PlaygroundVersionsPanel } from "@/components/playground-versions-panel";
 import { ProjectEditor } from "@/components/project-editor";
+import { UpdateBanner } from "@/components/update-banner";
 import { generateWorkflowCode } from "@/lib/ai-action";
 import { api, type WorkflowGraph } from "@/lib/api";
 import { parseWorkflowFromProjectAction } from "@/lib/parse-action";
 import { runWorkflowAction } from "@/lib/run-action";
+import { useProjectGitState } from "@/lib/use-project-git-state";
 import {
   readWorkflowDisplayName,
   upsertWorkflowDisplayName,
@@ -19,6 +23,7 @@ const PAGE_SIZE = 20;
 
 interface Props {
   projectId: string;
+  projectName: string | null;
   workflowName: string;
   initialGraph: WorkflowGraph;
   initialFiles: Record<string, string>;
@@ -51,27 +56,35 @@ function findWorkflowFile(
 
 export function WorkflowPageClient({
   projectId,
+  projectName,
   workflowName,
   initialGraph,
   initialFiles,
   initialRuns,
 }: Props) {
   const [expanded, setExpanded] = useState(false);
-  const [projectFiles, setProjectFiles] =
-    useState<Record<string, string>>(initialFiles);
+
+  const gitState = useProjectGitState({
+    projectId,
+    baselineFiles: initialFiles,
+  });
+  const { files: projectFiles, selectedSha, selectedFiles, setFile } = gitState;
+
+  const effectiveFiles = selectedFiles ?? projectFiles;
+  const readOnly = selectedSha !== null;
 
   const workflowFilePath = useMemo(
     () =>
       findWorkflowFile(
-        projectFiles,
+        effectiveFiles,
         workflowName,
         initialGraph.filePath || null,
       ),
-    [projectFiles, workflowName, initialGraph.filePath],
+    [effectiveFiles, workflowName, initialGraph.filePath],
   );
 
   const workflowCode = workflowFilePath
-    ? (projectFiles[workflowFilePath] ?? "")
+    ? (effectiveFiles[workflowFilePath] ?? "")
     : (initialGraph.sourceCode ?? "");
   const [isEditingTitle, setIsEditingTitle] = useState(false);
   const [titleInput, setTitleInput] = useState("");
@@ -90,16 +103,17 @@ export function WorkflowPageClient({
     setTitle(nextTitle);
   }, [workflowCode, workflowName, initialGraph.displayName, isEditingTitle]);
 
-  const projectFilesRef = useRef(projectFiles);
-  projectFilesRef.current = projectFiles;
+  const projectFilesRef = useRef(effectiveFiles);
+  projectFilesRef.current = effectiveFiles;
   const titleEditorRef = useRef<HTMLDivElement | null>(null);
 
   const handleCodeChange = useCallback(
     (newCode: string) => {
+      if (readOnly) return;
       const path = workflowFilePath ?? initialGraph.filePath;
-      setProjectFiles((prev) => ({ ...prev, [path]: newCode }));
+      setFile(path, newCode);
     },
-    [workflowFilePath, initialGraph.filePath],
+    [workflowFilePath, initialGraph.filePath, setFile, readOnly],
   );
 
   const handleParse = useCallback(
@@ -138,6 +152,33 @@ export function WorkflowPageClient({
       });
     },
     [projectId, workflowName],
+  );
+
+  const router = useRouter();
+  const [runDialogRequestKey, setRunDialogRequestKey] = useState(0);
+
+  const handleRunWorkflowFromGutter = useCallback(
+    ({ name }: { name: string }) => {
+      if (name === workflowName) {
+        if (expanded) setExpanded(false);
+        setRunDialogRequestKey((k) => k + 1);
+        return;
+      }
+      router.push(
+        `/projects/${projectId}/workflows/${encodeURIComponent(name)}`,
+      );
+    },
+    [workflowName, expanded, projectId, router],
+  );
+
+  const handleActiveWorkflowChange = useCallback(
+    ({ name }: { name: string }) => {
+      if (name === workflowName) return;
+      router.push(
+        `/projects/${projectId}/workflows/${encodeURIComponent(name)}`,
+      );
+    },
+    [workflowName, projectId, router],
   );
 
   const handleLoadMoreRuns = useCallback(
@@ -180,15 +221,17 @@ export function WorkflowPageClient({
 
   const handleFileChange = useCallback(
     ({ path, content }: { path: string; content: string }) => {
-      setProjectFiles((prev) => ({ ...prev, [path]: content }));
+      if (readOnly) return;
+      setFile(path, content);
     },
-    [],
+    [setFile, readOnly],
   );
 
   const handleStartEditTitle = useCallback(() => {
+    if (readOnly) return;
     setTitleInput(title);
     setIsEditingTitle(true);
-  }, [title]);
+  }, [title, readOnly]);
 
   const handleSaveTitle = useCallback(() => {
     const nextTitle = titleInput.trim();
@@ -204,7 +247,7 @@ export function WorkflowPageClient({
       nextTitle,
     );
     if (updatedCode !== workflowCode) {
-      setProjectFiles((prev) => ({ ...prev, [path]: updatedCode }));
+      setFile(path, updatedCode);
     }
     setTitle(nextTitle);
     setIsEditingTitle(false);
@@ -214,6 +257,7 @@ export function WorkflowPageClient({
     initialGraph.filePath,
     workflowCode,
     workflowName,
+    setFile,
   ]);
 
   useEffect(() => {
@@ -232,6 +276,36 @@ export function WorkflowPageClient({
     };
   }, [isEditingTitle, handleSaveTitle]);
 
+  const renderVersionsPanel = useCallback(
+    () => <PlaygroundVersionsPanel gitState={gitState} />,
+    [gitState],
+  );
+
+  const renderBanner = useCallback(
+    () => <UpdateBanner projectId={projectId} gitState={gitState} />,
+    [projectId, gitState],
+  );
+
+  const renderToolbarCenter = useCallback(
+    () => (
+      <div className="flex items-center gap-2 text-xs text-neutral-400">
+        <span className="px-2 py-0.5 rounded border border-neutral-800 bg-neutral-900">
+          {gitState.versionLabel}
+        </span>
+        {selectedSha && (
+          <button
+            type="button"
+            onClick={() => gitState.selectVersion(null)}
+            className="text-xs text-blue-400 hover:text-blue-300 cursor-pointer"
+          >
+            Return to latest
+          </button>
+        )}
+      </div>
+    ),
+    [gitState, selectedSha],
+  );
+
   return (
     <div className="h-[calc(100vh-3.5rem)] flex flex-col">
       <div className="flex items-center gap-2 text-sm text-neutral-400 px-4 py-2 border-b border-neutral-800 bg-neutral-950/50 shrink-0">
@@ -246,7 +320,7 @@ export function WorkflowPageClient({
           href={`/projects/${projectId}`}
           className="cursor-pointer hover:text-neutral-200 transition-colors"
         >
-          {projectId.slice(0, 8)}&hellip;
+          {projectName ?? `${projectId.slice(0, 8)}\u2026`}
         </Link>
         <span className="text-neutral-600">/</span>
         <div ref={titleEditorRef} className="inline-flex h-7 items-center">
@@ -271,19 +345,26 @@ export function WorkflowPageClient({
               type="button"
               onClick={handleStartEditTitle}
               className="h-7 cursor-pointer inline-flex items-center gap-1.5 text-neutral-200 hover:text-white transition-colors"
-              title="Rename workflow title"
+              title={
+                readOnly
+                  ? "Rename disabled while viewing history"
+                  : "Rename workflow title"
+              }
+              disabled={readOnly}
             >
               <span>{title}</span>
-              <svg
-                width="12"
-                height="12"
-                viewBox="0 0 16 16"
-                fill="currentColor"
-                aria-hidden="true"
-                className="text-neutral-500"
-              >
-                <path d="M11.013 1.427a1.75 1.75 0 0 1 2.474 2.474l-7.2 7.2a1.75 1.75 0 0 1-.77.445l-2.34.624a.75.75 0 0 1-.919-.919l.624-2.34a1.75 1.75 0 0 1 .445-.77zm1.414 1.06a.25.25 0 0 0-.354 0l-.72.72 1.414 1.414.72-.72a.25.25 0 0 0 0-.354zM11.28 4.62 4.387 11.513a.25.25 0 0 0-.064.11l-.315 1.182 1.182-.315a.25.25 0 0 0 .11-.064l6.893-6.893z" />
-              </svg>
+              {!readOnly && (
+                <svg
+                  width="12"
+                  height="12"
+                  viewBox="0 0 16 16"
+                  fill="currentColor"
+                  aria-hidden="true"
+                  className="text-neutral-500"
+                >
+                  <path d="M11.013 1.427a1.75 1.75 0 0 1 2.474 2.474l-7.2 7.2a1.75 1.75 0 0 1-.77.445l-2.34.624a.75.75 0 0 1-.919-.919l.624-2.34a1.75 1.75 0 0 1 .445-.77zm1.414 1.06a.25.25 0 0 0-.354 0l-.72.72 1.414 1.414.72-.72a.25.25 0 0 0 0-.354zM11.28 4.62 4.387 11.513a.25.25 0 0 0-.064.11l-.315 1.182 1.182-.315a.25.25 0 0 0 .11-.064l6.893-6.893z" />
+                </svg>
+              )}
             </button>
           )}
         </div>
@@ -302,24 +383,39 @@ export function WorkflowPageClient({
       <div className="flex-1 min-h-0">
         {expanded ? (
           <ProjectEditor
-            files={projectFiles}
+            files={effectiveFiles}
             onFileChange={handleFileChange}
             initialFile={workflowFilePath ?? undefined}
+            gitState={gitState}
+            baselineFiles={initialFiles}
+            readOnly={readOnly}
+            onRunWorkflow={handleRunWorkflowFromGutter}
           />
         ) : (
           <WorkflowEditor
             code={workflowCode}
             onCodeChange={handleCodeChange}
             onParse={handleParse}
-            renderCodeEditor={(props) => <MonacoCodeEditor {...props} />}
+            renderCodeEditor={(props) => (
+              <MonacoCodeEditor
+                {...props}
+                onRunWorkflow={handleRunWorkflowFromGutter}
+                onActiveWorkflowChange={handleActiveWorkflowChange}
+              />
+            )}
             showCodeEditor={true}
             showMinimap={true}
-            aiEnabled={true}
+            aiEnabled={!readOnly}
             onAIPrompt={handleAIPrompt}
             onRun={handleRun}
             onLoadMoreRuns={handleLoadMoreRuns}
             initialRuns={initialRuns}
             onExpandEditor={() => setExpanded(true)}
+            renderVersionsPanel={renderVersionsPanel}
+            renderBanner={renderBanner}
+            renderToolbarCenter={renderToolbarCenter}
+            readOnly={readOnly}
+            runDialogRequestKey={runDialogRequestKey}
           />
         )}
       </div>

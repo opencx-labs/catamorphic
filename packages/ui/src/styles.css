@@ -26,6 +26,15 @@
   gap: 8px;
 }
 
+.catamorphic-toolbar-center {
+  display: flex;
+  flex: 1;
+  justify-content: center;
+  align-items: center;
+  min-width: 0;
+  padding: 0 16px;
+}
+
 .catamorphic-toolbar-btn {
   padding: 6px 12px;
   border-radius: 6px;

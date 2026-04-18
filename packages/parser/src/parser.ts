@@ -31,13 +31,23 @@ function nextId(): string {
   return `node_${++nodeCounter}`;
 }
 
+/**
+ * ts-morph's in-memory file system normalizes every path to an absolute one
+ * (e.g. "src/a.ts" becomes "/src/a.ts"). Callers on the outside pass and
+ * expect repo-relative paths, so strip the leading slash before letting any
+ * path escape this module.
+ */
+function normalizePath(p: string): string {
+  return p.startsWith("/") ? p.slice(1) : p;
+}
+
 function getSourceRange(node: Node): SourceRange {
   const sf = node.getSourceFile();
   const start = node.getStart();
   const end = node.getEnd();
   const startPos = sf.getLineAndColumnAtPos(start);
   const endPos = sf.getLineAndColumnAtPos(end);
-  const filePath = sf.getFilePath();
+  const filePath = normalizePath(sf.getFilePath());
   const file =
     currentWorkflowFile && filePath !== currentWorkflowFile
       ? filePath
@@ -777,7 +787,7 @@ function findAllWorkflowFunctions(
         results.push({
           fn,
           sourceFile: sf,
-          filePath: sf.getFilePath(),
+          filePath: normalizePath(sf.getFilePath()),
         });
       }
     }
@@ -799,7 +809,7 @@ function buildWorkflowGraph(
     sourceFile,
     stepFunctions,
     variables: new Map(),
-    workflowFile: sourceFile.getFilePath(),
+    workflowFile: normalizePath(sourceFile.getFilePath()),
   };
 
   currentWorkflowFile = ctx.workflowFile;
@@ -838,8 +848,8 @@ function buildWorkflowGraph(
     nodes: ctx.nodes,
     edges: ctx.edges,
     sourceCode: opts?.sourceCode ?? workflowFn.getSourceFile().getFullText(),
-    filePath: opts?.filePath,
-    projectFiles: opts?.projectFiles,
+    filePath: opts?.filePath ? normalizePath(opts.filePath) : undefined,
+    projectFiles: opts?.projectFiles?.map(normalizePath),
   };
 }
 
@@ -866,10 +876,17 @@ function createMultiFileProject(files: Record<string, string>): Project {
     }),
   );
 
+  // Callers occasionally pass both "src/a.ts" and "/src/a.ts" (e.g. after
+  // legacy drafts). ts-morph normalizes these to the same absolute path and
+  // throws on the second createSourceFile call, so dedupe by normalized key
+  // and use overwrite: true for safety.
+  const seen = new Set<string>();
   for (const [filePath, content] of Object.entries(files)) {
-    if (filePath.endsWith(".ts") || filePath.endsWith(".tsx")) {
-      project.createSourceFile(filePath, content);
-    }
+    if (!filePath.endsWith(".ts") && !filePath.endsWith(".tsx")) continue;
+    const key = normalizePath(filePath);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    project.createSourceFile(key, content, { overwrite: true });
   }
 
   project.resolveSourceFileDependencies();

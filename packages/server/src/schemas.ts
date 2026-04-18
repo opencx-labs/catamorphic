@@ -198,6 +198,78 @@ export const SetRemoteSchema = z.object({
   url: z.string().url(),
 });
 
+export const RepoStatusSchema = z.object({
+  branch: z.string(),
+  dirty: z.boolean(),
+  modifiedFiles: z.array(z.string()),
+  ahead: z.number(),
+  behind: z.number(),
+  baseCommit: z.string().nullable(),
+  remoteHead: z.string().nullable(),
+  remoteHeadTimestamp: z.number().nullable(),
+});
+
+export const BranchInfoSchema = z.object({
+  name: z.string(),
+  commit: z.string(),
+  isCurrent: z.boolean(),
+  createdAt: z.number().nullable(),
+});
+
+export const DiffEntrySchema = z.object({
+  path: z.string(),
+  kind: z.enum(["added", "modified", "deleted"]),
+  before: z.string().nullable(),
+  after: z.string().nullable(),
+});
+
+export const ConflictEntrySchema = z.object({
+  path: z.string(),
+  base: z.string().nullable(),
+  ours: z.string().nullable(),
+  theirs: z.string().nullable(),
+});
+
+export const DeployRequestSchema = z.object({
+  message: z.string().min(1).optional(),
+  /** Optional draft files to write to the working tree before committing. */
+  files: z.record(z.string(), z.string()).optional(),
+});
+
+export const PullRequestSchema = z.object({
+  /** Optional draft files to write to the working tree before merging. */
+  files: z.record(z.string(), z.string()).optional(),
+});
+
+export const DeployResponseSchema = z.object({
+  status: z.enum(["deployed", "nothing-to-deploy", "conflict"]),
+  commitSha: z.string().nullable(),
+  remoteSha: z.string().nullable(),
+  conflicts: z.array(ConflictEntrySchema),
+});
+
+export const PullResponseSchema = z.object({
+  status: z.enum(["clean", "conflict", "up-to-date"]),
+  mergeCommit: z.string().nullable(),
+  conflicts: z.array(ConflictEntrySchema),
+});
+
+export const DiscardResponseSchema = z.object({
+  discarded: z.boolean(),
+  branch: z.string(),
+});
+
+export const CreateBranchSchema = z.object({
+  /** Optional explicit name; when omitted the server generates `work/YYYY-MM-DD_HH-mm`. */
+  name: z.string().optional(),
+  fromRef: z.string().optional(),
+});
+
+export const ResolveConflictsSchema = z.object({
+  resolutions: z.record(z.string(), z.string()),
+  message: z.string().optional(),
+});
+
 // --- Users ---
 export const UserSchema = z.object({
   id: z.string().uuid(),

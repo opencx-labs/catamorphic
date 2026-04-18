@@ -1,6 +1,6 @@
 import type { PlaygroundRun } from "@catamorphic/ui";
 import { notFound } from "next/navigation";
-import { api, type Run, type WorkflowGraph } from "@/lib/api";
+import { ApiError, api, type Run, type WorkflowGraph } from "@/lib/api";
 import { WorkflowPageClient } from "./workflow-page-client";
 
 function mapRun(run: Run): PlaygroundRun {
@@ -23,6 +23,26 @@ function mapRun(run: Run): PlaygroundRun {
   };
 }
 
+/**
+ * Synthetic graph used when the workflow name is not yet known to the server
+ * (e.g. the user just created it in a draft that hasn't been deployed). The
+ * client will re-parse from its localStorage drafts and render the real graph.
+ */
+function syntheticGraph(name: string): WorkflowGraph {
+  return {
+    name,
+    displayName: null,
+    description: null,
+    filePath: "",
+    projectFiles: [],
+    allFiles: {},
+    trigger: { parameters: [] },
+    nodes: [],
+    edges: [],
+    sourceCode: "",
+  };
+}
+
 export default async function WorkflowPage({
   params,
 }: {
@@ -30,12 +50,29 @@ export default async function WorkflowPage({
 }) {
   const { projectId, name } = await params;
 
-  let graph: WorkflowGraph;
-  try {
-    graph = await api.getWorkflow(projectId, name);
-  } catch {
+  const [graphOrNull, projectOrNull] = await Promise.all([
+    api.getWorkflow(projectId, name).catch((err) => {
+      if (err instanceof ApiError && err.status === 404) return null;
+      throw err;
+    }),
+    api.getProject(projectId).catch(() => null),
+  ]);
+
+  // Fetch baseline files so drafts can diff correctly. If this also fails we
+  // bail out — something is broken beyond just "workflow not deployed yet".
+  const baselineFiles =
+    graphOrNull?.allFiles ??
+    (await api.getFilesAtRef(projectId, "HEAD").catch(() => null));
+
+  if (!graphOrNull && !baselineFiles) {
     notFound();
   }
+
+  const graph = graphOrNull ?? syntheticGraph(name);
+  const initialFiles =
+    graphOrNull?.allFiles ??
+    baselineFiles ??
+    (graph.filePath ? { [graph.filePath]: graph.sourceCode } : {});
 
   const runsResponse = await api.getRuns(projectId, name).catch(() => ({
     items: [],
@@ -46,9 +83,10 @@ export default async function WorkflowPage({
   return (
     <WorkflowPageClient
       projectId={projectId}
+      projectName={projectOrNull?.name ?? null}
       workflowName={name}
       initialGraph={graph}
-      initialFiles={graph.allFiles ?? { [graph.filePath]: graph.sourceCode }}
+      initialFiles={initialFiles}
       initialRuns={initialRuns}
     />
   );

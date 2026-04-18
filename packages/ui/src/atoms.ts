@@ -44,6 +44,8 @@ export const panelVisibilityAtom = atom<PanelVisibility>({
 
 export const aiLoadingAtom = atom<boolean>(false);
 
+export const codeEditorReadOnlyAtom = atom<boolean>(false);
+
 export const runsAtom = atom<PlaygroundRun[]>([]);
 export const activeRunIdAtom = atom<string | null>(null);
 export const isRunningAtom = atom<boolean>(false);

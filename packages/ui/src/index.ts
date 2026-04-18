@@ -7,6 +7,7 @@ export {
   activeRunIdAtom,
   aiLoadingAtom,
   codeAtom,
+  codeEditorReadOnlyAtom,
   executionStateAtom,
   graphAtom,
   historySidebarOpenAtom,

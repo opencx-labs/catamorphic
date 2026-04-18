@@ -5,15 +5,16 @@ import type { FastifyInstance } from "fastify";
 import type { ZodTypeProvider } from "fastify-type-provider-zod";
 import type { Kysely } from "kysely";
 import {
+  DEFAULT_TENANT_ID,
+  getExternalUserId,
+  SYSTEM_AUTHOR,
+} from "../identity.js";
+import {
   ErrorSchema,
   PlaygroundRunRequestSchema,
   PlaygroundRunResponseSchema,
 } from "../schemas.js";
 import { PlaygroundExecutor } from "../services/playground-executor.js";
-
-const DEFAULT_TENANT_ID = "00000000-0000-0000-0000-000000000001";
-
-const SYSTEM_AUTHOR = { name: "Catamorphic", email: "system@catamorphic.dev" };
 
 export function registerPlaygroundRoutes(
   app: FastifyInstance,
@@ -37,17 +38,22 @@ export function registerPlaygroundRoutes(
       if (!sandboxProvider) {
         return reply.status(503).send({
           error:
-            "Sandbox provider not configured. Set DAYTONA_API_KEY to enable workflow execution.",
+            "Sandbox provider not configured. Set CLOUDFLARE_SANDBOX_API_URL and CLOUDFLARE_SANDBOX_API_KEY (recommended) or DAYTONA_API_KEY to enable workflow execution.",
         });
       }
 
       const { projectId, files, workflowName, triggerData } = request.body;
+      const externalUserId = getExternalUserId(request);
 
       let resolvedFiles = files;
       let commitSha: string | null = null;
 
       if (projectId && projectManager) {
-        const repo = await projectManager.open(DEFAULT_TENANT_ID, projectId);
+        const repo = await projectManager.openDev(
+          DEFAULT_TENANT_ID,
+          projectId,
+          externalUserId,
+        );
         try {
           for (const [filePath, content] of Object.entries(files)) {
             await repo.writeFile(filePath, content);

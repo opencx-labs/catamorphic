@@ -1,6 +1,7 @@
 "use client";
 
-import { useCallback, useMemo, useRef, useState } from "react";
+import { useCallback, useState } from "react";
+import type { ProjectGitState } from "@/lib/use-project-git-state";
 import { FileExplorer } from "./file-explorer";
 import { GitPanel } from "./git-panel";
 import { MultiTabMonaco } from "./multi-tab-monaco";
@@ -9,15 +10,21 @@ export interface ProjectEditorProps {
   files: Record<string, string>;
   onFileChange: (params: { path: string; content: string }) => void;
   initialFile?: string;
+  gitState: ProjectGitState;
+  baselineFiles: Record<string, string>;
+  readOnly?: boolean;
+  onRunWorkflow?: (params: { name: string }) => void;
 }
 
 export function ProjectEditor({
   files,
   onFileChange,
   initialFile,
+  gitState,
+  baselineFiles,
+  readOnly = false,
+  onRunWorkflow,
 }: ProjectEditorProps) {
-  const originalFilesRef = useRef(files);
-
   const [openTabs, setOpenTabs] = useState<string[]>(() =>
     initialFile ? [initialFile] : [],
   );
@@ -25,16 +32,7 @@ export function ProjectEditor({
     initialFile ?? null,
   );
 
-  const modifiedFiles = useMemo(() => {
-    const modified = new Set<string>();
-    const originals = originalFilesRef.current;
-    for (const [path, content] of Object.entries(files)) {
-      if (originals[path] !== undefined && originals[path] !== content) {
-        modified.add(path);
-      }
-    }
-    return modified;
-  }, [files]);
+  const modifiedFiles = gitState.modifiedFiles;
 
   const handleSelectFile = useCallback((path: string) => {
     setActiveTab(path);
@@ -58,9 +56,10 @@ export function ProjectEditor({
 
   const handleChange = useCallback(
     ({ path, content }: { path: string; content: string }) => {
+      if (readOnly) return;
       onFileChange({ path, content });
     },
-    [onFileChange],
+    [onFileChange, readOnly],
   );
 
   return (
@@ -83,13 +82,12 @@ export function ProjectEditor({
             onSelectTab={handleSelectFile}
             onCloseTab={handleCloseTab}
             onChange={handleChange}
+            readOnly={readOnly}
+            onRunWorkflow={onRunWorkflow}
           />
         </div>
       </div>
-      <GitPanel
-        modifiedFiles={modifiedFiles}
-        originalFiles={originalFilesRef.current}
-      />
+      <GitPanel gitState={gitState} baselineFiles={baselineFiles} />
     </div>
   );
 }

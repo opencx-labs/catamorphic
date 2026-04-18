@@ -44,7 +44,7 @@ export async function runWorkflowAction(opts: {
     const body = (await response.json()) as { error: string };
     throw new Error(
       body.error ||
-        "Sandbox provider not configured. Set DAYTONA_API_KEY to enable execution.",
+        "Sandbox provider not configured. Set CLOUDFLARE_SANDBOX_API_URL and CLOUDFLARE_SANDBOX_API_KEY (recommended) or DAYTONA_API_KEY to enable execution.",
     );
   }
 

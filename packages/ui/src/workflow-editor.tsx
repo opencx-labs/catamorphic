@@ -8,6 +8,7 @@ import {
   activeHistoryTabAtom,
   activeRunIdAtom,
   codeAtom,
+  codeEditorReadOnlyAtom,
   executionStateAtom,
   graphAtom,
   historySidebarOpenAtom,
@@ -60,6 +61,18 @@ export interface WorkflowEditorProps {
   triggerParameters?: ParameterInfo[];
   initialRuns?: PlaygroundRun[];
   onExpandEditor?: () => void;
+  renderVersionsPanel?: () => ReactNode;
+  renderBanner?: () => ReactNode;
+  renderToolbarCenter?: () => ReactNode;
+  /** When true, disables the code editor. */
+  readOnly?: boolean;
+  /**
+   * Opaque token that, when its value changes to a truthy value, opens the
+   * Run dialog. Intended for external triggers (e.g. a gutter "Run" glyph in
+   * a code editor host that doesn't have direct access to this component's
+   * internal Jotai store). Use `Date.now()` or a monotonic counter.
+   */
+  runDialogRequestKey?: number | null;
 }
 
 function WorkflowEditorInner({
@@ -77,6 +90,11 @@ function WorkflowEditorInner({
   aiEnabled = false,
   onAIPrompt,
   onExpandEditor,
+  renderVersionsPanel,
+  renderBanner,
+  renderToolbarCenter,
+  readOnly = false,
+  runDialogRequestKey,
 }: WorkflowEditorProps) {
   const [currentCode, setCode] = useAtom(codeAtom);
   const setExecutionState = useSetAtom(executionStateAtom);
@@ -93,6 +111,16 @@ function WorkflowEditorInner({
   const setActiveHistoryTab = useSetAtom(activeHistoryTabAtom);
   const [lastTriggerData, setLastTriggerData] = useAtom(lastTriggerDataAtom);
   const setLoadMoreRuns = useSetAtom(loadMoreRunsAtom);
+  const setReadOnly = useSetAtom(codeEditorReadOnlyAtom);
+
+  useEffect(() => {
+    setReadOnly(readOnly);
+  }, [readOnly, setReadOnly]);
+
+  useEffect(() => {
+    if (!runDialogRequestKey || !onRun) return;
+    setShowDialog(true);
+  }, [runDialogRequestKey, onRun, setShowDialog]);
 
   useEffect(() => {
     setCode(code);
@@ -274,7 +302,9 @@ function WorkflowEditorInner({
       <Toolbar
         onRun={onRun ? handleRunClick : undefined}
         isRunning={isRunning}
+        centerSlot={renderToolbarCenter?.()}
       />
+      {renderBanner?.()}
       <div className="catamorphic-editor-body">
         <div className="catamorphic-editor-canvas">
           <WorkflowCanvas />
@@ -285,7 +315,9 @@ function WorkflowEditorInner({
           onCodeChange={handleCodeChange}
           onExpandEditor={onExpandEditor}
         />
-        {historySidebarOpen && <HistorySidebar />}
+        {historySidebarOpen && (
+          <HistorySidebar renderVersionsPanel={renderVersionsPanel} />
+        )}
       </div>
       <AIBar
         enabled={aiEnabled}

@@ -1,5 +1,5 @@
 import { createDatabase } from "@catamorphic/db";
-import { FsBackend, ProjectManager } from "@catamorphic/git";
+import { FsBackend, FsRemoteBackend, ProjectManager } from "@catamorphic/git";
 import {
   CloudflareSandboxProvider,
   DaytonaSandboxProvider,
@@ -12,9 +12,14 @@ const DATABASE_URL =
   "postgresql://catamorphic:catamorphic@localhost:5432/catamorphic";
 
 const PROJECTS_PATH = process.env.PROJECTS_PATH ?? "/tmp/catamorphic-projects";
+const REMOTES_PATH =
+  process.env.REMOTES_PATH ?? "/tmp/catamorphic-project-remotes";
 
 const db = createDatabase({ connectionString: DATABASE_URL });
-const projectManager = new ProjectManager(new FsBackend(PROJECTS_PATH));
+const projectManager = new ProjectManager(
+  new FsBackend(PROJECTS_PATH),
+  new FsRemoteBackend(REMOTES_PATH),
+);
 
 function resolveSandboxProvider(): SandboxProvider | undefined {
   // Cloudflare is the default when both the bridge URL and shared key are
@@ -45,6 +50,12 @@ async function shutdown(signal: string) {
   shuttingDown = true;
 
   app.log.info(`Received ${signal}, shutting down gracefully...`);
+  const forceExit = setTimeout(() => {
+    app.log.error("Graceful shutdown timed out after 5s; forcing exit.");
+    process.exit(1);
+  }, 5000);
+  forceExit.unref();
+
   try {
     await app.close();
     await db.destroy();
@@ -54,8 +65,9 @@ async function shutdown(signal: string) {
   process.exit(0);
 }
 
-process.on("SIGTERM", () => shutdown("SIGTERM"));
-process.on("SIGINT", () => shutdown("SIGINT"));
+for (const signal of ["SIGTERM", "SIGINT", "SIGHUP"] as const) {
+  process.on(signal, () => shutdown(signal));
+}
 
 const PORT = Number(process.env.PORT ?? 3001);
 

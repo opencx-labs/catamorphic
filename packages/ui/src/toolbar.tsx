@@ -1,4 +1,5 @@
 import { useAtom } from "jotai";
+import type { ReactNode } from "react";
 import {
   activePanelTabAtom,
   historySidebarOpenAtom,
@@ -9,9 +10,11 @@ import {
 export interface ToolbarProps {
   onRun?: () => void;
   isRunning?: boolean;
+  /** Optional content rendered in the center of the toolbar (e.g. version label). */
+  centerSlot?: ReactNode;
 }
 
-export function Toolbar({ onRun, isRunning }: ToolbarProps) {
+export function Toolbar({ onRun, isRunning, centerSlot }: ToolbarProps) {
   const [, setPanelVisibility] = useAtom(panelVisibilityAtom);
   const [rightPanelOpen, setRightPanelOpen] = useAtom(rightPanelOpenAtom);
   const [, setActiveTab] = useAtom(activePanelTabAtom);
@@ -46,6 +49,9 @@ export function Toolbar({ onRun, isRunning }: ToolbarProps) {
           ⊡ Minimap
         </button>
       </div>
+      {centerSlot && (
+        <div className="catamorphic-toolbar-center">{centerSlot}</div>
+      )}
       <div className="catamorphic-toolbar-right">
         <button
           type="button"
