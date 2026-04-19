@@ -1,4 +1,5 @@
 import type { SandboxProvider, StepEntry } from "@catamorphic/sandbox";
+import { uploadWorkspace } from "./playground/workspace-upload.js";
 
 export interface PlaygroundRunRequest {
   files: Record<string, string>;
@@ -159,16 +160,15 @@ export class PlaygroundExecutor {
 
     try {
       const projectDir = `${this.provider.workspaceRoot}/project`;
-      await this.provider.uploadFiles(
-        sandbox.providerId,
-        request.files,
+      await uploadWorkspace({
+        provider: this.provider,
+        sandboxId: sandbox.providerId,
         projectDir,
-      );
-      await this.provider.uploadFiles(
-        sandbox.providerId,
-        { "harness.ts": HARNESS_SOURCE },
-        projectDir,
-      );
+        files: {
+        ...request.files,
+        "harness.ts": HARNESS_SOURCE,
+        },
+      });
 
       const env: Record<string, string> = {
         CATAMORPHIC_WORKFLOW_NAME: request.workflowName,
