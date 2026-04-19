@@ -60,6 +60,27 @@ pnpm -C backend catamorphic:migrate
 pnpm -C backend catamorphic:status
 ```
 
+### Local update loop (after each catamorphic change)
+
+When `@catamorphic/db` is installed via local `file:` dependency, run this every time you change catamorphic code:
+
+1. Rebuild catamorphic db package:
+   ```bash
+   cd /Users/you/workspace/catamorphic
+   bun run --filter @catamorphic/db build
+   ```
+2. Refresh the dependency in host backend:
+   ```bash
+   cd /Users/you/workspace/opencx
+   pnpm -C backend add @catamorphic/db@file:/Users/you/workspace/catamorphic/packages/db
+   ```
+3. Restart host backend process.
+4. If SQL migrations changed, run:
+   ```bash
+   pnpm -C backend catamorphic:migrate
+   pnpm -C backend catamorphic:status
+   ```
+
 ## Production Setup (Published Package)
 
 Use this once `@catamorphic/db` is publicly published.
