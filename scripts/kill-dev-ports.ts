@@ -10,11 +10,11 @@
 
 import { spawnSync } from "node:child_process";
 
-const PORTS = [8500, 3000, 8787];
+const PORTS = [8500, 8501, 8787];
 
 const STALE_PROCESS_PATTERNS = [
   "bun --watch --env-file=../../.env src/server.ts",
-  "next dev --port 3000",
+  "next dev --port 8501",
   "wrangler dev",
 ];
 
