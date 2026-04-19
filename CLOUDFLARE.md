@@ -124,6 +124,18 @@ The `StorageBackend` interface isolates the two paths — swapping `FsBackend` f
 
 ## Environment variables
 
+### Where to put `.env` values in this repo
+
+We use `.env` files (not `.env.local`) in this setup:
+
+| File | Purpose | Required keys |
+| --- | --- | --- |
+| `/.env` (repo root) | Primary env source when running the monorepo via turbo/scripts | `CLOUDFLARE_SANDBOX_API_URL`, `CLOUDFLARE_SANDBOX_API_KEY`, `NEXT_PUBLIC_API_URL` |
+| `packages/server/.env` | When running the server package directly | `CLOUDFLARE_SANDBOX_API_URL`, `CLOUDFLARE_SANDBOX_API_KEY` |
+| `apps/playground/.env` | When running the playground app directly | `NEXT_PUBLIC_API_URL` |
+
+> For workflow execution, the Cloudflare sandbox vars must be present in the **server process environment**. The playground talks to the server via `NEXT_PUBLIC_API_URL`.
+
 ### Runtime (Fastify server + playground)
 
 | Variable | Purpose | Scope |
@@ -189,6 +201,12 @@ Token scopes for a single "catamorphic server" token:
 - (Optional) Account → **Workers Tail: Read** — needed only if you want `wrangler tail` for remote logs.
 - Account resources → include your account.
 - TTL → your call; `1 year` is a common choice for non-prod.
+
+For deploying the Bridge Worker to Cloudflare (`wrangler deploy --env dev` / `--env production`), ensure the token has at least:
+
+- Account → **Workers Scripts: Edit** (required, includes DO + Containers deployment path)
+- (Optional) Account → **Workers Tail: Read** (for `wrangler tail`)
+- Account resources scoped to the target account
 
 Save the token **immediately** — Cloudflare shows it once. Export it:
 
@@ -268,7 +286,7 @@ CLOUDFLARE_SANDBOX_API_URL=http://localhost:8787
 CLOUDFLARE_SANDBOX_API_KEY=local-dev
 ```
 
-`apps/playground/.env.local` already ships with the same two vars; they only need to match what Fastify sees. `CLOUDFLARE_ACCOUNT_ID` / `CLOUDFLARE_API_TOKEN` / `CLOUDFLARE_ARTIFACTS_NAMESPACE` are unused by the server today — leave them commented in `.env.example` until `ArtifactsBackend` lands.
+Set `NEXT_PUBLIC_API_URL` in `apps/playground/.env` to point at the server (for example `http://localhost:8500`). `CLOUDFLARE_ACCOUNT_ID` / `CLOUDFLARE_API_TOKEN` / `CLOUDFLARE_ARTIFACTS_NAMESPACE` are unused by the server runtime today — leave them commented in `.env.example` until `ArtifactsBackend` lands.
 
 ### 4. Run everything together
 
@@ -290,6 +308,26 @@ curl http://localhost:8787/health
 Unset `CLOUDFLARE_SANDBOX_API_URL` and `CLOUDFLARE_SANDBOX_API_KEY` and the server bootstrap falls back to Daytona (requires `DAYTONA_API_KEY`). Storage always uses the local `FsBackend` today regardless of which sandbox provider is active.
 
 ---
+
+## Cloudflare dev deploy (real edge worker)
+
+Use this when you want the bridge on Cloudflare edge (not `wrangler dev`):
+
+```bash
+cd packages/cloudflare-sandbox-bridge
+bunx wrangler secret put SANDBOX_API_KEY --env dev
+bunx wrangler deploy --env dev
+```
+
+Then set the server/runtime env values in your `.env` files:
+
+```env
+CLOUDFLARE_SANDBOX_API_URL=https://catamorphic-sandbox-bridge-dev.<subdomain>.workers.dev
+CLOUDFLARE_SANDBOX_API_KEY=<same-value-used-in-wrangler-secret-put>
+NEXT_PUBLIC_API_URL=http://localhost:8500
+```
+
+If deploy fails with `Forbidden` / authentication errors, re-check that your token has **Workers Scripts: Edit** and is scoped to the correct account.
 
 ## Production setup
 
