@@ -57,7 +57,7 @@ cd packages/server && bun run dev    # Terminal 1
 cd apps/playground && bun run dev    # Terminal 2
 ```
 
-Open `http://localhost:3000`. Check: workflows render, zero browser console errors, zero Next.js dev overlay issues, no hydration mismatches.
+Open `http://localhost:8501`. Check: workflows render, zero browser console errors, zero Next.js dev overlay issues, no hydration mismatches.
 
 ### 6. Migration sync
 

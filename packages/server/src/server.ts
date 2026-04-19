@@ -10,12 +10,17 @@ import { createApp } from "./app.js";
 const DATABASE_URL =
   process.env.DATABASE_URL ??
   "postgresql://catamorphic:catamorphic@localhost:5432/catamorphic";
+const CATAMORPHIC_DB_SCHEMA =
+  process.env.CATAMORPHIC_DB_SCHEMA ?? "catamorphic";
 
 const PROJECTS_PATH = process.env.PROJECTS_PATH ?? "/tmp/catamorphic-projects";
 const REMOTES_PATH =
   process.env.REMOTES_PATH ?? "/tmp/catamorphic-project-remotes";
 
-const db = createDatabase({ connectionString: DATABASE_URL });
+const db = createDatabase({
+  connectionString: DATABASE_URL,
+  schema: CATAMORPHIC_DB_SCHEMA,
+});
 const projectManager = new ProjectManager(
   new FsBackend(PROJECTS_PATH),
   new FsRemoteBackend(REMOTES_PATH),
