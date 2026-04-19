@@ -16,6 +16,7 @@
     "lint:fix": "biome check --write .",
     "format": "biome format --write .",
     "db:migrate": "bun run --filter @catamorphic/db db:migrate",
+    "db:status": "bun run --filter @catamorphic/db db:status",
     "db:codegen": "bun run --filter @catamorphic/db db:codegen",
     "db:reset": "bun run --filter @catamorphic/db db:reset",
     "db:setup": "docker compose up -d postgres && bun run db:migrate"

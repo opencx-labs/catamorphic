@@ -34,8 +34,11 @@ bun run build
 
 # Start dev servers (use two terminals)
 cd packages/server && bun run dev    # API on :3001
-cd apps/playground && bun run dev    # UI on :3000
+cd apps/playground && bun run dev    # UI on :8501
 ```
+
+Local `bun run db:migrate` is for standalone development of this repo.  
+When using Catamorphic as a library inside another project, run migrations against the host app's database/schema instead. See `INTEGRATION.md` for the full host integration flow.
 
 Workspace packages expose compiled `dist/` entry points. The playground imports `@catamorphic/ui` and `@catamorphic/api-client`; without a full build (and the `generate-spec` / `generate` step for the client’s OpenAPI types), Next.js can report “module not found” for those packages.
 
@@ -99,7 +102,7 @@ bun run test       # Run all tests (specs)
 bun run typecheck  # Typecheck all packages with tsgo
 bun run lint       # Lint with Biome
 bun run lint:fix   # Auto-fix lint issues
-bun run db:migrate # Run database migrations
+bun run db:migrate # Run migrations for standalone/local catamorphic dev
 bun run db:codegen # Regenerate database types
 ```
 

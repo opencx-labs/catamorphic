@@ -1,6 +1,11 @@
 import type { PlaygroundRun } from "@catamorphic/ui";
 import { notFound } from "next/navigation";
 import { ApiError, api, type Run, type WorkflowGraph } from "@/lib/api";
+import {
+  displayNameFromWorkflowName,
+  starterCodeForWorkflow,
+  workflowFilePathFromName,
+} from "@/lib/workflow-helpers";
 import { WorkflowPageClient } from "./workflow-page-client";
 
 function mapRun(run: Run): PlaygroundRun {
@@ -29,17 +34,22 @@ function mapRun(run: Run): PlaygroundRun {
  * client will re-parse from its localStorage drafts and render the real graph.
  */
 function syntheticGraph(name: string): WorkflowGraph {
+  const filePath = workflowFilePathFromName(name);
+  const sourceCode = starterCodeForWorkflow(
+    name,
+    displayNameFromWorkflowName(name),
+  );
   return {
     name,
     displayName: null,
     description: null,
-    filePath: "",
+    filePath,
     projectFiles: [],
     allFiles: {},
     trigger: { parameters: [] },
     nodes: [],
     edges: [],
-    sourceCode: "",
+    sourceCode,
   };
 }
 
@@ -64,15 +74,16 @@ export default async function WorkflowPage({
     graphOrNull?.allFiles ??
     (await api.getFilesAtRef(projectId, "HEAD").catch(() => null));
 
-  if (!graphOrNull && !baselineFiles) {
+  if (!projectOrNull && !graphOrNull && !baselineFiles) {
     notFound();
   }
 
   const graph = graphOrNull ?? syntheticGraph(name);
+  const fallbackFiles = { [graph.filePath]: graph.sourceCode };
   const initialFiles =
     graphOrNull?.allFiles ??
     baselineFiles ??
-    (graph.filePath ? { [graph.filePath]: graph.sourceCode } : {});
+    fallbackFiles;
 
   const runsResponse = await api.getRuns(projectId, name).catch(() => ({
     items: [],
