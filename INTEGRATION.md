@@ -1,0 +1,101 @@
+# Catamorphic Integration Guide
+
+Catamorphic can run inside another application using that app's Postgres database.
+All Catamorphic tables live in one schema (default: `catamorphic`).
+
+## Local Setup (Using a Local Catamorphic Checkout)
+
+Use this when you have both repos on your machine (example: `opencx` + local `catamorphic`).
+
+### 1) Add local dependency in host backend
+
+From host repo root:
+
+```bash
+pnpm -C backend add @catamorphic/db@file:/Users/omarramadan/Workspace/catamorphic/packages/db
+```
+
+### 2) Build the local catamorphic db package once
+
+The CLI binary points to `dist/cli.js`, so you must build locally:
+
+```bash
+cd /Users/omarramadan/Workspace/catamorphic
+bun run --filter @catamorphic/db build
+```
+
+### 3) Run migrations in host app
+
+```bash
+cd /Users/omarramadan/Workspace/opencx
+DATABASE_URL=postgres://postgres:postgres@localhost:5432/opencx \
+CATAMORPHIC_DB_SCHEMA=catamorphic \
+pnpm -C backend exec catamorphic-db migrate
+```
+
+### 4) Verify migration state
+
+```bash
+cd /Users/omarramadan/Workspace/opencx
+DATABASE_URL=postgres://postgres:postgres@localhost:5432/opencx \
+CATAMORPHIC_DB_SCHEMA=catamorphic \
+pnpm -C backend exec catamorphic-db status
+```
+
+### 5) Add helper scripts in host `backend/package.json`
+
+```json
+{
+  "scripts": {
+    "catamorphic:migrate": "cross-env DATABASE_URL=postgres://postgres:postgres@localhost:5432/opencx CATAMORPHIC_DB_SCHEMA=catamorphic catamorphic-db migrate",
+    "catamorphic:status": "cross-env DATABASE_URL=postgres://postgres:postgres@localhost:5432/opencx CATAMORPHIC_DB_SCHEMA=catamorphic catamorphic-db status"
+  }
+}
+```
+
+Then you can run:
+
+```bash
+pnpm -C backend catamorphic:migrate
+pnpm -C backend catamorphic:status
+```
+
+## Production Setup (Published Package)
+
+Use this once `@catamorphic/db` is publicly published.
+
+### 1) Install package in host backend
+
+```bash
+pnpm -C backend add @catamorphic/db
+```
+
+### 2) Set env vars in runtime/deploy environment
+
+```bash
+DATABASE_URL=postgres://<user>:<password>@<host>:5432/<database>
+CATAMORPHIC_DB_SCHEMA=catamorphic
+```
+
+### 3) Run migrations as a one-time deploy step
+
+```bash
+DATABASE_URL="$DATABASE_URL" \
+CATAMORPHIC_DB_SCHEMA="${CATAMORPHIC_DB_SCHEMA:-catamorphic}" \
+pnpm -C backend exec catamorphic-db migrate
+```
+
+### 4) Optional gate/check
+
+```bash
+DATABASE_URL="$DATABASE_URL" \
+CATAMORPHIC_DB_SCHEMA="${CATAMORPHIC_DB_SCHEMA:-catamorphic}" \
+pnpm -C backend exec catamorphic-db status
+```
+
+## Operational Notes
+
+- Do not auto-run migrations on every app boot; run them in CI/deploy or a one-shot job.
+- You do not need to run a separate Catamorphic server process for this DB integration.
+- Catamorphic uses strict `search_path = "catamorphic"` on its own DB connections and migration transactions.
+- Unqualified names from Catamorphic cannot fall through to `public`; use explicit schema qualification when cross-schema access is intentional.

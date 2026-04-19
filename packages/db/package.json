@@ -5,21 +5,31 @@
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
+  "bin": {
+    "catamorphic-db": "./dist/cli.js"
+  },
+  "files": [
+    "dist",
+    "migrations"
+  ],
   "exports": {
     ".": {
       "bun": "./src/index.ts",
       "import": "./dist/index.js",
       "types": "./dist/index.d.ts"
-    }
+    },
+    "./migrations": "./migrations",
+    "./package.json": "./package.json"
   },
   "scripts": {
     "build": "tsup && tsc --project tsconfig.json --noEmit false --emitDeclarationOnly",
     "dev": "tsup --watch",
     "test": "vitest run --config ../../vitest.config.ts",
     "typecheck": "tsgo --project ./tsconfig.json",
-    "db:migrate": "bun run src/migrate.ts",
+    "db:migrate": "bun run src/cli.ts migrate",
+    "db:status": "bun run src/cli.ts status",
     "db:codegen": "kysely-codegen --out-file src/generated/db.ts",
-    "db:reset": "bun run src/reset.ts"
+    "db:reset": "bun run src/cli.ts reset"
   },
   "dependencies": {
     "kysely": "^0.28.15",
