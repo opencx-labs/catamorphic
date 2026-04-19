@@ -48,5 +48,34 @@
     "WARM_POOL_TARGET": "0",
     "WARM_POOL_REFRESH_INTERVAL": "10000"
   },
+  "env": {
+    "dev": {
+      "name": "catamorphic-sandbox-bridge-dev",
+      "containers": [
+        {
+          "class_name": "Sandbox",
+          "image": "./Dockerfile",
+          "instance_type": "lite",
+          "max_instances": 3
+        }
+      ],
+      "durable_objects": {
+        "bindings": [
+          {
+            "class_name": "Sandbox",
+            "name": "Sandbox"
+          },
+          {
+            "class_name": "WarmPool",
+            "name": "WarmPool"
+          }
+        ]
+      },
+      "vars": {
+        "WARM_POOL_TARGET": "0",
+        "WARM_POOL_REFRESH_INTERVAL": "10000"
+      }
+    }
+  },
   "preview_urls": false
 }

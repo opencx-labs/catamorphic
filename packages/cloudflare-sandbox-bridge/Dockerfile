@@ -46,10 +46,7 @@ RUN curl -fsSL https://bun.sh/install | bash \
 # /v1/sandbox/:id/exec cwd paths must resolve inside /workspace.
 RUN mkdir -p /workspace
 
-# Non-root user for sandbox.exec() — limits blast radius from workflow code.
-RUN useradd -m -s /bin/bash -d /home/sandbox sandbox \
-    && chown sandbox:sandbox /workspace \
-    && chmod 700 /root
-
-USER sandbox
+# Keep the base image's runtime user/entrypoint behavior intact. Overriding
+# USER here can prevent the sandbox control-plane process from starting on
+# Cloudflare-managed containers.
 WORKDIR /workspace
