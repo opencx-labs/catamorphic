@@ -150,4 +150,100 @@ describe("@catamorphic/db schema integration", () => {
       await verifyDb.destroy();
     }
   });
+
+  it("runtime queries resolve to target schema before public", async () => {
+    if (!dbAvailable) return;
+
+    const schema = uniqueSchema("catamorphic_runtime_scope_test");
+    const tableName = "runtime_scope_guard";
+    createdSchemas.push(schema);
+
+    const adminDb = createDatabase({ connectionString: TEST_DATABASE_URL });
+    try {
+      await sql.raw(`CREATE SCHEMA IF NOT EXISTS "${schema}"`).execute(adminDb);
+      await sql
+        .raw(
+          `CREATE TABLE IF NOT EXISTS public.${tableName} (origin text NOT NULL)`,
+        )
+        .execute(adminDb);
+      await sql
+        .raw(
+          `CREATE TABLE IF NOT EXISTS "${schema}".${tableName} (origin text NOT NULL)`,
+        )
+        .execute(adminDb);
+      await sql.raw(`TRUNCATE TABLE public.${tableName}`).execute(adminDb);
+      await sql.raw(`TRUNCATE TABLE "${schema}".${tableName}`).execute(adminDb);
+      await sql
+        .raw(`INSERT INTO public.${tableName} (origin) VALUES ('public')`)
+        .execute(adminDb);
+      await sql
+        .raw(
+          `INSERT INTO "${schema}".${tableName} (origin) VALUES ('catamorphic')`,
+        )
+        .execute(adminDb);
+    } finally {
+      await adminDb.destroy();
+    }
+
+    const schemaDb = createDatabase({
+      connectionString: TEST_DATABASE_URL,
+      schema,
+    });
+    try {
+      const rows = await sql<{ origin: string }>`
+        SELECT origin FROM ${sql.raw(tableName)} LIMIT 1
+      `.execute(schemaDb);
+      expect(rows.rows[0]?.origin).toBe("catamorphic");
+    } finally {
+      await schemaDb.destroy();
+      const cleanupDb = createDatabase({ connectionString: TEST_DATABASE_URL });
+      await sql
+        .raw(`DROP TABLE IF EXISTS public.${tableName}`)
+        .execute(cleanupDb);
+      await cleanupDb.destroy();
+    }
+  });
+
+  it("runtime queries do not fall through to public schema", async () => {
+    if (!dbAvailable) return;
+
+    const schema = uniqueSchema("catamorphic_no_fallback_test");
+    const tableName = "runtime_public_only_guard";
+    createdSchemas.push(schema);
+
+    const adminDb = createDatabase({ connectionString: TEST_DATABASE_URL });
+    try {
+      await sql.raw(`CREATE SCHEMA IF NOT EXISTS "${schema}"`).execute(adminDb);
+      await sql
+        .raw(
+          `CREATE TABLE IF NOT EXISTS public.${tableName} (origin text NOT NULL)`,
+        )
+        .execute(adminDb);
+      await sql.raw(`TRUNCATE TABLE public.${tableName}`).execute(adminDb);
+      await sql
+        .raw(`INSERT INTO public.${tableName} (origin) VALUES ('public')`)
+        .execute(adminDb);
+    } finally {
+      await adminDb.destroy();
+    }
+
+    const schemaDb = createDatabase({
+      connectionString: TEST_DATABASE_URL,
+      schema,
+    });
+    try {
+      await expect(
+        sql<{ origin: string }>`
+          SELECT origin FROM ${sql.raw(tableName)} LIMIT 1
+        `.execute(schemaDb),
+      ).rejects.toThrow(/relation .* does not exist|does not exist/i);
+    } finally {
+      await schemaDb.destroy();
+      const cleanupDb = createDatabase({ connectionString: TEST_DATABASE_URL });
+      await sql
+        .raw(`DROP TABLE IF EXISTS public.${tableName}`)
+        .execute(cleanupDb);
+      await cleanupDb.destroy();
+    }
+  });
 });
