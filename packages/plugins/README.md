@@ -351,7 +351,9 @@ const env = {
 ```
 
 `RunExecutorImpl` (durable workflow runs) and `PlaygroundExecutor`
-("▶ Run" button) both go through `uploadPluginPayloads` + the same env merge.
+("▶ Run" button) both use `uploadPluginPayloads`. Core plugin secrets and
+workflow metadata are passed through env in both paths; non-core `CATAMORPHIC_*`
+vars differ by executor and should be checked in their respective implementations.
 
 ### Execution flow
 
