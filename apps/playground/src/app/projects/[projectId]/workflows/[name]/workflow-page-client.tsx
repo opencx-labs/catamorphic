@@ -137,9 +137,10 @@ export function WorkflowPageClient({
         prompt,
         currentCode: workflowCode,
         workflowFunctionName: workflowName,
+        projectId,
       });
     },
-    [workflowCode, workflowName],
+    [workflowCode, workflowName, projectId],
   );
 
   const handleRun = useCallback(
