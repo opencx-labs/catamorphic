@@ -105,6 +105,16 @@ export interface StepEntry {
   completedAt: string;
 }
 
+/**
+ * Plugin package materialized for run-time upload. `files` maps paths
+ * relative to the package root (e.g. `package.json`, `dist/index.js`) to
+ * their UTF-8 contents.
+ */
+export interface RunPluginPayload {
+  packageName: string;
+  files: Record<string, string>;
+}
+
 export interface RunExecutor {
   executeRun(opts: {
     projectId: string;
@@ -112,6 +122,8 @@ export interface RunExecutor {
     triggerData: unknown;
     runId: string;
     commitSha: string;
+    plugins?: RunPluginPayload[];
+    secrets?: Record<string, string>;
   }): Promise<RunResult>;
 }
 
