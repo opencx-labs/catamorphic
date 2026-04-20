@@ -114,6 +114,39 @@ CATAMORPHIC_DB_SCHEMA="${CATAMORPHIC_DB_SCHEMA:-catamorphic}" \
 pnpm -C backend exec catamorphic-db status
 ```
 
+## Plugin packages (workflow SDKs)
+
+Catamorphic attaches external packages — things like `@acme/example-sdk` —
+to a project so workflows can `import` their triggers and actions.
+
+v1 resolves plugins from a local directory on the host (root `.env`, not
+`packages/server/.env` — `bun dev` loads env from the monorepo root):
+
+```bash
+CATAMORPHIC_LOCAL_PLUGINS_DIR=/Users/you/workspace/host-app/packages
+```
+
+At run time the server:
+
+1. Loads the project's attached plugins from `project_plugins`.
+2. Reads every file from each plugin's directory (skipping `src/`,
+   `node_modules/`, `.git`, `.turbo`, `__tests__/`).
+3. Uploads them into `<workspaceRoot>/project/node_modules/<packageName>/`
+   inside the sandbox before invoking `bun run harness.ts`.
+4. Merges the project's saved secrets (from `project_secrets`) into the
+   harness env so the SDK can read `process.env.EXAMPLE_API_KEY` etc.
+
+The coding agent and the workflow-builder LLM both receive the plugin's
+README + `dist/index.d.ts` in their system prompt so they stop
+hallucinating SDK calls.
+
+The full reference — manifest contract, DB schema, REST API, runtime flow,
+agent context injection, troubleshooting (scoped-package URL encoding,
+`EXAMPLE_API_URL` base URL, CORS, etc.), and the plan for npm / git
+resolvers — lives in
+[`packages/plugins/README.md`](packages/plugins/README.md). Read that first
+when touching anything plugin-related.
+
 ## Operational Notes
 
 - Do not auto-run migrations on every app boot; run them in CI/deploy or a one-shot job.
