@@ -3,12 +3,29 @@
 import OpenAI from "openai";
 import { ensurePrimaryWorkflowExportName } from "./workflow-helpers";
 
+const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:3001";
+
 function getClient() {
   const apiKey = process.env.OPENAI_API_KEY;
   if (!apiKey) {
     throw new Error("OPENAI_API_KEY environment variable is not set");
   }
   return new OpenAI({ apiKey });
+}
+
+async function fetchAgentContext(projectId: string): Promise<string> {
+  try {
+    const res = await fetch(
+      `${API_URL}/api/projects/${projectId}/agent-context`,
+    );
+    if (!res.ok) return "";
+    const parsed = (await res.json()) as { systemPromptSuffix?: unknown };
+    return typeof parsed.systemPromptSuffix === "string"
+      ? parsed.systemPromptSuffix
+      : "";
+  } catch {
+    return "";
+  }
 }
 
 function buildSystemPrompt(workflowExportName: string): string {
@@ -82,10 +99,12 @@ export async function generateWorkflowCode({
   prompt,
   currentCode,
   workflowFunctionName,
+  projectId,
 }: {
   prompt: string;
   currentCode: string;
   workflowFunctionName: string;
+  projectId?: string;
 }): Promise<string> {
   const client = getClient();
 
@@ -95,10 +114,15 @@ export async function generateWorkflowCode({
     ? `${nameReminder}Current workflow code:\n\`\`\`typescript\n${currentCode}\n\`\`\`\n\nUser request: ${prompt}`
     : `${nameReminder}User request: ${prompt}`;
 
+  const pluginContext = projectId ? await fetchAgentContext(projectId) : "";
+  const systemPrompt = [buildSystemPrompt(workflowFunctionName), pluginContext]
+    .filter(Boolean)
+    .join("\n\n");
+
   const response = await client.chat.completions.create({
     model: "gpt-4.1",
     messages: [
-      { role: "system", content: buildSystemPrompt(workflowFunctionName) },
+      { role: "system", content: systemPrompt },
       { role: "user", content: userMessage },
     ],
     temperature: 0.3,
