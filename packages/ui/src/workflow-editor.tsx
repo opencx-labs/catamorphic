@@ -1,13 +1,10 @@
 import type { ParameterInfo, WorkflowNodeType } from "@catamorphic/parser";
 import {
-  activeHistoryTabAtom,
-  activeRunIdAtom,
   codeAtom,
   codeEditorReadOnlyAtom,
   executionStateAtom,
   graphAtom,
   historySidebarOpenAtom,
-  isRunningAtom,
   type LoadMoreRunsFn,
   lastTriggerDataAtom,
   loadMoreRunsAtom,
@@ -18,10 +15,11 @@ import {
   rightPanelOpenAtom,
   runsAtom,
   showRunDialogAtom,
+  useEditorKeyboard,
   useWorkflowGraph,
+  useWorkflowRunController,
 } from "@catamorphic/react";
-import { ReactFlowProvider } from "@xyflow/react";
-import { Provider, useAtom, useAtomValue, useSetAtom } from "jotai";
+import { useAtom, useAtomValue, useSetAtom } from "jotai";
 import type { ComponentType, ReactNode } from "react";
 import { useCallback, useEffect } from "react";
 import { AIBar } from "./ai-bar.js";
@@ -31,6 +29,7 @@ import { HistorySidebar } from "./history-sidebar.js";
 import { RunTriggerDialog } from "./run-trigger-dialog.js";
 import { Toolbar } from "./toolbar.js";
 import type { NodeRendererProps } from "./types.js";
+import { WorkflowEditorScope } from "./workflow-editor-scope.js";
 
 export interface WorkflowEditorProps {
   code: string;
@@ -70,11 +69,26 @@ export interface WorkflowEditorProps {
    * Run dialog. Intended for external triggers (e.g. a gutter "Run" glyph in
    * a code editor host that doesn't have direct access to this component's
    * internal Jotai store). Use `Date.now()` or a monotonic counter.
+   *
+   * @deprecated Prefer wrapping your chrome in `<WorkflowEditorScope>` and
+   * calling `useSetAtom(showRunDialogAtom)(true)` directly, or consume the
+   * `openDialog` callback returned by `useWorkflowRunController`. The token
+   * channel exists only because the legacy editor scoped its jotai store
+   * internally and hosts had no other way to drive it.
    */
   runDialogRequestKey?: number | null;
 }
 
-function WorkflowEditorInner({
+/**
+ * Inner editor rendering. Assumes an ambient `<WorkflowEditorScope>` — this
+ * is the entry point for hosts that want to compose the editor alongside
+ * their own chrome (custom toolbars, inspectors, etc.) while still sharing
+ * the canvas state atoms.
+ *
+ * For the one-shot drop-in experience, mount `<WorkflowEditor>` instead,
+ * which wraps this component in a scope for you.
+ */
+export function WorkflowEditorChrome({
   code,
   onCodeChange,
   onParse,
@@ -98,19 +112,21 @@ function WorkflowEditorInner({
   const [currentCode, setCode] = useAtom(codeAtom);
   const setExecutionState = useSetAtom(executionStateAtom);
   const setPanelVisibility = useSetAtom(panelVisibilityAtom);
-  const [rightPanelOpen, setRightPanelOpen] = useAtom(rightPanelOpenAtom);
+  const setRightPanelOpen = useSetAtom(rightPanelOpenAtom);
   const graph = useAtomValue(graphAtom);
-  const [showDialog, setShowDialog] = useAtom(showRunDialogAtom);
-  const [isRunning, setIsRunning] = useAtom(isRunningAtom);
+  const setShowDialog = useSetAtom(showRunDialogAtom);
   const setRuns = useSetAtom(runsAtom);
-  const setActiveRunId = useSetAtom(activeRunIdAtom);
-  const [historySidebarOpen, setHistorySidebarOpen] = useAtom(
-    historySidebarOpenAtom,
-  );
-  const setActiveHistoryTab = useSetAtom(activeHistoryTabAtom);
-  const [lastTriggerData, setLastTriggerData] = useAtom(lastTriggerDataAtom);
+  const lastTriggerData = useAtomValue(lastTriggerDataAtom);
   const setLoadMoreRuns = useSetAtom(loadMoreRunsAtom);
   const setReadOnly = useSetAtom(codeEditorReadOnlyAtom);
+
+  const {
+    isRunning,
+    showDialog,
+    openDialog,
+    closeDialog,
+    submit: submitRun,
+  } = useWorkflowRunController({ onTriggerRun: onRun });
 
   useEffect(() => {
     setReadOnly(readOnly);
@@ -125,10 +141,11 @@ function WorkflowEditorInner({
     setCode(code);
   }, [code, setCode]);
 
+  // `executionState` is fully controlled: an undefined prop resets the atom
+  // so hosts can clear the canvas by dropping the prop, and a `{}` value
+  // explicitly means "no nodes executing".
   useEffect(() => {
-    if (executionState) {
-      setExecutionState(executionState);
-    }
+    setExecutionState(executionState ?? {});
   }, [executionState, setExecutionState]);
 
   useEffect(() => {
@@ -138,13 +155,15 @@ function WorkflowEditorInner({
     }));
   }, [showMinimap, setPanelVisibility]);
 
+  // `showCodeEditor` is bidirectional: flipping it to `false` closes the
+  // panel, not just opens on `true`. Prevents a stale-open panel when the
+  // host toggles code editing off.
   useEffect(() => {
-    if (showCodeEditor) {
-      setRightPanelOpen(true);
-    }
+    setRightPanelOpen(showCodeEditor);
   }, [showCodeEditor, setRightPanelOpen]);
 
   useWorkflowGraph({ onParse });
+  useEditorKeyboard();
 
   useEffect(() => {
     if (initialRuns && initialRuns.length > 0) {
@@ -156,25 +175,6 @@ function WorkflowEditorInner({
     setLoadMoreRuns(onLoadMoreRuns ?? null);
   }, [onLoadMoreRuns, setLoadMoreRuns]);
 
-  // Escape closes the frontmost open panel (history sidebar first, then detail panel).
-  useEffect(() => {
-    const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.key !== "Escape") return;
-      if (historySidebarOpen) {
-        setHistorySidebarOpen(false);
-      } else if (rightPanelOpen) {
-        setRightPanelOpen(false);
-      }
-    };
-    document.addEventListener("keydown", handleKeyDown);
-    return () => document.removeEventListener("keydown", handleKeyDown);
-  }, [
-    historySidebarOpen,
-    setHistorySidebarOpen,
-    rightPanelOpen,
-    setRightPanelOpen,
-  ]);
-
   const handleCodeChange = useCallback(
     (newCode: string) => {
       setCode(newCode);
@@ -184,115 +184,9 @@ function WorkflowEditorInner({
   );
 
   const handleRunClick = useCallback(() => {
-    if (onRun) {
-      setShowDialog(true);
-    }
-  }, [onRun, setShowDialog]);
-
-  const handleRunSubmit = useCallback(
-    async (triggerData: Record<string, unknown>) => {
-      if (!onRun) return;
-      setLastTriggerData(triggerData);
-
-      const runId = crypto.randomUUID();
-      const workflowName = graph?.name ?? "unknown";
-      const startedAt = new Date().toISOString();
-
-      const pendingRun: PlaygroundRun = {
-        id: runId,
-        workflowName,
-        status: "running",
-        triggerData,
-        steps: [],
-        startedAt,
-      };
-
-      setRuns((prev) => [pendingRun, ...prev]);
-      setActiveRunId(runId);
-      setIsRunning(true);
-      setShowDialog(false);
-      setHistorySidebarOpen(true);
-      setActiveHistoryTab("runs");
-
-      const nodeIds = (graph?.nodes ?? [])
-        .filter(
-          (n) =>
-            n.type === "step" || n.type === "trigger" || n.type === "return",
-        )
-        .map((n) => n.id);
-      const runningState: Record<string, string> = {};
-      for (const id of nodeIds) {
-        runningState[id] = "running";
-      }
-      setExecutionState(runningState);
-
-      try {
-        const result = await onRun(triggerData);
-        const finalId = result.runId ?? runId;
-
-        const completedRun: PlaygroundRun = {
-          id: finalId,
-          workflowName,
-          status: result.status,
-          triggerData,
-          result: result.result,
-          error: result.error ?? undefined,
-          steps: result.steps,
-          startedAt: result.startedAt,
-          completedAt: result.completedAt,
-        };
-
-        setRuns((prev) => prev.map((r) => (r.id === runId ? completedRun : r)));
-        setActiveRunId(finalId);
-
-        const execState: Record<string, string> = {};
-        for (const step of result.steps) {
-          execState[step.nodeId] = step.status;
-        }
-        const triggerNode = (graph?.nodes ?? []).find(
-          (n) => n.type === "trigger",
-        );
-        if (triggerNode) {
-          execState[triggerNode.id] = result.status;
-        }
-        const returnNode = (graph?.nodes ?? []).find(
-          (n) => n.type === "return",
-        );
-        if (returnNode) {
-          execState[returnNode.id] = result.status;
-        }
-        setExecutionState(execState);
-      } catch (err) {
-        const failedRun: PlaygroundRun = {
-          id: runId,
-          workflowName,
-          status: "failed",
-          triggerData,
-          error: err instanceof Error ? err.message : String(err),
-          steps: [],
-          startedAt,
-          completedAt: new Date().toISOString(),
-        };
-
-        setRuns((prev) => prev.map((r) => (r.id === runId ? failedRun : r)));
-        setExecutionState({});
-      } finally {
-        setIsRunning(false);
-      }
-    },
-    [
-      onRun,
-      graph,
-      setRuns,
-      setActiveRunId,
-      setIsRunning,
-      setShowDialog,
-      setHistorySidebarOpen,
-      setActiveHistoryTab,
-      setExecutionState,
-      setLastTriggerData,
-    ],
-  );
+    if (!onRun) return;
+    openDialog();
+  }, [onRun, openDialog]);
 
   const params = triggerParameters ?? graph?.trigger.parameters ?? [];
 
@@ -314,9 +208,7 @@ function WorkflowEditorInner({
           onCodeChange={handleCodeChange}
           onExpandEditor={onExpandEditor}
         />
-        {historySidebarOpen && (
-          <HistorySidebar renderVersionsPanel={renderVersionsPanel} />
-        )}
+        <HistorySidebarSlot renderVersionsPanel={renderVersionsPanel} />
       </div>
       <AIBar
         enabled={aiEnabled}
@@ -335,20 +227,38 @@ function WorkflowEditorInner({
           parameters={params}
           isRunning={isRunning}
           initialValues={lastTriggerData}
-          onRun={handleRunSubmit}
-          onClose={() => setShowDialog(false)}
+          onRun={submitRun}
+          onClose={closeDialog}
         />
       )}
     </div>
   );
 }
 
+function HistorySidebarSlot({
+  renderVersionsPanel,
+}: {
+  renderVersionsPanel?: () => ReactNode;
+}) {
+  const historySidebarOpen = useAtomValue(historySidebarOpenAtom);
+  if (!historySidebarOpen) return null;
+  return <HistorySidebar renderVersionsPanel={renderVersionsPanel} />;
+}
+
+/**
+ * Drop-in workflow editor. Wraps `<WorkflowEditorChrome>` in a
+ * `<WorkflowEditorScope>`, so hosts that just want "an editor" mount this
+ * and are done.
+ *
+ * The scope is idempotent: if you've already placed a
+ * `<WorkflowEditorScope>` higher in the tree (to share atoms with sibling
+ * chrome), this component will reuse it instead of creating a nested,
+ * disconnected store.
+ */
 export function WorkflowEditor(props: WorkflowEditorProps) {
   return (
-    <Provider>
-      <ReactFlowProvider>
-        <WorkflowEditorInner {...props} />
-      </ReactFlowProvider>
-    </Provider>
+    <WorkflowEditorScope>
+      <WorkflowEditorChrome {...props} />
+    </WorkflowEditorScope>
   );
 }
