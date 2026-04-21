@@ -6,13 +6,17 @@ Related: [`AGENTS.md`](./AGENTS.md).
 
 ---
 
+> **Default provider: Daytona.** Until further notice, the Fastify server always uses Daytona when `DAYTONA_API_KEY` is set, even if the Cloudflare env vars are also populated. The Cloudflare Bridge path stays wired up and maintained, but the selection logic in `packages/server/src/server.ts` prefers Daytona and only falls through to Cloudflare when `DAYTONA_API_KEY` is unset. Treat everything below as reference for the Cloudflare path — not as the active production choice.
+
+---
+
 ## TL;DR
 
-- **Sandbox provider**: [Cloudflare Sandbox](https://developers.cloudflare.com/sandbox/) — isolated VM per deployment — accessed through a thin Worker we deploy called the **Sandbox Bridge**.
+- **Sandbox provider (active default)**: Daytona. Enabled via `DAYTONA_API_KEY`. Preferred over Cloudflare whenever set.
+- **Sandbox provider (alternate)**: [Cloudflare Sandbox](https://developers.cloudflare.com/sandbox/) — isolated VM per deployment — accessed through a thin Worker we deploy called the **Sandbox Bridge**. Only selected when `DAYTONA_API_KEY` is unset.
 - **Git storage (in progress)**: [Cloudflare Artifacts](https://developers.cloudflare.com/artifacts/) — versioned repos with a Git-compatible HTTPS remote — accessed directly from the Fastify server via REST + [`isomorphic-git`](https://isomorphic-git.org/).
 - **Worker deploy**: `wrangler deploy` to Cloudflare's edge — nothing to self-host.
-- **Fastify host**: unchanged — runs on our existing container platform and calls the Bridge Worker over HTTPS.
-- **Daytona**: retained as an automatic fallback provider when Cloudflare env vars are absent.
+- **Fastify host**: unchanged — runs on our existing container platform and calls the Bridge Worker over HTTPS when the Cloudflare path is selected.
 
 ---
 
@@ -303,9 +307,9 @@ curl http://localhost:8787/health
 # => {"ok":true}
 ```
 
-### 5. Fallback path without Cloudflare
+### 5. Default path uses Daytona
 
-Unset `CLOUDFLARE_SANDBOX_API_URL` and `CLOUDFLARE_SANDBOX_API_KEY` and the server bootstrap falls back to Daytona (requires `DAYTONA_API_KEY`). Storage always uses the local `FsBackend` today regardless of which sandbox provider is active.
+Daytona is the default sandbox provider until further notice. If `DAYTONA_API_KEY` is set, the server uses Daytona even when the Cloudflare env vars are also populated. To exercise the Cloudflare path locally, unset `DAYTONA_API_KEY` (in addition to having `CLOUDFLARE_SANDBOX_API_URL` + `CLOUDFLARE_SANDBOX_API_KEY` set). Storage always uses the local `FsBackend` today regardless of which sandbox provider is active.
 
 ---
 

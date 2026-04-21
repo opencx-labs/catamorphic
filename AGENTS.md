@@ -12,7 +12,7 @@ Catamorphic AI is a code-first workflow builder. Workflows are TypeScript code, 
 - `packages/db` — Kysely instance, migrations, codegen types
 - `packages/plugins` — Plugin manifest contract + resolvers (see [packages/plugins/README.md](packages/plugins/README.md))
 - `packages/runtime` — Workflow execution harness (runs inside sandbox)
-- `packages/sandbox` — Daytona sandbox provider + coding agent (Codex SDK)
+- `packages/sandbox` — Sandbox providers (Daytona + Cloudflare) + coding agent (Codex SDK). **Daytona is the default until further notice** — the server in `packages/server/src/server.ts` prefers Daytona whenever `DAYTONA_API_KEY` is set, even when Cloudflare env vars are also populated. See `CLOUDFLARE.md`.
 - `packages/api-client` — Generated OpenAPI types + openapi-fetch client
 - `apps/playground` — Next.js demo app
 
