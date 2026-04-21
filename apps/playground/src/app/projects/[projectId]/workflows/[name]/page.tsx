@@ -80,10 +80,7 @@ export default async function WorkflowPage({
 
   const graph = graphOrNull ?? syntheticGraph(name);
   const fallbackFiles = { [graph.filePath]: graph.sourceCode };
-  const initialFiles =
-    graphOrNull?.allFiles ??
-    baselineFiles ??
-    fallbackFiles;
+  const initialFiles = graphOrNull?.allFiles ?? baselineFiles ?? fallbackFiles;
 
   const runsResponse = await api.getRuns(projectId, name).catch(() => ({
     items: [],
