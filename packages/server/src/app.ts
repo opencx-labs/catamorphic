@@ -1,6 +1,4 @@
-import type { DB } from "@catamorphic/db";
-import type { ProjectManager } from "@catamorphic/git";
-import type { SandboxProvider } from "@catamorphic/sandbox";
+import type { CatamorphicCore } from "@catamorphic/core";
 import fastifyCors from "@fastify/cors";
 import fastifySwagger from "@fastify/swagger";
 import fastifySwaggerUi from "@fastify/swagger-ui";
@@ -10,7 +8,7 @@ import {
   serializerCompiler,
   validatorCompiler,
 } from "fastify-type-provider-zod";
-import type { Kysely } from "kysely";
+import { HttpIdentityError } from "./http-identity.js";
 import { registerAgentRoutes } from "./routes/agent.js";
 import { registerPlaygroundRoutes } from "./routes/playground.js";
 import { registerPluginRoutes } from "./routes/plugins.js";
@@ -18,19 +16,26 @@ import { registerProjectRoutes } from "./routes/projects.js";
 import { registerRunRoutes } from "./routes/runs.js";
 import { registerTemplateRoutes } from "./routes/templates.js";
 import { registerWorkflowRoutes } from "./routes/workflows.js";
-import type { AgentContextService } from "./services/agent-context-service.js";
-import type { PluginsService } from "./services/plugins-service.js";
-import type { RunPluginsLoader } from "./services/run-plugins-loader.js";
-import type { SecretsService } from "./services/secrets-service.js";
 
 export interface AppConfig {
-  db?: Kysely<DB>;
-  projectManager?: ProjectManager;
-  sandboxProvider?: SandboxProvider;
-  pluginsService?: PluginsService;
-  secretsService?: SecretsService;
-  runPluginsLoader?: RunPluginsLoader;
-  agentContextService?: AgentContextService;
+  /**
+   * Wired catamorphic services. Required for any non-trivial route. When
+   * omitted (e.g. unit tests that only hit stub routes), project / run /
+   * workflow endpoints respond 503.
+   */
+  core?: CatamorphicCore;
+  /**
+   * When true, missing `X-Catamorphic-Tenant-Id` and `X-External-User-Id`
+   * headers fall back to the hard-coded defaults. Used by the local
+   * playground; embedding hosts should leave this false and pass the headers
+   * on every request.
+   */
+  standalone?: boolean;
+}
+
+export interface RouteContext {
+  core?: CatamorphicCore;
+  standalone: boolean;
 }
 
 export function createApp(config: AppConfig = {}) {
@@ -63,28 +68,27 @@ export function createApp(config: AppConfig = {}) {
     routePrefix: "/docs",
   });
 
-  app.decorate("db", config.db);
-  app.decorate("projectManager", config.projectManager);
+  app.setErrorHandler((err, _req, reply) => {
+    if (err instanceof HttpIdentityError) {
+      return reply.status(400).send({ error: err.message });
+    }
+    app.log.error(err);
+    return reply.send(err);
+  });
+
+  const ctx: RouteContext = {
+    core: config.core,
+    standalone: config.standalone ?? false,
+  };
 
   app.after(() => {
-    registerProjectRoutes(app, config.db, config.projectManager);
-    registerWorkflowRoutes(app, config.db, config.projectManager);
-    registerRunRoutes(app, config.db);
+    registerProjectRoutes(app, ctx);
+    registerWorkflowRoutes(app, ctx);
+    registerRunRoutes(app, ctx);
     registerAgentRoutes(app);
     registerTemplateRoutes(app);
-    registerPluginRoutes(
-      app,
-      config.pluginsService,
-      config.secretsService,
-      config.agentContextService,
-    );
-    registerPlaygroundRoutes(
-      app,
-      config.db,
-      config.sandboxProvider,
-      config.projectManager,
-      config.runPluginsLoader,
-    );
+    registerPluginRoutes(app, ctx);
+    registerPlaygroundRoutes(app, ctx);
   });
 
   return app;

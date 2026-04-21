@@ -1,7 +1,12 @@
+import {
+  PluginNotAttachedError,
+  UndeclaredSecretError,
+} from "@catamorphic/core";
 import { PluginResolutionError } from "@catamorphic/plugins";
 import type { FastifyInstance } from "fastify";
 import type { ZodTypeProvider } from "fastify-type-provider-zod";
 import { z } from "zod";
+import type { RouteContext } from "../app.js";
 import {
   AttachedPluginSchema,
   AttachPluginSchema,
@@ -13,20 +18,8 @@ import {
   SecretStatusSchema,
   UpsertSecretSchema,
 } from "../schemas.js";
-import type { AgentContextService } from "../services/agent-context-service.js";
-import {
-  PluginNotAttachedError,
-  type PluginsService,
-  UndeclaredSecretError,
-} from "../services/plugins-service.js";
-import type { SecretsService } from "../services/secrets-service.js";
 
-export function registerPluginRoutes(
-  app: FastifyInstance,
-  plugins?: PluginsService,
-  secrets?: SecretsService,
-  agentContext?: AgentContextService,
-) {
+export function registerPluginRoutes(app: FastifyInstance, ctx: RouteContext) {
   const typed = app.withTypeProvider<ZodTypeProvider>();
 
   typed.route({
@@ -39,9 +32,9 @@ export function registerPluginRoutes(
       },
     },
     handler: async (_request, reply) => {
-      if (!plugins)
+      if (!ctx.core?.plugins)
         return reply.status(503).send({ error: "Plugins not configured" });
-      const catalog = await plugins.listCatalog();
+      const catalog = await ctx.core.plugins.listCatalog();
       return reply.send(catalog);
     },
   });
@@ -57,9 +50,11 @@ export function registerPluginRoutes(
       },
     },
     handler: async (request, reply) => {
-      if (!plugins)
+      if (!ctx.core?.plugins)
         return reply.status(503).send({ error: "Plugins not configured" });
-      const attached = await plugins.listAttached(request.params.projectId);
+      const attached = await ctx.core.plugins.listAttached(
+        request.params.projectId,
+      );
       return reply.send(attached);
     },
   });
@@ -77,10 +72,10 @@ export function registerPluginRoutes(
       },
     },
     handler: async (request, reply) => {
-      if (!plugins)
+      if (!ctx.core?.plugins)
         return reply.status(503).send({ error: "Plugins not configured" });
       try {
-        const attached = await plugins.attach(
+        const attached = await ctx.core.plugins.attach(
           request.params.projectId,
           request.body.packageName,
         );
@@ -106,9 +101,9 @@ export function registerPluginRoutes(
       },
     },
     handler: async (request, reply) => {
-      if (!plugins)
+      if (!ctx.core?.plugins)
         return reply.status(503).send({ error: "Plugins not configured" });
-      const ok = await plugins.detach(
+      const ok = await ctx.core.plugins.detach(
         request.params.projectId,
         decodeURIComponent(request.params.packageName),
       );
@@ -132,9 +127,9 @@ export function registerPluginRoutes(
       },
     },
     handler: async (request, reply) => {
-      if (!secrets)
+      if (!ctx.core?.secrets)
         return reply.status(503).send({ error: "Secrets not configured" });
-      const list = await secrets.list(request.params.projectId);
+      const list = await ctx.core.secrets.list(request.params.projectId);
       return reply.send(list);
     },
   });
@@ -152,10 +147,10 @@ export function registerPluginRoutes(
       },
     },
     handler: async (request, reply) => {
-      if (!secrets)
+      if (!ctx.core?.secrets)
         return reply.status(503).send({ error: "Secrets not configured" });
       try {
-        const status = await secrets.upsert(
+        const status = await ctx.core.secrets.upsert(
           request.params.projectId,
           request.params.name,
           request.body.value,
@@ -184,9 +179,9 @@ export function registerPluginRoutes(
       },
     },
     handler: async (request, reply) => {
-      if (!agentContext)
+      if (!ctx.core?.agentContext)
         return reply.status(503).send({ error: "Plugins not configured" });
-      const systemPromptSuffix = await agentContext.buildPrompt(
+      const systemPromptSuffix = await ctx.core.agentContext.buildPrompt(
         request.params.projectId,
       );
       return reply.send({ systemPromptSuffix });
@@ -204,9 +199,9 @@ export function registerPluginRoutes(
       },
     },
     handler: async (request, reply) => {
-      if (!secrets)
+      if (!ctx.core?.secrets)
         return reply.status(503).send({ error: "Secrets not configured" });
-      const ok = await secrets.delete(
+      const ok = await ctx.core.secrets.delete(
         request.params.projectId,
         request.params.name,
       );

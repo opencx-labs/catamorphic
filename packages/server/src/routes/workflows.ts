@@ -1,14 +1,8 @@
-import type { DB } from "@catamorphic/db";
-import type { ProjectManager, ProjectRepo } from "@catamorphic/git";
-import {
-  layoutGraph,
-  parseProject,
-  parseWorkflowFromProject,
-} from "@catamorphic/parser";
+import { ProjectNotFoundError, WorkflowNotFoundError } from "@catamorphic/core";
 import type { FastifyInstance } from "fastify";
 import type { ZodTypeProvider } from "fastify-type-provider-zod";
-import type { Kysely, Selectable } from "kysely";
-import { DEFAULT_TENANT_ID, getExternalUserId } from "../identity.js";
+import type { RouteContext } from "../app.js";
+import { resolveIdentity } from "../http-identity.js";
 import {
   ErrorSchema,
   ListSchema,
@@ -21,34 +15,9 @@ import {
   WorkflowSummarySchema,
 } from "../schemas.js";
 
-type RunRow = Selectable<DB["workflow_runs"]>;
-
-function mapRun(row: RunRow) {
-  return {
-    id: row.id,
-    projectId: row.project_id,
-    workflowName: row.workflow_name,
-    commitSha: row.commit_sha,
-    isTest: row.is_test,
-    status: row.status as
-      | "pending"
-      | "running"
-      | "completed"
-      | "failed"
-      | "cancelled",
-    triggerData: row.trigger_data,
-    result: row.result,
-    error: row.error,
-    startedAt: row.started_at?.toISOString() ?? null,
-    completedAt: row.completed_at?.toISOString() ?? null,
-    createdAt: row.created_at.toISOString(),
-  };
-}
-
 export function registerWorkflowRoutes(
   app: FastifyInstance,
-  db?: Kysely<DB>,
-  projectManager?: ProjectManager,
+  ctx: RouteContext,
 ) {
   const typed = app.withTypeProvider<ZodTypeProvider>();
 
@@ -65,42 +34,20 @@ export function registerWorkflowRoutes(
       },
     },
     handler: async (request, reply) => {
-      if (!db || !projectManager) {
+      if (!ctx.core)
         return reply.status(503).send({ error: "Service not configured" });
-      }
-
-      const { projectId } = request.params;
-      const externalUserId = getExternalUserId(request);
-
-      const exists = await db
-        .selectFrom("projects")
-        .where("id", "=", projectId)
-        .where("tenant_id", "=", DEFAULT_TENANT_ID)
-        .select("id")
-        .executeTakeFirst();
-
-      if (!exists)
-        return reply.status(404).send({ error: "Project not found" });
-
-      const repo = await projectManager.openDev(
-        DEFAULT_TENANT_ID,
-        projectId,
-        externalUserId,
-      );
+      const identity = resolveIdentity(request, { standalone: ctx.standalone });
       try {
-        const files = await repo.readAllFiles();
-        const { workflows } = parseProject(files);
-        return reply.send(
-          workflows.map((wf) => ({
-            name: wf.functionName,
-            displayName: wf.graph.displayName ?? null,
-            description: wf.graph.description ?? null,
-            filePath: wf.filePath,
-            parameterCount: wf.graph.trigger.parameters.length,
-          })),
+        const workflows = await ctx.core.workflows.list(
+          identity,
+          request.params.projectId,
         );
-      } finally {
-        await repo.dispose();
+        return reply.send(workflows);
+      } catch (err) {
+        if (err instanceof ProjectNotFoundError) {
+          return reply.status(404).send({ error: "Project not found" });
+        }
+        throw err;
       }
     },
   });
@@ -118,41 +65,15 @@ export function registerWorkflowRoutes(
       },
     },
     handler: async (request, reply) => {
-      if (!db || !projectManager) {
+      if (!ctx.core)
         return reply.status(503).send({ error: "Service not configured" });
-      }
-
+      const identity = resolveIdentity(request, { standalone: ctx.standalone });
       const { projectId, name } = request.params;
       const { ref } = request.query;
-      const externalUserId = getExternalUserId(request);
-
-      const exists = await db
-        .selectFrom("projects")
-        .where("id", "=", projectId)
-        .where("tenant_id", "=", DEFAULT_TENANT_ID)
-        .select("id")
-        .executeTakeFirst();
-
-      if (!exists)
-        return reply.status(404).send({ error: "Project not found" });
-
-      const repo = await projectManager.openDev(
-        DEFAULT_TENANT_ID,
-        projectId,
-        externalUserId,
-      );
       try {
-        const allFiles = ref
-          ? await readAtRef(repo, ref)
-          : await repo.readAllFiles();
-        const graph = parseWorkflowFromProject(allFiles, name);
-
-        if (!graph) {
-          return reply.status(404).send({ error: "Workflow not found" });
-        }
-
-        layoutGraph({ nodes: graph.nodes, edges: graph.edges });
-
+        const graph = await ctx.core.workflows.get(identity, projectId, name, {
+          ref,
+        });
         return reply.send({
           ...graph,
           filePath: graph.filePath ?? "",
@@ -168,11 +89,15 @@ export function registerWorkflowRoutes(
               defaultValue: p.defaultValue ?? null,
             })),
           },
-          projectFiles: Object.keys(allFiles),
-          allFiles,
         });
-      } finally {
-        await repo.dispose();
+      } catch (err) {
+        if (err instanceof ProjectNotFoundError) {
+          return reply.status(404).send({ error: "Project not found" });
+        }
+        if (err instanceof WorkflowNotFoundError) {
+          return reply.status(404).send({ error: "Workflow not found" });
+        }
+        throw err;
       }
     },
   });
@@ -203,39 +128,23 @@ export function registerWorkflowRoutes(
       },
     },
     handler: async (request, reply) => {
-      if (!db) {
+      if (!ctx.core)
         return reply.status(503).send({ error: "Service not configured" });
-      }
-
+      const identity = resolveIdentity(request, { standalone: ctx.standalone });
       const { projectId, name } = request.params;
-      const { limit, offset } = request.query;
-
-      const rows = await db
-        .selectFrom("workflow_runs")
-        .where("project_id", "=", projectId)
-        .where("workflow_name", "=", name)
-        .selectAll()
-        .orderBy("created_at", "desc")
-        .limit(limit)
-        .offset(offset)
-        .execute();
-
-      const total = await db
-        .selectFrom("workflow_runs")
-        .where("project_id", "=", projectId)
-        .where("workflow_name", "=", name)
-        .select((eb) => eb.fn.countAll<number>().as("count"))
-        .executeTakeFirstOrThrow()
-        .then((r) => Number(r.count));
-
-      return reply.send({ items: rows.map(mapRun), total });
+      try {
+        const result = await ctx.core.runs.list(identity, projectId, {
+          workflowName: name,
+          limit: request.query.limit,
+          offset: request.query.offset,
+        });
+        return reply.send(result);
+      } catch (err) {
+        if (err instanceof ProjectNotFoundError) {
+          return reply.status(404).send({ error: "Project not found" });
+        }
+        throw err;
+      }
     },
   });
-}
-
-async function readAtRef(
-  repo: ProjectRepo,
-  ref: string,
-): Promise<Record<string, string>> {
-  return repo.readAllFilesAtRef(ref);
 }

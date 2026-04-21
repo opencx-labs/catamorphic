@@ -3,6 +3,8 @@
 Code-first workflow builder that parses TypeScript into visual workflow graphs.
 
 > **Embed-first project.** Catamorphic is designed to be embedded inside host applications (e.g. OpenCX), not to run as a standalone product. The host app provides auth, the user/org model, the database (or schema), and the deployment surface. The standalone `packages/server` + `apps/playground` in this repo exist only for local development, demos, and tests — they are not the shipping target. When contributing, prefer designs that make embedding easier (injectable DB/auth/providers, no hard-coded env/paths) over designs that only optimize the standalone repo. See `INTEGRATION.md` for the host integration flow and `AGENTS.md` for agent guidance.
+>
+> **Embedding shortcut:** `@catamorphic/sdk` — host imports `createCatamorphic(...)` and calls `cat.forTenant(orgId).forUser(userId).projects.create(...)` in-process, no sidecar HTTP server required. See [`packages/sdk/README.md`](packages/sdk/README.md).
 
 ## Quick Start
 
@@ -19,7 +21,9 @@ docker compose up -d
 # Run migrations
 bun run db:migrate
 
-# Regenerate Kysely types from the database (requires DATABASE_URL in the environment)
+# Regenerate Kysely types from the database (requires DATABASE_URL in the environment).
+# The script is scoped to the `catamorphic` schema so you can safely point it at a
+# host DB (e.g. opencx) without picking up unrelated tables.
 bun run db:codegen
 # If codegen cannot see your .env, pass the URL explicitly, e.g.:
 # DATABASE_URL="postgresql://catamorphic:catamorphic@localhost:5432/catamorphic" bun run db:codegen
@@ -56,15 +60,17 @@ TypeScript Code → ts-morph Parser → WorkflowGraph → React Flow Canvas
 
 ## Packages
 
-| Package                   | Description                             |
-| ------------------------- | --------------------------------------- |
-| `@catamorphic/parser`     | ts-morph AST → WorkflowGraph parser     |
-| `@catamorphic/ui`         | React Flow editor, embeddable component |
-| `@catamorphic/server`     | Fastify API + Zod + OpenAPI             |
-| `@catamorphic/db`         | Kysely + PostgreSQL + migrations        |
-| `@catamorphic/runtime`    | Vercel Workflow SDK adapter             |
-| `@catamorphic/sandbox`    | sandbox-agent wrapper for AI            |
-| `@catamorphic/api-client` | Generated type-safe API client          |
+| Package                   | Description                                           |
+| ------------------------- | ----------------------------------------------------- |
+| `@catamorphic/parser`     | ts-morph AST → WorkflowGraph parser                   |
+| `@catamorphic/ui`         | React Flow editor, embeddable component               |
+| `@catamorphic/core`       | Framework-free service layer (projects/workflows/runs)|
+| `@catamorphic/sdk`        | Library-direct embedding facade (scoped client)       |
+| `@catamorphic/server`     | Fastify API + Zod + OpenAPI (thin veneer over core)   |
+| `@catamorphic/db`         | Kysely + PostgreSQL + migrations                      |
+| `@catamorphic/runtime`    | Vercel Workflow SDK adapter                           |
+| `@catamorphic/sandbox`    | sandbox-agent wrapper for AI                          |
+| `@catamorphic/api-client` | Generated type-safe API client                        |
 
 ## Workflow Code Format
 

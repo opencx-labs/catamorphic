@@ -1,15 +1,13 @@
-import type { DB } from "@catamorphic/db";
-import type { ProjectManager } from "@catamorphic/git";
-import { parseProject } from "@catamorphic/parser";
+import {
+  type Project,
+  ProjectFileNotFoundError,
+  ProjectNotFoundError,
+} from "@catamorphic/core";
 import type { FastifyInstance } from "fastify";
 import type { ZodTypeProvider } from "fastify-type-provider-zod";
-import type { Kysely, Selectable } from "kysely";
 import { z } from "zod";
-import {
-  DEFAULT_TENANT_ID,
-  getExternalUserId,
-  SYSTEM_AUTHOR,
-} from "../identity.js";
+import type { RouteContext } from "../app.js";
+import { resolveIdentity } from "../http-identity.js";
 import {
   BranchInfoSchema,
   CommitSchema,
@@ -36,43 +34,25 @@ import {
   UpdateProjectSchema,
   WriteFileSchema,
 } from "../schemas.js";
-import { DeploymentService } from "../services/deployment-service.js";
-import { findTemplate } from "../templates.js";
 
-type ProjectRow = Selectable<DB["projects"]>;
-
-function mapProject(row: ProjectRow) {
+/**
+ * HTTP-facing shape of a project. Drops `tenantId` because the header already
+ * scopes the caller and the dashboard never renders it.
+ */
+function toDto(project: Project) {
   return {
-    id: row.id,
-    name: row.name,
-    storageType: row.storage_type as "managed" | "remote",
-    remoteUrl: row.remote_url,
-    defaultBranch: row.default_branch,
-    createdAt: row.created_at.toISOString(),
-    updatedAt: row.updated_at.toISOString(),
+    id: project.id,
+    name: project.name,
+    storageType: project.storageType,
+    remoteUrl: project.remoteUrl,
+    defaultBranch: project.defaultBranch,
+    createdAt: project.createdAt,
+    updatedAt: project.updatedAt,
   };
 }
 
-export function registerProjectRoutes(
-  app: FastifyInstance,
-  db?: Kysely<DB>,
-  projectManager?: ProjectManager,
-) {
+export function registerProjectRoutes(app: FastifyInstance, ctx: RouteContext) {
   const typed = app.withTypeProvider<ZodTypeProvider>();
-  const deploymentService = projectManager
-    ? new DeploymentService(projectManager)
-    : undefined;
-
-  async function projectExists(projectId: string): Promise<boolean> {
-    if (!db) return false;
-    const row = await db
-      .selectFrom("projects")
-      .where("id", "=", projectId)
-      .where("tenant_id", "=", DEFAULT_TENANT_ID)
-      .select("id")
-      .executeTakeFirst();
-    return Boolean(row);
-  }
 
   typed.route({
     method: "POST",
@@ -82,37 +62,11 @@ export function registerProjectRoutes(
       response: { 201: ProjectSchema, 400: ErrorSchema, 503: ErrorSchema },
     },
     handler: async (request, reply) => {
-      if (!db || !projectManager) {
+      if (!ctx.core)
         return reply.status(503).send({ error: "Service not configured" });
-      }
-
-      const { name, templateId } = request.body;
-      const template = templateId ? findTemplate(templateId) : undefined;
-
-      const projectId = crypto.randomUUID();
-
-      await db
-        .insertInto("projects")
-        .values({
-          id: projectId,
-          tenant_id: DEFAULT_TENANT_ID,
-          name,
-          storage_type: "managed",
-        })
-        .execute();
-
-      await projectManager.create(DEFAULT_TENANT_ID, projectId, {
-        name,
-        initialFiles: template?.files,
-      });
-
-      const row = await db
-        .selectFrom("projects")
-        .where("id", "=", projectId)
-        .selectAll()
-        .executeTakeFirstOrThrow();
-
-      return reply.status(201).send(mapProject(row));
+      const identity = resolveIdentity(request, { standalone: ctx.standalone });
+      const project = await ctx.core.projects.create(identity, request.body);
+      return reply.status(201).send(toDto(project));
     },
   });
 
@@ -124,27 +78,13 @@ export function registerProjectRoutes(
       response: { 200: ListSchema(ProjectSchema) },
     },
     handler: async (request, reply) => {
-      if (!db) return reply.send({ items: [], total: 0 });
-
-      const { limit, offset } = request.query;
-
-      const rows = await db
-        .selectFrom("projects")
-        .where("tenant_id", "=", DEFAULT_TENANT_ID)
-        .selectAll()
-        .orderBy("created_at", "desc")
-        .limit(limit)
-        .offset(offset)
-        .execute();
-
-      const total = await db
-        .selectFrom("projects")
-        .where("tenant_id", "=", DEFAULT_TENANT_ID)
-        .select((eb) => eb.fn.countAll<number>().as("count"))
-        .executeTakeFirstOrThrow()
-        .then((r) => Number(r.count));
-
-      return reply.send({ items: rows.map(mapProject), total });
+      if (!ctx.core) return reply.send({ items: [], total: 0 });
+      const identity = resolveIdentity(request, { standalone: ctx.standalone });
+      const result = await ctx.core.projects.list(identity, request.query);
+      return reply.send({
+        items: result.items.map(toDto),
+        total: result.total,
+      });
     },
   });
 
@@ -160,33 +100,25 @@ export function registerProjectRoutes(
       },
     },
     handler: async (request, reply) => {
-      if (!db || !projectManager) {
+      if (!ctx.core)
         return reply.status(503).send({ error: "Service not configured" });
-      }
-
+      const identity = resolveIdentity(request, { standalone: ctx.standalone });
       const { projectId } = request.params;
 
-      const row = await db
-        .selectFrom("projects")
-        .where("id", "=", projectId)
-        .where("tenant_id", "=", DEFAULT_TENANT_ID)
-        .selectAll()
-        .executeTakeFirst();
-
-      if (!row) return reply.status(404).send({ error: "Project not found" });
-
-      const externalUserId = getExternalUserId(request);
-      const parsed = await loadWorkflows(
-        projectManager,
-        projectId,
-        externalUserId,
-      );
-
-      return reply.send({
-        ...mapProject(row),
-        workflows: parsed.workflows,
-        files: parsed.files,
-      });
+      try {
+        const project = await ctx.core.projects.get(identity, projectId);
+        const summary = await safeListWorkflows(ctx.core, identity, projectId);
+        return reply.send({
+          ...toDto(project),
+          workflows: summary.workflows,
+          files: summary.files,
+        });
+      } catch (err) {
+        if (err instanceof ProjectNotFoundError) {
+          return reply.status(404).send({ error: "Project not found" });
+        }
+        throw err;
+      }
     },
   });
 
@@ -199,30 +131,22 @@ export function registerProjectRoutes(
       response: { 200: ProjectSchema, 404: ErrorSchema, 503: ErrorSchema },
     },
     handler: async (request, reply) => {
-      if (!db)
+      if (!ctx.core)
         return reply.status(503).send({ error: "Service not configured" });
-
-      const { projectId } = request.params;
-      const { name } = request.body;
-
-      const existing = await db
-        .selectFrom("projects")
-        .where("id", "=", projectId)
-        .where("tenant_id", "=", DEFAULT_TENANT_ID)
-        .selectAll()
-        .executeTakeFirst();
-
-      if (!existing)
-        return reply.status(404).send({ error: "Project not found" });
-
-      const updated = await db
-        .updateTable("projects")
-        .set({ name: name ?? existing.name, updated_at: new Date() })
-        .where("id", "=", projectId)
-        .returningAll()
-        .executeTakeFirstOrThrow();
-
-      return reply.send(mapProject(updated));
+      const identity = resolveIdentity(request, { standalone: ctx.standalone });
+      try {
+        const project = await ctx.core.projects.update(
+          identity,
+          request.params.projectId,
+          request.body,
+        );
+        return reply.send(toDto(project));
+      } catch (err) {
+        if (err instanceof ProjectNotFoundError) {
+          return reply.status(404).send({ error: "Project not found" });
+        }
+        throw err;
+      }
     },
   });
 
@@ -238,26 +162,18 @@ export function registerProjectRoutes(
       },
     },
     handler: async (request, reply) => {
-      if (!db || !projectManager) {
+      if (!ctx.core)
         return reply.status(503).send({ error: "Service not configured" });
+      const identity = resolveIdentity(request, { standalone: ctx.standalone });
+      try {
+        await ctx.core.projects.delete(identity, request.params.projectId);
+        return reply.send({ deleted: true });
+      } catch (err) {
+        if (err instanceof ProjectNotFoundError) {
+          return reply.status(404).send({ error: "Project not found" });
+        }
+        throw err;
       }
-
-      const { projectId } = request.params;
-
-      const existing = await db
-        .selectFrom("projects")
-        .where("id", "=", projectId)
-        .where("tenant_id", "=", DEFAULT_TENANT_ID)
-        .select("id")
-        .executeTakeFirst();
-
-      if (!existing)
-        return reply.status(404).send({ error: "Project not found" });
-
-      await db.deleteFrom("projects").where("id", "=", projectId).execute();
-      await projectManager.delete(DEFAULT_TENANT_ID, projectId).catch(() => {});
-
-      return reply.send({ deleted: true });
     },
   });
 
@@ -273,26 +189,20 @@ export function registerProjectRoutes(
       },
     },
     handler: async (request, reply) => {
-      if (!db || !projectManager) {
+      if (!ctx.core)
         return reply.status(503).send({ error: "Service not configured" });
-      }
-
-      const { projectId } = request.params;
-      const externalUserId = getExternalUserId(request);
-
-      if (!(await projectExists(projectId)))
-        return reply.status(404).send({ error: "Project not found" });
-
-      const repo = await projectManager.openDev(
-        DEFAULT_TENANT_ID,
-        projectId,
-        externalUserId,
-      );
+      const identity = resolveIdentity(request, { standalone: ctx.standalone });
       try {
-        const filePaths = await repo.listFiles();
-        return reply.send(filePaths.map((p) => ({ path: p, size: 0 })));
-      } finally {
-        await repo.dispose();
+        const entries = await ctx.core.projects.listFiles(
+          identity,
+          request.params.projectId,
+        );
+        return reply.send(entries);
+      } catch (err) {
+        if (err instanceof ProjectNotFoundError) {
+          return reply.status(404).send({ error: "Project not found" });
+        }
+        throw err;
       }
     },
   });
@@ -305,29 +215,26 @@ export function registerProjectRoutes(
       response: { 200: FileContentSchema, 404: ErrorSchema, 503: ErrorSchema },
     },
     handler: async (request, reply) => {
-      if (!db || !projectManager) {
+      if (!ctx.core)
         return reply.status(503).send({ error: "Service not configured" });
-      }
-
+      const identity = resolveIdentity(request, { standalone: ctx.standalone });
       const { projectId } = request.params;
       const filePath = request.params["*"];
-      const externalUserId = getExternalUserId(request);
-
-      if (!(await projectExists(projectId)))
-        return reply.status(404).send({ error: "Project not found" });
-
-      const repo = await projectManager.openDev(
-        DEFAULT_TENANT_ID,
-        projectId,
-        externalUserId,
-      );
       try {
-        const content = await repo.readFile(filePath);
+        const content = await ctx.core.projects.readFile(
+          identity,
+          projectId,
+          filePath,
+        );
         return reply.send({ path: filePath, content });
-      } catch {
-        return reply.status(404).send({ error: "File not found" });
-      } finally {
-        await repo.dispose();
+      } catch (err) {
+        if (err instanceof ProjectNotFoundError) {
+          return reply.status(404).send({ error: "Project not found" });
+        }
+        if (err instanceof ProjectFileNotFoundError) {
+          return reply.status(404).send({ error: "File not found" });
+        }
+        throw err;
       }
     },
   });
@@ -341,31 +248,24 @@ export function registerProjectRoutes(
       response: { 200: FileContentSchema, 404: ErrorSchema, 503: ErrorSchema },
     },
     handler: async (request, reply) => {
-      if (!db || !projectManager) {
+      if (!ctx.core)
         return reply.status(503).send({ error: "Service not configured" });
-      }
-
+      const identity = resolveIdentity(request, { standalone: ctx.standalone });
       const { projectId } = request.params;
       const filePath = request.params["*"];
-      const { content, commitMessage } = request.body;
-      const externalUserId = getExternalUserId(request);
-
-      if (!(await projectExists(projectId)))
-        return reply.status(404).send({ error: "Project not found" });
-
-      const repo = await projectManager.openDev(
-        DEFAULT_TENANT_ID,
-        projectId,
-        externalUserId,
-      );
       try {
-        await repo.writeFile(filePath, content);
-        if (commitMessage) {
-          await repo.commit(commitMessage, SYSTEM_AUTHOR);
-        }
+        const content = await ctx.core.projects.writeFile(
+          identity,
+          projectId,
+          filePath,
+          request.body,
+        );
         return reply.send({ path: filePath, content });
-      } finally {
-        await repo.dispose();
+      } catch (err) {
+        if (err instanceof ProjectNotFoundError) {
+          return reply.status(404).send({ error: "Project not found" });
+        }
+        throw err;
       }
     },
   });
@@ -383,26 +283,25 @@ export function registerProjectRoutes(
       },
     },
     handler: async (request, reply) => {
-      if (!db || !projectManager) {
+      if (!ctx.core)
         return reply.status(503).send({ error: "Service not configured" });
-      }
-
+      const identity = resolveIdentity(request, { standalone: ctx.standalone });
       const { projectId } = request.params;
-      const { limit } = request.query;
-      const externalUserId = getExternalUserId(request);
-
-      if (!(await projectExists(projectId)))
-        return reply.status(404).send({ error: "Project not found" });
-
-      if (!deploymentService)
-        return reply.status(503).send({ error: "Service not configured" });
-      const commits = await deploymentService.listCommits(
-        DEFAULT_TENANT_ID,
-        projectId,
-        externalUserId,
-        { maxCount: limit },
-      );
-      return reply.send({ items: commits, total: commits.length });
+      try {
+        await ctx.core.projects.get(identity, projectId);
+        const commits = await ctx.core.deployment.listCommits(
+          identity.tenantId,
+          projectId,
+          identity.externalUserId,
+          { maxCount: request.query.limit },
+        );
+        return reply.send({ items: commits, total: commits.length });
+      } catch (err) {
+        if (err instanceof ProjectNotFoundError) {
+          return reply.status(404).send({ error: "Project not found" });
+        }
+        throw err;
+      }
     },
   });
 
@@ -418,18 +317,24 @@ export function registerProjectRoutes(
       },
     },
     handler: async (request, reply) => {
-      if (!deploymentService)
+      if (!ctx.core)
         return reply.status(503).send({ error: "Service not configured" });
+      const identity = resolveIdentity(request, { standalone: ctx.standalone });
       const { projectId } = request.params;
-      const externalUserId = getExternalUserId(request);
-      if (!(await projectExists(projectId)))
-        return reply.status(404).send({ error: "Project not found" });
-      const status = await deploymentService.getStatus(
-        DEFAULT_TENANT_ID,
-        projectId,
-        externalUserId,
-      );
-      return reply.send(status);
+      try {
+        await ctx.core.projects.get(identity, projectId);
+        const status = await ctx.core.deployment.getStatus(
+          identity.tenantId,
+          projectId,
+          identity.externalUserId,
+        );
+        return reply.send(status);
+      } catch (err) {
+        if (err instanceof ProjectNotFoundError) {
+          return reply.status(404).send({ error: "Project not found" });
+        }
+        throw err;
+      }
     },
   });
 
@@ -445,18 +350,24 @@ export function registerProjectRoutes(
       },
     },
     handler: async (request, reply) => {
-      if (!deploymentService)
+      if (!ctx.core)
         return reply.status(503).send({ error: "Service not configured" });
+      const identity = resolveIdentity(request, { standalone: ctx.standalone });
       const { projectId } = request.params;
-      const externalUserId = getExternalUserId(request);
-      if (!(await projectExists(projectId)))
-        return reply.status(404).send({ error: "Project not found" });
-      const branches = await deploymentService.listBranches(
-        DEFAULT_TENANT_ID,
-        projectId,
-        externalUserId,
-      );
-      return reply.send(branches);
+      try {
+        await ctx.core.projects.get(identity, projectId);
+        const branches = await ctx.core.deployment.listBranches(
+          identity.tenantId,
+          projectId,
+          identity.externalUserId,
+        );
+        return reply.send(branches);
+      } catch (err) {
+        if (err instanceof ProjectNotFoundError) {
+          return reply.status(404).send({ error: "Project not found" });
+        }
+        throw err;
+      }
     },
   });
 
@@ -473,18 +384,24 @@ export function registerProjectRoutes(
       },
     },
     handler: async (request, reply) => {
-      if (!deploymentService)
+      if (!ctx.core)
         return reply.status(503).send({ error: "Service not configured" });
+      const identity = resolveIdentity(request, { standalone: ctx.standalone });
       const { projectId } = request.params;
-      const externalUserId = getExternalUserId(request);
-      if (!(await projectExists(projectId)))
-        return reply.status(404).send({ error: "Project not found" });
-      const result = await deploymentService.ensureWorkBranch(
-        DEFAULT_TENANT_ID,
-        projectId,
-        externalUserId,
-      );
-      return reply.send(result);
+      try {
+        await ctx.core.projects.get(identity, projectId);
+        const result = await ctx.core.deployment.ensureWorkBranch(
+          identity.tenantId,
+          projectId,
+          identity.externalUserId,
+        );
+        return reply.send(result);
+      } catch (err) {
+        if (err instanceof ProjectNotFoundError) {
+          return reply.status(404).send({ error: "Project not found" });
+        }
+        throw err;
+      }
     },
   });
 
@@ -501,19 +418,25 @@ export function registerProjectRoutes(
       },
     },
     handler: async (request, reply) => {
-      if (!deploymentService)
+      if (!ctx.core)
         return reply.status(503).send({ error: "Service not configured" });
+      const identity = resolveIdentity(request, { standalone: ctx.standalone });
       const { projectId } = request.params;
-      const externalUserId = getExternalUserId(request);
-      if (!(await projectExists(projectId)))
-        return reply.status(404).send({ error: "Project not found" });
-      const status = await deploymentService.checkoutBranch(
-        DEFAULT_TENANT_ID,
-        projectId,
-        externalUserId,
-        request.body.ref,
-      );
-      return reply.send({ ...status, remoteHeadTimestamp: null });
+      try {
+        await ctx.core.projects.get(identity, projectId);
+        const status = await ctx.core.deployment.checkoutBranch(
+          identity.tenantId,
+          projectId,
+          identity.externalUserId,
+          request.body.ref,
+        );
+        return reply.send({ ...status, remoteHeadTimestamp: null });
+      } catch (err) {
+        if (err instanceof ProjectNotFoundError) {
+          return reply.status(404).send({ error: "Project not found" });
+        }
+        throw err;
+      }
     },
   });
 
@@ -529,18 +452,24 @@ export function registerProjectRoutes(
       },
     },
     handler: async (request, reply) => {
-      if (!deploymentService)
+      if (!ctx.core)
         return reply.status(503).send({ error: "Service not configured" });
+      const identity = resolveIdentity(request, { standalone: ctx.standalone });
       const { projectId } = request.params;
-      const externalUserId = getExternalUserId(request);
-      if (!(await projectExists(projectId)))
-        return reply.status(404).send({ error: "Project not found" });
-      const diff = await deploymentService.workdirDiff(
-        DEFAULT_TENANT_ID,
-        projectId,
-        externalUserId,
-      );
-      return reply.send(diff);
+      try {
+        await ctx.core.projects.get(identity, projectId);
+        const diff = await ctx.core.deployment.workdirDiff(
+          identity.tenantId,
+          projectId,
+          identity.externalUserId,
+        );
+        return reply.send(diff);
+      } catch (err) {
+        if (err instanceof ProjectNotFoundError) {
+          return reply.status(404).send({ error: "Project not found" });
+        }
+        throw err;
+      }
     },
   });
 
@@ -560,20 +489,26 @@ export function registerProjectRoutes(
       },
     },
     handler: async (request, reply) => {
-      if (!deploymentService)
+      if (!ctx.core)
         return reply.status(503).send({ error: "Service not configured" });
+      const identity = resolveIdentity(request, { standalone: ctx.standalone });
       const { projectId } = request.params;
-      const externalUserId = getExternalUserId(request);
-      if (!(await projectExists(projectId)))
-        return reply.status(404).send({ error: "Project not found" });
-      const diff = await deploymentService.diffRefs(
-        DEFAULT_TENANT_ID,
-        projectId,
-        externalUserId,
-        request.query.base,
-        request.query.head,
-      );
-      return reply.send(diff);
+      try {
+        await ctx.core.projects.get(identity, projectId);
+        const diff = await ctx.core.deployment.diffRefs(
+          identity.tenantId,
+          projectId,
+          identity.externalUserId,
+          request.query.base,
+          request.query.head,
+        );
+        return reply.send(diff);
+      } catch (err) {
+        if (err instanceof ProjectNotFoundError) {
+          return reply.status(404).send({ error: "Project not found" });
+        }
+        throw err;
+      }
     },
   });
 
@@ -590,19 +525,25 @@ export function registerProjectRoutes(
       },
     },
     handler: async (request, reply) => {
-      if (!deploymentService)
+      if (!ctx.core)
         return reply.status(503).send({ error: "Service not configured" });
+      const identity = resolveIdentity(request, { standalone: ctx.standalone });
       const { projectId } = request.params;
-      const externalUserId = getExternalUserId(request);
-      if (!(await projectExists(projectId)))
-        return reply.status(404).send({ error: "Project not found" });
-      const result = await deploymentService.deploy(
-        DEFAULT_TENANT_ID,
-        projectId,
-        externalUserId,
-        { message: request.body.message, files: request.body.files },
-      );
-      return reply.send(result);
+      try {
+        await ctx.core.projects.get(identity, projectId);
+        const result = await ctx.core.deployment.deploy(
+          identity.tenantId,
+          projectId,
+          identity.externalUserId,
+          { message: request.body.message, files: request.body.files },
+        );
+        return reply.send(result);
+      } catch (err) {
+        if (err instanceof ProjectNotFoundError) {
+          return reply.status(404).send({ error: "Project not found" });
+        }
+        throw err;
+      }
     },
   });
 
@@ -619,19 +560,25 @@ export function registerProjectRoutes(
       },
     },
     handler: async (request, reply) => {
-      if (!deploymentService)
+      if (!ctx.core)
         return reply.status(503).send({ error: "Service not configured" });
+      const identity = resolveIdentity(request, { standalone: ctx.standalone });
       const { projectId } = request.params;
-      const externalUserId = getExternalUserId(request);
-      if (!(await projectExists(projectId)))
-        return reply.status(404).send({ error: "Project not found" });
-      const result = await deploymentService.pullFromRemote(
-        DEFAULT_TENANT_ID,
-        projectId,
-        externalUserId,
-        { files: request.body.files },
-      );
-      return reply.send(result);
+      try {
+        await ctx.core.projects.get(identity, projectId);
+        const result = await ctx.core.deployment.pullFromRemote(
+          identity.tenantId,
+          projectId,
+          identity.externalUserId,
+          { files: request.body.files },
+        );
+        return reply.send(result);
+      } catch (err) {
+        if (err instanceof ProjectNotFoundError) {
+          return reply.status(404).send({ error: "Project not found" });
+        }
+        throw err;
+      }
     },
   });
 
@@ -647,18 +594,24 @@ export function registerProjectRoutes(
       },
     },
     handler: async (request, reply) => {
-      if (!deploymentService)
+      if (!ctx.core)
         return reply.status(503).send({ error: "Service not configured" });
+      const identity = resolveIdentity(request, { standalone: ctx.standalone });
       const { projectId } = request.params;
-      const externalUserId = getExternalUserId(request);
-      if (!(await projectExists(projectId)))
-        return reply.status(404).send({ error: "Project not found" });
-      const result = await deploymentService.discardDraft(
-        DEFAULT_TENANT_ID,
-        projectId,
-        externalUserId,
-      );
-      return reply.send(result);
+      try {
+        await ctx.core.projects.get(identity, projectId);
+        const result = await ctx.core.deployment.discardDraft(
+          identity.tenantId,
+          projectId,
+          identity.externalUserId,
+        );
+        return reply.send(result);
+      } catch (err) {
+        if (err instanceof ProjectNotFoundError) {
+          return reply.status(404).send({ error: "Project not found" });
+        }
+        throw err;
+      }
     },
   });
 
@@ -675,22 +628,28 @@ export function registerProjectRoutes(
       },
     },
     handler: async (request, reply) => {
-      if (!deploymentService)
+      if (!ctx.core)
         return reply.status(503).send({ error: "Service not configured" });
+      const identity = resolveIdentity(request, { standalone: ctx.standalone });
       const { projectId } = request.params;
-      const externalUserId = getExternalUserId(request);
-      if (!(await projectExists(projectId)))
-        return reply.status(404).send({ error: "Project not found" });
-      const result = await deploymentService.resolveConflicts(
-        DEFAULT_TENANT_ID,
-        projectId,
-        externalUserId,
-        {
-          resolutions: request.body.resolutions,
-          message: request.body.message,
-        },
-      );
-      return reply.send(result);
+      try {
+        await ctx.core.projects.get(identity, projectId);
+        const result = await ctx.core.deployment.resolveConflicts(
+          identity.tenantId,
+          projectId,
+          identity.externalUserId,
+          {
+            resolutions: request.body.resolutions,
+            message: request.body.message,
+          },
+        );
+        return reply.send(result);
+      } catch (err) {
+        if (err instanceof ProjectNotFoundError) {
+          return reply.status(404).send({ error: "Project not found" });
+        }
+        throw err;
+      }
     },
   });
 
@@ -746,60 +705,47 @@ export function registerProjectRoutes(
       },
     },
     handler: async (request, reply) => {
-      if (!deploymentService)
+      if (!ctx.core)
         return reply.status(503).send({ error: "Service not configured" });
+      const identity = resolveIdentity(request, { standalone: ctx.standalone });
       const { projectId } = request.params;
-      const externalUserId = getExternalUserId(request);
-      if (!(await projectExists(projectId)))
-        return reply.status(404).send({ error: "Project not found" });
-      const files = await deploymentService.filesAtRef(
-        DEFAULT_TENANT_ID,
-        projectId,
-        externalUserId,
-        request.query.ref,
-      );
-      return reply.send(files);
+      try {
+        await ctx.core.projects.get(identity, projectId);
+        const files = await ctx.core.deployment.filesAtRef(
+          identity.tenantId,
+          projectId,
+          identity.externalUserId,
+          request.query.ref,
+        );
+        return reply.send(files);
+      } catch (err) {
+        if (err instanceof ProjectNotFoundError) {
+          return reply.status(404).send({ error: "Project not found" });
+        }
+        throw err;
+      }
     },
   });
 }
 
-async function loadWorkflows(
-  projectManager: ProjectManager,
+async function safeListWorkflows(
+  core: NonNullable<RouteContext["core"]>,
+  identity: { tenantId: string; externalUserId: string },
   projectId: string,
-  externalUserId: string,
 ): Promise<{
-  workflows: {
+  workflows: Array<{
     name: string;
     displayName: string | null;
     description: string | null;
     filePath: string;
     parameterCount: number;
-  }[];
+  }>;
   files: string[];
 }> {
   try {
-    const repo = await projectManager.openDev(
-      DEFAULT_TENANT_ID,
-      projectId,
-      externalUserId,
-    );
-    try {
-      const allFiles = await repo.readAllFiles();
-      const files = Object.keys(allFiles);
-      const parsed = parseProject(allFiles);
-      return {
-        files,
-        workflows: parsed.workflows.map((wf) => ({
-          name: wf.functionName,
-          displayName: wf.graph.displayName ?? null,
-          description: wf.graph.description ?? null,
-          filePath: wf.filePath ?? "",
-          parameterCount: wf.graph.trigger.parameters.length,
-        })),
-      };
-    } finally {
-      await repo.dispose();
-    }
+    const workflows = await core.workflows.list(identity, projectId);
+    const allFiles = await core.projects.readAllFiles(identity, projectId);
+    return { workflows, files: Object.keys(allFiles) };
   } catch {
     return { workflows: [], files: [] };
   }

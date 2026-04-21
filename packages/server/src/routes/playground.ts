@@ -1,28 +1,19 @@
+import { PlaygroundExecutor, SYSTEM_AUTHOR } from "@catamorphic/core";
 import type { DB, JsonObject } from "@catamorphic/db";
-import type { ProjectManager } from "@catamorphic/git";
-import type { SandboxProvider } from "@catamorphic/sandbox";
 import type { FastifyInstance } from "fastify";
 import type { ZodTypeProvider } from "fastify-type-provider-zod";
 import type { Kysely } from "kysely";
-import {
-  DEFAULT_TENANT_ID,
-  getExternalUserId,
-  SYSTEM_AUTHOR,
-} from "../identity.js";
+import type { RouteContext } from "../app.js";
+import { resolveIdentity } from "../http-identity.js";
 import {
   ErrorSchema,
   PlaygroundRunRequestSchema,
   PlaygroundRunResponseSchema,
 } from "../schemas.js";
-import { PlaygroundExecutor } from "../services/playground-executor.js";
-import type { RunPluginsLoader } from "../services/run-plugins-loader.js";
 
 export function registerPlaygroundRoutes(
   app: FastifyInstance,
-  db?: Kysely<DB>,
-  sandboxProvider?: SandboxProvider,
-  projectManager?: ProjectManager,
-  runPluginsLoader?: RunPluginsLoader,
+  ctx: RouteContext,
 ) {
   const typed = app.withTypeProvider<ZodTypeProvider>();
 
@@ -38,24 +29,24 @@ export function registerPlaygroundRoutes(
       },
     },
     handler: async (request, reply) => {
-      if (!sandboxProvider) {
+      if (!ctx.core?.sandboxProvider) {
         return reply.status(503).send({
           error:
             "Sandbox provider not configured. Set CLOUDFLARE_SANDBOX_API_URL and CLOUDFLARE_SANDBOX_API_KEY (recommended) or DAYTONA_API_KEY to enable workflow execution.",
         });
       }
 
+      const identity = resolveIdentity(request, { standalone: ctx.standalone });
       const { projectId, files, workflowName, triggerData } = request.body;
-      const externalUserId = getExternalUserId(request);
 
       let resolvedFiles = files;
       let commitSha: string | null = null;
 
-      if (projectId && projectManager) {
-        const repo = await projectManager.openDev(
-          DEFAULT_TENANT_ID,
+      if (projectId) {
+        const repo = await ctx.core.projectManager.openDev(
+          identity.tenantId,
           projectId,
-          externalUserId,
+          identity.externalUserId,
         );
         try {
           for (const [filePath, content] of Object.entries(files)) {
@@ -73,6 +64,7 @@ export function registerPlaygroundRoutes(
       }
 
       let runId: string | null = null;
+      const db: Kysely<DB> | undefined = ctx.core.db;
 
       if (projectId && commitSha && db) {
         runId = crypto.randomUUID();
@@ -91,9 +83,13 @@ export function registerPlaygroundRoutes(
           .execute();
       }
 
-      let plugins: Awaited<ReturnType<RunPluginsLoader["load"]>> | undefined;
-      if (projectId && runPluginsLoader) {
-        plugins = await runPluginsLoader.load(projectId);
+      let plugins:
+        | Awaited<
+            ReturnType<NonNullable<typeof ctx.core.runPluginsLoader>["load"]>
+          >
+        | undefined;
+      if (projectId && ctx.core.runPluginsLoader) {
+        plugins = await ctx.core.runPluginsLoader.load(projectId);
         if (plugins.missingRequiredSecrets.length > 0) {
           return reply.status(400).send({
             error: `Missing required plugin secrets: ${plugins.missingRequiredSecrets.join(
@@ -103,7 +99,7 @@ export function registerPlaygroundRoutes(
         }
       }
 
-      const executor = new PlaygroundExecutor(sandboxProvider);
+      const executor = new PlaygroundExecutor(ctx.core.sandboxProvider);
       const result = await executor.execute({
         files: resolvedFiles,
         workflowName,
