@@ -5,6 +5,11 @@ import type {
   ParseWorkflowRequest,
   ParseWorkflowResponse,
 } from "../lib/api-types.js";
+import {
+  type CatamorphicError,
+  runWithCatamorphicError,
+  toCatamorphicError,
+} from "../lib/errors.js";
 import { useCatamorphic } from "../provider.js";
 
 export type { ParseWorkflowRequest, ParseWorkflowResponse };
@@ -18,18 +23,30 @@ export type { ParseWorkflowRequest, ParseWorkflowResponse };
  */
 export function useParseWorkflow(): UseMutationResult<
   ParseWorkflowResponse,
-  Error,
+  CatamorphicError,
   ParseWorkflowRequest
 > {
   const { apiClient } = useCatamorphic();
-  return useMutation<ParseWorkflowResponse, Error, ParseWorkflowRequest>({
-    mutationFn: async (input) => {
-      const { data, error } = await apiClient.POST("/api/playground/parse", {
-        body: input,
-      });
-      if (error) throw error;
-      // `data` is `WorkflowGraph | null` — null is a legitimate parse miss.
-      return data ?? null;
-    },
+  return useMutation<
+    ParseWorkflowResponse,
+    CatamorphicError,
+    ParseWorkflowRequest
+  >({
+    mutationFn: (input) =>
+      runWithCatamorphicError(async () => {
+        const { data, error, response } = await apiClient.POST(
+          "/api/playground/parse",
+          { body: input },
+        );
+        if (error) {
+          throw toCatamorphicError({
+            response,
+            body: error,
+            fallbackMessage: "Parse request failed",
+          });
+        }
+        // `data` is `WorkflowGraph | null` — null is a legitimate parse miss.
+        return data ?? null;
+      }),
   });
 }

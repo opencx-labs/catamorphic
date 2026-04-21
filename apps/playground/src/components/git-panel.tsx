@@ -1,7 +1,7 @@
 "use client";
 
+import type { ConflictEntry } from "@catamorphic/react/types";
 import { useMemo, useState } from "react";
-import type { ConflictEntry } from "@/lib/api";
 import type { ProjectGitState } from "@/lib/use-project-git-state";
 import { DiffDrawer } from "./diff-drawer";
 

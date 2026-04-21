@@ -1,0 +1,17 @@
+{
+  "$schema": "https://ui.shadcn.com/schema/registry-item.json",
+  "name": "catamorphic-provider",
+  "type": "registry:component",
+  "description": "Wraps your app in CatamorphicProvider + QueryClientProvider so the @catamorphic/react hooks can talk to your Catamorphic API.",
+  "dependencies": [
+    "@catamorphic/react",
+    "@catamorphic/api-client",
+    "@tanstack/react-query"
+  ],
+  "files": [
+    {
+      "path": "components/catamorphic/catamorphic-provider.tsx",
+      "type": "registry:component"
+    }
+  ]
+}

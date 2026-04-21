@@ -2,17 +2,21 @@
 
 import { type UseQueryResult, useQuery } from "@tanstack/react-query";
 import type { Template } from "../lib/api-types.js";
+import {
+  assertApiOk,
+  type CatamorphicError,
+  runWithCatamorphicError,
+} from "../lib/errors.js";
 import { useCatamorphic } from "../provider.js";
 
-export function useTemplates(): UseQueryResult<Template[], Error> {
+export function useTemplates(): UseQueryResult<Template[], CatamorphicError> {
   const { apiClient } = useCatamorphic();
-  return useQuery<Template[]>({
+  return useQuery<Template[], CatamorphicError>({
     queryKey: ["cat", "templates"],
-    queryFn: async () => {
-      const { data, error } = await apiClient.GET("/api/templates");
-      if (error) throw error;
-      if (!data) throw new Error("Templates response empty");
-      return data;
-    },
+    queryFn: () =>
+      runWithCatamorphicError(async () => {
+        const result = await apiClient.GET("/api/templates");
+        return assertApiOk(result, "Templates response empty");
+      }),
   });
 }

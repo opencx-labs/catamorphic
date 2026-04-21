@@ -189,10 +189,11 @@ The provider is the **only** thing the React hooks depend on. If `queryClient` i
 
 ### 2) Data hooks — `@catamorphic/react`
 
-All hooks are TanStack Query wrappers over `@catamorphic/api-client`. They throw if used outside `CatamorphicProvider`.
+All hooks are TanStack Query wrappers over `@catamorphic/api-client`. They throw if used outside `CatamorphicProvider`. Errors are surfaced as a typed `CatamorphicError` (see "Error handling" below).
 
 ```tsx
 import {
+  // Projects + workflows + files
   useCreateProject,
   useDeleteProject,
   useProject,
@@ -204,10 +205,88 @@ import {
   useWorkflow,
   useWorkflows,
   useWriteProjectFile,
+  // Runs
+  useWorkflowRuns,
+  useWorkflowRun,
+  useTriggerWorkflowRun,
+  useCancelWorkflowRun,
+  // Git
+  useProjectGit,
+  useProjectBranches,
+  useProjectCommits,
+  useProjectConflicts,
+  useCreateBranch,
+  useCheckoutBranch,
+  useCommitChanges,
+  useDeployProject,
+  useProjectGitState, // composite hook for multi-branch draft persistence
+  // Plugins
+  usePluginCatalog,
+  useProjectPlugins,
+  useAttachPlugin,
+  useDetachPlugin,
+  // Secrets
+  useProjectSecrets,
+  useUpsertProjectSecret,
+  useDeleteProjectSecret,
+  // Agent (coding sessions)
+  useAgentSessions,
+  useAgentSession,
+  useCreateAgentSession,
+  useSendAgentMessage,
 } from "@catamorphic/react";
 ```
 
-Git operations (status/branches/commits/deploy/pull/resolve) ship as `useProjectGitState({ projectId, baselineFiles, api })` with a **host-supplied `ProjectGitApi` adapter** — these routes aren't in the OpenAPI schema yet, so the host bridges them itself. Swap to the typed client once phase-2 lands.
+OpenAPI-derived domain types live behind a single barrel — import them once and you're guaranteed shape parity with the server:
+
+```ts
+import type {
+  Project,
+  ProjectSummary,
+  Run,
+  RunDetail,
+  RepoStatus,
+  BranchInfo,
+  CommitInfo,
+  ConflictEntry,
+  PluginInfo,
+  Secret,
+  AgentSession,
+} from "@catamorphic/react/types";
+```
+
+#### Error handling
+
+All hooks reject with `CatamorphicError`, a discriminated envelope keyed off `error.code` instead of fragile substring matching of `error.message`:
+
+```ts
+import {
+  CatamorphicError,
+  isCatamorphicError,
+} from "@catamorphic/react";
+
+try {
+  await deploy.mutateAsync();
+} catch (err) {
+  if (isCatamorphicError(err)) {
+    switch (err.code) {
+      case "conflict":
+        return showConflictResolver(err.details); // typed payload
+      case "unauthorized":
+        return redirectToLogin();
+      case "not_found":
+      case "validation":
+      case "server_error":
+      case "network":
+      case "unknown":
+        return toast(err.message);
+    }
+  }
+  throw err;
+}
+```
+
+Never branch on `err.message.includes(...)` — `code` is the contract, `message` is the human-readable summary, and `details` carries the typed payload (e.g. conflict files, validation issues).
 
 ### 3) Canvas + panel state (jotai atoms)
 
@@ -324,9 +403,11 @@ const graph = parseWorkflow(source, { workflowName: "welcomeUser" });
 | `@catamorphic/plugins` | Backend (optional) | `LocalPluginResolver`, `PluginManifestSchema`, `PluginResolver` |
 | `@catamorphic/server` | Backend (HTTP path) | `createApp({ core, standalone })` — Fastify app factory |
 | `@catamorphic/api-client` | Frontend or non-Node backend | `createApiClient`, `CatamorphicApiClient`, `paths` (OpenAPI) |
-| `@catamorphic/react` | Frontend | `CatamorphicProvider`, `useCatamorphic`, data hooks (`useProjects`, `useWorkflow`, …), atoms, `useWorkflowGraph`, `useSelectedNode`, `useProjectGitState` |
+| `@catamorphic/react` | Frontend | `CatamorphicProvider`, `useCatamorphic`, data hooks (projects/runs/git/plugins/secrets/agent), atoms, `useWorkflowGraph`, `useSelectedNode`, `useProjectGitState`, `CatamorphicError`, `isCatamorphicError` |
+| `@catamorphic/react/types` | Frontend | OpenAPI-derived domain types (`Project`, `Run`, `RepoStatus`, `BranchInfo`, `ConflictEntry`, `PluginInfo`, `Secret`, `AgentSession`, …) |
 | `@catamorphic/react/workflow-helpers` | Frontend (server-safe) | Pure authoring helpers, no React |
 | `@catamorphic/ui` | Frontend | `WorkflowEditor`, `WorkflowEditorChrome`, `WorkflowEditorScope`, `WorkflowCanvas`, `DetailPanel`, `HistorySidebar`, `Toolbar`, `AIBar`, plus `@catamorphic/ui/styles.css` |
+| `@catamorphic/registry` | Frontend (copy-paste) | shadcn-style registry of pre-wired components (`catamorphic-provider`, `projects-list`, `project-editor`, `file-explorer`, `git-panel`, `diff-drawer`, `runs-panel`, `plugins-settings`) — install with `npx shadcn add <registry-host>/r/<item>.json` |
 | `@catamorphic/parser` | Either | `parseWorkflow`, `parseProject`, `layoutGraph`, `WorkflowGraph` types |
 
 ## Environment Variables

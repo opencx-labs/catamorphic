@@ -1,6 +1,6 @@
 "use client";
 
-import type { BranchInfo, CommitInfo } from "@/lib/api";
+import type { BranchInfo, CommitInfo } from "@catamorphic/react/types";
 import type { ProjectGitState } from "@/lib/use-project-git-state";
 
 export interface PlaygroundVersionsPanelProps {

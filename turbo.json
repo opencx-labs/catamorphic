@@ -5,6 +5,13 @@
       "dependsOn": ["^build"],
       "outputs": ["dist/**", ".next/**"]
     },
+    "@catamorphic/playground#build": {
+      "dependsOn": ["^build", "@catamorphic/registry#build"],
+      "outputs": ["dist/**", ".next/**"]
+    },
+    "@catamorphic/registry#build": {
+      "outputs": ["dist/**"]
+    },
     "dev": {
       "dependsOn": ["^build"],
       "cache": false,

@@ -2,6 +2,11 @@
 
 import { type UseQueryResult, useQuery } from "@tanstack/react-query";
 import type { ProjectsList } from "../lib/api-types.js";
+import {
+  assertApiOk,
+  type CatamorphicError,
+  runWithCatamorphicError,
+} from "../lib/errors.js";
 import { useCatamorphic } from "../provider.js";
 
 export interface UseProjectsOptions {
@@ -11,18 +16,17 @@ export interface UseProjectsOptions {
 
 export function useProjects(
   options: UseProjectsOptions = {},
-): UseQueryResult<ProjectsList, Error> {
+): UseQueryResult<ProjectsList, CatamorphicError> {
   const { apiClient } = useCatamorphic();
   const { limit, offset } = options;
-  return useQuery<ProjectsList>({
+  return useQuery<ProjectsList, CatamorphicError>({
     queryKey: ["cat", "projects", { limit, offset }],
-    queryFn: async () => {
-      const { data, error } = await apiClient.GET("/api/projects", {
-        params: { query: { limit, offset } },
-      });
-      if (error) throw error;
-      if (!data) throw new Error("Projects response empty");
-      return data;
-    },
+    queryFn: () =>
+      runWithCatamorphicError(async () => {
+        const result = await apiClient.GET("/api/projects", {
+          params: { query: { limit, offset } },
+        });
+        return assertApiOk(result, "Projects response empty");
+      }),
   });
 }

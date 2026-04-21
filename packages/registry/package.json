@@ -1,0 +1,27 @@
+{
+  "name": "@catamorphic/registry",
+  "version": "0.0.1",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "bun run scripts/build.ts",
+    "typecheck": "tsgo --project ./tsconfig.json"
+  },
+  "dependencies": {
+    "@catamorphic/react": "workspace:*",
+    "@catamorphic/ui": "workspace:*"
+  },
+  "peerDependencies": {
+    "@tanstack/react-query": "^5",
+    "react": "^18.2 || ^19",
+    "react-dom": "^18.2 || ^19"
+  },
+  "devDependencies": {
+    "@catamorphic/api-client": "workspace:*",
+    "@types/node": "*",
+    "@types/react": "*",
+    "@types/react-dom": "*",
+    "react": "*",
+    "react-dom": "*"
+  }
+}

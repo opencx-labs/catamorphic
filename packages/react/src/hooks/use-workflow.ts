@@ -2,6 +2,11 @@
 
 import { type UseQueryResult, useQuery } from "@tanstack/react-query";
 import type { WorkflowGraph } from "../lib/api-types.js";
+import {
+  assertApiOk,
+  CatamorphicError,
+  runWithCatamorphicError,
+} from "../lib/errors.js";
 import { useCatamorphic } from "../provider.js";
 
 export interface UseWorkflowOptions {
@@ -12,25 +17,27 @@ export function useWorkflow(
   projectId: string | undefined,
   name: string | undefined,
   options: UseWorkflowOptions = {},
-): UseQueryResult<WorkflowGraph, Error> {
+): UseQueryResult<WorkflowGraph, CatamorphicError> {
   const { apiClient } = useCatamorphic();
   const { ref } = options;
-  return useQuery<WorkflowGraph>({
+  return useQuery<WorkflowGraph, CatamorphicError>({
     queryKey: ["cat", "project", projectId, "workflow", name, { ref }],
-    queryFn: async () => {
-      if (!projectId || !name) {
-        throw new Error("projectId and name are required");
-      }
-      const { data, error } = await apiClient.GET(
-        "/api/projects/{projectId}/workflows/{name}",
-        {
-          params: { path: { projectId, name }, query: { ref } },
-        },
-      );
-      if (error) throw error;
-      if (!data) throw new Error("Workflow response empty");
-      return data;
-    },
+    queryFn: () =>
+      runWithCatamorphicError(async () => {
+        if (!projectId || !name) {
+          throw new CatamorphicError({
+            code: "validation",
+            message: "projectId and name are required",
+          });
+        }
+        const result = await apiClient.GET(
+          "/api/projects/{projectId}/workflows/{name}",
+          {
+            params: { path: { projectId, name }, query: { ref } },
+          },
+        );
+        return assertApiOk(result, "Workflow response empty");
+      }),
     enabled: Boolean(projectId && name),
   });
 }
