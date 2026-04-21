@@ -34,6 +34,7 @@ export {
   useCreateProject,
 } from "./hooks/use-create-project.js";
 export { useDeleteProject } from "./hooks/use-delete-project.js";
+export { useEditorKeyboard } from "./hooks/use-editor-keyboard.js";
 export type {
   ParseWorkflowRequest,
   ParseWorkflowResponse,
@@ -75,6 +76,13 @@ export type {
   ParseResult,
 } from "./hooks/use-workflow-graph.js";
 export { useWorkflowGraph } from "./hooks/use-workflow-graph.js";
+export type {
+  TriggerRunFn,
+  TriggerRunResult,
+  UseWorkflowRunControllerOptions,
+  UseWorkflowRunControllerResult,
+} from "./hooks/use-workflow-run-controller.js";
+export { useWorkflowRunController } from "./hooks/use-workflow-run-controller.js";
 // Workflow hooks
 export {
   type UseWorkflowsOptions,

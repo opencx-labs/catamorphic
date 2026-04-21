@@ -4,6 +4,7 @@ import { layoutGraph } from "@catamorphic/parser/layout";
 import {
   displayNameFromWorkflowName,
   type ParseResult,
+  type PlaygroundRun,
   readWorkflowDisplayName,
   starterCodeForWorkflow,
   upsertWorkflowDisplayName,
@@ -13,7 +14,7 @@ import {
   type WorkflowGraph,
   workflowFilePathFromName,
 } from "@catamorphic/react";
-import { type PlaygroundRun, WorkflowEditor } from "@catamorphic/ui";
+import { WorkflowEditor } from "@catamorphic/ui";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
