@@ -1,3 +1,4 @@
+import { createCatamorphicCore } from "@catamorphic/core";
 import { createDatabase } from "@catamorphic/db";
 import { FsBackend, FsRemoteBackend, ProjectManager } from "@catamorphic/git";
 import { LocalPluginResolver, type PluginResolver } from "@catamorphic/plugins";
@@ -7,10 +8,6 @@ import {
   type SandboxProvider,
 } from "@catamorphic/sandbox";
 import { createApp } from "./app.js";
-import { AgentContextService } from "./services/agent-context-service.js";
-import { PluginsService } from "./services/plugins-service.js";
-import { RunPluginsLoader } from "./services/run-plugins-loader.js";
-import { SecretsService } from "./services/secrets-service.js";
 
 const DATABASE_URL =
   process.env.DATABASE_URL ??
@@ -51,39 +48,20 @@ function resolveSandboxProvider(): SandboxProvider | undefined {
   return undefined;
 }
 
-const sandboxProvider = resolveSandboxProvider();
-
 function resolvePluginResolver(): PluginResolver | undefined {
   const rootDir = process.env.CATAMORPHIC_LOCAL_PLUGINS_DIR;
   if (!rootDir) return undefined;
   return new LocalPluginResolver({ rootDir });
 }
 
-const pluginResolver = resolvePluginResolver();
-const pluginsService = pluginResolver
-  ? new PluginsService(db, pluginResolver)
-  : undefined;
-const secretsService = pluginsService
-  ? new SecretsService(db, pluginsService)
-  : undefined;
-const runPluginsLoader =
-  pluginResolver && pluginsService && secretsService
-    ? new RunPluginsLoader(pluginsService, secretsService, pluginResolver)
-    : undefined;
-const agentContextService =
-  pluginResolver && pluginsService
-    ? new AgentContextService(pluginsService, pluginResolver)
-    : undefined;
-
-const app = createApp({
+const core = createCatamorphicCore({
   db,
   projectManager,
-  sandboxProvider,
-  pluginsService,
-  secretsService,
-  runPluginsLoader,
-  agentContextService,
+  sandboxProvider: resolveSandboxProvider(),
+  pluginResolver: resolvePluginResolver(),
 });
+
+const app = createApp({ core, standalone: true });
 
 let shuttingDown = false;
 

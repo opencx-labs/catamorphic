@@ -1,5 +1,5 @@
 {
-  "name": "@catamorphic/server",
+  "name": "@catamorphic/sdk",
   "version": "0.0.1",
   "private": true,
   "type": "module",
@@ -7,30 +7,26 @@
   "types": "./dist/index.d.ts",
   "exports": {
     ".": {
+      "bun": "./src/index.ts",
       "import": "./dist/index.js",
       "types": "./dist/index.d.ts"
     }
   },
   "scripts": {
     "build": "tsup && tsc --project tsconfig.json --noEmit false --emitDeclarationOnly",
-    "dev": "bun --watch --env-file=../../.env src/server.ts",
+    "dev": "tsup --watch",
     "test": "vitest run --config ../../vitest.config.ts",
-    "typecheck": "tsgo --project ./tsconfig.json",
-    "generate-spec": "bun run scripts/generate-spec.ts"
+    "typecheck": "tsgo --project ./tsconfig.json"
   },
   "dependencies": {
     "@catamorphic/core": "workspace:*",
     "@catamorphic/db": "workspace:*",
     "@catamorphic/git": "workspace:*",
-    "@catamorphic/parser": "workspace:*",
     "@catamorphic/plugins": "workspace:*",
     "@catamorphic/sandbox": "workspace:*",
-    "@fastify/cors": "^11.2.0",
-    "@fastify/swagger": "^9.7.0",
-    "@fastify/swagger-ui": "^5.2.5",
-    "fastify": "^5.8.4",
-    "fastify-type-provider-zod": "^6.1.0",
-    "kysely": "^0.28.15",
-    "zod": "^4.3.6"
+    "kysely": "^0.28.15"
+  },
+  "devDependencies": {
+    "@types/node": "^25.6.0"
   }
 }

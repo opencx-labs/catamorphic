@@ -1,7 +1,8 @@
-import type { DB } from "@catamorphic/db";
+import { RunNotFoundError } from "@catamorphic/core";
 import type { FastifyInstance } from "fastify";
 import type { ZodTypeProvider } from "fastify-type-provider-zod";
-import type { Kysely, Selectable } from "kysely";
+import type { RouteContext } from "../app.js";
+import { resolveIdentity } from "../http-identity.js";
 import {
   ErrorSchema,
   RunDetailSchema,
@@ -10,52 +11,7 @@ import {
   RunSchema,
 } from "../schemas.js";
 
-type RunRow = Selectable<DB["workflow_runs"]>;
-type StepRow = Selectable<DB["workflow_run_steps"]>;
-
-function mapRun(row: RunRow) {
-  return {
-    id: row.id,
-    projectId: row.project_id,
-    workflowName: row.workflow_name,
-    commitSha: row.commit_sha,
-    isTest: row.is_test,
-    status: row.status as
-      | "pending"
-      | "running"
-      | "completed"
-      | "failed"
-      | "cancelled",
-    triggerData: row.trigger_data,
-    result: row.result,
-    error: row.error,
-    startedAt: row.started_at?.toISOString() ?? null,
-    completedAt: row.completed_at?.toISOString() ?? null,
-    createdAt: row.created_at.toISOString(),
-  };
-}
-
-function mapStep(row: StepRow) {
-  return {
-    id: row.id,
-    runId: row.run_id,
-    nodeId: row.node_id,
-    name: row.name,
-    status: row.status as
-      | "pending"
-      | "running"
-      | "completed"
-      | "failed"
-      | "skipped",
-    input: row.input,
-    output: row.output,
-    error: row.error,
-    startedAt: row.started_at?.toISOString() ?? null,
-    completedAt: row.completed_at?.toISOString() ?? null,
-  };
-}
-
-export function registerRunRoutes(app: FastifyInstance, db?: Kysely<DB>) {
+export function registerRunRoutes(app: FastifyInstance, ctx: RouteContext) {
   const typed = app.withTypeProvider<ZodTypeProvider>();
 
   typed.route({
@@ -66,27 +22,18 @@ export function registerRunRoutes(app: FastifyInstance, db?: Kysely<DB>) {
       response: { 200: RunDetailSchema, 404: ErrorSchema, 503: ErrorSchema },
     },
     handler: async (request, reply) => {
-      if (!db)
+      if (!ctx.core)
         return reply.status(503).send({ error: "Service not configured" });
-
-      const { runId } = request.params;
-
-      const run = await db
-        .selectFrom("workflow_runs")
-        .where("id", "=", runId)
-        .selectAll()
-        .executeTakeFirst();
-
-      if (!run) return reply.status(404).send({ error: "Run not found" });
-
-      const steps = await db
-        .selectFrom("workflow_run_steps")
-        .where("run_id", "=", runId)
-        .selectAll()
-        .orderBy("started_at", "asc")
-        .execute();
-
-      return reply.send({ ...mapRun(run), steps: steps.map(mapStep) });
+      const identity = resolveIdentity(request, { standalone: ctx.standalone });
+      try {
+        const run = await ctx.core.runs.get(identity, request.params.runId);
+        return reply.send(run);
+      } catch (err) {
+        if (err instanceof RunNotFoundError) {
+          return reply.status(404).send({ error: "Run not found" });
+        }
+        throw err;
+      }
     },
   });
 

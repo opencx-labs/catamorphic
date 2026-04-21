@@ -1,7 +1,7 @@
+import { TEMPLATES } from "@catamorphic/core";
 import type { FastifyInstance } from "fastify";
 import type { ZodTypeProvider } from "fastify-type-provider-zod";
 import { TemplateSchema } from "../schemas.js";
-import { TEMPLATES } from "../templates.js";
 
 export function registerTemplateRoutes(app: FastifyInstance) {
   const typed = app.withTypeProvider<ZodTypeProvider>();

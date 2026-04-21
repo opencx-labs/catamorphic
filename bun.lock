@@ -56,6 +56,21 @@
         "wrangler": "^4.76.0",
       },
     },
+    "packages/core": {
+      "name": "@catamorphic/core",
+      "version": "0.0.1",
+      "dependencies": {
+        "@catamorphic/db": "workspace:*",
+        "@catamorphic/git": "workspace:*",
+        "@catamorphic/parser": "workspace:*",
+        "@catamorphic/plugins": "workspace:*",
+        "@catamorphic/sandbox": "workspace:*",
+        "kysely": "^0.28.15",
+      },
+      "devDependencies": {
+        "@types/node": "^25.6.0",
+      },
+    },
     "packages/db": {
       "name": "@catamorphic/db",
       "version": "0.0.1",
@@ -121,10 +136,26 @@
         "@types/node": "^25.6.0",
       },
     },
+    "packages/sdk": {
+      "name": "@catamorphic/sdk",
+      "version": "0.0.1",
+      "dependencies": {
+        "@catamorphic/core": "workspace:*",
+        "@catamorphic/db": "workspace:*",
+        "@catamorphic/git": "workspace:*",
+        "@catamorphic/plugins": "workspace:*",
+        "@catamorphic/sandbox": "workspace:*",
+        "kysely": "^0.28.15",
+      },
+      "devDependencies": {
+        "@types/node": "^25.6.0",
+      },
+    },
     "packages/server": {
       "name": "@catamorphic/server",
       "version": "0.0.1",
       "dependencies": {
+        "@catamorphic/core": "workspace:*",
         "@catamorphic/db": "workspace:*",
         "@catamorphic/git": "workspace:*",
         "@catamorphic/parser": "workspace:*",
@@ -266,6 +297,8 @@
 
     "@catamorphic/cloudflare-sandbox-bridge": ["@catamorphic/cloudflare-sandbox-bridge@workspace:packages/cloudflare-sandbox-bridge"],
 
+    "@catamorphic/core": ["@catamorphic/core@workspace:packages/core"],
+
     "@catamorphic/db": ["@catamorphic/db@workspace:packages/db"],
 
     "@catamorphic/git": ["@catamorphic/git@workspace:packages/git"],
@@ -279,6 +312,8 @@
     "@catamorphic/runtime": ["@catamorphic/runtime@workspace:packages/runtime"],
 
     "@catamorphic/sandbox": ["@catamorphic/sandbox@workspace:packages/sandbox"],
+
+    "@catamorphic/sdk": ["@catamorphic/sdk@workspace:packages/sdk"],
 
     "@catamorphic/server": ["@catamorphic/server@workspace:packages/server"],
 

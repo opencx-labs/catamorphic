@@ -1,7 +1,11 @@
 /**
  * Minimal tar archive builder for in-memory workspace hydration uploads.
  */
-function writeBytes(target: Uint8Array, offset: number, bytes: Uint8Array): void {
+function writeBytes(
+  target: Uint8Array,
+  offset: number,
+  bytes: Uint8Array,
+): void {
   target.set(bytes, offset);
 }
 

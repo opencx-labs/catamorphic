@@ -38,7 +38,11 @@ export async function uploadWorkspace(opts: {
     console.info(
       `[PlaygroundExecutor] workspace_upload_mode=fallback reason=no_hydrate_provider sandbox_id=${opts.sandboxId}`,
     );
-    await opts.provider.uploadFiles(opts.sandboxId, opts.files, opts.projectDir);
+    await opts.provider.uploadFiles(
+      opts.sandboxId,
+      opts.files,
+      opts.projectDir,
+    );
     return;
   }
 
@@ -47,14 +51,20 @@ export async function uploadWorkspace(opts: {
     console.info(
       `[PlaygroundExecutor] workspace_upload_mode=fallback reason=non_workspace_path sandbox_id=${opts.sandboxId}`,
     );
-    await opts.provider.uploadFiles(opts.sandboxId, opts.files, opts.projectDir);
+    await opts.provider.uploadFiles(
+      opts.sandboxId,
+      opts.files,
+      opts.projectDir,
+    );
     return;
   }
 
-  const archiveEntries = Object.entries(opts.files).map(([filePath, content]) => ({
-    path: `${relativeRoot}/${filePath}`.replace(/\/+/g, "/"),
-    content,
-  }));
+  const archiveEntries = Object.entries(opts.files).map(
+    ([filePath, content]) => ({
+      path: `${relativeRoot}/${filePath}`.replace(/\/+/g, "/"),
+      content,
+    }),
+  );
 
   try {
     const tar = createTarArchive(archiveEntries);
@@ -67,6 +77,10 @@ export async function uploadWorkspace(opts: {
     console.info(
       `[PlaygroundExecutor] workspace_upload_mode=fallback reason=hydrate_failed sandbox_id=${opts.sandboxId}`,
     );
-    await opts.provider.uploadFiles(opts.sandboxId, opts.files, opts.projectDir);
+    await opts.provider.uploadFiles(
+      opts.sandboxId,
+      opts.files,
+      opts.projectDir,
+    );
   }
 }
