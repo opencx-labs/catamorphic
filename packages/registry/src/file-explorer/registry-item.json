@@ -1,0 +1,13 @@
+{
+  "$schema": "https://ui.shadcn.com/schema/registry-item.json",
+  "name": "file-explorer",
+  "type": "registry:component",
+  "description": "Tree view for project files. Pure presentational chrome — pass `files` from useProjectFiles or useProjectGitState.",
+  "dependencies": [],
+  "files": [
+    {
+      "path": "components/catamorphic/file-explorer.tsx",
+      "type": "registry:component"
+    }
+  ]
+}

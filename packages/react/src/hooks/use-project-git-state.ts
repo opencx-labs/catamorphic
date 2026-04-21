@@ -1,46 +1,25 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCatamorphic } from "../provider.js";
+import type {
+  BranchInfo,
+  CommitInfo,
+  ConflictEntry,
+  RepoStatus,
+} from "../types.js";
 
 const STATUS_POLL_MS = 10_000;
 
-export interface RepoStatus {
-  branch: string;
-  dirty: boolean;
-  modifiedFiles: string[];
-  ahead: number;
-  behind: number;
-  baseCommit: string | null;
-  remoteHead: string | null;
-  remoteHeadTimestamp: number | null;
-}
-
-export interface BranchInfo {
-  name: string;
-  commit: string;
-  isCurrent: boolean;
-  createdAt: number | null;
-}
-
-export interface CommitInfo {
-  sha: string;
-  message: string;
-  author: { name: string; email: string };
-  timestamp: number;
-}
-
-export interface ConflictEntry {
-  path: string;
-  base: string | null;
-  ours: string | null;
-  theirs: string | null;
-}
+export type { BranchInfo, CommitInfo, ConflictEntry, RepoStatus };
 
 /**
- * Adapter the host wires up against its own API client. Phase 1 keeps the
- * git surface out of the typed openapi-fetch client because the routes are
- * still iterating; phase 2 will collapse this into a `useProjectGit` hook
- * backed directly by the api-client.
+ * Host-injected git transport.
+ *
+ * @deprecated Phase 2 collapsed the git surface into `apiClient`. This
+ * interface is kept for backwards compatibility with callers that still
+ * pass a custom adapter; pass `undefined` (or omit `api`) to have the
+ * hook talk to the typed api-client directly.
  */
 export interface ProjectGitApi {
   getStatus: (projectId: string) => Promise<RepoStatus>;
@@ -135,8 +114,11 @@ export interface UseProjectGitStateOptions {
   projectId: string;
   /** Baseline files from server at the current HEAD of the dev branch. */
   baselineFiles: Record<string, string>;
-  /** Host-provided git transport. Phase 2 collapses this into the api-client. */
-  api: ProjectGitApi;
+  /**
+   * Optional host-provided git transport.
+   * @deprecated Omit to use the typed api-client from `CatamorphicProvider`.
+   */
+  api?: ProjectGitApi;
 }
 
 export interface ProjectGitState {
@@ -186,6 +168,11 @@ export function useProjectGitState({
   baselineFiles,
   api,
 }: UseProjectGitStateOptions): ProjectGitState {
+  const { apiClient } = useCatamorphic();
+  const resolvedApi = useMemo<ProjectGitApi>(
+    () => api ?? buildApiFromClient(apiClient),
+    [api, apiClient],
+  );
   const [status, setStatus] = useState<RepoStatus | null>(null);
   const [branches, setBranches] = useState<BranchInfo[]>([]);
   const [commits, setCommits] = useState<CommitInfo[]>([]);
@@ -197,8 +184,8 @@ export function useProjectGitState({
   > | null>(null);
   const baselineRef = useRef(baselineFiles);
   baselineRef.current = baselineFiles;
-  const apiRef = useRef(api);
-  apiRef.current = api;
+  const apiRef = useRef(resolvedApi);
+  apiRef.current = resolvedApi;
 
   const currentBranch = status?.branch ?? "main";
 
@@ -397,5 +384,90 @@ export function useProjectGitState({
     pull,
     discard,
     resolveConflicts,
+  };
+}
+
+type ApiClient = ReturnType<typeof useCatamorphic>["apiClient"];
+
+function buildApiFromClient(apiClient: ApiClient): ProjectGitApi {
+  async function unwrap<T>(
+    promise: Promise<{ data?: T; error?: unknown }>,
+    label: string,
+  ): Promise<T> {
+    const { data, error } = await promise;
+    if (error || data === undefined) {
+      throw new Error(
+        `${label} failed${error ? `: ${JSON.stringify(error)}` : ""}`,
+      );
+    }
+    return data;
+  }
+
+  return {
+    getStatus: (projectId) =>
+      unwrap(
+        apiClient.GET("/api/projects/{projectId}/status", {
+          params: { path: { projectId } },
+        }),
+        "GET status",
+      ),
+    getBranches: (projectId) =>
+      unwrap(
+        apiClient.GET("/api/projects/{projectId}/branches", {
+          params: { path: { projectId } },
+        }),
+        "GET branches",
+      ),
+    getCommits: async (projectId) => {
+      const data = await unwrap(
+        apiClient.GET("/api/projects/{projectId}/commits", {
+          params: { path: { projectId } },
+        }),
+        "GET commits",
+      );
+      return { items: data.items };
+    },
+    getFilesAtRef: (projectId, ref) =>
+      unwrap(
+        apiClient.GET("/api/projects/{projectId}/files-at-ref", {
+          params: { path: { projectId }, query: { ref } },
+        }),
+        "GET files-at-ref",
+      ),
+    deploy: async (projectId, body) => {
+      const data = await unwrap(
+        apiClient.POST("/api/projects/{projectId}/deploy", {
+          params: { path: { projectId } },
+          body,
+        }),
+        "POST deploy",
+      );
+      return { status: data.status, conflicts: data.conflicts };
+    },
+    pull: async (projectId, body) => {
+      const data = await unwrap(
+        apiClient.POST("/api/projects/{projectId}/pull", {
+          params: { path: { projectId } },
+          body,
+        }),
+        "POST pull",
+      );
+      return { status: data.status, conflicts: data.conflicts };
+    },
+    discard: (projectId) =>
+      unwrap(
+        apiClient.POST("/api/projects/{projectId}/discard", {
+          params: { path: { projectId } },
+        }),
+        "POST discard",
+      ),
+    resolveConflicts: (projectId, body) =>
+      unwrap(
+        apiClient.POST("/api/projects/{projectId}/resolve-conflicts", {
+          params: { path: { projectId } },
+          body,
+        }),
+        "POST resolve-conflicts",
+      ),
   };
 }

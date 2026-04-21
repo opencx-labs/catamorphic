@@ -1,0 +1,14 @@
+{
+  "$schema": "https://ui.shadcn.com/schema/registry-item.json",
+  "name": "plugins-settings",
+  "type": "registry:component",
+  "description": "Attach/detach plugins and edit per-plugin secrets. Uses usePluginCatalog, useProjectPlugins, useAttachPlugin, useDetachPlugin and useUpsertProjectSecret.",
+  "dependencies": ["@catamorphic/react"],
+  "registryDependencies": ["catamorphic-provider"],
+  "files": [
+    {
+      "path": "components/catamorphic/plugins-settings.tsx",
+      "type": "registry:component"
+    }
+  ]
+}

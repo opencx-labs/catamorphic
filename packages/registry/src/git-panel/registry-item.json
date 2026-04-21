@@ -1,0 +1,14 @@
+{
+  "$schema": "https://ui.shadcn.com/schema/registry-item.json",
+  "name": "git-panel",
+  "type": "registry:component",
+  "description": "Branch + dirty + recent commits + Deploy/Discard buttons. Uses useProjectGit, useProjectCommits, useDeployProject from @catamorphic/react.",
+  "dependencies": ["@catamorphic/react"],
+  "registryDependencies": ["catamorphic-provider"],
+  "files": [
+    {
+      "path": "components/catamorphic/git-panel.tsx",
+      "type": "registry:component"
+    }
+  ]
+}

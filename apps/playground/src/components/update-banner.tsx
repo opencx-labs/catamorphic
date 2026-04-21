@@ -1,8 +1,8 @@
 "use client";
 
+import { useCatamorphic } from "@catamorphic/react";
+import type { ConflictEntry } from "@catamorphic/react/types";
 import { useState } from "react";
-import type { ConflictEntry } from "@/lib/api";
-import { api } from "@/lib/api";
 import type { ProjectGitState } from "@/lib/use-project-git-state";
 import { DiffDrawer } from "./diff-drawer";
 
@@ -12,6 +12,7 @@ export interface UpdateBannerProps {
 }
 
 export function UpdateBanner({ projectId, gitState }: UpdateBannerProps) {
+  const { apiClient } = useCatamorphic();
   const { status, isBehind, pull, resolveConflicts, files } = gitState;
   const [pulling, setPulling] = useState(false);
   const [conflicts, setConflicts] = useState<ConflictEntry[]>([]);
@@ -41,8 +42,19 @@ export function UpdateBanner({ projectId, gitState }: UpdateBannerProps) {
     setResolving(true);
     setError(null);
     try {
-      const result = await api.aiResolveConflicts(projectId, { conflicts });
-      await resolveConflicts(result.resolutions);
+      const { data, error: apiError } = await apiClient.POST(
+        "/api/projects/{projectId}/ai-resolve-conflicts",
+        {
+          params: { path: { projectId } },
+          body: { conflicts },
+        },
+      );
+      if (apiError || !data) {
+        throw new Error(
+          `AI conflict resolution failed${apiError ? `: ${JSON.stringify(apiError)}` : ""}`,
+        );
+      }
+      await resolveConflicts(data.resolutions);
       setConflicts([]);
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));

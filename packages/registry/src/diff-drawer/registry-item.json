@@ -1,0 +1,13 @@
+{
+  "$schema": "https://ui.shadcn.com/schema/registry-item.json",
+  "name": "diff-drawer",
+  "type": "registry:component",
+  "description": "Side-drawer diff viewer. Pure presentational chrome with a renderDiff slot so hosts can plug in monaco, codemirror, or a plain <pre> diff.",
+  "dependencies": [],
+  "files": [
+    {
+      "path": "components/catamorphic/diff-drawer.tsx",
+      "type": "registry:component"
+    }
+  ]
+}

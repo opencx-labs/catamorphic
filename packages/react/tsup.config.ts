@@ -18,4 +18,12 @@ export default defineConfig([
     sourcemap: true,
     external: ["react", "react-dom", "@tanstack/react-query"],
   },
+  {
+    entry: { types: "src/types.ts" },
+    format: ["esm"],
+    dts: false,
+    clean: false,
+    sourcemap: true,
+    external: ["react", "react-dom", "@tanstack/react-query"],
+  },
 ]);

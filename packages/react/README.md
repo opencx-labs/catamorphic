@@ -63,10 +63,46 @@ If you omit `queryClient`, the provider creates one internally so standalone app
 - `useWorkflow(projectId, name, { ref? })`
 - `useParseWorkflow()` — mutation that round-trips draft source through the server-side parser (browsers can't load ts-morph directly)
 
-### Run lifecycle
+### Runs
 
+- `useWorkflowRuns(projectId, name, { ref?, pollMs? })`
+- `useWorkflowRun(runId, { pollMs? })`
+- `useTriggerWorkflowRun(projectId, name)` — `mutateAsync({ triggerData? })`; pass nothing for runs that take no input
+- `useCancelWorkflowRun(runId)`
 - `useWorkflowRunController({ onTriggerRun })` — optimistic run list + canvas execution-state machine. Used internally by `<WorkflowEditor>`; host chrome can use it directly.
 - `useEditorKeyboard()` — Escape-key handling for the editor's panels.
+
+### Git
+
+- `useProjectGit(projectId, { pollMs? })` — repo status (branch + dirty + ahead/behind)
+- `useProjectBranches(projectId)`
+- `useProjectCommits(projectId, { ref?, limit?, before? })`
+- `useProjectConflicts(projectId)`
+- `useCreateBranch(projectId)`
+- `useCheckoutBranch(projectId)`
+- `useCommitChanges(projectId)` — commit + deploy
+- `useDeployProject(projectId)`
+- `useProjectGitState({ projectId, baselineFiles })` — composite hook for multi-branch draft persistence (now reads `apiClient` from the provider; no host adapter required)
+
+### Plugins
+
+- `usePluginCatalog()`
+- `useProjectPlugins(projectId)`
+- `useAttachPlugin(projectId)`
+- `useDetachPlugin(projectId)`
+
+### Secrets
+
+- `useProjectSecrets(projectId)`
+- `useUpsertProjectSecret(projectId)` — `mutateAsync({ key, value })`
+- `useDeleteProjectSecret(projectId)`
+
+### Agent (coding sessions)
+
+- `useAgentSessions(projectId)`
+- `useAgentSession(projectId, sessionId)`
+- `useCreateAgentSession(projectId)`
+- `useSendAgentMessage(projectId, sessionId)`
 
 ### Canvas + panel state (jotai)
 
@@ -118,24 +154,65 @@ Atoms exposed for host chrome: `codeAtom`, `graphAtom`, `selectedNodeIdAtom`,
 `reactFlowEdgesAtom`, `codeEditorReadOnlyAtom`, `aiLoadingAtom`,
 `loadMoreRunsAtom`.
 
-### Git / deploy (phase-1 adapter)
+## Error envelope
 
-`useProjectGitState(...)` is headless and takes a `ProjectGitApi` adapter. In phase 2 it will collapse to use the typed api-client directly once the git routes land in the OpenAPI schema.
+Every hook rejects with a typed `CatamorphicError` instead of a bare `Error`. Branch on `error.code`, never on `error.message`:
 
 ```tsx
-import { type ProjectGitApi, useProjectGitState } from "@catamorphic/react";
+import {
+  CatamorphicError,
+  isCatamorphicError,
+  useDeployProject,
+} from "@catamorphic/react";
 
-const gitApi: ProjectGitApi = {
-  getStatus: (projectId) => myApi.getStatus(projectId),
-  // …
-};
+const deploy = useDeployProject(projectId);
 
-const state = useProjectGitState({
-  projectId,
-  baselineFiles,
-  api: gitApi,
-});
+try {
+  await deploy.mutateAsync();
+} catch (err) {
+  if (isCatamorphicError(err)) {
+    switch (err.code) {
+      case "conflict":
+        return showConflictResolver(err.details);
+      case "unauthorized":
+        return redirectToLogin();
+      case "validation":
+      case "not_found":
+      case "server_error":
+      case "network":
+      case "unknown":
+        return toast(err.message);
+    }
+  }
+  throw err;
+}
 ```
+
+`code` is the contract; `message` is the human-readable summary; `details` carries a typed payload (e.g. conflict files for `code: "conflict"`, validation issues for `code: "validation"`).
+
+## Shared types — `@catamorphic/react/types`
+
+OpenAPI-derived domain types live behind a single barrel so a copy-pasted registry component still typechecks against the canonical shape:
+
+```ts
+import type {
+  Project,
+  ProjectSummary,
+  ProjectFilesList,
+  Run,
+  RunDetail,
+  RepoStatus,
+  BranchInfo,
+  CommitInfo,
+  ConflictEntry,
+  PluginInfo,
+  Secret,
+  AgentSession,
+  AgentSessionDetail,
+} from "@catamorphic/react/types";
+```
+
+Add new aliases here whenever a hook surfaces a new server shape — never re-declare an interface in the consuming file.
 
 ## Run lifecycle
 

@@ -13,12 +13,16 @@
     "./workflow-helpers": {
       "import": "./dist/workflow-helpers.js",
       "types": "./dist/workflow-helpers.d.ts"
+    },
+    "./types": {
+      "import": "./dist/types.js",
+      "types": "./dist/types.d.ts"
     }
   },
   "scripts": {
     "build": "tsup && tsc --project tsconfig.json --noEmit false --emitDeclarationOnly",
     "dev": "tsup --watch",
-    "test": "vitest run --config ../../vitest.config.ts",
+    "test": "vitest run --config ./vitest.config.ts",
     "typecheck": "tsgo --project ./tsconfig.json"
   },
   "dependencies": {
@@ -34,9 +38,15 @@
   },
   "devDependencies": {
     "@tanstack/react-query": "^5",
+    "@testing-library/jest-dom": "^6.9.1",
+    "@testing-library/react": "^16.3.2",
     "@types/react": "*",
     "@types/react-dom": "*",
+    "@vitest/ui": "^4.1.5",
+    "jsdom": "^29.0.2",
+    "msw": "^2.13.4",
     "react": "*",
-    "react-dom": "*"
+    "react-dom": "*",
+    "vitest": "^4.1.5"
   }
 }

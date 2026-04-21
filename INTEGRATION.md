@@ -228,7 +228,32 @@ function ProjectList() {
 }
 ```
 
-Phase-1 hooks shipped: `useTemplates`, `useProjects`, `useProject`, `useCreateProject`, `useUpdateProject`, `useDeleteProject`, `useProjectFiles`, `useProjectFile`, `useWriteProjectFile`, `useWorkflows`, `useWorkflow`. Git operations (status, branches, commits, deploy, pull, resolve) ship as a headless `useProjectGitState(...)` that takes a `ProjectGitApi` adapter — phase 2 will collapse that into the typed api-client once the git routes are in the OpenAPI schema.
+Hooks shipped (phase 1 + phase 2):
+
+- **Projects + workflows + files** — `useTemplates`, `useProjects`, `useProject`, `useCreateProject`, `useUpdateProject`, `useDeleteProject`, `useProjectFiles`, `useProjectFile`, `useWriteProjectFile`, `useWorkflows`, `useWorkflow`.
+- **Runs** — `useWorkflowRuns`, `useWorkflowRun`, `useTriggerWorkflowRun`, `useCancelWorkflowRun`.
+- **Git** — `useProjectGit`, `useProjectBranches`, `useProjectCommits`, `useProjectConflicts`, `useCreateBranch`, `useCheckoutBranch`, `useCommitChanges`, `useDeployProject`, plus the composite `useProjectGitState({ projectId, baselineFiles })` for multi-branch draft persistence (no longer requires a host-supplied adapter — it reads `apiClient` from the provider).
+- **Plugins + secrets** — `usePluginCatalog`, `useProjectPlugins`, `useAttachPlugin`, `useDetachPlugin`, `useProjectSecrets`, `useUpsertProjectSecret`, `useDeleteProjectSecret`.
+- **Agent (coding sessions)** — `useAgentSessions`, `useAgentSession`, `useCreateAgentSession`, `useSendAgentMessage`.
+
+All hooks reject with the typed `CatamorphicError` envelope (discriminated by `code`: `unauthorized`, `not_found`, `validation`, `conflict`, `server_error`, `network`, `unknown`). Use `isCatamorphicError(err)` and switch on `err.code`; never branch on `err.message`. Shared OpenAPI-derived domain types (`Project`, `Run`, `RepoStatus`, `BranchInfo`, `ConflictEntry`, `PluginInfo`, `Secret`, `AgentSession`, …) live behind a single `@catamorphic/react/types` barrel.
+
+## Component registry — `@catamorphic/registry`
+
+`@catamorphic/registry` is a shadcn-style copy-paste registry. Items are JSON manifests that inline a single React component file; consumers run `npx shadcn add <host>/r/<item>.json` and the component drops into `components/catamorphic/`. The component then imports hooks from `@catamorphic/react` and primitives from `@catamorphic/ui` only — there's no runtime dependency on the registry itself.
+
+Items shipped in phase 2:
+
+- `catamorphic-provider` — a `<CatamorphicAppProvider>` that wraps `CatamorphicProvider` + `QueryClientProvider` and configures the api client.
+- `projects-list` — table of projects + create-project dialog.
+- `project-editor` — three-pane editor scaffold (file tree slot, editor slot, optional git-panel slot). Plug in monaco/codemirror via `renderEditor`.
+- `file-explorer` — pure file tree.
+- `git-panel` — branch/dirty/commits/deploy panel powered by `useProjectGit` + `useProjectCommits` + `useDeployProject`.
+- `diff-drawer` — side drawer with a `renderDiff` slot so the host can plug in monaco-diff or codemirror-merge.
+- `runs-panel` — list runs and trigger new ones (`useWorkflowRuns` + `useTriggerWorkflowRun`).
+- `plugins-settings` — attach/detach plugins + edit secrets.
+
+The playground hosts the registry at `/r/<name>.json` (`apps/playground/src/app/r/[name]/route.ts`); a dedicated `registry.catamorphic.dev` is a deploy concern, not a code concern. To add a new item: drop a `src/<name>/<name>.tsx` + `registry-item.json` under `packages/registry/src/`, run `bun run build`, and the playground picks it up automatically.
 
 ## Plugin packages (workflow SDKs)
 

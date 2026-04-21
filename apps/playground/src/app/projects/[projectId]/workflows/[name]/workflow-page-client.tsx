@@ -5,12 +5,15 @@ import {
   displayNameFromWorkflowName,
   type ParseResult,
   type PlaygroundRun,
+  type Run,
   readWorkflowDisplayName,
   starterCodeForWorkflow,
   upsertWorkflowDisplayName,
+  useCatamorphic,
   useParseWorkflow,
   useProject,
   useWorkflow,
+  useWorkflowRuns,
   type WorkflowGraph,
   workflowFilePathFromName,
 } from "@catamorphic/react";
@@ -24,7 +27,6 @@ import { PlaygroundVersionsPanel } from "@/components/playground-versions-panel"
 import { ProjectEditor } from "@/components/project-editor";
 import { UpdateBanner } from "@/components/update-banner";
 import { generateWorkflowCode } from "@/lib/ai-action";
-import { api, type Run } from "@/lib/api";
 import { useProjectGitState } from "@/lib/use-project-git-state";
 
 const PAGE_SIZE = 20;
@@ -113,13 +115,20 @@ interface PlaygroundRunResponse {
 
 export function WorkflowPageClient({ projectId, workflowName }: Props) {
   const router = useRouter();
+  const { apiClient } = useCatamorphic();
   const [expanded, setExpanded] = useState(false);
   const [initialFiles, setInitialFiles] = useState<Record<string, string>>({});
-  const [initialRuns, setInitialRuns] = useState<PlaygroundRun[]>([]);
   const [filesReady, setFilesReady] = useState(false);
 
   const projectQuery = useProject(projectId);
   const workflowQuery = useWorkflow(projectId, workflowName);
+  const runsQuery = useWorkflowRuns(projectId, workflowName, {
+    limit: PAGE_SIZE,
+  });
+  const initialRuns = useMemo<PlaygroundRun[]>(
+    () => runsQuery.data?.items.map(mapRun) ?? [],
+    [runsQuery.data?.items],
+  );
 
   const projectName = projectQuery.data?.name ?? null;
   const graph = workflowQuery.data ?? syntheticGraph(workflowName);
@@ -139,11 +148,13 @@ export function WorkflowPageClient({ projectId, workflowName }: Props) {
         return;
       }
       if (workflowQuery.isLoading) return;
-      const files = await api
-        .getFilesAtRef(projectId, "HEAD")
-        .catch(() => null);
+      const { data } = await apiClient
+        .GET("/api/projects/{projectId}/files-at-ref", {
+          params: { path: { projectId }, query: { ref: "HEAD" } },
+        })
+        .catch(() => ({ data: null }) as { data: null });
       if (cancelled) return;
-      setInitialFiles(files ?? { [graphFilePath]: graph.sourceCode });
+      setInitialFiles(data ?? { [graphFilePath]: graph.sourceCode });
       setFilesReady(true);
     }
     loadBaselines();
@@ -151,26 +162,13 @@ export function WorkflowPageClient({ projectId, workflowName }: Props) {
       cancelled = true;
     };
   }, [
+    apiClient,
     projectId,
     workflowQuery.data?.allFiles,
     workflowQuery.isLoading,
     graphFilePath,
     graph.sourceCode,
   ]);
-
-  useEffect(() => {
-    let cancelled = false;
-    api
-      .getRuns(projectId, workflowName)
-      .then((res) => {
-        if (cancelled) return;
-        setInitialRuns(res.items.map(mapRun));
-      })
-      .catch(() => undefined);
-    return () => {
-      cancelled = true;
-    };
-  }, [projectId, workflowName]);
 
   const gitState = useProjectGitState({
     projectId,
@@ -319,20 +317,26 @@ export function WorkflowPageClient({ projectId, workflowName }: Props) {
     async (offset: number) => {
       const safeOffset = Number.isFinite(offset) && offset >= 0 ? offset : 0;
       try {
-        const response = await api.getRuns(projectId, workflowName, {
-          limit: PAGE_SIZE,
-          offset: safeOffset,
-        });
-        const items = response.items.map(mapRun);
+        const { data, error } = await apiClient.GET(
+          "/api/projects/{projectId}/workflows/{name}/runs",
+          {
+            params: {
+              path: { projectId, name: workflowName },
+              query: { limit: PAGE_SIZE, offset: safeOffset },
+            },
+          },
+        );
+        if (error || !data) return { items: [], hasMore: false };
+        const items = data.items.map(mapRun);
         return {
           items,
-          hasMore: safeOffset + items.length < response.total,
+          hasMore: safeOffset + items.length < data.total,
         };
       } catch {
         return { items: [], hasMore: false };
       }
     },
-    [projectId, workflowName],
+    [apiClient, projectId, workflowName],
   );
 
   const handleFileChange = useCallback(
