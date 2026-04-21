@@ -94,58 +94,102 @@ export const WorkflowSummarySchema = z.object({
   parameterCount: z.number(),
 });
 
+// Keep these enums in sync with `@catamorphic/parser`'s `WorkflowNodeType` and
+// edge `type` literal union so the OpenAPI-derived types line up with the
+// parser's in-memory types and `layoutGraph` can consume the response
+// directly with no casts.
+export const WorkflowNodeTypeSchema = z.enum([
+  "trigger",
+  "step",
+  "branch",
+  "if-block",
+  "loop-block",
+  "parallel",
+  "parallel-block",
+  "scope-block",
+  "delay",
+  "return",
+]);
+
+export const WorkflowEdgeTypeSchema = z.enum([
+  "branch-false",
+  "branch-true",
+  "parallel",
+  "sequential",
+]);
+
+// This schema mirrors `@catamorphic/parser`'s `WorkflowGraph` exactly so that
+// the OpenAPI-derived response types align with the parser's in-memory types
+// and `layoutGraph(...)` can consume responses without any adapter.
+export const ParameterInfoSchema = z.object({
+  name: z.string(),
+  type: z.string(),
+  optional: z.boolean(),
+  displayName: z.string().optional(),
+  description: z.string().optional(),
+  defaultValue: z.string().optional(),
+});
+
+export const SourceRangeSchema = z.object({
+  start: z.number(),
+  end: z.number(),
+  startLine: z.number(),
+  startColumn: z.number(),
+  endLine: z.number(),
+  endColumn: z.number(),
+  file: z.string().optional(),
+});
+
+export const StepArgumentSourceSchema = z.object({
+  variable: z.string(),
+  variableDisplayName: z.string().optional(),
+  stepNodeId: z.string().optional(),
+  stepLabel: z.string().optional(),
+});
+
+export const StepArgumentSchema = z.object({
+  name: z.string(),
+  displayName: z.string().optional(),
+  value: z.string(),
+  source: StepArgumentSourceSchema.optional(),
+});
+
+export const WorkflowNodeSchema = z.object({
+  id: z.string(),
+  type: WorkflowNodeTypeSchema,
+  label: z.string(),
+  description: z.string().optional(),
+  sourceRange: SourceRangeSchema,
+  metadata: z.record(z.string(), z.string()),
+  parameters: z.array(ParameterInfoSchema).optional(),
+  arguments: z.array(StepArgumentSchema).optional(),
+  condition: z.string().optional(),
+  loopVariable: z.string().optional(),
+  loopIterable: z.string().optional(),
+  duration: z.string().optional(),
+  returnExpression: z.string().optional(),
+  functionName: z.string().optional(),
+  parentId: z.string().optional(),
+});
+
+export const WorkflowEdgeSchema = z.object({
+  id: z.string(),
+  source: z.string(),
+  target: z.string(),
+  label: z.string().optional(),
+  type: WorkflowEdgeTypeSchema,
+});
+
 export const WorkflowGraphSchema = z.object({
   name: z.string(),
-  displayName: z.string().nullable(),
-  description: z.string().nullable(),
-  filePath: z.string(),
+  displayName: z.string().optional(),
+  description: z.string().optional(),
+  filePath: z.string().optional(),
   projectFiles: z.array(z.string()).optional(),
   allFiles: z.record(z.string(), z.string()).optional(),
-  trigger: z.object({
-    parameters: z.array(
-      z.object({
-        name: z.string(),
-        type: z.string(),
-        displayName: z.string().nullable(),
-        description: z.string().nullable(),
-        required: z.boolean(),
-        defaultValue: z.string().nullable(),
-      }),
-    ),
-  }),
-  nodes: z.array(
-    z.object({
-      id: z.string(),
-      type: z.string(),
-      label: z.string(),
-      description: z.string().optional(),
-      functionName: z.string().optional(),
-      condition: z.string().optional(),
-      duration: z.string().optional(),
-      parentId: z.string().optional(),
-      metadata: z.record(z.string(), z.unknown()),
-      sourceRange: z
-        .object({
-          start: z.number(),
-          end: z.number(),
-          startLine: z.number(),
-          startColumn: z.number(),
-          endLine: z.number(),
-          endColumn: z.number(),
-          file: z.string().optional(),
-        })
-        .optional(),
-    }),
-  ),
-  edges: z.array(
-    z.object({
-      id: z.string(),
-      source: z.string(),
-      target: z.string(),
-      label: z.string().optional(),
-      type: z.string(),
-    }),
-  ),
+  trigger: z.object({ parameters: z.array(ParameterInfoSchema) }),
+  nodes: z.array(WorkflowNodeSchema),
+  edges: z.array(WorkflowEdgeSchema),
   sourceCode: z.string(),
 });
 
@@ -364,6 +408,17 @@ export const RunReportSchema = z.object({
   startedAt: z.string(),
   completedAt: z.string(),
 });
+
+// --- Playground Parse ---
+// Pure AST parse of in-flight draft files → WorkflowGraph. Browser clients
+// can't run `@catamorphic/parser` (ts-morph → node:fs) so the server does it.
+export const PlaygroundParseRequestSchema = z.object({
+  files: z.record(z.string(), z.string()),
+  workflowName: z.string().min(1),
+  preferredFilePath: z.string().optional(),
+});
+
+export const PlaygroundParseResponseSchema = WorkflowGraphSchema.nullable();
 
 // --- Playground Run ---
 export const PlaygroundRunRequestSchema = z.object({

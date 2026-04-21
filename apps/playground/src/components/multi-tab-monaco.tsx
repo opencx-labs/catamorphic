@@ -1,11 +1,11 @@
 "use client";
 
-import dynamic from "next/dynamic";
-import { useCallback, useEffect, useRef } from "react";
 import {
   findWorkflowDefinitions,
   type WorkflowDefinition,
-} from "@/lib/find-workflow-definitions";
+} from "@catamorphic/react";
+import dynamic from "next/dynamic";
+import { useCallback, useEffect, useRef } from "react";
 
 const Editor = dynamic(() => import("@monaco-editor/react"), { ssr: false });
 

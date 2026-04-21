@@ -1,12 +1,13 @@
-import { useAtomValue, useSetAtom } from "jotai";
-import { useCallback, useEffect, useRef, useState } from "react";
 import {
   activeRunIdAtom,
   loadMoreRunsAtom,
+  type PlaygroundRun,
+  type PlaygroundRunStep,
   runsAtom,
   selectedNodeIdAtom,
-} from "./atoms.js";
-import type { PlaygroundRun, PlaygroundRunStep } from "./run-types.js";
+} from "@catamorphic/react";
+import { useAtomValue, useSetAtom } from "jotai";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 function StatusBadge({ status }: { status: string }) {
   const config: Record<string, { color: string; label: string }> = {

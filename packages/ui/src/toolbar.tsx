@@ -1,11 +1,11 @@
-import { useAtom } from "jotai";
-import type { ReactNode } from "react";
 import {
   activePanelTabAtom,
   historySidebarOpenAtom,
   panelVisibilityAtom,
   rightPanelOpenAtom,
-} from "./atoms.js";
+} from "@catamorphic/react";
+import { useAtom } from "jotai";
+import type { ReactNode } from "react";
 
 export interface ToolbarProps {
   onRun?: () => void;

@@ -1,5 +1,6 @@
 import { PlaygroundExecutor, SYSTEM_AUTHOR } from "@catamorphic/core";
 import type { DB, JsonObject } from "@catamorphic/db";
+import { layoutGraph, parseWorkflowFromProject } from "@catamorphic/parser";
 import type { FastifyInstance } from "fastify";
 import type { ZodTypeProvider } from "fastify-type-provider-zod";
 import type { Kysely } from "kysely";
@@ -7,6 +8,8 @@ import type { RouteContext } from "../app.js";
 import { resolveIdentity } from "../http-identity.js";
 import {
   ErrorSchema,
+  PlaygroundParseRequestSchema,
+  PlaygroundParseResponseSchema,
   PlaygroundRunRequestSchema,
   PlaygroundRunResponseSchema,
 } from "../schemas.js";
@@ -16,6 +19,29 @@ export function registerPlaygroundRoutes(
   ctx: RouteContext,
 ) {
   const typed = app.withTypeProvider<ZodTypeProvider>();
+
+  typed.route({
+    method: "POST",
+    url: "/api/playground/parse",
+    schema: {
+      body: PlaygroundParseRequestSchema,
+      response: {
+        200: PlaygroundParseResponseSchema,
+      },
+    },
+    handler: async (request, reply) => {
+      // Parse is a pure CPU operation over in-memory files; no DB, no repo,
+      // no identity required. We just need a server because ts-morph pulls in
+      // `node:fs` which cannot run in a browser bundle.
+      const { files, workflowName, preferredFilePath } = request.body;
+      const graph = parseWorkflowFromProject(files, workflowName, {
+        preferredFilePath,
+      });
+      if (!graph) return reply.send(null);
+      layoutGraph({ nodes: graph.nodes, edges: graph.edges });
+      return reply.send(graph);
+    },
+  });
 
   typed.route({
     method: "POST",

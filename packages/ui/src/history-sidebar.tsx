@@ -1,10 +1,10 @@
-import { useAtom, useSetAtom } from "jotai";
-import type { ReactNode } from "react";
 import {
   activeHistoryTabAtom,
   type HistoryTab,
   historySidebarOpenAtom,
-} from "./atoms.js";
+} from "@catamorphic/react";
+import { useAtom, useSetAtom } from "jotai";
+import type { ReactNode } from "react";
 import { RunsPanel } from "./runs-panel.js";
 
 function DefaultVersionsPanel() {

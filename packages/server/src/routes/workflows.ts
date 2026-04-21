@@ -74,22 +74,7 @@ export function registerWorkflowRoutes(
         const graph = await ctx.core.workflows.get(identity, projectId, name, {
           ref,
         });
-        return reply.send({
-          ...graph,
-          filePath: graph.filePath ?? "",
-          displayName: graph.displayName ?? null,
-          description: graph.description ?? null,
-          trigger: {
-            parameters: graph.trigger.parameters.map((p) => ({
-              name: p.name,
-              type: p.type,
-              displayName: p.displayName ?? null,
-              description: p.description ?? null,
-              required: !p.optional,
-              defaultValue: p.defaultValue ?? null,
-            })),
-          },
-        });
+        return reply.send(graph);
       } catch (err) {
         if (err instanceof ProjectNotFoundError) {
           return reply.status(404).send({ error: "Project not found" });

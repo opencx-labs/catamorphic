@@ -1,9 +1,4 @@
 import type { ParameterInfo, WorkflowNodeType } from "@catamorphic/parser";
-import { ReactFlowProvider } from "@xyflow/react";
-import { Provider, useAtom, useAtomValue, useSetAtom } from "jotai";
-import type { ComponentType, ReactNode } from "react";
-import { useCallback, useEffect } from "react";
-import { AIBar } from "./ai-bar.js";
 import {
   activeHistoryTabAtom,
   activeRunIdAtom,
@@ -16,20 +11,24 @@ import {
   type LoadMoreRunsFn,
   lastTriggerDataAtom,
   loadMoreRunsAtom,
+  type OnParseCallback,
+  type PlaygroundRun,
+  type PlaygroundRunStep,
   panelVisibilityAtom,
   rightPanelOpenAtom,
   runsAtom,
   showRunDialogAtom,
-} from "./atoms.js";
+  useWorkflowGraph,
+} from "@catamorphic/react";
+import { ReactFlowProvider } from "@xyflow/react";
+import { Provider, useAtom, useAtomValue, useSetAtom } from "jotai";
+import type { ComponentType, ReactNode } from "react";
+import { useCallback, useEffect } from "react";
+import { AIBar } from "./ai-bar.js";
 import { WorkflowCanvas } from "./canvas.js";
 import { type CodeEditorRenderProps, DetailPanel } from "./detail-panel.js";
 import { HistorySidebar } from "./history-sidebar.js";
-import {
-  type OnParseCallback,
-  useWorkflowGraph,
-} from "./hooks/use-workflow-graph.js";
 import { RunTriggerDialog } from "./run-trigger-dialog.js";
-import type { PlaygroundRun, PlaygroundRunStep } from "./run-types.js";
 import { Toolbar } from "./toolbar.js";
 import type { NodeRendererProps } from "./types.js";
 

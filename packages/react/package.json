@@ -1,5 +1,5 @@
 {
-  "name": "@catamorphic/ui",
+  "name": "@catamorphic/react",
   "version": "0.0.1",
   "private": true,
   "type": "module",
@@ -10,7 +10,10 @@
       "import": "./dist/index.js",
       "types": "./dist/index.d.ts"
     },
-    "./styles.css": "./src/styles.css"
+    "./workflow-helpers": {
+      "import": "./dist/workflow-helpers.js",
+      "types": "./dist/workflow-helpers.d.ts"
+    }
   },
   "scripts": {
     "build": "tsup && tsc --project tsconfig.json --noEmit false --emitDeclarationOnly",
@@ -19,8 +22,8 @@
     "typecheck": "tsgo --project ./tsconfig.json"
   },
   "dependencies": {
+    "@catamorphic/api-client": "workspace:*",
     "@catamorphic/parser": "workspace:*",
-    "@catamorphic/react": "workspace:*",
     "@xyflow/react": "*",
     "jotai": "*"
   },

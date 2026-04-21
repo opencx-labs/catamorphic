@@ -1,6 +1,14 @@
-export type { AIBarProps } from "./ai-bar.js";
-export { AIBar } from "./ai-bar.js";
-export type { HistoryTab, LoadMoreRunsFn, PanelTab } from "./atoms.js";
+// Re-export atoms, hooks, run types from @catamorphic/react so existing
+// consumers of @catamorphic/ui continue to work unchanged after the move.
+export type {
+  HistoryTab,
+  LoadMoreRunsFn,
+  OnParseCallback,
+  PanelTab,
+  ParseResult,
+  PlaygroundRun,
+  PlaygroundRunStep,
+} from "@catamorphic/react";
 export {
   activeHistoryTabAtom,
   activePanelTabAtom,
@@ -21,7 +29,10 @@ export {
   selectedNodeAtom,
   selectedNodeIdAtom,
   showRunDialogAtom,
-} from "./atoms.js";
+} from "@catamorphic/react";
+
+export type { AIBarProps } from "./ai-bar.js";
+export { AIBar } from "./ai-bar.js";
 export { WorkflowCanvas } from "./canvas.js";
 export type {
   CodeEditorRenderProps,
@@ -29,14 +40,6 @@ export type {
 } from "./detail-panel.js";
 export { DetailPanel } from "./detail-panel.js";
 export { HistorySidebar } from "./history-sidebar.js";
-export type {
-  OnParseCallback,
-  ParseResult,
-} from "./hooks/use-workflow-graph.js";
-export type {
-  PlaygroundRun,
-  PlaygroundRunStep,
-} from "./run-types.js";
 export { Toolbar } from "./toolbar.js";
 export type { NodeRendererProps } from "./types.js";
 export type { WorkflowEditorProps } from "./workflow-editor.js";
