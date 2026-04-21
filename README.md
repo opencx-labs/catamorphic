@@ -2,6 +2,8 @@
 
 Code-first workflow builder that parses TypeScript into visual workflow graphs.
 
+> **Embed-first project.** Catamorphic is designed to be embedded inside host applications (e.g. OpenCX), not to run as a standalone product. The host app provides auth, the user/org model, the database (or schema), and the deployment surface. The standalone `packages/server` + `apps/playground` in this repo exist only for local development, demos, and tests — they are not the shipping target. When contributing, prefer designs that make embedding easier (injectable DB/auth/providers, no hard-coded env/paths) over designs that only optimize the standalone repo. See `INTEGRATION.md` for the host integration flow and `AGENTS.md` for agent guidance.
+
 ## Quick Start
 
 ```bash
