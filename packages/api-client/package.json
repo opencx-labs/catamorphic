@@ -12,7 +12,7 @@
     }
   },
   "scripts": {
-    "build": "tsup && tsc --project tsconfig.json --noEmit false --emitDeclarationOnly",
+    "build": "tsup && tsc --project tsconfig.json --noEmit false --emitDeclarationOnly && cp src/schema.d.ts dist/schema.d.ts",
     "generate": "openapi-typescript openapi.json -o src/schema.d.ts",
     "typecheck": "tsgo --project ./tsconfig.json"
   },
