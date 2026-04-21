@@ -44,7 +44,7 @@ From the repo root:
 bun run dev
 ```
 
-Turbo brings up Postgres (already running in Docker Compose), the Fastify server, the playground, and this bridge Worker together. The server defaults to the Cloudflare sandbox provider when `CLOUDFLARE_SANDBOX_API_URL` + `CLOUDFLARE_SANDBOX_API_KEY` are set in its environment.
+Turbo brings up Postgres (already running in Docker Compose), the Fastify server, the playground, and this bridge Worker together. Note: Daytona is the default sandbox provider until further notice — the server only selects the Cloudflare bridge when `DAYTONA_API_KEY` is unset and `CLOUDFLARE_SANDBOX_API_URL` + `CLOUDFLARE_SANDBOX_API_KEY` are set. See [`CLOUDFLARE.md`](../../CLOUDFLARE.md) at the repo root.
 
 ## Production deploy
 

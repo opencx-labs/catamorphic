@@ -8,7 +8,7 @@ alwaysApply: false
 
 ## Sandbox Provider Interface
 
-Execution is abstracted behind `SandboxProvider` / `SandboxManager` so the underlying provider (currently Daytona) can be swapped later. Never call the Daytona SDK directly from routes — go through the service layer.
+Execution is abstracted behind `SandboxProvider` / `SandboxManager` so the underlying provider can be swapped. **Daytona is the default provider until further notice.** The Cloudflare Sandbox Bridge path (`CloudflareSandboxProvider`, see `CLOUDFLARE.md`) is wired up and kept working, but the server bootstrap in `packages/server/src/server.ts` always prefers Daytona when `DAYTONA_API_KEY` is set — even when the Cloudflare env vars are also populated. Never call the Daytona or Cloudflare SDKs directly from routes — go through the service layer.
 
 ## Execution Model
 
@@ -31,9 +31,9 @@ Execution is abstracted behind `SandboxProvider` / `SandboxManager` so the under
 
 The correct approach (future work) is a clean compile-time transform or a VM context that wraps step calls at a lower level. Until that is implemented, `steps` on run records will be an empty array.
 
-## Daytona Availability
+## Provider Availability
 
-The server degrades gracefully when `DAYTONA_API_KEY` is absent: the `/api/playground/run` route returns `503 Service Unavailable`. The client surfaces this as a user-visible error, not a crash. Integration tests that require the key use the `describeIf` skip pattern.
+Daytona is the default; Cloudflare is the documented alternate. The server degrades gracefully when **no** provider is configured (neither `DAYTONA_API_KEY` nor the `CLOUDFLARE_SANDBOX_API_URL` + `CLOUDFLARE_SANDBOX_API_KEY` pair): the `/api/playground/run` route returns `503 Service Unavailable`. The client surfaces this as a user-visible error, not a crash. Integration tests that require a specific provider use the `describeIf` skip pattern.
 
 ## Coding Agent (Future)
 

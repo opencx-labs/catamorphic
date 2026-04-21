@@ -32,18 +32,20 @@ const projectManager = new ProjectManager(
 );
 
 function resolveSandboxProvider(): SandboxProvider | undefined {
-  // Cloudflare is the default when both the bridge URL and shared key are
-  // configured; Daytona is the fallback. See CLOUDFLARE.md.
-  const cfUrl = process.env.CLOUDFLARE_SANDBOX_API_URL;
-  const cfKey = process.env.CLOUDFLARE_SANDBOX_API_KEY;
-  if (cfUrl && cfKey) {
-    return new CloudflareSandboxProvider({ apiUrl: cfUrl, apiKey: cfKey });
-  }
-
+  // Daytona is the default sandbox provider until further notice, even when
+  // Cloudflare env vars are also configured. The Cloudflare Bridge path stays
+  // wired up but is only selected when Daytona is unavailable. See
+  // CLOUDFLARE.md.
   if (process.env.DAYTONA_API_KEY) {
     return new DaytonaSandboxProvider({
       apiKey: process.env.DAYTONA_API_KEY,
     });
+  }
+
+  const cfUrl = process.env.CLOUDFLARE_SANDBOX_API_URL;
+  const cfKey = process.env.CLOUDFLARE_SANDBOX_API_KEY;
+  if (cfUrl && cfKey) {
+    return new CloudflareSandboxProvider({ apiUrl: cfUrl, apiKey: cfKey });
   }
 
   return undefined;
