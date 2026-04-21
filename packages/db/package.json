@@ -28,7 +28,7 @@
     "typecheck": "tsgo --project ./tsconfig.json",
     "db:migrate": "bun run src/cli.ts migrate",
     "db:status": "bun run src/cli.ts status",
-    "db:codegen": "kysely-codegen --out-file src/generated/db.ts",
+    "db:codegen": "kysely-codegen --out-file src/generated/db.ts --include-pattern 'catamorphic.*' --default-schema=catamorphic",
     "db:reset": "bun run src/cli.ts reset"
   },
   "dependencies": {
