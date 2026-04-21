@@ -15,12 +15,14 @@ import {
   PlaygroundRunResponseSchema,
 } from "../schemas.js";
 import { PlaygroundExecutor } from "../services/playground-executor.js";
+import type { RunPluginsLoader } from "../services/run-plugins-loader.js";
 
 export function registerPlaygroundRoutes(
   app: FastifyInstance,
   db?: Kysely<DB>,
   sandboxProvider?: SandboxProvider,
   projectManager?: ProjectManager,
+  runPluginsLoader?: RunPluginsLoader,
 ) {
   const typed = app.withTypeProvider<ZodTypeProvider>();
 
@@ -31,6 +33,7 @@ export function registerPlaygroundRoutes(
       body: PlaygroundRunRequestSchema,
       response: {
         200: PlaygroundRunResponseSchema,
+        400: ErrorSchema,
         503: ErrorSchema,
       },
     },
@@ -88,12 +91,26 @@ export function registerPlaygroundRoutes(
           .execute();
       }
 
+      let plugins: Awaited<ReturnType<RunPluginsLoader["load"]>> | undefined;
+      if (projectId && runPluginsLoader) {
+        plugins = await runPluginsLoader.load(projectId);
+        if (plugins.missingRequiredSecrets.length > 0) {
+          return reply.status(400).send({
+            error: `Missing required plugin secrets: ${plugins.missingRequiredSecrets.join(
+              ", ",
+            )}. Set them in the project settings before running.`,
+          });
+        }
+      }
+
       const executor = new PlaygroundExecutor(sandboxProvider);
       const result = await executor.execute({
         files: resolvedFiles,
         workflowName,
         triggerData,
         commitSha,
+        plugins: plugins?.plugins,
+        secrets: plugins?.secrets,
       });
 
       if (runId && db) {

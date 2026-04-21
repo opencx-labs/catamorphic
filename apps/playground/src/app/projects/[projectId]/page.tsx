@@ -1,5 +1,6 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
+import { PluginsSettings } from "@/components/plugins-settings";
 import { api } from "@/lib/api";
 import { createWorkflowInProjectAction } from "@/lib/project-actions";
 
@@ -95,6 +96,8 @@ export default async function ProjectPage({
           </div>
         )}
       </section>
+
+      <PluginsSettings projectId={projectId} />
     </main>
   );
 }

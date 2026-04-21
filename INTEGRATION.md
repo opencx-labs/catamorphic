@@ -114,6 +114,25 @@ CATAMORPHIC_DB_SCHEMA="${CATAMORPHIC_DB_SCHEMA:-catamorphic}" \
 pnpm -C backend exec catamorphic-db status
 ```
 
+## Plugin packages (workflow SDKs)
+
+Catamorphic can attach external packages (for example workflow SDKs) to a project so workflows can `import` plugin exports.
+
+In v1, plugins are resolved from a local directory configured in root `.env`:
+
+```bash
+CATAMORPHIC_LOCAL_PLUGINS_DIR=/Users/you/workspace/host-app/packages
+```
+
+Runtime summary:
+
+1. Server loads attached plugins and secret values for the project.
+2. Plugin files are mirrored into sandbox `node_modules/<packageName>/`.
+3. Secrets are injected into the harness env for plugin runtime usage.
+4. Agent and workflow-builder context include plugin README + d.ts.
+
+For full details (manifest contract, REST API, service internals, runtime flow, troubleshooting, and resolver roadmap), use [`packages/plugins/README.md`](packages/plugins/README.md) as the canonical source.
+
 ## Operational Notes
 
 - Do not auto-run migrations on every app boot; run them in CI/deploy or a one-shot job.
