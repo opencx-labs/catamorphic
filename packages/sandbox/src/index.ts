@@ -3,10 +3,24 @@ export {
   CloudflareSandboxError,
   CloudflareSandboxProvider,
 } from "./cloudflare-provider.js";
-export { CodexAgent } from "./coding-agent/codex-agent.js";
-export type { CodingAgentProvider } from "./coding-agent/types.js";
+export {
+  buildPluginsPreamble,
+  CodexAgent,
+  stagePluginDocs,
+} from "./coding-agent/codex-agent.js";
+export type {
+  AttachedPluginForAgent,
+  CodingAgentProvider,
+  ProviderSession,
+  StartSessionOpts,
+} from "./coding-agent/types.js";
 export { DaytonaSandboxProvider } from "./daytona-provider.js";
-export { RunExecutorImpl } from "./run-executor.js";
+export {
+  type ExecuteRunOpts,
+  type PluginPayload,
+  RunExecutorImpl,
+  uploadPluginPayloads,
+} from "./run-executor.js";
 export { SandboxManagerImpl } from "./sandbox-manager.js";
 export type {
   AgentEvent,
@@ -17,6 +31,7 @@ export type {
   ExecResult,
   GitCloneOpts,
   RunExecutor,
+  RunPluginPayload,
   RunResult,
   SandboxHandle,
   SandboxManager,

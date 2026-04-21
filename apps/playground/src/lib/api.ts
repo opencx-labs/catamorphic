@@ -322,4 +322,67 @@ export const api = {
     apiFetch<Record<string, string>>(
       `/api/projects/${projectId}/files-at-ref?ref=${encodeURIComponent(ref)}`,
     ),
+
+  getPluginCatalog: () => apiFetch<PluginInfo[]>("/api/plugins/catalog"),
+
+  getAttachedPlugins: (projectId: string) =>
+    apiFetch<AttachedPlugin[]>(`/api/projects/${projectId}/plugins`),
+
+  attachPlugin: (projectId: string, packageName: string) =>
+    apiFetch<AttachedPlugin>(`/api/projects/${projectId}/plugins`, {
+      method: "POST",
+      body: JSON.stringify({ packageName }),
+    }),
+
+  detachPlugin: (projectId: string, packageName: string) =>
+    apiFetch<{ detached: boolean }>(
+      `/api/projects/${projectId}/plugins/${encodeURIComponent(packageName)}`,
+      { method: "DELETE" },
+    ),
+
+  getSecrets: (projectId: string) =>
+    apiFetch<SecretStatus[]>(`/api/projects/${projectId}/secrets`),
+
+  setSecret: (projectId: string, name: string, value: string) =>
+    apiFetch<SecretStatus>(
+      `/api/projects/${projectId}/secrets/${encodeURIComponent(name)}`,
+      {
+        method: "PUT",
+        body: JSON.stringify({ value }),
+      },
+    ),
+
+  deleteSecret: (projectId: string, name: string) =>
+    apiFetch<{ deleted: boolean }>(
+      `/api/projects/${projectId}/secrets/${encodeURIComponent(name)}`,
+      { method: "DELETE" },
+    ),
 };
+
+export interface PluginSecretDescriptor {
+  name: string;
+  label: string;
+  description: string;
+  required: boolean;
+  default: string | null;
+}
+
+export interface PluginInfo {
+  packageName: string;
+  version: string | null;
+  source: "local" | "npm" | "git";
+  displayName: string;
+  description: string;
+  secrets: PluginSecretDescriptor[];
+}
+
+export interface AttachedPlugin extends PluginInfo {
+  attachedAt: string;
+  secretStatus: Array<{ name: string; hasValue: boolean; required: boolean }>;
+}
+
+export interface SecretStatus {
+  name: string;
+  hasValue: boolean;
+  updatedAt: string | null;
+}

@@ -183,4 +183,74 @@ describe("RunExecutorImpl", () => {
     expect(result.status).toBe("completed");
     expect(result.steps).toHaveLength(0);
   });
+
+  it("uploads plugin payloads into node_modules and merges secrets into env", async () => {
+    const provider = createMockProvider();
+    const manager = createMockManager();
+    const executor = new RunExecutorImpl({
+      provider,
+      sandboxManager: manager,
+      apiBaseUrl: "http://localhost:3001",
+    });
+
+    await executor.executeRun({
+      projectId: "proj-1",
+      workflowName: "myWorkflow",
+      triggerData: {},
+      runId: "run-1",
+      commitSha: "abc123",
+      plugins: [
+        {
+          packageName: "@opencx/workflow-sdk",
+          files: {
+            "package.json": '{"name":"@opencx/workflow-sdk"}',
+            "dist/index.js": "export {};",
+          },
+        },
+      ],
+      secrets: {
+        OPENCX_API_KEY: "sk_test_123",
+        OPENCX_API_URL: "https://api.open.cx",
+      },
+    });
+
+    const uploadCalls = (provider.uploadFiles as ReturnType<typeof vi.fn>).mock
+      .calls;
+    expect(uploadCalls).toHaveLength(1);
+    const [sandboxId, files, targetDir] = uploadCalls[0]!;
+    expect(sandboxId).toBe("prov-1");
+    expect(targetDir).toBe(
+      "/home/daytona/project/node_modules/@opencx/workflow-sdk",
+    );
+    expect(Object.keys(files as Record<string, string>)).toEqual([
+      "package.json",
+      "dist/index.js",
+    ]);
+
+    const cmd = (provider.executeCommand as ReturnType<typeof vi.fn>).mock
+      .calls[0]![1] as string;
+    expect(cmd).toContain('OPENCX_API_KEY="sk_test_123"');
+    expect(cmd).toContain('OPENCX_API_URL="https://api.open.cx"');
+    expect(cmd).toContain('CATAMORPHIC_RUN_ID="run-1"');
+  });
+
+  it("does not call uploadFiles when no plugins are attached", async () => {
+    const provider = createMockProvider();
+    const manager = createMockManager();
+    const executor = new RunExecutorImpl({
+      provider,
+      sandboxManager: manager,
+      apiBaseUrl: "http://localhost:3001",
+    });
+
+    await executor.executeRun({
+      projectId: "proj-1",
+      workflowName: "myWorkflow",
+      triggerData: {},
+      runId: "run-1",
+      commitSha: "abc123",
+    });
+
+    expect(provider.uploadFiles).not.toHaveBeenCalled();
+  });
 });

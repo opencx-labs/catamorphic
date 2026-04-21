@@ -202,6 +202,30 @@ describe("CloudflareSandboxProvider", () => {
     expect(bodies).toEqual(["// x", "export {};"]);
   });
 
+  it("keeps `@` un-encoded for scoped package paths", async () => {
+    const writes: string[] = [];
+    const fetchImpl = mockFetch((input) => {
+      writes.push(String(input));
+      return jsonResponse({ ok: true });
+    });
+
+    const provider = new CloudflareSandboxProvider({
+      apiUrl: "http://bridge",
+      apiKey: "k",
+      fetch: fetchImpl,
+    });
+
+    await provider.uploadFiles(
+      "id1",
+      { "package.json": "{}" },
+      "/workspace/project/node_modules/@opencx/workflow-sdk",
+    );
+
+    expect(writes).toEqual([
+      "http://bridge/v1/sandbox/id1/file/workspace/project/node_modules/@opencx/workflow-sdk/package.json",
+    ]);
+  });
+
   it("downloadFile decodes raw bytes from the file route", async () => {
     const fetchImpl = mockFetch((input) => {
       expect(String(input)).toBe(

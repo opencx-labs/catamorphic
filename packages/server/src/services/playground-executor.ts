@@ -1,4 +1,9 @@
-import type { SandboxProvider, StepEntry } from "@catamorphic/sandbox";
+import type {
+  RunPluginPayload,
+  SandboxProvider,
+  StepEntry,
+} from "@catamorphic/sandbox";
+import { uploadPluginPayloads } from "@catamorphic/sandbox";
 import { uploadWorkspace } from "./playground/workspace-upload.js";
 
 export interface PlaygroundRunRequest {
@@ -11,6 +16,16 @@ export interface PlaygroundRunRequest {
    * with the storage backend.
    */
   commitSha?: string | null;
+  /**
+   * Plugin packages attached to the project. Uploaded into
+   * `node_modules/<packageName>` so workflow code can import them.
+   */
+  plugins?: RunPluginPayload[];
+  /**
+   * Secret env vars declared by attached plugin manifests. Injected into the
+   * harness process alongside the built-in `CATAMORPHIC_*` vars.
+   */
+  secrets?: Record<string, string>;
 }
 
 export interface PlaygroundRunResult {
@@ -165,14 +180,22 @@ export class PlaygroundExecutor {
         sandboxId: sandbox.providerId,
         projectDir,
         files: {
-        ...request.files,
-        "harness.ts": HARNESS_SOURCE,
+          ...request.files,
+          "harness.ts": HARNESS_SOURCE,
         },
       });
+
+      await uploadPluginPayloads(
+        this.provider,
+        sandbox.providerId,
+        projectDir,
+        request.plugins,
+      );
 
       const env: Record<string, string> = {
         CATAMORPHIC_WORKFLOW_NAME: request.workflowName,
         CATAMORPHIC_TRIGGER_DATA: JSON.stringify(request.triggerData ?? {}),
+        ...(request.secrets ?? {}),
       };
       if (request.commitSha) {
         env.CATAMORPHIC_COMMIT_SHA = request.commitSha;

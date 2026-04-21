@@ -59,6 +59,9 @@
     "packages/db": {
       "name": "@catamorphic/db",
       "version": "0.0.1",
+      "bin": {
+        "catamorphic-db": "./dist/cli.js",
+      },
       "dependencies": {
         "kysely": "^0.28.15",
         "pg": "^8.20.0",
@@ -90,6 +93,16 @@
         "@types/dagre": "^0.7.54",
       },
     },
+    "packages/plugins": {
+      "name": "@catamorphic/plugins",
+      "version": "0.0.1",
+      "dependencies": {
+        "zod": "^4.3.6",
+      },
+      "devDependencies": {
+        "@types/node": "^25.6.0",
+      },
+    },
     "packages/runtime": {
       "name": "@catamorphic/runtime",
       "version": "0.0.1",
@@ -115,6 +128,7 @@
         "@catamorphic/db": "workspace:*",
         "@catamorphic/git": "workspace:*",
         "@catamorphic/parser": "workspace:*",
+        "@catamorphic/plugins": "workspace:*",
         "@catamorphic/sandbox": "workspace:*",
         "@fastify/cors": "^11.2.0",
         "@fastify/swagger": "^9.7.0",
@@ -259,6 +273,8 @@
     "@catamorphic/parser": ["@catamorphic/parser@workspace:packages/parser"],
 
     "@catamorphic/playground": ["@catamorphic/playground@workspace:apps/playground"],
+
+    "@catamorphic/plugins": ["@catamorphic/plugins@workspace:packages/plugins"],
 
     "@catamorphic/runtime": ["@catamorphic/runtime@workspace:packages/runtime"],
 

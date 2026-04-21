@@ -383,6 +383,60 @@ export const PlaygroundRunResponseSchema = z.object({
   completedAt: z.string(),
 });
 
+// --- Plugins ---
+export const PluginSecretSchema = z.object({
+  name: z.string(),
+  label: z.string(),
+  description: z.string(),
+  required: z.boolean(),
+  default: z.string().nullable(),
+});
+
+export const PluginManifestSchema = z.object({
+  packageName: z.string(),
+  version: z.string().nullable(),
+  source: z.enum(["local", "npm", "git"]),
+  displayName: z.string(),
+  description: z.string(),
+  secrets: z.array(PluginSecretSchema),
+});
+
+export const CatalogPluginSchema = PluginManifestSchema;
+
+export const AttachedPluginSchema = PluginManifestSchema.extend({
+  attachedAt: z.string().datetime(),
+  secretStatus: z.array(
+    z.object({
+      name: z.string(),
+      hasValue: z.boolean(),
+      required: z.boolean(),
+    }),
+  ),
+});
+
+export const AttachPluginSchema = z.object({
+  packageName: z.string().min(1),
+});
+
+export const PluginPackageParamsSchema = ProjectIdParamsSchema.extend({
+  packageName: z.string().min(1),
+});
+
+// --- Secrets ---
+export const SecretStatusSchema = z.object({
+  name: z.string(),
+  hasValue: z.boolean(),
+  updatedAt: z.string().datetime().nullable(),
+});
+
+export const UpsertSecretSchema = z.object({
+  value: z.string(),
+});
+
+export const SecretNameParamsSchema = ProjectIdParamsSchema.extend({
+  name: z.string().min(1),
+});
+
 // --- Generic ---
 export const ErrorSchema = z.object({
   error: z.string(),

@@ -10,10 +10,15 @@ Catamorphic AI is a code-first workflow builder. Workflows are TypeScript code, 
 - `packages/ui` — React Flow editor components (embeddable)
 - `packages/server` — Fastify API with Zod schemas + OpenAPI spec
 - `packages/db` — Kysely instance, migrations, codegen types
+- `packages/plugins` — Plugin manifest contract + resolvers (see [packages/plugins/README.md](packages/plugins/README.md))
 - `packages/runtime` — Workflow execution harness (runs inside sandbox)
 - `packages/sandbox` — Daytona sandbox provider + coding agent (Codex SDK)
 - `packages/api-client` — Generated OpenAPI types + openapi-fetch client
 - `apps/playground` — Next.js demo app
+
+## Skills
+
+- `.cursor/skills/plugin-e2e-integration/SKILL.md` — Business-agnostic end-to-end plugin integration flow (resolver, attach, secrets, sandbox, run, verification)
 
 ## Verification Checklist
 

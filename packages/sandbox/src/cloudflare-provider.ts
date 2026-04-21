@@ -285,8 +285,16 @@ function buildFileRoute(sandboxId: string, absolutePath: string): string {
   const segments = absolutePath
     .split("/")
     .filter((segment) => segment.length > 0)
-    .map((segment) => encodeURIComponent(segment));
+    .map(encodePathSegment);
   return `/v1/sandbox/${encodeURIComponent(sandboxId)}/file/${segments.join("/")}`;
+}
+
+// The bridge writes each decoded URL path segment to disk verbatim, so
+// `encodeURIComponent("@opencx")` ends up as a `%40opencx` directory and
+// breaks module resolution for scoped packages. `@` is a valid pchar per
+// RFC 3986 and doesn't need escaping in paths — decode it back after encoding.
+function encodePathSegment(segment: string): string {
+  return encodeURIComponent(segment).replace(/%40/g, "@");
 }
 
 function injectBasicAuth(
