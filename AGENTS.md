@@ -4,6 +4,18 @@
 
 Catamorphic AI is a code-first workflow builder. Workflows are TypeScript code, not JSON. The parser converts TypeScript AST into a visual graph rendered by React Flow. Non-technical users can build workflows using AI, and technical users can edit the code directly.
 
+### Embed-first positioning (READ THIS FIRST)
+
+**Catamorphic is an embed-first project. It is not designed to run as a standalone product.** The shipping target is embedding into host applications (e.g. OpenCX) — the host provides auth, user/org model, database (or schema), and the deployment surface. The standalone `packages/server` + `apps/playground` setup exists only for local development, demos, and tests; it is **not** the production shape.
+
+Concrete implications for any change you make:
+
+- Prefer designs that are **host-injectable**: DB connections/schemas, auth context, storage, sandbox credentials, LLM credentials, and telemetry should all be configurable/injectable — never hard-coded to the standalone repo.
+- Avoid assumptions that only hold in the standalone playground (e.g. a single global DB, a single user, a specific env layout, a specific port, a specific filesystem path).
+- When adding migrations, API routes, or packages, think first about how a host consumes them (library import, mountable Fastify plugin, schema-scoped migrations, generated client types). See `INTEGRATION.md`.
+- The playground is a harness, not the product. Do not add product-shaped features that only make sense in standalone mode.
+- When a tradeoff exists between "nice for standalone" vs. "nice for embedding", embedding wins unless the user explicitly says otherwise.
+
 ## Monorepo Structure
 
 - `packages/parser` — ts-morph AST-to-WorkflowGraph parser
