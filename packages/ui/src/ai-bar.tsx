@@ -1,6 +1,6 @@
+import { aiLoadingAtom, codeAtom } from "@catamorphic/react";
 import { useSetAtom } from "jotai";
 import { useCallback, useRef, useState } from "react";
-import { aiLoadingAtom, codeAtom } from "./atoms.js";
 
 export interface AIBarProps {
   onAIPrompt?: (prompt: string) => Promise<string>;

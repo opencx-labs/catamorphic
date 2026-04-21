@@ -1,13 +1,13 @@
 "use client";
 
 import type { WorkflowNode } from "@catamorphic/parser";
-import type { CodeEditorRenderProps } from "@catamorphic/ui";
-import dynamic from "next/dynamic";
-import { useCallback, useEffect, useRef } from "react";
 import {
   findWorkflowDefinitions,
   type WorkflowDefinition,
-} from "@/lib/find-workflow-definitions";
+} from "@catamorphic/react";
+import type { CodeEditorRenderProps } from "@catamorphic/ui";
+import dynamic from "next/dynamic";
+import { useCallback, useEffect, useRef } from "react";
 
 const Editor = dynamic(() => import("@monaco-editor/react"), { ssr: false });
 

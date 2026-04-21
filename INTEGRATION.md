@@ -178,6 +178,58 @@ In standalone mode (`createApp({ core, standalone: true })`, what `packages/serv
 
 The generated HTTP client lives in `@catamorphic/api-client`; construct it with `createCatamorphicClient({ baseUrl, fetch })` and set the headers on each call (or wrap `fetch` to inject them from your auth context).
 
+## React bindings — `@catamorphic/react`
+
+`@catamorphic/react` is the headless UI layer: a `CatamorphicProvider`, jotai atoms, and TanStack Query data hooks over `@catamorphic/api-client`. It has zero smart components — wire it up once and call the hooks from your own screens (or from `@catamorphic/ui`).
+
+Peer deps: `react ^18.2 || ^19`, `react-dom ^18.2 || ^19`, `@tanstack/react-query ^5`.
+
+```tsx
+import { createApiClient } from "@catamorphic/api-client";
+import { CatamorphicProvider } from "@catamorphic/react";
+import { QueryClient } from "@tanstack/react-query";
+
+const queryClient = new QueryClient();
+const apiClient = createApiClient({
+  baseUrl: process.env.NEXT_PUBLIC_CATAMORPHIC_URL!,
+  fetch: async (input, init) => {
+    // Inject X-Catamorphic-Tenant-Id + X-External-User-Id here.
+    const headers = new Headers(init?.headers);
+    headers.set("X-Catamorphic-Tenant-Id", orgId);
+    headers.set("X-External-User-Id", userId);
+    return fetch(input, { ...init, headers });
+  },
+});
+
+export function Root({ children }) {
+  return (
+    <CatamorphicProvider apiClient={apiClient} queryClient={queryClient}>
+      {children}
+    </CatamorphicProvider>
+  );
+}
+```
+
+Then anywhere under the provider:
+
+```tsx
+import {
+  useCreateProject,
+  useProject,
+  useProjects,
+  useWorkflow,
+  useWriteProjectFile,
+} from "@catamorphic/react";
+
+function ProjectList() {
+  const { data } = useProjects();
+  const createProject = useCreateProject();
+  // …
+}
+```
+
+Phase-1 hooks shipped: `useTemplates`, `useProjects`, `useProject`, `useCreateProject`, `useUpdateProject`, `useDeleteProject`, `useProjectFiles`, `useProjectFile`, `useWriteProjectFile`, `useWorkflows`, `useWorkflow`. Git operations (status, branches, commits, deploy, pull, resolve) ship as a headless `useProjectGitState(...)` that takes a `ProjectGitApi` adapter — phase 2 will collapse that into the typed api-client once the git routes are in the OpenAPI schema.
+
 ## Plugin packages (workflow SDKs)
 
 Catamorphic can attach external packages (for example workflow SDKs) to a project so workflows can `import` plugin exports.

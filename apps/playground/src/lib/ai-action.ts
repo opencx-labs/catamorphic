@@ -1,7 +1,7 @@
 "use server";
 
+import { ensurePrimaryWorkflowExportName } from "@catamorphic/react/workflow-helpers";
 import OpenAI from "openai";
-import { ensurePrimaryWorkflowExportName } from "./workflow-helpers";
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:3001";
 

@@ -10,6 +10,11 @@
       "bun": "./src/index.ts",
       "import": "./dist/index.js",
       "types": "./dist/index.d.ts"
+    },
+    "./layout": {
+      "bun": "./src/layout-entry.ts",
+      "import": "./dist/layout.js",
+      "types": "./dist/layout.d.ts"
     }
   },
   "scripts": {

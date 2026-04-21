@@ -3,8 +3,6 @@ import type {
   StepArgument,
   WorkflowNode,
 } from "@catamorphic/parser";
-import { useAtom, useAtomValue, useSetAtom } from "jotai";
-import type { ReactNode } from "react";
 import {
   activePanelTabAtom,
   codeEditorReadOnlyAtom,
@@ -13,7 +11,9 @@ import {
   rightPanelOpenAtom,
   selectedNodeAtom,
   selectedNodeIdAtom,
-} from "./atoms.js";
+} from "@catamorphic/react";
+import { useAtom, useAtomValue, useSetAtom } from "jotai";
+import type { ReactNode } from "react";
 import {
   formatDefaultValue,
   friendlyParamName,

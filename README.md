@@ -63,6 +63,7 @@ TypeScript Code → ts-morph Parser → WorkflowGraph → React Flow Canvas
 | Package                   | Description                                           |
 | ------------------------- | ----------------------------------------------------- |
 | `@catamorphic/parser`     | ts-morph AST → WorkflowGraph parser                   |
+| `@catamorphic/react`      | Headless React bindings (provider + hooks + atoms)    |
 | `@catamorphic/ui`         | React Flow editor, embeddable component               |
 | `@catamorphic/core`       | Framework-free service layer (projects/workflows/runs)|
 | `@catamorphic/sdk`        | Library-direct embedding facade (scoped client)       |

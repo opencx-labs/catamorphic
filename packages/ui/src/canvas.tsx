@@ -1,4 +1,12 @@
 import {
+  activePanelTabAtom,
+  panelVisibilityAtom,
+  reactFlowEdgesAtom,
+  reactFlowNodesAtom,
+  rightPanelOpenAtom,
+  selectedNodeIdAtom,
+} from "@catamorphic/react";
+import {
   applyNodeChanges,
   Background,
   Controls,
@@ -11,14 +19,6 @@ import {
 } from "@xyflow/react";
 import { useAtom, useAtomValue, useSetAtom } from "jotai";
 import { useCallback, useEffect, useMemo } from "react";
-import {
-  activePanelTabAtom,
-  panelVisibilityAtom,
-  reactFlowEdgesAtom,
-  reactFlowNodesAtom,
-  rightPanelOpenAtom,
-  selectedNodeIdAtom,
-} from "./atoms.js";
 import { nodeTypes } from "./nodes/index.js";
 
 function computeTranslateExtent(

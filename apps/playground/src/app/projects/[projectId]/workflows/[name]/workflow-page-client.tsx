@@ -1,5 +1,18 @@
 "use client";
 
+import { layoutGraph } from "@catamorphic/parser/layout";
+import {
+  displayNameFromWorkflowName,
+  type ParseResult,
+  readWorkflowDisplayName,
+  starterCodeForWorkflow,
+  upsertWorkflowDisplayName,
+  useParseWorkflow,
+  useProject,
+  useWorkflow,
+  type WorkflowGraph,
+  workflowFilePathFromName,
+} from "@catamorphic/react";
 import { type PlaygroundRun, WorkflowEditor } from "@catamorphic/ui";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
@@ -10,24 +23,15 @@ import { PlaygroundVersionsPanel } from "@/components/playground-versions-panel"
 import { ProjectEditor } from "@/components/project-editor";
 import { UpdateBanner } from "@/components/update-banner";
 import { generateWorkflowCode } from "@/lib/ai-action";
-import { api, type WorkflowGraph } from "@/lib/api";
-import { parseWorkflowFromProjectAction } from "@/lib/parse-action";
-import { runWorkflowAction } from "@/lib/run-action";
+import { api, type Run } from "@/lib/api";
 import { useProjectGitState } from "@/lib/use-project-git-state";
-import {
-  readWorkflowDisplayName,
-  upsertWorkflowDisplayName,
-} from "@/lib/workflow-helpers";
 
 const PAGE_SIZE = 20;
+const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:3001";
 
 interface Props {
   projectId: string;
-  projectName: string | null;
   workflowName: string;
-  initialGraph: WorkflowGraph;
-  initialFiles: Record<string, string>;
-  initialRuns: PlaygroundRun[];
 }
 
 function escapeRegExp(value: string): string {
@@ -54,15 +58,118 @@ function findWorkflowFile(
   return null;
 }
 
-export function WorkflowPageClient({
-  projectId,
-  projectName,
-  workflowName,
-  initialGraph,
-  initialFiles,
-  initialRuns,
-}: Props) {
+/**
+ * Synthetic graph used when the workflow name is not yet known to the server
+ * (e.g. the user just created it in a draft that hasn't been deployed).
+ */
+function syntheticGraph(name: string): WorkflowGraph {
+  const filePath = workflowFilePathFromName(name);
+  const sourceCode = starterCodeForWorkflow(
+    name,
+    displayNameFromWorkflowName(name),
+  );
+  return {
+    name,
+    filePath,
+    projectFiles: [],
+    allFiles: {},
+    trigger: { parameters: [] },
+    nodes: [],
+    edges: [],
+    sourceCode,
+  };
+}
+
+function mapRun(run: Run): PlaygroundRun {
+  return {
+    id: run.id,
+    workflowName: run.workflowName,
+    status:
+      run.status === "cancelled"
+        ? "failed"
+        : (run.status as PlaygroundRun["status"]),
+    triggerData:
+      run.triggerData != null && typeof run.triggerData === "object"
+        ? (run.triggerData as Record<string, unknown>)
+        : {},
+    result: run.result ?? undefined,
+    error: run.error ?? undefined,
+    steps: [],
+    startedAt: run.startedAt ?? run.createdAt,
+    completedAt: run.completedAt ?? undefined,
+  };
+}
+
+interface PlaygroundRunResponse {
+  runId: string | null;
+  status: "completed" | "failed";
+  result: unknown;
+  error: string | null;
+  steps: PlaygroundRun["steps"];
+  startedAt: string;
+  completedAt: string;
+}
+
+export function WorkflowPageClient({ projectId, workflowName }: Props) {
+  const router = useRouter();
   const [expanded, setExpanded] = useState(false);
+  const [initialFiles, setInitialFiles] = useState<Record<string, string>>({});
+  const [initialRuns, setInitialRuns] = useState<PlaygroundRun[]>([]);
+  const [filesReady, setFilesReady] = useState(false);
+
+  const projectQuery = useProject(projectId);
+  const workflowQuery = useWorkflow(projectId, workflowName);
+
+  const projectName = projectQuery.data?.name ?? null;
+  const graph = workflowQuery.data ?? syntheticGraph(workflowName);
+  // Wire `filePath` is optional (parser may not have placed the workflow in a
+  // specific file); fall back to the canonical location for the workflow name.
+  const graphFilePath =
+    graph.filePath ?? workflowFilePathFromName(workflowName);
+
+  useEffect(() => {
+    let cancelled = false;
+    async function loadBaselines() {
+      if (workflowQuery.data?.allFiles) {
+        if (!cancelled) {
+          setInitialFiles(workflowQuery.data.allFiles);
+          setFilesReady(true);
+        }
+        return;
+      }
+      if (workflowQuery.isLoading) return;
+      const files = await api
+        .getFilesAtRef(projectId, "HEAD")
+        .catch(() => null);
+      if (cancelled) return;
+      setInitialFiles(files ?? { [graphFilePath]: graph.sourceCode });
+      setFilesReady(true);
+    }
+    loadBaselines();
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    projectId,
+    workflowQuery.data?.allFiles,
+    workflowQuery.isLoading,
+    graphFilePath,
+    graph.sourceCode,
+  ]);
+
+  useEffect(() => {
+    let cancelled = false;
+    api
+      .getRuns(projectId, workflowName)
+      .then((res) => {
+        if (cancelled) return;
+        setInitialRuns(res.items.map(mapRun));
+      })
+      .catch(() => undefined);
+    return () => {
+      cancelled = true;
+    };
+  }, [projectId, workflowName]);
 
   const gitState = useProjectGitState({
     projectId,
@@ -74,22 +181,17 @@ export function WorkflowPageClient({
   const readOnly = selectedSha !== null;
 
   const workflowFilePath = useMemo(
-    () =>
-      findWorkflowFile(
-        effectiveFiles,
-        workflowName,
-        initialGraph.filePath || null,
-      ),
-    [effectiveFiles, workflowName, initialGraph.filePath],
+    () => findWorkflowFile(effectiveFiles, workflowName, graphFilePath || null),
+    [effectiveFiles, workflowName, graphFilePath],
   );
 
   const workflowCode = workflowFilePath
     ? (effectiveFiles[workflowFilePath] ?? "")
-    : (initialGraph.sourceCode ?? "");
+    : (graph.sourceCode ?? "");
   const [isEditingTitle, setIsEditingTitle] = useState(false);
   const [titleInput, setTitleInput] = useState("");
   const [title, setTitle] = useState<string>(
-    initialGraph.displayName ??
+    graph.displayName ??
       readWorkflowDisplayName(workflowCode, workflowName) ??
       workflowName,
   );
@@ -98,10 +200,10 @@ export function WorkflowPageClient({
     if (isEditingTitle) return;
     const nextTitle =
       readWorkflowDisplayName(workflowCode, workflowName) ??
-      initialGraph.displayName ??
+      graph.displayName ??
       workflowName;
     setTitle(nextTitle);
-  }, [workflowCode, workflowName, initialGraph.displayName, isEditingTitle]);
+  }, [workflowCode, workflowName, graph.displayName, isEditingTitle]);
 
   const projectFilesRef = useRef(effectiveFiles);
   projectFilesRef.current = effectiveFiles;
@@ -110,52 +212,82 @@ export function WorkflowPageClient({
   const handleCodeChange = useCallback(
     (newCode: string) => {
       if (readOnly) return;
-      const path = workflowFilePath ?? initialGraph.filePath;
+      const path = workflowFilePath ?? graphFilePath;
       setFile(path, newCode);
     },
-    [workflowFilePath, initialGraph.filePath, setFile, readOnly],
+    [workflowFilePath, graphFilePath, setFile, readOnly],
   );
 
+  const parseWorkflow = useParseWorkflow();
+  const parseMutateAsync = parseWorkflow.mutateAsync;
+
   const handleParse = useCallback(
-    async (source: string) => {
+    async (source: string): Promise<ParseResult | null> => {
       const files = { ...projectFilesRef.current };
-      const path = workflowFilePath ?? initialGraph.filePath;
+      const path = workflowFilePath ?? graphFilePath;
       files[path] = source;
-      return parseWorkflowFromProjectAction({
-        files,
-        workflowName,
-        preferredFilePath:
-          workflowFilePath ?? initialGraph.filePath ?? undefined,
-      });
+      try {
+        const parsed = await parseMutateAsync({
+          files,
+          workflowName,
+          preferredFilePath: workflowFilePath ?? graphFilePath ?? undefined,
+        });
+        if (!parsed) return null;
+        const layouted = layoutGraph({
+          nodes: parsed.nodes,
+          edges: parsed.edges,
+        });
+        return {
+          graph: parsed,
+          layoutedNodes: layouted.nodes,
+          layoutedEdges: layouted.edges,
+        };
+      } catch {
+        return null;
+      }
     },
-    [workflowFilePath, initialGraph.filePath, workflowName],
+    [workflowFilePath, graphFilePath, workflowName, parseMutateAsync],
   );
 
   const handleAIPrompt = useCallback(
-    async (prompt: string) => {
-      return generateWorkflowCode({
+    async (prompt: string) =>
+      generateWorkflowCode({
         prompt,
         currentCode: workflowCode,
         workflowFunctionName: workflowName,
         projectId,
-      });
-    },
+      }),
     [workflowCode, workflowName, projectId],
   );
 
   const handleRun = useCallback(
     async (triggerData: Record<string, unknown>) => {
-      return runWorkflowAction({
-        projectId,
-        files: projectFilesRef.current,
-        workflowName,
-        triggerData,
+      const res = await fetch(`${API_URL}/api/playground/run`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          projectId,
+          files: projectFilesRef.current,
+          workflowName,
+          triggerData,
+        }),
       });
+      if (res.status === 503) {
+        const body = (await res.json()) as { error: string };
+        throw new Error(
+          body.error ||
+            "Sandbox provider not configured. Set CLOUDFLARE_SANDBOX_API_URL and CLOUDFLARE_SANDBOX_API_KEY (recommended) or DAYTONA_API_KEY to enable execution.",
+        );
+      }
+      if (!res.ok) {
+        const text = await res.text().catch(() => "");
+        throw new Error(`Run failed: ${res.status} ${text}`);
+      }
+      return (await res.json()) as PlaygroundRunResponse;
     },
     [projectId, workflowName],
   );
 
-  const router = useRouter();
   const [runDialogRequestKey, setRunDialogRequestKey] = useState(0);
 
   const handleRunWorkflowFromGutter = useCallback(
@@ -190,25 +322,7 @@ export function WorkflowPageClient({
           limit: PAGE_SIZE,
           offset: safeOffset,
         });
-        const items = response.items.map(
-          (run): PlaygroundRun => ({
-            id: run.id,
-            workflowName: run.workflowName,
-            status:
-              run.status === "cancelled"
-                ? "failed"
-                : (run.status as PlaygroundRun["status"]),
-            triggerData:
-              run.triggerData != null && typeof run.triggerData === "object"
-                ? (run.triggerData as Record<string, unknown>)
-                : {},
-            result: run.result ?? undefined,
-            error: run.error ?? undefined,
-            steps: [],
-            startedAt: run.startedAt ?? run.createdAt,
-            completedAt: run.completedAt ?? undefined,
-          }),
-        );
+        const items = response.items.map(mapRun);
         return {
           items,
           hasMore: safeOffset + items.length < response.total,
@@ -241,7 +355,7 @@ export function WorkflowPageClient({
       return;
     }
 
-    const path = workflowFilePath ?? initialGraph.filePath;
+    const path = workflowFilePath ?? graphFilePath;
     const updatedCode = upsertWorkflowDisplayName(
       workflowCode,
       workflowName,
@@ -255,7 +369,7 @@ export function WorkflowPageClient({
   }, [
     titleInput,
     workflowFilePath,
-    initialGraph.filePath,
+    graphFilePath,
     workflowCode,
     workflowName,
     setFile,
@@ -306,6 +420,14 @@ export function WorkflowPageClient({
     ),
     [gitState, selectedSha],
   );
+
+  if (!filesReady && workflowQuery.isLoading) {
+    return (
+      <div className="h-[calc(100vh-3.5rem)] flex items-center justify-center text-sm text-neutral-500">
+        Loading workflow…
+      </div>
+    );
+  }
 
   return (
     <div className="h-[calc(100vh-3.5rem)] flex flex-col">
