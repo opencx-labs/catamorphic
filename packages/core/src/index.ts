@@ -42,13 +42,16 @@ export {
 export {
   type ListRunsInput,
   type ListRunsResult,
+  PluginSecretsMissingError,
   type Run,
   type RunDetail,
   RunNotFoundError,
   type RunStatus,
   type RunStep,
   RunsService,
+  SandboxProviderNotConfiguredError,
   type StepStatus,
+  type TriggerRunInput,
 } from "./services/runs-service.js";
 export {
   type SecretStatus,
