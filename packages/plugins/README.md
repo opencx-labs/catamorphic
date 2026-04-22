@@ -374,19 +374,15 @@ vars differ by executor and should be checked in their respective implementation
 
 Two LLMs need to know what's attached:
 
-### 1. Workflow-builder (OpenAI, Next.js server action)
+### 1. Workflow-builder (host-side OpenAI call)
 
-File: `apps/playground/src/lib/ai-action.ts`.
+The host app owns the workflow-builder prompt. Its flow:
 
-`generateWorkflowCode({ prompt, currentCode, workflowFunctionName, projectId })`:
-
-- Hits `GET /api/projects/:projectId/agent-context` at
-  `NEXT_PUBLIC_API_URL` (default `http://localhost:3001`, overriden to
-  `:8500` locally).
+- Hits `GET /api/projects/:projectId/agent-context` on the mounted
+  `@catamorphic/server` (via `@catamorphic/api-client`).
 - Concatenates the returned `systemPromptSuffix` after the base builder
   prompt. If the fetch fails or returns empty the call continues without
   context (the agent is still usable, just blind to attached packages).
-- Called from `workflow-page-client.tsx` with the current `projectId`.
 
 Before this wiring the builder was a pure OpenAI call with a hardcoded
 system prompt, which is exactly why early demos hallucinated SDK calls.
@@ -405,21 +401,21 @@ system prompt, which is exactly why early demos hallucinated SDK calls.
 
 ---
 
-## Playground UI
+## Host UI
 
-`apps/playground/src/components/plugins-settings.tsx` renders:
+The shadcn registry item `plugins-settings` (installed into the host via
+`npx shadcn add ./node_modules/@catamorphic/registry/dist/r/plugins-settings.json`)
+renders:
 
 - **Catalog list** — fetched once via `GET /api/plugins/catalog`. "Add"
   button POSTs to `/api/projects/:id/plugins`.
 - **Attached list** — for each attached plugin, an `AttachedPluginCard`
   with:
   - Detach button.
-  - One `SecretField` per declared secret. Each field has a unique
-    `id`/`htmlFor` pair (previously Biome complained about orphan labels),
-    shows `hasValue` state, and on save PUTs to
-    `/api/projects/:id/secrets/:name`.
+  - One `SecretField` per declared secret. Each field shows `hasValue`
+    state, and on save PUTs to `/api/projects/:id/secrets/:name`.
 
-Mounted on `/projects/[projectId]` under the main project page.
+Mounted inside the host's project page.
 
 ---
 
@@ -443,9 +439,9 @@ CLOUDFLARE_SANDBOX_API_KEY=…
 OPENAI_API_KEY=…
 ```
 
-The server reads `.env` from the monorepo root via `bun --env-file=../../.env`.
-If you put the var in `packages/server/.env` it won't be seen — this is the
-trap behind the early `503 Plugins not configured` report.
+The host process (e.g. OpenCX's backend) owns the env. `CATAMORPHIC_LOCAL_PLUGINS_DIR`
+must be set in the host's `.env`, not inside the catamorphic repo — catamorphic is
+embed-only and has no dev server of its own.
 
 ### 2. Build the plugin package
 
@@ -464,19 +460,14 @@ bun run --filter @catamorphic/db build
 pnpm -C backend exec catamorphic-db migrate   # from the host repo
 ```
 
-### 4. Start the services
+### 4. Start the host
 
-```bash
-# backend (port 8500 by default in this setup)
-cd catamorphic/packages/server && bun run dev
-
-# frontend (port 8501)
-cd catamorphic/apps/playground && bun run dev
-```
+Boot the host app with `CATAMORPHIC_ENABLED=true` + the env vars above so
+`@catamorphic/server` mounts inside it. For OpenCX: `cd opencx/backend && pnpm ddev`.
 
 ### 5. Attach the plugin and set secrets
 
-1. Open a project in the playground.
+1. Open a project in the host's Catamorphic UI.
 2. Scroll to **Plugins**. `@acme/example-sdk` shows up in the catalog.
 3. Click **Add**.
 4. Expand the attached card. Enter `EXAMPLE_API_KEY` (a real bearer from
@@ -633,7 +624,7 @@ When we add either:
    `007_plugins_and_secrets.sql`.
 2. Update the `source` column on `project_plugins` write paths
    (`PluginsService.attach`).
-3. Pick the right resolver in `server.ts` based on env
+3. Pick the right resolver in the host's boot code based on env
    (`CATAMORPHIC_PLUGIN_SOURCE=local|npm|git`) or run a
    `CompositeResolver` that tries multiple backends in order.
 
@@ -657,8 +648,8 @@ Quick index — every file that participates in the plugin subsystem.
 - `packages/server/src/routes/plugins.ts` — REST routes.
 - `packages/server/src/routes/playground.ts` — calls `RunPluginsLoader`.
 - `packages/server/src/app.ts` — CORS + route registration.
-- `packages/server/src/server.ts` — wires resolver + services from env.
 - `packages/server/src/schemas.ts` — shared Zod DTOs.
+- Host boot code (e.g. OpenCX's `backend/src/catamorphic/boot.ts`) — wires resolver + services from env.
 
 **Sandbox:**
 - `packages/sandbox/src/run-executor.ts` — `uploadPluginPayloads`, env merge.
@@ -673,13 +664,11 @@ Quick index — every file that participates in the plugin subsystem.
 - `packages/db/migrations/007_plugins_and_secrets.sql` — tables.
 - `packages/db/src/generated/db.ts` — generated Kysely types.
 
-**Playground:**
-- `apps/playground/src/lib/api.ts` — client methods.
-- `apps/playground/src/lib/ai-action.ts` — workflow builder + agent context fetch.
-- `apps/playground/src/components/plugins-settings.tsx` — settings UI.
-- `apps/playground/src/app/projects/[projectId]/page.tsx` — mounts the panel.
-- `apps/playground/src/app/projects/[projectId]/workflows/[name]/workflow-page-client.tsx`
-  — passes `projectId` to `generateWorkflowCode`.
+**Host UI (shadcn registry items):**
+- `packages/registry/src/plugins-settings/plugins-settings.tsx` — settings
+  UI, installed into the host via `shadcn add`. Consumes hooks from
+  `@catamorphic/react` and talks to `@catamorphic/server` through
+  `@catamorphic/api-client`.
 
 **Plugin example (outside this repo):**
 - `host-app/packages/example-sdk/package.json` — `catamorphic` field.

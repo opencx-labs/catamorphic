@@ -1,21 +1,23 @@
 ---
-description: Playground app UI conventions — run panel, history sidebar, state management
-globs: ["apps/playground/**", "packages/ui/src/runs-panel.tsx", "packages/ui/src/history-sidebar.tsx", "packages/ui/src/run-trigger-dialog.tsx", "packages/ui/src/toolbar.tsx", "packages/ui/src/atoms.ts"]
+description: Editor UI conventions — run panel, history sidebar, state management (consumed by the host app)
+globs: ["packages/ui/src/runs-panel.tsx", "packages/ui/src/history-sidebar.tsx", "packages/ui/src/run-trigger-dialog.tsx", "packages/ui/src/toolbar.tsx", "packages/ui/src/atoms.ts", "packages/react/src/**", "packages/registry/src/**"]
 alwaysApply: false
 ---
 
-# Playground UI Conventions
+# Editor UI Conventions
 
-## API-Only Rule
+These conventions apply to the embeddable editor shipped from `@catamorphic/ui` / `@catamorphic/react` / `@catamorphic/registry`. There is no standalone playground app — the host mounts the editor and wires data through its own API layer.
 
-The playground app (`apps/playground`) **must only communicate with the server API**. It never imports from `@catamorphic/db` or connects to the database directly. All data fetching goes through `src/lib/api.ts` or Next.js Server Actions that call the API.
+## Data access rule
+
+Editor components **must only communicate with the embed server** (either `@catamorphic/server` mounted by the host, or via `@catamorphic/sdk`). They never import from `@catamorphic/db` or talk to the database directly. All data flows through `@catamorphic/api-client` or the host's own proxy.
 
 ## Run Execution Flow
 
 1. User clicks **▶ Run** → `RunTriggerDialog` opens with a form built from `triggerParameters`.
-2. On submit, a local pending `PlaygroundRun` is added to `runsAtom` (status `running`).
+2. On submit, a local pending run is added to `runsAtom` (status `running`).
 3. The **History sidebar** opens automatically and the running run is expanded.
-4. `onRun(triggerData)` fires the server action → `POST /api/playground/run`.
+4. `onRun(triggerData)` fires the host-provided callback → `POST /workflows/:id/runs` on the embed server.
 5. On completion, the local run is updated with the server's `runId`, result, and status.
 6. If the server persisted the run to the DB, `runId` is the DB-assigned UUID (replaces the local temp ID).
 
