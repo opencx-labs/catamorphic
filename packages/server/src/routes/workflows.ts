@@ -41,7 +41,7 @@ export function registerWorkflowRoutes(
     handler: async (request, reply) => {
       if (!ctx.core)
         return reply.status(503).send({ error: "Service not configured" });
-      const identity = resolveIdentity(request, { standalone: ctx.standalone });
+      const identity = resolveIdentity(request);
       try {
         const workflows = await ctx.core.workflows.list(
           identity,
@@ -72,7 +72,7 @@ export function registerWorkflowRoutes(
     handler: async (request, reply) => {
       if (!ctx.core)
         return reply.status(503).send({ error: "Service not configured" });
-      const identity = resolveIdentity(request, { standalone: ctx.standalone });
+      const identity = resolveIdentity(request);
       const { projectId, name } = request.params;
       const { ref } = request.query;
       try {
@@ -108,7 +108,7 @@ export function registerWorkflowRoutes(
     handler: async (request, reply) => {
       if (!ctx.core)
         return reply.status(503).send({ error: "Service not configured" });
-      const identity = resolveIdentity(request, { standalone: ctx.standalone });
+      const identity = resolveIdentity(request);
       try {
         const run = await ctx.core.runs.trigger(
           identity,
@@ -153,7 +153,7 @@ export function registerWorkflowRoutes(
     handler: async (request, reply) => {
       if (!ctx.core)
         return reply.status(503).send({ error: "Service not configured" });
-      const identity = resolveIdentity(request, { standalone: ctx.standalone });
+      const identity = resolveIdentity(request);
       const { projectId, name } = request.params;
       try {
         const result = await ctx.core.runs.list(identity, projectId, {

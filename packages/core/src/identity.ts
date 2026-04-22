@@ -9,8 +9,8 @@
  *   table; used only for per-user git working directories and commit authorship.
  *
  * Services defined in this package accept {@link Identity} explicitly. They
- * intentionally do NOT fall back to any default. HTTP/standalone fallbacks live
- * in `@catamorphic/server`'s `http-identity.ts`.
+ * intentionally do NOT fall back to any default — catamorphic is embed-only,
+ * so the host is always responsible for supplying identity.
  */
 export interface Identity {
   tenantId: string;
@@ -19,20 +19,6 @@ export interface Identity {
 
 export type TenantId = string;
 export type ExternalUserId = string;
-
-/**
- * Default tenant UUID used by the standalone playground + specs. Embedders
- * should pass their own `tenantId` (typically the host's org id) and never
- * reference this constant.
- */
-export const DEFAULT_TENANT_ID = "00000000-0000-0000-0000-000000000001";
-
-/**
- * Default external user id used by the standalone playground when the request
- * omits the `X-External-User-Id` header. Embedders should pass their real
- * user id per request.
- */
-export const DEFAULT_EXTERNAL_USER_ID = "default";
 
 /**
  * Identity used for system-initiated writes (project initial commit, test-run

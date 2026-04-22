@@ -1,6 +1,6 @@
 ---
 description: Detail panel and code editor behavior conventions
-globs: ["packages/ui/src/detail-panel.tsx", "apps/playground/src/components/monaco-editor.tsx", "packages/ui/src/canvas.tsx", "packages/ui/src/atoms.ts"]
+globs: ["packages/ui/src/detail-panel.tsx", "packages/registry/src/**/monaco-editor.tsx", "packages/ui/src/canvas.tsx", "packages/ui/src/atoms.ts"]
 alwaysApply: false
 ---
 

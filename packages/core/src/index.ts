@@ -2,8 +2,6 @@ export type { CatamorphicCoreConfig } from "./core.js";
 export { CatamorphicCore, createCatamorphicCore } from "./core.js";
 export {
   authorFor,
-  DEFAULT_EXTERNAL_USER_ID,
-  DEFAULT_TENANT_ID,
   type ExternalUserId,
   type Identity,
   SYSTEM_AUTHOR,
