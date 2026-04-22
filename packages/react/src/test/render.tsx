@@ -11,6 +11,12 @@ export interface RenderWithProvidersOptions {
   queryClient?: QueryClient;
 }
 
+export interface RenderHookWithProvidersOptions<Props>
+  extends RenderWithProvidersOptions {
+  /** Initial props for the hook callback (forwarded to `renderHook`). */
+  initialProps?: Props;
+}
+
 function makeQueryClient(): QueryClient {
   return new QueryClient({
     defaultOptions: {
@@ -55,7 +61,7 @@ export function renderWithProviders(
  */
 export function renderHookWithProviders<Result, Props>(
   callback: (props: Props) => Result,
-  options: RenderWithProvidersOptions = {},
+  options: RenderHookWithProvidersOptions<Props> = {},
 ) {
   const apiClient = createTestApiClient(options.baseUrl);
   const queryClient = options.queryClient ?? makeQueryClient();
@@ -68,6 +74,9 @@ export function renderHookWithProviders<Result, Props>(
         </CatamorphicProvider>
       </JotaiProvider>
     ),
+    ...(options.initialProps !== undefined
+      ? { initialProps: options.initialProps }
+      : {}),
   });
   return { ...result, apiClient, queryClient, store };
 }

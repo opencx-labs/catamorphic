@@ -62,6 +62,7 @@ If you omit `queryClient`, the provider creates one internally so standalone app
 - `useWorkflows(projectId, { ref? })`
 - `useWorkflow(projectId, name, { ref? })`
 - `useParseWorkflow()` — mutation that round-trips draft source through the server-side parser (browsers can't load ts-morph directly)
+- `useOnParse({ files, workflowName, preferredFilePath? })` — ready-made `OnParseCallback` for `<WorkflowEditor onParse={…} />`. Wraps `useParseWorkflow` + `layoutGraph` and splices the live editor source into `files` on every call. Prefer this over inlining the parse+layout glue.
 
 ### Runs
 
