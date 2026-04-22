@@ -1,4 +1,9 @@
-import { ProjectNotFoundError, WorkflowNotFoundError } from "@catamorphic/core";
+import {
+  PluginSecretsMissingError,
+  ProjectNotFoundError,
+  SandboxProviderNotConfiguredError,
+  WorkflowNotFoundError,
+} from "@catamorphic/core";
 import type { FastifyInstance } from "fastify";
 import type { ZodTypeProvider } from "fastify-type-provider-zod";
 import type { RouteContext } from "../app.js";
@@ -93,10 +98,43 @@ export function registerWorkflowRoutes(
     schema: {
       params: WorkflowNameParamsSchema,
       body: TriggerRunSchema,
-      response: { 201: RunSchema, 404: ErrorSchema },
+      response: {
+        201: RunSchema,
+        400: ErrorSchema,
+        404: ErrorSchema,
+        503: ErrorSchema,
+      },
     },
-    handler: async (_request, reply) => {
-      return reply.status(404).send({ error: "Not implemented" });
+    handler: async (request, reply) => {
+      if (!ctx.core)
+        return reply.status(503).send({ error: "Service not configured" });
+      const identity = resolveIdentity(request, { standalone: ctx.standalone });
+      try {
+        const run = await ctx.core.runs.trigger(
+          identity,
+          request.params.projectId,
+          request.params.name,
+          request.body,
+        );
+        return reply.status(201).send(run);
+      } catch (err) {
+        if (err instanceof ProjectNotFoundError) {
+          return reply.status(404).send({ error: "Project not found" });
+        }
+        if (err instanceof WorkflowNotFoundError) {
+          return reply.status(404).send({ error: "Workflow not found" });
+        }
+        if (err instanceof PluginSecretsMissingError) {
+          return reply.status(400).send({ error: err.message });
+        }
+        if (err instanceof SandboxProviderNotConfiguredError) {
+          return reply.status(503).send({
+            error:
+              "Sandbox provider not configured. Set CLOUDFLARE_SANDBOX_API_URL and CLOUDFLARE_SANDBOX_API_KEY (recommended) or DAYTONA_API_KEY to enable workflow execution.",
+          });
+        }
+        throw err;
+      }
     },
   });
 

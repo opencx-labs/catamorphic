@@ -1,7 +1,12 @@
-import type { DB } from "@catamorphic/db";
+import type { DB, JsonObject } from "@catamorphic/db";
+import type { ProjectManager } from "@catamorphic/git";
+import type { SandboxProvider } from "@catamorphic/sandbox";
 import type { Kysely, Selectable } from "kysely";
 import type { Identity } from "../identity.js";
+import { PlaygroundExecutor } from "./playground-executor.js";
 import { ProjectNotFoundError } from "./projects-service.js";
+import type { RunPluginsLoader } from "./run-plugins-loader.js";
+import { WorkflowNotFoundError } from "./workflows-service.js";
 
 type RunRow = Selectable<DB["workflow_runs"]>;
 type StepRow = Selectable<DB["workflow_run_steps"]>;
@@ -70,13 +75,52 @@ export class RunNotFoundError extends Error {
   }
 }
 
+export class PluginSecretsMissingError extends Error {
+  constructor(readonly missing: string[]) {
+    super(
+      `Missing required plugin secrets: ${missing.join(
+        ", ",
+      )}. Set them in the project settings before running.`,
+    );
+    this.name = "PluginSecretsMissingError";
+  }
+}
+
+export class SandboxProviderNotConfiguredError extends Error {
+  constructor() {
+    super("Sandbox provider not configured");
+    this.name = "SandboxProviderNotConfiguredError";
+  }
+}
+
+export interface TriggerRunInput {
+  triggerData?: Record<string, unknown>;
+}
+
+interface RunsServiceDeps {
+  projectManager: ProjectManager;
+  sandboxProvider?: SandboxProvider;
+  runPluginsLoader?: RunPluginsLoader;
+}
+
 /**
- * Read-only view over `workflow_runs` + `workflow_run_steps`. Run creation +
- * execution currently lives in `PlaygroundExecutor` and the playground route;
- * a `trigger(...)` method is phase 2 (see plan).
+ * Reads `workflow_runs` + `workflow_run_steps` and triggers new runs against
+ * the project's HEAD commit. Execution is delegated to `PlaygroundExecutor`
+ * which owns the Daytona sandbox lifecycle.
  */
 export class RunsService {
-  constructor(private readonly db: Kysely<DB>) {}
+  private readonly projectManager: ProjectManager;
+  private readonly sandboxProvider?: SandboxProvider;
+  private readonly runPluginsLoader?: RunPluginsLoader;
+
+  constructor(
+    private readonly db: Kysely<DB>,
+    deps: RunsServiceDeps,
+  ) {
+    this.projectManager = deps.projectManager;
+    this.sandboxProvider = deps.sandboxProvider;
+    this.runPluginsLoader = deps.runPluginsLoader;
+  }
 
   async get(identity: Identity, runId: string): Promise<RunDetail> {
     const run = await this.db
@@ -138,6 +182,122 @@ export class RunsService {
     return { items: rows.map(mapRun), total };
   }
 
+  /**
+   * Trigger a workflow run against the project's HEAD commit. Opens the
+   * project's dev working copy, reads all files, resolves HEAD, loads
+   * attached plugins + secrets, then hands off to `PlaygroundExecutor` which
+   * spawns a Daytona sandbox and executes the harness. Persists the run + its
+   * steps to `workflow_runs` / `workflow_run_steps` as the execution
+   * progresses.
+   */
+  async trigger(
+    identity: Identity,
+    projectId: string,
+    workflowName: string,
+    input: TriggerRunInput,
+  ): Promise<Run> {
+    if (!this.sandboxProvider) {
+      throw new SandboxProviderNotConfiguredError();
+    }
+
+    await this.requireProject(identity, projectId);
+
+    const repo = await this.projectManager.openDev(
+      identity.tenantId,
+      projectId,
+      identity.externalUserId,
+    );
+    let files: Record<string, string>;
+    let commitSha: string;
+    try {
+      files = await repo.readAllFiles();
+      commitSha = await repo.resolveRef("HEAD");
+    } finally {
+      await repo.dispose();
+    }
+
+    if (!(workflowName in files) && !findWorkflowInFiles(files, workflowName)) {
+      throw new WorkflowNotFoundError(projectId, workflowName);
+    }
+
+    let plugins:
+      | Awaited<ReturnType<NonNullable<typeof this.runPluginsLoader>["load"]>>
+      | undefined;
+    if (this.runPluginsLoader) {
+      plugins = await this.runPluginsLoader.load(projectId);
+      if (plugins.missingRequiredSecrets.length > 0) {
+        throw new PluginSecretsMissingError(plugins.missingRequiredSecrets);
+      }
+    }
+
+    const triggerData = input.triggerData ?? {};
+    const runId = crypto.randomUUID();
+    const startedAt = new Date();
+
+    await this.db
+      .insertInto("workflow_runs")
+      .values({
+        id: runId,
+        project_id: projectId,
+        workflow_name: workflowName,
+        commit_sha: commitSha,
+        is_test: false,
+        status: "running",
+        trigger_data: triggerData as JsonObject,
+        started_at: startedAt,
+      })
+      .execute();
+
+    const executor = new PlaygroundExecutor(this.sandboxProvider);
+    const result = await executor.execute({
+      files,
+      workflowName,
+      triggerData,
+      commitSha,
+      plugins: plugins?.plugins,
+      secrets: plugins?.secrets,
+    });
+
+    const completedAt = new Date(result.completedAt);
+    await this.db
+      .updateTable("workflow_runs")
+      .set({
+        status: result.status,
+        result: (result.result ?? null) as JsonObject | null,
+        error: result.error ?? null,
+        completed_at: completedAt,
+      })
+      .where("id", "=", runId)
+      .execute();
+
+    if (result.steps.length > 0) {
+      await this.db
+        .insertInto("workflow_run_steps")
+        .values(
+          result.steps.map((step) => ({
+            id: crypto.randomUUID(),
+            run_id: runId,
+            node_id: step.nodeId,
+            name: step.name,
+            status: step.status,
+            input: (step.input ?? null) as JsonObject | null,
+            output: (step.output ?? null) as JsonObject | null,
+            error: step.error ?? null,
+            started_at: new Date(step.startedAt),
+            completed_at: new Date(step.completedAt),
+          })),
+        )
+        .execute();
+    }
+
+    const row = await this.db
+      .selectFrom("workflow_runs")
+      .where("id", "=", runId)
+      .selectAll()
+      .executeTakeFirstOrThrow();
+    return mapRun(row);
+  }
+
   private async requireProject(
     identity: Identity,
     projectId: string,
@@ -150,6 +310,25 @@ export class RunsService {
       .executeTakeFirst();
     if (!row) throw new ProjectNotFoundError(projectId);
   }
+}
+
+/**
+ * Cheap pre-flight check so we fail fast with `WorkflowNotFoundError` before
+ * spawning a Daytona sandbox. The harness does its own discovery, but a
+ * missing workflow would otherwise surface as a `status: 'failed'` run with a
+ * generic error string.
+ */
+function findWorkflowInFiles(
+  files: Record<string, string>,
+  workflowName: string,
+): boolean {
+  const needle = `function ${workflowName}`;
+  const marker = '"use workflow"';
+  for (const [path, source] of Object.entries(files)) {
+    if (!path.endsWith(".ts") && !path.endsWith(".js")) continue;
+    if (source.includes(needle) && source.includes(marker)) return true;
+  }
+  return false;
 }
 
 function mapRun(row: RunRow): Run {

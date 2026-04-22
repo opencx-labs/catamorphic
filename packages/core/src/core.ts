@@ -49,7 +49,6 @@ export class CatamorphicCore {
 
     this.projects = new ProjectsService(this.db, this.projectManager);
     this.workflows = new WorkflowsService(this.projectManager, this.projects);
-    this.runs = new RunsService(this.db);
     this.deployment = new DeploymentService(this.projectManager);
 
     if (this.pluginResolver) {
@@ -65,6 +64,12 @@ export class CatamorphicCore {
         this.pluginResolver,
       );
     }
+
+    this.runs = new RunsService(this.db, {
+      projectManager: this.projectManager,
+      sandboxProvider: this.sandboxProvider,
+      runPluginsLoader: this.runPluginsLoader,
+    });
   }
 }
 
