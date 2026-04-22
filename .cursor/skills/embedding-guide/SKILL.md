@@ -2,7 +2,7 @@
 
 ## Overview
 
-`@catamorphic/ui` is designed to be embedded in any React application. The `WorkflowEditor` component is the main entry point.
+`@catamorphic/ui` is designed to be embedded in any React application. The `WorkflowEditor` component is the main entry point. Catamorphic itself is embed-only — it never runs as a standalone product.
 
 ## Basic Usage
 
@@ -46,6 +46,11 @@ function MyApp() {
 - Import individual atoms from `@catamorphic/ui` for fine-grained state control
 - The CSS uses `.catamorphic-` prefixed classes for easy overriding
 
-## Server Setup
+## Backend wiring
 
-The embedding app should also run `@catamorphic/server` (Fastify) for persistence and use `@catamorphic/api-client` for type-safe communication.
+The host app boots catamorphic in-process via one of two paths:
+
+- **`@catamorphic/sdk`** (recommended) — call `createCatamorphic({ db, projectManager, sandboxProvider, pluginResolver })` once at startup, then `cat.forTenant(orgId).forUser(userId)` per request.
+- **`@catamorphic/server`** — mount the Fastify app inside the host process via `createApp({ core })`. The host listens on whichever port it wants; every request must carry `X-Catamorphic-Tenant-Id` and `X-External-User-Id` headers from the host's auth context. The frontend talks to it through `@catamorphic/api-client`.
+
+See [`INTEGRATION.md`](../../../INTEGRATION.md) for the end-to-end wiring example.

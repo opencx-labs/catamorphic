@@ -6,7 +6,7 @@ Related: [`AGENTS.md`](./AGENTS.md).
 
 ---
 
-> **Default provider: Daytona.** Until further notice, the Fastify server always uses Daytona when `DAYTONA_API_KEY` is set, even if the Cloudflare env vars are also populated. The Cloudflare Bridge path stays wired up and maintained, but the selection logic in `packages/server/src/server.ts` prefers Daytona and only falls through to Cloudflare when `DAYTONA_API_KEY` is unset. Treat everything below as reference for the Cloudflare path — not as the active production choice.
+> **Default provider: Daytona.** Until further notice, the host's boot code (see OpenCX's `backend/src/catamorphic/boot.ts`) always wires Daytona when `DAYTONA_API_KEY` is set, even if the Cloudflare env vars are also populated. The Cloudflare Bridge path stays wired up and maintained, but the host selection logic prefers Daytona and only falls through to Cloudflare when `DAYTONA_API_KEY` is unset. Treat everything below as reference for the Cloudflare path — not as the active production choice.
 
 ---
 
@@ -122,7 +122,7 @@ The `StorageBackend` interface isolates the two paths — swapping `FsBackend` f
 - `packages/cloudflare-sandbox-bridge/` — the Bridge Worker (deployed to Cloudflare). Contains `wrangler.jsonc`, `Dockerfile` (extends `cloudflare/sandbox` base), and a thin Worker entry that re-exports the `Sandbox` + `WarmPool` Durable Objects and delegates all routing to `@cloudflare/sandbox/bridge`.
 - `packages/sandbox/src/cloudflare-provider.ts` — `CloudflareSandboxProvider` implementing `SandboxProvider` as an HTTP client against the Bridge Worker.
 - `packages/git/src/artifacts-backend.ts` — `ArtifactsBackend` implementing `StorageBackend` via Artifacts REST + `isomorphic-git` (not yet implemented; see [TODO](#todo)).
-- `packages/server/src/server.ts` — bootstrap selects Cloudflare providers when CF env vars are present; falls back to Daytona/`FsBackend` otherwise.
+- Host boot code (e.g. OpenCX's `backend/src/catamorphic/boot.ts`) — selects Cloudflare providers when CF env vars are present; falls back to Daytona/`FsBackend` otherwise.
 
 ---
 
@@ -134,11 +134,9 @@ We use `.env` files (not `.env.local`) in this setup:
 
 | File | Purpose | Required keys |
 | --- | --- | --- |
-| `/.env` (repo root) | Primary env source when running the monorepo via turbo/scripts | `CLOUDFLARE_SANDBOX_API_URL`, `CLOUDFLARE_SANDBOX_API_KEY`, `NEXT_PUBLIC_API_URL` |
-| `packages/server/.env` | When running the server package directly | `CLOUDFLARE_SANDBOX_API_URL`, `CLOUDFLARE_SANDBOX_API_KEY` |
-| `apps/playground/.env` | When running the playground app directly | `NEXT_PUBLIC_API_URL` |
+| Host app `.env` | Primary env source — catamorphic is embed-only, so the host process owns these | `CLOUDFLARE_SANDBOX_API_URL`, `CLOUDFLARE_SANDBOX_API_KEY` |
 
-> For workflow execution, the Cloudflare sandbox vars must be present in the **server process environment**. The playground talks to the server via `NEXT_PUBLIC_API_URL`.
+> For workflow execution, the Cloudflare sandbox vars must be present in the **host process environment** (catamorphic runs in-process inside the host).
 
 ### Runtime (Fastify server + playground)
 
@@ -290,7 +288,7 @@ CLOUDFLARE_SANDBOX_API_URL=http://localhost:8787
 CLOUDFLARE_SANDBOX_API_KEY=local-dev
 ```
 
-Set `NEXT_PUBLIC_API_URL` in `apps/playground/.env` to point at the server (for example `http://localhost:8500`). `CLOUDFLARE_ACCOUNT_ID` / `CLOUDFLARE_API_TOKEN` / `CLOUDFLARE_ARTIFACTS_NAMESPACE` are unused by the server runtime today — leave them commented in `.env.example` until `ArtifactsBackend` lands.
+`CLOUDFLARE_ACCOUNT_ID` / `CLOUDFLARE_API_TOKEN` / `CLOUDFLARE_ARTIFACTS_NAMESPACE` are unused by the server runtime today — leave them commented in the host's env file until `ArtifactsBackend` lands.
 
 ### 4. Run everything together
 

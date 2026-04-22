@@ -4,7 +4,7 @@ Catamorphic is **embed-first**. A host application (for example OpenCX) runs cat
 
 1. **`@catamorphic/db` only** — run the migrations, let the host join against `catamorphic.projects` / `catamorphic.workflow_runs`. Read-only relationship. Useful for reporting / BI.
 2. **`@catamorphic/sdk` (library-direct, recommended)** — host imports `createCatamorphic(...)` and calls resources in-process. Identity is bound per request via `cat.forTenant(orgId).forUser(userId)`. No sidecar process.
-3. **`@catamorphic/server` + `@catamorphic/api-client`** — host runs the Fastify server out of process and talks to it over HTTP. Same backing services; useful when the host is non-Node or wants a network boundary.
+3. **`@catamorphic/server` + `@catamorphic/api-client`** — host mounts the Fastify app via `createApp({ core })` (in-process or as a sidecar) and talks to it over HTTP. Same backing services; useful when the host is non-Node or wants a network boundary.
 
 The rest of this guide is organized: library-direct SDK first (most hosts want this), then the DB-only setup, then the HTTP path.
 
@@ -167,14 +167,12 @@ CATAMORPHIC_DB_SCHEMA="${CATAMORPHIC_DB_SCHEMA:-catamorphic}" \
 pnpm -C backend exec catamorphic-db status
 ```
 
-## HTTP path — `@catamorphic/server` as a sidecar
+## HTTP path — `@catamorphic/server` mounted by the host
 
-When library-direct isn't possible (non-Node host, strict network boundary), run `@catamorphic/server` as a separate process. It accepts the same `CatamorphicCore` — wire it exactly like the SDK path and hand it to `createApp({ core, standalone: false })`. In embedded mode the server expects two headers on every request:
+When library-direct isn't possible (non-Node host, strict network boundary, or you want to reuse the generated `@catamorphic/api-client`), mount `@catamorphic/server` as an in-process or sidecar Fastify app. It accepts the same `CatamorphicCore` — wire it exactly like the SDK path and hand it to `createApp({ core })`. The server requires two headers on every request (there are no defaults — catamorphic is embed-only):
 
 - `X-Catamorphic-Tenant-Id` — host org id
 - `X-External-User-Id` — host user id
-
-In standalone mode (`createApp({ core, standalone: true })`, what `packages/server/src/server.ts` uses for the local playground) missing headers fall back to built-in defaults.
 
 The generated HTTP client lives in `@catamorphic/api-client`; construct it with `createCatamorphicClient({ baseUrl, fetch })` and set the headers on each call (or wrap `fetch` to inject them from your auth context).
 
@@ -253,7 +251,7 @@ Items shipped in phase 2:
 - `runs-panel` — list runs and trigger new ones (`useWorkflowRuns` + `useTriggerWorkflowRun`).
 - `plugins-settings` — attach/detach plugins + edit secrets.
 
-The playground hosts the registry at `/r/<name>.json` (`apps/playground/src/app/r/[name]/route.ts`); a dedicated `registry.catamorphic.dev` is a deploy concern, not a code concern. To add a new item: drop a `src/<name>/<name>.tsx` + `registry-item.json` under `packages/registry/src/`, run `bun run build`, and the playground picks it up automatically.
+Catamorphic doesn't host the registry itself (it's embed-only). After `bun run build`, the built manifests live at `packages/registry/dist/r/<name>.json`. Hosts install them by pointing the shadcn CLI at the file directly, at `./node_modules/@catamorphic/registry/dist/r/<name>.json` once the host installs the package, or at a URL the host serves the directory from. To add a new item: drop a `src/<name>/<name>.tsx` + `registry-item.json` under `packages/registry/src/`, run `bun run build`, and re-install it in the host.
 
 ## Plugin packages (workflow SDKs)
 

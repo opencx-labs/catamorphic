@@ -4,29 +4,30 @@
 
 Catamorphic AI is a code-first workflow builder. Workflows are TypeScript code, not JSON. The parser converts TypeScript AST into a visual graph rendered by React Flow. Non-technical users can build workflows using AI, and technical users can edit the code directly.
 
-### Embed-first positioning (READ THIS FIRST)
+### Embed-only positioning (READ THIS FIRST)
 
-**Catamorphic is an embed-first project. It is not designed to run as a standalone product.** The shipping target is embedding into host applications (e.g. OpenCX) — the host provides auth, user/org model, database (or schema), and the deployment surface. The standalone `packages/server` + `apps/playground` setup exists only for local development, demos, and tests; it is **not** the production shape.
+**Catamorphic is embed-only.** It ships as a set of libraries that a host application (e.g. OpenCX) mounts in-process. There is no standalone product, no demo app, no default identity, and no `bun run dev`. The host provides auth, user/org model, database (or schema), and the deployment surface.
 
 Concrete implications for any change you make:
 
-- Prefer designs that are **host-injectable**: DB connections/schemas, auth context, storage, sandbox credentials, LLM credentials, and telemetry should all be configurable/injectable — never hard-coded to the standalone repo.
-- Avoid assumptions that only hold in the standalone playground (e.g. a single global DB, a single user, a specific env layout, a specific port, a specific filesystem path).
+- Prefer designs that are **host-injectable**: DB connections/schemas, auth context, storage, sandbox credentials, LLM credentials, and telemetry should all be configurable/injectable — never hard-coded.
+- Avoid assumptions that only hold in a single-process demo (e.g. a single global DB, a single user, a specific env layout, a specific port, a specific filesystem path).
 - When adding migrations, API routes, or packages, think first about how a host consumes them (library import, mountable Fastify plugin, schema-scoped migrations, generated client types). See `INTEGRATION.md`.
-- The playground is a harness, not the product. Do not add product-shaped features that only make sense in standalone mode.
-- When a tradeoff exists between "nice for standalone" vs. "nice for embedding", embedding wins unless the user explicitly says otherwise.
+- Do not re-introduce a standalone boot, a default tenant, or a default user. Every request carries identity from the host's auth context.
+- When a tradeoff exists between "nice for a demo" vs. "nice for embedding", embedding wins unless the user explicitly says otherwise.
 
 ## Monorepo Structure
 
 - `packages/parser` — ts-morph AST-to-WorkflowGraph parser
 - `packages/ui` — React Flow editor components (embeddable)
-- `packages/server` — Fastify API with Zod schemas + OpenAPI spec
+- `packages/server` — Fastify app factory (`createApp({ core })`) with Zod schemas + OpenAPI spec; mounted by the host
 - `packages/db` — Kysely instance, migrations, codegen types
 - `packages/plugins` — Plugin manifest contract + resolvers (see [packages/plugins/README.md](packages/plugins/README.md))
 - `packages/runtime` — Workflow execution harness (runs inside sandbox)
-- `packages/sandbox` — Sandbox providers (Daytona + Cloudflare) + coding agent (Codex SDK). **Daytona is the default until further notice** — the server in `packages/server/src/server.ts` prefers Daytona whenever `DAYTONA_API_KEY` is set, even when Cloudflare env vars are also populated. See `CLOUDFLARE.md`.
+- `packages/sandbox` — Sandbox providers (Daytona + Cloudflare) + coding agent (Codex SDK). **Daytona is the default until further notice** — the host's boot code (see OpenCX's `backend/src/catamorphic/boot.ts`) prefers Daytona whenever `DAYTONA_API_KEY` is set, even when Cloudflare env vars are also populated. See `CLOUDFLARE.md`.
 - `packages/api-client` — Generated OpenAPI types + openapi-fetch client
-- `apps/playground` — Next.js demo app
+- `packages/registry` — shadcn-style copy-paste component registry (served by the host)
+- `packages/sdk` — Library-direct embedding facade (`createCatamorphic(...)`)
 
 ## Skills
 
@@ -69,12 +70,7 @@ All existing tests must pass.
 
 ### 5. Browser verification (after UI/integration changes)
 
-```bash
-cd packages/server && bun run dev    # Terminal 1
-cd apps/playground && bun run dev    # Terminal 2
-```
-
-Open `http://localhost:8501`. Check: workflows render, zero browser console errors, zero Next.js dev overlay issues, no hydration mismatches.
+Catamorphic has no standalone UI. Rebuild the affected packages, refresh the `file:` links in the host app, and verify in the **host's** browser (e.g. OpenCX's workflows-v2 screen). Check: workflows render, zero browser console errors, zero Next.js dev overlay issues, no hydration mismatches.
 
 ### 6. Migration sync
 
@@ -92,7 +88,7 @@ Settled decisions — do not deviate without explicit user approval. Full detail
 
 - **Project model, git versioning, templates, DB types** → `project-model.mdc`
 - **Sandbox execution, Daytona, run lifecycle, instrumentation** → `sandbox-execution.mdc`
-- **Playground UI: history sidebar, run panel, state management** → `playground-ui.mdc`
+- **Editor UI: history sidebar, run panel, state management** → `playground-ui.mdc`
 - **Canvas layout, nodes, edges, read-only behavior** → `graph-design.mdc`
 - **Parser node types, containers, source ranges, provenance** → `parser-conventions.mdc`
 - **Detail panel, code editor, bidirectional linking** → `panel-editor.mdc`
@@ -155,9 +151,10 @@ bun run db:codegen   # regenerate TypeScript types
 ## Build Order
 
 ```
-db → server → api-client
-parser → server
+db → core → server → api-client
+parser → core
 parser → ui
-api-client → ui → playground
-sandbox → server → playground
+core → sdk
+api-client → react → ui
+sandbox → core
 ```

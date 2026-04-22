@@ -24,7 +24,7 @@ export function registerRunRoutes(app: FastifyInstance, ctx: RouteContext) {
     handler: async (request, reply) => {
       if (!ctx.core)
         return reply.status(503).send({ error: "Service not configured" });
-      const identity = resolveIdentity(request, { standalone: ctx.standalone });
+      const identity = resolveIdentity(request);
       try {
         const run = await ctx.core.runs.get(identity, request.params.runId);
         return reply.send(run);

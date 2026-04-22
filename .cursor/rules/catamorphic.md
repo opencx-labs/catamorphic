@@ -5,7 +5,7 @@ globs: ["**/*.ts", "**/*.tsx"]
 
 # Catamorphic AI Rules
 
-- **Embed-first project.** Catamorphic is designed to be embedded inside host applications (e.g. OpenCX), not to run as a standalone product. Every architectural decision should assume a host app provides the user model, auth, database connection, and deployment surface. The standalone playground/server exist only for local development and demos — they are not the shipping target. When in doubt, favor designs that make embedding easier (configurable providers, injectable DB/schema, pluggable auth, no hard-coded env/paths) over designs that optimize for the standalone repo.
+- **Embed-only project.** Catamorphic ships as libraries that a host application (e.g. OpenCX) mounts in-process. There is no standalone demo, no default identity, and no `bun run dev`. Every architectural decision should assume the host provides the user model, auth, database connection, and deployment surface. Favor designs that make embedding easier (configurable providers, injectable DB/schema, pluggable auth, no hard-coded env/paths); never re-introduce standalone fallbacks.
 - Workflows are TypeScript code, not JSON. The parser (ts-morph) converts AST to WorkflowGraph.
 - All step functions take a single destructured object parameter.
 - Use JSDoc tags (@displayname, @icon, @description, @param) for UI metadata.

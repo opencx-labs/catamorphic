@@ -22,7 +22,7 @@ Choose **one** backend integration; the React/UI layer is the same in both.
 | Path | Use When | Packages |
 | --- | --- | --- |
 | **Library-direct (recommended)** | Host is Node/Bun and can import catamorphic in-process | `@catamorphic/sdk` + `@catamorphic/db` + `@catamorphic/git` (+ optional `@catamorphic/sandbox`, `@catamorphic/plugins`) |
-| **HTTP sidecar** | Host is non-Node or wants a network boundary | Run `@catamorphic/server` separately; host consumes `@catamorphic/api-client` |
+| **HTTP sidecar** | Host is non-Node or wants a network boundary | Mount `@catamorphic/server` via `createApp({ core })` inside the host process (or as a separate service); host consumes `@catamorphic/api-client` |
 | **DB-only (reporting)** | Host just needs to JOIN against catamorphic tables | `@catamorphic/db` migrations only |
 
 Frontend is always `@catamorphic/react` (+ optionally `@catamorphic/ui`) talking through `@catamorphic/api-client` to whichever backend surface is live.
@@ -137,7 +137,16 @@ Over HTTP the same path is `POST /api/projects/:projectId/workflows/:name/runs` 
 
 ## Backend Path B — HTTP Sidecar
 
-Run `@catamorphic/server` as a separate process wired with the exact same `CatamorphicCore` (see `createApp({ core, standalone: false })` from `@catamorphic/server`). In embedded mode the server requires `X-Catamorphic-Tenant-Id` and `X-External-User-Id` on every request.
+Mount `@catamorphic/server` inside the host process (or as a separate service) with the exact same `CatamorphicCore`:
+
+```ts
+import { createApp as createCatamorphicApp } from "@catamorphic/server";
+
+const app = createCatamorphicApp({ core });
+await app.listen({ port: 8500, host: "0.0.0.0" });
+```
+
+The server requires `X-Catamorphic-Tenant-Id` and `X-External-User-Id` on every request — there are no standalone defaults.
 
 The host consumes the server via the generated client:
 
@@ -419,9 +428,15 @@ Lower-level pieces — `WorkflowCanvas`, `DetailPanel`, `HistorySidebar`, `Toolb
 
 ### 6) Component registry — `@catamorphic/registry` (copy-paste UI)
 
-Pre-wired React components (file tree, git panel, runs panel, plugins/secrets settings, projects list, project editor, diff drawer, plus a `CatamorphicAppProvider` wrapper) ship as a shadcn-compatible registry. Items are JSON manifests that inline a single `.tsx` file; the host runs `npx shadcn add <host>/r/<item>.json` and the component lands in `components/catamorphic/`. The component imports from `@catamorphic/react` + `@catamorphic/ui` only — there's no runtime dependency on `@catamorphic/registry` itself.
+Pre-wired React components (file tree, git panel, runs panel, plugins/secrets settings, projects list, project editor, diff drawer, plus a `CatamorphicAppProvider` wrapper) ship as a shadcn-compatible registry. Items are JSON manifests that inline a single `.tsx` file; the component lands in `components/catamorphic/` once installed, and from there imports from `@catamorphic/react` + `@catamorphic/ui` only — there's no runtime dependency on `@catamorphic/registry` itself.
 
-The registry is **served**, not published to npm. In dev, the playground hosts it at `http://localhost:8501/r/<item>.json` (see `apps/playground/src/app/r/[name]/route.ts`); in production, point the shadcn CLI at whatever URL serves `packages/registry/dist/r/`. Items currently shipped:
+The registry is **served by the host**, not by catamorphic. The built JSON manifests live at `packages/registry/dist/r/<item>.json` after `bun run --filter @catamorphic/registry build`. Install options:
+
+- **Direct file path** (simplest for local dev): `npx shadcn add /abs/path/to/catamorphic/packages/registry/dist/r/projects-list.json`.
+- **From `node_modules`** (once the host has `@catamorphic/registry` installed via `file:` or npm): `npx shadcn add ./node_modules/@catamorphic/registry/dist/r/projects-list.json`, or wire the directory as a named registry in the host's `components.json`.
+- **Host-served URL** (production): the host serves `packages/registry/dist/r/` from its own static-asset pipeline and points shadcn at that URL.
+
+Items currently shipped:
 
 - `catamorphic-provider` — `<CatamorphicAppProvider baseUrl getTenantId getExternalUserId>` that wires `CatamorphicProvider` + `QueryClientProvider`. Always install this first.
 - `projects-list` — table + create-project dialog (`useProjects` + `useCreateProject` + `useTemplates`).
@@ -459,7 +474,7 @@ Use cases:
 | `@catamorphic/git` | Backend | `ProjectManager`, `FsBackend`, `FsRemoteBackend`, `DaytonaBackend` |
 | `@catamorphic/sandbox` | Backend (optional) | `DaytonaSandboxProvider`, `CloudflareSandboxProvider`, `SandboxManagerImpl`, `RunExecutorImpl`, `CodexAgent` |
 | `@catamorphic/plugins` | Backend (optional) | `LocalPluginResolver`, `PluginManifestSchema`, `PluginResolver` |
-| `@catamorphic/server` | Backend (HTTP path) | `createApp({ core, standalone })` — Fastify app factory |
+| `@catamorphic/server` | Backend (HTTP path) | `createApp({ core })` — Fastify app factory mounted by the host |
 | `@catamorphic/api-client` | Frontend or non-Node backend | `createApiClient`, `CatamorphicApiClient`, `paths` (OpenAPI) |
 | `@catamorphic/react` | Frontend | `CatamorphicProvider`, `useCatamorphic`, data hooks (projects/runs/git/plugins/secrets/agent), atoms, `useWorkflowGraph`, `useSelectedNode`, `useProjectGitState`, `useOnParse`/`useParseWorkflow`, `CatamorphicError`, `isCatamorphicError` |
 | `@catamorphic/react/types` | Frontend | OpenAPI-derived domain types (`Project`, `Run`, `RepoStatus`, `BranchInfo`, `ConflictEntry`, `PluginInfo`, `Secret`, `AgentSession`, …) |
@@ -485,7 +500,7 @@ Frontend (HTTP path):
 
 ## Common Pitfalls
 
-- **Missing `X-Catamorphic-Tenant-Id` / `X-External-User-Id`**. Embedded `@catamorphic/server` returns 400. Set both on *every* request via a `fetch` wrapper — don't set them per-call.
+- **Missing `X-Catamorphic-Tenant-Id` / `X-External-User-Id`**. `@catamorphic/server` returns 400 on every route that needs identity — both headers are mandatory (no standalone fallback). Set them on *every* request via a `fetch` wrapper — don't set them per-call.
 - **`Content-Type: application/json` stripped by `fetch` wrapper.** openapi-fetch passes a built `Request` as `input`; always seed `new Headers(input instanceof Request ? input.headers : init?.headers)` before overriding.
 - **Using `@catamorphic/ui` without the stylesheet.** Import `@catamorphic/ui/styles.css` once at the root — class names use the `.catamorphic-*` prefix so host CSS doesn't clash.
 - **Double `QueryClientProvider`.** `CatamorphicProvider` mounts its own if you don't pass `queryClient`. In hosts that already have one, pass it explicitly so queries share a cache.

@@ -52,9 +52,9 @@ Templates are pre-defined project skeletons (not in-memory state). When a user c
 
 This ensures `commit_sha` is always available on runs and avoids special-casing "unsaved" projects.
 
-## Playground Uses the API Only
+## Host Frontend Uses the API Only
 
-The playground (`apps/playground`) must talk to the server API exclusively. It must **never** import from `packages/db` or query the database directly. All data access goes through API routes.
+The host frontend (via `@catamorphic/react` + `@catamorphic/api-client`) must talk to the embed server exclusively. It must **never** import from `packages/db` or query the database directly. All data access goes through API routes.
 
 ## Project Discovery
 
