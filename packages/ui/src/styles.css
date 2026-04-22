@@ -1,43 +1,12 @@
 @import "@xyflow/react/dist/style.css";
 
-/*
- * Fallback theme tokens matching opencx (hoose) light theme.
- * When catamorphic is embedded in a host app that already defines these
- * variables (e.g. opencx via @open/hoose), the host's values win via the
- * cascade — including the host's .dark variant.
- */
-:root {
-  --radius: 6px;
-  --background: oklch(0.94 0 0);
-  --foreground: oklch(0.02 0 0);
-  --surface: oklch(0.98 0 0);
-  --surface-foreground: oklch(0.02 0 0);
-  --primary: oklch(0.02 0 0);
-  --primary-foreground: oklch(0.98 0 0);
-  --secondary: oklch(0.9 0 0);
-  --secondary-foreground: oklch(0.1 0 0);
-  --muted: oklch(0.94 0 0);
-  --muted-foreground: oklch(0.45 0 0);
-  --accent: oklch(0.94 0 0);
-  --accent-foreground: oklch(0.1 0 0);
-  --destructive: oklch(0.58 0.2 10);
-  --destructive-foreground: oklch(0.94 0 0);
-  --success: oklch(0.58 0.2 170);
-  --success-foreground: oklch(0.94 0 0);
-  --warm: oklch(0.75 0.12 70);
-  --warm-foreground: oklch(0.98 0 0);
-  --border: oklch(0.86 0 0);
-  --input: oklch(0.86 0 0);
-  --ring: var(--primary);
-}
-
 .catamorphic-editor {
   display: flex;
   flex-direction: column;
   width: 100%;
   height: 100%;
-  background: var(--background);
-  color: var(--foreground);
+  background: #0a0a0a;
+  color: #fafafa;
   font-family: system-ui, -apple-system, sans-serif;
 }
 
@@ -47,8 +16,8 @@
   justify-content: space-between;
   align-items: center;
   padding: 8px 16px;
-  border-bottom: 1px solid var(--border);
-  background: var(--background);
+  border-bottom: 1px solid #262626;
+  background: #0f0f0f;
 }
 
 .catamorphic-toolbar-left,
@@ -68,34 +37,34 @@
 
 .catamorphic-toolbar-btn {
   padding: 6px 12px;
-  border-radius: var(--radius);
-  border: 1px solid var(--border);
-  background: var(--surface);
-  color: var(--muted-foreground);
+  border-radius: 6px;
+  border: 1px solid #333;
+  background: #1a1a1a;
+  color: #a3a3a3;
   font-size: 13px;
   cursor: pointer;
   transition: all 0.15s;
 }
 
 .catamorphic-toolbar-btn:hover {
-  background: var(--muted);
-  color: var(--foreground);
+  background: #262626;
+  color: #fafafa;
 }
 
 .catamorphic-toolbar-btn-active {
-  background: var(--accent);
-  border-color: var(--border);
-  color: var(--accent-foreground);
+  background: #1e293b;
+  border-color: #334155;
+  color: #94a3b8;
 }
 
 .catamorphic-toolbar-run {
-  background: var(--primary);
-  border-color: var(--primary);
-  color: var(--primary-foreground);
+  background: #1d4ed8;
+  border-color: #2563eb;
+  color: #fff;
 }
 
 .catamorphic-toolbar-run:hover {
-  background: color-mix(in oklch, var(--primary) 88%, transparent);
+  background: #2563eb;
 }
 
 /* Layout: Canvas left, Detail panel right */
@@ -114,17 +83,17 @@
 .catamorphic-detail-panel {
   width: 420px;
   min-width: 340px;
-  border-left: 1px solid var(--border);
+  border-left: 1px solid #262626;
   display: flex;
   flex-direction: column;
-  background: var(--background);
+  background: #0f0f0f;
 }
 
 .catamorphic-detail-panel-header {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  border-bottom: 1px solid var(--border);
+  border-bottom: 1px solid #262626;
   padding: 0 8px 0 0;
 }
 
@@ -135,7 +104,7 @@
 .catamorphic-detail-tab {
   padding: 10px 20px;
   font-size: 13px;
-  color: color-mix(in oklch, var(--muted-foreground) 70%, transparent);
+  color: #737373;
   background: none;
   border: none;
   border-bottom: 2px solid transparent;
@@ -144,12 +113,12 @@
 }
 
 .catamorphic-detail-tab:hover {
-  color: var(--muted-foreground);
+  color: #a3a3a3;
 }
 
 .catamorphic-detail-tab-active {
-  color: var(--foreground);
-  border-bottom-color: var(--ring);
+  color: #fafafa;
+  border-bottom-color: #3b82f6;
 }
 
 .catamorphic-detail-close {
@@ -158,18 +127,18 @@
   display: flex;
   align-items: center;
   justify-content: center;
-  border-radius: var(--radius);
+  border-radius: 6px;
   border: none;
   background: none;
-  color: color-mix(in oklch, var(--muted-foreground) 50%, transparent);
+  color: #525252;
   cursor: pointer;
   font-size: 14px;
   transition: all 0.15s;
 }
 
 .catamorphic-detail-close:hover {
-  background: var(--muted);
-  color: var(--muted-foreground);
+  background: #262626;
+  color: #a3a3a3;
 }
 
 .catamorphic-detail-panel-body {
@@ -202,19 +171,19 @@
 
 .catamorphic-detail-icon {
   font-size: 14px;
-  color: var(--muted-foreground);
+  color: #a3a3a3;
 }
 
 .catamorphic-detail-title {
   font-size: 18px;
   font-weight: 600;
   margin: 0;
-  color: var(--foreground);
+  color: #fafafa;
 }
 
 .catamorphic-detail-description {
   font-size: 14px;
-  color: var(--muted-foreground);
+  color: #a3a3a3;
   line-height: 1.5;
   margin: 0;
 }
@@ -230,24 +199,24 @@
   font-weight: 600;
   text-transform: uppercase;
   letter-spacing: 0.5px;
-  color: color-mix(in oklch, var(--muted-foreground) 50%, transparent);
+  color: #525252;
 }
 
 .catamorphic-detail-code-inline {
   font-family: "Fira Code", "SF Mono", "JetBrains Mono", monospace;
   font-size: 13px;
-  color: var(--foreground);
-  background: var(--muted);
+  color: #e5e5e5;
+  background: #1a1a1a;
   padding: 6px 10px;
-  border-radius: var(--radius);
-  border: 1px solid var(--border);
+  border-radius: 6px;
+  border: 1px solid #262626;
   display: block;
   word-break: break-all;
 }
 
 .catamorphic-detail-source-range {
   font-size: 13px;
-  color: color-mix(in oklch, var(--muted-foreground) 70%, transparent);
+  color: #737373;
   font-family: "Fira Code", "SF Mono", "JetBrains Mono", monospace;
 }
 
@@ -259,9 +228,9 @@
 
 .catamorphic-detail-param {
   padding: 10px 12px;
-  background: var(--muted);
-  border: 1px solid var(--border);
-  border-radius: calc(var(--radius) + 2px);
+  background: #1a1a1a;
+  border: 1px solid #262626;
+  border-radius: 8px;
 }
 
 .catamorphic-detail-param-header {
@@ -273,35 +242,35 @@
 .catamorphic-detail-param-name {
   font-family: "Fira Code", "SF Mono", "JetBrains Mono", monospace;
   font-size: 13px;
-  color: var(--foreground);
+  color: #e5e5e5;
   font-weight: 500;
 }
 
 .catamorphic-detail-param-type {
   font-size: 11px;
   padding: 2px 6px;
-  background: var(--accent);
+  background: #262626;
   border-radius: 4px;
-  color: var(--ring);
+  color: #3b82f6;
   font-family: "Fira Code", "SF Mono", "JetBrains Mono", monospace;
 }
 
 .catamorphic-detail-param-optional {
   font-size: 10px;
-  color: color-mix(in oklch, var(--muted-foreground) 50%, transparent);
+  color: #525252;
   font-style: italic;
 }
 
 .catamorphic-detail-param-desc {
   font-size: 12px;
-  color: color-mix(in oklch, var(--muted-foreground) 70%, transparent);
+  color: #737373;
   margin: 4px 0 0;
   line-height: 1.4;
 }
 
 .catamorphic-detail-param-default {
   font-size: 11px;
-  color: var(--muted-foreground);
+  color: #a3a3a3;
   margin: 3px 0 0;
   font-style: italic;
 }
@@ -314,9 +283,9 @@
 
 .catamorphic-detail-arg {
   padding: 10px 12px;
-  background: var(--muted);
-  border: 1px solid var(--border);
-  border-radius: calc(var(--radius) + 2px);
+  background: #1a1a1a;
+  border: 1px solid #262626;
+  border-radius: 8px;
 }
 
 .catamorphic-detail-arg-header {
@@ -325,7 +294,7 @@
 
 .catamorphic-detail-arg-name {
   font-size: 13px;
-  color: var(--foreground);
+  color: #e5e5e5;
   font-weight: 500;
 }
 
@@ -339,22 +308,22 @@
 .catamorphic-detail-arg-value code {
   font-family: "Fira Code", "SF Mono", "JetBrains Mono", monospace;
   font-size: 12px;
-  color: var(--muted-foreground);
-  background: var(--background);
+  color: #a3a3a3;
+  background: #0f0f0f;
   padding: 3px 8px;
   border-radius: 4px;
-  border: 1px solid var(--border);
+  border: 1px solid #1a1a1a;
 }
 
 .catamorphic-detail-arg-source {
   font-size: 11px;
-  color: var(--ring);
+  color: #3b82f6;
   white-space: nowrap;
 }
 
 .catamorphic-detail-pretty-condition {
   font-size: 14px;
-  color: #a855f7;
+  color: #c084fc;
   line-height: 1.5;
   margin: 0;
 }
@@ -370,9 +339,9 @@
   align-items: center;
   gap: 8px;
   padding: 8px 12px;
-  background: var(--muted);
-  border: 1px solid var(--border);
-  border-radius: calc(var(--radius) + 2px);
+  background: #1a1a1a;
+  border: 1px solid #262626;
+  border-radius: 8px;
 }
 
 .catamorphic-detail-branch-type {
@@ -383,13 +352,13 @@
   padding: 2px 8px;
   border-radius: 4px;
   background: rgba(168, 85, 247, 0.15);
-  color: #a855f7;
+  color: #c084fc;
   flex-shrink: 0;
 }
 
 .catamorphic-detail-branch-cond {
   font-size: 12px;
-  color: var(--muted-foreground);
+  color: #a3a3a3;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -408,8 +377,8 @@
   font-family: "Fira Code", "SF Mono", "JetBrains Mono", monospace;
   font-size: 13px;
   line-height: 1.6;
-  background: var(--background);
-  color: var(--foreground);
+  background: #0a0a0a;
+  color: #e5e5e5;
   border: none;
   outline: none;
   resize: none;
@@ -425,12 +394,12 @@
   align-items: center;
   gap: 10px;
   padding: 12px 16px;
-  border-radius: calc(var(--radius) + 4px);
-  border: 1.5px solid var(--border);
-  background: var(--surface);
+  border-radius: 10px;
+  border: 1.5px solid #333;
+  background: #171717;
   width: 240px;
   box-sizing: border-box;
-  box-shadow: 0 2px 12px rgba(0, 0, 0, 0.08);
+  box-shadow: 0 2px 12px rgba(0, 0, 0, 0.4);
   transition:
     border-color 0.2s,
     box-shadow 0.2s,
@@ -439,8 +408,8 @@
 }
 
 .catamorphic-node:hover {
-  border-color: var(--muted-foreground);
-  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.12);
+  border-color: #525252;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.5);
 }
 
 .catamorphic-node-icon {
@@ -458,7 +427,7 @@
 .catamorphic-node-label {
   font-size: 13px;
   font-weight: 500;
-  color: var(--foreground);
+  color: #fafafa;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -466,12 +435,12 @@
 
 .catamorphic-node-description {
   font-size: 11px;
-  color: color-mix(in oklch, var(--muted-foreground) 70%, transparent);
+  color: #737373;
 }
 
 .catamorphic-node-subtitle {
   font-size: 11px;
-  color: color-mix(in oklch, var(--muted-foreground) 50%, transparent);
+  color: #525252;
   font-family: monospace;
   word-break: break-all;
 }
@@ -486,26 +455,26 @@
 .catamorphic-param-badge {
   font-size: 10px;
   padding: 2px 6px;
-  background: var(--accent);
+  background: #262626;
   border-radius: 4px;
-  color: var(--muted-foreground);
+  color: #a3a3a3;
 }
 
 .catamorphic-trigger-node {
-  border-color: var(--warm);
-  background: var(--surface);
+  border-color: #ca8a04;
+  background: linear-gradient(135deg, #1c1a0f, #171717);
 }
 
 .catamorphic-step-node {
-  border-color: var(--ring);
-  background: var(--surface);
+  border-color: #2563eb;
+  background: linear-gradient(135deg, #0f172a, #171717);
 }
 
 /* Branch container (if/else branch) */
 .catamorphic-branch-node {
-  border: 1.5px dashed rgba(168, 85, 247, 0.4);
-  border-radius: calc(var(--radius) * 2);
-  background: rgba(168, 85, 247, 0.04);
+  border: 1.5px dashed rgba(168, 85, 247, 0.3);
+  border-radius: 12px;
+  background: rgba(168, 85, 247, 0.03);
   position: relative;
   box-sizing: border-box;
 }
@@ -530,18 +499,18 @@
   padding: 2px 8px;
   border-radius: 4px;
   background: rgba(168, 85, 247, 0.15);
-  color: #a855f7;
+  color: #c084fc;
   flex-shrink: 0;
 }
 
 .catamorphic-branch-badge-else {
-  background: color-mix(in oklch, var(--muted-foreground) 12%, transparent);
-  color: var(--muted-foreground);
+  background: rgba(161, 161, 170, 0.12);
+  color: #a1a1aa;
 }
 
 .catamorphic-branch-condition {
   font-size: 11px;
-  color: var(--muted-foreground);
+  color: #a1a1aa;
   font-family: "Fira Code", "SF Mono", "JetBrains Mono", monospace;
   white-space: nowrap;
   overflow: hidden;
@@ -550,9 +519,9 @@
 
 /* Loop-block container */
 .catamorphic-loop-block-node {
-  border: 1.5px dashed color-mix(in oklch, var(--warm) 50%, transparent);
-  border-radius: calc(var(--radius) * 2);
-  background: color-mix(in oklch, var(--warm) 5%, transparent);
+  border: 1.5px dashed rgba(249, 115, 22, 0.3);
+  border-radius: 12px;
+  background: rgba(249, 115, 22, 0.03);
   position: relative;
   box-sizing: border-box;
 }
@@ -576,7 +545,7 @@
 
 .catamorphic-loop-block-label {
   font-size: 11px;
-  color: var(--warm);
+  color: #fb923c;
   font-family: "Fira Code", "SF Mono", "JetBrains Mono", monospace;
   white-space: nowrap;
   overflow: hidden;
@@ -585,17 +554,17 @@
 
 .catamorphic-parallel-node {
   border-color: #06b6d4;
-  background: var(--surface);
+  background: linear-gradient(135deg, #0c1a1f, #171717);
 }
 
 .catamorphic-delay-node {
-  border-color: var(--muted-foreground);
-  background: var(--surface);
+  border-color: #737373;
+  background: linear-gradient(135deg, #171717, #171717);
 }
 
 .catamorphic-return-node {
-  border-color: var(--success);
-  background: var(--surface);
+  border-color: #22c55e;
+  background: linear-gradient(135deg, #0f1f14, #171717);
 }
 
 /* AI Bar */
@@ -604,46 +573,46 @@
   align-items: center;
   gap: 8px;
   padding: 12px 16px;
-  border-top: 1px solid var(--border);
-  background: var(--background);
+  border-top: 1px solid #262626;
+  background: #0f0f0f;
 }
 
 .catamorphic-ai-input {
   flex: 1;
   padding: 10px 16px;
-  border-radius: calc(var(--radius) + 2px);
-  border: 1px solid var(--border);
-  background: var(--surface);
-  color: var(--foreground);
+  border-radius: 8px;
+  border: 1px solid #333;
+  background: #1a1a1a;
+  color: #fafafa;
   font-size: 14px;
   outline: none;
 }
 
 .catamorphic-ai-input:focus {
-  border-color: var(--ring);
+  border-color: #525252;
 }
 
 .catamorphic-ai-input::placeholder {
-  color: color-mix(in oklch, var(--muted-foreground) 50%, transparent);
+  color: #525252;
 }
 
 .catamorphic-ai-send {
   padding: 10px 20px;
-  border-radius: calc(var(--radius) + 2px);
+  border-radius: 8px;
   border: none;
-  background: var(--primary);
-  color: var(--primary-foreground);
+  background: #2563eb;
+  color: #fff;
   font-size: 14px;
   cursor: pointer;
   transition: background 0.15s;
 }
 
 .catamorphic-ai-send:hover {
-  background: color-mix(in oklch, var(--primary) 88%, transparent);
+  background: #3b82f6;
 }
 
 .catamorphic-ai-send:disabled {
-  background: color-mix(in oklch, var(--primary) 40%, transparent);
+  background: #1e3a5f;
   cursor: not-allowed;
 }
 
@@ -655,9 +624,9 @@
   height: 8px;
 }
 
-/* React Flow theme overrides */
+/* React Flow dark theme overrides */
 .react-flow__background {
-  background: var(--background);
+  background: #0a0a0a;
 }
 
 /* The wide invisible hit area for edges — we disable it so dragging over
@@ -667,7 +636,7 @@
 }
 
 .react-flow__edge-path {
-  stroke: var(--muted-foreground);
+  stroke: #737373;
   stroke-width: 1.5;
 }
 
@@ -687,33 +656,33 @@
 }
 
 .react-flow__controls {
-  background: var(--surface);
-  border: 1px solid var(--border);
-  border-radius: calc(var(--radius) + 2px);
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08);
+  background: #171717;
+  border: 1px solid #333;
+  border-radius: 8px;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
 }
 
 .react-flow__controls-button {
-  background: var(--surface);
-  color: var(--muted-foreground);
-  border-bottom: 1px solid var(--border);
+  background: #171717;
+  color: #a3a3a3;
+  border-bottom: 1px solid #262626;
 }
 
 .react-flow__controls-button:hover {
-  background: var(--muted);
+  background: #262626;
 }
 
 .react-flow__minimap {
-  background: var(--background);
-  border: 1px solid var(--border);
-  border-radius: calc(var(--radius) + 2px);
+  background: #0f0f0f;
+  border: 1px solid #333;
+  border-radius: 8px;
 }
 
 /* Parallel block container */
 .catamorphic-parallel-block-node {
-  border: 1.5px dashed rgba(6, 182, 212, 0.4);
-  border-radius: calc(var(--radius) * 2);
-  background: rgba(6, 182, 212, 0.04);
+  border: 1.5px dashed rgba(6, 182, 212, 0.3);
+  border-radius: 12px;
+  background: rgba(6, 182, 212, 0.03);
   position: relative;
   box-sizing: border-box;
 }
@@ -737,7 +706,7 @@
 
 .catamorphic-parallel-block-label {
   font-size: 11px;
-  color: #06b6d4;
+  color: #22d3ee;
   font-family: "Fira Code", "SF Mono", "JetBrains Mono", monospace;
   white-space: nowrap;
   overflow: hidden;
@@ -746,9 +715,9 @@
 
 /* Scope block container (bare blocks, IIFEs) */
 .catamorphic-scope-block-node {
-  border: 1.5px dashed rgba(100, 116, 139, 0.4);
-  border-radius: calc(var(--radius) * 2);
-  background: rgba(100, 116, 139, 0.04);
+  border: 1.5px dashed rgba(148, 163, 184, 0.3);
+  border-radius: 12px;
+  background: rgba(148, 163, 184, 0.03);
   position: relative;
   box-sizing: border-box;
 }
@@ -768,12 +737,12 @@
 .catamorphic-scope-block-icon {
   font-size: 12px;
   flex-shrink: 0;
-  color: #64748b;
+  color: #94a3b8;
 }
 
 .catamorphic-scope-block-label {
   font-size: 11px;
-  color: #64748b;
+  color: #94a3b8;
   font-family: "Fira Code", "SF Mono", "JetBrains Mono", monospace;
   white-space: nowrap;
   overflow: hidden;
@@ -783,24 +752,24 @@
 /* Selected node highlight */
 .react-flow__node.selected .catamorphic-node {
   box-shadow:
-    0 0 0 2px var(--ring),
-    0 4px 16px color-mix(in oklch, var(--ring) 20%, transparent);
+    0 0 0 2px #3b82f6,
+    0 4px 16px rgba(59, 130, 246, 0.2);
 }
 
 /* --- Node Execution Status --- */
 .catamorphic-node[data-execution-status="running"] {
   animation: catamorphic-node-pulse 1.2s ease-in-out infinite;
-  border-color: var(--ring);
+  border-color: #3b82f6;
 }
 
 .catamorphic-node[data-execution-status="completed"] {
-  border-color: var(--success);
-  box-shadow: 0 0 12px color-mix(in oklch, var(--success) 25%, transparent);
+  border-color: #22c55e;
+  box-shadow: 0 0 12px rgba(34, 197, 94, 0.2);
 }
 
 .catamorphic-node[data-execution-status="failed"] {
-  border-color: var(--destructive);
-  box-shadow: 0 0 12px color-mix(in oklch, var(--destructive) 25%, transparent);
+  border-color: #ef4444;
+  box-shadow: 0 0 12px rgba(239, 68, 68, 0.2);
 }
 
 .catamorphic-node[data-execution-status="pending"] {
@@ -814,29 +783,29 @@
   width: 10px;
   height: 10px;
   border-radius: 50%;
-  border: 2px solid var(--surface);
+  border: 2px solid #171717;
 }
 
 .catamorphic-node-exec-indicator[data-status="completed"] {
-  background: var(--success);
+  background: #22c55e;
 }
 
 .catamorphic-node-exec-indicator[data-status="failed"] {
-  background: var(--destructive);
+  background: #ef4444;
 }
 
 .catamorphic-node-exec-indicator[data-status="running"] {
-  background: var(--ring);
+  background: #3b82f6;
   animation: catamorphic-node-pulse 1.2s ease-in-out infinite;
 }
 
 @keyframes catamorphic-node-pulse {
   0%,
   100% {
-    box-shadow: 0 0 4px color-mix(in oklch, var(--ring) 30%, transparent);
+    box-shadow: 0 0 4px rgba(59, 130, 246, 0.3);
   }
   50% {
-    box-shadow: 0 0 16px color-mix(in oklch, var(--ring) 60%, transparent);
+    box-shadow: 0 0 16px rgba(59, 130, 246, 0.6);
   }
 }
 
@@ -844,7 +813,7 @@
 .catamorphic-run-overlay {
   position: fixed;
   inset: 0;
-  background: rgba(0, 0, 0, 0.4);
+  background: rgba(0, 0, 0, 0.6);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -853,15 +822,15 @@
 }
 
 .catamorphic-run-dialog {
-  background: var(--surface);
-  border: 1px solid var(--border);
-  border-radius: calc(var(--radius) * 2);
+  background: #171717;
+  border: 1px solid #333;
+  border-radius: 12px;
   width: 480px;
   max-width: 90vw;
   max-height: 80vh;
   display: flex;
   flex-direction: column;
-  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.15);
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5);
 }
 
 .catamorphic-run-dialog-header {
@@ -869,13 +838,13 @@
   align-items: center;
   justify-content: space-between;
   padding: 16px 20px;
-  border-bottom: 1px solid var(--border);
+  border-bottom: 1px solid #262626;
 }
 
 .catamorphic-run-dialog-title {
   font-size: 16px;
   font-weight: 600;
-  color: var(--foreground);
+  color: #fafafa;
   margin: 0;
 }
 
@@ -893,14 +862,14 @@
   justify-content: flex-end;
   gap: 8px;
   padding: 16px 20px;
-  border-top: 1px solid var(--border);
+  border-top: 1px solid #262626;
 }
 
 .catamorphic-run-mode-toggle {
   display: flex;
   gap: 4px;
-  background: var(--background);
-  border-radius: var(--radius);
+  background: #0f0f0f;
+  border-radius: 6px;
   padding: 2px;
   align-self: flex-start;
 }
@@ -909,7 +878,7 @@
   padding: 4px 12px;
   border: none;
   background: none;
-  color: color-mix(in oklch, var(--muted-foreground) 70%, transparent);
+  color: #737373;
   font-size: 12px;
   border-radius: 4px;
   cursor: pointer;
@@ -917,12 +886,12 @@
 }
 
 .catamorphic-run-mode-btn:hover {
-  color: var(--muted-foreground);
+  color: #a3a3a3;
 }
 
 .catamorphic-run-mode-btn-active {
-  background: var(--accent);
-  color: var(--accent-foreground);
+  background: #262626;
+  color: #fafafa;
 }
 
 .catamorphic-run-fields {
@@ -946,51 +915,51 @@
 .catamorphic-run-field-label {
   font-size: 13px;
   font-weight: 500;
-  color: var(--foreground);
+  color: #e5e5e5;
 }
 
 .catamorphic-run-field-type {
   font-size: 10px;
   padding: 2px 6px;
-  background: var(--accent);
+  background: #262626;
   border-radius: 4px;
-  color: var(--ring);
+  color: #3b82f6;
   font-family: "Fira Code", "SF Mono", monospace;
 }
 
 .catamorphic-run-field-optional {
   font-size: 10px;
-  color: color-mix(in oklch, var(--muted-foreground) 50%, transparent);
+  color: #525252;
   font-style: italic;
 }
 
 .catamorphic-run-field-desc {
   font-size: 11px;
-  color: color-mix(in oklch, var(--muted-foreground) 70%, transparent);
+  color: #737373;
 }
 
 .catamorphic-run-input {
   padding: 8px 12px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  background: var(--background);
-  color: var(--foreground);
+  border: 1px solid #333;
+  border-radius: 6px;
+  background: #0f0f0f;
+  color: #fafafa;
   font-size: 13px;
   outline: none;
   transition: border-color 0.15s;
 }
 
 .catamorphic-run-input:focus {
-  border-color: var(--ring);
+  border-color: #525252;
 }
 
 .catamorphic-run-textarea,
 .catamorphic-run-json-editor {
   padding: 8px 12px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  background: var(--background);
-  color: var(--foreground);
+  border: 1px solid #333;
+  border-radius: 6px;
+  background: #0f0f0f;
+  color: #fafafa;
   font-size: 13px;
   font-family: "Fira Code", "SF Mono", monospace;
   outline: none;
@@ -1000,7 +969,7 @@
 
 .catamorphic-run-textarea:focus,
 .catamorphic-run-json-editor:focus {
-  border-color: var(--ring);
+  border-color: #525252;
 }
 
 .catamorphic-run-checkbox-row {
@@ -1010,17 +979,17 @@
 }
 
 .catamorphic-run-checkbox {
-  accent-color: var(--ring);
+  accent-color: #3b82f6;
 }
 
 .catamorphic-run-checkbox-label {
   font-size: 13px;
-  color: var(--muted-foreground);
+  color: #a3a3a3;
 }
 
 .catamorphic-run-no-params {
   font-size: 14px;
-  color: color-mix(in oklch, var(--muted-foreground) 70%, transparent);
+  color: #737373;
   text-align: center;
   padding: 20px;
 }
@@ -1029,17 +998,17 @@
 .catamorphic-history-sidebar {
   width: 360px;
   min-width: 300px;
-  border-left: 1px solid var(--border);
+  border-left: 1px solid #262626;
   display: flex;
   flex-direction: column;
-  background: var(--background);
+  background: #0f0f0f;
 }
 
 .catamorphic-history-sidebar-header {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  border-bottom: 1px solid var(--border);
+  border-bottom: 1px solid #262626;
   padding: 0 8px 0 0;
 }
 
@@ -1055,7 +1024,7 @@
   justify-content: center;
   padding: 48px 20px;
   gap: 8px;
-  color: color-mix(in oklch, var(--muted-foreground) 70%, transparent);
+  color: #737373;
   font-size: 14px;
 }
 
@@ -1067,7 +1036,7 @@
 
 .catamorphic-versions-empty-hint {
   font-size: 12px;
-  color: color-mix(in oklch, var(--muted-foreground) 50%, transparent);
+  color: #525252;
 }
 
 /* --- Runs Panel --- */
@@ -1086,7 +1055,7 @@
 
 .catamorphic-runs-loading {
   font-size: 11px;
-  color: color-mix(in oklch, var(--muted-foreground) 70%, transparent);
+  color: #737373;
 }
 
 .catamorphic-run-empty {
@@ -1096,7 +1065,7 @@
   justify-content: center;
   padding: 48px 20px;
   gap: 8px;
-  color: color-mix(in oklch, var(--muted-foreground) 70%, transparent);
+  color: #737373;
   font-size: 14px;
 }
 
@@ -1108,7 +1077,7 @@
 
 .catamorphic-run-empty-hint {
   font-size: 12px;
-  color: color-mix(in oklch, var(--muted-foreground) 50%, transparent);
+  color: #525252;
 }
 
 .catamorphic-run-status {
@@ -1129,11 +1098,11 @@
 
 /* Collapsible run row */
 .catamorphic-run-row {
-  border-bottom: 1px solid var(--border);
+  border-bottom: 1px solid #1a1a1a;
 }
 
 .catamorphic-run-row-open {
-  border-bottom-color: var(--border);
+  border-bottom-color: #262626;
 }
 
 .catamorphic-run-row-header {
@@ -1143,7 +1112,7 @@
   padding: 10px 12px;
   background: none;
   border: none;
-  color: var(--muted-foreground);
+  color: #a3a3a3;
   font-size: 12px;
   cursor: pointer;
   width: 100%;
@@ -1152,13 +1121,13 @@
 }
 
 .catamorphic-run-row-header:hover {
-  background: var(--muted);
+  background: #1a1a1a;
 }
 
 .catamorphic-run-row-time {
   font-family: "Fira Code", "SF Mono", monospace;
   font-size: 11px;
-  color: color-mix(in oklch, var(--muted-foreground) 70%, transparent);
+  color: #737373;
 }
 
 .catamorphic-run-row-body {
@@ -1176,11 +1145,11 @@
 
 .catamorphic-run-error-text {
   font-size: 12px;
-  color: var(--destructive);
-  background: color-mix(in oklch, var(--destructive) 10%, transparent);
+  color: #ef4444;
+  background: rgba(239, 68, 68, 0.08);
   padding: 8px 12px;
-  border-radius: var(--radius);
-  border: 1px solid color-mix(in oklch, var(--destructive) 20%, transparent);
+  border-radius: 6px;
+  border: 1px solid rgba(239, 68, 68, 0.15);
   margin: 0;
   white-space: pre-wrap;
   word-break: break-word;
@@ -1189,11 +1158,11 @@
 
 .catamorphic-run-json {
   font-size: 12px;
-  color: var(--muted-foreground);
-  background: var(--background);
+  color: #a3a3a3;
+  background: #0f0f0f;
   padding: 8px 12px;
-  border-radius: var(--radius);
-  border: 1px solid var(--border);
+  border-radius: 6px;
+  border: 1px solid #262626;
   margin: 0;
   white-space: pre-wrap;
   word-break: break-word;
@@ -1204,7 +1173,7 @@
 
 .catamorphic-run-step-duration {
   font-size: 11px;
-  color: color-mix(in oklch, var(--muted-foreground) 50%, transparent);
+  color: #525252;
   font-family: "Fira Code", "SF Mono", monospace;
   flex-shrink: 0;
   margin-left: auto;
@@ -1234,7 +1203,7 @@
   padding: 5px 8px 5px 0;
   background: none;
   border: none;
-  color: var(--foreground);
+  color: #e5e5e5;
   font-size: 12px;
   cursor: pointer;
   width: 100%;
@@ -1244,13 +1213,13 @@
 }
 
 .catamorphic-run-tree-step-row:hover {
-  background: color-mix(in oklch, var(--foreground) 4%, transparent);
+  background: rgba(255, 255, 255, 0.04);
 }
 
 .catamorphic-run-tree-guide {
   width: 12px;
   height: 1px;
-  background: var(--border);
+  background: #333;
   flex-shrink: 0;
 }
 
@@ -1276,5 +1245,5 @@
 }
 
 .catamorphic-run-chevron {
-  color: color-mix(in oklch, var(--muted-foreground) 50%, transparent);
+  color: #525252;
 }

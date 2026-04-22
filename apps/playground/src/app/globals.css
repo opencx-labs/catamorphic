@@ -1,36 +1,6 @@
 @import "tailwindcss";
 
 /*
- * Fallback theme tokens matching opencx (hoose) light theme, for the
- * playground shell outside the editor canvas. These are overridden when
- * embedded in a host that provides its own tokens.
- */
-:root {
-  --radius: 6px;
-  --background: oklch(0.94 0 0);
-  --foreground: oklch(0.02 0 0);
-  --surface: oklch(0.98 0 0);
-  --surface-foreground: oklch(0.02 0 0);
-  --primary: oklch(0.02 0 0);
-  --primary-foreground: oklch(0.98 0 0);
-  --secondary: oklch(0.9 0 0);
-  --secondary-foreground: oklch(0.1 0 0);
-  --muted: oklch(0.94 0 0);
-  --muted-foreground: oklch(0.45 0 0);
-  --accent: oklch(0.94 0 0);
-  --accent-foreground: oklch(0.1 0 0);
-  --destructive: oklch(0.58 0.2 10);
-  --destructive-foreground: oklch(0.94 0 0);
-  --success: oklch(0.58 0.2 170);
-  --success-foreground: oklch(0.94 0 0);
-  --warm: oklch(0.75 0.12 70);
-  --warm-foreground: oklch(0.98 0 0);
-  --border: oklch(0.86 0 0);
-  --input: oklch(0.86 0 0);
-  --ring: var(--primary);
-}
-
-/*
  * Monaco gutter "Run workflow" glyph. A decoration with this class is added on
  * every line that defines an `async function` whose body starts with
  * `"use workflow"`. Clicking it opens the Run dialog via the editor host.
