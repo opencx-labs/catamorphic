@@ -234,9 +234,9 @@ import {
   useAgentSession,
   useCreateAgentSession,
   useSendAgentMessage,
-  // Editor glue
-  useOnParse,
-  useParseWorkflow,
+  // Parsing (for `<WorkflowEditor onParse={...}>`)
+  useOnParse, // ready-made onParse callback — prefer this
+  useParseWorkflow, // raw mutation over POST /api/playground/parse, for custom assembly
 } from "@catamorphic/react";
 ```
 
@@ -371,7 +371,7 @@ export function WorkflowScreen({
 Key props (see `WorkflowEditorProps` in `@catamorphic/ui`):
 
 - `code` / `onCodeChange` — controlled source string (required)
-- `onParse` — `OnParseCallback` that turns the current source into `{ graph, layoutedNodes, layoutedEdges }`. Use `useOnParse` unless you need custom parsing.
+- `onParse` — `OnParseCallback` that turns the current source into `{ graph, layoutedNodes, layoutedEdges }`. Use `useOnParse` unless you need custom parsing (different endpoint, project-git draft files, etc.) — in that case import `layoutGraph` from `@catamorphic/parser/layout`, **never** from the `@catamorphic/parser` barrel (it pulls `ts-morph` → `node:fs` into the client bundle).
 - `renderCodeEditor` — slot to plug in your own code editor (Monaco, CodeMirror, …)
 - `nodeRenderers` — partial map of `WorkflowNodeType` → component, overrides node visuals
 - `executionState` — `Record<nodeId, "running" | "completed" | "failed">` overlay
@@ -419,14 +419,20 @@ The registry is **served**, not published to npm. In dev, the playground hosts i
 
 Pick what you want, drop it into your repo, then customize the JSX/tailwind freely — they're meant to be edited.
 
-### 7) Parsing workflows on the client
+### 7) Parsing workflows
 
-Call `parseWorkflow` / `parseProject` directly from `@catamorphic/parser` if you need the `WorkflowGraph` without the editor — it uses `ts-morph` and runs in the browser.
+`parseWorkflow` / `parseProject` (exported from `@catamorphic/parser`'s main entry) use `ts-morph`, which pulls in `node:fs` and **will not bundle for the browser**. Importing _anything_ from the `@catamorphic/parser` barrel in client code throws `Cannot find module 'node:fs': Unsupported external type Url for commonjs reference` at module-evaluation time (the barrel re-exports the parser side-effectfully, so Next/Turbopack can't tree-shake it even if you only reach for `layoutGraph`).
 
-```ts
-import { parseWorkflow } from "@catamorphic/parser";
-const graph = parseWorkflow(source, { workflowName: "welcomeUser" });
-```
+Use cases:
+
+- **Server / Node**: `import { parseWorkflow } from "@catamorphic/parser"` — fine.
+- **Client** (code that runs in the browser): only ever import from the dedicated subpath:
+
+  ```ts
+  import { layoutGraph } from "@catamorphic/parser/layout";
+  ```
+
+  This subpath is `dagre`-only and has no Node built-in deps. For any actual parsing, call `useParseWorkflow()` and let the sidecar do it (see `onParse` above).
 
 ## Package Cheatsheet
 
@@ -474,6 +480,7 @@ Frontend (HTTP path):
 - **Branching on `error.message`.** All hooks reject with `CatamorphicError`; switch on `err.code` (use `isCatamorphicError(err)` first). `message` is for humans; `details` carries the typed payload (e.g. conflict files).
 - **Re-declaring server shapes.** Don't `interface Run {…}` in your own files — import from `@catamorphic/react/types` so you get whatever the OpenAPI schema says today.
 - **Empty workflow canvas.** `<WorkflowEditor>` has no default parser — if `onParse` is omitted the canvas stays blank. Pass `useOnParse({ files, workflowName, preferredFilePath })` (or the raw `useParseWorkflow` + `layoutGraph({ nodes, edges })` glue) so the editor can turn `code` into a graph.
+- **Importing `@catamorphic/parser` in client code.** The barrel re-exports `parseWorkflow` side-effectfully and drags `ts-morph` → `node:fs` into the bundle; Next/Turbopack throws `Cannot find module 'node:fs'` at module-evaluation. Client bundles must only import from `@catamorphic/parser/layout`; let the sidecar handle actual parsing via `useParseWorkflow`.
 
 ## Local Dev Linking (Host ↔ Local Catamorphic Checkout)
 
