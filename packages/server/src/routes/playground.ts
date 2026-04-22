@@ -62,7 +62,7 @@ export function registerPlaygroundRoutes(
         });
       }
 
-      const identity = resolveIdentity(request, { standalone: ctx.standalone });
+      const identity = resolveIdentity(request);
       const { projectId, files, workflowName, triggerData } = request.body;
 
       let resolvedFiles = files;
