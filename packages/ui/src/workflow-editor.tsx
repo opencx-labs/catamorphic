@@ -34,6 +34,17 @@ import { WorkflowEditorScope } from "./workflow-editor-scope.js";
 export interface WorkflowEditorProps {
   code: string;
   onCodeChange: (code: string) => void;
+  /**
+   * Turns the current source into a laid-out `WorkflowGraph`. Without this,
+   * the canvas stays empty — `<WorkflowEditor>` has no default parser because
+   * the parser bundle depends on the project file map, which only the host
+   * has in scope.
+   *
+   * Prefer `useOnParse({ files, workflowName, preferredFilePath })` from
+   * `@catamorphic/react` — it composes `useParseWorkflow` with `layoutGraph`
+   * into a stable callback. Only write a custom `OnParseCallback` when you
+   * need to replace the server-side parser entirely.
+   */
   onParse?: OnParseCallback;
   renderCodeEditor?: (props: CodeEditorRenderProps) => ReactNode;
   nodeRenderers?: Partial<

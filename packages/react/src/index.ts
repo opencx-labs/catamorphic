@@ -72,6 +72,7 @@ export {
   useDetachPlugin,
 } from "./hooks/use-detach-plugin.js";
 export { useEditorKeyboard } from "./hooks/use-editor-keyboard.js";
+export { type UseOnParseOptions, useOnParse } from "./hooks/use-on-parse.js";
 export type {
   ParseWorkflowRequest,
   ParseWorkflowResponse,

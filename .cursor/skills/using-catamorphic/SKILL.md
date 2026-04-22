@@ -234,6 +234,9 @@ import {
   useAgentSession,
   useCreateAgentSession,
   useSendAgentMessage,
+  // Editor glue
+  useOnParse,
+  useParseWorkflow,
 } from "@catamorphic/react";
 ```
 
@@ -328,14 +331,29 @@ import {
 ### 5) Drop-in editor — `@catamorphic/ui`
 
 ```tsx
+import { useOnParse } from "@catamorphic/react";
 import { WorkflowEditor } from "@catamorphic/ui";
 import "@catamorphic/ui/styles.css";
 
-export function WorkflowScreen({ code, setCode, triggerParameters, onRun }) {
+export function WorkflowScreen({
+  projectFiles,
+  workflowName,
+  workflowFilePath,
+  code,
+  setCode,
+  triggerParameters,
+  onRun,
+}) {
+  const onParse = useOnParse({
+    files: projectFiles,
+    workflowName,
+    preferredFilePath: workflowFilePath,
+  });
   return (
     <WorkflowEditor
       code={code}
       onCodeChange={setCode}
+      onParse={onParse}
       triggerParameters={triggerParameters}
       onRun={onRun}
       showCodeEditor
@@ -348,10 +366,12 @@ export function WorkflowScreen({ code, setCode, triggerParameters, onRun }) {
 }
 ```
 
+`onParse` is required: without it, `<WorkflowEditor>` has nothing to turn `code` into a graph and the canvas stays empty. Always mount `useOnParse` (or a hand-rolled equivalent); it wraps `useParseWorkflow` + `@catamorphic/parser/layout` into a stable callback that's safe to pass to the editor even as the host's `files` map churns on every keystroke.
+
 Key props (see `WorkflowEditorProps` in `@catamorphic/ui`):
 
 - `code` / `onCodeChange` — controlled source string (required)
-- `onParse` — `(graph) => void` callback fired after every parse
+- `onParse` — `OnParseCallback` that turns the current source into `{ graph, layoutedNodes, layoutedEdges }`. Use `useOnParse` unless you need custom parsing.
 - `renderCodeEditor` — slot to plug in your own code editor (Monaco, CodeMirror, …)
 - `nodeRenderers` — partial map of `WorkflowNodeType` → component, overrides node visuals
 - `executionState` — `Record<nodeId, "running" | "completed" | "failed">` overlay
@@ -382,7 +402,24 @@ function Inspector() {
 
 Lower-level pieces — `WorkflowCanvas`, `DetailPanel`, `HistorySidebar`, `Toolbar`, `AIBar`, plus `WorkflowEditorChrome` (the inner editor without the scope wrapper) — are exported too if you want to assemble a custom layout.
 
-### 6) Parsing workflows on the client
+### 6) Component registry — `@catamorphic/registry` (copy-paste UI)
+
+Pre-wired React components (file tree, git panel, runs panel, plugins/secrets settings, projects list, project editor, diff drawer, plus a `CatamorphicAppProvider` wrapper) ship as a shadcn-compatible registry. Items are JSON manifests that inline a single `.tsx` file; the host runs `npx shadcn add <host>/r/<item>.json` and the component lands in `components/catamorphic/`. The component imports from `@catamorphic/react` + `@catamorphic/ui` only — there's no runtime dependency on `@catamorphic/registry` itself.
+
+The registry is **served**, not published to npm. In dev, the playground hosts it at `http://localhost:8501/r/<item>.json` (see `apps/playground/src/app/r/[name]/route.ts`); in production, point the shadcn CLI at whatever URL serves `packages/registry/dist/r/`. Items currently shipped:
+
+- `catamorphic-provider` — `<CatamorphicAppProvider baseUrl getTenantId getExternalUserId>` that wires `CatamorphicProvider` + `QueryClientProvider`. Always install this first.
+- `projects-list` — table + create-project dialog (`useProjects` + `useCreateProject` + `useTemplates`).
+- `project-editor` — three-pane scaffold with `renderEditor` (plug in monaco/codemirror), `renderSidebar`, and `renderGitPanel` slots.
+- `file-explorer` — pure file tree.
+- `git-panel` — branch / dirty / commits / deploy panel (`useProjectGit` + `useProjectCommits` + `useDeployProject`).
+- `diff-drawer` — side drawer with a `renderDiff` slot for monaco-diff or codemirror-merge.
+- `runs-panel` — list runs + trigger new ones (`useWorkflowRuns` + `useTriggerWorkflowRun`).
+- `plugins-settings` — attach/detach plugins + edit secrets.
+
+Pick what you want, drop it into your repo, then customize the JSX/tailwind freely — they're meant to be edited.
+
+### 7) Parsing workflows on the client
 
 Call `parseWorkflow` / `parseProject` directly from `@catamorphic/parser` if you need the `WorkflowGraph` without the editor — it uses `ts-morph` and runs in the browser.
 
@@ -403,7 +440,7 @@ const graph = parseWorkflow(source, { workflowName: "welcomeUser" });
 | `@catamorphic/plugins` | Backend (optional) | `LocalPluginResolver`, `PluginManifestSchema`, `PluginResolver` |
 | `@catamorphic/server` | Backend (HTTP path) | `createApp({ core, standalone })` — Fastify app factory |
 | `@catamorphic/api-client` | Frontend or non-Node backend | `createApiClient`, `CatamorphicApiClient`, `paths` (OpenAPI) |
-| `@catamorphic/react` | Frontend | `CatamorphicProvider`, `useCatamorphic`, data hooks (projects/runs/git/plugins/secrets/agent), atoms, `useWorkflowGraph`, `useSelectedNode`, `useProjectGitState`, `CatamorphicError`, `isCatamorphicError` |
+| `@catamorphic/react` | Frontend | `CatamorphicProvider`, `useCatamorphic`, data hooks (projects/runs/git/plugins/secrets/agent), atoms, `useWorkflowGraph`, `useSelectedNode`, `useProjectGitState`, `useOnParse`/`useParseWorkflow`, `CatamorphicError`, `isCatamorphicError` |
 | `@catamorphic/react/types` | Frontend | OpenAPI-derived domain types (`Project`, `Run`, `RepoStatus`, `BranchInfo`, `ConflictEntry`, `PluginInfo`, `Secret`, `AgentSession`, …) |
 | `@catamorphic/react/workflow-helpers` | Frontend (server-safe) | Pure authoring helpers, no React |
 | `@catamorphic/ui` | Frontend | `WorkflowEditor`, `WorkflowEditorChrome`, `WorkflowEditorScope`, `WorkflowCanvas`, `DetailPanel`, `HistorySidebar`, `Toolbar`, `AIBar`, plus `@catamorphic/ui/styles.css` |
@@ -434,7 +471,9 @@ Frontend (HTTP path):
 - **Running migrations on every boot.** Run `catamorphic-db migrate` in CI/deploy, not in app startup.
 - **Forgetting the search_path.** `createDatabase({ schema })` sets `search_path` on each connection. Do not share a `pg.Pool` with host code that expects `public`.
 - **Calling hooks outside the provider.** `useCatamorphic must be used within a <CatamorphicProvider>` means the tree is missing the provider (or there are two React copies; check peer dep resolution).
-- **`useProjectGitState` has no adapter.** It is headless — the host must pass a `ProjectGitApi` pointing at its own git endpoints until phase 2 lands.
+- **Branching on `error.message`.** All hooks reject with `CatamorphicError`; switch on `err.code` (use `isCatamorphicError(err)` first). `message` is for humans; `details` carries the typed payload (e.g. conflict files).
+- **Re-declaring server shapes.** Don't `interface Run {…}` in your own files — import from `@catamorphic/react/types` so you get whatever the OpenAPI schema says today.
+- **Empty workflow canvas.** `<WorkflowEditor>` has no default parser — if `onParse` is omitted the canvas stays blank. Pass `useOnParse({ files, workflowName, preferredFilePath })` (or the raw `useParseWorkflow` + `layoutGraph({ nodes, edges })` glue) so the editor can turn `code` into a graph.
 
 ## Local Dev Linking (Host ↔ Local Catamorphic Checkout)
 

@@ -1,16 +1,14 @@
 "use client";
 
-import { layoutGraph } from "@catamorphic/parser/layout";
 import {
   displayNameFromWorkflowName,
-  type ParseResult,
   type PlaygroundRun,
   type Run,
   readWorkflowDisplayName,
   starterCodeForWorkflow,
   upsertWorkflowDisplayName,
   useCatamorphic,
-  useParseWorkflow,
+  useOnParse,
   useProject,
   useWorkflow,
   useWorkflowRuns,
@@ -217,36 +215,11 @@ export function WorkflowPageClient({ projectId, workflowName }: Props) {
     [workflowFilePath, graphFilePath, setFile, readOnly],
   );
 
-  const parseWorkflow = useParseWorkflow();
-  const parseMutateAsync = parseWorkflow.mutateAsync;
-
-  const handleParse = useCallback(
-    async (source: string): Promise<ParseResult | null> => {
-      const files = { ...projectFilesRef.current };
-      const path = workflowFilePath ?? graphFilePath;
-      files[path] = source;
-      try {
-        const parsed = await parseMutateAsync({
-          files,
-          workflowName,
-          preferredFilePath: workflowFilePath ?? graphFilePath ?? undefined,
-        });
-        if (!parsed) return null;
-        const layouted = layoutGraph({
-          nodes: parsed.nodes,
-          edges: parsed.edges,
-        });
-        return {
-          graph: parsed,
-          layoutedNodes: layouted.nodes,
-          layoutedEdges: layouted.edges,
-        };
-      } catch {
-        return null;
-      }
-    },
-    [workflowFilePath, graphFilePath, workflowName, parseMutateAsync],
-  );
+  const handleParse = useOnParse({
+    files: effectiveFiles,
+    workflowName,
+    preferredFilePath: workflowFilePath ?? graphFilePath ?? undefined,
+  });
 
   const handleAIPrompt = useCallback(
     async (prompt: string) =>
