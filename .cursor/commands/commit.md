@@ -1,6 +1,6 @@
 # Git Commit Command
 
-Create a git commit following [Conventional Commits](https://www.conventionalcommits.org/) with an optional Linear ticket reference. This repo is the **Catamorphic** Turborepo (`packages/*`, `apps/*`); scopes should reflect where the change lives.
+Create a git commit following [Conventional Commits](https://www.conventionalcommits.org/) with an optional Linear ticket reference. This repo is the **Catamorphic** Turborepo (`packages/*`); scopes should reflect where the change lives.
 
 ## Usage
 
@@ -44,7 +44,6 @@ For **new untracked files**, use `git add -N <path>` then `git add -p <path>` so
 | `runtime` | `packages/runtime` |
 | `sandbox` | `packages/sandbox` |
 | `api-client` | `packages/api-client` |
-| `playground` | `apps/playground` |
 | `repo` | Root config only (`package.json`, `turbo.json`, `biome.json`, CI, workspace tooling) |
 | `docs` | `README.md`, `AGENTS.md`, `.cursor/` docs, other top-level docs |
 
@@ -80,12 +79,6 @@ If the user passes a ticket id (e.g. `CM-42`):
 
 ```
 fix(parser): handle empty step body in workflow graph
-```
-
-**App + UI:**
-
-```
-feat(playground): show run errors in side panel
 ```
 
 **Server + generated client:**
