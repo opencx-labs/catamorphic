@@ -120,6 +120,21 @@ await scoped.workflows.get(projectId, "welcomeUser", { ref: "HEAD" });
 
 Anything not covered by the SDK v1 surface (runs, plugins, secrets, deploy/pull/diff) is reachable via `catamorphic.core.runs.*`, `catamorphic.core.plugins.*`, `catamorphic.core.deployment.*`, etc. — these take `identity` as their first argument (build it yourself: `{ tenantId, externalUserId }`).
 
+### 4) Triggering runs
+
+`core.runs.trigger(identity, projectId, workflowName, { triggerData })` is the one entry point that actually executes a workflow. It:
+
+1. Resolves the project for `identity.tenantId`.
+2. Opens the per-user dev working copy, calls `readAllFiles()` + `resolveRef("HEAD")`, then disposes.
+3. Loads attached plugin payloads + project secrets via `runPluginsLoader` (only if `pluginResolver` was wired at boot).
+4. Inserts a `workflow_runs` row (`status: 'running'`, `commit_sha: headSha`, `is_test: false`).
+5. Hands off to `PlaygroundExecutor` which spawns a sandbox, uploads files + plugins, runs `bun run harness.ts`, and parses the `CATAMORPHIC_REPORT:` line.
+6. Updates the run row and bulk-inserts `workflow_run_steps`, then returns the mapped `Run`.
+
+It requires `sandboxProvider` at boot — without it the method throws `SandboxProviderNotConfiguredError`. Other typed errors: `ProjectNotFoundError`, `WorkflowNotFoundError` (pre-flight check on files), `PluginSecretsMissingError` (when attached plugins declare required secrets the project hasn't set).
+
+Over HTTP the same path is `POST /api/projects/:projectId/workflows/:name/runs` with body `{ triggerData?: Record<string, unknown> }`, which `useTriggerWorkflowRun` (and the `runs-panel` registry item) already calls.
+
 ## Backend Path B — HTTP Sidecar
 
 Run `@catamorphic/server` as a separate process wired with the exact same `CatamorphicCore` (see `createApp({ core, standalone: false })` from `@catamorphic/server`). In embedded mode the server requires `X-Catamorphic-Tenant-Id` and `X-External-User-Id` on every request.
