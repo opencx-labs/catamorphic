@@ -24,18 +24,10 @@ export interface AppConfig {
    * workflow endpoints respond 503.
    */
   core?: CatamorphicCore;
-  /**
-   * When true, missing `X-Catamorphic-Tenant-Id` and `X-External-User-Id`
-   * headers fall back to the hard-coded defaults. Used by the local
-   * playground; embedding hosts should leave this false and pass the headers
-   * on every request.
-   */
-  standalone?: boolean;
 }
 
 export interface RouteContext {
   core?: CatamorphicCore;
-  standalone: boolean;
 }
 
 export function createApp(config: AppConfig = {}) {
@@ -59,7 +51,7 @@ export function createApp(config: AppConfig = {}) {
         version: "0.0.1",
         description: "Code-first workflow builder API",
       },
-      servers: [{ url: `http://localhost:${process.env.PORT ?? 3001}` }],
+      servers: [{ url: "/" }],
     },
     transform: jsonSchemaTransform,
   });
@@ -78,7 +70,6 @@ export function createApp(config: AppConfig = {}) {
 
   const ctx: RouteContext = {
     core: config.core,
-    standalone: config.standalone ?? false,
   };
 
   app.after(() => {

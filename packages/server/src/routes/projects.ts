@@ -64,7 +64,7 @@ export function registerProjectRoutes(app: FastifyInstance, ctx: RouteContext) {
     handler: async (request, reply) => {
       if (!ctx.core)
         return reply.status(503).send({ error: "Service not configured" });
-      const identity = resolveIdentity(request, { standalone: ctx.standalone });
+      const identity = resolveIdentity(request);
       const project = await ctx.core.projects.create(identity, request.body);
       return reply.status(201).send(toDto(project));
     },
@@ -79,7 +79,7 @@ export function registerProjectRoutes(app: FastifyInstance, ctx: RouteContext) {
     },
     handler: async (request, reply) => {
       if (!ctx.core) return reply.send({ items: [], total: 0 });
-      const identity = resolveIdentity(request, { standalone: ctx.standalone });
+      const identity = resolveIdentity(request);
       const result = await ctx.core.projects.list(identity, request.query);
       return reply.send({
         items: result.items.map(toDto),
@@ -102,7 +102,7 @@ export function registerProjectRoutes(app: FastifyInstance, ctx: RouteContext) {
     handler: async (request, reply) => {
       if (!ctx.core)
         return reply.status(503).send({ error: "Service not configured" });
-      const identity = resolveIdentity(request, { standalone: ctx.standalone });
+      const identity = resolveIdentity(request);
       const { projectId } = request.params;
 
       try {
@@ -133,7 +133,7 @@ export function registerProjectRoutes(app: FastifyInstance, ctx: RouteContext) {
     handler: async (request, reply) => {
       if (!ctx.core)
         return reply.status(503).send({ error: "Service not configured" });
-      const identity = resolveIdentity(request, { standalone: ctx.standalone });
+      const identity = resolveIdentity(request);
       try {
         const project = await ctx.core.projects.update(
           identity,
@@ -164,7 +164,7 @@ export function registerProjectRoutes(app: FastifyInstance, ctx: RouteContext) {
     handler: async (request, reply) => {
       if (!ctx.core)
         return reply.status(503).send({ error: "Service not configured" });
-      const identity = resolveIdentity(request, { standalone: ctx.standalone });
+      const identity = resolveIdentity(request);
       try {
         await ctx.core.projects.delete(identity, request.params.projectId);
         return reply.send({ deleted: true });
@@ -191,7 +191,7 @@ export function registerProjectRoutes(app: FastifyInstance, ctx: RouteContext) {
     handler: async (request, reply) => {
       if (!ctx.core)
         return reply.status(503).send({ error: "Service not configured" });
-      const identity = resolveIdentity(request, { standalone: ctx.standalone });
+      const identity = resolveIdentity(request);
       try {
         const entries = await ctx.core.projects.listFiles(
           identity,
@@ -217,7 +217,7 @@ export function registerProjectRoutes(app: FastifyInstance, ctx: RouteContext) {
     handler: async (request, reply) => {
       if (!ctx.core)
         return reply.status(503).send({ error: "Service not configured" });
-      const identity = resolveIdentity(request, { standalone: ctx.standalone });
+      const identity = resolveIdentity(request);
       const { projectId } = request.params;
       const filePath = request.params["*"];
       try {
@@ -250,7 +250,7 @@ export function registerProjectRoutes(app: FastifyInstance, ctx: RouteContext) {
     handler: async (request, reply) => {
       if (!ctx.core)
         return reply.status(503).send({ error: "Service not configured" });
-      const identity = resolveIdentity(request, { standalone: ctx.standalone });
+      const identity = resolveIdentity(request);
       const { projectId } = request.params;
       const filePath = request.params["*"];
       try {
@@ -285,7 +285,7 @@ export function registerProjectRoutes(app: FastifyInstance, ctx: RouteContext) {
     handler: async (request, reply) => {
       if (!ctx.core)
         return reply.status(503).send({ error: "Service not configured" });
-      const identity = resolveIdentity(request, { standalone: ctx.standalone });
+      const identity = resolveIdentity(request);
       const { projectId } = request.params;
       try {
         await ctx.core.projects.get(identity, projectId);
@@ -319,7 +319,7 @@ export function registerProjectRoutes(app: FastifyInstance, ctx: RouteContext) {
     handler: async (request, reply) => {
       if (!ctx.core)
         return reply.status(503).send({ error: "Service not configured" });
-      const identity = resolveIdentity(request, { standalone: ctx.standalone });
+      const identity = resolveIdentity(request);
       const { projectId } = request.params;
       try {
         await ctx.core.projects.get(identity, projectId);
@@ -352,7 +352,7 @@ export function registerProjectRoutes(app: FastifyInstance, ctx: RouteContext) {
     handler: async (request, reply) => {
       if (!ctx.core)
         return reply.status(503).send({ error: "Service not configured" });
-      const identity = resolveIdentity(request, { standalone: ctx.standalone });
+      const identity = resolveIdentity(request);
       const { projectId } = request.params;
       try {
         await ctx.core.projects.get(identity, projectId);
@@ -386,7 +386,7 @@ export function registerProjectRoutes(app: FastifyInstance, ctx: RouteContext) {
     handler: async (request, reply) => {
       if (!ctx.core)
         return reply.status(503).send({ error: "Service not configured" });
-      const identity = resolveIdentity(request, { standalone: ctx.standalone });
+      const identity = resolveIdentity(request);
       const { projectId } = request.params;
       try {
         await ctx.core.projects.get(identity, projectId);
@@ -420,7 +420,7 @@ export function registerProjectRoutes(app: FastifyInstance, ctx: RouteContext) {
     handler: async (request, reply) => {
       if (!ctx.core)
         return reply.status(503).send({ error: "Service not configured" });
-      const identity = resolveIdentity(request, { standalone: ctx.standalone });
+      const identity = resolveIdentity(request);
       const { projectId } = request.params;
       try {
         await ctx.core.projects.get(identity, projectId);
@@ -454,7 +454,7 @@ export function registerProjectRoutes(app: FastifyInstance, ctx: RouteContext) {
     handler: async (request, reply) => {
       if (!ctx.core)
         return reply.status(503).send({ error: "Service not configured" });
-      const identity = resolveIdentity(request, { standalone: ctx.standalone });
+      const identity = resolveIdentity(request);
       const { projectId } = request.params;
       try {
         await ctx.core.projects.get(identity, projectId);
@@ -491,7 +491,7 @@ export function registerProjectRoutes(app: FastifyInstance, ctx: RouteContext) {
     handler: async (request, reply) => {
       if (!ctx.core)
         return reply.status(503).send({ error: "Service not configured" });
-      const identity = resolveIdentity(request, { standalone: ctx.standalone });
+      const identity = resolveIdentity(request);
       const { projectId } = request.params;
       try {
         await ctx.core.projects.get(identity, projectId);
@@ -527,7 +527,7 @@ export function registerProjectRoutes(app: FastifyInstance, ctx: RouteContext) {
     handler: async (request, reply) => {
       if (!ctx.core)
         return reply.status(503).send({ error: "Service not configured" });
-      const identity = resolveIdentity(request, { standalone: ctx.standalone });
+      const identity = resolveIdentity(request);
       const { projectId } = request.params;
       try {
         await ctx.core.projects.get(identity, projectId);
@@ -562,7 +562,7 @@ export function registerProjectRoutes(app: FastifyInstance, ctx: RouteContext) {
     handler: async (request, reply) => {
       if (!ctx.core)
         return reply.status(503).send({ error: "Service not configured" });
-      const identity = resolveIdentity(request, { standalone: ctx.standalone });
+      const identity = resolveIdentity(request);
       const { projectId } = request.params;
       try {
         await ctx.core.projects.get(identity, projectId);
@@ -596,7 +596,7 @@ export function registerProjectRoutes(app: FastifyInstance, ctx: RouteContext) {
     handler: async (request, reply) => {
       if (!ctx.core)
         return reply.status(503).send({ error: "Service not configured" });
-      const identity = resolveIdentity(request, { standalone: ctx.standalone });
+      const identity = resolveIdentity(request);
       const { projectId } = request.params;
       try {
         await ctx.core.projects.get(identity, projectId);
@@ -630,7 +630,7 @@ export function registerProjectRoutes(app: FastifyInstance, ctx: RouteContext) {
     handler: async (request, reply) => {
       if (!ctx.core)
         return reply.status(503).send({ error: "Service not configured" });
-      const identity = resolveIdentity(request, { standalone: ctx.standalone });
+      const identity = resolveIdentity(request);
       const { projectId } = request.params;
       try {
         await ctx.core.projects.get(identity, projectId);
@@ -707,7 +707,7 @@ export function registerProjectRoutes(app: FastifyInstance, ctx: RouteContext) {
     handler: async (request, reply) => {
       if (!ctx.core)
         return reply.status(503).send({ error: "Service not configured" });
-      const identity = resolveIdentity(request, { standalone: ctx.standalone });
+      const identity = resolveIdentity(request);
       const { projectId } = request.params;
       try {
         await ctx.core.projects.get(identity, projectId);
