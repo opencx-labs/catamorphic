@@ -1,0 +1,35 @@
+# Dev OpenTelemetry Collector: OTLP in, ClickHouse out.
+# Used by the `otel-collector` service in docker-compose.yml.
+
+receivers:
+  otlp:
+    protocols:
+      grpc:
+        endpoint: 0.0.0.0:4317
+      http:
+        endpoint: 0.0.0.0:4318
+
+processors:
+  batch:
+    timeout: 2s
+
+exporters:
+  clickhouse:
+    # In-network address: the collector talks to the clickhouse service
+    # directly, not through the shifted host ports.
+    endpoint: tcp://clickhouse:9000?dial_timeout=10s
+    database: otel
+    username: catamorphic
+    password: catamorphic
+    create_schema: true
+    ttl: 72h
+    timeout: 5s
+    retry_on_failure:
+      enabled: true
+
+service:
+  pipelines:
+    traces:
+      receivers: [otlp]
+      processors: [batch]
+      exporters: [clickhouse]

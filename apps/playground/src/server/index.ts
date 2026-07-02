@@ -19,8 +19,13 @@ import { catamorphicPlugin } from "@catamorphic/fastify-plugin";
 import cors from "@fastify/cors";
 import Fastify from "fastify";
 import { bootCatamorphic, DEMO_TENANT_ID, DEMO_USER_ID } from "./boot.js";
+import { initTelemetry } from "./otel.js";
 
 const PORT = Number(process.env.PLAYGROUND_SERVER_PORT ?? 8500);
+
+// Register the tracer provider before boot so every span — including ones
+// emitted during startup — is exported.
+const shutdownTelemetry = initTelemetry();
 
 const catamorphic = await bootCatamorphic();
 
@@ -45,3 +50,12 @@ await app.register(catamorphicPlugin, {
 
 await app.listen({ port: PORT, host: "0.0.0.0" });
 console.log(`[playground] API ready on http://localhost:${PORT}/api`);
+
+if (shutdownTelemetry) {
+  const flushAndExit = async () => {
+    await shutdownTelemetry().catch(() => {});
+    process.exit(0);
+  };
+  process.once("SIGINT", flushAndExit);
+  process.once("SIGTERM", flushAndExit);
+}
