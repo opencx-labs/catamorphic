@@ -21,12 +21,14 @@
   "dependencies": {
     "@catamorphic/db": "workspace:*",
     "@catamorphic/git": "workspace:*",
+    "@catamorphic/otel": "workspace:*",
     "@catamorphic/parser": "workspace:*",
     "@catamorphic/plugins": "workspace:*",
     "@catamorphic/sandbox": "workspace:*",
     "kysely": "^0.28.15"
   },
   "devDependencies": {
+    "@catamorphic/cloudflare": "workspace:*",
     "@types/node": "^25.6.0"
   }
 }

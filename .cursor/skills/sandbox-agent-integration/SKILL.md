@@ -4,8 +4,24 @@
 
 `@catamorphic/sandbox` provides two core capabilities:
 
-1. **Workflow Execution** — Runs workflow code inside Daytona sandboxes with step-level observability
-2. **Coding Agent** — AI-assisted code generation via Codex SDK running inside dev sandboxes
+1. **Workflow Execution** — Runs workflow code inside sandboxes (Cloudflare Sandbox by default, Daytona as alternate) with step-level observability
+2. **Coding Agent contract** — the vendor-neutral `CodingAgentProvider` interface. Implementations are plugin packages: `@catamorphic/flue` (flagship — harness runs on the host server, edits the dev sandbox remotely) and `@catamorphic/codex` (Codex SDK). See `docs/decisions/0009`.
+
+## Provider Selection
+
+Providers live in vendor plugin packages (see `docs/decisions/0004`, `0008`, and `CLOUDFLARE.md`); the host constructs its chosen backend explicitly at boot:
+
+```typescript
+import { CloudflareSandboxProvider } from "@catamorphic/cloudflare"; // default
+// or: import { DaytonaSandboxProvider } from "@catamorphic/daytona";
+
+const provider = new CloudflareSandboxProvider({
+  apiUrl: process.env.CLOUDFLARE_SANDBOX_API_URL!,
+  apiKey: process.env.CLOUDFLARE_SANDBOX_API_KEY,
+});
+```
+
+Providers handed to `CatamorphicCore` are automatically wrapped with `instrumentSandboxProvider` (OpenTelemetry spans: `sandbox.create`, `sandbox.exec`, `sandbox.upload_files`, …). The wrapper preserves the optional `hydrateWorkspace` method (tar-based upload) that the Cloudflare provider exposes.
 
 ## Two-Sandbox Model
 
@@ -17,35 +33,46 @@ Each project uses two distinct sandbox types:
 ## Package Structure
 
 ```
-packages/sandbox/src/
-  types.ts              -- SandboxProvider, SandboxManager, RunExecutor, CodingAgent interfaces
-  daytona-provider.ts   -- DaytonaSandboxProvider (Daytona SDK wrapper)
-  sandbox-manager.ts    -- SandboxManagerImpl (two-sandbox lifecycle)
-  run-executor.ts       -- RunExecutorImpl (execute workflows via sandbox)
+packages/sandbox/src/               -- vendor-neutral, no vendor SDKs
+  types.ts                 -- SandboxProvider, SandboxManager, RunExecutor, CloneSource interfaces
+  instrumented-provider.ts -- instrumentSandboxProvider (OTel wrapper)
+  sandbox-manager.ts       -- SandboxManagerImpl (two-sandbox lifecycle)
+  run-executor.ts          -- RunExecutorImpl (execute workflows via sandbox; clone or upload)
   coding-agent/
-    types.ts            -- CodingAgentProvider interface (extensible)
-    codex-agent.ts      -- CodexAgent (Codex SDK implementation)
-    index.ts
-  index.ts
+    types.ts               -- CodingAgentProvider interface (extensible)
+    plugin-staging.ts      -- stagedPluginFiles / buildPluginsPreamble helpers
+
+packages/flue/src/                  -- @catamorphic/flue coding-agent plugin (flagship)
+  flue-agent.ts            -- FlueCodingAgent (server-side Flue harness)
+  sandbox-adapter.ts       -- catamorphicSandbox (Flue SandboxFactory over SandboxProvider)
+
+packages/codex/src/                 -- @catamorphic/codex coding-agent plugin
+  codex-agent.ts           -- CodexAgent (Codex SDK implementation)
+
+packages/cloudflare/src/            -- @catamorphic/cloudflare plugin
+  sandbox-provider.ts      -- CloudflareSandboxProvider (HTTP client to the Bridge Worker)
+  artifacts-client.ts      -- ArtifactsClient (Artifacts REST: repos + scoped tokens)
+  artifacts-remote-backend.ts -- ArtifactsRemoteBackend (RemoteBackend + getCloneSource)
+
+packages/daytona/src/               -- @catamorphic/daytona plugin
+  sandbox-provider.ts      -- DaytonaSandboxProvider (Daytona SDK wrapper)
+  storage-backend.ts       -- DaytonaBackend (StorageBackend using Daytona sandboxes)
+  project-repo.ts          -- DaytonaProjectRepo (ProjectRepo using Daytona's git/fs APIs)
+
+packages/cloudflare-sandbox-bridge/  -- deployable Worker the Cloudflare provider talks to
 
 packages/runtime/src/
-  harness.ts            -- Entry point that runs inside sandbox
-  step-wrapper.ts       -- Wraps "use step" functions for observability
-  reporter.ts           -- Reports run results to Catamorphic API
-  types.ts              -- StepEntry, RunReport types
-  index.ts
-
-packages/git/src/
-  daytona-backend.ts    -- StorageBackend using Daytona dev sandboxes
-  daytona-project-repo.ts -- ProjectRepo using Daytona's git/fs APIs
+  harness.ts               -- Entry point that runs inside sandbox
+  step-wrapper.ts          -- Source-level instrumentation of "use step" functions
+  reporter.ts              -- Reports run results to Catamorphic API
+  types.ts                 -- StepEntry, RunReport types
 ```
 
-## Sandbox Provider Interface
+## Sandbox Manager
 
 ```typescript
-import { DaytonaSandboxProvider, SandboxManagerImpl } from "@catamorphic/sandbox";
+import { SandboxManagerImpl } from "@catamorphic/sandbox";
 
-const provider = new DaytonaSandboxProvider({ apiKey: "...", apiUrl: "..." });
 const manager = new SandboxManagerImpl({ provider, store: dbStore });
 
 // Execution sandbox for a specific commit
@@ -63,21 +90,19 @@ const devSandbox = await manager.ensureDevSandbox({
 
 ## Coding Agent
 
+The host picks an agent at boot and passes it to `createCatamorphic({ codingAgent })`. Session orchestration (dev sandbox lifecycle, persistence, sync-back of agent edits into the user's draft) is vendor-neutral in `core.agentSessions` (`AgentSessionsService`).
+
 ```typescript
-import { CodexAgent } from "@catamorphic/sandbox";
+import { FlueCodingAgent } from "@catamorphic/flue"; // flagship
+// or: import { CodexAgent } from "@catamorphic/codex";
 
-const agent = new CodexAgent({ apiKey: process.env.OPENAI_API_KEY });
-const session = await agent.startSession({
-  projectId: "...",
-  userId: "...",
-  sandboxId: devSandbox.id,
-  workingDirectory: "/project",
+const agent = new FlueCodingAgent({
+  model: "openai/gpt-5.2-codex",
+  sandboxProvider: provider, // harness runs on the host, edits happen in the sandbox
 });
-
-for await (const event of agent.sendMessage(session, "Add error handling")) {
-  console.log(event.type, event.content);
-}
 ```
+
+Per-project skills live in the project repo under `.agents/skills/<name>/SKILL.md` (Agent Skills layout, `docs/decisions/0010`); Flue discovers them from the sandbox checkout automatically. `core.skills.list(...)` / `GET /api/projects/:id/skills` enumerate them.
 
 ## Runtime Harness
 
@@ -86,7 +111,7 @@ The harness runs inside the sandbox via `bun run harness.ts`. It:
 1. Scans project source for `"use step"` functions
 2. Wraps each step with instrumentation (input, output, timing, errors)
 3. Executes the workflow function with trigger data
-4. Reports results to `POST /api/runs/:runId/report`
+4. Emits a `CATAMORPHIC_REPORT:` JSON line on stdout, parsed by the server (the `POST /api/runs/:runId/report` push route exists but is not implemented yet)
 
 Environment variables:
 - `CATAMORPHIC_RUN_ID` — Run ID
@@ -97,20 +122,15 @@ Environment variables:
 
 ## Database Tables
 
-- `users` — Schema-only user model (no auth yet)
-- `project_members` — Project membership with roles
-- `project_sandboxes` — Tracks both execution and dev sandboxes
-- `agent_sessions` — Coding agent conversation sessions
-- `agent_messages` — Messages correlated with Git commit SHAs
+Runs persist to `workflow_runs` + `workflow_run_steps`. Migration `008` (re)introduced `project_sandboxes` (dev sandbox tracking per project + external user), `agent_sessions`, and `agent_messages` — all keyed by `external_user_id` (host identity), no `users` table.
 
 ## API Routes
 
-- `POST /api/runs/:runId/report` — Batch report from sandbox harness
-- `POST /api/projects/:projectId/agent/sessions` — Start agent session
-- `GET /api/projects/:projectId/agent/sessions` — List sessions
-- `GET /api/projects/:projectId/agent/sessions/:sessionId` — Get session with messages
-- `POST /api/projects/:projectId/agent/sessions/:sessionId/messages` — Send message
-- `DELETE /api/projects/:projectId/agent/sessions/:sessionId` — Close session
+- `POST /api/projects/:projectId/workflows/:name/runs` — Trigger a run (synchronous today)
+- `GET /api/runs/:runId` — Fetch run + steps
+- `POST /api/playground/run` — Test run from the editor (503 when no provider configured)
+- `POST/GET/DELETE /api/projects/:projectId/agent/sessions[...]` — Agent sessions + messages (503 when no `codingAgent` configured)
+- `GET /api/projects/:projectId/skills` — List per-project agent skills
 
 ## Adding a New Coding Agent Provider
 
@@ -128,7 +148,8 @@ interface CodingAgentProvider {
 
 ## Storage Backend Selection
 
-- `FsBackend` — Local dev, CI, tests (default)
-- `DaytonaBackend` — Production, uses Daytona sandboxes as Git repo storage
+- `FsBackend` / `FsRemoteBackend` (`@catamorphic/git`) — Local dev, CI, tests, simple hosts (default)
+- `ArtifactsRemoteBackend` (`@catamorphic/cloudflare`) — Cloudflare Artifacts remotes; implements `getCloneSource()` so sandboxes `git clone` with a short-lived token instead of receiving uploads
+- `DaytonaBackend` (`@catamorphic/daytona`) — Uses Daytona sandboxes as Git repo storage (experimental)
 
-Set via `STORAGE_BACKEND=fs|daytona` env var.
+The host chooses by constructing the backend it wants and passing it via `createCatamorphic({ storage })` — there is no env-var switch.

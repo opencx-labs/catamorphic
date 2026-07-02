@@ -1,6 +1,6 @@
 ---
-description: Workflow execution architecture — Daytona sandboxes, run lifecycle, and instrumentation constraints
-globs: ["packages/sandbox/**", "packages/runtime/**", "packages/server/src/services/**", "packages/server/src/routes/playground.ts"]
+description: Workflow execution architecture — sandbox providers, run lifecycle, and instrumentation constraints
+globs: ["packages/sandbox/**", "packages/runtime/**", "packages/core/src/services/**", "packages/fastify-plugin/src/routes/playground.ts"]
 alwaysApply: false
 ---
 
@@ -8,7 +8,9 @@ alwaysApply: false
 
 ## Sandbox Provider Interface
 
-Execution is abstracted behind `SandboxProvider` / `SandboxManager` so the underlying provider can be swapped. **Daytona is the default provider until further notice.** The Cloudflare Sandbox Bridge path (`CloudflareSandboxProvider`, see `CLOUDFLARE.md`) is wired up and kept working, but the server bootstrap in `packages/server/src/server.ts` always prefers Daytona when `DAYTONA_API_KEY` is set — even when the Cloudflare env vars are also populated. Never call the Daytona or Cloudflare SDKs directly from routes — go through the service layer.
+Execution is abstracted behind `SandboxProvider` / `SandboxManager` so the underlying provider can be swapped. Providers live in **vendor plugin packages** (see `docs/decisions/0008`): `CloudflareSandboxProvider` in `@catamorphic/cloudflare` (the default — see `docs/decisions/0004` and `CLOUDFLARE.md`) and `DaytonaSandboxProvider` in `@catamorphic/daytona`. `@catamorphic/sandbox` holds only the vendor-neutral contracts and must not depend on vendor SDKs. Hosts construct their chosen provider explicitly at boot and pass it to `createCatamorphic({ sandboxProvider })` — there is no env-sniffing selection helper. Never call the Cloudflare or Daytona SDKs directly from routes — go through the service layer.
+
+Providers handed to `CatamorphicCore` are automatically wrapped with `instrumentSandboxProvider` (OpenTelemetry spans for create/exec/upload/etc.) — do not double-wrap, and keep the wrapper's passthrough of the optional `hydrateWorkspace` method intact when extending the provider contract.
 
 ## Execution Model
 
@@ -18,10 +20,10 @@ Execution is abstracted behind `SandboxProvider` / `SandboxManager` so the under
 4. On completion (or error), update the run row with the result and final status.
 5. Step rows are written to `workflow_run_steps` if step instrumentation is active.
 
-## Two-Sandbox Model (Planned)
+## Two-Sandbox Model
 
 - **Execution sandbox**: immutable snapshot tied to a specific git commit. Versioned with the project. Used to run workflows reliably.
-- **Coding agent sandbox**: mutable, per-user session. The coding agent (Codex SDK) has read/write access to the project's working tree. Sessions are correlated with git commit metadata so every AI conversation is traceable to a code version.
+- **Dev (coding agent) sandbox**: mutable, per-(project, external user). Tracked in `project_sandboxes` (migration `008`). The coding agent has read/write access to the project checkout inside the sandbox; after each turn `AgentSessionsService` syncs changed files back into the user's dev working copy as an uncommitted draft. Sessions record `base_commit_sha` so every AI conversation is traceable to a code version.
 
 ## Step Instrumentation Constraints
 
@@ -33,10 +35,8 @@ The correct approach (future work) is a clean compile-time transform or a VM con
 
 ## Provider Availability
 
-Daytona is the default; Cloudflare is the documented alternate. The server degrades gracefully when **no** provider is configured (neither `DAYTONA_API_KEY` nor the `CLOUDFLARE_SANDBOX_API_URL` + `CLOUDFLARE_SANDBOX_API_KEY` pair): the `/api/playground/run` route returns `503 Service Unavailable`. The client surfaces this as a user-visible error, not a crash. Integration tests that require a specific provider use the `describeIf` skip pattern.
+The server degrades gracefully when **no** provider is configured (neither the `CLOUDFLARE_SANDBOX_API_URL` + `CLOUDFLARE_SANDBOX_API_KEY` pair nor `DAYTONA_API_KEY`): the `/api/playground/run` route returns `503 Service Unavailable`. The client surfaces this as a user-visible error, not a crash. Integration tests that require a specific provider use the `describeIf` skip pattern.
 
-## Coding Agent (Future)
+## Coding Agent
 
-First implementation targets **OpenAI Codex SDK** (client-side, no hosted server required). The agent interface will be behind an abstraction so other backends (Claude Code, etc.) can be plugged in. Sessions must store:
-- The git commit SHA at session start
-- Per-message deltas (commit SHA at time of each response)
+The agent is pluggable behind `CodingAgentProvider` (`docs/decisions/0009`). Implementations are vendor plugin packages: `@catamorphic/flue` (**flagship** — the Flue harness runs in the host server process and drives the dev sandbox remotely via the `catamorphicSandbox` adapter; model keys never enter the sandbox) and `@catamorphic/codex` (Codex SDK). Hosts pass one via `createCatamorphic({ codingAgent })`, which enables `core.agentSessions` and the agent HTTP routes. Sessions persist to `agent_sessions` / `agent_messages` with the git commit SHA at session start; per-project agent skills live in the repo under `.agents/skills/` (`docs/decisions/0010`).

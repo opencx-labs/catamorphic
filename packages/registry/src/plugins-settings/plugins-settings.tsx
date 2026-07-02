@@ -2,7 +2,6 @@
 
 import {
   type AttachedPlugin,
-  type PluginInfo,
   type PluginSecretDescriptor,
   useAttachPlugin,
   useDetachPlugin,

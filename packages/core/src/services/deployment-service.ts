@@ -7,7 +7,10 @@ import {
   pull,
   push,
 } from "@catamorphic/git";
+import { getTracer, withSpan } from "@catamorphic/otel";
 import { authorFor } from "../identity.js";
+
+const tracer = getTracer("@catamorphic/core");
 
 const REMOTE_BRANCH = "main";
 
@@ -145,6 +148,25 @@ export class DeploymentService {
   }
 
   async deploy(
+    tenantId: string,
+    projectId: string,
+    externalUserId: string,
+    opts?: { message?: string; files?: Record<string, string> },
+  ) {
+    return withSpan(
+      {
+        tracer,
+        name: "project.deploy",
+        attributes: {
+          "catamorphic.tenant.id": tenantId,
+          "catamorphic.project.id": projectId,
+        },
+      },
+      () => this.deployInner(tenantId, projectId, externalUserId, opts),
+    );
+  }
+
+  private async deployInner(
     tenantId: string,
     projectId: string,
     externalUserId: string,

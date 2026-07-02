@@ -49,8 +49,8 @@ about the contract, the data flow, or the operational gotchas changes.
 
 ```
 ┌─────────────────────┐      catalog / attach / secrets      ┌──────────────────┐
-│ Playground (Next)   │ ───────────────────────────────────▶ │  Fastify server  │
-│  plugins-settings   │                                      │                  │
+│ Host frontend       │ ───────────────────────────────────▶ │  Fastify server  │
+│  plugins-settings   │                                      │  (host-mounted)  │
 └──────────┬──────────┘                                      │  plugin routes   │
            │ generateWorkflowCode(projectId)                 │  agent-context   │
            ▼                                                 │  playground/run  │
@@ -198,7 +198,7 @@ Notes:
 
 ## Server services
 
-Everything lives in `packages/server/src/services/`.
+Everything lives in `packages/core/src/services/`.
 
 ### `PluginsService`
 
@@ -284,7 +284,7 @@ Revisit if a plugin ships a 100 KB d.ts.
 ## REST API
 
 All routes are registered by `registerPluginRoutes()` in
-`packages/server/src/routes/plugins.ts` and gated by the presence of the
+`packages/fastify-plugin/src/routes/plugins.ts` and gated by the presence of the
 `PluginsService` / `SecretsService` / `AgentContextService` in `AppConfig`
 (missing service → `503 Plugins not configured`).
 
@@ -379,7 +379,7 @@ Two LLMs need to know what's attached:
 The host app owns the workflow-builder prompt. Its flow:
 
 - Hits `GET /api/projects/:projectId/agent-context` on the mounted
-  `@catamorphic/server` (via `@catamorphic/api-client`).
+  `@catamorphic/fastify-plugin` (via `@catamorphic/api-client`).
 - Concatenates the returned `systemPromptSuffix` after the base builder
   prompt. If the fetch fails or returns empty the call continues without
   context (the agent is still usable, just blind to attached packages).
@@ -387,13 +387,14 @@ The host app owns the workflow-builder prompt. Its flow:
 Before this wiring the builder was a pure OpenAI call with a hardcoded
 system prompt, which is exactly why early demos hallucinated SDK calls.
 
-### 2. Coding agent (Codex, `packages/sandbox/src/coding-agent/codex-agent.ts`)
+### 2. Coding agent (`CodingAgentProvider` implementations — `@catamorphic/flue`, `@catamorphic/codex`)
 
-`CodexAgent.startSession({ attachedPlugins })`:
+`startSession({ attachedPlugins })` on every provider:
 
-- `stagePluginDocs()` writes each plugin's README + d.ts into
-  `<workspaceRoot>/_plugins/<slug>/` inside the dev sandbox, where the
-  agent can `read_file` them directly.
+- The shared staging helpers (`stagedPluginFiles` / `stagePluginDocs` in
+  `packages/sandbox/src/coding-agent/plugin-staging.ts`) write each plugin's
+  README + d.ts into `<workingDirectory>/_plugins/<slug>/` inside the dev
+  sandbox, where the agent can read them directly.
 - `buildPluginsPreamble()` generates a Markdown block listing each plugin
   and the absolute on-disk path of its staged docs.
 - The preamble is prepended to the first message passed to
@@ -463,7 +464,7 @@ pnpm -C backend exec catamorphic-db migrate   # from the host repo
 ### 4. Start the host
 
 Boot the host app with `CATAMORPHIC_ENABLED=true` + the env vars above so
-`@catamorphic/server` mounts inside it. For OpenCX: `cd opencx/backend && pnpm ddev`.
+`@catamorphic/fastify-plugin` mounts inside it. For OpenCX: `cd opencx/backend && pnpm ddev`.
 
 ### 5. Attach the plugin and set secrets
 
@@ -547,9 +548,9 @@ dir name was literally `%40opencx`.
 
 **Fix.** `encodePathSegment()` now decodes `%40` back to `@` after running
 `encodeURIComponent`. `@` is a valid `pchar` per RFC 3986 so the URL stays
-well-formed. See `packages/sandbox/src/cloudflare-provider.ts` and the
+well-formed. See `packages/cloudflare/src/sandbox-provider.ts` and the
 "keeps `@` un-encoded for scoped package paths" test in
-`cloudflare-provider.test.ts`.
+`sandbox-provider.test.ts`.
 
 ### 2. Production base URL 404s
 
@@ -572,7 +573,7 @@ log showed the preflight `OPTIONS` at 200 but never a `PUT`.
 `Access-Control-Request-Method` but didn't list `PUT` / `DELETE` in
 `Access-Control-Allow-Methods` for the browser.
 
-**Fix.** Explicit method list in `packages/server/src/app.ts`:
+**Fix.** Explicit method list in `packages/fastify-plugin/src/app.ts`:
 
 ```ts
 app.register(fastifyCors, {
@@ -586,10 +587,11 @@ app.register(fastifyCors, {
 **Symptom.** After setting `CATAMORPHIC_LOCAL_PLUGINS_DIR=...` the Plugins
 panel kept returning `503 Plugins not configured`.
 
-**Root cause.** `bun dev` in `packages/server` loads `.env` from the
-monorepo root (`../../.env`) — not from `packages/server/.env`.
+**Root cause.** The env var wasn't present in the **host process's**
+environment — catamorphic runs in-process inside the host, so only the host's
+env matters.
 
-**Fix.** Put the env var in the **root** `.env`, restart the server.
+**Fix.** Put the env var in the host's `.env`, restart the host.
 
 ### 5. Workflow builder hallucinating SDK calls
 
@@ -641,24 +643,24 @@ Quick index — every file that participates in the plugin subsystem.
 - `packages/plugins/src/__tests__/` — unit tests.
 
 **Server:**
-- `packages/server/src/services/plugins-service.ts` — DB ⇄ resolver bridge.
-- `packages/server/src/services/secrets-service.ts` — per-project secret store.
-- `packages/server/src/services/run-plugins-loader.ts` — per-run snapshot.
-- `packages/server/src/services/agent-context-service.ts` — LLM prompt builder.
-- `packages/server/src/routes/plugins.ts` — REST routes.
-- `packages/server/src/routes/playground.ts` — calls `RunPluginsLoader`.
-- `packages/server/src/app.ts` — CORS + route registration.
-- `packages/server/src/schemas.ts` — shared Zod DTOs.
+- `packages/core/src/services/plugins-service.ts` — DB ⇄ resolver bridge.
+- `packages/core/src/services/secrets-service.ts` — per-project secret store.
+- `packages/core/src/services/run-plugins-loader.ts` — per-run snapshot.
+- `packages/core/src/services/agent-context-service.ts` — LLM prompt builder.
+- `packages/fastify-plugin/src/routes/plugins.ts` — REST routes.
+- `packages/fastify-plugin/src/routes/playground.ts` — calls `RunPluginsLoader`.
+- `packages/fastify-plugin/src/app.ts` — CORS + route registration.
+- `packages/fastify-plugin/src/schemas.ts` — shared Zod DTOs.
 - Host boot code (e.g. OpenCX's `backend/src/catamorphic/boot.ts`) — wires resolver + services from env.
 
 **Sandbox:**
 - `packages/sandbox/src/run-executor.ts` — `uploadPluginPayloads`, env merge.
-- `packages/sandbox/src/cloudflare-provider.ts` — scoped-package upload fix.
+- `packages/cloudflare/src/sandbox-provider.ts` — scoped-package upload fix.
 - `packages/sandbox/src/coding-agent/codex-agent.ts` — staging + preamble.
 - `packages/sandbox/src/coding-agent/types.ts` — `AttachedPluginForAgent`.
 - `packages/sandbox/src/__tests__/run-executor.test.ts` — upload + env tests.
 - `packages/sandbox/src/__tests__/codex-agent-plugins.test.ts` — preamble tests.
-- `packages/sandbox/src/__tests__/cloudflare-provider.test.ts` — `@` encoding test.
+- `packages/cloudflare/src/__tests__/sandbox-provider.test.ts` — `@` encoding test.
 
 **Database:**
 - `packages/db/migrations/007_plugins_and_secrets.sql` — tables.
@@ -667,7 +669,7 @@ Quick index — every file that participates in the plugin subsystem.
 **Host UI (shadcn registry items):**
 - `packages/registry/src/plugins-settings/plugins-settings.tsx` — settings
   UI, installed into the host via `shadcn add`. Consumes hooks from
-  `@catamorphic/react` and talks to `@catamorphic/server` through
+  `@catamorphic/react` and talks to `@catamorphic/fastify-plugin` through
   `@catamorphic/api-client`.
 
 **Plugin example (outside this repo):**

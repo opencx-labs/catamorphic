@@ -63,7 +63,12 @@ export class FsRemoteBackend implements RemoteBackend {
   }
 }
 
-class FsOriginRepo implements OriginRepo {
+/**
+ * OriginRepo over a local bare repo directory. Used directly by
+ * `FsRemoteBackend` and reused by network-remote backends (e.g. Cloudflare
+ * Artifacts) that maintain a local bare mirror.
+ */
+export class FsOriginRepo implements OriginRepo {
   constructor(readonly gitdir: string) {}
 
   async resolveRef(ref: string): Promise<string | null> {

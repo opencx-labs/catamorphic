@@ -19,8 +19,7 @@
     "typecheck": "tsgo --project ./tsconfig.json"
   },
   "dependencies": {
-    "@daytonaio/sdk": "^0.164.0",
-    "@openai/codex-sdk": "^0.120.0"
+    "@catamorphic/otel": "workspace:*"
   },
   "devDependencies": {
     "@types/node": "^25.6.0"

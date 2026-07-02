@@ -117,6 +117,19 @@ export interface ProjectRepo {
 }
 
 /**
+ * Everything a git client (sandbox, CI job, local checkout) needs to clone a
+ * project directly from the remote backend. Credentials are typically
+ * short-lived scoped tokens — treat the value as ephemeral and request a
+ * fresh one per operation.
+ */
+export interface CloneSource {
+  url: string;
+  username?: string;
+  password?: string;
+  branch?: string;
+}
+
+/**
  * A backend that stores the canonical (shared) bare repository for a project.
  * The "origin" in git terminology — contents are never checked out; only git
  * objects + refs live here. Push/pull is orchestrated by the server using
@@ -128,14 +141,26 @@ export interface RemoteBackend {
   exists(tenantId: string, projectId: string): Promise<boolean>;
   /**
    * Invoke `fn` with an {@link OriginRepo} scoped to the project's bare repo.
-   * Implementations decide whether this is a local FS path or an ephemeral
-   * sandbox mounting a Daytona volume; the interface is always the same.
+   * Implementations decide whether this is a local FS path or a synced mirror
+   * of a network remote (e.g. Cloudflare Artifacts); the interface is always
+   * the same.
    */
   withOrigin<T>(
     tenantId: string,
     projectId: string,
     fn: (origin: OriginRepo) => Promise<T>,
   ): Promise<T>;
+  /**
+   * Optional capability: backends whose origin is a real network git remote
+   * (Cloudflare Artifacts) can hand out a URL + short-lived credentials so
+   * sandboxes `git clone` the project directly instead of receiving file
+   * uploads from the host. FS-backed origins do not implement this.
+   */
+  getCloneSource?(
+    tenantId: string,
+    projectId: string,
+    opts?: { scope?: "read" | "write" },
+  ): Promise<CloneSource>;
 }
 
 /**

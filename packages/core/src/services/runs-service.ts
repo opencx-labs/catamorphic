@@ -1,5 +1,6 @@
 import type { DB, JsonObject } from "@catamorphic/db";
-import type { ProjectManager } from "@catamorphic/git";
+import type { CloneSource, ProjectManager } from "@catamorphic/git";
+import { getTracer, withSpan } from "@catamorphic/otel";
 import type { SandboxProvider } from "@catamorphic/sandbox";
 import type { Kysely, Selectable } from "kysely";
 import type { Identity } from "../identity.js";
@@ -86,6 +87,8 @@ export class PluginSecretsMissingError extends Error {
   }
 }
 
+const tracer = getTracer("@catamorphic/core");
+
 export class SandboxProviderNotConfiguredError extends Error {
   constructor() {
     super("Sandbox provider not configured");
@@ -106,7 +109,7 @@ interface RunsServiceDeps {
 /**
  * Reads `workflow_runs` + `workflow_run_steps` and triggers new runs against
  * the project's HEAD commit. Execution is delegated to `PlaygroundExecutor`
- * which owns the Daytona sandbox lifecycle.
+ * which owns the sandbox lifecycle.
  */
 export class RunsService {
   private readonly projectManager: ProjectManager;
@@ -186,7 +189,7 @@ export class RunsService {
    * Trigger a workflow run against the project's HEAD commit. Opens the
    * project's dev working copy, reads all files, resolves HEAD, loads
    * attached plugins + secrets, then hands off to `PlaygroundExecutor` which
-   * spawns a Daytona sandbox and executes the harness. Persists the run + its
+   * spawns a sandbox and executes the harness. Persists the run + its
    * steps to `workflow_runs` / `workflow_run_steps` as the execution
    * progresses.
    */
@@ -195,6 +198,30 @@ export class RunsService {
     projectId: string,
     workflowName: string,
     input: TriggerRunInput,
+  ): Promise<Run> {
+    return withSpan(
+      {
+        tracer,
+        name: "workflow.run",
+        attributes: {
+          "catamorphic.project.id": projectId,
+          "catamorphic.workflow.name": workflowName,
+          "catamorphic.tenant.id": identity.tenantId,
+        },
+      },
+      (span) =>
+        this.triggerInner(identity, projectId, workflowName, input, (runId) =>
+          span.setAttribute("catamorphic.run.id", runId),
+        ),
+    );
+  }
+
+  private async triggerInner(
+    identity: Identity,
+    projectId: string,
+    workflowName: string,
+    input: TriggerRunInput,
+    onRunId: (runId: string) => void,
   ): Promise<Run> {
     if (!this.sandboxProvider) {
       throw new SandboxProviderNotConfiguredError();
@@ -209,9 +236,27 @@ export class RunsService {
     );
     let files: Record<string, string>;
     let commitSha: string;
+    let cloneSource: CloneSource | undefined;
     try {
       files = await repo.readAllFiles();
       commitSha = await repo.resolveRef("HEAD");
+
+      // Prefer having the sandbox clone from the origin (e.g. Cloudflare
+      // Artifacts) instead of uploading files — but only when the origin is
+      // known to contain the commit being executed (dev HEAD == origin/main).
+      const remoteBackend = this.projectManager.remoteBackend;
+      if (remoteBackend?.getCloneSource) {
+        const remoteSha = await repo
+          .resolveRef("refs/remotes/origin/main")
+          .catch(() => null);
+        if (remoteSha === commitSha) {
+          cloneSource = await remoteBackend.getCloneSource(
+            identity.tenantId,
+            projectId,
+            { scope: "read" },
+          );
+        }
+      }
     } finally {
       await repo.dispose();
     }
@@ -220,9 +265,7 @@ export class RunsService {
       throw new WorkflowNotFoundError(projectId, workflowName);
     }
 
-    let plugins:
-      | Awaited<ReturnType<NonNullable<typeof this.runPluginsLoader>["load"]>>
-      | undefined;
+    let plugins: Awaited<ReturnType<RunPluginsLoader["load"]>> | undefined;
     if (this.runPluginsLoader) {
       plugins = await this.runPluginsLoader.load(projectId);
       if (plugins.missingRequiredSecrets.length > 0) {
@@ -232,6 +275,7 @@ export class RunsService {
 
     const triggerData = input.triggerData ?? {};
     const runId = crypto.randomUUID();
+    onRunId(runId);
     const startedAt = new Date();
 
     await this.db
@@ -254,6 +298,7 @@ export class RunsService {
       workflowName,
       triggerData,
       commitSha,
+      cloneSource,
       plugins: plugins?.plugins,
       secrets: plugins?.secrets,
     });
@@ -314,7 +359,7 @@ export class RunsService {
 
 /**
  * Cheap pre-flight check so we fail fast with `WorkflowNotFoundError` before
- * spawning a Daytona sandbox. The harness does its own discovery, but a
+ * spawning a sandbox. The harness does its own discovery, but a
  * missing workflow would otherwise surface as a `status: 'failed'` run with a
  * generic error string.
  */

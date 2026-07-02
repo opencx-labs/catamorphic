@@ -2,6 +2,8 @@ import { describe, expect, it } from "vitest";
 import {
   findStepFunctions,
   hasUseStepDirective,
+  INSTRUMENTED_MARKER,
+  instrumentSource,
   wrapStep,
 } from "../step-wrapper.js";
 import type { StepEntry } from "../types.js";
@@ -92,6 +94,58 @@ export async function myWorkflow() {
     const source = `const x = "use step";`;
     const result = findStepFunctions(source);
     expect(result).toHaveLength(0);
+  });
+});
+
+describe("instrumentSource", () => {
+  it("renames step declarations and re-binds through the global wrapper", () => {
+    const source = `
+async function sendEmail({ to }: { to: string }) {
+  "use step";
+  return to;
+}
+
+export async function myWorkflow({ to }: { to: string }) {
+  "use workflow";
+  return sendEmail({ to });
+}`;
+    const result = instrumentSource(source);
+    expect(result).not.toBeNull();
+    expect(result).toContain("function __catamorphic_step_sendEmail");
+    expect(result).toContain(
+      'const sendEmail = globalThis.__catamorphicWrapStep(__catamorphic_step_sendEmail, "sendEmail");',
+    );
+    // Workflow function untouched.
+    expect(result).toContain("export async function myWorkflow");
+  });
+
+  it("preserves export on exported step functions", () => {
+    const source = `
+export async function myStep({ data }: { data: string }) {
+  "use step";
+  return data;
+}`;
+    const result = instrumentSource(source);
+    expect(result).toContain(
+      'export const myStep = globalThis.__catamorphicWrapStep(__catamorphic_step_myStep, "myStep");',
+    );
+    expect(result).not.toContain("export async function __catamorphic_step_");
+  });
+
+  it("returns null when there are no step functions", () => {
+    expect(instrumentSource(`export const x = 1;`)).toBeNull();
+  });
+
+  it("is idempotent via the instrumented marker", () => {
+    const source = `
+async function s({ x }: { x: number }) {
+  "use step";
+  return x;
+}`;
+    const first = instrumentSource(source);
+    expect(first).not.toBeNull();
+    expect(first!.startsWith(INSTRUMENTED_MARKER)).toBe(true);
+    expect(instrumentSource(first!)).toBeNull();
   });
 });
 

@@ -29,33 +29,35 @@ export function useDeployProject(
 ): UseMutationResult<
   DeployResult,
   CatamorphicError,
-  DeployProjectInput | void
+  DeployProjectInput | undefined
 > {
   const { apiClient } = useCatamorphic();
   const queryClient = useQueryClient();
-  return useMutation<DeployResult, CatamorphicError, DeployProjectInput | void>(
-    {
-      mutationFn: (input) =>
-        runWithCatamorphicError(async () => {
-          const result = await apiClient.POST(
-            "/api/projects/{projectId}/deploy",
-            {
-              params: { path: { projectId } },
-              body: input ?? {},
-            },
-          );
-          return assertApiOk(result, "Deploy failed");
-        }),
-      onSuccess: (data) => {
-        if (data.status === "deployed") {
-          queryClient.invalidateQueries({
-            queryKey: ["cat", "project", projectId, "git"],
-          });
-          queryClient.invalidateQueries({
-            queryKey: ["cat", "project", projectId, "workflows"],
-          });
-        }
-      },
+  return useMutation<
+    DeployResult,
+    CatamorphicError,
+    DeployProjectInput | undefined
+  >({
+    mutationFn: (input) =>
+      runWithCatamorphicError(async () => {
+        const result = await apiClient.POST(
+          "/api/projects/{projectId}/deploy",
+          {
+            params: { path: { projectId } },
+            body: input ?? {},
+          },
+        );
+        return assertApiOk(result, "Deploy failed");
+      }),
+    onSuccess: (data) => {
+      if (data.status === "deployed") {
+        queryClient.invalidateQueries({
+          queryKey: ["cat", "project", projectId, "git"],
+        });
+        queryClient.invalidateQueries({
+          queryKey: ["cat", "project", projectId, "workflows"],
+        });
+      }
     },
-  );
+  });
 }

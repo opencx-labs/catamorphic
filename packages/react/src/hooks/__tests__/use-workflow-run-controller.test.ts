@@ -1,3 +1,4 @@
+import type { WorkflowGraph } from "@catamorphic/parser";
 import { act, waitFor } from "@testing-library/react";
 import { useAtom } from "jotai";
 import { describe, expect, it, vi } from "vitest";
@@ -10,20 +11,45 @@ import {
 import { renderHookWithProviders } from "../../test/render.js";
 import { useWorkflowRunController } from "../use-workflow-run-controller.js";
 
-const SAMPLE_GRAPH = {
+const SAMPLE_RANGE = {
+  start: 0,
+  end: 0,
+  startLine: 1,
+  startColumn: 0,
+  endLine: 1,
+  endColumn: 0,
+};
+
+const SAMPLE_GRAPH: WorkflowGraph = {
   name: "sample",
-  displayName: null,
-  description: null,
   filePath: "workflows/sample.ts",
   trigger: { parameters: [] },
   nodes: [
-    { id: "trigger", type: "trigger", label: "start", metadata: {} },
-    { id: "step-1", type: "step", label: "step1", metadata: {} },
-    { id: "return", type: "return", label: "end", metadata: {} },
+    {
+      id: "trigger",
+      type: "trigger",
+      label: "start",
+      metadata: {},
+      sourceRange: SAMPLE_RANGE,
+    },
+    {
+      id: "step-1",
+      type: "step",
+      label: "step1",
+      metadata: {},
+      sourceRange: SAMPLE_RANGE,
+    },
+    {
+      id: "return",
+      type: "return",
+      label: "end",
+      metadata: {},
+      sourceRange: SAMPLE_RANGE,
+    },
   ],
   edges: [],
   sourceCode: "",
-} as const;
+};
 
 describe("useWorkflowRunController", () => {
   it("optimistically inserts a run and reconciles on success", async () => {
@@ -46,7 +72,6 @@ describe("useWorkflowRunController", () => {
     });
 
     const { result } = renderHookWithProviders(() => {
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const [, setGraph] = useAtom(graphAtom);
       const [runs] = useAtom(runsAtom);
       const [activeRunId] = useAtom(activeRunIdAtom);
@@ -56,8 +81,7 @@ describe("useWorkflowRunController", () => {
     });
 
     act(() => {
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      result.current.setGraph(SAMPLE_GRAPH as any);
+      result.current.setGraph(SAMPLE_GRAPH);
     });
 
     await act(async () => {
@@ -81,8 +105,7 @@ describe("useWorkflowRunController", () => {
     });
 
     act(() => {
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      result.current.setGraph(SAMPLE_GRAPH as any);
+      result.current.setGraph(SAMPLE_GRAPH);
     });
 
     await act(async () => {

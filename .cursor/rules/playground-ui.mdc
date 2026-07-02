@@ -10,7 +10,7 @@ These conventions apply to the embeddable editor shipped from `@catamorphic/ui` 
 
 ## Data access rule
 
-Editor components **must only communicate with the embed server** (either `@catamorphic/server` mounted by the host, or via `@catamorphic/sdk`). They never import from `@catamorphic/db` or talk to the database directly. All data flows through `@catamorphic/api-client` or the host's own proxy.
+Editor components **must only communicate with the embed server** (either `@catamorphic/fastify-plugin` mounted by the host, or via `@catamorphic/server-sdk`). They never import from `@catamorphic/db` or talk to the database directly. All data flows through `@catamorphic/api-client` or the host's own proxy.
 
 ## Run Execution Flow
 

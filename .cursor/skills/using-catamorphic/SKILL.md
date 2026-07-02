@@ -1,16 +1,17 @@
 ---
 name: using-catamorphic
-description: Embed Catamorphic (code-first workflow builder) inside a host app. Use when integrating the @catamorphic/sdk, @catamorphic/db, @catamorphic/api-client, @catamorphic/react, or @catamorphic/ui packages, wiring the CatamorphicProvider, mounting the WorkflowEditor canvas, booting the SDK with Postgres + git + sandbox, or when the user mentions catamorphic, workflow editor, workflow canvas, tenant id, external user id, or embedding catamorphic.
+description: Embed Catamorphic (code-first workflow builder) inside a host app. Use when integrating the @catamorphic/server-sdk, @catamorphic/fastify-plugin, @catamorphic/db, @catamorphic/api-client, @catamorphic/react, or @catamorphic/ui packages, wiring the CatamorphicProvider, mounting the WorkflowEditor canvas, booting the SDK with Postgres + git + sandbox, or when the user mentions catamorphic, workflow editor, workflow canvas, tenant id, external user id, or embedding catamorphic.
 ---
 
 # Using Catamorphic
 
-Catamorphic is an **embed-first** code-first workflow builder. The host app owns auth, users, orgs, and (usually) the Postgres database. Catamorphic supplies:
+Catamorphic is an **embeddable** code-first workflow builder. The host app owns auth, users, orgs, and the Postgres database. Catamorphic supplies:
 
-- a **backend SDK** (`@catamorphic/sdk`) for in-process project/workflow/file CRUD
+- a **backend SDK** (`@catamorphic/server-sdk`) for in-process project/workflow/file CRUD + execution
+- a **mountable Fastify plugin** (`@catamorphic/fastify-plugin`) exposing the HTTP API
 - **headless React bindings** (`@catamorphic/react`) for data hooks + jotai atoms
 - a **drop-in editor UI** (`@catamorphic/ui`) rendered with React Flow
-- a **typed HTTP client** (`@catamorphic/api-client`) for out-of-process setups
+- a **typed HTTP client** (`@catamorphic/api-client`) for frontends and non-Node backends
 - a **migration CLI + Kysely instance** (`@catamorphic/db`) for the schema
 
 Everything is scoped by a `tenantId` (= host org id) and an `externalUserId` (= host user id). Catamorphic never references host tables.
@@ -21,8 +22,8 @@ Choose **one** backend integration; the React/UI layer is the same in both.
 
 | Path | Use When | Packages |
 | --- | --- | --- |
-| **Library-direct (recommended)** | Host is Node/Bun and can import catamorphic in-process | `@catamorphic/sdk` + `@catamorphic/db` + `@catamorphic/git` (+ optional `@catamorphic/sandbox`, `@catamorphic/plugins`) |
-| **HTTP sidecar** | Host is non-Node or wants a network boundary | Mount `@catamorphic/server` via `createApp({ core })` inside the host process (or as a separate service); host consumes `@catamorphic/api-client` |
+| **Library-direct (recommended)** | Host is Node/Bun and can import catamorphic in-process | `@catamorphic/server-sdk` (re-exports db/git/sandbox building blocks) |
+| **HTTP** | Frontend needs the API, host is non-Node, or wants a network boundary | Register `catamorphicPlugin` from `@catamorphic/fastify-plugin` on the host's Fastify server (or run `createApp` as a sidecar); consume via `@catamorphic/api-client` |
 | **DB-only (reporting)** | Host just needs to JOIN against catamorphic tables | `@catamorphic/db` migrations only |
 
 Frontend is always `@catamorphic/react` (+ optionally `@catamorphic/ui`) talking through `@catamorphic/api-client` to whichever backend surface is live.
@@ -46,43 +47,29 @@ Never hardcode these; always pull from the host's auth context.
 Install (workspace/local — see `Local Dev Linking` below for file: installs):
 
 ```bash
-pnpm add @catamorphic/sdk @catamorphic/db @catamorphic/git @catamorphic/sandbox @catamorphic/plugins kysely
+pnpm add @catamorphic/server-sdk
 ```
 
-### 1) Run migrations once
-
-```bash
-DATABASE_URL=postgres://... \
-CATAMORPHIC_DB_SCHEMA=catamorphic \
-pnpm exec catamorphic-db migrate
-```
-
-The schema defaults to `catamorphic`. Use a distinct schema if the host already has a table with a colliding name.
-
-### 2) Boot the SDK at process start
+### 1) Boot the SDK at process start
 
 ```ts
-import { createDatabase } from "@catamorphic/db";
-import { FsBackend, FsRemoteBackend, ProjectManager } from "@catamorphic/git";
-import { DaytonaSandboxProvider } from "@catamorphic/sandbox";
-import { LocalPluginResolver } from "@catamorphic/plugins";
-import { createCatamorphic } from "@catamorphic/sdk";
-
-const db = createDatabase({
-  connectionString: process.env.DATABASE_URL!,
-  schema: "catamorphic",
-});
+import { CloudflareSandboxProvider } from "@catamorphic/cloudflare";
+import { createCatamorphic, LocalPluginResolver } from "@catamorphic/server-sdk";
 
 export const catamorphic = createCatamorphic({
-  db,
-  projectManager: new ProjectManager(
-    new FsBackend(process.env.CATAMORPHIC_PROJECTS_PATH!),
-    new FsRemoteBackend(process.env.CATAMORPHIC_REMOTES_PATH!),
-  ),
-  // Optional — only needed for run execution.
-  sandboxProvider: process.env.DAYTONA_API_KEY
-    ? new DaytonaSandboxProvider({ apiKey: process.env.DAYTONA_API_KEY })
-    : undefined,
+  // { pool } (host-owned), { connectionString } (catamorphic-owned), or { db }.
+  // Tables live in the `catamorphic` schema either way (override with `schema`).
+  database: { pool: hostPgPool },
+  storage: {
+    projectsPath: process.env.CATAMORPHIC_PROJECTS_PATH!,
+    remotesPath: process.env.CATAMORPHIC_REMOTES_PATH!,
+  },
+  // Optional — only needed for run execution. Backends are vendor plugin
+  // packages: @catamorphic/cloudflare (default) or @catamorphic/daytona.
+  sandboxProvider: new CloudflareSandboxProvider({
+    apiUrl: process.env.CLOUDFLARE_SANDBOX_API_URL!,
+    apiKey: process.env.CLOUDFLARE_SANDBOX_API_KEY,
+  }),
   // Optional — only needed for plugin attachment + secrets.
   pluginResolver: process.env.CATAMORPHIC_LOCAL_PLUGINS_DIR
     ? new LocalPluginResolver(process.env.CATAMORPHIC_LOCAL_PLUGINS_DIR)
@@ -90,7 +77,23 @@ export const catamorphic = createCatamorphic({
 });
 ```
 
-Catamorphic **does not** call `db.destroy()` — the host owns the connection's lifetime.
+Catamorphic never destroys host-owned pools/Kysely instances; `catamorphic.close()` only closes what it created.
+
+### 2) Run migrations
+
+Idempotent and schema-scoped. Programmatically:
+
+```ts
+await catamorphic.migrate();
+```
+
+Or via CLI in a deploy step:
+
+```bash
+DATABASE_URL=postgres://... \
+CATAMORPHIC_DB_SCHEMA=catamorphic \
+pnpm exec catamorphic-db migrate
+```
 
 ### 3) Per-request: bind identity, call resources
 
@@ -118,7 +121,7 @@ await scoped.workflows.list(projectId);
 await scoped.workflows.get(projectId, "welcomeUser", { ref: "HEAD" });
 ```
 
-Anything not covered by the SDK v1 surface (runs, plugins, secrets, deploy/pull/diff) is reachable via `catamorphic.core.runs.*`, `catamorphic.core.plugins.*`, `catamorphic.core.deployment.*`, etc. — these take `identity` as their first argument (build it yourself: `{ tenantId, externalUserId }`).
+Anything not covered by the scoped-client surface (runs, plugins, secrets, deploy/pull/diff) is reachable via `catamorphic.core.runs.*`, `catamorphic.core.plugins.*`, `catamorphic.core.deployment.*`, etc. — these take `identity` as their first argument (build it yourself: `{ tenantId, externalUserId }`).
 
 ### 4) Triggering runs
 
@@ -135,18 +138,29 @@ It requires `sandboxProvider` at boot — without it the method throws `SandboxP
 
 Over HTTP the same path is `POST /api/projects/:projectId/workflows/:name/runs` with body `{ triggerData?: Record<string, unknown> }`, which `useTriggerWorkflowRun` (and the `runs-panel` registry item) already calls.
 
-## Backend Path B — HTTP Sidecar
+## Backend Path B — HTTP via the Fastify plugin
 
-Mount `@catamorphic/server` inside the host process (or as a separate service) with the exact same `CatamorphicCore`:
+Register `catamorphicPlugin` on the host's own Fastify server with the exact same `CatamorphicCore`:
 
 ```ts
-import { createApp as createCatamorphicApp } from "@catamorphic/server";
+import { catamorphicPlugin } from "@catamorphic/fastify-plugin";
 
-const app = createCatamorphicApp({ core });
+app.register(catamorphicPlugin, {
+  core: catamorphic.core,
+  prefix: "/api", // the generated api-client expects /api
+});
+```
+
+The plugin is encapsulated (its Zod compilers + error handler don't leak) and registers no CORS — the host owns cross-origin policy. For a sidecar process, `createApp({ core })` returns a complete Fastify app (CORS + Swagger UI at `/docs`, plugin at `/api`):
+
+```ts
+import { createApp } from "@catamorphic/fastify-plugin";
+
+const app = createApp({ core: catamorphic.core });
 await app.listen({ port: 8500, host: "0.0.0.0" });
 ```
 
-The server requires `X-Catamorphic-Tenant-Id` and `X-External-User-Id` on every request — there are no standalone defaults.
+Every route requires `X-Catamorphic-Tenant-Id` and `X-External-User-Id` — there are no defaults. Set them server-side from the host's verified auth context.
 
 The host consumes the server via the generated client:
 
@@ -468,13 +482,18 @@ Use cases:
 
 | Package | Use In | Key Exports |
 | --- | --- | --- |
-| `@catamorphic/sdk` | Node/Bun backend | `createCatamorphic`, `Catamorphic`, `ScopedClient`, `TenantScopedClient` |
+| `@catamorphic/server-sdk` | Node/Bun backend | `createCatamorphic`, `Catamorphic` (`migrate()`, `close()`, `forTenant`), `ScopedClient`, re-exports of db/git/sandbox/plugins building blocks |
 | `@catamorphic/core` | Advanced backend | `CatamorphicCore`, `createCatamorphicCore`, service classes + identity helpers |
-| `@catamorphic/db` | Backend + migrations | `createDatabase`, `DB` (Kysely types), `catamorphic-db` CLI (`migrate`, `status`, `reset`) |
-| `@catamorphic/git` | Backend | `ProjectManager`, `FsBackend`, `FsRemoteBackend`, `DaytonaBackend` |
-| `@catamorphic/sandbox` | Backend (optional) | `DaytonaSandboxProvider`, `CloudflareSandboxProvider`, `SandboxManagerImpl`, `RunExecutorImpl`, `CodexAgent` |
+| `@catamorphic/db` | Backend + migrations | `createDatabase` (pool or connection string), `migrateToLatest`, `DB` (Kysely types), `catamorphic-db` CLI (`migrate`, `status`, `reset`) |
+| `@catamorphic/git` | Backend | `ProjectManager`, `FsBackend`, `FsRemoteBackend`, `FsOriginRepo` |
+| `@catamorphic/sandbox` | Backend (optional) | `SandboxProvider` + `CodingAgentProvider` contracts, `instrumentSandboxProvider`, `SandboxManagerImpl`, `RunExecutorImpl` |
+| `@catamorphic/cloudflare` | Backend (plugin) | `CloudflareSandboxProvider`, `ArtifactsClient`, `ArtifactsRemoteBackend` |
+| `@catamorphic/daytona` | Backend (plugin) | `DaytonaSandboxProvider`, `DaytonaBackend`, `DaytonaProjectRepo` |
+| `@catamorphic/flue` | Backend (plugin) | `FlueCodingAgent` (flagship coding agent, server-side Flue harness), `catamorphicSandbox`, `defineSkill`, `defineTool`, `registerProvider` |
+| `@catamorphic/codex` | Backend (plugin) | `CodexAgent` (Codex SDK coding agent) |
 | `@catamorphic/plugins` | Backend (optional) | `LocalPluginResolver`, `PluginManifestSchema`, `PluginResolver` |
-| `@catamorphic/server` | Backend (HTTP path) | `createApp({ core })` — Fastify app factory mounted by the host |
+| `@catamorphic/fastify-plugin` | Backend (HTTP path) | `catamorphicPlugin` (mountable, encapsulated), `createApp({ core })` app factory |
+| `@catamorphic/otel` | Backend libraries | `getTracer`, `withSpan` — `@opentelemetry/api` helpers; host owns the OTel SDK |
 | `@catamorphic/api-client` | Frontend or non-Node backend | `createApiClient`, `CatamorphicApiClient`, `paths` (OpenAPI) |
 | `@catamorphic/react` | Frontend | `CatamorphicProvider`, `useCatamorphic`, data hooks (projects/runs/git/plugins/secrets/agent), atoms, `useWorkflowGraph`, `useSelectedNode`, `useProjectGitState`, `useOnParse`/`useParseWorkflow`, `CatamorphicError`, `isCatamorphicError` |
 | `@catamorphic/react/types` | Frontend | OpenAPI-derived domain types (`Project`, `Run`, `RepoStatus`, `BranchInfo`, `ConflictEntry`, `PluginInfo`, `Secret`, `AgentSession`, …) |
@@ -491,21 +510,22 @@ Backend (SDK):
 - `CATAMORPHIC_DB_SCHEMA` — schema name (default `catamorphic`)
 - `CATAMORPHIC_PROJECTS_PATH` — fs path for per-user git working trees
 - `CATAMORPHIC_REMOTES_PATH` — fs path for bare git remotes
-- `DAYTONA_API_KEY` — optional, enables sandboxed run execution
+- `CLOUDFLARE_SANDBOX_API_URL` + `CLOUDFLARE_SANDBOX_API_KEY` — default sandbox provider (Bridge Worker; see `CLOUDFLARE.md`)
+- `DAYTONA_API_KEY` — alternate sandbox provider (used when Cloudflare vars unset)
 - `CATAMORPHIC_LOCAL_PLUGINS_DIR` — optional, enables local plugin resolution
 
 Frontend (HTTP path):
 
-- `NEXT_PUBLIC_CATAMORPHIC_URL` (or equivalent) — base URL of `@catamorphic/server`
+- `NEXT_PUBLIC_CATAMORPHIC_URL` (or equivalent) — base URL where the host mounts `@catamorphic/fastify-plugin`
 
 ## Common Pitfalls
 
-- **Missing `X-Catamorphic-Tenant-Id` / `X-External-User-Id`**. `@catamorphic/server` returns 400 on every route that needs identity — both headers are mandatory (no standalone fallback). Set them on *every* request via a `fetch` wrapper — don't set them per-call.
+- **Missing `X-Catamorphic-Tenant-Id` / `X-External-User-Id`**. `@catamorphic/fastify-plugin` returns 400 on every route that needs identity — both headers are mandatory (no standalone fallback). Set them on *every* request via a `fetch` wrapper — don't set them per-call.
 - **`Content-Type: application/json` stripped by `fetch` wrapper.** openapi-fetch passes a built `Request` as `input`; always seed `new Headers(input instanceof Request ? input.headers : init?.headers)` before overriding.
 - **Using `@catamorphic/ui` without the stylesheet.** Import `@catamorphic/ui/styles.css` once at the root — class names use the `.catamorphic-*` prefix so host CSS doesn't clash.
 - **Double `QueryClientProvider`.** `CatamorphicProvider` mounts its own if you don't pass `queryClient`. In hosts that already have one, pass it explicitly so queries share a cache.
-- **Running migrations on every boot.** Run `catamorphic-db migrate` in CI/deploy, not in app startup.
-- **Forgetting the search_path.** `createDatabase({ schema })` sets `search_path` on each connection. Do not share a `pg.Pool` with host code that expects `public`.
+- **Migrations.** `catamorphic.migrate()` / `catamorphic-db migrate` are idempotent and schema-scoped; prefer running them in CI/deploy.
+- **Schema scoping with shared pools.** `createDatabase({ connectionString, schema })` sets `search_path` on connections it creates — don't hand that pool to host code expecting `public`. Host-owned pools passed as `{ pool }` are safe: catamorphic schema-qualifies its queries via Kysely's `WithSchemaPlugin` and leaves the pool's `search_path` alone.
 - **Calling hooks outside the provider.** `useCatamorphic must be used within a <CatamorphicProvider>` means the tree is missing the provider (or there are two React copies; check peer dep resolution).
 - **Branching on `error.message`.** All hooks reject with `CatamorphicError`; switch on `err.code` (use `isCatamorphicError(err)` first). `message` is for humans; `details` carries the typed payload (e.g. conflict files).
 - **Re-declaring server shapes.** Don't `interface Run {…}` in your own files — import from `@catamorphic/react/types` so you get whatever the OpenAPI schema says today.

@@ -1,7 +1,5 @@
-export { DaytonaBackend } from "./daytona-backend.js";
-export { DaytonaProjectRepo } from "./daytona-project-repo.js";
 export { FsBackend } from "./fs-backend.js";
-export { FsRemoteBackend } from "./fs-remote-backend.js";
+export { FsOriginRepo, FsRemoteBackend } from "./fs-remote-backend.js";
 export {
   fetchRemote,
   PushNotFastForwardError,
@@ -17,6 +15,7 @@ export {
 export { ProjectRepoImpl } from "./project-repo.js";
 export type {
   BranchInfo,
+  CloneSource,
   CommitInfo,
   ConflictEntry,
   DiffEntry,

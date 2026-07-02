@@ -39,7 +39,7 @@ For **new untracked files**, use `git add -N <path>` then `git add -p <path>` so
 | ----- | --------------- |
 | `parser` | `packages/parser` |
 | `ui` | `packages/ui` |
-| `server` | `packages/server` |
+| `fastify-plugin` | `packages/fastify-plugin` |
 | `db` | `packages/db` (migrations, Kysely) |
 | `runtime` | `packages/runtime` |
 | `sandbox` | `packages/sandbox` |

@@ -16,10 +16,18 @@ import type { TriggeredRun, TriggerRunInput } from "../types.js";
 export function useTriggerWorkflowRun(
   projectId: string,
   name: string,
-): UseMutationResult<TriggeredRun, CatamorphicError, TriggerRunInput | void> {
+): UseMutationResult<
+  TriggeredRun,
+  CatamorphicError,
+  TriggerRunInput | undefined
+> {
   const { apiClient } = useCatamorphic();
   const queryClient = useQueryClient();
-  return useMutation<TriggeredRun, CatamorphicError, TriggerRunInput | void>({
+  return useMutation<
+    TriggeredRun,
+    CatamorphicError,
+    TriggerRunInput | undefined
+  >({
     mutationFn: (input) =>
       runWithCatamorphicError(async () => {
         const result = await apiClient.POST(

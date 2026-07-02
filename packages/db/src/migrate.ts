@@ -1,7 +1,9 @@
 import fs from "node:fs";
 import path from "node:path";
+import type { Kysely } from "kysely";
 import { sql } from "kysely";
 import {
+  DEFAULT_SCHEMA,
   quoteIdentifier,
   resolveDatabaseUrl,
   resolveSchema,
@@ -10,14 +12,37 @@ import { createDatabase } from "./database.js";
 import { isExecutedDirectly } from "./is-main.js";
 import { getMigrationsDir } from "./migrations-dir.js";
 
-export async function runMigrate() {
-  const connectionString = resolveDatabaseUrl();
-  const schema = resolveSchema();
+export interface MigrateToLatestOptions<T> {
+  /**
+   * Any Kysely instance connected to the target database. Migrations run raw
+   * SQL and schema-qualify everything explicitly, so the instance's own
+   * search_path / schema plugin configuration does not matter.
+   */
+  db: Kysely<T>;
+  /** Target schema. Created if missing. Defaults to `catamorphic`. */
+  schema?: string;
+  /** Called once per applied migration. Defaults to silent. */
+  onApplied?: (name: string) => void;
+}
+
+export interface MigrateToLatestResult {
+  schema: string;
+  applied: string[];
+}
+
+/**
+ * Apply all pending SQL migrations inside the target schema. Safe to call on
+ * every boot: already-applied migrations are tracked in `<schema>._migrations`
+ * and skipped. All catamorphic tables live in this schema so the host's own
+ * tables are never touched.
+ */
+export async function migrateToLatest<T>({
+  db,
+  schema = DEFAULT_SCHEMA,
+  onApplied,
+}: MigrateToLatestOptions<T>): Promise<MigrateToLatestResult> {
   const quotedSchema = quoteIdentifier(schema);
   const migrationsTable = `${quotedSchema}._migrations`;
-
-  const db = createDatabase({ connectionString });
-
   const migrationsDir = getMigrationsDir();
 
   await sql.raw(`CREATE SCHEMA IF NOT EXISTS ${quotedSchema}`).execute(db);
@@ -42,11 +67,12 @@ export async function runMigrate() {
     .filter((f) => f.endsWith(".sql"))
     .sort();
 
+  const newlyApplied: string[] = [];
+
   for (const file of files) {
     if (appliedSet.has(file)) continue;
 
     const content = fs.readFileSync(path.join(migrationsDir, file), "utf-8");
-    console.log(`Applying migration: ${file}`);
 
     await db.transaction().execute(async (trx) => {
       await sql.raw(`SET LOCAL search_path TO ${quotedSchema}`).execute(trx);
@@ -57,8 +83,23 @@ export async function runMigrate() {
       `.execute(trx);
     });
 
-    console.log(`  ✓ ${file}`);
+    newlyApplied.push(file);
+    onApplied?.(file);
   }
+
+  return { schema, applied: newlyApplied };
+}
+
+export async function runMigrate() {
+  const connectionString = resolveDatabaseUrl();
+  const schema = resolveSchema();
+  const db = createDatabase({ connectionString });
+
+  await migrateToLatest({
+    db,
+    schema,
+    onApplied: (name) => console.log(`  ✓ ${name}`),
+  });
 
   console.log(`All migrations applied in schema "${schema}".`);
   await db.destroy();

@@ -1,0 +1,29 @@
+{
+  "name": "@catamorphic/flue",
+  "version": "0.0.1",
+  "private": true,
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "bun": "./src/index.ts",
+      "import": "./dist/index.js",
+      "types": "./dist/index.d.ts"
+    }
+  },
+  "scripts": {
+    "build": "tsup && tsc --project tsconfig.json --noEmit false --emitDeclarationOnly",
+    "dev": "tsup --watch",
+    "test": "vitest run --config ../../vitest.config.ts",
+    "typecheck": "tsgo --project ./tsconfig.json"
+  },
+  "dependencies": {
+    "@catamorphic/sandbox": "workspace:*",
+    "@flue/runtime": "^1.0.0-beta.3"
+  },
+  "devDependencies": {
+    "@catamorphic/cloudflare": "workspace:*",
+    "@types/node": "^25.6.0"
+  }
+}

@@ -57,3 +57,47 @@ export function findStepFunctions(
 
   return results;
 }
+
+export const INSTRUMENTED_MARKER = "/* @catamorphic-instrumented */";
+
+const STEP_FN_RE =
+  /(export\s+)?((?:async\s+)?function\s+)([A-Za-z_$][\w$]*)(\s*\([^)]*\)\s*(?::[^{]*)?\{\s*["']use step["'])/g;
+
+/**
+ * Rewrite `"use step"` function declarations so every call — including
+ * intra-module calls — routes through `globalThis.__catamorphicWrapStep`.
+ * Patching the imported module namespace does not work: ESM namespaces are
+ * read-only, and calls within the defining module bind to the declaration
+ * directly.
+ *
+ * Returns the transformed source, or `null` when there is nothing to do
+ * (no step functions, or the file was already instrumented).
+ */
+export function instrumentSource(source: string): string | null {
+  if (source.startsWith(INSTRUMENTED_MARKER)) return null;
+
+  const steps: Array<{ name: string; exported: boolean }> = [];
+  const transformed = source.replace(
+    STEP_FN_RE,
+    (
+      _match,
+      exported: string | undefined,
+      fnKeyword: string,
+      name: string,
+      rest: string,
+    ) => {
+      steps.push({ name, exported: Boolean(exported) });
+      return `${fnKeyword}__catamorphic_step_${name}${rest}`;
+    },
+  );
+  if (steps.length === 0) return null;
+
+  const footer = steps
+    .map(
+      (step) =>
+        `${step.exported ? "export " : ""}const ${step.name} = globalThis.__catamorphicWrapStep(__catamorphic_step_${step.name}, ${JSON.stringify(step.name)});`,
+    )
+    .join("\n");
+
+  return `${INSTRUMENTED_MARKER}\n${transformed}\n${footer}\n`;
+}

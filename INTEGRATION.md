@@ -1,37 +1,41 @@
 # Catamorphic Integration Guide
 
-Catamorphic is **embed-first**. A host application (for example OpenCX) runs catamorphic services in-process against its own Postgres instance — all catamorphic tables live in one schema (default: `catamorphic`). Three integration surfaces are available, in increasing order of coupling:
+Catamorphic is an **embeddable framework**. A host application runs catamorphic services in-process against its own Postgres instance — all catamorphic tables live in one schema (default: `catamorphic`). Three integration surfaces are available, in increasing order of coupling:
 
 1. **`@catamorphic/db` only** — run the migrations, let the host join against `catamorphic.projects` / `catamorphic.workflow_runs`. Read-only relationship. Useful for reporting / BI.
-2. **`@catamorphic/sdk` (library-direct, recommended)** — host imports `createCatamorphic(...)` and calls resources in-process. Identity is bound per request via `cat.forTenant(orgId).forUser(userId)`. No sidecar process.
-3. **`@catamorphic/server` + `@catamorphic/api-client`** — host mounts the Fastify app via `createApp({ core })` (in-process or as a sidecar) and talks to it over HTTP. Same backing services; useful when the host is non-Node or wants a network boundary.
+2. **`@catamorphic/server-sdk` (library-direct, recommended)** — host imports `createCatamorphic(...)` and calls resources in-process. Identity is bound per request via `cat.forTenant(orgId).forUser(userId)`. No sidecar process.
+3. **`@catamorphic/fastify-plugin` + `@catamorphic/api-client`** — host registers the Fastify plugin on its own server (or runs `createApp` as a sidecar) and frontends talk to it over HTTP. Same backing services; required for the React UI, and useful when the host is non-Node or wants a network boundary.
 
-The rest of this guide is organized: library-direct SDK first (most hosts want this), then the DB-only setup, then the HTTP path.
+Most hosts use 2 + 3 together: the server-sdk boots the core once, the fastify plugin exposes it to the frontend.
 
-## Library-direct SDK
+## Library-direct SDK — `@catamorphic/server-sdk`
 
-See [`packages/sdk/README.md`](packages/sdk/README.md) for the full usage guide. The short version:
+See [`packages/server-sdk/README.md`](packages/server-sdk/README.md) for the full usage guide. The short version:
 
 ```ts
 // Boot, once per process
-import { createDatabase } from "@catamorphic/db";
-import { ProjectManager, FsBackend, FsRemoteBackend } from "@catamorphic/git";
-import { DaytonaSandboxProvider } from "@catamorphic/sandbox";
-import { createCatamorphic } from "@catamorphic/sdk";
+import { CloudflareSandboxProvider } from "@catamorphic/cloudflare";
+import { createCatamorphic } from "@catamorphic/server-sdk";
 
 export const catamorphic = createCatamorphic({
-  db: createDatabase({
-    connectionString: process.env.DATABASE_URL!,
-    schema: "catamorphic",
+  // Pass a pg.Pool the host already owns, or a connection string catamorphic
+  // manages itself. Tables live in the `catamorphic` schema either way.
+  database: { pool: hostPgPool },
+  storage: {
+    projectsPath: process.env.CATAMORPHIC_PROJECTS_PATH!,
+    remotesPath: process.env.CATAMORPHIC_REMOTES_PATH!,
+  },
+  // Sandbox backends are vendor plugin packages: @catamorphic/cloudflare
+  // (default) or @catamorphic/daytona. Omit for read-only embeds.
+  sandboxProvider: new CloudflareSandboxProvider({
+    apiUrl: process.env.CLOUDFLARE_SANDBOX_API_URL!,
+    apiKey: process.env.CLOUDFLARE_SANDBOX_API_KEY,
   }),
-  projectManager: new ProjectManager(
-    new FsBackend(process.env.CATAMORPHIC_PROJECTS_PATH!),
-    new FsRemoteBackend(process.env.CATAMORPHIC_REMOTES_PATH!),
-  ),
-  sandboxProvider: process.env.DAYTONA_API_KEY
-    ? new DaytonaSandboxProvider({ apiKey: process.env.DAYTONA_API_KEY })
-    : undefined,
 });
+
+// Apply pending migrations (idempotent, schema-scoped). Run from a deploy
+// step or at boot — it never touches the host's own tables.
+await catamorphic.migrate();
 
 // Per request
 const scoped = catamorphic.forTenant(req.org.id).forUser(req.user.id);
@@ -42,139 +46,68 @@ await scoped.files.write(project.id, "src/welcome.ts", {
 });
 ```
 
+Advanced hosts can inject their own wiring instead: `database: { db }` with a pre-built Kysely instance, `storage: { projectManager }` with custom git backends, or a custom `sandboxProvider`. Every injected sandbox provider is automatically wrapped with OpenTelemetry instrumentation.
+
 ### Identity mapping
 
 - `tenantId` = host's org id. Maps 1:1 to `catamorphic.tenants(id)` and is upserted on first use — hosts never need to pre-register orgs with catamorphic.
 - `externalUserId` = host's user id. Never persisted in catamorphic's DB; used only for (a) per-user git working directories via the `ProjectManager` and (b) git commit authorship.
 - The host can freely `JOIN host.orgs.id = catamorphic.projects.tenant_id` for reports, analytics, cascading deletes, etc. Catamorphic never references host tables.
 
-### v1 surface
+### Scoped-client surface
 
-Covered: project CRUD, workflow listing/fetching (parsed from project source), and file read/write (with optional commit). Not yet covered by the SDK: triggering runs, plugin + secret management, and git ops (deploy, pull, diff, conflict resolution) — those live on `cat.core.*` today and will land as SDK resources in phase 2.
+Covered: project CRUD, workflow listing/fetching (parsed from project source), and file read/write (with optional commit). Not yet covered by the scoped client: triggering runs, plugin + secret management, and git ops (deploy, pull, diff, conflict resolution) — those live on `catamorphic.core.*` today (fully available via HTTP + React hooks) and will land as scoped-client resources next.
+
+### Observability
+
+Catamorphic instruments itself with `@opentelemetry/api` only. Register your OpenTelemetry SDK (NodeSDK, exporters, sampling) in the host as usual and catamorphic's spans — `workflow.run`, `workflow.execute`, `project.create`, `project.deploy`, `sandbox.*` — appear in your traces automatically, correlated with your HTTP spans. Without an SDK they are no-ops.
 
 ## Database-only setup (just run the migrations)
 
-Use the DB-only path when the host just wants to reach into catamorphic's schema (reporting, migrations) without running catamorphic services in-process or over HTTP.
+Use the DB-only path when the host just wants to reach into catamorphic's schema (reporting, BI) without running catamorphic services.
 
-### Local Setup (Using a Local Catamorphic Checkout)
-
-Use this when you have both repos on your machine (example: `opencx` + local `catamorphic`).
-
-### 1) Add local dependency in host backend
-
-From host repo root:
+Install `@catamorphic/db` in the host and run migrations as a deploy step:
 
 ```bash
-pnpm -C backend add @catamorphic/db@file:/Users/omarramadan/Workspace/catamorphic/packages/db
-```
-
-### 2) Build the local catamorphic db package once
-
-The CLI binary points to `dist/cli.js`, so you must build locally:
-
-```bash
-cd /Users/omarramadan/Workspace/catamorphic
-bun run --filter @catamorphic/db build
-```
-
-### 3) Run migrations in host app
-
-```bash
-cd /Users/omarramadan/Workspace/opencx
-DATABASE_URL=postgres://postgres:postgres@localhost:5432/opencx \
+DATABASE_URL=postgres://<user>:<password>@<host>:5432/<hostdb> \
 CATAMORPHIC_DB_SCHEMA=catamorphic \
-pnpm -C backend exec catamorphic-db migrate
+npx catamorphic-db migrate     # or: catamorphic-db status
 ```
 
-### 4) Verify migration state
+Or programmatically:
 
-```bash
-cd /Users/omarramadan/Workspace/opencx
-DATABASE_URL=postgres://postgres:postgres@localhost:5432/opencx \
-CATAMORPHIC_DB_SCHEMA=catamorphic \
-pnpm -C backend exec catamorphic-db status
+```ts
+import { createDatabase, migrateToLatest } from "@catamorphic/db";
+
+const db = createDatabase({ pool: hostPgPool });
+await migrateToLatest({ db, schema: "catamorphic" });
 ```
 
-### 5) Add helper scripts in host `backend/package.json`
+For local development against a catamorphic checkout, install via `file:` links and rebuild after changes — see `.cursor/skills/using-catamorphic/SKILL.md` → "Local dev linking".
 
-```json
-{
-  "scripts": {
-    "catamorphic:migrate": "cross-env DATABASE_URL=postgres://postgres:postgres@localhost:5432/opencx CATAMORPHIC_DB_SCHEMA=catamorphic catamorphic-db migrate",
-    "catamorphic:status": "cross-env DATABASE_URL=postgres://postgres:postgres@localhost:5432/opencx CATAMORPHIC_DB_SCHEMA=catamorphic catamorphic-db status"
-  }
-}
+## HTTP path — `@catamorphic/fastify-plugin`
+
+Register the plugin on the host's Fastify server:
+
+```ts
+import { catamorphicPlugin } from "@catamorphic/fastify-plugin";
+
+app.register(catamorphicPlugin, {
+  core: catamorphic.core,
+  prefix: "/api", // the generated api-client expects /api
+});
 ```
 
-Then you can run:
+The plugin is fully encapsulated (its Zod compilers and error handler don't leak into the host app) and registers no CORS — the host owns cross-origin policy. For a sidecar process or spec generation, `createApp({ core })` returns a complete Fastify app with CORS + Swagger UI at `/docs` and the plugin mounted at `/api`.
 
-```bash
-pnpm -C backend catamorphic:migrate
-pnpm -C backend catamorphic:status
-```
-
-### Local update loop (after each catamorphic change)
-
-When `@catamorphic/db` is installed via local `file:` dependency, run this every time you change catamorphic code:
-
-1. Rebuild catamorphic db package:
-   ```bash
-   cd /Users/omarramadan/Workspace/catamorphic
-   bun run --filter @catamorphic/db build
-   ```
-2. Refresh the dependency in host backend:
-   ```bash
-   cd /Users/omarramadan/Workspace/opencx
-   pnpm -C backend add @catamorphic/db@file:/Users/omarramadan/Workspace/catamorphic/packages/db
-   ```
-3. Restart host backend process.
-4. If SQL migrations changed, run:
-   ```bash
-   pnpm -C backend catamorphic:migrate
-   pnpm -C backend catamorphic:status
-   ```
-
-### Production Setup (Published Package)
-
-Use this once `@catamorphic/db` is publicly published.
-
-### 1) Install package in host backend
-
-```bash
-pnpm -C backend add @catamorphic/db
-```
-
-### 2) Set env vars in runtime/deploy environment
-
-```bash
-DATABASE_URL=postgres://<user>:<password>@<host>:5432/<database>
-CATAMORPHIC_DB_SCHEMA=catamorphic
-```
-
-### 3) Run migrations as a one-time deploy step
-
-```bash
-DATABASE_URL="$DATABASE_URL" \
-CATAMORPHIC_DB_SCHEMA="${CATAMORPHIC_DB_SCHEMA:-catamorphic}" \
-pnpm -C backend exec catamorphic-db migrate
-```
-
-### 4) Optional gate/check
-
-```bash
-DATABASE_URL="$DATABASE_URL" \
-CATAMORPHIC_DB_SCHEMA="${CATAMORPHIC_DB_SCHEMA:-catamorphic}" \
-pnpm -C backend exec catamorphic-db status
-```
-
-## HTTP path — `@catamorphic/server` mounted by the host
-
-When library-direct isn't possible (non-Node host, strict network boundary, or you want to reuse the generated `@catamorphic/api-client`), mount `@catamorphic/server` as an in-process or sidecar Fastify app. It accepts the same `CatamorphicCore` — wire it exactly like the SDK path and hand it to `createApp({ core })`. The server requires two headers on every request (there are no defaults — catamorphic is embed-only):
+Every request requires two headers (there are no defaults):
 
 - `X-Catamorphic-Tenant-Id` — host org id
 - `X-External-User-Id` — host user id
 
-The generated HTTP client lives in `@catamorphic/api-client`; construct it with `createCatamorphicClient({ baseUrl, fetch })` and set the headers on each call (or wrap `fetch` to inject them from your auth context).
+**Set these server-side from the host's verified auth context** (session, JWT) — never trust values forwarded from the browser. Typical setup: the host exposes its own authenticated proxy route, or wraps `fetch` in the api-client to inject the headers after verifying the session.
+
+The generated HTTP client lives in `@catamorphic/api-client`; construct it with `createCatamorphicClient({ baseUrl, fetch })`.
 
 ## React bindings — `@catamorphic/react`
 
@@ -191,11 +124,9 @@ const queryClient = new QueryClient();
 const apiClient = createApiClient({
   baseUrl: process.env.NEXT_PUBLIC_CATAMORPHIC_URL!,
   fetch: async (input, init) => {
-    // Inject X-Catamorphic-Tenant-Id + X-External-User-Id here.
-    const headers = new Headers(init?.headers);
-    headers.set("X-Catamorphic-Tenant-Id", orgId);
-    headers.set("X-External-User-Id", userId);
-    return fetch(input, { ...init, headers });
+    // Route through the host's authenticated proxy, which sets
+    // X-Catamorphic-Tenant-Id + X-External-User-Id from the session.
+    return fetch(input, init);
   },
 });
 
@@ -226,41 +157,36 @@ function ProjectList() {
 }
 ```
 
-Hooks shipped (phase 1 + phase 2):
+Hooks shipped:
 
 - **Projects + workflows + files** — `useTemplates`, `useProjects`, `useProject`, `useCreateProject`, `useUpdateProject`, `useDeleteProject`, `useProjectFiles`, `useProjectFile`, `useWriteProjectFile`, `useWorkflows`, `useWorkflow`.
 - **Runs** — `useWorkflowRuns`, `useWorkflowRun`, `useTriggerWorkflowRun`, `useCancelWorkflowRun`.
-- **Git** — `useProjectGit`, `useProjectBranches`, `useProjectCommits`, `useProjectConflicts`, `useCreateBranch`, `useCheckoutBranch`, `useCommitChanges`, `useDeployProject`, plus the composite `useProjectGitState({ projectId, baselineFiles })` for multi-branch draft persistence (no longer requires a host-supplied adapter — it reads `apiClient` from the provider).
+- **Git** — `useProjectGit`, `useProjectBranches`, `useProjectCommits`, `useProjectConflicts`, `useCreateBranch`, `useCheckoutBranch`, `useCommitChanges`, `useDeployProject`, plus the composite `useProjectGitState({ projectId, baselineFiles })` for multi-branch draft persistence.
 - **Plugins + secrets** — `usePluginCatalog`, `useProjectPlugins`, `useAttachPlugin`, `useDetachPlugin`, `useProjectSecrets`, `useUpsertProjectSecret`, `useDeleteProjectSecret`.
 - **Agent (coding sessions)** — `useAgentSessions`, `useAgentSession`, `useCreateAgentSession`, `useSendAgentMessage`.
 
 All hooks reject with the typed `CatamorphicError` envelope (discriminated by `code`: `unauthorized`, `not_found`, `validation`, `conflict`, `server_error`, `network`, `unknown`). Use `isCatamorphicError(err)` and switch on `err.code`; never branch on `err.message`. Shared OpenAPI-derived domain types (`Project`, `Run`, `RepoStatus`, `BranchInfo`, `ConflictEntry`, `PluginInfo`, `Secret`, `AgentSession`, …) live behind a single `@catamorphic/react/types` barrel.
 
+## Ready-made components — `@catamorphic/ui`
+
+`@catamorphic/ui` ships the workflow canvas (`WorkflowEditor`, `WorkflowCanvas`), detail panel, history sidebar, toolbar, and AI bar as composable React components built on `@catamorphic/react`. Everything is opt-in: use `WorkflowEditor` for the full experience, or compose `WorkflowCanvas` + your own chrome. Code editors are plugged in via render props (bring your own Monaco/CodeMirror). Import `@catamorphic/ui/styles.css` once.
+
 ## Component registry — `@catamorphic/registry`
 
-`@catamorphic/registry` is a shadcn-style copy-paste registry. Items are JSON manifests that inline a single React component file; consumers run `npx shadcn add <host>/r/<item>.json` and the component drops into `components/catamorphic/`. The component then imports hooks from `@catamorphic/react` and primitives from `@catamorphic/ui` only — there's no runtime dependency on the registry itself.
+`@catamorphic/registry` is a shadcn-style copy-paste registry for hosts that want to own the component source. Items are JSON manifests that inline a single React component file; consumers run `npx shadcn add <path-or-url>/r/<item>.json` and the component drops into `components/catamorphic/`. The component then imports hooks from `@catamorphic/react` and primitives from `@catamorphic/ui` only — there's no runtime dependency on the registry itself.
 
-Items shipped in phase 2:
+Items shipped: `catamorphic-provider`, `projects-list`, `project-editor`, `file-explorer`, `git-panel`, `diff-drawer`, `runs-panel`, `plugins-settings`.
 
-- `catamorphic-provider` — a `<CatamorphicAppProvider>` that wraps `CatamorphicProvider` + `QueryClientProvider` and configures the api client.
-- `projects-list` — table of projects + create-project dialog.
-- `project-editor` — three-pane editor scaffold (file tree slot, editor slot, optional git-panel slot). Plug in monaco/codemirror via `renderEditor`.
-- `file-explorer` — pure file tree.
-- `git-panel` — branch/dirty/commits/deploy panel powered by `useProjectGit` + `useProjectCommits` + `useDeployProject`.
-- `diff-drawer` — side drawer with a `renderDiff` slot so the host can plug in monaco-diff or codemirror-merge.
-- `runs-panel` — list runs and trigger new ones (`useWorkflowRuns` + `useTriggerWorkflowRun`).
-- `plugins-settings` — attach/detach plugins + edit secrets.
-
-Catamorphic doesn't host the registry itself (it's embed-only). After `bun run build`, the built manifests live at `packages/registry/dist/r/<name>.json`. Hosts install them by pointing the shadcn CLI at the file directly, at `./node_modules/@catamorphic/registry/dist/r/<name>.json` once the host installs the package, or at a URL the host serves the directory from. To add a new item: drop a `src/<name>/<name>.tsx` + `registry-item.json` under `packages/registry/src/`, run `bun run build`, and re-install it in the host.
+Catamorphic doesn't host the registry itself. After `bun run build`, the built manifests live at `packages/registry/dist/r/<name>.json`; hosts install them from `./node_modules/@catamorphic/registry/dist/r/<name>.json` or from a URL the host serves. To add a new item: drop a `src/<name>/<name>.tsx` + `registry-item.json` under `packages/registry/src/`, run `bun run build`, and re-install it in the host.
 
 ## Plugin packages (workflow SDKs)
 
 Catamorphic can attach external packages (for example workflow SDKs) to a project so workflows can `import` plugin exports.
 
-In v1, plugins are resolved from a local directory configured in root `.env`:
+In v1, plugins are resolved from a local directory configured via env:
 
 ```bash
-CATAMORPHIC_LOCAL_PLUGINS_DIR=/Users/you/Workspace/opencx/dashboard/packages
+CATAMORPHIC_LOCAL_PLUGINS_DIR=/path/to/host/plugin/packages
 ```
 
 Runtime summary:
@@ -274,7 +200,6 @@ For full details (manifest contract, REST API, service internals, runtime flow, 
 
 ## Operational Notes
 
-- Do not auto-run migrations on every app boot; run them in CI/deploy or a one-shot job.
-- You do not need to run a separate Catamorphic server process for this DB integration.
-- Catamorphic uses strict `search_path = "catamorphic"` on its own DB connections and migration transactions.
-- Unqualified names from Catamorphic cannot fall through to `public`; use explicit schema qualification when cross-schema access is intentional.
+- `catamorphic.migrate()` / `catamorphic-db migrate` are idempotent and schema-scoped; run them in CI/deploy (preferred) or at boot.
+- Catamorphic uses strict schema scoping on its own DB access: connection strings get `search_path = "catamorphic"`, host-provided pools get Kysely's `WithSchemaPlugin`. Unqualified names cannot fall through to `public`.
+- Host-owned pools and Kysely instances are never destroyed by catamorphic; `catamorphic.close()` only closes what catamorphic created.
