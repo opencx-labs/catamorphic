@@ -10,5 +10,45 @@ services:
     volumes:
       - pgdata:/var/lib/postgresql/data
 
+  # Telemetry store for dev. Host ports are shifted (8124/19001) because
+  # 8123/9000/19000 are commonly taken by other local ClickHouse/MinIO stacks.
+  clickhouse:
+    image: clickhouse/clickhouse-server:latest
+    ports:
+      - "8124:8123" # HTTP interface
+      - "19001:9000" # native TCP interface
+    environment:
+      CLICKHOUSE_USER: catamorphic
+      CLICKHOUSE_PASSWORD: catamorphic
+      CLICKHOUSE_DB: otel
+    ulimits:
+      nofile:
+        soft: 262144
+        hard: 262144
+    volumes:
+      - chdata:/var/lib/clickhouse
+    healthcheck:
+      test: ["CMD", "clickhouse-client", "--query", "SELECT 1"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+
+  # Receives OTLP from the playground (and any other host app) and writes it
+  # to ClickHouse. ClickHouse has no native OTLP endpoint, so the collector
+  # sits in front of it.
+  otel-collector:
+    image: otel/opentelemetry-collector-contrib:latest
+    command: ["--config=/etc/otel-collector.yaml"]
+    ports:
+      - "4317:4317" # OTLP gRPC
+      - "4318:4318" # OTLP HTTP
+    volumes:
+      - ./infra/otel-collector.yaml:/etc/otel-collector.yaml:ro
+    depends_on:
+      clickhouse:
+        condition: service_healthy
+    restart: unless-stopped
+
 volumes:
   pgdata:
+  chdata:

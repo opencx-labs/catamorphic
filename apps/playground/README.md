@@ -52,3 +52,29 @@ enabled). The **AI assistant** panel on the right chats with the Flue agent;
 its edits appear as draft changes you can review and deploy.
 
 Migrations are applied automatically at server boot (`catamorphic.migrate()`).
+
+## Observability
+
+The playground exports OpenTelemetry traces over OTLP/HTTP. The dev
+docker-compose (repo root) ships a collector + ClickHouse pair for storing
+them:
+
+```sh
+docker compose up -d clickhouse otel-collector   # from the repo root
+```
+
+- Collector listens on `localhost:4317` (gRPC) / `localhost:4318` (HTTP) and
+  writes to ClickHouse database `otel` (table `otel_traces`).
+- ClickHouse host ports are shifted to avoid clashing with other local
+  stacks: HTTP on `localhost:8124`, native TCP on `localhost:19001`
+  (credentials `catamorphic`/`catamorphic`).
+- The server defaults to `http://localhost:4318`; override with
+  `OTEL_EXPORTER_OTLP_ENDPOINT` or disable with `OTEL_SDK_DISABLED=true`.
+  Running without the collector is harmless — export failures are silent.
+
+Query spans, e.g.:
+
+```sh
+echo "select Timestamp, SpanName, Duration/1e6 as ms from otel.otel_traces order by Timestamp desc limit 20" \
+  | curl -s "http://localhost:8124/" -u catamorphic:catamorphic --data-binary @-
+```
