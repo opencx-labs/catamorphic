@@ -33,36 +33,38 @@ export function useCommitChanges(
 ): UseMutationResult<
   DeployResult,
   CatamorphicError,
-  CommitChangesInput | void
+  CommitChangesInput | undefined
 > {
   const { apiClient } = useCatamorphic();
   const queryClient = useQueryClient();
-  return useMutation<DeployResult, CatamorphicError, CommitChangesInput | void>(
-    {
-      mutationFn: (input) =>
-        runWithCatamorphicError(async () => {
-          const result = await apiClient.POST(
-            "/api/projects/{projectId}/deploy",
-            {
-              params: { path: { projectId } },
-              body: input ?? {},
-            },
-          );
-          return assertApiOk(result, "Commit/deploy failed");
-        }),
-      onSuccess: (data) => {
-        if (data.status === "deployed") {
-          queryClient.invalidateQueries({
-            queryKey: ["cat", "project", projectId, "git"],
-          });
-          queryClient.invalidateQueries({
-            queryKey: ["cat", "project", projectId, "files"],
-          });
-          queryClient.invalidateQueries({
-            queryKey: ["cat", "project", projectId, "workflows"],
-          });
-        }
-      },
+  return useMutation<
+    DeployResult,
+    CatamorphicError,
+    CommitChangesInput | undefined
+  >({
+    mutationFn: (input) =>
+      runWithCatamorphicError(async () => {
+        const result = await apiClient.POST(
+          "/api/projects/{projectId}/deploy",
+          {
+            params: { path: { projectId } },
+            body: input ?? {},
+          },
+        );
+        return assertApiOk(result, "Commit/deploy failed");
+      }),
+    onSuccess: (data) => {
+      if (data.status === "deployed") {
+        queryClient.invalidateQueries({
+          queryKey: ["cat", "project", projectId, "git"],
+        });
+        queryClient.invalidateQueries({
+          queryKey: ["cat", "project", projectId, "files"],
+        });
+        queryClient.invalidateQueries({
+          queryKey: ["cat", "project", projectId, "workflows"],
+        });
+      }
     },
-  );
+  });
 }

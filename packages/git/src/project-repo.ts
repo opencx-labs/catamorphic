@@ -14,6 +14,13 @@ import type {
 
 const IGNORED_DIRS = new Set(["node_modules", ".git", "dist", ".turbo"]);
 
+/**
+ * Dot-directories that are project content despite the hidden-file skip
+ * below. `.agents/` holds per-project agent skills (`.agents/skills/…`) that
+ * must be committed, uploaded to sandboxes, and listed like any other file.
+ */
+const ALLOWED_DOT_DIRS = new Set([".agents"]);
+
 function assertSafePath(filePath: string): void {
   const normalized = path.normalize(filePath);
   if (path.isAbsolute(normalized)) {
@@ -33,7 +40,8 @@ async function walkDirectory(dir: string, base: string): Promise<string[]> {
 
   for (const entry of entries) {
     if (IGNORED_DIRS.has(entry.name)) continue;
-    if (entry.name.startsWith(".")) continue;
+    if (entry.name.startsWith(".") && !ALLOWED_DOT_DIRS.has(entry.name))
+      continue;
 
     const fullPath = path.join(dir, entry.name);
     const relativePath = path.relative(base, fullPath);

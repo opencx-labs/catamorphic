@@ -1,4 +1,5 @@
 import type {
+  CloneSource,
   SandboxHandle,
   SandboxManager,
   SandboxProvider,
@@ -56,6 +57,7 @@ export class SandboxManagerImpl implements SandboxManager {
   async ensureExecSandbox(opts: {
     projectId: string;
     commitSha: string;
+    cloneSource?: CloneSource;
   }): Promise<SandboxHandle> {
     const existing = await this.store.findSandbox({
       projectId: opts.projectId,
@@ -72,6 +74,9 @@ export class SandboxManagerImpl implements SandboxManager {
       sandboxType: "execution",
       commitSha: opts.commitSha,
       userId: null,
+      cloneSource: opts.cloneSource
+        ? { ...opts.cloneSource, commitSha: opts.commitSha }
+        : undefined,
       labels: {
         projectId: opts.projectId,
         commitSha: opts.commitSha,
@@ -83,6 +88,7 @@ export class SandboxManagerImpl implements SandboxManager {
   async ensureDevSandbox(opts: {
     projectId: string;
     userId: string;
+    cloneSource?: CloneSource;
   }): Promise<SandboxHandle> {
     const existing = await this.store.findSandbox({
       projectId: opts.projectId,
@@ -99,6 +105,7 @@ export class SandboxManagerImpl implements SandboxManager {
       sandboxType: "dev",
       commitSha: null,
       userId: opts.userId,
+      cloneSource: opts.cloneSource,
       labels: {
         projectId: opts.projectId,
         userId: opts.userId,
@@ -134,6 +141,7 @@ export class SandboxManagerImpl implements SandboxManager {
     sandboxType: SandboxType;
     commitSha: string | null;
     userId: string | null;
+    cloneSource?: CloneSource;
     labels: Record<string, string>;
   }): Promise<SandboxHandle> {
     const handle = await this.provider.createSandbox({
@@ -142,6 +150,20 @@ export class SandboxManagerImpl implements SandboxManager {
       autoStopInterval: opts.sandboxType === "dev" ? 30 : 15,
       labels: opts.labels,
     });
+
+    if (opts.cloneSource) {
+      await this.provider.gitClone(
+        handle.providerId,
+        opts.cloneSource.url,
+        `${this.provider.workspaceRoot}/project`,
+        {
+          branch: opts.cloneSource.branch,
+          commitId: opts.cloneSource.commitSha,
+          username: opts.cloneSource.username,
+          password: opts.cloneSource.password,
+        },
+      );
+    }
 
     const record = await this.store.insertSandbox({
       projectId: opts.projectId,

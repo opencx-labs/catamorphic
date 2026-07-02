@@ -1,4 +1,5 @@
 import type {
+  CloneSource,
   RunExecutor,
   RunResult,
   SandboxManager,
@@ -31,6 +32,11 @@ export interface ExecuteRunOpts {
   runId: string;
   commitSha: string;
   /**
+   * When set, freshly created exec sandboxes `git clone` the project from
+   * this remote (e.g. Cloudflare Artifacts) pinned to `commitSha`.
+   */
+  cloneSource?: CloneSource;
+  /**
    * Plugin packages attached to the project. Uploaded into `node_modules/`
    * so workflow code can `import` them at runtime.
    */
@@ -60,6 +66,7 @@ export class RunExecutorImpl implements RunExecutor {
     const sandbox = await this.sandboxManager.ensureExecSandbox({
       projectId: opts.projectId,
       commitSha: opts.commitSha,
+      cloneSource: opts.cloneSource,
     });
 
     const projectDir = `${this.provider.workspaceRoot}/project`;

@@ -1,3 +1,5 @@
+import type { CloneSource } from "@catamorphic/git";
+import { getTracer, withSpan } from "@catamorphic/otel";
 import type {
   RunPluginPayload,
   SandboxProvider,
@@ -5,6 +7,8 @@ import type {
 } from "@catamorphic/sandbox";
 import { uploadPluginPayloads } from "@catamorphic/sandbox";
 import { uploadWorkspace } from "./playground/workspace-upload.js";
+
+const tracer = getTracer("@catamorphic/core");
 
 export interface PlaygroundRunRequest {
   files: Record<string, string>;
@@ -26,6 +30,13 @@ export interface PlaygroundRunRequest {
    * harness process alongside the built-in `CATAMORPHIC_*` vars.
    */
   secrets?: Record<string, string>;
+  /**
+   * When set, the sandbox `git clone`s the project from this remote (e.g. a
+   * Cloudflare Artifacts repo) instead of receiving `files` as uploads.
+   * `files` is still used for the pre-flight workflow lookup; only the
+   * harness is uploaded on top of the clone. `commitSha` pins the checkout.
+   */
+  cloneSource?: CloneSource;
 }
 
 export interface PlaygroundRunResult {
@@ -38,8 +49,6 @@ export interface PlaygroundRunResult {
 }
 
 const HARNESS_SOURCE = `
-import { findStepFunctions, hasUseStepDirective, wrapStep } from "./step-wrapper.js";
-
 const workflowName = process.env.CATAMORPHIC_WORKFLOW_NAME ?? "";
 const triggerDataRaw = process.env.CATAMORPHIC_TRIGGER_DATA ?? "{}";
 
@@ -52,9 +61,49 @@ const triggerData = JSON.parse(triggerDataRaw);
 const stepLog = [];
 const startedAt = new Date().toISOString();
 
-async function findWorkflowFile() {
+// Step functions are rewritten at the source level (see instrumentSource)
+// to route through this global wrapper. Module-namespace patching does not
+// work: ESM namespaces are read-only and intra-module calls bind directly.
+globalThis.__catamorphicWrapStep = (fn, stepName) => async (...callArgs) => {
+  const entry = { nodeId: stepName, name: stepName, status: "completed", input: callArgs[0], startedAt: new Date().toISOString(), completedAt: "" };
+  stepLog.push(entry);
+  try {
+    const result = await fn(...callArgs);
+    entry.output = result;
+    entry.completedAt = new Date().toISOString();
+    return result;
+  } catch (err) {
+    entry.status = "failed";
+    entry.error = err instanceof Error ? err.message : String(err);
+    entry.completedAt = new Date().toISOString();
+    throw err;
+  }
+};
+
+const INSTRUMENTED_MARKER = "/* @catamorphic-instrumented */";
+const STEP_FN_RE = /(export\\s+)?((?:async\\s+)?function\\s+)([A-Za-z_$][\\w$]*)(\\s*\\([^)]*\\)\\s*(?::[^{]*)?\\{\\s*["']use step["'])/g;
+
+function instrumentSource(source) {
+  if (source.startsWith(INSTRUMENTED_MARKER)) return null;
+  const steps = [];
+  const transformed = source.replace(STEP_FN_RE, (_m, exported, fnKeyword, name, rest) => {
+    steps.push({ name, exported: Boolean(exported) });
+    return fnKeyword + "__catamorphic_step_" + name + rest;
+  });
+  if (steps.length === 0) return null;
+  const footer = steps
+    .map((s) =>
+      (s.exported ? "export " : "") +
+      "const " + s.name + " = globalThis.__catamorphicWrapStep(__catamorphic_step_" + s.name + ", " + JSON.stringify(s.name) + ");",
+    )
+    .join("\\n");
+  return INSTRUMENTED_MARKER + "\\n" + transformed + "\\n" + footer + "\\n";
+}
+
+async function listSourceFiles() {
   const fs = await import("node:fs/promises");
   const path = await import("node:path");
+  const found = [];
 
   async function scanDir(dir) {
     const entries = await fs.readdir(dir, { withFileTypes: true });
@@ -62,60 +111,38 @@ async function findWorkflowFile() {
       if (entry.name === "node_modules" || entry.name === ".git" || entry.name === "dist") continue;
       const fullPath = path.join(dir, entry.name);
       if (entry.isDirectory()) {
-        const found = await scanDir(fullPath);
-        if (found) return found;
-      } else if (entry.name.endsWith(".ts") || entry.name.endsWith(".js")) {
-        const source = await fs.readFile(fullPath, "utf-8");
-        if (source.includes("function " + workflowName) && source.includes('"use workflow"')) {
-          return fullPath;
-        }
+        await scanDir(fullPath);
+      } else if ((entry.name.endsWith(".ts") || entry.name.endsWith(".js")) && fullPath !== path.join(process.cwd(), "harness.ts")) {
+        found.push(fullPath);
       }
     }
-    return null;
   }
 
-  return scanDir(process.cwd());
+  await scanDir(process.cwd());
+  return found;
 }
 
 async function run() {
-  const workflowFile = await findWorkflowFile();
+  const fs = await import("node:fs/promises");
+  const files = await listSourceFiles();
+
+  let workflowFile = null;
+  for (const filePath of files) {
+    const source = await fs.readFile(filePath, "utf-8");
+    if (source.includes("function " + workflowName) && source.includes('"use workflow"')) {
+      workflowFile = filePath;
+    }
+    const instrumented = instrumentSource(source);
+    if (instrumented !== null) {
+      await fs.writeFile(filePath, instrumented);
+    }
+  }
+
   if (!workflowFile) throw new Error("Workflow function '" + workflowName + "' not found");
 
-  const fs = await import("node:fs/promises");
-  const source = await fs.readFile(workflowFile, "utf-8");
   const mod = await import(workflowFile);
   const workflowFn = mod[workflowName];
   if (typeof workflowFn !== "function") throw new Error("'" + workflowName + "' is not exported as a function");
-
-  const useStepRe = /["']use step["']/;
-  if (useStepRe.test(source)) {
-    const funcRe = /(?:export\\s+)?(async\\s+)?function\\s+(\\w+)\\s*\\([^)]*\\)\\s*(?::\\s*[^{]*)?\\{[^}]*["']use step["']/g;
-    let match = funcRe.exec(source);
-    while (match) {
-      const stepName = match[2];
-      const original = mod[stepName];
-      if (typeof original === "function") {
-        mod[stepName] = async (...callArgs) => {
-          const args = callArgs[0];
-          const entry = { nodeId: stepName, name: stepName, status: "completed", input: args, startedAt: new Date().toISOString(), completedAt: "" };
-          stepLog.push(entry);
-          try {
-            const result = await original(...callArgs);
-            entry.status = "completed";
-            entry.output = result;
-            entry.completedAt = new Date().toISOString();
-            return result;
-          } catch (err) {
-            entry.status = "failed";
-            entry.error = err instanceof Error ? err.message : String(err);
-            entry.completedAt = new Date().toISOString();
-            throw err;
-          }
-        };
-      }
-      match = funcRe.exec(source);
-    }
-  }
 
   const result = await workflowFn(triggerData);
   const report = { status: "completed", result, steps: stepLog, startedAt, completedAt: new Date().toISOString() };
@@ -167,6 +194,26 @@ export class PlaygroundExecutor {
   constructor(private readonly provider: SandboxProvider) {}
 
   async execute(request: PlaygroundRunRequest): Promise<PlaygroundRunResult> {
+    return withSpan(
+      {
+        tracer,
+        name: "workflow.execute",
+        attributes: {
+          "catamorphic.workflow.name": request.workflowName,
+          "catamorphic.run.file_count": Object.keys(request.files).length,
+        },
+      },
+      async (span) => {
+        const result = await this.executeInner(request);
+        span.setAttribute("catamorphic.run.status", result.status);
+        return result;
+      },
+    );
+  }
+
+  private async executeInner(
+    request: PlaygroundRunRequest,
+  ): Promise<PlaygroundRunResult> {
     const sandbox = await this.provider.createSandbox({
       language: "typescript",
       autoStopInterval: 5,
@@ -175,15 +222,36 @@ export class PlaygroundExecutor {
 
     try {
       const projectDir = `${this.provider.workspaceRoot}/project`;
-      await uploadWorkspace({
-        provider: this.provider,
-        sandboxId: sandbox.providerId,
-        projectDir,
-        files: {
-          ...request.files,
-          "harness.ts": HARNESS_SOURCE,
-        },
-      });
+
+      if (request.cloneSource) {
+        await this.provider.gitClone(
+          sandbox.providerId,
+          request.cloneSource.url,
+          projectDir,
+          {
+            branch: request.cloneSource.branch,
+            commitId: request.commitSha ?? undefined,
+            username: request.cloneSource.username,
+            password: request.cloneSource.password,
+          },
+        );
+        await uploadWorkspace({
+          provider: this.provider,
+          sandboxId: sandbox.providerId,
+          projectDir,
+          files: { "harness.ts": HARNESS_SOURCE },
+        });
+      } else {
+        await uploadWorkspace({
+          provider: this.provider,
+          sandboxId: sandbox.providerId,
+          projectDir,
+          files: {
+            ...request.files,
+            "harness.ts": HARNESS_SOURCE,
+          },
+        });
+      }
 
       await uploadPluginPayloads(
         this.provider,

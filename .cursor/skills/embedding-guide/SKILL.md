@@ -50,7 +50,7 @@ function MyApp() {
 
 The host app boots catamorphic in-process via one of two paths:
 
-- **`@catamorphic/sdk`** (recommended) — call `createCatamorphic({ db, projectManager, sandboxProvider, pluginResolver })` once at startup, then `cat.forTenant(orgId).forUser(userId)` per request.
-- **`@catamorphic/server`** — mount the Fastify app inside the host process via `createApp({ core })`. The host listens on whichever port it wants; every request must carry `X-Catamorphic-Tenant-Id` and `X-External-User-Id` headers from the host's auth context. The frontend talks to it through `@catamorphic/api-client`.
+- **`@catamorphic/server-sdk`** (recommended) — call `createCatamorphic({ database, storage, sandboxProvider?, pluginResolver? })` once at startup (plus `await catamorphic.migrate()`), then `catamorphic.forTenant(orgId).forUser(userId)` per request.
+- **`@catamorphic/fastify-plugin`** — register `catamorphicPlugin` on the host's Fastify server with `{ core, prefix: "/api" }` (or run `createApp({ core })` as a sidecar). Every request must carry `X-Catamorphic-Tenant-Id` and `X-External-User-Id` headers set from the host's auth context. The frontend talks to it through `@catamorphic/api-client`.
 
 See [`INTEGRATION.md`](../../../INTEGRATION.md) for the end-to-end wiring example.

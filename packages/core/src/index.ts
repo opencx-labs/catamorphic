@@ -8,6 +8,16 @@ export {
   type TenantId,
 } from "./identity.js";
 export { AgentContextService } from "./services/agent-context-service.js";
+export {
+  type AgentMessage,
+  type AgentSession,
+  AgentSessionClosedError,
+  type AgentSessionDetail,
+  AgentSessionNotFoundError,
+  AgentSessionsService,
+  type SyncedFileChange,
+} from "./services/agent-sessions-service.js";
+export { DbSandboxStore } from "./services/db-sandbox-store.js";
 export { DeploymentService } from "./services/deployment-service.js";
 export {
   PlaygroundExecutor,
@@ -55,6 +65,11 @@ export {
   type SecretStatus,
   SecretsService,
 } from "./services/secrets-service.js";
+export {
+  type ProjectSkill,
+  SKILLS_DIR,
+  SkillsService,
+} from "./services/skills-service.js";
 export {
   type WorkflowDetail,
   WorkflowNotFoundError,

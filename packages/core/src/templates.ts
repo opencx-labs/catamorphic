@@ -25,6 +25,61 @@ const pkg = (name: string) =>
     2,
   );
 
+/**
+ * Per-project agent skills seeded into every project (templates and blank
+ * ones alike). Skills live in the project repo under
+ * `.agents/skills/<name>/SKILL.md` (Agent Skills spec) so they are versioned
+ * with the code, scoped per project, and discovered by coding agents (e.g.
+ * Flue) from the dev sandbox checkout.
+ */
+export const SEED_SKILLS: Record<string, string> = {
+  ".agents/skills/writing-workflows/SKILL.md": `---
+name: writing-workflows
+description: How to write and edit Catamorphic workflows in this project. Use when creating a new workflow, adding steps, or restructuring workflow logic.
+---
+
+# Writing Workflows
+
+Workflows are plain TypeScript functions marked with the \`"use workflow"\`
+directive and exported from files under \`src/\`. Steps are async functions
+marked with \`"use step"\`.
+
+Rules:
+
+1. Every workflow and step takes a **single destructured object parameter**.
+2. Every workflow, step, and parameter has JSDoc metadata with a
+   \`@displayname\` (short action phrases for steps, descriptive labels for
+   parameters).
+3. Keep workflow bodies simple and linear: awaited step calls, \`if\`/\`else\`
+   branches, \`for\` loops, and \`Promise.all\` for parallel work. The visual
+   graph is derived from this structure.
+4. Steps do the real work (API calls, DB access). Workflows only orchestrate.
+
+Example:
+
+\`\`\`typescript
+/**
+ * @displayname Greet User
+ * @description Send a greeting to a user
+ */
+export async function greetUser({ email }: { email: string }) {
+  "use workflow";
+  await sendGreeting({ to: email });
+  return { status: "sent" };
+}
+
+/**
+ * @displayname Send Greeting
+ * @icon mail
+ * @param to - @displayname Recipient | @description Email address to send to
+ */
+async function sendGreeting({ to }: { to: string }) {
+  "use step";
+}
+\`\`\`
+`,
+};
+
 export const TEMPLATES: ProjectTemplate[] = [
   {
     id: "welcome-user",
@@ -34,6 +89,7 @@ export const TEMPLATES: ProjectTemplate[] = [
     files: {
       "package.json": pkg("welcome-user"),
       "tsconfig.json": SHARED_TSCONFIG,
+      ...SEED_SKILLS,
       "src/welcome.ts": `/**
  * @displayname Welcome New User
  * @description Onboard a new user with welcome email and follow-up
@@ -108,6 +164,7 @@ function sleep(_duration: string) {}
     files: {
       "package.json": pkg("order-processing"),
       "tsconfig.json": SHARED_TSCONFIG,
+      ...SEED_SKILLS,
       "src/process-order.ts": `/**
  * @displayname Process Order
  * @description Process an e-commerce order end-to-end
@@ -211,6 +268,7 @@ function sleep(_duration: string) {}
     files: {
       "package.json": pkg("data-pipeline"),
       "tsconfig.json": SHARED_TSCONFIG,
+      ...SEED_SKILLS,
       "src/pipeline.ts": `import { extractFromSource } from "./steps/extract";
 import { validateSchema, transformData } from "./steps/transform";
 import { loadToDatabase, verifySync } from "./steps/load";
@@ -337,6 +395,7 @@ export async function sendAlert({ channel, message }: { channel: string; message
     files: {
       "package.json": pkg("support-routing"),
       "tsconfig.json": SHARED_TSCONFIG,
+      ...SEED_SKILLS,
       "src/route-ticket.ts": `/**
  * @displayname Route Support Ticket
  * @description Route incoming support tickets to the right team based on priority level

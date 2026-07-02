@@ -1,20 +1,20 @@
 # Cloudflare integration
 
-How Catamorphic uses Cloudflare for workflow sandboxing and (soon) Git storage, and how to provision both for development and production.
+How Catamorphic uses Cloudflare for workflow sandboxing and Git code storage, and how to provision both for development and production.
 
-Related: [`AGENTS.md`](./AGENTS.md).
+Related: [`AGENTS.md`](./AGENTS.md), [`packages/cloudflare/README.md`](packages/cloudflare/README.md).
 
 ---
 
-> **Default provider: Daytona.** Until further notice, the host's boot code (see OpenCX's `backend/src/catamorphic/boot.ts`) always wires Daytona when `DAYTONA_API_KEY` is set, even if the Cloudflare env vars are also populated. The Cloudflare Bridge path stays wired up and maintained, but the host selection logic prefers Daytona and only falls through to Cloudflare when `DAYTONA_API_KEY` is unset. Treat everything below as reference for the Cloudflare path — not as the active production choice.
+> **Default stack: Cloudflare.** Catamorphic is Cloudflare-first (see `docs/decisions/0004`), and Cloudflare support ships as the **`@catamorphic/cloudflare`** plugin package (see `docs/decisions/0008`). Hosts construct the pieces explicitly at boot — `new CloudflareSandboxProvider(...)` and `new ArtifactsRemoteBackend(...)` — and pass them to `createCatamorphic`. `apps/playground/src/server/boot.ts` is the reference wiring.
 
 ---
 
 ## TL;DR
 
-- **Sandbox provider (active default)**: Daytona. Enabled via `DAYTONA_API_KEY`. Preferred over Cloudflare whenever set.
-- **Sandbox provider (alternate)**: [Cloudflare Sandbox](https://developers.cloudflare.com/sandbox/) — isolated VM per deployment — accessed through a thin Worker we deploy called the **Sandbox Bridge**. Only selected when `DAYTONA_API_KEY` is unset.
-- **Git storage (in progress)**: [Cloudflare Artifacts](https://developers.cloudflare.com/artifacts/) — versioned repos with a Git-compatible HTTPS remote — accessed directly from the Fastify server via REST + [`isomorphic-git`](https://isomorphic-git.org/).
+- **Sandbox provider (default)**: [Cloudflare Sandbox](https://developers.cloudflare.com/sandbox/) — isolated VM per deployment — accessed through a thin Worker we deploy called the **Sandbox Bridge**. `CloudflareSandboxProvider` in `@catamorphic/cloudflare`.
+- **Sandbox provider (alternate)**: Daytona, via the `@catamorphic/daytona` plugin package.
+- **Git code storage**: [Cloudflare Artifacts](https://developers.cloudflare.com/artifacts/) — versioned repos with a Git-compatible HTTPS remote — `ArtifactsRemoteBackend` in `@catamorphic/cloudflare` (REST + [`isomorphic-git`](https://isomorphic-git.org/)). Requires the Artifacts closed beta; hosts fall back to filesystem remotes until access is granted.
 - **Worker deploy**: `wrangler deploy` to Cloudflare's edge — nothing to self-host.
 - **Fastify host**: unchanged — runs on our existing container platform and calls the Bridge Worker over HTTPS when the Cloudflare path is selected.
 
@@ -95,34 +95,29 @@ flowchart LR
   sandbox -->|git clone short lived token| artifactsGit
 ```
 
-### How a run executes today
+### How a run executes
 
-1. Fastify resolves the project → uses `FsBackend` to get a local working directory at `commitSha`.
-2. `CloudflareSandboxProvider.createSandbox` via the Bridge Worker with `sandboxId = deploy-{projectId}-{commitSha}`.
-3. Upload the working tree + a generated `harness.ts` into the sandbox at `/workspace/project` through the Bridge's file-upload API.
-4. Exec inside the sandbox: `cd /workspace/project && bun run harness.ts`.
-5. Collect output, update `workflow_runs`, destroy the sandbox (or let it sleep).
+1. Fastify resolves the project → local working directory at `commitSha` (per-user working copies via the `ProjectManager`).
+2. If the project's `RemoteBackend` supports `getCloneSource()` (Artifacts does) and the deployed commit is on the remote, the runs service obtains a **clone source**: the repo's HTTPS remote URL + a freshly minted short-lived token.
+3. `CloudflareSandboxProvider.createSandbox` via the Bridge Worker with `sandboxId = deploy-{projectId}-{commitSha}`.
+4. Materialize the code in the sandbox:
+   - **Clone path** (Artifacts): `git clone` the authenticated remote inside the sandbox, `git checkout {commitSha}`, then upload only the generated `harness.ts`.
+   - **Upload path** (fs remotes, or commit not yet pushed): upload the working tree + `harness.ts` through the Bridge's file-upload API.
+5. Exec inside the sandbox: `cd /workspace/project && bun run harness.ts`.
+6. Collect output (step-level results via the instrumented harness), update `workflow_runs`, destroy the sandbox (or let it sleep).
 
-### How a run will execute once Artifacts is wired up
+Dev sandboxes (coding-agent sessions) use the same two materialization paths via `SandboxManager.ensureDevSandbox({ cloneSource? })`.
 
-1. Fastify resolves the project → ensures an Artifacts repo + local working dir via `ArtifactsBackend`.
-2. Writes workflow files into the working dir, commits, pushes to the Artifacts remote via `isomorphic-git`.
-3. Mints a short-lived write token for the repo via Artifacts REST.
-4. `CloudflareSandboxProvider.createSandbox` with `sandboxId = deploy-{projectId}-{commitSha}`.
-5. Passes `ARTIFACTS_GIT_REMOTE` (authenticated HTTPS remote) + the generated `harness.ts` to the sandbox.
-6. Exec: `git clone $ARTIFACTS_GIT_REMOTE project && cd project && git checkout $COMMIT_SHA && bun run harness.ts`.
-7. Collect output, update `workflow_runs`, destroy the sandbox (or let it sleep).
-
-The `StorageBackend` interface isolates the two paths — swapping `FsBackend` for `ArtifactsBackend` does not change the provider/executor contract.
+The `RemoteBackend` interface isolates the paths — swapping filesystem remotes for `ArtifactsRemoteBackend` does not change the provider/executor contract; `getCloneSource()` is an optional capability.
 
 ---
 
 ## Monorepo layout
 
 - `packages/cloudflare-sandbox-bridge/` — the Bridge Worker (deployed to Cloudflare). Contains `wrangler.jsonc`, `Dockerfile` (extends `cloudflare/sandbox` base), and a thin Worker entry that re-exports the `Sandbox` + `WarmPool` Durable Objects and delegates all routing to `@cloudflare/sandbox/bridge`.
-- `packages/sandbox/src/cloudflare-provider.ts` — `CloudflareSandboxProvider` implementing `SandboxProvider` as an HTTP client against the Bridge Worker.
-- `packages/git/src/artifacts-backend.ts` — `ArtifactsBackend` implementing `StorageBackend` via Artifacts REST + `isomorphic-git` (not yet implemented; see [TODO](#todo)).
-- Host boot code (e.g. OpenCX's `backend/src/catamorphic/boot.ts`) — selects Cloudflare providers when CF env vars are present; falls back to Daytona/`FsBackend` otherwise.
+- `packages/cloudflare/src/sandbox-provider.ts` — `CloudflareSandboxProvider` implementing `SandboxProvider` as an HTTP client against the Bridge Worker.
+- `packages/cloudflare/src/artifacts-client.ts` — `ArtifactsClient`, a minimal REST client for the Artifacts API (create/get/delete repos, mint scoped short-lived tokens).
+- `packages/cloudflare/src/artifacts-remote-backend.ts` — `ArtifactsRemoteBackend` implementing `RemoteBackend` (+ `getCloneSource()`) via Artifacts REST + `isomorphic-git` over a local bare mirror.
 
 ---
 
@@ -262,7 +257,7 @@ Use a different value per environment.
 
 ## Local development
 
-Goal: everything runs on your laptop. The sandbox path hits a local Worker via `workerd` + Docker and does **not** call Cloudflare's edge. Artifacts is not wired up yet (see [TODO](#todo)) so nothing in the current server code reaches out to the Cloudflare API.
+Goal: everything runs on your laptop. The sandbox path hits a local Worker via `workerd` + Docker and does **not** call Cloudflare's edge. Artifacts (when configured) talks to the real Cloudflare API — there is no local emulator; leave the Artifacts vars unset to use filesystem remotes instead.
 
 ### 1. Install prerequisites
 
@@ -288,15 +283,18 @@ CLOUDFLARE_SANDBOX_API_URL=http://localhost:8787
 CLOUDFLARE_SANDBOX_API_KEY=local-dev
 ```
 
-`CLOUDFLARE_ACCOUNT_ID` / `CLOUDFLARE_API_TOKEN` / `CLOUDFLARE_ARTIFACTS_NAMESPACE` are unused by the server runtime today — leave them commented in the host's env file until `ArtifactsBackend` lands.
+Add `CLOUDFLARE_ACCOUNT_ID` / `CLOUDFLARE_API_TOKEN` / `CLOUDFLARE_ARTIFACTS_NAMESPACE` to use Cloudflare Artifacts for code storage (`ArtifactsRemoteBackend`); leave them unset to use filesystem remotes.
 
-### 4. Run everything together
+### 4. Run the bridge
+
+There is no root `bun run dev` — catamorphic runs inside a host app. Start the bridge on its own:
 
 ```bash
-bun run dev   # repo root — turbo brings up server + playground + bridge
+cd packages/cloudflare-sandbox-bridge
+bunx wrangler dev
 ```
 
-This runs `wrangler dev` inside `packages/cloudflare-sandbox-bridge` as one of the turbo processes, which in turn builds and starts the sandbox container image via Docker on `http://localhost:8787`. First boot takes a minute or two (image build); subsequent boots are fast.
+This builds and starts the sandbox container image via Docker on `http://localhost:8787`. First boot takes a minute or two (image build); subsequent boots are fast.
 
 Smoke-test the bridge without leaving the shell:
 
@@ -305,9 +303,33 @@ curl http://localhost:8787/health
 # => {"ok":true}
 ```
 
-### 5. Default path uses Daytona
+### 5. Provider construction
 
-Daytona is the default sandbox provider until further notice. If `DAYTONA_API_KEY` is set, the server uses Daytona even when the Cloudflare env vars are also populated. To exercise the Cloudflare path locally, unset `DAYTONA_API_KEY` (in addition to having `CLOUDFLARE_SANDBOX_API_URL` + `CLOUDFLARE_SANDBOX_API_KEY` set). Storage always uses the local `FsBackend` today regardless of which sandbox provider is active.
+Backend selection is host boot code — there is no env-sniffing helper. The playground's `apps/playground/src/server/boot.ts` shows the pattern:
+
+```ts
+import {
+  ArtifactsClient,
+  ArtifactsRemoteBackend,
+  CloudflareSandboxProvider,
+} from "@catamorphic/cloudflare";
+
+const sandboxProvider = new CloudflareSandboxProvider({
+  apiUrl: process.env.CLOUDFLARE_SANDBOX_API_URL!,
+  apiKey: process.env.CLOUDFLARE_SANDBOX_API_KEY,
+});
+
+const remoteBackend = new ArtifactsRemoteBackend({
+  client: new ArtifactsClient({
+    accountId: process.env.CLOUDFLARE_ACCOUNT_ID!,
+    apiToken: process.env.CLOUDFLARE_API_TOKEN!,
+    namespace: process.env.CLOUDFLARE_ARTIFACTS_NAMESPACE!,
+  }),
+  cachePath: "/var/catamorphic/artifacts-cache",
+});
+```
+
+To exercise the Daytona path instead, construct `DaytonaSandboxProvider` from `@catamorphic/daytona`.
 
 ---
 
@@ -382,10 +404,7 @@ CLOUDFLARE_SANDBOX_API_KEY=<same-value-as-worker-secret>
 ## TODO
 
 - [ ] **Deploy the Bridge Worker to a real Cloudflare environment.** The package is ready (`packages/cloudflare-sandbox-bridge/`) but has only been exercised locally via `wrangler dev`. First real `wrangler deploy --env <env>` also validates the token's `Workers Scripts: Edit` scope and applies the DO migration.
-- [ ] **Register for the Artifacts private beta and create the `catamorphic-dev` / `catamorphic-prod` namespaces.** Until the account is approved, all Artifacts REST calls return `HTTP 403` / code `10004`, which blocks the items below.
-- [ ] **Implement `ArtifactsBackend` in `packages/git/`** — wraps Artifacts REST for repo creation + token minting and `isomorphic-git` (pure-JS, `http/node`) for read/write/commit/push against a local working dir. Slots into `StorageBackend` alongside `FsBackend` and `DaytonaBackend`.
-- [ ] **Swap the sandbox materialization step** from "upload working tree via the Bridge" to "`git clone` inside the sandbox with a short-lived Artifacts write token injected as env." `ArtifactsBackend` mints the token per run.
-- [ ] **Expand `describeIf` integration tests** to cover the full path: Artifacts repo create → commit via `isomorphic-git` → sandbox clones + checks out commit → harness runs → result readback. Current suites only cover the Bridge Worker path (`CF_SANDBOX_INTEGRATION=1`).
+- [ ] **Register for the Artifacts private beta and create the `catamorphic-dev` / `catamorphic-prod` namespaces.** `ArtifactsRemoteBackend` is implemented and integration-tested, but until the account is approved all Artifacts REST calls return `HTTP 403` / code `10004` — the tests skip with a warning and the playground falls back to filesystem remotes. Once granted, re-run `packages/cloudflare`'s `artifacts.integration.test.ts` against the real API.
 - [ ] **Revisit `instance_type` configurability** once we have a workflow that outgrows the fixed default — either raise the global default or surface per-project defaults with a per-deployment override.
 - [ ] **Revisit multi-VM scaling** when concurrency or blast-radius requirements exceed one VM per deployment. The escalation path is shard pools or per-run sandbox ids with a dispatcher, not more sessions inside one VM.
 

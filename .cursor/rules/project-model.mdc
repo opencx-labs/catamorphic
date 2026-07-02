@@ -1,6 +1,6 @@
 ---
 description: Project model, git versioning, multi-tenancy, and templates
-globs: "packages/git/**/*.ts,packages/server/src/routes/projects.ts,packages/db/migrations/*.sql"
+globs: "packages/git/**/*.ts,packages/fastify-plugin/src/routes/projects.ts,packages/db/migrations/*.sql"
 alwaysApply: false
 ---
 
@@ -18,7 +18,7 @@ The hierarchy is: **tenant → project → workflow**.
 
 - `tenants` table is the top-level isolation boundary.
 - All projects belong to a tenant.
-- The playground uses a fixed default tenant (`00000000-0000-0000-0000-000000000001`, seeded in migration `005`).
+- **There is no default tenant.** `tenantId` is the host's org id, provided on every request from the host's auth context and upserted into `tenants` on first project create.
 - Multi-tenant APIs pass `tenantId` through the storage backend; path containment checks in `FsBackend` enforce isolation (`<basePath>/<tenantId>/<projectId>`).
 
 ## Git Is the Version Control
@@ -28,17 +28,18 @@ Every project **is** a git repository. Version control is not bolted on — it i
 - `ProjectManager.create` writes `package.json` + `tsconfig.json` (ES2022, strict) and makes an **initial commit** authored as the system user.
 - Every subsequent edit that should be versioned produces a commit. Playground test runs commit with message `"Test run <ISO timestamp>"` before executing.
 - **Runs store the commit SHA**. `workflow_runs.commit_sha` is non-nullable; there is no such thing as a run without a version.
-- `isomorphic-git` is used for all git operations — portable, no native CLI dependency, works inside Daytona sandboxes.
+- `isomorphic-git` is used for all git operations — portable, no native CLI dependency, works inside sandboxes.
 - Default branch is **`main`**.
 
 ## Storage Backends
 
-`StorageBackend` is an interface with two concrete implementations:
+`StorageBackend` is an interface with pluggable implementations:
 
 | Backend | Used for |
 |---------|----------|
-| `FsBackend` | Local dev, CI — stores repos under a base path on disk |
-| `DaytonaBackend` | Cloud — creates a Daytona sandbox per project, stores the repo inside it |
+| `FsBackend` | Local dev, CI, simple hosts — stores repos under a base path on disk |
+| `DaytonaBackend` (`@catamorphic/daytona`) | Cloud — creates a Daytona sandbox per project, stores the repo inside it |
+| `ArtifactsRemoteBackend` (`@catamorphic/cloudflare`) | Cloudflare Artifacts — remote-first git repos; implements `getCloneSource()` so sandboxes `git clone` with a short-lived token instead of receiving uploads (see `docs/decisions/0004`, `0008`) |
 
 Path safety rules are enforced in both: no absolute paths, no `..`, no `.git` access in file APIs.
 

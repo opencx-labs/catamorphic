@@ -23,28 +23,30 @@ export function useCreateBranch(
 ): UseMutationResult<
   CreatedBranch,
   CatamorphicError,
-  CreateBranchInput | void
+  CreateBranchInput | undefined
 > {
   const { apiClient } = useCatamorphic();
   const queryClient = useQueryClient();
-  return useMutation<CreatedBranch, CatamorphicError, CreateBranchInput | void>(
-    {
-      mutationFn: (input) =>
-        runWithCatamorphicError(async () => {
-          const result = await apiClient.POST(
-            "/api/projects/{projectId}/branches",
-            {
-              params: { path: { projectId } },
-              body: input ?? {},
-            },
-          );
-          return assertApiOk(result, "Create branch failed");
-        }),
-      onSuccess: () => {
-        queryClient.invalidateQueries({
-          queryKey: ["cat", "project", projectId, "git"],
-        });
-      },
+  return useMutation<
+    CreatedBranch,
+    CatamorphicError,
+    CreateBranchInput | undefined
+  >({
+    mutationFn: (input) =>
+      runWithCatamorphicError(async () => {
+        const result = await apiClient.POST(
+          "/api/projects/{projectId}/branches",
+          {
+            params: { path: { projectId } },
+            body: input ?? {},
+          },
+        );
+        return assertApiOk(result, "Create branch failed");
+      }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({
+        queryKey: ["cat", "project", projectId, "git"],
+      });
     },
-  );
+  });
 }

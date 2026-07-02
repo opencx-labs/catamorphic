@@ -66,7 +66,7 @@ export interface UseWorkflowRunControllerResult {
  * Owns the client-side run lifecycle for the workflow editor: optimistic
  * insertion into `runsAtom`, execution-state painting on the canvas, history
  * sidebar toggling, and failure cleanup. The actual run dispatch is delegated
- * to `onTriggerRun`, which is typically wired to `@catamorphic/sdk` or an
+ * to `onTriggerRun`, which is typically wired to `@catamorphic/server-sdk` or an
  * HTTP endpoint by the embedder.
  *
  * This hook intentionally has no UI of its own. Mount it anywhere inside a

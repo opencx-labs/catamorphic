@@ -39,7 +39,7 @@ export function RunsPanel({
   const handleTrigger = async () => {
     setError(null);
     try {
-      await trigger.mutateAsync();
+      await trigger.mutateAsync(undefined);
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     }

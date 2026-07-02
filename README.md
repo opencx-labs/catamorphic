@@ -1,73 +1,91 @@
-# Catamorphic AI
+# Catamorphic
 
-Code-first workflow builder that parses TypeScript into visual workflow graphs.
+Catamorphic is a framework for building workflow automations and apps. You embed it inside your SaaS product to let your users build their own automations and dashboards with AI.
 
-> **Embed-only project.** Catamorphic ships as a set of libraries that a host application (for example OpenCX) mounts in-process. It does not run as a standalone product — there is no dev server, demo app, or default identity. The host app provides auth, the user/org model, the database (or schema), and the deployment surface. See [`INTEGRATION.md`](INTEGRATION.md) for the host integration flow and [`AGENTS.md`](AGENTS.md) for agent guidance.
->
-> **Embedding shortcut:** `@catamorphic/sdk` — host imports `createCatamorphic(...)` and calls `cat.forTenant(orgId).forUser(userId).projects.create(...)` in-process, no sidecar HTTP server required. See [`packages/sdk/README.md`](packages/sdk/README.md). When the host needs a network boundary or isn't Node/Bun, mount `@catamorphic/server`'s `createApp({ core })` as an in-process (or sidecar) Fastify app and talk to it through `@catamorphic/api-client`.
+**Code is the source of truth.** Workflows and apps are stored as TypeScript code in a git repository — never as a proprietary DSL or JSON format. The parser renders that code as an intuitive visual graph for non-technical users, while technical users (and AI agents) work directly with the code. A *project* is a collection of workflows and apps: just a git repo containing TypeScript.
 
-## Quick Start (local development against a host app)
+> **Embeddable framework.** Catamorphic ships as libraries a host application mounts in-process. The host provides auth, the user/org model, the database, and the deployment surface. There is no default identity or tenant — every request carries identity from the host's auth context. See [`INTEGRATION.md`](INTEGRATION.md) for the host integration flow.
 
-```bash
-# Install dependencies (workspaces only contains packages/*)
-bun install
+## The developer surface
 
-# Start a local Postgres for schema iteration + tests
-docker compose up -d
+| Package | What it is |
+| --- | --- |
+| `@catamorphic/server-sdk` | The core SDK for your Node/Bun backend. Takes a Postgres connection (or `pg.Pool`), manages its own schema-scoped tables and migrations, and exposes projects, workflow CRUD, file I/O, and execution. |
+| `@catamorphic/fastify-plugin` | A mountable Fastify plugin (`app.register(catamorphicPlugin, { core, prefix: "/api" })`) exposing the standard HTTP API for frontends. Also exports a standalone `createApp` factory for sidecar deployments. |
+| `@catamorphic/react` | Headless React bindings: `CatamorphicProvider`, TanStack Query hooks, and jotai atoms. Build a fully custom UI on top of these. |
+| `@catamorphic/ui` | Ready-made components: the React Flow workflow canvas, detail panel, history sidebar, AI bar. Every piece is opt-in — use the whole `WorkflowEditor` or compose the parts yourself. |
+| `@catamorphic/registry` | shadcn-style copy-paste components for hosts that want to own and customize the component source. |
+| `@catamorphic/api-client` | Generated OpenAPI types + `openapi-fetch` client for the HTTP API. |
 
-# Point catamorphic migrations at a database. When the host already owns a
-# Postgres (e.g. opencx), re-use it and scope catamorphic to its own schema.
-DATABASE_URL="postgresql://catamorphic:catamorphic@localhost:5432/catamorphic" \
-CATAMORPHIC_DB_SCHEMA=catamorphic \
-bun run db:migrate
+Supporting packages (consumed through the surface above, importable directly for advanced wiring):
 
-# Regenerate Kysely types from the database. The script is scoped to the
-# `catamorphic` schema, so it's safe to point at a host DB.
-DATABASE_URL="postgresql://catamorphic:catamorphic@localhost:5432/catamorphic" \
-bun run db:codegen
+| Package | What it is |
+| --- | --- |
+| `@catamorphic/core` | Framework-agnostic service layer (projects/workflows/runs/plugins/secrets). The kernel behind `server-sdk` and `fastify-plugin`. |
+| `@catamorphic/db` | Kysely + Postgres. Schema-scoped (default schema `catamorphic`), raw SQL migrations, programmatic `migrateToLatest`. |
+| `@catamorphic/git` | Git-backed project storage (`isomorphic-git`): per-user working copies + pluggable origin remotes (`RemoteBackend`). |
+| `@catamorphic/parser` | ts-morph AST → `WorkflowGraph` parser + dagre layout. |
+| `@catamorphic/sandbox` | Vendor-neutral sandbox + coding-agent contracts (`SandboxProvider`, `SandboxManager`, `RunExecutor`, `CodingAgentProvider`), OTel instrumentation. |
+| `@catamorphic/cloudflare` | Cloudflare backend plugin: `CloudflareSandboxProvider` (Bridge Worker) + `ArtifactsRemoteBackend` (Cloudflare Artifacts code storage). The default stack. |
+| `@catamorphic/daytona` | Daytona backend plugin: `DaytonaSandboxProvider` + experimental Daytona git storage. |
+| `@catamorphic/flue` | Coding-agent plugin backed by [Flue](https://flueframework.com): server-side harness driving the dev sandbox remotely. The flagship agent. |
+| `@catamorphic/codex` | Coding-agent plugin backed by the OpenAI Codex SDK. |
+| `@catamorphic/otel` | Tiny OpenTelemetry helpers (`@opentelemetry/api` only — the host owns the SDK/exporters). |
+| `@catamorphic/runtime` | Execution harness that runs *inside* the sandbox and reports step results. |
+| `@catamorphic/plugins` | Plugin manifest contract + resolvers for host-provided packages and secrets. |
+| `@catamorphic/cloudflare-sandbox-bridge` | Deployable Cloudflare Worker exposing Cloudflare Sandbox over HTTP. |
 
-# Build the monorepo so workspace consumers can resolve dist/ entry points.
-bun run build
+A reference host app lives in [`apps/playground`](apps/playground/README.md) — Fastify + Vite/React on the Cloudflare stack (Sandbox for execution, Artifacts for code storage).
 
-# Regenerate the OpenAPI spec + the typed api-client whenever server routes
-# or DTOs change.
-cd packages/server && bun run generate-spec
-cd ../api-client && bun run generate
+## Design principles
+
+- **Workflows are regular code.** User-defined workflows run like normal apps — full IO, real npm dependencies, no crippled JS runtime. Execution happens inside a sandbox (Cloudflare Sandbox by default) using **Bun** to run and bundle.
+- **Workflow code stays simple.** Both AI agents and humans must be able to write, edit, and understand workflows, and the parser must render them intuitively for non-technical users. See the code format below.
+- **Host-injectable everything.** Database connections, storage backends, sandbox credentials, LLM credentials, and telemetry are all injected by the host — nothing is hard-coded.
+- **Cloudflare-first infrastructure.** Cloudflare Sandbox for execution, Cloudflare Artifacts for git code storage (`ArtifactsRemoteBackend`; requires the closed beta). Backends ship as vendor plugin packages so hosts install only what they use. Postgres for everything stateful — including (planned) job queues and scheduling via `SKIP LOCKED`, to avoid extra infrastructure.
+- **OpenTelemetry throughout.** Libraries instrument against `@opentelemetry/api` only; the host registers the SDK and exporters and gets full traces for free.
+
+Settled design decisions are recorded as ADRs in [`docs/decisions/`](docs/decisions/README.md).
+
+## Quick start (embedding)
+
+```ts
+import { CloudflareSandboxProvider } from "@catamorphic/cloudflare";
+import { createCatamorphic } from "@catamorphic/server-sdk";
+
+// Boot once per process
+const catamorphic = createCatamorphic({
+  database: { connectionString: process.env.DATABASE_URL! }, // or { pool }
+  storage: {
+    projectsPath: process.env.CATAMORPHIC_PROJECTS_PATH!,
+    remotesPath: process.env.CATAMORPHIC_REMOTES_PATH!,
+  },
+  // Backend plugins: @catamorphic/cloudflare (default) or @catamorphic/daytona
+  sandboxProvider: new CloudflareSandboxProvider({
+    apiUrl: process.env.CLOUDFLARE_SANDBOX_API_URL!,
+    apiKey: process.env.CLOUDFLARE_SANDBOX_API_KEY,
+  }),
+});
+await catamorphic.migrate(); // idempotent, schema-scoped
+
+// Per request: bind the host's org + user
+const client = catamorphic.forTenant(orgId).forUser(userId);
+const project = await client.projects.create({ name: "Onboarding" });
 ```
 
-To iterate on catamorphic alongside a host app, install the packages the host
-needs via `file:` links (see `INTEGRATION.md` → "Local dev linking"). There is
-no root `bun run dev` — you run the **host app**, which boots catamorphic
-in-process.
+To expose the HTTP API to your frontend:
 
-## Architecture
+```ts
+import { catamorphicPlugin } from "@catamorphic/fastify-plugin";
 
-Workflows are TypeScript code — the source of truth. The parser converts TypeScript AST into a `WorkflowGraph`, which React Flow renders visually.
-
-```
-TypeScript Code → ts-morph Parser → WorkflowGraph → React Flow Canvas
-                                                   ↕
-                                              Monaco Editor
+app.register(catamorphicPlugin, { core: catamorphic.core, prefix: "/api" });
 ```
 
-## Packages
+And on the frontend, wrap your tree with `CatamorphicProvider` from `@catamorphic/react` and drop in `WorkflowEditor` from `@catamorphic/ui` (or build your own UI from the hooks). See [`INTEGRATION.md`](INTEGRATION.md).
 
-| Package                   | Description                                                             |
-| ------------------------- | ----------------------------------------------------------------------- |
-| `@catamorphic/parser`     | ts-morph AST → WorkflowGraph parser                                     |
-| `@catamorphic/react`      | Headless React bindings (provider + hooks + atoms)                      |
-| `@catamorphic/ui`         | React Flow editor, embeddable component                                 |
-| `@catamorphic/core`       | Framework-free service layer (projects/workflows/runs)                  |
-| `@catamorphic/sdk`        | Library-direct embedding facade (scoped client)                         |
-| `@catamorphic/server`     | Fastify app factory (`createApp({ core })`) — mount in-process or as sidecar |
-| `@catamorphic/db`         | Kysely + PostgreSQL + migrations                                        |
-| `@catamorphic/runtime`    | Vercel Workflow SDK adapter                                             |
-| `@catamorphic/sandbox`    | sandbox-agent wrapper for AI                                            |
-| `@catamorphic/plugins`    | Host-attached package / secret resolver for workflow runtime            |
-| `@catamorphic/api-client` | Generated type-safe API client                                          |
-| `@catamorphic/registry`   | shadcn-style copy-paste component registry                              |
+## Workflow code format
 
-## Workflow Code Format
+Workflows are exported async functions with a `"use workflow"` directive; steps use `"use step"`. All functions take a single destructured object parameter and carry JSDoc display metadata.
 
 ```typescript
 /**
@@ -97,11 +115,33 @@ export async function welcomeUser({
 }
 ```
 
+## Local development
+
+```bash
+bun install
+
+# Start a local Postgres for schema iteration + tests
+docker compose up -d
+
+# Apply migrations + regenerate Kysely types (scoped to the `catamorphic` schema)
+DATABASE_URL="postgresql://catamorphic:catamorphic@localhost:5432/catamorphic" bun run db:migrate
+DATABASE_URL="postgresql://catamorphic:catamorphic@localhost:5432/catamorphic" bun run db:codegen
+
+# Build everything
+bun run build
+
+# Regenerate the OpenAPI spec + typed api-client after route/DTO changes
+cd packages/fastify-plugin && bun run generate-spec
+cd ../api-client && bun run generate
+```
+
+There is no root `bun run dev` — you run a **host app** that boots catamorphic in-process. To iterate on catamorphic alongside a host, link the packages via `file:` (see `.cursor/skills/using-catamorphic/SKILL.md` → "Local dev linking").
+
 ## Scripts
 
 ```bash
 bun run build      # Build all packages
-bun run test       # Run all tests (specs)
+bun run test       # Run all tests
 bun run typecheck  # Typecheck all packages with tsgo
 bun run lint       # Lint with Biome
 bun run lint:fix   # Auto-fix lint issues
@@ -111,63 +151,41 @@ bun run db:reset   # Drop + recreate the catamorphic schema (dev only)
 bun run db:status  # Show applied / pending migrations
 ```
 
-## Testing (Specs)
+## Testing
 
-Specs are written with **Vitest** and run through Turborepo from the root.
-
-### Run all specs
+Tests use **Vitest**, orchestrated by Turborepo.
 
 ```bash
-bun run test
+bun run test                                   # everything
+bun run --filter @catamorphic/parser test      # one package
+cd packages/parser && bun run test src/__tests__/parser.test.ts  # one file
 ```
 
-### Run specs for one workspace package
+Integration tests hit the **real services** using the keys in the repo root `.env` (loaded automatically by the vitest config) and skip themselves when credentials are absent:
 
-```bash
-# Parser package specs
-bun run --filter @catamorphic/parser test
+- **Daytona** (`packages/daytona`) — runs whenever `DAYTONA_API_KEY` is set.
+- **Cloudflare Sandbox** (`packages/cloudflare`, `packages/core`) — needs `CLOUDFLARE_SANDBOX_API_URL` plus the explicit opt-in `CF_SANDBOX_INTEGRATION=1` (start the bridge first: `bun run dev` in `packages/cloudflare-sandbox-bridge`).
+- **Cloudflare Artifacts** (`packages/cloudflare`) — runs whenever the `CLOUDFLARE_ACCOUNT_ID` / `CLOUDFLARE_API_TOKEN` / `CLOUDFLARE_ARTIFACTS_NAMESPACE` keys are set and the account has Artifacts beta access; skips with a warning while feature-gated.
 
-# Server package specs
-bun run --filter @catamorphic/server test
-```
+Unit tests run with no setup.
 
-### Run one spec file
+## Tech stack
 
-```bash
-cd packages/parser
-bun run test src/__tests__/parser.test.ts
-```
-
-### Notes
-
-- Some integration specs (e.g. Daytona-backed tests in `packages/git` / `packages/sandbox`) require external services or network access and may fail locally without the required environment.
-- Unit specs (parser/runtime/server route validation, etc.) should run locally with no special setup.
-
-## Tech Stack
-
-- **Bun** — runtime, package manager, workspace
+- **Bun** — runtime, package manager, bundler (also inside sandboxes)
 - **TypeScript** — tsgo for typechecking
-- **Fastify** — API surface with Zod + OpenAPI (mounted by the host)
-- **React Flow** — workflow visualization
+- **Postgres** — all state, schema-scoped; queues/scheduling planned on the same DB
+- **Cloudflare** — Sandbox (execution), Artifacts (code storage)
+- **Fastify** — HTTP surface with Zod + OpenAPI (mounted by the host)
+- **React Flow** — workflow visualization; **Jotai** + **TanStack Query** — frontend state
 - **ts-morph** — TypeScript AST parsing
-- **Kysely** — type-safe SQL query builder
-- **Jotai** — state management
+- **Kysely** — type-safe SQL
+- **isomorphic-git** — portable git, no native CLI dependency
+- **OpenTelemetry** — `@opentelemetry/api` instrumentation throughout
 - **Turborepo** — build orchestration
 
-# TODO
+## Roadmap
 
-- Make the graph and code editor easily embeddable
-  - Extract the rendering and editor logic into an installable package
-  - Should be highly configurable
-    - Theme and UI
-    - Toggles for minimap, code editor, AI input box, etc
-- Implement Git workflow
-  - Create branches for new edits, merge them to main to deploy
-  - Handle versions, conflicts, sync (pull/push) in the UI
-- Implement sleeps
-  - Might require an abstraction that lets users return from steps - returned value is delayed and put on a queue
-  - Abstraction must be minimal and must render well in the graph
-- Make execution really efficient
-  - Maybe run persistent server sandboxes for each project
-  - Make sure managing sandboxes is simple
-    - Take into account both scale-to-zero AND scale-up
+- **Postgres-backed queue + scheduler** — durable runs, retries, cron triggers, and `sleep()` via the host's Postgres (`SKIP LOCKED`), no extra infra (see `docs/decisions/0006`).
+- **Apps** — first-class support for user-built dashboards/apps alongside workflows.
+- **Persistent per-project sandboxes** — scale-to-zero and warm-start execution.
+- **Compile-time step instrumentation** — replace the interim regex-based step rewriting in the run harness with an AST transform.

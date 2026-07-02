@@ -35,7 +35,7 @@ export class AgentContextService {
         parts.push("### README", readme.trim());
       }
       if (types) {
-        parts.push("### Types (" + plugin.manifest.docs.types + ")");
+        parts.push(`### Types (${plugin.manifest.docs.types})`);
         parts.push("```typescript");
         parts.push(types.trim());
         parts.push("```");

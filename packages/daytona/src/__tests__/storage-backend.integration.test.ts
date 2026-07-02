@@ -1,0 +1,53 @@
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { DaytonaBackend } from "../storage-backend.js";
+
+const DAYTONA_API_KEY = process.env.DAYTONA_API_KEY;
+
+const describeIf = DAYTONA_API_KEY ? describe : describe.skip;
+
+const TENANT = "a1b2c3d4-e5f6-4890-abcd-ef1234567890";
+const PROJECT = "f1e2d3c4-b5a6-4890-bcde-a12345678901";
+
+describeIf("DaytonaBackend (integration)", () => {
+  let backend: DaytonaBackend;
+
+  beforeAll(() => {
+    backend = new DaytonaBackend({ apiKey: DAYTONA_API_KEY });
+  });
+
+  afterAll(async () => {
+    try {
+      await backend.deleteProject(TENANT, PROJECT);
+    } catch {
+      // already cleaned up
+    }
+  }, 120_000);
+
+  it("reports non-existent project as not existing", async () => {
+    expect(await backend.exists(TENANT, PROJECT)).toBe(false);
+  }, 10_000);
+
+  it("initializes a project and marks it as existing", async () => {
+    const repoPath = await backend.initProject(TENANT, PROJECT);
+    expect(repoPath).toBe("project");
+    expect(await backend.exists(TENANT, PROJECT)).toBe(true);
+  }, 120_000);
+
+  it("acquires a project and returns a repoPath", async () => {
+    const { repoPath, release } = await backend.acquireProject(TENANT, PROJECT);
+    expect(repoPath).toBe("project");
+    expect(typeof release).toBe("function");
+    await release();
+  }, 60_000);
+
+  it("returns sandboxId for an existing project", async () => {
+    const sandboxId = backend.getSandboxId(TENANT, PROJECT);
+    expect(sandboxId).toBeTruthy();
+  }, 10_000);
+
+  it("deletes a project and marks it as not existing", async () => {
+    await backend.deleteProject(TENANT, PROJECT);
+    expect(await backend.exists(TENANT, PROJECT)).toBe(false);
+    expect(backend.getSandboxId(TENANT, PROJECT)).toBeUndefined();
+  }, 60_000);
+});

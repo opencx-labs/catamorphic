@@ -9,11 +9,7 @@
  *   CATAMORPHIC_COMMIT_SHA    - The commit SHA being executed
  */
 import { reportRunResult } from "./reporter.js";
-import {
-  findStepFunctions,
-  hasUseStepDirective,
-  wrapStep,
-} from "./step-wrapper.js";
+import { instrumentSource, wrapStep } from "./step-wrapper.js";
 import type { RunReport, StepEntry } from "./types.js";
 
 const runId = process.env.CATAMORPHIC_RUN_ID ?? "";
@@ -30,11 +26,26 @@ const triggerData = JSON.parse(triggerDataRaw) as Record<string, unknown>;
 const stepLog: StepEntry[] = [];
 const startedAt = new Date().toISOString();
 
-async function findWorkflowFile(): Promise<string | null> {
+// Instrumented project sources (see `instrumentSource`) route every step
+// call through this global wrapper. Patching the imported module namespace
+// does not work: ESM namespaces are read-only, and intra-module calls bind
+// to the declaration directly.
+(
+  globalThis as Record<string, unknown> & {
+    __catamorphicWrapStep?: unknown;
+  }
+).__catamorphicWrapStep = (
+  fn: (...args: unknown[]) => unknown,
+  stepName: string,
+) => wrapStep(fn, stepName, stepLog);
+
+async function listSourceFiles(): Promise<string[]> {
   const fs = await import("node:fs/promises");
   const path = await import("node:path");
+  const found: string[] = [];
+  const harnessPath = path.join(process.cwd(), "harness.ts");
 
-  async function scanDir(dir: string): Promise<string | null> {
+  async function scanDir(dir: string): Promise<void> {
     const entries = await fs.readdir(dir, { withFileTypes: true });
     for (const entry of entries) {
       if (
@@ -45,51 +56,48 @@ async function findWorkflowFile(): Promise<string | null> {
         continue;
       const fullPath = path.join(dir, entry.name);
       if (entry.isDirectory()) {
-        const found = await scanDir(fullPath);
-        if (found) return found;
-      } else if (entry.name.endsWith(".ts") || entry.name.endsWith(".js")) {
-        const source = await fs.readFile(fullPath, "utf-8");
-        if (
-          source.includes(`function ${workflowName}`) &&
-          source.includes('"use workflow"')
-        ) {
-          return fullPath;
-        }
+        await scanDir(fullPath);
+      } else if (
+        (entry.name.endsWith(".ts") || entry.name.endsWith(".js")) &&
+        fullPath !== harnessPath
+      ) {
+        found.push(fullPath);
       }
     }
-    return null;
   }
 
-  return scanDir(process.cwd());
+  await scanDir(process.cwd());
+  return found;
 }
 
 async function run(): Promise<void> {
-  const workflowFile = await findWorkflowFile();
+  const fs = await import("node:fs/promises");
+  const files = await listSourceFiles();
+
+  const workflowFiles: string[] = [];
+  for (const filePath of files) {
+    const source = await fs.readFile(filePath, "utf-8");
+    if (
+      source.includes(`function ${workflowName}`) &&
+      source.includes('"use workflow"')
+    ) {
+      workflowFiles.push(filePath);
+    }
+    const instrumented = instrumentSource(source);
+    if (instrumented !== null) {
+      await fs.writeFile(filePath, instrumented);
+    }
+  }
+
+  const workflowFile = workflowFiles[0];
   if (!workflowFile) {
     throw new Error(`Workflow function '${workflowName}' not found`);
   }
-
-  const fs = await import("node:fs/promises");
-  const source = await fs.readFile(workflowFile, "utf-8");
 
   const mod = (await import(workflowFile)) as Record<string, unknown>;
   const workflowFn = mod[workflowName];
   if (typeof workflowFn !== "function") {
     throw new Error(`'${workflowName}' is not exported as a function`);
-  }
-
-  if (hasUseStepDirective(source)) {
-    const steps = findStepFunctions(source);
-    for (const step of steps) {
-      const original = mod[step.name];
-      if (typeof original === "function") {
-        (mod as Record<string, unknown>)[step.name] = wrapStep(
-          original as (...args: unknown[]) => unknown,
-          step.name,
-          stepLog,
-        );
-      }
-    }
   }
 
   const result = await (workflowFn as (data: unknown) => Promise<unknown>)(

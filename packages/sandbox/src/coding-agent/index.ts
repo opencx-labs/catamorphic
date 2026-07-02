@@ -1,5 +1,11 @@
-export { CodexAgent } from "./codex-agent.js";
+export {
+  buildPluginsPreamble,
+  PLUGIN_STAGE_DIR,
+  stagedPluginFiles,
+  stagePluginDocs,
+} from "./plugin-staging.js";
 export type {
+  AttachedPluginForAgent,
   CodingAgentProvider,
   ProviderSession,
   StartSessionOpts,

@@ -1,30 +1,28 @@
-export type { CloudflareSandboxProviderOpts } from "./cloudflare-provider.js";
-export {
-  CloudflareSandboxError,
-  CloudflareSandboxProvider,
-} from "./cloudflare-provider.js";
 export {
   buildPluginsPreamble,
-  CodexAgent,
+  PLUGIN_STAGE_DIR,
+  stagedPluginFiles,
   stagePluginDocs,
-} from "./coding-agent/codex-agent.js";
+} from "./coding-agent/plugin-staging.js";
 export type {
   AttachedPluginForAgent,
   CodingAgentProvider,
   ProviderSession,
   StartSessionOpts,
 } from "./coding-agent/types.js";
-export { DaytonaSandboxProvider } from "./daytona-provider.js";
+export { instrumentSandboxProvider } from "./instrumented-provider.js";
 export {
   type ExecuteRunOpts,
   type PluginPayload,
   RunExecutorImpl,
   uploadPluginPayloads,
 } from "./run-executor.js";
+export type { SandboxStore } from "./sandbox-manager.js";
 export { SandboxManagerImpl } from "./sandbox-manager.js";
 export type {
   AgentEvent,
   AgentSession,
+  CloneSource,
   CodingAgent,
   CreateSandboxOpts,
   ExecOpts,

@@ -73,15 +73,34 @@ export interface SandboxProvider {
   gitCheckout(sandboxId: string, path: string, ref: string): Promise<void>;
 }
 
+/**
+ * Instruction for populating a sandbox's project directory via `git clone`
+ * from a real git remote (e.g. Cloudflare Artifacts) instead of uploading
+ * files from the host. Produced by remote backends that expose
+ * `getCloneSource` (see `@catamorphic/git`).
+ */
+export interface CloneSource {
+  url: string;
+  username?: string;
+  password?: string;
+  branch?: string;
+  /** Commit to check out after cloning (exec sandboxes pin to a SHA). */
+  commitSha?: string;
+}
+
 export interface SandboxManager {
   ensureExecSandbox(opts: {
     projectId: string;
     commitSha: string;
+    /** When set, freshly created sandboxes clone the project from git. */
+    cloneSource?: CloneSource;
   }): Promise<SandboxHandle>;
 
   ensureDevSandbox(opts: {
     projectId: string;
     userId: string;
+    /** When set, freshly created sandboxes clone the project from git. */
+    cloneSource?: CloneSource;
   }): Promise<SandboxHandle>;
 
   releaseSandbox(sandboxId: string): Promise<void>;
@@ -122,6 +141,7 @@ export interface RunExecutor {
     triggerData: unknown;
     runId: string;
     commitSha: string;
+    cloneSource?: CloneSource;
     plugins?: RunPluginPayload[];
     secrets?: Record<string, string>;
   }): Promise<RunResult>;

@@ -14,7 +14,6 @@ import { useCatamorphic } from "../provider.js";
 import type { AgentSession } from "../types.js";
 
 export interface CreateAgentSessionInput {
-  userId: string;
   systemPrompt?: string;
 }
 

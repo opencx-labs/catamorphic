@@ -1,6 +1,6 @@
 # @catamorphic/cloudflare-sandbox-bridge
 
-Thin Cloudflare Worker that exposes [Cloudflare Sandbox](https://developers.cloudflare.com/sandbox/) as an HTTP API so the Fastify server (which runs on our own CaaS, not inside Workers) can create and drive sandboxes.
+Thin Cloudflare Worker that exposes [Cloudflare Sandbox](https://developers.cloudflare.com/sandbox/) as an HTTP API so the host's Node/Bun process (which runs outside Workers) can create and drive sandboxes via `CloudflareSandboxProvider`.
 
 The Worker is a small wrapper around [`@cloudflare/sandbox/bridge`](https://developers.cloudflare.com/sandbox/bridge/) — all HTTP routing, auth, and pool logic lives in that package. Bumping the Sandbox SDK is the normal way to pick up upstream changes.
 
@@ -38,13 +38,7 @@ Open that URL in a browser (with a bearer-injecting extension, or by calling the
 
 ## Running alongside the rest of the stack
 
-From the repo root:
-
-```sh
-bun run dev
-```
-
-Turbo brings up Postgres (already running in Docker Compose), the Fastify server, the playground, and this bridge Worker together. Note: Daytona is the default sandbox provider until further notice — the server only selects the Cloudflare bridge when `DAYTONA_API_KEY` is unset and `CLOUDFLARE_SANDBOX_API_URL` + `CLOUDFLARE_SANDBOX_API_KEY` are set. See [`CLOUDFLARE.md`](../../CLOUDFLARE.md) at the repo root.
+Catamorphic is embed-only — there is no root `bun run dev`. Start the bridge on its own (`bun run dev` in this package), then point the **host** at it: construct `new CloudflareSandboxProvider({ apiUrl, apiKey })` from `@catamorphic/cloudflare` in the host's boot code (typically from `CLOUDFLARE_SANDBOX_API_URL` / `CLOUDFLARE_SANDBOX_API_KEY`). See [`CLOUDFLARE.md`](../../CLOUDFLARE.md) at the repo root and `apps/playground/src/server/boot.ts` for a reference.
 
 ## Production deploy
 
@@ -79,4 +73,4 @@ The bridge exposes the routes documented in [Cloudflare's bridge API reference](
 - `POST /v1/sandbox/:id/hydrate` — bulk-populate `/workspace` from a tar archive.
 - `GET /v1/sandbox/:id/running` — liveness.
 
-`CloudflareSandboxProvider` in [`packages/sandbox/src/cloudflare-provider.ts`](../sandbox/src/cloudflare-provider.ts) is the typed client the rest of the monorepo uses.
+`CloudflareSandboxProvider` in [`packages/cloudflare/src/sandbox-provider.ts`](../cloudflare/src/sandbox-provider.ts) is the typed client the rest of the monorepo uses.

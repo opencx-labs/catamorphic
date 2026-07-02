@@ -1,8 +1,15 @@
 import type { DB } from "@catamorphic/db";
 import type { ProjectManager, ProjectRepo } from "@catamorphic/git";
+import { getTracer, withSpan } from "@catamorphic/otel";
 import type { Kysely, Selectable } from "kysely";
 import { authorFor, type Identity } from "../identity.js";
-import { findTemplate, type ProjectTemplate } from "../templates.js";
+import {
+  findTemplate,
+  type ProjectTemplate,
+  SEED_SKILLS,
+} from "../templates.js";
+
+const tracer = getTracer("@catamorphic/core");
 
 type ProjectRow = Selectable<DB["projects"]>;
 
@@ -79,6 +86,23 @@ export class ProjectsService {
     identity: Identity,
     input: CreateProjectInput,
   ): Promise<Project> {
+    return withSpan(
+      {
+        tracer,
+        name: "project.create",
+        attributes: {
+          "catamorphic.tenant.id": identity.tenantId,
+          "catamorphic.project.template": input.templateId ?? "none",
+        },
+      },
+      () => this.createInner(identity, input),
+    );
+  }
+
+  private async createInner(
+    identity: Identity,
+    input: CreateProjectInput,
+  ): Promise<Project> {
     const { tenantId } = identity;
     const template = input.templateId
       ? findTemplate(input.templateId)
@@ -101,9 +125,12 @@ export class ProjectsService {
       })
       .execute();
 
+    // Blank projects still get the seed skills so the coding agent knows the
+    // workflow conventions from its first session (templates already include
+    // them in their file maps).
     await this.projectManager.create(tenantId, projectId, {
       name: input.name,
-      initialFiles: template?.files,
+      initialFiles: template?.files ?? SEED_SKILLS,
     });
 
     const row = await this.db
