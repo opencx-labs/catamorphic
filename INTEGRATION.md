@@ -60,7 +60,7 @@ Covered: project CRUD, workflow listing/fetching (parsed from project source), a
 
 ### Observability
 
-Catamorphic instruments itself with `@opentelemetry/api` only. Register your OpenTelemetry SDK (NodeSDK, exporters, sampling) in the host as usual and catamorphic's spans — `workflow.run`, `workflow.execute`, `project.create`, `project.deploy`, `sandbox.*` — appear in your traces automatically, correlated with your HTTP spans. Without an SDK they are no-ops.
+Catamorphic instruments itself with `@opentelemetry/api` only. Register your OpenTelemetry SDK (NodeSDK, exporters, sampling) in the host as usual and catamorphic's spans — `workflow.run`, `workflow.execute`, `project.create`, `project.deploy`, `sandbox.*` — appear in your traces automatically, correlated with your HTTP spans. Without an SDK they are no-ops. For a working host-side reference, see the playground's SDK wiring (`apps/playground/src/server/otel.ts`) and the dev OTel collector → ClickHouse stack in the repo-root `docker-compose.yml`.
 
 ## Database-only setup (just run the migrations)
 

@@ -120,7 +120,8 @@ export async function welcomeUser({
 ```bash
 bun install
 
-# Start a local Postgres for schema iteration + tests
+# Start local dev services: Postgres, plus an OTel collector (:4317/:4318)
+# backed by ClickHouse (:8124 HTTP, :19001 native) for trace storage
 docker compose up -d
 
 # Apply migrations + regenerate Kysely types (scoped to the `catamorphic` schema)
