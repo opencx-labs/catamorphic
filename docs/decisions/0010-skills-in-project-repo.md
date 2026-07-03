@@ -37,8 +37,9 @@ Supporting changes:
 - `SkillsService` (`core.skills`) lists a project's skills by parsing SKILL.md
   frontmatter; exposed at `GET /projects/:id/skills`. Writing skills is just
   writing files through the existing file APIs.
-- Project templates seed `.agents/skills/writing-workflows/SKILL.md` so every
-  new project teaches its agent the workflow conventions.
+- Every new project — template-based or blank — is seeded with
+  `.agents/skills/writing-workflows/SKILL.md` (`SEED_SKILLS` in core) so its
+  agent knows the workflow conventions from the first session.
 
 Host-application-level skills (not project-specific) are **not** stored in
 catamorphic at all — hosts pass them to their agent directly (e.g.

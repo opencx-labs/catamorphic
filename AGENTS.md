@@ -22,7 +22,7 @@ Concrete implications for any change you make:
 
 - **Cloudflare-first.** Cloudflare Sandbox is the default execution provider and Cloudflare Artifacts the default git code storage (both in `@catamorphic/cloudflare`; Daytona is the maintained alternate in `@catamorphic/daytona`). Backends are vendor plugin packages — hosts construct providers explicitly at boot (see ADR 0008 and `apps/playground/src/server/boot.ts`). See `CLOUDFLARE.md`.
 - **Postgres for everything stateful.** Tables live in a dedicated schema (default `catamorphic`). When you need queues or scheduling, build them on the same Postgres (`SKIP LOCKED`) instead of adding infrastructure.
-- **OpenTelemetry throughout.** Libraries instrument with `@opentelemetry/api` only (via `@catamorphic/otel`); the host owns the SDK/exporters. New service methods on hot paths (runs, deploys, sandbox ops, project mutations) should get spans with `catamorphic.*` attributes.
+- **OpenTelemetry throughout.** Libraries instrument with `@opentelemetry/api` only (via `@catamorphic/otel`); the host owns the SDK/exporters. New service methods on hot paths (runs, deploys, sandbox ops, project mutations) should get spans with `catamorphic.*` attributes. For dev, the repo-root docker-compose ships an OTel collector (:4317/:4318) writing to ClickHouse (:8124 HTTP / :19001 native, db `otel`); the playground registers the host-side SDK in `apps/playground/src/server/otel.ts`.
 - **Bun** for running, bundling, and inside sandboxes.
 
 ## Design Decisions (ADRs)

@@ -24,3 +24,4 @@ Conventions:
 - Hosts get catamorphic spans in their existing traces for free; no config surface to maintain.
 - Because spans nest via active context, sandbox operations appear as children of `workflow.execute` automatically.
 - HTTP-layer tracing is deliberately left to the host's Fastify instrumentation.
+- The playground demonstrates the host side: it registers a `NodeTracerProvider` with an OTLP/HTTP exporter (`apps/playground/src/server/otel.ts`), and the dev docker-compose ships an OTel collector + ClickHouse pair (`infra/otel-collector.yaml`) to receive and store the spans.
