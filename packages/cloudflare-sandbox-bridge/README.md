@@ -38,7 +38,7 @@ Open that URL in a browser (with a bearer-injecting extension, or by calling the
 
 ## Running alongside the rest of the stack
 
-Catamorphic is embed-only — there is no root `bun run dev`. Start the bridge on its own (`bun run dev` in this package), then point the **host** at it: construct `new CloudflareSandboxProvider({ apiUrl, apiKey })` from `@catamorphic/cloudflare` in the host's boot code (typically from `CLOUDFLARE_SANDBOX_API_URL` / `CLOUDFLARE_SANDBOX_API_KEY`). See [`CLOUDFLARE.md`](../../CLOUDFLARE.md) at the repo root and `apps/playground/src/server/boot.ts` for a reference.
+The repo-root `bun run dev` starts this bridge alongside the playground and the docker-compose infra. To pair the bridge with a different host app, start it on its own (`bun run dev` in this package), then point the **host** at it: construct `new CloudflareSandboxProvider({ apiUrl, apiKey })` from `@catamorphic/cloudflare` in the host's boot code (typically from `CLOUDFLARE_SANDBOX_API_URL` / `CLOUDFLARE_SANDBOX_API_KEY`). See [`CLOUDFLARE.md`](../../CLOUDFLARE.md) at the repo root and `apps/playground/src/server/boot.ts` for a reference.
 
 ## Production deploy
 

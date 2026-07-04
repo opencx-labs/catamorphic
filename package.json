@@ -7,6 +7,7 @@
     "apps/*"
   ],
   "scripts": {
+    "dev": "docker compose up -d --wait && turbo dev --filter=catamorphic-playground --filter=@catamorphic/cloudflare-sandbox-bridge",
     "build": "turbo build",
     "test": "turbo test",
     "typecheck": "turbo typecheck",

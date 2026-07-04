@@ -27,21 +27,31 @@ inject identity from its verified session.
 
 ## Running
 
-Prereqs (from the repo root):
+One-time setup (from the repo root):
 
-1. Postgres — `docker run -d --name catamorphic-dev-pg -p 5433:5432 -e POSTGRES_USER=catamorphic -e POSTGRES_PASSWORD=catamorphic -e POSTGRES_DB=catamorphic postgres:17`
-   (or point `DATABASE_URL` in `apps/playground/.env` at your own).
-2. Sandbox bridge — `bun run dev` in `packages/cloudflare-sandbox-bridge`
-   (requires Docker; serves `http://localhost:8787`).
-3. Repo root `.env` with `CLOUDFLARE_SANDBOX_API_URL`, and optionally the
+1. `cp apps/playground/.env.example apps/playground/.env` and point
+   `DATABASE_URL` at your Postgres — the docker-compose one is
+   `postgresql://catamorphic:catamorphic@localhost:5432/catamorphic`.
+2. Repo root `.env` with `CLOUDFLARE_SANDBOX_API_URL`, and optionally the
    Artifacts vars (`CLOUDFLARE_ACCOUNT_ID`, `CLOUDFLARE_API_TOKEN`,
    `CLOUDFLARE_ARTIFACTS_NAMESPACE`).
+3. Docker running (the sandbox bridge builds/runs containers locally).
 
-Then:
+Then, from the repo root:
+
+```sh
+bun run dev
+```
+
+This starts everything: docker-compose infra (Postgres, OTel collector,
+ClickHouse), a one-off build of the workspace packages the playground
+consumes, the Cloudflare sandbox bridge (`:8787`), and the playground
+itself — API server (`:8500`) + Vite (`:5173`).
+
+To run just the playground against already-running infra:
 
 ```sh
 cd apps/playground
-cp .env.example .env   # adjust DATABASE_URL if needed
 bun run dev            # starts the API server (:8500) + Vite (:5173)
 ```
 

@@ -287,7 +287,7 @@ Add `CLOUDFLARE_ACCOUNT_ID` / `CLOUDFLARE_API_TOKEN` / `CLOUDFLARE_ARTIFACTS_NAM
 
 ### 4. Run the bridge
 
-There is no root `bun run dev` — catamorphic runs inside a host app. Start the bridge on its own:
+The root `bun run dev` starts the bridge together with the playground and the docker-compose infra. To run the bridge on its own (e.g. against a different host app):
 
 ```bash
 cd packages/cloudflare-sandbox-bridge
