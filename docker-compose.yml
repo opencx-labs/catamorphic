@@ -1,14 +1,22 @@
 services:
+  # Dev-state Postgres. The host port is configurable (root `.env`) because
+  # dev machines often already run other Postgres instances on 5432/5433;
+  # point the host app's DATABASE_URL at whichever Postgres you use.
   postgres:
     image: postgres:17
     ports:
-      - "5432:5432"
+      - "${CATAMORPHIC_POSTGRES_PORT:-5432}:5432"
     environment:
       POSTGRES_USER: catamorphic
       POSTGRES_PASSWORD: catamorphic
       POSTGRES_DB: catamorphic
     volumes:
       - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U catamorphic -d catamorphic"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
 
   # Telemetry store for dev. Host ports are shifted (8124/19001) because
   # 8123/9000/19000 are commonly taken by other local ClickHouse/MinIO stacks.

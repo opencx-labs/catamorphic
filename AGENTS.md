@@ -8,7 +8,7 @@ Workflow code must stay simple: easy for AI agents and humans to write and edit,
 
 ### Embeddable framework positioning (READ THIS FIRST)
 
-**Catamorphic ships as libraries a host application mounts in-process.** There is no standalone product, no default identity, and no root `bun run dev`. The host provides auth, user/org model, database, and the deployment surface. (A playground demo app that acts as a reference host is on the roadmap; libraries must never depend on it.)
+**Catamorphic ships as libraries a host application mounts in-process.** There is no standalone product and no default identity. The host provides auth, user/org model, database, and the deployment surface. The root `bun run dev` is a dev convenience only: it boots the reference host (`apps/playground`) plus its infra (docker-compose, sandbox bridge); libraries must never depend on the playground or on that script.
 
 Concrete implications for any change you make:
 
@@ -60,7 +60,7 @@ Internal packages:
 
 Apps:
 
-- `apps/playground` — reference host app (Fastify + Vite/React) on the Cloudflare stack. Has its own `bun run dev`; catamorphic itself remains embed-only.
+- `apps/playground` — reference host app (Fastify + Vite/React) on the Cloudflare stack. The repo-root `bun run dev` boots it with its infra (docker-compose + sandbox bridge); catamorphic itself remains embed-only.
 
 ## Skills
 
