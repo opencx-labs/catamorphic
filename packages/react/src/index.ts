@@ -42,6 +42,11 @@ export {
 } from "./hooks/use-attach-plugin.js";
 export { useCancelWorkflowRun } from "./hooks/use-cancel-workflow-run.js";
 export { useCheckoutBranch } from "./hooks/use-checkout-branch.js";
+export type {
+  CodeEditorRevealRequest,
+  UseCodeEditorLinkResult,
+} from "./hooks/use-code-editor-link.js";
+export { useCodeEditorLink } from "./hooks/use-code-editor-link.js";
 export {
   type CommitChangesInput,
   useCommitChanges,
@@ -177,6 +182,9 @@ export {
   runWithCatamorphicError,
   toCatamorphicError,
 } from "./lib/errors.js";
+// Lib helpers (bidirectional code ↔ canvas linking)
+export type { EditorPosition } from "./lib/find-node-at-position.js";
+export { findNodeAtPosition } from "./lib/find-node-at-position.js";
 // Lib helpers (workflow code authoring)
 export type { WorkflowDefinition } from "./lib/find-workflow-definitions.js";
 export { findWorkflowDefinitions } from "./lib/find-workflow-definitions.js";

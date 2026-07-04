@@ -398,7 +398,10 @@ export function WorkflowScreen({
       showMinimap
       aiEnabled
       onAIPrompt={async (prompt) => callHostAI(prompt, code)}
-      renderCodeEditor={(props) => <MonacoHost {...props} />}
+      renderCodeEditor={({ code, onChange, readOnly }) => (
+        // from the `monaco-editor` registry item
+        <MonacoCodeEditor code={code} onChange={onChange} readOnly={readOnly} />
+      )}
     />
   );
 }
@@ -410,7 +413,7 @@ Key props (see `WorkflowEditorProps` in `@catamorphic/ui`):
 
 - `code` / `onCodeChange` — controlled source string (required)
 - `onParse` — `OnParseCallback` that turns the current source into `{ graph, layoutedNodes, layoutedEdges }`. Use `useOnParse` unless you need custom parsing (different endpoint, project-git draft files, etc.) — in that case import `layoutGraph` from `@catamorphic/parser/layout`, **never** from the `@catamorphic/parser` barrel (it pulls `ts-morph` → `node:fs` into the client bundle).
-- `renderCodeEditor` — slot to plug in your own code editor (Monaco, CodeMirror, …)
+- `renderCodeEditor` — slot for the Code tab's editor. Install the `monaco-editor` registry item for a ready-made TypeScript Monaco editor with line numbers, TS diagnostics/completion, and bidirectional code ↔ canvas linking, or plug in your own (Monaco, CodeMirror, …) and wire linking through `useCodeEditorLink` from `@catamorphic/react`. Without this prop the Code tab falls back to a plain `<textarea>`.
 - `nodeRenderers` — partial map of `WorkflowNodeType` → component, overrides node visuals
 - `executionState` — `Record<nodeId, "running" | "completed" | "failed">` overlay
 - `onRun(triggerData) => Promise<{ runId, status, steps, startedAt, completedAt, … }>` — wires the Run dialog + history sidebar
@@ -460,6 +463,7 @@ Items currently shipped:
 - `diff-drawer` — side drawer with a `renderDiff` slot for monaco-diff or codemirror-merge.
 - `runs-panel` — list runs + trigger new ones (`useWorkflowRuns` + `useTriggerWorkflowRun`).
 - `plugins-settings` — attach/detach plugins + edit secrets.
+- `monaco-editor` — `MonacoCodeEditor` for `WorkflowEditor`'s `renderCodeEditor` slot: TypeScript highlighting/diagnostics/completion, line numbers, and code ↔ canvas linking via `useCodeEditorLink` (ADR 0011). Pulls `@monaco-editor/react` into the host, not into catamorphic packages.
 
 Pick what you want, drop it into your repo, then customize the JSX/tailwind freely — they're meant to be edited.
 
