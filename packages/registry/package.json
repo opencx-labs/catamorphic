@@ -18,7 +18,9 @@
   },
   "devDependencies": {
     "@catamorphic/api-client": "workspace:*",
+    "@monaco-editor/react": "^4.7.0",
     "@types/node": "*",
+    "monaco-editor": "^0.55.1",
     "@types/react": "*",
     "@types/react-dom": "*",
     "react": "*",

@@ -23,3 +23,4 @@ Settled design decisions live here as short Architecture Decision Records. They 
 | [0008](0008-vendor-plugin-packages.md) | Vendor backends live in plugin packages (`@catamorphic/cloudflare`, `@catamorphic/daytona`) | Accepted |
 | [0009](0009-pluggable-coding-agents.md) | Coding agents are pluggable; Flue is the flagship server-side agent | Accepted |
 | [0010](0010-skills-in-project-repo.md) | Per-project agent skills live in the project repo (`.agents/skills/`) | Accepted |
+| [0011](0011-registry-distributed-monaco-editor.md) | Code editor ships as a registry item; linking state lives in React hooks | Accepted |

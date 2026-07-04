@@ -11,6 +11,7 @@ import {
 } from "@catamorphic/react";
 import { WorkflowEditor } from "@catamorphic/ui";
 import { useCallback, useState } from "react";
+import { MonacoCodeEditor } from "./monaco-editor.js";
 
 export function WorkflowScreen({
   projectId,
@@ -157,6 +158,14 @@ function WorkflowScreenInner({
       onParse={onParse}
       onRun={onRun}
       initialRuns={initialRuns}
+      renderCodeEditor={({ code: editorCode, onChange, readOnly }) => (
+        <MonacoCodeEditor
+          code={editorCode}
+          onChange={onChange}
+          readOnly={readOnly}
+          path={`file:///${filePath}`}
+        />
+      )}
       renderToolbarCenter={() => (
         <button
           type="button"
