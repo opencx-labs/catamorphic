@@ -50,6 +50,7 @@ Internal packages:
 - `packages/parser` — ts-morph AST-to-WorkflowGraph parser.
 - `packages/sandbox` — vendor-neutral sandbox + coding-agent contracts (`SandboxProvider`, `SandboxManager`, `RunExecutor`, `CodingAgentProvider`), `instrumentSandboxProvider`, plugin-doc staging helpers. No vendor SDKs here.
 - `packages/cloudflare` — **`@catamorphic/cloudflare`** backend plugin: `CloudflareSandboxProvider` (Bridge Worker client), `ArtifactsClient` + `ArtifactsRemoteBackend` (Cloudflare Artifacts code storage). Default stack.
+- `packages/s3` — **`@catamorphic/s3`** backend plugin: `S3RemoteBackend` + `S3ObjectStore` store project origins directly in any S3-compatible bucket (Cloudflare R2, AWS S3, MinIO). Default code storage until Artifacts access lands (ADR 0012).
 - `packages/daytona` — **`@catamorphic/daytona`** backend plugin: `DaytonaSandboxProvider`, experimental Daytona git storage.
 - `packages/flue` — **`@catamorphic/flue`** coding-agent plugin: `FlueCodingAgent` (Flue harness runs on the host server, operates on the dev sandbox remotely) + `catamorphicSandbox` adapter. Flagship agent; used by the playground.
 - `packages/codex` — **`@catamorphic/codex`** coding-agent plugin: `CodexAgent` (OpenAI Codex SDK).
@@ -201,6 +202,7 @@ db → core → fastify-plugin → api-client
 otel → sandbox → core
 otel → core
 git → core
+git → s3
 parser → core
 parser → ui
 core → server-sdk

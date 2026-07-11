@@ -24,6 +24,7 @@
         "@catamorphic/git": "workspace:*",
         "@catamorphic/parser": "workspace:*",
         "@catamorphic/react": "workspace:*",
+        "@catamorphic/s3": "workspace:*",
         "@catamorphic/sandbox": "workspace:*",
         "@catamorphic/server-sdk": "workspace:*",
         "@catamorphic/ui": "workspace:*",
@@ -266,6 +267,18 @@
       "version": "0.0.1",
       "devDependencies": {
         "@types/node": "^25.6.0",
+      },
+    },
+    "packages/s3": {
+      "name": "@catamorphic/s3",
+      "version": "0.0.1",
+      "dependencies": {
+        "@aws-sdk/client-s3": "^3.750.0",
+        "@catamorphic/git": "workspace:*",
+      },
+      "devDependencies": {
+        "@types/node": "^25.6.0",
+        "isomorphic-git": "^1.29.0",
       },
     },
     "packages/sandbox": {
@@ -514,6 +527,8 @@
     "@catamorphic/registry": ["@catamorphic/registry@workspace:packages/registry"],
 
     "@catamorphic/runtime": ["@catamorphic/runtime@workspace:packages/runtime"],
+
+    "@catamorphic/s3": ["@catamorphic/s3@workspace:packages/s3"],
 
     "@catamorphic/sandbox": ["@catamorphic/sandbox@workspace:packages/sandbox"],
 

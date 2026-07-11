@@ -19,6 +19,7 @@
     "@catamorphic/git": "workspace:*",
     "@catamorphic/parser": "workspace:*",
     "@catamorphic/react": "workspace:*",
+    "@catamorphic/s3": "workspace:*",
     "@catamorphic/sandbox": "workspace:*",
     "@catamorphic/server-sdk": "workspace:*",
     "@catamorphic/ui": "workspace:*",

@@ -1,0 +1,29 @@
+{
+  "name": "@catamorphic/s3",
+  "version": "0.0.1",
+  "private": true,
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "bun": "./src/index.ts",
+      "import": "./dist/index.js",
+      "types": "./dist/index.d.ts"
+    }
+  },
+  "scripts": {
+    "build": "tsup && tsc --project tsconfig.json --noEmit false --emitDeclarationOnly",
+    "dev": "tsup --watch",
+    "test": "vitest run --config ../../vitest.config.ts",
+    "typecheck": "tsgo --project ./tsconfig.json"
+  },
+  "dependencies": {
+    "@aws-sdk/client-s3": "^3.750.0",
+    "@catamorphic/git": "workspace:*"
+  },
+  "devDependencies": {
+    "@types/node": "^25.6.0",
+    "isomorphic-git": "^1.29.0"
+  }
+}
