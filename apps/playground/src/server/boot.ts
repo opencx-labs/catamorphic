@@ -12,6 +12,7 @@ import {
   ProjectManager,
   type RemoteBackend,
 } from "@catamorphic/git";
+import { S3ObjectStore, S3RemoteBackend } from "@catamorphic/s3";
 import type { SandboxProvider } from "@catamorphic/sandbox";
 import { type Catamorphic, createCatamorphic } from "@catamorphic/server-sdk";
 
@@ -25,11 +26,16 @@ const DEFAULT_DATABASE_URL =
   "postgresql://catamorphic:catamorphic@localhost:5432/catamorphic";
 
 /**
- * Cloudflare Artifacts is the playground's canonical code storage. It is in
- * closed beta, so accounts without access (REST error 10004 "Access denied
- * by feature gate") fall back to filesystem bare repos with a loud warning.
+ * Code storage resolution order (see docs/decisions/0012):
+ * 1. S3-compatible object storage (Cloudflare R2 et al.) when `S3_*` is set —
+ *    the default until the account gets Cloudflare Artifacts access.
+ * 2. Cloudflare Artifacts when configured and not feature-gated.
+ * 3. Filesystem bare repos, with a loud warning.
  */
 async function resolveRemoteBackend(): Promise<RemoteBackend> {
+  const s3Backend = resolveS3RemoteBackend();
+  if (s3Backend) return s3Backend;
+
   const accountId = process.env.CLOUDFLARE_ACCOUNT_ID;
   const apiToken = process.env.CLOUDFLARE_API_TOKEN;
   const namespace = process.env.CLOUDFLARE_ARTIFACTS_NAMESPACE;
@@ -38,8 +44,9 @@ async function resolveRemoteBackend(): Promise<RemoteBackend> {
 
   if (!accountId || !apiToken || !namespace) {
     console.warn(
-      "[playground] CLOUDFLARE_ACCOUNT_ID / CLOUDFLARE_API_TOKEN / " +
-        "CLOUDFLARE_ARTIFACTS_NAMESPACE not set — using filesystem git remotes.",
+      "[playground] Neither S3_BUCKET/S3_ACCESS_KEY_ID/S3_SECRET_ACCESS_KEY " +
+        "nor CLOUDFLARE_ACCOUNT_ID/CLOUDFLARE_API_TOKEN/" +
+        "CLOUDFLARE_ARTIFACTS_NAMESPACE are set — using filesystem git remotes.",
     );
     return fsFallback();
   }
@@ -66,6 +73,29 @@ async function resolveRemoteBackend(): Promise<RemoteBackend> {
     client,
     cachePath: path.join(DATA_DIR, "artifacts-cache"),
     repoPrefix: "playground",
+  });
+}
+
+function resolveS3RemoteBackend(): S3RemoteBackend | undefined {
+  const bucket = process.env.S3_BUCKET;
+  const accessKeyId = process.env.S3_ACCESS_KEY_ID;
+  const secretAccessKey = process.env.S3_SECRET_ACCESS_KEY;
+  if (!bucket || !accessKeyId || !secretAccessKey) return undefined;
+
+  const endpoint = process.env.S3_ENDPOINT;
+  console.log(
+    `[playground] Code storage: S3-compatible bucket '${bucket}'` +
+      (endpoint ? ` at ${endpoint}` : ""),
+  );
+  return new S3RemoteBackend({
+    store: new S3ObjectStore({
+      bucket,
+      endpoint,
+      region: process.env.S3_REGION,
+      forcePathStyle: process.env.S3_FORCE_PATH_STYLE === "true",
+      credentials: { accessKeyId, secretAccessKey },
+    }),
+    keyPrefix: process.env.S3_KEY_PREFIX ?? "playground/",
   });
 }
 
