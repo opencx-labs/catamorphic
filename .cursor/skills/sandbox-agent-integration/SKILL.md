@@ -27,8 +27,10 @@ Providers handed to `CatamorphicCore` are automatically wrapped with `instrument
 
 Each project uses two distinct sandbox types:
 
-- **Execution Sandbox** — Pinned to a commit SHA, immutable code, for running workflows. Keyed by `(project_id, commit_sha)`.
-- **Dev Sandbox** — Per-user, mutable code, for the coding agent. Keyed by `(project_id, user_id)`.
+- **Production execution sandbox** — Fresh, immutable code pinned to deployed
+  `origin/main`; destroyed after the synchronous run.
+- **Dev sandbox** — Per-user, mutable code for coding agents and isolated test
+  run directories. Keyed by `(project_id, user_id)`.
 
 ## Package Structure
 
@@ -62,9 +64,8 @@ packages/daytona/src/               -- @catamorphic/daytona plugin
 packages/cloudflare-sandbox-bridge/  -- deployable Worker the Cloudflare provider talks to
 
 packages/runtime/src/
-  harness.ts               -- Entry point that runs inside sandbox
-  step-wrapper.ts          -- Source-level instrumentation of "use step" functions
-  reporter.ts              -- Reports run results to Catamorphic API
+  harness.ts               -- Canonical sandbox harness source
+  reporter.ts              -- Reserved for future push reporting
   types.ts                 -- StepEntry, RunReport types
 ```
 
@@ -108,17 +109,15 @@ Per-project skills live in the project repo under `.agents/skills/<name>/SKILL.m
 
 The harness runs inside the sandbox via `bun run harness.ts`. It:
 
-1. Scans project source for `"use step"` functions
-2. Wraps each step with instrumentation (input, output, timing, errors)
-3. Executes the workflow function with trigger data
-4. Emits a `CATAMORPHIC_REPORT:` JSON line on stdout, parsed by the server (the `POST /api/runs/:runId/report` push route exists but is not implemented yet)
+1. Installs the call-site step recorder used by parser-transformed source.
+2. Imports the requested workflow file and executes its exported function.
+3. Emits one safely serialized `CATAMORPHIC_REPORT:` JSON line on stdout.
 
 Environment variables:
 - `CATAMORPHIC_RUN_ID` — Run ID
 - `CATAMORPHIC_WORKFLOW_NAME` — Function name to execute
+- `CATAMORPHIC_WORKFLOW_FILE` — Project-relative workflow source path
 - `CATAMORPHIC_TRIGGER_DATA` — JSON trigger payload
-- `CATAMORPHIC_API_URL` — API base URL for reporting
-- `CATAMORPHIC_COMMIT_SHA` — Commit SHA being executed
 
 ## Database Tables
 
@@ -126,9 +125,9 @@ Runs persist to `workflow_runs` + `workflow_run_steps`. Migration `008` (re)intr
 
 ## API Routes
 
-- `POST /api/projects/:projectId/workflows/:name/runs` — Trigger a run (synchronous today)
+- `POST /api/projects/:projectId/workflows/:name/runs` — Trigger a production run
+- `POST /api/projects/:projectId/workflows/:name/test-runs` — Trigger a test run with optional file overlays
 - `GET /api/runs/:runId` — Fetch run + steps
-- `POST /api/playground/run` — Test run from the editor (503 when no provider configured)
 - `POST/GET/DELETE /api/projects/:projectId/agent/sessions[...]` — Agent sessions + messages (503 when no `codingAgent` configured)
 - `GET /api/projects/:projectId/skills` — List per-project agent skills
 

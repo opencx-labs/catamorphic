@@ -36,7 +36,7 @@ export async function uploadWorkspace(opts: {
 }): Promise<void> {
   if (!hasHydrateWorkspace(opts.provider)) {
     console.info(
-      `[PlaygroundExecutor] workspace_upload_mode=fallback reason=no_hydrate_provider sandbox_id=${opts.sandboxId}`,
+      `[RunExecutor] workspace_upload_mode=fallback reason=no_hydrate_provider sandbox_id=${opts.sandboxId}`,
     );
     await opts.provider.uploadFiles(
       opts.sandboxId,
@@ -49,7 +49,7 @@ export async function uploadWorkspace(opts: {
   const relativeRoot = toWorkspaceRelativePath(opts.provider, opts.projectDir);
   if (!relativeRoot) {
     console.info(
-      `[PlaygroundExecutor] workspace_upload_mode=fallback reason=non_workspace_path sandbox_id=${opts.sandboxId}`,
+      `[RunExecutor] workspace_upload_mode=fallback reason=non_workspace_path sandbox_id=${opts.sandboxId}`,
     );
     await opts.provider.uploadFiles(
       opts.sandboxId,
@@ -70,12 +70,12 @@ export async function uploadWorkspace(opts: {
     const tar = createTarArchive(archiveEntries);
     await opts.provider.hydrateWorkspace(opts.sandboxId, tar);
     console.info(
-      `[PlaygroundExecutor] workspace_upload_mode=hydrate sandbox_id=${opts.sandboxId} files=${archiveEntries.length}`,
+      `[RunExecutor] workspace_upload_mode=hydrate sandbox_id=${opts.sandboxId} files=${archiveEntries.length}`,
     );
   } catch {
     // Keep old behavior as a safe fallback in case hydration fails.
     console.info(
-      `[PlaygroundExecutor] workspace_upload_mode=fallback reason=hydrate_failed sandbox_id=${opts.sandboxId}`,
+      `[RunExecutor] workspace_upload_mode=fallback reason=hydrate_failed sandbox_id=${opts.sandboxId}`,
     );
     await opts.provider.uploadFiles(
       opts.sandboxId,

@@ -1,5 +1,7 @@
 import {
+  InvalidRunOverlayError,
   PluginSecretsMissingError,
+  ProductionDeploymentNotFoundError,
   ProjectNotFoundError,
   SandboxProviderNotConfiguredError,
   WorkflowNotFoundError,
@@ -11,10 +13,11 @@ import { resolveIdentity } from "../http-identity.js";
 import {
   ErrorSchema,
   ListSchema,
-  PaginationQuerySchema,
   RefQuerySchema,
   RunSchema,
+  RunsQuerySchema,
   TriggerRunSchema,
+  TriggerTestRunSchema,
   WorkflowGraphSchema,
   WorkflowNameParamsSchema,
   WorkflowSummarySchema,
@@ -102,6 +105,7 @@ export function registerWorkflowRoutes(
         201: RunSchema,
         400: ErrorSchema,
         404: ErrorSchema,
+        409: ErrorSchema,
         503: ErrorSchema,
       },
     },
@@ -110,7 +114,7 @@ export function registerWorkflowRoutes(
         return reply.status(503).send({ error: "Service not configured" });
       const identity = resolveIdentity(request);
       try {
-        const run = await ctx.core.runs.trigger(
+        const run = await ctx.core.runs.triggerProduction(
           identity,
           request.params.projectId,
           request.params.name,
@@ -123,6 +127,9 @@ export function registerWorkflowRoutes(
         }
         if (err instanceof WorkflowNotFoundError) {
           return reply.status(404).send({ error: "Workflow not found" });
+        }
+        if (err instanceof ProductionDeploymentNotFoundError) {
+          return reply.status(409).send({ error: err.message });
         }
         if (err instanceof PluginSecretsMissingError) {
           return reply.status(400).send({ error: err.message });
@@ -139,11 +146,59 @@ export function registerWorkflowRoutes(
   });
 
   typed.route({
+    method: "POST",
+    url: "/projects/:projectId/workflows/:name/test-runs",
+    schema: {
+      params: WorkflowNameParamsSchema,
+      body: TriggerTestRunSchema,
+      response: {
+        201: RunSchema,
+        400: ErrorSchema,
+        404: ErrorSchema,
+        503: ErrorSchema,
+      },
+    },
+    handler: async (request, reply) => {
+      if (!ctx.core)
+        return reply.status(503).send({ error: "Service not configured" });
+      const identity = resolveIdentity(request);
+      try {
+        const run = await ctx.core.runs.triggerTest(
+          identity,
+          request.params.projectId,
+          request.params.name,
+          request.body,
+        );
+        return reply.status(201).send(run);
+      } catch (err) {
+        if (err instanceof ProjectNotFoundError) {
+          return reply.status(404).send({ error: "Project not found" });
+        }
+        if (err instanceof WorkflowNotFoundError) {
+          return reply.status(404).send({ error: "Workflow not found" });
+        }
+        if (
+          err instanceof PluginSecretsMissingError ||
+          err instanceof InvalidRunOverlayError
+        ) {
+          return reply.status(400).send({ error: err.message });
+        }
+        if (err instanceof SandboxProviderNotConfiguredError) {
+          return reply.status(503).send({
+            error: "Sandbox provider not configured",
+          });
+        }
+        throw err;
+      }
+    },
+  });
+
+  typed.route({
     method: "GET",
     url: "/projects/:projectId/workflows/:name/runs",
     schema: {
       params: WorkflowNameParamsSchema,
-      querystring: PaginationQuerySchema,
+      querystring: RunsQuerySchema,
       response: {
         200: ListSchema(RunSchema),
         404: ErrorSchema,
@@ -160,6 +215,7 @@ export function registerWorkflowRoutes(
           workflowName: name,
           limit: request.query.limit,
           offset: request.query.offset,
+          mode: request.query.mode,
         });
         return reply.send(result);
       } catch (err) {

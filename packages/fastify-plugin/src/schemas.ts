@@ -194,12 +194,15 @@ export const WorkflowGraphSchema = z.object({
 });
 
 // --- Runs ---
+export const RunModeSchema = z.enum(["test", "production"]);
+
 export const RunSchema = z.object({
   id: z.string().uuid(),
   projectId: z.string().uuid(),
   workflowName: z.string(),
-  commitSha: z.string().length(40),
-  isTest: z.boolean(),
+  commitSha: z.string().length(40).nullable(),
+  mode: RunModeSchema,
+  initiatedBy: z.string().nullable(),
   status: z.enum(["pending", "running", "completed", "failed", "cancelled"]),
   triggerData: z.unknown().nullable(),
   result: z.unknown().nullable(),
@@ -228,6 +231,14 @@ export const RunDetailSchema = RunSchema.extend({
 
 export const TriggerRunSchema = z.object({
   triggerData: z.record(z.string(), z.unknown()).optional(),
+});
+
+export const TriggerTestRunSchema = TriggerRunSchema.extend({
+  files: z.record(z.string(), z.string()).optional(),
+});
+
+export const RunsQuerySchema = PaginationQuerySchema.extend({
+  mode: RunModeSchema.optional(),
 });
 
 // --- Git ---
@@ -426,24 +437,6 @@ export const PlaygroundParseRequestSchema = z.object({
 
 export const PlaygroundParseResponseSchema = WorkflowGraphSchema.nullable();
 
-// --- Playground Run ---
-export const PlaygroundRunRequestSchema = z.object({
-  projectId: z.string().uuid().optional(),
-  files: z.record(z.string(), z.string()),
-  workflowName: z.string().min(1),
-  triggerData: z.record(z.string(), z.unknown()).optional(),
-});
-
-export const PlaygroundRunResponseSchema = z.object({
-  runId: z.string().uuid().nullable(),
-  status: z.enum(["completed", "failed"]),
-  result: z.unknown().nullable(),
-  error: z.string().nullable(),
-  steps: z.array(RunReportStepSchema),
-  startedAt: z.string(),
-  completedAt: z.string(),
-});
-
 // --- Plugins ---
 export const PluginSecretSchema = z.object({
   name: z.string(),
@@ -496,6 +489,10 @@ export const UpsertSecretSchema = z.object({
 
 export const SecretNameParamsSchema = ProjectIdParamsSchema.extend({
   name: z.string().min(1),
+});
+
+export const SecretEnvironmentQuerySchema = z.object({
+  environment: RunModeSchema.default("production"),
 });
 
 // --- Generic ---

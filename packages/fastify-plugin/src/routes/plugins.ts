@@ -14,6 +14,7 @@ import {
   ErrorSchema,
   PluginPackageParamsSchema,
   ProjectIdParamsSchema,
+  SecretEnvironmentQuerySchema,
   SecretNameParamsSchema,
   SecretStatusSchema,
   UpsertSecretSchema,
@@ -121,6 +122,7 @@ export function registerPluginRoutes(app: FastifyInstance, ctx: RouteContext) {
     url: "/projects/:projectId/secrets",
     schema: {
       params: ProjectIdParamsSchema,
+      querystring: SecretEnvironmentQuerySchema,
       response: {
         200: z.array(SecretStatusSchema),
         503: ErrorSchema,
@@ -129,7 +131,10 @@ export function registerPluginRoutes(app: FastifyInstance, ctx: RouteContext) {
     handler: async (request, reply) => {
       if (!ctx.core?.secrets)
         return reply.status(503).send({ error: "Secrets not configured" });
-      const list = await ctx.core.secrets.list(request.params.projectId);
+      const list = await ctx.core.secrets.list({
+        projectId: request.params.projectId,
+        environment: request.query.environment,
+      });
       return reply.send(list);
     },
   });
@@ -139,6 +144,7 @@ export function registerPluginRoutes(app: FastifyInstance, ctx: RouteContext) {
     url: "/projects/:projectId/secrets/:name",
     schema: {
       params: SecretNameParamsSchema,
+      querystring: SecretEnvironmentQuerySchema,
       body: UpsertSecretSchema,
       response: {
         200: SecretStatusSchema,
@@ -150,11 +156,12 @@ export function registerPluginRoutes(app: FastifyInstance, ctx: RouteContext) {
       if (!ctx.core?.secrets)
         return reply.status(503).send({ error: "Secrets not configured" });
       try {
-        const status = await ctx.core.secrets.upsert(
-          request.params.projectId,
-          request.params.name,
-          request.body.value,
-        );
+        const status = await ctx.core.secrets.upsert({
+          projectId: request.params.projectId,
+          environment: request.query.environment,
+          name: request.params.name,
+          value: request.body.value,
+        });
         return reply.send(status);
       } catch (err) {
         if (
@@ -193,6 +200,7 @@ export function registerPluginRoutes(app: FastifyInstance, ctx: RouteContext) {
     url: "/projects/:projectId/secrets/:name",
     schema: {
       params: SecretNameParamsSchema,
+      querystring: SecretEnvironmentQuerySchema,
       response: {
         200: z.object({ deleted: z.boolean() }),
         503: ErrorSchema,
@@ -201,10 +209,11 @@ export function registerPluginRoutes(app: FastifyInstance, ctx: RouteContext) {
     handler: async (request, reply) => {
       if (!ctx.core?.secrets)
         return reply.status(503).send({ error: "Secrets not configured" });
-      const ok = await ctx.core.secrets.delete(
-        request.params.projectId,
-        request.params.name,
-      );
+      const ok = await ctx.core.secrets.delete({
+        projectId: request.params.projectId,
+        environment: request.query.environment,
+        name: request.params.name,
+      });
       return reply.send({ deleted: ok });
     },
   });

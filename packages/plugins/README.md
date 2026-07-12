@@ -53,7 +53,7 @@ about the contract, the data flow, or the operational gotchas changes.
 │  plugins-settings   │                                      │  (host-mounted)  │
 └──────────┬──────────┘                                      │  plugin routes   │
            │ generateWorkflowCode(projectId)                 │  agent-context   │
-           ▼                                                 │  playground/run  │
+           ▼                                                 │  run routes      │
 ┌─────────────────────┐    GET /api/projects/:id/agent-      │                  │
 │ OpenAI (workflow    │ ◀────  context (prompt suffix)  ──── │                  │
 │  builder prompt)    │                                      │                  │
@@ -70,7 +70,7 @@ about the contract, the data flow, or the operational gotchas changes.
                                                    │ RunPluginPayload[] + env map
                                                    ▼
                            ┌─────────────────────────────────────────────────┐
-                           │ PlaygroundExecutor / RunExecutorImpl            │
+                           │ RunExecutorImpl                                 │
                            │  uploadPluginPayloads → uploadFiles per plugin  │
                            │  merges secrets into `bun run harness.ts` env   │
                            └────────┬────────────────────────────────────────┘
@@ -337,36 +337,33 @@ unusable; building on the host before attach is the operator's job.
 ### Secret injection
 
 `ExecuteRunOpts.secrets` is merged with the built-in `CATAMORPHIC_*` env vars
-and passed to the harness via command-line `KEY=value` pairs:
+and passed through `SandboxProvider.executeCommand` environment options:
 
 ```ts
 const env = {
   CATAMORPHIC_RUN_ID,
   CATAMORPHIC_WORKFLOW_NAME,
+  CATAMORPHIC_WORKFLOW_FILE,
   CATAMORPHIC_TRIGGER_DATA,
-  CATAMORPHIC_API_URL,
-  CATAMORPHIC_COMMIT_SHA,
   ...opts.secrets,          // EXAMPLE_API_KEY, EXAMPLE_API_URL, …
 };
 ```
 
-`RunExecutorImpl` (durable workflow runs) and `PlaygroundExecutor`
-("▶ Run" button) both use `uploadPluginPayloads`. Core plugin secrets and
-workflow metadata are passed through env in both paths; non-core `CATAMORPHIC_*`
-vars differ by executor and should be checked in their respective implementations.
+Secret declarations may not use the reserved `CATAMORPHIC_` prefix. Test and
+production secret values are stored separately and the executor receives only
+the values for the run's mode.
 
 ### Execution flow
 
-`PlaygroundExecutor.execute()`:
+`RunExecutorImpl.executeRun()`:
 
-1. `createSandbox({ language: "typescript" })` — fresh sandbox per run.
-2. `uploadWorkspace()` — tar-hydrates the workspace (or falls back to
-   per-file PUTs) with the user's workflow files + `harness.ts`.
-3. `uploadPluginPayloads()` — individual PUTs per plugin file under
+1. Receives a prepared production sandbox or disposable test directory.
+2. Uploads the canonical runtime harness.
+3. `uploadPluginPayloads()` writes individual plugin files under
    `node_modules/<pkg>/`.
-4. `executeCommand("cd <projectDir> && K=V ... bun run harness.ts", { timeout: 120 })`.
+4. Calls `executeCommand("bun run harness.ts", { cwd, env, timeout })`.
 5. Parses the `CATAMORPHIC_REPORT:` marker from stdout.
-6. `destroySandbox()` in `finally`.
+6. Core transactionally persists terminal state and awaits cleanup.
 
 ---
 
@@ -517,7 +514,8 @@ const contact = await getContactDetails({ contactId });
 Hit **▶ Run**. Expected path:
 
 ```
-POST /api/playground/run          (RunPluginsLoader builds payloads + env)
+POST /api/projects/:id/workflows/:name/test-runs
+  (RunPluginsLoader builds test payloads + env)
   ↓
 Cloudflare sandbox
   /workspace/project/node_modules/@acme/example-sdk/dist/index.mjs

@@ -14,16 +14,17 @@ Providers handed to `CatamorphicCore` are automatically wrapped with `instrument
 
 ## Execution Model
 
-1. **Pre-generate the run ID** before entering the sandbox. The run row is inserted into `workflow_runs` with status `running` before the sandbox call.
-2. Pass project files + run ID + trigger data into the sandbox.
-3. The sandbox runs `bun` to execute the workflow function.
-4. On completion (or error), update the run row with the result and final status.
-5. Step rows are written to `workflow_run_steps` if step instrumentation is active.
+1. Production runs resolve deployed `origin/main` and retain that SHA. Test runs use the caller's dev files plus overlays and deliberately retain no SHA.
+2. **Pre-generate the run ID** before entering the sandbox. The run row is inserted into `workflow_runs` with status `running` before the sandbox call.
+3. Pass project files + run ID + trigger data into the sandbox.
+4. The sandbox runs the canonical `@catamorphic/runtime` harness with environment values supplied through provider execution options, never shell assignments.
+5. On completion (or error), transactionally update the run row and replace its step rows.
 
 ## Two-Sandbox Model
 
-- **Execution sandbox**: immutable snapshot tied to a specific git commit. Versioned with the project. Used to run workflows reliably.
+- **Production execution sandbox**: fresh immutable snapshot tied to the deployed git commit. Used to run production workflows reliably.
 - **Dev (coding agent) sandbox**: mutable, per-(project, external user). Tracked in `project_sandboxes` (migration `008`). The coding agent has read/write access to the project checkout inside the sandbox; after each turn `AgentSessionsService` syncs changed files back into the user's dev working copy as an uncommitted draft. Sessions record `base_commit_sha` so every AI conversation is traceable to a code version.
+- **Test run directory**: disposable run-specific copy inside the caller's dev sandbox. It is deleted after execution and never receives a source revision.
 
 ## Step Instrumentation Constraints
 
@@ -31,11 +32,11 @@ Providers handed to `CatamorphicCore` are automatically wrapped with `instrument
 - Regex-based source-level code transformation to inject instrumentation.
 - Global variable / module-level monkey-patching of ES module exports (ES modules are immutable after evaluation — monkey-patching silently fails).
 
-The correct approach (future work) is a clean compile-time transform or a VM context that wraps step calls at a lower level. Until that is implemented, `steps` on run records will be an empty array.
+`@catamorphic/parser` produces an execution transform that wraps exact step call expressions with the node IDs from the parsed graph. Transform only the disposable execution copy, never user source or step declarations.
 
 ## Provider Availability
 
-The server degrades gracefully when **no** provider is configured (neither the `CLOUDFLARE_SANDBOX_API_URL` + `CLOUDFLARE_SANDBOX_API_KEY` pair nor `DAYTONA_API_KEY`): the `/api/playground/run` route returns `503 Service Unavailable`. The client surfaces this as a user-visible error, not a crash. Integration tests that require a specific provider use the `describeIf` skip pattern.
+The server degrades gracefully when **no** provider is configured (neither the `CLOUDFLARE_SANDBOX_API_URL` + `CLOUDFLARE_SANDBOX_API_KEY` pair nor `DAYTONA_API_KEY`): both production and test run endpoints return `503 Service Unavailable`. The client surfaces this as a user-visible error, not a crash. Integration tests that require a specific provider use the `describeIf` skip pattern.
 
 ## Coding Agent
 

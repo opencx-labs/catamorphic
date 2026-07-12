@@ -12,6 +12,10 @@ export const PluginSecretSchema = z.object({
     .regex(
       /^[A-Z][A-Z0-9_]*$/,
       "Secret names must be SCREAMING_SNAKE_CASE env-var style.",
+    )
+    .refine(
+      (name) => !name.startsWith("CATAMORPHIC_"),
+      "Secret names must not use the reserved CATAMORPHIC_ prefix.",
     ),
   label: z.string().min(1),
   description: z.string().default(""),

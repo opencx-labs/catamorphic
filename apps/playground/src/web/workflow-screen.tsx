@@ -4,7 +4,7 @@ import {
   useDeployProject,
   useOnParse,
   useProjectFile,
-  useTriggerWorkflowRun,
+  useTriggerWorkflowTestRun,
   useWorkflowRuns,
   useWorkflows,
   useWriteProjectFile,
@@ -75,8 +75,11 @@ function WorkflowScreenInner({
 
   const writeFile = useWriteProjectFile(projectId);
   const deploy = useDeployProject(projectId);
-  const trigger = useTriggerWorkflowRun(projectId, workflowName);
-  const runsQuery = useWorkflowRuns(projectId, workflowName, { limit: 25 });
+  const trigger = useTriggerWorkflowTestRun(projectId, workflowName);
+  const runsQuery = useWorkflowRuns(projectId, workflowName, {
+    limit: 25,
+    mode: "test",
+  });
 
   const [deployState, setDeployState] = useState<
     "idle" | "deploying" | "deployed" | "error"
@@ -98,7 +101,10 @@ function WorkflowScreenInner({
 
   const onRun = useCallback(
     async (triggerData: Record<string, unknown>) => {
-      const run = await trigger.mutateAsync({ triggerData });
+      const run = await trigger.mutateAsync({
+        triggerData,
+        files: { [filePath]: code },
+      });
       const detail = await apiClient.GET("/api/runs/{runId}", {
         params: { path: { runId: run.id } },
       });
@@ -128,7 +134,7 @@ function WorkflowScreenInner({
         completedAt: run.completedAt ?? new Date().toISOString(),
       };
     },
-    [trigger, apiClient],
+    [trigger, apiClient, filePath, code],
   );
 
   const initialRuns: PlaygroundRun[] = (runsQuery.data?.items ?? []).map(

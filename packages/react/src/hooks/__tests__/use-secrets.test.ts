@@ -15,14 +15,19 @@ const SECRET = {
 
 describe("useProjectSecrets", () => {
   it("returns secrets list", async () => {
+    let environment: string | null = null;
     server.use(
-      http.get(apiUrl("/api/projects/p1/secrets"), () =>
-        HttpResponse.json([SECRET]),
-      ),
+      http.get(apiUrl("/api/projects/p1/secrets"), ({ request }) => {
+        environment = new URL(request.url).searchParams.get("environment");
+        return HttpResponse.json([SECRET]);
+      }),
     );
-    const { result } = renderHookWithProviders(() => useProjectSecrets("p1"));
+    const { result } = renderHookWithProviders(() =>
+      useProjectSecrets("p1", "test"),
+    );
     await waitFor(() => expect(result.current.isSuccess).toBe(true));
     expect(result.current.data?.[0]?.name).toBe(SECRET.name);
+    expect(environment).toBe("test");
   });
 
   it("maps 503 to sandbox_unavailable", async () => {

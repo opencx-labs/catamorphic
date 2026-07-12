@@ -6,6 +6,7 @@ import { renderHookWithProviders } from "../../test/render.js";
 import { server } from "../../test/server.js";
 import { useCancelWorkflowRun } from "../use-cancel-workflow-run.js";
 import { useTriggerWorkflowRun } from "../use-trigger-workflow-run.js";
+import { useTriggerWorkflowTestRun } from "../use-trigger-workflow-test-run.js";
 import { useWorkflowRun } from "../use-workflow-run.js";
 import { useWorkflowRuns } from "../use-workflow-runs.js";
 
@@ -13,8 +14,9 @@ const RUN_BASE = {
   id: "00000000-0000-0000-0000-000000000001",
   projectId: "00000000-0000-0000-0000-0000000000aa",
   workflowName: "sample",
-  commitSha: "abc",
-  isTest: false,
+  commitSha: "a".repeat(40),
+  mode: "production" as const,
+  initiatedBy: null,
   status: "completed" as const,
   triggerData: null,
   result: null,
@@ -105,6 +107,42 @@ describe("useTriggerWorkflowRun", () => {
     );
     await expect(result.current.mutateAsync()).rejects.toMatchObject({
       code: "not_found",
+    });
+  });
+});
+
+describe("useTriggerWorkflowTestRun", () => {
+  it("sends development file overlays to the test endpoint", async () => {
+    let requestBody: unknown;
+    server.use(
+      http.post(
+        apiUrl("/api/projects/proj/workflows/sample/test-runs"),
+        async ({ request }) => {
+          requestBody = await request.json();
+          return HttpResponse.json(
+            {
+              ...RUN_BASE,
+              id: "test-run",
+              commitSha: null,
+              mode: "test",
+              initiatedBy: "user-1",
+            },
+            { status: 201 },
+          );
+        },
+      ),
+    );
+    const { result } = renderHookWithProviders(() =>
+      useTriggerWorkflowTestRun("proj", "sample"),
+    );
+    const run = await result.current.mutateAsync({
+      triggerData: { value: 1 },
+      files: { "src/workflow.ts": "export {}" },
+    });
+    expect(run.mode).toBe("test");
+    expect(requestBody).toEqual({
+      triggerData: { value: 1 },
+      files: { "src/workflow.ts": "export {}" },
     });
   });
 });
