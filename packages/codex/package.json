@@ -20,9 +20,9 @@
   },
   "dependencies": {
     "@catamorphic/sandbox": "workspace:*",
-    "@openai/codex-sdk": "^0.120.0"
+    "@openai/codex-sdk": "^0.144.1"
   },
   "devDependencies": {
-    "@types/node": "^25.6.0"
+    "@types/node": "^26.1.1"
   }
 }

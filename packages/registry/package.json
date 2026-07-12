@@ -19,11 +19,11 @@
   "devDependencies": {
     "@catamorphic/api-client": "workspace:*",
     "@monaco-editor/react": "^4.7.0",
-    "@types/node": "*",
+    "@types/node": "^26.1.1",
     "monaco-editor": "^0.55.1",
-    "@types/react": "*",
-    "@types/react-dom": "*",
-    "react": "*",
-    "react-dom": "*"
+    "@types/react": "^19.2.17",
+    "@types/react-dom": "^19.2.3",
+    "react": "^19.2.7",
+    "react-dom": "^19.2.7"
   }
 }

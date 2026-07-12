@@ -52,8 +52,7 @@ describe("CloudflareSandboxProvider", () => {
     const fetchImpl = mockFetch((input, init) => {
       expect(String(input)).toBe("http://bridge/v1/sandbox");
       expect(init?.method).toBe("POST");
-      const authHeader = (init?.headers as Record<string, string>)
-        .Authorization;
+      const authHeader = new Headers(init?.headers).get("Authorization");
       expect(authHeader).toBe("Bearer secret");
       return jsonResponse({ id: "abcdef" });
     });
