@@ -21,9 +21,9 @@
   "dependencies": {
     "@catamorphic/git": "workspace:*",
     "@catamorphic/sandbox": "workspace:*",
-    "isomorphic-git": "^1.29.0"
+    "isomorphic-git": "^1.38.6"
   },
   "devDependencies": {
-    "@types/node": "^25.6.0"
+    "@types/node": "^26.1.1"
   }
 }

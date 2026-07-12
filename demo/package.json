@@ -8,11 +8,11 @@
     "render": "node render.mjs"
   },
   "devDependencies": {
-    "@revideo/2d": "^0.10.4",
-    "@revideo/core": "^0.10.4",
-    "@revideo/renderer": "^0.10.4",
-    "@revideo/ui": "0.10.4",
-    "@revideo/vite-plugin": "0.10.4",
+    "@revideo/2d": "^0.11.0",
+    "@revideo/core": "^0.11.0",
+    "@revideo/renderer": "^0.11.0",
+    "@revideo/ui": "0.11.0",
+    "@revideo/vite-plugin": "0.11.0",
     "playwright": "^1.61.1"
   }
 }

@@ -32,8 +32,8 @@
     "db:reset": "bun run src/cli.ts reset"
   },
   "dependencies": {
-    "kysely": "^0.28.15",
-    "pg": "^8.20.0"
+    "kysely": "^0.29.3",
+    "pg": "^8.22.0"
   },
   "devDependencies": {
     "@types/pg": "^8.20.0",
