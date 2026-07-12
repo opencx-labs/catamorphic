@@ -7,6 +7,7 @@ import {
   useDetachPlugin,
   usePluginCatalog,
   useProjectPlugins,
+  useProjectSecrets,
   useUpsertProjectSecret,
 } from "@catamorphic/react";
 import { useState } from "react";
@@ -20,6 +21,8 @@ export function PluginsSettings({ projectId }: Props) {
   const catalogQuery = usePluginCatalog();
   const attachMutation = useAttachPlugin(projectId);
   const detachMutation = useDetachPlugin(projectId);
+  const [environment, setEnvironment] = useState<"test" | "production">("test");
+  const secretsQuery = useProjectSecrets(projectId, environment);
 
   const [picking, setPicking] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -27,6 +30,9 @@ export function PluginsSettings({ projectId }: Props) {
   const attached = attachedQuery.data ?? null;
   const catalog = catalogQuery.data ?? [];
   const loading = attachedQuery.isLoading;
+  const secretValues = new Map(
+    (secretsQuery.data ?? []).map((secret) => [secret.name, secret.hasValue]),
+  );
 
   const attachedNames = new Set(attached?.map((p) => p.packageName) ?? []);
   const available = catalog.filter((p) => !attachedNames.has(p.packageName));
@@ -73,6 +79,23 @@ export function PluginsSettings({ projectId }: Props) {
           {error}
         </div>
       ) : null}
+
+      <div className="mb-4 flex items-center gap-2">
+        {(["test", "production"] as const).map((value) => (
+          <button
+            key={value}
+            type="button"
+            onClick={() => setEnvironment(value)}
+            className={`h-8 rounded border px-3 text-xs font-medium ${
+              environment === value
+                ? "border-blue-600 bg-blue-600/20 text-blue-300"
+                : "border-neutral-700 text-neutral-400"
+            }`}
+          >
+            {value === "test" ? "Test secrets" : "Production secrets"}
+          </button>
+        ))}
+      </div>
 
       {picking ? (
         <div className="mb-4 rounded border border-neutral-800 p-4">
@@ -135,6 +158,8 @@ export function PluginsSettings({ projectId }: Props) {
               key={plugin.packageName}
               projectId={projectId}
               plugin={plugin}
+              environment={environment}
+              secretValues={secretValues}
               onDetach={() => handleDetach(plugin.packageName)}
             />
           ))}
@@ -147,16 +172,16 @@ export function PluginsSettings({ projectId }: Props) {
 function AttachedPluginCard({
   projectId,
   plugin,
+  environment,
+  secretValues,
   onDetach,
 }: {
   projectId: string;
   plugin: AttachedPlugin;
+  environment: "test" | "production";
+  secretValues: Map<string, boolean>;
   onDetach: () => void | Promise<void>;
 }) {
-  const hasValue = new Map(
-    plugin.secretStatus.map((s) => [s.name, s.hasValue]),
-  );
-
   return (
     <li className="rounded-lg border border-neutral-800 p-4">
       <header className="flex items-start justify-between gap-4 mb-3">
@@ -192,7 +217,8 @@ function AttachedPluginCard({
               key={secret.name}
               projectId={projectId}
               secret={secret}
-              hasValue={hasValue.get(secret.name) ?? false}
+              environment={environment}
+              hasValue={secretValues.get(secret.name) ?? false}
             />
           ))}
         </div>
@@ -204,16 +230,18 @@ function AttachedPluginCard({
 function SecretField({
   projectId,
   secret,
+  environment,
   hasValue,
 }: {
   projectId: string;
   secret: PluginSecretDescriptor;
+  environment: "test" | "production";
   hasValue: boolean;
 }) {
   const [value, setValue] = useState("");
   const [err, setErr] = useState<string | null>(null);
-  const upsert = useUpsertProjectSecret(projectId);
-  const inputId = `secret-${projectId}-${secret.name}`;
+  const upsert = useUpsertProjectSecret(projectId, environment);
+  const inputId = `secret-${projectId}-${environment}-${secret.name}`;
 
   const handleSave = async (e: React.FormEvent) => {
     e.preventDefault();

@@ -65,6 +65,21 @@ describe("PluginManifestSchema", () => {
     ).toThrow();
   });
 
+  it("rejects secret names in the reserved runtime namespace", () => {
+    expect(() =>
+      PluginManifestSchema.parse({
+        displayName: "Bad",
+        secrets: [
+          {
+            name: "CATAMORPHIC_WORKFLOW_NAME",
+            label: "Override",
+            required: true,
+          },
+        ],
+      }),
+    ).toThrow(/reserved CATAMORPHIC_/);
+  });
+
   it("rejects manifests without a displayName", () => {
     expect(() =>
       PluginManifestSchema.parse({

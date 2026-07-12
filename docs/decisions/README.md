@@ -25,3 +25,4 @@ Settled design decisions live here as short Architecture Decision Records. They 
 | [0010](0010-skills-in-project-repo.md) | Per-project agent skills live in the project repo (`.agents/skills/`) | Accepted |
 | [0011](0011-registry-distributed-monaco-editor.md) | Code editor ships as a registry item; linking state lives in React hooks | Accepted |
 | [0012](0012-s3-compatible-origin-backend.md) | S3-compatible object storage as a git origin backend (`@catamorphic/s3`) | Accepted |
+| [0013](0013-test-and-production-run-modes.md) | Explicit test and production workflow run modes | Accepted |

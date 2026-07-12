@@ -12,6 +12,7 @@ import type { RunsList } from "../types.js";
 export interface UseWorkflowRunsOptions {
   limit?: number;
   offset?: number;
+  mode?: "test" | "production";
 }
 
 export function useWorkflowRuns(
@@ -20,7 +21,7 @@ export function useWorkflowRuns(
   options: UseWorkflowRunsOptions = {},
 ): UseQueryResult<RunsList, CatamorphicError> {
   const { apiClient } = useCatamorphic();
-  const { limit, offset } = options;
+  const { limit, offset, mode } = options;
   return useQuery<RunsList, CatamorphicError>({
     queryKey: [
       "cat",
@@ -29,7 +30,7 @@ export function useWorkflowRuns(
       "workflow",
       name,
       "runs",
-      { limit, offset },
+      { limit, offset, mode },
     ],
     queryFn: () =>
       runWithCatamorphicError(async () => {
@@ -42,7 +43,10 @@ export function useWorkflowRuns(
         const result = await apiClient.GET(
           "/api/projects/{projectId}/workflows/{name}/runs",
           {
-            params: { path: { projectId, name }, query: { limit, offset } },
+            params: {
+              path: { projectId, name },
+              query: { limit, offset, mode },
+            },
           },
         );
         return assertApiOk(result, "Runs response empty");

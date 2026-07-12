@@ -32,7 +32,10 @@ export function RunsPanel({
   limit = 25,
   onSelectRun,
 }: RunsPanelProps) {
-  const runsQuery = useWorkflowRuns(projectId, workflowName, { limit });
+  const runsQuery = useWorkflowRuns(projectId, workflowName, {
+    limit,
+    mode: "production",
+  });
   const trigger = useTriggerWorkflowRun(projectId, workflowName);
   const [error, setError] = useState<string | null>(null);
 
@@ -88,7 +91,7 @@ export function RunsPanel({
                     {run.id}
                   </p>
                   <p className="text-[11px] text-neutral-500">
-                    {run.commitSha?.slice(0, 7) ?? "—"} ·{" "}
+                    {run.mode} · {run.commitSha?.slice(0, 7) ?? "unversioned"} ·{" "}
                     {new Date(run.createdAt).toLocaleString()}
                   </p>
                 </div>

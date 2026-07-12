@@ -1,9 +1,5 @@
 import type { DB, JsonObject } from "@catamorphic/db";
-import type {
-  CloneSource,
-  ProjectManager,
-  ProjectRepo,
-} from "@catamorphic/git";
+import type { ProjectManager } from "@catamorphic/git";
 import { getTracer, withSpan } from "@catamorphic/otel";
 import type { PluginResolver } from "@catamorphic/plugins";
 import type {
@@ -13,10 +9,9 @@ import type {
   ProviderSession,
   SandboxProvider,
 } from "@catamorphic/sandbox";
-import { SandboxManagerImpl } from "@catamorphic/sandbox";
 import type { Kysely, Selectable } from "kysely";
 import type { Identity } from "../identity.js";
-import { DbSandboxStore } from "./db-sandbox-store.js";
+import type { DevSandboxService } from "./dev-sandbox-service.js";
 import type { PluginsService } from "./plugins-service.js";
 import { ProjectNotFoundError } from "./projects-service.js";
 
@@ -79,6 +74,7 @@ interface AgentSessionsDeps {
   projectManager: ProjectManager;
   sandboxProvider: SandboxProvider;
   codingAgent: CodingAgentProvider;
+  devSandboxes: DevSandboxService;
   plugins?: PluginsService;
   pluginResolver?: PluginResolver;
 }
@@ -102,8 +98,7 @@ export class AgentSessionsService {
   private readonly codingAgent: CodingAgentProvider;
   private readonly plugins?: PluginsService;
   private readonly pluginResolver?: PluginResolver;
-  private readonly sandboxManager: SandboxManagerImpl;
-  private readonly sandboxStore: DbSandboxStore;
+  private readonly devSandboxes: DevSandboxService;
 
   constructor(
     private readonly db: Kysely<DB>,
@@ -112,13 +107,9 @@ export class AgentSessionsService {
     this.projectManager = deps.projectManager;
     this.sandboxProvider = deps.sandboxProvider;
     this.codingAgent = deps.codingAgent;
+    this.devSandboxes = deps.devSandboxes;
     this.plugins = deps.plugins;
     this.pluginResolver = deps.pluginResolver;
-    this.sandboxStore = new DbSandboxStore(this.db);
-    this.sandboxManager = new SandboxManagerImpl({
-      provider: this.sandboxProvider,
-      store: this.sandboxStore,
-    });
   }
 
   get providerName(): string {
@@ -378,68 +369,16 @@ export class AgentSessionsService {
     handle: { id: string; providerId: string };
     baseCommitSha: string | null;
   }> {
-    const repo = await this.projectManager.openDev(
-      identity.tenantId,
+    const prepared = await this.devSandboxes.ensure({
+      identity,
       projectId,
-      identity.externalUserId,
-    );
-
-    try {
-      const baseCommitSha = await repo.resolveRef("HEAD").catch(() => null);
-
-      const existing = await this.sandboxStore.findSandbox({
-        projectId,
-        sandboxType: "dev",
-        userId: identity.externalUserId,
-      });
-
-      const cloneSource = existing
-        ? undefined
-        : await this.cloneSourceIfInSync(identity, projectId, repo);
-
-      const handle = await this.sandboxManager.ensureDevSandbox({
-        projectId,
-        userId: identity.externalUserId,
-        cloneSource,
-      });
-
-      if (!cloneSource) {
-        const files = await repo.readAllFiles();
-        await this.sandboxProvider.uploadFiles(
-          handle.providerId,
-          files,
-          this.projectDir(),
-        );
-      }
-
-      await this.ensureGitBaseline(handle.providerId);
-
-      return { handle, baseCommitSha };
-    } finally {
-      await repo.dispose();
-    }
-  }
-
-  private async cloneSourceIfInSync(
-    identity: Identity,
-    projectId: string,
-    repo: ProjectRepo,
-  ): Promise<CloneSource | undefined> {
-    const remoteBackend = this.projectManager.remoteBackend;
-    if (!remoteBackend?.getCloneSource) return undefined;
-
-    const status = await repo.status().catch(() => null);
-    if (!status || status.dirty) return undefined;
-
-    const head = await repo.resolveRef("HEAD").catch(() => null);
-    const remoteSha = await repo
-      .resolveRef("refs/remotes/origin/main")
-      .catch(() => null);
-    if (!head || head !== remoteSha) return undefined;
-
-    return remoteBackend.getCloneSource(identity.tenantId, projectId, {
-      scope: "read",
+      refresh: true,
     });
+    await this.ensureGitBaseline(prepared.providerId);
+    return {
+      handle: { id: prepared.id, providerId: prepared.providerId },
+      baseCommitSha: prepared.baseCommitSha,
+    };
   }
 
   /**

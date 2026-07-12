@@ -125,18 +125,25 @@ Anything not covered by the scoped-client surface (runs, plugins, secrets, deplo
 
 ### 4) Triggering runs
 
-`core.runs.trigger(identity, projectId, workflowName, { triggerData })` is the one entry point that actually executes a workflow. It:
+Use an explicit run mode:
 
-1. Resolves the project for `identity.tenantId`.
-2. Opens the per-user dev working copy, calls `readAllFiles()` + `resolveRef("HEAD")`, then disposes.
-3. Loads attached plugin payloads + project secrets via `runPluginsLoader` (only if `pluginResolver` was wired at boot).
-4. Inserts a `workflow_runs` row (`status: 'running'`, `commit_sha: headSha`, `is_test: false`).
-5. Hands off to `PlaygroundExecutor` which spawns a sandbox, uploads files + plugins, runs `bun run harness.ts`, and parses the `CATAMORPHIC_REPORT:` line.
-6. Updates the run row and bulk-inserts `workflow_run_steps`, then returns the mapped `Run`.
+- `core.runs.triggerProduction(...)` resolves and executes deployed
+  `origin/main` in a fresh sandbox and records its exact SHA.
+- `core.runs.triggerTest(...)` executes the caller's current dev files plus
+  optional file overlays in a disposable directory inside their dev sandbox.
+  Test runs intentionally retain no SHA and are not reproducible.
+
+Both methods load the matching production or test secret profile, use the
+shared runtime harness, and transactionally persist terminal run and step
+state.
 
 It requires `sandboxProvider` at boot — without it the method throws `SandboxProviderNotConfiguredError`. Other typed errors: `ProjectNotFoundError`, `WorkflowNotFoundError` (pre-flight check on files), `PluginSecretsMissingError` (when attached plugins declare required secrets the project hasn't set).
 
-Over HTTP the same path is `POST /api/projects/:projectId/workflows/:name/runs` with body `{ triggerData?: Record<string, unknown> }`, which `useTriggerWorkflowRun` (and the `runs-panel` registry item) already calls.
+Over HTTP, production uses
+`POST /api/projects/:projectId/workflows/:name/runs`; test uses
+`POST /api/projects/:projectId/workflows/:name/test-runs` and may include
+`files`. React exposes `useTriggerWorkflowRun` and
+`useTriggerWorkflowTestRun`, respectively.
 
 ## Backend Path B — HTTP via the Fastify plugin
 

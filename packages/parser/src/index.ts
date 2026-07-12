@@ -1,3 +1,7 @@
+export {
+  type PreparedWorkflowExecution,
+  prepareWorkflowExecution,
+} from "./execution-transform.js";
 export type { LayoutedGraph, LayoutedNode } from "./layout.js";
 export { layoutGraph } from "./layout.js";
 export {

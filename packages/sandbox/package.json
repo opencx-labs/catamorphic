@@ -19,7 +19,8 @@
     "typecheck": "tsgo --project ./tsconfig.json"
   },
   "dependencies": {
-    "@catamorphic/otel": "workspace:*"
+    "@catamorphic/otel": "workspace:*",
+    "@catamorphic/runtime": "workspace:*"
   },
   "devDependencies": {
     "@types/node": "^26.1.1"

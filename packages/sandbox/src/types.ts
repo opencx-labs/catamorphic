@@ -136,12 +136,12 @@ export interface RunPluginPayload {
 
 export interface RunExecutor {
   executeRun(opts: {
-    projectId: string;
+    sandboxId: string;
+    workingDirectory: string;
+    workflowFile: string;
     workflowName: string;
     triggerData: unknown;
     runId: string;
-    commitSha: string;
-    cloneSource?: CloneSource;
     plugins?: RunPluginPayload[];
     secrets?: Record<string, string>;
   }): Promise<RunResult>;

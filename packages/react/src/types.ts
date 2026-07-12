@@ -56,6 +56,12 @@ export type TriggerRunInput =
 export type TriggeredRun =
   paths["/api/projects/{projectId}/workflows/{name}/runs"]["post"]["responses"][201]["content"]["application/json"];
 
+export type TriggerTestRunInput =
+  paths["/api/projects/{projectId}/workflows/{name}/test-runs"]["post"]["requestBody"]["content"]["application/json"];
+
+export type TriggeredTestRun =
+  paths["/api/projects/{projectId}/workflows/{name}/test-runs"]["post"]["responses"][201]["content"]["application/json"];
+
 // --- Git ----------------------------------------------------------------
 
 export type RepoStatus =

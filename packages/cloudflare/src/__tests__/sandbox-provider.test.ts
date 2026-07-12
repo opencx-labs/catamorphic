@@ -121,6 +121,45 @@ describe("CloudflareSandboxProvider", () => {
     expect(result.result).toBe("hello\nwarn\n");
   });
 
+  it("uses an isolated bridge session for command environment variables", async () => {
+    const fetchImpl = mockFetch((input, init) => {
+      const url = String(input);
+      if (url.endsWith("/session") && init?.method === "POST") {
+        expect(JSON.parse(init.body as string)).toEqual({
+          cwd: "/workspace/project",
+          env: { API_KEY: "$(not-shell-source)" },
+        });
+        return jsonResponse({ id: "session-1" });
+      }
+      if (url.endsWith("/exec")) {
+        expect(new Headers(init?.headers).get("Session-Id")).toBe("session-1");
+        const body = JSON.parse(init?.body as string) as {
+          cwd?: string;
+        };
+        expect(body.cwd).toBeUndefined();
+        return sseResponse([
+          { event: "exit", data: JSON.stringify({ exit_code: 0 }) },
+        ]);
+      }
+      if (url.endsWith("/session/session-1") && init?.method === "DELETE") {
+        return new Response(null, { status: 204 });
+      }
+      throw new Error(`Unexpected request: ${url}`);
+    });
+    const provider = new CloudflareSandboxProvider({
+      apiUrl: "http://bridge",
+      fetch: fetchImpl,
+    });
+
+    const result = await provider.executeCommand("id1", "bun run harness.ts", {
+      cwd: "/workspace/project",
+      env: { API_KEY: "$(not-shell-source)" },
+    });
+
+    expect(result.exitCode).toBe(0);
+    expect(fetchImpl).toHaveBeenCalledTimes(3);
+  });
+
   it("throws when the exec stream emits an error event", async () => {
     const fetchImpl = mockFetch(() =>
       sseResponse([

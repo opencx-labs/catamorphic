@@ -75,6 +75,8 @@ JSONB columns (`trigger_data`, `result`, `input`, `output`) type as:
 - **Kysely side**: `Json` / `JsonValue` (from `@catamorphic/db`)
 - **Zod schema side**: `z.unknown().nullable()` — not `z.record(z.string(), z.unknown())`, since JSONB can hold any JSON value (arrays, primitives, etc.), not just objects
 
-## Test Run Marking
+## Run modes
 
-Playground / manual runs from the UI are stored with `is_test = true` in `workflow_runs`. Production workflow invocations leave it `false`.
+`workflow_runs.mode` is `test` or `production`. Production rows require the
+deployed commit SHA. Test rows require a null SHA and initiating external user;
+historical test runs intentionally do not retain source.

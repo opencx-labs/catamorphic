@@ -1,10 +1,20 @@
-import type { DB, JsonObject } from "@catamorphic/db";
-import type { CloneSource, ProjectManager } from "@catamorphic/git";
+import type { DB, Json } from "@catamorphic/db";
+import {
+  type CloneSource,
+  fetchRemote,
+  type ProjectManager,
+} from "@catamorphic/git";
 import { getTracer, withSpan } from "@catamorphic/otel";
-import type { SandboxProvider } from "@catamorphic/sandbox";
+import { prepareWorkflowExecution } from "@catamorphic/parser";
+import {
+  RunExecutorImpl,
+  type RunResult,
+  type SandboxProvider,
+} from "@catamorphic/sandbox";
 import type { Kysely, Selectable } from "kysely";
 import type { Identity } from "../identity.js";
-import { PlaygroundExecutor } from "./playground-executor.js";
+import type { DevSandboxService } from "./dev-sandbox-service.js";
+import { uploadWorkspace } from "./playground/workspace-upload.js";
 import { ProjectNotFoundError } from "./projects-service.js";
 import type { RunPluginsLoader } from "./run-plugins-loader.js";
 import { WorkflowNotFoundError } from "./workflows-service.js";
@@ -12,13 +22,13 @@ import { WorkflowNotFoundError } from "./workflows-service.js";
 type RunRow = Selectable<DB["workflow_runs"]>;
 type StepRow = Selectable<DB["workflow_run_steps"]>;
 
+export type RunMode = "test" | "production";
 export type RunStatus =
   | "pending"
   | "running"
   | "completed"
   | "failed"
   | "cancelled";
-
 export type StepStatus =
   | "pending"
   | "running"
@@ -30,8 +40,9 @@ export interface Run {
   id: string;
   projectId: string;
   workflowName: string;
-  commitSha: string;
-  isTest: boolean;
+  commitSha: string | null;
+  mode: RunMode;
+  initiatedBy: string | null;
   status: RunStatus;
   triggerData: unknown;
   result: unknown;
@@ -60,6 +71,7 @@ export interface RunDetail extends Run {
 
 export interface ListRunsInput {
   workflowName?: string;
+  mode?: RunMode;
   limit?: number;
   offset?: number;
 }
@@ -67,6 +79,14 @@ export interface ListRunsInput {
 export interface ListRunsResult {
   items: Run[];
   total: number;
+}
+
+export interface TriggerRunInput {
+  triggerData?: Record<string, unknown>;
+}
+
+export interface TriggerTestRunInput extends TriggerRunInput {
+  files?: Record<string, string>;
 }
 
 export class RunNotFoundError extends Error {
@@ -81,13 +101,11 @@ export class PluginSecretsMissingError extends Error {
     super(
       `Missing required plugin secrets: ${missing.join(
         ", ",
-      )}. Set them in the project settings before running.`,
+      )}. Set them in the selected environment before running.`,
     );
     this.name = "PluginSecretsMissingError";
   }
 }
-
-const tracer = getTracer("@catamorphic/core");
 
 export class SandboxProviderNotConfiguredError extends Error {
   constructor() {
@@ -96,33 +114,47 @@ export class SandboxProviderNotConfiguredError extends Error {
   }
 }
 
-export interface TriggerRunInput {
-  triggerData?: Record<string, unknown>;
+export class ProductionDeploymentNotFoundError extends Error {
+  constructor(readonly projectId: string) {
+    super(`Project '${projectId}' has no deployed main revision`);
+    this.name = "ProductionDeploymentNotFoundError";
+  }
+}
+
+export class InvalidRunOverlayError extends Error {
+  constructor(readonly filePath: string) {
+    super(`Invalid test run overlay path '${filePath}'`);
+    this.name = "InvalidRunOverlayError";
+  }
 }
 
 interface RunsServiceDeps {
   projectManager: ProjectManager;
   sandboxProvider?: SandboxProvider;
+  devSandboxes?: DevSandboxService;
   runPluginsLoader?: RunPluginsLoader;
 }
 
-/**
- * Reads `workflow_runs` + `workflow_run_steps` and triggers new runs against
- * the project's HEAD commit. Execution is delegated to `PlaygroundExecutor`
- * which owns the sandbox lifecycle.
- */
+interface PreparedSource {
+  files: Record<string, string>;
+  originalFiles: Record<string, string>;
+  workflowFile: string;
+  commitSha: string | null;
+  cloneSource?: CloneSource;
+}
+
+const tracer = getTracer("@catamorphic/core");
+
 export class RunsService {
-  private readonly projectManager: ProjectManager;
-  private readonly sandboxProvider?: SandboxProvider;
-  private readonly runPluginsLoader?: RunPluginsLoader;
+  private readonly executor?: RunExecutorImpl;
 
   constructor(
     private readonly db: Kysely<DB>,
-    deps: RunsServiceDeps,
+    private readonly deps: RunsServiceDeps,
   ) {
-    this.projectManager = deps.projectManager;
-    this.sandboxProvider = deps.sandboxProvider;
-    this.runPluginsLoader = deps.runPluginsLoader;
+    this.executor = deps.sandboxProvider
+      ? new RunExecutorImpl({ provider: deps.sandboxProvider })
+      : undefined;
   }
 
   async get(identity: Identity, runId: string): Promise<RunDetail> {
@@ -133,7 +165,6 @@ export class RunsService {
       .where("projects.tenant_id", "=", identity.tenantId)
       .selectAll("workflow_runs")
       .executeTakeFirst();
-
     if (!run) throw new RunNotFoundError(runId);
 
     const steps = await this.db
@@ -142,7 +173,6 @@ export class RunsService {
       .selectAll()
       .orderBy("started_at", "asc")
       .execute();
-
     return { ...mapRun(run), steps: steps.map(mapStep) };
   }
 
@@ -152,195 +182,393 @@ export class RunsService {
     input: ListRunsInput = {},
   ): Promise<ListRunsResult> {
     await this.requireProject(identity, projectId);
-
     const limit = input.limit ?? 50;
     const offset = input.offset ?? 0;
-
     let query = this.db
       .selectFrom("workflow_runs")
       .where("project_id", "=", projectId);
-
-    if (input.workflowName) {
-      query = query.where("workflow_name", "=", input.workflowName);
-    }
-
-    const rows = await query
-      .selectAll()
-      .orderBy("created_at", "desc")
-      .limit(limit)
-      .offset(offset)
-      .execute();
-
     let countQuery = this.db
       .selectFrom("workflow_runs")
       .where("project_id", "=", projectId);
     if (input.workflowName) {
+      query = query.where("workflow_name", "=", input.workflowName);
       countQuery = countQuery.where("workflow_name", "=", input.workflowName);
     }
-    const total = await countQuery
-      .select((eb) => eb.fn.countAll<number>().as("count"))
-      .executeTakeFirstOrThrow()
-      .then((r) => Number(r.count));
-
-    return { items: rows.map(mapRun), total };
+    if (input.mode) {
+      query = query.where("mode", "=", input.mode);
+      countQuery = countQuery.where("mode", "=", input.mode);
+    }
+    const [rows, count] = await Promise.all([
+      query
+        .selectAll()
+        .orderBy("created_at", "desc")
+        .limit(limit)
+        .offset(offset)
+        .execute(),
+      countQuery
+        .select((eb) => eb.fn.countAll<number>().as("count"))
+        .executeTakeFirstOrThrow(),
+    ]);
+    return { items: rows.map(mapRun), total: Number(count.count) };
   }
 
-  /**
-   * Trigger a workflow run against the project's HEAD commit. Opens the
-   * project's dev working copy, reads all files, resolves HEAD, loads
-   * attached plugins + secrets, then hands off to `PlaygroundExecutor` which
-   * spawns a sandbox and executes the harness. Persists the run + its
-   * steps to `workflow_runs` / `workflow_run_steps` as the execution
-   * progresses.
-   */
-  async trigger(
+  async triggerProduction(
     identity: Identity,
     projectId: string,
     workflowName: string,
     input: TriggerRunInput,
   ): Promise<Run> {
+    return this.trigger({
+      identity,
+      projectId,
+      workflowName,
+      input,
+      mode: "production",
+    });
+  }
+
+  async triggerTest(
+    identity: Identity,
+    projectId: string,
+    workflowName: string,
+    input: TriggerTestRunInput,
+  ): Promise<Run> {
+    return this.trigger({
+      identity,
+      projectId,
+      workflowName,
+      input,
+      mode: "test",
+    });
+  }
+
+  private async trigger(opts: {
+    identity: Identity;
+    projectId: string;
+    workflowName: string;
+    input: TriggerTestRunInput;
+    mode: RunMode;
+  }): Promise<Run> {
     return withSpan(
       {
         tracer,
         name: "workflow.run",
         attributes: {
-          "catamorphic.project.id": projectId,
-          "catamorphic.workflow.name": workflowName,
-          "catamorphic.tenant.id": identity.tenantId,
+          "catamorphic.project.id": opts.projectId,
+          "catamorphic.workflow.name": opts.workflowName,
+          "catamorphic.tenant.id": opts.identity.tenantId,
+          "catamorphic.run.mode": opts.mode,
         },
       },
-      (span) =>
-        this.triggerInner(identity, projectId, workflowName, input, (runId) =>
-          span.setAttribute("catamorphic.run.id", runId),
-        ),
+      async (span) => {
+        const run = await this.triggerInner(opts);
+        span.setAttribute("catamorphic.run.id", run.id);
+        span.setAttribute("catamorphic.run.status", run.status);
+        return run;
+      },
     );
   }
 
-  private async triggerInner(
-    identity: Identity,
-    projectId: string,
-    workflowName: string,
-    input: TriggerRunInput,
-    onRunId: (runId: string) => void,
-  ): Promise<Run> {
-    if (!this.sandboxProvider) {
+  private async triggerInner(opts: {
+    identity: Identity;
+    projectId: string;
+    workflowName: string;
+    input: TriggerTestRunInput;
+    mode: RunMode;
+  }): Promise<Run> {
+    const provider = this.deps.sandboxProvider;
+    const executor = this.executor;
+    if (!provider || !executor) {
       throw new SandboxProviderNotConfiguredError();
     }
+    await this.requireProject(opts.identity, opts.projectId);
 
-    await this.requireProject(identity, projectId);
-
-    const repo = await this.projectManager.openDev(
-      identity.tenantId,
-      projectId,
-      identity.externalUserId,
-    );
-    let files: Record<string, string>;
-    let commitSha: string;
-    let cloneSource: CloneSource | undefined;
-    try {
-      files = await repo.readAllFiles();
-      commitSha = await repo.resolveRef("HEAD");
-
-      // Prefer having the sandbox clone from the origin (e.g. Cloudflare
-      // Artifacts) instead of uploading files — but only when the origin is
-      // known to contain the commit being executed (dev HEAD == origin/main).
-      const remoteBackend = this.projectManager.remoteBackend;
-      if (remoteBackend?.getCloneSource) {
-        const remoteSha = await repo
-          .resolveRef("refs/remotes/origin/main")
-          .catch(() => null);
-        if (remoteSha === commitSha) {
-          cloneSource = await remoteBackend.getCloneSource(
-            identity.tenantId,
-            projectId,
-            { scope: "read" },
-          );
-        }
-      }
-    } finally {
-      await repo.dispose();
-    }
-
-    if (!(workflowName in files) && !findWorkflowInFiles(files, workflowName)) {
-      throw new WorkflowNotFoundError(projectId, workflowName);
-    }
-
-    let plugins: Awaited<ReturnType<RunPluginsLoader["load"]>> | undefined;
-    if (this.runPluginsLoader) {
-      plugins = await this.runPluginsLoader.load(projectId);
-      if (plugins.missingRequiredSecrets.length > 0) {
-        throw new PluginSecretsMissingError(plugins.missingRequiredSecrets);
-      }
-    }
-
-    const triggerData = input.triggerData ?? {};
+    const source =
+      opts.mode === "test"
+        ? await this.prepareTestSource(opts)
+        : await this.prepareProductionSource(opts);
+    const plugins = await this.loadPlugins(opts.projectId, opts.mode);
+    const triggerData = opts.input.triggerData ?? {};
     const runId = crypto.randomUUID();
-    onRunId(runId);
     const startedAt = new Date();
 
     await this.db
       .insertInto("workflow_runs")
       .values({
         id: runId,
-        project_id: projectId,
-        workflow_name: workflowName,
-        commit_sha: commitSha,
-        is_test: false,
+        project_id: opts.projectId,
+        workflow_name: opts.workflowName,
+        commit_sha: source.commitSha,
+        mode: opts.mode,
+        external_user_id: opts.identity.externalUserId,
         status: "running",
-        trigger_data: triggerData as JsonObject,
+        trigger_data: triggerData as Json,
         started_at: startedAt,
       })
       .execute();
 
-    const executor = new PlaygroundExecutor(this.sandboxProvider);
-    const result = await executor.execute({
-      files,
-      workflowName,
+    const execution = await this.execute({
+      identity: opts.identity,
+      projectId: opts.projectId,
+      workflowName: opts.workflowName,
+      mode: opts.mode,
+      runId,
+      source,
       triggerData,
-      commitSha,
-      cloneSource,
-      plugins: plugins?.plugins,
-      secrets: plugins?.secrets,
+      plugins,
+      provider,
+      executor,
     });
-
-    const completedAt = new Date(result.completedAt);
-    await this.db
-      .updateTable("workflow_runs")
-      .set({
-        status: result.status,
-        result: (result.result ?? null) as JsonObject | null,
-        error: result.error ?? null,
-        completed_at: completedAt,
-      })
-      .where("id", "=", runId)
-      .execute();
-
-    if (result.steps.length > 0) {
-      await this.db
-        .insertInto("workflow_run_steps")
-        .values(
-          result.steps.map((step) => ({
-            id: crypto.randomUUID(),
-            run_id: runId,
-            node_id: step.nodeId,
-            name: step.name,
-            status: step.status,
-            input: (step.input ?? null) as JsonObject | null,
-            output: (step.output ?? null) as JsonObject | null,
-            error: step.error ?? null,
-            started_at: new Date(step.startedAt),
-            completed_at: new Date(step.completedAt),
-          })),
-        )
-        .execute();
-    }
-
+    await this.finalizeRun(runId, execution);
     const row = await this.db
       .selectFrom("workflow_runs")
       .where("id", "=", runId)
       .selectAll()
       .executeTakeFirstOrThrow();
     return mapRun(row);
+  }
+
+  private async execute(opts: {
+    identity: Identity;
+    projectId: string;
+    workflowName: string;
+    mode: RunMode;
+    runId: string;
+    source: PreparedSource;
+    triggerData: Record<string, unknown>;
+    plugins?: Awaited<ReturnType<RunPluginsLoader["load"]>>;
+    provider: SandboxProvider;
+    executor: RunExecutorImpl;
+  }): Promise<RunResult> {
+    let sandboxId: string | undefined;
+    let workingDirectory: string | undefined;
+    let destroySandbox = false;
+    try {
+      if (opts.mode === "test") {
+        const devSandbox = await this.requireDevSandboxes().ensure({
+          identity: opts.identity,
+          projectId: opts.projectId,
+          refresh: false,
+        });
+        sandboxId = devSandbox.providerId;
+        workingDirectory = `${opts.provider.workspaceRoot}/runs/${opts.runId}`;
+        await opts.provider.executeCommand(
+          sandboxId,
+          `rm -rf ${shellQuote(workingDirectory)} && mkdir -p ${shellQuote(workingDirectory)}`,
+        );
+        await uploadWorkspace({
+          provider: opts.provider,
+          sandboxId,
+          projectDir: workingDirectory,
+          files: opts.source.files,
+        });
+      } else {
+        const handle = await opts.provider.createSandbox({
+          language: "typescript",
+          autoStopInterval: 5,
+          labels: {
+            purpose: "execution",
+            projectId: opts.projectId,
+            commitSha: opts.source.commitSha ?? "",
+          },
+        });
+        sandboxId = handle.providerId;
+        destroySandbox = true;
+        workingDirectory = `${opts.provider.workspaceRoot}/project`;
+        if (opts.source.cloneSource) {
+          await opts.provider.gitClone(
+            sandboxId,
+            opts.source.cloneSource.url,
+            workingDirectory,
+            {
+              branch: opts.source.cloneSource.branch,
+              commitId: opts.source.commitSha ?? undefined,
+              username: opts.source.cloneSource.username,
+              password: opts.source.cloneSource.password,
+            },
+          );
+          const transformedFiles = changedFiles({
+            before: opts.source.originalFiles,
+            after: opts.source.files,
+          });
+          if (Object.keys(transformedFiles).length > 0) {
+            await uploadWorkspace({
+              provider: opts.provider,
+              sandboxId,
+              projectDir: workingDirectory,
+              files: transformedFiles,
+            });
+          }
+        } else {
+          await uploadWorkspace({
+            provider: opts.provider,
+            sandboxId,
+            projectDir: workingDirectory,
+            files: opts.source.files,
+          });
+        }
+      }
+
+      return await opts.executor.executeRun({
+        sandboxId,
+        workingDirectory,
+        workflowFile: opts.source.workflowFile,
+        workflowName: opts.workflowName,
+        triggerData: opts.triggerData,
+        runId: opts.runId,
+        plugins: opts.plugins?.plugins,
+        secrets: opts.plugins?.secrets,
+      });
+    } catch (error) {
+      return {
+        status: "failed",
+        error: error instanceof Error ? error.message : String(error),
+        steps: [],
+      };
+    } finally {
+      if (sandboxId && workingDirectory && opts.mode === "test") {
+        await opts.provider
+          .executeCommand(sandboxId, `rm -rf ${shellQuote(workingDirectory)}`)
+          .catch(() => {});
+      }
+      if (sandboxId && destroySandbox) {
+        await opts.provider.destroySandbox(sandboxId).catch(() => {});
+      }
+    }
+  }
+
+  private async prepareTestSource(opts: {
+    identity: Identity;
+    projectId: string;
+    workflowName: string;
+    input: TriggerTestRunInput;
+  }): Promise<PreparedSource> {
+    const repo = await this.deps.projectManager.openDev(
+      opts.identity.tenantId,
+      opts.projectId,
+      opts.identity.externalUserId,
+    );
+    try {
+      const originalFiles = await repo.readAllFiles();
+      const overlays = opts.input.files ?? {};
+      assertOverlayPaths(overlays);
+      const files = { ...originalFiles, ...overlays };
+      return prepareSource({
+        projectId: opts.projectId,
+        workflowName: opts.workflowName,
+        files,
+        originalFiles,
+        commitSha: null,
+      });
+    } finally {
+      await repo.dispose();
+    }
+  }
+
+  private async prepareProductionSource(opts: {
+    identity: Identity;
+    projectId: string;
+    workflowName: string;
+  }): Promise<PreparedSource> {
+    const remote = this.deps.projectManager.remoteBackend;
+    if (!remote) throw new ProductionDeploymentNotFoundError(opts.projectId);
+    const repo = await this.deps.projectManager.openDev(
+      opts.identity.tenantId,
+      opts.projectId,
+      opts.identity.externalUserId,
+    );
+    try {
+      await fetchRemote({
+        dev: repo,
+        remote,
+        tenantId: opts.identity.tenantId,
+        projectId: opts.projectId,
+        remoteBranch: "main",
+      });
+      const commitSha = await repo
+        .resolveRef("refs/remotes/origin/main")
+        .catch(() => null);
+      if (!commitSha) {
+        throw new ProductionDeploymentNotFoundError(opts.projectId);
+      }
+      const files = await repo.readAllFilesAtRef(commitSha);
+      const cloneSource = remote.getCloneSource
+        ? await remote.getCloneSource(opts.identity.tenantId, opts.projectId, {
+            scope: "read",
+          })
+        : undefined;
+      return {
+        ...prepareSource({
+          projectId: opts.projectId,
+          workflowName: opts.workflowName,
+          files,
+          originalFiles: files,
+          commitSha,
+        }),
+        cloneSource,
+      };
+    } finally {
+      await repo.dispose();
+    }
+  }
+
+  private async loadPlugins(projectId: string, mode: RunMode) {
+    if (!this.deps.runPluginsLoader) return undefined;
+    const plugins = await this.deps.runPluginsLoader.load({
+      projectId,
+      environment: mode,
+    });
+    if (plugins.missingRequiredSecrets.length > 0) {
+      throw new PluginSecretsMissingError(plugins.missingRequiredSecrets);
+    }
+    return plugins;
+  }
+
+  private async finalizeRun(runId: string, result: RunResult): Promise<void> {
+    const completedAt = new Date();
+    await this.db.transaction().execute(async (trx) => {
+      await trx
+        .updateTable("workflow_runs")
+        .set({
+          status: result.status,
+          result: (result.result ?? null) as Json,
+          error: result.error ?? null,
+          completed_at: completedAt,
+        })
+        .where("id", "=", runId)
+        .where("status", "=", "running")
+        .execute();
+      await trx
+        .deleteFrom("workflow_run_steps")
+        .where("run_id", "=", runId)
+        .execute();
+      if (result.steps.length > 0) {
+        await trx
+          .insertInto("workflow_run_steps")
+          .values(
+            result.steps.map((step) => ({
+              id: crypto.randomUUID(),
+              run_id: runId,
+              node_id: step.nodeId,
+              name: step.name,
+              status: step.status,
+              input: (step.input ?? null) as Json,
+              output: (step.output ?? null) as Json,
+              error: step.error ?? null,
+              started_at: new Date(step.startedAt),
+              completed_at: new Date(step.completedAt),
+            })),
+          )
+          .execute();
+      }
+    });
+  }
+
+  private requireDevSandboxes(): DevSandboxService {
+    if (!this.deps.devSandboxes) {
+      throw new SandboxProviderNotConfiguredError();
+    }
+    return this.deps.devSandboxes;
   }
 
   private async requireProject(
@@ -357,23 +585,58 @@ export class RunsService {
   }
 }
 
-/**
- * Cheap pre-flight check so we fail fast with `WorkflowNotFoundError` before
- * spawning a sandbox. The harness does its own discovery, but a
- * missing workflow would otherwise surface as a `status: 'failed'` run with a
- * generic error string.
- */
-function findWorkflowInFiles(
-  files: Record<string, string>,
-  workflowName: string,
-): boolean {
-  const needle = `function ${workflowName}`;
-  const marker = '"use workflow"';
-  for (const [path, source] of Object.entries(files)) {
-    if (!path.endsWith(".ts") && !path.endsWith(".js")) continue;
-    if (source.includes(needle) && source.includes(marker)) return true;
+function prepareSource(opts: {
+  projectId: string;
+  workflowName: string;
+  files: Record<string, string>;
+  originalFiles: Record<string, string>;
+  commitSha: string | null;
+}): PreparedSource {
+  const prepared = prepareWorkflowExecution({
+    files: opts.files,
+    workflowName: opts.workflowName,
+  });
+  if (!prepared) {
+    throw new WorkflowNotFoundError(opts.projectId, opts.workflowName);
   }
-  return false;
+  const workflowFile = prepared.graph.filePath;
+  if (!workflowFile) {
+    throw new WorkflowNotFoundError(opts.projectId, opts.workflowName);
+  }
+  return {
+    files: prepared.files,
+    originalFiles: opts.originalFiles,
+    workflowFile,
+    commitSha: opts.commitSha,
+  };
+}
+
+function changedFiles(opts: {
+  before: Record<string, string>;
+  after: Record<string, string>;
+}): Record<string, string> {
+  return Object.fromEntries(
+    Object.entries(opts.after).filter(
+      ([path, content]) => opts.before[path] !== content,
+    ),
+  );
+}
+
+function shellQuote(value: string): string {
+  return `'${value.replace(/'/g, `'\\''`)}'`;
+}
+
+function assertOverlayPaths(files: Record<string, string>): void {
+  for (const filePath of Object.keys(files)) {
+    const parts = filePath.split("/");
+    if (
+      filePath.startsWith("/") ||
+      filePath.includes("\0") ||
+      parts.some((part) => part === "" || part === "." || part === "..")
+    ) {
+      throw new InvalidRunOverlayError(filePath);
+    }
+  }
 }
 
 function mapRun(row: RunRow): Run {
@@ -382,7 +645,8 @@ function mapRun(row: RunRow): Run {
     projectId: row.project_id,
     workflowName: row.workflow_name,
     commitSha: row.commit_sha,
-    isTest: row.is_test,
+    mode: row.mode as RunMode,
+    initiatedBy: row.external_user_id,
     status: row.status as RunStatus,
     triggerData: row.trigger_data,
     result: row.result,

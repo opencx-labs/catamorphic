@@ -9,7 +9,9 @@ import { instrumentSandboxProvider } from "@catamorphic/sandbox";
 import type { Kysely } from "kysely";
 import { AgentContextService } from "./services/agent-context-service.js";
 import { AgentSessionsService } from "./services/agent-sessions-service.js";
+import { DbSandboxStore } from "./services/db-sandbox-store.js";
 import { DeploymentService } from "./services/deployment-service.js";
+import { DevSandboxService } from "./services/dev-sandbox-service.js";
 import { PluginsService } from "./services/plugins-service.js";
 import { ProjectsService } from "./services/projects-service.js";
 import { RunPluginsLoader } from "./services/run-plugins-loader.js";
@@ -54,6 +56,7 @@ export class CatamorphicCore {
   readonly plugins?: PluginsService;
   readonly secrets?: SecretsService;
   readonly runPluginsLoader?: RunPluginsLoader;
+  readonly devSandboxes?: DevSandboxService;
   readonly agentContext?: AgentContextService;
   readonly agentSessions?: AgentSessionsService;
 
@@ -64,6 +67,13 @@ export class CatamorphicCore {
       ? instrumentSandboxProvider(config.sandboxProvider)
       : undefined;
     this.pluginResolver = config.pluginResolver;
+    this.devSandboxes = this.sandboxProvider
+      ? new DevSandboxService({
+          projectManager: this.projectManager,
+          provider: this.sandboxProvider,
+          store: new DbSandboxStore(this.db),
+        })
+      : undefined;
 
     this.projects = new ProjectsService(this.db, this.projectManager);
     this.workflows = new WorkflowsService(this.projectManager, this.projects);
@@ -86,16 +96,18 @@ export class CatamorphicCore {
     this.runs = new RunsService(this.db, {
       projectManager: this.projectManager,
       sandboxProvider: this.sandboxProvider,
+      devSandboxes: this.devSandboxes,
       runPluginsLoader: this.runPluginsLoader,
     });
 
     this.skills = new SkillsService(this.db, this.projectManager);
 
-    if (config.codingAgent && this.sandboxProvider) {
+    if (config.codingAgent && this.sandboxProvider && this.devSandboxes) {
       this.agentSessions = new AgentSessionsService(this.db, {
         projectManager: this.projectManager,
         sandboxProvider: this.sandboxProvider,
         codingAgent: config.codingAgent,
+        devSandboxes: this.devSandboxes,
         plugins: this.plugins,
         pluginResolver: this.pluginResolver,
       });

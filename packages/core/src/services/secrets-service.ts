@@ -11,6 +11,8 @@ export interface SecretStatus {
   updatedAt: string | null;
 }
 
+export type SecretEnvironment = "test" | "production";
+
 /**
  * Per-project secret store. Values are only read back through
  * {@link loadForRun}; the dashboard APIs expose presence metadata but never
@@ -22,7 +24,11 @@ export class SecretsService {
     private readonly plugins: PluginsService,
   ) {}
 
-  async list(projectId: string): Promise<SecretStatus[]> {
+  async list(opts: {
+    projectId: string;
+    environment: SecretEnvironment;
+  }): Promise<SecretStatus[]> {
+    const { projectId, environment } = opts;
     const declared = await this.plugins.getDeclaredSecrets(projectId);
     if (declared.size === 0) return [];
 
@@ -30,6 +36,7 @@ export class SecretsService {
     const rows = await this.db
       .selectFrom("project_secrets")
       .where("project_id", "=", projectId)
+      .where("environment", "=", environment)
       .where("name", "in", names)
       .select(["name", "updated_at"])
       .execute();
@@ -42,11 +49,13 @@ export class SecretsService {
     }));
   }
 
-  async upsert(
-    projectId: string,
-    name: string,
-    value: string,
-  ): Promise<SecretStatus> {
+  async upsert(opts: {
+    projectId: string;
+    environment: SecretEnvironment;
+    name: string;
+    value: string;
+  }): Promise<SecretStatus> {
+    const { projectId, environment, name, value } = opts;
     const declared = await this.plugins.getDeclaredSecrets(projectId);
     if (!declared.has(name)) {
       throw new UndeclaredSecretError(name);
@@ -57,12 +66,13 @@ export class SecretsService {
       .insertInto("project_secrets")
       .values({
         project_id: projectId,
+        environment,
         name,
         value,
         updated_at: now,
       })
       .onConflict((oc) =>
-        oc.columns(["project_id", "name"]).doUpdateSet({
+        oc.columns(["project_id", "environment", "name"]).doUpdateSet({
           value,
           updated_at: now,
         }),
@@ -72,10 +82,16 @@ export class SecretsService {
     return { name, hasValue: true, updatedAt: now.toISOString() };
   }
 
-  async delete(projectId: string, name: string): Promise<boolean> {
+  async delete(opts: {
+    projectId: string;
+    environment: SecretEnvironment;
+    name: string;
+  }): Promise<boolean> {
+    const { projectId, environment, name } = opts;
     const result = await this.db
       .deleteFrom("project_secrets")
       .where("project_id", "=", projectId)
+      .where("environment", "=", environment)
       .where("name", "=", name)
       .executeTakeFirst();
     return Number(result.numDeletedRows) > 0;
@@ -87,10 +103,14 @@ export class SecretsService {
    * explicit value. Required secrets with no value + no default are returned
    * as missing so the caller can surface a clear error.
    */
-  async loadForRun(projectId: string): Promise<{
+  async loadForRun(opts: {
+    projectId: string;
+    environment: SecretEnvironment;
+  }): Promise<{
     values: Record<string, string>;
     missingRequired: string[];
   }> {
+    const { projectId, environment } = opts;
     const declared = await this.plugins.getDeclaredSecrets(projectId);
     if (declared.size === 0) {
       return { values: {}, missingRequired: [] };
@@ -99,6 +119,7 @@ export class SecretsService {
     const rows = await this.db
       .selectFrom("project_secrets")
       .where("project_id", "=", projectId)
+      .where("environment", "=", environment)
       .select(["name", "value"])
       .execute();
 

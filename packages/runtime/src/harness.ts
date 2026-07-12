@@ -1,139 +1,104 @@
-/**
- * Runtime harness that executes inside a Daytona sandbox.
- *
- * Environment variables:
- *   CATAMORPHIC_RUN_ID        - The run ID
- *   CATAMORPHIC_WORKFLOW_NAME - The workflow function name to execute
- *   CATAMORPHIC_TRIGGER_DATA  - JSON-encoded trigger data
- *   CATAMORPHIC_API_URL       - Base URL for the Catamorphic API
- *   CATAMORPHIC_COMMIT_SHA    - The commit SHA being executed
- */
-import { reportRunResult } from "./reporter.js";
-import { instrumentSource, wrapStep } from "./step-wrapper.js";
-import type { RunReport, StepEntry } from "./types.js";
-
+export const RUNTIME_HARNESS_SOURCE = `
 const runId = process.env.CATAMORPHIC_RUN_ID ?? "";
 const workflowName = process.env.CATAMORPHIC_WORKFLOW_NAME ?? "";
+const workflowFile = process.env.CATAMORPHIC_WORKFLOW_FILE ?? "";
 const triggerDataRaw = process.env.CATAMORPHIC_TRIGGER_DATA ?? "{}";
-const apiUrl = process.env.CATAMORPHIC_API_URL;
 
-if (!runId || !workflowName) {
-  console.error("Missing CATAMORPHIC_RUN_ID or CATAMORPHIC_WORKFLOW_NAME");
+if (!runId || !workflowName || !workflowFile) {
+  console.error(
+    "Missing CATAMORPHIC_RUN_ID, CATAMORPHIC_WORKFLOW_NAME, or CATAMORPHIC_WORKFLOW_FILE",
+  );
   process.exit(1);
 }
 
-const triggerData = JSON.parse(triggerDataRaw) as Record<string, unknown>;
-const stepLog: StepEntry[] = [];
+const triggerData = JSON.parse(triggerDataRaw);
+const stepLog = [];
 const startedAt = new Date().toISOString();
 
-// Instrumented project sources (see `instrumentSource`) route every step
-// call through this global wrapper. Patching the imported module namespace
-// does not work: ESM namespaces are read-only, and intra-module calls bind
-// to the declaration directly.
-(
-  globalThis as Record<string, unknown> & {
-    __catamorphicWrapStep?: unknown;
+globalThis.__catamorphicRunStep = async (nodeId, name, fn, input) => {
+  const entry = {
+    nodeId,
+    name,
+    status: "running",
+    input,
+    startedAt: new Date().toISOString(),
+    completedAt: "",
+  };
+  stepLog.push(entry);
+  try {
+    const output = await fn(input);
+    entry.status = "completed";
+    entry.output = output;
+    entry.completedAt = new Date().toISOString();
+    return output;
+  } catch (error) {
+    entry.status = "failed";
+    entry.error = error instanceof Error ? error.message : String(error);
+    entry.completedAt = new Date().toISOString();
+    throw error;
   }
-).__catamorphicWrapStep = (
-  fn: (...args: unknown[]) => unknown,
-  stepName: string,
-) => wrapStep(fn, stepName, stepLog);
+};
 
-async function listSourceFiles(): Promise<string[]> {
-  const fs = await import("node:fs/promises");
-  const path = await import("node:path");
-  const found: string[] = [];
-  const harnessPath = path.join(process.cwd(), "harness.ts");
-
-  async function scanDir(dir: string): Promise<void> {
-    const entries = await fs.readdir(dir, { withFileTypes: true });
-    for (const entry of entries) {
-      if (
-        entry.name === "node_modules" ||
-        entry.name === ".git" ||
-        entry.name === "dist"
-      )
-        continue;
-      const fullPath = path.join(dir, entry.name);
-      if (entry.isDirectory()) {
-        await scanDir(fullPath);
-      } else if (
-        (entry.name.endsWith(".ts") || entry.name.endsWith(".js")) &&
-        fullPath !== harnessPath
-      ) {
-        found.push(fullPath);
-      }
+function stringifyReport(report) {
+  const seen = new WeakSet();
+  return JSON.stringify(report, (_key, value) => {
+    if (typeof value === "bigint") return value.toString();
+    if (typeof value === "undefined") return null;
+    if (value instanceof Error) {
+      return { name: value.name, message: value.message, stack: value.stack };
     }
-  }
-
-  await scanDir(process.cwd());
-  return found;
+    if (typeof value === "object" && value !== null) {
+      if (seen.has(value)) return "[Circular]";
+      seen.add(value);
+    }
+    return value;
+  });
 }
 
-async function run(): Promise<void> {
-  const fs = await import("node:fs/promises");
-  const files = await listSourceFiles();
+function emit(report) {
+  console.log("CATAMORPHIC_REPORT:" + stringifyReport(report));
+}
 
-  const workflowFiles: string[] = [];
-  for (const filePath of files) {
-    const source = await fs.readFile(filePath, "utf-8");
-    if (
-      source.includes(`function ${workflowName}`) &&
-      source.includes('"use workflow"')
-    ) {
-      workflowFiles.push(filePath);
-    }
-    const instrumented = instrumentSource(source);
-    if (instrumented !== null) {
-      await fs.writeFile(filePath, instrumented);
-    }
+function failRunningSteps(message) {
+  const completedAt = new Date().toISOString();
+  for (const entry of stepLog) {
+    if (entry.status !== "running") continue;
+    entry.status = "failed";
+    entry.error = message;
+    entry.completedAt = completedAt;
   }
+}
 
-  const workflowFile = workflowFiles[0];
-  if (!workflowFile) {
-    throw new Error(`Workflow function '${workflowName}' not found`);
-  }
-
-  const mod = (await import(workflowFile)) as Record<string, unknown>;
+async function run() {
+  const path = await import("node:path");
+  const modulePath = path.resolve(process.cwd(), workflowFile);
+  const mod = await import(modulePath);
   const workflowFn = mod[workflowName];
   if (typeof workflowFn !== "function") {
-    throw new Error(`'${workflowName}' is not exported as a function`);
+    throw new Error("'" + workflowName + "' is not exported as a function");
   }
 
-  const result = await (workflowFn as (data: unknown) => Promise<unknown>)(
-    triggerData,
-  );
-  const report: RunReport = {
+  const result = await workflowFn(triggerData);
+  emit({
     runId,
     status: "completed",
     result,
     steps: stepLog,
     startedAt,
     completedAt: new Date().toISOString(),
-  };
-
-  if (apiUrl) {
-    await reportRunResult(apiUrl, runId, report);
-  }
-
-  console.log(`CATAMORPHIC_REPORT:${JSON.stringify(report)}`);
+  });
 }
 
-run().catch(async (err: unknown) => {
-  const errorMessage = err instanceof Error ? err.message : String(err);
-  const report: RunReport = {
+run().catch((error) => {
+  failRunningSteps("Workflow ended before the step completed");
+  emit({
     runId,
     status: "failed",
-    error: errorMessage,
+    error: error instanceof Error ? error.message : String(error),
     steps: stepLog,
     startedAt,
     completedAt: new Date().toISOString(),
-  };
-
-  if (apiUrl) {
-    await reportRunResult(apiUrl, runId, report).catch(() => {});
-  }
-
-  console.log(`CATAMORPHIC_REPORT:${JSON.stringify(report)}`);
+  });
   process.exit(1);
 });
+`;

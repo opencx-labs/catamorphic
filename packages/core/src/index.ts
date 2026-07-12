@@ -20,10 +20,9 @@ export {
 export { DbSandboxStore } from "./services/db-sandbox-store.js";
 export { DeploymentService } from "./services/deployment-service.js";
 export {
-  PlaygroundExecutor,
-  type PlaygroundRunRequest,
-  type PlaygroundRunResult,
-} from "./services/playground-executor.js";
+  DevSandboxService,
+  type PreparedDevSandbox,
+} from "./services/dev-sandbox-service.js";
 export {
   type AttachedPluginInfo,
   type PluginInfo,
@@ -48,11 +47,14 @@ export {
   RunPluginsLoader,
 } from "./services/run-plugins-loader.js";
 export {
+  InvalidRunOverlayError,
   type ListRunsInput,
   type ListRunsResult,
   PluginSecretsMissingError,
+  ProductionDeploymentNotFoundError,
   type Run,
   type RunDetail,
+  type RunMode,
   RunNotFoundError,
   type RunStatus,
   type RunStep,
@@ -60,8 +62,10 @@ export {
   SandboxProviderNotConfiguredError,
   type StepStatus,
   type TriggerRunInput,
+  type TriggerTestRunInput,
 } from "./services/runs-service.js";
 export {
+  type SecretEnvironment,
   type SecretStatus,
   SecretsService,
 } from "./services/secrets-service.js";

@@ -14,16 +14,20 @@ import type { Secret } from "../types.js";
  */
 export function useProjectSecrets(
   projectId: string | undefined,
+  environment: "test" | "production" = "production",
 ): UseQueryResult<Secret[], CatamorphicError> {
   const { apiClient } = useCatamorphic();
   return useQuery<Secret[], CatamorphicError>({
-    queryKey: ["cat", "project", projectId, "secrets"],
+    queryKey: ["cat", "project", projectId, "secrets", environment],
     queryFn: () =>
       runWithCatamorphicError(async () => {
         const result = await apiClient.GET(
           "/api/projects/{projectId}/secrets",
           {
-            params: { path: { projectId: projectId as string } },
+            params: {
+              path: { projectId: projectId as string },
+              query: { environment },
+            },
           },
         );
         return assertApiOk(result, "Secrets response empty");

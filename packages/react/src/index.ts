@@ -129,6 +129,7 @@ export {
 // Project hooks
 export { useTemplates } from "./hooks/use-templates.js";
 export { useTriggerWorkflowRun } from "./hooks/use-trigger-workflow-run.js";
+export { useTriggerWorkflowTestRun } from "./hooks/use-trigger-workflow-test-run.js";
 export {
   type UpdateProjectInput,
   useUpdateProject,
@@ -231,5 +232,7 @@ export type {
   SecretStatus,
   SentAgentMessage,
   TriggeredRun,
+  TriggeredTestRun,
   TriggerRunInput,
+  TriggerTestRunInput,
 } from "./types.js";
