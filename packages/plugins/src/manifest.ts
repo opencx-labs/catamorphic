@@ -36,6 +36,39 @@ export const PluginDocsSchema = z.object({
 
 export type PluginDocs = z.infer<typeof PluginDocsSchema>;
 
+const PluginBatchSchemaPathsSchema = z.record(z.string(), z.string().min(1));
+
+export const PluginBatchSourceSchema = z.object({
+  id: z.string().min(1),
+  displayName: z.string().min(1),
+  description: z.string().default(""),
+  exportName: z.string().min(1),
+  execution: z.enum(["host", "sandbox"]),
+  consistency: z.array(z.enum(["snapshot", "bounded", "best_effort"])).min(1),
+  schemas: PluginBatchSchemaPathsSchema,
+});
+
+export const PluginBatchSinkSchema = z.object({
+  id: z.string().min(1),
+  displayName: z.string().min(1),
+  description: z.string().default(""),
+  exportName: z.string().min(1),
+  execution: z.enum(["host", "sandbox"]),
+  schemas: PluginBatchSchemaPathsSchema,
+});
+
+export const PluginBatchCapabilitiesSchema = z.object({
+  contractVersion: z.literal(1),
+  sources: z.array(PluginBatchSourceSchema).default([]),
+  sinks: z.array(PluginBatchSinkSchema).default([]),
+});
+
+export type PluginBatchSource = z.infer<typeof PluginBatchSourceSchema>;
+export type PluginBatchSink = z.infer<typeof PluginBatchSinkSchema>;
+export type PluginBatchCapabilities = z.infer<
+  typeof PluginBatchCapabilitiesSchema
+>;
+
 /**
  * Schema for the `catamorphic` field on a plugin's `package.json`. This is the
  * only contract a plugin package has to honor to be usable inside Catamorphic.
@@ -44,6 +77,7 @@ export const PluginManifestSchema = z.object({
   displayName: z.string().min(1),
   description: z.string().default(""),
   secrets: z.array(PluginSecretSchema).default([]),
+  batch: PluginBatchCapabilitiesSchema.optional(),
   docs: PluginDocsSchema.default({
     readme: "README.md",
     types: "dist/index.d.ts",

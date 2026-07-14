@@ -170,6 +170,12 @@ export async function bootCatamorphic(): Promise<Catamorphic> {
   if (applied.length > 0) {
     console.log(`[playground] Applied migrations: ${applied.join(", ")}`);
   }
+  if (sandboxProvider) {
+    catamorphic.startWorker({
+      workerId: "playground",
+      concurrency: 2,
+    });
+  }
 
   return catamorphic;
 }

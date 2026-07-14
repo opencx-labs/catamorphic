@@ -2,11 +2,18 @@ import {
   type ArrowFunction,
   type FunctionDeclaration,
   type FunctionExpression,
+  type MethodDeclaration,
   Node,
+  type VariableStatement,
 } from "ts-morph";
 import type { ParameterInfo } from "./types.js";
 
-type FunctionLike = FunctionDeclaration | FunctionExpression | ArrowFunction;
+type FunctionLike =
+  | FunctionDeclaration
+  | FunctionExpression
+  | ArrowFunction
+  | MethodDeclaration;
+type JsDocSource = FunctionLike | VariableStatement;
 
 interface JsDocMetadata {
   displayName?: string;
@@ -16,14 +23,13 @@ interface JsDocMetadata {
   paramMetadata: Map<string, { displayName?: string; description?: string }>;
 }
 
-export function extractJsDocMetadata(fn: FunctionLike): JsDocMetadata {
+export function extractJsDocMetadata(source: JsDocSource): JsDocMetadata {
   const result: JsDocMetadata = {
     tags: {},
     paramMetadata: new Map(),
   };
 
-  const jsDocs =
-    "getJsDocs" in fn ? (fn as FunctionDeclaration).getJsDocs() : [];
+  const jsDocs = source.getJsDocs();
 
   for (const doc of jsDocs) {
     const desc = doc.getDescription().trim();

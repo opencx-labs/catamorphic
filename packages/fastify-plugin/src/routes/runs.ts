@@ -42,10 +42,28 @@ export function registerRunRoutes(app: FastifyInstance, ctx: RouteContext) {
     url: "/runs/:runId/cancel",
     schema: {
       params: RunIdParamsSchema,
-      response: { 200: RunSchema, 404: ErrorSchema },
+      response: {
+        200: RunSchema,
+        404: ErrorSchema,
+        503: ErrorSchema,
+      },
     },
-    handler: async (_request, reply) => {
-      return reply.status(404).send({ error: "Not implemented" });
+    handler: async (request, reply) => {
+      if (!ctx.core)
+        return reply.status(503).send({ error: "Service not configured" });
+      const identity = resolveIdentity(request);
+      try {
+        const run = await ctx.core.runs.cancel({
+          identity,
+          runId: request.params.runId,
+        });
+        return reply.send(run);
+      } catch (error) {
+        if (error instanceof RunNotFoundError) {
+          return reply.status(404).send({ error: "Run not found" });
+        }
+        throw error;
+      }
     },
   });
 
@@ -55,10 +73,38 @@ export function registerRunRoutes(app: FastifyInstance, ctx: RouteContext) {
     schema: {
       params: RunIdParamsSchema,
       body: RunReportSchema,
-      response: { 200: RunDetailSchema, 404: ErrorSchema },
+      response: {
+        200: RunDetailSchema,
+        400: ErrorSchema,
+        404: ErrorSchema,
+        503: ErrorSchema,
+      },
     },
-    handler: async (_request, reply) => {
-      return reply.status(404).send({ error: "Not implemented" });
+    handler: async (request, reply) => {
+      if (!ctx.core)
+        return reply.status(503).send({ error: "Service not configured" });
+      if (request.body.runId !== request.params.runId) {
+        return reply.status(400).send({ error: "Run ID does not match path" });
+      }
+      const identity = resolveIdentity(request);
+      try {
+        const run = await ctx.core.runs.report({
+          identity,
+          runId: request.params.runId,
+          result: {
+            status: request.body.status,
+            result: request.body.result,
+            error: request.body.error,
+            steps: request.body.steps,
+          },
+        });
+        return reply.send(run);
+      } catch (error) {
+        if (error instanceof RunNotFoundError) {
+          return reply.status(404).send({ error: "Run not found" });
+        }
+        throw error;
+      }
     },
   });
 }

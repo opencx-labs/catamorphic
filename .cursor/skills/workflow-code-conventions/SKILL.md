@@ -29,6 +29,22 @@ async function stepName({ propName }: { propName: Type }) {
 }
 ```
 
+## Batch Workflows
+
+Batch workflows import their authoring primitives from the project's
+established SaaS wrapper, or directly from `@catamorphic/workflow` when no
+wrapper exists:
+
+```typescript
+import {
+  defineBatchStep,
+  defineBatchWorkflow,
+  skipBatchItem,
+} from "@catamorphic/workflow";
+```
+
+Do not create project-local copies of these primitives.
+
 ## JSDoc Tags
 
 - `@displayname` — label shown in the UI node

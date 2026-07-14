@@ -20,6 +20,7 @@ export type {
   StepArgumentSource,
   WorkflowEdge,
   WorkflowGraph,
+  WorkflowKind,
   WorkflowNode,
   WorkflowNodeType,
 } from "./types.js";

@@ -20,10 +20,12 @@ function DefaultVersionsPanel() {
 }
 
 export interface HistorySidebarProps {
+  renderRunsPanel?: () => ReactNode;
   renderVersionsPanel?: () => ReactNode;
 }
 
 export function HistorySidebar({
+  renderRunsPanel,
   renderVersionsPanel,
 }: HistorySidebarProps = {}) {
   const setOpen = useSetAtom(historySidebarOpenAtom);
@@ -59,7 +61,8 @@ export function HistorySidebar({
         </button>
       </div>
       <div className="catamorphic-history-sidebar-body">
-        {activeTab === "runs" && <RunsPanel />}
+        {activeTab === "runs" &&
+          (renderRunsPanel ? renderRunsPanel() : <RunsPanel />)}
         {activeTab === "versions" &&
           (renderVersionsPanel ? (
             renderVersionsPanel()

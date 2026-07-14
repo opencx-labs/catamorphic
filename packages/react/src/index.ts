@@ -40,6 +40,28 @@ export {
   type AttachPluginInput,
   useAttachPlugin,
 } from "./hooks/use-attach-plugin.js";
+// Runs (Track A)
+export {
+  type UseBatchItemStepsOptions,
+  useBatchItemSteps,
+} from "./hooks/use-batch-item-steps.js";
+export {
+  type UseBatchRunOptions,
+  useBatchRun,
+} from "./hooks/use-batch-run.js";
+export {
+  type UseBatchRunItemsOptions,
+  useBatchRunItems,
+} from "./hooks/use-batch-run-items.js";
+export {
+  type UseBatchRunsOptions,
+  useBatchRuns,
+} from "./hooks/use-batch-runs.js";
+export {
+  type CancelBatchRunInput,
+  type UseCancelBatchRunOptions,
+  useCancelBatchRun,
+} from "./hooks/use-cancel-batch-run.js";
 export { useCancelWorkflowRun } from "./hooks/use-cancel-workflow-run.js";
 export { useCheckoutBranch } from "./hooks/use-checkout-branch.js";
 export type {
@@ -83,6 +105,11 @@ export type {
   ParseWorkflowResponse,
 } from "./hooks/use-parse-workflow.js";
 export { useParseWorkflow } from "./hooks/use-parse-workflow.js";
+export {
+  type PauseBatchRunInput,
+  type UsePauseBatchRunOptions,
+  usePauseBatchRun,
+} from "./hooks/use-pause-batch-run.js";
 // Plugins (Track A)
 export { usePluginCatalog } from "./hooks/use-plugin-catalog.js";
 export { useProject } from "./hooks/use-project.js";
@@ -121,6 +148,16 @@ export { useProjectPlugins } from "./hooks/use-project-plugins.js";
 // Secrets (Track A)
 export { useProjectSecrets } from "./hooks/use-project-secrets.js";
 export { type UseProjectsOptions, useProjects } from "./hooks/use-projects.js";
+export {
+  type ResumeBatchRunInput,
+  type UseResumeBatchRunOptions,
+  useResumeBatchRun,
+} from "./hooks/use-resume-batch-run.js";
+export {
+  type RetryFailedBatchItemsInput,
+  type UseRetryFailedBatchItemsOptions,
+  useRetryFailedBatchItems,
+} from "./hooks/use-retry-failed-batch-items.js";
 export { useSelectedNode } from "./hooks/use-selected-node.js";
 export {
   type SendAgentMessageInput,
@@ -128,6 +165,10 @@ export {
 } from "./hooks/use-send-agent-message.js";
 // Project hooks
 export { useTemplates } from "./hooks/use-templates.js";
+export {
+  type UseTriggerBatchRunOptions,
+  useTriggerBatchRun,
+} from "./hooks/use-trigger-batch-run.js";
 export { useTriggerWorkflowRun } from "./hooks/use-trigger-workflow-run.js";
 export { useTriggerWorkflowTestRun } from "./hooks/use-trigger-workflow-test-run.js";
 export {
@@ -148,7 +189,6 @@ export type {
   ParseResult,
 } from "./hooks/use-workflow-graph.js";
 export { useWorkflowGraph } from "./hooks/use-workflow-graph.js";
-// Runs (Track A)
 export { useWorkflowRun } from "./hooks/use-workflow-run.js";
 export type {
   TriggerRunFn,
@@ -215,6 +255,13 @@ export type {
   AgentSession,
   AgentSessionDetail,
   AttachedPlugin,
+  BatchItem,
+  BatchItemStatus,
+  BatchItemStep,
+  BatchItemsList,
+  BatchRun,
+  BatchRunStatus,
+  BatchRunsList,
   CommitsList,
   CreatedBranch,
   DeployResult,
@@ -231,6 +278,8 @@ export type {
   Secret,
   SecretStatus,
   SentAgentMessage,
+  TriggerBatchRunInput,
+  TriggeredBatchRun,
   TriggeredRun,
   TriggeredTestRun,
   TriggerRunInput,

@@ -13,6 +13,7 @@ import {
 
 export interface WorkflowSummary {
   name: string;
+  kind: "regular" | "batch";
   displayName: string | null;
   description: string | null;
   filePath: string;
@@ -55,6 +56,7 @@ export class WorkflowsService {
       const { workflows } = parseProject(files);
       return workflows.map((wf) => ({
         name: wf.functionName,
+        kind: wf.kind ?? "regular",
         displayName: wf.graph.displayName ?? null,
         description: wf.graph.description ?? null,
         filePath: wf.filePath ?? "",

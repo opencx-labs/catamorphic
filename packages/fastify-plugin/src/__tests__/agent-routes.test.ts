@@ -144,8 +144,8 @@ describe("run report route", () => {
           completedAt: "2026-04-11T00:00:01.000Z",
         },
       });
-      expect(res.statusCode).toBe(404);
-      expect(res.json()).toEqual({ error: "Not implemented" });
+      expect(res.statusCode).toBe(503);
+      expect(res.json()).toEqual({ error: "Service not configured" });
       await app.close();
     });
 
@@ -176,8 +176,8 @@ describe("run report route", () => {
           completedAt: "2026-04-11T00:00:01.000Z",
         },
       });
-      expect(res.statusCode).toBe(404);
-      expect(res.json()).toEqual({ error: "Not implemented" });
+      expect(res.statusCode).toBe(503);
+      expect(res.json()).toEqual({ error: "Service not configured" });
       await app.close();
     });
   });

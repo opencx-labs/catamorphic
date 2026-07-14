@@ -1,5 +1,10 @@
 import type { Attributes, Span, Tracer } from "@opentelemetry/api";
-import { SpanStatusCode, trace } from "@opentelemetry/api";
+import {
+  context,
+  propagation,
+  SpanStatusCode,
+  trace,
+} from "@opentelemetry/api";
 
 export type SpanAttributes = Attributes;
 
@@ -11,6 +16,12 @@ export type SpanAttributes = Attributes;
  */
 export function getTracer(instrumentationScope: string): Tracer {
   return trace.getTracer(instrumentationScope);
+}
+
+export function currentTraceContext(): Record<string, string> {
+  const carrier: Record<string, string> = {};
+  propagation.inject(context.active(), carrier);
+  return carrier;
 }
 
 export interface WithSpanOptions {

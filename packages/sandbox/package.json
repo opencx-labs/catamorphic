@@ -20,7 +20,8 @@
   },
   "dependencies": {
     "@catamorphic/otel": "workspace:*",
-    "@catamorphic/runtime": "workspace:*"
+    "@catamorphic/runtime": "workspace:*",
+    "@catamorphic/workflow": "workspace:*"
   },
   "devDependencies": {
     "@types/node": "^26.1.1"

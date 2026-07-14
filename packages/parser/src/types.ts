@@ -1,5 +1,7 @@
 export type WorkflowNodeType =
   | "trigger"
+  | "source"
+  | "sink"
   | "step"
   | "branch"
   | "if-block"
@@ -9,6 +11,8 @@ export type WorkflowNodeType =
   | "scope-block"
   | "delay"
   | "return";
+
+export type WorkflowKind = "regular" | "batch";
 
 export interface SourceRange {
   start: number;
@@ -71,6 +75,11 @@ export interface WorkflowEdge {
 
 export interface WorkflowGraph {
   name: string;
+  /**
+   * Parsers always set this field. It remains optional so existing consumers
+   * that construct regular workflow graphs stay source-compatible.
+   */
+  kind?: WorkflowKind;
   displayName?: string;
   description?: string;
   trigger: { parameters: ParameterInfo[] };
@@ -83,6 +92,11 @@ export interface WorkflowGraph {
 
 export interface DiscoveredWorkflow {
   functionName: string;
+  /**
+   * Parsers always set this field. It remains optional for source compatibility
+   * with regular workflow discovery results constructed by consumers.
+   */
+  kind?: WorkflowKind;
   filePath: string;
   graph: WorkflowGraph;
 }

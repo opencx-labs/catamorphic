@@ -1,11 +1,13 @@
-import type {
-  CreateSandboxOpts,
-  ExecOpts,
-  ExecResult,
-  GitCloneOpts,
-  SandboxHandle,
-  SandboxProvider,
-  SandboxStatus,
+import {
+  CommandDeploymentRuntimeProvider,
+  type CreateSandboxOpts,
+  type DeploymentRuntimeProvider,
+  type ExecOpts,
+  type ExecResult,
+  type GitCloneOpts,
+  type SandboxHandle,
+  type SandboxProvider,
+  type SandboxStatus,
 } from "@catamorphic/sandbox";
 
 export interface CloudflareSandboxProviderOpts {
@@ -49,6 +51,7 @@ export class CloudflareSandboxError extends Error {
 
 export class CloudflareSandboxProvider implements SandboxProvider {
   readonly workspaceRoot = "/workspace";
+  readonly deploymentRuntime: DeploymentRuntimeProvider;
 
   private readonly apiUrl: string;
   private readonly apiKey: string | undefined;
@@ -58,6 +61,9 @@ export class CloudflareSandboxProvider implements SandboxProvider {
     this.apiUrl = opts.apiUrl.replace(/\/+$/, "");
     this.apiKey = opts.apiKey;
     this.fetchImpl = opts.fetch ?? globalThis.fetch.bind(globalThis);
+    this.deploymentRuntime = new CommandDeploymentRuntimeProvider({
+      provider: this,
+    });
   }
 
   async createSandbox(_opts: CreateSandboxOpts): Promise<SandboxHandle> {

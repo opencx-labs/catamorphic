@@ -1,3 +1,13 @@
+import type {
+  RuntimeBatchStepSuspension,
+  RuntimeInvocationEvent,
+  RuntimeInvocationEventsResponse,
+  RuntimeInvocationRequest,
+  RuntimeStepEntry,
+  RuntimeSupervisorHealth,
+  RuntimeTerminalResult,
+} from "@catamorphic/runtime";
+
 export type SandboxType = "execution" | "dev";
 
 export type SandboxStatus =
@@ -71,7 +81,96 @@ export interface SandboxProvider {
     opts?: GitCloneOpts,
   ): Promise<void>;
   gitCheckout(sandboxId: string, path: string, ref: string): Promise<void>;
+
+  /**
+   * Optional warm deployment-runtime capability. Existing providers can omit
+   * it and continue using command-based execution.
+   */
+  readonly deploymentRuntime?: DeploymentRuntimeProvider;
 }
+
+export type DeploymentRuntimeStatus =
+  | "starting"
+  | "healthy"
+  | "stopped"
+  | "error";
+
+export interface DeploymentRuntime {
+  runtimeId: string;
+  sandboxId: string;
+  deploymentArtifactId: string;
+  generation: string;
+  status: DeploymentRuntimeStatus;
+}
+
+export interface EnsureDeploymentRuntimeArgs {
+  sandboxId: string;
+  deploymentArtifactId: string;
+  workingDirectory: string;
+  maxConcurrency?: number;
+  env?: Record<string, string>;
+}
+
+export interface RuntimeInvocation extends RuntimeInvocationRequest {
+  runtimeId: string;
+  eventSink?: RuntimeInvocationEventSink;
+}
+
+export interface RuntimeInvocationEventBatch {
+  runtimeId: string;
+  invocationId: string;
+  events: readonly RuntimeInvocationEvent[];
+}
+
+export interface RuntimeInvocationEventSink {
+  report(args: RuntimeInvocationEventBatch): Promise<void>;
+}
+
+export class RuntimeEventReportingError extends Error {
+  constructor(args: { invocationId: string; cause: unknown }) {
+    super(`Failed to persist events for invocation '${args.invocationId}'`, {
+      cause: args.cause,
+    });
+    this.name = "RuntimeEventReportingError";
+  }
+}
+
+export interface RuntimeInvocationReceipt {
+  runtimeId: string;
+  invocationId: string;
+  events: readonly RuntimeInvocationEvent[];
+  terminal: RuntimeTerminalResult;
+}
+
+export interface CancelRuntimeInvocationArgs {
+  runtimeId: string;
+  invocationId: string;
+}
+
+export interface GetRuntimeHealthArgs {
+  runtimeId: string;
+}
+
+export interface RuntimeHealth extends RuntimeSupervisorHealth {
+  runtimeId: string;
+  runtimeStatus: DeploymentRuntimeStatus;
+}
+
+export interface DeploymentRuntimeProvider {
+  ensureRuntime(args: EnsureDeploymentRuntimeArgs): Promise<DeploymentRuntime>;
+  invoke(args: RuntimeInvocation): Promise<RuntimeInvocationReceipt>;
+  cancel(args: CancelRuntimeInvocationArgs): Promise<void>;
+  getHealth(args: GetRuntimeHealthArgs): Promise<RuntimeHealth>;
+}
+
+export type {
+  RuntimeBatchStepSuspension,
+  RuntimeInvocationEvent,
+  RuntimeInvocationEventsResponse,
+  RuntimeInvocationRequest,
+  RuntimeStepEntry,
+  RuntimeTerminalResult,
+};
 
 /**
  * Instruction for populating a sandbox's project directory via `git clone`
@@ -115,8 +214,10 @@ export interface RunResult {
 
 export interface StepEntry {
   nodeId: string;
+  occurrence?: number;
   name: string;
   status: "completed" | "failed" | "skipped";
+  attempt?: number;
   input?: unknown;
   output?: unknown;
   error?: string;

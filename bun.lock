@@ -106,6 +106,7 @@
         "@catamorphic/parser": "workspace:*",
         "@catamorphic/plugins": "workspace:*",
         "@catamorphic/sandbox": "workspace:*",
+        "@catamorphic/workflow": "workspace:*",
         "kysely": "^0.29.3",
       },
       "devDependencies": {
@@ -266,6 +267,9 @@
     "packages/runtime": {
       "name": "@catamorphic/runtime",
       "version": "0.0.1",
+      "dependencies": {
+        "@catamorphic/workflow": "workspace:*",
+      },
       "devDependencies": {
         "@types/node": "^26.1.1",
       },
@@ -288,6 +292,7 @@
       "dependencies": {
         "@catamorphic/otel": "workspace:*",
         "@catamorphic/runtime": "workspace:*",
+        "@catamorphic/workflow": "workspace:*",
       },
       "devDependencies": {
         "@types/node": "^26.1.1",
@@ -318,6 +323,7 @@
         "@catamorphic/react": "workspace:*",
         "@xyflow/react": "^12.11.2",
         "jotai": "^2.20.1",
+        "lucide-react": "^1.24.0",
       },
       "devDependencies": {
         "@tanstack/react-query": "^5.101.2",
@@ -330,6 +336,13 @@
         "@tanstack/react-query": "^5",
         "react": "^18.2 || ^19",
         "react-dom": "^18.2 || ^19",
+      },
+    },
+    "packages/workflow": {
+      "name": "@catamorphic/workflow",
+      "version": "0.0.1",
+      "devDependencies": {
+        "@types/node": "^26.1.1",
       },
     },
   },
@@ -505,6 +518,8 @@
     "@catamorphic/server-sdk": ["@catamorphic/server-sdk@workspace:packages/server-sdk"],
 
     "@catamorphic/ui": ["@catamorphic/ui@workspace:packages/ui"],
+
+    "@catamorphic/workflow": ["@catamorphic/workflow@workspace:packages/workflow"],
 
     "@cloudflare/containers": ["@cloudflare/containers@0.3.7", "", {}, "sha512-DM9dm3FnIBSyiSJ1FLavKwl/lk3oAmTaynCzZQ9pZR0ncRPquSxkxd8Nu2MFILxmDDsPkxKsSNEh9mHHMty4Fw=="],
 
@@ -1741,6 +1756,8 @@
     "long": ["long@5.3.2", "", {}, "sha512-mNAgZ1GmyNhD7AuqnTG3/VQ26o760+ZYBPKjPvugO8+nLbYfX6TVpJPseBvopbdY+qpZ/lKUnmEc1LeZYS3QAA=="],
 
     "lru-cache": ["lru-cache@11.5.2", "", {}, "sha512-4pfM1Ff0x50o0tQwb5ucw/RzNyD0/YJME6IVcStalZuMWxdt3sR3huStTtxz4PUmvZfRguvDejasvQ2kifR11g=="],
+
+    "lucide-react": ["lucide-react@1.24.0", "", { "peerDependencies": { "react": "^16.5.1 || ^17.0.0 || ^18.0.0 || ^19.0.0" } }, "sha512-YT6mBD8lGKkg4nM39enlm94/sfJIiW0YKUT60fBy4YK8tai31ylg1VhGNWxkpSKHo9UagfnZqwIff3HTDQwXeA=="],
 
     "lz-string": ["lz-string@1.5.0", "", { "bin": { "lz-string": "bin/bin.js" } }, "sha512-h5bgJWpxJNswbU7qCrV0tIKQCaS3blPDrqKWx+QxzuzL1zGUzij9XCWLrSLsJPu5t+eWA/ycetzYAO5IOMcWAQ=="],
 

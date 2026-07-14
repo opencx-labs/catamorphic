@@ -8,11 +8,15 @@ import { ParallelBlockNode } from "./parallel-block-node.js";
 import { ParallelNode } from "./parallel-node.js";
 import { ReturnNode } from "./return-node.js";
 import { ScopeBlockNode } from "./scope-block-node.js";
+import { SinkNode } from "./sink-node.js";
+import { SourceNode } from "./source-node.js";
 import { StepNode } from "./step-node.js";
 import { TriggerNode } from "./trigger-node.js";
 
 export const nodeTypes: Record<string, ComponentType<NodeProps>> = {
   trigger: TriggerNode,
+  source: SourceNode,
+  sink: SinkNode,
   step: StepNode,
   branch: BranchNode,
   "if-block": IfBlockNode,
@@ -33,6 +37,8 @@ export {
   ParallelNode,
   ReturnNode,
   ScopeBlockNode,
+  SinkNode,
+  SourceNode,
   StepNode,
   TriggerNode,
 };

@@ -25,6 +25,7 @@
     "@catamorphic/parser": "workspace:*",
     "@catamorphic/plugins": "workspace:*",
     "@catamorphic/sandbox": "workspace:*",
+    "@catamorphic/workflow": "workspace:*",
     "kysely": "^0.29.3"
   },
   "devDependencies": {

@@ -83,4 +83,59 @@ export async function example({ value }: { value: number }) {
     expect(source).toContain("async function double");
     expect(source).not.toContain("__catamorphic_step_double");
   });
+
+  it("instruments only process step calls in batch workflows with stable ids", () => {
+    const files = {
+      "src/batch.ts": `${STEPS}
+export const exampleBatch = defineBatchWorkflow({
+  source: ({ input }) => loadItems({ cursor: input.cursor }),
+  process: async ({ item }) => {
+    const doubled = await double({ value: item.value });
+    if (doubled > 10) {
+      await stringify({ value: doubled });
+    }
+    for (const extra of item.extras) {
+      await double({ value: extra });
+    }
+    return doubled;
+  },
+  sink: saveItems({ format: "json" }),
+});
+`,
+    };
+
+    const first = prepareWorkflowExecution({
+      workflowName: "exampleBatch",
+      files,
+    });
+    const second = prepareWorkflowExecution({
+      workflowName: "exampleBatch",
+      files,
+    });
+
+    expect(first?.graph.kind).toBe("batch");
+    const firstSteps =
+      first?.graph.nodes.filter((node) => node.type === "step") ?? [];
+    const secondSteps =
+      second?.graph.nodes.filter((node) => node.type === "step") ?? [];
+    expect(firstSteps).toHaveLength(3);
+    expect(firstSteps.map((node) => node.id)).toEqual(
+      secondSteps.map((node) => node.id),
+    );
+
+    const transformed = first?.files["src/batch.ts"] ?? "";
+    for (const step of firstSteps) {
+      expect(transformed).toContain(`__catamorphicRunStep("${step.id}"`);
+    }
+    expect(transformed).toContain(
+      "source: ({ input }) => loadItems({ cursor: input.cursor })",
+    );
+    expect(transformed).toContain('sink: saveItems({ format: "json" })');
+    expect(transformed).not.toContain(
+      "__catamorphicInput) => loadItems(__catamorphicInput)",
+    );
+    expect(transformed).not.toContain(
+      "__catamorphicInput) => saveItems(__catamorphicInput)",
+    );
+  });
 });

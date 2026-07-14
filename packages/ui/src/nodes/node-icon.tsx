@@ -1,0 +1,58 @@
+import {
+  BadgeCheck,
+  Bell,
+  CircleAlert,
+  CircleSlash2,
+  CodeXml,
+  Cog,
+  Crown,
+  Database,
+  FileText,
+  Globe2,
+  Inbox,
+  type LucideIcon,
+  Mail,
+  MessagesSquare,
+  Search,
+  Settings,
+  Shield,
+  Sparkles,
+  Star,
+  TriangleAlert,
+  Truck,
+  UserCheck,
+  UserPlus,
+  WandSparkles,
+  Zap,
+} from "lucide-react";
+
+const ICONS: Readonly<Record<string, LucideIcon>> = {
+  "alert-circle": CircleAlert,
+  "alert-triangle": TriangleAlert,
+  "badge-check": BadgeCheck,
+  bell: Bell,
+  "circle-slash-2": CircleSlash2,
+  code: CodeXml,
+  crown: Crown,
+  database: Database,
+  file: FileText,
+  globe: Globe2,
+  inbox: Inbox,
+  mail: Mail,
+  "messages-square": MessagesSquare,
+  search: Search,
+  settings: Settings,
+  shield: Shield,
+  sparkles: Sparkles,
+  star: Star,
+  truck: Truck,
+  "user-check": UserCheck,
+  "user-plus": UserPlus,
+  "wand-sparkles": WandSparkles,
+  zap: Zap,
+};
+
+export function NodeIcon({ name }: { name?: string }) {
+  const Icon = ICONS[name ?? ""] ?? Cog;
+  return <Icon aria-hidden="true" size={18} strokeWidth={1.8} />;
+}

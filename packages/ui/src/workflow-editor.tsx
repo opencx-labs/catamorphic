@@ -70,6 +70,7 @@ export interface WorkflowEditorProps {
   triggerParameters?: ParameterInfo[];
   initialRuns?: PlaygroundRun[];
   onExpandEditor?: () => void;
+  renderRunsPanel?: () => ReactNode;
   renderVersionsPanel?: () => ReactNode;
   renderBanner?: () => ReactNode;
   renderToolbarCenter?: () => ReactNode;
@@ -114,6 +115,7 @@ export function WorkflowEditorChrome({
   aiEnabled = false,
   onAIPrompt,
   onExpandEditor,
+  renderRunsPanel,
   renderVersionsPanel,
   renderBanner,
   renderToolbarCenter,
@@ -219,7 +221,10 @@ export function WorkflowEditorChrome({
           onCodeChange={handleCodeChange}
           onExpandEditor={onExpandEditor}
         />
-        <HistorySidebarSlot renderVersionsPanel={renderVersionsPanel} />
+        <HistorySidebarSlot
+          renderRunsPanel={renderRunsPanel}
+          renderVersionsPanel={renderVersionsPanel}
+        />
       </div>
       <AIBar
         enabled={aiEnabled}
@@ -247,13 +252,20 @@ export function WorkflowEditorChrome({
 }
 
 function HistorySidebarSlot({
+  renderRunsPanel,
   renderVersionsPanel,
 }: {
+  renderRunsPanel?: () => ReactNode;
   renderVersionsPanel?: () => ReactNode;
 }) {
   const historySidebarOpen = useAtomValue(historySidebarOpenAtom);
   if (!historySidebarOpen) return null;
-  return <HistorySidebar renderVersionsPanel={renderVersionsPanel} />;
+  return (
+    <HistorySidebar
+      renderRunsPanel={renderRunsPanel}
+      renderVersionsPanel={renderVersionsPanel}
+    />
+  );
 }
 
 /**

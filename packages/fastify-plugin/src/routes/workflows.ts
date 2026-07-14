@@ -3,6 +3,7 @@ import {
   PluginSecretsMissingError,
   ProductionDeploymentNotFoundError,
   ProjectNotFoundError,
+  RegularWorkflowRequiredError,
   SandboxProviderNotConfiguredError,
   WorkflowNotFoundError,
 } from "@catamorphic/core";
@@ -131,6 +132,9 @@ export function registerWorkflowRoutes(
         if (err instanceof ProductionDeploymentNotFoundError) {
           return reply.status(409).send({ error: err.message });
         }
+        if (err instanceof RegularWorkflowRequiredError) {
+          return reply.status(409).send({ error: err.message });
+        }
         if (err instanceof PluginSecretsMissingError) {
           return reply.status(400).send({ error: err.message });
         }
@@ -181,6 +185,9 @@ export function registerWorkflowRoutes(
           err instanceof PluginSecretsMissingError ||
           err instanceof InvalidRunOverlayError
         ) {
+          return reply.status(400).send({ error: err.message });
+        }
+        if (err instanceof RegularWorkflowRequiredError) {
           return reply.status(400).send({ error: err.message });
         }
         if (err instanceof SandboxProviderNotConfiguredError) {

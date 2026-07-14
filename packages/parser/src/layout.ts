@@ -3,7 +3,8 @@ import type { WorkflowEdge, WorkflowNode } from "./types.js";
 
 const NODE_WIDTH = 240;
 const BASE_HEIGHT = 44;
-const RANK_SEP = 48;
+const DESCRIBED_NODE_HEIGHT = 56;
+const RANK_SEP = 32;
 const NODE_SEP = 36;
 const BRANCH_GAP = 28;
 const GROUP_PAD_X = 24;
@@ -27,7 +28,14 @@ interface SizeInfo {
   height: number;
 }
 
-function estimateNodeHeight(_node: WorkflowNode): number {
+function estimateNodeHeight(node: WorkflowNode): number {
+  if (
+    node.type === "source" ||
+    node.type === "sink" ||
+    node.metadata.batchStep === "true"
+  ) {
+    return DESCRIBED_NODE_HEIGHT;
+  }
   return BASE_HEIGHT;
 }
 

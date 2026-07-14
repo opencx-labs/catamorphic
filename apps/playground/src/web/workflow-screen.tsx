@@ -11,6 +11,7 @@ import {
 } from "@catamorphic/react";
 import { WorkflowEditor } from "@catamorphic/ui";
 import { useCallback, useState } from "react";
+import { BatchRunsPanel } from "./batch-runs-panel.js";
 import { MonacoCodeEditor } from "./monaco-editor.js";
 
 export function WorkflowScreen({
@@ -47,6 +48,7 @@ export function WorkflowScreen({
     <WorkflowScreenInner
       projectId={projectId}
       workflowName={workflowName}
+      workflowKind={summary.kind}
       filePath={filePath}
       initialCode={fileQuery.data?.content ?? ""}
     />
@@ -56,11 +58,13 @@ export function WorkflowScreen({
 function WorkflowScreenInner({
   projectId,
   workflowName,
+  workflowKind,
   filePath,
   initialCode,
 }: {
   projectId: string;
   workflowName: string;
+  workflowKind: "regular" | "batch";
   filePath: string;
   initialCode: string;
 }) {
@@ -76,10 +80,14 @@ function WorkflowScreenInner({
   const writeFile = useWriteProjectFile(projectId);
   const deploy = useDeployProject(projectId);
   const trigger = useTriggerWorkflowTestRun(projectId, workflowName);
-  const runsQuery = useWorkflowRuns(projectId, workflowName, {
-    limit: 25,
-    mode: "test",
-  });
+  const runsQuery = useWorkflowRuns(
+    workflowKind === "regular" ? projectId : undefined,
+    workflowKind === "regular" ? workflowName : undefined,
+    {
+      limit: 25,
+      mode: "test",
+    },
+  );
 
   const [deployState, setDeployState] = useState<
     "idle" | "deploying" | "deployed" | "error"
@@ -162,8 +170,18 @@ function WorkflowScreenInner({
       code={code}
       onCodeChange={setCode}
       onParse={onParse}
-      onRun={onRun}
-      initialRuns={initialRuns}
+      onRun={workflowKind === "regular" ? onRun : undefined}
+      initialRuns={workflowKind === "regular" ? initialRuns : []}
+      renderRunsPanel={
+        workflowKind === "batch"
+          ? () => (
+              <BatchRunsPanel
+                projectId={projectId}
+                workflowName={workflowName}
+              />
+            )
+          : undefined
+      }
       renderCodeEditor={({ code: editorCode, onChange, readOnly }) => (
         <MonacoCodeEditor
           code={editorCode}

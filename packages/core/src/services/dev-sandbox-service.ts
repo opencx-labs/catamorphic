@@ -4,7 +4,11 @@ import type {
   ProjectRepo,
 } from "@catamorphic/git";
 import type { SandboxProvider } from "@catamorphic/sandbox";
-import { SandboxManagerImpl } from "@catamorphic/sandbox";
+import {
+  resolveWorkflowPackageFallback,
+  SandboxManagerImpl,
+  uploadPluginPayloads,
+} from "@catamorphic/sandbox";
 import type { Identity } from "../identity.js";
 import type { DbSandboxStore } from "./db-sandbox-store.js";
 
@@ -67,6 +71,15 @@ export class DevSandboxService {
           this.projectDirectory,
         );
       }
+      const workflowPackage = await resolveWorkflowPackageFallback({
+        packageJson: await repo.readFile("package.json").catch(() => undefined),
+      });
+      await uploadPluginPayloads({
+        provider: this.deps.provider,
+        sandboxId: handle.providerId,
+        projectDir: this.projectDirectory,
+        plugins: workflowPackage ? [workflowPackage] : undefined,
+      });
       return {
         id: handle.id,
         providerId: handle.providerId,

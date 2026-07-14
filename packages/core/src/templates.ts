@@ -1,3 +1,5 @@
+import { WORKFLOW_PACKAGE_VERSION } from "@catamorphic/workflow";
+
 export interface ProjectTemplate {
   id: string;
   name: string;
@@ -18,12 +20,27 @@ const SHARED_TSCONFIG = `{
   "include": ["src"]
 }`;
 
-const pkg = (name: string) =>
+const pkg = ({
+  name,
+  dependencies,
+}: {
+  name: string;
+  dependencies?: Record<string, string>;
+}) =>
   JSON.stringify(
-    { name, version: "1.0.0", private: true, type: "module" },
+    {
+      name,
+      version: "1.0.0",
+      private: true,
+      type: "module",
+      ...(dependencies ? { dependencies } : {}),
+    },
     null,
     2,
   );
+
+export const BATCH_WORKFLOW_SKILL_PATH =
+  ".agents/skills/batch-workflows/SKILL.md";
 
 /**
  * Per-project agent skills seeded into every project (templates and blank
@@ -35,27 +52,36 @@ const pkg = (name: string) =>
 export const SEED_SKILLS: Record<string, string> = {
   ".agents/skills/writing-workflows/SKILL.md": `---
 name: writing-workflows
-description: How to write and edit Catamorphic workflows in this project. Use when creating a new workflow, adding steps, or restructuring workflow logic.
+description: Writes and edits regular and batch Catamorphic workflows. Use when creating workflows, adding steps, changing workflow logic, or choosing between single-run and durable item processing.
 ---
 
 # Writing Workflows
 
-Workflows are plain TypeScript functions marked with the \`"use workflow"\`
-directive and exported from files under \`src/\`. Steps are async functions
-marked with \`"use step"\`.
+## Determine the workflow kind first
 
-Rules:
+Inspect the existing export before editing it and preserve its kind unless the
+user explicitly requests a conversion.
 
-1. Every workflow and step takes a **single destructured object parameter**.
-2. Every workflow, step, and parameter has JSDoc metadata with a
-   \`@displayname\` (short action phrases for steps, descriptive labels for
-   parameters).
-3. Keep workflow bodies simple and linear: awaited step calls, \`if\`/\`else\`
-   branches, \`for\` loops, and \`Promise.all\` for parallel work. The visual
-   graph is derived from this structure.
-4. Steps do the real work (API calls, DB access). Workflows only orchestrate.
+- **Regular workflow:** an exported async function containing
+  \`"use workflow"\`. Use for one request, event, entity, or orchestration run.
+- **Batch workflow:** an exported \`defineBatchWorkflow({ source, process,
+  sink? })\`. Use for many durable items that need paging, bounded concurrency,
+  physical batching, retries, progress, pause/resume, or resumable output.
 
-Example:
+Do not add \`"use workflow"\` to a batch definition. Do not wrap a regular
+workflow in \`defineBatchWorkflow\` merely to process an array supplied in one
+request.
+
+## Shared rules
+
+1. Every workflow and step takes one destructured object parameter.
+2. Every UI-facing workflow, step, and parameter has JSDoc metadata with
+   \`@displayname\`; steps may also use \`@icon\`.
+3. Keep orchestration code simple: awaited calls, \`if\`/\`else\`, loops, and
+   \`Promise.all\`. The visual graph is derived from this structure.
+4. Put IO and business operations in steps. Keep workflow bodies declarative.
+
+## Regular workflows
 
 \`\`\`typescript
 /**
@@ -77,6 +103,176 @@ async function sendGreeting({ to }: { to: string }) {
   "use step";
 }
 \`\`\`
+
+## Batch workflows
+
+Read [the batch workflow skill](../batch-workflows/SKILL.md) before creating or
+substantially editing a batch workflow.
+
+Key rules:
+
+- The source emits stable, unique item keys and uses a durable cursor.
+- \`process\` describes one logical item. Regular \`"use step"\` calls still
+  execute per item.
+- Use an exported \`defineBatchStep\` only when an operation benefits from
+  physically coalescing multiple items. Return exactly one keyed outcome for
+  every input key.
+- Batch-step failures declare whether they are retryable. Never depend on input
+  order when matching outcomes.
+- Sinks must tolerate retries, acknowledge keys, and finalize from persisted
+  state.
+- Use \`skipBatchItem({ reason })\` for intentionally ignored items.
+- Preserve source keys, replay behavior, and existing batch policies when
+  editing.
+`,
+  [BATCH_WORKFLOW_SKILL_PATH]: `---
+name: batch-workflows
+description: Creates and edits durable Catamorphic batch workflows with paged sources, per-item processing, physical batch steps, retries, and idempotent sinks. Use when a workflow handles many items or mentions batches, bulk processing, imports, exports, backfills, or large collections.
+---
+
+# Batch Workflows
+
+## Authoring contract
+
+Inspect the project's imports and \`package.json\` before adding a batch
+workflow:
+
+- If the host provides a workflow wrapper package, import only the primitives
+  that wrapper exposes.
+- Otherwise add \`@catamorphic/workflow\` as an explicit dependency and import
+  the primitives from it.
+- Never create or copy a local \`src/batch.ts\` implementation.
+
+A batch workflow has three phases:
+
+1. \`source\` binds trigger input to a paged source.
+2. \`process\` describes one logical item and may suspend at exported batch
+   steps.
+3. \`sink\` optionally writes terminal item outcomes in idempotent chunks and
+   returns a final artifact.
+
+## Workflow skeleton
+
+\`\`\`typescript
+import {
+  defineBatchStep,
+  defineBatchWorkflow,
+  skipBatchItem,
+} from "@catamorphic/workflow";
+
+interface RecordInput {
+  id: string;
+  value: string;
+}
+
+const recordsSource = {
+  consistency: "snapshot",
+  async initialize({ config }: { config: { prefix?: string } }) {
+    return {
+      snapshot: { capturedAt: new Date().toISOString() },
+      cursor: 0,
+      estimatedCount: undefined,
+    };
+  },
+  async readPage({
+    cursor = 0,
+    limit,
+  }: {
+    cursor?: number;
+    limit: number;
+  }) {
+    const records: readonly RecordInput[] = [];
+    const page = records.slice(cursor, cursor + limit);
+    const nextCursor = cursor + page.length;
+    return {
+      items: page.map((record) => ({ key: record.id, value: record })),
+      nextCursor,
+      done: nextCursor >= records.length,
+    };
+  },
+};
+
+/**
+ * @displayname Enrich Records
+ * @icon sparkles
+ */
+export const enrichRecords = defineBatchStep<
+  { record: RecordInput },
+  { enrichedValue: string }
+>({
+  batch: { maxItems: 50, maxWaitMs: 500, maxBytes: 128_000 },
+  async run({ items }) {
+    return items.map(({ key, value }) => ({
+      key,
+      status: "succeeded",
+      result: { enrichedValue: value.record.value.trim() },
+    }));
+  },
+});
+
+const resultSink = {
+  async initialize() {
+    const writtenKeys: readonly string[] = [];
+    return { writtenKeys };
+  },
+  async writeBatch({ records, state = { writtenKeys: [] } }) {
+    const acknowledgedKeys = records.map((record) => record.key);
+    return {
+      state: {
+        writtenKeys: [...new Set([...state.writtenKeys, ...acknowledgedKeys])],
+      },
+      acknowledgedKeys,
+    };
+  },
+  async finalize({ state = { writtenKeys: [] }, summary }) {
+    return { writtenKeys: state.writtenKeys, summary };
+  },
+};
+
+/**
+ * @displayname Process Records
+ * @description Process a durable collection of records
+ */
+export const processRecords = defineBatchWorkflow({
+  source: ({ input }: { input: { prefix?: string } }) => ({
+    source: recordsSource,
+    config: { prefix: input.prefix },
+  }),
+  process: async ({ item }: { key: string; item: RecordInput }) => {
+    if (item.value.trim() === "") {
+      skipBatchItem({ reason: "Record value is empty" });
+    }
+    return enrichRecords({ record: item });
+  },
+  sink: resultSink,
+});
+\`\`\`
+
+## Source rules
+
+- \`initialize\` captures a stable snapshot and initial cursor.
+- \`readPage\` honors \`limit\`, returns stable keys, and advances the cursor.
+- If \`done\` is false, return a next cursor.
+- Never use array indexes as keys when the source has a durable identifier.
+
+## Batch-step rules
+
+- Export every \`defineBatchStep\`; workers target the export by name.
+- \`maxItems\` bounds cohort size, \`maxWaitMs\` bounds collection delay, and
+  \`maxBytes\` bounds serialized input size.
+- Return one outcome per input key: \`succeeded\`, \`failed\`, or \`skipped\`.
+- Mark transient failures \`retryable: true\`; permanent failures should not be
+  retried.
+- Keep outputs deterministic for the same item attempt. The coordinator replays
+  completed steps when resuming an item.
+
+## Sink rules
+
+- Treat \`writeBatch\` as retryable and idempotent.
+- Deduplicate by item key or chunk key before producing external side effects.
+- Return every durably written key in \`acknowledgedKeys\`.
+- Keep sink state JSON-serializable.
+- \`finalize\` returns the artifact shown to the host application.
 `,
 };
 
@@ -87,7 +283,7 @@ export const TEMPLATES: ProjectTemplate[] = [
     description: "Onboard a new user with welcome email and follow-up",
     defaultWorkflow: "welcomeUser",
     files: {
-      "package.json": pkg("welcome-user"),
+      "package.json": pkg({ name: "welcome-user" }),
       "tsconfig.json": SHARED_TSCONFIG,
       ...SEED_SKILLS,
       "src/welcome.ts": `/**
@@ -162,7 +358,7 @@ function sleep(_duration: string) {}
       "Process an e-commerce order with parallel fulfillment and notifications",
     defaultWorkflow: "processOrder",
     files: {
-      "package.json": pkg("order-processing"),
+      "package.json": pkg({ name: "order-processing" }),
       "tsconfig.json": SHARED_TSCONFIG,
       ...SEED_SKILLS,
       "src/process-order.ts": `/**
@@ -266,7 +462,7 @@ function sleep(_duration: string) {}
       "ETL pipeline with parallel extraction, transformation, and loading",
     defaultWorkflow: "dataSyncPipeline",
     files: {
-      "package.json": pkg("data-pipeline"),
+      "package.json": pkg({ name: "data-pipeline" }),
       "tsconfig.json": SHARED_TSCONFIG,
       ...SEED_SKILLS,
       "src/pipeline.ts": `import { extractFromSource } from "./steps/extract";
@@ -393,7 +589,7 @@ export async function sendAlert({ channel, message }: { channel: string; message
       "Route incoming support tickets based on priority with nested branching",
     defaultWorkflow: "routeSupportTicket",
     files: {
-      "package.json": pkg("support-routing"),
+      "package.json": pkg({ name: "support-routing" }),
       "tsconfig.json": SHARED_TSCONFIG,
       ...SEED_SKILLS,
       "src/route-ticket.ts": `/**
@@ -471,6 +667,269 @@ async function addToQueue({ ticketId, queue }: { ticketId: string; queue: string
 /** @displayname Send Acknowledgment @icon mail */
 async function sendAcknowledgment({ to, ticketId }: { to: string; ticketId: string }) {
   "use step";
+}
+`,
+    },
+  },
+  {
+    id: "customer-feedback-analysis",
+    name: "Customer Feedback Analysis",
+    description:
+      "Analyze seeded customer feedback in durable batches and produce a summary artifact",
+    defaultWorkflow: "analyzeCustomerFeedback",
+    files: {
+      "package.json": pkg({
+        name: "customer-feedback-analysis",
+        dependencies: {
+          "@catamorphic/workflow": WORKFLOW_PACKAGE_VERSION,
+        },
+      }),
+      "tsconfig.json": SHARED_TSCONFIG,
+      ...SEED_SKILLS,
+      "src/customer-feedback.ts": `import {
+  type BatchConsistency,
+  defineBatchStep,
+  defineBatchWorkflow,
+  skipBatchItem,
+} from "@catamorphic/workflow";
+
+interface Feedback {
+  id: string;
+  rating: number;
+  comment: string;
+}
+
+interface NormalizedFeedback extends Feedback {
+  normalizedComment: string;
+}
+
+interface FeedbackAnalysis {
+  sentiment: "positive" | "neutral" | "negative";
+  topic: "product" | "support" | "pricing";
+}
+
+const COMMENTS: readonly string[] = [
+  "The product is fast and delightful.",
+  "Support took too long to reply.",
+  "Great value for the price.",
+  "The product works as expected.",
+  "Pricing is confusing and expensive.",
+  "Support solved my issue immediately.",
+];
+
+const FEEDBACK_SOURCE_CONSISTENCY: BatchConsistency = "snapshot";
+
+const SEEDED_FEEDBACK: readonly Feedback[] = Array.from(
+  { length: 320 },
+  (_, index) => ({
+    id: \`fb-\${String(index + 1).padStart(3, "0")}\`,
+    rating: (index % 5) + 1,
+    comment: index > 0 && index % 79 === 0 ? "" : COMMENTS[index % COMMENTS.length] ?? "",
+  }),
+);
+
+const feedbackSource = {
+  consistency: FEEDBACK_SOURCE_CONSISTENCY,
+  async initialize({
+    config,
+  }: {
+    config: { minimumRating: number };
+  }) {
+    const matching = SEEDED_FEEDBACK.filter(
+      (feedback) => feedback.rating >= config.minimumRating,
+    );
+    return {
+      snapshot: { highWaterMark: matching.length },
+      cursor: 0,
+      estimatedCount: matching.length,
+    };
+  },
+  async readPage({
+    config,
+    snapshot,
+    cursor = 0,
+    limit,
+  }: {
+    config: { minimumRating: number };
+    snapshot: { highWaterMark: number };
+    cursor?: number;
+    limit: number;
+  }) {
+    const matching = SEEDED_FEEDBACK.filter(
+      (feedback) => feedback.rating >= config.minimumRating,
+    ).slice(0, snapshot.highWaterMark);
+    const page = matching.slice(cursor, cursor + limit);
+    const nextCursor = cursor + page.length;
+    return {
+      items: page.map((feedback) => ({
+        key: feedback.id,
+        value: feedback,
+      })),
+      nextCursor,
+      done: nextCursor >= matching.length,
+    };
+  },
+};
+
+/**
+ * @displayname Classify Feedback
+ * @icon messages-square
+ */
+export const classifyFeedback = defineBatchStep<
+  { feedback: NormalizedFeedback },
+  FeedbackAnalysis
+>({
+  batch: { maxItems: 32, maxWaitMs: 250, maxBytes: 64_000 },
+  async run({ items }) {
+    return items.map(({ key, value, attempt }) => {
+      if (key === "fb-042" && attempt === 1) {
+        return {
+          key,
+          status: "failed",
+          error: {
+            message: "Seeded transient classifier failure",
+            retryable: true,
+          },
+        };
+      }
+      const text = value.feedback.normalizedComment;
+      const sentiment =
+        value.feedback.rating >= 4
+          ? "positive"
+          : value.feedback.rating <= 2
+            ? "negative"
+            : "neutral";
+      const topic = text.includes("support")
+        ? "support"
+        : text.includes("price") || text.includes("pricing")
+          ? "pricing"
+          : "product";
+      return { key, status: "succeeded", result: { sentiment, topic } };
+    });
+  },
+});
+
+const summarySink = {
+  async initialize() {
+    const results: { key: string; sentiment: string; topic: string }[] = [];
+    return { results };
+  },
+  async writeBatch({
+    records,
+    state = { results: [] },
+  }: {
+    records: readonly {
+      key: string;
+      outcome: {
+        status: string;
+        result?: FeedbackAnalysis;
+      };
+    }[];
+    state?: {
+      results: { key: string; sentiment: string; topic: string }[];
+    };
+  }) {
+    const written = records.flatMap((record) =>
+      record.outcome.status === "succeeded" && record.outcome.result
+        ? [{ key: record.key, ...record.outcome.result }]
+        : [],
+    );
+    const retained = state.results.filter(
+      (result) => !written.some((candidate) => candidate.key === result.key),
+    );
+    return {
+      state: { results: [...retained, ...written] },
+      acknowledgedKeys: records.map((record) => record.key),
+    };
+  },
+  async finalize({
+    state = { results: [] },
+    summary,
+  }: {
+    state?: {
+      results: { key: string; sentiment: string; topic: string }[];
+    };
+    summary: {
+      total: number;
+      succeeded: number;
+      failed: number;
+      skipped: number;
+    };
+  }) {
+    const rows = state.results.map(
+      (result) =>
+        \`\${result.key},\${result.sentiment},\${result.topic}\`,
+    );
+    return {
+      fileName: "customer-feedback-analysis.csv",
+      contentType: "text/csv",
+      content: ["key,sentiment,topic", ...rows].join("\\n"),
+      summary,
+    };
+  },
+};
+
+/**
+ * @displayname Analyze Customer Feedback
+ * @description Classify seeded customer feedback in efficient physical batches
+ */
+export const analyzeCustomerFeedback = defineBatchWorkflow({
+  source: ({
+    input,
+  }: {
+    input: { minimumRating?: number };
+  }) => ({
+    source: feedbackSource,
+    config: { minimumRating: input.minimumRating ?? 1 },
+  }),
+  process: async ({
+    item,
+  }: {
+    key: string;
+    item: Feedback;
+  }) => {
+    const validation = await validateFeedback({ feedback: item });
+    if (!validation.valid) {
+      skipBatchItem({ reason: validation.reason });
+    }
+    const normalized = await normalizeFeedback({ feedback: item });
+    return classifyFeedback({ feedback: normalized });
+  },
+  sink: summarySink,
+});
+
+/**
+ * @displayname Validate Feedback
+ * @icon badge-check
+ * @param feedback - @displayname Customer Feedback | @description Seeded feedback to validate
+ */
+async function validateFeedback({
+  feedback,
+}: {
+  feedback: Feedback;
+}): Promise<{ valid: true } | { valid: false; reason: string }> {
+  "use step";
+  if (feedback.comment.trim() === "") {
+    return { valid: false, reason: "Feedback comment is empty" };
+  }
+  return { valid: true };
+}
+
+/**
+ * @displayname Normalize Feedback
+ * @icon wand-sparkles
+ * @param feedback - @displayname Customer Feedback | @description Raw seeded feedback record
+ */
+async function normalizeFeedback({
+  feedback,
+}: {
+  feedback: Feedback;
+}): Promise<NormalizedFeedback> {
+  "use step";
+  return {
+    ...feedback,
+    normalizedComment: feedback.comment.trim().toLowerCase(),
+  };
 }
 `,
     },
