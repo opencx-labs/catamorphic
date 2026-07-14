@@ -1,6 +1,9 @@
 export type {
   CatamorphicCore,
   CreateProjectInput,
+  DeploymentRuntimeCleanupResult,
+  DeploymentRuntimeHealthResult,
+  DeploymentRuntimeRetirementResult,
   ListProjectsInput,
   ListProjectsResult,
   Project,

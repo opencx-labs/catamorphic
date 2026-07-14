@@ -28,14 +28,6 @@ export interface ParseResult {
 
 export type OnParseCallback = (source: string) => Promise<ParseResult | null>;
 
-const GROUP_TYPES = new Set([
-  "if-block",
-  "branch",
-  "loop-block",
-  "parallel-block",
-  "scope-block",
-]);
-
 function getDepth(nodeId: string, nodeMap: Map<string, WorkflowNode>): number {
   let depth = 0;
   let current = nodeMap.get(nodeId);
@@ -74,7 +66,6 @@ export function useWorkflowGraph({ onParse }: { onParse?: OnParseCallback }) {
         const nodeMap = new Map(result.layoutedNodes.map((n) => [n.id, n]));
 
         const rfNodes: Node[] = result.layoutedNodes.map((n) => {
-          const isGroup = GROUP_TYPES.has(n.type);
           const depth = getDepth(n.id, nodeMap);
 
           return {
@@ -89,8 +80,8 @@ export function useWorkflowGraph({ onParse }: { onParse?: OnParseCallback }) {
               executionStatus: executionState[n.id],
               depth,
             },
+            style: { width: n.width, height: n.height },
             ...(n.parentId ? { parentId: n.parentId } : {}),
-            ...(isGroup ? { style: { width: n.width, height: n.height } } : {}),
           };
         });
 

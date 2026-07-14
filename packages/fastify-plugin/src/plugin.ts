@@ -6,6 +6,7 @@ import {
 } from "fastify-type-provider-zod";
 import { HttpIdentityError } from "./http-identity.js";
 import { registerAgentRoutes } from "./routes/agent.js";
+import { registerBatchRunRoutes } from "./routes/batch-runs.js";
 import { registerPlaygroundRoutes } from "./routes/playground.js";
 import { registerPluginRoutes } from "./routes/plugins.js";
 import { registerProjectRoutes } from "./routes/projects.js";
@@ -64,6 +65,7 @@ export const catamorphicPlugin: FastifyPluginAsync<
   registerProjectRoutes(app, ctx);
   registerWorkflowRoutes(app, ctx);
   registerRunRoutes(app, ctx);
+  registerBatchRunRoutes(app, ctx);
   registerAgentRoutes(app, ctx);
   registerTemplateRoutes(app);
   registerPluginRoutes(app, ctx);

@@ -51,6 +51,47 @@ describe("PluginManifestSchema", () => {
     expect(parsed.secrets).toEqual([]);
   });
 
+  it("validates versioned batch source and sink capabilities", () => {
+    const parsed = PluginManifestSchema.parse({
+      displayName: "Data connector",
+      batch: {
+        contractVersion: 1,
+        sources: [
+          {
+            id: "feedback",
+            displayName: "Feedback",
+            exportName: "feedbackSource",
+            execution: "sandbox",
+            consistency: ["snapshot"],
+            schemas: {
+              config: "schemas/feedback-config.json",
+              item: "schemas/feedback-item.json",
+              cursor: "schemas/feedback-cursor.json",
+              snapshot: "schemas/feedback-snapshot.json",
+            },
+          },
+        ],
+        sinks: [
+          {
+            id: "csv",
+            displayName: "CSV",
+            exportName: "csvSink",
+            execution: "sandbox",
+            schemas: {
+              result: "schemas/csv-result.json",
+              state: "schemas/csv-state.json",
+              artifact: "schemas/csv-artifact.json",
+            },
+          },
+        ],
+      },
+    });
+
+    expect(parsed.batch?.contractVersion).toBe(1);
+    expect(parsed.batch?.sources[0]?.consistency).toEqual(["snapshot"]);
+    expect(parsed.batch?.sinks[0]?.id).toBe("csv");
+  });
+
   it("rejects secret names that are not SCREAMING_SNAKE_CASE", () => {
     expect(() =>
       PluginManifestSchema.parse({

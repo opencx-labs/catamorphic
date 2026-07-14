@@ -422,6 +422,8 @@
   flex-direction: column;
   gap: 2px;
   overflow: hidden;
+  flex: 1;
+  min-width: 0;
 }
 
 .catamorphic-node-label {
@@ -436,6 +438,9 @@
 .catamorphic-node-description {
   font-size: 11px;
   color: #737373;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .catamorphic-node-subtitle {
@@ -463,6 +468,24 @@
 .catamorphic-trigger-node {
   border-color: #ca8a04;
   background: linear-gradient(135deg, #1c1a0f, #171717);
+}
+
+.catamorphic-source-node {
+  border-color: #0891b2;
+  background: linear-gradient(135deg, #082f49, #171717);
+  min-height: 56px;
+}
+
+.catamorphic-sink-node {
+  border-color: #16a34a;
+  background: linear-gradient(135deg, #052e16, #171717);
+  min-height: 56px;
+}
+
+.catamorphic-batch-step-node {
+  border-color: #7c3aed;
+  background: linear-gradient(135deg, #2e1065, #171717);
+  min-height: 56px;
 }
 
 .catamorphic-step-node {

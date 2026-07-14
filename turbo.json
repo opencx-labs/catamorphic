@@ -8,6 +8,10 @@
     "@catamorphic/registry#build": {
       "outputs": ["dist/**"]
     },
+    "@catamorphic/api-client#build": {
+      "inputs": ["$TURBO_DEFAULT$", "src/schema.d.ts"],
+      "outputs": ["dist/**"]
+    },
     "dev": {
       "dependsOn": ["^build"],
       "cache": false,

@@ -4,6 +4,10 @@ Manifest contract + resolver backends for **plugin packages** that Catamorphic
 attaches to a project. Today that's only `@opencx/workflow-sdk`, but any npm
 package can play as long as it ships the `catamorphic` manifest below.
 
+Plugin SDKs may depend on `@catamorphic/workflow` and re-export only the
+authoring primitives their host wants projects to use. Projects importing that
+wrapper do not need a direct `@catamorphic/workflow` dependency.
+
 This README is the authoritative reference for the whole plugin subsystem —
 manifest format, DB schema, runtime plumbing, agent context injection, and the
 troubleshooting scars we've collected so far. Update this file when anything
@@ -154,6 +158,13 @@ shared by the server (route validation) and resolver (manifest parsing).
 - `docs.readme` / `docs.types` — paths **inside the package** that the coding
   agent stages into `_plugins/<pkg>/` in the dev sandbox and that
   `AgentContextService` inlines into the workflow-builder system prompt.
+- `batch` — optional versioned source/sink capability metadata.
+  `contractVersion` is currently `1`. Sources declare a stable ID, export name,
+  host-or-sandbox execution location, supported consistency modes, and paths to
+  config/item/cursor/snapshot JSON Schemas. Sinks declare the same identity and
+  execution metadata plus result/state/artifact schema paths. These declarations
+  extend the existing plugin flow; they do not create a separate registry or
+  allow arbitrary workflow code to receive host credentials.
 
 ---
 

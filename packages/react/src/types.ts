@@ -62,6 +62,32 @@ export type TriggerTestRunInput =
 export type TriggeredTestRun =
   paths["/api/projects/{projectId}/workflows/{name}/test-runs"]["post"]["responses"][201]["content"]["application/json"];
 
+// --- Batch runs ---------------------------------------------------------
+
+export type BatchRun =
+  paths["/api/batch-runs/{batchRunId}"]["get"]["responses"][200]["content"]["application/json"];
+
+export type BatchRunStatus = BatchRun["status"];
+
+export type BatchRunsList =
+  paths["/api/projects/{projectId}/workflows/{name}/batch-runs"]["get"]["responses"][200]["content"]["application/json"];
+
+export type TriggerBatchRunInput =
+  paths["/api/projects/{projectId}/workflows/{name}/batch-runs"]["post"]["requestBody"]["content"]["application/json"];
+
+export type TriggeredBatchRun =
+  paths["/api/projects/{projectId}/workflows/{name}/batch-runs"]["post"]["responses"][201]["content"]["application/json"];
+
+export type BatchItemsList =
+  paths["/api/batch-runs/{batchRunId}/items"]["get"]["responses"][200]["content"]["application/json"];
+
+export type BatchItem = BatchItemsList["items"][number];
+
+export type BatchItemStatus = BatchItem["status"];
+
+export type BatchItemStep =
+  paths["/api/batch-runs/{batchRunId}/items/{itemId}/steps"]["get"]["responses"][200]["content"]["application/json"][number];
+
 // --- Git ----------------------------------------------------------------
 
 export type RepoStatus =

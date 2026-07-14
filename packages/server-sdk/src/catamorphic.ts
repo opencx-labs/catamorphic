@@ -1,5 +1,14 @@
-import type { CatamorphicCore } from "@catamorphic/core";
-import { createCatamorphicCore } from "@catamorphic/core";
+import type {
+  CatamorphicCore,
+  DeploymentRuntimeCleanupResult,
+  DeploymentRuntimeHealthResult,
+  DeploymentRuntimeRetirementResult,
+  ExecutionWorkerOptions,
+} from "@catamorphic/core";
+import {
+  createCatamorphicCore,
+  DeploymentRuntimeNotSupportedError,
+} from "@catamorphic/core";
 import type { DB } from "@catamorphic/db";
 import {
   createDatabase,
@@ -148,12 +157,55 @@ export class Catamorphic {
     return new TenantScopedClient(this.core, tenantId);
   }
 
+  startWorker(options: ExecutionWorkerOptions = {}): string {
+    return this.core.executionWorker.start(options);
+  }
+
+  stopWorker(args: { workerId: string }): boolean {
+    return this.core.executionWorker.stop(args);
+  }
+
+  redriveExecutionJob(args: {
+    tenantId: string;
+    jobId: string;
+    availableAt?: Date;
+  }): Promise<boolean> {
+    return this.core.executionJobs.redrive(args);
+  }
+
+  reconcileDeploymentRuntimeHealth(
+    args: { limit?: number } = {},
+  ): Promise<DeploymentRuntimeHealthResult> {
+    const service = this.core.deploymentRuntime;
+    if (!service) throw new DeploymentRuntimeNotSupportedError();
+    return service.reconcileHealth(args);
+  }
+
+  retireIdleDeploymentRuntimes(args: {
+    idleBefore: Date;
+    limit?: number;
+  }): Promise<DeploymentRuntimeRetirementResult> {
+    const service = this.core.deploymentRuntime;
+    if (!service) throw new DeploymentRuntimeNotSupportedError();
+    return service.retireIdle(args);
+  }
+
+  cleanupOldDeploymentArtifactRuntimes(args: {
+    lastUsedBefore: Date;
+    limit?: number;
+  }): Promise<DeploymentRuntimeCleanupResult> {
+    const service = this.core.deploymentRuntime;
+    if (!service) throw new DeploymentRuntimeNotSupportedError();
+    return service.cleanupOldArtifacts(args);
+  }
+
   /**
    * Release resources catamorphic created itself (currently: the pg pool when
    * booted from a connection string). Host-owned pools and Kysely instances
    * are left untouched.
    */
   async close(): Promise<void> {
+    this.core.executionWorker.stopAll();
     if (this.ownsDb) {
       await this.core.db.destroy();
     }

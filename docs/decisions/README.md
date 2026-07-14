@@ -18,11 +18,15 @@ Settled design decisions live here as short Architecture Decision Records. They 
 | [0003](0003-postgres-schema-scoped-storage.md) | Postgres with schema-scoped tables, host-provided connection | Accepted |
 | [0004](0004-cloudflare-first-infrastructure.md) | Cloudflare-first infrastructure (Sandbox now, Artifacts next) | Accepted |
 | [0005](0005-opentelemetry-api-only-instrumentation.md) | OpenTelemetry instrumentation via `@opentelemetry/api` only | Accepted |
-| [0006](0006-postgres-backed-queue-and-scheduling.md) | Postgres-backed job queue and scheduling | Accepted (not yet implemented) |
+| [0006](0006-postgres-backed-queue-and-scheduling.md) | Postgres-backed job queue and scheduling | Accepted |
 | [0007](0007-bun-and-unrestricted-workflow-runtime.md) | Bun runtime; workflows run as regular, unrestricted code | Accepted |
 | [0008](0008-vendor-plugin-packages.md) | Vendor backends live in plugin packages (`@catamorphic/cloudflare`, `@catamorphic/daytona`) | Accepted |
 | [0009](0009-pluggable-coding-agents.md) | Coding agents are pluggable; Flue is the flagship server-side agent | Accepted |
 | [0010](0010-skills-in-project-repo.md) | Per-project agent skills live in the project repo (`.agents/skills/`) | Accepted |
 | [0011](0011-registry-distributed-monaco-editor.md) | Code editor ships as a registry item; linking state lives in React hooks | Accepted |
 | [0012](0012-s3-compatible-origin-backend.md) | S3-compatible object storage as a git origin backend (`@catamorphic/s3`) | Accepted |
-| [0013](0013-test-and-production-run-modes.md) | Explicit test and production workflow run modes | Accepted |
+| [0013](0013-test-and-production-run-modes.md) | Explicit test and production workflow run modes | Accepted (updated by 0014) |
+| [0014](0014-deployment-scoped-execution-runtimes.md) | Deployment-scoped execution runtimes | Accepted |
+| [0015](0015-first-class-batch-workflows.md) | First-class batch workflows | Accepted |
+| [0016](0016-durable-runtime-event-reporting.md) | Durable runtime event reporting | Accepted |
+| [0017](0017-public-workflow-authoring-package.md) | Public workflow authoring package | Accepted |

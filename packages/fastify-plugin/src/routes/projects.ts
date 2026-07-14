@@ -735,6 +735,7 @@ async function safeListWorkflows(
 ): Promise<{
   workflows: Array<{
     name: string;
+    kind: "regular" | "batch";
     displayName: string | null;
     description: string | null;
     filePath: string;

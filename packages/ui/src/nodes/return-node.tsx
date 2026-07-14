@@ -18,8 +18,11 @@ export function ReturnNode({ data }: NodeProps) {
       )}
       <div className="catamorphic-node-icon">🏁</div>
       <div className="catamorphic-node-content">
-        <div className="catamorphic-node-label">Return</div>
+        <div className="catamorphic-node-label">{node.label}</div>
       </div>
+      {node.label === "Item result" && (
+        <Handle type="source" position={Position.Bottom} />
+      )}
     </div>
   );
 }

@@ -1,10 +1,16 @@
 export type {
+  PluginBatchCapabilities,
+  PluginBatchSink,
+  PluginBatchSource,
   PluginDocs,
   PluginManifest,
   PluginPackageJson,
   PluginSecret,
 } from "./manifest.js";
 export {
+  PluginBatchCapabilitiesSchema,
+  PluginBatchSinkSchema,
+  PluginBatchSourceSchema,
   PluginDocsSchema,
   PluginManifestSchema,
   PluginPackageJsonSchema,

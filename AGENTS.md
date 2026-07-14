@@ -41,6 +41,7 @@ Public developer surface:
 - `packages/ui` — React Flow editor components (canvas, panels, AI bar); all opt-in/composable.
 - `packages/registry` — shadcn-style copy-paste component registry.
 - `packages/api-client` — generated OpenAPI types + openapi-fetch client.
+- `packages/workflow` — **`@catamorphic/workflow`**: dependency-light authoring primitives for batch workflows; hosts may wrap and selectively re-export this surface.
 
 Internal packages:
 
@@ -205,6 +206,7 @@ git → core
 git → s3
 parser → core
 parser → ui
+workflow → runtime → sandbox → core
 core → server-sdk
 api-client → react → ui → registry
 ```

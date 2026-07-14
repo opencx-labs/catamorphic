@@ -11,6 +11,7 @@ import {
   Background,
   Controls,
   type CoordinateExtent,
+  type FitViewOptions,
   MiniMap,
   type NodeMouseHandler,
   type OnNodesChange,
@@ -20,6 +21,12 @@ import {
 import { useAtom, useAtomValue, useSetAtom } from "jotai";
 import { useCallback, useEffect, useMemo } from "react";
 import { nodeTypes } from "./nodes/index.js";
+
+const FIT_VIEW_OPTIONS: FitViewOptions = {
+  padding: 0.08,
+  minZoom: 0.5,
+  maxZoom: 1,
+};
 
 function computeTranslateExtent(
   nodes: {
@@ -62,6 +69,8 @@ function computeTranslateExtent(
 
 const MINIMAP_NODE_COLORS: Record<string, string> = {
   trigger: "#ca8a04",
+  source: "#0891b2",
+  sink: "#16a34a",
   step: "#2563eb",
   branch: "#a855f7",
   "if-block": "transparent",
@@ -139,6 +148,7 @@ export function WorkflowCanvas() {
   return (
     <div style={{ width: "100%", height: "100%" }}>
       <ReactFlow
+        key={isOpen ? "panel-open" : "panel-closed"}
         nodes={nodes}
         edges={edges}
         nodeTypes={nodeTypes}
@@ -150,6 +160,7 @@ export function WorkflowCanvas() {
         minZoom={0.1}
         maxZoom={2}
         fitView
+        fitViewOptions={FIT_VIEW_OPTIONS}
         nodesDraggable={false}
         nodesConnectable={false}
         nodesFocusable={false}
@@ -170,6 +181,7 @@ export function WorkflowCanvas() {
             maskColor="rgba(0, 0, 0, 0.6)"
             pannable
             zoomable
+            style={{ width: 120, height: 90 }}
           />
         )}
       </ReactFlow>

@@ -15,6 +15,9 @@ npx shadcn add /abs/path/to/catamorphic/packages/registry/dist/r/catamorphic-pro
 npx shadcn add ./node_modules/@catamorphic/registry/dist/r/catamorphic-provider.json
 ```
 
+The `batch-runs-panel` item provides batch progress, throughput, item status
+filters, errors, cancellation, and an artifact rendering slot.
+
 For production, hosts typically serve `packages/registry/dist/r/` from their own static-asset pipeline and point the shadcn CLI at that URL; none of this runs in end-user production traffic — registry items are build-time scaffolding that lands as React code inside the host repo.
 
 ## Layout

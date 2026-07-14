@@ -1,6 +1,6 @@
 # 0013 — Test and production run modes
 
-- **Status:** Accepted
+- **Status:** Accepted (fresh production sandbox clause updated by [0014](0014-deployment-scoped-execution-runtimes.md))
 - **Date:** 2026-07-12
 
 ## Context
@@ -17,7 +17,10 @@ Runs have explicit `test` and `production` modes and separate trigger
 endpoints.
 
 - Production runs resolve and execute the canonical deployed `origin/main`
-  SHA. They use a fresh isolated sandbox and retain that SHA.
+  SHA and retain it. Per [ADR 0014](0014-deployment-scoped-execution-runtimes.md),
+  they use the reusable deployment-scoped runtime pinned to the complete
+  immutable artifact identity, replacing this ADR's fresh-sandbox-per-run
+  requirement.
 - Test runs execute the invoking user's current development files plus request
   overlays in a disposable directory within their dev sandbox. They retain no
   source snapshot or SHA and are intentionally not reproducible after the
@@ -36,5 +39,6 @@ could corrupt or change a run in progress.
 
 Production run provenance is exact, while test runs are fast and clearly
 non-reproducible. Hosts must configure test secrets separately and use the
-test-run endpoint for editor execution. Queueing, cancellation, retries,
-push-based reporting, and reusable production sandboxes remain follow-up work.
+test-run endpoint for editor execution. ADR 0014 settles reusable production
+runtimes; queueing, cancellation, retries, and push-based reporting remain
+follow-up work.

@@ -16,6 +16,7 @@ Catamorphic is a framework for building workflow automations and apps. You embed
 | `@catamorphic/ui` | Ready-made components: the React Flow workflow canvas, detail panel, history sidebar, AI bar. Every piece is opt-in — use the whole `WorkflowEditor` or compose the parts yourself. |
 | `@catamorphic/registry` | shadcn-style copy-paste components for hosts that want to own and customize the component source. |
 | `@catamorphic/api-client` | Generated OpenAPI types + `openapi-fetch` client for the HTTP API. |
+| `@catamorphic/workflow` | Typed workflow-authoring primitives. Projects opt in directly, or a SaaS can wrap it and re-export only its approved surface. |
 
 Supporting packages (consumed through the surface above, importable directly for advanced wiring):
 

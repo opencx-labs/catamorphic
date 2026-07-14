@@ -1,9 +1,17 @@
 import { getTracer, withSpan } from "@catamorphic/otel";
 import type {
+  CancelRuntimeInvocationArgs,
   CreateSandboxOpts,
+  DeploymentRuntime,
+  DeploymentRuntimeProvider,
+  EnsureDeploymentRuntimeArgs,
   ExecOpts,
   ExecResult,
+  GetRuntimeHealthArgs,
   GitCloneOpts,
+  RuntimeHealth,
+  RuntimeInvocation,
+  RuntimeInvocationReceipt,
   SandboxHandle,
   SandboxProvider,
   SandboxStatus,
@@ -39,6 +47,12 @@ export function instrumentSandboxProvider(
   const instrumented: SandboxProvider &
     Partial<Pick<HydratableProvider, "hydrateWorkspace">> = {
     workspaceRoot: provider.workspaceRoot,
+    deploymentRuntime: provider.deploymentRuntime
+      ? instrumentDeploymentRuntimeProvider({
+          provider: provider.deploymentRuntime,
+          providerName,
+        })
+      : undefined,
 
     createSandbox: (opts: CreateSandboxOpts): Promise<SandboxHandle> =>
       withSpan(
@@ -183,4 +197,86 @@ export function instrumentSandboxProvider(
   }
 
   return instrumented;
+}
+
+function instrumentDeploymentRuntimeProvider(args: {
+  provider: DeploymentRuntimeProvider;
+  providerName: string;
+}): DeploymentRuntimeProvider {
+  const base = { "catamorphic.sandbox.provider": args.providerName };
+  return {
+    ensureRuntime: (
+      options: EnsureDeploymentRuntimeArgs,
+    ): Promise<DeploymentRuntime> =>
+      withSpan(
+        {
+          tracer,
+          name: "sandbox.runtime.ensure",
+          attributes: {
+            ...base,
+            "catamorphic.sandbox.id": options.sandboxId,
+            "catamorphic.deployment_artifact.id": options.deploymentArtifactId,
+          },
+        },
+        async (span) => {
+          const runtime = await args.provider.ensureRuntime(options);
+          span.setAttribute("catamorphic.runtime.id", runtime.runtimeId);
+          return runtime;
+        },
+      ),
+    invoke: (options: RuntimeInvocation): Promise<RuntimeInvocationReceipt> =>
+      withSpan(
+        {
+          tracer,
+          name: "sandbox.runtime.invoke",
+          attributes: {
+            ...base,
+            "catamorphic.runtime.id": options.runtimeId,
+            "catamorphic.invocation.id": options.invocationId,
+            "catamorphic.deployment_artifact.id": options.deploymentArtifactId,
+          },
+        },
+        () => args.provider.invoke(options),
+      ),
+    cancel: (options: CancelRuntimeInvocationArgs): Promise<void> =>
+      withSpan(
+        {
+          tracer,
+          name: "sandbox.runtime.cancel",
+          attributes: {
+            ...base,
+            "catamorphic.runtime.id": options.runtimeId,
+            "catamorphic.invocation.id": options.invocationId,
+          },
+        },
+        () => args.provider.cancel(options),
+      ),
+    getHealth: (options: GetRuntimeHealthArgs): Promise<RuntimeHealth> =>
+      withSpan(
+        {
+          tracer,
+          name: "sandbox.runtime.health",
+          attributes: {
+            ...base,
+            "catamorphic.runtime.id": options.runtimeId,
+          },
+        },
+        async (span) => {
+          const health = await args.provider.getHealth(options);
+          span.setAttribute(
+            "catamorphic.runtime.active_invocations",
+            health.activeInvocations,
+          );
+          span.setAttribute(
+            "catamorphic.runtime.queued_invocations",
+            health.queuedInvocations,
+          );
+          span.setAttribute(
+            "catamorphic.runtime.max_concurrency",
+            health.maxConcurrency,
+          );
+          return health;
+        },
+      ),
+  };
 }

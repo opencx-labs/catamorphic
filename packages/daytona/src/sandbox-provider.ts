@@ -1,11 +1,13 @@
-import type {
-  CreateSandboxOpts,
-  ExecOpts,
-  ExecResult,
-  GitCloneOpts,
-  SandboxHandle,
-  SandboxProvider,
-  SandboxStatus,
+import {
+  CommandDeploymentRuntimeProvider,
+  type CreateSandboxOpts,
+  type DeploymentRuntimeProvider,
+  type ExecOpts,
+  type ExecResult,
+  type GitCloneOpts,
+  type SandboxHandle,
+  type SandboxProvider,
+  type SandboxStatus,
 } from "@catamorphic/sandbox";
 import { Daytona } from "@daytonaio/sdk";
 
@@ -31,10 +33,14 @@ function mapDaytonaState(state: string | undefined): SandboxStatus {
 
 export class DaytonaSandboxProvider implements SandboxProvider {
   readonly workspaceRoot = "/home/daytona";
+  readonly deploymentRuntime: DeploymentRuntimeProvider;
   private client: Daytona;
 
   constructor(config?: { apiKey?: string; apiUrl?: string; target?: string }) {
     this.client = new Daytona(config);
+    this.deploymentRuntime = new CommandDeploymentRuntimeProvider({
+      provider: this,
+    });
   }
 
   async createSandbox(opts: CreateSandboxOpts): Promise<SandboxHandle> {

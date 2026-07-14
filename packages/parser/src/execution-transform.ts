@@ -64,6 +64,8 @@ export function prepareWorkflowExecution(opts: {
       callable,
       "(__catamorphicInput), ",
       input,
+      ", ",
+      JSON.stringify(node.functionName),
       ")",
     ].join("");
     const edits = editsByFile.get(filePath) ?? [];

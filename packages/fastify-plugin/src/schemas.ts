@@ -17,6 +17,14 @@ export const RunIdParamsSchema = z.object({
   runId: z.string().uuid(),
 });
 
+export const BatchRunIdParamsSchema = z.object({
+  batchRunId: z.string().uuid(),
+});
+
+export const BatchItemIdParamsSchema = BatchRunIdParamsSchema.extend({
+  itemId: z.string().uuid(),
+});
+
 // --- Query ---
 export const RefQuerySchema = z.object({
   ref: z.string().optional(),
@@ -60,6 +68,7 @@ export const ProjectDetailSchema = ProjectSchema.extend({
   workflows: z.array(
     z.object({
       name: z.string(),
+      kind: z.enum(["regular", "batch"]),
       displayName: z.string().nullable(),
       description: z.string().nullable(),
       filePath: z.string(),
@@ -88,6 +97,7 @@ export const WriteFileSchema = z.object({
 // --- Workflows (discovered, not stored) ---
 export const WorkflowSummarySchema = z.object({
   name: z.string(),
+  kind: z.enum(["regular", "batch"]),
   displayName: z.string().nullable(),
   description: z.string().nullable(),
   filePath: z.string(),
@@ -100,6 +110,8 @@ export const WorkflowSummarySchema = z.object({
 // directly with no casts.
 export const WorkflowNodeTypeSchema = z.enum([
   "trigger",
+  "source",
+  "sink",
   "step",
   "branch",
   "if-block",
@@ -182,6 +194,7 @@ export const WorkflowEdgeSchema = z.object({
 
 export const WorkflowGraphSchema = z.object({
   name: z.string(),
+  kind: z.enum(["regular", "batch"]).optional(),
   displayName: z.string().optional(),
   description: z.string().optional(),
   filePath: z.string().optional(),
@@ -239,6 +252,106 @@ export const TriggerTestRunSchema = TriggerRunSchema.extend({
 
 export const RunsQuerySchema = PaginationQuerySchema.extend({
   mode: RunModeSchema.optional(),
+});
+
+// --- Batch Runs ---
+export const BatchRunStatusSchema = z.enum([
+  "pending",
+  "sourcing",
+  "running",
+  "paused",
+  "sinking",
+  "completed",
+  "completed_with_errors",
+  "failed",
+  "canceled",
+]);
+
+export const BatchItemStatusSchema = z.enum([
+  "pending",
+  "running",
+  "waiting",
+  "succeeded",
+  "failed",
+  "skipped",
+  "canceled",
+]);
+
+export const BatchRunSchema = z.object({
+  id: z.string().uuid(),
+  projectId: z.string().uuid(),
+  workflowName: z.string(),
+  deploymentArtifactId: z.string().uuid().nullable(),
+  mode: RunModeSchema,
+  initiatedBy: z.string().nullable(),
+  status: BatchRunStatusSchema,
+  triggerData: z.unknown().nullable(),
+  sourceSnapshot: z.unknown().nullable(),
+  sourceCursor: z.unknown().nullable(),
+  sourceConsistency: z.string().nullable(),
+  estimatedCount: z.number().nullable(),
+  discoveredCount: z.number(),
+  completedCount: z.number(),
+  failedCount: z.number(),
+  skippedCount: z.number(),
+  failurePolicy: z.unknown().nullable(),
+  artifact: z.unknown().nullable(),
+  sinkCompletedChunks: z.number(),
+  sinkTotalChunks: z.number(),
+  error: z.string().nullable(),
+  startedAt: z.string().datetime().nullable(),
+  completedAt: z.string().datetime().nullable(),
+  createdAt: z.string().datetime(),
+});
+
+export const BatchItemSchema = z.object({
+  id: z.string().uuid(),
+  batchRunId: z.string().uuid(),
+  key: z.string(),
+  sourceOrder: z.number(),
+  status: BatchItemStatusSchema,
+  value: z.unknown().nullable(),
+  valueReference: z.unknown().nullable(),
+  output: z.unknown().nullable(),
+  outputReference: z.unknown().nullable(),
+  error: z.string().nullable(),
+  currentNodeId: z.string().nullable(),
+  availableAt: z.string().datetime(),
+  attempt: z.number(),
+  createdAt: z.string().datetime(),
+  updatedAt: z.string().datetime(),
+  completedAt: z.string().datetime().nullable(),
+});
+
+export const BatchItemStepSchema = z.object({
+  id: z.string().uuid(),
+  itemId: z.string().uuid(),
+  nodeId: z.string(),
+  occurrence: z.number(),
+  attempt: z.number(),
+  name: z.string(),
+  status: z.string(),
+  input: z.unknown().nullable(),
+  output: z.unknown().nullable(),
+  error: z.string().nullable(),
+  startedAt: z.string().datetime().nullable(),
+  completedAt: z.string().datetime().nullable(),
+});
+
+export const TriggerBatchRunSchema = z.object({
+  triggerData: z.unknown().optional(),
+  failurePolicy: z
+    .object({
+      mode: z.enum(["continue", "fail_fast"]),
+      maxFailures: z.number().int().positive().optional(),
+    })
+    .optional(),
+});
+
+export const BatchRunsQuerySchema = PaginationQuerySchema;
+
+export const BatchItemsQuerySchema = PaginationQuerySchema.extend({
+  status: BatchItemStatusSchema.optional(),
 });
 
 // --- Git ---
