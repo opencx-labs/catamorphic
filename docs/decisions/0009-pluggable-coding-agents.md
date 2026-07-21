@@ -1,6 +1,6 @@
 # 0009 — Coding agents are pluggable; Flue is the flagship server-side agent
 
-- **Status**: accepted
+- **Status**: superseded by 0018
 - **Date**: 2026-07-02
 
 ## Context

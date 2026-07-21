@@ -1,11 +1,13 @@
 import path from "node:path";
+import { anthropic } from "@ai-sdk/anthropic";
+import { openai } from "@ai-sdk/openai";
+import { AiSdkCodingAgent } from "@catamorphic/ai-sdk";
 import {
   ArtifactsApiError,
   ArtifactsClient,
   ArtifactsRemoteBackend,
   CloudflareSandboxProvider,
 } from "@catamorphic/cloudflare";
-import { FlueCodingAgent } from "@catamorphic/flue";
 import {
   FsBackend,
   FsRemoteBackend,
@@ -117,27 +119,32 @@ function resolveSandboxProvider(): CloudflareSandboxProvider | undefined {
 }
 
 /**
- * The playground's coding agent is Flue (https://flueframework.com): the
- * harness runs in this server process and drives the Cloudflare dev sandbox
- * remotely. Model keys stay on the server and never enter the sandbox.
+ * The AI SDK agent loop runs in this server process and drives the Cloudflare
+ * dev sandbox remotely. Model keys stay on the server and never enter it.
  */
 function resolveCodingAgent(
   sandboxProvider: SandboxProvider | undefined,
-): FlueCodingAgent | undefined {
+): AiSdkCodingAgent | undefined {
   if (!sandboxProvider) return undefined;
-  const model =
-    process.env.FLUE_MODEL ??
-    (process.env.OPENAI_API_KEY ? "openai/gpt-5.2-codex" : undefined) ??
-    (process.env.ANTHROPIC_API_KEY ? "anthropic/claude-sonnet-4-5" : undefined);
-  if (!model) {
+  const configuredModel = process.env.CODING_AGENT_MODEL;
+  const model = configuredModel
+    ? resolveCodingAgentModel(configuredModel)
+    : process.env.OPENAI_API_KEY
+      ? openai("gpt-5.2-codex")
+      : process.env.ANTHROPIC_API_KEY
+        ? anthropic("claude-sonnet-4-5")
+        : undefined;
+  if (model === undefined) {
     console.warn(
-      "[playground] No FLUE_MODEL / OPENAI_API_KEY / ANTHROPIC_API_KEY set — " +
-        "the coding agent is disabled.",
+      "[playground] No CODING_AGENT_MODEL / OPENAI_API_KEY / " +
+        "ANTHROPIC_API_KEY set; the coding agent is disabled.",
     );
     return undefined;
   }
-  console.log(`[playground] Coding agent: Flue (${model})`);
-  return new FlueCodingAgent({
+  console.log(
+    `[playground] Coding agent: AI SDK (${configuredModel ?? "default"})`,
+  );
+  return new AiSdkCodingAgent({
     model,
     sandboxProvider,
     instructions:
@@ -146,6 +153,18 @@ function resolveCodingAgent(
       "Consult .agents/skills/ for project-specific guidance before large " +
       "changes.",
   });
+}
+
+function resolveCodingAgentModel(model: string) {
+  if (model.startsWith("openai/")) {
+    return openai(model.slice("openai/".length));
+  }
+  if (model.startsWith("anthropic/")) {
+    return anthropic(model.slice("anthropic/".length));
+  }
+  throw new Error(
+    `Unsupported CODING_AGENT_MODEL '${model}'. Use openai/<model> or anthropic/<model>.`,
+  );
 }
 
 export async function bootCatamorphic(): Promise<Catamorphic> {

@@ -395,7 +395,7 @@ The host app owns the workflow-builder prompt. Its flow:
 Before this wiring the builder was a pure OpenAI call with a hardcoded
 system prompt, which is exactly why early demos hallucinated SDK calls.
 
-### 2. Coding agent (`CodingAgentProvider` implementations — `@catamorphic/flue`, `@catamorphic/codex`)
+### 2. Coding agent (`CodingAgentProvider` implementations - `@catamorphic/ai-sdk`, `@catamorphic/codex`)
 
 `startSession({ attachedPlugins })` on every provider:
 

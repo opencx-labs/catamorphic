@@ -53,7 +53,7 @@ Internal packages:
 - `packages/cloudflare` — **`@catamorphic/cloudflare`** backend plugin: `CloudflareSandboxProvider` (Bridge Worker client), `ArtifactsClient` + `ArtifactsRemoteBackend` (Cloudflare Artifacts code storage). Default stack.
 - `packages/s3` — **`@catamorphic/s3`** backend plugin: `S3RemoteBackend` + `S3ObjectStore` store project origins directly in any S3-compatible bucket (Cloudflare R2, AWS S3, MinIO). Default code storage until Artifacts access lands (ADR 0012).
 - `packages/daytona` — **`@catamorphic/daytona`** backend plugin: `DaytonaSandboxProvider`, experimental Daytona git storage.
-- `packages/flue` — **`@catamorphic/flue`** coding-agent plugin: `FlueCodingAgent` (Flue harness runs on the host server, operates on the dev sandbox remotely) + `catamorphicSandbox` adapter. Flagship agent; used by the playground.
+- `packages/ai-sdk` — **`@catamorphic/ai-sdk`** coding-agent plugin: `AiSdkCodingAgent` uses Vercel AI SDK `ToolLoopAgent` in the host process and operates on the dev sandbox remotely. Flagship agent; used by the playground.
 - `packages/codex` — **`@catamorphic/codex`** coding-agent plugin: `CodexAgent` (OpenAI Codex SDK).
 - `packages/otel` — OpenTelemetry helpers (`getTracer`, `withSpan`) over `@opentelemetry/api`.
 - `packages/runtime` — workflow execution harness (runs inside the sandbox).

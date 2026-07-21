@@ -29,7 +29,7 @@ Supporting packages (consumed through the surface above, importable directly for
 | `@catamorphic/sandbox` | Vendor-neutral sandbox + coding-agent contracts (`SandboxProvider`, `SandboxManager`, `RunExecutor`, `CodingAgentProvider`), OTel instrumentation. |
 | `@catamorphic/cloudflare` | Cloudflare backend plugin: `CloudflareSandboxProvider` (Bridge Worker) + `ArtifactsRemoteBackend` (Cloudflare Artifacts code storage). The default stack. |
 | `@catamorphic/daytona` | Daytona backend plugin: `DaytonaSandboxProvider` + experimental Daytona git storage. |
-| `@catamorphic/flue` | Coding-agent plugin backed by [Flue](https://flueframework.com): server-side harness driving the dev sandbox remotely. The flagship agent. |
+| `@catamorphic/ai-sdk` | Flagship coding-agent plugin: Vercel AI SDK `ToolLoopAgent` running in the host and driving the dev sandbox remotely. |
 | `@catamorphic/codex` | Coding-agent plugin backed by the OpenAI Codex SDK. |
 | `@catamorphic/otel` | Tiny OpenTelemetry helpers (`@opentelemetry/api` only — the host owns the SDK/exporters). |
 | `@catamorphic/runtime` | Execution harness that runs *inside* the sandbox and reports step results. |

@@ -65,8 +65,8 @@ export interface CreateCatamorphicConfig {
   /** Required once the host uses plugins + secrets. */
   pluginResolver?: PluginResolver;
   /**
-   * Pluggable coding agent for AI-assisted editing (e.g. `FlueCodingAgent`
-   * from `@catamorphic/flue` or `CodexAgent` from `@catamorphic/codex`).
+   * Pluggable coding agent for AI-assisted editing (e.g. `AiSdkCodingAgent`
+   * from `@catamorphic/ai-sdk` or `CodexAgent` from `@catamorphic/codex`).
    * Requires `sandboxProvider`; enables the agent-session APIs.
    */
   codingAgent?: CodingAgentProvider;

@@ -27,8 +27,8 @@ Artifacts on the CF stack, ADR 0004), this gives us everything for free:
 - **Versioning & review**: skills flow through the same draft → deploy → git
   history as workflow code; agents can even edit their own skills.
 - **Sandbox access**: the dev sandbox clones the project from Artifacts, so
-  skills are on disk at `<project>/.agents/skills/` where Flue's workspace
-  discovery picks them up natively — no extra distribution channel.
+  skills are on disk at `<project>/.agents/skills/` where coding agents can
+  read them directly - no extra distribution channel.
 
 Supporting changes:
 
@@ -42,8 +42,8 @@ Supporting changes:
   agent knows the workflow conventions from the first session.
 
 Host-application-level skills (not project-specific) are **not** stored in
-catamorphic at all — hosts pass them to their agent directly (e.g.
-`FlueCodingAgent`'s `skills` option).
+catamorphic at all; hosts incorporate them into their coding-agent
+configuration.
 
 ## Consequences
 

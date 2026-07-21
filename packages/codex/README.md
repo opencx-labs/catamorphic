@@ -7,7 +7,7 @@ Coding-agent plugin backed by the OpenAI Codex SDK (`@openai/codex-sdk`).
   the host environment.
 
 Install this package only if you want the Codex agent; the flagship
-server-side agent is [`@catamorphic/flue`](../flue/README.md). See
+server-side agent is [`@catamorphic/ai-sdk`](../ai-sdk/README.md). See
 `docs/decisions/0009` for the pluggable coding-agent architecture.
 
 ## Usage
