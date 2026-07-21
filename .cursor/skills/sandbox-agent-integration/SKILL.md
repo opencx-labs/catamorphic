@@ -5,7 +5,7 @@
 `@catamorphic/sandbox` provides two core capabilities:
 
 1. **Workflow Execution** — Runs workflow code inside sandboxes (Cloudflare Sandbox by default, Daytona as alternate) with step-level observability
-2. **Coding Agent contract** — the vendor-neutral `CodingAgentProvider` interface. Implementations are plugin packages: `@catamorphic/flue` (flagship — harness runs on the host server, edits the dev sandbox remotely) and `@catamorphic/codex` (Codex SDK). See `docs/decisions/0009`.
+2. **Coding Agent contract** — the vendor-neutral `CodingAgentProvider` interface. Implementations are plugin packages: `@catamorphic/ai-sdk` (flagship — AI SDK tool loop runs on the host server and edits the dev sandbox remotely) and `@catamorphic/codex` (Codex SDK). See `docs/decisions/0009` and `0018`.
 
 ## Provider Selection
 
@@ -44,9 +44,8 @@ packages/sandbox/src/               -- vendor-neutral, no vendor SDKs
     types.ts               -- CodingAgentProvider interface (extensible)
     plugin-staging.ts      -- stagedPluginFiles / buildPluginsPreamble helpers
 
-packages/flue/src/                  -- @catamorphic/flue coding-agent plugin (flagship)
-  flue-agent.ts            -- FlueCodingAgent (server-side Flue harness)
-  sandbox-adapter.ts       -- catamorphicSandbox (Flue SandboxFactory over SandboxProvider)
+packages/ai-sdk/src/                -- @catamorphic/ai-sdk coding-agent plugin (flagship)
+  ai-sdk-agent.ts          -- AiSdkCodingAgent + sandbox-backed tools
 
 packages/codex/src/                 -- @catamorphic/codex coding-agent plugin
   codex-agent.ts           -- CodexAgent (Codex SDK implementation)
@@ -94,16 +93,17 @@ const devSandbox = await manager.ensureDevSandbox({
 The host picks an agent at boot and passes it to `createCatamorphic({ codingAgent })`. Session orchestration (dev sandbox lifecycle, persistence, sync-back of agent edits into the user's draft) is vendor-neutral in `core.agentSessions` (`AgentSessionsService`).
 
 ```typescript
-import { FlueCodingAgent } from "@catamorphic/flue"; // flagship
+import { anthropic } from "@ai-sdk/anthropic";
+import { AiSdkCodingAgent } from "@catamorphic/ai-sdk"; // flagship
 // or: import { CodexAgent } from "@catamorphic/codex";
 
-const agent = new FlueCodingAgent({
-  model: "openai/gpt-5.2-codex",
-  sandboxProvider: provider, // harness runs on the host, edits happen in the sandbox
+const agent = new AiSdkCodingAgent({
+  model: anthropic("claude-sonnet-4-5"),
+  sandboxProvider: provider, // tool loop runs on the host, edits happen in the sandbox
 });
 ```
 
-Per-project skills live in the project repo under `.agents/skills/<name>/SKILL.md` (Agent Skills layout, `docs/decisions/0010`); Flue discovers them from the sandbox checkout automatically. `core.skills.list(...)` / `GET /api/projects/:id/skills` enumerate them.
+Per-project skills live in the project repo under `.agents/skills/<name>/SKILL.md` (Agent Skills layout, `docs/decisions/0010`); the agent reads relevant skills from the sandbox checkout with its filesystem tools. `core.skills.list(...)` / `GET /api/projects/:id/skills` enumerate them.
 
 ## Runtime Harness
 

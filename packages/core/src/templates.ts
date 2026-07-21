@@ -46,8 +46,8 @@ export const BATCH_WORKFLOW_SKILL_PATH =
  * Per-project agent skills seeded into every project (templates and blank
  * ones alike). Skills live in the project repo under
  * `.agents/skills/<name>/SKILL.md` (Agent Skills spec) so they are versioned
- * with the code, scoped per project, and discovered by coding agents (e.g.
- * Flue) from the dev sandbox checkout.
+ * with the code, scoped per project, and read by coding agents from the dev
+ * sandbox checkout.
  */
 export const SEED_SKILLS: Record<string, string> = {
   ".agents/skills/writing-workflows/SKILL.md": `---

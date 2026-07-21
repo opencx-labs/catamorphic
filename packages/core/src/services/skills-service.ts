@@ -16,8 +16,8 @@ import { ProjectNotFoundError } from "./projects-service.js";
  * The project repo is the single source of truth for these skills — its
  * canonical storage is the project origin (e.g. Cloudflare Artifacts), so
  * skills are versioned with the workflow code and scoped per project/tenant
- * by construction. Coding agents discover them from the dev sandbox checkout
- * (Flue does this natively); no separate skill store exists.
+ * by construction. Coding agents read them from the dev sandbox checkout; no
+ * separate skill store exists.
  */
 export const SKILLS_DIR = ".agents/skills";
 

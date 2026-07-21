@@ -21,7 +21,7 @@ Settled design decisions live here as short Architecture Decision Records. They 
 | [0006](0006-postgres-backed-queue-and-scheduling.md) | Postgres-backed job queue and scheduling | Accepted |
 | [0007](0007-bun-and-unrestricted-workflow-runtime.md) | Bun runtime; workflows run as regular, unrestricted code | Accepted |
 | [0008](0008-vendor-plugin-packages.md) | Vendor backends live in plugin packages (`@catamorphic/cloudflare`, `@catamorphic/daytona`) | Accepted |
-| [0009](0009-pluggable-coding-agents.md) | Coding agents are pluggable; Flue is the flagship server-side agent | Accepted |
+| [0009](0009-pluggable-coding-agents.md) | Coding agents are pluggable; Flue is the flagship server-side agent | Superseded by 0018 |
 | [0010](0010-skills-in-project-repo.md) | Per-project agent skills live in the project repo (`.agents/skills/`) | Accepted |
 | [0011](0011-registry-distributed-monaco-editor.md) | Code editor ships as a registry item; linking state lives in React hooks | Accepted |
 | [0012](0012-s3-compatible-origin-backend.md) | S3-compatible object storage as a git origin backend (`@catamorphic/s3`) | Accepted |
@@ -30,3 +30,4 @@ Settled design decisions live here as short Architecture Decision Records. They 
 | [0015](0015-first-class-batch-workflows.md) | First-class batch workflows | Accepted |
 | [0016](0016-durable-runtime-event-reporting.md) | Durable runtime event reporting | Accepted |
 | [0017](0017-public-workflow-authoring-package.md) | Public workflow authoring package | Accepted |
+| [0018](0018-ai-sdk-coding-agent.md) | AI SDK ToolLoopAgent is the flagship coding agent | Accepted |

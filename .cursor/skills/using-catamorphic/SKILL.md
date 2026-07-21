@@ -500,7 +500,7 @@ Use cases:
 | `@catamorphic/sandbox` | Backend (optional) | `SandboxProvider` + `CodingAgentProvider` contracts, `instrumentSandboxProvider`, `SandboxManagerImpl`, `RunExecutorImpl` |
 | `@catamorphic/cloudflare` | Backend (plugin) | `CloudflareSandboxProvider`, `ArtifactsClient`, `ArtifactsRemoteBackend` |
 | `@catamorphic/daytona` | Backend (plugin) | `DaytonaSandboxProvider`, `DaytonaBackend`, `DaytonaProjectRepo` |
-| `@catamorphic/flue` | Backend (plugin) | `FlueCodingAgent` (flagship coding agent, server-side Flue harness), `catamorphicSandbox`, `defineSkill`, `defineTool`, `registerProvider` |
+| `@catamorphic/ai-sdk` | Backend (plugin) | `AiSdkCodingAgent` (flagship coding agent, in-process AI SDK `ToolLoopAgent` with remote sandbox tools) |
 | `@catamorphic/codex` | Backend (plugin) | `CodexAgent` (Codex SDK coding agent) |
 | `@catamorphic/plugins` | Backend (optional) | `LocalPluginResolver`, `PluginManifestSchema`, `PluginResolver` |
 | `@catamorphic/fastify-plugin` | Backend (HTTP path) | `catamorphicPlugin` (mountable, encapsulated), `createApp({ core })` app factory |

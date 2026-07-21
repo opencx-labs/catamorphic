@@ -18,7 +18,7 @@ import {
  * the project checkout the agent should edit lives on the same filesystem
  * as the server (or when the host itself is the isolation boundary, e.g. a
  * CI runner). For agents that drive a remote dev sandbox, see
- * `@catamorphic/flue`.
+ * `@catamorphic/ai-sdk`.
  */
 export class CodexAgent implements CodingAgentProvider {
   readonly name = "codex";

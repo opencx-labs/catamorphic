@@ -130,8 +130,8 @@ interface AgentSessionsDeps {
  * 1. Ensures a per-(project, user) **dev sandbox** exists and contains the
  *    user's current working-copy state (cloned from the project origin when
  *    it is in sync, uploaded otherwise).
- * 2. Starts a session with the pluggable {@link CodingAgentProvider} (Flue,
- *    Codex, or host-supplied) pointed at the sandbox project directory.
+ * 2. Starts a session with the pluggable {@link CodingAgentProvider} pointed
+ *    at the sandbox project directory.
  * 3. Persists the conversation to `agent_sessions` / `agent_messages`.
  * 4. After each assistant turn, syncs files the agent changed inside the
  *    sandbox back into the user's dev working copy as an uncommitted draft —

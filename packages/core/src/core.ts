@@ -35,8 +35,8 @@ export interface CatamorphicCoreConfig {
   sandboxProvider?: SandboxProvider;
   pluginResolver?: PluginResolver;
   /**
-   * Pluggable coding agent (e.g. `FlueCodingAgent` from `@catamorphic/flue`,
-   * `CodexAgent` from `@catamorphic/codex`, or a host-supplied
+   * Pluggable coding agent (e.g. `AiSdkCodingAgent` from
+   * `@catamorphic/ai-sdk`, `CodexAgent` from `@catamorphic/codex`, or a host-supplied
    * implementation). Requires `sandboxProvider` — agent sessions operate on a
    * per-(project, user) dev sandbox.
    */

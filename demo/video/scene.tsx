@@ -35,7 +35,7 @@ const CHAPTERS: Chapter[] = [
     duration: clipDurations.c2,
     step: "02",
     title: "Ask the AI agent to build a workflow",
-    sub: "Flue writes real code in a Cloudflare dev sandbox (sped up)",
+    sub: "The AI agent writes real code in a Cloudflare dev sandbox (sped up)",
   },
   {
     src: "/c3.mp4",

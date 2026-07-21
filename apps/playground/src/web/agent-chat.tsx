@@ -8,7 +8,7 @@ import { useQueryClient } from "@tanstack/react-query";
 import { useEffect, useRef, useState } from "react";
 
 /**
- * Chat panel backed by the playground's Flue coding agent. The agent runs on
+ * Chat panel backed by the playground's AI SDK coding agent. The agent runs on
  * the playground server and edits the project inside the Cloudflare dev
  * sandbox; changes land in the dev working copy as an uncommitted draft, so
  * after each turn the project file queries are refreshed.
