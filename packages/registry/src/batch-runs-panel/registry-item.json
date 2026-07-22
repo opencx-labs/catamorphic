@@ -4,7 +4,7 @@
   "type": "registry:component",
   "description": "Monitor batch workflow progress, filter items, inspect errors, and cancel active batches.",
   "dependencies": ["@catamorphic/react"],
-  "registryDependencies": ["catamorphic-provider"],
+  "registryDependencies": ["@catamorphic/catamorphic-provider"],
   "files": [
     {
       "path": "components/catamorphic/batch-runs-panel.tsx",

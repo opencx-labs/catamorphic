@@ -4,7 +4,7 @@
   "type": "registry:component",
   "description": "Three-pane project editor: file tree, code editor slot (plug in your monaco/codemirror), and git panel. Uses useProjectFiles + useProjectGit + useWriteProjectFile.",
   "dependencies": ["@catamorphic/react"],
-  "registryDependencies": ["catamorphic-provider"],
+  "registryDependencies": ["@catamorphic/catamorphic-provider"],
   "files": [
     {
       "path": "components/catamorphic/project-editor.tsx",

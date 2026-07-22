@@ -9,7 +9,9 @@
   },
   "dependencies": {
     "@catamorphic/react": "workspace:*",
-    "@catamorphic/ui": "workspace:*"
+    "@catamorphic/ui": "workspace:*",
+    "lucide-react": "^1.24.0",
+    "use-stick-to-bottom": "^1.1.6"
   },
   "peerDependencies": {
     "@tanstack/react-query": "^5",

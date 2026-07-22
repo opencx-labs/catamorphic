@@ -308,14 +308,29 @@ export class AgentSessionsService {
       await this.commitBatchWorkflowSkillBaseline(sandboxProviderId);
     }
 
-    await this.db
-      .insertInto("agent_messages")
-      .values({
-        session_id: sessionId,
-        role: "user",
-        content: message,
-      })
-      .execute();
+    const assistantMessageId = await this.db
+      .transaction()
+      .execute(async (trx) => {
+        await trx
+          .insertInto("agent_messages")
+          .values({
+            session_id: sessionId,
+            role: "user",
+            content: message,
+          })
+          .execute();
+        const assistant = await trx
+          .insertInto("agent_messages")
+          .values({
+            session_id: sessionId,
+            role: "assistant",
+            content: "Thinking...",
+            metadata: progressMetadata([]),
+          })
+          .returning("id")
+          .executeTakeFirstOrThrow();
+        return assistant.id;
+      });
 
     const providerSession: ProviderSession = {
       providerSessionId: session.provider_session_id ?? "",
@@ -325,56 +340,79 @@ export class AgentSessionsService {
 
     const events: AgentEvent[] = [];
     const textParts: string[] = [];
-    for await (const event of this.codingAgent.sendMessage(
-      providerSession,
-      message,
-    )) {
-      events.push(event);
-      if (event.type === "text" && event.content) {
-        textParts.push(event.content);
+    try {
+      for await (const event of this.codingAgent.sendMessage(
+        providerSession,
+        message,
+      )) {
+        events.push(event);
+        if (event.type === "text" && event.content) {
+          textParts.push(event.content);
+        }
+        if (event.type !== "done") {
+          await this.db
+            .updateTable("agent_messages")
+            .set({
+              content: activityLabel(event),
+              metadata: progressMetadata(events),
+            })
+            .where("id", "=", assistantMessageId)
+            .execute();
+        }
       }
+
+      const changedFiles = await this.syncBackChanges(
+        identity,
+        projectId,
+        sandboxProviderId,
+      );
+
+      const content =
+        textParts.join("\n\n") ||
+        events
+          .filter((event) => event.type === "error")
+          .map((event) => event.content)
+          .join("\n") ||
+        "(no response)";
+
+      const failed = events.some((event) => event.type === "error");
+      const metadata: JsonObject = {
+        status: failed ? "failed" : "completed",
+        events: JSON.parse(JSON.stringify(events)) as JsonObject[],
+        changedFiles: changedFiles.map((change) => ({ ...change })),
+      };
+
+      const row = await this.db
+        .updateTable("agent_messages")
+        .set({ content, metadata })
+        .where("id", "=", assistantMessageId)
+        .returningAll()
+        .executeTakeFirstOrThrow();
+
+      await this.db
+        .updateTable("agent_sessions")
+        .set({
+          updated_at: new Date(),
+          ...(session.title === null ? { title: truncate(message, 500) } : {}),
+        })
+        .where("id", "=", sessionId)
+        .execute();
+
+      return mapMessage(row);
+    } catch (error) {
+      await this.db
+        .updateTable("agent_messages")
+        .set({
+          content: error instanceof Error ? error.message : String(error),
+          metadata: {
+            status: "failed",
+            events: JSON.parse(JSON.stringify(events)) as JsonObject[],
+          },
+        })
+        .where("id", "=", assistantMessageId)
+        .execute();
+      throw error;
     }
-
-    const changedFiles = await this.syncBackChanges(
-      identity,
-      projectId,
-      sandboxProviderId,
-    );
-
-    const content =
-      textParts.join("\n\n") ||
-      events
-        .filter((e) => e.type === "error")
-        .map((e) => e.content)
-        .join("\n") ||
-      "(no response)";
-
-    const metadata: JsonObject = {
-      events: JSON.parse(JSON.stringify(events)) as JsonObject[],
-      changedFiles: changedFiles.map((change) => ({ ...change })),
-    };
-
-    const row = await this.db
-      .insertInto("agent_messages")
-      .values({
-        session_id: sessionId,
-        role: "assistant",
-        content,
-        metadata,
-      })
-      .returningAll()
-      .executeTakeFirstOrThrow();
-
-    await this.db
-      .updateTable("agent_sessions")
-      .set({
-        updated_at: new Date(),
-        ...(session.title === null ? { title: truncate(message, 500) } : {}),
-      })
-      .where("id", "=", sessionId)
-      .execute();
-
-    return mapMessage(row);
   }
 
   async close(
@@ -616,6 +654,28 @@ export class AgentSessionsService {
     if (!row) throw new AgentSessionNotFoundError(sessionId);
     return row;
   }
+}
+
+function progressMetadata(events: AgentEvent[]): JsonObject {
+  return {
+    status: "in_progress",
+    events: JSON.parse(JSON.stringify(events)) as JsonObject[],
+  };
+}
+
+export function activityLabel(event: AgentEvent): string {
+  if (event.type === "file_edit") {
+    return event.filePath ? `Editing ${event.filePath}` : "Editing files...";
+  }
+  if (event.type === "command") {
+    return event.content ? `Running ${event.content}` : "Running a command...";
+  }
+  if (event.type === "tool_call") {
+    return event.toolName ? `Using ${event.toolName}` : "Using a tool...";
+  }
+  if (event.type === "error") return event.content ?? "Agent failed";
+  if (event.type === "text") return event.content ?? "Thinking...";
+  return "Thinking...";
 }
 
 interface PorcelainChange {

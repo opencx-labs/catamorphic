@@ -9,12 +9,17 @@ import {
 import { useCatamorphic } from "../provider.js";
 import type { AgentSessionDetail } from "../types.js";
 
+export interface UseAgentSessionOptions {
+  refetchInterval?: number | false;
+}
+
 /**
  * Single agent session detail (with messages).
  */
 export function useAgentSession(
   projectId: string | undefined,
   sessionId: string | undefined,
+  options: UseAgentSessionOptions = {},
 ): UseQueryResult<AgentSessionDetail, CatamorphicError> {
   const { apiClient } = useCatamorphic();
   return useQuery<AgentSessionDetail, CatamorphicError>({
@@ -35,5 +40,6 @@ export function useAgentSession(
         return assertApiOk(result, "Agent session response empty");
       }),
     enabled: Boolean(projectId && sessionId),
+    refetchInterval: options.refetchInterval,
   });
 }

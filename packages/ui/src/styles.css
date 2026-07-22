@@ -1,5 +1,359 @@
 @import "@xyflow/react/dist/style.css";
 
+/* Agent chat dock */
+.catamorphic-agent-dock {
+  --agent-dock-border: #303030;
+  --agent-dock-surface: rgba(18, 18, 18, 0.96);
+  --agent-dock-muted: #8a8a8a;
+  display: flex;
+  flex-direction: column;
+  width: min(760px, 100%);
+  color: #f5f5f5;
+  font-family: system-ui, -apple-system, sans-serif;
+  filter: drop-shadow(0 18px 45px rgba(0, 0, 0, 0.42));
+}
+
+.catamorphic-agent-dock-live {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+}
+
+.catamorphic-agent-dock-panel {
+  display: flex;
+  flex-direction: column;
+  height: 0;
+  min-height: 0;
+  margin: 0 10px;
+  overflow: hidden;
+  visibility: hidden;
+  border: 0 solid var(--agent-dock-border);
+  border-bottom: 0;
+  border-radius: 16px 16px 0 0;
+  background: var(--agent-dock-surface);
+  opacity: 0;
+  backdrop-filter: blur(18px);
+  pointer-events: none;
+  transform: translateY(10px) scale(0.985);
+  transform-origin: bottom center;
+  transition:
+    height 180ms cubic-bezier(0.22, 1, 0.36, 1),
+    min-height 180ms cubic-bezier(0.22, 1, 0.36, 1),
+    margin 180ms cubic-bezier(0.22, 1, 0.36, 1),
+    border-width 180ms cubic-bezier(0.22, 1, 0.36, 1),
+    opacity 130ms ease-in,
+    transform 180ms cubic-bezier(0.22, 1, 0.36, 1),
+    visibility 0s linear 180ms;
+}
+
+.catamorphic-agent-dock.is-expanded .catamorphic-agent-dock-panel {
+  height: min(520px, calc(100vh - 190px));
+  min-height: 280px;
+  margin: 0 10px -1px;
+  visibility: visible;
+  border-width: 1px;
+  opacity: 1;
+  pointer-events: auto;
+  transform: translateY(0) scale(1);
+  transition:
+    height 220ms cubic-bezier(0.22, 1, 0.36, 1),
+    min-height 220ms cubic-bezier(0.22, 1, 0.36, 1),
+    margin 220ms cubic-bezier(0.22, 1, 0.36, 1),
+    border-width 220ms cubic-bezier(0.22, 1, 0.36, 1),
+    opacity 160ms ease-out,
+    transform 220ms cubic-bezier(0.22, 1, 0.36, 1),
+    visibility 0s;
+}
+
+.catamorphic-agent-dock-header,
+.catamorphic-agent-dock-bar,
+.catamorphic-agent-dock-heading,
+.catamorphic-agent-dock-actions,
+.catamorphic-agent-dock-summary,
+.catamorphic-agent-dock-composer,
+.catamorphic-agent-dock-working {
+  display: flex;
+  align-items: center;
+}
+
+.catamorphic-agent-dock-queued {
+  margin-left: auto;
+  color: #737373;
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+
+.catamorphic-agent-dock-header {
+  flex: 0 0 auto;
+  justify-content: space-between;
+  min-height: 48px;
+  padding: 0 14px;
+  border-bottom: 1px solid #282828;
+}
+
+.catamorphic-agent-dock-heading {
+  gap: 9px;
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+}
+
+.catamorphic-agent-dock-mark,
+.catamorphic-agent-dock-status {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  flex: 0 0 auto;
+  border: 1px solid #3a3a3a;
+  border-radius: 50%;
+  background: #222;
+  color: #d4d4d4;
+}
+
+.catamorphic-agent-dock-actions {
+  gap: 4px;
+}
+
+.catamorphic-agent-dock-actions button,
+.catamorphic-agent-dock-send,
+.catamorphic-agent-dock-expand,
+.catamorphic-agent-dock-scroll {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  padding: 0;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  color: #a3a3a3;
+  cursor: pointer;
+}
+
+.catamorphic-agent-dock-actions button:hover:not(:disabled) {
+  background: #292929;
+  color: #fff;
+}
+
+.catamorphic-agent-dock-conversation {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.catamorphic-agent-dock-messages {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  min-height: 100%;
+  padding: 16px 18px 22px;
+}
+
+.catamorphic-agent-dock-empty {
+  max-width: 420px;
+  margin: auto;
+  color: #777;
+  font-size: 13px;
+  line-height: 1.55;
+  text-align: center;
+}
+
+.catamorphic-agent-dock-message {
+  max-width: min(82%, 620px);
+}
+
+.catamorphic-agent-dock-message.is-user {
+  align-self: flex-end;
+  padding: 9px 12px;
+  border: 1px solid #36445e;
+  border-radius: 12px 12px 3px 12px;
+  background: #1c2638;
+}
+
+.catamorphic-agent-dock-message.is-assistant,
+.catamorphic-agent-dock-message.is-system {
+  align-self: flex-start;
+}
+
+.catamorphic-agent-dock-role {
+  margin-bottom: 4px;
+  color: #717171;
+  font-size: 10px;
+  font-weight: 650;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.catamorphic-agent-dock-content {
+  font-size: 13px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.catamorphic-agent-dock-working {
+  gap: 8px;
+  color: #a3a3a3;
+  font-size: 12px;
+}
+
+.catamorphic-agent-dock-working svg,
+.catamorphic-agent-dock-send svg.lucide-loader-circle {
+  animation: catamorphic-agent-spin 900ms linear infinite;
+}
+
+.catamorphic-agent-dock-shimmer {
+  color: transparent;
+  background: linear-gradient(90deg, #737373 10%, #f5f5f5 42%, #737373 72%);
+  background-size: 220% 100%;
+  background-clip: text;
+  animation: catamorphic-agent-shimmer 1.7s linear infinite;
+}
+
+.catamorphic-agent-dock-error {
+  padding: 8px 10px;
+  border: 1px solid #7f1d1d;
+  border-radius: 8px;
+  background: rgba(127, 29, 29, 0.18);
+  color: #fca5a5;
+  font-size: 12px;
+}
+
+.catamorphic-agent-dock-bar {
+  position: relative;
+  z-index: 1;
+  min-height: 62px;
+  padding: 7px;
+  border: 1px solid var(--agent-dock-border);
+  border-radius: 15px;
+  background: var(--agent-dock-surface);
+  backdrop-filter: blur(18px);
+}
+
+.catamorphic-agent-dock.is-expanded .catamorphic-agent-dock-bar {
+  border-radius: 0 0 15px 15px;
+}
+
+.catamorphic-agent-dock-composer {
+  min-width: 230px;
+  flex: 1;
+  gap: 7px;
+  padding: 0 4px 0 10px;
+}
+
+.catamorphic-agent-dock-composer textarea {
+  width: 100%;
+  min-width: 0;
+  max-height: 84px;
+  field-sizing: content;
+  resize: none;
+  padding: 8px 2px;
+  border: 0;
+  outline: 0;
+  background: transparent;
+  color: #f5f5f5;
+  font: inherit;
+  font-size: 13px;
+  line-height: 1.35;
+}
+
+.catamorphic-agent-dock-composer:focus-within {
+  box-shadow: inset 0 -1px 0 #737373;
+}
+
+.catamorphic-agent-dock-composer textarea::placeholder {
+  color: #666;
+}
+
+.catamorphic-agent-dock-send {
+  flex: 0 0 auto;
+  border-radius: 9px;
+  background: #f5f5f5;
+  color: #111;
+}
+
+.catamorphic-agent-dock-expand {
+  flex: 0 0 auto;
+  color: #8a8a8a;
+}
+
+.catamorphic-agent-dock-expand:hover:not(:disabled) {
+  background: #292929;
+  color: #fff;
+}
+
+.catamorphic-agent-dock-scroll {
+  position: absolute;
+  right: 18px;
+  bottom: 14px;
+  border: 1px solid #3a3a3a;
+  border-radius: 999px;
+  background: #1b1b1b;
+  color: #d4d4d4;
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.35);
+}
+
+.catamorphic-agent-dock-send:disabled,
+.catamorphic-agent-dock-actions button:disabled {
+  opacity: 0.35;
+  cursor: default;
+}
+
+@keyframes catamorphic-agent-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@keyframes catamorphic-agent-shimmer {
+  to {
+    background-position: -220% 0;
+  }
+}
+
+@media (max-width: 680px) {
+  .catamorphic-agent-dock {
+    width: 100%;
+  }
+
+  .catamorphic-agent-dock-panel {
+    margin-inline: 0;
+  }
+
+  .catamorphic-agent-dock.is-expanded .catamorphic-agent-dock-panel {
+    height: min(68vh, calc(100vh - 130px));
+    margin-inline: 0;
+  }
+
+  .catamorphic-agent-dock-bar {
+    align-items: stretch;
+    flex-direction: column;
+    gap: 4px;
+  }
+
+  .catamorphic-agent-dock-composer {
+    min-width: 0;
+    flex-basis: auto;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .catamorphic-agent-dock-panel,
+  .catamorphic-agent-dock-working svg,
+  .catamorphic-agent-dock-send svg.lucide-loader-circle,
+  .catamorphic-agent-dock-shimmer {
+    animation: none;
+    transition: none;
+  }
+}
+
 .catamorphic-editor {
   display: flex;
   flex-direction: column;

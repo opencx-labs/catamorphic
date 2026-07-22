@@ -31,3 +31,4 @@ Settled design decisions live here as short Architecture Decision Records. They 
 | [0016](0016-durable-runtime-event-reporting.md) | Durable runtime event reporting | Accepted |
 | [0017](0017-public-workflow-authoring-package.md) | Public workflow authoring package | Accepted |
 | [0018](0018-ai-sdk-coding-agent.md) | AI SDK ToolLoopAgent is the flagship coding agent | Accepted |
+| [0019](0019-headless-agent-chat-and-dock.md) | Agent chat is headless state plus a controlled dock | Accepted |

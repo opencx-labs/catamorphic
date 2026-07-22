@@ -18,6 +18,11 @@ npx shadcn add ./node_modules/@catamorphic/registry/dist/r/catamorphic-provider.
 The `batch-runs-panel` item provides batch progress, throughput, item status
 filters, errors, cancellation, and an artifact rendering slot.
 
+The `agent-chat` item is a complete bottom-docked coding-agent conversation.
+It needs only a `projectId` inside `CatamorphicAppProvider`; optimistic queued
+messages, live Thinking/editing/command activity, changed-file chips, and
+conversation expansion are included.
+
 For production, hosts typically serve `packages/registry/dist/r/` from their own static-asset pipeline and point the shadcn CLI at that URL; none of this runs in end-user production traffic — registry items are build-time scaffolding that lands as React code inside the host repo.
 
 ## Layout

@@ -29,6 +29,10 @@ export {
   selectedNodeIdAtom,
   showRunDialogAtom,
 } from "./atoms.js";
+export {
+  type UseAgentChatResult,
+  useAgentChat,
+} from "./hooks/use-agent-chat.js";
 export { useAgentSession } from "./hooks/use-agent-session.js";
 // Agent (Track A)
 export {

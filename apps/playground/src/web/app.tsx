@@ -5,7 +5,7 @@ import {
   useWorkflows,
 } from "@catamorphic/react";
 import { useState } from "react";
-import { AgentChatPanel } from "./agent-chat.js";
+import { AgentChat } from "@/components/catamorphic/agent-chat.js";
 import { WorkflowScreen } from "./workflow-screen.js";
 
 export function App() {
@@ -55,7 +55,11 @@ export function App() {
             </div>
           )}
         </main>
-        {activeProjectId && <AgentChatPanel projectId={activeProjectId} />}
+        {activeProjectId && (
+          <div className="pg-agent-dock">
+            <AgentChat key={activeProjectId} projectId={activeProjectId} />
+          </div>
+        )}
       </div>
     </div>
   );
