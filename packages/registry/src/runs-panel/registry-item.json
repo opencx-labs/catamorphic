@@ -4,7 +4,7 @@
   "type": "registry:component",
   "description": "List recent workflow runs + Trigger button. Uses useWorkflowRuns and useTriggerWorkflowRun.",
   "dependencies": ["@catamorphic/react"],
-  "registryDependencies": ["catamorphic-provider"],
+  "registryDependencies": ["@catamorphic/catamorphic-provider"],
   "files": [
     {
       "path": "components/catamorphic/runs-panel.tsx",

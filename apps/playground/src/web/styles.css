@@ -1,3 +1,5 @@
+@import "tailwindcss";
+
 * {
   box-sizing: border-box;
 }
@@ -47,6 +49,7 @@ body {
 }
 
 .pg-main {
+  position: relative;
   flex: 1;
   min-height: 0;
   display: flex;
@@ -154,77 +157,19 @@ body {
   font-size: 12px;
 }
 
-.pg-chat {
-  width: 320px;
-  flex-shrink: 0;
+.pg-agent-dock {
+  position: absolute;
+  z-index: 20;
+  right: 18px;
+  bottom: 16px;
+  left: 278px;
   display: flex;
-  flex-direction: column;
-  border-left: 1px solid #262626;
-  background: #0f0f0f;
+  justify-content: center;
+  pointer-events: none;
 }
 
-.pg-chat-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 10px 12px;
-  border-bottom: 1px solid #1c1c1c;
-  font-size: 12px;
-  font-weight: 600;
-  text-transform: uppercase;
-  letter-spacing: 0.06em;
-  color: #737373;
-}
-
-.pg-chat-new {
-  padding: 3px 8px;
-  border: 1px solid #333;
-  border-radius: 6px;
-  background: transparent;
-  color: #a3a3a3;
-  font-size: 11px;
-  cursor: pointer;
-}
-
-.pg-chat-messages {
-  flex: 1;
-  min-height: 0;
-  overflow-y: auto;
-  padding: 12px;
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-}
-
-.pg-chat-hint {
-  margin: 0;
-  color: #737373;
-  font-size: 12px;
-}
-
-.pg-chat-message {
-  border-radius: 8px;
-  padding: 8px 10px;
-  background: #171717;
-}
-
-.pg-chat-message.user {
-  background: #1e293b;
-}
-
-.pg-chat-role {
-  font-size: 10px;
-  font-weight: 600;
-  text-transform: uppercase;
-  letter-spacing: 0.06em;
-  color: #737373;
-  margin-bottom: 4px;
-}
-
-.pg-chat-content {
-  font-size: 13px;
-  white-space: pre-wrap;
-  word-break: break-word;
+.pg-agent-dock > * {
+  pointer-events: auto;
 }
 
 .pg-chat-files {
@@ -244,22 +189,24 @@ body {
   font-family: ui-monospace, monospace;
 }
 
-.pg-chat-composer {
-  display: flex;
-  gap: 6px;
-  padding: 10px 12px;
-  border-top: 1px solid #1c1c1c;
+@media (max-width: 760px) {
+  .pg-sidebar {
+    width: 210px;
+  }
+
+  .pg-agent-dock {
+    right: 10px;
+    bottom: 10px;
+    left: 220px;
+  }
 }
 
-.pg-chat-composer textarea {
-  flex: 1;
-  min-width: 0;
-  resize: none;
-  padding: 6px 8px;
-  border: 1px solid #333;
-  border-radius: 6px;
-  background: #171717;
-  color: #fafafa;
-  font-size: 13px;
-  font-family: inherit;
+@media (max-width: 540px) {
+  .pg-sidebar {
+    width: 160px;
+  }
+
+  .pg-agent-dock {
+    left: 170px;
+  }
 }

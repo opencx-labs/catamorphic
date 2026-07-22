@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import {
+  activityLabel,
   buildAgentSystemPrompt,
   ensureBatchWorkflowSkill,
   parsePorcelain,
@@ -9,6 +10,21 @@ import {
   SEED_SKILLS,
   TEMPLATES,
 } from "../templates.js";
+
+describe("activityLabel", () => {
+  it("describes thinking, file edits, commands, and tools", () => {
+    expect(activityLabel({ type: "done" })).toBe("Thinking...");
+    expect(
+      activityLabel({ type: "file_edit", filePath: "src/workflow.ts" }),
+    ).toBe("Editing src/workflow.ts");
+    expect(activityLabel({ type: "command", content: "bun test" })).toBe(
+      "Running bun test",
+    );
+    expect(activityLabel({ type: "tool_call", toolName: "read" })).toBe(
+      "Using read",
+    );
+  });
+});
 
 describe("parsePorcelain", () => {
   it("parses modified, added, untracked, and deleted entries", () => {

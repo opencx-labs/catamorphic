@@ -1,3 +1,8 @@
+export type {
+  AgentChatDockMessage,
+  AgentChatDockProps,
+} from "./agent-chat-dock.js";
+export { AgentChatDock } from "./agent-chat-dock.js";
 export type { AIBarProps } from "./ai-bar.js";
 export { AIBar } from "./ai-bar.js";
 export { WorkflowCanvas } from "./canvas.js";

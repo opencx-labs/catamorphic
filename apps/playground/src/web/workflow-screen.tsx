@@ -10,7 +10,7 @@ import {
   useWriteProjectFile,
 } from "@catamorphic/react";
 import { WorkflowEditor } from "@catamorphic/ui";
-import { useCallback, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { BatchRunsPanel } from "./batch-runs-panel.js";
 import { MonacoCodeEditor } from "./monaco-editor.js";
 
@@ -69,6 +69,12 @@ function WorkflowScreenInner({
   initialCode: string;
 }) {
   const [code, setCode] = useState(initialCode);
+  const previousInitialCode = useRef(initialCode);
+  useEffect(() => {
+    const previous = previousInitialCode.current;
+    previousInitialCode.current = initialCode;
+    setCode((current) => (current === previous ? initialCode : current));
+  }, [initialCode]);
   const { apiClient } = useCatamorphic();
 
   const onParse = useOnParse({
