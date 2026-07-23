@@ -59,10 +59,15 @@ export function AgentChatDock({
   const [draft, setDraft] = useState("");
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [submissionError, setSubmissionError] = useState<string | null>(null);
-  const latestMessage = messages.at(-1);
-  const busy = isWorking || isSubmitting;
+  const pendingAssistant = latestPendingAssistant(messages);
+  const conversationMessages = messages.filter(
+    (message) => !isPendingAssistant(message),
+  );
+  const latestMessage = conversationMessages.at(-1);
+  const busy = isWorking || isSubmitting || pendingAssistant !== undefined;
+  const activeWorkingLabel = pendingAssistant?.content || workingLabel;
   const statusText = busy
-    ? workingLabel
+    ? activeWorkingLabel
     : (error ??
       submissionError ??
       collapsedSummary ??
@@ -148,10 +153,10 @@ export function AgentChatDock({
           role="log"
         >
           <StickToBottom.Content className="catamorphic-agent-dock-messages">
-            {messages.length === 0 && !busy && (
+            {conversationMessages.length === 0 && !busy && (
               <div className="catamorphic-agent-dock-empty">{emptyState}</div>
             )}
-            {messages.map((message) => (
+            {conversationMessages.map((message) => (
               <article
                 key={message.id}
                 className={`catamorphic-agent-dock-message is-${message.role}`}
@@ -173,7 +178,7 @@ export function AgentChatDock({
               <div className="catamorphic-agent-dock-working">
                 <LoaderCircle size={14} aria-hidden="true" />
                 <span className="catamorphic-agent-dock-shimmer">
-                  {workingLabel}
+                  {activeWorkingLabel}
                 </span>
                 {queuedMessageCount > 1 && (
                   <span className="catamorphic-agent-dock-queued">
@@ -225,6 +230,28 @@ export function AgentChatDock({
         </form>
       </div>
     </section>
+  );
+}
+
+function latestPendingAssistant(
+  messages: readonly AgentChatDockMessage[],
+): AgentChatDockMessage | undefined {
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const message = messages[index];
+    if (message?.role === "assistant") {
+      return isPendingAssistant(message) ? message : undefined;
+    }
+  }
+  return undefined;
+}
+
+function isPendingAssistant(message: AgentChatDockMessage): boolean {
+  return (
+    message.role === "assistant" &&
+    typeof message.metadata === "object" &&
+    message.metadata !== null &&
+    "status" in message.metadata &&
+    message.metadata.status === "in_progress"
   );
 }
 
