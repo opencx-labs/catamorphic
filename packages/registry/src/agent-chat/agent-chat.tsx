@@ -10,7 +10,7 @@ import {
   Minimize2,
   Plus,
 } from "lucide-react";
-import { type FormEvent, type KeyboardEvent, useState } from "react";
+import { type FormEvent, type KeyboardEvent, useEffect, useState } from "react";
 import { StickToBottom, useStickToBottomContext } from "use-stick-to-bottom";
 
 export interface AgentChatProps {
@@ -29,8 +29,14 @@ export function AgentChat({
   const chat = useAgentChat(projectId);
   const [expanded, setExpanded] = useState(false);
   const [draft, setDraft] = useState("");
-  const messages = [...chat.messages, ...chat.optimisticMessages];
-  const activity = latestActivity(chat.messages) ?? "Thinking...";
+  const messages = [...chat.messages, ...chat.optimisticMessages].filter(
+    isConversationMessage,
+  );
+  const pendingAssistant = latestPendingAssistant(chat.messages);
+  const activity = pendingAssistant?.content ?? "Thinking...";
+  const showActivity =
+    pendingAssistant !== undefined ||
+    (chat.isSending && chat.optimisticMessages.length > 0);
 
   const submit = (event?: FormEvent) => {
     event?.preventDefault();
@@ -58,7 +64,9 @@ export function AgentChat({
       aria-label={title}
     >
       <span className="sr-only" aria-live="polite">
-        {chat.isSending ? activity : latestAssistant(chat.messages)?.content}
+        {showActivity
+          ? activity
+          : latestConversationAssistant(chat.messages)?.content}
       </span>
       <div
         className={`origin-bottom overflow-hidden rounded-t-2xl border-neutral-700/80 bg-neutral-950/95 backdrop-blur-xl transition-[height,opacity,transform,margin,border-width] duration-200 ease-out ${
@@ -106,7 +114,7 @@ export function AgentChat({
           role="log"
         >
           <StickToBottom.Content className="flex min-h-full flex-col gap-3 p-5">
-            {messages.length === 0 && !chat.isSending && (
+            {messages.length === 0 && !showActivity && (
               <div className="m-auto max-w-sm text-center text-sm leading-6 text-neutral-500">
                 Ask the agent to build or change your project.
               </div>
@@ -114,7 +122,7 @@ export function AgentChat({
             {messages.map((message) => (
               <Message key={message.id} message={message} />
             ))}
-            {chat.isSending && (
+            {showActivity && (
               <div className="flex items-center gap-2 text-xs text-neutral-400">
                 <LoaderCircle className="size-4 animate-spin" />
                 <span className="animate-pulse">{activity}</span>
@@ -178,9 +186,16 @@ export function AgentChat({
 
 function Message({ message }: { message: ChatMessage }) {
   const files = changedFiles(message);
+  const [entered, setEntered] = useState(false);
+
+  useEffect(() => {
+    const frame = requestAnimationFrame(() => setEntered(true));
+    return () => cancelAnimationFrame(frame);
+  }, []);
+
   return (
     <article
-      className={`max-w-[85%] text-sm ${message.role === "user" ? "ml-auto rounded-xl rounded-br-sm border-[1px] border-blue-900 bg-blue-950/50 px-3 py-2" : "mr-auto"}`}
+      className={`max-w-[85%] text-sm motion-safe:transition-[opacity,transform] motion-safe:duration-200 motion-safe:ease-out ${entered ? "motion-safe:translate-y-0 motion-safe:opacity-100" : "motion-safe:translate-y-1 motion-safe:opacity-0"} ${message.role === "user" ? "ml-auto rounded-xl rounded-br-sm border-[1px] border-blue-900 bg-blue-950/50 px-3 py-2" : "mr-auto"}`}
     >
       <div className="mb-1 text-[10px] font-semibold uppercase tracking-wider text-neutral-600">
         {message.role === "user" ? "You" : "Agent"}
@@ -211,21 +226,35 @@ type ChatMessage = {
   metadata?: unknown;
 };
 
-function latestAssistant(messages: AgentMessage[]): AgentMessage | undefined {
+function latestConversationAssistant(
+  messages: AgentMessage[],
+): AgentMessage | undefined {
   for (let index = messages.length - 1; index >= 0; index -= 1) {
     const message = messages[index];
-    if (message?.role === "assistant") return message;
+    if (message?.role === "assistant" && isConversationMessage(message)) {
+      return message;
+    }
   }
   return undefined;
 }
 
-function latestActivity(messages: AgentMessage[]): string | undefined {
-  const message = latestAssistant(messages);
-  const metadata = asRecord(message?.metadata);
-  if (metadata?.status === "in_progress" && message?.content) {
-    return message.content;
+function latestPendingAssistant(
+  messages: AgentMessage[],
+): AgentMessage | undefined {
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const message = messages[index];
+    if (message?.role === "assistant") {
+      return isConversationMessage(message) ? undefined : message;
+    }
   }
   return undefined;
+}
+
+function isConversationMessage(message: ChatMessage): boolean {
+  return !(
+    message.role === "assistant" &&
+    asRecord(message.metadata)?.status === "in_progress"
+  );
 }
 
 function changedFiles(message: ChatMessage): string[] {

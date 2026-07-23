@@ -61,6 +61,48 @@ describe("AgentChatDock", () => {
     await waitFor(() => expect(composer).toHaveValue(""));
   });
 
+  it("keeps in-progress assistant content in the working state", () => {
+    const { rerender } = render(
+      <AgentChatDock
+        messages={[
+          {
+            id: "pending",
+            role: "assistant",
+            content: "Thinking...",
+            metadata: { status: "in_progress" },
+          },
+        ]}
+        defaultExpanded
+        onSend={() => {}}
+      />,
+    );
+
+    expect(screen.getAllByText("Thinking...")).toHaveLength(2);
+    expect(document.querySelectorAll("article")).toHaveLength(0);
+
+    rerender(
+      <AgentChatDock
+        messages={[
+          {
+            id: "pending",
+            role: "assistant",
+            content: "Updated the workflow",
+            metadata: { status: "completed" },
+          },
+        ]}
+        defaultExpanded
+        onSend={() => {}}
+      />,
+    );
+
+    expect(screen.getByRole("article")).toHaveTextContent(
+      "Updated the workflow",
+    );
+    expect(screen.getByRole("article")).toHaveClass(
+      "catamorphic-agent-dock-message",
+    );
+  });
+
   it("submits a trimmed message and clears the composer", async () => {
     const onSend = vi.fn(async () => {});
     render(<AgentChatDock messages={[]} onSend={onSend} />);

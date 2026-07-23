@@ -167,6 +167,7 @@
 
 .catamorphic-agent-dock-message {
   max-width: min(82%, 620px);
+  animation: catamorphic-agent-message-enter 200ms ease-out both;
 }
 
 .catamorphic-agent-dock-message.is-user {
@@ -318,6 +319,13 @@
   }
 }
 
+@keyframes catamorphic-agent-message-enter {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+}
+
 @media (max-width: 680px) {
   .catamorphic-agent-dock {
     width: 100%;
@@ -346,6 +354,7 @@
 
 @media (prefers-reduced-motion: reduce) {
   .catamorphic-agent-dock-panel,
+  .catamorphic-agent-dock-message,
   .catamorphic-agent-dock-working svg,
   .catamorphic-agent-dock-send svg.lucide-loader-circle,
   .catamorphic-agent-dock-shimmer {
