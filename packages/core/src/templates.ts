@@ -41,6 +41,8 @@ const pkg = ({
 
 export const BATCH_WORKFLOW_SKILL_PATH =
   ".agents/skills/batch-workflows/SKILL.md";
+export const DURABLE_WORKFLOW_SKILL_PATH =
+  ".agents/skills/durable-workflows/SKILL.md";
 
 /**
  * Per-project agent skills seeded into every project (templates and blank
@@ -52,25 +54,26 @@ export const BATCH_WORKFLOW_SKILL_PATH =
 export const SEED_SKILLS: Record<string, string> = {
   ".agents/skills/writing-workflows/SKILL.md": `---
 name: writing-workflows
-description: Writes and edits regular and batch Catamorphic workflows. Use when creating workflows, adding steps, changing workflow logic, or choosing between single-run and durable item processing.
+description: Writes and edits Catamorphic Workflows using plain functions or persisted boundary and batch scopes. Use when creating workflows, adding steps, changing workflow logic, or choosing capabilities.
 ---
 
 # Writing Workflows
 
-## Determine the workflow kind first
+## Choose the workflow capabilities
 
-Inspect the existing export before editing it and preserve its kind unless the
-user explicitly requests a conversion.
+Inspect the existing export before editing it and preserve its authoring model
+unless the user explicitly requests a conversion.
 
-- **Regular workflow:** an exported async function containing
+- **Plain workflow function:** an exported async function containing
   \`"use workflow"\`. Use for one request, event, entity, or orchestration run.
-- **Batch workflow:** an exported \`defineBatchWorkflow({ source, process,
-  sink? })\`. Use for many durable items that need paging, bounded concurrency,
-  physical batching, retries, progress, pause/resume, or resumable output.
+- **Defined workflow:** an exported \`defineWorkflow(...)\` whose ordered steps
+  use builder-scoped \`defineBoundary\` and \`defineBatch\`. Use boundaries for
+  explicit retries, pauses, or child workflows. Use batches for persisted paged
+  collections, bounded concurrency, physical batching, progress, or resumable
+  output.
 
-Do not add \`"use workflow"\` to a batch definition. Do not wrap a regular
-workflow in \`defineBatchWorkflow\` merely to process an array supplied in one
-request.
+Do not add \`"use workflow"\` to a \`defineWorkflow\` definition. Do not add a
+batch scope merely to process an array supplied in one request.
 
 ## Shared rules
 
@@ -81,7 +84,7 @@ request.
    \`Promise.all\`. The visual graph is derived from this structure.
 4. Put IO and business operations in steps. Keep workflow bodies declarative.
 
-## Regular workflows
+## Plain workflow functions
 
 \`\`\`typescript
 /**
@@ -104,14 +107,14 @@ async function sendGreeting({ to }: { to: string }) {
 }
 \`\`\`
 
-## Batch workflows
+## Paged batch scopes
 
-Read [the batch workflow skill](../batch-workflows/SKILL.md) before creating or
-substantially editing a batch workflow.
+Read [the batch scope skill](../batch-workflows/SKILL.md) before creating or
+substantially editing a \`defineBatch\` scope.
 
 Key rules:
 
-- The source emits stable, unique item keys and uses a durable cursor.
+- The source emits stable, unique item keys and uses a persisted cursor.
 - \`process\` describes one logical item. Regular \`"use step"\` calls still
   execute per item.
 - Use an exported \`defineBatchStep\` only when an operation benefits from
@@ -124,18 +127,24 @@ Key rules:
 - Use \`skipBatchItem({ reason })\` for intentionally ignored items.
 - Preserve source keys, replay behavior, and existing batch policies when
   editing.
+
+## Boundary and pause scopes
+
+Read [the boundary scope skill](../durable-workflows/SKILL.md) before creating
+or substantially editing boundaries, pauses, or child calls. Defined Workflows
+execute in production with persisted continuation state.
 `,
   [BATCH_WORKFLOW_SKILL_PATH]: `---
 name: batch-workflows
-description: Creates and edits durable Catamorphic batch workflows with paged sources, per-item processing, physical batch steps, retries, and idempotent sinks. Use when a workflow handles many items or mentions batches, bulk processing, imports, exports, backfills, or large collections.
+description: Creates and edits Catamorphic defineBatch scopes with paged sources, per-item processing, physical batch steps, retries, and idempotent sinks. Use when a Workflow handles many items or mentions batches, bulk processing, imports, exports, backfills, or large collections.
 ---
 
-# Batch Workflows
+# Paged Batch Scopes
 
 ## Authoring contract
 
-Inspect the project's imports and \`package.json\` before adding a batch
-workflow:
+Inspect the project's imports and \`package.json\` before adding a
+\`defineBatch\` scope:
 
 - If the host provides a workflow wrapper package, import only the primitives
   that wrapper exposes.
@@ -143,7 +152,7 @@ workflow:
   the primitives from it.
 - Never create or copy a local \`src/batch.ts\` implementation.
 
-A batch workflow has three phases:
+A \`defineBatch\` scope has three phases:
 
 1. \`source\` binds trigger input to a paged source.
 2. \`process\` describes one logical item and may suspend at exported batch
@@ -156,7 +165,7 @@ A batch workflow has three phases:
 \`\`\`typescript
 import {
   defineBatchStep,
-  defineBatchWorkflow,
+  defineWorkflow,
   skipBatchItem,
 } from "@catamorphic/workflow";
 
@@ -231,21 +240,25 @@ const resultSink = {
 
 /**
  * @displayname Process Records
- * @description Process a durable collection of records
+ * @description Process a persisted collection of records
  */
-export const processRecords = defineBatchWorkflow({
-  source: ({ input }: { input: { prefix?: string } }) => ({
-    source: recordsSource,
-    config: { prefix: input.prefix },
-  }),
-  process: async ({ item }: { key: string; item: RecordInput }) => {
-    if (item.value.trim() === "") {
-      skipBatchItem({ reason: "Record value is empty" });
-    }
-    return enrichRecords({ record: item });
-  },
-  sink: resultSink,
-});
+export const processRecords = defineWorkflow(({ defineBatch }) => ({
+  steps: [
+    defineBatch({
+      source: ({ input }: { input: { prefix?: string } }) => ({
+        source: recordsSource,
+        config: { prefix: input.prefix },
+      }),
+      process: async ({ item }: { key: string; item: RecordInput }) => {
+        if (item.value.trim() === "") {
+          skipBatchItem({ reason: "Record value is empty" });
+        }
+        return enrichRecords({ record: item });
+      },
+      sink: resultSink,
+    }),
+  ],
+}));
 \`\`\`
 
 ## Source rules
@@ -253,7 +266,7 @@ export const processRecords = defineBatchWorkflow({
 - \`initialize\` captures a stable snapshot and initial cursor.
 - \`readPage\` honors \`limit\`, returns stable keys, and advances the cursor.
 - If \`done\` is false, return a next cursor.
-- Never use array indexes as keys when the source has a durable identifier.
+- Never use array indexes as keys when the source has a stable identifier.
 
 ## Batch-step rules
 
@@ -270,9 +283,187 @@ export const processRecords = defineBatchWorkflow({
 
 - Treat \`writeBatch\` as retryable and idempotent.
 - Deduplicate by item key or chunk key before producing external side effects.
-- Return every durably written key in \`acknowledgedKeys\`.
+- Return every persistently written key in \`acknowledgedKeys\`.
 - Keep sink state JSON-serializable.
 - \`finalize\` returns the artifact shown to the host application.
+`,
+  [DURABLE_WORKFLOW_SKILL_PATH]: `---
+name: durable-workflows
+description: Creates and edits typed Catamorphic persisted scopes using defineWorkflow, defineBoundary, pause, retries, and child Workflows. Use when a Workflow mentions boundaries, waiting, pausing, resuming, retries, or child Workflows.
+---
+
+# Boundary and Pause Scopes
+
+## Current status
+
+The persisted-scope API is an authoring, visualization, and production-execution
+contract. Each boundary runs as a separate invocation against one immutable
+deployment artifact, while Postgres persists retries, pauses, child workflow
+links, continuation state, and cancellation. Mutable-source test execution is
+not supported, so deploy the Workflow before triggering it.
+
+Import from the project's established SaaS wrapper when it exposes these
+primitives; otherwise import from \`@catamorphic/workflow\`. Never copy the
+helpers into the project.
+
+When an existing direct dependency does not export \`defineWorkflow\`, update
+it to the exact workflow package version used by the host or current template.
+Do not recreate the types locally or bypass the missing API with assertions.
+
+## Capability model
+
+- \`defineWorkflow\` receives a builder callback.
+- \`defineBoundary\` is available only on that builder context.
+- \`pause\` and \`callWorkflow\` are available only in a boundary's
+  \`BoundaryContext\`.
+- A boundary is one atomic retry unit. If an attempt fails, all code in that
+  boundary runs again. Ordinary \`"use step"\` functions called inside it may
+  eventually be visualized, but are not separate persisted checkpoints.
+- A returned transition resolves before the next boundary starts. The resolved
+  value, not the transition object, is the next boundary's input.
+
+## Complete pattern
+
+\`\`\`typescript
+import {
+  type BoundaryContext,
+  defineWorkflow,
+} from "@catamorphic/workflow";
+
+interface OrderInput {
+  orderId: string;
+}
+
+interface PreparedOrder {
+  orderId: string;
+  requestId: string;
+}
+
+interface Approval {
+  approved: boolean;
+}
+
+interface ApprovalState extends PreparedOrder {}
+
+const finishOrder = defineWorkflow(({ defineBoundary }) => ({
+  steps: [
+    defineBoundary({
+      run: async ({ input }: BoundaryContext<PreparedOrder>) => ({
+        orderId: input.orderId,
+        completed: true as const,
+      }),
+    }),
+  ],
+}));
+
+export const approveOrder = defineWorkflow(({ defineBoundary }) => ({
+  controls: { cancel: true },
+  steps: [
+    /**
+     * @displayname Request Approval
+     * @description Create and wait for an approval request
+     * @icon badge-check
+     * @param orderId - @displayname Order ID | @description Order waiting for approval
+     * @param requestedBy - @displayname Requested By | @description User requesting approval
+     */
+    defineBoundary({
+      retry: {
+        maxAttempts: 3,
+        backoff: { initial: "1s", maximum: "30s", multiplier: 2 },
+      },
+      run: async ({ input }: BoundaryContext<OrderInput>) => ({
+        orderId: input.orderId,
+        requestId: \`request-\${input.orderId}\`,
+      }),
+    }),
+    defineBoundary({
+      run: ({ input, pause }: BoundaryContext<PreparedOrder>) =>
+        pause<Approval, ApprovalState>({
+          timeout: "24h",
+          state: input,
+        }),
+    }),
+    defineBoundary({
+      run: ({ input, callWorkflow }: BoundaryContext<
+        | {
+            reason: "resumed";
+            value: Approval;
+            state: ApprovalState;
+          }
+        | { reason: "timed_out"; state: ApprovalState }
+      >) => callWorkflow(finishOrder, { input: input.state }),
+    }),
+  ],
+}));
+\`\`\`
+
+## Strict authoring rules
+
+1. Annotate every callback parameter as \`BoundaryContext<Input>\`. This gives
+   TypeScript a concrete input type for chain validation.
+2. Return \`pause(...)\` and \`callWorkflow(...)\` directly. Never await them,
+   store them for later, or ignore them; they are opaque instructions rather
+   than promises.
+   Destructure each capability from \`BoundaryContext\`; they are not package
+   exports or globals.
+3. Return \`callWorkflow(child, { input })\`, never \`child\` or a newly created
+   \`defineWorkflow(...)\` value.
+4. Keep workflow definitions static at module scope. Do not create workflows or
+   boundaries inside \`run\`.
+5. Boundary inputs and resolved outputs, pause values/state, and child workflow
+   inputs/outputs must be JSON-compatible. Do not cross a boundary with
+   functions, class instances with behavior, dates, maps, sets, promises,
+   streams, or open resources.
+6. Do not use \`any\`, assertions, or \`@ts-ignore\` to bypass workflow errors.
+   Fix the boundary contract instead.
+7. A pause without \`timeout\` can only resolve explicitly. A pause with
+   \`timeout\` returns a union discriminated by \`reason: "resumed" |
+   "timed_out"\`; handle both paths in the following boundary.
+8. Cancellation is an authenticated, terminal host control. Use
+   \`controls: { cancel: true }\` when the definition should declare that
+   control. Never invent \`cancel()\` on \`BoundaryContext\`, and never add a
+   canceled branch to \`PauseResult\`.
+9. The parser requires an exported direct \`defineWorkflow\` call, an inline
+   builder object, an inline \`steps\` array, direct \`defineBoundary\` entries,
+   and inline \`run\` callbacks. Keep these structural parts static.
+10. Workflows with persisted scopes and their boundaries use the same JSDoc
+    metadata as plain functions and steps. Put \`@displayname\`,
+    \`@description\`, \`@icon\`, and
+    \`@param name - @displayname ... | @description ...\` immediately above the
+    exported workflow definition or \`defineBoundary(...)\` array element.
+
+## Understanding compiler errors
+
+The API uses branded internal types, variadic tuples, conditional types, and
+intentional \`__catamorphicWorkflowTypeError\` fields. TypeScript may print a
+large structural error around a small workflow mistake. Find the quoted
+Catamorphic message first, then inspect its details:
+
+- \`Boundary N resolves to a value that boundary N+1 does not accept\` means
+  boundary N's resolved return type is not assignable to the next annotated
+  \`BoundaryContext<Input>\`. Compare \`resolvedOutput\` with \`nextInput\` in
+  the diagnostic. Remember that a pause contributes its \`PauseResult\`, and a
+  child call contributes the child workflow's output.
+- \`A durable boundary input must be JSON-compatible\` means the
+  \`BoundaryContext<Input>\` type cannot be persisted. Replace non-JSON fields
+  with IDs or JSON data.
+- \`A durable boundary must resolve to a JSON-compatible value\` means the
+  callback returned a function, class instance, or other non-persistable value.
+- \`Return callWorkflow(workflow, { input }) instead of returning a workflow
+  definition\` means a static definition was returned as if it were a runtime
+  transition.
+- \`Workflow step N must be created by defineBoundary\` means the \`steps\`
+  tuple contains a function, pause, workflow, promise, or other value instead
+  of a boundary definition.
+- A child-call property error means \`callWorkflow\` inferred the child's exact
+  input. Supply every required field with the correct types; do not cast it.
+- If \`input\` is \`unknown\` or inference becomes recursive, add or correct the
+  explicit \`BoundaryContext<Input>\` annotation. Do not add generic arguments
+  to \`defineWorkflow\` as a workaround.
+
+Fix errors from the earliest boundary first because one incorrect return type
+can cascade through every later tuple element. Run the project's TypeScript
+check after each fix and remove temporary error suppressions.
 `,
 };
 
@@ -672,10 +863,144 @@ async function sendAcknowledgment({ to, ticketId }: { to: string; ticketId: stri
     },
   },
   {
+    id: "durable-order-approval",
+    name: "Order Approval with Retries",
+    description:
+      "Visualize retry boundaries, resumable approval, child workflows, and cancellation",
+    defaultWorkflow: "approveOrder",
+    files: {
+      "package.json": pkg({
+        name: "durable-order-approval",
+        dependencies: {
+          "@catamorphic/workflow": WORKFLOW_PACKAGE_VERSION,
+        },
+      }),
+      "tsconfig.json": SHARED_TSCONFIG,
+      ...SEED_SKILLS,
+      "src/approve-order.ts": `import {
+  type BoundaryContext,
+  defineWorkflow,
+} from "@catamorphic/workflow";
+import { finishOrder } from "./finish-order";
+
+interface OrderInput {
+  orderId: string;
+  requestedBy: string;
+}
+
+interface PreparedOrder {
+  orderId: string;
+  requestId: string;
+}
+
+interface Approval {
+  approved: boolean;
+  reviewerId: string;
+}
+
+/**
+ * @displayname Approve Order
+ * @description Request a resumable approval before finishing an order
+ * @param orderId - @displayname Order ID | @description Order waiting for approval
+ * @param requestedBy - @displayname Requested By | @description User requesting approval
+ */
+export const approveOrder = defineWorkflow(({ defineBoundary }) => ({
+  controls: { cancel: true },
+  steps: [
+    /**
+     * @displayname Request Approval
+     * @description Create and wait for an approval request
+     * @icon badge-check
+     * @param orderId - @displayname Order ID | @description Order waiting for approval
+     * @param requestedBy - @displayname Requested By | @description User requesting approval
+     */
+    defineBoundary({
+      retry: {
+        maxAttempts: 3,
+        backoff: { initial: "1s", maximum: "30s", multiplier: 2 },
+      },
+      run: async ({ input, pause }: BoundaryContext<OrderInput>) => {
+        const prepared = await createApprovalRequest({
+          orderId: input.orderId,
+          requestedBy: input.requestedBy,
+        });
+        return pause<Approval, PreparedOrder>({
+          timeout: "24h",
+          state: prepared,
+        });
+      },
+    }),
+    /**
+     * @displayname Finish Approved Order
+     * @description Continue into the child workflow after approval or timeout
+     * @icon workflow
+     */
+    defineBoundary({
+      run: ({ input, callWorkflow }: BoundaryContext<
+        | { reason: "resumed"; value: Approval; state: PreparedOrder }
+        | { reason: "timed_out"; state: PreparedOrder }
+      >) => callWorkflow(finishOrder, { input: input.state }),
+    }),
+  ],
+}));
+
+/**
+ * @displayname Create Approval Request
+ * @icon badge-check
+ */
+async function createApprovalRequest({
+  orderId,
+  requestedBy,
+}: {
+  orderId: string;
+  requestedBy: string;
+}): Promise<PreparedOrder> {
+  "use step";
+  return { orderId, requestId: \`approval-\${requestedBy}\` };
+}
+`,
+      "src/finish-order.ts": `import {
+  type BoundaryContext,
+  defineWorkflow,
+} from "@catamorphic/workflow";
+
+interface PreparedOrder {
+  orderId: string;
+  requestId: string;
+}
+
+/** @displayname Finish Order */
+export const finishOrder = defineWorkflow(({ defineBoundary }) => ({
+  controls: { cancel: true },
+  steps: [
+    /**
+     * @displayname Finalize Order
+     * @description Mark the approved order complete
+     * @icon badge-check
+     * @param orderId - @displayname Order ID | @description Approved order to finish
+     * @param requestId - @displayname Request ID | @description Completed approval request
+     */
+    defineBoundary({
+      run: async ({ input }: BoundaryContext<PreparedOrder>) => {
+        await markOrderApproved({ orderId: input.orderId });
+        return { orderId: input.orderId, completed: true };
+      },
+    }),
+  ],
+}));
+
+/** @displayname Mark Order Approved @icon badge-check */
+async function markOrderApproved({ orderId }: { orderId: string }) {
+  "use step";
+}
+`,
+    },
+  },
+  {
     id: "customer-feedback-analysis",
     name: "Customer Feedback Analysis",
     description:
-      "Analyze seeded customer feedback in durable batches and produce a summary artifact",
+      "Analyze seeded customer feedback in a paged batch scope and produce a summary artifact",
     defaultWorkflow: "analyzeCustomerFeedback",
     files: {
       "package.json": pkg({
@@ -689,7 +1014,7 @@ async function sendAcknowledgment({ to, ticketId }: { to: string; ticketId: stri
       "src/customer-feedback.ts": `import {
   type BatchConsistency,
   defineBatchStep,
-  defineBatchWorkflow,
+  defineWorkflow,
   skipBatchItem,
 } from "@catamorphic/workflow";
 
@@ -873,30 +1198,34 @@ const summarySink = {
  * @displayname Analyze Customer Feedback
  * @description Classify seeded customer feedback in efficient physical batches
  */
-export const analyzeCustomerFeedback = defineBatchWorkflow({
-  source: ({
-    input,
-  }: {
-    input: { minimumRating?: number };
-  }) => ({
-    source: feedbackSource,
-    config: { minimumRating: input.minimumRating ?? 1 },
-  }),
-  process: async ({
-    item,
-  }: {
-    key: string;
-    item: Feedback;
-  }) => {
-    const validation = await validateFeedback({ feedback: item });
-    if (!validation.valid) {
-      skipBatchItem({ reason: validation.reason });
-    }
-    const normalized = await normalizeFeedback({ feedback: item });
-    return classifyFeedback({ feedback: normalized });
-  },
-  sink: summarySink,
-});
+export const analyzeCustomerFeedback = defineWorkflow(({ defineBatch }) => ({
+  steps: [
+    defineBatch({
+      source: ({
+        input,
+      }: {
+        input: { minimumRating?: number };
+      }) => ({
+        source: feedbackSource,
+        config: { minimumRating: input.minimumRating ?? 1 },
+      }),
+      process: async ({
+        item,
+      }: {
+        key: string;
+        item: Feedback;
+      }) => {
+        const validation = await validateFeedback({ feedback: item });
+        if (!validation.valid) {
+          skipBatchItem({ reason: validation.reason });
+        }
+        const normalized = await normalizeFeedback({ feedback: item });
+        return classifyFeedback({ feedback: normalized });
+      },
+      sink: summarySink,
+    }),
+  ],
+}));
 
 /**
  * @displayname Validate Feedback

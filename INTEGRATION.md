@@ -37,12 +37,24 @@ export const catamorphic = createCatamorphic({
 // step or at boot — it never touches the host's own tables.
 await catamorphic.migrate();
 
+// Worker startup is explicit. Start it once when this host process should
+// process queued production runs.
+const executionWorker = catamorphic.startExecutionWorker({ concurrency: 4 });
+
 // Per request
 const scoped = catamorphic.forTenant(req.org.id).forUser(req.user.id);
 const project = await scoped.projects.create({ name: "onboarding" });
-await scoped.files.write(project.id, "src/welcome.ts", {
+await scoped.files.write({
+  projectId: project.id,
+  path: "src/welcome.ts",
   content: welcomeTs,
   commitMessage: "Add welcome workflow",
+});
+
+const run = await scoped.runs.triggerProduction({
+  projectId: project.id,
+  workflowName: "welcomeUser",
+  input: { email: "ada@example.com" },
 });
 ```
 
@@ -56,7 +68,19 @@ Advanced hosts can inject their own wiring instead: `database: { db }` with a pr
 
 ### Scoped-client surface
 
-Covered: project CRUD, workflow listing/fetching (parsed from project source), and file read/write (with optional commit). Not yet covered by the scoped client: triggering runs, plugin + secret management, and git ops (deploy, pull, diff, conflict resolution) — those live on `catamorphic.core.*` today (fully available via HTTP + React hooks) and will land as scoped-client resources next.
+The scoped client exposes project CRUD, workflow listing/fetching, file I/O, and
+the complete identity-bound Runs resource. Every public method takes one keyed
+object parameter, for example `scoped.projects.get({ projectId })`,
+`scoped.workflows.get({ projectId, workflowName })`, and
+`scoped.runs.get({ runId })`. Hosts do not pass tenant or user IDs into
+individual calls. Plugin, secret, and git operations remain available through
+`catamorphic.core.*` and the HTTP surface.
+
+`scoped.runs` is the one SDK family for all Workflows. It includes production
+and test triggers, list/detail, cancellation, operator processing pause/resume,
+input submission, and item inspection. Capabilities on a Workflow or Run decide
+which controls apply; there is no separate batch or persisted-continuation Run
+resource.
 
 ### Observability
 
@@ -107,7 +131,18 @@ Every request requires two headers (there are no defaults):
 
 **Set these server-side from the host's verified auth context** (session, JWT) — never trust values forwarded from the browser. Typical setup: the host exposes its own authenticated proxy route, or wraps `fetch` in the api-client to inject the headers after verifying the session.
 
-The generated HTTP client lives in `@catamorphic/api-client`; construct it with `createCatamorphicClient({ baseUrl, fetch })`.
+The generated HTTP client lives in `@catamorphic/api-client`; construct it with `createApiClient({ baseUrl, fetch })`.
+
+All execution uses one Runs route family:
+
+- `POST /api/projects/:projectId/workflows/:name/runs` triggers a production Run.
+- `POST /api/projects/:projectId/workflows/:name/test-runs` triggers a mutable-source test Run for a plain `"use workflow"` function.
+- `GET /api/projects/:projectId/workflows/:name/runs` lists Runs.
+- `GET /api/runs/:runId` and `/api/runs/:runId/*` expose detail and capability-specific controls.
+
+The test/production distinction is a Run mode and provenance choice, not a
+type split. Workflows with persisted scopes currently require an immutable
+production deployment; test triggering returns a capability error.
 
 ## React bindings — `@catamorphic/react`
 
@@ -160,7 +195,7 @@ function ProjectList() {
 Hooks shipped:
 
 - **Projects + workflows + files** — `useTemplates`, `useProjects`, `useProject`, `useCreateProject`, `useUpdateProject`, `useDeleteProject`, `useProjectFiles`, `useProjectFile`, `useWriteProjectFile`, `useWorkflows`, `useWorkflow`.
-- **Runs** — `useWorkflowRuns`, `useWorkflowRun`, `useTriggerWorkflowRun`, `useCancelWorkflowRun`.
+- **Runs** — `useRuns`, `useRun`, `useTriggerRun`, `useTriggerTestRun`, `useCancelRun`, `usePauseRunProcessing`, `useResumeRunProcessing`, `useSubmitRunInput`, `useRunItems`, `useRunItemSteps`.
 - **Git** — `useProjectGit`, `useProjectBranches`, `useProjectCommits`, `useProjectConflicts`, `useCreateBranch`, `useCheckoutBranch`, `useCommitChanges`, `useDeployProject`, plus the composite `useProjectGitState({ projectId, baselineFiles })` for multi-branch draft persistence.
 - **Plugins + secrets** — `usePluginCatalog`, `useProjectPlugins`, `useAttachPlugin`, `useDetachPlugin`, `useProjectSecrets`, `useUpsertProjectSecret`, `useDeleteProjectSecret`.
 - **Agent (coding sessions)** — `useAgentSessions`, `useAgentSession`, `useCreateAgentSession`, `useSendAgentMessage`.
@@ -175,7 +210,7 @@ All hooks reject with the typed `CatamorphicError` envelope (discriminated by `c
 
 `@catamorphic/registry` is a shadcn-style copy-paste registry for hosts that want to own the component source. Items are JSON manifests that inline a single React component file; consumers run `npx shadcn add <path-or-url>/r/<item>.json` and the component drops into `components/catamorphic/`. The component then imports hooks from `@catamorphic/react` and primitives from `@catamorphic/ui` only — there's no runtime dependency on the registry itself.
 
-Items shipped: `catamorphic-provider`, `projects-list`, `project-editor`, `file-explorer`, `git-panel`, `diff-drawer`, `runs-panel`, `plugins-settings`.
+Items shipped: `catamorphic-provider`, `projects-list`, `project-editor`, `file-explorer`, `git-panel`, `diff-drawer`, `runs-panel`, `plugins-settings`, `monaco-editor`, `agent-chat`.
 
 Catamorphic doesn't host the registry itself. After `bun run build`, the built manifests live at `packages/registry/dist/r/<name>.json`; hosts install them from `./node_modules/@catamorphic/registry/dist/r/<name>.json` or from a URL the host serves. To add a new item: drop a `src/<name>/<name>.tsx` + `registry-item.json` under `packages/registry/src/`, run `bun run build`, and re-install it in the host.
 
@@ -198,8 +233,25 @@ Runtime summary:
 
 For full details (manifest contract, REST API, service internals, runtime flow, troubleshooting, and resolver roadmap), use [`packages/plugins/README.md`](packages/plugins/README.md) as the canonical source.
 
+## Workflow authoring model
+
+All exports are Workflows and every invocation is a Run. An exported async
+function with the exact `"use workflow"` directive has no persisted continuation
+between operations. A Workflow that needs continuation uses
+`defineWorkflow(({ defineBoundary, defineBatch }) => ({ steps: [...] }))` from
+`@catamorphic/workflow` (or a host wrapper):
+
+- `defineBoundary` is an atomic retry scope whose callback operations retry together.
+- `defineBatch` is a finite paged per-item processing scope with an optional sink.
+- `defineBatchStep` physically coalesces compatible calls made inside `defineBatch.process`.
+
+These capabilities share workflow discovery, graph APIs, Runs routes, SDK
+resources, React hooks, and UI. Do not introduce a public stage, category
+selector, or capability-specific Run family.
+
 ## Operational Notes
 
 - `catamorphic.migrate()` / `catamorphic-db migrate` are idempotent and schema-scoped; run them in CI/deploy (preferred) or at boot.
 - Catamorphic uses strict schema scoping on its own DB access: connection strings get `search_path = "catamorphic"`, host-provided pools get Kysely's `WithSchemaPlugin`. Unqualified names cannot fall through to `public`.
 - Host-owned pools and Kysely instances are never destroyed by catamorphic; `catamorphic.close()` only closes what catamorphic created.
+- Stop handles returned by `catamorphic.startExecutionWorker(...)` during host shutdown. Constructing the SDK or Fastify plugin never starts workers implicitly.

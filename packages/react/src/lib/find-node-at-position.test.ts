@@ -121,4 +121,44 @@ describe("findNodeAtPosition", () => {
     });
     expect(found).toBeNull();
   });
+
+  it("prefers durable transition leaves over their boundary", () => {
+    const boundary = node({
+      id: "boundary",
+      type: "durable-boundary",
+      sourceRange: range({
+        start: 500,
+        end: 800,
+        startLine: 31,
+        startColumn: 1,
+        endLine: 45,
+        endColumn: 3,
+      }),
+    });
+    const pause = node({
+      id: "pause",
+      type: "pause",
+      sourceRange: range({
+        start: 650,
+        end: 690,
+        startLine: 38,
+        startColumn: 12,
+        endLine: 38,
+        endColumn: 52,
+      }),
+    });
+
+    expect(
+      findNodeAtPosition({
+        nodes: [boundary, pause],
+        position: { line: 38, column: 20 },
+      })?.id,
+    ).toBe("pause");
+    expect(
+      findNodeAtPosition({
+        nodes: [boundary, pause],
+        position: { line: 31, column: 5 },
+      })?.id,
+    ).toBe("boundary");
+  });
 });

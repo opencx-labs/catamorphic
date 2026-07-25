@@ -12,6 +12,7 @@ import {
 } from "../lib/errors.js";
 import { useCatamorphic } from "../provider.js";
 import type { DeployResult } from "../types.js";
+import { workflowKeys } from "../workflow-keys.js";
 
 export interface CommitChangesInput {
   message?: string;
@@ -62,7 +63,7 @@ export function useCommitChanges(
           queryKey: ["cat", "project", projectId, "files"],
         });
         queryClient.invalidateQueries({
-          queryKey: ["cat", "project", projectId, "workflows"],
+          queryKey: workflowKeys.project({ projectId }),
         });
       }
     },

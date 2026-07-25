@@ -60,13 +60,12 @@ const catamorphic = createCatamorphic({
 - `getCloneSource` mints a short-lived scoped repo token and returns
   `{ url, username, password }` so **sandboxes `git clone` the project
   directly from Artifacts** instead of receiving file uploads from the host.
-  Both exec sandboxes (`RunsService.trigger` / `SandboxManager.ensureExecSandbox`)
-  and dev sandboxes (`SandboxManager.ensureDevSandbox`) use this path.
+  Production deployment runtimes and dev sandboxes use this path.
 
 Artifacts is in closed beta. Accounts without access get REST error `10004`
 ("Access denied by feature gate") — `ArtifactsApiError.codes` exposes it so
-hosts can fall back (the playground falls back to `FsRemoteBackend` with a
-warning).
+hosts can fall back. The playground prefers `S3RemoteBackend` when configured,
+then Artifacts, then `FsRemoteBackend`.
 
 ## Testing
 

@@ -9,6 +9,7 @@ const NODE_SEP = 36;
 const BRANCH_GAP = 28;
 const GROUP_PAD_X = 24;
 const GROUP_PAD_TOP = 40;
+const BOUNDARY_PAD_TOP = 24;
 const GROUP_PAD_BOTTOM = 24;
 const CHILD_GAP = 36;
 
@@ -22,6 +23,9 @@ export interface LayoutedGraph {
   nodes: LayoutedNode[];
   edges: WorkflowEdge[];
 }
+
+export const COLLAPSED_CONTAINER_WIDTH = 240;
+export const COLLAPSED_CONTAINER_HEIGHT = 52;
 
 interface SizeInfo {
   width: number;
@@ -78,7 +82,17 @@ function calculateSize(
 
   let size: SizeInfo;
 
-  if (node.type === "if-block") {
+  if (
+    node.metadata.collapsed === "true" &&
+    (node.type === "durable-boundary" ||
+      node.type === "batch" ||
+      node.type === "call-workflow")
+  ) {
+    size = {
+      width: COLLAPSED_CONTAINER_WIDTH,
+      height: COLLAPSED_CONTAINER_HEIGHT,
+    };
+  } else if (node.type === "if-block") {
     if (children.length === 0) {
       size = { width: NODE_WIDTH, height: BASE_HEIGHT };
     } else {
@@ -110,12 +124,19 @@ function calculateSize(
   } else if (
     node.type === "branch" ||
     node.type === "loop-block" ||
-    node.type === "scope-block"
+    node.type === "scope-block" ||
+    node.type === "durable-boundary" ||
+    node.type === "batch" ||
+    node.type === "call-workflow"
   ) {
+    const padTop =
+      node.type === "durable-boundary" && !node.label
+        ? BOUNDARY_PAD_TOP
+        : GROUP_PAD_TOP;
     if (children.length === 0) {
       size = {
         width: NODE_WIDTH + GROUP_PAD_X * 2,
-        height: GROUP_PAD_TOP + GROUP_PAD_BOTTOM,
+        height: padTop + GROUP_PAD_BOTTOM,
       };
     } else {
       const childSizes = children.map((c) =>
@@ -127,7 +148,7 @@ function calculateSize(
         (children.length - 1) * CHILD_GAP;
       size = {
         width: maxChildWidth + GROUP_PAD_X * 2,
-        height: GROUP_PAD_TOP + totalChildHeight + GROUP_PAD_BOTTOM,
+        height: padTop + totalChildHeight + GROUP_PAD_BOTTOM,
       };
     }
   } else {
@@ -204,9 +225,15 @@ function positionChildrenRecursive(
   } else if (
     parent.type === "branch" ||
     parent.type === "loop-block" ||
-    parent.type === "scope-block"
+    parent.type === "scope-block" ||
+    parent.type === "durable-boundary" ||
+    parent.type === "batch" ||
+    parent.type === "call-workflow"
   ) {
-    let y = GROUP_PAD_TOP;
+    let y =
+      parent.type === "durable-boundary" && !parent.label
+        ? BOUNDARY_PAD_TOP
+        : GROUP_PAD_TOP;
     for (const child of children) {
       const childSize = sizeCache.get(child.id);
       if (!childSize) continue;

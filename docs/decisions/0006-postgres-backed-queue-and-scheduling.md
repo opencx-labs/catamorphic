@@ -1,25 +1,35 @@
 # 0006 — Postgres-backed job queue and scheduling
 
-- **Status:** Accepted (not yet implemented)
+- **Status:** Accepted (queue/retry/pause execution implemented by 0014, 0016, and 0023-0026; cron triggers remain future work)
 - **Date:** 2026-07-02
+- **Implemented and updated by:** 0014, 0016, 0023, 0024, 0025, 0026
 
 ## Context
 
-Runs today are synchronous request/response: the HTTP handler blocks until the sandbox finishes. Durable workflows need queued execution, retries, cron-style triggers, and long `sleep("7 days")` semantics. Adding Redis/BullMQ or a hosted queue would burden every host with extra infrastructure.
+At the time of this decision, Runs were synchronous request/response: the HTTP
+handler blocked until the sandbox finished. Persisted continuation needed queued
+execution, retries, scheduled resumes, and long wait semantics. Adding
+Redis/BullMQ or a hosted queue would burden every host with extra infrastructure.
 
 ## Decision
 
-When queueing and scheduling land, they are built on the **same host Postgres**, inside the `catamorphic` schema, using `FOR UPDATE SKIP LOCKED` polling (the pg-boss/graphile-worker pattern — implemented directly or by embedding one of those libraries if it fits the schema-scoping requirement). No new infrastructure dependencies.
+Queueing and scheduling are built on the **same host Postgres**, inside the
+`catamorphic` schema, using `FOR UPDATE SKIP LOCKED` polling. No new
+infrastructure dependencies.
 
 Intended shape:
 
-- A `jobs` (or similar) table in the `catamorphic` schema; workers are just host processes that opt in (`catamorphic.startWorker()`), so single-process hosts work out of the box.
+- An `execution_jobs` table in the `catamorphic` schema; workers are host
+  processes that explicitly opt in with `catamorphic.startExecutionWorker()`.
 - Run triggering becomes enqueue + poll/notify; the HTTP API returns a pending run immediately.
-- `sleep()` in workflows becomes a durable timer: the run suspends, a scheduled job resumes it (this interacts with the execution harness design and may require workflow-level checkpointing — to be designed in its own ADR).
+- Authored `pause()` with a timeout is a durable timer: the Run suspends and a
+  scheduled job resumes it. Plain `sleep()` remains non-durable.
 - Cron triggers are rows, not crontabs.
 
 ## Consequences
 
 - Hosts scale workers horizontally with plain processes; Postgres is the only coordination point.
 - Throughput ceiling is Postgres's — acceptable for workflow workloads (bursty, seconds-to-days latency tolerance), revisit if a host outgrows it.
-- Until implemented, runs remain synchronous and `sleep()` is not durable.
+- ADRs 0023-0026 implement queued Runs, retries, persisted pauses, cancellation,
+  boundaries, and batch scopes on Postgres. Cron trigger management remains
+  outside the current surface, and plain `sleep()` remains non-durable.

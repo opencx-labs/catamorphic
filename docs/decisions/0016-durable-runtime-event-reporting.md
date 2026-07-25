@@ -1,7 +1,8 @@
-# 0016 — Durable runtime event reporting
+# 0016 — Persisted runtime event reporting
 
 - **Status:** Accepted
 - **Date:** 2026-07-12
+- **Updated by:** 0024 (persisted pauses), 0026 (canonical Run events)
 
 ## Context
 
@@ -27,15 +28,14 @@ no-ops only when their event data matches; conflicting reuse fails. Retries use
 a new invocation ID and replay completed outputs by stable node occurrence.
 External effects remain at-least-once.
 
-Durable `sleepUntil` and `waitForSignal` are deferred. They require a settled
-code-level call-site identity, signal-delivery API, authorization model, and
-scheduled-resume state; a runtime-only helper would either restart timers or
-consume signals nondeterministically.
+The original proposal deferred `sleepUntil` and `waitForSignal`. ADR 0024 later
+introduced builder-scoped `pause()` with optional timeouts and explicit resume;
+no global runtime wait helper was added.
 
 ## Consequences
 
 Step completion can survive process and queue-worker failure, and replay does
 not expose transport details to workflow code or core DTOs. Providers that can
 stream or poll can report before process exit; providers without incremental
-transport still flush the terminal receipt. Durable waits need a follow-up ADR
-and parser/API work rather than an implicit runtime DSL.
+transport still flush the terminal receipt. Persisted waits use the explicit
+boundary `pause()` capability from ADR 0024 rather than an implicit runtime DSL.

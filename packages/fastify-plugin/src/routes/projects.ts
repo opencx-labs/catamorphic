@@ -2,6 +2,7 @@ import {
   type Project,
   ProjectFileNotFoundError,
   ProjectNotFoundError,
+  type WorkflowSummary,
 } from "@catamorphic/core";
 import type { FastifyInstance } from "fastify";
 import type { ZodTypeProvider } from "fastify-type-provider-zod";
@@ -733,18 +734,11 @@ async function safeListWorkflows(
   identity: { tenantId: string; externalUserId: string },
   projectId: string,
 ): Promise<{
-  workflows: Array<{
-    name: string;
-    kind: "regular" | "batch";
-    displayName: string | null;
-    description: string | null;
-    filePath: string;
-    parameterCount: number;
-  }>;
+  workflows: WorkflowSummary[];
   files: string[];
 }> {
   try {
-    const workflows = await core.workflows.list(identity, projectId);
+    const workflows = await core.workflows.list({ identity, projectId });
     const allFiles = await core.projects.readAllFiles(identity, projectId);
     return { workflows, files: Object.keys(allFiles) };
   } catch {

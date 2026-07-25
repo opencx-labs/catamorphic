@@ -9,8 +9,8 @@ import { instrumentSandboxProvider } from "@catamorphic/sandbox";
 import type { Kysely } from "kysely";
 import { AgentContextService } from "./services/agent-context-service.js";
 import { AgentSessionsService } from "./services/agent-sessions-service.js";
-import { BatchExecutionService } from "./services/batch-execution-service.js";
-import { BatchRunsService } from "./services/batch-runs-service.js";
+import { BatchExecutionHandler } from "./services/batch-execution-handler.js";
+import { BoundaryExecutionHandler } from "./services/boundary-execution-handler.js";
 import { DbSandboxStore } from "./services/db-sandbox-store.js";
 import { DeploymentArtifactsService } from "./services/deployment-artifacts-service.js";
 import { DeploymentRuntimeService } from "./services/deployment-runtime-service.js";
@@ -22,6 +22,7 @@ import { ExecutionWorkerService } from "./services/execution-worker-service.js";
 import { PluginsService } from "./services/plugins-service.js";
 import { ProjectsService } from "./services/projects-service.js";
 import { RateReservationsService } from "./services/rate-reservations-service.js";
+import { RunCoordinator } from "./services/run-coordinator.js";
 import { RunPluginsLoader } from "./services/run-plugins-loader.js";
 import { RunsService } from "./services/runs-service.js";
 import { RuntimeEventsService } from "./services/runtime-events-service.js";
@@ -60,15 +61,9 @@ export class CatamorphicCore {
   readonly projects: ProjectsService;
   readonly workflows: WorkflowsService;
   readonly runs: RunsService;
-  readonly batchRuns: BatchRunsService;
-  readonly batchExecution: BatchExecutionService;
   readonly deployment: DeploymentService;
   readonly deploymentArtifacts: DeploymentArtifactsService;
   readonly deploymentRuntime?: DeploymentRuntimeService;
-  readonly executionJobs: ExecutionJobsService;
-  readonly executionWorker: ExecutionWorkerService;
-  readonly runtimeEvents: RuntimeEventsService;
-  readonly rateReservations: RateReservationsService;
   readonly skills: SkillsService;
   readonly plugins?: PluginsService;
   readonly secrets?: SecretsService;
@@ -105,10 +100,10 @@ export class CatamorphicCore {
           },
         )
       : undefined;
-    this.executionJobs = new ExecutionJobsService(this.db);
-    this.executionWorker = new ExecutionWorkerService(this.executionJobs);
-    this.runtimeEvents = new RuntimeEventsService(this.db);
-    this.rateReservations = new RateReservationsService(this.db);
+    const executionJobs = new ExecutionJobsService(this.db);
+    const executionWorker = new ExecutionWorkerService(executionJobs);
+    const runtimeEvents = new RuntimeEventsService(this.db);
+    const rateReservations = new RateReservationsService(this.db);
 
     if (this.pluginResolver) {
       this.plugins = new PluginsService(this.db, this.pluginResolver);
@@ -124,6 +119,10 @@ export class CatamorphicCore {
       );
     }
 
+    const coordinator = new RunCoordinator(this.db, executionJobs);
+    executionWorker.registerExhaustedHandler((args) =>
+      coordinator.handleExhaustedJob(args),
+    );
     this.runs = new RunsService(this.db, {
       projectManager: this.projectManager,
       sandboxProvider: this.sandboxProvider,
@@ -131,41 +130,22 @@ export class CatamorphicCore {
       runPluginsLoader: this.runPluginsLoader,
       deploymentArtifacts: this.deploymentArtifacts,
       deploymentRuntime: this.deploymentRuntime,
-      executionJobs: this.executionJobs,
-      executionWorker: this.executionWorker,
-      runtimeEvents: this.runtimeEvents,
+      executionJobs,
+      executionWorker,
+      runtimeEvents,
+      coordinator,
     });
-    this.batchRuns = new BatchRunsService(this.db, {
-      jobs: this.executionJobs,
-      resolveProductionArtifact: (args) =>
-        this.runs.resolveProductionArtifact(args),
-      getWorkflowKind: async (args) => {
-        const workflow = await this.workflows.get(
-          args.identity,
-          args.projectId,
-          args.workflowName,
-          { ref: args.ref },
-        );
-        return workflow.kind ?? "regular";
-      },
-      cancelRuntimeInvocations: this.deploymentRuntime
-        ? async ({ artifactId, invocationIds }) => {
-            await Promise.all(
-              invocationIds.map((invocationId) =>
-                this.deploymentRuntime?.cancel({
-                  artifactId,
-                  invocationId,
-                }),
-              ),
-            );
-          }
-        : undefined,
+    new BoundaryExecutionHandler(this.db, {
+      coordinator,
+      worker: executionWorker,
+      invokeRuntime: (args) => this.runs.invokeProductionRuntime(args),
+      resolveChild: (args) => this.runs.resolveProductionWorkflow(args),
     });
-    this.batchExecution = new BatchExecutionService(this.db, {
-      batchRuns: this.batchRuns,
-      jobs: this.executionJobs,
-      rateReservations: this.rateReservations,
-      worker: this.executionWorker,
+    new BatchExecutionHandler(this.db, {
+      coordinator,
+      jobs: executionJobs,
+      rateReservations,
+      worker: executionWorker,
       invokeRuntime: (args) => this.runs.invokeProductionRuntime(args),
     });
 

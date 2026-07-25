@@ -50,12 +50,15 @@ await app.register(catamorphicPlugin, {
 
 await app.listen({ port: PORT, host: "0.0.0.0" });
 console.log(`[playground] API ready on http://localhost:${PORT}/api`);
+const executionWorker = catamorphic.core.sandboxProvider
+  ? catamorphic.startExecutionWorker({ name: "playground", concurrency: 2 })
+  : undefined;
 
-if (shutdownTelemetry) {
-  const flushAndExit = async () => {
-    await shutdownTelemetry().catch(() => {});
-    process.exit(0);
-  };
-  process.once("SIGINT", flushAndExit);
-  process.once("SIGTERM", flushAndExit);
-}
+const flushAndExit = async () => {
+  await app.close().catch(() => {});
+  await executionWorker?.stop().catch(() => {});
+  await catamorphic.close().catch(() => {});
+  await shutdownTelemetry?.().catch(() => {});
+};
+process.once("SIGINT", () => void flushAndExit());
+process.once("SIGTERM", () => void flushAndExit());

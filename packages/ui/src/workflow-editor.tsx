@@ -4,31 +4,24 @@ import {
   codeEditorReadOnlyAtom,
   executionStateAtom,
   graphAtom,
-  historySidebarOpenAtom,
-  type LoadMoreRunsFn,
   lastTriggerDataAtom,
-  loadMoreRunsAtom,
   type OnParseCallback,
-  type PlaygroundRun,
-  type PlaygroundRunStep,
   panelVisibilityAtom,
   rightPanelOpenAtom,
-  runsAtom,
   showRunDialogAtom,
   useEditorKeyboard,
   useWorkflowGraph,
-  useWorkflowRunController,
 } from "@catamorphic/react";
+import type { Run, WorkflowCapabilities } from "@catamorphic/react/types";
+import type { NodeTypes } from "@xyflow/react";
 import { useAtom, useAtomValue, useSetAtom } from "jotai";
-import type { ComponentType, ReactNode } from "react";
-import { useCallback, useEffect } from "react";
+import type { ReactNode } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { AIBar } from "./ai-bar.js";
 import { WorkflowCanvas } from "./canvas.js";
 import { type CodeEditorRenderProps, DetailPanel } from "./detail-panel.js";
-import { HistorySidebar } from "./history-sidebar.js";
 import { RunTriggerDialog } from "./run-trigger-dialog.js";
 import { Toolbar } from "./toolbar.js";
-import type { NodeRendererProps } from "./types.js";
 import { WorkflowEditorScope } from "./workflow-editor-scope.js";
 
 export interface WorkflowEditorProps {
@@ -47,48 +40,26 @@ export interface WorkflowEditorProps {
    */
   onParse?: OnParseCallback;
   renderCodeEditor?: (props: CodeEditorRenderProps) => ReactNode;
-  nodeRenderers?: Partial<
-    Record<WorkflowNodeType, ComponentType<NodeRendererProps>>
-  >;
+  nodeRenderers?: Partial<Record<WorkflowNodeType, NodeTypes[string]>>;
   theme?: Record<string, string>;
   aiEnabled?: boolean;
   onAIPrompt?: (prompt: string) => Promise<string>;
   executionState?: Record<string, string>;
   showCodeEditor?: boolean;
-  showRunsPanel?: boolean;
   showMinimap?: boolean;
-  onRun?: (triggerData: Record<string, unknown>) => Promise<{
-    runId?: string | null;
-    status: "completed" | "failed";
-    result?: unknown;
-    error?: string | null;
-    steps: PlaygroundRunStep[];
-    startedAt: string;
-    completedAt: string;
-  }>;
-  onLoadMoreRuns?: LoadMoreRunsFn;
+  /** Canonical capabilities from the loaded Workflow. */
+  workflowCapabilities?: WorkflowCapabilities;
+  /** Starts a production Run. Available for every Workflow. */
+  onRun?: (input: Record<string, unknown>) => Promise<Run>;
+  /** Starts a test Run. Shown only when the Workflow can run without continuations. */
+  onTestRun?: (input: Record<string, unknown>) => Promise<Run>;
   triggerParameters?: ParameterInfo[];
-  initialRuns?: PlaygroundRun[];
   onExpandEditor?: () => void;
-  renderRunsPanel?: () => ReactNode;
-  renderVersionsPanel?: () => ReactNode;
+  renderRunsPanel?: (props: { activeRun?: Run }) => ReactNode;
   renderBanner?: () => ReactNode;
   renderToolbarCenter?: () => ReactNode;
   /** When true, disables the code editor. */
   readOnly?: boolean;
-  /**
-   * Opaque token that, when its value changes to a truthy value, opens the
-   * Run dialog. Intended for external triggers (e.g. a gutter "Run" glyph in
-   * a code editor host that doesn't have direct access to this component's
-   * internal Jotai store). Use `Date.now()` or a monotonic counter.
-   *
-   * @deprecated Prefer wrapping your chrome in `<WorkflowEditorScope>` and
-   * calling `useSetAtom(showRunDialogAtom)(true)` directly, or consume the
-   * `openDialog` callback returned by `useWorkflowRunController`. The token
-   * channel exists only because the legacy editor scoped its jotai store
-   * internally and hosts had no other way to drive it.
-   */
-  runDialogRequestKey?: number | null;
 }
 
 /**
@@ -105,50 +76,38 @@ export function WorkflowEditorChrome({
   onCodeChange,
   onParse,
   renderCodeEditor,
+  nodeRenderers,
   executionState,
   showCodeEditor = true,
   showMinimap = true,
+  workflowCapabilities,
   onRun,
-  onLoadMoreRuns,
+  onTestRun,
   triggerParameters,
-  initialRuns,
   aiEnabled = false,
   onAIPrompt,
   onExpandEditor,
   renderRunsPanel,
-  renderVersionsPanel,
   renderBanner,
   renderToolbarCenter,
   readOnly = false,
-  runDialogRequestKey,
 }: WorkflowEditorProps) {
   const [currentCode, setCode] = useAtom(codeAtom);
   const setExecutionState = useSetAtom(executionStateAtom);
   const setPanelVisibility = useSetAtom(panelVisibilityAtom);
   const setRightPanelOpen = useSetAtom(rightPanelOpenAtom);
   const graph = useAtomValue(graphAtom);
-  const setShowDialog = useSetAtom(showRunDialogAtom);
-  const setRuns = useSetAtom(runsAtom);
+  const [showDialog, setShowDialog] = useAtom(showRunDialogAtom);
   const lastTriggerData = useAtomValue(lastTriggerDataAtom);
-  const setLoadMoreRuns = useSetAtom(loadMoreRunsAtom);
+  const setLastTriggerData = useSetAtom(lastTriggerDataAtom);
   const setReadOnly = useSetAtom(codeEditorReadOnlyAtom);
-
-  const {
-    isRunning,
-    showDialog,
-    openDialog,
-    closeDialog,
-    submit: submitRun,
-  } = useWorkflowRunController({ onTriggerRun: onRun });
+  const [runMode, setRunMode] = useState<"test" | "production">("production");
+  const [isRunning, setIsRunning] = useState(false);
+  const [activeRun, setActiveRun] = useState<Run>();
 
   useEffect(() => {
     setReadOnly(readOnly);
   }, [readOnly, setReadOnly]);
-
-  useEffect(() => {
-    if (!runDialogRequestKey || !onRun) return;
-    setShowDialog(true);
-  }, [runDialogRequestKey, onRun, setShowDialog]);
 
   useEffect(() => {
     setCode(code);
@@ -178,16 +137,6 @@ export function WorkflowEditorChrome({
   useWorkflowGraph({ onParse });
   useEditorKeyboard();
 
-  useEffect(() => {
-    if (initialRuns && initialRuns.length > 0) {
-      setRuns(initialRuns);
-    }
-  }, [initialRuns, setRuns]);
-
-  useEffect(() => {
-    setLoadMoreRuns(onLoadMoreRuns ?? null);
-  }, [onLoadMoreRuns, setLoadMoreRuns]);
-
   const handleCodeChange = useCallback(
     (newCode: string) => {
       setCode(newCode);
@@ -198,8 +147,45 @@ export function WorkflowEditorChrome({
 
   const handleRunClick = useCallback(() => {
     if (!onRun) return;
-    openDialog();
-  }, [onRun, openDialog]);
+    setRunMode("production");
+    setShowDialog(true);
+  }, [onRun, setShowDialog]);
+
+  const currentCapabilities = graph?.capabilities ?? workflowCapabilities;
+  const canTestRun = currentCapabilities?.persistedContinuations === false;
+  const handleTestRunClick = useCallback(() => {
+    if (!onTestRun || !canTestRun) return;
+    setRunMode("test");
+    setShowDialog(true);
+  }, [canTestRun, onTestRun, setShowDialog]);
+
+  const submitRun = useCallback(
+    async (input: Record<string, unknown>) => {
+      const trigger = runMode === "test" ? onTestRun : onRun;
+      if (!trigger) return;
+      setLastTriggerData(input);
+      setIsRunning(true);
+      try {
+        const run = await trigger(input);
+        setActiveRun(run);
+        setShowDialog(false);
+        setPanelVisibility((current) => ({
+          ...current,
+          runsPanel: true,
+        }));
+      } finally {
+        setIsRunning(false);
+      }
+    },
+    [
+      onRun,
+      onTestRun,
+      runMode,
+      setLastTriggerData,
+      setPanelVisibility,
+      setShowDialog,
+    ],
+  );
 
   const params = triggerParameters ?? graph?.trigger.parameters ?? [];
 
@@ -207,13 +193,15 @@ export function WorkflowEditorChrome({
     <div className="catamorphic-editor">
       <Toolbar
         onRun={onRun ? handleRunClick : undefined}
+        onTestRun={onTestRun ? handleTestRunClick : undefined}
+        testRunEnabled={canTestRun}
         isRunning={isRunning}
         centerSlot={renderToolbarCenter?.()}
       />
       {renderBanner?.()}
       <div className="catamorphic-editor-body">
         <div className="catamorphic-editor-canvas">
-          <WorkflowCanvas />
+          <WorkflowCanvas nodeRenderers={nodeRenderers} />
         </div>
         <DetailPanel
           renderCodeEditor={renderCodeEditor}
@@ -221,9 +209,9 @@ export function WorkflowEditorChrome({
           onCodeChange={handleCodeChange}
           onExpandEditor={onExpandEditor}
         />
-        <HistorySidebarSlot
+        <RunsPanelSlot
+          activeRun={activeRun}
           renderRunsPanel={renderRunsPanel}
-          renderVersionsPanel={renderVersionsPanel}
         />
       </div>
       <AIBar
@@ -241,30 +229,39 @@ export function WorkflowEditorChrome({
       {showDialog && (
         <RunTriggerDialog
           parameters={params}
+          mode={runMode}
           isRunning={isRunning}
           initialValues={lastTriggerData}
           onRun={submitRun}
-          onClose={closeDialog}
+          onClose={() => setShowDialog(false)}
         />
       )}
     </div>
   );
 }
 
-function HistorySidebarSlot({
+function RunsPanelSlot({
+  activeRun,
   renderRunsPanel,
-  renderVersionsPanel,
 }: {
-  renderRunsPanel?: () => ReactNode;
-  renderVersionsPanel?: () => ReactNode;
+  activeRun?: Run;
+  renderRunsPanel?: (props: { activeRun?: Run }) => ReactNode;
 }) {
-  const historySidebarOpen = useAtomValue(historySidebarOpenAtom);
-  if (!historySidebarOpen) return null;
+  const panelVisibility = useAtomValue(panelVisibilityAtom);
+  if (!panelVisibility.runsPanel) return null;
   return (
-    <HistorySidebar
-      renderRunsPanel={renderRunsPanel}
-      renderVersionsPanel={renderVersionsPanel}
-    />
+    <aside className="catamorphic-runs-sidebar">
+      {renderRunsPanel ? (
+        renderRunsPanel({ activeRun })
+      ) : (
+        <div className="catamorphic-run-empty">
+          <p>Runs are not connected</p>
+          <p className="catamorphic-run-empty-hint">
+            Provide renderRunsPanel to connect this view.
+          </p>
+        </div>
+      )}
+    </aside>
   );
 }
 

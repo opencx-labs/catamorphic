@@ -1,9 +1,6 @@
-export type JsonPrimitive = boolean | number | string | null;
+import type { AssertJsonCompatible, JsonValue } from "./json.js";
 
-export type JsonValue =
-  | JsonPrimitive
-  | { readonly [key: string]: JsonValue }
-  | readonly JsonValue[];
+export type { JsonPrimitive, JsonValue } from "./json.js";
 
 export type BatchConsistency = "snapshot" | "bounded" | "best_effort";
 
@@ -20,16 +17,13 @@ export interface SourceItem<Item> {
   attempt?: number;
 }
 
-export interface SourcePage<Item, Cursor extends JsonValue> {
+export interface SourcePage<Item, Cursor> {
   items: readonly SourceItem<Item>[];
   nextCursor?: Cursor;
   done: boolean;
 }
 
-export interface SourceInitialization<
-  Cursor extends JsonValue,
-  Snapshot extends JsonValue,
-> {
+export interface SourceInitialization<Cursor, Snapshot> {
   snapshot: Snapshot;
   cursor?: Cursor;
   estimatedCount?: number;
@@ -38,8 +32,8 @@ export interface SourceInitialization<
 export interface BatchSource<
   Config,
   Item,
-  Cursor extends JsonValue = JsonValue,
-  Snapshot extends JsonValue = JsonValue,
+  Cursor = JsonValue,
+  Snapshot = JsonValue,
 > {
   readonly consistency: BatchConsistency;
   initialize(args: {
@@ -58,8 +52,8 @@ export interface BatchSource<
 export interface BatchSourceBinding<
   Config,
   Item,
-  Cursor extends JsonValue = JsonValue,
-  Snapshot extends JsonValue = JsonValue,
+  Cursor = JsonValue,
+  Snapshot = JsonValue,
 > {
   source: BatchSource<Config, Item, Cursor, Snapshot>;
   config: Config;
@@ -169,9 +163,9 @@ export interface BatchStepRateLimit {
   costPerItem?: number;
 }
 
+/** Physical item coalescing for calls made inside `defineBatch.process`. */
 export type BatchStepDefinition<Item, Result> = {
   (input: Item): Promise<Result>;
-  readonly kind: "batch-step";
   readonly batch: BatchStepPolicy;
   readonly partitionBy?: (input: Item) => JsonValue;
   run(args: {
@@ -189,20 +183,20 @@ export function defineBatchStep<Item, Result>(definition: {
   }): Promise<readonly KeyedBatchOutcome<Result>[]>;
 }): BatchStepDefinition<Item, Result> {
   assertBatchStepPolicy(definition.batch);
-  const kind: "batch-step" = "batch-step";
-  return Object.assign(
+  const batchStep = Object.assign(
     async (_input: Item): Promise<Result> => {
       throw new Error(
-        "Batch steps are callable only inside an orchestrated batch workflow",
+        "Batch steps are callable only inside an orchestrated defineBatch process",
       );
     },
     {
-      kind,
       batch: definition.batch,
       partitionBy: definition.partitionBy,
       run: definition.run,
     },
   );
+  Object.defineProperty(batchStep, "kind", { value: "batch-step" });
+  return batchStep;
 }
 
 export interface BatchSinkRecord<Result> {
@@ -212,23 +206,24 @@ export interface BatchSinkRecord<Result> {
   ordinal: number;
 }
 
-export interface BatchSinkWriteResult<State extends JsonValue> {
+export interface BatchSinkWriteResult<State> {
   state: State;
   acknowledgedKeys: readonly string[];
 }
 
-export interface BatchSinkSummary {
+export interface BatchSummary {
   total: number;
   succeeded: number;
   failed: number;
   skipped: number;
 }
 
-export interface BatchSink<
-  Result,
-  State extends JsonValue = JsonValue,
-  Artifact extends JsonValue = JsonValue,
-> {
+export interface BatchFailurePolicy {
+  mode: "continue" | "fail_fast";
+  maxFailures?: number;
+}
+
+export interface BatchSink<Result, State = JsonValue, Artifact = JsonValue> {
   initialize?(args: { context: BatchExecutionContext }): Promise<State>;
   writeBatch(args: {
     chunkKey: string;
@@ -238,22 +233,25 @@ export interface BatchSink<
   }): Promise<BatchSinkWriteResult<State>>;
   finalize(args: {
     state?: State;
-    summary: BatchSinkSummary;
+    summary: BatchSummary;
     context: BatchExecutionContext;
   }): Promise<Artifact>;
 }
 
-export interface BatchWorkflowDefinition<
+export type BatchOutput<Artifact = never> = [Artifact] extends [never]
+  ? { readonly summary: BatchSummary }
+  : { readonly summary: BatchSummary; readonly artifact: Artifact };
+
+export interface BatchOptions<
   Input,
   Config,
   Item,
-  Cursor extends JsonValue,
-  Snapshot extends JsonValue,
+  Cursor,
+  Snapshot,
   Result,
-  SinkState extends JsonValue,
-  Artifact extends JsonValue,
+  SinkState,
+  Artifact,
 > {
-  readonly kind: "batch-workflow";
   source(args: {
     input: Input;
     context: BatchExecutionContext;
@@ -265,21 +263,266 @@ export interface BatchWorkflowDefinition<
     item: Item;
     context: BatchExecutionContext;
   }): Promise<Result>;
+  failurePolicy?: BatchFailurePolicy;
   sink?: BatchSink<Result, SinkState, Artifact>;
 }
 
-export function defineBatchWorkflow<
+declare class BatchDefinitionImpl<
+  Input,
+  Output,
+  Config,
+  Item,
+  Cursor,
+  Snapshot,
+  Result,
+  SinkState,
+  Artifact,
+> {
+  private declare readonly input: Input;
+  private declare readonly output: Output;
+
+  readonly source: BatchOptions<
+    Input,
+    Config,
+    Item,
+    Cursor,
+    Snapshot,
+    Result,
+    SinkState,
+    Artifact
+  >["source"];
+  readonly process: BatchOptions<
+    Input,
+    Config,
+    Item,
+    Cursor,
+    Snapshot,
+    Result,
+    SinkState,
+    Artifact
+  >["process"];
+  readonly failurePolicy?: BatchFailurePolicy;
+  readonly sink?: BatchSink<Result, SinkState, Artifact>;
+}
+
+export type BatchDefinition<
+  Input,
+  Output,
+  Config = unknown,
+  Item = unknown,
+  Cursor = JsonValue,
+  Snapshot = JsonValue,
+  Result = unknown,
+  SinkState = JsonValue,
+  Artifact = JsonValue,
+> = BatchDefinitionImpl<
+  Input,
+  Output,
+  Config,
+  Item,
+  Cursor,
+  Snapshot,
+  Result,
+  SinkState,
+  Artifact
+>;
+
+type ValidateBatch<
   Input,
   Config,
   Item,
-  Cursor extends JsonValue = JsonValue,
-  Snapshot extends JsonValue = JsonValue,
-  Result = unknown,
-  SinkState extends JsonValue = JsonValue,
-  Artifact extends JsonValue = JsonValue,
+  Cursor,
+  Snapshot,
+  Result,
+  SinkState,
+  Artifact,
+> = AssertJsonCompatible<Input, "A batch input must be JSON-compatible"> &
+  AssertJsonCompatible<
+    BatchFailurePolicy,
+    "A batch failure policy must be JSON-compatible"
+  > &
+  AssertJsonCompatible<
+    Config,
+    "A batch source config must be JSON-compatible"
+  > &
+  AssertJsonCompatible<Item, "A batch source item must be JSON-compatible"> &
+  AssertJsonCompatible<
+    Cursor,
+    "A batch source cursor must be JSON-compatible"
+  > &
+  AssertJsonCompatible<
+    Snapshot,
+    "A batch source snapshot must be JSON-compatible"
+  > &
+  AssertJsonCompatible<
+    Result,
+    "A batch process result must be JSON-compatible"
+  > &
+  AssertJsonCompatible<
+    SinkState,
+    "A batch sink state must be JSON-compatible"
+  > &
+  ([Artifact] extends [never]
+    ? unknown
+    : AssertJsonCompatible<
+        Artifact,
+        "A batch sink artifact must be JSON-compatible"
+      >);
+
+export interface DefineBatch {
+  <
+    Input,
+    Config,
+    Item,
+    Cursor = JsonValue,
+    Snapshot = JsonValue,
+    Result = JsonValue,
+  >(
+    definition: Omit<
+      BatchOptions<
+        Input,
+        Config,
+        Item,
+        Cursor,
+        Snapshot,
+        Result,
+        JsonValue,
+        never
+      >,
+      "sink"
+    > & {
+      readonly sink?: never;
+    } & ValidateBatch<
+        Input,
+        Config,
+        Item,
+        Cursor,
+        Snapshot,
+        Result,
+        JsonValue,
+        never
+      >,
+  ): BatchDefinition<
+    Input,
+    BatchOutput,
+    Config,
+    Item,
+    Cursor,
+    Snapshot,
+    Result,
+    JsonValue,
+    never
+  >;
+
+  <
+    Input,
+    Config,
+    Item,
+    Cursor = JsonValue,
+    Snapshot = JsonValue,
+    Result = JsonValue,
+    SinkState = JsonValue,
+    Artifact = JsonValue,
+  >(
+    definition: BatchOptions<
+      Input,
+      Config,
+      Item,
+      Cursor,
+      Snapshot,
+      Result,
+      SinkState,
+      Artifact
+    > & {
+      readonly sink: BatchSink<Result, SinkState, Artifact>;
+    } & ValidateBatch<
+        Input,
+        Config,
+        Item,
+        Cursor,
+        Snapshot,
+        Result,
+        SinkState,
+        Artifact
+      >,
+  ): BatchDefinition<
+    Input,
+    BatchOutput<Artifact>,
+    Config,
+    Item,
+    Cursor,
+    Snapshot,
+    Result,
+    SinkState,
+    Artifact
+  >;
+}
+
+export function createBatch<
+  Input,
+  Config,
+  Item,
+  Cursor = JsonValue,
+  Snapshot = JsonValue,
+  Result = JsonValue,
 >(
   definition: Omit<
-    BatchWorkflowDefinition<
+    BatchOptions<
+      Input,
+      Config,
+      Item,
+      Cursor,
+      Snapshot,
+      Result,
+      JsonValue,
+      never
+    >,
+    "sink"
+  > & {
+    readonly sink?: never;
+  } & ValidateBatch<
+      Input,
+      Config,
+      Item,
+      Cursor,
+      Snapshot,
+      Result,
+      JsonValue,
+      never
+    >,
+): BatchDefinition<
+  Input,
+  BatchOutput,
+  Config,
+  Item,
+  Cursor,
+  Snapshot,
+  Result,
+  JsonValue,
+  never
+>;
+export function createBatch<
+  Input,
+  Config,
+  Item,
+  Cursor = JsonValue,
+  Snapshot = JsonValue,
+  Result = JsonValue,
+  SinkState = JsonValue,
+  Artifact = JsonValue,
+>(
+  definition: BatchOptions<
+    Input,
+    Config,
+    Item,
+    Cursor,
+    Snapshot,
+    Result,
+    SinkState,
+    Artifact
+  > & {
+    readonly sink: BatchSink<Result, SinkState, Artifact>;
+  } & ValidateBatch<
       Input,
       Config,
       Item,
@@ -289,10 +532,9 @@ export function defineBatchWorkflow<
       SinkState,
       Artifact
     >,
-    "kind"
-  >,
-): BatchWorkflowDefinition<
+): BatchDefinition<
   Input,
+  BatchOutput<Artifact>,
   Config,
   Item,
   Cursor,
@@ -300,8 +542,54 @@ export function defineBatchWorkflow<
   Result,
   SinkState,
   Artifact
-> {
-  return { kind: "batch-workflow", ...definition };
+>;
+export function createBatch(definition: object): object {
+  const failurePolicy = Reflect.get(definition, "failurePolicy");
+  assertBatchFailurePolicy(failurePolicy);
+  return {
+    source: Reflect.get(definition, "source"),
+    process: Reflect.get(definition, "process"),
+    failurePolicy,
+    sink: Reflect.get(definition, "sink"),
+  };
+}
+
+function assertBatchFailurePolicy(failurePolicy: unknown): void {
+  if (failurePolicy === undefined) return;
+  if (
+    typeof failurePolicy !== "object" ||
+    failurePolicy === null ||
+    Array.isArray(failurePolicy)
+  ) {
+    throw new Error("Batch failurePolicy must be an object");
+  }
+
+  const keys = Reflect.ownKeys(failurePolicy);
+  if (
+    keys.some(
+      (key) =>
+        typeof key !== "string" || (key !== "mode" && key !== "maxFailures"),
+    )
+  ) {
+    throw new Error(
+      "Batch failurePolicy may contain only mode and maxFailures",
+    );
+  }
+
+  const mode = Reflect.get(failurePolicy, "mode");
+  if (mode !== "continue" && mode !== "fail_fast") {
+    throw new Error("Batch failurePolicy mode must be continue or fail_fast");
+  }
+
+  const maxFailures = Reflect.get(failurePolicy, "maxFailures");
+  if (
+    maxFailures !== undefined &&
+    (!Number.isInteger(maxFailures) || maxFailures < 1)
+  ) {
+    throw new Error(
+      "Batch failurePolicy maxFailures must be a positive integer",
+    );
+  }
 }
 
 function assertBatchStepPolicy(policy: BatchStepPolicy): void {
@@ -331,10 +619,7 @@ function assertBatchStepPolicy(policy: BatchStepPolicy): void {
         "Batch step rate limit partitionKey must contain 1 to 500 characters",
       );
     }
-    assertPositiveRateValue({
-      name: "capacity",
-      value: limit.capacity,
-    });
+    assertPositiveRateValue({ name: "capacity", value: limit.capacity });
     assertPositiveRateValue({
       name: "refillRatePerSecond",
       value: limit.refillRatePerSecond,

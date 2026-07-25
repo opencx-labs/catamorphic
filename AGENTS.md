@@ -20,7 +20,7 @@ Concrete implications for any change you make:
 
 ### Infrastructure priorities
 
-- **Cloudflare-first.** Cloudflare Sandbox is the default execution provider and Cloudflare Artifacts the default git code storage (both in `@catamorphic/cloudflare`; Daytona is the maintained alternate in `@catamorphic/daytona`). Backends are vendor plugin packages — hosts construct providers explicitly at boot (see ADR 0008 and `apps/playground/src/server/boot.ts`). See `CLOUDFLARE.md`.
+- **Cloudflare-first.** Cloudflare Sandbox is the default execution provider. S3-compatible storage (`@catamorphic/s3`, including Cloudflare R2) is the default git code storage until Cloudflare Artifacts access is generally available; Artifacts remains the preferred Cloudflare-native backend in `@catamorphic/cloudflare`. Daytona is the maintained alternate execution provider in `@catamorphic/daytona`. Hosts construct backends explicitly at boot (see ADRs 0008 and 0012 and `apps/playground/src/server/boot.ts`). See `CLOUDFLARE.md`.
 - **Postgres for everything stateful.** Tables live in a dedicated schema (default `catamorphic`). When you need queues or scheduling, build them on the same Postgres (`SKIP LOCKED`) instead of adding infrastructure.
 - **OpenTelemetry throughout.** Libraries instrument with `@opentelemetry/api` only (via `@catamorphic/otel`); the host owns the SDK/exporters. New service methods on hot paths (runs, deploys, sandbox ops, project mutations) should get spans with `catamorphic.*` attributes. For dev, the repo-root docker-compose ships an OTel collector (:4317/:4318) writing to ClickHouse (:8124 HTTP / :19001 native, db `otel`); the playground registers the host-side SDK in `apps/playground/src/server/otel.ts`.
 - **Bun** for running, bundling, and inside sandboxes.
@@ -41,7 +41,7 @@ Public developer surface:
 - `packages/ui` — React Flow editor components (canvas, panels, AI bar); all opt-in/composable.
 - `packages/registry` — shadcn-style copy-paste component registry.
 - `packages/api-client` — generated OpenAPI types + openapi-fetch client.
-- `packages/workflow` — **`@catamorphic/workflow`**: dependency-light authoring primitives for batch workflows; hosts may wrap and selectively re-export this surface.
+- `packages/workflow` — **`@catamorphic/workflow`**: dependency-light `defineWorkflow`, boundary, batch-scope, pause, child-workflow, and physical batch-step authoring primitives; hosts may wrap and selectively re-export this surface.
 
 Internal packages:
 
@@ -50,7 +50,7 @@ Internal packages:
 - `packages/git` — vendor-neutral git-backed project storage (isomorphic-git): `StorageBackend`/`RemoteBackend` contracts, `ProjectManager`, git-sync, filesystem backends.
 - `packages/parser` — ts-morph AST-to-WorkflowGraph parser.
 - `packages/sandbox` — vendor-neutral sandbox + coding-agent contracts (`SandboxProvider`, `SandboxManager`, `RunExecutor`, `CodingAgentProvider`), `instrumentSandboxProvider`, plugin-doc staging helpers. No vendor SDKs here.
-- `packages/cloudflare` — **`@catamorphic/cloudflare`** backend plugin: `CloudflareSandboxProvider` (Bridge Worker client), `ArtifactsClient` + `ArtifactsRemoteBackend` (Cloudflare Artifacts code storage). Default stack.
+- `packages/cloudflare` — **`@catamorphic/cloudflare`** backend plugin: `CloudflareSandboxProvider` (Bridge Worker client), `ArtifactsClient` + `ArtifactsRemoteBackend` (Cloudflare Artifacts code storage).
 - `packages/s3` — **`@catamorphic/s3`** backend plugin: `S3RemoteBackend` + `S3ObjectStore` store project origins directly in any S3-compatible bucket (Cloudflare R2, AWS S3, MinIO). Default code storage until Artifacts access lands (ADR 0012).
 - `packages/daytona` — **`@catamorphic/daytona`** backend plugin: `DaytonaSandboxProvider`, experimental Daytona git storage.
 - `packages/ai-sdk` — **`@catamorphic/ai-sdk`** coding-agent plugin: `AiSdkCodingAgent` uses Vercel AI SDK `ToolLoopAgent` in the host process and operates on the dev sandbox remotely. Flagship agent; used by the playground.
@@ -68,7 +68,7 @@ Apps:
 
 - `.cursor/skills/plugin-e2e-integration/SKILL.md` — Business-agnostic end-to-end plugin integration flow
 - `.cursor/skills/using-catamorphic/SKILL.md` — Embedding catamorphic in a host app
-- `.cursor/skills/embedding-guide/SKILL.md`, `api-type-safety`, `code-first-architecture`, `database-conventions`, `sandbox-agent-integration`, `workflow-code-conventions`
+- `.cursor/skills/embedding-guide/SKILL.md`, `.cursor/skills/api-type-safety/SKILL.md`, `.cursor/skills/code-first-architecture/SKILL.md`, `.cursor/skills/database-conventions/SKILL.md`, `.cursor/skills/sandbox-agent-integration/SKILL.md`, `.cursor/skills/workflow-code-conventions/SKILL.md`
 
 ## Verification Checklist
 
@@ -86,7 +86,7 @@ Zero errors and zero warnings. Use `bunx biome check --write --unsafe .` for uns
 ### 2. Typecheck
 
 ```bash
-turbo typecheck # all packages from root
+bun run typecheck # all packages from root via Turbo
 ```
 
 Every `.ts`/`.tsx` change must pass with zero errors.
@@ -94,13 +94,13 @@ Every `.ts`/`.tsx` change must pass with zero errors.
 ### 3. Build
 
 ```bash
-turbo build # all packages from root
+bun run build # all packages from root via Turbo
 ```
 
 ### 4. Tests
 
 ```bash
-turbo test # all packages from root
+bun run test # all packages from root via Turbo
 ```
 
 All existing tests must pass.
@@ -142,7 +142,10 @@ Settled decisions — do not deviate without explicit user approval. ADRs in `do
 
 ### Workflow Code Format
 
-Workflows use `"use workflow"` directive. Steps use `"use step"` directive.
+There is one Workflow model. A plain workflow is an exported async function
+whose function body contains the exact `"use workflow"` directive. It executes
+normally but has no persisted continuation between operations. Steps use the
+exact `"use step"` directive.
 
 ```typescript
 export async function myWorkflow({ input }: { input: string }) {
@@ -151,6 +154,15 @@ export async function myWorkflow({ input }: { input: string }) {
  return { result };
 }
 ```
+
+Workflows that need persisted continuation use the typed
+`defineWorkflow(({ defineBoundary, defineBatch }) => ({ steps: [...] }))`
+contract from `@catamorphic/workflow`. `defineBoundary` creates one atomic
+retry scope: when its callback fails, every operation in that callback retries
+together. `defineBatch` creates a paged per-item processing scope with an optional sink.
+Package-level `defineBatchStep` may physically coalesce compatible calls only
+inside `defineBatch.process`. These are Workflow capabilities, not separate
+public categories, and `stage` is not a public authoring concept.
 
 ### Step Functions
 

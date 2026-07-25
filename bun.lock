@@ -353,7 +353,7 @@
     },
     "packages/workflow": {
       "name": "@catamorphic/workflow",
-      "version": "0.0.1",
+      "version": "0.0.2",
       "devDependencies": {
         "@types/node": "^26.1.1",
       },

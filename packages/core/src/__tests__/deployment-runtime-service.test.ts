@@ -1,3 +1,4 @@
+import { EXECUTION_TRANSFORM_VERSION } from "@catamorphic/parser";
 import type {
   DeploymentRuntime,
   DeploymentRuntimeProvider,
@@ -5,7 +6,10 @@ import type {
   RuntimeHealth,
   SandboxProvider,
 } from "@catamorphic/sandbox";
-import { RUNTIME_PROTOCOL_VERSION } from "@catamorphic/sandbox";
+import {
+  DEPLOYMENT_RUNTIME_VERSION,
+  RUNTIME_PROTOCOL_VERSION,
+} from "@catamorphic/sandbox";
 import { describe, expect, it, vi } from "vitest";
 import { DeploymentRuntimeService } from "../services/deployment-runtime-service.js";
 import type {
@@ -18,6 +22,42 @@ const now = new Date("2026-07-12T12:00:00.000Z");
 const old = new Date("2026-06-01T00:00:00.000Z");
 
 describe("DeploymentRuntimeService lifecycle", () => {
+  it("rejects artifacts prepared by an older transform or runtime", async () => {
+    const store = new FakeDeploymentRuntimeStore({ runtimes: [] });
+    const provider = createProvider({
+      deploymentRuntime: createRuntimeProvider({}),
+    });
+    const service = createService({
+      store,
+      provider,
+      verifyArtifact: async () => false,
+    });
+    const artifact = {
+      id: "artifact-stale",
+      projectId: "project-1",
+      commitSha: "a".repeat(40),
+      artifactDigest: "b".repeat(64),
+      pluginDigest: "c".repeat(64),
+      transformVersion: "execution-transform-v2",
+      runtimeVersion: "runtime-protocol-v5",
+      status: "ready" as const,
+      createdAt: old.toISOString(),
+      readyAt: old.toISOString(),
+      lastUsedAt: old.toISOString(),
+    };
+
+    await expect(
+      service.ensure({
+        projectId: "project-1",
+        artifact,
+        files: {},
+        originalFiles: {},
+      }),
+    ).rejects.toThrow("incompatible transform or runtime versions");
+    expect(provider.createSandbox).not.toHaveBeenCalled();
+    expect(provider.deploymentRuntime?.ensureRuntime).not.toHaveBeenCalled();
+  });
+
   it("restarts an idle retired runtime instead of rematerializing it", async () => {
     const store = new FakeDeploymentRuntimeStore({
       runtimes: [
@@ -33,6 +73,9 @@ describe("DeploymentRuntimeService lifecycle", () => {
         runtimeId: "provider-stopped",
         sandboxId: "sandbox-stopped",
         deploymentArtifactId: "artifact-stopped",
+        artifactDigest: "b".repeat(64),
+        transformVersion: EXECUTION_TRANSFORM_VERSION,
+        runtimeVersion: DEPLOYMENT_RUNTIME_VERSION,
         generation: "1",
         status: "healthy",
       }),
@@ -48,8 +91,8 @@ describe("DeploymentRuntimeService lifecycle", () => {
         commitSha: "a".repeat(40),
         artifactDigest: "b".repeat(64),
         pluginDigest: "c".repeat(64),
-        transformVersion: "transform-v1",
-        runtimeVersion: "runtime-v1",
+        transformVersion: EXECUTION_TRANSFORM_VERSION,
+        runtimeVersion: DEPLOYMENT_RUNTIME_VERSION,
         status: "ready",
         createdAt: old.toISOString(),
         readyAt: old.toISOString(),
@@ -189,12 +232,16 @@ function createService(args: {
   store: DeploymentRuntimeStore;
   deploymentRuntime?: DeploymentRuntimeProvider;
   provider?: SandboxProvider;
+  verifyArtifact?: () => Promise<boolean>;
 }): DeploymentRuntimeService {
   return new DeploymentRuntimeService(args.store, {
     provider:
       args.provider ??
       createProvider({ deploymentRuntime: args.deploymentRuntime }),
-    artifacts: { markStatus: vi.fn(async () => {}) },
+    artifacts: {
+      markStatus: vi.fn(async () => {}),
+      verify: vi.fn(args.verifyArtifact ?? (async () => true)),
+    },
     now: () => now,
   });
 }
@@ -247,7 +294,13 @@ function health(args: {
   activeInvocations: number;
   queuedInvocations: number;
   maxConcurrency: number;
-}): RuntimeHealth {
+}): RuntimeHealth & {
+  protocolVersion: typeof RUNTIME_PROTOCOL_VERSION;
+  status: "healthy";
+  activeInvocations: number;
+  queuedInvocations: number;
+  maxConcurrency: number;
+} {
   return {
     runtimeId: args.runtimeId,
     runtimeStatus: args.runtimeStatus,

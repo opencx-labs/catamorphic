@@ -1,17 +1,21 @@
 export type {
   BatchConsistency,
+  BatchDefinition,
   BatchExecutionContext,
   BatchFailure,
+  BatchFailurePolicy,
+  BatchOptions,
+  BatchOutput,
   BatchSink,
   BatchSinkRecord,
-  BatchSinkSummary,
   BatchSinkWriteResult,
   BatchSource,
   BatchSourceBinding,
   BatchStepDefinition,
   BatchStepPolicy,
   BatchStepRateLimit,
-  BatchWorkflowDefinition,
+  BatchSummary,
+  DefineBatch,
   JsonPrimitive,
   JsonValue,
   KeyedBatchFailure,
@@ -28,9 +32,25 @@ export {
   batchSkipped,
   batchSucceeded,
   defineBatchStep,
-  defineBatchWorkflow,
   skipBatchItem,
   validateKeyedBatchOutcomes,
 } from "./batch.js";
+export type {
+  BoundaryContext,
+  BoundaryDefinition,
+  BoundaryOptions,
+  CallWorkflow,
+  DefineBoundary,
+  Pause,
+  PauseOptions,
+  PauseResult,
+  RetryBackoff,
+  RetryPolicy,
+  WorkflowBuilderContext,
+  WorkflowControls,
+  WorkflowDefinition,
+  WorkflowTransition,
+} from "./workflow.js";
+export { defineWorkflow } from "./workflow.js";
 
-export const WORKFLOW_PACKAGE_VERSION = "0.0.1";
+export const WORKFLOW_PACKAGE_VERSION = "0.0.2";

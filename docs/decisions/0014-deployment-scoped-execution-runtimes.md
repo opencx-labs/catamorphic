@@ -2,13 +2,15 @@
 
 - **Status:** Accepted
 - **Date:** 2026-07-12
+- **Updated by:** 0026 (one Workflow/Run model; batch is a scope)
 
 ## Context
 
 Production runs need exact provenance without paying sandbox, dependency,
 transform, plugin, and Bun startup costs for every invocation. ADR 0013 required
 a fresh production sandbox per run, while ADR 0004 established a sandbox per
-deployment. Regular and batch workflows also need one durable invocation model.
+deployment. Plain execution and paged collection processing also need one
+persisted invocation model.
 
 ## Decision
 
@@ -30,7 +32,7 @@ Provider URLs, tunnel credentials, and process details stay inside provider
 plugins. Cloudflare remains the priority implementation and alternate providers
 implement the same lifecycle and invocation contract, reinforcing ADR 0004.
 
-Regular and batch production work share one invocation protocol and incremental,
+All production Workflow capabilities share one invocation protocol and incremental,
 sequenced reporting. Postgres is the durable authority for queue state, leases,
 attempts, cancellation, checkpoints, and outcomes; supervisors are replaceable
 compute. Test mode retains ADR 0013's per-user mutable dev files, test secrets,
@@ -42,6 +44,8 @@ runs use the deployment-scoped pool pinned to their immutable artifact.
 ## Consequences
 
 Production provenance remains exact while warm runtimes amortize setup cost.
+ADR 0026 removes public execution-category distinctions; internal work kinds
+continue dispatching plain execution, boundaries, and batch operations.
 Invocations from different artifacts or trust boundaries never share a pool.
 Worker failure, timeout, or cancellation requires worker replacement;
 supervisor state is disposable and recovery follows Postgres. Pool

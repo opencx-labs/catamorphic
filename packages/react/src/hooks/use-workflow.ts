@@ -1,13 +1,14 @@
 "use client";
 
 import { type UseQueryResult, useQuery } from "@tanstack/react-query";
-import type { WorkflowGraph } from "../lib/api-types.js";
+import { adaptWorkflowGraph, type WorkflowGraph } from "../lib/api-types.js";
 import {
   assertApiOk,
   CatamorphicError,
   runWithCatamorphicError,
 } from "../lib/errors.js";
 import { useCatamorphic } from "../provider.js";
+import { workflowKeys } from "../workflow-keys.js";
 
 export interface UseWorkflowOptions {
   ref?: string;
@@ -21,7 +22,7 @@ export function useWorkflow(
   const { apiClient } = useCatamorphic();
   const { ref } = options;
   return useQuery<WorkflowGraph, CatamorphicError>({
-    queryKey: ["cat", "project", projectId, "workflow", name, { ref }],
+    queryKey: workflowKeys.detail({ projectId, name, ref }),
     queryFn: () =>
       runWithCatamorphicError(async () => {
         if (!projectId || !name) {
@@ -36,7 +37,9 @@ export function useWorkflow(
             params: { path: { projectId, name }, query: { ref } },
           },
         );
-        return assertApiOk(result, "Workflow response empty");
+        return adaptWorkflowGraph(
+          assertApiOk(result, "Workflow response empty"),
+        );
       }),
     enabled: Boolean(projectId && name),
   });

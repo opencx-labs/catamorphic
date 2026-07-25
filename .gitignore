@@ -19,11 +19,6 @@ dist/
 *.tmp
 *.log
 
-# Generated files
-packages/api-client/src/schema.d.ts
-packages/api-client/openapi.json
-packages/db/src/generated/
-
 # Postgres data (docker)
 pgdata/
 

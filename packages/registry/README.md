@@ -15,8 +15,15 @@ npx shadcn add /abs/path/to/catamorphic/packages/registry/dist/r/catamorphic-pro
 npx shadcn add ./node_modules/@catamorphic/registry/dist/r/catamorphic-provider.json
 ```
 
-The `batch-runs-panel` item provides batch progress, throughput, item status
-filters, errors, cancellation, and an artifact rendering slot.
+The `runs-panel` item is the single Runs surface for every Workflow. It uses Run
+capabilities to expose cancellation, processing pause/resume, waiting-for-input
+submission, selectable Batch processing scopes, and item inspection/history,
+including prior failed or canceled attempts. Do not add separate panels for
+Workflow authoring or execution capabilities.
+
+Items currently shipped: `catamorphic-provider`, `projects-list`,
+`project-editor`, `file-explorer`, `git-panel`, `diff-drawer`, `runs-panel`,
+`plugins-settings`, `monaco-editor`, and `agent-chat`.
 
 The `agent-chat` item is a complete bottom-docked coding-agent conversation.
 It needs only a `projectId` inside `CatamorphicAppProvider`; optimistic queued

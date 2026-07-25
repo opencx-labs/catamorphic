@@ -19,6 +19,28 @@ The plugin is fully encapsulated:
 - Registers **no CORS** — the host owns cross-origin policy.
 - Route URLs are prefix-relative; mount anywhere, but `@catamorphic/api-client`'s generated paths assume `/api`.
 
+## Runs
+
+There is one Runs route family for every Workflow:
+
+- `POST /api/projects/:projectId/workflows/:name/runs` triggers production.
+- `POST /api/projects/:projectId/workflows/:name/test-runs` triggers mutable-source test mode for plain Workflow functions.
+- `GET /api/projects/:projectId/workflows/:name/runs` lists Runs.
+- `GET /api/runs/:runId` and `/api/runs/:runId/*` expose detail and capability-driven controls.
+
+Boundaries, batch scopes, pauses, and item progress are capabilities/details on
+the canonical Workflow and Run models. They do not get separate route families.
+Run list and detail responses expose every Batch processing scope as ordered
+`batchScopes`, including failed and canceled attempts, so hosts can inspect
+items by `workflowStepAttemptId` after the Run is terminal.
+Pause and resume return `409` when their current Run capability is unavailable;
+repeating an operation after it already reached its target paused/running state
+is idempotent.
+
+Workflow list and detail routes accept `?ref=<git-ref>`. Workflow detail always
+includes `projectFiles` and `allFiles`; public workflow responses omit internal
+parser execution descriptors.
+
 ## Identity
 
 Every request requires two headers (no defaults):

@@ -177,19 +177,7 @@ async function applyEvent(args: {
   event: RuntimeInvocationEvent;
 }): Promise<void> {
   const timestamp = new Date(args.event.timestamp);
-  if (args.event.type === "started") {
-    await args.trx
-      .updateTable("workflow_runs")
-      .set({
-        status: "running",
-        started_at: timestamp,
-        attempt: args.event.attempt,
-      })
-      .where("id", "=", args.runId)
-      .where("status", "in", ["pending", "running"])
-      .execute();
-    return;
-  }
+  if (args.event.type === "started") return;
   if (args.event.type === "step_started") {
     await insertStartedStep({
       trx: args.trx,
@@ -211,36 +199,8 @@ async function applyEvent(args: {
     });
     return;
   }
-  if (args.event.type === "completed") {
-    await args.trx
-      .updateTable("workflow_runs")
-      .set({
-        status: "completed",
-        result: toJson(args.event.result),
-        error: null,
-        completed_at: timestamp,
-      })
-      .where("id", "=", args.runId)
-      .where("status", "in", ["pending", "running"])
-      .execute();
-    return;
-  }
-  if (
-    args.event.type === "failed" ||
-    args.event.type === "timed_out" ||
-    args.event.type === "canceled"
-  ) {
-    await args.trx
-      .updateTable("workflow_runs")
-      .set({
-        status: args.event.type === "canceled" ? "cancelled" : "failed",
-        error: args.event.error,
-        completed_at: timestamp,
-      })
-      .where("id", "=", args.runId)
-      .where("status", "in", ["pending", "running"])
-      .execute();
-  }
+  // RunsService owns the plain invocation's top-level lifecycle. Events only
+  // persist replayable graph progress.
 }
 
 async function insertStartedStep(args: {
@@ -399,9 +359,20 @@ async function requireRun(args: {
     .innerJoin("projects", "projects.id", "workflow_runs.project_id")
     .where("workflow_runs.id", "=", args.runId)
     .where("projects.tenant_id", "=", args.tenantId)
-    .select("workflow_runs.id")
+    .leftJoin(
+      "workflow_run_states",
+      "workflow_run_states.run_id",
+      "workflow_runs.id",
+    )
+    .select([
+      "workflow_runs.id",
+      "workflow_run_states.run_id as execution_state_run_id",
+    ])
     .executeTakeFirst();
   if (!run) throw new RuntimeEventRunNotFoundError(args.runId);
+  if (run.execution_state_run_id) {
+    throw new Error("Runtime event application supports plain functions only");
+  }
 }
 
 function replayKey(args: { nodeId: string; occurrence: number }): string {

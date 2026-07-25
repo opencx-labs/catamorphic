@@ -87,6 +87,14 @@ Idempotent and schema-scoped. Programmatically:
 await catamorphic.migrate();
 ```
 
+Worker startup is explicit and host-owned. Start a handle once in every process
+that should claim queued production work, then stop it during shutdown:
+
+```ts
+const executionWorker = catamorphic.startExecutionWorker({ concurrency: 4 });
+// Later: await executionWorker.stop();
+```
+
 Or via CLI in a deploy step:
 
 ```bash
@@ -103,47 +111,71 @@ const scoped = catamorphic.forTenant(req.org.id).forUser(req.user.id);
 // Projects
 await scoped.projects.create({ name: "onboarding" });
 await scoped.projects.list({ limit: 20 });
-await scoped.projects.get(projectId);
-await scoped.projects.update(projectId, { name: "renamed" });
-await scoped.projects.delete(projectId);
+await scoped.projects.get({ projectId });
+await scoped.projects.update({ projectId, name: "renamed" });
+await scoped.projects.delete({ projectId });
 
 // Files (content-addressed, commit-on-write)
-await scoped.files.list(projectId);
-await scoped.files.read(projectId, "src/welcome.ts");
-await scoped.files.readAll(projectId);
-await scoped.files.write(projectId, "src/welcome.ts", {
+await scoped.files.list({ projectId });
+await scoped.files.read({ projectId, path: "src/welcome.ts" });
+await scoped.files.readAll({ projectId });
+await scoped.files.write({
+  projectId,
+  path: "src/welcome.ts",
   content: source,
   commitMessage: "Add welcome workflow",
 });
 
 // Workflows (parsed on read from project source)
-await scoped.workflows.list(projectId);
-await scoped.workflows.get(projectId, "welcomeUser", { ref: "HEAD" });
+await scoped.workflows.list({ projectId });
+await scoped.workflows.get({ projectId, workflowName: "welcomeUser", ref: "HEAD" });
 ```
 
-Anything not covered by the scoped-client surface (runs, plugins, secrets, deploy/pull/diff) is reachable via `catamorphic.core.runs.*`, `catamorphic.core.plugins.*`, `catamorphic.core.deployment.*`, etc. — these take `identity` as their first argument (build it yourself: `{ tenantId, externalUserId }`).
+Runs are also identity-bound on `scoped.runs`. Plugins, secrets, and git
+operations such as deploy/pull/diff remain available through
+`catamorphic.core.*` or the HTTP surface.
 
 ### 4) Triggering runs
 
-Use an explicit run mode:
+Use the one `scoped.runs` resource with an explicit Run mode:
 
-- `core.runs.triggerProduction(...)` resolves and executes deployed
-  `origin/main` in a fresh sandbox and records its exact SHA.
-- `core.runs.triggerTest(...)` executes the caller's current dev files plus
+- `scoped.runs.triggerProduction({ projectId, workflowName, input? })` resolves
+  the deployed `origin/main` artifact, enqueues the Run, and records its SHA.
+- `scoped.runs.triggerTest({ projectId, workflowName, input?, files? })`
+  executes the caller's current dev files plus
   optional file overlays in a disposable directory inside their dev sandbox.
   Test runs intentionally retain no SHA and are not reproducible.
 
-Both methods load the matching production or test secret profile, use the
-shared runtime harness, and transactionally persist terminal run and step
-state.
+Both methods return a canonical Run. Production execution continues through the
+explicit host worker; test execution uses the shared runtime harness. Workflows
+with persisted scopes require production deployment and reject mutable-source
+test triggering.
 
 It requires `sandboxProvider` at boot — without it the method throws `SandboxProviderNotConfiguredError`. Other typed errors: `ProjectNotFoundError`, `WorkflowNotFoundError` (pre-flight check on files), `PluginSecretsMissingError` (when attached plugins declare required secrets the project hasn't set).
 
 Over HTTP, production uses
 `POST /api/projects/:projectId/workflows/:name/runs`; test uses
 `POST /api/projects/:projectId/workflows/:name/test-runs` and may include
-`files`. React exposes `useTriggerWorkflowRun` and
-`useTriggerWorkflowTestRun`, respectively.
+`files`. These are two triggers in the same route and hook family. React exposes
+`useTriggerRun` and `useTriggerTestRun`; list, detail, controls, and item
+inspection use `useRuns`, `useRun`, and the other `useRun*` hooks.
+
+### 5) Workflow authoring model
+
+There is one Workflow model and one Run model:
+
+- An exported async function with the exact `"use workflow"` directive has no
+  persisted continuation between operations.
+- `defineWorkflow(({ defineBoundary, defineBatch }) => ({ steps: [...] }))`
+  enables persisted scopes without creating another public category.
+- `defineBoundary` is one atomic retry scope; all callback operations retry
+  together after failure.
+- `defineBatch` is a finite paged per-item processing scope with an optional sink.
+- Package-level `defineBatchStep` may physically coalesce compatible calls only
+  inside `defineBatch.process`.
+
+Workflow and Run capabilities determine available controls. Do not add a public
+stage concept or separate API, SDK, hook, or UI families for these mechanics.
 
 ## Backend Path B — HTTP via the Fastify plugin
 
@@ -251,10 +283,16 @@ import {
   useWorkflows,
   useWriteProjectFile,
   // Runs
-  useWorkflowRuns,
-  useWorkflowRun,
-  useTriggerWorkflowRun,
-  useCancelWorkflowRun,
+  useRuns,
+  useRun,
+  useTriggerRun,
+  useTriggerTestRun,
+  useCancelRun,
+  usePauseRunProcessing,
+  useResumeRunProcessing,
+  useSubmitRunInput,
+  useRunItems,
+  useRunItemSteps,
   // Git
   useProjectGit,
   useProjectBranches,
@@ -468,9 +506,10 @@ Items currently shipped:
 - `file-explorer` — pure file tree.
 - `git-panel` — branch / dirty / commits / deploy panel (`useProjectGit` + `useProjectCommits` + `useDeployProject`).
 - `diff-drawer` — side drawer with a `renderDiff` slot for monaco-diff or codemirror-merge.
-- `runs-panel` — list runs + trigger new ones (`useWorkflowRuns` + `useTriggerWorkflowRun`).
+- `runs-panel` — the single Runs surface for all Workflows, including capability-driven controls and item inspection (`useRuns` + `useTriggerRun`).
 - `plugins-settings` — attach/detach plugins + edit secrets.
 - `monaco-editor` — `MonacoCodeEditor` for `WorkflowEditor`'s `renderCodeEditor` slot: TypeScript highlighting/diagnostics/completion, line numbers, and code ↔ canvas linking via `useCodeEditorLink` (ADR 0011). Pulls `@monaco-editor/react` into the host, not into catamorphic packages.
+- `agent-chat` — bottom-docked coding-agent conversation with optimistic activity and changed-file state.
 
 Pick what you want, drop it into your repo, then customize the JSX/tailwind freely — they're meant to be edited.
 
@@ -493,24 +532,27 @@ Use cases:
 
 | Package | Use In | Key Exports |
 | --- | --- | --- |
-| `@catamorphic/server-sdk` | Node/Bun backend | `createCatamorphic`, `Catamorphic` (`migrate()`, `close()`, `forTenant`), `ScopedClient`, re-exports of db/git/sandbox/plugins building blocks |
+| `@catamorphic/server-sdk` | Node/Bun backend | `createCatamorphic`, `Catamorphic` (`migrate()`, `startExecutionWorker()`, `close()`, `forTenant`), `ScopedClient` with `scoped.runs`, re-exports of db/git/sandbox/plugins building blocks |
 | `@catamorphic/core` | Advanced backend | `CatamorphicCore`, `createCatamorphicCore`, service classes + identity helpers |
 | `@catamorphic/db` | Backend + migrations | `createDatabase` (pool or connection string), `migrateToLatest`, `DB` (Kysely types), `catamorphic-db` CLI (`migrate`, `status`, `reset`) |
 | `@catamorphic/git` | Backend | `ProjectManager`, `FsBackend`, `FsRemoteBackend`, `FsOriginRepo` |
 | `@catamorphic/sandbox` | Backend (optional) | `SandboxProvider` + `CodingAgentProvider` contracts, `instrumentSandboxProvider`, `SandboxManagerImpl`, `RunExecutorImpl` |
 | `@catamorphic/cloudflare` | Backend (plugin) | `CloudflareSandboxProvider`, `ArtifactsClient`, `ArtifactsRemoteBackend` |
+| `@catamorphic/s3` | Backend (plugin) | `S3RemoteBackend`, `S3ObjectStore` for R2, S3, MinIO, and compatible stores |
 | `@catamorphic/daytona` | Backend (plugin) | `DaytonaSandboxProvider`, `DaytonaBackend`, `DaytonaProjectRepo` |
 | `@catamorphic/ai-sdk` | Backend (plugin) | `AiSdkCodingAgent` (flagship coding agent, in-process AI SDK `ToolLoopAgent` with remote sandbox tools) |
 | `@catamorphic/codex` | Backend (plugin) | `CodexAgent` (Codex SDK coding agent) |
 | `@catamorphic/plugins` | Backend (optional) | `LocalPluginResolver`, `PluginManifestSchema`, `PluginResolver` |
 | `@catamorphic/fastify-plugin` | Backend (HTTP path) | `catamorphicPlugin` (mountable, encapsulated), `createApp({ core })` app factory |
 | `@catamorphic/otel` | Backend libraries | `getTracer`, `withSpan` — `@opentelemetry/api` helpers; host owns the OTel SDK |
+| `@catamorphic/workflow` | Workflow projects | `defineWorkflow`, builder-scoped `defineBoundary`/`defineBatch`, `defineBatchStep`, pause and child-workflow types |
+| `@catamorphic/runtime` | Sandbox runtime | Workflow harness and deployment supervisor protocol; not an author dependency |
 | `@catamorphic/api-client` | Frontend or non-Node backend | `createApiClient`, `CatamorphicApiClient`, `paths` (OpenAPI) |
 | `@catamorphic/react` | Frontend | `CatamorphicProvider`, `useCatamorphic`, data hooks (projects/runs/git/plugins/secrets/agent), atoms, `useWorkflowGraph`, `useSelectedNode`, `useProjectGitState`, `useOnParse`/`useParseWorkflow`, `CatamorphicError`, `isCatamorphicError` |
 | `@catamorphic/react/types` | Frontend | OpenAPI-derived domain types (`Project`, `Run`, `RepoStatus`, `BranchInfo`, `ConflictEntry`, `PluginInfo`, `Secret`, `AgentSession`, …) |
 | `@catamorphic/react/workflow-helpers` | Frontend (server-safe) | Pure authoring helpers, no React |
 | `@catamorphic/ui` | Frontend | `WorkflowEditor`, `WorkflowEditorChrome`, `WorkflowEditorScope`, `WorkflowCanvas`, `DetailPanel`, `HistorySidebar`, `Toolbar`, `AIBar`, plus `@catamorphic/ui/styles.css` |
-| `@catamorphic/registry` | Frontend (copy-paste) | shadcn-style registry of pre-wired components (`catamorphic-provider`, `projects-list`, `project-editor`, `file-explorer`, `git-panel`, `diff-drawer`, `runs-panel`, `plugins-settings`) — install with `npx shadcn add <registry-host>/r/<item>.json` |
+| `@catamorphic/registry` | Frontend (copy-paste) | shadcn-style registry of pre-wired components (`catamorphic-provider`, `projects-list`, `project-editor`, `file-explorer`, `git-panel`, `diff-drawer`, `runs-panel`, `plugins-settings`, `monaco-editor`, `agent-chat`) — install with `npx shadcn add <registry-host>/r/<item>.json` |
 | `@catamorphic/parser` | Either | `parseWorkflow`, `parseProject`, `layoutGraph`, `WorkflowGraph` types |
 
 ## Environment Variables
@@ -522,7 +564,7 @@ Backend (SDK):
 - `CATAMORPHIC_PROJECTS_PATH` — fs path for per-user git working trees
 - `CATAMORPHIC_REMOTES_PATH` — fs path for bare git remotes
 - `CLOUDFLARE_SANDBOX_API_URL` + `CLOUDFLARE_SANDBOX_API_KEY` — default sandbox provider (Bridge Worker; see `CLOUDFLARE.md`)
-- `DAYTONA_API_KEY` — alternate sandbox provider (used when Cloudflare vars unset)
+- `DAYTONA_API_KEY` — credential for hosts that explicitly construct the alternate Daytona provider
 - `CATAMORPHIC_LOCAL_PLUGINS_DIR` — optional, enables local plugin resolution
 
 Frontend (HTTP path):
@@ -536,6 +578,8 @@ Frontend (HTTP path):
 - **Using `@catamorphic/ui` without the stylesheet.** Import `@catamorphic/ui/styles.css` once at the root — class names use the `.catamorphic-*` prefix so host CSS doesn't clash.
 - **Double `QueryClientProvider`.** `CatamorphicProvider` mounts its own if you don't pass `queryClient`. In hosts that already have one, pass it explicitly so queries share a cache.
 - **Migrations.** `catamorphic.migrate()` / `catamorphic-db migrate` are idempotent and schema-scoped; prefer running them in CI/deploy.
+- **No execution worker.** Production triggers enqueue Runs; a host process must explicitly start `catamorphic.startExecutionWorker(...)` and stop its handle during shutdown.
+- **Mutable-source test of persisted scopes.** Test mode supports plain `"use workflow"` functions. A Workflow using `defineWorkflow` must be deployed and triggered in production mode.
 - **Schema scoping with shared pools.** `createDatabase({ connectionString, schema })` sets `search_path` on connections it creates — don't hand that pool to host code expecting `public`. Host-owned pools passed as `{ pool }` are safe: catamorphic schema-qualifies its queries via Kysely's `WithSchemaPlugin` and leaves the pool's `search_path` alone.
 - **Calling hooks outside the provider.** `useCatamorphic must be used within a <CatamorphicProvider>` means the tree is missing the provider (or there are two React copies; check peer dep resolution).
 - **Branching on `error.message`.** All hooks reject with `CatamorphicError`; switch on `err.code` (use `isCatamorphicError(err)` first). `message` is for humans; `details` carries the typed payload (e.g. conflict files).

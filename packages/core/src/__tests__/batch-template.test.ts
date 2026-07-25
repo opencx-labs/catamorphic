@@ -24,7 +24,10 @@ describe("customer feedback batch template", () => {
     expect(parsed.workflows).toHaveLength(1);
     expect(parsed.workflows[0]).toMatchObject({
       functionName: "analyzeCustomerFeedback",
-      kind: "batch",
+      capabilities: {
+        persistedContinuations: true,
+        batchProcessing: true,
+      },
     });
     expect(parsed.workflows[0]?.graph.nodes.map((node) => node.type)).toEqual(
       expect.arrayContaining(["source", "step", "sink"]),

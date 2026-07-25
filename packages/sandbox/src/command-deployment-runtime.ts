@@ -17,7 +17,10 @@ import type {
   RuntimeTerminalResult,
   SandboxProvider,
 } from "./types.js";
-import { RuntimeEventReportingError } from "./types.js";
+import {
+  RuntimeEventReportingError,
+  RuntimeInfrastructureError,
+} from "./types.js";
 
 interface RuntimeRecord {
   runtime: DeploymentRuntime;
@@ -49,7 +52,7 @@ export class CommandDeploymentRuntimeProvider
   async ensureRuntime(
     args: EnsureDeploymentRuntimeArgs,
   ): Promise<DeploymentRuntime> {
-    const key = `${args.sandboxId}:${args.deploymentArtifactId}`;
+    const key = runtimeKey(args);
     const existingId = this.runtimeKeys.get(key);
     const existing = existingId ? this.runtimes.get(existingId) : undefined;
     if (existing) {
@@ -85,6 +88,9 @@ export class CommandDeploymentRuntimeProvider
           CATAMORPHIC_RUNTIME_ARTIFACT_ROOT: args.workingDirectory,
           CATAMORPHIC_RUNTIME_WRITABLE_ROOT: writableRoot,
           CATAMORPHIC_DEPLOYMENT_ARTIFACT_ID: args.deploymentArtifactId,
+          CATAMORPHIC_ARTIFACT_DIGEST: args.artifactDigest,
+          CATAMORPHIC_TRANSFORM_VERSION: args.transformVersion,
+          CATAMORPHIC_RUNTIME_VERSION: args.runtimeVersion,
           CATAMORPHIC_RUNTIME_PORT: String(port),
           CATAMORPHIC_RUNTIME_MAX_CONCURRENCY: String(args.maxConcurrency ?? 4),
         },
@@ -98,6 +104,9 @@ export class CommandDeploymentRuntimeProvider
       runtimeId,
       sandboxId: args.sandboxId,
       deploymentArtifactId: args.deploymentArtifactId,
+      artifactDigest: args.artifactDigest,
+      transformVersion: args.transformVersion,
+      runtimeVersion: args.runtimeVersion,
       generation,
       status: "starting",
     };
@@ -115,10 +124,31 @@ export class CommandDeploymentRuntimeProvider
   }
 
   async invoke(args: RuntimeInvocation): Promise<RuntimeInvocationReceipt> {
-    const record = this.requireRuntime(args.runtimeId);
-    if (args.deploymentArtifactId !== record.runtime.deploymentArtifactId) {
-      throw new Error("Invocation deployment artifact does not match runtime");
+    try {
+      return await this.invokeInner(args);
+    } catch (error) {
+      if (args.signal?.aborted) throw error;
+      if (error instanceof RuntimeInfrastructureError) throw error;
+      throw new RuntimeInfrastructureError({
+        operation: `invocation '${args.invocationId}' handoff`,
+        cause: error,
+      });
     }
+  }
+
+  private async invokeInner(
+    args: RuntimeInvocation,
+  ): Promise<RuntimeInvocationReceipt> {
+    const record = this.requireRuntime(args.runtimeId);
+    if (
+      args.deploymentArtifactId !== record.runtime.deploymentArtifactId ||
+      args.artifactDigest !== record.runtime.artifactDigest ||
+      args.transformVersion !== record.runtime.transformVersion ||
+      args.runtimeVersion !== record.runtime.runtimeVersion
+    ) {
+      throw new Error("Invocation artifact identity does not match runtime");
+    }
+    args.signal?.throwIfAborted();
     const requestFile = `requests/${hash(args.invocationId)}.json`;
     await this.options.provider.uploadFiles(
       record.runtime.sandboxId,
@@ -127,6 +157,9 @@ export class CommandDeploymentRuntimeProvider
           protocolVersion: args.protocolVersion,
           invocationId: args.invocationId,
           deploymentArtifactId: args.deploymentArtifactId,
+          artifactDigest: args.artifactDigest,
+          transformVersion: args.transformVersion,
+          runtimeVersion: args.runtimeVersion,
           kind: args.kind,
           target: args.target,
           input: args.input,
@@ -161,45 +194,56 @@ export class CommandDeploymentRuntimeProvider
       (result) => ({ status: "fulfilled", result }),
       (error: unknown) => ({ status: "rejected", error }),
     );
-    const cursor = { sequence: 0 };
-    if (args.eventSink) {
-      await this.reportWhileRunning({
-        record,
-        invocation: args,
-        completion,
-        cursor,
-      });
-    }
-    const outcome = await completion;
-    if (outcome.status === "rejected") throw outcome.error;
-    const result = outcome.result;
-    if (result.exitCode !== 0) {
-      const logs = await this.options.provider
-        .downloadFile(
-          record.runtime.sandboxId,
-          `${record.runtimeDirectory}/supervisor.log`,
-        )
-        .catch(() => "");
-      throw new Error(
-        `Deployment runtime invocation failed: ${result.result}\n${logs}`,
-      );
-    }
-    const receipt = parseReceipt({
-      runtimeId: args.runtimeId,
-      value: JSON.parse(result.result),
-    });
-    if (args.eventSink) {
-      await reportEvents({
-        sink: args.eventSink,
+    const cancelInvocation = (): void => {
+      void this.cancel({
         runtimeId: args.runtimeId,
         invocationId: args.invocationId,
-        events: receipt.events.filter(
-          (event) => event.sequence > cursor.sequence,
-        ),
-        cursor,
+      }).catch(() => {});
+    };
+    args.signal?.addEventListener("abort", cancelInvocation, { once: true });
+    const cursor = { sequence: 0 };
+    try {
+      if (args.eventSink) {
+        await this.reportWhileRunning({
+          record,
+          invocation: args,
+          completion,
+          cursor,
+        });
+      }
+      const outcome = await completion;
+      if (outcome.status === "rejected") throw outcome.error;
+      const result = outcome.result;
+      if (result.exitCode !== 0) {
+        const logs = await this.options.provider
+          .downloadFile(
+            record.runtime.sandboxId,
+            `${record.runtimeDirectory}/supervisor.log`,
+          )
+          .catch(() => "");
+        throw new Error(
+          `Deployment runtime invocation failed: ${result.result}\n${logs}`,
+        );
+      }
+      const receipt = parseReceipt({
+        runtimeId: args.runtimeId,
+        value: JSON.parse(result.result),
       });
+      if (args.eventSink) {
+        await reportEvents({
+          sink: args.eventSink,
+          runtimeId: args.runtimeId,
+          invocationId: args.invocationId,
+          events: receipt.events.filter(
+            (event) => event.sequence > cursor.sequence,
+          ),
+          cursor,
+        });
+      }
+      return receipt;
+    } finally {
+      args.signal?.removeEventListener("abort", cancelInvocation);
     }
-    return receipt;
   }
 
   async cancel(args: CancelRuntimeInvocationArgs): Promise<void> {
@@ -351,7 +395,12 @@ const required = (name) => {
 const dispatcher = new RuntimeInvocationDispatcher({
   artifactRoot: required("CATAMORPHIC_RUNTIME_ARTIFACT_ROOT"),
   writableRoot: required("CATAMORPHIC_RUNTIME_WRITABLE_ROOT"),
-  deploymentArtifactId: required("CATAMORPHIC_DEPLOYMENT_ARTIFACT_ID"),
+  artifactIdentity: {
+    deploymentArtifactId: required("CATAMORPHIC_DEPLOYMENT_ARTIFACT_ID"),
+    artifactDigest: required("CATAMORPHIC_ARTIFACT_DIGEST"),
+    transformVersion: required("CATAMORPHIC_TRANSFORM_VERSION"),
+    runtimeVersion: required("CATAMORPHIC_RUNTIME_VERSION"),
+  },
   maxConcurrency: Number(process.env.CATAMORPHIC_RUNTIME_MAX_CONCURRENCY ?? "4"),
   workerFactory: new BunWorkerFactory({
     workerEntryUrl: new URL("./supervisor-worker.js", import.meta.url),
@@ -371,6 +420,16 @@ startBunSupervisor({
 
 function hash(value: string): string {
   return createHash("sha256").update(value).digest("hex");
+}
+
+function runtimeKey(args: EnsureDeploymentRuntimeArgs): string {
+  return [
+    args.sandboxId,
+    args.deploymentArtifactId,
+    args.artifactDigest,
+    args.transformVersion,
+    args.runtimeVersion,
+  ].join(":");
 }
 
 function parseEventsResponse(value: unknown): RuntimeInvocationEventsResponse {
@@ -465,6 +524,7 @@ function isReceiptValue(value: Record<string, unknown>): value is {
   terminal: RuntimeTerminalResult;
 } {
   return (
+    value.protocolVersion === RUNTIME_PROTOCOL_VERSION &&
     typeof value.invocationId === "string" &&
     Array.isArray(value.events) &&
     value.events.every(isRuntimeEvent) &&

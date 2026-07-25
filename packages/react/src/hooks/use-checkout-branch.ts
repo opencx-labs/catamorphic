@@ -12,6 +12,7 @@ import {
 } from "../lib/errors.js";
 import { useCatamorphic } from "../provider.js";
 import type { RepoStatus } from "../types.js";
+import { workflowKeys } from "../workflow-keys.js";
 
 export function useCheckoutBranch(
   projectId: string,
@@ -36,6 +37,9 @@ export function useCheckoutBranch(
       });
       queryClient.invalidateQueries({
         queryKey: ["cat", "project", projectId, "files"],
+      });
+      queryClient.invalidateQueries({
+        queryKey: workflowKeys.project({ projectId }),
       });
     },
   });

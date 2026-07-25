@@ -3,6 +3,8 @@ import {
   layoutGraph,
   parseProject,
   parseWorkflowFromProject,
+  type WorkflowCapabilities,
+  type WorkflowExecutionDescriptor,
   type WorkflowGraph,
 } from "@catamorphic/parser";
 import type { Identity } from "../identity.js";
@@ -13,7 +15,8 @@ import {
 
 export interface WorkflowSummary {
   name: string;
-  kind: "regular" | "batch";
+  capabilities: WorkflowCapabilities;
+  execution: WorkflowExecutionDescriptor;
   displayName: string | null;
   description: string | null;
   filePath: string;
@@ -37,8 +40,7 @@ export class WorkflowNotFoundError extends Error {
 
 /**
  * Reads workflow definitions by parsing project source files. Workflows are
- * not separate DB entities — they are exported functions with a
- * `"use workflow"` directive in the project's git repo.
+ * not separate DB entities; the exported TypeScript source is the registry.
  */
 export class WorkflowsService {
   constructor(
@@ -46,17 +48,21 @@ export class WorkflowsService {
     private readonly projects: ProjectsService,
   ) {}
 
-  async list(
-    identity: Identity,
-    projectId: string,
-  ): Promise<WorkflowSummary[]> {
-    await this.requireProject(identity, projectId);
-    return this.withDev(identity, projectId, async (repo) => {
-      const files = await repo.readAllFiles();
+  async list(args: {
+    identity: Identity;
+    projectId: string;
+    ref?: string;
+  }): Promise<WorkflowSummary[]> {
+    await this.requireProject(args.identity, args.projectId);
+    return this.withDev(args.identity, args.projectId, async (repo) => {
+      const files = args.ref
+        ? await repo.readAllFilesAtRef(args.ref)
+        : await repo.readAllFiles();
       const { workflows } = parseProject(files);
       return workflows.map((wf) => ({
         name: wf.functionName,
-        kind: wf.kind ?? "regular",
+        capabilities: wf.graph.capabilities,
+        execution: wf.graph.execution,
         displayName: wf.graph.displayName ?? null,
         description: wf.graph.description ?? null,
         filePath: wf.filePath ?? "",
@@ -65,19 +71,21 @@ export class WorkflowsService {
     });
   }
 
-  async get(
-    identity: Identity,
-    projectId: string,
-    workflowName: string,
-    opts: { ref?: string } = {},
-  ): Promise<WorkflowDetail> {
-    await this.requireProject(identity, projectId);
-    return this.withDev(identity, projectId, async (repo) => {
-      const allFiles = opts.ref
-        ? await repo.readAllFilesAtRef(opts.ref)
+  async get(args: {
+    identity: Identity;
+    projectId: string;
+    workflowName: string;
+    ref?: string;
+  }): Promise<WorkflowDetail> {
+    await this.requireProject(args.identity, args.projectId);
+    return this.withDev(args.identity, args.projectId, async (repo) => {
+      const allFiles = args.ref
+        ? await repo.readAllFilesAtRef(args.ref)
         : await repo.readAllFiles();
-      const graph = parseWorkflowFromProject(allFiles, workflowName);
-      if (!graph) throw new WorkflowNotFoundError(projectId, workflowName);
+      const graph = parseWorkflowFromProject(allFiles, args.workflowName);
+      if (!graph) {
+        throw new WorkflowNotFoundError(args.projectId, args.workflowName);
+      }
 
       layoutGraph({ nodes: graph.nodes, edges: graph.edges });
 

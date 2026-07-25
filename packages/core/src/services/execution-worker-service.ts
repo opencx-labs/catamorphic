@@ -13,7 +13,7 @@ export type ExecutionJobHandler = (args: {
 }) => Promise<void>;
 
 export interface ExecutionWorkerOptions {
-  workerId?: string;
+  name?: string;
   concurrency?: number;
   claimLimit?: number;
   leaseSeconds?: number;
@@ -21,8 +21,17 @@ export interface ExecutionWorkerOptions {
   kinds?: readonly ExecutionJobKind[];
 }
 
+export interface ExecutionWorkerHandle {
+  readonly id: string;
+  readonly name?: string;
+  readonly done: Promise<void>;
+  stop(): Promise<void>;
+}
+
 const ALL_JOB_KINDS: readonly ExecutionJobKind[] = [
   "workflow_run",
+  "durable_boundary",
+  "durable_pause_timeout",
   "batch_source",
   "batch_item",
   "batch_step",
@@ -36,9 +45,18 @@ export class ExecutionJobDeferredError extends Error {
   }
 }
 
+interface WorkerGroup {
+  controller: AbortController;
+  done: Promise<void>;
+}
+
 export class ExecutionWorkerService {
   private readonly handlers = new Map<ExecutionJobKind, ExecutionJobHandler>();
-  private readonly workers = new Map<string, AbortController>();
+  private readonly workers = new Map<string, WorkerGroup>();
+  private exhaustedHandler?: (args: {
+    job: ExecutionJob;
+    error: string;
+  }) => Promise<void>;
 
   constructor(private readonly jobs: ExecutionJobsService) {}
 
@@ -49,50 +67,61 @@ export class ExecutionWorkerService {
     this.handlers.set(args.kind, args.handler);
   }
 
-  start(options: ExecutionWorkerOptions = {}): string {
-    const workerId = options.workerId ?? `worker-${crypto.randomUUID()}`;
-    if (this.workers.has(workerId)) {
-      throw new Error(`Execution worker '${workerId}' is already running`);
-    }
+  registerExhaustedHandler(
+    handler: (args: { job: ExecutionJob; error: string }) => Promise<void>,
+  ): void {
+    this.exhaustedHandler = handler;
+  }
 
+  start(options: ExecutionWorkerOptions = {}): ExecutionWorkerHandle {
+    const name = options.name;
+    const id = `${name ?? "execution"}-${crypto.randomUUID()}`;
     const controller = new AbortController();
-    this.workers.set(workerId, controller);
-    const concurrency = Math.max(1, Math.min(options.concurrency ?? 1, 32));
+    const concurrency = boundedInteger({
+      value: options.concurrency ?? 1,
+      name: "concurrency",
+      minimum: 1,
+      maximum: 32,
+    });
+    const claimLimit = boundedInteger({
+      value: options.claimLimit ?? 1,
+      name: "claimLimit",
+      minimum: 1,
+      maximum: 100,
+    });
     const loops = Array.from({ length: concurrency }, (_, index) =>
       this.runLoop({
-        workerId: `${workerId}:${index}`,
+        workerId: `${id}:${index}`,
         controller,
-        claimLimit: options.claimLimit ?? 1,
+        claimLimit,
         leaseSeconds: options.leaseSeconds ?? 60,
         pollIntervalMs: options.pollIntervalMs ?? 500,
         kinds: options.kinds ?? ALL_JOB_KINDS,
       }),
     );
-    void Promise.allSettled(loops).finally(() => {
-      if (this.workers.get(workerId) === controller) {
-        this.workers.delete(workerId);
-      }
-    });
-    return workerId;
+    const done = Promise.all(loops)
+      .then(() => undefined)
+      .finally(() => this.workers.delete(id));
+    this.workers.set(id, { controller, done });
+    let stopped: Promise<void> | undefined;
+    return {
+      id,
+      name,
+      done,
+      stop: () => {
+        if (!stopped) {
+          controller.abort();
+          stopped = done;
+        }
+        return stopped;
+      },
+    };
   }
 
-  stop(args: { workerId: string }): boolean {
-    const controller = this.workers.get(args.workerId);
-    if (!controller) return false;
-    controller.abort();
-    this.workers.delete(args.workerId);
-    return true;
-  }
-
-  stopAll(): void {
-    for (const controller of this.workers.values()) {
-      controller.abort();
-    }
-    this.workers.clear();
-  }
-
-  isRunning(args: { workerId: string }): boolean {
-    return this.workers.has(args.workerId);
+  async stopAll(): Promise<void> {
+    const groups = [...this.workers.values()];
+    for (const group of groups) group.controller.abort();
+    await Promise.allSettled(groups.map((group) => group.done));
   }
 
   private async runLoop(args: {
@@ -106,6 +135,15 @@ export class ExecutionWorkerService {
     const { signal } = args.controller;
     while (!signal.aborted) {
       await this.jobs.requeueExpired({ limit: 100 });
+      const unhandled = await this.jobs.listUnhandledExhausted({ limit: 100 });
+      await Promise.allSettled(
+        unhandled.map((job) =>
+          this.handleExhausted({
+            job,
+            error: job.lastError ?? "Execution job attempts exhausted",
+          }),
+        ),
+      );
       const claimed = await this.jobs.claim({
         workerId: args.workerId,
         kinds: args.kinds,
@@ -113,15 +151,20 @@ export class ExecutionWorkerService {
         leaseSeconds: args.leaseSeconds,
       });
       if (claimed.length === 0) {
-        await abortableDelay({
-          milliseconds: args.pollIntervalMs,
-          signal,
-        });
+        await abortableDelay({ milliseconds: args.pollIntervalMs, signal });
         continue;
       }
-
       for (const job of claimed) {
-        if (signal.aborted) return;
+        if (signal.aborted) {
+          await this.jobs.release({
+            jobId: job.id,
+            workerId: args.workerId,
+            leaseToken: requireLeaseToken(job),
+            leaseGeneration: job.leaseGeneration,
+            availableAt: new Date(),
+          });
+          continue;
+        }
         await this.processJob({
           job,
           workerId: args.workerId,
@@ -147,95 +190,148 @@ export class ExecutionWorkerService {
       async (span) => {
         const handler = this.handlers.get(args.job.kind);
         if (!handler) {
-          span.setAttribute("catamorphic.queue.job.outcome", "unhandled");
-          await this.jobs.fail({
+          const error = `No handler registered for '${args.job.kind}'`;
+          const status = await this.jobs.fail({
             jobId: args.job.id,
             workerId: args.workerId,
-            error: `No handler registered for '${args.job.kind}'`,
+            error,
+            leaseToken: requireLeaseToken(args.job),
+            leaseGeneration: args.job.leaseGeneration,
           });
+          if (status === "failed") {
+            await this.handleExhausted({ job: args.job, error });
+          }
           return;
         }
-
+        const jobController = new AbortController();
+        const abortJob = () => jobController.abort();
+        args.signal.addEventListener("abort", abortJob, { once: true });
         const heartbeat = setInterval(
           () => {
-            void this.jobs.heartbeat({
-              jobId: args.job.id,
-              workerId: args.workerId,
-              leaseSeconds: args.leaseSeconds,
-            });
+            void this.jobs
+              .heartbeat({
+                jobId: args.job.id,
+                workerId: args.workerId,
+                leaseToken: requireLeaseToken(args.job),
+                leaseGeneration: args.job.leaseGeneration,
+                leaseSeconds: args.leaseSeconds,
+              })
+              .then((owned) => {
+                if (!owned) jobController.abort();
+              })
+              .catch(() => jobController.abort());
           },
           Math.max(1_000, Math.floor((args.leaseSeconds * 1_000) / 3)),
         );
-
         try {
-          await handler({ job: args.job, signal: args.signal });
-          await this.jobs.complete({
+          await handler({ job: args.job, signal: jobController.signal });
+          if (jobController.signal.aborted) {
+            await this.jobs.release({
+              jobId: args.job.id,
+              workerId: args.workerId,
+              leaseToken: requireLeaseToken(args.job),
+              leaseGeneration: args.job.leaseGeneration,
+              availableAt: new Date(),
+            });
+            return;
+          }
+          const completed = await this.jobs.complete({
             jobId: args.job.id,
             workerId: args.workerId,
+            leaseToken: requireLeaseToken(args.job),
+            leaseGeneration: args.job.leaseGeneration,
           });
-          span.setAttribute("catamorphic.queue.job.outcome", "completed");
+          span.setAttribute(
+            "catamorphic.queue.job.outcome",
+            completed ? "completed" : "lease_lost",
+          );
         } catch (error) {
+          if (jobController.signal.aborted) {
+            await this.jobs.release({
+              jobId: args.job.id,
+              workerId: args.workerId,
+              leaseToken: requireLeaseToken(args.job),
+              leaseGeneration: args.job.leaseGeneration,
+              availableAt: new Date(),
+            });
+            return;
+          }
           if (error instanceof ExecutionJobDeferredError) {
             await this.jobs.release({
               jobId: args.job.id,
               workerId: args.workerId,
+              leaseToken: requireLeaseToken(args.job),
+              leaseGeneration: args.job.leaseGeneration,
               availableAt: error.availableAt,
             });
-            span.setAttribute("catamorphic.queue.job.outcome", "deferred");
             return;
           }
-          await this.jobs.fail({
+          const message =
+            error instanceof Error ? error.message : String(error);
+          const status = await this.jobs.fail({
             jobId: args.job.id,
             workerId: args.workerId,
-            error: error instanceof Error ? error.message : String(error),
+            leaseToken: requireLeaseToken(args.job),
+            leaseGeneration: args.job.leaseGeneration,
+            error: message,
           });
-          span.setAttribute("catamorphic.queue.job.outcome", "failed");
-          throw error;
+          if (status === "failed") {
+            await this.handleExhausted({ job: args.job, error: message });
+          }
         } finally {
           clearInterval(heartbeat);
+          args.signal.removeEventListener("abort", abortJob);
         }
       },
     ).catch(() => undefined);
   }
+
+  private async handleExhausted(args: {
+    job: ExecutionJob;
+    error: string;
+  }): Promise<void> {
+    if (!this.exhaustedHandler) return;
+    await this.exhaustedHandler(args);
+    await this.jobs.markExhaustionHandled({ jobId: args.job.id });
+  }
+}
+
+function boundedInteger(args: {
+  value: number;
+  name: string;
+  minimum: number;
+  maximum: number;
+}): number {
+  if (
+    !Number.isInteger(args.value) ||
+    args.value < args.minimum ||
+    args.value > args.maximum
+  ) {
+    throw new Error(
+      `Execution worker ${args.name} must be an integer from ${args.minimum} to ${args.maximum}`,
+    );
+  }
+  return args.value;
 }
 
 function executionJobAttributes(args: {
   job: ExecutionJob;
   workerId: string;
 }): SpanAttributes {
-  const payload = jsonRecord(args.job.payload);
-  const batchRunId = stringValue(payload?.batchRunId);
-  const itemId = stringValue(payload?.itemId);
-  const invocationId = stringValue(payload?.invocationId);
-  const chunkId = stringValue(payload?.chunkId);
   return {
     "catamorphic.tenant.id": args.job.tenantId,
     "catamorphic.queue.worker_id": args.workerId,
     "catamorphic.queue.job.id": args.job.id,
     "catamorphic.queue.job.kind": args.job.kind,
     "catamorphic.queue.job.attempt": args.job.attempt,
-    "catamorphic.queue.wait_ms": Math.max(
-      0,
-      Date.now() - new Date(args.job.availableAt).getTime(),
-    ),
-    ...(batchRunId ? { "catamorphic.batch_run.id": batchRunId } : {}),
-    ...(itemId ? { "catamorphic.item.id": itemId } : {}),
-    ...(invocationId ? { "catamorphic.invocation.id": invocationId } : {}),
-    ...(chunkId ? { "catamorphic.sink.chunk.id": chunkId } : {}),
+    "catamorphic.run.id": args.job.workflowRunId,
   };
 }
 
-function jsonRecord(
-  value: ExecutionJob["payload"],
-): Record<string, unknown> | undefined {
-  if (typeof value !== "object" || value === null || Array.isArray(value)) {
-    return undefined;
-  }
-  return Object.fromEntries(Object.entries(value));
-}
-
-function stringValue(value: unknown): string | undefined {
-  return typeof value === "string" && value !== "" ? value : undefined;
+function requireLeaseToken(job: ExecutionJob): string {
+  if (!job.leaseToken)
+    throw new Error(`Execution job '${job.id}' has no lease token`);
+  return job.leaseToken;
 }
 
 async function abortableDelay(args: {
@@ -244,14 +340,14 @@ async function abortableDelay(args: {
 }): Promise<void> {
   if (args.signal.aborted) return;
   await new Promise<void>((resolve) => {
-    const timeout = setTimeout(resolve, args.milliseconds);
-    args.signal.addEventListener(
-      "abort",
-      () => {
-        clearTimeout(timeout);
-        resolve();
-      },
-      { once: true },
-    );
+    const onAbort = () => {
+      clearTimeout(timeout);
+      resolve();
+    };
+    const timeout = setTimeout(() => {
+      args.signal.removeEventListener("abort", onAbort);
+      resolve();
+    }, args.milliseconds);
+    args.signal.addEventListener("abort", onAbort, { once: true });
   });
 }

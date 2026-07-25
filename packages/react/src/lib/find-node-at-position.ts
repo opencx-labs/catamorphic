@@ -23,6 +23,8 @@ const CONTAINER_TYPES: ReadonlySet<WorkflowNodeType> = new Set([
   "loop-block",
   "parallel-block",
   "scope-block",
+  "durable-boundary",
+  "call-workflow",
 ]);
 
 function rangeContains(range: SourceRange, position: EditorPosition): boolean {

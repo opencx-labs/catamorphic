@@ -18,9 +18,7 @@ export function SourceNode({ data }: NodeProps) {
       <div className="catamorphic-node-icon">◉</div>
       <div className="catamorphic-node-content">
         <div className="catamorphic-node-label">Batch source</div>
-        <div className="catamorphic-node-description">
-          Reads items in durable pages
-        </div>
+        <div className="catamorphic-node-description">Loads Items in pages</div>
       </div>
       <Handle type="source" position={Position.Bottom} />
     </div>

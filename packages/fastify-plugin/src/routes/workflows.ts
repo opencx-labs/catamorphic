@@ -3,7 +3,7 @@ import {
   PluginSecretsMissingError,
   ProductionDeploymentNotFoundError,
   ProjectNotFoundError,
-  RegularWorkflowRequiredError,
+  RunCapabilityError,
   SandboxProviderNotConfiguredError,
   WorkflowNotFoundError,
 } from "@catamorphic/core";
@@ -19,7 +19,7 @@ import {
   RunsQuerySchema,
   TriggerRunSchema,
   TriggerTestRunSchema,
-  WorkflowGraphSchema,
+  WorkflowDetailSchema,
   WorkflowNameParamsSchema,
   WorkflowSummarySchema,
 } from "../schemas.js";
@@ -47,10 +47,11 @@ export function registerWorkflowRoutes(
         return reply.status(503).send({ error: "Service not configured" });
       const identity = resolveIdentity(request);
       try {
-        const workflows = await ctx.core.workflows.list(
+        const workflows = await ctx.core.workflows.list({
           identity,
-          request.params.projectId,
-        );
+          projectId: request.params.projectId,
+          ref: request.query.ref,
+        });
         return reply.send(workflows);
       } catch (err) {
         if (err instanceof ProjectNotFoundError) {
@@ -68,7 +69,7 @@ export function registerWorkflowRoutes(
       params: WorkflowNameParamsSchema,
       querystring: RefQuerySchema,
       response: {
-        200: WorkflowGraphSchema,
+        200: WorkflowDetailSchema,
         404: ErrorSchema,
         503: ErrorSchema,
       },
@@ -80,7 +81,10 @@ export function registerWorkflowRoutes(
       const { projectId, name } = request.params;
       const { ref } = request.query;
       try {
-        const graph = await ctx.core.workflows.get(identity, projectId, name, {
+        const graph = await ctx.core.workflows.get({
+          identity,
+          projectId,
+          workflowName: name,
           ref,
         });
         return reply.send(graph);
@@ -115,12 +119,12 @@ export function registerWorkflowRoutes(
         return reply.status(503).send({ error: "Service not configured" });
       const identity = resolveIdentity(request);
       try {
-        const run = await ctx.core.runs.triggerProduction(
+        const run = await ctx.core.runs.triggerProduction({
           identity,
-          request.params.projectId,
-          request.params.name,
-          request.body,
-        );
+          projectId: request.params.projectId,
+          workflowName: request.params.name,
+          input: request.body.input,
+        });
         return reply.status(201).send(run);
       } catch (err) {
         if (err instanceof ProjectNotFoundError) {
@@ -132,7 +136,7 @@ export function registerWorkflowRoutes(
         if (err instanceof ProductionDeploymentNotFoundError) {
           return reply.status(409).send({ error: err.message });
         }
-        if (err instanceof RegularWorkflowRequiredError) {
+        if (err instanceof RunCapabilityError) {
           return reply.status(409).send({ error: err.message });
         }
         if (err instanceof PluginSecretsMissingError) {
@@ -159,6 +163,7 @@ export function registerWorkflowRoutes(
         201: RunSchema,
         400: ErrorSchema,
         404: ErrorSchema,
+        409: ErrorSchema,
         503: ErrorSchema,
       },
     },
@@ -167,12 +172,13 @@ export function registerWorkflowRoutes(
         return reply.status(503).send({ error: "Service not configured" });
       const identity = resolveIdentity(request);
       try {
-        const run = await ctx.core.runs.triggerTest(
+        const run = await ctx.core.runs.triggerTest({
           identity,
-          request.params.projectId,
-          request.params.name,
-          request.body,
-        );
+          projectId: request.params.projectId,
+          workflowName: request.params.name,
+          input: request.body.input,
+          files: request.body.files,
+        });
         return reply.status(201).send(run);
       } catch (err) {
         if (err instanceof ProjectNotFoundError) {
@@ -187,8 +193,8 @@ export function registerWorkflowRoutes(
         ) {
           return reply.status(400).send({ error: err.message });
         }
-        if (err instanceof RegularWorkflowRequiredError) {
-          return reply.status(400).send({ error: err.message });
+        if (err instanceof RunCapabilityError) {
+          return reply.status(409).send({ error: err.message });
         }
         if (err instanceof SandboxProviderNotConfiguredError) {
           return reply.status(503).send({
@@ -218,7 +224,9 @@ export function registerWorkflowRoutes(
       const identity = resolveIdentity(request);
       const { projectId, name } = request.params;
       try {
-        const result = await ctx.core.runs.list(identity, projectId, {
+        const result = await ctx.core.runs.list({
+          identity,
+          projectId,
           workflowName: name,
           limit: request.query.limit,
           offset: request.query.offset,

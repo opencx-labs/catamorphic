@@ -1,6 +1,10 @@
 import type { DB } from "@catamorphic/db";
 import { getTracer, withSpan } from "@catamorphic/otel";
-import type { RunPluginPayload } from "@catamorphic/sandbox";
+import { EXECUTION_TRANSFORM_VERSION } from "@catamorphic/parser";
+import {
+  DEPLOYMENT_RUNTIME_VERSION,
+  type RunPluginPayload,
+} from "@catamorphic/sandbox";
 import type { Kysely, Selectable } from "kysely";
 
 type DeploymentArtifactRow = Selectable<DB["deployment_artifacts"]>;
@@ -26,8 +30,13 @@ export interface DeploymentArtifact {
   lastUsedAt: string;
 }
 
-const TRANSFORM_VERSION = "execution-transform-v1";
-const RUNTIME_VERSION = "runtime-protocol-v2";
+export interface DeploymentArtifactIdentity {
+  artifactDigest: string;
+  pluginDigest: string;
+  transformVersion: string;
+  runtimeVersion: string;
+}
+
 const tracer = getTracer("@catamorphic/core");
 
 export class DeploymentArtifactsService {
@@ -50,25 +59,16 @@ export class DeploymentArtifactsService {
         },
       },
       async (span) => {
-        const pluginDigest = await digestPlugins(args.plugins ?? []);
-        const artifactDigest = await sha256(
-          stableSerialize({
-            commitSha: args.commitSha,
-            files: sortedRecord(args.files),
-            pluginDigest,
-            transformVersion: TRANSFORM_VERSION,
-            runtimeVersion: RUNTIME_VERSION,
-          }),
-        );
+        const identity = await createDeploymentArtifactIdentity(args);
         const row = await this.db
           .insertInto("deployment_artifacts")
           .values({
             project_id: args.projectId,
             commit_sha: args.commitSha,
-            artifact_digest: artifactDigest,
-            plugin_digest: pluginDigest,
-            transform_version: TRANSFORM_VERSION,
-            runtime_version: RUNTIME_VERSION,
+            artifact_digest: identity.artifactDigest,
+            plugin_digest: identity.pluginDigest,
+            transform_version: identity.transformVersion,
+            runtime_version: identity.runtimeVersion,
           })
           .onConflict((conflict) =>
             conflict.columns(["project_id", "artifact_digest"]).doUpdateSet({
@@ -91,6 +91,24 @@ export class DeploymentArtifactsService {
       .selectAll()
       .executeTakeFirst();
     return row ? mapDeploymentArtifact(row) : null;
+  }
+
+  async verify(args: {
+    artifact: DeploymentArtifact;
+    projectId: string;
+    commitSha: string;
+    files: Record<string, string>;
+    plugins?: readonly RunPluginPayload[];
+  }): Promise<boolean> {
+    const identity = await createDeploymentArtifactIdentity(args);
+    return (
+      args.artifact.projectId === args.projectId &&
+      args.artifact.commitSha === args.commitSha &&
+      args.artifact.artifactDigest === identity.artifactDigest &&
+      args.artifact.pluginDigest === identity.pluginDigest &&
+      args.artifact.transformVersion === identity.transformVersion &&
+      args.artifact.runtimeVersion === identity.runtimeVersion
+    );
   }
 
   async markStatus(args: {
@@ -119,6 +137,31 @@ export class DeploymentArtifactsService {
           .then(() => undefined),
     );
   }
+}
+
+export async function createDeploymentArtifactIdentity(args: {
+  commitSha: string;
+  files: Record<string, string>;
+  plugins?: readonly RunPluginPayload[];
+}): Promise<DeploymentArtifactIdentity> {
+  const pluginDigest = await digestPlugins(args.plugins ?? []);
+  const transformVersion = EXECUTION_TRANSFORM_VERSION;
+  const runtimeVersion = DEPLOYMENT_RUNTIME_VERSION;
+  const artifactDigest = await sha256(
+    stableSerialize({
+      commitSha: args.commitSha,
+      files: sortedRecord(args.files),
+      pluginDigest,
+      transformVersion,
+      runtimeVersion,
+    }),
+  );
+  return {
+    artifactDigest,
+    pluginDigest,
+    transformVersion,
+    runtimeVersion,
+  };
 }
 
 async function digestPlugins(

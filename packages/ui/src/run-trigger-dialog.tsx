@@ -4,9 +4,10 @@ import { friendlyParamName, friendlyType } from "./display-utils.js";
 
 export interface RunTriggerDialogProps {
   parameters: ParameterInfo[];
+  mode: "test" | "production";
   isRunning: boolean;
   initialValues?: Record<string, unknown>;
-  onRun: (triggerData: Record<string, unknown>) => void;
+  onRun: (triggerData: Record<string, unknown>) => Promise<void>;
   onClose: () => void;
 }
 
@@ -150,6 +151,7 @@ function ParameterField({
 
 export function RunTriggerDialog({
   parameters,
+  mode,
   isRunning,
   initialValues,
   onRun,
@@ -167,16 +169,23 @@ export function RunTriggerDialog({
 
   const [jsonMode, setJsonMode] = useState(false);
   const [rawJson, setRawJson] = useState(() => JSON.stringify(values, null, 2));
+  const [error, setError] = useState<string>();
 
-  const handleSubmit = useCallback(() => {
+  const handleSubmit = useCallback(async () => {
+    setError(undefined);
+    let input = values;
     if (jsonMode) {
       try {
-        onRun(JSON.parse(rawJson) as Record<string, unknown>);
+        input = JSON.parse(rawJson) as Record<string, unknown>;
       } catch {
-        onRun(values);
+        setError("Enter valid JSON before starting the Run.");
+        return;
       }
-    } else {
-      onRun(values);
+    }
+    try {
+      await onRun(input);
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : String(cause));
     }
   }, [jsonMode, rawJson, values, onRun]);
 
@@ -207,12 +216,14 @@ export function RunTriggerDialog({
         className="catamorphic-run-dialog"
         role="dialog"
         aria-modal="true"
-        aria-label="Run workflow"
+        aria-label={mode === "test" ? "Test Workflow" : "Run Workflow"}
         onClick={(e) => e.stopPropagation()}
         onKeyDown={(e) => e.stopPropagation()}
       >
         <div className="catamorphic-run-dialog-header">
-          <h3 className="catamorphic-run-dialog-title">Run Workflow</h3>
+          <h3 className="catamorphic-run-dialog-title">
+            {mode === "test" ? "Test Workflow" : "Run Workflow"}
+          </h3>
           <button
             type="button"
             className="catamorphic-detail-close"
@@ -245,6 +256,9 @@ export function RunTriggerDialog({
               </button>
             </div>
           )}
+          {error ? (
+            <p className="catamorphic-run-inline-error">{error}</p>
+          ) : null}
 
           {jsonMode ? (
             <textarea
@@ -284,10 +298,14 @@ export function RunTriggerDialog({
           <button
             type="button"
             className="catamorphic-toolbar-btn catamorphic-toolbar-run"
-            onClick={handleSubmit}
+            onClick={() => void handleSubmit()}
             disabled={isRunning}
           >
-            {isRunning ? "Running..." : "▶ Run"}
+            {isRunning
+              ? "Starting..."
+              : mode === "test"
+                ? "Start Test Run"
+                : "Start Run"}
           </button>
         </div>
       </div>

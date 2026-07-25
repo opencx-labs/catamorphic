@@ -1,5 +1,4 @@
 import { pathToFileURL } from "node:url";
-import { type MessagePort, parentPort, workerData } from "node:worker_threads";
 import type { ResolvedRuntimeInvocation } from "./supervisor-dispatcher.js";
 import type {
   RuntimeBatchStepSuspension,
@@ -21,25 +20,37 @@ type WorkerRunStep = (
 
 type InvocationTargetFunction = (input: unknown) => unknown;
 
-const port = requireParentPort(parentPort);
+const invocationAbortController = new AbortController();
+let initialized = false;
 
-void runInvocation()
-  .then((terminal) => {
-    port.postMessage({ type: "terminal", terminal });
-  })
-  .catch((error) => {
-    port.postMessage({
-      type: "terminal",
-      terminal: {
-        status: "failed",
-        error: error instanceof Error ? error.message : String(error),
-        steps: [],
-      },
-    });
-  });
+process.on("message", (message: unknown) => {
+  if (!isRecord(message)) return;
+  if (message.type === "abort") {
+    invocationAbortController.abort(
+      new Error(
+        typeof message.reason === "string"
+          ? message.reason
+          : "Invocation was aborted",
+      ),
+    );
+    return;
+  }
+  if (message.type !== "init") return;
+  if (initialized) {
+    void reportInfrastructureError(
+      new Error("Invocation child can only be initialized once"),
+    );
+    return;
+  }
+  initialized = true;
+  void runInvocation(message.invocation)
+    .then((terminal) => sendToParent({ type: "terminal", terminal }))
+    .then(disconnectParent)
+    .catch(reportInfrastructureError);
+});
 
-async function runInvocation(): Promise<RuntimeTerminalResult> {
-  const invocation = parseResolvedInvocation(workerData);
+async function runInvocation(value: unknown): Promise<RuntimeTerminalResult> {
+  const invocation = parseResolvedInvocation(value);
   const steps: RuntimeStepEntry[] = [];
   installStepRecorder({ invocation, steps });
 
@@ -61,6 +72,7 @@ async function runInvocation(): Promise<RuntimeTerminalResult> {
       steps,
     };
   } catch (error) {
+    if (error instanceof InvocationChildInfrastructureError) throw error;
     if (error instanceof BatchStepSuspensionError) {
       return {
         status: "suspended",
@@ -99,17 +111,25 @@ async function executeInvocationTarget(args: {
     invocationId: args.invocation.invocationId,
     attempt: args.invocation.attempt,
     deadlineAt: args.invocation.deadlineAt,
-    signal: new AbortController().signal,
+    signal: invocationAbortController.signal,
   };
 
   if (args.invocation.kind === "batch-source") {
-    const definition = requireBatchWorkflow(exported);
+    const definition = requireBatchDefinition({
+      exported,
+      stepIndex: requireTargetStepIndex({ target: args.invocation.target }),
+    });
     const input = requireRecordInput(args.invocation.input);
-    const binding = await Reflect.apply(definition.source, definition, [
+    const source = requireFunctionProperty({
+      value: definition,
+      property: "source",
+      description: "Batch definition source",
+    });
+    const binding = await Reflect.apply(source, definition, [
       { input: input.workflowInput, context },
     ]);
     if (!isRecord(binding) || !isRecord(binding.source)) {
-      throw new Error("Batch workflow source returned an invalid binding");
+      throw new Error("Batch definition source returned an invalid binding");
     }
     if (args.invocation.target.operation === "initialize") {
       const initialize = Reflect.get(binding.source, "initialize");
@@ -145,18 +165,70 @@ async function executeInvocationTarget(args: {
     throw new Error("Batch source operation must be initialize or readPage");
   }
 
+  if (args.invocation.kind === "durable-boundary") {
+    const boundary = requireWorkflowStep({
+      exported,
+      stepIndex: requireTargetStepIndex({ target: args.invocation.target }),
+    });
+    const input = requireRecordInput(args.invocation.input);
+    const run = requireFunctionProperty({
+      value: boundary,
+      property: "run",
+      description: "Boundary definition run callback",
+    });
+    const pause = (
+      options?: Record<string, unknown>,
+    ): Record<string, unknown> => ({
+      __catamorphicDurableTransition: "pause",
+      ...(typeof options?.timeout === "string"
+        ? { timeout: options.timeout }
+        : {}),
+      statePresent: options ? Object.hasOwn(options, "state") : false,
+      ...(options && Object.hasOwn(options, "state")
+        ? { state: options.state }
+        : {}),
+    });
+    const callWorkflow = (
+      _workflow: unknown,
+      options: Record<string, unknown>,
+      metadata?: Record<string, unknown>,
+    ): Record<string, unknown> => ({
+      __catamorphicDurableTransition: "child_workflow",
+      input: options.input,
+      ...(metadata ? { workflow: metadata } : {}),
+    });
+    const returned = await Reflect.apply(run, boundary, [
+      { input: input.value, pause, callWorkflow },
+    ]);
+    const safe = strictJson({
+      value: returned,
+      path: "Durable boundary result",
+    });
+    if (
+      isRecord(safe) &&
+      (safe.__catamorphicDurableTransition === "pause" ||
+        safe.__catamorphicDurableTransition === "child_workflow")
+    ) {
+      return { type: safe.__catamorphicDurableTransition, transition: safe };
+    }
+    return { type: "completed", output: safe };
+  }
+
   if (
     args.invocation.kind === "batch-step" &&
-    isRecord(exported) &&
-    exported.kind === "batch-workflow" &&
     args.invocation.target.operation === "process"
   ) {
-    const process = Reflect.get(exported, "process");
-    if (typeof process !== "function") {
-      throw new Error("Batch workflow does not implement process");
-    }
+    const definition = requireBatchDefinition({
+      exported,
+      stepIndex: requireTargetStepIndex({ target: args.invocation.target }),
+    });
+    const process = requireFunctionProperty({
+      value: definition,
+      property: "process",
+      description: "Batch definition process",
+    });
     const input = requireRecordInput(args.invocation.input);
-    return Reflect.apply(process, exported, [
+    return Reflect.apply(process, definition, [
       {
         key: input.key,
         item: input.item,
@@ -167,25 +239,21 @@ async function executeInvocationTarget(args: {
 
   if (
     args.invocation.kind === "batch-step" &&
-    (isRecord(exported) || typeof exported === "function")
+    args.invocation.target.operation === "run"
   ) {
-    const run = Reflect.get(exported, "run");
-    if (
-      Reflect.get(exported, "kind") !== "batch-step" ||
-      typeof run !== "function"
-    ) {
-      throw new Error("Batch step export is invalid");
-    }
+    const batchStep = requireExportedBatchStep(exported);
     const input = requireRecordInput(args.invocation.input);
-    return Reflect.apply(run, exported, [{ items: input.items, context }]);
+    return Reflect.apply(batchStep.run, exported, [
+      { items: input.items, context },
+    ]);
   }
 
-  if (
-    args.invocation.kind === "batch-sink" &&
-    isRecord(exported) &&
-    exported.kind === "batch-workflow"
-  ) {
-    const sink = Reflect.get(exported, "sink");
+  if (args.invocation.kind === "batch-sink") {
+    const definition = requireBatchDefinition({
+      exported,
+      stepIndex: requireTargetStepIndex({ target: args.invocation.target }),
+    });
+    const sink = Reflect.get(definition, "sink");
     const operation = args.invocation.target.operation;
     if (operation === "inspect") {
       return {
@@ -195,7 +263,7 @@ async function executeInvocationTarget(args: {
           typeof Reflect.get(sink, "initialize") === "function",
       };
     }
-    if (!isRecord(sink)) throw new Error("Batch workflow has no sink");
+    if (!isRecord(sink)) throw new Error("Batch definition has no sink");
     const target = operation ? Reflect.get(sink, operation) : undefined;
     if (typeof target !== "function") {
       throw new Error(`Batch sink does not implement '${operation ?? ""}'`);
@@ -205,31 +273,80 @@ async function executeInvocationTarget(args: {
     ]);
   }
 
-  const target = resolveTarget({
-    moduleExports: args.moduleExports,
-    exportName: args.invocation.target.exportName,
-    operation: args.invocation.target.operation,
-  });
+  const target = resolvePlainWorkflowTarget({ exported });
   return Reflect.apply(target, undefined, [args.invocation.input]);
 }
 
-function requireBatchWorkflow(value: unknown): {
-  source: (args: unknown) => unknown;
+function requireWorkflowStep(args: {
+  exported: unknown;
+  stepIndex: number;
+}): Record<string, unknown> {
+  if (!isRecord(args.exported)) {
+    throw new Error("Invocation target is not a defined workflow");
+  }
+  const steps = Reflect.get(args.exported, "steps");
+  if (!Array.isArray(steps)) {
+    throw new Error("Defined workflow steps are invalid");
+  }
+  const step = steps[args.stepIndex];
+  if (!isRecord(step)) {
+    throw new Error(`Defined workflow step ${args.stepIndex} is invalid`);
+  }
+  return step;
+}
+
+function requireTargetStepIndex(args: {
+  target: { stepIndex?: number };
+}): number {
+  if (args.target.stepIndex === undefined) {
+    throw new Error("Invocation target requires stepIndex");
+  }
+  return args.target.stepIndex;
+}
+
+function requireBatchDefinition(args: {
+  exported: unknown;
+  stepIndex: number;
+}): Record<string, unknown> {
+  const definition = requireWorkflowStep(args);
+  if (
+    typeof Reflect.get(definition, "source") !== "function" ||
+    typeof Reflect.get(definition, "process") !== "function"
+  ) {
+    throw new Error(`Defined workflow step ${args.stepIndex} is not a batch`);
+  }
+  return definition;
+}
+
+function requireFunctionProperty(args: {
+  value: Record<string, unknown>;
+  property: string;
+  description: string;
+}): (...values: unknown[]) => unknown {
+  const fn = Reflect.get(args.value, args.property);
+  if (typeof fn !== "function") {
+    throw new Error(`${args.description} is invalid`);
+  }
+  return (...values) => Reflect.apply(fn, args.value, values);
+}
+
+function requireExportedBatchStep(value: unknown): {
+  run: (...values: unknown[]) => unknown;
 } {
-  if (!isRecord(value) || value.kind !== "batch-workflow") {
-    throw new Error("Invocation target is not a batch workflow");
+  if (
+    (typeof value !== "function" && !isRecord(value)) ||
+    Reflect.get(value, "kind") !== "batch-step" ||
+    typeof Reflect.get(value, "run") !== "function" ||
+    !isRecord(Reflect.get(value, "batch"))
+  ) {
+    throw new Error("Batch step export is invalid");
   }
-  const source = Reflect.get(value, "source");
-  if (typeof source !== "function") {
-    throw new Error("Batch workflow does not implement source");
-  }
-  return {
-    source: (args) => Reflect.apply(source, value, [args]),
-  };
+  const run = Reflect.get(value, "run");
+  return { run: (...values) => Reflect.apply(run, value, values) };
 }
 
 function requireRecordInput(value: unknown): Record<string, unknown> {
-  if (!isRecord(value)) throw new Error("Batch invocation input is invalid");
+  if (!isRecord(value)) throw new Error("Invocation input must be an object");
   return value;
 }
 
@@ -272,6 +389,7 @@ function installStepRecorder(args: {
         : undefined;
       throw new BatchStepSuspensionError({
         nodeId,
+        occurrence,
         name,
         functionName: functionName ?? "",
         input: toProtocolJson(input),
@@ -279,7 +397,7 @@ function installStepRecorder(args: {
         policy: batchStep.batch,
       });
     }
-    port.postMessage({
+    await sendToParent({
       type: "event",
       event: {
         type: "step_started",
@@ -303,7 +421,7 @@ function installStepRecorder(args: {
         startedAt,
         completedAt: new Date().toISOString(),
       });
-      port.postMessage({
+      await sendToParent({
         type: "event",
         event: {
           type: "step_completed",
@@ -315,6 +433,7 @@ function installStepRecorder(args: {
       });
       return output;
     } catch (error) {
+      if (error instanceof InvocationChildInfrastructureError) throw error;
       const message = error instanceof Error ? error.message : String(error);
       args.steps.push({
         nodeId,
@@ -327,7 +446,7 @@ function installStepRecorder(args: {
         startedAt,
         completedAt: new Date().toISOString(),
       });
-      port.postMessage({
+      await sendToParent({
         type: "event",
         event: {
           type: "step_failed",
@@ -354,6 +473,13 @@ class BatchStepSuspensionError extends Error {
   constructor(readonly suspension: RuntimeBatchStepSuspension) {
     super(`Batch step '${suspension.name}' is waiting for a cohort`);
     this.name = "BatchStepSuspensionError";
+  }
+}
+
+class InvocationChildInfrastructureError extends Error {
+  constructor(message: string, options?: ErrorOptions) {
+    super(message, options);
+    this.name = "InvocationChildInfrastructureError";
   }
 }
 
@@ -432,26 +558,12 @@ function readReplay(
   return new Map(Object.entries(replay));
 }
 
-function resolveTarget(args: {
-  moduleExports: unknown;
-  exportName: string;
-  operation?: string;
+function resolvePlainWorkflowTarget(args: {
+  exported: unknown;
 }): InvocationTargetFunction {
-  if (!isRecord(args.moduleExports)) {
-    throw new Error("Invocation target module did not export an object");
-  }
-  const exported = Reflect.get(args.moduleExports, args.exportName);
-  const target =
-    args.operation === undefined
-      ? exported
-      : isRecord(exported)
-        ? Reflect.get(exported, args.operation)
-        : undefined;
+  const target = args.exported;
   if (typeof target !== "function") {
-    const suffix = args.operation ? `.${args.operation}` : "";
-    throw new Error(
-      `'${args.exportName}${suffix}' is not exported as a function`,
-    );
+    throw new Error("Invocation target is not exported as a function");
   }
   return (input) => Reflect.apply(target, undefined, [input]);
 }
@@ -494,9 +606,75 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
 }
 
-function requireParentPort(value: MessagePort | null): MessagePort {
-  if (!value) {
-    throw new Error("Supervisor worker requires a parent message port");
+function strictJson(args: { value: unknown; path: string }): unknown {
+  if (
+    args.value === null ||
+    typeof args.value === "string" ||
+    typeof args.value === "boolean"
+  ) {
+    return args.value;
   }
-  return value;
+  if (typeof args.value === "number") {
+    if (!Number.isFinite(args.value)) {
+      throw new Error(`${args.path} must be finite JSON`);
+    }
+    return args.value;
+  }
+  if (Array.isArray(args.value)) {
+    return args.value.map((entry, index) =>
+      strictJson({ value: entry, path: `${args.path}[${index}]` }),
+    );
+  }
+  if (!isRecord(args.value) || args.value instanceof Date) {
+    throw new Error(`${args.path} must be JSON-compatible`);
+  }
+  return Object.fromEntries(
+    Object.entries(args.value).map(([key, entry]) => {
+      if (entry === undefined) {
+        throw new Error(`${args.path}.${key} must not be undefined`);
+      }
+      return [key, strictJson({ value: entry, path: `${args.path}.${key}` })];
+    }),
+  );
+}
+
+function sendToParent(message: unknown): Promise<void> {
+  return new Promise((resolve, reject) => {
+    if (!process.send) {
+      reject(
+        new InvocationChildInfrastructureError(
+          "Invocation child requires a parent IPC channel",
+        ),
+      );
+      return;
+    }
+    process.send(message, (error) => {
+      if (error) {
+        reject(
+          new InvocationChildInfrastructureError(
+            "Invocation child failed to send an IPC message",
+            { cause: error },
+          ),
+        );
+        return;
+      }
+      resolve();
+    });
+  });
+}
+
+async function reportInfrastructureError(error: unknown): Promise<void> {
+  process.exitCode = 1;
+  try {
+    await sendToParent({
+      type: "infrastructure_error",
+      error: error instanceof Error ? error.message : String(error),
+    }).catch(() => {});
+  } finally {
+    disconnectParent();
+  }
+}
+
+function disconnectParent(): void {
+  if (process.connected && process.disconnect) process.disconnect();
 }

@@ -4,7 +4,7 @@
 
 `@catamorphic/sandbox` provides two core capabilities:
 
-1. **Workflow Execution** — Runs workflow code inside sandboxes (Cloudflare Sandbox by default, Daytona as alternate) with step-level observability
+1. **Workflow Execution** — Runs workflow code inside sandboxes (Cloudflare Sandbox by default, Daytona as alternate) with persisted Run state and step-level observability
 2. **Coding Agent contract** — the vendor-neutral `CodingAgentProvider` interface. Implementations are plugin packages: `@catamorphic/ai-sdk` (flagship — AI SDK tool loop runs on the host server and edits the dev sandbox remotely) and `@catamorphic/codex` (Codex SDK). See `docs/decisions/0009` and `0018`.
 
 ## Provider Selection
@@ -23,12 +23,12 @@ const provider = new CloudflareSandboxProvider({
 
 Providers handed to `CatamorphicCore` are automatically wrapped with `instrumentSandboxProvider` (OpenTelemetry spans: `sandbox.create`, `sandbox.exec`, `sandbox.upload_files`, …). The wrapper preserves the optional `hydrateWorkspace` method (tar-based upload) that the Cloudflare provider exposes.
 
-## Two-Sandbox Model
+## Sandbox Model
 
 Each project uses two distinct sandbox types:
 
-- **Production execution sandbox** — Fresh, immutable code pinned to deployed
-  `origin/main`; destroyed after the synchronous run.
+- **Production deployment runtime** — Immutable code pinned to deployed
+  `origin/main`; a warm supervisor accepts queued invocations for the artifact.
 - **Dev sandbox** — Per-user, mutable code for coding agents and isolated test
   run directories. Keyed by `(project_id, user_id)`.
 
@@ -63,9 +63,11 @@ packages/daytona/src/               -- @catamorphic/daytona plugin
 packages/cloudflare-sandbox-bridge/  -- deployable Worker the Cloudflare provider talks to
 
 packages/runtime/src/
-  harness.ts               -- Canonical sandbox harness source
-  reporter.ts              -- Reserved for future push reporting
-  types.ts                 -- StepEntry, RunReport types
+  harness.ts               -- Plain workflow test harness
+  supervisor-protocol.ts   -- Deployment invocation and event protocol
+  supervisor-http.ts       -- Warm runtime HTTP supervisor
+  supervisor-worker.ts     -- Per-invocation Bun Worker execution
+  supervisor-dispatcher.ts -- Workflow/boundary/batch dispatch
 ```
 
 ## Sandbox Manager
@@ -75,7 +77,7 @@ import { SandboxManagerImpl } from "@catamorphic/sandbox";
 
 const manager = new SandboxManagerImpl({ provider, store: dbStore });
 
-// Execution sandbox for a specific commit
+// Deployment runtime sandbox for a specific commit
 const execSandbox = await manager.ensureExecSandbox({
   projectId: "...",
   commitSha: "abc123...",
@@ -107,11 +109,19 @@ Per-project skills live in the project repo under `.agents/skills/<name>/SKILL.m
 
 ## Runtime Harness
 
-The harness runs inside the sandbox via `bun run harness.ts`. It:
+The plain-workflow test harness runs inside a disposable directory in the dev
+sandbox via `bun run harness.ts`. It:
 
 1. Installs the call-site step recorder used by parser-transformed source.
 2. Imports the requested workflow file and executes its exported function.
 3. Emits one safely serialized `CATAMORPHIC_REPORT:` JSON line on stdout.
+
+Production Runs are enqueued in Postgres. A host explicitly starts
+`catamorphic.startExecutionWorker(...)`; the worker advances the canonical Run
+through plain execution or ordered `defineBoundary`/`defineBatch` scopes. The
+deployment supervisor reports sequenced events, while Postgres remains
+authoritative for retries, pauses, child Runs, batch items, cancellation, and
+terminal state.
 
 Environment variables:
 - `CATAMORPHIC_RUN_ID` — Run ID
@@ -121,13 +131,21 @@ Environment variables:
 
 ## Database Tables
 
-Runs persist to `workflow_runs` + `workflow_run_steps`. Migration `008` (re)introduced `project_sandboxes` (dev sandbox tracking per project + external user), `agent_sessions`, and `agent_messages` — all keyed by `external_user_id` (host identity), no `users` table.
+Every invocation persists one canonical `workflow_runs` row. Supporting tables
+include `workflow_run_states`, `workflow_step_attempts`, `workflow_pauses`,
+`workflow_run_steps`, `workflow_run_events`, `execution_jobs`, and batch-scope
+item/sink tables keyed by Run and workflow-step attempt. Migration `008`
+introduced `project_sandboxes`, `agent_sessions`, and `agent_messages`, keyed by
+host `external_user_id`; there is no Catamorphic users table.
 
 ## API Routes
 
 - `POST /api/projects/:projectId/workflows/:name/runs` — Trigger a production run
 - `POST /api/projects/:projectId/workflows/:name/test-runs` — Trigger a test run with optional file overlays
+- `GET /api/projects/:projectId/workflows/:name/runs` — List runs for a Workflow
 - `GET /api/runs/:runId` — Fetch run + steps
+- `/api/runs/:runId/*` — Capability-driven cancel, processing pause/resume,
+  input submission, and batch-scope item inspection
 - `POST/GET/DELETE /api/projects/:projectId/agent/sessions[...]` — Agent sessions + messages (503 when no `codingAgent` configured)
 - `GET /api/projects/:projectId/skills` — List per-project agent skills
 
@@ -150,5 +168,7 @@ interface CodingAgentProvider {
 - `FsBackend` / `FsRemoteBackend` (`@catamorphic/git`) — Local dev, CI, tests, simple hosts (default)
 - `ArtifactsRemoteBackend` (`@catamorphic/cloudflare`) — Cloudflare Artifacts remotes; implements `getCloneSource()` so sandboxes `git clone` with a short-lived token instead of receiving uploads
 - `DaytonaBackend` (`@catamorphic/daytona`) — Uses Daytona sandboxes as Git repo storage (experimental)
+- `S3RemoteBackend` (`@catamorphic/s3`) — Default git origin for R2, S3,
+  MinIO, and compatible stores until Artifacts is generally available
 
 The host chooses by constructing the backend it wants and passing it via `createCatamorphic({ storage })` — there is no env-var switch.

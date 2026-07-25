@@ -26,7 +26,7 @@ export type {
   WorkflowList,
 } from "./lib/api-types.js";
 
-import type { ProjectsList } from "./lib/api-types.js";
+import type { ProjectsList, WorkflowGraph } from "./lib/api-types.js";
 
 /** Slim project shape returned by the list endpoint (no `workflows`/`files`). */
 export type ProjectSummary = ProjectsList["items"][number];
@@ -50,6 +50,22 @@ export type RunDetail =
 
 export type RunStep = RunDetail["steps"][number];
 
+export type WorkflowStepAttempt = RunDetail["workflowStepAttempts"][number];
+
+export type RunCapabilities = Run["capabilities"];
+
+export type RunPause = NonNullable<Run["activePause"]>;
+
+export type BatchProgress = Run["batchScopes"][number];
+
+export type RunMode = Run["mode"];
+
+export type RunStatus = Run["status"];
+
+export type RunPhase = Run["phase"];
+
+export type WorkflowCapabilities = WorkflowGraph["capabilities"];
+
 export type TriggerRunInput =
   paths["/api/projects/{projectId}/workflows/{name}/runs"]["post"]["requestBody"]["content"]["application/json"];
 
@@ -62,31 +78,23 @@ export type TriggerTestRunInput =
 export type TriggeredTestRun =
   paths["/api/projects/{projectId}/workflows/{name}/test-runs"]["post"]["responses"][201]["content"]["application/json"];
 
-// --- Batch runs ---------------------------------------------------------
+export type CancelRunInput =
+  paths["/api/runs/{runId}/cancel"]["post"]["requestBody"]["content"]["application/json"];
 
-export type BatchRun =
-  paths["/api/batch-runs/{batchRunId}"]["get"]["responses"][200]["content"]["application/json"];
+export type SubmitRunInput =
+  paths["/api/runs/{runId}/pauses/{pauseId}/resume"]["post"]["requestBody"]["content"]["application/json"];
 
-export type BatchRunStatus = BatchRun["status"];
+// --- Run items ----------------------------------------------------------
 
-export type BatchRunsList =
-  paths["/api/projects/{projectId}/workflows/{name}/batch-runs"]["get"]["responses"][200]["content"]["application/json"];
+export type RunItemsList =
+  paths["/api/runs/{runId}/steps/{workflowStepAttemptId}/items"]["get"]["responses"][200]["content"]["application/json"];
 
-export type TriggerBatchRunInput =
-  paths["/api/projects/{projectId}/workflows/{name}/batch-runs"]["post"]["requestBody"]["content"]["application/json"];
+export type RunItem = RunItemsList["items"][number];
 
-export type TriggeredBatchRun =
-  paths["/api/projects/{projectId}/workflows/{name}/batch-runs"]["post"]["responses"][201]["content"]["application/json"];
+export type RunItemStatus = RunItem["status"];
 
-export type BatchItemsList =
-  paths["/api/batch-runs/{batchRunId}/items"]["get"]["responses"][200]["content"]["application/json"];
-
-export type BatchItem = BatchItemsList["items"][number];
-
-export type BatchItemStatus = BatchItem["status"];
-
-export type BatchItemStep =
-  paths["/api/batch-runs/{batchRunId}/items/{itemId}/steps"]["get"]["responses"][200]["content"]["application/json"][number];
+export type RunItemStep =
+  paths["/api/runs/{runId}/steps/{workflowStepAttemptId}/items/{itemId}/steps"]["get"]["responses"][200]["content"]["application/json"][number];
 
 // --- Git ----------------------------------------------------------------
 

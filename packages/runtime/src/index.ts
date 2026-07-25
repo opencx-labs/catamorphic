@@ -1,7 +1,6 @@
 export type { BunWorkerFactoryOptions } from "./bun-worker.js";
 export { BunWorkerFactory } from "./bun-worker.js";
 export { RUNTIME_HARNESS_SOURCE } from "./harness.js";
-export { reportRunResult } from "./reporter.js";
 export type {
   ResolvedRuntimeInvocation,
   RuntimeInvocationDispatcherOptions,
@@ -12,6 +11,7 @@ export type {
 export {
   RuntimeInvocationConflictError,
   RuntimeInvocationDispatcher,
+  RuntimeInvocationInfrastructureError,
 } from "./supervisor-dispatcher.js";
 export type {
   StartBunSupervisorOptions,
@@ -26,12 +26,19 @@ export {
   startBunSupervisor,
 } from "./supervisor-http.js";
 export type {
+  RuntimeArtifactIdentity,
+  RuntimeBatchProcessTarget,
+  RuntimeBatchSinkTarget,
+  RuntimeBatchSourceTarget,
   RuntimeBatchStepSuspension,
+  RuntimeBatchStepTarget,
+  RuntimeBoundaryTarget,
   RuntimeInvocationEvent,
   RuntimeInvocationEventsResponse,
   RuntimeInvocationRequest,
   RuntimeInvocationResponse,
   RuntimeInvocationTarget,
+  RuntimePlainWorkflowTarget,
   RuntimeProtocolErrorBody,
   RuntimeStepEntry,
   RuntimeSupervisorHealth,
@@ -39,8 +46,8 @@ export type {
   RuntimeWorkKind,
 } from "./supervisor-protocol.js";
 export {
+  DEPLOYMENT_RUNTIME_VERSION,
   parseRuntimeInvocationRequest,
   RUNTIME_PROTOCOL_VERSION,
   toProtocolJson,
 } from "./supervisor-protocol.js";
-export type { RunReport, StepEntry } from "./types.js";

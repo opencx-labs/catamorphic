@@ -58,6 +58,10 @@ export async function loadWorkflowPackagePayload(): Promise<WorkflowPackagePaylo
     indexTypesMap,
     batchTypes,
     batchTypesMap,
+    jsonTypes,
+    jsonTypesMap,
+    workflowTypes,
+    workflowTypesMap,
   ] = await Promise.all([
     readFile(packageJsonPath, "utf8"),
     readFile(path.join(packageRoot, "dist/index.js"), "utf8"),
@@ -66,6 +70,10 @@ export async function loadWorkflowPackagePayload(): Promise<WorkflowPackagePaylo
     readFile(path.join(packageRoot, "dist/index.d.ts.map"), "utf8"),
     readFile(path.join(packageRoot, "dist/batch.d.ts"), "utf8"),
     readFile(path.join(packageRoot, "dist/batch.d.ts.map"), "utf8"),
+    readFile(path.join(packageRoot, "dist/json.d.ts"), "utf8"),
+    readFile(path.join(packageRoot, "dist/json.d.ts.map"), "utf8"),
+    readFile(path.join(packageRoot, "dist/workflow.d.ts"), "utf8"),
+    readFile(path.join(packageRoot, "dist/workflow.d.ts.map"), "utf8"),
   ]);
   const metadata = parsePackageMetadata(packageJson);
   return {
@@ -79,6 +87,10 @@ export async function loadWorkflowPackagePayload(): Promise<WorkflowPackagePaylo
       "dist/index.d.ts.map": indexTypesMap,
       "dist/batch.d.ts": batchTypes,
       "dist/batch.d.ts.map": batchTypesMap,
+      "dist/json.d.ts": jsonTypes,
+      "dist/json.d.ts.map": jsonTypesMap,
+      "dist/workflow.d.ts": workflowTypes,
+      "dist/workflow.d.ts.map": workflowTypesMap,
     },
   };
 }

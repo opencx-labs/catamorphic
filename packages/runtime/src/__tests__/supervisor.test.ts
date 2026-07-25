@@ -9,6 +9,7 @@ import type {
 import {
   RuntimeInvocationConflictError,
   RuntimeInvocationDispatcher,
+  RuntimeInvocationInfrastructureError,
 } from "../supervisor-dispatcher.js";
 import {
   createSupervisorRequestHandler,
@@ -19,6 +20,7 @@ import type {
   RuntimeTerminalResult,
 } from "../supervisor-protocol.js";
 import {
+  parseRuntimeInvocationRequest,
   RUNTIME_PROTOCOL_VERSION,
   toProtocolJson,
 } from "../supervisor-protocol.js";
@@ -36,6 +38,44 @@ describe("runtime protocol JSON", () => {
     ).toEqual({
       policy: { maxItems: 10 },
       values: [1, null, 3],
+    });
+  });
+
+  it("validates indexed defined-workflow targets", () => {
+    const request = invocation({});
+    expect(RUNTIME_PROTOCOL_VERSION).toBe(6);
+    expect(() =>
+      parseRuntimeInvocationRequest({
+        ...request,
+        kind: "durable-boundary",
+      }),
+    ).toThrow("requires stepIndex");
+    expect(() =>
+      parseRuntimeInvocationRequest({
+        ...request,
+        kind: "batch-source",
+        target: {
+          ...request.target,
+          stepIndex: 1,
+          operation: "unsupported",
+        },
+      }),
+    ).toThrow("must be initialize or readPage");
+    expect(
+      parseRuntimeInvocationRequest({
+        ...request,
+        kind: "batch-step",
+        target: {
+          ...request.target,
+          stepIndex: 2,
+          operation: "process",
+        },
+      }).target,
+    ).toEqual({
+      modulePath: "workflow.ts",
+      exportName: "run",
+      stepIndex: 2,
+      operation: "process",
     });
   });
 });
@@ -113,16 +153,70 @@ describe("runtime invocation dispatcher", () => {
     ]);
   });
 
-  it("deduplicates matching invocation IDs and rejects conflicting reuse", () => {
+  it("deduplicates logical invocation redelivery despite delivery metadata changes", async () => {
+    let finish = (_terminal: RuntimeTerminalResult): void => {};
     const factory = createWorkerFactory({
-      execute: async () => completed(true),
+      execute: () =>
+        new Promise((resolve) => {
+          finish = resolve;
+        }),
     });
     const dispatcher = createDispatcher({ factory });
     const request = invocation({});
-    expect(dispatcher.invoke(request)).toBe(dispatcher.invoke(request));
+    const first = dispatcher.invoke(request);
+    const redelivery = dispatcher.invoke({
+      ...request,
+      attempt: 2,
+      deadlineAt: new Date(Date.now() + 120_000).toISOString(),
+      traceContext: { traceparent: "redelivered" },
+    });
+    expect(redelivery).toBe(first);
+    await vi.waitFor(() => expect(factory.create).toHaveBeenCalledTimes(1));
+    finish(completed(true));
+    const receipt = await first;
+    await expect(
+      dispatcher.invoke({
+        ...request,
+        attempt: 3,
+        deadlineAt: new Date(Date.now() + 180_000).toISOString(),
+      }),
+    ).resolves.toBe(receipt);
+    expect(factory.create).toHaveBeenCalledTimes(1);
     expect(() =>
       dispatcher.invoke({ ...request, input: { changed: true } }),
     ).toThrow(RuntimeInvocationConflictError);
+  });
+
+  it("keeps runtime terminal failure semantic but permits infrastructure retry", async () => {
+    const execute = vi
+      .fn<() => Promise<RuntimeTerminalResult>>()
+      .mockRejectedValueOnce(new Error("worker unavailable"))
+      .mockResolvedValueOnce(completed("retried"));
+    const factory = createWorkerFactory({ execute });
+    const dispatcher = createDispatcher({ factory });
+    const request = invocation({ invocationId: "infrastructure-retry" });
+
+    await expect(dispatcher.invoke(request)).rejects.toBeInstanceOf(
+      RuntimeInvocationInfrastructureError,
+    );
+    await expect(dispatcher.invoke(request)).resolves.toMatchObject({
+      terminal: { status: "completed", result: "retried" },
+    });
+    expect(factory.create).toHaveBeenCalledTimes(2);
+
+    const semantic = invocation({ invocationId: "semantic-failure" });
+    execute.mockResolvedValueOnce({
+      status: "failed",
+      error: "workflow failed",
+      steps: [],
+    });
+    const failed = await dispatcher.invoke(semantic);
+    expect(failed.terminal).toMatchObject({
+      status: "failed",
+      error: "workflow failed",
+    });
+    await expect(dispatcher.invoke(semantic)).resolves.toBe(failed);
+    expect(factory.create).toHaveBeenCalledTimes(3);
   });
 
   it("cancels active invocations and terminates their worker", async () => {
@@ -155,6 +249,99 @@ describe("runtime invocation dispatcher", () => {
     expect(terminated).toHaveBeenCalled();
   });
 
+  it("retains completed step entries when an invocation is canceled", async () => {
+    const factory = createWorkerFactory({
+      execute: ({ signal, onEvent }) =>
+        new Promise((_resolve, reject) => {
+          onEvent({
+            type: "step_started",
+            nodeId: "node-1",
+            occurrence: 0,
+            name: "Completed before cancel",
+            input: null,
+          });
+          onEvent({
+            type: "step_completed",
+            nodeId: "node-1",
+            occurrence: 0,
+            name: "Completed before cancel",
+            output: null,
+          });
+          signal.addEventListener("abort", () => reject(new Error("aborted")), {
+            once: true,
+          });
+        }),
+    });
+    const dispatcher = createDispatcher({ factory });
+    const result = dispatcher.invoke(invocation({}));
+    await vi.waitFor(() =>
+      expect(
+        dispatcher.events({ invocationId: "invocation-1" })?.events,
+      ).toHaveLength(4),
+    );
+
+    await dispatcher.cancel({ invocationId: "invocation-1" });
+
+    await expect(result).resolves.toMatchObject({
+      terminal: {
+        status: "canceled",
+        steps: [
+          {
+            nodeId: "node-1",
+            occurrence: 0,
+            input: null,
+            output: null,
+            status: "completed",
+          },
+        ],
+      },
+    });
+  });
+
+  it("retains completed step entries when an active invocation times out", async () => {
+    const factory = createWorkerFactory({
+      execute: ({ signal, onEvent }) =>
+        new Promise((_resolve, reject) => {
+          onEvent({
+            type: "step_started",
+            nodeId: "node-1",
+            occurrence: 0,
+            name: "Completed before timeout",
+          });
+          onEvent({
+            type: "step_completed",
+            nodeId: "node-1",
+            occurrence: 0,
+            name: "Completed before timeout",
+            output: "saved",
+          });
+          signal.addEventListener("abort", () => reject(new Error("aborted")), {
+            once: true,
+          });
+        }),
+    });
+    const dispatcher = createDispatcher({ factory });
+
+    const result = await dispatcher.invoke(
+      invocation({
+        invocationId: "timeout-ledger",
+        deadlineAt: new Date(Date.now() + 25).toISOString(),
+      }),
+    );
+
+    expect(result.terminal).toMatchObject({
+      status: "timed_out",
+      steps: [
+        {
+          nodeId: "node-1",
+          occurrence: 0,
+          output: "saved",
+          status: "completed",
+        },
+      ],
+    });
+  });
+
   it("times out expired queued work without creating a worker", async () => {
     const factory = createWorkerFactory({
       execute: async () => completed(true),
@@ -183,7 +370,16 @@ describe("runtime invocation dispatcher", () => {
       dispatcher.invoke(
         invocation({ deploymentArtifactId: "another-artifact" }),
       ),
-    ).toThrow("expected");
+    ).toThrow("does not match runtime");
+    expect(() =>
+      dispatcher.invoke(invocation({ artifactDigest: "another-digest" })),
+    ).toThrow("does not match runtime");
+    expect(() =>
+      dispatcher.invoke(invocation({ transformVersion: "another-transform" })),
+    ).toThrow("does not match runtime");
+    expect(() =>
+      dispatcher.invoke(invocation({ runtimeVersion: "another-runtime" })),
+    ).toThrow("does not match runtime");
   });
 });
 
@@ -302,7 +498,12 @@ function createDispatcher(args: {
     writableRoot,
     maxConcurrency: args.maxConcurrency ?? 1,
     workerFactory: args.factory,
-    deploymentArtifactId: "artifact-1",
+    artifactIdentity: {
+      deploymentArtifactId: "artifact-1",
+      artifactDigest: "digest-1",
+      transformVersion: "transform-1",
+      runtimeVersion: "runtime-1",
+    },
     makeDirectory: async () => {},
   });
 }
@@ -330,12 +531,15 @@ function createWorkerFactory(args: {
 }
 
 function invocation(
-  overrides: Partial<RuntimeInvocationRequest>,
+  overrides: Partial<Extract<RuntimeInvocationRequest, { kind: "workflow" }>>,
 ): RuntimeInvocationRequest {
   return {
     protocolVersion: RUNTIME_PROTOCOL_VERSION,
     invocationId: "invocation-1",
     deploymentArtifactId: "artifact-1",
+    artifactDigest: "digest-1",
+    transformVersion: "transform-1",
+    runtimeVersion: "runtime-1",
     kind: "workflow",
     target: { modulePath: "workflow.ts", exportName: "run" },
     input: { value: 2 },

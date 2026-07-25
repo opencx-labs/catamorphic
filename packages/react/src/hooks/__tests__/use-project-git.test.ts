@@ -1,9 +1,11 @@
+import type { QueryClient } from "@tanstack/react-query";
 import { waitFor } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 import { CatamorphicError } from "../../lib/errors.js";
 import { apiUrl, HttpResponse, http } from "../../test/handlers.js";
 import { renderHookWithProviders } from "../../test/render.js";
 import { server } from "../../test/server.js";
+import { workflowKeys } from "../../workflow-keys.js";
 import { useCheckoutBranch } from "../use-checkout-branch.js";
 import { useCommitChanges } from "../use-commit-changes.js";
 import { useCreateBranch } from "../use-create-branch.js";
@@ -22,6 +24,18 @@ const STATUS = {
   remoteHead: "abc",
   remoteHeadTimestamp: 123,
 };
+
+function seedWorkflowQueries(queryClient: QueryClient) {
+  const listKey = workflowKeys.list({ projectId: "p1", ref: undefined });
+  const detailKey = workflowKeys.detail({
+    projectId: "p1",
+    name: "sample",
+    ref: undefined,
+  });
+  queryClient.setQueryData(listKey, []);
+  queryClient.setQueryData(detailKey, { name: "sample" });
+  return { listKey, detailKey };
+}
 
 describe("useProjectGit", () => {
   it("returns the status on happy path", async () => {
@@ -151,9 +165,14 @@ describe("useCheckoutBranch", () => {
         HttpResponse.json({ ...STATUS, branch: "dev" }),
       ),
     );
-    const { result } = renderHookWithProviders(() => useCheckoutBranch("p1"));
+    const { result, queryClient } = renderHookWithProviders(() =>
+      useCheckoutBranch("p1"),
+    );
+    const keys = seedWorkflowQueries(queryClient);
     const status = await result.current.mutateAsync("dev");
     expect(status.branch).toBe("dev");
+    expect(queryClient.getQueryState(keys.listKey)?.isInvalidated).toBe(true);
+    expect(queryClient.getQueryState(keys.detailKey)?.isInvalidated).toBe(true);
   });
 
   it("maps errors", async () => {
@@ -181,25 +200,35 @@ describe("useCommitChanges / useDeployProject", () => {
         }),
       ),
     );
-    const { result } = renderHookWithProviders(() => useCommitChanges("p1"));
+    const { result, queryClient } = renderHookWithProviders(() =>
+      useCommitChanges("p1"),
+    );
+    const keys = seedWorkflowQueries(queryClient);
     const out = await result.current.mutateAsync({ message: "x" });
     expect(out.status).toBe("deployed");
+    expect(queryClient.getQueryState(keys.listKey)?.isInvalidated).toBe(true);
+    expect(queryClient.getQueryState(keys.detailKey)?.isInvalidated).toBe(true);
   });
 
   it("deploys on happy path", async () => {
     server.use(
       http.post(apiUrl("/api/projects/p1/deploy"), () =>
         HttpResponse.json({
-          status: "nothing-to-deploy",
-          commitSha: null,
-          remoteSha: null,
+          status: "deployed",
+          commitSha: "abc",
+          remoteSha: "abc",
           conflicts: [],
         }),
       ),
     );
-    const { result } = renderHookWithProviders(() => useDeployProject("p1"));
+    const { result, queryClient } = renderHookWithProviders(() =>
+      useDeployProject("p1"),
+    );
+    const keys = seedWorkflowQueries(queryClient);
     const out = await result.current.mutateAsync();
-    expect(out.status).toBe("nothing-to-deploy");
+    expect(out.status).toBe("deployed");
+    expect(queryClient.getQueryState(keys.listKey)?.isInvalidated).toBe(true);
+    expect(queryClient.getQueryState(keys.detailKey)?.isInvalidated).toBe(true);
   });
 
   it("maps server errors", async () => {

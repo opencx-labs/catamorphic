@@ -19,6 +19,12 @@ alwaysApply: false
 | `loop-block` | A for/for-of/for-in/while loop | Yes | Vertical |
 | `parallel-block` | A `Promise.all([...])` call | Yes | Horizontal |
 | `scope-block` | An IIFE or bare `{ }` block | Yes | Vertical |
+| `durable-boundary` | One atomic `defineBoundary` retry scope (internal node type retained for compatibility) | Yes | Vertical |
+| `batch` | One `defineBatch` paged per-item scope | Yes | Vertical |
+| `source` | Batch source initialization/paging | No | — |
+| `sink` | Optional bounded batch sink | No | — |
+| `pause` | A returned persisted `pause(...)` transition | No | — |
+| `call-workflow` | A returned persisted `callWorkflow(...)` transition | No | — |
 
 ## Container Semantics
 
@@ -54,6 +60,33 @@ Containers use `parentId` to express nesting. All children of a container have `
 - Label comes from a leading JSDoc `@displayname` comment, or defaults to `"Block"`.
 - Children are parsed with `[]` as `previousIds`.
 
+### defineWorkflow scopes
+
+- Persisted Workflows are exported direct `defineWorkflow` calls with an inline
+  builder object, inline `steps` array, direct `defineBoundary`/`defineBatch`
+  entries, and inline callbacks.
+- Each boundary is a nameless gray container and an atomic retry unit. Its
+  `sourceRange` spans the complete `defineBoundary(...)` call.
+- JSDoc immediately above `defineBoundary(...)` uses the regular
+  `@displayname`, `@description`, `@icon`, and `@param` contract. A display name
+  adds a boundary header; without one the boundary remains nameless.
+- A `batch` container owns source, process operations, and an optional sink.
+  Calls to exported `defineBatchStep` definitions are valid only inside process
+  and are marked as physical batching metadata, never separate Workflow nodes.
+- Root edges connect boundary and batch containers in `steps` tuple order.
+  Internal edges never connect directly to the next top-level scope.
+- Ordinary calls inside are `step` nodes. Returned `pause` and `callWorkflow`
+  calls are dedicated leaves with exact call ranges. Do not add synthetic
+  return nodes after persisted transitions.
+- Child workflow calls are containers that recursively inline the child
+  workflow's boundaries and operations. Detect recursive call cycles and stop
+  expansion at the recursive call.
+- `controls: { cancel: true }` is graph metadata for a host-issued terminal Run
+  control. Cancellation is not a source node or boundary continuation.
+- Graphs and discovery results expose `capabilities` (`persistedContinuations`,
+  `batchProcessing`, `cancellation`) and never a category discriminator. `stage`
+  is not a public graph node or authoring concept.
+
 ## Edge Types
 
 | Type | Color | When used |
@@ -68,6 +101,9 @@ Removed types (do not re-add): `loop-body`, `loop-back`.
 ## Source Ranges
 
 Every node has a `sourceRange` with `start`, `end`, `startLine`, `startColumn`, `endLine`, `endColumn`. These enable bidirectional code ↔ canvas linking. Always extract column information via `sf.getLineAndColumnAtPos()`.
+
+Boundary and child ranges intentionally overlap. Code linking prefers
+the smallest leaf range and falls back to the boundary on structural lines.
 
 ## JSDoc Metadata
 

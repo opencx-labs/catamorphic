@@ -11,6 +11,7 @@ import {
   toCatamorphicError,
 } from "../lib/errors.js";
 import { useCatamorphic } from "../provider.js";
+import { workflowKeys } from "../workflow-keys.js";
 
 export interface WriteProjectFileInput {
   path: string;
@@ -74,7 +75,7 @@ export function useWriteProjectFile(
         queryKey: ["cat", "project", projectId, "file", data.path],
       });
       queryClient.invalidateQueries({
-        queryKey: ["cat", "project", projectId, "workflows"],
+        queryKey: workflowKeys.project({ projectId }),
       });
     },
   });

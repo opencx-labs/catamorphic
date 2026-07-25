@@ -9,10 +9,12 @@ export type WorkflowNodeType =
   | "parallel"
   | "parallel-block"
   | "scope-block"
+  | "durable-boundary"
+  | "batch"
+  | "pause"
+  | "call-workflow"
   | "delay"
   | "return";
-
-export type WorkflowKind = "regular" | "batch";
 
 export interface SourceRange {
   start: number;
@@ -60,6 +62,10 @@ export interface WorkflowNode {
   loopVariable?: string;
   loopIterable?: string;
   duration?: string;
+  stateExpression?: string;
+  workflowName?: string;
+  workflowInputExpression?: string;
+  workflowTarget?: WorkflowCallTargetDescriptor;
   returnExpression?: string;
   functionName?: string;
   parentId?: string;
@@ -73,15 +79,93 @@ export interface WorkflowEdge {
   type: "sequential" | "branch-true" | "branch-false" | "parallel";
 }
 
+export interface WorkflowCapabilities {
+  persistedContinuations: boolean;
+  batchProcessing: boolean;
+  cancellation: boolean;
+}
+
+export interface WorkflowExportTarget {
+  modulePath: string;
+  exportName: string;
+}
+
+export interface BoundaryRetryDescriptor {
+  maxAttemptsExpression?: string;
+  backoff?: {
+    initialExpression?: string;
+    maximumExpression?: string;
+    multiplierExpression?: string;
+  };
+}
+
+export interface BoundaryExecutionDescriptor {
+  type: "boundary";
+  topLevelIndex: number;
+  nodeId: string;
+  sourceRange: SourceRange;
+  runRange: SourceRange;
+  retry: BoundaryRetryDescriptor;
+}
+
+export interface PhysicalBatchStepPolicyDescriptor {
+  maxItemsExpression: string;
+  maxWaitMsExpression: string;
+  maxBytesExpression?: string;
+  rateLimitsExpression?: string;
+  partitionByExpression?: string;
+}
+
+export interface PhysicalBatchStepDescriptor {
+  nodeId: string;
+  functionName: string;
+  sourceRange: SourceRange;
+  policy: PhysicalBatchStepPolicyDescriptor;
+  exportTarget: WorkflowExportTarget;
+}
+
+export interface BatchFailurePolicyDescriptor {
+  mode: "continue" | "fail_fast";
+  maxFailures?: number;
+}
+
+export interface BatchExecutionDescriptor {
+  type: "batch";
+  topLevelIndex: number;
+  nodeId: string;
+  sourceRange: SourceRange;
+  source: { sourceRange: SourceRange };
+  process: {
+    sourceRange: SourceRange;
+    stepNodeIds: string[];
+    physicalSteps: PhysicalBatchStepDescriptor[];
+  };
+  failurePolicy: BatchFailurePolicyDescriptor;
+  sink?: { sourceRange: SourceRange };
+}
+
+export type WorkflowExecutionUnitDescriptor =
+  | BoundaryExecutionDescriptor
+  | BatchExecutionDescriptor;
+
+export interface WorkflowExecutionDescriptor {
+  exportTarget: WorkflowExportTarget;
+  steps: WorkflowExecutionUnitDescriptor[];
+}
+
+export interface WorkflowCallTargetDescriptor {
+  exportTarget: WorkflowExportTarget;
+  capabilities: WorkflowCapabilities;
+  execution: WorkflowExecutionDescriptor;
+}
+
 export interface WorkflowGraph {
   name: string;
-  /**
-   * Parsers always set this field. It remains optional so existing consumers
-   * that construct regular workflow graphs stay source-compatible.
-   */
-  kind?: WorkflowKind;
+  capabilities: WorkflowCapabilities;
+  execution: WorkflowExecutionDescriptor;
   displayName?: string;
   description?: string;
+  controls?: { cancel?: true };
   trigger: { parameters: ParameterInfo[] };
   nodes: WorkflowNode[];
   edges: WorkflowEdge[];
@@ -92,11 +176,7 @@ export interface WorkflowGraph {
 
 export interface DiscoveredWorkflow {
   functionName: string;
-  /**
-   * Parsers always set this field. It remains optional for source compatibility
-   * with regular workflow discovery results constructed by consumers.
-   */
-  kind?: WorkflowKind;
+  capabilities: WorkflowCapabilities;
   filePath: string;
   graph: WorkflowGraph;
 }

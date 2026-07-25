@@ -3,6 +3,7 @@ import type {
   DeploymentRuntimeCleanupResult,
   DeploymentRuntimeHealthResult,
   DeploymentRuntimeRetirementResult,
+  ExecutionWorkerHandle,
   ExecutionWorkerOptions,
 } from "@catamorphic/core";
 import {
@@ -108,9 +109,10 @@ function resolveStorage(config: StorageConfig): ProjectManager {
 /**
  * Library-direct entry point for embedding catamorphic in a Node/Bun backend.
  * Hosts construct this once at boot and keep it around for the process
- * lifetime. Identity is bound per-request via `forTenant(orgId).forUser(userId)`.
+ * lifetime. Identity is bound per request with keyed tenant and user objects.
  */
 export class Catamorphic {
+  private readonly workerHandles = new Set<ExecutionWorkerHandle>();
   readonly core: CatamorphicCore;
 
   private readonly schema: string;
@@ -151,18 +153,22 @@ export class Catamorphic {
 
   /**
    * Bind the tenant (host's org id). Returns an intermediate client that
-   * still needs a user id via `.forUser(externalUserId)`.
+   * still needs a user id via `.forUser({ externalUserId })`.
    */
-  forTenant(tenantId: string): TenantScopedClient {
-    return new TenantScopedClient(this.core, tenantId);
+  forTenant(args: { tenantId: string }): TenantScopedClient {
+    return new TenantScopedClient(this.core, args.tenantId);
   }
 
-  startWorker(options: ExecutionWorkerOptions = {}): string {
-    return this.core.executionWorker.start(options);
-  }
-
-  stopWorker(args: { workerId: string }): boolean {
-    return this.core.executionWorker.stop(args);
+  startExecutionWorker(
+    options: ExecutionWorkerOptions = {},
+  ): ExecutionWorkerHandle {
+    if (!this.core.sandboxProvider) {
+      throw new Error("Sandbox provider required to start execution workers");
+    }
+    const handle = this.core.runs.startWorker(options);
+    this.workerHandles.add(handle);
+    void handle.done.finally(() => this.workerHandles.delete(handle));
+    return handle;
   }
 
   redriveExecutionJob(args: {
@@ -170,7 +176,7 @@ export class Catamorphic {
     jobId: string;
     availableAt?: Date;
   }): Promise<boolean> {
-    return this.core.executionJobs.redrive(args);
+    return this.core.runs.redriveJob(args);
   }
 
   reconcileDeploymentRuntimeHealth(
@@ -205,7 +211,9 @@ export class Catamorphic {
    * are left untouched.
    */
   async close(): Promise<void> {
-    this.core.executionWorker.stopAll();
+    await Promise.allSettled(
+      [...this.workerHandles].map((handle) => handle.stop()),
+    );
     if (this.ownsDb) {
       await this.core.db.destroy();
     }

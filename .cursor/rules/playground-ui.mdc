@@ -17,7 +17,7 @@ Editor components **must only communicate with the embed server** (either `@cata
 1. User clicks **▶ Run** → `RunTriggerDialog` opens with a form built from `triggerParameters`.
 2. On submit, a local pending run is added to `runsAtom` (status `running`).
 3. The **History sidebar** opens automatically and the running run is expanded.
-4. `onRun(triggerData)` fires the host-provided callback → `POST /workflows/:id/runs` on the embed server.
+4. `onRun(triggerData)` fires the host-provided callback → `POST /api/projects/:projectId/workflows/:name/runs` on the embed server.
 5. On completion, the local run is updated with the server's `runId`, result, and status.
 6. If the server persisted the run to the DB, `runId` is the DB-assigned UUID (replaces the local temp ID).
 
@@ -30,6 +30,9 @@ Editor components **must only communicate with the embed server** (either `@cata
 
 ## Runs Panel Behavior
 
+- One Runs panel renders every Workflow. Run capabilities determine whether
+  cancel, processing pause/resume, input submission, progress, and item
+  inspection controls appear; never add capability-specific panel families.
 - Runs start **collapsed by default** — DB-loaded history is never auto-expanded.
 - Only the run triggered in the **current session** (`activeRunIdAtom`) auto-expands.
 - Runs are paginated: 20 per page. An `IntersectionObserver` sentinel at the bottom triggers `onLoadMoreRuns(offset)` when scrolled into view, appending more items to `runsAtom`.

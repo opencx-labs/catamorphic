@@ -2,7 +2,7 @@
   "$schema": "https://ui.shadcn.com/schema/registry-item.json",
   "name": "runs-panel",
   "type": "registry:component",
-  "description": "List recent workflow runs + Trigger button. Uses useWorkflowRuns and useTriggerWorkflowRun.",
+  "description": "Unified Workflow Runs with capability-driven controls, selectable Batch processing scopes, Items, and input submission.",
   "dependencies": ["@catamorphic/react"],
   "registryDependencies": ["@catamorphic/catamorphic-provider"],
   "files": [

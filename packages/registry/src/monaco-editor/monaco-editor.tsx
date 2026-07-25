@@ -7,6 +7,54 @@ import { useEffect, useRef } from "react";
 type EditorInstance = Parameters<OnMount>[0];
 type MonacoInstance = Parameters<OnMount>[1];
 
+const WORKFLOW_AUTHORING_TYPES = `
+declare module "@catamorphic/workflow" {
+  export type JsonValue = boolean | number | string | null | { readonly [key: string]: JsonValue } | readonly JsonValue[];
+  export interface RetryPolicy { maxAttempts: number; backoff?: { initial: string; maximum?: string; multiplier?: number }; }
+  declare const transitionBrand: unique symbol;
+  export interface WorkflowTransition<Output> { readonly [transitionBrand]: Output; }
+  export type PauseResult<Value, State = never> =
+    | ({ reason: "resumed"; value: Value } & ([State] extends [never] ? object : { state: State }))
+    | ({ reason: "timed_out" } & ([State] extends [never] ? object : { state: State }));
+  export interface Pause {
+    <Value>(): WorkflowTransition<Extract<PauseResult<Value>, { reason: "resumed" }>>;
+    <Value>(options: { timeout: string }): WorkflowTransition<PauseResult<Value>>;
+    <Value, State>(options: { timeout?: string; state: State }): WorkflowTransition<PauseResult<Value, State>>;
+  }
+  export interface WorkflowDefinition<Input, Output> { readonly steps: readonly (BoundaryDefinition<unknown, unknown> | BatchDefinition<unknown, unknown>)[]; }
+  export type CallWorkflow = <Input, Output>(workflow: WorkflowDefinition<Input, Output>, options: { input: Input }) => WorkflowTransition<Output>;
+  export interface BoundaryContext<Input> { readonly input: Input; readonly pause: Pause; readonly callWorkflow: CallWorkflow; }
+  export interface BoundaryDefinition<Input, Output> { readonly run: (context: BoundaryContext<Input>) => unknown | Promise<unknown>; readonly retry?: RetryPolicy; }
+  export interface BatchExecutionContext { invocationId: string; attempt: number; deadlineAt: string; signal: AbortSignal; }
+  export interface BatchDefinition<Input, Output> { readonly source: (args: { input: Input; context: BatchExecutionContext }) => unknown; readonly process: (args: { key: string; item: unknown; context: BatchExecutionContext }) => Promise<unknown>; }
+  export interface DefineBatch {
+    <Input, Result>(options: {
+      source(args: { input: Input; context: BatchExecutionContext }): unknown;
+      process(args: { key: string; item: unknown; context: BatchExecutionContext }): Promise<Result>;
+      failurePolicy?: { mode: "continue" | "fail_fast"; maxFailures?: number };
+      sink?: unknown;
+    }): BatchDefinition<Input, { summary: { total: number; succeeded: number; failed: number; skipped: number }; artifact?: unknown }>;
+  }
+  export interface WorkflowBuilderContext {
+    readonly defineBoundary: <Input, Returned>(options: {
+      retry?: RetryPolicy;
+      run(context: BoundaryContext<Input>): Returned | Promise<Returned>;
+    }) => BoundaryDefinition<Input, Awaited<Returned> extends WorkflowTransition<infer Output> ? Output : Awaited<Returned>>;
+    readonly defineBatch: DefineBatch;
+  }
+  export function defineWorkflow<Steps extends readonly [BoundaryDefinition<unknown, unknown> | BatchDefinition<unknown, unknown>, ...(BoundaryDefinition<unknown, unknown> | BatchDefinition<unknown, unknown>)[]]>(
+    build: (context: WorkflowBuilderContext) => { readonly steps: Steps; readonly controls?: { readonly cancel?: true } },
+  ): WorkflowDefinition<unknown, unknown>;
+  export interface BatchStepPolicy { maxItems: number; maxWaitMs: number; maxBytes?: number; }
+  export interface BatchStepDefinition<Item, Result> { (input: Item): Promise<Result>; readonly batch: BatchStepPolicy; }
+  export function defineBatchStep<Item, Result>(definition: {
+    batch: BatchStepPolicy;
+    partitionBy?: (input: Item) => JsonValue;
+    run(args: { items: readonly { key: string; value: Item }[]; context: BatchExecutionContext }): Promise<readonly ({ key: string; status: "succeeded"; result: Result } | { key: string; status: "failed"; error: { message: string } } | { key: string; status: "skipped"; reason?: string })[]>;
+  }): BatchStepDefinition<Item, Result>;
+}
+`;
+
 export interface MonacoCodeEditorProps {
   code: string;
   onChange: (code: string) => void;
@@ -109,6 +157,10 @@ export function MonacoCodeEditor({
       // into the editor, so cross-file and npm imports can't resolve here.
       diagnosticCodesToIgnore: [2307],
     });
+    monaco.languages.typescript.typescriptDefaults.addExtraLib(
+      WORKFLOW_AUTHORING_TYPES,
+      "file:///node_modules/@catamorphic/workflow/index.d.ts",
+    );
 
     editor.onDidChangeCursorPosition((event) => {
       if (programmaticReveal.current) return;

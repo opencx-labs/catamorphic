@@ -1,6 +1,8 @@
 import { getTracer, withSpan } from "@catamorphic/otel";
+import { EXECUTION_TRANSFORM_VERSION } from "@catamorphic/parser";
 import {
   type CloneSource,
+  DEPLOYMENT_RUNTIME_VERSION,
   type DeploymentRuntime,
   type DeploymentRuntimeStatus,
   type RunPluginPayload,
@@ -60,7 +62,7 @@ export class DeploymentRuntimeService {
     private readonly store: DeploymentRuntimeStore,
     private readonly deps: {
       provider: SandboxProvider;
-      artifacts: Pick<DeploymentArtifactsService, "markStatus">;
+      artifacts: Pick<DeploymentArtifactsService, "markStatus" | "verify">;
       maxConcurrency?: number;
       now?: () => Date;
     },
@@ -76,6 +78,21 @@ export class DeploymentRuntimeService {
   }): Promise<DeploymentRuntime> {
     const runtimeProvider = this.deps.provider.deploymentRuntime;
     if (!runtimeProvider) throw new DeploymentRuntimeNotSupportedError();
+    if (
+      !(await this.deps.artifacts.verify({
+        artifact: args.artifact,
+        projectId: args.projectId,
+        commitSha: args.artifact.commitSha,
+        files: args.files,
+        plugins: args.plugins,
+      })) ||
+      args.artifact.transformVersion !== EXECUTION_TRANSFORM_VERSION ||
+      args.artifact.runtimeVersion !== DEPLOYMENT_RUNTIME_VERSION
+    ) {
+      throw new Error(
+        `Deployment artifact '${args.artifact.id}' uses incompatible transform or runtime versions`,
+      );
+    }
 
     return withSpan(
       {
@@ -103,6 +120,9 @@ export class DeploymentRuntimeService {
                     purpose: "deployment-runtime",
                     projectId: args.projectId,
                     deploymentArtifactId: args.artifact.id,
+                    artifactDigest: args.artifact.artifactDigest,
+                    transformVersion: args.artifact.transformVersion,
+                    runtimeVersion: args.artifact.runtimeVersion,
                   },
                 })
               ).providerId;
@@ -129,6 +149,9 @@ export class DeploymentRuntimeService {
               const runtime = await runtimeProvider.ensureRuntime({
                 sandboxId,
                 deploymentArtifactId: args.artifact.id,
+                artifactDigest: args.artifact.artifactDigest,
+                transformVersion: args.artifact.transformVersion,
+                runtimeVersion: args.artifact.runtimeVersion,
                 workingDirectory: projectDirectory,
                 maxConcurrency: this.deps.maxConcurrency ?? 4,
               });
@@ -220,9 +243,11 @@ export class DeploymentRuntimeService {
         const outcomes = await Promise.all(
           candidates.map(async (runtime): Promise<HealthOutcome> => {
             try {
-              const health = await runtimeProvider.getHealth({
-                runtimeId: runtime.providerId,
-              });
+              const health = readProviderHealth(
+                await runtimeProvider.getHealth({
+                  runtimeId: runtime.providerId,
+                }),
+              );
               const status = runtimeRecordStatus(health.runtimeStatus);
               const now = this.now();
               await this.store.update({
@@ -618,6 +643,40 @@ interface HealthOutcome {
   activeInvocations: number;
   queuedInvocations: number;
   maxConcurrency: number;
+}
+
+interface DeploymentRuntimeProviderHealth {
+  runtimeStatus: DeploymentRuntimeStatus;
+  activeInvocations: number;
+  queuedInvocations: number;
+  maxConcurrency: number;
+}
+
+function readProviderHealth(value: unknown): DeploymentRuntimeProviderHealth {
+  if (typeof value !== "object" || value === null) {
+    throw new Error("Deployment runtime health is invalid");
+  }
+  const runtimeStatus = Reflect.get(value, "runtimeStatus");
+  const activeInvocations = Reflect.get(value, "activeInvocations");
+  const queuedInvocations = Reflect.get(value, "queuedInvocations");
+  const maxConcurrency = Reflect.get(value, "maxConcurrency");
+  if (
+    (runtimeStatus !== "starting" &&
+      runtimeStatus !== "healthy" &&
+      runtimeStatus !== "stopped" &&
+      runtimeStatus !== "error") ||
+    typeof activeInvocations !== "number" ||
+    typeof queuedInvocations !== "number" ||
+    typeof maxConcurrency !== "number"
+  ) {
+    throw new Error("Deployment runtime health is invalid");
+  }
+  return {
+    runtimeStatus,
+    activeInvocations,
+    queuedInvocations,
+    maxConcurrency,
+  };
 }
 
 function runtimeRecordStatus(

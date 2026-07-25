@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { RunExecutorImpl } from "../run-executor.js";
 import type { SandboxProvider } from "../types.js";
+import { RuntimeInfrastructureError } from "../types.js";
 
 function createProvider(opts?: {
   exitCode?: number;
@@ -79,28 +80,28 @@ describe("RunExecutorImpl", () => {
     });
   });
 
-  it("fails when a successful process emits no report", async () => {
+  it("classifies a missing process report as infrastructure failure", async () => {
     const provider = createProvider({ result: "ordinary output" });
-    const result = await execute(new RunExecutorImpl({ provider }));
-    expect(result.status).toBe("failed");
-    expect(result.error).toContain("ordinary output");
+    await expect(
+      execute(new RunExecutorImpl({ provider })),
+    ).rejects.toBeInstanceOf(RuntimeInfrastructureError);
   });
 
   it("fails on a malformed report", async () => {
     const provider = createProvider({
       result: "CATAMORPHIC_REPORT:{not-json}",
     });
-    const result = await execute(new RunExecutorImpl({ provider }));
-    expect(result.status).toBe("failed");
-    expect(result.error).toContain("Invalid workflow report");
+    await expect(
+      execute(new RunExecutorImpl({ provider })),
+    ).rejects.toBeInstanceOf(RuntimeInfrastructureError);
   });
 
   it("fails when a report omits step data", async () => {
     const provider = createProvider({
       result: 'CATAMORPHIC_REPORT:{"status":"completed"}',
     });
-    const result = await execute(new RunExecutorImpl({ provider }));
-    expect(result.status).toBe("failed");
-    expect(result.error).toContain("invalid steps");
+    await expect(
+      execute(new RunExecutorImpl({ provider })),
+    ).rejects.toBeInstanceOf(RuntimeInfrastructureError);
   });
 });
