@@ -10,6 +10,7 @@ import type {
   SandboxProvider,
   StepEntry,
 } from "./types.js";
+import { RuntimeInfrastructureError } from "./types.js";
 
 export interface DeploymentRuntimeExecutorOptions {
   provider: SandboxProvider;
@@ -24,6 +25,7 @@ export interface DeploymentRuntimeExecutorOptions {
   invocationAttempt?: number;
   replay?: Record<string, unknown>;
   eventSink?: RuntimeInvocationEventSink;
+  signal?: AbortSignal;
   now?: () => Date;
 }
 
@@ -51,26 +53,40 @@ export class DeploymentRuntimeExecutorAdapter implements RunExecutor {
       typeof this.options.runtime === "function"
         ? await this.options.runtime({ run })
         : this.options.runtime;
-    const receipt = await runtimeProvider.invoke({
-      protocolVersion: RUNTIME_PROTOCOL_VERSION,
-      runtimeId: runtime.runtimeId,
-      invocationId: this.options.invocationId ?? run.runId,
-      deploymentArtifactId: runtime.deploymentArtifactId,
-      kind: "workflow",
-      target: {
-        modulePath: run.workflowFile,
-        exportName: run.workflowName,
-      },
-      input: run.triggerData,
-      attempt: this.options.invocationAttempt ?? 1,
-      deadlineAt: new Date(
-        this.now().getTime() + this.timeoutSeconds * 1_000,
-      ).toISOString(),
-      replay: this.options.replay,
-      env: run.secrets,
-      eventSink: this.options.eventSink,
-      traceContext: currentTraceContext(),
-    });
+    let receipt: RuntimeInvocationReceipt;
+    try {
+      receipt = await runtimeProvider.invoke({
+        protocolVersion: RUNTIME_PROTOCOL_VERSION,
+        runtimeId: runtime.runtimeId,
+        invocationId: this.options.invocationId ?? run.runId,
+        deploymentArtifactId: runtime.deploymentArtifactId,
+        artifactDigest: runtime.artifactDigest,
+        transformVersion: runtime.transformVersion,
+        runtimeVersion: runtime.runtimeVersion,
+        kind: "workflow",
+        target: {
+          modulePath: run.workflowFile,
+          exportName: run.workflowName,
+        },
+        input: run.triggerData,
+        attempt: this.options.invocationAttempt ?? 1,
+        deadlineAt: new Date(
+          this.now().getTime() + this.timeoutSeconds * 1_000,
+        ).toISOString(),
+        replay: this.options.replay,
+        env: run.secrets,
+        eventSink: this.options.eventSink,
+        signal: this.options.signal,
+        traceContext: currentTraceContext(),
+      });
+    } catch (error) {
+      if (this.options.signal?.aborted) throw error;
+      if (error instanceof RuntimeInfrastructureError) throw error;
+      throw new RuntimeInfrastructureError({
+        operation: `invocation '${this.options.invocationId ?? run.runId}' handoff`,
+        cause: error,
+      });
+    }
     return receiptToRunResult(receipt);
   }
 }

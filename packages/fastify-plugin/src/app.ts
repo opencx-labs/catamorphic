@@ -42,6 +42,28 @@ export function createApp(config: AppConfig = {}) {
         version: "0.0.1",
         description: "Code-first workflow builder API",
       },
+      components: {
+        schemas: {
+          JsonValueInput: {
+            anyOf: [
+              { type: "string" },
+              { type: "number" },
+              { type: "boolean" },
+              { type: "string", nullable: true, enum: [null] },
+              {
+                type: "array",
+                items: { $ref: "#/components/schemas/JsonValueInput" },
+              },
+              {
+                type: "object",
+                additionalProperties: {
+                  $ref: "#/components/schemas/JsonValueInput",
+                },
+              },
+            ],
+          },
+        },
+      },
       servers: [{ url: "/" }],
     },
     transform: jsonSchemaTransform,

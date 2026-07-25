@@ -20,6 +20,11 @@ Shows human-readable information about the selected node.
 - **Argument provenance**: For each argument, show where the value comes from (e.g., "from Validate Order" or "from trigger parameter").
 - **Friendly types**: `string` → "Text", `boolean` → "True or False", `number` → "Number", `string[]` → "Text List", etc. Non-technical users read this.
 - **Default values**: Show when a parameter has a TypeScript default.
+- Boundary details explain atomic retry behavior and show retry/backoff
+  policy. Pause details show timeout/resume behavior and persisted state. Child
+  calls show their target Workflow and input expression. Batch details show
+  paged source, per-item processing, failure policy, sink, and progress without
+  presenting a separate Workflow category.
 
 ### Code Tab
 
@@ -40,6 +45,9 @@ When the selected node changes from outside the editor, the hook emits a `reveal
 ### Code → Canvas
 
 When the cursor moves in the editor (Monaco: `onDidChangeCursorPosition`), the editor calls `handleCursorPositionChange({ line, column })`. The hook runs `findNodeAtPosition` (`packages/react/src/lib/find-node-at-position.ts`) — smallest-span non-container node whose `sourceRange` contains the cursor; containers (including the trigger, whose range is the whole function) win only on structural lines — and selects that node, highlighting it in the canvas.
+
+`durable-boundary` is a container. `pause` and `call-workflow` are leaves and
+must win selection when their call ranges overlap the enclosing boundary.
 
 ### Preventing Feedback Loops
 

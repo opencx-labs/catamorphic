@@ -17,24 +17,11 @@ export {
   AgentSessionsService,
   type SyncedFileChange,
 } from "./services/agent-sessions-service.js";
-export { BatchExecutionService } from "./services/batch-execution-service.js";
-export {
-  type BatchFailurePolicy,
-  type BatchItem,
-  BatchItemNotFoundError,
-  type BatchItemStatus,
-  type BatchItemStep,
-  type BatchRun,
-  BatchRunNotFoundError,
-  type BatchRunStatus,
-  BatchRunsService,
-  BatchWorkflowRequiredError,
-  type ListBatchItemsResult,
-  type ListBatchRunsResult,
-} from "./services/batch-runs-service.js";
 export { DbSandboxStore } from "./services/db-sandbox-store.js";
 export {
+  createDeploymentArtifactIdentity,
   type DeploymentArtifact,
+  type DeploymentArtifactIdentity,
   type DeploymentArtifactStatus,
   DeploymentArtifactsService,
 } from "./services/deployment-artifacts-service.js";
@@ -65,6 +52,7 @@ export {
 export {
   ExecutionJobDeferredError,
   type ExecutionJobHandler,
+  type ExecutionWorkerHandle,
   type ExecutionWorkerOptions,
   ExecutionWorkerService,
 } from "./services/execution-worker-service.js";
@@ -96,35 +84,52 @@ export {
   RateReservationsService,
 } from "./services/rate-reservations-service.js";
 export {
+  RunPauseNotFoundError,
+  RunResumeConflictError,
+} from "./services/run-coordinator.js";
+export {
   type RunPluginBundle,
   RunPluginsLoader,
 } from "./services/run-plugins-loader.js";
 export {
+  type BatchItem,
+  type BatchItemStatus,
+  type BatchItemStep,
+  type BatchProgress,
+  type CancelRunInput,
+  type GetRunInput,
   InvalidRunOverlayError,
+  type ListBatchItemStepsInput,
+  type ListBatchItemsInput,
+  type ListBatchItemsResult,
   type ListRunsInput,
   type ListRunsResult,
+  type PauseRunInput,
   PluginSecretsMissingError,
   ProductionDeploymentNotFoundError,
-  RegularWorkflowRequiredError,
+  type RedriveRunJobInput,
+  type ResumeRunInput,
+  type ResumeRunPauseInput,
   type Run,
+  type RunArtifact,
+  type RunCapabilities,
+  RunCapabilityError,
   type RunDetail,
   type RunMode,
   RunNotFoundError,
+  type RunPause,
+  type RunPhase,
+  type RunProvenance,
   type RunStatus,
   type RunStep,
   RunsService,
   SandboxProviderNotConfiguredError,
   type StepStatus,
-  type TriggerRunInput,
+  type TriggerProductionRunInput,
   type TriggerTestRunInput,
+  type WorkflowStepAttempt,
+  type WorkflowStepAttemptStatus,
 } from "./services/runs-service.js";
-export {
-  type RuntimeEventIngestionResult,
-  RuntimeEventRunNotFoundError,
-  RuntimeEventSequenceConflictError,
-  RuntimeEventsService,
-  RuntimeStepReplayConflictError,
-} from "./services/runtime-events-service.js";
 export {
   type SecretEnvironment,
   type SecretStatus,

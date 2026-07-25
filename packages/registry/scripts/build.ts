@@ -57,7 +57,16 @@ async function build(): Promise<void> {
   await fs.mkdir(DIST, { recursive: true });
 
   const entries = await fs.readdir(SRC, { withFileTypes: true });
-  const itemDirs = entries.filter((e) => e.isDirectory()).map((e) => e.name);
+  const itemDirs: string[] = [];
+  for (const entry of entries) {
+    if (!entry.isDirectory()) continue;
+    try {
+      await fs.access(path.join(SRC, entry.name, "registry-item.json"));
+      itemDirs.push(entry.name);
+    } catch {
+      // Deleted registry items may leave an empty directory in a local checkout.
+    }
+  }
 
   const index: { name: string; type: string; description?: string }[] = [];
 

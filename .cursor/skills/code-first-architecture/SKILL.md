@@ -12,10 +12,23 @@ TypeScript code is the single source of truth for workflow definitions. There is
 4. Code changes → re-parse → visual update (unidirectional)
 5. Visual edits happen through AI: user describes the change → AI modifies code → re-parse
 
-## Workflow Directives
+## Workflow Authoring
 
-- `"use workflow"` — marks a function as a workflow entry point
-- `"use step"` — marks a function as a step
+- An exported async function whose body contains exact `"use workflow"` is a
+  Workflow without persisted continuation between operations.
+- `"use step"` marks a visual step function called by a plain workflow or from
+  inside a persisted scope.
+- `defineWorkflow(({ defineBoundary, defineBatch }) => ({ steps: [...] }))`
+  defines a Workflow with persisted continuation capabilities. It does not
+  create another public category.
+- `defineBoundary` is an atomic retry scope whose callback operations retry
+  together.
+- `defineBatch` is finite paged per-item processing with an optional sink.
+- Package-level `defineBatchStep` physically coalesces compatible calls only
+  inside `defineBatch.process`.
+
+There is no public stage construct. All definitions remain exported TypeScript
+and the parser never executes author code.
 
 ## AST-to-Graph Mapping
 
@@ -28,11 +41,18 @@ TypeScript code is the single source of truth for workflow definitions. There is
 | `Promise.all([...])` | Parallel fork + join |
 | `sleep(duration)` | Delay node |
 | `return value` | Return node |
+| `defineBoundary({ run })` | Boundary container |
+| `defineBatch({ source, process, sink? })` | Batch container with source/process/sink detail |
+| returned `pause(...)` | Pause node |
+| returned `callWorkflow(...)` | Child Workflow node |
 
 ## Why Code-First
 
 - Code is diffable, versionable, reviewable
 - Full TypeScript type safety and IDE support
-- No impedance mismatch between what you see and what runs
+- The graph faithfully projects supported source semantics and exposes Workflow
+  capabilities rather than kind discriminators.
+- Persisted boundaries, pauses, child calls, batch progress, retries, and
+  cancellation execute through the canonical Runs service and Postgres state.
 - AI agents are excellent at writing and modifying code
 - Embedding in SaaS: host app controls the code, UI is a view layer

@@ -1,25 +1,73 @@
 import type { BatchStepRateLimit, JsonValue } from "@catamorphic/workflow";
 
-export const RUNTIME_PROTOCOL_VERSION = 2;
+export const RUNTIME_PROTOCOL_VERSION = 6;
+export const DEPLOYMENT_RUNTIME_VERSION = `runtime-protocol-v${RUNTIME_PROTOCOL_VERSION}`;
+
+export interface RuntimeArtifactIdentity {
+  deploymentArtifactId: string;
+  artifactDigest: string;
+  transformVersion: string;
+  runtimeVersion: string;
+}
 
 export type RuntimeWorkKind =
   | "workflow"
+  | "durable-boundary"
   | "batch-source"
   | "batch-step"
   | "batch-sink";
 
-export interface RuntimeInvocationTarget {
+interface RuntimeInvocationTargetBase {
   modulePath: string;
   exportName: string;
-  operation?: string;
 }
 
-export interface RuntimeInvocationRequest {
+export interface RuntimePlainWorkflowTarget
+  extends RuntimeInvocationTargetBase {
+  stepIndex?: never;
+  operation?: never;
+}
+
+export interface RuntimeBoundaryTarget extends RuntimeInvocationTargetBase {
+  stepIndex: number;
+  operation?: never;
+}
+
+export interface RuntimeBatchSourceTarget extends RuntimeInvocationTargetBase {
+  stepIndex: number;
+  operation: "initialize" | "readPage";
+}
+
+export interface RuntimeBatchProcessTarget extends RuntimeInvocationTargetBase {
+  stepIndex: number;
+  operation: "process";
+}
+
+export interface RuntimeBatchStepTarget extends RuntimeInvocationTargetBase {
+  stepIndex?: never;
+  operation: "run";
+}
+
+export interface RuntimeBatchSinkTarget extends RuntimeInvocationTargetBase {
+  stepIndex: number;
+  operation: "inspect" | "initialize" | "writeBatch" | "finalize";
+}
+
+export type RuntimeInvocationTarget =
+  | RuntimePlainWorkflowTarget
+  | RuntimeBoundaryTarget
+  | RuntimeBatchSourceTarget
+  | RuntimeBatchProcessTarget
+  | RuntimeBatchStepTarget
+  | RuntimeBatchSinkTarget;
+
+interface RuntimeInvocationRequestBase extends RuntimeArtifactIdentity {
   protocolVersion: typeof RUNTIME_PROTOCOL_VERSION;
+  /**
+   * Idempotency identity for one logical execution. Redelivery must reuse this
+   * value; an intentional re-execution must use a new value.
+   */
   invocationId: string;
-  deploymentArtifactId: string;
-  kind: RuntimeWorkKind;
-  target: RuntimeInvocationTarget;
   input: unknown;
   attempt: number;
   deadlineAt: string;
@@ -27,6 +75,28 @@ export interface RuntimeInvocationRequest {
   env?: Record<string, string>;
   traceContext?: Record<string, string>;
 }
+
+export type RuntimeInvocationRequest =
+  | (RuntimeInvocationRequestBase & {
+      kind: "workflow";
+      target: RuntimePlainWorkflowTarget;
+    })
+  | (RuntimeInvocationRequestBase & {
+      kind: "durable-boundary";
+      target: RuntimeBoundaryTarget;
+    })
+  | (RuntimeInvocationRequestBase & {
+      kind: "batch-source";
+      target: RuntimeBatchSourceTarget;
+    })
+  | (RuntimeInvocationRequestBase & {
+      kind: "batch-step";
+      target: RuntimeBatchProcessTarget | RuntimeBatchStepTarget;
+    })
+  | (RuntimeInvocationRequestBase & {
+      kind: "batch-sink";
+      target: RuntimeBatchSinkTarget;
+    });
 
 export interface RuntimeStepEntry {
   nodeId: string;
@@ -43,6 +113,7 @@ export interface RuntimeStepEntry {
 
 export interface RuntimeBatchStepSuspension {
   nodeId: string;
+  occurrence: number;
   name: string;
   functionName: string;
   input: unknown;
@@ -180,10 +251,21 @@ export function parseRuntimeInvocationRequest(
     value: value.deploymentArtifactId,
     field: "deploymentArtifactId",
   });
+  const artifactDigest = requireNonEmptyString({
+    value: value.artifactDigest,
+    field: "artifactDigest",
+  });
+  const transformVersion = requireNonEmptyString({
+    value: value.transformVersion,
+    field: "transformVersion",
+  });
+  const runtimeVersion = requireNonEmptyString({
+    value: value.runtimeVersion,
+    field: "runtimeVersion",
+  });
   if (!isRuntimeWorkKind(value.kind)) {
     throw new Error("Invocation kind is invalid");
   }
-  const target = parseTarget(value.target);
   if (!Number.isInteger(value.attempt) || Number(value.attempt) < 1) {
     throw new Error("Invocation attempt must be a positive integer");
   }
@@ -198,18 +280,52 @@ export function parseRuntimeInvocationRequest(
   const traceContext = parseEnvironment(value.traceContext);
   const replay = parseReplay(value.replay);
 
-  return {
+  const request: RuntimeInvocationRequestBase = {
     protocolVersion: RUNTIME_PROTOCOL_VERSION,
     invocationId,
     deploymentArtifactId,
-    kind: value.kind,
-    target,
+    artifactDigest,
+    transformVersion,
+    runtimeVersion,
     input: value.input,
     attempt: Number(value.attempt),
     deadlineAt,
     replay,
     env,
     traceContext,
+  };
+  if (value.kind === "workflow") {
+    return {
+      ...request,
+      kind: value.kind,
+      target: parseTarget({ value: value.target, kind: value.kind }),
+    };
+  }
+  if (value.kind === "durable-boundary") {
+    return {
+      ...request,
+      kind: value.kind,
+      target: parseTarget({ value: value.target, kind: value.kind }),
+    };
+  }
+  if (value.kind === "batch-source") {
+    return {
+      ...request,
+      kind: value.kind,
+      target: parseTarget({ value: value.target, kind: value.kind }),
+    };
+  }
+  if (value.kind === "batch-step") {
+    return {
+      ...request,
+      kind: value.kind,
+      target: parseTarget({ value: value.target, kind: value.kind }),
+    };
+  }
+  return {
+    ...request,
+    kind: value.kind,
+    target: parseTarget({ value: value.target, kind: value.kind }),
   };
 }
 
@@ -225,29 +341,151 @@ export function toProtocolJson(value: unknown): JsonValue {
   return toProtocolJsonValue({ value, seen: new WeakSet<object>() });
 }
 
-function parseTarget(value: unknown): RuntimeInvocationTarget {
-  if (!isRecord(value)) {
+function parseTarget(args: {
+  value: unknown;
+  kind: "workflow";
+}): RuntimePlainWorkflowTarget;
+function parseTarget(args: {
+  value: unknown;
+  kind: "durable-boundary";
+}): RuntimeBoundaryTarget;
+function parseTarget(args: {
+  value: unknown;
+  kind: "batch-source";
+}): RuntimeBatchSourceTarget;
+function parseTarget(args: {
+  value: unknown;
+  kind: "batch-step";
+}): RuntimeBatchProcessTarget | RuntimeBatchStepTarget;
+function parseTarget(args: {
+  value: unknown;
+  kind: "batch-sink";
+}): RuntimeBatchSinkTarget;
+function parseTarget(args: {
+  value: unknown;
+  kind: RuntimeWorkKind;
+}): RuntimeInvocationTarget {
+  if (!isRecord(args.value)) {
     throw new Error("Invocation target must be an object");
   }
   const modulePath = requireNonEmptyString({
-    value: value.modulePath,
+    value: args.value.modulePath,
     field: "target.modulePath",
   });
   if (modulePath.includes("\0")) {
     throw new Error("Invocation target.modulePath contains a null byte");
   }
   const exportName = requireNonEmptyString({
-    value: value.exportName,
+    value: args.value.exportName,
     field: "target.exportName",
   });
   const operation =
-    value.operation === undefined
+    args.value.operation === undefined
       ? undefined
       : requireNonEmptyString({
-          value: value.operation,
+          value: args.value.operation,
           field: "target.operation",
         });
-  return { modulePath, exportName, operation };
+  const stepIndex = parseStepIndex(args.value.stepIndex);
+  const base = { modulePath, exportName };
+
+  if (args.kind === "workflow") {
+    requireNoStepIndex({ stepIndex, kind: args.kind });
+    requireOperation({ operation, expected: undefined, kind: args.kind });
+    return base;
+  }
+  if (args.kind === "durable-boundary") {
+    requireOperation({ operation, expected: undefined, kind: args.kind });
+    return {
+      ...base,
+      stepIndex: requireStepIndex({ stepIndex, kind: args.kind }),
+    };
+  }
+  if (args.kind === "batch-source") {
+    if (operation !== "initialize" && operation !== "readPage") {
+      throw new Error(
+        "Invocation batch-source target.operation must be initialize or readPage",
+      );
+    }
+    return {
+      ...base,
+      stepIndex: requireStepIndex({ stepIndex, kind: args.kind }),
+      operation,
+    };
+  }
+  if (args.kind === "batch-step" && operation === "process") {
+    return {
+      ...base,
+      stepIndex: requireStepIndex({ stepIndex, kind: args.kind }),
+      operation,
+    };
+  }
+  if (args.kind === "batch-step" && operation === "run") {
+    requireNoStepIndex({ stepIndex, kind: "physical batch-step" });
+    return { ...base, operation };
+  }
+  if (args.kind === "batch-step") {
+    throw new Error(
+      "Invocation batch-step target.operation must be process or run",
+    );
+  }
+  if (
+    operation !== "inspect" &&
+    operation !== "initialize" &&
+    operation !== "writeBatch" &&
+    operation !== "finalize"
+  ) {
+    throw new Error("Invocation batch-sink target.operation is invalid");
+  }
+  return {
+    ...base,
+    stepIndex: requireStepIndex({ stepIndex, kind: args.kind }),
+    operation,
+  };
+}
+
+function parseStepIndex(value: unknown): number | undefined {
+  if (value === undefined) return undefined;
+  if (!Number.isInteger(value) || Number(value) < 0) {
+    throw new Error(
+      "Invocation target.stepIndex must be a non-negative integer",
+    );
+  }
+  return Number(value);
+}
+
+function requireStepIndex(args: {
+  stepIndex: number | undefined;
+  kind: string;
+}): number {
+  if (args.stepIndex === undefined) {
+    throw new Error(`Invocation ${args.kind} target requires stepIndex`);
+  }
+  return args.stepIndex;
+}
+
+function requireNoStepIndex(args: {
+  stepIndex: number | undefined;
+  kind: string;
+}): void {
+  if (args.stepIndex !== undefined) {
+    throw new Error(
+      `Invocation ${args.kind} target must not include stepIndex`,
+    );
+  }
+}
+
+function requireOperation(args: {
+  operation: string | undefined;
+  expected: string | undefined;
+  kind: string;
+}): void {
+  if (args.operation !== args.expected) {
+    const expectation = args.expected
+      ? `must be ${args.expected}`
+      : "must not be set";
+    throw new Error(`Invocation ${args.kind} target.operation ${expectation}`);
+  }
 }
 
 function parseEnvironment(value: unknown): Record<string, string> | undefined {
@@ -278,6 +516,7 @@ function requireNonEmptyString(args: {
 function isRuntimeWorkKind(value: unknown): value is RuntimeWorkKind {
   return (
     value === "workflow" ||
+    value === "durable-boundary" ||
     value === "batch-source" ||
     value === "batch-step" ||
     value === "batch-sink"

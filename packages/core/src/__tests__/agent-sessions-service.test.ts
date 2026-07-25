@@ -3,10 +3,12 @@ import {
   activityLabel,
   buildAgentSystemPrompt,
   ensureBatchWorkflowSkill,
+  ensureDurableWorkflowSkill,
   parsePorcelain,
 } from "../services/agent-sessions-service.js";
 import {
   BATCH_WORKFLOW_SKILL_PATH,
+  DURABLE_WORKFLOW_SKILL_PATH,
   SEED_SKILLS,
   TEMPLATES,
 } from "../templates.js";
@@ -69,35 +71,71 @@ describe("parsePorcelain", () => {
 });
 
 describe("template skill seeding", () => {
-  it("every template teaches both workflow kinds", () => {
+  it("every template teaches both workflow authoring models", () => {
     for (const template of TEMPLATES) {
       const skill = template.files[".agents/skills/writing-workflows/SKILL.md"];
       const batchSkill = template.files[BATCH_WORKFLOW_SKILL_PATH];
+      const durableSkill = template.files[DURABLE_WORKFLOW_SKILL_PATH];
       expect(skill, `template ${template.id}`).toBeDefined();
       expect(batchSkill, `template ${template.id}`).toBeDefined();
       expect(skill).toContain("name: writing-workflows");
       expect(skill).toContain('"use workflow"');
-      expect(skill).toContain("defineBatchWorkflow");
-      expect(skill).toContain("preserve its kind");
+      expect(skill).toContain("defineBatch");
+      expect(skill).toContain("defineBoundary");
+      expect(skill).toContain("preserve its authoring model");
       expect(batchSkill).toContain("name: batch-workflows");
       expect(batchSkill).toContain("defineBatchStep");
       expect(batchSkill).toContain("acknowledgedKeys");
+      expect(durableSkill).toContain("name: durable-workflows");
+      expect(durableSkill).toContain("BoundaryContext");
+      expect(durableSkill).toContain("__catamorphicWorkflowTypeError");
+      expect(durableSkill).toContain("Return callWorkflow");
+      expect(durableSkill).toContain("controls: { cancel: true }");
+      expect(durableSkill).toContain("visualization");
     }
   });
 });
 
 describe("buildAgentSystemPrompt", () => {
-  it("always distinguishes workflow kinds and preserves host instructions", () => {
+  it("always distinguishes authoring models and preserves host instructions", () => {
     const prompt = buildAgentSystemPrompt({
       systemPrompt: "Use the host's billing plugin.",
     });
 
     expect(prompt).toContain('"use workflow"');
-    expect(prompt).toContain("defineBatchWorkflow");
-    expect(prompt).toContain("preserve its workflow kind");
+    expect(prompt).toContain("defineBatch");
+    expect(prompt).toContain("defineBoundary");
+    expect(prompt).toContain("execute ordered boundary and batch scopes");
+    expect(prompt).toContain("continuation state persisted in Postgres");
+    expect(prompt).toContain("controls: { cancel: true }");
+    expect(prompt).toContain("preserve its authoring model");
     expect(prompt).toContain("@catamorphic/workflow");
-    expect(prompt).toContain("Never create a local src/batch.ts");
+    expect(prompt).toContain("Never create local copies");
     expect(prompt).toContain("Use the host's billing plugin.");
+  });
+});
+
+describe("ensureDurableWorkflowSkill", () => {
+  it("stages the skill for an existing project that does not have it", async () => {
+    const sandboxProvider = {
+      executeCommand: vi.fn().mockResolvedValue({ exitCode: 1, result: "" }),
+      uploadFiles: vi.fn().mockResolvedValue(undefined),
+    };
+
+    const staged = await ensureDurableWorkflowSkill({
+      sandboxProvider,
+      sandboxProviderId: "sandbox-1",
+      projectDir: "/workspace/project",
+    });
+
+    expect(staged).toBe(true);
+    expect(sandboxProvider.uploadFiles).toHaveBeenCalledWith(
+      "sandbox-1",
+      {
+        [DURABLE_WORKFLOW_SKILL_PATH]: SEED_SKILLS[DURABLE_WORKFLOW_SKILL_PATH],
+      },
+      "/workspace/project",
+    );
   });
 });
 

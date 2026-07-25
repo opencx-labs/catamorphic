@@ -522,7 +522,7 @@ const { getContactDetails } = await import("@acme/example-sdk");
 const contact = await getContactDetails({ contactId });
 ```
 
-Hit **▶ Run**. Expected path:
+Hit **Run**. Expected test-mode path within the canonical Runs API:
 
 ```
 POST /api/projects/:id/workflows/:name/test-runs

@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { mkdir } from "node:fs/promises";
 import path from "node:path";
 import type {
+  RuntimeArtifactIdentity,
   RuntimeInvocationEvent,
   RuntimeInvocationEventsResponse,
   RuntimeInvocationRequest,
@@ -14,10 +15,10 @@ import {
   toProtocolJson,
 } from "./supervisor-protocol.js";
 
-export interface ResolvedRuntimeInvocation extends RuntimeInvocationRequest {
+export type ResolvedRuntimeInvocation = RuntimeInvocationRequest & {
   absoluteModulePath: string;
   workingDirectory: string;
-}
+};
 
 export type RuntimeWorkerEvent =
   | {
@@ -63,6 +64,7 @@ interface InvocationState {
   events: RuntimeInvocationEvent[];
   promise: Promise<RuntimeInvocationResponse>;
   resolve: (response: RuntimeInvocationResponse) => void;
+  reject: (error: unknown) => void;
   status: "queued" | "active" | "done";
   abortController: AbortController;
   worker?: RuntimeInvocationWorker;
@@ -74,13 +76,25 @@ export interface RuntimeInvocationDispatcherOptions {
   writableRoot: string;
   maxConcurrency: number;
   workerFactory: RuntimeInvocationWorkerFactory;
-  deploymentArtifactId?: string;
+  artifactIdentity?: RuntimeArtifactIdentity;
   maxRetainedInvocations?: number;
   now?: () => Date;
   makeDirectory?: (path: string) => Promise<void>;
 }
 
 export class RuntimeInvocationConflictError extends Error {}
+
+export class RuntimeInvocationInfrastructureError extends Error {
+  constructor(args: { invocationId: string; cause: unknown }) {
+    super(
+      `Invocation '${args.invocationId}' failed in runtime infrastructure: ${errorMessage(args.cause)}`,
+      {
+        cause: args.cause,
+      },
+    );
+    this.name = "RuntimeInvocationInfrastructureError";
+  }
+}
 
 export class RuntimeInvocationDispatcher {
   private readonly states = new Map<string, InvocationState>();
@@ -108,7 +122,7 @@ export class RuntimeInvocationDispatcher {
     request: RuntimeInvocationRequest,
   ): Promise<RuntimeInvocationResponse> {
     this.assertArtifact(request);
-    const fingerprint = JSON.stringify(toProtocolJson(request));
+    const fingerprint = invocationFingerprint(request);
     const existing = this.states.get(request.invocationId);
     if (existing) {
       if (existing.fingerprint !== fingerprint) {
@@ -127,6 +141,7 @@ export class RuntimeInvocationDispatcher {
       events: [],
       promise: deferred.promise,
       resolve: deferred.resolve,
+      reject: deferred.reject,
       status: "queued",
       abortController: new AbortController(),
     };
@@ -149,7 +164,7 @@ export class RuntimeInvocationDispatcher {
     this.finish(state, {
       status: "canceled",
       error: "Invocation was canceled",
-      steps: [],
+      steps: completedStepLedger(state.events),
     });
     if (worker) {
       await worker.terminate().catch(() => {});
@@ -219,8 +234,7 @@ export class RuntimeInvocationDispatcher {
       this.finish(state, terminal);
     } catch (error) {
       if (state.status === "done") return;
-      const message = error instanceof Error ? error.message : String(error);
-      this.finish(state, { status: "failed", error: message, steps: [] });
+      this.failInfrastructure(state, error);
     } finally {
       if (state.worker) {
         await state.worker.terminate().catch(() => {});
@@ -249,6 +263,21 @@ export class RuntimeInvocationDispatcher {
     this.pruneCompleted();
   }
 
+  private failInfrastructure(state: InvocationState, cause: unknown): void {
+    if (state.status === "done") return;
+    state.status = "done";
+    if (state.deadlineTimer) clearTimeout(state.deadlineTimer);
+    this.states.delete(state.request.invocationId);
+    state.reject(
+      cause instanceof RuntimeInvocationInfrastructureError
+        ? cause
+        : new RuntimeInvocationInfrastructureError({
+            invocationId: state.request.invocationId,
+            cause,
+          }),
+    );
+  }
+
   private finishTimedOut(state: InvocationState): void {
     state.abortController.abort(
       new Error(`Invocation '${state.request.invocationId}' exceeded deadline`),
@@ -257,7 +286,7 @@ export class RuntimeInvocationDispatcher {
     this.finish(state, {
       status: "timed_out",
       error: "Invocation deadline exceeded",
-      steps: [],
+      steps: completedStepLedger(state.events),
     });
   }
 
@@ -371,12 +400,16 @@ export class RuntimeInvocationDispatcher {
   }
 
   private assertArtifact(request: RuntimeInvocationRequest): void {
+    const expected = this.options.artifactIdentity;
+    if (!expected) return;
     if (
-      this.options.deploymentArtifactId !== undefined &&
-      request.deploymentArtifactId !== this.options.deploymentArtifactId
+      request.deploymentArtifactId !== expected.deploymentArtifactId ||
+      request.artifactDigest !== expected.artifactDigest ||
+      request.transformVersion !== expected.transformVersion ||
+      request.runtimeVersion !== expected.runtimeVersion
     ) {
       throw new Error(
-        `Invocation targets artifact '${request.deploymentArtifactId}', expected '${this.options.deploymentArtifactId}'`,
+        `Invocation artifact identity does not match runtime '${expected.deploymentArtifactId}'`,
       );
     }
   }
@@ -392,13 +425,89 @@ export class RuntimeInvocationDispatcher {
   }
 }
 
+function completedStepLedger(
+  events: readonly RuntimeInvocationEvent[],
+): RuntimeTerminalResult["steps"] {
+  const starts = new Map<
+    string,
+    Extract<RuntimeInvocationEvent, { type: "step_started" }>
+  >();
+  const steps: RuntimeTerminalResult["steps"][number][] = [];
+  for (const event of events) {
+    if (event.type === "step_started") {
+      starts.set(`${event.nodeId}:${event.occurrence}`, event);
+      continue;
+    }
+    if (event.type !== "step_completed" && event.type !== "step_failed") {
+      continue;
+    }
+    const key = `${event.nodeId}:${event.occurrence}`;
+    const started = starts.get(key);
+    if (!started) continue;
+    steps.push({
+      nodeId: event.nodeId,
+      occurrence: event.occurrence,
+      name: event.name,
+      status: event.type === "step_completed" ? "completed" : "failed",
+      attempt: event.attempt,
+      ...(Object.hasOwn(started, "input") ? { input: started.input } : {}),
+      ...(event.type === "step_completed" && Object.hasOwn(event, "output")
+        ? { output: event.output }
+        : {}),
+      ...(event.type === "step_failed" ? { error: event.error } : {}),
+      startedAt: started.timestamp,
+      completedAt: event.timestamp,
+    });
+    starts.delete(key);
+  }
+  return steps;
+}
+
 function createDeferred<Value>(): {
   promise: Promise<Value>;
   resolve: (value: Value) => void;
+  reject: (error: unknown) => void;
 } {
   let resolve = (_value: Value): void => {};
-  const promise = new Promise<Value>((resolver) => {
+  let reject = (_error: unknown): void => {};
+  const promise = new Promise<Value>((resolver, rejecter) => {
     resolve = resolver;
+    reject = rejecter;
   });
-  return { promise, resolve };
+  return { promise, resolve, reject };
+}
+
+function invocationFingerprint(request: RuntimeInvocationRequest): string {
+  return stableStringify(
+    toProtocolJson({
+      protocolVersion: request.protocolVersion,
+      invocationId: request.invocationId,
+      deploymentArtifactId: request.deploymentArtifactId,
+      artifactDigest: request.artifactDigest,
+      transformVersion: request.transformVersion,
+      runtimeVersion: request.runtimeVersion,
+      kind: request.kind,
+      target: request.target,
+      input: request.input,
+      replay: request.replay,
+      env: request.env,
+    }),
+  );
+}
+
+function stableStringify(value: unknown): string {
+  return JSON.stringify(value, (_key, entry: unknown) => {
+    if (typeof entry !== "object" || entry === null || Array.isArray(entry)) {
+      return entry;
+    }
+    return Object.fromEntries(
+      Object.entries(entry).sort(([left], [right]) =>
+        left.localeCompare(right),
+      ),
+    );
+  });
+}
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
 }

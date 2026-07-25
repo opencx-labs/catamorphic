@@ -5,14 +5,19 @@ import {
   type ProjectManager,
 } from "@catamorphic/git";
 import { getTracer, withSpan } from "@catamorphic/otel";
-import { prepareWorkflowExecution } from "@catamorphic/parser";
+import {
+  prepareWorkflowExecution,
+  type WorkflowCapabilities,
+  type WorkflowExecutionDescriptor,
+  type WorkflowGraph,
+} from "@catamorphic/parser";
 import {
   DeploymentRuntimeExecutorAdapter,
   RUNTIME_PROTOCOL_VERSION,
   RunExecutorImpl,
   type RunPluginPayload,
   type RunResult,
-  RuntimeEventReportingError,
+  RuntimeInfrastructureError,
   type RuntimeInvocation,
   type RuntimeInvocationReceipt,
   resolveWorkflowPackageFallback,
@@ -31,9 +36,15 @@ import type {
   ExecutionJob,
   ExecutionJobsService,
 } from "./execution-jobs-service.js";
-import type { ExecutionWorkerService } from "./execution-worker-service.js";
+import type {
+  ExecutionWorkerHandle,
+  ExecutionWorkerOptions,
+  ExecutionWorkerService,
+} from "./execution-worker-service.js";
 import { uploadWorkspace } from "./playground/workspace-upload.js";
 import { ProjectNotFoundError } from "./projects-service.js";
+import type { RunCoordinator } from "./run-coordinator.js";
+import { jsonColumn, jsonRecord, toJson } from "./run-coordinator.js";
 import type { RunPluginsLoader } from "./run-plugins-loader.js";
 import type { RuntimeEventsService } from "./runtime-events-service.js";
 import { WorkflowNotFoundError } from "./workflows-service.js";
@@ -45,9 +56,20 @@ export type RunMode = "test" | "production";
 export type RunStatus =
   | "pending"
   | "running"
+  | "waiting"
+  | "paused"
+  | "canceling"
   | "completed"
   | "failed"
-  | "cancelled";
+  | "canceled";
+export type RunPhase =
+  | "execute"
+  | "boundary"
+  | "source"
+  | "process"
+  | "sink"
+  | "pause"
+  | "child";
 export type StepStatus =
   | "pending"
   | "running"
@@ -55,26 +77,78 @@ export type StepStatus =
   | "failed"
   | "skipped";
 
+export interface RunProvenance {
+  commitSha?: string;
+  mutableSource?: true;
+}
+
+export interface RunArtifact {
+  deploymentArtifactId: string;
+}
+
+export interface RunPause {
+  id: string;
+  status: "open" | "resumed" | "timed_out" | "canceled";
+  state: unknown;
+  timeoutAt: string | null;
+  createdAt: string;
+  resolvedAt: string | null;
+}
+
+export interface BatchProgress {
+  workflowStepAttemptId: string;
+  stepIndex: number;
+  nodeId: string;
+  attempt: number;
+  status: WorkflowStepAttemptStatus;
+  estimated: number | null;
+  discovered: number;
+  succeeded: number;
+  failed: number;
+  skipped: number;
+  sinkCompletedChunks: number;
+  sinkTotalChunks: number;
+  artifact: unknown;
+}
+
+export interface RunCapabilities {
+  cancel: boolean;
+  pauseProcessing: boolean;
+  resumeProcessing: boolean;
+  submitInput: boolean;
+  inspectItems: boolean;
+}
+
 export interface Run {
   id: string;
   projectId: string;
   workflowName: string;
-  commitSha: string | null;
+  capabilities: RunCapabilities;
+  status: RunStatus;
+  phase: RunPhase;
+  currentStepIndex: number | null;
+  activePause: RunPause | null;
+  batchScopes: BatchProgress[];
+  provenance: RunProvenance;
+  artifact?: RunArtifact;
   mode: RunMode;
   initiatedBy: string | null;
-  status: RunStatus;
-  triggerData: unknown;
+  input: unknown;
   result: unknown;
   error: string | null;
+  parentRunId: string | null;
+  createdAt: string;
+  updatedAt: string;
   startedAt: string | null;
   completedAt: string | null;
-  createdAt: string;
 }
 
 export interface RunStep {
   id: string;
   runId: string;
   nodeId: string;
+  occurrence: number;
+  attempt: number;
   name: string;
   status: StepStatus;
   input: unknown;
@@ -84,15 +158,78 @@ export interface RunStep {
   completedAt: string | null;
 }
 
-export interface RunDetail extends Run {
-  steps: RunStep[];
+export type WorkflowStepAttemptStatus =
+  | "pending"
+  | "running"
+  | "waiting"
+  | "completed"
+  | "failed"
+  | "canceled";
+
+export interface WorkflowStepAttempt {
+  id: string;
+  runId: string;
+  stepIndex: number;
+  nodeId: string;
+  executor: "boundary" | "batch";
+  attempt: number;
+  status: WorkflowStepAttemptStatus;
+  input: unknown;
+  output: unknown;
+  error: string | null;
+  startedAt: string | null;
+  completedAt: string | null;
 }
 
-export interface ListRunsInput {
-  workflowName?: string;
-  mode?: RunMode;
-  limit?: number;
-  offset?: number;
+export interface RunDetail extends Run {
+  steps: RunStep[];
+  workflowStepAttempts: WorkflowStepAttempt[];
+}
+
+export type BatchItemStatus =
+  | "pending"
+  | "running"
+  | "waiting"
+  | "succeeded"
+  | "failed"
+  | "skipped"
+  | "canceled";
+
+export interface BatchItem {
+  id: string;
+  runId: string;
+  workflowStepAttemptId: string;
+  key: string;
+  sourceOrder: number;
+  status: BatchItemStatus;
+  value: unknown;
+  output: unknown;
+  error: string | null;
+  currentNodeId: string | null;
+  attempt: number;
+  createdAt: string;
+  updatedAt: string;
+  completedAt: string | null;
+}
+
+export interface BatchItemStep {
+  id: string;
+  itemId: string;
+  nodeId: string;
+  occurrence: number;
+  attempt: number;
+  name: string;
+  status: string;
+  input: unknown;
+  output: unknown;
+  error: string | null;
+  startedAt: string | null;
+  completedAt: string | null;
+}
+
+export interface ListBatchItemsResult {
+  items: BatchItem[];
+  total: number;
 }
 
 export interface ListRunsResult {
@@ -100,12 +237,60 @@ export interface ListRunsResult {
   total: number;
 }
 
-export interface TriggerRunInput {
-  triggerData?: Record<string, unknown>;
+export interface GetRunInput {
+  identity: Identity;
+  runId: string;
 }
 
-export interface TriggerTestRunInput extends TriggerRunInput {
+export interface ListRunsInput {
+  identity: Identity;
+  projectId: string;
+  workflowName?: string;
+  mode?: RunMode;
+  limit?: number;
+  offset?: number;
+}
+
+export interface TriggerProductionRunInput {
+  identity: Identity;
+  projectId: string;
+  workflowName: string;
+  input?: Json;
+}
+
+export interface TriggerTestRunInput extends TriggerProductionRunInput {
   files?: Record<string, string>;
+}
+
+export interface CancelRunInput extends GetRunInput {
+  reason?: string;
+}
+
+export type PauseRunInput = GetRunInput;
+export type ResumeRunInput = GetRunInput;
+
+export interface ResumeRunPauseInput extends GetRunInput {
+  pauseId: string;
+  idempotencyKey: string;
+  value: Json;
+}
+
+export interface ListBatchItemsInput extends GetRunInput {
+  workflowStepAttemptId: string;
+  status?: BatchItemStatus;
+  limit?: number;
+  offset?: number;
+}
+
+export interface ListBatchItemStepsInput extends GetRunInput {
+  workflowStepAttemptId: string;
+  itemId: string;
+}
+
+export interface RedriveRunJobInput {
+  tenantId: string;
+  jobId: string;
+  availableAt?: Date;
 }
 
 export class RunNotFoundError extends Error {
@@ -115,13 +300,19 @@ export class RunNotFoundError extends Error {
   }
 }
 
+export class RunCapabilityError extends Error {
+  constructor(
+    readonly capability: keyof WorkflowCapabilities | keyof RunCapabilities,
+    readonly operation: string,
+  ) {
+    super(`Run operation '${operation}' is unavailable for '${capability}'`);
+    this.name = "RunCapabilityError";
+  }
+}
+
 export class PluginSecretsMissingError extends Error {
   constructor(readonly missing: string[]) {
-    super(
-      `Missing required plugin secrets: ${missing.join(
-        ", ",
-      )}. Set them in the selected environment before running.`,
-    );
+    super(`Missing required plugin secrets: ${missing.join(", ")}`);
     this.name = "PluginSecretsMissingError";
   }
 }
@@ -137,13 +328,6 @@ export class ProductionDeploymentNotFoundError extends Error {
   constructor(readonly projectId: string) {
     super(`Project '${projectId}' has no deployed main revision`);
     this.name = "ProductionDeploymentNotFoundError";
-  }
-}
-
-export class RegularWorkflowRequiredError extends Error {
-  constructor(readonly workflowName: string) {
-    super(`Workflow '${workflowName}' is a batch workflow`);
-    this.name = "RegularWorkflowRequiredError";
   }
 }
 
@@ -164,15 +348,16 @@ interface RunsServiceDeps {
   executionJobs: ExecutionJobsService;
   executionWorker: ExecutionWorkerService;
   runtimeEvents: RuntimeEventsService;
+  coordinator: RunCoordinator;
 }
 
 interface PreparedSource {
   files: Record<string, string>;
   originalFiles: Record<string, string>;
   workflowFile: string;
+  graph: WorkflowGraph;
   commitSha: string | null;
   cloneSource?: GitCloneSource & { commitSha: string };
-  workflowKind: "regular" | "batch";
   workflowPackage?: WorkflowPackagePayload;
 }
 
@@ -194,50 +379,218 @@ export class RunsService {
     });
   }
 
-  async get(identity: Identity, runId: string): Promise<RunDetail> {
-    const run = await this.db
-      .selectFrom("workflow_runs")
-      .innerJoin("projects", "projects.id", "workflow_runs.project_id")
-      .where("workflow_runs.id", "=", runId)
-      .where("projects.tenant_id", "=", identity.tenantId)
-      .selectAll("workflow_runs")
-      .executeTakeFirst();
-    if (!run) throw new RunNotFoundError(runId);
-
-    const steps = await this.db
-      .selectFrom("workflow_run_steps")
-      .where("run_id", "=", runId)
-      .selectAll()
-      .orderBy("started_at", "asc")
-      .execute();
-    return { ...mapRun(run), steps: steps.map(mapStep) };
+  startWorker(args: ExecutionWorkerOptions = {}): ExecutionWorkerHandle {
+    return this.deps.executionWorker.start(args);
   }
 
-  async list(
-    identity: Identity,
-    projectId: string,
-    input: ListRunsInput = {},
-  ): Promise<ListRunsResult> {
-    await this.requireProject(identity, projectId);
-    const limit = input.limit ?? 50;
-    const offset = input.offset ?? 0;
+  stopWorkers(): Promise<void> {
+    return this.deps.executionWorker.stopAll();
+  }
+
+  redriveJob(args: RedriveRunJobInput): Promise<boolean> {
+    return this.deps.executionJobs.redrive(args);
+  }
+
+  async get(args: GetRunInput): Promise<RunDetail> {
+    const row = await this.db
+      .selectFrom("workflow_runs")
+      .innerJoin("projects", "projects.id", "workflow_runs.project_id")
+      .leftJoin(
+        "workflow_run_states",
+        "workflow_run_states.run_id",
+        "workflow_runs.id",
+      )
+      .where("workflow_runs.id", "=", args.runId)
+      .where("projects.tenant_id", "=", args.identity.tenantId)
+      .selectAll("workflow_runs")
+      .select([
+        "workflow_run_states.current_step_index",
+        "workflow_run_states.active_workflow_step_attempt_id",
+      ])
+      .executeTakeFirst();
+    if (!row) throw new RunNotFoundError(args.runId);
+    const [pause, batches, steps, attempts] = await Promise.all([
+      this.db
+        .selectFrom("workflow_pauses")
+        .where("run_id", "=", args.runId)
+        .where("status", "=", "open")
+        .selectAll()
+        .executeTakeFirst(),
+      this.db
+        .selectFrom("batch_execution_states")
+        .innerJoin(
+          "workflow_step_attempts",
+          "workflow_step_attempts.id",
+          "batch_execution_states.workflow_step_attempt_id",
+        )
+        .where("batch_execution_states.run_id", "=", args.runId)
+        .selectAll("batch_execution_states")
+        .select([
+          "workflow_step_attempts.step_index",
+          "workflow_step_attempts.step_node_id",
+          "workflow_step_attempts.attempt",
+          "workflow_step_attempts.status",
+        ])
+        .orderBy("workflow_step_attempts.step_index")
+        .orderBy("workflow_step_attempts.attempt")
+        .execute(),
+      this.db
+        .selectFrom("workflow_run_steps")
+        .where("run_id", "=", args.runId)
+        .selectAll()
+        .orderBy("started_at")
+        .execute(),
+      this.db
+        .selectFrom("workflow_step_attempts")
+        .where("run_id", "=", args.runId)
+        .selectAll()
+        .orderBy("step_index")
+        .orderBy("attempt")
+        .execute(),
+    ]);
+    return {
+      ...mapRun({
+        row,
+        pause,
+        batchScopes: batches.map(mapBatchProgress),
+      }),
+      steps: steps.map(mapStep),
+      workflowStepAttempts: attempts.map((attempt) => ({
+        id: attempt.id,
+        runId: attempt.run_id,
+        stepIndex: attempt.step_index,
+        nodeId: attempt.step_node_id,
+        executor: attempt.executor === "batch" ? "batch" : "boundary",
+        attempt: attempt.attempt,
+        status: parseAttemptStatus(attempt.status),
+        input: attempt.input,
+        output: attempt.output,
+        error: attempt.error,
+        startedAt: attempt.started_at?.toISOString() ?? null,
+        completedAt: attempt.completed_at?.toISOString() ?? null,
+      })),
+    };
+  }
+
+  async listItems(args: ListBatchItemsInput): Promise<ListBatchItemsResult> {
+    await this.requireBatchScope(args);
+    const limit = Math.max(1, Math.min(args.limit ?? 100, 500));
+    const offset = Math.max(0, args.offset ?? 0);
     let query = this.db
-      .selectFrom("workflow_runs")
-      .where("project_id", "=", projectId);
+      .selectFrom("batch_items")
+      .where("run_id", "=", args.runId)
+      .where("workflow_step_attempt_id", "=", args.workflowStepAttemptId);
     let countQuery = this.db
-      .selectFrom("workflow_runs")
-      .where("project_id", "=", projectId);
-    if (input.workflowName) {
-      query = query.where("workflow_name", "=", input.workflowName);
-      countQuery = countQuery.where("workflow_name", "=", input.workflowName);
-    }
-    if (input.mode) {
-      query = query.where("mode", "=", input.mode);
-      countQuery = countQuery.where("mode", "=", input.mode);
+      .selectFrom("batch_items")
+      .where("run_id", "=", args.runId)
+      .where("workflow_step_attempt_id", "=", args.workflowStepAttemptId);
+    if (args.status) {
+      query = query.where("status", "=", args.status);
+      countQuery = countQuery.where("status", "=", args.status);
     }
     const [rows, count] = await Promise.all([
       query
         .selectAll()
+        .orderBy("source_order")
+        .limit(limit)
+        .offset(offset)
+        .execute(),
+      countQuery
+        .select((eb) => eb.fn.countAll<number>().as("count"))
+        .executeTakeFirstOrThrow(),
+    ]);
+    return {
+      items: rows.map((row) => ({
+        id: row.id,
+        runId: row.run_id,
+        workflowStepAttemptId: row.workflow_step_attempt_id,
+        key: row.item_key,
+        sourceOrder: Number(row.source_order),
+        status: parseBatchItemStatus(row.status),
+        value: row.value_storage === "inline" ? row.value : row.value_reference,
+        output:
+          row.output_storage === "inline"
+            ? row.output
+            : row.output_storage === "reference"
+              ? row.output_reference
+              : null,
+        error: row.error,
+        currentNodeId: row.current_node_id,
+        attempt: row.attempt,
+        createdAt: row.created_at.toISOString(),
+        updatedAt: row.updated_at.toISOString(),
+        completedAt: row.completed_at?.toISOString() ?? null,
+      })),
+      total: Number(count.count),
+    };
+  }
+
+  async listItemSteps(args: ListBatchItemStepsInput): Promise<BatchItemStep[]> {
+    await this.requireBatchScope(args);
+    const item = await this.db
+      .selectFrom("batch_items")
+      .where("id", "=", args.itemId)
+      .where("run_id", "=", args.runId)
+      .where("workflow_step_attempt_id", "=", args.workflowStepAttemptId)
+      .select("id")
+      .executeTakeFirst();
+    if (!item) throw new RunNotFoundError(args.runId);
+    const rows = await this.db
+      .selectFrom("batch_item_steps")
+      .where("run_id", "=", args.runId)
+      .where("workflow_step_attempt_id", "=", args.workflowStepAttemptId)
+      .where("item_id", "=", args.itemId)
+      .selectAll()
+      .orderBy("attempt")
+      .orderBy("started_at")
+      .orderBy("occurrence")
+      .execute();
+    return rows.map((row) => ({
+      id: row.id,
+      itemId: row.item_id,
+      nodeId: row.node_id,
+      occurrence: row.occurrence,
+      attempt: row.attempt,
+      name: row.name,
+      status: row.status,
+      input: row.input,
+      output: row.output,
+      error: row.error,
+      startedAt: row.started_at?.toISOString() ?? null,
+      completedAt: row.completed_at?.toISOString() ?? null,
+    }));
+  }
+
+  async list(args: ListRunsInput): Promise<ListRunsResult> {
+    await this.requireProject(args.identity, args.projectId);
+    const limit = Math.max(1, Math.min(args.limit ?? 50, 100));
+    const offset = Math.max(0, args.offset ?? 0);
+    let query = this.db
+      .selectFrom("workflow_runs")
+      .leftJoin(
+        "workflow_run_states",
+        "workflow_run_states.run_id",
+        "workflow_runs.id",
+      )
+      .where("project_id", "=", args.projectId);
+    let countQuery = this.db
+      .selectFrom("workflow_runs")
+      .where("project_id", "=", args.projectId);
+    if (args.workflowName) {
+      query = query.where("workflow_name", "=", args.workflowName);
+      countQuery = countQuery.where("workflow_name", "=", args.workflowName);
+    }
+    if (args.mode) {
+      query = query.where("mode", "=", args.mode);
+      countQuery = countQuery.where("mode", "=", args.mode);
+    }
+    const [rows, count] = await Promise.all([
+      query
+        .selectAll("workflow_runs")
+        .select([
+          "workflow_run_states.current_step_index",
+          "workflow_run_states.active_workflow_step_attempt_id",
+        ])
         .orderBy("created_at", "desc")
         .limit(limit)
         .offset(offset)
@@ -246,90 +599,98 @@ export class RunsService {
         .select((eb) => eb.fn.countAll<number>().as("count"))
         .executeTakeFirstOrThrow(),
     ]);
-    return { items: rows.map(mapRun), total: Number(count.count) };
+    const runIds = rows.map((row) => row.id);
+    const [pauses, batches] =
+      runIds.length === 0
+        ? [[], []]
+        : await Promise.all([
+            this.db
+              .selectFrom("workflow_pauses")
+              .where("run_id", "in", runIds)
+              .where("status", "=", "open")
+              .selectAll()
+              .execute(),
+            this.db
+              .selectFrom("batch_execution_states")
+              .innerJoin(
+                "workflow_step_attempts",
+                "workflow_step_attempts.id",
+                "batch_execution_states.workflow_step_attempt_id",
+              )
+              .where("batch_execution_states.run_id", "in", runIds)
+              .selectAll("batch_execution_states")
+              .select([
+                "workflow_step_attempts.step_index",
+                "workflow_step_attempts.step_node_id",
+                "workflow_step_attempts.attempt",
+                "workflow_step_attempts.status",
+              ])
+              .orderBy("workflow_step_attempts.step_index")
+              .orderBy("workflow_step_attempts.attempt")
+              .execute(),
+          ]);
+    const pausesByRun = new Map(pauses.map((pause) => [pause.run_id, pause]));
+    const batchesByRun = new Map<string, BatchProgress[]>();
+    for (const batch of batches) {
+      const scopes = batchesByRun.get(batch.run_id) ?? [];
+      scopes.push(mapBatchProgress(batch));
+      batchesByRun.set(batch.run_id, scopes);
+    }
+    return {
+      items: rows.map((row) =>
+        mapRun({
+          row,
+          pause: pausesByRun.get(row.id),
+          batchScopes: batchesByRun.get(row.id) ?? [],
+        }),
+      ),
+      total: Number(count.count),
+    };
   }
 
-  async cancel(args: { identity: Identity; runId: string }): Promise<Run> {
-    const existing = await this.get(args.identity, args.runId);
-    if (
-      existing.status === "completed" ||
-      existing.status === "failed" ||
-      existing.status === "cancelled"
-    ) {
-      return existing;
-    }
-
-    const now = new Date();
-    await this.db
-      .updateTable("workflow_runs")
-      .set({
-        status: "cancelled",
-        cancel_requested_at: now,
-        completed_at: now,
-      })
-      .where("id", "=", args.runId)
-      .where("status", "in", ["pending", "running"])
-      .execute();
-    await this.deps.executionJobs.cancelByDedupeKey({
-      tenantId: args.identity.tenantId,
-      dedupeKey: `workflow-run:${args.runId}`,
-    });
-    const row = await this.db
-      .selectFrom("workflow_runs")
-      .where("id", "=", args.runId)
-      .selectAll()
-      .executeTakeFirstOrThrow();
-    if (
-      row.mode === "production" &&
-      row.deployment_artifact_id &&
-      this.deps.deploymentRuntime
-    ) {
-      await this.deps.deploymentRuntime.cancel({
-        artifactId: row.deployment_artifact_id,
-        invocationId: row.id,
-      });
-    }
-    return mapRun(row);
+  async triggerProduction(args: TriggerProductionRunInput): Promise<Run> {
+    return this.trigger({ ...args, mode: "production" });
   }
 
-  async report(args: {
+  async triggerTest(args: {
     identity: Identity;
-    runId: string;
-    result: RunResult;
-  }): Promise<RunDetail> {
-    await this.get(args.identity, args.runId);
-    await this.finalizeRun(args.runId, args.result);
-    return this.get(args.identity, args.runId);
+    projectId: string;
+    workflowName: string;
+    input?: Json;
+    files?: Record<string, string>;
+  }): Promise<Run> {
+    return this.trigger({ ...args, mode: "test" });
   }
 
-  async triggerProduction(
-    identity: Identity,
-    projectId: string,
-    workflowName: string,
-    input: TriggerRunInput,
-  ): Promise<Run> {
-    return this.trigger({
-      identity,
-      projectId,
-      workflowName,
-      input,
-      mode: "production",
-    });
+  async cancel(args: CancelRunInput): Promise<Run> {
+    const invocations = await this.deps.coordinator.cancel(args);
+    await Promise.all(
+      invocations.map((invocation) =>
+        this.deps.deploymentRuntime?.cancel(invocation).catch(() => {}),
+      ),
+    );
+    return this.get(args);
   }
 
-  async triggerTest(
-    identity: Identity,
-    projectId: string,
-    workflowName: string,
-    input: TriggerTestRunInput,
-  ): Promise<Run> {
-    return this.trigger({
-      identity,
-      projectId,
-      workflowName,
-      input,
-      mode: "test",
-    });
+  async pause(args: PauseRunInput): Promise<Run> {
+    const outcome = await this.deps.coordinator.pauseOperator(args);
+    if (outcome === "unavailable") {
+      throw new RunCapabilityError("pauseProcessing", "pause");
+    }
+    return this.get(args);
+  }
+
+  async resume(args: ResumeRunInput): Promise<Run> {
+    const outcome = await this.deps.coordinator.resumeOperator(args);
+    if (outcome === "unavailable") {
+      throw new RunCapabilityError("resumeProcessing", "resume");
+    }
+    return this.get(args);
+  }
+
+  async resumePause(args: ResumeRunPauseInput): Promise<Run> {
+    await this.deps.coordinator.resumePause(args);
+    return this.get(args);
   }
 
   async resolveProductionArtifact(args: {
@@ -339,9 +700,8 @@ export class RunsService {
   }): Promise<DeploymentArtifact> {
     await this.requireProject(args.identity, args.projectId);
     const source = await this.prepareProductionSource(args);
-    if (!source.commitSha) {
+    if (!source.commitSha)
       throw new ProductionDeploymentNotFoundError(args.projectId);
-    }
     const plugins = await this.loadPlugins(args.projectId, "production");
     return this.deps.deploymentArtifacts.ensure({
       tenantId: args.identity.tenantId,
@@ -355,6 +715,31 @@ export class RunsService {
     });
   }
 
+  async resolveProductionExecution(args: {
+    identity: Identity;
+    projectId: string;
+    workflowName: string;
+    commitSha: string;
+  }): Promise<WorkflowExecutionDescriptor> {
+    return (await this.prepareProductionSource(args)).graph.execution;
+  }
+
+  async resolveProductionWorkflow(args: {
+    identity: Identity;
+    projectId: string;
+    workflowName: string;
+    commitSha: string;
+  }): Promise<{
+    capabilities: WorkflowCapabilities;
+    execution: WorkflowExecutionDescriptor;
+  }> {
+    const graph = (await this.prepareProductionSource(args)).graph;
+    return {
+      capabilities: graph.capabilities,
+      execution: graph.execution,
+    };
+  }
+
   async invokeProductionRuntime(args: {
     identity: Identity;
     projectId: string;
@@ -365,10 +750,14 @@ export class RunsService {
     kind: RuntimeInvocation["kind"];
     operation?: string;
     exportName?: string;
+    modulePath?: string;
+    stepIndex?: number;
     input: unknown;
     attempt: number;
     timeoutSeconds?: number;
+    signal?: AbortSignal;
   }): Promise<RuntimeInvocationReceipt> {
+    args.signal?.throwIfAborted();
     const provider = this.deps.sandboxProvider;
     const deploymentRuntime = this.deps.deploymentRuntime;
     if (!provider?.deploymentRuntime || !deploymentRuntime) {
@@ -379,9 +768,22 @@ export class RunsService {
       this.loadPlugins(args.projectId, "production"),
       this.deps.deploymentArtifacts.get({ artifactId: args.artifactId }),
     ]);
-    if (!artifact || artifact.commitSha !== args.commitSha) {
+    const runtimePackagesForArtifact = runtimePackages({
+      plugins: plugins?.plugins,
+      workflowPackage: source.workflowPackage,
+    });
+    if (
+      !artifact ||
+      !(await this.deps.deploymentArtifacts.verify({
+        artifact,
+        projectId: args.projectId,
+        commitSha: args.commitSha,
+        files: source.files,
+        plugins: runtimePackagesForArtifact,
+      }))
+    ) {
       throw new Error(
-        `Deployment artifact '${args.artifactId}' does not match batch run`,
+        `Deployment artifact '${args.artifactId}' does not match run`,
       );
     }
     const runtime = await deploymentRuntime.ensure({
@@ -390,36 +792,115 @@ export class RunsService {
       files: source.files,
       originalFiles: source.originalFiles,
       cloneSource: source.cloneSource,
-      plugins: runtimePackages({
-        plugins: plugins?.plugins,
-        workflowPackage: source.workflowPackage,
-      }),
+      plugins: runtimePackagesForArtifact,
     });
-    return provider.deploymentRuntime.invoke({
+    const base = {
       protocolVersion: RUNTIME_PROTOCOL_VERSION,
       runtimeId: runtime.runtimeId,
       invocationId: args.invocationId,
       deploymentArtifactId: artifact.id,
-      kind: args.kind,
-      target: {
-        modulePath: source.workflowFile,
-        exportName: args.exportName ?? args.workflowName,
-        operation: args.operation,
-      },
+      artifactDigest: artifact.artifactDigest,
+      transformVersion: artifact.transformVersion,
+      runtimeVersion: artifact.runtimeVersion,
       input: args.input,
       attempt: args.attempt,
       deadlineAt: new Date(
         Date.now() + (args.timeoutSeconds ?? 300) * 1_000,
       ).toISOString(),
       env: plugins?.secrets,
+      signal: args.signal,
+    } as const;
+    const targetBase = {
+      modulePath: args.modulePath ?? source.workflowFile,
+      exportName: args.exportName ?? args.workflowName,
+    };
+    if (args.kind === "workflow") {
+      const receipt = await provider.deploymentRuntime.invoke({
+        ...base,
+        kind: args.kind,
+        target: targetBase,
+      });
+      args.signal?.throwIfAborted();
+      return receipt;
+    }
+    if (args.kind === "durable-boundary") {
+      const receipt = await provider.deploymentRuntime.invoke({
+        ...base,
+        kind: args.kind,
+        target: { ...targetBase, stepIndex: requireStepIndex(args.stepIndex) },
+      });
+      args.signal?.throwIfAborted();
+      return receipt;
+    }
+    if (args.kind === "batch-source") {
+      const operation = args.operation;
+      if (operation !== "initialize" && operation !== "readPage") {
+        throw new Error("Invalid batch source operation");
+      }
+      const receipt = await provider.deploymentRuntime.invoke({
+        ...base,
+        kind: args.kind,
+        target: {
+          ...targetBase,
+          stepIndex: requireStepIndex(args.stepIndex),
+          operation,
+        },
+      });
+      args.signal?.throwIfAborted();
+      return receipt;
+    }
+    if (args.kind === "batch-step") {
+      if (args.operation === "run") {
+        const receipt = await provider.deploymentRuntime.invoke({
+          ...base,
+          kind: args.kind,
+          target: { ...targetBase, operation: "run" },
+        });
+        args.signal?.throwIfAborted();
+        return receipt;
+      }
+      if (args.operation !== "process")
+        throw new Error("Invalid batch step operation");
+      const receipt = await provider.deploymentRuntime.invoke({
+        ...base,
+        kind: args.kind,
+        target: {
+          ...targetBase,
+          stepIndex: requireStepIndex(args.stepIndex),
+          operation: "process",
+        },
+      });
+      args.signal?.throwIfAborted();
+      return receipt;
+    }
+    const operation = args.operation;
+    if (
+      operation !== "inspect" &&
+      operation !== "initialize" &&
+      operation !== "writeBatch" &&
+      operation !== "finalize"
+    ) {
+      throw new Error("Invalid batch sink operation");
+    }
+    const receipt = await provider.deploymentRuntime.invoke({
+      ...base,
+      kind: args.kind,
+      target: {
+        ...targetBase,
+        stepIndex: requireStepIndex(args.stepIndex),
+        operation,
+      },
     });
+    args.signal?.throwIfAborted();
+    return receipt;
   }
 
-  private async trigger(opts: {
+  private async trigger(args: {
     identity: Identity;
     projectId: string;
     workflowName: string;
-    input: TriggerTestRunInput;
+    input?: Json;
+    files?: Record<string, string>;
     mode: RunMode;
   }): Promise<Run> {
     return withSpan(
@@ -427,14 +908,14 @@ export class RunsService {
         tracer,
         name: "workflow.run",
         attributes: {
-          "catamorphic.project.id": opts.projectId,
-          "catamorphic.workflow.name": opts.workflowName,
-          "catamorphic.tenant.id": opts.identity.tenantId,
-          "catamorphic.run.mode": opts.mode,
+          "catamorphic.project.id": args.projectId,
+          "catamorphic.workflow.name": args.workflowName,
+          "catamorphic.tenant.id": args.identity.tenantId,
+          "catamorphic.run.mode": args.mode,
         },
       },
       async (span) => {
-        const run = await this.triggerInner(opts);
+        const run = await this.triggerInner(args);
         span.setAttribute("catamorphic.run.id", run.id);
         span.setAttribute("catamorphic.run.status", run.status);
         return run;
@@ -442,37 +923,37 @@ export class RunsService {
     );
   }
 
-  private async triggerInner(opts: {
+  private async triggerInner(args: {
     identity: Identity;
     projectId: string;
     workflowName: string;
-    input: TriggerTestRunInput;
+    input?: Json;
+    files?: Record<string, string>;
     mode: RunMode;
   }): Promise<Run> {
     const provider = this.deps.sandboxProvider;
     const executor = this.executor;
-    if (!provider || !executor) {
-      throw new SandboxProviderNotConfiguredError();
-    }
-    await this.requireProject(opts.identity, opts.projectId);
-
+    if (!provider || !executor) throw new SandboxProviderNotConfiguredError();
+    await this.requireProject(args.identity, args.projectId);
     const source =
-      opts.mode === "test"
-        ? await this.prepareTestSource(opts)
-        : await this.prepareProductionSource(opts);
-    if (source.workflowKind === "batch") {
-      throw new RegularWorkflowRequiredError(opts.workflowName);
+      args.mode === "test"
+        ? await this.prepareTestSource(args)
+        : await this.prepareProductionSource(args);
+    if (args.mode === "test" && source.graph.execution.steps.length > 0) {
+      throw new RunCapabilityError("persistedContinuations", "triggerTest");
     }
-    const plugins = await this.loadPlugins(opts.projectId, opts.mode);
-    const triggerData = opts.input.triggerData ?? {};
+    const plugins = await this.loadPlugins(args.projectId, args.mode);
+    const input = args.input ?? null;
     const runId = crypto.randomUUID();
-    if (opts.mode === "production") {
-      if (!source.commitSha) {
-        throw new ProductionDeploymentNotFoundError(opts.projectId);
-      }
+    const provenance: RunProvenance = source.commitSha
+      ? { commitSha: source.commitSha }
+      : { mutableSource: true };
+    if (args.mode === "production") {
+      if (!source.commitSha)
+        throw new ProductionDeploymentNotFoundError(args.projectId);
       const artifact = await this.deps.deploymentArtifacts.ensure({
-        tenantId: opts.identity.tenantId,
-        projectId: opts.projectId,
+        tenantId: args.identity.tenantId,
+        projectId: args.projectId,
         commitSha: source.commitSha,
         files: source.files,
         plugins: runtimePackages({
@@ -485,334 +966,410 @@ export class RunsService {
           .insertInto("workflow_runs")
           .values({
             id: runId,
-            project_id: opts.projectId,
-            workflow_name: opts.workflowName,
-            commit_sha: source.commitSha,
-            deployment_artifact_id: artifact.id,
+            project_id: args.projectId,
+            workflow_name: args.workflowName,
             mode: "production",
-            external_user_id: opts.identity.externalUserId,
+            provenance: toJson({
+              ...provenance,
+              capabilities: source.graph.capabilities,
+            }),
+            deployment_artifact_id: artifact.id,
+            external_user_id: args.identity.externalUserId,
             status: "pending",
-            trigger_data: triggerData as Json,
+            phase:
+              source.graph.execution.steps[0]?.type === "batch"
+                ? "source"
+                : source.graph.execution.steps.length > 0
+                  ? "boundary"
+                  : "execute",
+            input: jsonColumn(input),
           })
           .execute();
-        await this.deps.executionJobs.enqueue({
-          tenantId: opts.identity.tenantId,
-          kind: "workflow_run",
-          payload: { runId },
-          priority: 100,
-          dedupeKey: `workflow-run:${runId}`,
-          trx,
-        });
+        if (source.graph.execution.steps.length === 0) {
+          await this.deps.executionJobs.enqueue({
+            trx,
+            tenantId: args.identity.tenantId,
+            workflowRunId: runId,
+            kind: "workflow_run",
+            payload: {},
+            priority: 100,
+            dedupeKey: `run:${runId}:execute`,
+          });
+        } else {
+          await this.deps.coordinator.initialize({
+            trx,
+            tenantId: args.identity.tenantId,
+            runId,
+            execution: source.graph.execution,
+            input,
+          });
+        }
       });
-      const row = await this.db
-        .selectFrom("workflow_runs")
-        .where("id", "=", runId)
-        .selectAll()
-        .executeTakeFirstOrThrow();
-      return mapRun(row);
+      return this.get({ identity: args.identity, runId });
     }
 
+    const now = new Date();
     await this.db
       .insertInto("workflow_runs")
       .values({
         id: runId,
-        project_id: opts.projectId,
-        workflow_name: opts.workflowName,
-        commit_sha: null,
+        project_id: args.projectId,
+        workflow_name: args.workflowName,
         mode: "test",
-        external_user_id: opts.identity.externalUserId,
+        provenance: toJson({
+          ...provenance,
+          capabilities: source.graph.capabilities,
+        }),
+        external_user_id: args.identity.externalUserId,
         status: "running",
-        trigger_data: triggerData as Json,
-        started_at: new Date(),
+        phase: "execute",
+        input: jsonColumn(input),
+        started_at: now,
       })
       .execute();
-    const execution = await this.execute({
-      identity: opts.identity,
-      projectId: opts.projectId,
-      workflowName: opts.workflowName,
+    const result = await this.executePlain({
+      identity: args.identity,
+      projectId: args.projectId,
+      workflowName: args.workflowName,
       mode: "test",
       runId,
       source,
-      triggerData,
+      input,
       plugins,
       provider,
       executor,
     });
-    await this.finalizeRun(runId, execution);
-    const row = await this.db
-      .selectFrom("workflow_runs")
-      .where("id", "=", runId)
-      .selectAll()
-      .executeTakeFirstOrThrow();
-    return mapRun(row);
+    await this.finalizePlainRun({ runId, result });
+    return this.get({ identity: args.identity, runId });
   }
 
   private async executeProductionJob(args: {
     job: ExecutionJob;
     signal: AbortSignal;
   }): Promise<void> {
-    const runId = readRunId(args.job.payload);
     const row = await this.db
       .selectFrom("workflow_runs")
       .innerJoin("projects", "projects.id", "workflow_runs.project_id")
-      .where("workflow_runs.id", "=", runId)
+      .where("workflow_runs.id", "=", args.job.workflowRunId)
+      .where("projects.tenant_id", "=", args.job.tenantId)
       .selectAll("workflow_runs")
       .select("projects.tenant_id")
       .executeTakeFirst();
-    if (!row || row.tenant_id !== args.job.tenantId) {
-      throw new RunNotFoundError(runId);
+    if (!row) throw new RunNotFoundError(args.job.workflowRunId);
+    if (!(await this.deps.coordinator.beginPlainRun({ job: args.job }))) return;
+    const provenance = jsonRecord(row.provenance);
+    const commitSha =
+      typeof provenance.commitSha === "string"
+        ? provenance.commitSha
+        : undefined;
+    if (!commitSha || !row.external_user_id || !row.deployment_artifact_id) {
+      throw new Error(`Production run '${row.id}' has incomplete provenance`);
     }
-    if (
-      row.status === "completed" ||
-      row.status === "failed" ||
-      row.status === "cancelled"
-    ) {
-      return;
-    }
-    if (!row.commit_sha || !row.external_user_id) {
-      throw new Error(`Production run '${runId}' has incomplete provenance`);
-    }
-    if (args.signal.aborted) {
+    if (args.signal.aborted)
       throw new Error("Execution worker stopped before invocation");
-    }
-
-    const claimed = await this.db
-      .updateTable("workflow_runs")
-      .set({
-        status: "running",
-        started_at: row.started_at ?? new Date(),
-        attempt: args.job.attempt,
-      })
-      .where("id", "=", runId)
-      .where("status", "in", ["pending", "running"])
-      .executeTakeFirst();
-    if (Number(claimed.numUpdatedRows) !== 1) {
-      return;
-    }
-
     const identity: Identity = {
       tenantId: row.tenant_id,
       externalUserId: row.external_user_id,
     };
     const provider = this.deps.sandboxProvider;
     const executor = this.executor;
-    if (!provider || !executor) {
-      throw new SandboxProviderNotConfiguredError();
-    }
+    if (!provider || !executor) throw new SandboxProviderNotConfiguredError();
     const source = await this.prepareProductionSource({
       identity,
       projectId: row.project_id,
       workflowName: row.workflow_name,
-      commitSha: row.commit_sha,
+      commitSha,
     });
-    const plugins = await this.loadPlugins(row.project_id, "production");
-    const artifact = row.deployment_artifact_id
-      ? await this.deps.deploymentArtifacts.get({
-          artifactId: row.deployment_artifact_id,
-        })
-      : null;
-    if (!artifact) {
-      throw new Error(`Production run '${runId}' has no deployment artifact`);
+    if (source.graph.execution.steps.length !== 0) {
+      throw new Error("Defined workflow was dispatched as a plain workflow");
     }
-    const execution = await this.execute({
-      identity,
-      projectId: row.project_id,
-      workflowName: row.workflow_name,
-      mode: "production",
-      runId,
-      source,
-      triggerData: jsonObject(row.trigger_data),
-      plugins,
-      provider,
-      executor,
-      artifact,
-      invocationId: `${runId}:${args.job.attempt}`,
-      invocationAttempt: args.job.attempt,
+    const [plugins, artifact] = await Promise.all([
+      this.loadPlugins(row.project_id, "production"),
+      this.deps.deploymentArtifacts.get({
+        artifactId: row.deployment_artifact_id,
+      }),
+    ]);
+    if (
+      !artifact ||
+      !(await this.deps.deploymentArtifacts.verify({
+        artifact,
+        projectId: row.project_id,
+        commitSha,
+        files: source.files,
+        plugins: runtimePackages({
+          plugins: plugins?.plugins,
+          workflowPackage: source.workflowPackage,
+        }),
+      }))
+    )
+      throw new Error(`Production run '${row.id}' has no artifact`);
+    const invocationId = `${row.id}:${args.job.attempt}`;
+    const result = await this.deps.coordinator.invokeRuntime({
+      job: args.job,
+      invocationId,
+      invoke: () =>
+        this.executePlain({
+          identity,
+          projectId: row.project_id,
+          workflowName: row.workflow_name,
+          mode: "production",
+          runId: row.id,
+          source,
+          input: row.input,
+          plugins,
+          provider,
+          executor,
+          artifact,
+          invocationId,
+          invocationAttempt: args.job.attempt,
+          signal: args.signal,
+        }),
     });
-    await this.finalizeRun(runId, execution);
+    await this.deps.coordinator.finalizePlainRun({
+      job: args.job,
+      result,
+    });
   }
 
-  private async execute(opts: {
+  private async executePlain(args: {
     identity: Identity;
     projectId: string;
     workflowName: string;
     mode: RunMode;
     runId: string;
     source: PreparedSource;
-    triggerData: Record<string, unknown>;
+    input: Json;
     plugins?: Awaited<ReturnType<RunPluginsLoader["load"]>>;
     provider: SandboxProvider;
     executor: RunExecutorImpl;
     artifact?: DeploymentArtifact;
     invocationId?: string;
     invocationAttempt?: number;
+    signal?: AbortSignal;
   }): Promise<RunResult> {
     let sandboxId: string | undefined;
     let workingDirectory: string | undefined;
     let destroySandbox = false;
     try {
+      args.signal?.throwIfAborted();
       if (
-        opts.mode === "production" &&
-        opts.artifact &&
+        args.mode === "production" &&
+        args.artifact &&
         this.deps.deploymentRuntime &&
-        opts.provider.deploymentRuntime
+        args.provider.deploymentRuntime
       ) {
         const runtime = await this.deps.deploymentRuntime.ensure({
-          projectId: opts.projectId,
-          artifact: opts.artifact,
-          files: opts.source.files,
-          originalFiles: opts.source.originalFiles,
-          cloneSource: opts.source.cloneSource,
+          projectId: args.projectId,
+          artifact: args.artifact,
+          files: args.source.files,
+          originalFiles: args.source.originalFiles,
+          cloneSource: args.source.cloneSource,
           plugins: runtimePackages({
-            plugins: opts.plugins?.plugins,
-            workflowPackage: opts.source.workflowPackage,
+            plugins: args.plugins?.plugins,
+            workflowPackage: args.source.workflowPackage,
           }),
         });
         const runtimeExecutor = new DeploymentRuntimeExecutorAdapter({
-          provider: opts.provider,
+          provider: args.provider,
           runtime,
-          invocationId: opts.invocationId,
-          invocationAttempt: opts.invocationAttempt,
+          invocationId: args.invocationId,
+          invocationAttempt: args.invocationAttempt,
           replay: await this.deps.runtimeEvents.replay({
-            tenantId: opts.identity.tenantId,
-            runId: opts.runId,
+            tenantId: args.identity.tenantId,
+            runId: args.runId,
           }),
           eventSink: this.deps.runtimeEvents.sink({
-            tenantId: opts.identity.tenantId,
-            runId: opts.runId,
+            tenantId: args.identity.tenantId,
+            runId: args.runId,
           }),
         });
-        return await runtimeExecutor.executeRun({
+        const result = await runtimeExecutor.executeRun({
           sandboxId: runtime.sandboxId,
-          workingDirectory: `${opts.provider.workspaceRoot}/deployments/${opts.artifact.id}/project`,
-          workflowFile: opts.source.workflowFile,
-          workflowName: opts.workflowName,
-          triggerData: opts.triggerData,
-          runId: opts.runId,
+          workingDirectory: `${args.provider.workspaceRoot}/deployments/${args.artifact.id}/project`,
+          workflowFile: args.source.workflowFile,
+          workflowName: args.workflowName,
+          triggerData: args.input,
+          runId: args.runId,
           plugins: runtimePackages({
-            plugins: opts.plugins?.plugins,
-            workflowPackage: opts.source.workflowPackage,
+            plugins: args.plugins?.plugins,
+            workflowPackage: args.source.workflowPackage,
           }),
-          secrets: opts.plugins?.secrets,
+          secrets: args.plugins?.secrets,
         });
+        args.signal?.throwIfAborted();
+        return result;
       }
-      if (opts.mode === "test") {
-        const devSandbox = await this.requireDevSandboxes().ensure({
-          identity: opts.identity,
-          projectId: opts.projectId,
+      if (args.mode === "test") {
+        const dev = await this.requireDevSandboxes().ensure({
+          identity: args.identity,
+          projectId: args.projectId,
           refresh: false,
         });
-        sandboxId = devSandbox.providerId;
-        workingDirectory = `${opts.provider.workspaceRoot}/runs/${opts.runId}`;
-        await opts.provider.executeCommand(
+        sandboxId = dev.providerId;
+        workingDirectory = `${args.provider.workspaceRoot}/runs/${args.runId}`;
+        await args.provider.executeCommand(
           sandboxId,
           `rm -rf ${shellQuote(workingDirectory)} && mkdir -p ${shellQuote(workingDirectory)}`,
         );
         await uploadWorkspace({
-          provider: opts.provider,
+          provider: args.provider,
           sandboxId,
           projectDir: workingDirectory,
-          files: opts.source.files,
+          files: args.source.files,
         });
       } else {
-        const handle = await opts.provider.createSandbox({
+        const handle = await args.provider.createSandbox({
           language: "typescript",
           autoStopInterval: 5,
           labels: {
             purpose: "execution",
-            projectId: opts.projectId,
-            commitSha: opts.source.commitSha ?? "",
+            projectId: args.projectId,
+            commitSha: args.source.commitSha ?? "",
           },
         });
         sandboxId = handle.providerId;
         destroySandbox = true;
-        workingDirectory = `${opts.provider.workspaceRoot}/project`;
-        if (opts.source.cloneSource) {
-          await opts.provider.gitClone(
+        workingDirectory = `${args.provider.workspaceRoot}/project`;
+        if (args.source.cloneSource) {
+          await args.provider.gitClone(
             sandboxId,
-            opts.source.cloneSource.url,
+            args.source.cloneSource.url,
             workingDirectory,
             {
-              branch: opts.source.cloneSource.branch,
-              commitId: opts.source.commitSha ?? undefined,
-              username: opts.source.cloneSource.username,
-              password: opts.source.cloneSource.password,
+              branch: args.source.cloneSource.branch,
+              commitId: args.source.commitSha ?? undefined,
+              username: args.source.cloneSource.username,
+              password: args.source.cloneSource.password,
             },
           );
-          const transformedFiles = changedFiles({
-            before: opts.source.originalFiles,
-            after: opts.source.files,
+          const transformed = changedFiles({
+            before: args.source.originalFiles,
+            after: args.source.files,
           });
-          if (Object.keys(transformedFiles).length > 0) {
+          if (Object.keys(transformed).length > 0) {
             await uploadWorkspace({
-              provider: opts.provider,
+              provider: args.provider,
               sandboxId,
               projectDir: workingDirectory,
-              files: transformedFiles,
+              files: transformed,
             });
           }
         } else {
           await uploadWorkspace({
-            provider: opts.provider,
+            provider: args.provider,
             sandboxId,
             projectDir: workingDirectory,
-            files: opts.source.files,
+            files: args.source.files,
           });
         }
       }
-
-      return await opts.executor.executeRun({
+      const result = await args.executor.executeRun({
         sandboxId,
         workingDirectory,
-        workflowFile: opts.source.workflowFile,
-        workflowName: opts.workflowName,
-        triggerData: opts.triggerData,
-        runId: opts.runId,
+        workflowFile: args.source.workflowFile,
+        workflowName: args.workflowName,
+        triggerData: args.input,
+        runId: args.runId,
         plugins: runtimePackages({
-          plugins: opts.plugins?.plugins,
-          workflowPackage: opts.source.workflowPackage,
+          plugins: args.plugins?.plugins,
+          workflowPackage: args.source.workflowPackage,
         }),
-        secrets: opts.plugins?.secrets,
+        secrets: args.plugins?.secrets,
       });
+      args.signal?.throwIfAborted();
+      return result;
     } catch (error) {
-      if (error instanceof RuntimeEventReportingError) throw error;
+      if (args.signal?.aborted) throw error;
+      if (args.mode === "production") {
+        if (error instanceof RuntimeInfrastructureError) throw error;
+        throw new RuntimeInfrastructureError({
+          operation: `production run '${args.runId}' execution`,
+          cause: error,
+        });
+      }
       return {
         status: "failed",
         error: error instanceof Error ? error.message : String(error),
         steps: [],
       };
     } finally {
-      if (sandboxId && workingDirectory && opts.mode === "test") {
-        await opts.provider
+      if (sandboxId && workingDirectory && args.mode === "test") {
+        await args.provider
           .executeCommand(sandboxId, `rm -rf ${shellQuote(workingDirectory)}`)
           .catch(() => {});
       }
       if (sandboxId && destroySandbox) {
-        await opts.provider.destroySandbox(sandboxId).catch(() => {});
+        await args.provider.destroySandbox(sandboxId).catch(() => {});
       }
     }
   }
 
-  private async prepareTestSource(opts: {
+  private async finalizePlainRun(args: {
+    runId: string;
+    result: RunResult;
+  }): Promise<boolean> {
+    const now = new Date();
+    return this.db.transaction().execute(async (trx) => {
+      const updated = await trx
+        .updateTable("workflow_runs")
+        .set({
+          status: args.result.status,
+          result: jsonColumn(toJson(args.result.result)),
+          error: args.result.error ?? null,
+          completed_at: now,
+          updated_at: now,
+        })
+        .where("id", "=", args.runId)
+        .where("status", "in", ["pending", "running"])
+        .returning("id")
+        .executeTakeFirst();
+      if (!updated) return false;
+      if (args.result.steps.length === 0) return true;
+      await trx
+        .insertInto("workflow_run_steps")
+        .values(
+          args.result.steps.map((step) => ({
+            id: crypto.randomUUID(),
+            run_id: args.runId,
+            node_id: step.nodeId,
+            occurrence: step.occurrence ?? 0,
+            name: step.name,
+            status: step.status,
+            attempt: step.attempt ?? 1,
+            input: jsonColumn(toJson(step.input)),
+            output: jsonColumn(toJson(step.output)),
+            error: step.error ?? null,
+            started_at: new Date(step.startedAt),
+            completed_at: new Date(step.completedAt),
+          })),
+        )
+        .onConflict((conflict) =>
+          conflict.columns(["run_id", "node_id", "occurrence"]).doNothing(),
+        )
+        .execute();
+      return true;
+    });
+  }
+
+  private async prepareTestSource(args: {
     identity: Identity;
     projectId: string;
     workflowName: string;
-    input: TriggerTestRunInput;
+    files?: Record<string, string>;
   }): Promise<PreparedSource> {
     const repo = await this.deps.projectManager.openDev(
-      opts.identity.tenantId,
-      opts.projectId,
-      opts.identity.externalUserId,
+      args.identity.tenantId,
+      args.projectId,
+      args.identity.externalUserId,
     );
     try {
       const originalFiles = await repo.readAllFiles();
-      const overlays = opts.input.files ?? {};
+      const overlays = args.files ?? {};
       assertOverlayPaths(overlays);
-      const files = { ...originalFiles, ...overlays };
-      return await prepareSource({
-        projectId: opts.projectId,
-        workflowName: opts.workflowName,
-        files,
+      return prepareSource({
+        projectId: args.projectId,
+        workflowName: args.workflowName,
+        files: { ...originalFiles, ...overlays },
         originalFiles,
         commitSha: null,
       });
@@ -821,43 +1378,42 @@ export class RunsService {
     }
   }
 
-  private async prepareProductionSource(opts: {
+  private async prepareProductionSource(args: {
     identity: Identity;
     projectId: string;
     workflowName: string;
     commitSha?: string;
   }): Promise<PreparedSource> {
     const remote = this.deps.projectManager.remoteBackend;
-    if (!remote) throw new ProductionDeploymentNotFoundError(opts.projectId);
+    if (!remote) throw new ProductionDeploymentNotFoundError(args.projectId);
     const repo = await this.deps.projectManager.openDev(
-      opts.identity.tenantId,
-      opts.projectId,
-      opts.identity.externalUserId,
+      args.identity.tenantId,
+      args.projectId,
+      args.identity.externalUserId,
     );
     try {
       await fetchRemote({
         dev: repo,
         remote,
-        tenantId: opts.identity.tenantId,
-        projectId: opts.projectId,
+        tenantId: args.identity.tenantId,
+        projectId: args.projectId,
         remoteBranch: "main",
       });
       const commitSha =
-        opts.commitSha ??
+        args.commitSha ??
         (await repo.resolveRef("refs/remotes/origin/main").catch(() => null));
-      if (!commitSha) {
-        throw new ProductionDeploymentNotFoundError(opts.projectId);
-      }
+      if (!commitSha)
+        throw new ProductionDeploymentNotFoundError(args.projectId);
       const files = await repo.readAllFilesAtRef(commitSha);
       const cloneSource = remote.getCloneSource
-        ? await remote.getCloneSource(opts.identity.tenantId, opts.projectId, {
+        ? await remote.getCloneSource(args.identity.tenantId, args.projectId, {
             scope: "read",
           })
         : undefined;
       return {
         ...(await prepareSource({
-          projectId: opts.projectId,
-          workflowName: opts.workflowName,
+          projectId: args.projectId,
+          workflowName: args.workflowName,
           files,
           originalFiles: files,
           commitSha,
@@ -881,64 +1437,8 @@ export class RunsService {
     return plugins;
   }
 
-  private async finalizeRun(runId: string, result: RunResult): Promise<void> {
-    const completedAt = new Date();
-    await this.db.transaction().execute(async (trx) => {
-      const updated = await trx
-        .updateTable("workflow_runs")
-        .set({
-          status: result.status,
-          result: (result.result ?? null) as Json,
-          error: result.error ?? null,
-          completed_at: completedAt,
-        })
-        .where("id", "=", runId)
-        .where("status", "=", "running")
-        .returning("id")
-        .execute();
-      if (updated.length === 0) return;
-      if (result.steps.length > 0) {
-        await trx
-          .insertInto("workflow_run_steps")
-          .values(
-            withStepOccurrences(result.steps).map(({ step, occurrence }) => ({
-              id: crypto.randomUUID(),
-              run_id: runId,
-              node_id: step.nodeId,
-              occurrence,
-              name: step.name,
-              status: step.status,
-              attempt: step.attempt ?? 1,
-              input: (step.input ?? null) as Json,
-              output: (step.output ?? null) as Json,
-              error: step.error ?? null,
-              started_at: new Date(step.startedAt),
-              completed_at: new Date(step.completedAt),
-            })),
-          )
-          .onConflict((conflict) =>
-            conflict
-              .columns(["run_id", "node_id", "occurrence"])
-              .doUpdateSet((eb) => ({
-                name: eb.ref("excluded.name"),
-                status: eb.ref("excluded.status"),
-                attempt: eb.ref("excluded.attempt"),
-                input: eb.ref("excluded.input"),
-                output: eb.ref("excluded.output"),
-                error: eb.ref("excluded.error"),
-                started_at: eb.ref("excluded.started_at"),
-                completed_at: eb.ref("excluded.completed_at"),
-              })),
-          )
-          .execute();
-      }
-    });
-  }
-
   private requireDevSandboxes(): DevSandboxService {
-    if (!this.deps.devSandboxes) {
-      throw new SandboxProviderNotConfiguredError();
-    }
+    if (!this.deps.devSandboxes) throw new SandboxProviderNotConfiguredError();
     return this.deps.devSandboxes;
   }
 
@@ -954,23 +1454,34 @@ export class RunsService {
       .executeTakeFirst();
     if (!row) throw new ProjectNotFoundError(projectId);
   }
+
+  private async requireBatchScope(args: {
+    identity: Identity;
+    runId: string;
+    workflowStepAttemptId: string;
+  }): Promise<void> {
+    const scope = await this.db
+      .selectFrom("batch_execution_states")
+      .innerJoin(
+        "workflow_runs",
+        "workflow_runs.id",
+        "batch_execution_states.run_id",
+      )
+      .innerJoin("projects", "projects.id", "workflow_runs.project_id")
+      .where("batch_execution_states.run_id", "=", args.runId)
+      .where(
+        "batch_execution_states.workflow_step_attempt_id",
+        "=",
+        args.workflowStepAttemptId,
+      )
+      .where("projects.tenant_id", "=", args.identity.tenantId)
+      .select("batch_execution_states.run_id")
+      .executeTakeFirst();
+    if (!scope) throw new RunNotFoundError(args.runId);
+  }
 }
 
-function withStepOccurrences(
-  steps: RunResult["steps"],
-): Array<{ step: RunResult["steps"][number]; occurrence: number }> {
-  const occurrences = new Map<string, number>();
-  return steps.map((step) => {
-    const occurrence = step.occurrence ?? occurrences.get(step.nodeId) ?? 0;
-    occurrences.set(
-      step.nodeId,
-      Math.max(occurrences.get(step.nodeId) ?? 0, occurrence + 1),
-    );
-    return { step, occurrence };
-  });
-}
-
-async function prepareSource(opts: {
+async function prepareSource(args: {
   projectId: string;
   workflowName: string;
   files: Record<string, string>;
@@ -978,26 +1489,208 @@ async function prepareSource(opts: {
   commitSha: string | null;
 }): Promise<PreparedSource> {
   const prepared = prepareWorkflowExecution({
-    files: opts.files,
-    workflowName: opts.workflowName,
+    files: args.files,
+    workflowName: args.workflowName,
   });
-  if (!prepared) {
-    throw new WorkflowNotFoundError(opts.projectId, opts.workflowName);
-  }
-  const workflowFile = prepared.graph.filePath;
-  if (!workflowFile) {
-    throw new WorkflowNotFoundError(opts.projectId, opts.workflowName);
+  if (!prepared?.graph.filePath) {
+    throw new WorkflowNotFoundError(args.projectId, args.workflowName);
   }
   return {
     files: prepared.files,
-    originalFiles: opts.originalFiles,
-    workflowFile,
-    commitSha: opts.commitSha,
-    workflowKind: prepared.graph.kind ?? "regular",
+    originalFiles: args.originalFiles,
+    workflowFile: prepared.graph.filePath,
+    graph: prepared.graph,
+    commitSha: args.commitSha,
     workflowPackage: await resolveWorkflowPackageFallback({
-      packageJson: opts.files["package.json"],
+      packageJson: args.files["package.json"],
     }),
   };
+}
+
+function mapRun(args: {
+  row: RunRow & {
+    current_step_index: number | null;
+    active_workflow_step_attempt_id: string | null;
+  };
+  pause: Selectable<DB["workflow_pauses"]> | undefined;
+  batchScopes: BatchProgress[];
+}): Run {
+  const provenance = jsonRecord(args.row.provenance);
+  const active = ["pending", "running", "waiting", "paused"].includes(
+    args.row.status,
+  );
+  const activeBatch = args.batchScopes.some(
+    (scope) =>
+      scope.workflowStepAttemptId === args.row.active_workflow_step_attempt_id,
+  );
+  const processingPhase =
+    args.row.phase === "source" ||
+    args.row.phase === "process" ||
+    args.row.phase === "sink";
+  const openPause = args.pause?.status === "open";
+  return {
+    id: args.row.id,
+    projectId: args.row.project_id,
+    workflowName: args.row.workflow_name,
+    capabilities: {
+      cancel: active,
+      pauseProcessing:
+        activeBatch &&
+        processingPhase &&
+        args.row.status !== "paused" &&
+        !openPause,
+      resumeProcessing: activeBatch && args.row.status === "paused",
+      submitInput:
+        active &&
+        args.row.status === "waiting" &&
+        args.row.phase === "pause" &&
+        openPause,
+      inspectItems: args.batchScopes.length > 0,
+    },
+    status: parseRunStatus(args.row.status),
+    phase: parseRunPhase(args.row.phase),
+    currentStepIndex: args.row.current_step_index,
+    activePause: args.pause
+      ? {
+          id: args.pause.id,
+          status: args.pause.status as RunPause["status"],
+          state: args.pause.state,
+          timeoutAt: args.pause.timeout_at?.toISOString() ?? null,
+          createdAt: args.pause.created_at.toISOString(),
+          resolvedAt: args.pause.resolved_at?.toISOString() ?? null,
+        }
+      : null,
+    batchScopes: args.batchScopes,
+    provenance: {
+      ...(typeof provenance.commitSha === "string"
+        ? { commitSha: provenance.commitSha }
+        : {}),
+      ...(provenance.mutableSource === true
+        ? { mutableSource: true as const }
+        : {}),
+    },
+    ...(args.row.deployment_artifact_id
+      ? { artifact: { deploymentArtifactId: args.row.deployment_artifact_id } }
+      : {}),
+    mode: args.row.mode === "test" ? "test" : "production",
+    initiatedBy: args.row.external_user_id,
+    input: args.row.input,
+    result: args.row.result,
+    error: args.row.error,
+    parentRunId: args.row.parent_run_id,
+    createdAt: args.row.created_at.toISOString(),
+    updatedAt: args.row.updated_at.toISOString(),
+    startedAt: args.row.started_at?.toISOString() ?? null,
+    completedAt: args.row.completed_at?.toISOString() ?? null,
+  };
+}
+
+function mapBatchProgress(
+  row: Selectable<DB["batch_execution_states"]> & {
+    step_index: number;
+    step_node_id: string;
+    attempt: number;
+    status: string;
+  },
+): BatchProgress {
+  return {
+    workflowStepAttemptId: row.workflow_step_attempt_id,
+    stepIndex: row.step_index,
+    nodeId: row.step_node_id,
+    attempt: row.attempt,
+    status: parseAttemptStatus(row.status),
+    estimated:
+      row.estimated_count === null ? null : Number(row.estimated_count),
+    discovered: Number(row.discovered_count),
+    succeeded: Number(row.completed_count),
+    failed: Number(row.failed_count),
+    skipped: Number(row.skipped_count),
+    sinkCompletedChunks: Number(row.sink_completed_chunks),
+    sinkTotalChunks: Number(row.sink_total_chunks),
+    artifact: row.sink_artifact,
+  };
+}
+
+function mapStep(row: StepRow): RunStep {
+  return {
+    id: row.id,
+    runId: row.run_id,
+    nodeId: row.node_id,
+    occurrence: row.occurrence,
+    attempt: row.attempt,
+    name: row.name,
+    status: row.status as StepStatus,
+    input: row.input,
+    output: row.output,
+    error: row.error,
+    startedAt: row.started_at?.toISOString() ?? null,
+    completedAt: row.completed_at?.toISOString() ?? null,
+  };
+}
+
+function parseRunStatus(value: string): RunStatus {
+  if (
+    value === "pending" ||
+    value === "running" ||
+    value === "waiting" ||
+    value === "paused" ||
+    value === "canceling" ||
+    value === "completed" ||
+    value === "failed" ||
+    value === "canceled"
+  ) {
+    return value;
+  }
+  throw new Error(`Unknown run status '${value}'`);
+}
+
+function parseRunPhase(value: string): RunPhase {
+  if (
+    value === "execute" ||
+    value === "boundary" ||
+    value === "source" ||
+    value === "process" ||
+    value === "sink" ||
+    value === "pause" ||
+    value === "child"
+  ) {
+    return value;
+  }
+  throw new Error(`Unknown run phase '${value}'`);
+}
+
+function parseAttemptStatus(value: string): WorkflowStepAttempt["status"] {
+  if (
+    value === "pending" ||
+    value === "running" ||
+    value === "waiting" ||
+    value === "completed" ||
+    value === "failed" ||
+    value === "canceled"
+  ) {
+    return value;
+  }
+  throw new Error(`Unknown workflow step attempt status '${value}'`);
+}
+
+function parseBatchItemStatus(value: string): BatchItemStatus {
+  if (
+    value === "pending" ||
+    value === "running" ||
+    value === "waiting" ||
+    value === "succeeded" ||
+    value === "failed" ||
+    value === "skipped" ||
+    value === "canceled"
+  ) {
+    return value;
+  }
+  throw new Error(`Unknown batch item status '${value}'`);
+}
+
+function requireStepIndex(value: number | undefined): number {
+  if (value === undefined) throw new Error("Runtime target requires stepIndex");
+  return value;
 }
 
 function runtimePackages(args: {
@@ -1011,13 +1704,13 @@ function runtimePackages(args: {
   return packages.length > 0 ? packages : undefined;
 }
 
-function changedFiles(opts: {
+function changedFiles(args: {
   before: Record<string, string>;
   after: Record<string, string>;
 }): Record<string, string> {
   return Object.fromEntries(
-    Object.entries(opts.after).filter(
-      ([path, content]) => opts.before[path] !== content,
+    Object.entries(args.after).filter(
+      ([path, content]) => args.before[path] !== content,
     ),
   );
 }
@@ -1037,56 +1730,4 @@ function assertOverlayPaths(files: Record<string, string>): void {
       throw new InvalidRunOverlayError(filePath);
     }
   }
-}
-
-function readRunId(payload: Json): string {
-  if (
-    Array.isArray(payload) ||
-    payload === null ||
-    typeof payload !== "object" ||
-    typeof payload.runId !== "string"
-  ) {
-    throw new Error("Workflow run job payload is missing runId");
-  }
-  return payload.runId;
-}
-
-function jsonObject(value: Json | null): Record<string, unknown> {
-  if (value === null || Array.isArray(value) || typeof value !== "object") {
-    return {};
-  }
-  return Object.fromEntries(Object.entries(value));
-}
-
-function mapRun(row: RunRow): Run {
-  return {
-    id: row.id,
-    projectId: row.project_id,
-    workflowName: row.workflow_name,
-    commitSha: row.commit_sha,
-    mode: row.mode as RunMode,
-    initiatedBy: row.external_user_id,
-    status: row.status as RunStatus,
-    triggerData: row.trigger_data,
-    result: row.result,
-    error: row.error,
-    startedAt: row.started_at?.toISOString() ?? null,
-    completedAt: row.completed_at?.toISOString() ?? null,
-    createdAt: row.created_at.toISOString(),
-  };
-}
-
-function mapStep(row: StepRow): RunStep {
-  return {
-    id: row.id,
-    runId: row.run_id,
-    nodeId: row.node_id,
-    name: row.name,
-    status: row.status as StepStatus,
-    input: row.input,
-    output: row.output,
-    error: row.error,
-    startedAt: row.started_at?.toISOString() ?? null,
-    completedAt: row.completed_at?.toISOString() ?? null,
-  };
 }

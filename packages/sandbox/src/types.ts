@@ -1,4 +1,5 @@
 import type {
+  RuntimeArtifactIdentity,
   RuntimeBatchStepSuspension,
   RuntimeInvocationEvent,
   RuntimeInvocationEventsResponse,
@@ -99,21 +100,39 @@ export interface DeploymentRuntime {
   runtimeId: string;
   sandboxId: string;
   deploymentArtifactId: string;
+  artifactDigest: string;
+  transformVersion: string;
+  runtimeVersion: string;
   generation: string;
   status: DeploymentRuntimeStatus;
 }
 
-export interface EnsureDeploymentRuntimeArgs {
+export interface EnsureDeploymentRuntimeArgs extends RuntimeArtifactIdentity {
   sandboxId: string;
-  deploymentArtifactId: string;
   workingDirectory: string;
   maxConcurrency?: number;
   env?: Record<string, string>;
 }
 
-export interface RuntimeInvocation extends RuntimeInvocationRequest {
+export type RuntimeInvocation = RuntimeInvocationRequest & {
   runtimeId: string;
   eventSink?: RuntimeInvocationEventSink;
+  signal?: AbortSignal;
+};
+
+/**
+ * A runtime handoff or provider failure, distinct from a terminal result
+ * produced by workflow code. Retrying may execute external effects again, so
+ * workflow and batch effects remain at-least-once and must be idempotent.
+ */
+export class RuntimeInfrastructureError extends Error {
+  constructor(args: { operation: string; cause: unknown }) {
+    super(
+      `Runtime infrastructure failed during ${args.operation}: ${errorMessage(args.cause)}`,
+      { cause: args.cause },
+    );
+    this.name = "RuntimeInfrastructureError";
+  }
 }
 
 export interface RuntimeInvocationEventBatch {
@@ -126,9 +145,10 @@ export interface RuntimeInvocationEventSink {
   report(args: RuntimeInvocationEventBatch): Promise<void>;
 }
 
-export class RuntimeEventReportingError extends Error {
+export class RuntimeEventReportingError extends RuntimeInfrastructureError {
   constructor(args: { invocationId: string; cause: unknown }) {
-    super(`Failed to persist events for invocation '${args.invocationId}'`, {
+    super({
+      operation: `event reporting for invocation '${args.invocationId}'`,
       cause: args.cause,
     });
     this.name = "RuntimeEventReportingError";
@@ -158,12 +178,22 @@ export interface RuntimeHealth extends RuntimeSupervisorHealth {
 
 export interface DeploymentRuntimeProvider {
   ensureRuntime(args: EnsureDeploymentRuntimeArgs): Promise<DeploymentRuntime>;
+  /**
+   * Uses invocationId for supervisor deduplication. A caller that cannot
+   * recover the original receipt may retry execution with a new invocationId;
+   * external effects are therefore delivered at least once.
+   */
   invoke(args: RuntimeInvocation): Promise<RuntimeInvocationReceipt>;
   cancel(args: CancelRuntimeInvocationArgs): Promise<void>;
   getHealth(args: GetRuntimeHealthArgs): Promise<RuntimeHealth>;
 }
 
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
 export type {
+  RuntimeArtifactIdentity,
   RuntimeBatchStepSuspension,
   RuntimeInvocationEvent,
   RuntimeInvocationEventsResponse,

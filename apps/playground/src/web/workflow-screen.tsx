@@ -1,17 +1,15 @@
 import {
-  type PlaygroundRun,
-  useCatamorphic,
   useDeployProject,
   useOnParse,
   useProjectFile,
-  useTriggerWorkflowTestRun,
-  useWorkflowRuns,
+  useTriggerRun,
+  useTriggerTestRun,
+  useWorkflow,
   useWorkflows,
   useWriteProjectFile,
 } from "@catamorphic/react";
-import { WorkflowEditor } from "@catamorphic/ui";
+import { RunsPanel, WorkflowEditor } from "@catamorphic/ui";
 import { useCallback, useEffect, useRef, useState } from "react";
-import { BatchRunsPanel } from "./batch-runs-panel.js";
 import { MonacoCodeEditor } from "./monaco-editor.js";
 
 export function WorkflowScreen({
@@ -48,7 +46,7 @@ export function WorkflowScreen({
     <WorkflowScreenInner
       projectId={projectId}
       workflowName={workflowName}
-      workflowKind={summary.kind}
+      workflowCapabilities={summary.capabilities}
       filePath={filePath}
       initialCode={fileQuery.data?.content ?? ""}
     />
@@ -58,13 +56,17 @@ export function WorkflowScreen({
 function WorkflowScreenInner({
   projectId,
   workflowName,
-  workflowKind,
+  workflowCapabilities,
   filePath,
   initialCode,
 }: {
   projectId: string;
   workflowName: string;
-  workflowKind: "regular" | "batch";
+  workflowCapabilities: {
+    persistedContinuations: boolean;
+    batchProcessing: boolean;
+    cancellation: boolean;
+  };
   filePath: string;
   initialCode: string;
 }) {
@@ -75,25 +77,21 @@ function WorkflowScreenInner({
     previousInitialCode.current = initialCode;
     setCode((current) => (current === previous ? initialCode : current));
   }, [initialCode]);
-  const { apiClient } = useCatamorphic();
+  const workflow = useWorkflow(projectId, workflowName);
 
   const onParse = useOnParse({
-    files: { [filePath]: code },
+    files: {
+      ...(workflow.data?.allFiles ?? {}),
+      [filePath]: code,
+    },
     workflowName,
     preferredFilePath: filePath,
   });
 
   const writeFile = useWriteProjectFile(projectId);
   const deploy = useDeployProject(projectId);
-  const trigger = useTriggerWorkflowTestRun(projectId, workflowName);
-  const runsQuery = useWorkflowRuns(
-    workflowKind === "regular" ? projectId : undefined,
-    workflowKind === "regular" ? workflowName : undefined,
-    {
-      limit: 25,
-      mode: "test",
-    },
-  );
+  const triggerRun = useTriggerRun({ projectId, workflowName });
+  const triggerTestRun = useTriggerTestRun({ projectId, workflowName });
 
   const [deployState, setDeployState] = useState<
     "idle" | "deploying" | "deployed" | "error"
@@ -114,80 +112,49 @@ function WorkflowScreenInner({
   }, [code, initialCode, filePath, writeFile, deploy]);
 
   const onRun = useCallback(
-    async (triggerData: Record<string, unknown>) => {
-      const run = await trigger.mutateAsync({
-        triggerData,
-        files: { [filePath]: code },
-      });
-      const detail = await apiClient.GET("/api/runs/{runId}", {
-        params: { path: { runId: run.id } },
-      });
-      const steps = detail.data?.steps ?? [];
-      return {
-        runId: run.id,
-        status:
-          run.status === "completed"
-            ? ("completed" as const)
-            : ("failed" as const),
-        result: run.result,
-        error: run.error,
-        steps: steps.map((step) => ({
-          nodeId: step.nodeId,
-          name: step.name,
-          status:
-            step.status === "completed"
-              ? ("completed" as const)
-              : ("failed" as const),
-          input: step.input,
-          output: step.output,
-          error: step.error ?? undefined,
-          startedAt: step.startedAt ?? new Date().toISOString(),
-          completedAt: step.completedAt ?? new Date().toISOString(),
-        })),
-        startedAt: run.startedAt ?? new Date().toISOString(),
-        completedAt: run.completedAt ?? new Date().toISOString(),
-      };
-    },
-    [trigger, apiClient, filePath, code],
+    (input: Record<string, unknown>) => triggerRun.mutateAsync({ input }),
+    [triggerRun],
   );
 
-  const initialRuns: PlaygroundRun[] = (runsQuery.data?.items ?? []).map(
-    (run) => ({
-      id: run.id,
-      workflowName: run.workflowName,
-      status:
-        run.status === "completed" ||
-        run.status === "failed" ||
-        run.status === "running" ||
-        run.status === "pending"
-          ? run.status
-          : "failed",
-      triggerData: (run.triggerData ?? {}) as Record<string, unknown>,
-      result: run.result,
-      error: run.error ?? undefined,
-      steps: [],
-      startedAt: run.startedAt ?? run.createdAt,
-      completedAt: run.completedAt ?? undefined,
-    }),
+  const onTestRun = useCallback(
+    (input: Record<string, unknown>) =>
+      triggerTestRun.mutateAsync({
+        input,
+        files: { [filePath]: code },
+      }),
+    [triggerTestRun, filePath, code],
   );
+
+  if (workflow.isLoading) {
+    return (
+      <div className="pg-empty">
+        <p>Loading workflow graph…</p>
+      </div>
+    );
+  }
+  if (workflow.error) {
+    return (
+      <div className="pg-empty">
+        <p className="pg-error">{workflow.error.message}</p>
+      </div>
+    );
+  }
 
   return (
     <WorkflowEditor
       code={code}
       onCodeChange={setCode}
       onParse={onParse}
-      onRun={workflowKind === "regular" ? onRun : undefined}
-      initialRuns={workflowKind === "regular" ? initialRuns : []}
-      renderRunsPanel={
-        workflowKind === "batch"
-          ? () => (
-              <BatchRunsPanel
-                projectId={projectId}
-                workflowName={workflowName}
-              />
-            )
-          : undefined
-      }
+      workflowCapabilities={workflowCapabilities}
+      onRun={onRun}
+      onTestRun={onTestRun}
+      renderRunsPanel={({ activeRun }) => (
+        <RunsPanel
+          projectId={projectId}
+          workflowName={workflowName}
+          activeRun={activeRun}
+        />
+      )}
       renderCodeEditor={({ code: editorCode, onChange, readOnly }) => (
         <MonacoCodeEditor
           code={editorCode}
@@ -204,11 +171,11 @@ function WorkflowScreenInner({
           disabled={deployState === "deploying"}
         >
           {deployState === "deploying"
-            ? "Deploying…"
+            ? "Deploying..."
             : deployState === "deployed"
-              ? "Deployed ✓"
+              ? "Deployed"
               : deployState === "error"
-                ? "Deploy failed — retry"
+                ? "Deploy failed, retry"
                 : "Deploy"}
         </button>
       )}

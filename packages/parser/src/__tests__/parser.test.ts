@@ -311,8 +311,6 @@ export async function myWorkflow() {
   it("throws when no workflow function found", () => {
     const source = `export function notAWorkflow() { return 42; }`;
 
-    expect(() => parseWorkflow(source)).toThrow(
-      'No function with "use workflow" directive found',
-    );
+    expect(() => parseWorkflow(source)).toThrow("No workflow definition found");
   });
 });

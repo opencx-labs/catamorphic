@@ -1,7 +1,8 @@
 "use client";
 
 import { layoutGraph } from "@catamorphic/parser/layout";
-import { useCallback, useEffect, useRef } from "react";
+import { useCallback, useRef } from "react";
+import { adaptWorkflowGraph } from "../lib/api-types.js";
 import { useParseWorkflow } from "./use-parse-workflow.js";
 import type { OnParseCallback, ParseResult } from "./use-workflow-graph.js";
 
@@ -49,9 +50,7 @@ export function useOnParse({
   // latest project files without re-subscribing the debounced parse effect
   // in `useWorkflowGraph` on every keystroke in an unrelated file.
   const filesRef = useRef(files);
-  useEffect(() => {
-    filesRef.current = files;
-  }, [files]);
+  filesRef.current = files;
 
   return useCallback<OnParseCallback>(
     async (source): Promise<ParseResult | null> => {
@@ -69,12 +68,13 @@ export function useOnParse({
           preferredFilePath,
         });
         if (!parsed) return null;
+        const graph = adaptWorkflowGraph(parsed);
         const layouted = layoutGraph({
-          nodes: parsed.nodes,
-          edges: parsed.edges,
+          nodes: graph.nodes,
+          edges: graph.edges,
         });
         return {
-          graph: parsed,
+          graph,
           layoutedNodes: layouted.nodes,
           layoutedEdges: layouted.edges,
         };

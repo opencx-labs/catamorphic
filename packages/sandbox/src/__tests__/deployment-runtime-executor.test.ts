@@ -17,6 +17,9 @@ const runtime: DeploymentRuntime = {
   runtimeId: "runtime-1",
   sandboxId: "sandbox-1",
   deploymentArtifactId: "artifact-1",
+  artifactDigest: "digest-1",
+  transformVersion: "transform-1",
+  runtimeVersion: "runtime-1",
   generation: "generation-1",
   status: "healthy",
 };
@@ -49,6 +52,9 @@ describe("DeploymentRuntimeExecutorAdapter", () => {
       runtimeId: "runtime-1",
       invocationId: "run-1",
       deploymentArtifactId: "artifact-1",
+      artifactDigest: "digest-1",
+      transformVersion: "transform-1",
+      runtimeVersion: "runtime-1",
       kind: "workflow",
       target: {
         modulePath: "src/workflow.ts",

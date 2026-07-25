@@ -55,39 +55,33 @@ export async function migrateToLatest<T>({
     )
   `)
     .execute(db);
-
-  const applied = await sql<{ name: string }>`
-    SELECT name FROM ${sql.raw(migrationsTable)} ORDER BY name
-  `.execute(db);
-
-  const appliedSet = new Set(applied.rows.map((r) => r.name));
-
-  const files = fs
-    .readdirSync(migrationsDir)
-    .filter((f) => f.endsWith(".sql"))
-    .sort();
-
-  const newlyApplied: string[] = [];
-
-  for (const file of files) {
-    if (appliedSet.has(file)) continue;
-
-    const content = fs.readFileSync(path.join(migrationsDir, file), "utf-8");
-
-    await db.transaction().execute(async (trx) => {
+  return db.transaction().execute(async (trx) => {
+    await sql`SELECT pg_advisory_xact_lock(hashtext(${`catamorphic:migrate:${schema}`}))`.execute(
+      trx,
+    );
+    const applied = await sql<{ name: string }>`
+      SELECT name FROM ${sql.raw(migrationsTable)} ORDER BY name
+    `.execute(trx);
+    const appliedSet = new Set(applied.rows.map((row) => row.name));
+    const files = fs
+      .readdirSync(migrationsDir)
+      .filter((file) => file.endsWith(".sql"))
+      .sort();
+    const newlyApplied: string[] = [];
+    for (const file of files) {
+      if (appliedSet.has(file)) continue;
+      const content = fs.readFileSync(path.join(migrationsDir, file), "utf-8");
       await sql.raw(`SET LOCAL search_path TO ${quotedSchema}`).execute(trx);
       await sql.raw(content).execute(trx);
       await sql`
         INSERT INTO ${sql.raw(migrationsTable)} (name)
         VALUES (${file})
       `.execute(trx);
-    });
-
-    newlyApplied.push(file);
-    onApplied?.(file);
-  }
-
-  return { schema, applied: newlyApplied };
+      newlyApplied.push(file);
+      onApplied?.(file);
+    }
+    return { schema, applied: newlyApplied };
+  });
 }
 
 export async function runMigrate() {

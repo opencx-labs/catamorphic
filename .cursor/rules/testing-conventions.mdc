@@ -10,7 +10,7 @@ alwaysApply: false
 
 Tests run in parallel at two levels:
 
-1. **Package level** — Turbo runs each package's `test` task concurrently. `test.dependsOn` is `["^build"]` (caret prefix), meaning a package only waits for its *dependencies* to be built, not its own build. Leaf packages (`parser`, `git`, `runtime`, `otel`, `db`) therefore start testing immediately with no build wait. Dependent packages (`core`, `fastify-plugin`, `server-sdk`, `react`, `ui`) wait only for their upstream packages.
+1. **Package level** — Turbo runs each package's `test` task concurrently. `test.dependsOn` is `["^build"]` (caret prefix), meaning a package only waits for its *dependencies* to be built, not its own build. Leaf packages (`workflow`, `parser`, `git`, `runtime`, `otel`, `db`) therefore start testing immediately with no build wait. Dependent packages (`sandbox`, `core`, `fastify-plugin`, `server-sdk`, `api-client`, `react`, `ui`, `registry`) wait only for their upstream packages.
 
 2. **File level** — Within each package, Vitest runs test files concurrently using Node.js worker threads (`pool: "threads"`, `fileParallelism: true` in root `vitest.config.ts`).
 

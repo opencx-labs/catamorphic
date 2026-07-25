@@ -11,9 +11,9 @@ export type {
   DetailPanelProps,
 } from "./detail-panel.js";
 export { DetailPanel } from "./detail-panel.js";
-export { HistorySidebar } from "./history-sidebar.js";
+export type { RunsPanelProps } from "./runs-panel.js";
+export { RunsPanel } from "./runs-panel.js";
 export { Toolbar } from "./toolbar.js";
-export type { NodeRendererProps } from "./types.js";
 export type { WorkflowEditorProps } from "./workflow-editor.js";
 export { WorkflowEditor, WorkflowEditorChrome } from "./workflow-editor.js";
 export type { WorkflowEditorScopeProps } from "./workflow-editor-scope.js";

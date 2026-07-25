@@ -2,6 +2,7 @@ import { timingSafeEqual } from "node:crypto";
 import {
   RuntimeInvocationConflictError,
   type RuntimeInvocationDispatcher,
+  RuntimeInvocationInfrastructureError,
 } from "./supervisor-dispatcher.js";
 import {
   parseRuntimeInvocationRequest,
@@ -45,6 +46,13 @@ export function createSupervisorRequestHandler(
           return protocolError({
             status: 409,
             code: "conflict",
+            message: error.message,
+          });
+        }
+        if (error instanceof RuntimeInvocationInfrastructureError) {
+          return protocolError({
+            status: 500,
+            code: "internal_error",
             message: error.message,
           });
         }

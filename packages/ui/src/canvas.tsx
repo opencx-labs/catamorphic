@@ -14,13 +14,14 @@ import {
   type FitViewOptions,
   MiniMap,
   type NodeMouseHandler,
+  type NodeTypes,
   type OnNodesChange,
   type OnSelectionChangeFunc,
   ReactFlow,
 } from "@xyflow/react";
 import { useAtom, useAtomValue, useSetAtom } from "jotai";
 import { useCallback, useEffect, useMemo } from "react";
-import { nodeTypes } from "./nodes/index.js";
+import { nodeTypes as builtInNodeTypes } from "./nodes/index.js";
 
 const FIT_VIEW_OPTIONS: FitViewOptions = {
   padding: 0.08,
@@ -78,6 +79,10 @@ const MINIMAP_NODE_COLORS: Record<string, string> = {
   parallel: "#06b6d4",
   "parallel-block": "#06b6d4",
   "scope-block": "#94a3b8",
+  "durable-boundary": "#94a3b8",
+  batch: "#0d9488",
+  pause: "#d97706",
+  "call-workflow": "#6366f1",
   delay: "#737373",
   return: "#22c55e",
 };
@@ -86,7 +91,11 @@ function minimapNodeColor(node: { type?: string }): string {
   return MINIMAP_NODE_COLORS[node.type ?? ""] ?? "#525252";
 }
 
-export function WorkflowCanvas() {
+export function WorkflowCanvas({
+  nodeRenderers,
+}: {
+  nodeRenderers?: Partial<NodeTypes>;
+} = {}) {
   const [nodes, setNodes] = useAtom(reactFlowNodesAtom);
   const edges = useAtomValue(reactFlowEdgesAtom);
   const selectedNodeId = useAtomValue(selectedNodeIdAtom);
@@ -121,6 +130,13 @@ export function WorkflowCanvas() {
   );
 
   const translateExtent = useMemo(() => computeTranslateExtent(nodes), [nodes]);
+  const nodeTypes = useMemo<NodeTypes>(() => {
+    const merged: NodeTypes = { ...builtInNodeTypes };
+    for (const [type, Renderer] of Object.entries(nodeRenderers ?? {})) {
+      if (Renderer) merged[type] = Renderer;
+    }
+    return merged;
+  }, [nodeRenderers]);
 
   const onSelectionChange: OnSelectionChangeFunc = useCallback(
     ({ nodes: selectedNodes }) => {
@@ -146,7 +162,7 @@ export function WorkflowCanvas() {
   }, [setSelectedNodeId]);
 
   return (
-    <div style={{ width: "100%", height: "100%" }}>
+    <div style={{ position: "absolute", inset: 0 }}>
       <ReactFlow
         key={isOpen ? "panel-open" : "panel-closed"}
         nodes={nodes}

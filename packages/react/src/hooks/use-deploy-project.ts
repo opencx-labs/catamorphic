@@ -12,6 +12,7 @@ import {
 } from "../lib/errors.js";
 import { useCatamorphic } from "../provider.js";
 import type { DeployResult } from "../types.js";
+import { workflowKeys } from "../workflow-keys.js";
 
 export interface DeployProjectInput {
   message?: string;
@@ -55,7 +56,7 @@ export function useDeployProject(
           queryKey: ["cat", "project", projectId, "git"],
         });
         queryClient.invalidateQueries({
-          queryKey: ["cat", "project", projectId, "workflows"],
+          queryKey: workflowKeys.project({ projectId }),
         });
       }
     },

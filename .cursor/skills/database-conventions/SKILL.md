@@ -50,12 +50,26 @@ bun run db:migrate
 bun run db:codegen
 ```
 
-3. The `DB` type in `packages/db/src/generated/db.ts` is auto-updated (a `.ts` source file, gitignored — regenerate after pulling migration changes)
+3. Commit the updated `packages/db/src/generated/db.ts` with the migration. This generated source is tracked; rerunning `bun run db:codegen` against an up-to-date local database must leave it unchanged.
 4. Use it in Kysely queries with full type safety
 
-## Current tables
+## Current table groups
 
-`tenants`, `projects`, `workflow_runs`, `workflow_run_steps`, `project_plugins`, `project_secrets` (+ `_migrations`). There is **no** `workflows` table — workflows are discovered by parsing project source (`(projectId, workflowName)` identifies one).
+- Project/host integration: `tenants`, `projects`, `project_plugins`,
+  `project_secrets`, `project_sandboxes`, `agent_sessions`, `agent_messages`.
+- Deployment/runtime: `deployment_artifacts`, `deployment_runtimes`,
+  `execution_jobs`, `rate_reservation_buckets`.
+- Canonical Runs: `workflow_runs`, `workflow_run_states`,
+  `workflow_step_attempts`, `workflow_pauses`, `workflow_run_events`,
+  `workflow_run_steps`.
+- Batch-scope extensions: `batch_execution_states`, `batch_items`,
+  `batch_step_invocations`, `batch_step_members`, `batch_item_steps`,
+  `batch_sink_chunks`.
+
+There is **no** `workflows` table: Workflows are discovered from project source
+and identified by `(projectId, workflowName)`. Every invocation uses
+`workflow_runs`; capability-specific state is keyed by Run and workflow-step
+attempt rather than a separate Run table.
 
 ## Querying
 

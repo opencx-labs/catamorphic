@@ -13,19 +13,24 @@ import {
   Project,
   type SourceFile,
   type Statement,
+  SyntaxKind,
   type VariableDeclaration,
   type VariableStatement,
   type WhileStatement,
 } from "ts-morph";
 import { extractJsDocMetadata, extractParameterInfo } from "./jsdoc.js";
 import type {
+  BatchExecutionDescriptor,
+  BoundaryExecutionDescriptor,
   DiscoveredWorkflow,
   ParameterInfo,
   ParseError,
+  PhysicalBatchStepPolicyDescriptor,
   ProjectParseResult,
   SourceRange,
   StepArgument,
   StepArgumentSource,
+  WorkflowCallTargetDescriptor,
   WorkflowEdge,
   WorkflowGraph,
   WorkflowNode,
@@ -74,6 +79,7 @@ function findWorkflowFunction(
   sourceFile: SourceFile,
 ): FunctionDeclaration | undefined {
   for (const fn of sourceFile.getFunctions()) {
+    if (!fn.isExported() || !fn.isAsync()) continue;
     const body = fn.getBody();
     if (!body || !Node.isBlock(body)) continue;
 
@@ -81,14 +87,20 @@ function findWorkflowFunction(
     if (statements.length === 0) continue;
 
     const first = statements[0];
-    if (
-      Node.isExpressionStatement(first) &&
-      first.getText().includes('"use workflow"')
-    ) {
+    if (first && isWorkflowDirectiveStatement(first)) {
       return fn;
     }
   }
   return undefined;
+}
+
+function isWorkflowDirectiveStatement(statement: Statement): boolean {
+  if (!Node.isExpressionStatement(statement)) return false;
+  const expression = statement.getExpression();
+  return (
+    Node.isStringLiteral(expression) &&
+    expression.getLiteralValue() === "use workflow"
+  );
 }
 
 function getCallName(node: CallExpression): string {
@@ -134,6 +146,12 @@ interface StepDefinition {
   fn: StepFunction;
   metadataSource?: VariableStatement;
   batchMetadata?: Record<string, string>;
+  batch?: {
+    exported: boolean;
+    exportName: string;
+    modulePath: string;
+    policy: Partial<PhysicalBatchStepPolicyDescriptor>;
+  };
 }
 
 interface ParseContext {
@@ -145,7 +163,11 @@ interface ParseContext {
   variables: Map<string, VariableInfo>;
   workflowFile?: string;
   returnLabel?: string;
+  statementMode?: "regular" | "boundary" | "batch-process";
+  workflowStack?: Set<string>;
 }
+
+type DurableCallback = ArrowFunction | FunctionExpression | MethodDeclaration;
 
 function lookupStepMetadata(
   ctx: ParseContext,
@@ -174,6 +196,40 @@ function lookupStepParams(ctx: ParseContext, fnName: string) {
   return params.length > 0 ? params : undefined;
 }
 
+function validateStepCall(ctx: ParseContext, fnName: string): void {
+  const step = ctx.stepFunctions.get(fnName);
+  if (step?.batch && ctx.statementMode !== "batch-process") {
+    throw new Error(
+      `Batch step '${fnName}' may only be called inside defineBatch.process`,
+    );
+  }
+}
+
+function validateBatchStepCallLocations(opts: {
+  root: Node;
+  stepFunctions: Map<string, StepDefinition>;
+  processCallbacks: BatchCallback[];
+}): void {
+  const processRanges = opts.processCallbacks.map((callback) => ({
+    start: callback.getStart(),
+    end: callback.getEnd(),
+  }));
+  for (const call of opts.root.getDescendantsOfKind(
+    SyntaxKind.CallExpression,
+  )) {
+    const fnName = getCallName(call);
+    if (!opts.stepFunctions.get(fnName)?.batch) continue;
+    const inProcess = processRanges.some(
+      (range) => call.getStart() >= range.start && call.getEnd() <= range.end,
+    );
+    if (!inProcess) {
+      throw new Error(
+        `Batch step '${fnName}' may only be called inside defineBatch.process`,
+      );
+    }
+  }
+}
+
 function addEdgesFromPrevious(
   ctx: ParseContext,
   previousIds: string[],
@@ -200,6 +256,53 @@ function extractLeadingDisplayName(stmt: Statement): string | undefined {
     }
   }
   return undefined;
+}
+
+function extractLeadingJsDocMetadata(node: Node): {
+  displayName?: string;
+  description?: string;
+  icon?: string;
+  tags: Record<string, string>;
+  paramMetadata: Map<string, { displayName?: string; description?: string }>;
+} {
+  const result: {
+    displayName?: string;
+    description?: string;
+    icon?: string;
+    tags: Record<string, string>;
+    paramMetadata: Map<string, { displayName?: string; description?: string }>;
+  } = { tags: {}, paramMetadata: new Map() };
+  const text = node
+    .getLeadingCommentRanges()
+    .map((range) => range.getText())
+    .reverse()
+    .find((comment) => comment.startsWith("/**"));
+  if (!text) return result;
+
+  const readTag = (tagName: string): string | undefined =>
+    text.match(new RegExp(`@${tagName}\\s+([^\\n*]+)`, "i"))?.[1]?.trim();
+  result.displayName = readTag("displayname");
+  result.description = readTag("description");
+  result.icon = readTag("icon");
+  if (result.displayName) result.tags.displayname = result.displayName;
+  if (result.description) result.tags.description = result.description;
+  if (result.icon) result.tags.icon = result.icon;
+
+  const paramPattern = /@param\s+(\w+)\s*-?\s*([^\n*]*)/gi;
+  for (const match of text.matchAll(paramPattern)) {
+    const name = match[1];
+    if (!name) continue;
+    const content = match[2]?.trim() ?? "";
+    const displayName = content.match(/@displayname\s+([^|@]+)/i)?.[1]?.trim();
+    const description = content.match(/@description\s+([^|@]+)/i)?.[1]?.trim();
+    result.paramMetadata.set(name, {
+      displayName,
+      description:
+        description ?? (!displayName && content ? content : undefined),
+    });
+    result.tags[`param:${name}`] = content;
+  }
+  return result;
 }
 
 function resolveArgumentSource(
@@ -231,16 +334,17 @@ function resolveArgumentSource(
   };
 }
 
-function extractCallArguments(
+function extractCallArgumentsAt(
   callNode: CallExpression,
   ctx: ParseContext,
   fnName: string,
+  argumentIndex: number,
 ): StepArgument[] | undefined {
   const args = callNode.getArguments();
-  if (args.length === 0) return undefined;
-
-  const firstArg = args[0];
-  if (!firstArg || !Node.isObjectLiteralExpression(firstArg)) return undefined;
+  const objectArgument = args[argumentIndex];
+  if (!objectArgument || !Node.isObjectLiteralExpression(objectArgument)) {
+    return undefined;
+  }
 
   const fn = ctx.stepFunctions.get(fnName);
   const paramMeta = fn
@@ -249,7 +353,7 @@ function extractCallArguments(
 
   const result: StepArgument[] = [];
 
-  for (const prop of firstArg.getProperties()) {
+  for (const prop of objectArgument.getProperties()) {
     if (Node.isPropertyAssignment(prop)) {
       const name = prop.getName();
       const init = prop.getInitializer();
@@ -275,6 +379,14 @@ function extractCallArguments(
   }
 
   return result.length > 0 ? result : undefined;
+}
+
+function extractCallArguments(
+  callNode: CallExpression,
+  ctx: ParseContext,
+  fnName: string,
+): StepArgument[] | undefined {
+  return extractCallArgumentsAt(callNode, ctx, fnName, 0);
 }
 
 function registerVariablesFromStatement(
@@ -326,6 +438,12 @@ function collectIfBranches(stmt: IfStatement): IfBranch[] {
       branches.push({
         condition: undefined,
         statements: elseStatement.getStatements(),
+        sourceNode: elseStatement,
+      });
+    } else {
+      branches.push({
+        condition: undefined,
+        statements: [elseStatement],
         sourceNode: elseStatement,
       });
     }
@@ -433,8 +551,22 @@ function parseStatements(
         expression && Node.isAwaitExpression(expression)
           ? expression.getExpression()
           : expression;
+      if (
+        ctx.statementMode === "boundary" &&
+        returnedExpression &&
+        parseDurableTransitionExpression(
+          ctx,
+          returnedExpression,
+          currentIds,
+          parentId,
+        )
+      ) {
+        currentIds = [];
+        break;
+      }
       if (returnedExpression && Node.isCallExpression(returnedExpression)) {
         const fnName = getCallName(returnedExpression);
+        validateStepCall(ctx, fnName);
         const stepMeta = lookupStepMetadata(ctx, fnName);
         const stepNodeId = nextId();
         ctx.nodes.push({
@@ -450,6 +582,10 @@ function parseStatements(
         });
         addEdgesFromPrevious(ctx, currentIds, stepNodeId);
         currentIds = [stepNodeId];
+      }
+      if (ctx.statementMode === "boundary") {
+        currentIds = [];
+        break;
       }
       const returnExpr = expression?.getText() ?? "";
       const nodeId = nextId();
@@ -494,6 +630,7 @@ function parseStatements(
       }
 
       const fnName = getCallName(callNode);
+      validateStepCall(ctx, fnName);
       const stepMeta = lookupStepMetadata(ctx, fnName);
       const nodeId = nextId();
       const stepArgs = extractCallArguments(callNode, ctx, fnName);
@@ -545,6 +682,321 @@ function parseStatements(
   }
 
   return currentIds;
+}
+
+function unwrapExpression(expression: Node): Node {
+  if (Node.isParenthesizedExpression(expression)) {
+    return unwrapExpression(expression.getExpression());
+  }
+  if (Node.isAwaitExpression(expression)) {
+    return unwrapExpression(expression.getExpression());
+  }
+  return expression;
+}
+
+function readObjectPropertyText(
+  object: ObjectLiteralExpression | undefined,
+  propertyName: string,
+): string | undefined {
+  const property = object?.getProperty(propertyName);
+  return property && Node.isPropertyAssignment(property)
+    ? property.getInitializer()?.getText()
+    : undefined;
+}
+
+function durableTransitionKind(
+  expression: Node,
+): "pause" | "callWorkflow" | "conditional" | undefined {
+  const unwrapped = unwrapExpression(expression);
+  if (Node.isConditionalExpression(unwrapped)) return "conditional";
+  if (!Node.isCallExpression(unwrapped)) return undefined;
+  const callName = getCallName(unwrapped);
+  return callName === "pause" || callName === "callWorkflow"
+    ? callName
+    : undefined;
+}
+
+function workflowCallLabel(ctx: ParseContext, workflowName: string): string {
+  for (const sourceFile of ctx.sourceFile.getProject().getSourceFiles()) {
+    const declaration = sourceFile
+      .getVariableDeclarations()
+      .find((candidate) => candidate.getName() === workflowName);
+    const statement = declaration?.getVariableStatement();
+    if (statement) {
+      const displayName = extractJsDocMetadata(statement).displayName;
+      if (displayName) return `Call ${displayName}`;
+    }
+    const fn = sourceFile
+      .getFunctions()
+      .find((candidate) => candidate.getName() === workflowName);
+    if (fn) {
+      const displayName = extractJsDocMetadata(fn).displayName;
+      if (displayName) return `Call ${displayName}`;
+    }
+  }
+  const readable = workflowName
+    .replace(/([a-z0-9])([A-Z])/g, "$1 $2")
+    .replace(/[-_]+/g, " ")
+    .replace(/^./, (character) => character.toUpperCase());
+  return `Call ${readable}`;
+}
+
+function findWorkflowCallTarget(
+  ctx: ParseContext,
+  workflowName: string,
+): FoundPlainWorkflow | FoundDefinedWorkflow | undefined {
+  for (const sourceFile of ctx.sourceFile.getProject().getSourceFiles()) {
+    for (const statement of sourceFile.getVariableStatements()) {
+      if (!statement.isExported()) continue;
+      for (const declaration of statement.getDeclarations()) {
+        const initializer = declaration.getInitializer();
+        if (
+          declaration.getName() !== workflowName ||
+          !initializer ||
+          !Node.isCallExpression(initializer) ||
+          getCallName(initializer) !== "defineWorkflow"
+        ) {
+          continue;
+        }
+        return {
+          type: "defined",
+          declaration,
+          sourceFile,
+          filePath: normalizePath(sourceFile.getFilePath()),
+          name: workflowName,
+        };
+      }
+    }
+    for (const fn of sourceFile.getFunctions()) {
+      if (fn.getName() !== workflowName || !fn.isExported() || !fn.isAsync()) {
+        continue;
+      }
+      const body = fn.getBody();
+      if (!body || !Node.isBlock(body)) continue;
+      const first = body.getStatements()[0];
+      if (!first || !isWorkflowDirectiveStatement(first)) continue;
+      return {
+        type: "plain",
+        fn,
+        sourceFile,
+        filePath: normalizePath(sourceFile.getFilePath()),
+      };
+    }
+  }
+  return undefined;
+}
+
+function workflowTargetMetadataSource(
+  workflow: FoundPlainWorkflow | FoundDefinedWorkflow,
+): FunctionDeclaration | VariableStatement | undefined {
+  return workflow.type === "plain"
+    ? workflow.fn
+    : workflow.declaration.getVariableStatement();
+}
+
+function workflowTargetName(
+  workflow: FoundPlainWorkflow | FoundDefinedWorkflow,
+): string {
+  return workflow.type === "plain"
+    ? (workflow.fn.getName() ?? "unnamed")
+    : workflow.name;
+}
+
+function definedWorkflowCancellation(
+  definition: DurableWorkflowDefinition,
+): boolean {
+  const controlsProperty = definition.config.getProperty("controls");
+  const controlsObject =
+    controlsProperty && Node.isPropertyAssignment(controlsProperty)
+      ? controlsProperty.getInitializer()
+      : undefined;
+  return (
+    controlsObject !== undefined &&
+    Node.isObjectLiteralExpression(controlsObject) &&
+    readObjectPropertyText(controlsObject, "cancel") === "true"
+  );
+}
+
+function parseWorkflowCallTarget(opts: {
+  ctx: ParseContext;
+  workflow: FoundPlainWorkflow | FoundDefinedWorkflow;
+  parentId: string;
+}): WorkflowCallTargetDescriptor {
+  const exportName = workflowTargetName(opts.workflow);
+  const exportTarget = {
+    modulePath: opts.workflow.filePath,
+    exportName,
+  };
+  if (opts.workflow.type === "plain") {
+    const body = opts.workflow.fn.getBody();
+    const previousMode = opts.ctx.statementMode;
+    opts.ctx.statementMode = "regular";
+    if (body && Node.isBlock(body)) {
+      parseStatements(opts.ctx, body.getStatements(), [], opts.parentId);
+    }
+    opts.ctx.statementMode = previousMode;
+    return {
+      exportTarget,
+      capabilities: {
+        persistedContinuations: false,
+        batchProcessing: false,
+        cancellation: false,
+      },
+      execution: { exportTarget, steps: [] },
+    };
+  }
+
+  const definition = parseDurableDefinition(opts.workflow);
+  const parsed = parseWorkflowSteps({
+    ctx: opts.ctx,
+    definitions: definition.steps,
+    parentId: opts.parentId,
+    previousIds: [],
+  });
+  const capabilities = {
+    persistedContinuations: true,
+    batchProcessing: definition.steps.some((step) => step.type === "batch"),
+    cancellation: definedWorkflowCancellation(definition),
+  };
+  return {
+    exportTarget,
+    capabilities,
+    execution: { exportTarget, steps: parsed.descriptors },
+  };
+}
+
+function parseDurableTransitionExpression(
+  ctx: ParseContext,
+  expression: Node,
+  previousIds: string[],
+  parentId?: string,
+): boolean {
+  const unwrapped = unwrapExpression(expression);
+  const kind = durableTransitionKind(unwrapped);
+  if (!kind) return false;
+
+  if (kind === "conditional" && Node.isConditionalExpression(unwrapped)) {
+    const ifBlockId = nextId();
+    ctx.nodes.push({
+      id: ifBlockId,
+      type: "if-block",
+      label: "",
+      sourceRange: getSourceRange(unwrapped),
+      metadata: {},
+      parentId,
+    });
+
+    const arms = [
+      {
+        condition: unwrapped.getCondition().getText(),
+        expression: unwrapped.getWhenTrue(),
+        branchType: "if",
+      },
+      {
+        condition: undefined,
+        expression: unwrapped.getWhenFalse(),
+        branchType: "else",
+      },
+    ] as const;
+    for (const arm of arms) {
+      const branchId = nextId();
+      ctx.nodes.push({
+        id: branchId,
+        type: "branch",
+        label: arm.condition ?? "Otherwise",
+        condition: arm.condition,
+        sourceRange: getSourceRange(arm.expression),
+        metadata: { branchType: arm.branchType },
+        parentId: ifBlockId,
+      });
+      addEdgesFromPrevious(ctx, previousIds, branchId);
+      parseDurableTransitionExpression(ctx, arm.expression, [], branchId);
+    }
+    return true;
+  }
+
+  if (!Node.isCallExpression(unwrapped)) return false;
+  if (kind === "pause") {
+    const options = unwrapped.getArguments()[0];
+    const object =
+      options && Node.isObjectLiteralExpression(options) ? options : undefined;
+    const timeout = readObjectPropertyText(object, "timeout");
+    const stateExpression = readObjectPropertyText(object, "state");
+    const nodeId = nextId();
+    ctx.nodes.push({
+      id: nodeId,
+      type: "pause",
+      label: timeout ? "Pause with timeout" : "Pause until resumed",
+      sourceRange: getSourceRange(unwrapped),
+      metadata: {},
+      functionName: "pause",
+      arguments: extractCallArgumentsAt(unwrapped, ctx, "pause", 0),
+      duration: timeout,
+      stateExpression,
+      parentId,
+    });
+    addEdgesFromPrevious(ctx, previousIds, nodeId);
+    return true;
+  }
+
+  const target = unwrapped.getArguments()[0]?.getText() ?? "workflow";
+  const options = unwrapped.getArguments()[1];
+  const object =
+    options && Node.isObjectLiteralExpression(options) ? options : undefined;
+  const workflowInputExpression = readObjectPropertyText(object, "input");
+  const childWorkflow = findWorkflowCallTarget(ctx, target);
+  const childMetadataSource = childWorkflow
+    ? workflowTargetMetadataSource(childWorkflow)
+    : undefined;
+  const childJsDoc = childMetadataSource
+    ? extractJsDocMetadata(childMetadataSource)
+    : undefined;
+  const nodeId = nextId();
+  const stack = ctx.workflowStack ?? new Set<string>();
+  const childKey = childWorkflow
+    ? `${childWorkflow.filePath}#${workflowTargetName(childWorkflow)}`
+    : undefined;
+  const isRecursive = childKey !== undefined && stack.has(childKey);
+  const callNode: WorkflowNode = {
+    id: nodeId,
+    type: "call-workflow",
+    label: workflowCallLabel(ctx, target),
+    sourceRange: getSourceRange(unwrapped),
+    description: childJsDoc?.description,
+    metadata: {
+      ...(childJsDoc?.tags ?? {}),
+      workflowScope: "true",
+      ...(childWorkflow
+        ? {
+            childModulePath: childWorkflow.filePath,
+            childExportName: workflowTargetName(childWorkflow),
+          }
+        : {}),
+      ...(isRecursive ? { recursiveWorkflow: "true" } : {}),
+    },
+    functionName: "callWorkflow",
+    arguments: extractCallArgumentsAt(unwrapped, ctx, "callWorkflow", 1),
+    workflowName: target,
+    workflowInputExpression,
+    parentId,
+  };
+  ctx.nodes.push(callNode);
+  addEdgesFromPrevious(ctx, previousIds, nodeId);
+
+  if (childWorkflow && childKey && !isRecursive) {
+    stack.add(childKey);
+    try {
+      callNode.workflowTarget = parseWorkflowCallTarget({
+        ctx,
+        workflow: childWorkflow,
+        parentId: nodeId,
+      });
+    } finally {
+      stack.delete(childKey);
+    }
+  }
+
+  return true;
 }
 
 function parseIfStatement(
@@ -706,6 +1158,7 @@ function parsePromiseAll(
       }
 
       const stepMeta = lookupStepMetadata(ctx, fnName);
+      validateStepCall(ctx, fnName);
       const stepArgs = actualCall
         ? extractCallArguments(actualCall, ctx, fnName)
         : undefined;
@@ -793,11 +1246,47 @@ function collectStepFunctions(
             definition,
             exported: variableStatement?.isExported() ?? false,
           }),
+          batch: {
+            exported: variableStatement?.isExported() ?? false,
+            exportName: declaration.getName(),
+            modulePath: normalizePath(sf.getFilePath()),
+            policy: readBatchStepPolicy(definition),
+          },
         });
       }
     }
   }
   return map;
+}
+
+function readBatchStepPolicy(
+  definition: ObjectLiteralExpression,
+): Partial<PhysicalBatchStepPolicyDescriptor> {
+  const batchProperty = definition.getProperty("batch");
+  const batch =
+    batchProperty && Node.isPropertyAssignment(batchProperty)
+      ? batchProperty.getInitializer()
+      : undefined;
+  const policy =
+    batch && Node.isObjectLiteralExpression(batch) ? batch : undefined;
+  const partitionByProperty = definition.getProperty("partitionBy");
+  const partitionBy =
+    partitionByProperty && Node.isPropertyAssignment(partitionByProperty)
+      ? partitionByProperty.getInitializer()?.getText()
+      : undefined;
+  const read = (name: string): string | undefined =>
+    readObjectPropertyText(policy, name);
+  return {
+    ...(read("maxItems") ? { maxItemsExpression: read("maxItems") ?? "" } : {}),
+    ...(read("maxWaitMs")
+      ? { maxWaitMsExpression: read("maxWaitMs") ?? "" }
+      : {}),
+    ...(read("maxBytes") ? { maxBytesExpression: read("maxBytes") ?? "" } : {}),
+    ...(read("rateLimits")
+      ? { rateLimitsExpression: read("rateLimits") ?? "" }
+      : {}),
+    ...(partitionBy ? { partitionByExpression: partitionBy } : {}),
+  };
 }
 
 function readBatchStepMetadata(args: {
@@ -825,25 +1314,38 @@ function readBatchStepMetadata(args: {
       ? { "batch:maxWaitMs": read("maxWaitMs") ?? "" }
       : {}),
     ...(read("maxBytes") ? { "batch:maxBytes": read("maxBytes") ?? "" } : {}),
+    ...(read("rateLimits")
+      ? { "batch:rateLimits": read("rateLimits") ?? "" }
+      : {}),
   };
 }
 
-interface FoundRegularWorkflow {
-  kind: "regular";
+interface FoundPlainWorkflow {
+  type: "plain";
   fn: FunctionDeclaration;
   sourceFile: SourceFile;
   filePath: string;
 }
 
-interface FoundBatchWorkflow {
-  kind: "batch";
+interface FoundDefinedWorkflow {
+  type: "defined";
   declaration: VariableDeclaration;
   sourceFile: SourceFile;
   filePath: string;
   name: string;
 }
 
-type FoundWorkflow = FoundRegularWorkflow | FoundBatchWorkflow;
+interface FoundObsoleteBatchWorkflow {
+  type: "obsolete-batch";
+  sourceFile: SourceFile;
+  filePath: string;
+  name: string;
+}
+
+type FoundWorkflow =
+  | FoundPlainWorkflow
+  | FoundDefinedWorkflow
+  | FoundObsoleteBatchWorkflow;
 
 /** Matches app convention: `src/<kebab>.ts` for a workflow identifier. */
 export function defaultWorkflowSourcePath(workflowName: string): string {
@@ -901,17 +1403,15 @@ function findAllWorkflows(sourceFiles: readonly SourceFile[]): FoundWorkflow[] {
   const results: FoundWorkflow[] = [];
   for (const sf of sourceFiles) {
     for (const fn of sf.getFunctions()) {
+      if (!fn.isExported() || !fn.isAsync()) continue;
       const body = fn.getBody();
       if (!body || !Node.isBlock(body)) continue;
       const statements = body.getStatements();
       if (statements.length === 0) continue;
       const first = statements[0];
-      if (
-        Node.isExpressionStatement(first) &&
-        first.getText().includes('"use workflow"')
-      ) {
+      if (first && isWorkflowDirectiveStatement(first)) {
         results.push({
-          kind: "regular",
+          type: "plain",
           fn,
           sourceFile: sf,
           filePath: normalizePath(sf.getFilePath()),
@@ -934,15 +1434,26 @@ function findAllWorkflows(sourceFiles: readonly SourceFile[]): FoundWorkflow[] {
         }
 
         const helper = initializer.getExpression();
-        if (
-          !Node.isIdentifier(helper) ||
-          helper.getText() !== "defineBatchWorkflow"
-        ) {
+        if (!Node.isIdentifier(helper)) {
+          continue;
+        }
+
+        const helperName = helper.getText();
+        if (helperName === "defineBatchWorkflow") {
+          results.push({
+            type: "obsolete-batch",
+            sourceFile: sf,
+            filePath: normalizePath(sf.getFilePath()),
+            name: nameNode.getText(),
+          });
+          continue;
+        }
+        if (helperName !== "defineWorkflow") {
           continue;
         }
 
         results.push({
-          kind: "batch",
+          type: "defined",
           declaration,
           sourceFile: sf,
           filePath: normalizePath(sf.getFilePath()),
@@ -1002,7 +1513,20 @@ function buildWorkflowGraph(
 
   return {
     name: workflowFn.getName() ?? "unnamed",
-    kind: "regular",
+    capabilities: {
+      persistedContinuations: false,
+      batchProcessing: false,
+      cancellation: false,
+    },
+    execution: {
+      exportTarget: {
+        modulePath: opts?.filePath
+          ? normalizePath(opts.filePath)
+          : normalizePath(sourceFile.getFilePath()),
+        exportName: workflowFn.getName() ?? "unnamed",
+      },
+      steps: [],
+    },
     displayName: jsdoc.displayName,
     description: jsdoc.description,
     trigger: { parameters: triggerParams },
@@ -1014,120 +1538,7 @@ function buildWorkflowGraph(
   };
 }
 
-type BatchCallback = ArrowFunction | FunctionExpression;
-
-interface BatchWorkflowDefinition {
-  source: BatchCallback;
-  process: BatchCallback;
-  sink?: Node;
-}
-
-function requireBatchProperty(opts: {
-  objectLiteral: Node;
-  propertyName: "source" | "process";
-  workflowName: string;
-}): Node {
-  if (!Node.isObjectLiteralExpression(opts.objectLiteral)) {
-    throw new Error(
-      `Batch workflow '${opts.workflowName}' must pass an object literal to defineBatchWorkflow`,
-    );
-  }
-
-  const property = opts.objectLiteral.getProperty(opts.propertyName);
-  if (!property) {
-    throw new Error(
-      `Batch workflow '${opts.workflowName}' is missing required '${opts.propertyName}'`,
-    );
-  }
-  if (!Node.isPropertyAssignment(property)) {
-    throw new Error(
-      `Batch workflow '${opts.workflowName}' must define '${opts.propertyName}' as a property`,
-    );
-  }
-
-  const initializer = property.getInitializer();
-  if (!initializer) {
-    throw new Error(
-      `Batch workflow '${opts.workflowName}' has an invalid '${opts.propertyName}'`,
-    );
-  }
-  return initializer;
-}
-
-function getBatchCallback(opts: {
-  expression: Node;
-  propertyName: "source" | "process";
-  workflowName: string;
-}): BatchCallback {
-  if (
-    !Node.isArrowFunction(opts.expression) &&
-    !Node.isFunctionExpression(opts.expression)
-  ) {
-    throw new Error(
-      `Batch workflow '${opts.workflowName}' '${opts.propertyName}' must be an inline function`,
-    );
-  }
-  return opts.expression;
-}
-
-function parseBatchDefinition(
-  workflow: FoundBatchWorkflow,
-): BatchWorkflowDefinition {
-  const initializer = workflow.declaration.getInitializer();
-  if (!initializer || !Node.isCallExpression(initializer)) {
-    throw new Error(
-      `Batch workflow '${workflow.name}' must be initialized with defineBatchWorkflow`,
-    );
-  }
-
-  const args = initializer.getArguments();
-  const config = args[0];
-  if (!config || !Node.isObjectLiteralExpression(config)) {
-    throw new Error(
-      `Batch workflow '${workflow.name}' must pass an object literal to defineBatchWorkflow`,
-    );
-  }
-
-  const sourceExpression = requireBatchProperty({
-    objectLiteral: config,
-    propertyName: "source",
-    workflowName: workflow.name,
-  });
-  const processExpression = requireBatchProperty({
-    objectLiteral: config,
-    propertyName: "process",
-    workflowName: workflow.name,
-  });
-  const source = getBatchCallback({
-    expression: sourceExpression,
-    propertyName: "source",
-    workflowName: workflow.name,
-  });
-  const process = getBatchCallback({
-    expression: processExpression,
-    propertyName: "process",
-    workflowName: workflow.name,
-  });
-
-  if (!Node.isBlock(process.getBody())) {
-    throw new Error(
-      `Batch workflow '${workflow.name}' 'process' must have a block body`,
-    );
-  }
-
-  const sinkProperty = config.getProperty("sink");
-  if (sinkProperty && !Node.isPropertyAssignment(sinkProperty)) {
-    throw new Error(
-      `Batch workflow '${workflow.name}' must define 'sink' as a property`,
-    );
-  }
-
-  return {
-    source,
-    process,
-    sink: sinkProperty?.getInitializer(),
-  };
-}
+type BatchCallback = ArrowFunction | FunctionExpression | MethodDeclaration;
 
 function extractCallbackParameters(callback: BatchCallback): ParameterInfo[] {
   const extracted = extractParameterInfo(callback, new Map());
@@ -1159,24 +1570,523 @@ function registerCallbackVariables(opts: {
   }
 }
 
-function buildBatchWorkflowGraph(
-  workflow: FoundBatchWorkflow,
-  stepFunctions: Map<string, StepDefinition>,
-  opts?: { filePath?: string; projectFiles?: string[]; sourceCode?: string },
-): WorkflowGraph {
-  const definition = parseBatchDefinition(workflow);
-  const sourceFile = workflow.sourceFile;
-  const ctx: ParseContext = {
-    nodes: [],
-    edges: [],
-    returnNodeIds: [],
-    sourceFile,
-    stepFunctions,
-    variables: new Map(),
-    workflowFile: normalizePath(sourceFile.getFilePath()),
-    returnLabel: "Item result",
+interface DurableBoundaryDefinition {
+  type: "boundary";
+  topLevelIndex: number;
+  call: CallExpression;
+  config: ObjectLiteralExpression;
+  run: DurableCallback;
+  jsdoc: ReturnType<typeof extractLeadingJsDocMetadata>;
+}
+
+interface BatchScopeDefinition {
+  type: "batch";
+  topLevelIndex: number;
+  call: CallExpression;
+  config: ObjectLiteralExpression;
+  source: BatchCallback;
+  process: BatchCallback;
+  sink?: Node;
+  jsdoc: ReturnType<typeof extractLeadingJsDocMetadata>;
+}
+
+type WorkflowStepDefinition = DurableBoundaryDefinition | BatchScopeDefinition;
+
+interface DurableWorkflowDefinition {
+  builder: ArrowFunction | FunctionExpression;
+  config: ObjectLiteralExpression;
+  steps: WorkflowStepDefinition[];
+}
+
+function requireReturnedObjectLiteral(opts: {
+  callback: ArrowFunction | FunctionExpression;
+  workflowName: string;
+}): ObjectLiteralExpression {
+  const body = opts.callback.getBody();
+  if (!Node.isBlock(body)) {
+    const expression = unwrapExpression(body);
+    if (Node.isObjectLiteralExpression(expression)) return expression;
+  } else {
+    const returnStatement = body
+      .getStatements()
+      .find((statement) => Node.isReturnStatement(statement));
+    const expression =
+      returnStatement && Node.isReturnStatement(returnStatement)
+        ? returnStatement.getExpression()
+        : undefined;
+    const unwrapped = expression ? unwrapExpression(expression) : undefined;
+    if (unwrapped && Node.isObjectLiteralExpression(unwrapped))
+      return unwrapped;
+  }
+  throw new Error(
+    `Workflow '${opts.workflowName}' builder must return an object literal`,
+  );
+}
+
+function requireDurableRun(opts: {
+  config: ObjectLiteralExpression;
+  workflowName: string;
+  boundaryIndex: number;
+}): DurableCallback {
+  const property = opts.config.getProperty("run");
+  const run =
+    property && Node.isPropertyAssignment(property)
+      ? property.getInitializer()
+      : property && Node.isMethodDeclaration(property)
+        ? property
+        : undefined;
+  if (
+    !run ||
+    (!Node.isArrowFunction(run) &&
+      !Node.isFunctionExpression(run) &&
+      !Node.isMethodDeclaration(run))
+  ) {
+    throw new Error(
+      `Workflow '${opts.workflowName}' boundary ${opts.boundaryIndex + 1} must define 'run' as an inline function`,
+    );
+  }
+  return run;
+}
+
+function requireBatchCallback(opts: {
+  config: ObjectLiteralExpression;
+  propertyName: "source" | "process";
+  workflowName: string;
+  topLevelIndex: number;
+}): BatchCallback {
+  const property = opts.config.getProperty(opts.propertyName);
+  const callback =
+    property && Node.isPropertyAssignment(property)
+      ? property.getInitializer()
+      : property && Node.isMethodDeclaration(property)
+        ? property
+        : undefined;
+  if (
+    !callback ||
+    (!Node.isArrowFunction(callback) &&
+      !Node.isFunctionExpression(callback) &&
+      !Node.isMethodDeclaration(callback))
+  ) {
+    throw new Error(
+      `Workflow '${opts.workflowName}' batch ${opts.topLevelIndex + 1} must define '${opts.propertyName}' as an inline function`,
+    );
+  }
+  return callback;
+}
+
+function parseDurableDefinition(
+  workflow: FoundDefinedWorkflow,
+): DurableWorkflowDefinition {
+  const initializer = workflow.declaration.getInitializer();
+  if (!initializer || !Node.isCallExpression(initializer)) {
+    throw new Error(
+      `Workflow '${workflow.name}' must be initialized with defineWorkflow`,
+    );
+  }
+  const builderExpression = initializer.getArguments()[0];
+  if (
+    !builderExpression ||
+    (!Node.isArrowFunction(builderExpression) &&
+      !Node.isFunctionExpression(builderExpression))
+  ) {
+    throw new Error(
+      `Workflow '${workflow.name}' must use an inline builder function`,
+    );
+  }
+  const config = requireReturnedObjectLiteral({
+    callback: builderExpression,
+    workflowName: workflow.name,
+  });
+  const stepsProperty = config.getProperty("steps");
+  const steps =
+    stepsProperty && Node.isPropertyAssignment(stepsProperty)
+      ? stepsProperty.getInitializer()
+      : undefined;
+  if (!steps || !Node.isArrayLiteralExpression(steps)) {
+    throw new Error(
+      `Workflow '${workflow.name}' must define 'steps' as an inline array`,
+    );
+  }
+  if (steps.getElements().length === 0) {
+    throw new Error(
+      `Workflow '${workflow.name}' must contain at least one boundary or batch`,
+    );
+  }
+
+  const definitions = steps.getElements().map((element, topLevelIndex) => {
+    const call = unwrapExpression(element);
+    if (!Node.isCallExpression(call)) {
+      throw new Error(
+        `Workflow '${workflow.name}' step ${topLevelIndex + 1} must be a direct defineBoundary or defineBatch call`,
+      );
+    }
+    const helperName = getCallName(call);
+    if (helperName !== "defineBoundary" && helperName !== "defineBatch") {
+      throw new Error(
+        `Workflow '${workflow.name}' step ${topLevelIndex + 1} must be a direct defineBoundary or defineBatch call`,
+      );
+    }
+    const configExpression = call.getArguments()[0];
+    if (
+      !configExpression ||
+      !Node.isObjectLiteralExpression(configExpression)
+    ) {
+      throw new Error(
+        `Workflow '${workflow.name}' ${helperName === "defineBoundary" ? "boundary" : "batch"} ${topLevelIndex + 1} must use an object literal`,
+      );
+    }
+    if (helperName === "defineBatch") {
+      const process = requireBatchCallback({
+        config: configExpression,
+        propertyName: "process",
+        workflowName: workflow.name,
+        topLevelIndex,
+      });
+      const sinkProperty = configExpression.getProperty("sink");
+      if (sinkProperty && !Node.isPropertyAssignment(sinkProperty)) {
+        throw new Error(
+          `Workflow '${workflow.name}' batch ${topLevelIndex + 1} must define 'sink' as a property`,
+        );
+      }
+      return {
+        type: "batch",
+        topLevelIndex,
+        call,
+        config: configExpression,
+        jsdoc: extractLeadingJsDocMetadata(call),
+        source: requireBatchCallback({
+          config: configExpression,
+          propertyName: "source",
+          workflowName: workflow.name,
+          topLevelIndex,
+        }),
+        process,
+        sink: sinkProperty?.getInitializer(),
+      } satisfies BatchScopeDefinition;
+    }
+    return {
+      type: "boundary",
+      topLevelIndex,
+      call,
+      config: configExpression,
+      jsdoc: extractLeadingJsDocMetadata(call),
+      run: requireDurableRun({
+        config: configExpression,
+        workflowName: workflow.name,
+        boundaryIndex: topLevelIndex,
+      }),
+    } satisfies DurableBoundaryDefinition;
+  });
+  return { builder: builderExpression, config, steps: definitions };
+}
+
+function extractDurableInputParameters(
+  callback: DurableCallback,
+  paramMetadata: Map<string, { displayName?: string; description?: string }>,
+): ParameterInfo[] {
+  const parameter = callback.getParameters()[0];
+  const typeNode = parameter?.getTypeNode();
+  if (!parameter || !typeNode || !Node.isTypeReference(typeNode)) return [];
+  if (typeNode.getTypeName().getText() !== "BoundaryContext") return [];
+  const inputTypeNode = typeNode.getTypeArguments()[0];
+  if (!inputTypeNode) return [];
+
+  const properties = inputTypeNode.getType().getProperties();
+  if (properties.length === 0) {
+    return [
+      {
+        name: "input",
+        type: inputTypeNode.getText(),
+        optional: false,
+        displayName: paramMetadata.get("input")?.displayName,
+        description: paramMetadata.get("input")?.description,
+      },
+    ];
+  }
+  return properties.map((property) => {
+    const declaration = property.getDeclarations()[0];
+    const metadata = paramMetadata.get(property.getName());
+    return {
+      name: property.getName(),
+      type: declaration
+        ? property.getTypeAtLocation(declaration).getText(declaration)
+        : "unknown",
+      optional: property.isOptional(),
+      displayName: metadata?.displayName,
+      description: metadata?.description,
+    };
+  });
+}
+
+function durableRetryMetadata(
+  config: ObjectLiteralExpression,
+): Record<string, string> {
+  const retryProperty = config.getProperty("retry");
+  const retry =
+    retryProperty && Node.isPropertyAssignment(retryProperty)
+      ? retryProperty.getInitializer()
+      : undefined;
+  if (!retry || !Node.isObjectLiteralExpression(retry)) return {};
+  const backoffProperty = retry.getProperty("backoff");
+  const backoff =
+    backoffProperty && Node.isPropertyAssignment(backoffProperty)
+      ? backoffProperty.getInitializer()
+      : undefined;
+  const backoffObject =
+    backoff && Node.isObjectLiteralExpression(backoff) ? backoff : undefined;
+  const read = (
+    object: ObjectLiteralExpression | undefined,
+    propertyName: string,
+  ) => readObjectPropertyText(object, propertyName);
+  return {
+    ...(read(retry, "maxAttempts")
+      ? { "retry:maxAttempts": read(retry, "maxAttempts") ?? "" }
+      : {}),
+    ...(read(backoffObject, "initial")
+      ? { "retry:backoff.initial": read(backoffObject, "initial") ?? "" }
+      : {}),
+    ...(read(backoffObject, "maximum")
+      ? { "retry:backoff.maximum": read(backoffObject, "maximum") ?? "" }
+      : {}),
+    ...(read(backoffObject, "multiplier")
+      ? { "retry:backoff.multiplier": read(backoffObject, "multiplier") ?? "" }
+      : {}),
   };
-  currentWorkflowFile = ctx.workflowFile;
+}
+
+function durableRetryDescriptor(
+  config: ObjectLiteralExpression,
+): BoundaryExecutionDescriptor["retry"] {
+  const retryProperty = config.getProperty("retry");
+  const retry =
+    retryProperty && Node.isPropertyAssignment(retryProperty)
+      ? retryProperty.getInitializer()
+      : undefined;
+  if (!retry || !Node.isObjectLiteralExpression(retry)) return {};
+  const backoffProperty = retry.getProperty("backoff");
+  const backoff =
+    backoffProperty && Node.isPropertyAssignment(backoffProperty)
+      ? backoffProperty.getInitializer()
+      : undefined;
+  const backoffObject =
+    backoff && Node.isObjectLiteralExpression(backoff) ? backoff : undefined;
+  const initialExpression = readObjectPropertyText(backoffObject, "initial");
+  const maximumExpression = readObjectPropertyText(backoffObject, "maximum");
+  const multiplierExpression = readObjectPropertyText(
+    backoffObject,
+    "multiplier",
+  );
+  return {
+    ...(readObjectPropertyText(retry, "maxAttempts")
+      ? {
+          maxAttemptsExpression:
+            readObjectPropertyText(retry, "maxAttempts") ?? "",
+        }
+      : {}),
+    ...(initialExpression || maximumExpression || multiplierExpression
+      ? {
+          backoff: {
+            ...(initialExpression ? { initialExpression } : {}),
+            ...(maximumExpression ? { maximumExpression } : {}),
+            ...(multiplierExpression ? { multiplierExpression } : {}),
+          },
+        }
+      : {}),
+  };
+}
+
+function batchFailurePolicyDescriptor(
+  config: ObjectLiteralExpression,
+): BatchExecutionDescriptor["failurePolicy"] {
+  const property = config.getProperty("failurePolicy");
+  if (!property) return { mode: "continue" };
+  const policy =
+    Node.isPropertyAssignment(property) && property.getInitializer();
+  if (!policy || !Node.isObjectLiteralExpression(policy)) {
+    throw new Error("Batch 'failurePolicy' must be an object literal");
+  }
+  const modeProperty = policy.getProperty("mode");
+  const mode =
+    modeProperty && Node.isPropertyAssignment(modeProperty)
+      ? modeProperty.getInitializer()
+      : undefined;
+  if (!mode || !Node.isStringLiteral(mode)) {
+    throw new Error("Batch 'failurePolicy.mode' must be a string literal");
+  }
+  const modeValue = mode.getLiteralValue();
+  if (modeValue !== "continue" && modeValue !== "fail_fast") {
+    throw new Error(
+      "Batch 'failurePolicy.mode' must be 'continue' or 'fail_fast'",
+    );
+  }
+  const maxFailuresProperty = policy.getProperty("maxFailures");
+  const maxFailures =
+    maxFailuresProperty && Node.isPropertyAssignment(maxFailuresProperty)
+      ? maxFailuresProperty.getInitializer()
+      : undefined;
+  if (maxFailures && !Node.isNumericLiteral(maxFailures)) {
+    throw new Error(
+      "Batch 'failurePolicy.maxFailures' must be a positive integer literal",
+    );
+  }
+  const maxFailuresValue = maxFailures
+    ? Number(maxFailures.getText().replaceAll("_", ""))
+    : undefined;
+  if (
+    maxFailuresValue !== undefined &&
+    (!Number.isInteger(maxFailuresValue) || maxFailuresValue < 1)
+  ) {
+    throw new Error(
+      "Batch 'failurePolicy.maxFailures' must be a positive integer literal",
+    );
+  }
+  return {
+    mode: modeValue,
+    ...(maxFailuresValue !== undefined
+      ? { maxFailures: maxFailuresValue }
+      : {}),
+  };
+}
+
+function extractDurableBoundaryParameters(
+  callback: DurableCallback,
+  paramMetadata: Map<string, { displayName?: string; description?: string }>,
+): ParameterInfo[] | undefined {
+  const parameters = extractDurableInputParameters(callback, paramMetadata);
+  return parameters.length > 0 ? parameters : undefined;
+}
+
+function registerDurableInputVariable(opts: {
+  ctx: ParseContext;
+  callback: DurableCallback;
+  sourceNodeId: string;
+}): void {
+  const parameter = opts.callback.getParameters()[0];
+  const nameNode = parameter?.getNameNode();
+  if (!nameNode || !Node.isObjectBindingPattern(nameNode)) return;
+  for (const element of nameNode.getElements()) {
+    if (element.getName() === "input") {
+      opts.ctx.variables.set("input", {
+        sourceNodeId: opts.sourceNodeId,
+        sourceStepLabel: "Previous boundary",
+      });
+    }
+  }
+}
+
+function parseWorkflowSteps(opts: {
+  ctx: ParseContext;
+  definitions: WorkflowStepDefinition[];
+  previousIds: string[];
+  parentId?: string;
+}): {
+  previousIds: string[];
+  descriptors: Array<BoundaryExecutionDescriptor | BatchExecutionDescriptor>;
+} {
+  let previousIds = opts.previousIds;
+  const descriptors: Array<
+    BoundaryExecutionDescriptor | BatchExecutionDescriptor
+  > = [];
+  for (const definition of opts.definitions) {
+    if (definition.type === "batch") {
+      const parsed = parseBatchScope({
+        ctx: opts.ctx,
+        definition,
+        previousIds,
+        parentId: opts.parentId,
+      });
+      previousIds = [parsed.nodeId];
+      descriptors.push(parsed.descriptor);
+      continue;
+    }
+
+    const boundary = definition;
+    const boundaryId = nextId();
+    opts.ctx.nodes.push({
+      id: boundaryId,
+      type: "durable-boundary",
+      label: boundary.jsdoc.displayName ?? "",
+      description: boundary.jsdoc.description,
+      sourceRange: getSourceRange(boundary.call),
+      metadata: {
+        ...boundary.jsdoc.tags,
+        ...durableRetryMetadata(boundary.config),
+      },
+      parameters: extractDurableBoundaryParameters(
+        boundary.run,
+        boundary.jsdoc.paramMetadata,
+      ),
+      parentId: opts.parentId,
+    });
+    addEdgesFromPrevious(opts.ctx, previousIds, boundaryId);
+    registerDurableInputVariable({
+      ctx: opts.ctx,
+      callback: boundary.run,
+      sourceNodeId: boundaryId,
+    });
+
+    const body = boundary.run.getBody();
+    const previousMode = opts.ctx.statementMode;
+    opts.ctx.statementMode = "boundary";
+    if (Node.isBlock(body)) {
+      parseStatements(opts.ctx, body.getStatements(), [], boundaryId);
+    } else if (body) {
+      const parsedTransition = parseDurableTransitionExpression(
+        opts.ctx,
+        body,
+        [],
+        boundaryId,
+      );
+      const expression = unwrapExpression(body);
+      if (!parsedTransition && Node.isCallExpression(expression)) {
+        const fnName = getCallName(expression);
+        validateStepCall(opts.ctx, fnName);
+        const stepMeta = lookupStepMetadata(opts.ctx, fnName);
+        opts.ctx.nodes.push({
+          id: nextId(),
+          type: "step",
+          label: stepMeta.displayName ?? fnName,
+          sourceRange: getSourceRange(expression),
+          metadata: stepMeta.metadata,
+          functionName: fnName,
+          parameters: lookupStepParams(opts.ctx, fnName),
+          arguments: extractCallArguments(expression, opts.ctx, fnName),
+          parentId: boundaryId,
+        });
+      }
+    }
+    opts.ctx.statementMode = previousMode;
+    descriptors.push({
+      type: "boundary",
+      topLevelIndex: boundary.topLevelIndex,
+      nodeId: boundaryId,
+      sourceRange: getSourceRange(boundary.call),
+      runRange: getSourceRange(boundary.run),
+      retry: durableRetryDescriptor(boundary.config),
+    });
+    previousIds = [boundaryId];
+  }
+  return { previousIds, descriptors };
+}
+
+function parseBatchScope(opts: {
+  ctx: ParseContext;
+  definition: BatchScopeDefinition;
+  previousIds: string[];
+  parentId?: string;
+}): { nodeId: string; descriptor: BatchExecutionDescriptor } {
+  const { ctx, definition } = opts;
+  const batchId = nextId();
+  ctx.nodes.push({
+    id: batchId,
+    type: "batch",
+    label: definition.jsdoc.displayName ?? "Batch",
+    description: definition.jsdoc.description,
+    sourceRange: getSourceRange(definition.call),
+    metadata: definition.jsdoc.tags,
+    parentId: opts.parentId,
+  });
+  addEdgesFromPrevious(ctx, opts.previousIds, batchId);
 
   const sourceParameters = extractCallbackParameters(definition.source);
   const sourceId = nextId();
@@ -1187,6 +2097,7 @@ function buildBatchWorkflowGraph(
     sourceRange: getSourceRange(definition.source),
     metadata: {},
     parameters: sourceParameters,
+    parentId: batchId,
   });
   registerCallbackVariables({
     ctx,
@@ -1201,21 +2112,75 @@ function buildBatchWorkflowGraph(
     sourceLabel: "Source",
   });
 
+  const nodeStart = ctx.nodes.length;
+  const returnStart = ctx.returnNodeIds.length;
+  const previousMode = ctx.statementMode;
+  const previousReturnLabel = ctx.returnLabel;
+  ctx.statementMode = "batch-process";
+  ctx.returnLabel = "Item result";
   const processBody = definition.process.getBody();
-  const processExits = Node.isBlock(processBody)
-    ? parseStatements(ctx, processBody.getStatements(), [sourceId])
-    : [sourceId];
-  const unexportedBatchStep = ctx.nodes.find(
-    (node) =>
-      node.metadata.batchStep === "true" &&
-      node.metadata.batchStepExported !== "true",
-  );
-  if (unexportedBatchStep?.functionName) {
+  if (!processBody) {
     throw new Error(
-      `Batch step '${unexportedBatchStep.functionName}' must be exported`,
+      `Workflow batch ${definition.topLevelIndex + 1} 'process' must have a body`,
     );
   }
+  const processExits = Node.isBlock(processBody)
+    ? parseStatements(ctx, processBody.getStatements(), [sourceId], batchId)
+    : parseBatchProcessExpression({
+        ctx,
+        expression: processBody,
+        previousIds: [sourceId],
+        parentId: batchId,
+      });
+  ctx.statementMode = previousMode;
+  ctx.returnLabel = previousReturnLabel;
 
+  const processNodes = ctx.nodes.slice(nodeStart);
+  const stepNodes = processNodes.filter(
+    (node) => node.type === "step" && node.functionName,
+  );
+  const physicalSteps = stepNodes.flatMap((node) => {
+    if (!node.functionName) return [];
+    const batchStep = ctx.stepFunctions.get(node.functionName)?.batch;
+    if (!batchStep) return [];
+    if (!batchStep.exported) {
+      throw new Error(`Batch step '${node.functionName}' must be exported`);
+    }
+    if (
+      !batchStep.policy.maxItemsExpression ||
+      !batchStep.policy.maxWaitMsExpression
+    ) {
+      throw new Error(
+        `Batch step '${node.functionName}' must define maxItems and maxWaitMs`,
+      );
+    }
+    return [
+      {
+        nodeId: node.id,
+        functionName: node.functionName,
+        sourceRange: node.sourceRange,
+        policy: {
+          maxItemsExpression: batchStep.policy.maxItemsExpression,
+          maxWaitMsExpression: batchStep.policy.maxWaitMsExpression,
+          ...(batchStep.policy.maxBytesExpression
+            ? { maxBytesExpression: batchStep.policy.maxBytesExpression }
+            : {}),
+          ...(batchStep.policy.rateLimitsExpression
+            ? { rateLimitsExpression: batchStep.policy.rateLimitsExpression }
+            : {}),
+          ...(batchStep.policy.partitionByExpression
+            ? { partitionByExpression: batchStep.policy.partitionByExpression }
+            : {}),
+        },
+        exportTarget: {
+          modulePath: batchStep.modulePath,
+          exportName: batchStep.exportName,
+        },
+      },
+    ];
+  });
+
+  let sinkDescriptor: BatchExecutionDescriptor["sink"];
   if (definition.sink) {
     const sinkId = nextId();
     ctx.nodes.push({
@@ -1224,20 +2189,176 @@ function buildBatchWorkflowGraph(
       label: "Sink",
       sourceRange: getSourceRange(definition.sink),
       metadata: {},
+      parentId: batchId,
     });
-    const previousIds =
+    const returnIds = ctx.returnNodeIds.slice(returnStart);
+    const sinkPreviousIds =
       processExits.length > 0
         ? processExits
-        : ctx.returnNodeIds.length > 0
-          ? ctx.returnNodeIds
+        : returnIds.length > 0
+          ? returnIds
           : [sourceId];
-    addEdgesFromPrevious(ctx, previousIds, sinkId);
+    addEdgesFromPrevious(ctx, sinkPreviousIds, sinkId);
+    sinkDescriptor = { sourceRange: getSourceRange(definition.sink) };
   }
 
   return {
+    nodeId: batchId,
+    descriptor: {
+      type: "batch",
+      topLevelIndex: definition.topLevelIndex,
+      nodeId: batchId,
+      sourceRange: getSourceRange(definition.call),
+      source: { sourceRange: getSourceRange(definition.source) },
+      process: {
+        sourceRange: getSourceRange(definition.process),
+        stepNodeIds: stepNodes.map((node) => node.id),
+        physicalSteps,
+      },
+      failurePolicy: batchFailurePolicyDescriptor(definition.config),
+      ...(sinkDescriptor ? { sink: sinkDescriptor } : {}),
+    },
+  };
+}
+
+function parseBatchProcessExpression(opts: {
+  ctx: ParseContext;
+  expression: Node;
+  previousIds: string[];
+  parentId: string;
+}): string[] {
+  const expression = unwrapExpression(opts.expression);
+  let previousIds = opts.previousIds;
+  if (Node.isCallExpression(expression)) {
+    const fnName = getCallName(expression);
+    validateStepCall(opts.ctx, fnName);
+    const stepMeta = lookupStepMetadata(opts.ctx, fnName);
+    const stepId = nextId();
+    opts.ctx.nodes.push({
+      id: stepId,
+      type: "step",
+      label: stepMeta.displayName ?? fnName,
+      sourceRange: getSourceRange(expression),
+      metadata: stepMeta.metadata,
+      functionName: fnName,
+      parameters: lookupStepParams(opts.ctx, fnName),
+      arguments: extractCallArguments(expression, opts.ctx, fnName),
+      parentId: opts.parentId,
+    });
+    addEdgesFromPrevious(opts.ctx, previousIds, stepId);
+    previousIds = [stepId];
+  }
+
+  const returnId = nextId();
+  opts.ctx.nodes.push({
+    id: returnId,
+    type: "return",
+    label: "Item result",
+    sourceRange: getSourceRange(opts.expression),
+    metadata: {},
+    returnExpression: opts.expression.getText(),
+    parentId: opts.parentId,
+  });
+  opts.ctx.returnNodeIds.push(returnId);
+  addEdgesFromPrevious(opts.ctx, previousIds, returnId);
+  return [];
+}
+
+function buildDefinedWorkflowGraph(
+  workflow: FoundDefinedWorkflow,
+  stepFunctions: Map<string, StepDefinition>,
+  opts?: { filePath?: string; projectFiles?: string[]; sourceCode?: string },
+): WorkflowGraph {
+  const definition = parseDurableDefinition(workflow);
+  validateBatchStepCallLocations({
+    root: definition.builder,
+    stepFunctions,
+    processCallbacks: definition.steps.flatMap((step) =>
+      step.type === "batch" ? [step.process] : [],
+    ),
+  });
+  const sourceFile = workflow.sourceFile;
+  const metadataSource = workflow.declaration.getVariableStatement();
+  const jsdoc = metadataSource
+    ? extractJsDocMetadata(metadataSource)
+    : { tags: {}, paramMetadata: new Map<string, never>() };
+  const firstStep = definition.steps[0];
+  const triggerParameters =
+    firstStep?.type === "boundary"
+      ? extractDurableInputParameters(firstStep.run, jsdoc.paramMetadata)
+      : firstStep?.type === "batch"
+        ? extractCallbackParameters(firstStep.source)
+        : [];
+  const controlsProperty = definition.config.getProperty("controls");
+  const controlsObject =
+    controlsProperty && Node.isPropertyAssignment(controlsProperty)
+      ? controlsProperty.getInitializer()
+      : undefined;
+  const cancelControl =
+    controlsObject && Node.isObjectLiteralExpression(controlsObject)
+      ? readObjectPropertyText(controlsObject, "cancel")
+      : undefined;
+  const ctx: ParseContext = {
+    nodes: [],
+    edges: [],
+    returnNodeIds: [],
+    sourceFile,
+    stepFunctions,
+    variables: new Map(),
+    workflowFile: normalizePath(sourceFile.getFilePath()),
+    statementMode: "boundary",
+    workflowStack: new Set([
+      `${normalizePath(sourceFile.getFilePath())}#${workflow.name}`,
+    ]),
+  };
+  currentWorkflowFile = ctx.workflowFile;
+
+  const triggerId = nextId();
+  const triggerLabel = jsdoc.displayName ?? workflow.name;
+  ctx.nodes.push({
+    id: triggerId,
+    type: "trigger",
+    label: triggerLabel,
+    description: jsdoc.description,
+    sourceRange: getSourceRange(workflow.declaration),
+    metadata: jsdoc.tags,
+    parameters: triggerParameters,
+  });
+  for (const parameter of triggerParameters) {
+    ctx.variables.set(parameter.name, {
+      sourceNodeId: triggerId,
+      sourceStepLabel: triggerLabel,
+    });
+  }
+
+  const parsedSteps = parseWorkflowSteps({
+    ctx,
+    definitions: definition.steps,
+    previousIds: [triggerId],
+  });
+  const hasBatch = definition.steps.some((step) => step.type === "batch");
+  const cancellation = cancelControl === "true";
+
+  return {
     name: workflow.name,
-    kind: "batch",
-    trigger: { parameters: sourceParameters },
+    capabilities: {
+      persistedContinuations: true,
+      batchProcessing: hasBatch,
+      cancellation,
+    },
+    execution: {
+      exportTarget: {
+        modulePath: opts?.filePath
+          ? normalizePath(opts.filePath)
+          : normalizePath(sourceFile.getFilePath()),
+        exportName: workflow.name,
+      },
+      steps: parsedSteps.descriptors,
+    },
+    displayName: jsdoc.displayName,
+    description: jsdoc.description,
+    controls: cancellation ? { cancel: true } : undefined,
+    trigger: { parameters: triggerParameters },
     nodes: ctx.nodes,
     edges: ctx.edges,
     sourceCode: opts?.sourceCode ?? sourceFile.getFullText(),
@@ -1287,7 +2408,7 @@ function createMultiFileProject(files: Record<string, string>): Project {
 }
 
 function getWorkflowName(workflow: FoundWorkflow): string {
-  return workflow.kind === "regular"
+  return workflow.type === "plain"
     ? (workflow.fn.getName() ?? "unnamed")
     : workflow.name;
 }
@@ -1302,9 +2423,24 @@ function buildFoundWorkflowGraph(opts: {
     projectFiles: opts.fileNames,
     sourceCode: opts.workflow.sourceFile.getFullText(),
   };
-  return opts.workflow.kind === "regular"
-    ? buildWorkflowGraph(opts.workflow.fn, opts.stepFunctions, graphOptions)
-    : buildBatchWorkflowGraph(opts.workflow, opts.stepFunctions, graphOptions);
+  switch (opts.workflow.type) {
+    case "plain":
+      return buildWorkflowGraph(
+        opts.workflow.fn,
+        opts.stepFunctions,
+        graphOptions,
+      );
+    case "defined":
+      return buildDefinedWorkflowGraph(
+        opts.workflow,
+        opts.stepFunctions,
+        graphOptions,
+      );
+    case "obsolete-batch":
+      throw new Error(
+        `Workflow '${opts.workflow.name}' uses removed defineBatchWorkflow; wrap defineBatch(...) in an exported defineWorkflow(({ defineBatch }) => ({ steps: [...] })) definition`,
+      );
+  }
 }
 
 export function parseProject(
@@ -1334,7 +2470,7 @@ export function parseProject(
       });
       discovered.push({
         functionName: getWorkflowName(wf),
-        kind: wf.kind,
+        capabilities: graph.capabilities,
         filePath: wf.filePath,
         graph,
       });
@@ -1400,15 +2536,17 @@ export function parseWorkflow(source: string): WorkflowGraph {
     });
   }
 
-  const batchWorkflow = findAllWorkflows([sourceFile]).find(
-    (workflow): workflow is FoundBatchWorkflow => workflow.kind === "batch",
+  const definitionWorkflow = findAllWorkflows([sourceFile]).find(
+    (workflow) => workflow.type !== "plain",
   );
-  if (!batchWorkflow) {
-    throw new Error('No function with "use workflow" directive found');
+  if (!definitionWorkflow) {
+    throw new Error("No workflow definition found");
   }
 
   const stepFunctions = collectStepFunctions([sourceFile]);
-  return buildBatchWorkflowGraph(batchWorkflow, stepFunctions, {
-    sourceCode: source,
+  return buildFoundWorkflowGraph({
+    workflow: definitionWorkflow,
+    stepFunctions,
+    fileNames: ["workflow.ts"],
   });
 }

@@ -1,30 +1,20 @@
 // Provider
 
 // Atoms
-export type {
-  HistoryTab,
-  LoadMoreRunsFn,
-  PanelTab,
-  PanelVisibility,
-} from "./atoms.js";
+export type { PanelTab, PanelVisibility } from "./atoms.js";
 export {
-  activeHistoryTabAtom,
   activePanelTabAtom,
-  activeRunIdAtom,
   aiLoadingAtom,
   codeAtom,
   codeEditorReadOnlyAtom,
+  collapsedNodeIdsAtom,
   executionStateAtom,
   graphAtom,
-  historySidebarOpenAtom,
-  isRunningAtom,
   lastTriggerDataAtom,
-  loadMoreRunsAtom,
   panelVisibilityAtom,
   reactFlowEdgesAtom,
   reactFlowNodesAtom,
   rightPanelOpenAtom,
-  runsAtom,
   selectedNodeAtom,
   selectedNodeIdAtom,
   showRunDialogAtom,
@@ -44,29 +34,6 @@ export {
   type AttachPluginInput,
   useAttachPlugin,
 } from "./hooks/use-attach-plugin.js";
-// Runs (Track A)
-export {
-  type UseBatchItemStepsOptions,
-  useBatchItemSteps,
-} from "./hooks/use-batch-item-steps.js";
-export {
-  type UseBatchRunOptions,
-  useBatchRun,
-} from "./hooks/use-batch-run.js";
-export {
-  type UseBatchRunItemsOptions,
-  useBatchRunItems,
-} from "./hooks/use-batch-run-items.js";
-export {
-  type UseBatchRunsOptions,
-  useBatchRuns,
-} from "./hooks/use-batch-runs.js";
-export {
-  type CancelBatchRunInput,
-  type UseCancelBatchRunOptions,
-  useCancelBatchRun,
-} from "./hooks/use-cancel-batch-run.js";
-export { useCancelWorkflowRun } from "./hooks/use-cancel-workflow-run.js";
 export { useCheckoutBranch } from "./hooks/use-checkout-branch.js";
 export type {
   CodeEditorRevealRequest,
@@ -109,11 +76,6 @@ export type {
   ParseWorkflowResponse,
 } from "./hooks/use-parse-workflow.js";
 export { useParseWorkflow } from "./hooks/use-parse-workflow.js";
-export {
-  type PauseBatchRunInput,
-  type UsePauseBatchRunOptions,
-  usePauseBatchRun,
-} from "./hooks/use-pause-batch-run.js";
 // Plugins (Track A)
 export { usePluginCatalog } from "./hooks/use-plugin-catalog.js";
 export { useProject } from "./hooks/use-project.js";
@@ -152,16 +114,28 @@ export { useProjectPlugins } from "./hooks/use-project-plugins.js";
 // Secrets (Track A)
 export { useProjectSecrets } from "./hooks/use-project-secrets.js";
 export { type UseProjectsOptions, useProjects } from "./hooks/use-projects.js";
+// Runs
 export {
-  type ResumeBatchRunInput,
-  type UseResumeBatchRunOptions,
-  useResumeBatchRun,
-} from "./hooks/use-resume-batch-run.js";
-export {
-  type RetryFailedBatchItemsInput,
-  type UseRetryFailedBatchItemsOptions,
-  useRetryFailedBatchItems,
-} from "./hooks/use-retry-failed-batch-items.js";
+  runKeys,
+  type UseRunItemStepsOptions,
+  type UseRunItemsOptions,
+  type UseRunMutationOptions,
+  type UseRunOptions,
+  type UseRunsOptions,
+  type UseSubmitRunInputOptions,
+  type UseTriggerRunOptions,
+  type UseTriggerTestRunOptions,
+  useCancelRun,
+  usePauseRunProcessing,
+  useResumeRunProcessing,
+  useRun,
+  useRunItemSteps,
+  useRunItems,
+  useRuns,
+  useSubmitRunInput,
+  useTriggerRun,
+  useTriggerTestRun,
+} from "./hooks/use-runs.js";
 export { useSelectedNode } from "./hooks/use-selected-node.js";
 export {
   type SendAgentMessageInput,
@@ -169,12 +143,6 @@ export {
 } from "./hooks/use-send-agent-message.js";
 // Project hooks
 export { useTemplates } from "./hooks/use-templates.js";
-export {
-  type UseTriggerBatchRunOptions,
-  useTriggerBatchRun,
-} from "./hooks/use-trigger-batch-run.js";
-export { useTriggerWorkflowRun } from "./hooks/use-trigger-workflow-run.js";
-export { useTriggerWorkflowTestRun } from "./hooks/use-trigger-workflow-test-run.js";
 export {
   type UpdateProjectInput,
   useUpdateProject,
@@ -193,18 +161,6 @@ export type {
   ParseResult,
 } from "./hooks/use-workflow-graph.js";
 export { useWorkflowGraph } from "./hooks/use-workflow-graph.js";
-export { useWorkflowRun } from "./hooks/use-workflow-run.js";
-export type {
-  TriggerRunFn,
-  TriggerRunResult,
-  UseWorkflowRunControllerOptions,
-  UseWorkflowRunControllerResult,
-} from "./hooks/use-workflow-run-controller.js";
-export { useWorkflowRunController } from "./hooks/use-workflow-run-controller.js";
-export {
-  type UseWorkflowRunsOptions,
-  useWorkflowRuns,
-} from "./hooks/use-workflow-runs.js";
 // Workflow hooks
 export {
   type UseWorkflowsOptions,
@@ -251,21 +207,14 @@ export {
   useCatamorphic,
   useQueryClient,
 } from "./provider.js";
-// Run types (shared between hooks and ui)
-export type { PlaygroundRun, PlaygroundRunStep } from "./run-types.js";
 // Shared domain types (also available as subpath import `@catamorphic/react/types`)
 export type {
   AgentMessage,
   AgentSession,
   AgentSessionDetail,
   AttachedPlugin,
-  BatchItem,
-  BatchItemStatus,
-  BatchItemStep,
-  BatchItemsList,
-  BatchRun,
-  BatchRunStatus,
-  BatchRunsList,
+  BatchProgress,
+  CancelRunInput,
   CommitsList,
   CreatedBranch,
   DeployResult,
@@ -276,16 +225,27 @@ export type {
   PluginSecretDescriptor,
   PullResult,
   Run,
+  RunCapabilities,
   RunDetail,
+  RunItem,
+  RunItemStatus,
+  RunItemStep,
+  RunItemsList,
+  RunMode,
+  RunPause,
+  RunPhase,
+  RunStatus,
   RunStep,
   RunsList,
   Secret,
   SecretStatus,
   SentAgentMessage,
-  TriggerBatchRunInput,
-  TriggeredBatchRun,
+  SubmitRunInput,
   TriggeredRun,
   TriggeredTestRun,
   TriggerRunInput,
   TriggerTestRunInput,
+  WorkflowCapabilities,
+  WorkflowStepAttempt,
 } from "./types.js";
+export { workflowKeys } from "./workflow-keys.js";

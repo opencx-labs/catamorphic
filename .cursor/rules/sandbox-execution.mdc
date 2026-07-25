@@ -14,15 +14,16 @@ Providers handed to `CatamorphicCore` are automatically wrapped with `instrument
 
 ## Execution Model
 
-1. Production runs resolve deployed `origin/main` and retain that SHA. Test runs use the caller's dev files plus overlays and deliberately retain no SHA.
-2. **Pre-generate the run ID** before entering the sandbox. The run row is inserted into `workflow_runs` with status `running` before the sandbox call.
-3. Pass project files + run ID + trigger data into the sandbox.
-4. The sandbox runs the canonical `@catamorphic/runtime` harness with environment values supplied through provider execution options, never shell assignments.
-5. On completion (or error), transactionally update the run row and replace its step rows.
+1. Every invocation creates one canonical `workflow_runs` row. Production Runs resolve deployed `origin/main` and retain immutable artifact/SHA provenance. Test Runs use the caller's dev files plus overlays and deliberately retain no SHA.
+2. Production triggering enqueues work in Postgres and returns the Run. Hosts explicitly start `catamorphic.startExecutionWorker(...)`; SDK or plugin construction never starts a worker.
+3. Plain Workflows execute as one operation. `defineWorkflow` Runs advance ordered boundary and batch scopes through the same coordinator and Run row.
+4. A boundary is one atomic retry scope. A batch owns paged source, per-item replay/retry, optional physical `defineBatchStep` coalescing inside process, and optional sink finalization.
+5. Runtime invocations use deployment-scoped supervisors with environment values supplied through provider execution options, never shell assignments. Sequenced events update Postgres transactionally.
+6. Public APIs expose capabilities, not execution categories. `stage` and internal runtime work kinds remain private dispatch details.
 
 ## Two-Sandbox Model
 
-- **Production execution sandbox**: fresh immutable snapshot tied to the deployed git commit. Used to run production workflows reliably.
+- **Production deployment runtime**: immutable artifact tied to the deployed git commit. A warm supervisor dispatches isolated Bun Workers for queued invocations.
 - **Dev (coding agent) sandbox**: mutable, per-(project, external user). Tracked in `project_sandboxes` (migration `008`). The coding agent has read/write access to the project checkout inside the sandbox; after each turn `AgentSessionsService` syncs changed files back into the user's dev working copy as an uncommitted draft. Sessions record `base_commit_sha` so every AI conversation is traceable to a code version.
 - **Test run directory**: disposable run-specific copy inside the caller's dev sandbox. It is deleted after execution and never receives a source revision.
 
@@ -36,7 +37,11 @@ Providers handed to `CatamorphicCore` are automatically wrapped with `instrument
 
 ## Provider Availability
 
-The server degrades gracefully when **no** provider is configured (neither the `CLOUDFLARE_SANDBOX_API_URL` + `CLOUDFLARE_SANDBOX_API_KEY` pair nor `DAYTONA_API_KEY`): both production and test run endpoints return `503 Service Unavailable`. The client surfaces this as a user-visible error, not a crash. Integration tests that require a specific provider use the `describeIf` skip pattern.
+The server degrades gracefully when **no** provider is configured: both
+production and test Run endpoints return `503 Service Unavailable`. Provider
+selection is host boot code, not env sniffing inside libraries. The client
+surfaces this as a user-visible error, not a crash. Integration tests that
+require a specific provider use the `describeIf` skip pattern.
 
 ## Coding Agent
 

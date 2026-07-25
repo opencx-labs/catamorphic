@@ -95,6 +95,10 @@ const NODE_TYPE_LABELS: Record<string, string> = {
   parallel: "Parallel",
   "parallel-block": "Parallel",
   "scope-block": "Block",
+  "durable-boundary": "Retry scope",
+  batch: "Batch processing",
+  pause: "Waiting for input",
+  "call-workflow": "Child Workflow",
   delay: "Delay",
   return: "Return",
 };
@@ -108,6 +112,10 @@ const NODE_TYPE_COLORS: Record<string, string> = {
   parallel: "#06b6d4",
   "parallel-block": "#06b6d4",
   "scope-block": "#94a3b8",
+  "durable-boundary": "#94a3b8",
+  batch: "#0d9488",
+  pause: "#d97706",
+  "call-workflow": "#6366f1",
   delay: "#737373",
   return: "#22c55e",
 };
@@ -208,6 +216,107 @@ function IfBlockDetailsView({
   );
 }
 
+function BoundaryDetailsView({
+  node,
+  allNodes,
+}: {
+  node: WorkflowNode;
+  allNodes: WorkflowNode[];
+}) {
+  const operations = allNodes.filter(
+    (candidate) => candidate.parentId === node.id,
+  );
+  const maxAttempts = node.metadata["retry:maxAttempts"];
+  const initialBackoff = node.metadata["retry:backoff.initial"];
+  const maximumBackoff = node.metadata["retry:backoff.maximum"];
+  const multiplier = node.metadata["retry:backoff.multiplier"];
+
+  return (
+    <div className="catamorphic-detail-content">
+      <div className="catamorphic-detail-header-row">
+        <NodeTypeTag type="durable-boundary" />
+        {node.metadata.icon && (
+          <span className="catamorphic-detail-icon">{node.metadata.icon}</span>
+        )}
+      </div>
+      <h3 className="catamorphic-detail-title">
+        {node.label || "Retry scope"}
+      </h3>
+      <p className="catamorphic-detail-description">
+        {node.description ??
+          "One atomic checkpoint. A failed attempt reruns all work inside this boundary."}
+      </p>
+      {node.parameters && node.parameters.length > 0 && (
+        <div className="catamorphic-detail-section">
+          <span className="catamorphic-detail-section-label">Input</span>
+          <div className="catamorphic-detail-params">
+            {node.parameters.map((parameter) => (
+              <ParamRow key={parameter.name} param={parameter} />
+            ))}
+          </div>
+        </div>
+      )}
+      <div className="catamorphic-detail-section">
+        <span className="catamorphic-detail-section-label">Operations</span>
+        <p className="catamorphic-detail-description">
+          {operations.length} visual operation
+          {operations.length === 1 ? "" : "s"}
+        </p>
+      </div>
+      {maxAttempts && (
+        <div className="catamorphic-detail-section">
+          <span className="catamorphic-detail-section-label">Retry policy</span>
+          <p className="catamorphic-detail-description">
+            Up to {maxAttempts} attempts
+          </p>
+          {(initialBackoff || maximumBackoff || multiplier) && (
+            <code className="catamorphic-detail-code-inline">
+              {[
+                initialBackoff && `starts ${initialBackoff}`,
+                maximumBackoff && `max ${maximumBackoff}`,
+                multiplier && `x${multiplier}`,
+              ]
+                .filter(Boolean)
+                .join(" · ")}
+            </code>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function BatchDetailsView({
+  node,
+  allNodes,
+}: {
+  node: WorkflowNode;
+  allNodes: WorkflowNode[];
+}) {
+  const items = allNodes.filter((candidate) => candidate.parentId === node.id);
+  const label =
+    node.label && node.label !== "Batch" ? node.label : "Batch processing";
+
+  return (
+    <div className="catamorphic-detail-content">
+      <div className="catamorphic-detail-header-row">
+        <NodeTypeTag type="batch" />
+      </div>
+      <h3 className="catamorphic-detail-title">{label}</h3>
+      <p className="catamorphic-detail-description">
+        {node.description ??
+          "Processes a finite collection with per-item history and retries."}
+      </p>
+      <div className="catamorphic-detail-section">
+        <span className="catamorphic-detail-section-label">Items flow</span>
+        <p className="catamorphic-detail-description">
+          {items.length} visual operation{items.length === 1 ? "" : "s"}
+        </p>
+      </div>
+    </div>
+  );
+}
+
 function NodeDetailsView({
   node,
   allNodes,
@@ -218,6 +327,12 @@ function NodeDetailsView({
   if (node.type === "branch") return <BranchDetailsView node={node} />;
   if (node.type === "if-block")
     return <IfBlockDetailsView node={node} allNodes={allNodes} />;
+  if (node.type === "durable-boundary") {
+    return <BoundaryDetailsView node={node} allNodes={allNodes} />;
+  }
+  if (node.type === "batch") {
+    return <BatchDetailsView node={node} allNodes={allNodes} />;
+  }
 
   return (
     <div className="catamorphic-detail-content">
@@ -306,6 +421,48 @@ function NodeDetailsView({
           <code className="catamorphic-detail-code-inline">
             {node.duration}
           </code>
+        </div>
+      )}
+
+      {node.type === "pause" && (
+        <div className="catamorphic-detail-section">
+          <span className="catamorphic-detail-section-label">
+            Waiting for input
+          </span>
+          <p className="catamorphic-detail-description">
+            {node.duration
+              ? "Continues when input is submitted or when the timeout expires."
+              : "Waits until the host submits input for this Run."}
+          </p>
+          {node.stateExpression && (
+            <>
+              <span className="catamorphic-detail-section-label">
+                Persisted state
+              </span>
+              <code className="catamorphic-detail-code-inline">
+                {node.stateExpression}
+              </code>
+            </>
+          )}
+        </div>
+      )}
+
+      {node.type === "call-workflow" && (
+        <div className="catamorphic-detail-section">
+          <span className="catamorphic-detail-section-label">
+            Child workflow
+          </span>
+          <code className="catamorphic-detail-code-inline">
+            {node.workflowName}
+          </code>
+          {node.workflowInputExpression && (
+            <>
+              <span className="catamorphic-detail-section-label">Input</span>
+              <code className="catamorphic-detail-code-inline">
+                {node.workflowInputExpression}
+              </code>
+            </>
+          )}
         </div>
       )}
 

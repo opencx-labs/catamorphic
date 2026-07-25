@@ -6,7 +6,7 @@ Related: [`AGENTS.md`](./AGENTS.md), [`packages/cloudflare/README.md`](packages/
 
 ---
 
-> **Default stack: Cloudflare.** Catamorphic is Cloudflare-first (see `docs/decisions/0004`), and Cloudflare support ships as the **`@catamorphic/cloudflare`** plugin package (see `docs/decisions/0008`). Hosts construct the pieces explicitly at boot — `new CloudflareSandboxProvider(...)` and `new ArtifactsRemoteBackend(...)` — and pass them to `createCatamorphic`. `apps/playground/src/server/boot.ts` is the reference wiring.
+> **Cloudflare-first execution.** Cloudflare Sandbox is the default execution provider and ships in **`@catamorphic/cloudflare`** (see ADRs 0004 and 0008). Until Artifacts is generally available, S3-compatible storage from **`@catamorphic/s3`** (including Cloudflare R2) is the default git origin; `ArtifactsRemoteBackend` remains the preferred Cloudflare-native option. Hosts construct every backend explicitly. `apps/playground/src/server/boot.ts` is the reference wiring.
 
 ---
 
@@ -95,16 +95,14 @@ flowchart LR
   sandbox -->|git clone short lived token| artifactsGit
 ```
 
-### How a run executes
+### How a production Run executes
 
-1. Fastify resolves the project → local working directory at `commitSha` (per-user working copies via the `ProjectManager`).
-2. If the project's `RemoteBackend` supports `getCloneSource()` (Artifacts does) and the deployed commit is on the remote, the runs service obtains a **clone source**: the repo's HTTPS remote URL + a freshly minted short-lived token.
-3. `CloudflareSandboxProvider.createSandbox` via the Bridge Worker with `sandboxId = deploy-{projectId}-{commitSha}`.
-4. Materialize the code in the sandbox:
-   - **Clone path** (Artifacts): `git clone` the authenticated remote inside the sandbox, `git checkout {commitSha}`, then upload only the generated `harness.ts`.
-   - **Upload path** (fs remotes, or commit not yet pushed): upload the working tree + `harness.ts` through the Bridge's file-upload API.
-5. Exec inside the sandbox: `cd /workspace/project && bun run harness.ts`.
-6. Collect output (step-level results via the instrumented harness), update `workflow_runs`, destroy the sandbox (or let it sleep).
+1. The Runs service resolves deployed `origin/main`, creates one canonical Run row, and enqueues Postgres work.
+2. An explicitly started host execution worker claims the job and resolves the immutable deployment artifact.
+3. If the project's `RemoteBackend` supports `getCloneSource()` (Artifacts does), the deployment runtime receives the repo URL plus a short-lived token. Other backends upload the resolved files.
+4. `CloudflareSandboxProvider` creates or reuses the deployment-scoped sandbox through the Bridge Worker and materializes the immutable artifact.
+5. A warm Bun supervisor dispatches plain Workflow execution, boundary callbacks, or batch source/process/sink operations in isolated Bun Workers.
+6. Sequenced runtime events update `workflow_runs` and supporting state. Postgres schedules retries, pauses, child Runs, and subsequent scopes; the deployment sandbox may sleep between invocations.
 
 Dev sandboxes (coding-agent sessions) use the same two materialization paths via `SandboxManager.ensureDevSandbox({ cloneSource? })`.
 
@@ -283,7 +281,11 @@ CLOUDFLARE_SANDBOX_API_URL=http://localhost:8787
 CLOUDFLARE_SANDBOX_API_KEY=local-dev
 ```
 
-Add `CLOUDFLARE_ACCOUNT_ID` / `CLOUDFLARE_API_TOKEN` / `CLOUDFLARE_ARTIFACTS_NAMESPACE` to use Cloudflare Artifacts for code storage (`ArtifactsRemoteBackend`); leave them unset to use filesystem remotes.
+Set `S3_BUCKET` / `S3_ACCESS_KEY_ID` / `S3_SECRET_ACCESS_KEY` (and the
+provider-specific endpoint/region when needed) to use S3-compatible storage.
+Otherwise add `CLOUDFLARE_ACCOUNT_ID` / `CLOUDFLARE_API_TOKEN` /
+`CLOUDFLARE_ARTIFACTS_NAMESPACE` to use Artifacts. With neither configured, the
+playground uses filesystem remotes.
 
 ### 4. Run the bridge
 

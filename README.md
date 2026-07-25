@@ -27,7 +27,8 @@ Supporting packages (consumed through the surface above, importable directly for
 | `@catamorphic/git` | Git-backed project storage (`isomorphic-git`): per-user working copies + pluggable origin remotes (`RemoteBackend`). |
 | `@catamorphic/parser` | ts-morph AST → `WorkflowGraph` parser + dagre layout. |
 | `@catamorphic/sandbox` | Vendor-neutral sandbox + coding-agent contracts (`SandboxProvider`, `SandboxManager`, `RunExecutor`, `CodingAgentProvider`), OTel instrumentation. |
-| `@catamorphic/cloudflare` | Cloudflare backend plugin: `CloudflareSandboxProvider` (Bridge Worker) + `ArtifactsRemoteBackend` (Cloudflare Artifacts code storage). The default stack. |
+| `@catamorphic/cloudflare` | Cloudflare backend plugin: `CloudflareSandboxProvider` (default execution via Bridge Worker) + `ArtifactsRemoteBackend` (preferred Cloudflare-native code storage when available). |
+| `@catamorphic/s3` | S3-compatible git origin backend for Cloudflare R2, AWS S3, MinIO, and similar stores. Default code storage until Cloudflare Artifacts access is generally available. |
 | `@catamorphic/daytona` | Daytona backend plugin: `DaytonaSandboxProvider` + experimental Daytona git storage. |
 | `@catamorphic/ai-sdk` | Flagship coding-agent plugin: Vercel AI SDK `ToolLoopAgent` running in the host and driving the dev sandbox remotely. |
 | `@catamorphic/codex` | Coding-agent plugin backed by the OpenAI Codex SDK. |
@@ -36,14 +37,14 @@ Supporting packages (consumed through the surface above, importable directly for
 | `@catamorphic/plugins` | Plugin manifest contract + resolvers for host-provided packages and secrets. |
 | `@catamorphic/cloudflare-sandbox-bridge` | Deployable Cloudflare Worker exposing Cloudflare Sandbox over HTTP. |
 
-A reference host app lives in [`apps/playground`](apps/playground/README.md) — Fastify + Vite/React on the Cloudflare stack (Sandbox for execution, Artifacts for code storage).
+A reference host app lives in [`apps/playground`](apps/playground/README.md) — Fastify + Vite/React with Cloudflare Sandbox execution and S3-compatible, Artifacts, or filesystem git origins.
 
 ## Design principles
 
 - **Workflows are regular code.** User-defined workflows run like normal apps — full IO, real npm dependencies, no crippled JS runtime. Execution happens inside a sandbox (Cloudflare Sandbox by default) using **Bun** to run and bundle.
 - **Workflow code stays simple.** Both AI agents and humans must be able to write, edit, and understand workflows, and the parser must render them intuitively for non-technical users. See the code format below.
 - **Host-injectable everything.** Database connections, storage backends, sandbox credentials, LLM credentials, and telemetry are all injected by the host — nothing is hard-coded.
-- **Cloudflare-first infrastructure.** Cloudflare Sandbox for execution, Cloudflare Artifacts for git code storage (`ArtifactsRemoteBackend`; requires the closed beta). Backends ship as vendor plugin packages so hosts install only what they use. Postgres for everything stateful — including (planned) job queues and scheduling via `SKIP LOCKED`, to avoid extra infrastructure.
+- **Cloudflare-first infrastructure.** Cloudflare Sandbox is the default execution provider. S3-compatible storage, including Cloudflare R2, is the default git code storage until Cloudflare Artifacts access is generally available. Backends ship as vendor plugin packages so hosts install only what they use. Postgres is authoritative for runs, retries, pauses, batch-item state, queues, and scheduling via `SKIP LOCKED`.
 - **OpenTelemetry throughout.** Libraries instrument against `@opentelemetry/api` only; the host registers the SDK and exporters and gets full traces for free.
 
 Settled design decisions are recorded as ADRs in [`docs/decisions/`](docs/decisions/README.md).
@@ -69,9 +70,17 @@ const catamorphic = createCatamorphic({
 });
 await catamorphic.migrate(); // idempotent, schema-scoped
 
+// Worker startup is explicit and host-owned.
+const executionWorker = catamorphic.startExecutionWorker({ concurrency: 4 });
+
 // Per request: bind the host's org + user
 const client = catamorphic.forTenant(orgId).forUser(userId);
 const project = await client.projects.create({ name: "Onboarding" });
+const run = await client.runs.triggerProduction({
+  projectId: project.id,
+  workflowName: "welcomeUser",
+  input: { email: "ada@example.com" },
+});
 ```
 
 To expose the HTTP API to your frontend:
@@ -86,7 +95,16 @@ And on the frontend, wrap your tree with `CatamorphicProvider` from `@catamorphi
 
 ## Workflow code format
 
-Workflows are exported async functions with a `"use workflow"` directive; steps use `"use step"`. All functions take a single destructured object parameter and carry JSDoc display metadata.
+There is one public Workflow model and one public Run model. Authoring syntax
+selects capabilities; it does not create user-facing execution categories.
+
+### Plain workflow functions
+
+A plain workflow is an exported async function whose body contains the exact
+`"use workflow"` directive. Steps use the exact `"use step"` directive. Plain
+functions run as normal code, but operations do not have persisted continuation
+between them. All functions take one destructured object parameter and carry
+JSDoc display metadata.
 
 ```typescript
 /**
@@ -109,12 +127,48 @@ export async function welcomeUser({
     await assignPremiumBenefits({ userId: user.id });
   }
 
-  await sleep("7 days");
   await sendFollowUpEmail({ to: user.email });
 
   return { status: "complete", userId: user.id };
 }
 ```
+
+### Persisted workflow scopes
+
+Use `defineWorkflow(({ defineBoundary, defineBatch }) => ({ steps: [...] }))`
+when a Workflow needs persisted continuation. A boundary is one atomic retry
+scope: if its callback fails, all operations in that callback retry together. A
+batch scope is paged per-item processing with an optional sink. `defineBatchStep` is a
+physical coalescing primitive for compatible calls inside `defineBatch.process`;
+it does not define a Workflow or a separate logical step scope.
+
+```typescript
+import { defineWorkflow } from "@catamorphic/workflow";
+
+export const processAccount = defineWorkflow(
+  ({ defineBoundary, defineBatch }) => ({
+    steps: [
+      defineBoundary<{ accountId: string }, { accountId: string }>({
+        retry: { maxAttempts: 3 },
+        run: async ({ input }) => prepareAccount({ accountId: input.accountId }),
+      }),
+      defineBatch({
+        source: async ({ input }: { input: { accountId: string } }) => ({
+          source: recordsSource,
+          config: { accountId: input.accountId },
+        }),
+        process: async ({ item }: { item: AccountRecord }) =>
+          processRecord({ record: item }),
+        sink: resultSink,
+      }),
+    ],
+  }),
+);
+```
+
+The parser and UI expose capabilities such as persisted continuation, batch
+processing, and cancellation. There is no public stage concept, category
+switch, or separate Run family for these capabilities.
 
 ## Local development
 
@@ -176,7 +230,7 @@ Unit tests run with no setup.
 
 - **Bun** — runtime, package manager, bundler (also inside sandboxes)
 - **TypeScript** — tsgo for typechecking
-- **Postgres** — all state, schema-scoped; queues/scheduling planned on the same DB
+- **Postgres** — all state, schema-scoped; run queues, retries, pauses, and scheduling use the same DB
 - **Cloudflare** — Sandbox (execution), Artifacts (code storage)
 - **Fastify** — HTTP surface with Zod + OpenAPI (mounted by the host)
 - **React Flow** — workflow visualization; **Jotai** + **TanStack Query** — frontend state
@@ -188,7 +242,5 @@ Unit tests run with no setup.
 
 ## Roadmap
 
-- **Postgres-backed queue + scheduler** — durable runs, retries, cron triggers, and `sleep()` via the host's Postgres (`SKIP LOCKED`), no extra infra (see `docs/decisions/0006`).
+- **Scheduled and cron triggers** — build trigger management on the existing Postgres execution queue without adding infrastructure.
 - **Apps** — first-class support for user-built dashboards/apps alongside workflows.
-- **Persistent per-project sandboxes** — scale-to-zero and warm-start execution.
-- **Compile-time step instrumentation** — replace the interim regex-based step rewriting in the run harness with an AST transform.

@@ -1,9 +1,10 @@
-import type { WorkflowGraph, WorkflowNode } from "@catamorphic/parser";
+import type { WorkflowNode } from "@catamorphic/parser";
 import { act } from "@testing-library/react";
 import { useSetAtom } from "jotai";
 import { describe, expect, it } from "vitest";
 import { graphAtom, selectedNodeIdAtom } from "../../atoms.js";
 import { renderHookWithProviders } from "../../test/render.js";
+import type { WorkflowGraph } from "../../types.js";
 import { useCodeEditorLink } from "../use-code-editor-link.js";
 
 function makeNode(
@@ -42,6 +43,11 @@ const stepB = makeNode("step-b", "step", {
 
 const graph: WorkflowGraph = {
   name: "wf",
+  capabilities: {
+    persistedContinuations: false,
+    batchProcessing: false,
+    cancellation: false,
+  },
   trigger: { parameters: [] },
   nodes: [stepA, stepB],
   edges: [],

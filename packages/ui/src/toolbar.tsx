@@ -1,6 +1,5 @@
 import {
   activePanelTabAtom,
-  historySidebarOpenAtom,
   panelVisibilityAtom,
   rightPanelOpenAtom,
 } from "@catamorphic/react";
@@ -9,18 +8,23 @@ import type { ReactNode } from "react";
 
 export interface ToolbarProps {
   onRun?: () => void;
+  onTestRun?: () => void;
+  testRunEnabled?: boolean;
   isRunning?: boolean;
   /** Optional content rendered in the center of the toolbar (e.g. version label). */
   centerSlot?: ReactNode;
 }
 
-export function Toolbar({ onRun, isRunning, centerSlot }: ToolbarProps) {
-  const [, setPanelVisibility] = useAtom(panelVisibilityAtom);
+export function Toolbar({
+  onRun,
+  onTestRun,
+  testRunEnabled = false,
+  isRunning,
+  centerSlot,
+}: ToolbarProps) {
+  const [panelVisibility, setPanelVisibility] = useAtom(panelVisibilityAtom);
   const [rightPanelOpen, setRightPanelOpen] = useAtom(rightPanelOpenAtom);
   const [, setActiveTab] = useAtom(activePanelTabAtom);
-  const [historySidebarOpen, setHistorySidebarOpen] = useAtom(
-    historySidebarOpenAtom,
-  );
 
   return (
     <div className="catamorphic-toolbar">
@@ -55,20 +59,42 @@ export function Toolbar({ onRun, isRunning, centerSlot }: ToolbarProps) {
       <div className="catamorphic-toolbar-right">
         <button
           type="button"
-          className={`catamorphic-toolbar-btn ${historySidebarOpen ? "catamorphic-toolbar-btn-active" : ""}`}
-          onClick={() => setHistorySidebarOpen((v) => !v)}
+          className={`catamorphic-toolbar-btn ${panelVisibility.runsPanel ? "catamorphic-toolbar-btn-active" : ""}`}
+          onClick={() =>
+            setPanelVisibility((current) => ({
+              ...current,
+              runsPanel: !current.runsPanel,
+            }))
+          }
         >
-          ⏱ History
+          ⏱ Runs
         </button>
         {onRun && (
-          <button
-            type="button"
-            className="catamorphic-toolbar-btn catamorphic-toolbar-run"
-            onClick={onRun}
-            disabled={isRunning}
-          >
-            {isRunning ? "⟳ Running..." : "▶ Run"}
-          </button>
+          <>
+            {onTestRun ? (
+              <button
+                type="button"
+                className="catamorphic-toolbar-btn"
+                onClick={onTestRun}
+                disabled={isRunning || !testRunEnabled}
+                title={
+                  testRunEnabled
+                    ? undefined
+                    : "Test Runs are unavailable for Workflows with persisted continuations"
+                }
+              >
+                Test
+              </button>
+            ) : null}
+            <button
+              type="button"
+              className="catamorphic-toolbar-btn catamorphic-toolbar-run"
+              onClick={onRun}
+              disabled={isRunning}
+            >
+              {isRunning ? "Running..." : "Run"}
+            </button>
+          </>
         )}
       </div>
     </div>

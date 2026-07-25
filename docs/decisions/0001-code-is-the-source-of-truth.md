@@ -2,6 +2,7 @@
 
 - **Status:** Accepted
 - **Date:** 2026-07-02
+- **Expanded by:** 0015 (historical collection processing), 0020 (boundary definitions), 0026 (unified Workflow capabilities)
 
 ## Context
 
@@ -9,7 +10,13 @@ Workflow builders traditionally store workflows as JSON or a proprietary DSL and
 
 ## Decision
 
-Workflows and apps are **TypeScript code**, and the code is strictly the source of truth. We will never invent a DSL or JSON format for storing workflow logic. A *project* is a git repository of TypeScript; workflows are exported async functions marked with a `"use workflow"` directive (steps with `"use step"`), discovered by parsing — there is no registry file or workflow table.
+Workflows and apps are **TypeScript code**, and the code is strictly the source
+of truth. We will never invent a DSL or JSON format for storing workflow logic.
+A *project* is a git repository of TypeScript. Workflows are either exported
+async functions with the exact `"use workflow"` directive (steps use exact
+`"use step"`) or exported `defineWorkflow(...)` definitions with statically
+inspectable boundary/batch scopes. Both are discovered by parsing; there is no
+registry file or workflow table.
 
 The visual graph is a **projection** of the code: `@catamorphic/parser` (ts-morph) converts the AST into a `WorkflowGraph` rendered by React Flow. Edits flow through code (human or AI-authored), never through graph mutations serialized to a side format.
 

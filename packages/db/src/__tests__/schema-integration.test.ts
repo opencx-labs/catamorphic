@@ -34,6 +34,26 @@ async function schemaExists(connectionString: string, schema: string) {
   }
 }
 
+async function tableExists(
+  connectionString: string,
+  schema: string,
+  table: string,
+) {
+  const db = createDatabase({ connectionString });
+  try {
+    const result = await sql<{ exists: boolean }>`
+      SELECT EXISTS(
+        SELECT 1
+        FROM pg_tables
+        WHERE schemaname = ${schema} AND tablename = ${table}
+      ) AS exists
+    `.execute(db);
+    return Boolean(result.rows[0]?.exists);
+  } finally {
+    await db.destroy();
+  }
+}
+
 async function dropSchema(connectionString: string, schema: string) {
   const db = createDatabase({ connectionString });
   try {
@@ -70,6 +90,11 @@ describe("@catamorphic/db schema integration", () => {
     createdSchemas.push(schema);
     process.env.DATABASE_URL = TEST_DATABASE_URL;
     process.env.CATAMORPHIC_DB_SCHEMA = schema;
+    const publicMigrationTableBefore = await tableExists(
+      TEST_DATABASE_URL,
+      "public",
+      "_migrations",
+    );
 
     await runMigrate();
 
@@ -92,7 +117,132 @@ describe("@catamorphic/db schema integration", () => {
       `.execute(db);
 
       expect(Number(migrationRows.rows[0]?.count ?? "0")).toBe(filesCount);
-      expect(publicMigrationTable.rows[0]?.exists).toBe(false);
+      expect(publicMigrationTable.rows[0]?.exists).toBe(
+        publicMigrationTableBefore,
+      );
+
+      const executionTables = await sql<{ tablename: string }>`
+        SELECT tablename
+        FROM pg_tables
+        WHERE schemaname = ${schema}
+      `.execute(db);
+      const tableNames = new Set(
+        executionTables.rows.map((row) => row.tablename),
+      );
+      expect(tableNames.has("workflow_runs")).toBe(true);
+      expect(tableNames.has("workflow_run_states")).toBe(true);
+      expect(tableNames.has("active_run_invocations")).toBe(true);
+      expect(tableNames.has("workflow_step_attempts")).toBe(true);
+      expect(tableNames.has("workflow_pauses")).toBe(true);
+      expect(tableNames.has("batch_execution_states")).toBe(true);
+      expect(tableNames.has("execution_jobs")).toBe(true);
+      expect(tableNames.has("batch_runs")).toBe(false);
+      expect(tableNames.has("durable_run_states")).toBe(false);
+      expect(tableNames.has("durable_boundary_attempts")).toBe(false);
+      expect(tableNames.has("durable_pauses")).toBe(false);
+      expect(tableNames.has("durable_child_runs")).toBe(false);
+
+      const runColumns = await sql<{ column_name: string }>`
+        SELECT column_name
+        FROM information_schema.columns
+        WHERE table_schema = ${schema} AND table_name = 'workflow_runs'
+      `.execute(db);
+      const runColumnNames = new Set(
+        runColumns.rows.map((row) => row.column_name),
+      );
+      expect(runColumnNames.has("provenance")).toBe(true);
+      expect(runColumnNames.has("phase")).toBe(true);
+      expect(runColumnNames.has("parent_workflow_step_attempt_id")).toBe(true);
+      expect(runColumnNames.has("workflow_kind")).toBe(false);
+      expect(runColumnNames.has("trigger_data")).toBe(false);
+
+      const runStateColumns = await sql<{ column_name: string }>`
+        SELECT column_name
+        FROM information_schema.columns
+        WHERE table_schema = ${schema} AND table_name = 'workflow_run_states'
+      `.execute(db);
+      expect(
+        runStateColumns.rows.some(
+          (column) => column.column_name === "active_invocation_id",
+        ),
+      ).toBe(false);
+
+      const activeInvocationColumns = await sql<{ column_name: string }>`
+        SELECT column_name
+        FROM information_schema.columns
+        WHERE table_schema = ${schema}
+          AND table_name = 'active_run_invocations'
+      `.execute(db);
+      expect(
+        new Set(activeInvocationColumns.rows.map((row) => row.column_name)),
+      ).toEqual(
+        new Set([
+          "invocation_id",
+          "workflow_run_id",
+          "workflow_step_attempt_id",
+          "execution_job_id",
+          "lease_token",
+          "lease_generation",
+          "created_at",
+        ]),
+      );
+
+      const executionJobColumns = await sql<{ column_name: string }>`
+        SELECT column_name
+        FROM information_schema.columns
+        WHERE table_schema = ${schema} AND table_name = 'execution_jobs'
+      `.execute(db);
+      expect(
+        executionJobColumns.rows.some(
+          (column) => column.column_name === "exhaustion_handled_at",
+        ),
+      ).toBe(true);
+
+      const batchColumns = await sql<{
+        table_name: string;
+        column_name: string;
+      }>`
+        SELECT table_name, column_name
+        FROM information_schema.columns
+        WHERE table_schema = ${schema}
+          AND table_name IN (
+            'batch_execution_states',
+            'batch_items',
+            'batch_step_members',
+            'batch_item_steps'
+          )
+      `.execute(db);
+      const batchColumnNames = new Set(
+        batchColumns.rows.map((row) => `${row.table_name}.${row.column_name}`),
+      );
+      expect(
+        batchColumnNames.has("batch_execution_states.source_snapshot_present"),
+      ).toBe(true);
+      expect(
+        batchColumnNames.has("batch_execution_states.source_cursor_present"),
+      ).toBe(true);
+      expect(
+        batchColumnNames.has("batch_execution_states.sink_state_present"),
+      ).toBe(true);
+      expect(batchColumnNames.has("batch_items.value_storage")).toBe(true);
+      expect(batchColumnNames.has("batch_items.output_storage")).toBe(true);
+      expect(batchColumnNames.has("batch_step_members.occurrence")).toBe(true);
+      expect(batchColumnNames.has("batch_step_members.output_present")).toBe(
+        true,
+      );
+      expect(batchColumnNames.has("batch_item_steps.output_present")).toBe(
+        true,
+      );
+
+      const childRunIndex = await sql<{ exists: boolean }>`
+        SELECT EXISTS(
+          SELECT 1
+          FROM pg_indexes
+          WHERE schemaname = ${schema}
+            AND indexname = 'uq_workflow_runs_parent_step_child'
+        ) AS exists
+      `.execute(db);
+      expect(childRunIndex.rows[0]?.exists).toBe(true);
     } finally {
       await db.destroy();
     }

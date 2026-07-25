@@ -2,11 +2,12 @@
 
 - **Status:** Accepted
 - **Date:** 2026-07-13
+- **Expanded by:** 0020 (boundary authoring), 0026 (unified Workflow with boundary and batch scopes)
 
 ## Context
 
-Batch workflows need typed helpers such as `defineBatchWorkflow`,
-`defineBatchStep`, and `skipBatchItem`. Keeping those helpers in the private
+The original collection-processing design needed typed source, physical-step,
+sink, outcome, and skip helpers. Keeping those helpers in the private
 execution runtime couples author code to supervisor internals; copying a local
 `src/batch.ts` into each project lets the authoring and execution contracts
 drift. Hosts also need to expose a curated wrapper without forcing Catamorphic's
@@ -41,3 +42,7 @@ copy. Hosts retain control through wrapper packages, while templates can use
 the direct package without making it mandatory for unrelated projects. The
 local fallback requires an unlocked project; locked projects must resolve the
 declared package normally so lockfile reproducibility remains intact.
+
+ADR 0026 later replaced the original top-level constructor with builder-scoped
+`defineBatch` inside `defineWorkflow`. Package-level `defineBatchStep` and
+`skipBatchItem` remain part of this authoring package.

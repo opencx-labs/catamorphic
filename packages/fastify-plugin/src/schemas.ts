@@ -17,11 +17,15 @@ export const RunIdParamsSchema = z.object({
   runId: z.string().uuid(),
 });
 
-export const BatchRunIdParamsSchema = z.object({
-  batchRunId: z.string().uuid(),
+export const RunPauseParamsSchema = RunIdParamsSchema.extend({
+  pauseId: z.string().uuid(),
 });
 
-export const BatchItemIdParamsSchema = BatchRunIdParamsSchema.extend({
+export const RunStepAttemptParamsSchema = RunIdParamsSchema.extend({
+  workflowStepAttemptId: z.string().uuid(),
+});
+
+export const RunItemParamsSchema = RunStepAttemptParamsSchema.extend({
   itemId: z.string().uuid(),
 });
 
@@ -42,6 +46,22 @@ export const TemplateSchema = z.object({
   description: z.string(),
   defaultWorkflow: z.string(),
   fileCount: z.number(),
+});
+
+// --- Workflows (discovered, not stored) ---
+export const WorkflowCapabilitiesSchema = z.object({
+  persistedContinuations: z.boolean(),
+  batchProcessing: z.boolean(),
+  cancellation: z.boolean(),
+});
+
+export const WorkflowSummarySchema = z.object({
+  name: z.string(),
+  capabilities: WorkflowCapabilitiesSchema,
+  displayName: z.string().nullable(),
+  description: z.string().nullable(),
+  filePath: z.string(),
+  parameterCount: z.number(),
 });
 
 // --- Projects ---
@@ -65,16 +85,7 @@ export const UpdateProjectSchema = z.object({
 });
 
 export const ProjectDetailSchema = ProjectSchema.extend({
-  workflows: z.array(
-    z.object({
-      name: z.string(),
-      kind: z.enum(["regular", "batch"]),
-      displayName: z.string().nullable(),
-      description: z.string().nullable(),
-      filePath: z.string(),
-      parameterCount: z.number(),
-    }),
-  ),
+  workflows: z.array(WorkflowSummarySchema),
   files: z.array(z.string()),
 });
 
@@ -94,16 +105,6 @@ export const WriteFileSchema = z.object({
   commitMessage: z.string().optional(),
 });
 
-// --- Workflows (discovered, not stored) ---
-export const WorkflowSummarySchema = z.object({
-  name: z.string(),
-  kind: z.enum(["regular", "batch"]),
-  displayName: z.string().nullable(),
-  description: z.string().nullable(),
-  filePath: z.string(),
-  parameterCount: z.number(),
-});
-
 // Keep these enums in sync with `@catamorphic/parser`'s `WorkflowNodeType` and
 // edge `type` literal union so the OpenAPI-derived types line up with the
 // parser's in-memory types and `layoutGraph` can consume the response
@@ -119,6 +120,10 @@ export const WorkflowNodeTypeSchema = z.enum([
   "parallel",
   "parallel-block",
   "scope-block",
+  "durable-boundary",
+  "batch",
+  "pause",
+  "call-workflow",
   "delay",
   "return",
 ]);
@@ -179,6 +184,9 @@ export const WorkflowNodeSchema = z.object({
   loopVariable: z.string().optional(),
   loopIterable: z.string().optional(),
   duration: z.string().optional(),
+  stateExpression: z.string().optional(),
+  workflowName: z.string().optional(),
+  workflowInputExpression: z.string().optional(),
   returnExpression: z.string().optional(),
   functionName: z.string().optional(),
   parentId: z.string().optional(),
@@ -194,41 +202,121 @@ export const WorkflowEdgeSchema = z.object({
 
 export const WorkflowGraphSchema = z.object({
   name: z.string(),
-  kind: z.enum(["regular", "batch"]).optional(),
+  capabilities: WorkflowCapabilitiesSchema,
   displayName: z.string().optional(),
   description: z.string().optional(),
+  controls: z.object({ cancel: z.literal(true).optional() }).optional(),
   filePath: z.string().optional(),
-  projectFiles: z.array(z.string()).optional(),
-  allFiles: z.record(z.string(), z.string()).optional(),
   trigger: z.object({ parameters: z.array(ParameterInfoSchema) }),
   nodes: z.array(WorkflowNodeSchema),
   edges: z.array(WorkflowEdgeSchema),
   sourceCode: z.string(),
 });
 
+export const WorkflowDetailSchema = WorkflowGraphSchema.extend({
+  projectFiles: z.array(z.string()),
+  allFiles: z.record(z.string(), z.string()),
+});
+
 // --- Runs ---
 export const RunModeSchema = z.enum(["test", "production"]);
+
+const JsonValueSchema = z.json().meta({ id: "JsonValue" });
+
+export const RunStatusSchema = z.enum([
+  "pending",
+  "running",
+  "waiting",
+  "paused",
+  "canceling",
+  "completed",
+  "failed",
+  "canceled",
+]);
+
+export const RunPhaseSchema = z.enum([
+  "execute",
+  "boundary",
+  "source",
+  "process",
+  "sink",
+  "pause",
+  "child",
+]);
+
+export const RunCapabilitiesSchema = z.object({
+  cancel: z.boolean(),
+  pauseProcessing: z.boolean(),
+  resumeProcessing: z.boolean(),
+  submitInput: z.boolean(),
+  inspectItems: z.boolean(),
+});
+
+export const RunPauseSchema = z.object({
+  id: z.string().uuid(),
+  status: z.enum(["open", "resumed", "timed_out", "canceled"]),
+  state: z.unknown().nullable(),
+  timeoutAt: z.string().datetime().nullable(),
+  createdAt: z.string().datetime(),
+  resolvedAt: z.string().datetime().nullable(),
+});
+
+export const BatchProgressSchema = z.object({
+  workflowStepAttemptId: z.string().uuid(),
+  stepIndex: z.number().int().nonnegative(),
+  nodeId: z.string(),
+  attempt: z.number().int().positive(),
+  status: z.enum([
+    "pending",
+    "running",
+    "waiting",
+    "completed",
+    "failed",
+    "canceled",
+  ]),
+  estimated: z.number().nullable(),
+  discovered: z.number(),
+  succeeded: z.number(),
+  failed: z.number(),
+  skipped: z.number(),
+  sinkCompletedChunks: z.number(),
+  sinkTotalChunks: z.number(),
+  artifact: z.unknown().nullable(),
+});
 
 export const RunSchema = z.object({
   id: z.string().uuid(),
   projectId: z.string().uuid(),
   workflowName: z.string(),
-  commitSha: z.string().length(40).nullable(),
+  capabilities: RunCapabilitiesSchema,
+  status: RunStatusSchema,
+  phase: RunPhaseSchema,
+  currentStepIndex: z.number().int().nonnegative().nullable(),
+  activePause: RunPauseSchema.nullable(),
+  batchScopes: z.array(BatchProgressSchema),
+  provenance: z.object({
+    commitSha: z.string().optional(),
+    mutableSource: z.literal(true).optional(),
+  }),
+  artifact: z.object({ deploymentArtifactId: z.string().uuid() }).optional(),
   mode: RunModeSchema,
   initiatedBy: z.string().nullable(),
-  status: z.enum(["pending", "running", "completed", "failed", "cancelled"]),
-  triggerData: z.unknown().nullable(),
+  input: z.unknown().nullable(),
   result: z.unknown().nullable(),
   error: z.string().nullable(),
+  parentRunId: z.string().uuid().nullable(),
+  createdAt: z.string().datetime(),
+  updatedAt: z.string().datetime(),
   startedAt: z.string().datetime().nullable(),
   completedAt: z.string().datetime().nullable(),
-  createdAt: z.string().datetime(),
 });
 
 export const RunStepSchema = z.object({
   id: z.string().uuid(),
   runId: z.string().uuid(),
   nodeId: z.string(),
+  occurrence: z.number().int().nonnegative(),
+  attempt: z.number().int().positive(),
   name: z.string(),
   status: z.enum(["pending", "running", "completed", "failed", "skipped"]),
   input: z.unknown().nullable(),
@@ -238,12 +326,35 @@ export const RunStepSchema = z.object({
   completedAt: z.string().datetime().nullable(),
 });
 
+export const WorkflowStepAttemptSchema = z.object({
+  id: z.string().uuid(),
+  runId: z.string().uuid(),
+  stepIndex: z.number().int().nonnegative(),
+  nodeId: z.string(),
+  executor: z.enum(["boundary", "batch"]),
+  attempt: z.number().int().positive(),
+  status: z.enum([
+    "pending",
+    "running",
+    "waiting",
+    "completed",
+    "failed",
+    "canceled",
+  ]),
+  input: z.unknown().nullable(),
+  output: z.unknown().nullable(),
+  error: z.string().nullable(),
+  startedAt: z.string().datetime().nullable(),
+  completedAt: z.string().datetime().nullable(),
+});
+
 export const RunDetailSchema = RunSchema.extend({
   steps: z.array(RunStepSchema),
+  workflowStepAttempts: z.array(WorkflowStepAttemptSchema),
 });
 
 export const TriggerRunSchema = z.object({
-  triggerData: z.record(z.string(), z.unknown()).optional(),
+  input: JsonValueSchema.optional(),
 });
 
 export const TriggerTestRunSchema = TriggerRunSchema.extend({
@@ -253,19 +364,6 @@ export const TriggerTestRunSchema = TriggerRunSchema.extend({
 export const RunsQuerySchema = PaginationQuerySchema.extend({
   mode: RunModeSchema.optional(),
 });
-
-// --- Batch Runs ---
-export const BatchRunStatusSchema = z.enum([
-  "pending",
-  "sourcing",
-  "running",
-  "paused",
-  "sinking",
-  "completed",
-  "completed_with_errors",
-  "failed",
-  "canceled",
-]);
 
 export const BatchItemStatusSchema = z.enum([
   "pending",
@@ -277,47 +375,18 @@ export const BatchItemStatusSchema = z.enum([
   "canceled",
 ]);
 
-export const BatchRunSchema = z.object({
-  id: z.string().uuid(),
-  projectId: z.string().uuid(),
-  workflowName: z.string(),
-  deploymentArtifactId: z.string().uuid().nullable(),
-  mode: RunModeSchema,
-  initiatedBy: z.string().nullable(),
-  status: BatchRunStatusSchema,
-  triggerData: z.unknown().nullable(),
-  sourceSnapshot: z.unknown().nullable(),
-  sourceCursor: z.unknown().nullable(),
-  sourceConsistency: z.string().nullable(),
-  estimatedCount: z.number().nullable(),
-  discoveredCount: z.number(),
-  completedCount: z.number(),
-  failedCount: z.number(),
-  skippedCount: z.number(),
-  failurePolicy: z.unknown().nullable(),
-  artifact: z.unknown().nullable(),
-  sinkCompletedChunks: z.number(),
-  sinkTotalChunks: z.number(),
-  error: z.string().nullable(),
-  startedAt: z.string().datetime().nullable(),
-  completedAt: z.string().datetime().nullable(),
-  createdAt: z.string().datetime(),
-});
-
 export const BatchItemSchema = z.object({
   id: z.string().uuid(),
-  batchRunId: z.string().uuid(),
+  runId: z.string().uuid(),
+  workflowStepAttemptId: z.string().uuid(),
   key: z.string(),
   sourceOrder: z.number(),
   status: BatchItemStatusSchema,
   value: z.unknown().nullable(),
-  valueReference: z.unknown().nullable(),
   output: z.unknown().nullable(),
-  outputReference: z.unknown().nullable(),
   error: z.string().nullable(),
   currentNodeId: z.string().nullable(),
-  availableAt: z.string().datetime(),
-  attempt: z.number(),
+  attempt: z.number().int().nonnegative(),
   createdAt: z.string().datetime(),
   updatedAt: z.string().datetime(),
   completedAt: z.string().datetime().nullable(),
@@ -338,19 +407,18 @@ export const BatchItemStepSchema = z.object({
   completedAt: z.string().datetime().nullable(),
 });
 
-export const TriggerBatchRunSchema = z.object({
-  triggerData: z.unknown().optional(),
-  failurePolicy: z
-    .object({
-      mode: z.enum(["continue", "fail_fast"]),
-      maxFailures: z.number().int().positive().optional(),
-    })
-    .optional(),
+export const CancelRunSchema = z.object({
+  reason: z.string().max(1000).optional(),
 });
 
-export const BatchRunsQuerySchema = PaginationQuerySchema;
+export const ResumeRunPauseSchema = z.object({
+  idempotencyKey: z.string().min(1).max(255),
+  value: JsonValueSchema,
+});
 
-export const BatchItemsQuerySchema = PaginationQuerySchema.extend({
+export const RunItemsQuerySchema = z.object({
+  limit: z.coerce.number().int().min(1).max(500).default(100),
+  offset: z.coerce.number().int().min(0).default(0),
   status: BatchItemStatusSchema.optional(),
 });
 
@@ -515,28 +583,6 @@ export const SkillSchema = z.object({
   name: z.string(),
   description: z.string(),
   path: z.string(),
-});
-
-// --- Run Report (from sandbox harness) ---
-export const RunReportStepSchema = z.object({
-  nodeId: z.string(),
-  name: z.string(),
-  status: z.enum(["completed", "failed", "skipped"]),
-  input: z.unknown().optional(),
-  output: z.unknown().optional(),
-  error: z.string().optional(),
-  startedAt: z.string(),
-  completedAt: z.string(),
-});
-
-export const RunReportSchema = z.object({
-  runId: z.string().uuid(),
-  status: z.enum(["completed", "failed"]),
-  result: z.unknown().optional(),
-  error: z.string().optional(),
-  steps: z.array(RunReportStepSchema),
-  startedAt: z.string(),
-  completedAt: z.string(),
 });
 
 // --- Playground Parse ---

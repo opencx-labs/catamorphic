@@ -26,8 +26,11 @@ The hierarchy is: **tenant → project → workflow**.
 Every project **is** a git repository. Version control is not bolted on — it is the storage model:
 
 - `ProjectManager.create` writes `package.json` + `tsconfig.json` (ES2022, strict) and makes an **initial commit** authored as the system user.
-- Every subsequent edit that should be versioned produces a commit. Playground test runs commit with message `"Test run <ISO timestamp>"` before executing.
-- **Runs store the commit SHA**. `workflow_runs.commit_sha` is non-nullable; there is no such thing as a run without a version.
+- Every subsequent edit that should be versioned produces a commit. Test Runs
+  execute mutable dev files plus overlays without creating hidden commits.
+- **Production Runs retain immutable provenance.** Their provenance contains the
+  deployed commit SHA and deployment artifact. Test Runs intentionally retain
+  `{ mutableSource: true }` and no SHA.
 - `isomorphic-git` is used for all git operations — portable, no native CLI dependency, works inside sandboxes.
 - Default branch is **`main`**.
 
@@ -38,10 +41,13 @@ Every project **is** a git repository. Version control is not bolted on — it i
 | Backend | Used for |
 |---------|----------|
 | `FsBackend` | Local dev, CI, simple hosts — stores repos under a base path on disk |
+| `S3RemoteBackend` (`@catamorphic/s3`) | Default origin until Artifacts is generally available — direct object/ref storage in R2, S3, MinIO, or a compatible bucket |
 | `DaytonaBackend` (`@catamorphic/daytona`) | Cloud — creates a Daytona sandbox per project, stores the repo inside it |
 | `ArtifactsRemoteBackend` (`@catamorphic/cloudflare`) | Cloudflare Artifacts — remote-first git repos; implements `getCloneSource()` so sandboxes `git clone` with a short-lived token instead of receiving uploads (see `docs/decisions/0004`, `0008`) |
 
-Path safety rules are enforced in both: no absolute paths, no `..`, no `.git` access in file APIs.
+Path safety rules are enforced by working-copy backends: no absolute paths, no
+`..`, and no `.git` access through file APIs. Remote backends enforce
+tenant/project key isolation and compare-and-swap ref updates.
 
 ## Templates
 
@@ -51,7 +57,8 @@ Templates are pre-defined project skeletons (not in-memory state). When a user c
 2. Template files are written.
 3. An **initial commit** is made — the project has at least one commit before any run.
 
-This ensures `commit_sha` is always available on runs and avoids special-casing "unsaved" projects.
+This ensures production provenance is always available and avoids
+special-casing projects that have never been committed.
 
 ## Host Frontend Uses the API Only
 
@@ -59,7 +66,12 @@ The host frontend (via `@catamorphic/react` + `@catamorphic/api-client`) must ta
 
 ## Project Discovery
 
-Workflows in a project are discovered at parse time by `packages/parser`: the parser scans exported async functions with a `"use workflow"` directive. There is no workflow registry file or manifest — the TypeScript source is the registry.
+Workflows are discovered at parse time by `packages/parser`. A plain Workflow is
+an exported async function with the exact `"use workflow"` directive. A Workflow
+with persisted scopes is an exported static
+`defineWorkflow(({ defineBoundary, defineBatch }) => ({ steps: [...] }))`
+definition. There is no kind field, registry file, or manifest; TypeScript
+source is the registry.
 
 ## Database Type Conventions
 
@@ -71,7 +83,8 @@ DATABASE_URL="..." kysely-codegen --out-file src/generated/db.ts
 
 When querying with Kysely, use `Selectable<DB["table_name"]>` — never write manual interface duplicates or `as unknown as` casts. Kysely infers row types correctly from the generated file.
 
-JSONB columns (`trigger_data`, `result`, `input`, `output`) type as:
+JSONB columns (`provenance`, `input`, `result`, `output`, and persisted scope
+state) type as:
 - **Kysely side**: `Json` / `JsonValue` (from `@catamorphic/db`)
 - **Zod schema side**: `z.unknown().nullable()` — not `z.record(z.string(), z.unknown())`, since JSONB can hold any JSON value (arrays, primitives, etc.), not just objects
 

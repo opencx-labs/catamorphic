@@ -1,6 +1,6 @@
 # 0004 — Cloudflare-first infrastructure (Sandbox now, Artifacts next)
 
-- **Status:** Accepted (updated by [0008](0008-vendor-plugin-packages.md): implementations moved to `@catamorphic/cloudflare`; `createSandboxProviderFromEnv()` removed; `ArtifactsRemoteBackend` implemented)
+- **Status:** Accepted (updated by [0008](0008-vendor-plugin-packages.md) for vendor packages and [0012](0012-s3-compatible-origin-backend.md) for generally available code storage)
 - **Date:** 2026-07-02
 
 ## Context
@@ -19,5 +19,7 @@ Operational detail lives in `CLOUDFLARE.md`.
 ## Consequences
 
 - This reverses the previous "Daytona is the default until further notice" rule; docs and env selection helpers reflect Cloudflare-first.
-- Artifacts is in beta; `ArtifactsBackend` is roadmap work gated on account access (tracked in `CLOUDFLARE.md` → TODO).
+- Artifacts remains feature-gated. ADR 0012 makes `@catamorphic/s3` the
+  generally available origin backend until Artifacts access lands, while
+  `ArtifactsRemoteBackend` remains the preferred Cloudflare-native direction.
 - The Bridge Worker becomes a deployment prerequisite for the default execution path; hosts without Cloudflare accounts use Daytona or a custom provider.

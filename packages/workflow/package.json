@@ -1,6 +1,6 @@
 {
   "name": "@catamorphic/workflow",
-  "version": "0.0.1",
+  "version": "0.0.2",
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
@@ -20,7 +20,7 @@
     "build": "tsup && tsc --project tsconfig.json --noEmit false --emitDeclarationOnly",
     "dev": "tsup --watch",
     "test": "vitest run --config ../../vitest.config.ts",
-    "typecheck": "tsgo --project ./tsconfig.json"
+    "typecheck": "tsgo --project ./tsconfig.json && tsgo --project ./tsconfig.type-tests.json"
   },
   "devDependencies": {
     "@types/node": "^26.1.1"

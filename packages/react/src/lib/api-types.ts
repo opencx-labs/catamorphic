@@ -1,4 +1,5 @@
 import type { paths } from "@catamorphic/api-client";
+import type { WorkflowGraph as ParserWorkflowGraph } from "@catamorphic/parser";
 
 /**
  * Direct aliases over the OpenAPI `paths` map. We index into the schema
@@ -20,8 +21,25 @@ export type Template =
 export type WorkflowList =
   paths["/api/projects/{projectId}/workflows"]["get"]["responses"][200]["content"]["application/json"];
 
-export type WorkflowGraph =
+type WorkflowGraphResponse =
   paths["/api/projects/{projectId}/workflows/{name}"]["get"]["responses"][200]["content"]["application/json"];
+
+/**
+ * Browser-facing graph shape. Execution descriptors stay parser-internal and
+ * are intentionally omitted from HTTP graph responses.
+ */
+export type WorkflowGraph = Omit<
+  ParserWorkflowGraph,
+  "capabilities" | "edges" | "execution" | "nodes"
+> &
+  Pick<WorkflowGraphResponse, "capabilities" | "edges" | "nodes"> & {
+    allFiles?: Record<string, string>;
+  };
+
+/** Explicitly adapts the public HTTP graph to the renderable graph contract. */
+export function adaptWorkflowGraph(graph: WorkflowGraph): WorkflowGraph {
+  return graph;
+}
 
 export type ProjectFilesList =
   paths["/api/projects/{projectId}/files"]["get"]["responses"][200]["content"]["application/json"];

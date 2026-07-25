@@ -241,27 +241,19 @@ export class KyselyDeploymentRuntimeStore implements DeploymentRuntimeStore {
   }
 
   async hasPinnedWork(args: { artifactId: string }): Promise<boolean> {
-    const [workflowRun, batchRun] = await Promise.all([
-      this.db
-        .selectFrom("workflow_runs")
-        .where("deployment_artifact_id", "=", args.artifactId)
-        .where("status", "in", ["pending", "running"])
-        .select("id")
-        .executeTakeFirst(),
-      this.db
-        .selectFrom("batch_runs")
-        .where("deployment_artifact_id", "=", args.artifactId)
-        .where("status", "in", [
-          "pending",
-          "sourcing",
-          "running",
-          "paused",
-          "sinking",
-        ])
-        .select("id")
-        .executeTakeFirst(),
-    ]);
-    return Boolean(workflowRun || batchRun);
+    const workflowRun = await this.db
+      .selectFrom("workflow_runs")
+      .where("deployment_artifact_id", "=", args.artifactId)
+      .where("status", "in", [
+        "pending",
+        "running",
+        "waiting",
+        "paused",
+        "canceling",
+      ])
+      .select("id")
+      .executeTakeFirst();
+    return Boolean(workflowRun);
   }
 
   async deleteClaimed(args: { runtimeId: string }): Promise<boolean> {

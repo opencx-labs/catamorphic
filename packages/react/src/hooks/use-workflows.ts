@@ -8,6 +8,7 @@ import {
   runWithCatamorphicError,
 } from "../lib/errors.js";
 import { useCatamorphic } from "../provider.js";
+import { workflowKeys } from "../workflow-keys.js";
 
 export interface UseWorkflowsOptions {
   ref?: string;
@@ -20,7 +21,7 @@ export function useWorkflows(
   const { apiClient } = useCatamorphic();
   const { ref } = options;
   return useQuery<WorkflowList, CatamorphicError>({
-    queryKey: ["cat", "project", projectId, "workflows", { ref }],
+    queryKey: workflowKeys.list({ projectId, ref }),
     queryFn: () =>
       runWithCatamorphicError(async () => {
         if (!projectId) {

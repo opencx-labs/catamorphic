@@ -5,6 +5,7 @@ import type {
   SandboxProvider,
   StepEntry,
 } from "./types.js";
+import { RuntimeInfrastructureError } from "./types.js";
 
 interface RunExecutorOpts {
   provider: SandboxProvider;
@@ -35,38 +36,46 @@ export class RunExecutorImpl implements RunExecutor {
   }
 
   async executeRun(opts: ExecuteRunOpts): Promise<RunResult> {
-    await this.opts.provider.uploadFiles(
-      opts.sandboxId,
-      { "harness.ts": RUNTIME_HARNESS_SOURCE },
-      opts.workingDirectory,
-    );
-    await uploadPluginPayloads({
-      provider: this.opts.provider,
-      sandboxId: opts.sandboxId,
-      projectDir: opts.workingDirectory,
-      plugins: opts.plugins,
-    });
+    try {
+      await this.opts.provider.uploadFiles(
+        opts.sandboxId,
+        { "harness.ts": RUNTIME_HARNESS_SOURCE },
+        opts.workingDirectory,
+      );
+      await uploadPluginPayloads({
+        provider: this.opts.provider,
+        sandboxId: opts.sandboxId,
+        projectDir: opts.workingDirectory,
+        plugins: opts.plugins,
+      });
 
-    const result = await this.opts.provider.executeCommand(
-      opts.sandboxId,
-      "bun run harness.ts",
-      {
-        cwd: opts.workingDirectory,
-        timeout: this.timeoutSeconds,
-        env: {
-          CATAMORPHIC_RUN_ID: opts.runId,
-          CATAMORPHIC_WORKFLOW_NAME: opts.workflowName,
-          CATAMORPHIC_WORKFLOW_FILE: opts.workflowFile,
-          CATAMORPHIC_TRIGGER_DATA: JSON.stringify(opts.triggerData ?? {}),
-          ...(opts.secrets ?? {}),
+      const result = await this.opts.provider.executeCommand(
+        opts.sandboxId,
+        "bun run harness.ts",
+        {
+          cwd: opts.workingDirectory,
+          timeout: this.timeoutSeconds,
+          env: {
+            CATAMORPHIC_RUN_ID: opts.runId,
+            CATAMORPHIC_WORKFLOW_NAME: opts.workflowName,
+            CATAMORPHIC_WORKFLOW_FILE: opts.workflowFile,
+            CATAMORPHIC_TRIGGER_DATA: JSON.stringify(opts.triggerData ?? {}),
+            ...(opts.secrets ?? {}),
+          },
         },
-      },
-    );
+      );
 
-    return parseRunResult({
-      output: result.result,
-      exitCode: result.exitCode,
-    });
+      return parseRunResult({
+        output: result.result,
+        exitCode: result.exitCode,
+      });
+    } catch (error) {
+      if (error instanceof RuntimeInfrastructureError) throw error;
+      throw new RuntimeInfrastructureError({
+        operation: `workflow run '${opts.runId}' provider execution`,
+        cause: error,
+      });
+    }
   }
 }
 
@@ -94,13 +103,13 @@ function parseRunResult(opts: { output: string; exitCode: number }): RunResult {
   const marker = "CATAMORPHIC_REPORT:";
   const markerIndex = opts.output.lastIndexOf(marker);
   if (markerIndex === -1) {
-    return {
-      status: "failed",
-      error:
+    throw new RuntimeInfrastructureError({
+      operation: "workflow process reporting",
+      cause: new Error(
         opts.output.trim() ||
-        `Workflow process exited with code ${opts.exitCode} without a report`,
-      steps: [],
-    };
+          `Workflow process exited with code ${opts.exitCode} without a report`,
+      ),
+    });
   }
 
   const reportLine = opts.output
@@ -108,11 +117,10 @@ function parseRunResult(opts: { output: string; exitCode: number }): RunResult {
     .split(/\r?\n/, 1)[0]
     ?.trim();
   if (!reportLine) {
-    return {
-      status: "failed",
-      error: "Workflow produced an empty report",
-      steps: [],
-    };
+    throw new RuntimeInfrastructureError({
+      operation: "workflow process reporting",
+      cause: new Error("Workflow produced an empty report"),
+    });
   }
 
   try {
@@ -138,14 +146,13 @@ function parseRunResult(opts: { output: string; exitCode: number }): RunResult {
       steps: parsed.steps,
     };
   } catch (error) {
-    return {
-      status: "failed",
-      error:
+    throw new RuntimeInfrastructureError({
+      operation: "workflow process reporting",
+      cause:
         error instanceof Error
-          ? `Invalid workflow report: ${error.message}`
-          : "Invalid workflow report",
-      steps: [],
-    };
+          ? new Error(`Invalid workflow report: ${error.message}`)
+          : new Error("Invalid workflow report"),
+    });
   }
 }
 

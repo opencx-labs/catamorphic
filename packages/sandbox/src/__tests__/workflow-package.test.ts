@@ -11,26 +11,28 @@ describe("workflow package fallback", () => {
     const payload = await loadWorkflowPackagePayload();
 
     expect(payload.packageName).toBe(WORKFLOW_PACKAGE_NAME);
-    expect(payload.version).toBe("0.0.1");
+    expect(payload.version).toBe("0.0.2");
     expect(payload.files["package.json"]).toContain(WORKFLOW_PACKAGE_NAME);
     expect(payload.files["package.json"]).not.toContain('"bun"');
-    expect(payload.files["dist/index.js"]).toContain("defineBatchWorkflow");
-    expect(payload.files["dist/index.d.ts"]).toContain(
-      "BatchWorkflowDefinition",
-    );
+    expect(payload.files["dist/index.js"]).toContain("defineWorkflow");
+    expect(payload.files["dist/index.js"]).not.toContain("defineBatchWorkflow");
+    expect(payload.files["dist/index.d.ts"]).toContain("WorkflowDefinition");
     expect(payload.files["dist/batch.d.ts"]).toContain("BatchStepDefinition");
+    expect(payload.files["dist/json.d.ts"]).toContain("JsonValue");
+    expect(payload.files["dist/workflow.d.ts"]).toContain("BoundaryDefinition");
+    expect(payload.files).not.toHaveProperty("dist/durable.d.ts");
   });
 
   it("resolves only an exact matching direct dependency", async () => {
     await expect(
       resolveWorkflowPackageFallback({
         packageJson: JSON.stringify({
-          dependencies: { [WORKFLOW_PACKAGE_NAME]: "0.0.1" },
+          dependencies: { [WORKFLOW_PACKAGE_NAME]: "0.0.2" },
         }),
       }),
     ).resolves.toMatchObject({
       packageName: WORKFLOW_PACKAGE_NAME,
-      version: "0.0.1",
+      version: "0.0.2",
     });
 
     await expect(
@@ -62,7 +64,7 @@ describe("workflow package fallback", () => {
       packageJson: JSON.stringify({
         name: "customer-project",
         dependencies: {
-          [WORKFLOW_PACKAGE_NAME]: "0.0.1",
+          [WORKFLOW_PACKAGE_NAME]: "0.0.2",
           zod: "^4.0.0",
         },
       }),

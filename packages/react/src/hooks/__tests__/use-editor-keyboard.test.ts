@@ -1,7 +1,7 @@
 import { act } from "@testing-library/react";
 import { useAtom } from "jotai";
 import { describe, expect, it } from "vitest";
-import { historySidebarOpenAtom, rightPanelOpenAtom } from "../../atoms.js";
+import { panelVisibilityAtom, rightPanelOpenAtom } from "../../atoms.js";
 import { renderHookWithProviders } from "../../test/render.js";
 import { useEditorKeyboard } from "../use-editor-keyboard.js";
 
@@ -12,37 +12,43 @@ function pressEscape() {
 }
 
 describe("useEditorKeyboard", () => {
-  it("closes history sidebar first when Escape pressed", () => {
+  it("closes the Runs pane first when Escape pressed", () => {
     const { result } = renderHookWithProviders(() => {
       useEditorKeyboard();
-      const [history, setHistory] = useAtom(historySidebarOpenAtom);
+      const [panels, setPanels] = useAtom(panelVisibilityAtom);
       const [right, setRight] = useAtom(rightPanelOpenAtom);
-      return { history, setHistory, right, setRight };
+      return { panels, setPanels, right, setRight };
     });
 
     act(() => {
-      result.current.setHistory(true);
+      result.current.setPanels((current) => ({
+        ...current,
+        runsPanel: true,
+      }));
       result.current.setRight(true);
     });
-    expect(result.current.history).toBe(true);
+    expect(result.current.panels.runsPanel).toBe(true);
     expect(result.current.right).toBe(true);
 
     pressEscape();
 
-    expect(result.current.history).toBe(false);
+    expect(result.current.panels.runsPanel).toBe(false);
     expect(result.current.right).toBe(true);
   });
 
-  it("closes right panel if history is already closed", () => {
+  it("closes right panel if the Runs pane is already closed", () => {
     const { result } = renderHookWithProviders(() => {
       useEditorKeyboard();
-      const [history, setHistory] = useAtom(historySidebarOpenAtom);
+      const [panels, setPanels] = useAtom(panelVisibilityAtom);
       const [right, setRight] = useAtom(rightPanelOpenAtom);
-      return { history, setHistory, right, setRight };
+      return { panels, setPanels, right, setRight };
     });
 
     act(() => {
-      result.current.setHistory(false);
+      result.current.setPanels((current) => ({
+        ...current,
+        runsPanel: false,
+      }));
       result.current.setRight(true);
     });
 
@@ -54,14 +60,14 @@ describe("useEditorKeyboard", () => {
   it("is a no-op when nothing is open", () => {
     const { result } = renderHookWithProviders(() => {
       useEditorKeyboard();
-      const [history] = useAtom(historySidebarOpenAtom);
+      const [panels] = useAtom(panelVisibilityAtom);
       const [right] = useAtom(rightPanelOpenAtom);
-      return { history, right };
+      return { panels, right };
     });
 
     pressEscape();
 
-    expect(result.current.history).toBe(false);
+    expect(result.current.panels.runsPanel).toBe(false);
     expect(result.current.right).toBe(false);
   });
 });

@@ -1,7 +1,8 @@
 # 0015 — First-class batch workflows
 
-- **Status:** Accepted
+- **Status:** Superseded by 0026
 - **Date:** 2026-07-12
+- **Superseded by:** [0026](0026-unified-workflows-runs-and-batch-scopes.md), which retains the finite source, per-item replay, physical batching, and sink semantics inside builder-scoped `defineBatch`
 
 ## Context
 

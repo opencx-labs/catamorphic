@@ -6,10 +6,10 @@ Cloudflare stack:
 - **Workflow execution + dev sandboxes**: Cloudflare Sandbox via the
   [Bridge Worker](../../packages/cloudflare-sandbox-bridge/README.md)
   (`CloudflareSandboxProvider` from `@catamorphic/cloudflare`).
-- **Code storage**: Cloudflare Artifacts (`ArtifactsRemoteBackend`) — each
-  project's canonical git repo lives in Artifacts, and sandboxes `git clone`
-  it directly with short-lived tokens. Falls back to filesystem remotes (with
-  a warning) while the Cloudflare account's Artifacts beta access is pending.
+- **Code storage**: S3-compatible storage (`S3RemoteBackend`) when `S3_*` is
+  configured, including Cloudflare R2, AWS S3, or MinIO. Cloudflare Artifacts
+  (`ArtifactsRemoteBackend`) is next when configured and available; filesystem
+  remotes are the local fallback.
 - **Coding agent**: Vercel AI SDK (`AiSdkCodingAgent` from
   `@catamorphic/ai-sdk`). The tool loop runs in the playground server process and
   edits the project inside the Cloudflare dev sandbox; changes come back as an
@@ -17,9 +17,14 @@ Cloudflare stack:
   when `OPENAI_API_KEY` is set.
 - **State**: Postgres, schema-scoped to `catamorphic`.
 - **API**: Fastify with `@catamorphic/fastify-plugin` mounted at `/api`.
+- **Run worker**: explicitly started by the host after the API is listening;
+  Postgres owns queued execution, retries, pauses, and continuation state.
 - **UI**: Vite + React using `@catamorphic/react` hooks and the
   `@catamorphic/ui` `<WorkflowEditor>`, plus an AI chat panel wired to the
-  agent-session routes.
+  agent-session routes. One Runs surface handles every Workflow and reveals
+  controls from Run capabilities. The host always supplies test execution;
+  the editor derives Test visibility and availability from the current parsed
+  graph so unsaved capability changes take effect immediately.
 
 The playground stands in for the host's auth: it injects a fixed demo
 tenant/user server-side (`src/server/index.ts`) the way a real host would
@@ -32,7 +37,9 @@ One-time setup (from the repo root):
 1. `cp apps/playground/.env.example apps/playground/.env` and point
    `DATABASE_URL` at your Postgres — the docker-compose one is
    `postgresql://catamorphic:catamorphic@localhost:5432/catamorphic`.
-2. Repo root `.env` with `CLOUDFLARE_SANDBOX_API_URL`, and optionally the
+2. Repo root `.env` with `CLOUDFLARE_SANDBOX_API_URL`. For durable git origins,
+   configure S3-compatible storage (`S3_BUCKET`, `S3_ACCESS_KEY_ID`,
+   `S3_SECRET_ACCESS_KEY`, plus endpoint/region as needed), or optionally the
    Artifacts vars (`CLOUDFLARE_ACCOUNT_ID`, `CLOUDFLARE_API_TOKEN`,
    `CLOUDFLARE_ARTIFACTS_NAMESPACE`).
 3. Docker running (the sandbox bridge builds/runs containers locally).
@@ -62,6 +69,23 @@ enabled). The **AI assistant** panel on the right chats with the AI SDK agent;
 its edits appear as draft changes you can review and deploy.
 
 Migrations are applied automatically at server boot (`catamorphic.migrate()`).
+
+Templates demonstrate both authoring shapes without introducing Workflow
+kinds: exact `"use workflow"` functions have no persisted continuation, while
+`defineWorkflow(({ defineBoundary, defineBatch }) => ({ steps: [...] }))`
+composes atomic retry boundaries and paged per-item batch scopes. The Runs UI,
+API, and history remain the same for both.
+
+## Verification
+
+From the repository root:
+
+```sh
+bun run lint
+bun run typecheck
+bun run build
+bun run test
+```
 
 ## Observability
 

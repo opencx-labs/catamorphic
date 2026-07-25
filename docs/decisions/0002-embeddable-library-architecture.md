@@ -2,6 +2,7 @@
 
 - **Status:** Accepted
 - **Date:** 2026-07-02
+- **Updated by:** 0026 (identity-bound `scoped.runs` and one Run surface)
 
 ## Context
 
@@ -21,5 +22,7 @@ Internal packages (`core`, `db`, `git`, `parser`, `sandbox`, `otel`, `runtime`, 
 
 - Hosts integrate at the coupling level they want (DB-only → SDK → HTTP → full UI).
 - Every new capability must be designed as "how does a host consume this" first.
-- The scoped-client surface of server-sdk lags the HTTP surface (runs/git/plugins are `core.*`-only today) and needs to catch up.
+- The scoped SDK now exposes identity-bound projects, workflows, files, and
+  `scoped.runs` with keyed object parameters. Git, plugins, and secrets remain
+  available through core and HTTP surfaces.
 - Package renames from this ADR: `@catamorphic/sdk` → `@catamorphic/server-sdk`, `@catamorphic/server` → `@catamorphic/fastify-plugin`.

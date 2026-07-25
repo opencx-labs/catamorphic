@@ -62,8 +62,19 @@ When adjusting spacing, change these constants — don't hardcode numbers elsewh
 Containers have explicit `width`/`height` via `style` prop. Non-container nodes do NOT get explicit width/height (React Flow measures them from DOM).
 
 - **Nesting depth** affects border opacity: `0.3 + depth * 0.12` (capped at depth 3).
+- Boundaries are dedicated nameless gray dashed containers, not lexical
+  `scope-block` nodes. They use reduced top padding because they have no header.
+- Batch scopes are dedicated containers whose source, per-item processing, and
+  optional sink remain visually grouped. They are not a separate Workflow
+  category.
+- Pause nodes use amber and child-workflow calls use indigo. Their canvas labels
+  remain human-readable; timeout, state, target, and input live in Details.
+- Boundaries, batch scopes, and child-Workflow scopes are expanded by default and have
+  an in-canvas disclosure control. Collapsing is animated view state and never
+  rewrites workflow source.
 
 ## Minimap
 
 Color-coded by node type:
 - trigger: `#ca8a04`, step: `#2563eb`, branch: `#a855f7`, loop-block: `#f97316`, parallel-block: `#06b6d4`, scope-block: `#94a3b8`, delay: `#737373`, return: `#22c55e`, if-block: `transparent`.
+- durable-boundary: `#94a3b8`, pause: `#d97706`, call-workflow: `#6366f1`.

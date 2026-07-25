@@ -1,4 +1,7 @@
-export { RUNTIME_PROTOCOL_VERSION } from "@catamorphic/runtime";
+export {
+  DEPLOYMENT_RUNTIME_VERSION,
+  RUNTIME_PROTOCOL_VERSION,
+} from "@catamorphic/runtime";
 export {
   buildPluginsPreamble,
   PLUGIN_STAGE_DIR,
@@ -41,6 +44,7 @@ export type {
   RunExecutor,
   RunPluginPayload,
   RunResult,
+  RuntimeArtifactIdentity,
   RuntimeBatchStepSuspension,
   RuntimeHealth,
   RuntimeInvocation,
@@ -59,7 +63,10 @@ export type {
   SessionInfo,
   StepEntry,
 } from "./types.js";
-export { RuntimeEventReportingError } from "./types.js";
+export {
+  RuntimeEventReportingError,
+  RuntimeInfrastructureError,
+} from "./types.js";
 export type { WorkflowPackagePayload } from "./workflow-package.js";
 export {
   loadWorkflowPackagePayload,

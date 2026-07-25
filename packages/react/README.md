@@ -66,12 +66,41 @@ If you omit `queryClient`, the provider creates one internally so standalone app
 
 ### Runs
 
-- `useWorkflowRuns(projectId, name, { ref?, pollMs? })`
-- `useWorkflowRun(runId, { pollMs? })`
-- `useTriggerWorkflowRun(projectId, name)` — `mutateAsync({ triggerData? })`; pass nothing for runs that take no input
-- `useCancelWorkflowRun(runId)`
-- `useWorkflowRunController({ onTriggerRun })` — optimistic run list + canvas execution-state machine. Used internally by `<WorkflowEditor>`; host chrome can use it directly.
+This is one hook family for the canonical Run model. Workflow/Run capabilities
+control which mutations and item views apply; there are no separate hook
+families for boundaries or batch processing.
+
+- `useRuns({ projectId, workflowName?, mode?, limit?, offset?, pollInterval? })`
+- `useRun({ runId, pollInterval? })`
+- `useTriggerRun({ projectId, workflowName })` — `mutateAsync({ input? })`
+- `useTriggerTestRun({ projectId, workflowName })` — `mutateAsync({ input?, files? })`
+- `useCancelRun({ runId })` — `mutateAsync({ reason? })`
+- `usePauseRunProcessing({ runId })`
+- `useResumeRunProcessing({ runId })`
+- `useSubmitRunInput({ runId, pauseId })` — `mutateAsync({ idempotencyKey, value })`
+- `useRunItems({ run, workflowStepAttemptId, status?, limit?, offset?, pollInterval? })`
+- `useRunItemSteps({ run, workflowStepAttemptId, itemId, pollInterval? })`
 - `useEditorKeyboard()` — Escape-key handling for the editor's panels.
+
+`workflowName` is optional so selection-driven screens can mount `useRuns`
+before a workflow is selected; the query remains disabled until both IDs are
+available.
+
+`useTriggerRun` and `useTriggerTestRun` select production or mutable-source test
+mode within this family. Workflows with persisted continuation currently require
+an immutable production deployment and reject test triggering.
+
+All server-backed run data uses one cache hierarchy rooted at
+`["cat", "run"]`. Detail and list queries poll `pending`, `running`, and
+`canceling` runs. A `waiting` run polls only while its phase is `child`; input
+pauses and operator-paused runs rely on mutation updates or normal query
+refetches instead of aggressive polling. Item and item-step queries derive
+polling from their parent `Run` and selected batch scope, including waiting
+scopes, instead of accepting a separate activity flag.
+
+Workflow list and detail queries share the exported `workflowKeys` hierarchy.
+File writes, deploys, commits, and branch checkouts invalidate the project
+workflow prefix so both list summaries and singular workflow graphs refresh.
 
 ### Git
 
@@ -149,11 +178,10 @@ side-by-side editors that must not share selection).
 
 Atoms exposed for host chrome: `codeAtom`, `graphAtom`, `selectedNodeIdAtom`,
 `selectedNodeAtom`, `panelVisibilityAtom`, `rightPanelOpenAtom`,
-`activePanelTabAtom`, `historySidebarOpenAtom`, `activeHistoryTabAtom`,
-`runsAtom`, `activeRunIdAtom`, `isRunningAtom`, `showRunDialogAtom`,
-`lastTriggerDataAtom`, `executionStateAtom`, `reactFlowNodesAtom`,
+`activePanelTabAtom`, `showRunDialogAtom`, `lastTriggerDataAtom`,
+`executionStateAtom`, `reactFlowNodesAtom`,
 `reactFlowEdgesAtom`, `codeEditorReadOnlyAtom`, `aiLoadingAtom`,
-`loadMoreRunsAtom`.
+and `collapsedNodeIdsAtom`.
 
 ## Error envelope
 
@@ -202,6 +230,13 @@ import type {
   ProjectFilesList,
   Run,
   RunDetail,
+  RunCapabilities,
+  RunPause,
+  BatchProgress,
+  RunItem,
+  RunItemStep,
+  WorkflowStepAttempt,
+  WorkflowCapabilities,
   RepoStatus,
   BranchInfo,
   CommitInfo,
@@ -215,28 +250,22 @@ import type {
 
 Add new aliases here whenever a hook surfaces a new server shape — never re-declare an interface in the consuming file.
 
+`WorkflowGraph` is the public HTTP/rendering graph and includes workflow
+capabilities but not the parser-only execution descriptor. Local parser graphs
+still include `execution`; `useOnParse` deliberately adapts the HTTP response
+to the public graph rather than asserting the two shapes are identical.
+
 ## Run lifecycle
 
-`useWorkflowRunController({ onTriggerRun })` owns the optimistic run list,
-canvas execution-state painting, history sidebar toggle, and failure
-cleanup. Mount it anywhere inside a `<WorkflowEditorScope>` (the editor
-mounts it internally; you can also use it from custom chrome that wants the
-same UX as the drop-in editor):
+`<WorkflowEditor>` keeps only local run-dialog state. Its production and test
+callbacks return the canonical `Run`, which is handed to the unified Runs
+panel and selected while the query cache refreshes. The Test action is always
+wired by the host when test execution exists; the editor disables it from the
+current parsed graph capability, falling back to the loaded Workflow capability
+until a live graph is available.
 
-```tsx
-const { submit, openDialog, isRunning } = useWorkflowRunController({
-  onTriggerRun: async (triggerData) => {
-    const res = await apiClient.POST(
-      "/api/projects/{projectId}/workflows/{name}/runs",
-      { params: { path: { projectId, name } }, body: { triggerData } },
-    );
-    return { /* …TriggerRunResult shape… */ };
-  },
-});
-```
-
-`useEditorKeyboard()` wires the Escape-key behaviour (close history
-sidebar, then detail panel). Mount it at most once per scope.
+`useEditorKeyboard()` wires the Escape-key behaviour (close the Runs pane,
+then the detail panel). Mount it at most once per scope.
 
 ## Embedding with `@catamorphic/ui`
 

@@ -2,6 +2,7 @@
 
 - **Status:** Accepted (fresh production sandbox clause updated by [0014](0014-deployment-scoped-execution-runtimes.md))
 - **Date:** 2026-07-12
+- **Updated by:** 0014 (deployment runtimes), 0026 (one Run API/model)
 
 ## Context
 
@@ -13,8 +14,9 @@ invocations also shared one ambiguous API and one secret set.
 
 ## Decision
 
-Runs have explicit `test` and `production` modes and separate trigger
-endpoints.
+Runs have explicit `test` and `production` modes within one canonical Run model
+and route/hook family. The modes retain separate trigger operations because
+their source and provenance semantics differ.
 
 - Production runs resolve and execute the canonical deployed `origin/main`
   SHA and retain it. Per [ADR 0014](0014-deployment-scoped-execution-runtimes.md),
@@ -37,8 +39,8 @@ could corrupt or change a run in progress.
 
 ## Consequences
 
-Production run provenance is exact, while test runs are fast and clearly
-non-reproducible. Hosts must configure test secrets separately and use the
-test-run endpoint for editor execution. ADR 0014 settles reusable production
-runtimes; queueing, cancellation, retries, and push-based reporting remain
-follow-up work.
+Production Run provenance is exact, while test Runs are fast and clearly
+non-reproducible. Hosts configure test secrets separately and use the test-mode
+trigger for editor execution of plain Workflow functions. ADRs 0014, 0016, and
+0023-0026 subsequently implemented reusable production runtimes, queueing,
+retries, persisted continuation, cancellation, and one Runs surface.

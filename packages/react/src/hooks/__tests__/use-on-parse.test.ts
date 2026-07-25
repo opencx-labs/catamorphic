@@ -7,16 +7,67 @@ import { useOnParse } from "../use-on-parse.js";
 
 const SAMPLE_GRAPH = {
   name: "demo",
+  capabilities: {
+    persistedContinuations: true,
+    batchProcessing: true,
+    cancellation: true,
+  },
   displayName: null,
   description: null,
   filePath: "workflows/demo.ts",
   trigger: { parameters: [] },
   nodes: [
-    { id: "trigger", type: "trigger", label: "start", metadata: {} },
-    { id: "step-1", type: "step", label: "step1", metadata: {} },
-    { id: "return", type: "return", label: "end", metadata: {} },
+    {
+      id: "trigger",
+      type: "trigger",
+      label: "start",
+      metadata: {},
+      sourceRange: {
+        start: 0,
+        end: 10,
+        startLine: 1,
+        startColumn: 1,
+        endLine: 1,
+        endColumn: 10,
+      },
+    },
+    {
+      id: "step-1",
+      type: "step",
+      label: "step1",
+      metadata: {},
+      sourceRange: {
+        start: 11,
+        end: 20,
+        startLine: 2,
+        startColumn: 1,
+        endLine: 2,
+        endColumn: 10,
+      },
+    },
+    {
+      id: "return",
+      type: "return",
+      label: "end",
+      metadata: {},
+      sourceRange: {
+        start: 21,
+        end: 30,
+        startLine: 3,
+        startColumn: 1,
+        endLine: 3,
+        endColumn: 10,
+      },
+    },
   ],
-  edges: [{ id: "e1", source: "trigger", target: "step-1" }],
+  edges: [
+    {
+      id: "e1",
+      source: "trigger",
+      target: "step-1",
+      type: "sequential",
+    },
+  ],
   sourceCode: "",
 } as const;
 

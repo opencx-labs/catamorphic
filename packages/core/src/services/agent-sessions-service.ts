@@ -11,7 +11,11 @@ import type {
 } from "@catamorphic/sandbox";
 import type { Kysely, Selectable } from "kysely";
 import type { Identity } from "../identity.js";
-import { BATCH_WORKFLOW_SKILL_PATH, SEED_SKILLS } from "../templates.js";
+import {
+  BATCH_WORKFLOW_SKILL_PATH,
+  DURABLE_WORKFLOW_SKILL_PATH,
+  SEED_SKILLS,
+} from "../templates.js";
 import type { DevSandboxService } from "./dev-sandbox-service.js";
 import type { PluginsService } from "./plugins-service.js";
 import { ProjectNotFoundError } from "./projects-service.js";
@@ -68,7 +72,7 @@ export interface SyncedFileChange {
 
 const tracer = getTracer("@catamorphic/core");
 
-const WORKFLOW_AUTHORING_SYSTEM_PROMPT = `Before editing workflow code, inspect the existing export and preserve its workflow kind unless the user explicitly requests a conversion. A regular workflow is an exported async function with a "use workflow" directive. A batch workflow is an exported defineBatchWorkflow({ source, process, sink? }) definition; only exported defineBatchStep calls are physically batched. For batch primitives, use the project's established SaaS wrapper when present; otherwise use @catamorphic/workflow. Never create a local src/batch.ts implementation. Consult .agents/skills/writing-workflows/SKILL.md and .agents/skills/batch-workflows/SKILL.md, when present, before creating or restructuring workflows.`;
+const WORKFLOW_AUTHORING_SYSTEM_PROMPT = `Before editing workflow code, inspect the existing export and preserve its authoring model unless the user explicitly requests a conversion. A plain workflow is an exported async function with a "use workflow" directive. A defined workflow is an exported defineWorkflow(({ defineBoundary, defineBatch }) => ({ steps })) value; production runs execute ordered boundary and batch scopes against an immutable deployment, with continuation state persisted in Postgres. Mutable-source defined test execution is not supported. Cancellation is a host-issued terminal control declared with controls: { cancel: true }, never a BoundaryContext transition. Only exported defineBatchStep calls inside defineBatch.process are physically coalesced. For authoring primitives, use the project's established SaaS wrapper when present; otherwise use @catamorphic/workflow. Never create local copies. Consult .agents/skills/writing-workflows/SKILL.md, .agents/skills/durable-workflows/SKILL.md, and .agents/skills/batch-workflows/SKILL.md, when present, before creating or restructuring workflows.`;
 
 export function buildAgentSystemPrompt({
   systemPrompt,
@@ -89,24 +93,60 @@ export async function ensureBatchWorkflowSkill({
   sandboxProviderId: string;
   projectDir: string;
 }): Promise<boolean> {
-  const content = SEED_SKILLS[BATCH_WORKFLOW_SKILL_PATH];
+  return ensureWorkflowSkill({
+    sandboxProvider,
+    sandboxProviderId,
+    projectDir,
+    skillPath: BATCH_WORKFLOW_SKILL_PATH,
+  });
+}
+
+export async function ensureDurableWorkflowSkill({
+  sandboxProvider,
+  sandboxProviderId,
+  projectDir,
+}: {
+  sandboxProvider: Pick<SandboxProvider, "executeCommand" | "uploadFiles">;
+  sandboxProviderId: string;
+  projectDir: string;
+}): Promise<boolean> {
+  return ensureWorkflowSkill({
+    sandboxProvider,
+    sandboxProviderId,
+    projectDir,
+    skillPath: DURABLE_WORKFLOW_SKILL_PATH,
+  });
+}
+
+async function ensureWorkflowSkill({
+  sandboxProvider,
+  sandboxProviderId,
+  projectDir,
+  skillPath,
+}: {
+  sandboxProvider: Pick<SandboxProvider, "executeCommand" | "uploadFiles">;
+  sandboxProviderId: string;
+  projectDir: string;
+  skillPath: string;
+}): Promise<boolean> {
+  const content = SEED_SKILLS[skillPath];
   if (!content) {
-    throw new Error("Built-in batch workflow skill is not configured");
+    throw new Error(`Built-in workflow skill '${skillPath}' is not configured`);
   }
 
-  const skillPath = `${projectDir}/${BATCH_WORKFLOW_SKILL_PATH}`;
+  const absoluteSkillPath = `${projectDir}/${skillPath}`;
   const exists = await sandboxProvider.executeCommand(
     sandboxProviderId,
-    `test -f ${shellQuote(skillPath)}`,
+    `test -f ${shellQuote(absoluteSkillPath)}`,
   );
   if (exists.exitCode === 0) return false;
   if (exists.exitCode !== 1) {
-    throw new Error(`Failed to inspect batch workflow skill: ${exists.result}`);
+    throw new Error(`Failed to inspect workflow skill: ${exists.result}`);
   }
 
   await sandboxProvider.uploadFiles(
     sandboxProviderId,
-    { [BATCH_WORKFLOW_SKILL_PATH]: content },
+    { [skillPath]: content },
     projectDir,
   );
   return true;
@@ -299,13 +339,25 @@ export class AgentSessionsService {
 
     const sandboxProviderId = await this.resolveSandboxProviderId(session);
     const workingDirectory = this.projectDir();
-    const skillStaged = await ensureBatchWorkflowSkill({
+    const batchSkillStaged = await ensureBatchWorkflowSkill({
       sandboxProvider: this.sandboxProvider,
       sandboxProviderId,
       projectDir: workingDirectory,
     });
-    if (skillStaged) {
-      await this.commitBatchWorkflowSkillBaseline(sandboxProviderId);
+    const durableSkillStaged = await ensureDurableWorkflowSkill({
+      sandboxProvider: this.sandboxProvider,
+      sandboxProviderId,
+      projectDir: workingDirectory,
+    });
+    const stagedSkillPaths = [
+      ...(batchSkillStaged ? [BATCH_WORKFLOW_SKILL_PATH] : []),
+      ...(durableSkillStaged ? [DURABLE_WORKFLOW_SKILL_PATH] : []),
+    ];
+    if (stagedSkillPaths.length > 0) {
+      await this.commitWorkflowSkillBaseline(
+        sandboxProviderId,
+        stagedSkillPaths,
+      );
     }
 
     const assistantMessageId = await this.db
@@ -472,6 +524,11 @@ export class AgentSessionsService {
       sandboxProviderId: prepared.providerId,
       projectDir: this.projectDir(),
     });
+    await ensureDurableWorkflowSkill({
+      sandboxProvider: this.sandboxProvider,
+      sandboxProviderId: prepared.providerId,
+      projectDir: this.projectDir(),
+    });
     await this.ensureGitBaseline(prepared.providerId);
     return {
       handle: { id: prepared.id, providerId: prepared.providerId },
@@ -479,23 +536,22 @@ export class AgentSessionsService {
     };
   }
 
-  private async commitBatchWorkflowSkillBaseline(
+  private async commitWorkflowSkillBaseline(
     sandboxProviderId: string,
+    skillPaths: readonly string[],
   ): Promise<void> {
-    const path = shellQuote(BATCH_WORKFLOW_SKILL_PATH);
+    const paths = skillPaths.map(shellQuote).join(" ");
     const command = [
       `cd ${shellQuote(this.projectDir())}`,
-      `git add -- ${path}`,
-      `git -c user.name=catamorphic -c user.email=agent@catamorphic.dev commit -m catamorphic-batch-skill --quiet -- ${path}`,
+      `git add -- ${paths}`,
+      `git -c user.name=catamorphic -c user.email=agent@catamorphic.dev commit -m catamorphic-workflow-skills --quiet -- ${paths}`,
     ].join(" && ");
     const result = await this.sandboxProvider.executeCommand(
       sandboxProviderId,
       command,
     );
     if (result.exitCode !== 0) {
-      throw new Error(
-        `Failed to baseline batch workflow skill: ${result.result}`,
-      );
+      throw new Error(`Failed to baseline workflow skills: ${result.result}`);
     }
   }
 
