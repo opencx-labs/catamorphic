@@ -274,9 +274,9 @@ describe("runtime invocation dispatcher", () => {
     });
     const dispatcher = createDispatcher({ factory });
     const result = dispatcher.invoke(invocation({}));
-    await vi.waitFor(() =>
+    await vi.waitFor(async () =>
       expect(
-        dispatcher.events({ invocationId: "invocation-1" })?.events,
+        (await dispatcher.events({ invocationId: "invocation-1" }))?.events,
       ).toHaveLength(4),
     );
 
@@ -296,6 +296,66 @@ describe("runtime invocation dispatcher", () => {
         ],
       },
     });
+  });
+
+  it("holds an event long poll open until an event arrives", async () => {
+    let emit: (() => void) | undefined;
+    const factory = createWorkerFactory({
+      execute: ({ onEvent }) =>
+        new Promise((resolve) => {
+          emit = () => {
+            onEvent({
+              type: "step_started",
+              nodeId: "node-1",
+              occurrence: 0,
+              name: "Deferred",
+            });
+            resolve(completed({ ok: true }));
+          };
+        }),
+    });
+    const dispatcher = createDispatcher({ factory });
+    const result = dispatcher.invoke(invocation({}));
+    await vi.waitFor(() => expect(emit).toBeDefined());
+
+    // Drain what the invocation has already produced so the next poll has
+    // nothing waiting for it and must block.
+    const seen = await dispatcher.events({ invocationId: "invocation-1" });
+    const afterSequence = seen?.events.at(-1)?.sequence ?? 0;
+
+    let settled = false;
+    const poll = dispatcher
+      .events({ invocationId: "invocation-1", afterSequence, waitMs: 5_000 })
+      .then((response) => {
+        settled = true;
+        return response;
+      });
+    await delay(50);
+    expect(settled).toBe(false);
+
+    emit?.();
+    await expect(poll).resolves.toMatchObject({
+      events: expect.arrayContaining([
+        expect.objectContaining({ type: "step_started" }),
+      ]),
+    });
+    await result;
+  });
+
+  it("returns immediately when events are already pending", async () => {
+    const factory = createWorkerFactory({
+      execute: async () => completed({ ok: true }),
+    });
+    const dispatcher = createDispatcher({ factory });
+    await dispatcher.invoke(invocation({}));
+
+    const started = Date.now();
+    const response = await dispatcher.events({
+      invocationId: "invocation-1",
+      waitMs: 5_000,
+    });
+    expect(Date.now() - started).toBeLessThan(1_000);
+    expect(response?.done).toBe(true);
   });
 
   it("retains completed step entries when an active invocation times out", async () => {
@@ -551,4 +611,8 @@ function invocation(
 
 function completed(result: unknown): RuntimeTerminalResult {
   return { status: "completed", result, steps: [] };
+}
+
+async function delay(milliseconds: number): Promise<void> {
+  await new Promise<void>((resolve) => setTimeout(resolve, milliseconds));
 }

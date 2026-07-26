@@ -79,9 +79,18 @@ export function createSupervisorRequestHandler(
           message: "afterSequence must be a non-negative integer",
         });
       }
-      const events = options.dispatcher.events({
+      const waitMs = parseWaitMs(url.searchParams.get("waitMs"));
+      if (waitMs === null) {
+        return protocolError({
+          status: 400,
+          code: "bad_request",
+          message: `waitMs must be an integer between 0 and ${MAX_EVENT_WAIT_MS}`,
+        });
+      }
+      const events = await options.dispatcher.events({
         invocationId,
         afterSequence,
+        waitMs,
       });
       if (!events) {
         return protocolError({
@@ -124,6 +133,19 @@ function parseAfterSequence(value: string | null): number | null {
   if (value === null) return 0;
   const parsed = Number(value);
   return Number.isInteger(parsed) && parsed >= 0 ? parsed : null;
+}
+
+/**
+ * Held below the caller's own request timeout so a long poll returns on its
+ * own terms rather than being torn down mid-flight.
+ */
+const MAX_EVENT_WAIT_MS = 30_000;
+
+function parseWaitMs(value: string | null): number | null {
+  if (value === null) return 0;
+  const parsed = Number(value);
+  if (!Number.isInteger(parsed) || parsed < 0) return null;
+  return parsed <= MAX_EVENT_WAIT_MS ? parsed : null;
 }
 
 export interface SupervisorServer {
