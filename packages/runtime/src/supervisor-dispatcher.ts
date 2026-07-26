@@ -67,6 +67,8 @@ interface InvocationState {
   reject: (error: unknown) => void;
   status: "queued" | "active" | "done";
   abortController: AbortController;
+  /** Woken whenever an event is appended, so long polls return immediately. */
+  waiters: Set<() => void>;
   worker?: RuntimeInvocationWorker;
   deadlineTimer?: ReturnType<typeof setTimeout>;
 }
@@ -144,6 +146,7 @@ export class RuntimeInvocationDispatcher {
       reject: deferred.reject,
       status: "queued",
       abortController: new AbortController(),
+      waiters: new Set(),
     };
     this.appendEvent(state, { type: "accepted" });
     this.states.set(request.invocationId, state);
@@ -172,19 +175,55 @@ export class RuntimeInvocationDispatcher {
     return true;
   }
 
-  events(args: {
+  /**
+   * Returns events after `afterSequence`, optionally waiting for one to arrive.
+   *
+   * With `waitMs` the call blocks until an event is appended, the invocation
+   * finishes, or the wait elapses. The host drives this from outside the
+   * sandbox, where each poll costs a process spawn and a network round trip, so
+   * returning empty immediately turns an idle invocation into a busy loop
+   * proportional to its wall-clock duration. Waiting here makes the cost
+   * proportional to events instead, and delivers them with no added latency.
+   */
+  async events(args: {
     invocationId: string;
     afterSequence?: number;
-  }): RuntimeInvocationEventsResponse | null {
+    waitMs?: number;
+  }): Promise<RuntimeInvocationEventsResponse | null> {
     const state = this.states.get(args.invocationId);
     if (!state) return null;
     const afterSequence = args.afterSequence ?? 0;
+    const pending = (): RuntimeInvocationEvent[] =>
+      state.events.filter((event) => event.sequence > afterSequence);
+
+    if (args.waitMs && args.waitMs > 0 && state.status !== "done") {
+      if (pending().length === 0) {
+        await new Promise<void>((resolve) => {
+          const settle = (): void => {
+            clearTimeout(timer);
+            state.waiters.delete(settle);
+            resolve();
+          };
+          const timer = setTimeout(settle, args.waitMs);
+          // Node keeps the process alive for a pending timer; this wait must
+          // never be the reason the supervisor stays up.
+          timer.unref?.();
+          state.waiters.add(settle);
+        });
+      }
+    }
+
     return {
       protocolVersion: RUNTIME_PROTOCOL_VERSION,
       invocationId: args.invocationId,
-      events: state.events.filter((event) => event.sequence > afterSequence),
+      events: pending(),
       done: state.status === "done",
     };
+  }
+
+  private wakeWaiters(state: InvocationState): void {
+    if (state.waiters.size === 0) return;
+    for (const wake of [...state.waiters]) wake();
   }
 
   health(): RuntimeSupervisorHealth {
@@ -253,6 +292,9 @@ export class RuntimeInvocationDispatcher {
     state.status = "done";
     if (state.deadlineTimer) clearTimeout(state.deadlineTimer);
     this.appendTerminalEvent(state, terminal);
+    // Covers every appendTerminalEvent branch and the move to "done", so a
+    // long poll never waits out its timeout on a finished invocation.
+    this.wakeWaiters(state);
     state.resolve({
       protocolVersion: RUNTIME_PROTOCOL_VERSION,
       invocationId: state.request.invocationId,
@@ -268,6 +310,7 @@ export class RuntimeInvocationDispatcher {
     state.status = "done";
     if (state.deadlineTimer) clearTimeout(state.deadlineTimer);
     this.states.delete(state.request.invocationId);
+    this.wakeWaiters(state);
     state.reject(
       cause instanceof RuntimeInvocationInfrastructureError
         ? cause
@@ -302,6 +345,7 @@ export class RuntimeInvocationDispatcher {
       timestamp: this.now().toISOString(),
       ...event,
     });
+    this.wakeWaiters(state);
   }
 
   private appendTerminalEvent(

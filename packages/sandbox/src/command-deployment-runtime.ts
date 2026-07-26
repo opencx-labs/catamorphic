@@ -29,6 +29,20 @@ interface RuntimeRecord {
   port: number;
 }
 
+/**
+ * How long the supervisor holds an event request open when nothing is ready.
+ * Must stay at or below the supervisor's own ceiling; long enough that an idle
+ * invocation costs few round trips, short enough that a lost response is
+ * noticed promptly.
+ */
+const EVENT_WAIT_MS = 20_000;
+
+/** Lets the supervisor answer a wait on its own terms before curl gives up. */
+const EVENT_REQUEST_GRACE_SECONDS = 10;
+
+/** Backoff after a failed drain, so an unreachable supervisor is not spun on. */
+const EVENT_RETRY_DELAY_MS = 1_000;
+
 type CommandOutcome =
   | {
       status: "fulfilled";
@@ -310,6 +324,19 @@ export class CommandDeploymentRuntimeProvider
     throw new Error(`Deployment runtime failed health check: ${logs}`);
   }
 
+  /**
+   * Drains events until the invocation completes.
+   *
+   * Each drain is a process spawn inside the sandbox plus a network round trip,
+   * so the supervisor holds the request open until an event is ready
+   * ({@link EVENT_WAIT_MS}) rather than answering empty right away. That makes
+   * the cost track the number of events instead of the invocation's wall-clock
+   * duration — an idle run waiting on a slow API costs nothing — while events
+   * still arrive as soon as they are emitted.
+   *
+   * Iterative rather than recursive: a long invocation would otherwise build a
+   * promise chain one frame deep per poll.
+   */
   private async reportWhileRunning(args: {
     record: RuntimeRecord;
     invocation: RuntimeInvocation;
@@ -319,33 +346,53 @@ export class CommandDeploymentRuntimeProvider
     >;
     cursor: { sequence: number };
   }): Promise<void> {
-    const completionState = await Promise.race([
-      args.completion.then(doneState),
-      delay({ milliseconds: 50 }).then(pollState),
-    ]);
-    await this.reportAvailableEvents(args);
-    if (completionState === "poll") {
-      await this.reportWhileRunning(args);
+    let running = true;
+    const stop = (): void => {
+      running = false;
+    };
+    args.completion.then(stop, stop);
+    // The supervisor wakes long polls the moment an invocation finishes, so
+    // this observes completion without a separate timer racing each iteration.
+    while (running) {
+      const drained = await this.reportAvailableEvents({
+        ...args,
+        waitMs: EVENT_WAIT_MS,
+      });
+      // A failing request returns immediately rather than holding the wait, so
+      // without this the loop would spin against an unreachable supervisor.
+      if (!drained && running) {
+        await delay({ milliseconds: EVENT_RETRY_DELAY_MS });
+      }
     }
+    // Events emitted between the last drain and completion are still pending;
+    // this final pass must not block waiting for events that will never come.
+    await this.reportAvailableEvents({ ...args, waitMs: 0 });
   }
 
   private async reportAvailableEvents(args: {
     record: RuntimeRecord;
     invocation: RuntimeInvocation;
     cursor: { sequence: number };
-  }): Promise<void> {
+    waitMs?: number;
+  }): Promise<boolean> {
     const sink = args.invocation.eventSink;
-    if (!sink) return;
+    if (!sink) return true;
+    const waitMs = args.waitMs ?? 0;
+    const waitSeconds = Math.ceil(waitMs / 1_000);
     const result = await this.options.provider.executeCommand(
       args.record.runtime.sandboxId,
       `curl --fail --silent --show-error ` +
+        `--max-time ${waitSeconds + EVENT_REQUEST_GRACE_SECONDS} ` +
         `-H ${shellQuote(`Authorization: Bearer ${args.record.token}`)} ` +
         `http://127.0.0.1:${args.record.port}/v1/invocations/` +
         `${encodeURIComponent(args.invocation.invocationId)}/events` +
-        `?afterSequence=${args.cursor.sequence}`,
-      { cwd: args.record.runtimeDirectory, timeout: 10 },
+        `?afterSequence=${args.cursor.sequence}&waitMs=${waitMs}`,
+      {
+        cwd: args.record.runtimeDirectory,
+        timeout: waitSeconds + EVENT_REQUEST_GRACE_SECONDS + 1,
+      },
     );
-    if (result.exitCode !== 0) return;
+    if (result.exitCode !== 0) return false;
     const response = parseEventsResponse(JSON.parse(result.result));
     await reportEvents({
       sink,
@@ -354,6 +401,7 @@ export class CommandDeploymentRuntimeProvider
       events: response.events,
       cursor: args.cursor,
     });
+    return true;
   }
 
   private requireRuntime(runtimeId: string): RuntimeRecord {
@@ -619,14 +667,6 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 function shellQuote(value: string): string {
   return `'${value.replaceAll("'", `'\\''`)}'`;
-}
-
-function doneState(): "done" {
-  return "done";
-}
-
-function pollState(): "poll" {
-  return "poll";
 }
 
 async function delay(args: { milliseconds: number }): Promise<void> {
