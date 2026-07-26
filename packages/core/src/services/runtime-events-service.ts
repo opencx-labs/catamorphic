@@ -34,6 +34,43 @@ export class RuntimeStepReplayConflictError extends Error {
   }
 }
 
+export class RuntimeReplayTooLargeError extends Error {
+  constructor(args: { runId: string; bytes: number; limit: number }) {
+    super(
+      `Run '${args.runId}' replay state is ${args.bytes} bytes, over the ${args.limit} byte limit`,
+    );
+    this.name = "RuntimeReplayTooLargeError";
+  }
+}
+
+export class RuntimeStepPayloadTooLargeError extends Error {
+  constructor(args: {
+    runId: string;
+    nodeId: string;
+    occurrence: number;
+    bytes: number;
+    limit: number;
+  }) {
+    super(
+      `Run '${args.runId}' step '${args.nodeId}:${args.occurrence}' payload is ${args.bytes} bytes, over the ${args.limit} byte limit`,
+    );
+    this.name = "RuntimeStepPayloadTooLargeError";
+  }
+}
+
+/**
+ * Ceiling on a single step's persisted input or output.
+ *
+ * Postgres would otherwise accept payloads up to its 1GB field limit, and the
+ * failure mode there is an aborted transaction rather than a legible error
+ * against the offending step. A step's output is also replayed into every
+ * later resume, so oversized values compound.
+ */
+const MAX_STEP_PAYLOAD_BYTES = 4 * 1024 * 1024;
+
+/** Ceiling on the full replay ledger shipped into the sandbox on resume. */
+const MAX_REPLAY_BYTES = 32 * 1024 * 1024;
+
 export interface RuntimeEventIngestionResult {
   accepted: number;
   duplicates: number;
@@ -98,6 +135,15 @@ export class RuntimeEventsService {
     );
   }
 
+  /**
+   * Builds the completed-step ledger a resuming invocation replays against.
+   *
+   * The whole ledger is serialized and shipped into the sandbox on every
+   * resume, so its cost grows with everything the run has already done — a
+   * workflow that loops thousands of times re-uploads every prior output each
+   * time it restarts. The cap turns that from a silent memory and bandwidth
+   * cliff into an explicit failure naming the run.
+   */
   async replay(args: {
     tenantId: string;
     runId: string;
@@ -112,15 +158,23 @@ export class RuntimeEventsService {
       .where("run_id", "=", args.runId)
       .where("status", "=", "completed")
       .select(["node_id", "occurrence", "output"])
-      .orderBy("node_id", "asc")
       .orderBy("occurrence", "asc")
       .execute();
-    return Object.fromEntries(
+    const replay = Object.fromEntries(
       rows.map((row) => [
         replayKey({ nodeId: row.node_id, occurrence: row.occurrence }),
         row.output,
       ]),
     );
+    const bytes = jsonByteLength(replay);
+    if (bytes > MAX_REPLAY_BYTES) {
+      throw new RuntimeReplayTooLargeError({
+        runId: args.runId,
+        bytes,
+        limit: MAX_REPLAY_BYTES,
+      });
+    }
+    return replay;
   }
 }
 
@@ -131,6 +185,9 @@ async function ingestEvents(args: {
   events: readonly RuntimeInvocationEvent[];
 }): Promise<RuntimeEventIngestionResult> {
   const counts = { accepted: 0, duplicates: 0 };
+  if (args.events.length === 0) return counts;
+
+  const payloads = new Map<number, Json>();
   for (const event of args.events) {
     validateEvent(event);
     if (args.invocationId && event.invocationId !== args.invocationId) {
@@ -138,29 +195,40 @@ async function ingestEvents(args: {
         `Runtime event invocation '${event.invocationId}' does not match '${args.invocationId}'`,
       );
     }
-    const payload = toJson(event);
-    const inserted = await args.trx
-      .insertInto("workflow_run_events")
-      .values({
+    payloads.set(event.sequence, toJson(event));
+  }
+
+  // One insert for the whole batch rather than one per event. Events arrive in
+  // groups, and each statement is a round trip held inside this transaction.
+  const inserted = await args.trx
+    .insertInto("workflow_run_events")
+    .values(
+      args.events.map((event) => ({
         run_id: args.runId,
         invocation_id: event.invocationId,
         sequence: event.sequence,
         attempt: event.attempt,
         type: event.type,
-        payload,
+        payload: payloads.get(event.sequence) ?? null,
         created_at: new Date(event.timestamp),
-      })
-      .onConflict((conflict) =>
-        conflict.columns(["invocation_id", "sequence"]).doNothing(),
-      )
-      .returning("id")
-      .executeTakeFirst();
-    if (!inserted) {
+      })),
+    )
+    .onConflict((conflict) =>
+      conflict.columns(["invocation_id", "sequence"]).doNothing(),
+    )
+    .returning(["invocation_id", "sequence"])
+    .execute();
+  const accepted = new Set(
+    inserted.map((row) => `${row.invocation_id} ${row.sequence}`),
+  );
+
+  for (const event of args.events) {
+    if (!accepted.has(`${event.invocationId} ${event.sequence}`)) {
       await assertDuplicateMatches({
         trx: args.trx,
         runId: args.runId,
         event,
-        payload,
+        payload: payloads.get(event.sequence) ?? null,
       });
       counts.duplicates += 1;
       continue;
@@ -209,7 +277,14 @@ async function insertStartedStep(args: {
   event: Extract<RuntimeInvocationEvent, { type: "step_started" }>;
   timestamp: Date;
 }): Promise<void> {
-  await args.trx
+  const input = toJson(args.event.input);
+  assertStepPayloadSize({
+    runId: args.runId,
+    nodeId: args.event.nodeId,
+    occurrence: args.event.occurrence,
+    value: input,
+  });
+  const inserted = await args.trx
     .insertInto("workflow_run_steps")
     .values({
       id: crypto.randomUUID(),
@@ -218,19 +293,23 @@ async function insertStartedStep(args: {
       occurrence: args.event.occurrence,
       name: args.event.name,
       status: "running",
-      input: toJson(args.event.input),
+      input,
       attempt: args.event.attempt,
       started_at: args.timestamp,
     })
     .onConflict((conflict) =>
       conflict.columns(["run_id", "node_id", "occurrence"]).doNothing(),
     )
-    .execute();
+    .returning("id")
+    .executeTakeFirst();
+  // A fresh insert already holds these values; only a retry landing on an
+  // existing row needs them refreshed.
+  if (inserted) return;
   await args.trx
     .updateTable("workflow_run_steps")
     .set({
       name: args.event.name,
-      input: toJson(args.event.input),
+      input,
       attempt: args.event.attempt,
       started_at: args.timestamp,
     })
@@ -254,7 +333,13 @@ async function upsertTerminalStep(args: {
   const output =
     args.event.type === "step_completed" ? toJson(args.event.output) : null;
   const error = args.event.type === "step_failed" ? args.event.error : null;
-  await args.trx
+  assertStepPayloadSize({
+    runId: args.runId,
+    nodeId: args.event.nodeId,
+    occurrence: args.event.occurrence,
+    value: output,
+  });
+  const inserted = await args.trx
     .insertInto("workflow_run_steps")
     .values({
       id: crypto.randomUUID(),
@@ -272,7 +357,11 @@ async function upsertTerminalStep(args: {
     .onConflict((conflict) =>
       conflict.columns(["run_id", "node_id", "occurrence"]).doNothing(),
     )
-    .execute();
+    .returning("id")
+    .executeTakeFirst();
+  // Nothing preceded a winning insert, so there is no prior row to reconcile
+  // against and no replay conflict to check.
+  if (inserted) return;
   if (args.event.type === "step_failed") {
     await args.trx
       .updateTable("workflow_run_steps")
@@ -377,6 +466,28 @@ async function requireRun(args: {
 
 function replayKey(args: { nodeId: string; occurrence: number }): string {
   return `${args.nodeId}:${args.occurrence}`;
+}
+
+function assertStepPayloadSize(args: {
+  runId: string;
+  nodeId: string;
+  occurrence: number;
+  value: Json;
+}): void {
+  if (args.value === null) return;
+  const bytes = jsonByteLength(args.value);
+  if (bytes <= MAX_STEP_PAYLOAD_BYTES) return;
+  throw new RuntimeStepPayloadTooLargeError({
+    runId: args.runId,
+    nodeId: args.nodeId,
+    occurrence: args.occurrence,
+    bytes,
+    limit: MAX_STEP_PAYLOAD_BYTES,
+  });
+}
+
+function jsonByteLength(value: unknown): number {
+  return new TextEncoder().encode(JSON.stringify(value)).byteLength;
 }
 
 function validateEvent(event: RuntimeInvocationEvent): void {
