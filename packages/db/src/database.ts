@@ -10,6 +10,15 @@ export type CreateDatabaseOptions =
        */
       connectionString: string;
       schema?: string;
+      /**
+       * Maximum pooled connections. Defaults to {@link DEFAULT_POOL_SIZE}.
+       *
+       * Size this above the total worker concurrency you start (see
+       * `startWorker({ concurrency })`), with headroom for the host's own
+       * queries: every loop holds a connection for the length of its
+       * transaction.
+       */
+      poolSize?: number;
     }
   | {
       /**
@@ -21,6 +30,17 @@ export type CreateDatabaseOptions =
       pool: pg.Pool;
       schema?: string;
     };
+
+/**
+ * Pooled connections for a catamorphic-owned pool.
+ *
+ * A worker loop holds a connection for the length of each transaction, and a
+ * host serves requests from the same pool. node-postgres defaults to 10, which
+ * a worker at moderate concurrency exhausts on its own — and pool-acquire
+ * timeouts surface as generic query failures, so the misconfiguration reads as
+ * database trouble rather than a too-small pool.
+ */
+export const DEFAULT_POOL_SIZE = 20;
 
 export function createDatabase(options: CreateDatabaseOptions) {
   if ("pool" in options) {
@@ -37,6 +57,7 @@ export function createDatabase(options: CreateDatabaseOptions) {
   const pool = new pg.Pool({
     connectionString: options.connectionString,
     options: poolOptions,
+    max: options.poolSize ?? DEFAULT_POOL_SIZE,
   });
 
   return new Kysely<import("./generated/db.js").DB>({
