@@ -4,6 +4,7 @@ import type {
   ExecutionJobsService,
 } from "../services/execution-jobs-service.js";
 import { ExecutionWorkerService } from "../services/execution-worker-service.js";
+import type { RetentionService } from "../services/retention-service.js";
 
 function job(id: string): ExecutionJob {
   return {
@@ -30,6 +31,57 @@ function job(id: string): ExecutionJob {
     exhaustionHandledAt: null,
   };
 }
+
+describe("execution worker retention sweep", () => {
+  const idleJobs = {
+    requeueExpired: async () => 0,
+    listUnhandledExhausted: async () => [],
+    claim: async () => [],
+    heartbeat: async () => true,
+    complete: async () => true,
+    fail: async () => "completed" as const,
+    release: async () => true,
+  } as unknown as ExecutionJobsService;
+
+  it("sweeps once per interval no matter how often the loop polls", async () => {
+    let sweeps = 0;
+    const retention = {
+      isEnabled: true,
+      // Long enough that the many polls in this window collapse to one sweep.
+      sweepIntervalMs: 60_000,
+      purgeExpiredRuns: async () => {
+        sweeps += 1;
+        return { purgedRuns: 0 };
+      },
+    } as unknown as RetentionService;
+
+    const service = new ExecutionWorkerService(idleJobs, retention);
+    const worker = service.start({ pollIntervalMs: 1, concurrency: 4 });
+    await new Promise((resolve) => setTimeout(resolve, 120));
+    await worker.stop();
+
+    expect(sweeps).toBe(1);
+  });
+
+  it("does not sweep when retention is disabled", async () => {
+    let sweeps = 0;
+    const retention = {
+      isEnabled: false,
+      sweepIntervalMs: 1,
+      purgeExpiredRuns: async () => {
+        sweeps += 1;
+        return { purgedRuns: 0 };
+      },
+    } as unknown as RetentionService;
+
+    const service = new ExecutionWorkerService(idleJobs, retention);
+    const worker = service.start({ pollIntervalMs: 1 });
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    await worker.stop();
+
+    expect(sweeps).toBe(0);
+  });
+});
 
 describe("execution worker resilience", () => {
   it("keeps polling after a transient database error", async () => {

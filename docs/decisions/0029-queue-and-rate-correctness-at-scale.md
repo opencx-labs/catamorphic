@@ -98,7 +98,8 @@ claim path itself is insulated — its indexes are partial on live statuses — 
 retains an entry for every job ever enqueued and is the first thing expected to
 degrade. Heartbeats compound it: they update the indexed `lease_expires_at`
 every ~20s per in-flight job, defeating HOT updates and keeping autovacuum
-behind. Retention needs its own ADR.
+behind. Retention needs its own ADR — since written, as
+[0030](0030-run-retention.md), which bounds every table listed above.
 
 One reported "quadratic completion" defect was investigated and **rejected**:
 the per-completion backlog `COUNT(*)` looks unbounded, but the source

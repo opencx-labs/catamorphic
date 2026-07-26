@@ -5,6 +5,7 @@ import type {
   DeploymentRuntimeRetirementResult,
   ExecutionWorkerHandle,
   ExecutionWorkerOptions,
+  RetentionConfig,
 } from "@catamorphic/core";
 import {
   createCatamorphicCore,
@@ -71,6 +72,12 @@ export interface CreateCatamorphicConfig {
    * Requires `sandboxProvider`; enables the agent-session APIs.
    */
   codingAgent?: CodingAgentProvider;
+  /**
+   * How long finished runs are kept before they and everything hanging off
+   * them are purged. Defaults to 90 days; pass `{ enabled: false }` to keep
+   * runs forever. Per-tenant windows go through `tenantPolicies`.
+   */
+  retention?: RetentionConfig;
 }
 
 function resolveDatabase(config: DatabaseConfig): {
@@ -135,6 +142,9 @@ export class Catamorphic {
       sandboxProvider: config.sandboxProvider,
       pluginResolver: config.pluginResolver,
       codingAgent: config.codingAgent,
+      ...(config.retention === undefined
+        ? {}
+        : { retention: config.retention }),
     });
   }
 

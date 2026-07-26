@@ -22,6 +22,10 @@ import { ExecutionWorkerService } from "./services/execution-worker-service.js";
 import { PluginsService } from "./services/plugins-service.js";
 import { ProjectsService } from "./services/projects-service.js";
 import { RateReservationsService } from "./services/rate-reservations-service.js";
+import {
+  type RetentionConfig,
+  RetentionService,
+} from "./services/retention-service.js";
 import { RunCoordinator } from "./services/run-coordinator.js";
 import { RunPluginsLoader } from "./services/run-plugins-loader.js";
 import { RunsService } from "./services/runs-service.js";
@@ -43,6 +47,12 @@ export interface CatamorphicCoreConfig {
    * per-(project, user) dev sandbox.
    */
   codingAgent?: CodingAgentProvider;
+  /**
+   * How long finished runs are kept. Defaults to 90 days; set
+   * `{ enabled: false }` to keep everything. Individual tenants can be given a
+   * different window through `tenantPolicies`.
+   */
+  retention?: RetentionConfig;
 }
 
 /**
@@ -67,6 +77,7 @@ export class CatamorphicCore {
   readonly deploymentRuntime?: DeploymentRuntimeService;
   readonly skills: SkillsService;
   readonly tenantPolicies: TenantPoliciesService;
+  readonly retention: RetentionService;
   readonly plugins?: PluginsService;
   readonly secrets?: SecretsService;
   readonly runPluginsLoader?: RunPluginsLoader;
@@ -103,7 +114,11 @@ export class CatamorphicCore {
         )
       : undefined;
     const executionJobs = new ExecutionJobsService(this.db);
-    const executionWorker = new ExecutionWorkerService(executionJobs);
+    this.retention = new RetentionService(this.db, config.retention);
+    const executionWorker = new ExecutionWorkerService(
+      executionJobs,
+      this.retention,
+    );
     const runtimeEvents = new RuntimeEventsService(this.db);
     const rateReservations = new RateReservationsService(this.db);
     this.tenantPolicies = new TenantPoliciesService(this.db);

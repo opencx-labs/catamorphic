@@ -41,4 +41,5 @@ Settled design decisions live here as short Architecture Decision Records. They 
 | [0026](0026-unified-workflows-runs-and-batch-scopes.md) | Unified workflows, runs, and batch scopes | Accepted |
 | [0027](0027-correlation-keys-and-external-signals.md) | Correlation keys and named external signals | Accepted |
 | [0028](0028-shared-rate-budgets-and-tenant-execution-policy.md) | Shared rate budgets and host-owned tenant execution policy | Accepted; claim cost and rate accuracy corrected by 0029 |
-| [0029](0029-queue-and-rate-correctness-at-scale.md) | Queue claim cost, lease fencing, and rate budget accuracy at scale | Accepted |
+| [0029](0029-queue-and-rate-correctness-at-scale.md) | Queue claim cost, lease fencing, and rate budget accuracy at scale | Accepted; retention gap it identified is closed by 0030 |
+| [0030](0030-run-retention.md) | Run retention | Accepted |
