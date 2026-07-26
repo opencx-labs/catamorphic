@@ -39,6 +39,15 @@ const ALL_JOB_KINDS: readonly ExecutionJobKind[] = [
   "batch_sink",
 ];
 
+/**
+ * How often a process reclaims expired leases and drains exhausted jobs.
+ *
+ * Both are recovery paths, not hot paths — the delay before an abandoned lease
+ * is noticed is bounded by this plus the lease itself, which is well inside the
+ * tolerance for a worker that has already crashed.
+ */
+const MAINTENANCE_SWEEP_INTERVAL_MS = 5_000;
+
 export class ExecutionJobDeferredError extends Error {
   constructor(readonly availableAt: Date) {
     super(`Execution job deferred until ${availableAt.toISOString()}`);
@@ -139,10 +148,11 @@ export class ExecutionWorkerService {
     kinds: readonly ExecutionJobKind[];
   }): Promise<void> {
     const { signal } = args.controller;
+    const swept = { at: 0 };
     let consecutiveFailures = 0;
     while (!signal.aborted) {
       try {
-        await this.pollOnce(args);
+        await this.pollOnce({ ...args, swept });
         consecutiveFailures = 0;
       } catch (error) {
         // The database is reachable only intermittently during a failover or
@@ -163,21 +173,69 @@ export class ExecutionWorkerService {
   }
 
   /**
-   * Purge aged-out runs on a slow timer shared by every loop in the process.
+   * Run periodic upkeep, throttled per loop.
    *
-   * One bounded batch per interval: the sweep rides the poll loop rather than
-   * owning a timer, so it inherits the loop's error handling and shutdown, and
-   * it never competes with job execution for more than one statement at a time.
-   * A large backlog drains over successive sweeps instead of in one long
-   * transaction.
+   * Upkeep rides the poll loop rather than owning a timer, so it inherits the
+   * loop's error handling and shutdown, and never competes with job execution
+   * for more than one statement at a time. Bounded batches mean a large backlog
+   * drains over successive sweeps instead of in one long transaction.
+   *
+   * Throttling matters: this used to run on every poll, so a host with 10
+   * instances at concurrency 8 issued ~480 maintenance queries a second against
+   * an idle database. It is cheap when there is nothing to do, but not free,
+   * and it scales with instances × loops.
+   *
+   * The interval is per loop rather than shared. A shared clock means a loop
+   * that starts just after another one swept waits out the remainder before
+   * reclaiming anything, so how fast an abandoned lease is recovered depends on
+   * unrelated loops' timing — which is exactly the latency this is meant to
+   * bound.
    */
-  private async sweepRetention(): Promise<void> {
+  private async sweepMaintenance(args: {
+    swept: { at: number };
+  }): Promise<void> {
+    const now = Date.now();
+    if (now - args.swept.at >= MAINTENANCE_SWEEP_INTERVAL_MS) {
+      args.swept.at = now;
+      await this.jobs.requeueExpired({ limit: 100 });
+      await this.drainExhausted();
+    }
+    await this.sweepRetention(now);
+  }
+
+  private async sweepRetention(now: number): Promise<void> {
     const retention = this.retention;
     if (!retention?.isEnabled) return;
-    const now = Date.now();
     if (now - this.lastRetentionSweepAt < retention.sweepIntervalMs) return;
     this.lastRetentionSweepAt = now;
     await retention.purgeExpiredRuns();
+  }
+
+  /**
+   * Runs the terminal handler for jobs that exhausted their attempts.
+   *
+   * The claim is exclusive, so a job is handled once across every loop and
+   * every process. A handler that throws releases its claim, which requeues the
+   * job for a later sweep rather than stranding it as permanently handled.
+   */
+  private async drainExhausted(): Promise<void> {
+    if (!this.exhaustedHandler) return;
+    const claimed = await this.jobs.claimExhausted({ limit: 100 });
+    await Promise.allSettled(
+      claimed.map(async (job) => {
+        try {
+          await this.handleExhausted({
+            job,
+            error: job.lastError ?? "Execution job attempts exhausted",
+          });
+        } catch (error) {
+          await this.jobs
+            .releaseExhaustionClaim({ jobId: job.id })
+            .catch(() => undefined);
+          throw error;
+        }
+      }),
+    );
   }
 
   private reportLoopError(args: { workerId: string; error: unknown }): void {
@@ -195,19 +253,10 @@ export class ExecutionWorkerService {
     leaseSeconds: number;
     pollIntervalMs: number;
     kinds: readonly ExecutionJobKind[];
+    swept: { at: number };
   }): Promise<void> {
     const { signal } = args.controller;
-    await this.sweepRetention();
-    await this.jobs.requeueExpired({ limit: 100 });
-    const unhandled = await this.jobs.listUnhandledExhausted({ limit: 100 });
-    await Promise.allSettled(
-      unhandled.map((job) =>
-        this.handleExhausted({
-          job,
-          error: job.lastError ?? "Execution job attempts exhausted",
-        }),
-      ),
-    );
+    await this.sweepMaintenance({ swept: args.swept });
     const claimed = await this.jobs.claim({
       workerId: args.workerId,
       kinds: args.kinds,
@@ -262,7 +311,7 @@ export class ExecutionWorkerService {
             leaseGeneration: args.job.leaseGeneration,
           });
           if (status === "failed") {
-            await this.handleExhausted({ job: args.job, error });
+            await this.handleExhaustedInline({ job: args.job, error });
           }
           return;
         }
@@ -339,7 +388,7 @@ export class ExecutionWorkerService {
             error: message,
           });
           if (status === "failed") {
-            await this.handleExhausted({ job: args.job, error: message });
+            await this.handleExhaustedInline({ job: args.job, error: message });
           }
         } finally {
           clearInterval(heartbeat);
@@ -353,9 +402,29 @@ export class ExecutionWorkerService {
     job: ExecutionJob;
     error: string;
   }): Promise<void> {
+    await this.exhaustedHandler?.(args);
+  }
+
+  /**
+   * Handles a job this worker just exhausted, without double-handling it.
+   *
+   * The sweep claims from the same pool, so the claim decides ownership; losing
+   * it means a sweep got there first and has already run the handler.
+   */
+  private async handleExhaustedInline(args: {
+    job: ExecutionJob;
+    error: string;
+  }): Promise<void> {
     if (!this.exhaustedHandler) return;
-    await this.exhaustedHandler(args);
-    await this.jobs.markExhaustionHandled({ jobId: args.job.id });
+    if (!(await this.jobs.claimExhaustionFor({ jobId: args.job.id }))) return;
+    try {
+      await this.handleExhausted(args);
+    } catch (error) {
+      await this.jobs
+        .releaseExhaustionClaim({ jobId: args.job.id })
+        .catch(() => undefined);
+      throw error;
+    }
   }
 }
 

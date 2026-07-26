@@ -35,7 +35,7 @@ function job(id: string): ExecutionJob {
 describe("execution worker retention sweep", () => {
   const idleJobs = {
     requeueExpired: async () => 0,
-    listUnhandledExhausted: async () => [],
+    claimExhausted: async () => [],
     claim: async () => [],
     heartbeat: async () => true,
     complete: async () => true,
@@ -89,7 +89,7 @@ describe("execution worker resilience", () => {
     const processed: string[] = [];
     const jobs = {
       requeueExpired: async () => 0,
-      listUnhandledExhausted: async () => [],
+      claimExhausted: async () => [],
       claim: async () => {
         claimCalls += 1;
         // A connection reset on the first poll, work available on the next.
@@ -122,12 +122,78 @@ describe("execution worker resilience", () => {
     expect(claimCalls).toBeGreaterThan(2);
   });
 
+  it("runs the exhausted handler once per claim across concurrent loops", async () => {
+    const exhausted = job("job-exhausted");
+    let remaining = [exhausted];
+    const handled: string[] = [];
+    const jobs = {
+      requeueExpired: async () => 0,
+      // Models the atomic claim: whichever loop asks first takes the row, and
+      // every later caller sees an empty set.
+      claimExhausted: async () => {
+        const taken = remaining;
+        remaining = [];
+        return taken;
+      },
+      releaseExhaustionClaim: async () => {},
+      claim: async () => [],
+      heartbeat: async () => true,
+      complete: async () => true,
+      fail: async () => "completed" as const,
+      release: async () => true,
+    } as unknown as ExecutionJobsService;
+
+    const service = new ExecutionWorkerService(jobs);
+    service.registerExhaustedHandler(async ({ job: claimed }) => {
+      handled.push(claimed.id);
+    });
+
+    const worker = service.start({ concurrency: 4, pollIntervalMs: 1 });
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    await worker.stop();
+
+    expect(handled).toEqual(["job-exhausted"]);
+  });
+
+  it("releases the claim when the exhausted handler throws", async () => {
+    const released: string[] = [];
+    let claims = 0;
+    const jobs = {
+      requeueExpired: async () => 0,
+      claimExhausted: async () => {
+        claims += 1;
+        return claims === 1 ? [job("job-exhausted")] : [];
+      },
+      releaseExhaustionClaim: async ({ jobId }: { jobId: string }) => {
+        released.push(jobId);
+      },
+      claim: async () => [],
+      heartbeat: async () => true,
+      complete: async () => true,
+      fail: async () => "completed" as const,
+      release: async () => true,
+    } as unknown as ExecutionJobsService;
+
+    const service = new ExecutionWorkerService(jobs);
+    service.registerExhaustedHandler(async () => {
+      throw new Error("downstream unavailable");
+    });
+
+    const worker = service.start({ pollIntervalMs: 1 });
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    await worker.stop();
+
+    // Without the release the job stays stamped as handled forever and its
+    // run is never failed.
+    expect(released).toEqual(["job-exhausted"]);
+  });
+
   it("surfaces no unhandled rejection when a poll fails", async () => {
     const jobs = {
       requeueExpired: async () => {
         throw new Error("pool timeout");
       },
-      listUnhandledExhausted: async () => [],
+      claimExhausted: async () => [],
       claim: async () => [],
       heartbeat: async () => true,
       complete: async () => true,

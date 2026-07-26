@@ -46,6 +46,33 @@ export interface ExecutionJob {
 
 const tracer = getTracer("@catamorphic/core");
 
+/**
+ * Dedupe-conflict resolution shared by every enqueue path.
+ *
+ * A live row absorbs the duplicate, which is what dedupe is for. A terminal one
+ * must be revived instead: the caller is asking for work that no longer exists,
+ * and leaving the row terminal strands whatever was waiting on it with nothing
+ * to claim.
+ */
+function reviveTerminalJob(eb: {
+  ref: (column: string) => unknown;
+}): Record<string, unknown> {
+  const status = eb.ref("execution_jobs.status");
+  const isTerminal = sql<boolean>`${status} IN ('completed', 'failed', 'canceled')`;
+  return {
+    status: sql<string>`CASE WHEN ${isTerminal} THEN 'pending' ELSE ${status} END`,
+    attempt: sql<number>`CASE WHEN ${isTerminal} THEN 0 ELSE ${eb.ref("execution_jobs.attempt")} END`,
+    available_at: sql<Date>`CASE WHEN ${isTerminal} THEN excluded.available_at ELSE ${eb.ref("execution_jobs.available_at")} END`,
+    payload: sql<Json>`CASE WHEN ${isTerminal} THEN excluded.payload ELSE ${eb.ref("execution_jobs.payload")} END`,
+    completed_at: sql<Date | null>`CASE WHEN ${isTerminal} THEN NULL ELSE ${eb.ref("execution_jobs.completed_at")} END`,
+    last_error: sql<
+      string | null
+    >`CASE WHEN ${isTerminal} THEN NULL ELSE ${eb.ref("execution_jobs.last_error")} END`,
+    exhaustion_handled_at: sql<Date | null>`CASE WHEN ${isTerminal} THEN NULL ELSE ${eb.ref("execution_jobs.exhaustion_handled_at")} END`,
+    updated_at: new Date(),
+  };
+}
+
 export class ExecutionJobsService {
   constructor(private readonly db: Kysely<DB>) {}
 
@@ -91,27 +118,84 @@ export class ExecutionJobsService {
             conflict
               .columns(["tenant_id", "dedupe_key"])
               .where("dedupe_key", "is not", null)
-              // A live row absorbs the duplicate, which is what dedupe is for.
-              // A terminal one must be revived instead: the caller is asking
-              // for work that no longer exists, and leaving the row terminal
-              // strands whatever was waiting on it with nothing to claim.
-              .doUpdateSet((eb) => ({
-                status: sql<string>`CASE WHEN ${eb.ref("execution_jobs.status")} IN ('completed', 'failed', 'canceled') THEN 'pending' ELSE ${eb.ref("execution_jobs.status")} END`,
-                attempt: sql<number>`CASE WHEN ${eb.ref("execution_jobs.status")} IN ('completed', 'failed', 'canceled') THEN 0 ELSE ${eb.ref("execution_jobs.attempt")} END`,
-                available_at: sql<Date>`CASE WHEN ${eb.ref("execution_jobs.status")} IN ('completed', 'failed', 'canceled') THEN excluded.available_at ELSE ${eb.ref("execution_jobs.available_at")} END`,
-                payload: sql<Json>`CASE WHEN ${eb.ref("execution_jobs.status")} IN ('completed', 'failed', 'canceled') THEN excluded.payload ELSE ${eb.ref("execution_jobs.payload")} END`,
-                completed_at: sql<Date | null>`CASE WHEN ${eb.ref("execution_jobs.status")} IN ('completed', 'failed', 'canceled') THEN NULL ELSE ${eb.ref("execution_jobs.completed_at")} END`,
-                last_error: sql<
-                  string | null
-                >`CASE WHEN ${eb.ref("execution_jobs.status")} IN ('completed', 'failed', 'canceled') THEN NULL ELSE ${eb.ref("execution_jobs.last_error")} END`,
-                exhaustion_handled_at: sql<Date | null>`CASE WHEN ${eb.ref("execution_jobs.status")} IN ('completed', 'failed', 'canceled') THEN NULL ELSE ${eb.ref("execution_jobs.exhaustion_handled_at")} END`,
-                updated_at: new Date(),
-              })),
+              .doUpdateSet(reviveTerminalJob),
           )
           .returningAll()
           .executeTakeFirstOrThrow();
         span.setAttribute("catamorphic.queue.job.id", row.id);
         return mapExecutionJob(row);
+      },
+    );
+  }
+
+  /**
+   * Enqueues many jobs in one statement.
+   *
+   * Fan-out paths enqueue one job per item, and a per-item round trip makes
+   * page acceptance and batch-step resumption scale with item count rather
+   * than page count. Dedupe semantics are identical to {@link enqueue}.
+   *
+   * Rows sharing a dedupe key within one call would make the statement's own
+   * ON CONFLICT ambiguous, so they are collapsed first — last write wins, which
+   * matches what sequential enqueues would have left behind.
+   */
+  async enqueueMany(args: {
+    jobs: readonly {
+      tenantId: string;
+      kind: ExecutionJobKind;
+      payload: Json;
+      priority?: number;
+      availableAt?: Date;
+      maxAttempts?: number;
+      dedupeKey?: string;
+      workflowRunId: string;
+      workflowStepAttemptId?: string;
+    }[];
+    trx?: Transaction<DB>;
+  }): Promise<void> {
+    if (args.jobs.length === 0) return;
+    const deduped = [...args.jobs];
+    const lastByKey = new Map<string, number>();
+    for (const [index, job] of deduped.entries()) {
+      if (!job.dedupeKey) continue;
+      lastByKey.set(`${job.tenantId} ${job.dedupeKey}`, index);
+    }
+    const rows = deduped.filter(
+      (job, index) =>
+        !job.dedupeKey ||
+        lastByKey.get(`${job.tenantId} ${job.dedupeKey}`) === index,
+    );
+
+    await withSpan(
+      {
+        tracer,
+        name: "queue.enqueue_many",
+        attributes: { "catamorphic.queue.job.count": rows.length },
+      },
+      async () => {
+        const database = args.trx ?? this.db;
+        await database
+          .insertInto("execution_jobs")
+          .values(
+            rows.map((job) => ({
+              tenant_id: job.tenantId,
+              kind: job.kind,
+              payload: job.payload,
+              priority: job.priority ?? 0,
+              available_at: job.availableAt ?? sql<Date>`clock_timestamp()`,
+              max_attempts: job.maxAttempts ?? 5,
+              dedupe_key: job.dedupeKey ?? null,
+              workflow_run_id: job.workflowRunId,
+              workflow_step_attempt_id: job.workflowStepAttemptId ?? null,
+            })),
+          )
+          .onConflict((conflict) =>
+            conflict
+              .columns(["tenant_id", "dedupe_key"])
+              .where("dedupe_key", "is not", null)
+              .doUpdateSet(reviveTerminalJob),
+          )
+          .execute();
       },
     );
   }
@@ -562,32 +646,68 @@ export class ExecutionJobsService {
     });
   }
 
-  async listUnhandledExhausted(args: {
-    limit?: number;
-  }): Promise<ExecutionJob[]> {
+  /**
+   * Atomically takes ownership of exhausted jobs needing their terminal handler.
+   *
+   * Reading the unhandled set and marking it afterwards let every loop in every
+   * process see the same rows and run the handler once each — the side effect
+   * (failing the step, failing the run) is not idempotent, so it fired N times
+   * per job. Stamping `exhaustion_handled_at` in the same statement that
+   * selects makes the claim exclusive, and `SKIP LOCKED` keeps concurrent
+   * claimers from queueing behind one another.
+   *
+   * The stamp is a claim, not a receipt: a handler that fails must call
+   * {@link releaseExhaustionClaim} so the job is retried rather than stranded.
+   */
+  async claimExhausted(args: { limit?: number }): Promise<ExecutionJob[]> {
+    const limit = Math.max(1, Math.min(args.limit ?? 100, 1_000));
     const rows = await this.db
-      .selectFrom("execution_jobs")
-      .where("status", "=", "failed")
-      .where("exhaustion_handled_at", "is", null)
-      .selectAll()
-      .orderBy("completed_at", "asc")
-      .limit(Math.max(1, Math.min(args.limit ?? 100, 1_000)))
+      .updateTable("execution_jobs")
+      .set({ exhaustion_handled_at: sql<Date>`clock_timestamp()` })
+      .where(({ eb, selectFrom }) =>
+        eb(
+          "id",
+          "in",
+          selectFrom("execution_jobs")
+            .select("id")
+            .where("status", "=", "failed")
+            .where("exhaustion_handled_at", "is", null)
+            .orderBy("completed_at", "asc")
+            .limit(limit)
+            .forUpdate()
+            .skipLocked(),
+        ),
+      )
+      .returningAll()
       .execute();
     return rows.map(mapExecutionJob);
   }
 
-  async markExhaustionHandled(args: { jobId: string }): Promise<boolean> {
+  /**
+   * Claims one exhausted job, for the worker that just exhausted it inline.
+   *
+   * Returns false when a sweep already claimed it, so the terminal handler
+   * still runs exactly once no matter which path reaches the job first.
+   */
+  async claimExhaustionFor(args: { jobId: string }): Promise<boolean> {
     const result = await this.db
       .updateTable("execution_jobs")
-      .set({
-        exhaustion_handled_at: sql<Date>`clock_timestamp()`,
-        updated_at: sql<Date>`clock_timestamp()`,
-      })
+      .set({ exhaustion_handled_at: sql<Date>`clock_timestamp()` })
       .where("id", "=", args.jobId)
       .where("status", "=", "failed")
       .where("exhaustion_handled_at", "is", null)
       .executeTakeFirst();
     return Number(result.numUpdatedRows) === 1;
+  }
+
+  /** Returns a claimed job to the unhandled set after its handler failed. */
+  async releaseExhaustionClaim(args: { jobId: string }): Promise<void> {
+    await this.db
+      .updateTable("execution_jobs")
+      .set({ exhaustion_handled_at: null })
+      .where("id", "=", args.jobId)
+      .where("status", "=", "failed")
+      .execute();
   }
 }
 
