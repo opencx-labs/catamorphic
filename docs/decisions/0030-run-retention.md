@@ -47,9 +47,15 @@ process, so N concurrent loops still sweep once per interval.
 **Two guards decide what is purgeable.** Only root runs are considered — a child
 whose parent is also expiring would otherwise be deleted twice, once directly
 and once by the parent's cascade. And a run with any non-terminal descendant is
-skipped entirely: a parent can reach a terminal status while a child is still
-live (the parent failed before its child was cancelled), and cascading onto that
-child would destroy in-flight work.
+skipped entirely: a parent can reach a terminal status while a descendant is
+still live (the parent failed before its child was cancelled), and cascading
+onto that descendant would destroy in-flight work.
+
+**The descendant check is recursive, because the cascade is.** The first
+implementation checked direct children only, which was wrong in a way worth
+recording: a root whose own child was terminal looked purgeable, and the delete
+then cascaded *through* that terminal child onto a still-running grandchild.
+Depth-one reasoning does not hold against a depth-N cascade.
 
 ## Consequences
 
@@ -66,6 +72,13 @@ Resolving each project's cutoff instant in a leading CTE and then joining
 `LATERAL` makes the comparison a per-project constant, which the index can seek
 on. The index existed in both versions; only the shape of the predicate decided
 whether it was usable.
+
+The descendant walk has the same shape of trap. Written the obvious way — a
+correlated `WITH RECURSIVE` inside `NOT EXISTS`, evaluated per candidate — it
+costs about 50× more (~20ms versus 0.35ms on the same data), because the CTE is
+re-planned and re-executed for every row. Walking the whole candidate batch once
+as a set and anti-joining the blocked roots restores it to ~0.7ms while keeping
+full recursive protection. Both formulations are correct; only one is usable.
 
 `idx_workflow_runs_retention` is partial on the terminal statuses, so it indexes
 only purgeable rows and stays small relative to the table — live runs, which the
