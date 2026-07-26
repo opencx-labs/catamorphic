@@ -118,37 +118,51 @@ export class RunCoordinator {
     return result;
   }
 
+  /**
+   * Moves a run between batch phases.
+   *
+   * Every item of a batch calls this, and they all target the same
+   * `workflow_runs` row. Taking an explicit `FOR UPDATE` first serialized the
+   * whole batch behind one row lock; folding the guards into a single
+   * conditional UPDATE lets Postgres lock only when a row actually matches.
+   *
+   * The status/phase inequality matters as much as the lock: items repeatedly
+   * re-assert the phase they are already in, and without the guard each no-op
+   * still rewrote the row, producing a dead tuple per item on one row.
+   */
   async setPhase(args: {
     runId: string;
     workflowStepAttemptId: string;
     status?: "pending" | "running" | "waiting";
     phase: "source" | "process" | "sink";
   }): Promise<void> {
-    await this.db.transaction().execute(async (trx) => {
-      const run = await lockRun({ trx, runId: args.runId });
-      if (!run || !isActiveRunStatus(run.status)) return;
-      const state = await trx
-        .selectFrom("workflow_run_states")
-        .where("run_id", "=", args.runId)
-        .where(
-          "active_workflow_step_attempt_id",
-          "=",
-          args.workflowStepAttemptId,
-        )
-        .select("run_id")
-        .executeTakeFirst();
-      if (!state) return;
-      await trx
-        .updateTable("workflow_runs")
-        .set({
-          status: args.status ?? "running",
-          phase: args.phase,
-          updated_at: await databaseNow(trx),
-        })
-        .where("id", "=", args.runId)
-        .where("status", "in", [...ACTIVE_RUN_STATUSES])
-        .execute();
-    });
+    const status = args.status ?? "running";
+    await this.db
+      .updateTable("workflow_runs")
+      .set({
+        status,
+        phase: args.phase,
+        updated_at: sql<Date>`clock_timestamp()`,
+      })
+      .where("id", "=", args.runId)
+      .where("status", "in", [...ACTIVE_RUN_STATUSES])
+      .where((eb) =>
+        eb.or([eb("status", "!=", status), eb("phase", "!=", args.phase)]),
+      )
+      .where((eb) =>
+        eb.exists(
+          eb
+            .selectFrom("workflow_run_states")
+            .select("run_id")
+            .whereRef("workflow_run_states.run_id", "=", "workflow_runs.id")
+            .where(
+              "active_workflow_step_attempt_id",
+              "=",
+              args.workflowStepAttemptId,
+            ),
+        ),
+      )
+      .execute();
   }
 
   async completeStep(args: {
@@ -1419,7 +1433,7 @@ export class RunCoordinator {
     invocationId: string;
   }): Promise<boolean> {
     return this.db.transaction().execute(async (trx) => {
-      const run = await lockRun({ trx, runId: args.job.workflowRunId });
+      const run = await shareLockRun({ trx, runId: args.job.workflowRunId });
       if (!run || !isActiveRunStatus(run.status)) return false;
       if (!(await ownsJob({ trx, job: args.job }))) return false;
       const inserted = await trx
@@ -1444,7 +1458,7 @@ export class RunCoordinator {
     invocationId: string;
   }): Promise<boolean> {
     return this.db.transaction().execute(async (trx) => {
-      const run = await lockRun({ trx, runId: args.job.workflowRunId });
+      const run = await shareLockRun({ trx, runId: args.job.workflowRunId });
       if (!run || !isActiveRunStatus(run.status)) return false;
       if (!(await ownsJob({ trx, job: args.job }))) return false;
       const deleted = await trx
@@ -1664,6 +1678,24 @@ function lockRun(args: { trx: Transaction<DB>; runId: string }) {
     .where("id", "=", args.runId)
     .selectAll()
     .forUpdate()
+    .executeTakeFirst();
+}
+
+/**
+ * Pins a run's status without excluding other readers.
+ *
+ * Callers that only need the run to stay non-terminal for the length of their
+ * transaction — invocation fencing, not run mutation — would otherwise take
+ * `FOR UPDATE` and serialize every concurrent item of a batch against the one
+ * `workflow_runs` row. `FOR SHARE` still blocks the canceler's `FOR UPDATE`,
+ * so the fence holds, while items no longer block each other.
+ */
+function shareLockRun(args: { trx: Transaction<DB>; runId: string }) {
+  return args.trx
+    .selectFrom("workflow_runs")
+    .where("id", "=", args.runId)
+    .selectAll()
+    .forShare()
     .executeTakeFirst();
 }
 
