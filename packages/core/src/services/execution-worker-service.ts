@@ -133,45 +133,83 @@ export class ExecutionWorkerService {
     kinds: readonly ExecutionJobKind[];
   }): Promise<void> {
     const { signal } = args.controller;
+    let consecutiveFailures = 0;
     while (!signal.aborted) {
-      await this.jobs.requeueExpired({ limit: 100 });
-      const unhandled = await this.jobs.listUnhandledExhausted({ limit: 100 });
-      await Promise.allSettled(
-        unhandled.map((job) =>
-          this.handleExhausted({
-            job,
-            error: job.lastError ?? "Execution job attempts exhausted",
-          }),
-        ),
-      );
-      const claimed = await this.jobs.claim({
-        workerId: args.workerId,
-        kinds: args.kinds,
-        limit: args.claimLimit,
-        leaseSeconds: args.leaseSeconds,
-      });
-      if (claimed.length === 0) {
-        await abortableDelay({ milliseconds: args.pollIntervalMs, signal });
-        continue;
-      }
-      for (const job of claimed) {
-        if (signal.aborted) {
-          await this.jobs.release({
-            jobId: job.id,
-            workerId: args.workerId,
-            leaseToken: requireLeaseToken(job),
-            leaseGeneration: job.leaseGeneration,
-            availableAt: new Date(),
-          });
-          continue;
-        }
-        await this.processJob({
-          job,
-          workerId: args.workerId,
-          leaseSeconds: args.leaseSeconds,
+      try {
+        await this.pollOnce(args);
+        consecutiveFailures = 0;
+      } catch (error) {
+        // The database is reachable only intermittently during a failover or
+        // pool exhaustion. Letting the loop exit would silently retire this
+        // concurrency slot for the lifetime of the process, so back off and
+        // keep polling instead.
+        consecutiveFailures += 1;
+        this.reportLoopError({ workerId: args.workerId, error });
+        await abortableDelay({
+          milliseconds: Math.min(
+            args.pollIntervalMs * 2 ** Math.min(consecutiveFailures, 6),
+            30_000,
+          ),
           signal,
         });
       }
+    }
+  }
+
+  private reportLoopError(args: { workerId: string; error: unknown }): void {
+    const message =
+      args.error instanceof Error ? args.error.message : String(args.error);
+    console.error(
+      `[catamorphic] execution worker '${args.workerId}' poll failed: ${message}`,
+    );
+  }
+
+  private async pollOnce(args: {
+    workerId: string;
+    controller: AbortController;
+    claimLimit: number;
+    leaseSeconds: number;
+    pollIntervalMs: number;
+    kinds: readonly ExecutionJobKind[];
+  }): Promise<void> {
+    const { signal } = args.controller;
+    await this.jobs.requeueExpired({ limit: 100 });
+    const unhandled = await this.jobs.listUnhandledExhausted({ limit: 100 });
+    await Promise.allSettled(
+      unhandled.map((job) =>
+        this.handleExhausted({
+          job,
+          error: job.lastError ?? "Execution job attempts exhausted",
+        }),
+      ),
+    );
+    const claimed = await this.jobs.claim({
+      workerId: args.workerId,
+      kinds: args.kinds,
+      limit: args.claimLimit,
+      leaseSeconds: args.leaseSeconds,
+    });
+    if (claimed.length === 0) {
+      await abortableDelay({ milliseconds: args.pollIntervalMs, signal });
+      return;
+    }
+    for (const job of claimed) {
+      if (signal.aborted) {
+        await this.jobs.release({
+          jobId: job.id,
+          workerId: args.workerId,
+          leaseToken: requireLeaseToken(job),
+          leaseGeneration: job.leaseGeneration,
+          availableAt: new Date(),
+        });
+        continue;
+      }
+      await this.processJob({
+        job,
+        workerId: args.workerId,
+        leaseSeconds: args.leaseSeconds,
+        signal,
+      });
     }
   }
 

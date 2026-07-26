@@ -196,4 +196,53 @@ describeIf("execution queue fairness", () => {
 
     expect(claimed.map((job) => job.priority)).toEqual([100, 100]);
   });
+
+  it("claims at a cost set by tenant count, not backlog depth", async () => {
+    const runId = await createRun(busyTenant);
+    async function seed(count: number): Promise<void> {
+      await sql`
+        INSERT INTO execution_jobs
+          (tenant_id, workflow_run_id, kind, payload, status, available_at)
+        SELECT ${busyTenant}::uuid, ${runId}::uuid, 'workflow_run', '{}'::jsonb,
+               'pending', clock_timestamp()
+        FROM generate_series(1::bigint, ${count}::bigint)
+      `.execute(db);
+      await sql`ANALYZE execution_jobs`.execute(db);
+    }
+
+    async function medianClaimMs(): Promise<number> {
+      const samples: number[] = [];
+      for (let index = 0; index < 5; index += 1) {
+        const startedAt = performance.now();
+        await db
+          .transaction()
+          .execute((trx) =>
+            sql`SELECT id FROM execution_jobs WHERE status = 'pending' LIMIT 1`.execute(
+              trx,
+            ),
+          );
+        const baseline = performance.now() - startedAt;
+        const claimStartedAt = performance.now();
+        const claimed = await jobs.claim({
+          workerId: `probe-${index}`,
+          kinds: ["workflow_run"],
+          limit: 20,
+        });
+        expect(claimed).toHaveLength(20);
+        samples.push(performance.now() - claimStartedAt - baseline);
+      }
+      return samples.sort((a, b) => a - b)[2] ?? 0;
+    }
+
+    await seed(2_000);
+    const shallow = await medianClaimMs();
+    await seed(40_000);
+    const deep = await medianClaimMs();
+
+    // A whole-set ranking sorts every pending row per poll, so this ratio grows
+    // linearly with the backlog — 20x the rows measured ~20x the latency before
+    // the LATERAL rewrite. Bounded selection keeps it roughly flat; the margin
+    // is wide so ordinary CI noise cannot trip it.
+    expect(deep).toBeLessThan(Math.max(shallow, 1) * 8);
+  }, 120_000);
 });
