@@ -22,6 +22,12 @@ export interface TenantExecutionPolicy {
   /** Suspends claiming without cancelling in-flight work. */
   jobsEnabled: boolean;
   /**
+   * Days this tenant's finished runs are kept, overriding the installation
+   * default. Host-owned like the rest of this table: a tenant must not be able
+   * to extend its own retention and grow shared storage unilaterally.
+   */
+  retentionDays?: number;
+  /**
    * Per-bucket ceilings keyed by the author's `globalKey`. Caps an author's
    * declared capacity and refill rate; it can lower them but never raise them.
    */
@@ -77,6 +83,9 @@ export class TenantPoliciesService {
     if (input.maxActiveRuns !== undefined) {
       requirePositiveInteger(input.maxActiveRuns, "maxActiveRuns");
     }
+    if (input.retentionDays !== undefined) {
+      requirePositiveInteger(input.retentionDays, "retentionDays");
+    }
     if (input.queueWeight !== undefined) {
       requirePositiveInteger(input.queueWeight, "queueWeight");
       if (input.queueWeight > 1_000) {
@@ -97,6 +106,9 @@ export class TenantPoliciesService {
       ...(input.jobsEnabled === undefined
         ? {}
         : { jobs_enabled: input.jobsEnabled }),
+      ...(input.retentionDays === undefined
+        ? {}
+        : { retention_days: input.retentionDays }),
       ...(overrides === undefined
         ? {}
         : { rate_limit_overrides: jsonbColumn(overrides) }),
@@ -214,6 +226,7 @@ function mapPolicy(row: {
   max_active_runs: number | null;
   queue_weight: number;
   jobs_enabled: boolean;
+  retention_days: number | null;
   rate_limit_overrides: unknown;
 }): TenantExecutionPolicy {
   return {
@@ -226,6 +239,9 @@ function mapPolicy(row: {
       : { maxActiveRuns: row.max_active_runs }),
     queueWeight: row.queue_weight,
     jobsEnabled: row.jobs_enabled,
+    ...(row.retention_days === null
+      ? {}
+      : { retentionDays: row.retention_days }),
     rateLimitOverrides: readOverrides(row.rate_limit_overrides),
   };
 }

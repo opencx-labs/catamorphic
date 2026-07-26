@@ -4,6 +4,7 @@ import type {
   ExecutionJobKind,
   ExecutionJobsService,
 } from "./execution-jobs-service.js";
+import type { RetentionService } from "./retention-service.js";
 
 const tracer = getTracer("@catamorphic/core");
 
@@ -53,12 +54,17 @@ interface WorkerGroup {
 export class ExecutionWorkerService {
   private readonly handlers = new Map<ExecutionJobKind, ExecutionJobHandler>();
   private readonly workers = new Map<string, WorkerGroup>();
+  // Shared across loops so N concurrent loops still sweep once per interval.
+  private lastRetentionSweepAt = 0;
   private exhaustedHandler?: (args: {
     job: ExecutionJob;
     error: string;
   }) => Promise<void>;
 
-  constructor(private readonly jobs: ExecutionJobsService) {}
+  constructor(
+    private readonly jobs: ExecutionJobsService,
+    private readonly retention?: RetentionService,
+  ) {}
 
   registerHandler(args: {
     kind: ExecutionJobKind;
@@ -156,6 +162,24 @@ export class ExecutionWorkerService {
     }
   }
 
+  /**
+   * Purge aged-out runs on a slow timer shared by every loop in the process.
+   *
+   * One bounded batch per interval: the sweep rides the poll loop rather than
+   * owning a timer, so it inherits the loop's error handling and shutdown, and
+   * it never competes with job execution for more than one statement at a time.
+   * A large backlog drains over successive sweeps instead of in one long
+   * transaction.
+   */
+  private async sweepRetention(): Promise<void> {
+    const retention = this.retention;
+    if (!retention?.isEnabled) return;
+    const now = Date.now();
+    if (now - this.lastRetentionSweepAt < retention.sweepIntervalMs) return;
+    this.lastRetentionSweepAt = now;
+    await retention.purgeExpiredRuns();
+  }
+
   private reportLoopError(args: { workerId: string; error: unknown }): void {
     const message =
       args.error instanceof Error ? args.error.message : String(args.error);
@@ -173,6 +197,7 @@ export class ExecutionWorkerService {
     kinds: readonly ExecutionJobKind[];
   }): Promise<void> {
     const { signal } = args.controller;
+    await this.sweepRetention();
     await this.jobs.requeueExpired({ limit: 100 });
     const unhandled = await this.jobs.listUnhandledExhausted({ limit: 100 });
     await Promise.allSettled(

@@ -300,6 +300,7 @@ export interface TenantExecutionPolicies {
   max_concurrent_jobs: number | null;
   queue_weight: Generated<number>;
   rate_limit_overrides: Generated<Json>;
+  retention_days: number | null;
   tenant_id: string;
   updated_at: Generated<Timestamp>;
 }

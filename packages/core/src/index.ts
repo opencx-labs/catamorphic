@@ -84,6 +84,12 @@ export {
   RateReservationsService,
 } from "./services/rate-reservations-service.js";
 export {
+  DEFAULT_RUN_RETENTION_DAYS,
+  type PurgeResult,
+  type RetentionConfig,
+  RetentionService,
+} from "./services/retention-service.js";
+export {
   RunPauseNotFoundError,
   RunResumeConflictError,
 } from "./services/run-coordinator.js";

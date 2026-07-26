@@ -244,14 +244,37 @@ await catamorphic.tenantPolicies.upsert({
   maxConcurrentJobs: 32,     // ceiling on simultaneously leased jobs
   maxActiveRuns: 50_000,     // ceiling on live runs; bounds enrollment fan-out
   queueWeight: 4,            // relative share of each claim batch
+  retentionDays: 365,        // overrides the installation retention window
   rateLimitOverrides: {      // can tighten an author's bucket, never loosen it
     whatsapp: { capacity: 40, refillRatePerSecond: 10 },
   },
 });
 ```
 
-See [ADR 0027](docs/decisions/0027-correlation-keys-and-external-signals.md) and
-[ADR 0028](docs/decisions/0028-shared-rate-budgets-and-tenant-execution-policy.md).
+### Retention
+
+Finished runs are purged after **90 days by default**, along with everything
+hanging off them — jobs, events, step attempts, batch items and their steps.
+Without this, a daily 100k-item batch adds on the order of 1.5M rows a day and
+never gives any back.
+
+The sweep runs inside the execution worker, so it needs no wiring. Change the
+window, or turn it off entirely, at construction:
+
+```ts
+const catamorphic = createCatamorphic({
+  database,
+  storage,
+  retention: { runRetentionDays: 30 }, // or { enabled: false } to keep forever
+});
+```
+
+Individual tenants can be given a longer or shorter window with
+`retentionDays` above.
+
+See [ADR 0027](docs/decisions/0027-correlation-keys-and-external-signals.md),
+[ADR 0028](docs/decisions/0028-shared-rate-budgets-and-tenant-execution-policy.md),
+and [ADR 0030](docs/decisions/0030-run-retention.md).
 
 ## Local development
 
