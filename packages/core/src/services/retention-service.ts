@@ -86,7 +86,7 @@ export class RetentionService {
       },
       async (span) => {
         const rows = await sql<{ id: string }>`
-          WITH cutoff AS (
+          WITH RECURSIVE cutoff AS (
             -- Resolve each project's cutoff instant first, so the scan below
             -- compares completed_at against a constant per project and can use
             -- idx_workflow_runs_retention as an index condition. Joining the
@@ -101,8 +101,8 @@ export class RetentionService {
             LEFT JOIN tenant_execution_policies AS policy
               ON policy.tenant_id = projects.tenant_id
           ),
-          expired AS (
-            SELECT run.id
+          candidates AS (
+            SELECT run.id, run.completed_at
             FROM cutoff
             JOIN LATERAL (
               SELECT candidate.id, candidate.completed_at
@@ -116,24 +116,43 @@ export class RetentionService {
                 -- roots only keeps each tree to a single delete, and children
                 -- age out with the parent that owns them.
                 AND candidate.parent_run_id IS NULL
-                -- A parent can go terminal while a child is still live (the
-                -- parent failed before its child was cancelled). Cascading
-                -- onto a running child would destroy in-flight work, so leave
-                -- the whole tree until it has settled.
-                AND NOT EXISTS (
-                  SELECT 1
-                  FROM workflow_runs AS child
-                  WHERE child.parent_run_id = candidate.id
-                    AND child.status NOT IN ('completed', 'failed', 'canceled')
-                )
               ORDER BY candidate.completed_at
               LIMIT ${limit}
             ) AS run ON true
             ORDER BY run.completed_at
             LIMIT ${limit}
+          ),
+          -- Walk every candidate's descendants once, as a set. Testing each
+          -- candidate with its own recursive subquery costs ~50x more, because
+          -- the CTE is re-planned and re-executed per row.
+          tree AS (
+            SELECT candidates.id AS root_id, candidates.id
+            FROM candidates
+            UNION ALL
+            SELECT tree.root_id, child.id
+            FROM workflow_runs AS child
+            JOIN tree ON child.parent_run_id = tree.id
+          ),
+          -- A parent can go terminal while a descendant is still live (the
+          -- parent failed before its child was cancelled). The cascade is
+          -- recursive, so this check must be too: a terminal direct child can
+          -- itself hold a running grandchild, and deleting the root would
+          -- destroy that in-flight work. Leave the whole tree until every run
+          -- under it has settled.
+          blocked AS (
+            SELECT DISTINCT tree.root_id
+            FROM tree
+            JOIN workflow_runs AS descendant ON descendant.id = tree.id
+            WHERE descendant.status NOT IN ('completed', 'failed', 'canceled')
           )
           DELETE FROM workflow_runs
-          WHERE id IN (SELECT id FROM expired)
+          WHERE id IN (
+            SELECT candidates.id
+            FROM candidates
+            WHERE NOT EXISTS (
+              SELECT 1 FROM blocked WHERE blocked.root_id = candidates.id
+            )
+          )
           RETURNING id
         `.execute(this.db);
         span.setAttribute(

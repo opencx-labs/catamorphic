@@ -166,6 +166,29 @@ describeIf("run retention", () => {
     expect(await runExists(child)).toBe(true);
   });
 
+  it("keeps a tree whose live run is deeper than a direct child", async () => {
+    // Every ancestor is terminal and aged out; only the leaf is still running.
+    // A guard that checked direct children alone would find the root's own
+    // child terminal, purge the root, and cascade through it onto the leaf.
+    const root = await createRun({
+      status: "completed",
+      completedDaysAgo: 120,
+    });
+    const middle = await createRun({
+      status: "completed",
+      completedDaysAgo: 120,
+      parentRunId: root,
+    });
+    const leaf = await createRun({ status: "running", parentRunId: middle });
+
+    const result = await new RetentionService(db).purgeExpiredRuns();
+
+    expect(result.purgedRuns).toBe(0);
+    expect(await runExists(root)).toBe(true);
+    expect(await runExists(middle)).toBe(true);
+    expect(await runExists(leaf)).toBe(true);
+  });
+
   it("purges a finished parent once its children have settled", async () => {
     const parent = await createRun({
       status: "completed",
