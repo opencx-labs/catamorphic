@@ -327,15 +327,20 @@ export class BatchExecutionHandler {
               )
               .returning(["id"])
               .execute();
-      for (const item of inserted) {
-        await this.enqueueItem({
-          trx,
-          context: args.context,
-          itemId: item.id,
-          itemAttempt: 1,
-          dedupeSuffix: "source",
-        });
-      }
+      // A page carries up to SOURCE_PAGE_LIMIT items; enqueueing them one at a
+      // time made page acceptance cost a round trip per item.
+      await this.deps.jobs.enqueueMany({
+        trx,
+        jobs: inserted.map((item) => ({
+          tenantId: args.context.identity.tenantId,
+          workflowRunId: args.context.runId,
+          workflowStepAttemptId: args.context.workflowStepAttemptId,
+          kind: "batch_item" as const,
+          payload: { itemId: item.id, itemAttempt: 1 },
+          maxAttempts: MAX_BATCH_ITEM_ATTEMPTS,
+          dedupeKey: scopeKey(args.context, `item:${item.id}:source`),
+        })),
+      });
       const backlog = await trx
         .selectFrom("batch_items")
         .where("run_id", "=", args.context.runId)
@@ -802,92 +807,151 @@ export class BatchExecutionHandler {
       status: "failed" | "skipped";
       error?: string;
     }> = [];
+    // Resolved up front so the writes below can be grouped by shape instead of
+    // interleaved per member. A physical step coalesces many items into one
+    // invocation, so this loop ran 3-4 statements per member serially.
+    const resolved = args.members.map((member) => {
+      const outcome = byKey.get(member.member_key);
+      if (!outcome) throw new Error(`Missing outcome '${member.member_key}'`);
+      const retry =
+        outcome.status === "failed" &&
+        outcome.retryable === true &&
+        member.item_attempt < MAX_BATCH_ITEM_ATTEMPTS;
+      return {
+        member,
+        outcome,
+        retry,
+        nextAttempt: retry ? member.item_attempt + 1 : member.item_attempt,
+        resumes: outcome.status === "succeeded" || retry,
+      };
+    });
+
     await this.db.transaction().execute(async (trx) => {
-      for (const member of args.members) {
-        const outcome = byKey.get(member.member_key);
-        if (!outcome) throw new Error(`Missing outcome '${member.member_key}'`);
-        const retry =
-          outcome.status === "failed" &&
-          outcome.retryable === true &&
-          member.item_attempt < MAX_BATCH_ITEM_ATTEMPTS;
+      const now = new Date();
+      // One UPDATE ... FROM (VALUES ...) per table rather than one per member.
+      // The join carries each member's own outcome, so distinct values still
+      // land on distinct rows.
+      await trx
+        .updateTable("batch_step_members")
+        .from(
+          memberOutcomeValues(
+            resolved.map((entry) => ({
+              itemId: entry.member.item_id,
+              status: entry.retry ? "unresolved" : entry.outcome.status,
+              output: entry.outcome.result,
+              error: entry.outcome.error ?? null,
+            })),
+          ),
+        )
+        .set((eb) => ({
+          status: eb.ref("outcome.status"),
+          output: eb.ref("outcome.output"),
+          output_present: eb.ref("outcome.output_present"),
+          error: eb.ref("outcome.error"),
+          completed_at: now,
+        }))
+        .whereRef("batch_step_members.item_id", "=", "outcome.item_id")
+        .where("run_id", "=", args.context.runId)
+        .where(
+          "workflow_step_attempt_id",
+          "=",
+          args.context.workflowStepAttemptId,
+        )
+        .where("invocation_id", "=", args.invocation.id)
+        .execute();
+
+      await trx
+        .updateTable("batch_item_steps")
+        .from(
+          memberOutcomeValues(
+            resolved.map((entry) => ({
+              itemId: entry.member.item_id,
+              status:
+                entry.outcome.status === "succeeded"
+                  ? "completed"
+                  : entry.outcome.status,
+              output: entry.outcome.result,
+              error: entry.outcome.error ?? null,
+              occurrence: entry.member.occurrence,
+              attempt: entry.member.item_attempt,
+            })),
+          ),
+        )
+        .set((eb) => ({
+          status: eb.ref("outcome.status"),
+          output: eb.ref("outcome.output"),
+          output_present: eb.ref("outcome.output_present"),
+          error: eb.ref("outcome.error"),
+          completed_at: now,
+          updated_at: now,
+        }))
+        .whereRef("batch_item_steps.item_id", "=", "outcome.item_id")
+        .whereRef("batch_item_steps.occurrence", "=", "outcome.occurrence")
+        .whereRef("batch_item_steps.attempt", "=", "outcome.attempt")
+        .where("run_id", "=", args.context.runId)
+        .where(
+          "workflow_step_attempt_id",
+          "=",
+          args.context.workflowStepAttemptId,
+        )
+        .where("node_id", "=", args.invocation.node_id)
+        .execute();
+
+      const resuming = resolved.filter((entry) => entry.resumes);
+      if (resuming.length > 0) {
         await trx
-          .updateTable("batch_step_members")
-          .set({
-            status: retry ? "unresolved" : outcome.status,
-            output:
-              outcome.result === undefined ? null : jsonColumn(outcome.result),
-            output_present: outcome.result !== undefined,
-            error: outcome.error ?? null,
-            completed_at: new Date(),
-          })
-          .where("run_id", "=", args.context.runId)
-          .where(
-            "workflow_step_attempt_id",
-            "=",
-            args.context.workflowStepAttemptId,
+          .updateTable("batch_items")
+          .from(
+            itemAttemptValues(
+              resuming.map((entry) => ({
+                itemId: entry.member.item_id,
+                attempt: entry.nextAttempt,
+              })),
+            ),
           )
-          .where("invocation_id", "=", args.invocation.id)
-          .where("item_id", "=", member.item_id)
+          .set((eb) => ({
+            status: "pending",
+            current_node_id: null,
+            attempt: eb.ref("resume.attempt"),
+            updated_at: now,
+          }))
+          .whereRef("batch_items.id", "=", "resume.item_id")
           .execute();
-        await trx
-          .updateTable("batch_item_steps")
-          .set({
-            status:
-              outcome.status === "succeeded" ? "completed" : outcome.status,
-            output:
-              outcome.result === undefined ? null : jsonColumn(outcome.result),
-            output_present: outcome.result !== undefined,
-            error: outcome.error ?? null,
-            completed_at: new Date(),
-            updated_at: new Date(),
-          })
-          .where("run_id", "=", args.context.runId)
-          .where(
-            "workflow_step_attempt_id",
-            "=",
-            args.context.workflowStepAttemptId,
-          )
-          .where("item_id", "=", member.item_id)
-          .where("node_id", "=", args.invocation.node_id)
-          .where("occurrence", "=", member.occurrence)
-          .where("attempt", "=", member.item_attempt)
-          .execute();
-        if (outcome.status === "succeeded" || retry) {
-          const nextAttempt = retry
-            ? member.item_attempt + 1
-            : member.item_attempt;
-          await trx
-            .updateTable("batch_items")
-            .set({
-              status: "pending",
-              current_node_id: null,
-              attempt: nextAttempt,
-              updated_at: new Date(),
-            })
-            .where("id", "=", member.item_id)
-            .execute();
-          await this.enqueueItem({
-            trx,
-            context: args.context,
-            itemId: member.item_id,
-            itemAttempt: nextAttempt,
-            dedupeSuffix: `resume:${args.invocation.id}`,
-          });
-        } else {
-          terminal.push({
-            itemId: member.item_id,
-            status: outcome.status,
-            error: outcome.error,
-          });
-        }
+        await this.deps.jobs.enqueueMany({
+          trx,
+          jobs: resuming.map((entry) => ({
+            tenantId: args.context.identity.tenantId,
+            workflowRunId: args.context.runId,
+            workflowStepAttemptId: args.context.workflowStepAttemptId,
+            kind: "batch_item" as const,
+            payload: {
+              itemId: entry.member.item_id,
+              itemAttempt: entry.nextAttempt,
+            },
+            maxAttempts: MAX_BATCH_ITEM_ATTEMPTS,
+            dedupeKey: scopeKey(
+              args.context,
+              `item:${entry.member.item_id}:resume:${args.invocation.id}`,
+            ),
+          })),
+        });
       }
+      for (const entry of resolved) {
+        if (entry.resumes) continue;
+        terminal.push({
+          itemId: entry.member.item_id,
+          status: entry.outcome.status as "failed" | "skipped",
+          error: entry.outcome.error,
+        });
+      }
+
       await trx
         .updateTable("batch_step_invocations")
         .set({
           status: "completed",
-          completed_at: new Date(),
+          completed_at: now,
           error: null,
-          updated_at: new Date(),
+          updated_at: now,
         })
         .where("id", "=", args.invocation.id)
         .execute();
@@ -1583,28 +1647,6 @@ export class BatchExecutionHandler {
     });
   }
 
-  private async enqueueItem(args: {
-    trx: Transaction<DB>;
-    context: BatchContext;
-    itemId: string;
-    itemAttempt: number;
-    dedupeSuffix: string;
-  }): Promise<void> {
-    await this.deps.jobs.enqueue({
-      trx: args.trx,
-      tenantId: args.context.identity.tenantId,
-      workflowRunId: args.context.runId,
-      workflowStepAttemptId: args.context.workflowStepAttemptId,
-      kind: "batch_item",
-      payload: { itemId: args.itemId, itemAttempt: args.itemAttempt },
-      maxAttempts: MAX_BATCH_ITEM_ATTEMPTS,
-      dedupeKey: scopeKey(
-        args.context,
-        `item:${args.itemId}:${args.dedupeSuffix}`,
-      ),
-    });
-  }
-
   private async invoke(args: {
     context: BatchContext;
     job: ExecutionJob;
@@ -1673,10 +1715,14 @@ export class BatchExecutionHandler {
     attempt: number;
     steps: RuntimeInvocationReceipt["terminal"]["steps"];
   }): Promise<void> {
-    for (const step of args.steps) {
-      await this.db
-        .insertInto("batch_item_steps")
-        .values({
+    if (args.steps.length === 0) return;
+    const now = new Date();
+    // One statement for the whole ledger. This runs once per item, so a
+    // per-step round trip made the cost of a batch scale with items × steps.
+    await this.db
+      .insertInto("batch_item_steps")
+      .values(
+        args.steps.map((step) => ({
           run_id: args.context.runId,
           workflow_step_attempt_id: args.context.workflowStepAttemptId,
           item_id: args.itemId,
@@ -1698,37 +1744,33 @@ export class BatchExecutionHandler {
           error: step.error ?? null,
           started_at: new Date(step.startedAt),
           completed_at: new Date(step.completedAt),
-        })
-        .onConflict((conflict) =>
-          conflict
-            .columns([
-              "run_id",
-              "workflow_step_attempt_id",
-              "item_id",
-              "node_id",
-              "occurrence",
-              "attempt",
-            ])
-            .doUpdateSet({
-              status: step.status,
-              input:
-                step.input === undefined
-                  ? null
-                  : jsonColumn(requireJson(step.input)),
-              input_present: step.input !== undefined,
-              output:
-                step.output === undefined
-                  ? null
-                  : jsonColumn(requireJson(step.output)),
-              output_present: step.output !== undefined,
-              error: step.error ?? null,
-              started_at: new Date(step.startedAt),
-              completed_at: new Date(step.completedAt),
-              updated_at: new Date(),
-            }),
-        )
-        .execute();
-    }
+        })),
+      )
+      .onConflict((conflict) =>
+        conflict
+          .columns([
+            "run_id",
+            "workflow_step_attempt_id",
+            "item_id",
+            "node_id",
+            "occurrence",
+            "attempt",
+          ])
+          // Redelivery replays the same ledger, so each row takes the values
+          // from its own proposed insert rather than a per-step closure.
+          .doUpdateSet((eb) => ({
+            status: eb.ref("excluded.status"),
+            input: eb.ref("excluded.input"),
+            input_present: eb.ref("excluded.input_present"),
+            output: eb.ref("excluded.output"),
+            output_present: eb.ref("excluded.output_present"),
+            error: eb.ref("excluded.error"),
+            started_at: eb.ref("excluded.started_at"),
+            completed_at: eb.ref("excluded.completed_at"),
+            updated_at: now,
+          })),
+      )
+      .execute();
   }
 
   private async loadContext(job: ExecutionJob): Promise<BatchContext | null> {
@@ -2124,6 +2166,53 @@ function isJson(value: unknown): value is Json {
   return Object.values(value).every(
     (entry) => entry === undefined || isJson(entry),
   );
+}
+
+/**
+ * Builds an `outcome` VALUES list for joining per-member results into an UPDATE.
+ *
+ * Types are cast explicitly: Postgres infers `unknown` for bare literals in a
+ * VALUES list, which then fails to compare against the typed columns it is
+ * joined to. The first row carries the casts and the rest follow it.
+ */
+function memberOutcomeValues(
+  rows: readonly {
+    itemId: string;
+    status: string;
+    output?: Json;
+    error: string | null;
+    occurrence?: number;
+    attempt?: number;
+  }[],
+) {
+  const hasStepKey = rows[0]?.occurrence !== undefined;
+  // UNION ALL of SELECTs rather than a VALUES list: a VALUES row needs its
+  // column names supplied as `alias(cols)`, which collides with the alias
+  // Kysely appends via `.as()`. Naming the columns in the leading SELECT
+  // carries the same types with no second alias.
+  const selects = rows.map((row, index) => {
+    const label = (name: string) =>
+      index === 0 ? sql.raw(` AS ${name}`) : sql``;
+    const output =
+      row.output === undefined ? sql`NULL::jsonb` : jsonColumn(row.output);
+    const base = sql`SELECT ${row.itemId}::uuid${label("item_id")}, ${row.status}::varchar${label("status")}, ${output}${label("output")}, ${row.output !== undefined}::boolean${label("output_present")}, ${row.error}::text${label("error")}`;
+    return hasStepKey
+      ? sql`${base}, ${row.occurrence ?? 0}::integer${label("occurrence")}, ${row.attempt ?? 0}::integer${label("attempt")}`
+      : base;
+  });
+  return sql<never>`(${sql.join(selects, sql` UNION ALL `)})`.as("outcome");
+}
+
+/** Builds a `resume` row set pairing each item with its next attempt. */
+function itemAttemptValues(
+  rows: readonly { itemId: string; attempt: number }[],
+) {
+  const selects = rows.map((row, index) => {
+    const label = (name: string) =>
+      index === 0 ? sql.raw(` AS ${name}`) : sql``;
+    return sql`SELECT ${row.itemId}::uuid${label("item_id")}, ${row.attempt}::integer${label("attempt")}`;
+  });
+  return sql<never>`(${sql.join(selects, sql` UNION ALL `)})`.as("resume");
 }
 
 function isTerminalItem(status: string): boolean {
