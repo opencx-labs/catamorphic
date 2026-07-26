@@ -125,25 +125,13 @@ export class ExecutionJobsService {
       },
       (span) =>
         this.db.transaction().execute(async (trx) => {
-          const tenants = await trx
-            .selectFrom("execution_jobs")
-            .where("status", "=", "pending")
-            .where("available_at", "<=", sql<Date>`clock_timestamp()`)
-            .where("kind", "in", [...args.kinds])
-            .select("tenant_id")
-            .select((eb) => eb.fn.min("created_at").as("oldest_job_at"))
-            .groupBy("tenant_id")
-            .orderBy("oldest_job_at", "asc")
-            .limit(limit)
-            .execute();
-          const ids = await claimOnePerTenant({
+          const ids = await selectClaimableJobs({
             trx,
-            tenantIds: tenants.map((row) => row.tenant_id),
             kinds: args.kinds,
+            limit,
           });
           if (ids.length === 0) {
             span.setAttribute("catamorphic.queue.claimed_count", 0);
-            span.setAttribute("catamorphic.queue.tenant_count", tenants.length);
             return [];
           }
 
@@ -164,7 +152,10 @@ export class ExecutionJobsService {
             .returningAll()
             .execute();
           span.setAttribute("catamorphic.queue.claimed_count", rows.length);
-          span.setAttribute("catamorphic.queue.tenant_count", tenants.length);
+          span.setAttribute(
+            "catamorphic.queue.tenant_count",
+            new Set(rows.map((row) => row.tenant_id)).size,
+          );
           return rows.map(mapExecutionJob);
         }),
     );
@@ -589,33 +580,88 @@ async function databaseNow(trx: Transaction<DB>): Promise<Date> {
   return now;
 }
 
-async function claimOnePerTenant(args: {
+/**
+ * Picks the next batch of jobs, fairly but without wasting capacity.
+ *
+ * Every eligible tenant gets a floor of one job before any tenant gets a
+ * second, which preserves anti-starvation. Remaining slots are then backfilled
+ * from the global pending set in rank order, so one tenant running a large
+ * campaign can saturate an otherwise idle system instead of being pinned to one
+ * job per poll. `queue_weight` scales how deep into a tenant's own backlog the
+ * backfill will reach, and `max_concurrent_jobs` caps its leased total.
+ *
+ * Runs as one set-based statement: ranking, policy joins, and the eligibility
+ * cutoff all happen inside Postgres, so cost does not grow with tenant count.
+ *
+ * `max_concurrent_jobs` is a best-effort ceiling, not a hard semaphore: two
+ * workers claiming at the same instant can read the same leased count and
+ * together overshoot it by up to one batch. Bounding cost is what this is for,
+ * and the next poll self-corrects; anything needing exactness would have to
+ * serialize claims per tenant, which is the throughput problem being fixed.
+ */
+async function selectClaimableJobs(args: {
   trx: Transaction<DB>;
-  tenantIds: readonly string[];
   kinds: readonly ExecutionJobKind[];
-  index?: number;
+  limit: number;
 }): Promise<string[]> {
-  const index = args.index ?? 0;
-  const tenantId = args.tenantIds[index];
-  if (!tenantId) return [];
-  const job = await args.trx
-    .selectFrom("execution_jobs")
-    .where("tenant_id", "=", tenantId)
-    .where("status", "=", "pending")
-    .where("available_at", "<=", sql<Date>`clock_timestamp()`)
-    .where("kind", "in", [...args.kinds])
-    .select("id")
-    .orderBy("priority", "desc")
-    .orderBy("created_at", "asc")
-    .forUpdate()
-    .skipLocked()
-    .limit(1)
-    .executeTakeFirst();
-  const remaining = await claimOnePerTenant({
-    ...args,
-    index: index + 1,
-  });
-  return job ? [job.id, ...remaining] : remaining;
+  const kinds = [...args.kinds];
+  const rows = await sql<{ id: string }>`
+    WITH policy AS (
+      SELECT
+        tenant_id,
+        max_concurrent_jobs,
+        queue_weight,
+        jobs_enabled
+      FROM tenant_execution_policies
+    ),
+    leased AS (
+      SELECT tenant_id, count(*) AS running_count
+      FROM execution_jobs
+      WHERE status = 'running'
+      GROUP BY tenant_id
+    ),
+    ranked AS (
+      SELECT
+        job.id,
+        job.tenant_id,
+        row_number() OVER (
+          PARTITION BY job.tenant_id
+          ORDER BY job.priority DESC, job.created_at, job.id
+        ) AS tenant_rank,
+        COALESCE(policy.queue_weight, 1) AS queue_weight,
+        policy.max_concurrent_jobs,
+        COALESCE(leased.running_count, 0) AS running_count
+      FROM execution_jobs AS job
+      LEFT JOIN policy ON policy.tenant_id = job.tenant_id
+      LEFT JOIN leased ON leased.tenant_id = job.tenant_id
+      WHERE job.status = 'pending'
+        AND job.available_at <= clock_timestamp()
+        AND job.kind IN (${sql.join(kinds)})
+        AND COALESCE(policy.jobs_enabled, true)
+    ),
+    eligible AS (
+      SELECT id, tenant_rank, queue_weight
+      FROM ranked
+      WHERE
+        -- Never exceed the tenant's ceiling on simultaneously leased jobs.
+        (max_concurrent_jobs IS NULL OR running_count + tenant_rank <= max_concurrent_jobs)
+        -- Backfill depth scales with weight; the whole batch is still capped
+        -- by the claim limit, so an idle system is fully usable by one tenant.
+        AND tenant_rank <= GREATEST(1, ${args.limit} * queue_weight)
+      -- Rank 1 for every tenant first (the fairness floor), then deeper ranks.
+      ORDER BY tenant_rank, queue_weight DESC, id
+      -- Over-select so rows lost to SKIP LOCKED do not shrink the batch.
+      LIMIT ${args.limit * 4}
+    )
+    SELECT job.id
+    FROM execution_jobs AS job
+    JOIN eligible ON eligible.id = job.id
+    WHERE job.status = 'pending'
+    ORDER BY eligible.tenant_rank, eligible.queue_weight DESC, job.id
+    LIMIT ${args.limit}
+    FOR UPDATE OF job SKIP LOCKED
+  `.execute(args.trx);
+  return rows.rows.map((row) => row.id);
 }
 
 function escapeLike(value: string): string {

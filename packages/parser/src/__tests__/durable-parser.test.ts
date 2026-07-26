@@ -402,6 +402,65 @@ export async function inexactChild() {
     expect(collapsed).toMatchObject({ width: 240, height: 52 });
   });
 
+  it("extracts boundary rate limits into the execution descriptor", () => {
+    const graph = parseWorkflow(`
+export const sendCampaign = defineWorkflow(({ defineBoundary }) => ({
+  steps: [
+    defineBoundary({
+      rateLimits: [
+        { globalKey: "whatsapp", partitionKey: "sender-1", capacity: 80, refillRatePerSecond: 20, cost: 2 },
+      ],
+      run: async ({ input }: BoundaryContext<{ to: string }>) => sendMessage({ to: input.to }),
+    }),
+  ],
+}));
+`);
+
+    const step = graph.execution.steps[0];
+    expect(step?.type).toBe("boundary");
+    expect(step?.type === "boundary" && step.rateLimits).toEqual([
+      {
+        globalKeyExpression: '"whatsapp"',
+        partitionKeyExpression: '"sender-1"',
+        capacityExpression: "80",
+        refillRatePerSecondExpression: "20",
+        costExpression: "2",
+      },
+    ]);
+  });
+
+  it("renders a named signal pause as an addressable wait", () => {
+    const graph = parseWorkflow(`
+export const nurture = defineWorkflow(({ defineBoundary }) => ({
+  steps: [
+    defineBoundary({
+      run: async ({ pause }: BoundaryContext<{ contactId: string }>) =>
+        pause<{ clicked: boolean }>({ timeout: "72h", signal: "reply" }),
+    }),
+  ],
+}));
+`);
+
+    const pause = graph.nodes.find((node) => node.type === "pause");
+    expect(pause?.label).toBe("Wait for 'reply'");
+    expect(pause?.metadata.signal).toBe("reply");
+  });
+
+  it("rejects rate limits that are not analyzable object literals", () => {
+    expect(() =>
+      parseWorkflow(`
+export const flow = defineWorkflow(({ defineBoundary }) => ({
+  steps: [
+    defineBoundary({
+      rateLimits: sharedLimits,
+      run: async ({ input }: BoundaryContext<{ id: string }>) => input,
+    }),
+  ],
+}));
+`),
+    ).toThrow("must be an array literal");
+  });
+
   it.each([
     {
       source: "export const flow = defineWorkflow(builder);",

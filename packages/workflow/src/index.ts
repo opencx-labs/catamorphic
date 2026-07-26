@@ -39,6 +39,7 @@ export type {
   BoundaryContext,
   BoundaryDefinition,
   BoundaryOptions,
+  BoundaryRateLimit,
   CallWorkflow,
   DefineBoundary,
   Pause,
@@ -51,6 +52,10 @@ export type {
   WorkflowDefinition,
   WorkflowTransition,
 } from "./workflow.js";
-export { defineWorkflow } from "./workflow.js";
+export {
+  defineWorkflow,
+  RateLimitedError,
+  rateLimited,
+} from "./workflow.js";
 
 export const WORKFLOW_PACKAGE_VERSION = "0.0.2";

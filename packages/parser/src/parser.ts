@@ -22,6 +22,7 @@ import { extractJsDocMetadata, extractParameterInfo } from "./jsdoc.js";
 import type {
   BatchExecutionDescriptor,
   BoundaryExecutionDescriptor,
+  BoundaryRateLimitDescriptor,
   DiscoveredWorkflow,
   ParameterInfo,
   ParseError,
@@ -694,6 +695,16 @@ function unwrapExpression(expression: Node): Node {
   return expression;
 }
 
+function unquoteExpression(value: string): string | undefined {
+  const trimmed = value.trim();
+  const quoted =
+    (trimmed.startsWith('"') && trimmed.endsWith('"')) ||
+    (trimmed.startsWith("'") && trimmed.endsWith("'")) ||
+    (trimmed.startsWith("`") && trimmed.endsWith("`"));
+  const unquoted = quoted ? trimmed.slice(1, -1) : trimmed;
+  return unquoted.length > 0 ? unquoted : undefined;
+}
+
 function readObjectPropertyText(
   object: ObjectLiteralExpression | undefined,
   propertyName: string,
@@ -922,13 +933,21 @@ function parseDurableTransitionExpression(
       options && Node.isObjectLiteralExpression(options) ? options : undefined;
     const timeout = readObjectPropertyText(object, "timeout");
     const stateExpression = readObjectPropertyText(object, "state");
+    const signalExpression = readObjectPropertyText(object, "signal");
+    const signalName = signalExpression
+      ? unquoteExpression(signalExpression)
+      : undefined;
     const nodeId = nextId();
     ctx.nodes.push({
       id: nodeId,
       type: "pause",
-      label: timeout ? "Pause with timeout" : "Pause until resumed",
+      label: signalName
+        ? `Wait for '${signalName}'`
+        : timeout
+          ? "Pause with timeout"
+          : "Pause until resumed",
       sourceRange: getSourceRange(unwrapped),
-      metadata: {},
+      metadata: signalName ? { signal: signalName } : {},
       functionName: "pause",
       arguments: extractCallArgumentsAt(unwrapped, ctx, "pause", 0),
       duration: timeout,
@@ -1895,6 +1914,50 @@ function durableRetryDescriptor(
   };
 }
 
+function durableRateLimitDescriptors(
+  config: ObjectLiteralExpression,
+): BoundaryRateLimitDescriptor[] {
+  const property = config.getProperty("rateLimits");
+  if (!property) return [];
+  const initializer =
+    Node.isPropertyAssignment(property) && property.getInitializer();
+  if (!initializer || !Node.isArrayLiteralExpression(initializer)) {
+    throw new Error("Boundary 'rateLimits' must be an array literal");
+  }
+  return initializer.getElements().map((element) => {
+    if (!Node.isObjectLiteralExpression(element)) {
+      throw new Error("Each boundary rate limit must be an object literal");
+    }
+    const globalKeyExpression = readObjectPropertyText(element, "globalKey");
+    const capacityExpression = readObjectPropertyText(element, "capacity");
+    const refillRatePerSecondExpression = readObjectPropertyText(
+      element,
+      "refillRatePerSecond",
+    );
+    if (
+      !globalKeyExpression ||
+      !capacityExpression ||
+      !refillRatePerSecondExpression
+    ) {
+      throw new Error(
+        "A boundary rate limit requires globalKey, capacity, and refillRatePerSecond",
+      );
+    }
+    const partitionKeyExpression = readObjectPropertyText(
+      element,
+      "partitionKey",
+    );
+    const costExpression = readObjectPropertyText(element, "cost");
+    return {
+      globalKeyExpression,
+      ...(partitionKeyExpression ? { partitionKeyExpression } : {}),
+      capacityExpression,
+      refillRatePerSecondExpression,
+      ...(costExpression ? { costExpression } : {}),
+    };
+  });
+}
+
 function batchFailurePolicyDescriptor(
   config: ObjectLiteralExpression,
 ): BatchExecutionDescriptor["failurePolicy"] {
@@ -2063,6 +2126,10 @@ function parseWorkflowSteps(opts: {
       sourceRange: getSourceRange(boundary.call),
       runRange: getSourceRange(boundary.run),
       retry: durableRetryDescriptor(boundary.config),
+      ...(() => {
+        const rateLimits = durableRateLimitDescriptors(boundary.config);
+        return rateLimits.length > 0 ? { rateLimits } : {};
+      })(),
     });
     previousIds = [boundaryId];
   }

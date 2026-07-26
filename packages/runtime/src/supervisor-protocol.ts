@@ -1,6 +1,6 @@
 import type { BatchStepRateLimit, JsonValue } from "@catamorphic/workflow";
 
-export const RUNTIME_PROTOCOL_VERSION = 6;
+export const RUNTIME_PROTOCOL_VERSION = 7;
 export const DEPLOYMENT_RUNTIME_VERSION = `runtime-protocol-v${RUNTIME_PROTOCOL_VERSION}`;
 
 export interface RuntimeArtifactIdentity {
@@ -172,6 +172,11 @@ export type RuntimeInvocationEvent =
       reason: string;
     })
   | (RuntimeInvocationEventBase & {
+      type: "rate_limited";
+      retryAfterMs: number;
+      error: string;
+    })
+  | (RuntimeInvocationEventBase & {
       type: "failed" | "canceled" | "timed_out";
       error: string;
     });
@@ -190,6 +195,12 @@ export type RuntimeTerminalResult =
   | {
       status: "skipped";
       reason: string;
+      steps: readonly RuntimeStepEntry[];
+    }
+  | {
+      status: "rate_limited";
+      retryAfterMs: number;
+      error: string;
       steps: readonly RuntimeStepEntry[];
     }
   | {

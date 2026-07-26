@@ -84,6 +84,12 @@ export type CancelRunInput =
 export type SubmitRunInput =
   paths["/api/runs/{runId}/pauses/{pauseId}/resume"]["post"]["requestBody"]["content"]["application/json"];
 
+export type SignalRunInput =
+  paths["/api/projects/{projectId}/workflows/{name}/signals"]["post"]["requestBody"]["content"]["application/json"];
+
+export type CancelRunByKeyInput =
+  paths["/api/projects/{projectId}/workflows/{name}/cancellations"]["post"]["requestBody"]["content"]["application/json"];
+
 // --- Run items ----------------------------------------------------------
 
 export type RunItemsList =

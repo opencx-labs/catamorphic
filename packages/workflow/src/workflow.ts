@@ -20,9 +20,32 @@ export interface RetryPolicy {
   backoff?: RetryBackoff;
 }
 
+/**
+ * A share of a token bucket that gates a boundary before it is dispatched.
+ *
+ * Buckets are keyed per tenant, not per run or per workflow, so every boundary
+ * naming the same `globalKey` draws on one budget — which is what makes a
+ * single shared third-party account (one WhatsApp sender, one ESP) safe to
+ * drive from many workflows at once. Waiting for capacity is not a failure: a
+ * boundary that cannot reserve is rescheduled without consuming a retry and
+ * without holding a sandbox.
+ */
+export interface BoundaryRateLimit {
+  /** Bucket identity shared across every workflow in the tenant. */
+  globalKey: string;
+  /** Subdivides the bucket, e.g. one sender number within an account. */
+  partitionKey?: string;
+  /** Burst ceiling in tokens. */
+  capacity: number;
+  /** Sustained refill in tokens per second. */
+  refillRatePerSecond: number;
+  /** Tokens this boundary consumes per attempt. Defaults to 1. */
+  cost?: number;
+}
+
 export type PauseOptions<State extends JsonValue = JsonValue> =
-  | { timeout?: never; state?: State }
-  | { timeout: string; state?: State };
+  | { timeout?: never; signal?: string; state?: State }
+  | { timeout: string; signal?: string; state?: State };
 
 type PauseState<State> = [State] extends [never] ? object : { state: State };
 
@@ -34,6 +57,37 @@ type ResumedPauseResult<Value, State = never> = {
 export type PauseResult<Value, State = never> =
   | ResumedPauseResult<Value, State>
   | ({ reason: "timed_out" } & PauseState<State>);
+
+/**
+ * Reports that a third party refused the call for rate reasons, usually a 429
+ * carrying `Retry-After`.
+ *
+ * Throwing this does not fail the boundary. The provider's own answer is fed
+ * back into the buckets the boundary declared, blocking every other workflow
+ * drawing on the same shared account, and the boundary is rescheduled without
+ * consuming a retry attempt. Prefer it over a bare throw whenever the remote
+ * side tells you how long to wait.
+ */
+export class RateLimitedError extends Error {
+  readonly retryAfterMs: number;
+
+  constructor(args: { retryAfterMs: number; message?: string }) {
+    if (!Number.isFinite(args.retryAfterMs) || args.retryAfterMs <= 0) {
+      throw new Error("retryAfterMs must be a positive finite number");
+    }
+    super(args.message ?? `Rate limited for ${args.retryAfterMs}ms`);
+    this.name = "RateLimitedError";
+    this.retryAfterMs = args.retryAfterMs;
+  }
+}
+
+/** Reports rate-limit backpressure from a third party. See {@link RateLimitedError}. */
+export function rateLimited(args: {
+  retryAfterMs: number;
+  message?: string;
+}): never {
+  throw new RateLimitedError(args);
+}
 
 class WorkflowTransitionImpl<Output> {
   private declare readonly output: Output;
@@ -48,13 +102,16 @@ class BoundaryDefinitionImpl<Input, Output> {
 
   readonly run: (context: BoundaryContext<Input>) => unknown | Promise<unknown>;
   readonly retry?: RetryPolicy;
+  readonly rateLimits?: readonly BoundaryRateLimit[];
 
   constructor(args: {
     run: (context: BoundaryContext<Input>) => unknown | Promise<unknown>;
     retry?: RetryPolicy;
+    rateLimits?: readonly BoundaryRateLimit[];
   }) {
     this.run = args.run;
     this.retry = args.retry;
+    this.rateLimits = args.rateLimits;
     Object.defineProperty(this, "kind", { value: "durable-boundary" });
   }
 }
@@ -90,16 +147,20 @@ export interface Pause {
   <Value extends JsonValue>(): WorkflowTransition<ResumedPauseResult<Value>>;
   <Value extends JsonValue>(options: {
     timeout: string;
+    signal?: string;
   }): WorkflowTransition<PauseResult<Value>>;
   <Value extends JsonValue, State extends JsonValue>(options: {
     timeout: string;
+    signal?: string;
     state: State;
   }): WorkflowTransition<PauseResult<Value, State>>;
   <Value extends JsonValue>(options: {
     timeout?: never;
+    signal?: string;
   }): WorkflowTransition<ResumedPauseResult<Value>>;
   <Value extends JsonValue, State extends JsonValue>(options: {
     timeout?: never;
+    signal?: string;
     state: State;
   }): WorkflowTransition<ResumedPauseResult<Value, State>>;
 }
@@ -160,6 +221,7 @@ export interface BoundaryContext<Input> {
 
 export interface BoundaryOptions<Input, Returned> {
   retry?: RetryPolicy;
+  rateLimits?: readonly BoundaryRateLimit[];
   run(context: BoundaryContext<Input>): Returned | Promise<Returned>;
 }
 
@@ -271,7 +333,55 @@ function createBoundary<Input, Returned>(
   options: BoundaryOptions<Input, Returned> &
     ValidateBoundary<Input, Awaited<Returned>>,
 ): BoundaryDefinition<Input, ResolveBoundaryReturn<Awaited<Returned>>> {
-  return new BoundaryDefinitionImpl({ run: options.run, retry: options.retry });
+  assertRateLimits(options.rateLimits);
+  return new BoundaryDefinitionImpl({
+    run: options.run,
+    retry: options.retry,
+    rateLimits: options.rateLimits,
+  });
+}
+
+function assertRateLimits(
+  limits: readonly BoundaryRateLimit[] | undefined,
+): void {
+  if (!limits) return;
+  const seen = new Set<string>();
+  for (const limit of limits) {
+    assertKeyPart({ name: "globalKey", value: limit.globalKey });
+    if (limit.partitionKey !== undefined) {
+      assertKeyPart({ name: "partitionKey", value: limit.partitionKey });
+    }
+    const identity = `${limit.globalKey.length}:${limit.globalKey}${limit.partitionKey ?? ""}`;
+    if (seen.has(identity)) {
+      throw new Error(
+        "Boundary rate limit keys must be unique within a boundary",
+      );
+    }
+    seen.add(identity);
+    assertPositiveRateValue({ name: "capacity", value: limit.capacity });
+    assertPositiveRateValue({
+      name: "refillRatePerSecond",
+      value: limit.refillRatePerSecond,
+    });
+    assertPositiveRateValue({ name: "cost", value: limit.cost ?? 1 });
+    if ((limit.cost ?? 1) > limit.capacity) {
+      throw new Error("Boundary rate limit cost cannot exceed capacity");
+    }
+  }
+}
+
+function assertKeyPart(args: { name: string; value: string }): void {
+  if (args.value.length === 0 || args.value.length > 500) {
+    throw new Error(
+      `Boundary rate limit ${args.name} must contain 1 to 500 characters`,
+    );
+  }
+}
+
+function assertPositiveRateValue(args: { name: string; value: number }): void {
+  if (!Number.isFinite(args.value) || args.value <= 0) {
+    throw new Error(`Boundary rate limit ${args.name} must be positive`);
+  }
 }
 
 const workflowBuilderContext: WorkflowBuilderContext = {

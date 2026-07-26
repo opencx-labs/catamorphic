@@ -16,8 +16,13 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { CatamorphicCore } from "../core.js";
 import type { Identity } from "../identity.js";
 import { ExecutionJobsService } from "../services/execution-jobs-service.js";
+import { RateReservationsService } from "../services/rate-reservations-service.js";
 import { RunCoordinator } from "../services/run-coordinator.js";
-import { RunCapabilityError } from "../services/runs-service.js";
+import {
+  RunCapabilityError,
+  RunEnrollmentConflictError,
+  RunSignalNotFoundError,
+} from "../services/runs-service.js";
 
 const connectionString = process.env.DATABASE_URL ?? "";
 const describeIf = connectionString ? describe : describe.skip;
@@ -180,6 +185,326 @@ describeIf("unified RunsService integration", () => {
       }),
     ).rejects.toBeInstanceOf(RunCapabilityError);
   });
+
+  it("enrolls, signals, and opts a contact out by correlation key", async () => {
+    const worker = core.runs.startWorker({
+      name: "campaign",
+      kinds: ["durable_boundary", "durable_pause_timeout"],
+      pollIntervalMs: 5,
+      leaseSeconds: 5,
+    });
+    const enroll = () =>
+      core.runs.triggerProduction({
+        identity,
+        projectId,
+        workflowName: "campaignWorkflow",
+        input: { contactId: "contact-1" },
+        correlationKey: "contact-1",
+      });
+
+    const run = await enroll();
+    expect(run.correlationKey).toBe("contact-1");
+    await waitForStatus({ runId: run.id, status: "waiting" });
+
+    // A redelivered enrollment webhook must not start a second journey.
+    const duplicate = await enroll();
+    expect(duplicate.id).toBe(run.id);
+    await expect(
+      core.runs.triggerProduction({
+        identity,
+        projectId,
+        workflowName: "campaignWorkflow",
+        input: { contactId: "contact-1" },
+        correlationKey: "contact-1",
+        onConflict: "error",
+      }),
+    ).rejects.toBeInstanceOf(RunEnrollmentConflictError);
+
+    // The caller knows the contact, not the run id.
+    const signaled = await core.runs.signalByKey({
+      identity,
+      projectId,
+      workflowName: "campaignWorkflow",
+      correlationKey: "contact-1",
+      signal: "reply",
+      idempotencyKey: "reply-1",
+      value: { optedOut: false },
+    });
+    expect(signaled.id).toBe(run.id);
+    await waitForStatus({ runId: run.id, status: "completed" });
+    await worker.stop();
+
+    // A finished journey frees the key for re-enrollment.
+    const second = await enroll();
+    expect(second.id).not.toBe(run.id);
+
+    const optedOut = await core.runs.cancelByKey({
+      identity,
+      projectId,
+      workflowName: "campaignWorkflow",
+      correlationKey: "contact-1",
+      reason: "unsubscribed",
+    });
+    expect(optedOut).toMatchObject({ id: second.id, status: "canceled" });
+
+    // Opting out twice is a no-op, not an error.
+    await expect(
+      core.runs.cancelByKey({
+        identity,
+        projectId,
+        workflowName: "campaignWorkflow",
+        correlationKey: "contact-1",
+      }),
+    ).resolves.toBeNull();
+
+    const history = await core.runs.list({
+      identity,
+      projectId,
+      workflowName: "campaignWorkflow",
+      correlationKey: "contact-1",
+    });
+    expect(history.total).toBe(2);
+  });
+
+  it("keeps concurrent enrollments for one key idempotent", async () => {
+    const worker = core.runs.startWorker({
+      name: "campaign-enroll-race",
+      kinds: ["durable_boundary"],
+      pollIntervalMs: 5,
+      leaseSeconds: 5,
+    });
+    // Artifact preparation sits between the conflict check and the insert, so
+    // simultaneous webhooks both pass the check and race the unique index.
+    const enrollments = await Promise.all(
+      Array.from({ length: 4 }, () =>
+        core.runs.triggerProduction({
+          identity,
+          projectId,
+          workflowName: "campaignWorkflow",
+          input: { contactId: "contact-race" },
+          correlationKey: "contact-race",
+        }),
+      ),
+    );
+    await worker.stop();
+
+    const ids = new Set(enrollments.map((run) => run.id));
+    expect(ids.size).toBe(1);
+    const history = await core.runs.list({
+      identity,
+      projectId,
+      workflowName: "campaignWorkflow",
+      correlationKey: "contact-race",
+    });
+    expect(history.total).toBe(1);
+
+    await core.runs.cancelByKey({
+      identity,
+      projectId,
+      workflowName: "campaignWorkflow",
+      correlationKey: "contact-race",
+    });
+  }, 20_000);
+
+  it("never leaves a restarted enrollment without a run", async () => {
+    const worker = core.runs.startWorker({
+      name: "campaign-restart",
+      kinds: ["durable_boundary"],
+      pollIntervalMs: 5,
+      leaseSeconds: 5,
+    });
+    const first = await core.runs.triggerProduction({
+      identity,
+      projectId,
+      workflowName: "campaignWorkflow",
+      input: { contactId: "contact-restart" },
+      correlationKey: "contact-restart",
+    });
+    await waitForStatus({ runId: first.id, status: "waiting" });
+
+    // A failure after the old run is cancelled but before the new one exists
+    // would strand the contact mid-journey, so the cancel must come last.
+    await expect(
+      core.runs.triggerProduction({
+        identity,
+        projectId,
+        workflowName: "missingWorkflow",
+        input: { contactId: "contact-restart" },
+        correlationKey: "contact-restart",
+        onConflict: "restart",
+      }),
+    ).rejects.toBeDefined();
+
+    const survivor = await core.runs.get({ identity, runId: first.id });
+    expect(survivor.status).toBe("waiting");
+
+    const restarted = await core.runs.triggerProduction({
+      identity,
+      projectId,
+      workflowName: "campaignWorkflow",
+      input: { contactId: "contact-restart" },
+      correlationKey: "contact-restart",
+      onConflict: "restart",
+    });
+    expect(restarted.id).not.toBe(first.id);
+    expect((await core.runs.get({ identity, runId: first.id })).status).toBe(
+      "canceled",
+    );
+    await worker.stop();
+
+    await core.runs.cancelByKey({
+      identity,
+      projectId,
+      workflowName: "campaignWorkflow",
+      correlationKey: "contact-restart",
+    });
+  }, 20_000);
+
+  it("restarts an enrollment even when the tenant is over its run cap", async () => {
+    const worker = core.runs.startWorker({
+      name: "campaign-restart-cap",
+      kinds: ["durable_boundary"],
+      pollIntervalMs: 5,
+      leaseSeconds: 5,
+    });
+    const first = await core.runs.triggerProduction({
+      identity,
+      projectId,
+      workflowName: "campaignWorkflow",
+      input: { contactId: "contact-cap" },
+      correlationKey: "contact-cap",
+    });
+    await waitForStatus({ runId: first.id, status: "waiting" });
+    const neighbour = await core.runs.triggerProduction({
+      identity,
+      projectId,
+      workflowName: "campaignWorkflow",
+      input: { contactId: "contact-cap-neighbour" },
+      correlationKey: "contact-cap-neighbour",
+    });
+    await waitForStatus({ runId: neighbour.id, status: "waiting" });
+
+    // Lowering the cap under existing load leaves the tenant over budget even
+    // after the restart cancels its own run. A restart replaces a run rather
+    // than adding one, so it must still succeed — otherwise the contact is
+    // cancelled and then refused re-entry, ending up with no journey at all.
+    await core.tenantPolicies.upsert({ tenantId, maxActiveRuns: 1 });
+    try {
+      const restarted = await core.runs.triggerProduction({
+        identity,
+        projectId,
+        workflowName: "campaignWorkflow",
+        input: { contactId: "contact-cap" },
+        correlationKey: "contact-cap",
+        onConflict: "restart",
+      });
+      expect(restarted.id).not.toBe(first.id);
+      const survivor = await core.runs.get({
+        identity,
+        runId: restarted.id,
+      });
+      expect(survivor.status).not.toBe("canceled");
+    } finally {
+      await core.tenantPolicies.delete(tenantId);
+      await worker.stop();
+      await core.runs.cancelByKey({
+        identity,
+        projectId,
+        workflowName: "campaignWorkflow",
+        correlationKey: "contact-cap",
+      });
+      await core.runs.cancel({ identity, runId: neighbour.id });
+    }
+  }, 20_000);
+
+  it("rejects an unknown signal instead of guessing a pause", async () => {
+    const worker = core.runs.startWorker({
+      name: "campaign-unknown-signal",
+      kinds: ["durable_boundary"],
+      pollIntervalMs: 5,
+      leaseSeconds: 5,
+    });
+    const run = await core.runs.triggerProduction({
+      identity,
+      projectId,
+      workflowName: "campaignWorkflow",
+      input: { contactId: "contact-2" },
+      correlationKey: "contact-2",
+    });
+    await waitForStatus({ runId: run.id, status: "waiting" });
+    await worker.stop();
+
+    await expect(
+      core.runs.signalByKey({
+        identity,
+        projectId,
+        workflowName: "campaignWorkflow",
+        correlationKey: "contact-2",
+        signal: "bounce",
+        idempotencyKey: "bounce-1",
+        value: {},
+      }),
+    ).rejects.toBeInstanceOf(RunSignalNotFoundError);
+
+    await core.runs.cancel({ identity, runId: run.id });
+  });
+
+  it("defers a boundary that cannot reserve its shared rate budget", async () => {
+    // Drain the whatsapp bucket the campaign's second step draws on. Refill is
+    // effectively zero, so the step must park rather than fail.
+    const rateReservations = new RateReservationsService(db);
+    const limit = {
+      key: { globalKey: "campaign-whatsapp" },
+      capacity: 2,
+      refillRatePerSecond: 0.000_001,
+    };
+    await rateReservations.reserve({
+      tenantId: identity.tenantId,
+      limits: [limit],
+    });
+    await rateReservations.reserve({
+      tenantId: identity.tenantId,
+      limits: [limit],
+    });
+
+    const worker = core.runs.startWorker({
+      name: "campaign-rate-limited",
+      kinds: ["durable_boundary"],
+      pollIntervalMs: 5,
+      leaseSeconds: 5,
+    });
+    const run = await core.runs.triggerProduction({
+      identity,
+      projectId,
+      workflowName: "campaignWorkflow",
+      input: { contactId: "contact-3" },
+      correlationKey: "contact-3",
+    });
+    await waitForStatus({ runId: run.id, status: "waiting" });
+    await core.runs.signalByKey({
+      identity,
+      projectId,
+      workflowName: "campaignWorkflow",
+      correlationKey: "contact-3",
+      signal: "reply",
+      idempotencyKey: "reply-3",
+      value: { optedOut: false },
+    });
+
+    const blocked = await waitForRateBlock({
+      runId: run.id,
+      stepIndex: 1,
+      timeout: 10_000,
+    });
+    await worker.stop();
+
+    expect(blocked?.rate_blocked_until).toBeInstanceOf(Date);
+    // Waiting for capacity must not burn the boundary's retry budget.
+    expect(blocked?.attempt).toBe(1);
+    const current = await core.runs.get({ identity, runId: run.id });
+    expect(current.status).not.toBe("failed");
+    await core.runs.cancel({ identity, runId: run.id });
+  }, 20_000);
 
   it("resumes a boundary pause idempotently across worker restarts", async () => {
     const first = core.runs.startWorker({
@@ -1580,6 +1905,26 @@ describeIf("unified RunsService integration", () => {
   }, 35_000);
 });
 
+async function waitForRateBlock(args: {
+  runId: string;
+  stepIndex: number;
+  timeout?: number;
+}): Promise<{ rate_blocked_until: Date | null; attempt: number } | undefined> {
+  const deadline = Date.now() + (args.timeout ?? 5_000);
+  let latest: { rate_blocked_until: Date | null; attempt: number } | undefined;
+  while (Date.now() < deadline) {
+    latest = await db
+      .selectFrom("workflow_step_attempts")
+      .where("run_id", "=", args.runId)
+      .where("step_index", "=", args.stepIndex)
+      .select(["rate_blocked_until", "attempt"])
+      .executeTakeFirst();
+    if (latest?.rate_blocked_until) return latest;
+    await new Promise((resolve) => setTimeout(resolve, 15));
+  }
+  return latest;
+}
+
 async function waitForStatus(args: {
   runId: string;
   status: string;
@@ -1735,6 +2080,24 @@ async function invokeRuntime(
                 type: "completed",
                 output: record(input).value ?? { approved: true },
               },
+        ),
+      );
+    }
+    if (invocation.target.exportName === "campaignWorkflow") {
+      return receipt(
+        invocation,
+        completed(
+          stepIndex === 0
+            ? {
+                type: "pause",
+                transition: {
+                  __catamorphicDurableTransition: "pause",
+                  signal: "reply",
+                  statePresent: true,
+                  state: { contactId: record(input).contactId ?? "unknown" },
+                },
+              }
+            : { type: "completed", output: record(input).value ?? {} },
         ),
       );
     }
@@ -2154,7 +2517,7 @@ class FakeSandboxProvider implements SandboxProvider {
     getHealth: async ({ runtimeId }) => ({
       runtimeId,
       runtimeStatus: "healthy",
-      protocolVersion: 6,
+      protocolVersion: 7,
       status: "healthy",
       activeInvocations: 0,
       queuedInvocations: 0,
@@ -2263,6 +2626,21 @@ export const approvalWorkflow = defineWorkflow(({ defineBoundary }) => ({
     defineBoundary({ run: ({ input, pause }: BoundaryContext<{ orderId: string }>) =>
       pause<{ approved: boolean }, { requestId: string }>({ state: { requestId: input.orderId } }) }),
     defineBoundary({ run: ({ input }: BoundaryContext<{ reason: "resumed"; value: { approved: boolean }; state: { requestId: string } }>) => input.value }),
+  ],
+}));
+
+export const campaignWorkflow = defineWorkflow(({ defineBoundary }) => ({
+  controls: { cancel: true },
+  steps: [
+    defineBoundary({
+      rateLimits: [{ globalKey: "campaign-email", capacity: 100, refillRatePerSecond: 50 }],
+      run: ({ input, pause }: BoundaryContext<{ contactId: string }>) =>
+        pause<{ optedOut: boolean }, { contactId: string }>({ signal: "reply", state: { contactId: input.contactId } }),
+    }),
+    defineBoundary({
+      rateLimits: [{ globalKey: "campaign-whatsapp", capacity: 2, refillRatePerSecond: 0.000001 }],
+      run: ({ input }: BoundaryContext<{ reason: "resumed"; value: { optedOut: boolean }; state: { contactId: string } }>) => input.value,
+    }),
   ],
 }));
 

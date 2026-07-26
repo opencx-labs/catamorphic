@@ -170,6 +170,89 @@ The parser and UI expose capabilities such as persisted continuation, batch
 processing, and cancellation. There is no public stage concept, category
 switch, or separate Run family for these capabilities.
 
+### Long-lived journeys: correlation keys, signals, shared rate budgets
+
+A run may carry a **correlation key** — a host-meaningful identity for its
+subject (a contact, an account, a subscription). It is unique among live runs of
+the same workflow, which makes it at once an enrollment idempotency key and the
+address external events use to reach the run. A boundary declares the shared
+third-party budgets it draws on; buckets are keyed per tenant, so every workflow
+naming the same `globalKey` draws on one budget.
+
+```typescript
+export const nurtureContact = defineWorkflow(({ defineBoundary }) => ({
+  controls: { cancel: true },
+  steps: [
+    defineBoundary({
+      rateLimits: [
+        { globalKey: "email", capacity: 500, refillRatePerSecond: 100 },
+      ],
+      run: async ({ input, pause }: BoundaryContext<{ contactId: string }>) => {
+        await sendWelcomeEmail({ contactId: input.contactId });
+        return pause<{ clicked: boolean }, { contactId: string }>({
+          signal: "reply",
+          timeout: "72h",
+          state: { contactId: input.contactId },
+        });
+      },
+    }),
+    defineBoundary({
+      // A different step, a different provider, a different budget.
+      rateLimits: [
+        { globalKey: "whatsapp", partitionKey: "sender-1", capacity: 80, refillRatePerSecond: 20 },
+      ],
+      run: async ({ input }) => sendWhatsApp({ contactId: input.state.contactId }),
+    }),
+  ],
+}));
+```
+
+```ts
+// Enrolling twice for the same contact is a no-op, so webhook redelivery is safe.
+await client.runs.triggerProduction({
+  projectId, workflowName: "nurtureContact",
+  input: { contactId: "contact-42" },
+  correlationKey: "contact-42",           // onConflict: "ignore" | "error" | "restart"
+});
+
+// External events address the contact, not a run id.
+await client.runs.signalByKey({
+  projectId, workflowName: "nurtureContact",
+  correlationKey: "contact-42",
+  signal: "reply", idempotencyKey: replyEventId, value: { clicked: true },
+});
+
+// Opting out ends the journey wherever it sits. Resolves null if none was live.
+await client.runs.cancelByKey({
+  projectId, workflowName: "nurtureContact",
+  correlationKey: "contact-42", reason: "unsubscribed",
+});
+```
+
+Waiting for capacity is not failure: a boundary that cannot reserve is
+rescheduled without consuming a retry and without holding a sandbox. When a
+provider answers with a 429, report it with `rateLimited({ retryAfterMs })` —
+that blocks every workflow sharing the account, not just the run that hit it.
+
+Hosts bound what any one tenant may consume from these shared resources via
+`catamorphic.tenantPolicies`. It is SDK-only and never exposed over HTTP, so a
+tenant cannot raise its own limits:
+
+```ts
+await catamorphic.tenantPolicies.upsert({
+  tenantId,
+  maxConcurrentJobs: 32,     // ceiling on simultaneously leased jobs
+  maxActiveRuns: 50_000,     // ceiling on live runs; bounds enrollment fan-out
+  queueWeight: 4,            // relative share of each claim batch
+  rateLimitOverrides: {      // can tighten an author's bucket, never loosen it
+    whatsapp: { capacity: 40, refillRatePerSecond: 10 },
+  },
+});
+```
+
+See [ADR 0027](docs/decisions/0027-correlation-keys-and-external-signals.md) and
+[ADR 0028](docs/decisions/0028-shared-rate-budgets-and-tenant-execution-policy.md).
+
 ## Local development
 
 ```bash

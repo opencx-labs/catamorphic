@@ -1598,6 +1598,7 @@ export interface paths {
                     limit?: number;
                     offset?: number;
                     mode?: "test" | "production";
+                    correlationKey?: string;
                 };
                 header?: never;
                 path: {
@@ -1621,6 +1622,7 @@ export interface paths {
                                 /** Format: uuid */
                                 projectId: string;
                                 workflowName: string;
+                                correlationKey: string | null;
                                 capabilities: {
                                     cancel: boolean;
                                     pauseProcessing: boolean;
@@ -1732,6 +1734,9 @@ export interface paths {
                 content: {
                     "application/json": {
                         input?: components["schemas"]["JsonValueInput"];
+                        correlationKey?: string;
+                        /** @enum {string} */
+                        onConflict?: "ignore" | "error" | "restart";
                     };
                 };
             };
@@ -1748,6 +1753,7 @@ export interface paths {
                             /** Format: uuid */
                             projectId: string;
                             workflowName: string;
+                            correlationKey: string | null;
                             capabilities: {
                                 cancel: boolean;
                                 pauseProcessing: boolean;
@@ -1842,6 +1848,17 @@ export interface paths {
                 };
                 /** @description Default Response */
                 409: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                429: {
                     headers: {
                         [name: string]: unknown;
                     };
@@ -1912,6 +1929,7 @@ export interface paths {
                             /** Format: uuid */
                             projectId: string;
                             workflowName: string;
+                            correlationKey: string | null;
                             capabilities: {
                                 cancel: boolean;
                                 pauseProcessing: boolean;
@@ -2034,6 +2052,310 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/projects/{projectId}/workflows/{name}/signals": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    projectId: string;
+                    name: string;
+                };
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": {
+                        correlationKey: string;
+                        signal: string;
+                        idempotencyKey: string;
+                        value: components["schemas"]["JsonValueInput"];
+                    };
+                };
+            };
+            responses: {
+                /** @description Default Response */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            /** Format: uuid */
+                            id: string;
+                            /** Format: uuid */
+                            projectId: string;
+                            workflowName: string;
+                            correlationKey: string | null;
+                            capabilities: {
+                                cancel: boolean;
+                                pauseProcessing: boolean;
+                                resumeProcessing: boolean;
+                                submitInput: boolean;
+                                inspectItems: boolean;
+                            };
+                            /** @enum {string} */
+                            status: "pending" | "running" | "waiting" | "paused" | "canceling" | "completed" | "failed" | "canceled";
+                            /** @enum {string} */
+                            phase: "execute" | "boundary" | "source" | "process" | "sink" | "pause" | "child";
+                            currentStepIndex: number | null;
+                            activePause: {
+                                /** Format: uuid */
+                                id: string;
+                                /** @enum {string} */
+                                status: "open" | "resumed" | "timed_out" | "canceled";
+                                state: unknown;
+                                /** Format: date-time */
+                                timeoutAt: string | null;
+                                /** Format: date-time */
+                                createdAt: string;
+                                /** Format: date-time */
+                                resolvedAt: string | null;
+                            } | null;
+                            batchScopes: {
+                                /** Format: uuid */
+                                workflowStepAttemptId: string;
+                                stepIndex: number;
+                                nodeId: string;
+                                attempt: number;
+                                /** @enum {string} */
+                                status: "pending" | "running" | "waiting" | "completed" | "failed" | "canceled";
+                                estimated: number | null;
+                                discovered: number;
+                                succeeded: number;
+                                failed: number;
+                                skipped: number;
+                                sinkCompletedChunks: number;
+                                sinkTotalChunks: number;
+                                artifact: unknown;
+                            }[];
+                            provenance: {
+                                commitSha?: string;
+                                /** @enum {boolean} */
+                                mutableSource?: true;
+                            };
+                            artifact?: {
+                                /** Format: uuid */
+                                deploymentArtifactId: string;
+                            };
+                            /** @enum {string} */
+                            mode: "test" | "production";
+                            initiatedBy: string | null;
+                            input: unknown;
+                            result: unknown;
+                            error: string | null;
+                            /** Format: uuid */
+                            parentRunId: string | null;
+                            /** Format: date-time */
+                            createdAt: string;
+                            /** Format: date-time */
+                            updatedAt: string;
+                            /** Format: date-time */
+                            startedAt: string | null;
+                            /** Format: date-time */
+                            completedAt: string | null;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                409: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                503: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                        };
+                    };
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/projects/{projectId}/workflows/{name}/cancellations": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    projectId: string;
+                    name: string;
+                };
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": {
+                        correlationKey: string;
+                        reason?: string;
+                    };
+                };
+            };
+            responses: {
+                /** @description Default Response */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            /** Format: uuid */
+                            id: string;
+                            /** Format: uuid */
+                            projectId: string;
+                            workflowName: string;
+                            correlationKey: string | null;
+                            capabilities: {
+                                cancel: boolean;
+                                pauseProcessing: boolean;
+                                resumeProcessing: boolean;
+                                submitInput: boolean;
+                                inspectItems: boolean;
+                            };
+                            /** @enum {string} */
+                            status: "pending" | "running" | "waiting" | "paused" | "canceling" | "completed" | "failed" | "canceled";
+                            /** @enum {string} */
+                            phase: "execute" | "boundary" | "source" | "process" | "sink" | "pause" | "child";
+                            currentStepIndex: number | null;
+                            activePause: {
+                                /** Format: uuid */
+                                id: string;
+                                /** @enum {string} */
+                                status: "open" | "resumed" | "timed_out" | "canceled";
+                                state: unknown;
+                                /** Format: date-time */
+                                timeoutAt: string | null;
+                                /** Format: date-time */
+                                createdAt: string;
+                                /** Format: date-time */
+                                resolvedAt: string | null;
+                            } | null;
+                            batchScopes: {
+                                /** Format: uuid */
+                                workflowStepAttemptId: string;
+                                stepIndex: number;
+                                nodeId: string;
+                                attempt: number;
+                                /** @enum {string} */
+                                status: "pending" | "running" | "waiting" | "completed" | "failed" | "canceled";
+                                estimated: number | null;
+                                discovered: number;
+                                succeeded: number;
+                                failed: number;
+                                skipped: number;
+                                sinkCompletedChunks: number;
+                                sinkTotalChunks: number;
+                                artifact: unknown;
+                            }[];
+                            provenance: {
+                                commitSha?: string;
+                                /** @enum {boolean} */
+                                mutableSource?: true;
+                            };
+                            artifact?: {
+                                /** Format: uuid */
+                                deploymentArtifactId: string;
+                            };
+                            /** @enum {string} */
+                            mode: "test" | "production";
+                            initiatedBy: string | null;
+                            input: unknown;
+                            result: unknown;
+                            error: string | null;
+                            /** Format: uuid */
+                            parentRunId: string | null;
+                            /** Format: date-time */
+                            createdAt: string;
+                            /** Format: date-time */
+                            updatedAt: string;
+                            /** Format: date-time */
+                            startedAt: string | null;
+                            /** Format: date-time */
+                            completedAt: string | null;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                204: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": null;
+                    };
+                };
+                /** @description Default Response */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                503: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                        };
+                    };
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/runs/{runId}": {
         parameters: {
             query?: never;
@@ -2064,6 +2386,7 @@ export interface paths {
                             /** Format: uuid */
                             projectId: string;
                             workflowName: string;
+                            correlationKey: string | null;
                             capabilities: {
                                 cancel: boolean;
                                 pauseProcessing: boolean;
@@ -2243,6 +2566,7 @@ export interface paths {
                             /** Format: uuid */
                             projectId: string;
                             workflowName: string;
+                            correlationKey: string | null;
                             capabilities: {
                                 cancel: boolean;
                                 pauseProcessing: boolean;
@@ -2386,6 +2710,7 @@ export interface paths {
                             /** Format: uuid */
                             projectId: string;
                             workflowName: string;
+                            correlationKey: string | null;
                             capabilities: {
                                 cancel: boolean;
                                 pauseProcessing: boolean;
@@ -2529,6 +2854,7 @@ export interface paths {
                             /** Format: uuid */
                             projectId: string;
                             workflowName: string;
+                            correlationKey: string | null;
                             capabilities: {
                                 cancel: boolean;
                                 pauseProcessing: boolean;
@@ -2680,6 +3006,7 @@ export interface paths {
                             /** Format: uuid */
                             projectId: string;
                             workflowName: string;
+                            correlationKey: string | null;
                             capabilities: {
                                 cancel: boolean;
                                 pauseProcessing: boolean;

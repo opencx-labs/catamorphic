@@ -293,6 +293,17 @@ export interface RateReservationBuckets {
   updated_at: Generated<Timestamp>;
 }
 
+export interface TenantExecutionPolicies {
+  created_at: Generated<Timestamp>;
+  jobs_enabled: Generated<boolean>;
+  max_active_runs: number | null;
+  max_concurrent_jobs: number | null;
+  queue_weight: Generated<number>;
+  rate_limit_overrides: Generated<Json>;
+  tenant_id: string;
+  updated_at: Generated<Timestamp>;
+}
+
 export interface Tenants {
   created_at: Generated<Timestamp>;
   id: Generated<string>;
@@ -307,6 +318,7 @@ export interface WorkflowPauses {
   resume_payload_hash: string | null;
   resume_value: Json | null;
   run_id: string;
+  signal_name: string | null;
   state: Json | null;
   state_present: Generated<boolean>;
   status: Generated<string>;
@@ -330,6 +342,7 @@ export interface WorkflowRuns {
   cancel_reason: string | null;
   cancel_requested_at: Timestamp | null;
   completed_at: Timestamp | null;
+  correlation_key: string | null;
   created_at: Generated<Timestamp>;
   deployment_artifact_id: string | null;
   error: string | null;
@@ -386,6 +399,8 @@ export interface WorkflowStepAttempts {
   input: Json | null;
   output: Json | null;
   policy: Generated<Json>;
+  rate_blocked_keys: Json | null;
+  rate_blocked_until: Timestamp | null;
   run_id: string;
   started_at: Timestamp | null;
   status: Generated<string>;
@@ -413,6 +428,7 @@ export interface DB {
   project_secrets: ProjectSecrets;
   projects: Projects;
   rate_reservation_buckets: RateReservationBuckets;
+  tenant_execution_policies: TenantExecutionPolicies;
   tenants: Tenants;
   workflow_pauses: WorkflowPauses;
   workflow_run_events: WorkflowRunEvents;

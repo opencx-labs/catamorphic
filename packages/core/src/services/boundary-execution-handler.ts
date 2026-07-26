@@ -11,12 +11,19 @@ import {
   ExecutionJobDeferredError,
   type ExecutionWorkerService,
 } from "./execution-worker-service.js";
+import type {
+  RateBucketKey,
+  RateLimit,
+  RateReservationsService,
+} from "./rate-reservations-service.js";
 import {
+  jsonColumn,
   jsonRecord,
   type RunCoordinator,
   stringValue,
   toJson,
 } from "./run-coordinator.js";
+import type { TenantPoliciesService } from "./tenant-policies-service.js";
 
 interface BoundaryRuntimeContext {
   identity: Identity;
@@ -32,6 +39,7 @@ interface BoundaryRuntimeContext {
   input: Json | null;
   attempt: number;
   status: string;
+  rateLimits: readonly RateLimit[];
 }
 
 export class BoundaryExecutionHandler {
@@ -40,6 +48,8 @@ export class BoundaryExecutionHandler {
     private readonly deps: {
       coordinator: RunCoordinator;
       worker: ExecutionWorkerService;
+      rateReservations: RateReservationsService;
+      tenantPolicies: TenantPoliciesService;
       invokeRuntime(args: {
         identity: Identity;
         projectId: string;
@@ -89,6 +99,9 @@ export class BoundaryExecutionHandler {
       throw new ExecutionJobDeferredError(new Date(Date.now() + 100));
     }
     const invocationId = `${context.runId}:step:${context.stepIndex}:attempt:${context.attempt}`;
+    // Reserved before the sandbox is touched, so a throttled boundary occupies
+    // no compute while it waits and consumes no retry attempt.
+    await this.reserveRateCapacity({ context, job: args.job });
     if (
       !(await this.deps.coordinator.beginAttempt({
         job: args.job,
@@ -111,6 +124,17 @@ export class BoundaryExecutionHandler {
             signal: args.signal,
           }),
       });
+    if (receipt.terminal.status === "rate_limited") {
+      // The provider is the authority on its own limits, so its answer blocks
+      // every workflow sharing these buckets, not just this run.
+      const retryAt = await this.applyRemoteBackpressure({
+        context,
+        retryAfterMs: receipt.terminal.retryAfterMs,
+      });
+      // The attempt row stays 'running', which beginAttempt re-accepts when the
+      // job is redelivered, so the boundary resumes without burning an attempt.
+      throw new ExecutionJobDeferredError(retryAt);
+    }
     if (receipt.terminal.status !== "completed") {
       await this.deps.coordinator.failStep({
         workflowStepAttemptId: context.workflowStepAttemptId,
@@ -178,6 +202,71 @@ export class BoundaryExecutionHandler {
     });
   }
 
+  private async reserveRateCapacity(args: {
+    context: BoundaryRuntimeContext;
+    job: ExecutionJob;
+  }): Promise<void> {
+    if (args.context.rateLimits.length === 0) return;
+    const limits = await this.deps.tenantPolicies.applyRateOverrides({
+      tenantId: args.context.identity.tenantId,
+      limits: args.context.rateLimits,
+    });
+    const reservation = await this.deps.rateReservations.reserve({
+      tenantId: args.context.identity.tenantId,
+      limits,
+    });
+    if (!reservation.reserved) {
+      await this.recordRateBlock({
+        workflowStepAttemptId: args.context.workflowStepAttemptId,
+        blockedUntil: reservation.retryAt,
+        keys: reservation.blockedBy,
+      });
+      throw new ExecutionJobDeferredError(reservation.retryAt);
+    }
+    await this.recordRateBlock({
+      workflowStepAttemptId: args.context.workflowStepAttemptId,
+      blockedUntil: null,
+      keys: null,
+    });
+  }
+
+  private async applyRemoteBackpressure(args: {
+    context: BoundaryRuntimeContext;
+    retryAfterMs: number;
+  }): Promise<Date> {
+    const keys = args.context.rateLimits.map((limit) => limit.key);
+    if (keys.length === 0) {
+      return new Date(Date.now() + args.retryAfterMs);
+    }
+    const blockedUntil = await this.deps.rateReservations.applyRetryAfter({
+      tenantId: args.context.identity.tenantId,
+      keys,
+      retryAfterMs: args.retryAfterMs,
+    });
+    await this.recordRateBlock({
+      workflowStepAttemptId: args.context.workflowStepAttemptId,
+      blockedUntil,
+      keys,
+    });
+    return blockedUntil;
+  }
+
+  private async recordRateBlock(args: {
+    workflowStepAttemptId: string;
+    blockedUntil: Date | null;
+    keys: readonly RateBucketKey[] | null;
+  }): Promise<void> {
+    await this.db
+      .updateTable("workflow_step_attempts")
+      .set({
+        rate_blocked_until: args.blockedUntil,
+        rate_blocked_keys: args.keys ? jsonColumn(toJson(args.keys)) : null,
+        updated_at: new Date(),
+      })
+      .where("id", "=", args.workflowStepAttemptId)
+      .execute();
+  }
+
   private async loadContext(
     job: ExecutionJob,
   ): Promise<BoundaryRuntimeContext | null> {
@@ -216,6 +305,7 @@ export class BoundaryExecutionHandler {
         "workflow_step_attempts.step_index",
         "workflow_step_attempts.input",
         "workflow_step_attempts.attempt",
+        "workflow_step_attempts.policy",
         "workflow_run_states.execution_plan",
       ])
       .executeTakeFirst();
@@ -243,6 +333,35 @@ export class BoundaryExecutionHandler {
       input: row.input,
       attempt: row.attempt,
       status: row.status,
+      rateLimits: readRateLimits(row.policy),
     };
   }
+}
+
+function readRateLimits(policy: Json): readonly RateLimit[] {
+  const value = jsonRecord(policy).rateLimits;
+  if (!Array.isArray(value)) return [];
+  return value.flatMap((entry) => {
+    const limit = jsonRecord(entry);
+    const globalKey = stringValue(limit.globalKey);
+    if (
+      !globalKey ||
+      typeof limit.capacity !== "number" ||
+      typeof limit.refillRatePerSecond !== "number"
+    ) {
+      return [];
+    }
+    const partitionKey = stringValue(limit.partitionKey);
+    return [
+      {
+        key: {
+          globalKey,
+          ...(partitionKey ? { partitionKey } : {}),
+        },
+        capacity: limit.capacity,
+        refillRatePerSecond: limit.refillRatePerSecond,
+        ...(typeof limit.cost === "number" ? { cost: limit.cost } : {}),
+      },
+    ];
+  });
 }

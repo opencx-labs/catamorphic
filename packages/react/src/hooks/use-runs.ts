@@ -16,6 +16,7 @@ import {
 } from "../lib/errors.js";
 import { useCatamorphic } from "../provider.js";
 import type {
+  CancelRunByKeyInput,
   CancelRunInput,
   Run,
   RunDetail,
@@ -24,6 +25,7 @@ import type {
   RunItemsList,
   RunMode,
   RunsList,
+  SignalRunInput,
   SubmitRunInput,
   TriggeredRun,
   TriggeredTestRun,
@@ -244,19 +246,29 @@ export function useTriggerRun({
   const { apiClient } = useCatamorphic();
   const queryClient = useQueryClient();
   return useMutation({
+    // Raw fetch: openapi-fetch cannot infer a body that mixes the recursive
+    // JsonValueInput schema with sibling properties. Same reason as
+    // useSubmitRunInput below.
     mutationFn: (input) =>
-      runWithCatamorphicError(async () =>
-        assertApiOk(
-          await apiClient.POST(
-            "/api/projects/{projectId}/workflows/{name}/runs",
-            {
-              params: { path: { projectId, name: workflowName } },
-              body: input ?? {},
-            },
-          ),
-          "Trigger run failed",
-        ),
-      ),
+      runWithCatamorphicError(async () => {
+        const url = `${apiClient.baseUrl}/api/projects/${encodeURIComponent(projectId)}/workflows/${encodeURIComponent(workflowName)}/runs`;
+        const response = await apiClient.fetch(url, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(input ?? {}),
+        });
+        if (!response.ok) {
+          const body = await response
+            .json()
+            .catch(() => response.text().catch(() => ""));
+          throw toCatamorphicError({
+            response,
+            body,
+            fallbackMessage: "Trigger run failed",
+          });
+        }
+        return response.json();
+      }),
     onSuccess: async () => {
       await queryClient.invalidateQueries({ queryKey: runKeys.lists() });
     },
@@ -411,6 +423,85 @@ export function useSubmitRunInput({
         return response.json();
       }),
     onSuccess: (run) => refreshRunCaches(queryClient, run),
+  });
+}
+
+export interface UseKeyedRunMutationOptions {
+  projectId: string;
+  workflowName: string;
+}
+
+/** Delivers an external event to whichever run awaits a named signal for a key. */
+export function useSignalRun({
+  projectId,
+  workflowName,
+}: UseKeyedRunMutationOptions): UseMutationResult<
+  Run,
+  CatamorphicError,
+  SignalRunInput
+> {
+  const { apiClient } = useCatamorphic();
+  const queryClient = useQueryClient();
+  return useMutation<Run, CatamorphicError, SignalRunInput>({
+    mutationFn: (input) =>
+      runWithCatamorphicError(async () => {
+        const url = `${apiClient.baseUrl}/api/projects/${encodeURIComponent(projectId)}/workflows/${encodeURIComponent(workflowName)}/signals`;
+        const response = await apiClient.fetch(url, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(input),
+        });
+        if (!response.ok) {
+          const body = await response
+            .json()
+            .catch(() => response.text().catch(() => ""));
+          throw toCatamorphicError({
+            response,
+            body,
+            fallbackMessage: "Signal run failed",
+          });
+        }
+        return response.json();
+      }),
+    onSuccess: (run) => refreshRunCaches(queryClient, run),
+  });
+}
+
+/** Ends the live journey for a key. Resolves null when none was live. */
+export function useCancelRunByKey({
+  projectId,
+  workflowName,
+}: UseKeyedRunMutationOptions): UseMutationResult<
+  Run | null,
+  CatamorphicError,
+  CancelRunByKeyInput
+> {
+  const { apiClient } = useCatamorphic();
+  const queryClient = useQueryClient();
+  return useMutation<Run | null, CatamorphicError, CancelRunByKeyInput>({
+    mutationFn: (input) =>
+      runWithCatamorphicError(async () => {
+        const url = `${apiClient.baseUrl}/api/projects/${encodeURIComponent(projectId)}/workflows/${encodeURIComponent(workflowName)}/cancellations`;
+        const response = await apiClient.fetch(url, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(input),
+        });
+        if (!response.ok) {
+          const body = await response
+            .json()
+            .catch(() => response.text().catch(() => ""));
+          throw toCatamorphicError({
+            response,
+            body,
+            fallbackMessage: "Cancel run failed",
+          });
+        }
+        return response.status === 204 ? null : await response.json();
+      }),
+    onSuccess: (run) => {
+      if (run) refreshRunCaches(queryClient, run);
+    },
   });
 }
 

@@ -125,6 +125,13 @@ function receiptToRunResult(receipt: RuntimeInvocationReceipt): RunResult {
       steps,
     };
   }
+  if (receipt.terminal.status === "rate_limited") {
+    return {
+      status: "failed",
+      error: `Regular workflow reported rate limiting without a declared rate limit: ${receipt.terminal.error}`,
+      steps,
+    };
+  }
   return {
     status: "failed",
     error: receipt.terminal.error,
