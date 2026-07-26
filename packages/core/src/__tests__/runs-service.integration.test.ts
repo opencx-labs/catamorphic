@@ -186,6 +186,52 @@ describeIf("unified RunsService integration", () => {
     ).rejects.toBeInstanceOf(RunCapabilityError);
   });
 
+  it("parses a pinned commit once across repeated invocations", async () => {
+    // Every boundary and every batch item resolves the source before invoking.
+    // Uncached, a 10k-item batch fetches and parses the project 10k times.
+    let opened = 0;
+    const openDev = projectManager.openDev.bind(projectManager);
+    projectManager.openDev = ((...args: Parameters<typeof openDev>) => {
+      opened += 1;
+      return openDev(...args);
+    }) as typeof openDev;
+    try {
+      const first = await core.runs.resolveProductionExecution({
+        identity,
+        projectId,
+        workflowName: "approvalWorkflow",
+        commitSha: commitSha.value,
+      });
+      const afterFirst = opened;
+      const repeats = await Promise.all(
+        Array.from({ length: 8 }, () =>
+          core.runs.resolveProductionExecution({
+            identity,
+            projectId,
+            workflowName: "approvalWorkflow",
+            commitSha: commitSha.value,
+          }),
+        ),
+      );
+      expect(opened).toBe(afterFirst);
+      for (const repeat of repeats) expect(repeat).toEqual(first);
+
+      // A different commit is different content and must not be served the
+      // cached parse.
+      await expect(
+        core.runs.resolveProductionExecution({
+          identity,
+          projectId,
+          workflowName: "approvalWorkflow",
+          commitSha: "0".repeat(40),
+        }),
+      ).rejects.toBeDefined();
+      expect(opened).toBeGreaterThan(afterFirst);
+    } finally {
+      projectManager.openDev = openDev;
+    }
+  });
+
   it("enrolls, signals, and opts a contact out by correlation key", async () => {
     const worker = core.runs.startWorker({
       name: "campaign",
@@ -1207,25 +1253,24 @@ describeIf("unified RunsService integration", () => {
   });
 
   it("fails a waiting parent when its child is canceled directly", async () => {
-    const worker = core.runs.startWorker({
-      name: "cancel-direct-child",
-      kinds: ["durable_boundary"],
-      pollIntervalMs: 5,
-      leaseSeconds: 5,
-    });
     const parent = await core.runs.triggerProduction({
       identity,
       projectId,
       workflowName: "parentWorkflow",
       input: { parent: true },
     });
-    await waitForStatus({ runId: parent.id, status: "waiting" });
+    const worker = core.runs.startWorker({
+      name: "cancel-direct-child",
+      kinds: ["durable_boundary"],
+      pollIntervalMs: 5,
+      leaseSeconds: 5,
+    });
+    // Wait for the child row, not for the parent's `waiting` status. The parent
+    // holds `waiting` only between spawning the child and that child finishing,
+    // and childWorkflow returns immediately, so polling for the status can miss
+    // the window entirely. The child row is durable once created.
+    const child = await waitForChildRun({ parentRunId: parent.id });
     await worker.stop();
-    const child = await db
-      .selectFrom("workflow_runs")
-      .where("parent_run_id", "=", parent.id)
-      .select("id")
-      .executeTakeFirstOrThrow();
 
     await core.runs.cancel({
       identity,
@@ -1923,6 +1968,30 @@ async function waitForRateBlock(args: {
     await new Promise((resolve) => setTimeout(resolve, 15));
   }
   return latest;
+}
+
+/**
+ * Waits for a run's child to exist.
+ *
+ * Prefer this over waiting for the parent to report `waiting` when the child
+ * completes promptly: the parent's `waiting` status is transient, so polling
+ * for it is a race, while the child row persists once written.
+ */
+async function waitForChildRun(args: {
+  parentRunId: string;
+  timeout?: number;
+}): Promise<{ id: string }> {
+  const deadline = Date.now() + (args.timeout ?? 5_000);
+  while (Date.now() < deadline) {
+    const child = await db
+      .selectFrom("workflow_runs")
+      .where("parent_run_id", "=", args.parentRunId)
+      .select("id")
+      .executeTakeFirst();
+    if (child) return child;
+    await new Promise((resolve) => setTimeout(resolve, 5));
+  }
+  throw new Error(`Run '${args.parentRunId}' never spawned a child`);
 }
 
 async function waitForStatus(args: {

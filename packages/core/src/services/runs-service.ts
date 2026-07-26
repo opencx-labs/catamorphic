@@ -441,6 +441,7 @@ const tracer = getTracer("@catamorphic/core");
 
 export class RunsService {
   private readonly executor?: RunExecutorImpl;
+  private readonly preparedSources = new Map<string, Promise<PreparedSource>>();
 
   constructor(
     private readonly db: Kysely<DB>,
@@ -1673,43 +1674,99 @@ export class RunsService {
   }): Promise<PreparedSource> {
     const remote = this.deps.projectManager.remoteBackend;
     if (!remote) throw new ProductionDeploymentNotFoundError(args.projectId);
-    const repo = await this.deps.projectManager.openDev(
-      args.identity.tenantId,
-      args.projectId,
-      args.identity.externalUserId,
-    );
-    try {
-      await fetchRemote({
-        dev: repo,
-        remote,
-        tenantId: args.identity.tenantId,
-        projectId: args.projectId,
-        remoteBranch: "main",
-      });
-      const commitSha =
-        args.commitSha ??
-        (await repo.resolveRef("refs/remotes/origin/main").catch(() => null));
-      if (!commitSha)
-        throw new ProductionDeploymentNotFoundError(args.projectId);
-      const files = await repo.readAllFilesAtRef(commitSha);
-      const cloneSource = remote.getCloneSource
-        ? await remote.getCloneSource(args.identity.tenantId, args.projectId, {
-            scope: "read",
-          })
-        : undefined;
-      return {
-        ...(await prepareSource({
+
+    // A pinned sha names immutable content, so the parse behind it can be
+    // reused. Without a sha the caller is asking "whatever main is now", which
+    // has to hit the remote to answer.
+    const cached = args.commitSha
+      ? this.preparedSources.get(
+          preparedSourceKey({ ...args, commitSha: args.commitSha }),
+        )
+      : undefined;
+    const resolved = await (cached ??
+      this.loadProductionSource({ ...args, remote }));
+
+    // Clone credentials are short-lived, so they are fetched per call and
+    // layered onto the cached parse rather than cached with it.
+    const cloneSource = remote.getCloneSource
+      ? await remote.getCloneSource(args.identity.tenantId, args.projectId, {
+          scope: "read",
+        })
+      : undefined;
+    return {
+      ...resolved,
+      cloneSource:
+        cloneSource && resolved.commitSha
+          ? { ...cloneSource, commitSha: resolved.commitSha }
+          : undefined,
+    };
+  }
+
+  /**
+   * Reads a commit and parses it into an executable source.
+   *
+   * Every durable boundary and every batch item invokes the runtime, and each
+   * invocation needs the transformed source. Recomputing it per invocation
+   * means a full git fetch plus a whole-project ts-morph parse per step, so a
+   * 10k-item batch parses the project 10k times. Results are memoised by
+   * (tenant, project, workflow, sha) — a sha is immutable, so a hit is always
+   * valid.
+   *
+   * The promise is cached before it settles, so concurrent items on the same
+   * commit collapse into one parse instead of stampeding.
+   */
+  private loadProductionSource(args: {
+    identity: Identity;
+    projectId: string;
+    workflowName: string;
+    commitSha?: string;
+    remote: NonNullable<ProjectManager["remoteBackend"]>;
+  }): Promise<PreparedSource> {
+    const load = (async () => {
+      const repo = await this.deps.projectManager.openDev(
+        args.identity.tenantId,
+        args.projectId,
+        args.identity.externalUserId,
+      );
+      try {
+        await fetchRemote({
+          dev: repo,
+          remote: args.remote,
+          tenantId: args.identity.tenantId,
+          projectId: args.projectId,
+          remoteBranch: "main",
+        });
+        const commitSha =
+          args.commitSha ??
+          (await repo.resolveRef("refs/remotes/origin/main").catch(() => null));
+        if (!commitSha)
+          throw new ProductionDeploymentNotFoundError(args.projectId);
+        const files = await repo.readAllFilesAtRef(commitSha);
+        return await prepareSource({
           projectId: args.projectId,
           workflowName: args.workflowName,
           files,
           originalFiles: files,
           commitSha,
-        })),
-        cloneSource: cloneSource ? { ...cloneSource, commitSha } : undefined,
-      };
-    } finally {
-      await repo.dispose();
+        });
+      } finally {
+        await repo.dispose();
+      }
+    })();
+
+    if (!args.commitSha) return load;
+    const key = preparedSourceKey({ ...args, commitSha: args.commitSha });
+    // Each deploy strands its predecessor's entry, so the map is capped and
+    // evicted oldest-first (Map preserves insertion order).
+    if (this.preparedSources.size >= PREPARED_SOURCE_CACHE_MAX) {
+      const oldest = this.preparedSources.keys().next();
+      if (!oldest.done) this.preparedSources.delete(oldest.value);
     }
+    this.preparedSources.set(key, load);
+    // A failed parse must not be remembered, or the run retries against a
+    // cached rejection forever.
+    void load.catch(() => this.preparedSources.delete(key));
+    return load;
   }
 
   private async loadPlugins(projectId: string, mode: RunMode) {
@@ -1766,6 +1823,22 @@ export class RunsService {
       .executeTakeFirst();
     if (!scope) throw new RunNotFoundError(args.runId);
   }
+}
+
+const PREPARED_SOURCE_CACHE_MAX = 32;
+
+function preparedSourceKey(args: {
+  identity: Identity;
+  projectId: string;
+  workflowName: string;
+  commitSha: string;
+}): string {
+  return [
+    args.identity.tenantId,
+    args.projectId,
+    args.workflowName,
+    args.commitSha,
+  ].join(" ");
 }
 
 async function prepareSource(args: {
