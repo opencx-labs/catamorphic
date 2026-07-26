@@ -568,6 +568,11 @@ function isRuntimeEvent(value: unknown): value is RuntimeInvocationEvent {
   }
   if (value.type === "suspended") return isRecord(value.suspension);
   if (value.type === "skipped") return typeof value.reason === "string";
+  if (value.type === "rate_limited") {
+    return (
+      typeof value.error === "string" && typeof value.retryAfterMs === "number"
+    );
+  }
   return (
     (value.type === "failed" ||
       value.type === "canceled" ||
@@ -582,6 +587,11 @@ function isRuntimeTerminal(value: unknown): value is RuntimeTerminalResult {
   if (value.status === "completed") return true;
   if (value.status === "suspended") return isRecord(value.suspension);
   if (value.status === "skipped") return typeof value.reason === "string";
+  if (value.status === "rate_limited") {
+    return (
+      typeof value.error === "string" && typeof value.retryAfterMs === "number"
+    );
+  }
   return (
     (value.status === "failed" ||
       value.status === "canceled" ||

@@ -28,6 +28,7 @@ import { RunsService } from "./services/runs-service.js";
 import { RuntimeEventsService } from "./services/runtime-events-service.js";
 import { SecretsService } from "./services/secrets-service.js";
 import { SkillsService } from "./services/skills-service.js";
+import { TenantPoliciesService } from "./services/tenant-policies-service.js";
 import { WorkflowsService } from "./services/workflows-service.js";
 
 export interface CatamorphicCoreConfig {
@@ -65,6 +66,7 @@ export class CatamorphicCore {
   readonly deploymentArtifacts: DeploymentArtifactsService;
   readonly deploymentRuntime?: DeploymentRuntimeService;
   readonly skills: SkillsService;
+  readonly tenantPolicies: TenantPoliciesService;
   readonly plugins?: PluginsService;
   readonly secrets?: SecretsService;
   readonly runPluginsLoader?: RunPluginsLoader;
@@ -104,6 +106,7 @@ export class CatamorphicCore {
     const executionWorker = new ExecutionWorkerService(executionJobs);
     const runtimeEvents = new RuntimeEventsService(this.db);
     const rateReservations = new RateReservationsService(this.db);
+    this.tenantPolicies = new TenantPoliciesService(this.db);
 
     if (this.pluginResolver) {
       this.plugins = new PluginsService(this.db, this.pluginResolver);
@@ -134,10 +137,13 @@ export class CatamorphicCore {
       executionWorker,
       runtimeEvents,
       coordinator,
+      tenantPolicies: this.tenantPolicies,
     });
     new BoundaryExecutionHandler(this.db, {
       coordinator,
       worker: executionWorker,
+      rateReservations,
+      tenantPolicies: this.tenantPolicies,
       invokeRuntime: (args) => this.runs.invokeProductionRuntime(args),
       resolveChild: (args) => this.runs.resolveProductionWorkflow(args),
     });

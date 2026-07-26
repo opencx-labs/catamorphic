@@ -43,7 +43,7 @@ describe("runtime protocol JSON", () => {
 
   it("validates indexed defined-workflow targets", () => {
     const request = invocation({});
-    expect(RUNTIME_PROTOCOL_VERSION).toBe(6);
+    expect(RUNTIME_PROTOCOL_VERSION).toBe(7);
     expect(() =>
       parseRuntimeInvocationRequest({
         ...request,

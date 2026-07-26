@@ -288,6 +288,7 @@ export const RunSchema = z.object({
   id: z.string().uuid(),
   projectId: z.string().uuid(),
   workflowName: z.string(),
+  correlationKey: z.string().nullable(),
   capabilities: RunCapabilitiesSchema,
   status: RunStatusSchema,
   phase: RunPhaseSchema,
@@ -353,16 +354,71 @@ export const RunDetailSchema = RunSchema.extend({
   workflowStepAttempts: z.array(WorkflowStepAttemptSchema),
 });
 
+export const CorrelationKeySchema = z.string().min(1).max(500);
+
+export const EnrollmentConflictPolicySchema = z.enum([
+  "ignore",
+  "error",
+  "restart",
+]);
+
 export const TriggerRunSchema = z.object({
   input: JsonValueSchema.optional(),
+  correlationKey: CorrelationKeySchema.optional(),
+  onConflict: EnrollmentConflictPolicySchema.optional(),
 });
 
-export const TriggerTestRunSchema = TriggerRunSchema.extend({
+export const TriggerTestRunSchema = z.object({
+  input: JsonValueSchema.optional(),
   files: z.record(z.string(), z.string()).optional(),
 });
 
 export const RunsQuerySchema = PaginationQuerySchema.extend({
   mode: RunModeSchema.optional(),
+  correlationKey: CorrelationKeySchema.optional(),
+});
+
+export const SignalRunSchema = z.object({
+  correlationKey: CorrelationKeySchema,
+  signal: z.string().min(1).max(255),
+  idempotencyKey: z.string().min(1).max(255),
+  value: JsonValueSchema,
+});
+
+export const CancelRunByKeySchema = z.object({
+  correlationKey: CorrelationKeySchema,
+  reason: z.string().max(1000).optional(),
+});
+
+export const TenantExecutionPolicySchema = z.object({
+  tenantId: z.string().uuid(),
+  maxConcurrentJobs: z.number().int().positive().optional(),
+  maxActiveRuns: z.number().int().positive().optional(),
+  queueWeight: z.number().int().min(1).max(1000),
+  jobsEnabled: z.boolean(),
+  rateLimitOverrides: z.record(
+    z.string(),
+    z.object({
+      capacity: z.number().positive().optional(),
+      refillRatePerSecond: z.number().positive().optional(),
+    }),
+  ),
+});
+
+export const UpsertTenantExecutionPolicySchema = z.object({
+  maxConcurrentJobs: z.number().int().positive().optional(),
+  maxActiveRuns: z.number().int().positive().optional(),
+  queueWeight: z.number().int().min(1).max(1000).optional(),
+  jobsEnabled: z.boolean().optional(),
+  rateLimitOverrides: z
+    .record(
+      z.string(),
+      z.object({
+        capacity: z.number().positive().optional(),
+        refillRatePerSecond: z.number().positive().optional(),
+      }),
+    )
+    .optional(),
 });
 
 export const BatchItemStatusSchema = z.enum([

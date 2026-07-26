@@ -87,6 +87,16 @@ async function runInvocation(value: unknown): Promise<RuntimeTerminalResult> {
         steps,
       };
     }
+    const retryAfterMs = rateLimitRetryAfter(error);
+    if (retryAfterMs !== undefined) {
+      failRunningSteps({ steps });
+      return {
+        status: "rate_limited",
+        retryAfterMs,
+        error: error instanceof Error ? error.message : String(error),
+        steps,
+      };
+    }
     failRunningSteps({ steps });
     return {
       status: "failed",
@@ -182,6 +192,9 @@ async function executeInvocationTarget(args: {
       __catamorphicDurableTransition: "pause",
       ...(typeof options?.timeout === "string"
         ? { timeout: options.timeout }
+        : {}),
+      ...(typeof options?.signal === "string" && options.signal.length > 0
+        ? { signal: options.signal }
         : {}),
       statePresent: options ? Object.hasOwn(options, "state") : false,
       ...(options && Object.hasOwn(options, "state")
@@ -600,6 +613,20 @@ function failRunningSteps(args: { steps: RuntimeStepEntry[] }): void {
     step.error = "Workflow ended before the step completed";
     step.completedAt = completedAt;
   }
+}
+
+// Matched structurally: workflow code runs in the sandbox against its own copy
+// of @catamorphic/workflow, so `instanceof` cannot be used across that boundary.
+function rateLimitRetryAfter(error: unknown): number | undefined {
+  if (!(error instanceof Error) || error.name !== "RateLimitedError") {
+    return undefined;
+  }
+  const retryAfterMs = Reflect.get(error, "retryAfterMs");
+  return typeof retryAfterMs === "number" &&
+    Number.isFinite(retryAfterMs) &&
+    retryAfterMs > 0
+    ? retryAfterMs
+    : undefined;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

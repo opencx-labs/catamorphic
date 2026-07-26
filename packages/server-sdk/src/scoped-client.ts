@@ -26,6 +26,7 @@ import type {
   UpdateProjectInput,
   WriteFileInput,
 } from "@catamorphic/core";
+import type { Json } from "@catamorphic/db";
 
 export type WorkflowSummary = Omit<CoreWorkflowSummary, "execution">;
 type PublicWorkflowNode = Omit<
@@ -70,6 +71,22 @@ export interface RunsResource {
   list(args: Omit<ListRunsInput, "identity">): Promise<ListRunsResult>;
   get(args: Omit<GetRunInput, "identity">): Promise<RunDetail>;
   cancel(args: Omit<CancelRunInput, "identity">): Promise<Run>;
+  /** Delivers an external event to the run awaiting a named signal for a key. */
+  signalByKey(args: {
+    projectId: string;
+    workflowName: string;
+    correlationKey: string;
+    signal: string;
+    idempotencyKey: string;
+    value: Json;
+  }): Promise<Run>;
+  /** Terminates the live run for a key. Resolves null when none was live. */
+  cancelByKey(args: {
+    projectId: string;
+    workflowName: string;
+    correlationKey: string;
+    reason?: string;
+  }): Promise<Run | null>;
   pauseProcessing(args: Omit<PauseRunInput, "identity">): Promise<Run>;
   resumeProcessing(args: Omit<ResumeRunInput, "identity">): Promise<Run>;
   submitInput(args: Omit<ResumeRunPauseInput, "identity">): Promise<Run>;
@@ -143,6 +160,8 @@ function buildRuns(core: CatamorphicCore, identity: Identity): RunsResource {
     list: (args) => core.runs.list({ ...args, identity }),
     get: (args) => core.runs.get({ ...args, identity }),
     cancel: (args) => core.runs.cancel({ ...args, identity }),
+    signalByKey: (args) => core.runs.signalByKey({ ...args, identity }),
+    cancelByKey: (args) => core.runs.cancelByKey({ ...args, identity }),
     pauseProcessing: (args) => core.runs.pause({ ...args, identity }),
     resumeProcessing: (args) => core.runs.resume({ ...args, identity }),
     submitInput: (args) => core.runs.resumePause({ ...args, identity }),

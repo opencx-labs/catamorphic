@@ -338,6 +338,15 @@ export class RuntimeInvocationDispatcher {
       });
       return;
     }
+    if (terminal.status === "rate_limited") {
+      state.events.push({
+        ...common,
+        type: "rate_limited",
+        retryAfterMs: terminal.retryAfterMs,
+        error: terminal.error,
+      });
+      return;
+    }
     state.events.push({
       ...common,
       type: terminal.status,

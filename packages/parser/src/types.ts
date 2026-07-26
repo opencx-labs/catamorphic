@@ -99,6 +99,14 @@ export interface BoundaryRetryDescriptor {
   };
 }
 
+export interface BoundaryRateLimitDescriptor {
+  globalKeyExpression: string;
+  partitionKeyExpression?: string;
+  capacityExpression: string;
+  refillRatePerSecondExpression: string;
+  costExpression?: string;
+}
+
 export interface BoundaryExecutionDescriptor {
   type: "boundary";
   topLevelIndex: number;
@@ -106,6 +114,7 @@ export interface BoundaryExecutionDescriptor {
   sourceRange: SourceRange;
   runRange: SourceRange;
   retry: BoundaryRetryDescriptor;
+  rateLimits?: BoundaryRateLimitDescriptor[];
 }
 
 export interface PhysicalBatchStepPolicyDescriptor {

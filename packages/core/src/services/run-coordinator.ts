@@ -296,6 +296,7 @@ export class RunCoordinator {
           state_present: args.transition.statePresent === true,
           state: jsonColumn(toJson(args.transition.state)),
           timeout_at: timeoutAt,
+          signal_name: stringValue(args.transition.signal) ?? null,
         })
         .execute();
       await trx
@@ -903,7 +904,7 @@ export class RunCoordinator {
     const id = crypto.randomUUID();
     const policy =
       args.descriptor.type === "boundary"
-        ? boundaryPolicy(args.descriptor.retry)
+        ? boundaryPolicy(args.descriptor)
         : batchPolicy(args.descriptor);
     await args.trx
       .insertInto("workflow_step_attempts")
@@ -1533,14 +1534,40 @@ function executionSteps(value: Json): WorkflowExecutionUnitDescriptor[] {
   });
 }
 
-function boundaryPolicy(retry: unknown): Json {
-  const descriptor = jsonRecord(retry);
+function boundaryPolicy(unit: unknown): Json {
+  const descriptor = jsonRecord(jsonRecord(unit).retry);
   const backoff = jsonRecord(descriptor.backoff);
+  const rateLimits = boundaryRateLimits(jsonRecord(unit).rateLimits);
   return toJson({
     maxAttempts: expressionNumber(descriptor.maxAttemptsExpression) ?? 1,
     initial: expressionString(backoff.initialExpression) ?? null,
     maximum: expressionString(backoff.maximumExpression) ?? null,
     multiplier: expressionNumber(backoff.multiplierExpression) ?? 2,
+    ...(rateLimits.length > 0 ? { rateLimits } : {}),
+  });
+}
+
+function boundaryRateLimits(value: unknown): Json[] {
+  if (!Array.isArray(value)) return [];
+  return value.flatMap((entry) => {
+    const limit = jsonRecord(entry);
+    const globalKey = expressionString(limit.globalKeyExpression);
+    const capacity = expressionNumber(limit.capacityExpression);
+    const refillRatePerSecond = expressionNumber(
+      limit.refillRatePerSecondExpression,
+    );
+    if (!globalKey || !capacity || !refillRatePerSecond) return [];
+    const partitionKey = expressionString(limit.partitionKeyExpression);
+    const cost = expressionNumber(limit.costExpression);
+    return [
+      toJson({
+        globalKey,
+        ...(partitionKey ? { partitionKey } : {}),
+        capacity,
+        refillRatePerSecond,
+        ...(cost ? { cost } : {}),
+      }),
+    ];
   });
 }
 

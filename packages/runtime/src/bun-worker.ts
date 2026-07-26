@@ -260,6 +260,9 @@ function isWorkerTerminalMessage(
     terminal.status === "completed" ||
     (terminal.status === "suspended" && isRecord(terminal.suspension)) ||
     (terminal.status === "skipped" && typeof terminal.reason === "string") ||
+    (terminal.status === "rate_limited" &&
+      typeof terminal.retryAfterMs === "number" &&
+      typeof terminal.error === "string") ||
     ((terminal.status === "failed" ||
       terminal.status === "canceled" ||
       terminal.status === "timed_out") &&

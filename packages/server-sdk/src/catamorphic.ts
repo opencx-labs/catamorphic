@@ -179,6 +179,18 @@ export class Catamorphic {
     return this.core.runs.redriveJob(args);
   }
 
+  /**
+   * Per-tenant execution limits: queue share, concurrency ceilings, active-run
+   * ceilings, and per-bucket rate overrides.
+   *
+   * Deliberately host-only — it is not reachable through the HTTP surface,
+   * because a tenant must not be able to raise its own limits. Hosts wire it to
+   * their own plan/billing tier logic.
+   */
+  get tenantPolicies() {
+    return this.core.tenantPolicies;
+  }
+
   reconcileDeploymentRuntimeHealth(
     args: { limit?: number } = {},
   ): Promise<DeploymentRuntimeHealthResult> {

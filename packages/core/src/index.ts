@@ -97,6 +97,7 @@ export {
   type BatchItemStep,
   type BatchProgress,
   type CancelRunInput,
+  type EnrollmentConflictPolicy,
   type GetRunInput,
   InvalidRunOverlayError,
   type ListBatchItemStepsInput,
@@ -115,11 +116,13 @@ export {
   type RunCapabilities,
   RunCapabilityError,
   type RunDetail,
+  RunEnrollmentConflictError,
   type RunMode,
   RunNotFoundError,
   type RunPause,
   type RunPhase,
   type RunProvenance,
+  RunSignalNotFoundError,
   type RunStatus,
   type RunStep,
   RunsService,
@@ -140,6 +143,13 @@ export {
   SKILLS_DIR,
   SkillsService,
 } from "./services/skills-service.js";
+export {
+  TenantActiveRunLimitError,
+  type TenantExecutionPolicy,
+  TenantPoliciesService,
+  type TenantRateLimitOverride,
+  type UpsertTenantExecutionPolicyInput,
+} from "./services/tenant-policies-service.js";
 export {
   type WorkflowDetail,
   WorkflowNotFoundError,
