@@ -77,12 +77,16 @@ export class RateReservationsService {
             tenantId: args.tenantId,
             limits,
           });
-          const now = await databaseNow(trx);
           const rows = await lockBucketRows({
             trx,
             tenantId: args.tenantId,
             limits,
           });
+          // Read the clock only once the rows are locked. transaction_timestamp()
+          // is fixed at BEGIN, so a caller that queued behind the lock would
+          // stamp refilled_at earlier than the holder before it, and the next
+          // caller would then re-credit time that had already been spent.
+          const now = await databaseNow(trx);
           const states = rows.map((row, index) =>
             calculateState({
               row,
@@ -291,7 +295,7 @@ async function createMissingBuckets(args: {
 
 async function databaseNow(trx: Transaction<DB>): Promise<Date> {
   const result = await sql<{ now: Date }>`
-    SELECT transaction_timestamp() AS now
+    SELECT clock_timestamp() AS now
   `.execute(trx);
   const clock = result.rows[0];
   if (!clock) throw new Error("Database did not return its current time");
@@ -362,7 +366,12 @@ async function persistState(args: {
     .updateTable("rate_reservation_buckets")
     .set({
       capacity: args.state.limit.capacity,
-      tokens: args.state.available - (args.consume ? args.state.limit.cost : 0),
+      // Float subtraction of equal magnitudes lands just under zero
+      // (-6.7e-16 when available === cost), which the tokens >= 0 check rejects.
+      tokens: Math.max(
+        0,
+        args.state.available - (args.consume ? args.state.limit.cost : 0),
+      ),
       refill_rate_per_second: args.state.limit.refillRatePerSecond,
       refilled_at: args.now,
       updated_at: args.now,

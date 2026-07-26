@@ -21,7 +21,9 @@ Separately, the queue claim was fair but wasteful. `claim` grouped pending jobs 
 
 **`tenant_execution_policies` gives the embedder the controls, and it is deliberately not reachable over HTTP** — only via the server SDK — because a tenant must not be able to raise its own limits. It carries `max_concurrent_jobs`, `max_active_runs`, `queue_weight`, `jobs_enabled`, and per-bucket `rate_limit_overrides`. Overrides can only *tighten* what the author declared: the author states what the provider accepts; the host states what this tenant is allowed. A tenant with no row is unconstrained, so adoption is incremental.
 
-**The claim became a single set-based weighted query.** Every eligible tenant still takes a floor of one job before any tenant takes a second, preserving anti-starvation; remaining slots then backfill from the global pending set in rank order, scaled by `queue_weight` and capped by `max_concurrent_jobs`. This also removes the previous N+1 round trip (one query per tenant per claim), so claim cost no longer grows with tenant count.
+**The claim became a single set-based weighted query.** Every eligible tenant still takes a floor of one job before any tenant takes a second, preserving anti-starvation; remaining slots then backfill from the global pending set in rank order, scaled by `queue_weight` and capped by `max_concurrent_jobs`. This also removes the previous N+1 round trip (one query per tenant per claim).
+
+> **Superseded in part by [0029](0029-queue-and-rate-correctness-at-scale.md).** This ADR claimed claim cost "no longer grows with tenant count", which was true but traded the wrong axis: ranking the whole pending set made cost grow linearly with *backlog depth* instead — 243ms per claim at 200k pending jobs. 0029 keeps the fairness semantics described here and replaces the ranking with a per-tenant LATERAL selection.
 
 ## Consequences
 

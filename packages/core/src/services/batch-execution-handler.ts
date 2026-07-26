@@ -411,6 +411,7 @@ export class BatchExecutionHandler {
     if (item.value_storage !== "inline") {
       await this.completeItem({
         context,
+        job: args.job,
         itemId,
         status: "failed",
         error: "Referenced batch values require a host resolver",
@@ -451,6 +452,7 @@ export class BatchExecutionHandler {
     if (receipt.terminal.status === "completed") {
       await this.completeItem({
         context,
+        job: args.job,
         itemId,
         status: "succeeded",
         output: requireJson(receipt.terminal.result),
@@ -468,6 +470,7 @@ export class BatchExecutionHandler {
     if (receipt.terminal.status === "skipped") {
       await this.completeItem({
         context,
+        job: args.job,
         itemId,
         status: "skipped",
         error: receipt.terminal.reason,
@@ -476,7 +479,13 @@ export class BatchExecutionHandler {
     }
     const error = receipt.terminal.error;
     if (args.job.attempt >= args.job.maxAttempts) {
-      await this.completeItem({ context, itemId, status: "failed", error });
+      await this.completeItem({
+        context,
+        job: args.job,
+        itemId,
+        status: "failed",
+        error,
+      });
       return;
     }
     await this.db
@@ -744,6 +753,7 @@ export class BatchExecutionHandler {
       }
       await this.persistPhysicalOutcomes({
         context,
+        job: args.job,
         invocation,
         members,
         outcomes: parseBatchOutcomes({
@@ -771,6 +781,7 @@ export class BatchExecutionHandler {
 
   private async persistPhysicalOutcomes(args: {
     context: BatchContext;
+    job: ExecutionJob;
     invocation: { id: string; node_id: string };
     members: readonly {
       item_id: string;
@@ -882,6 +893,7 @@ export class BatchExecutionHandler {
     for (const outcome of terminal) {
       await this.completeItem({
         context: args.context,
+        job: args.job,
         itemId: outcome.itemId,
         status: outcome.status,
         error: outcome.error,
@@ -891,6 +903,7 @@ export class BatchExecutionHandler {
 
   private async completeItem(args: {
     context: BatchContext;
+    job: ExecutionJob;
     itemId: string;
     status: "succeeded" | "failed" | "skipped";
     output?: Json;
@@ -953,7 +966,7 @@ export class BatchExecutionHandler {
     if (!completed) return;
     if (
       args.status === "failed" &&
-      (await this.applyFailurePolicy(args.context))
+      (await this.applyFailurePolicy(args.context, args.job))
     ) {
       return;
     }
@@ -961,7 +974,10 @@ export class BatchExecutionHandler {
     await this.finalizeIfComplete(args.context);
   }
 
-  private async applyFailurePolicy(context: BatchContext): Promise<boolean> {
+  private async applyFailurePolicy(
+    context: BatchContext,
+    job: ExecutionJob,
+  ): Promise<boolean> {
     const state = await this.db
       .selectFrom("batch_execution_states")
       .where("run_id", "=", context.runId)
@@ -983,6 +999,7 @@ export class BatchExecutionHandler {
       error: failFast
         ? "Batch stopped after the first failed item"
         : `Batch stopped after ${Number(state.failed_count)} failed items`,
+      job,
     });
     return true;
   }
@@ -1107,6 +1124,7 @@ export class BatchExecutionHandler {
         await this.deps.coordinator.failStep({
           workflowStepAttemptId: context.workflowStepAttemptId,
           error: error instanceof Error ? error.message : String(error),
+          job: args.job,
         });
       }
       throw error;
@@ -1143,7 +1161,7 @@ export class BatchExecutionHandler {
       }),
     );
     if (inspection.present !== true) {
-      await this.completeBatchStep({ context: args.context });
+      await this.completeBatchStep({ context: args.context, job: args.job });
       return;
     }
     const state =
@@ -1437,11 +1455,16 @@ export class BatchExecutionHandler {
         args.context.workflowStepAttemptId,
       )
       .execute();
-    await this.completeBatchStep({ context: args.context, artifact });
+    await this.completeBatchStep({
+      context: args.context,
+      job: args.job,
+      artifact,
+    });
   }
 
   private async completeBatchStep(args: {
     context: BatchContext;
+    job: ExecutionJob;
     artifact?: Json;
   }): Promise<void> {
     const state = await this.db
@@ -1460,6 +1483,7 @@ export class BatchExecutionHandler {
         summary: batchSummary(state),
         ...(args.artifact === undefined ? {} : { artifact: args.artifact }),
       }),
+      job: args.job,
     });
   }
 
