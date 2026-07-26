@@ -732,6 +732,16 @@ export class RunCoordinator {
         })
         .where("run_id", "=", args.runId)
         .execute();
+      // Jobs deferred while this run was paused are parked an hour out rather
+      // than polling for it. Pull them forward in the same transaction, so a
+      // resume that commits always leaves its work runnable.
+      await trx
+        .updateTable("execution_jobs")
+        .set({ available_at: now, updated_at: now })
+        .where("workflow_run_id", "=", args.runId)
+        .where("status", "=", "pending")
+        .where("available_at", ">", now)
+        .execute();
       return "resumed";
     });
   }

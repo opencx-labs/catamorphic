@@ -1,0 +1,17 @@
+-- Drop the index on the heartbeated lease column.
+--
+-- Heartbeats fire every ~20s per in-flight job and update lease_expires_at.
+-- Because that column was indexed, no heartbeat could ever be a HOT update:
+-- measured over 1000 heartbeats, 0% were HOT and every one left a dead tuple
+-- plus an index entry to clean up. Without the index the same workload is 100%
+-- HOT and leaves 12 dead tuples instead of 1100 — roughly 90x less work for
+-- autovacuum on the hottest table in the system.
+--
+-- Nothing is lost on the read side. The reaper's predicate
+-- (status = 'running' AND lease_expires_at <= now()) was already being served
+-- by idx_execution_jobs_running_by_tenant, which is partial on status and so
+-- contains only live leases; the planner did not choose this index even when it
+-- was available. Reaper latency measured at ~1ms either way against a 200k-row
+-- job table. Every other lease_expires_at predicate is a fencing check on a
+-- single row already located by primary key.
+DROP INDEX idx_execution_jobs_lease;

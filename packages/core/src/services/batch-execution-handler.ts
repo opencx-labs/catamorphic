@@ -34,6 +34,8 @@ const SOURCE_PAGE_SIZE = 250;
 const SOURCE_HIGH_WATER_MARK = 100;
 const SOURCE_LOW_WATER_MARK = 50;
 const SINK_CHUNK_SIZE = 100;
+/** Backstop only: `resume` wakes parked jobs explicitly. */
+const PAUSED_RUN_PARK_MS = 60 * 60 * 1_000;
 
 interface BatchContext {
   identity: Identity;
@@ -1797,7 +1799,12 @@ export class BatchExecutionHandler {
 
   private assertRunnable(context: BatchContext): boolean {
     if (context.status === "paused") {
-      throw new ExecutionJobDeferredError(new Date(Date.now() + 5_000));
+      // Park rather than poll: every item job on a paused batch would other-
+      // wise cycle through claim+release indefinitely, burning queue capacity
+      // that the tenant's live runs need. `resume` wakes them explicitly.
+      throw new ExecutionJobDeferredError(
+        new Date(Date.now() + PAUSED_RUN_PARK_MS),
+      );
     }
     return !["canceling", "canceled", "completed", "failed"].includes(
       context.status,

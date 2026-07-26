@@ -25,6 +25,9 @@ import {
 } from "./run-coordinator.js";
 import type { TenantPoliciesService } from "./tenant-policies-service.js";
 
+/** Backstop only: `resume` wakes parked jobs explicitly. */
+const PAUSED_RUN_PARK_MS = 60 * 60 * 1_000;
+
 interface BoundaryRuntimeContext {
   identity: Identity;
   runId: string;
@@ -96,7 +99,14 @@ export class BoundaryExecutionHandler {
     const context = await this.loadContext(args.job);
     if (!context || args.signal.aborted) return;
     if (context.status === "paused") {
-      throw new ExecutionJobDeferredError(new Date(Date.now() + 100));
+      // Park rather than poll. A 100ms retry made every job on a paused run
+      // spin through claim+release forever — at ~3ms a cycle, 10k paused jobs
+      // demanded more database time than exists. `resume` wakes these jobs
+      // explicitly, so parking costs no latency; the interval is only a
+      // backstop if a wake is ever missed.
+      throw new ExecutionJobDeferredError(
+        new Date(Date.now() + PAUSED_RUN_PARK_MS),
+      );
     }
     const invocationId = `${context.runId}:step:${context.stepIndex}:attempt:${context.attempt}`;
     // Reserved before the sandbox is touched, so a throttled boundary occupies

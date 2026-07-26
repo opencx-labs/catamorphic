@@ -43,3 +43,4 @@ Settled design decisions live here as short Architecture Decision Records. They 
 | [0028](0028-shared-rate-budgets-and-tenant-execution-policy.md) | Shared rate budgets and host-owned tenant execution policy | Accepted; claim cost and rate accuracy corrected by 0029 |
 | [0029](0029-queue-and-rate-correctness-at-scale.md) | Queue claim cost, lease fencing, and rate budget accuracy at scale | Accepted; retention gap it identified is closed by 0030 |
 | [0030](0030-run-retention.md) | Run retention | Accepted |
+| [0031](0031-execution-hot-path-costs.md) | Execution hot-path costs: parked deferrals, bucket round trips, heartbeat HOT updates | Accepted |

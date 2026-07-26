@@ -430,6 +430,32 @@ export class ExecutionJobsService {
       .execute();
   }
 
+  /**
+   * Pull a run's parked jobs forward so they are claimable now.
+   *
+   * Work deferred while a run was paused is parked far in the future rather
+   * than re-polled, so nothing spins against a paused run. That trades polling
+   * for an explicit wake: whoever makes the run runnable again must call this,
+   * or its jobs wait out the parking interval.
+   */
+  async makeRunAvailable(args: {
+    runId: string;
+    availableAt?: Date;
+  }): Promise<number> {
+    const availableAt = args.availableAt ?? sql<Date>`clock_timestamp()`;
+    const result = await this.db
+      .updateTable("execution_jobs")
+      .set({
+        available_at: availableAt,
+        updated_at: new Date(),
+      })
+      .where("workflow_run_id", "=", args.runId)
+      .where("status", "=", "pending")
+      .where("available_at", ">", availableAt)
+      .executeTakeFirst();
+    return Number(result.numUpdatedRows);
+  }
+
   async redrive(args: {
     tenantId: string;
     jobId: string;
