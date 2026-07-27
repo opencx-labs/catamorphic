@@ -59,3 +59,79 @@ describe("WorkflowsService", () => {
     expect(dispose).toHaveBeenCalledOnce();
   });
 });
+
+describe("WorkflowsService.listDeclaredSecrets", () => {
+  const secretFiles = (description: string) => ({
+    "workflows/src/secrets.ts": `
+      import { defineSecrets } from "@catamorphic/workflow";
+      export const secrets = defineSecrets({
+        STRIPE_API_KEY: { description: "${description}" },
+      });
+    `,
+  });
+
+  function makeService(files: () => Record<string, string>) {
+    const readAllFiles = vi.fn(async () => files());
+    const repo = {
+      readAllFiles,
+      readAllFilesAtRef: vi.fn(async () => files()),
+      dispose: vi.fn(async () => {}),
+    } as unknown as ProjectRepo;
+    const projectManager = {
+      openDev: vi.fn(async () => repo),
+    } as unknown as ProjectManager;
+    const projects = {
+      get: vi.fn(async () => ({ id: "project-1" })),
+    } as unknown as ProjectsService;
+    return {
+      service: new WorkflowsService(projectManager, projects),
+      readAllFiles,
+    };
+  }
+
+  it("reads declared secrets from source", async () => {
+    const { service } = makeService(() => secretFiles("Stripe key"));
+    const secrets = await service.listDeclaredSecrets({
+      identity,
+      projectId: "project-1",
+    });
+    expect(secrets.map((secret) => secret.name)).toEqual(["STRIPE_API_KEY"]);
+    expect(secrets[0]?.description).toBe("Stripe key");
+  });
+
+  it("reuses the parse for unchanged sources", async () => {
+    // This runs on every run trigger, so the ts-morph parse must not repeat
+    // for an unchanged tree.
+    const { service, readAllFiles } = makeService(() =>
+      secretFiles("Stripe key"),
+    );
+    const first = await service.listDeclaredSecrets({
+      identity,
+      projectId: "project-1",
+    });
+    const second = await service.listDeclaredSecrets({
+      identity,
+      projectId: "project-1",
+    });
+    // Same parsed instance: the cache answered rather than re-parsing.
+    expect(second).toBe(first);
+    // The repo is still read each time — only the parse is memoized.
+    expect(readAllFiles).toHaveBeenCalledTimes(2);
+  });
+
+  it("re-parses when a source file changes", async () => {
+    let description = "Stripe key";
+    const { service } = makeService(() => secretFiles(description));
+    const first = await service.listDeclaredSecrets({
+      identity,
+      projectId: "project-1",
+    });
+    description = "Rotated Stripe key";
+    const second = await service.listDeclaredSecrets({
+      identity,
+      projectId: "project-1",
+    });
+    expect(second).not.toBe(first);
+    expect(second[0]?.description).toBe("Rotated Stripe key");
+  });
+});

@@ -100,7 +100,14 @@ export async function assertWorkflowAllowed(args: {
 }
 
 function parseWorkflowList(value: unknown): string[] {
-  const parsed: unknown = typeof value === "string" ? JSON.parse(value) : value;
+  // A corrupt row must read as an empty frozen set (deny everything), not a
+  // 500 that leaks parse errors to an untrusted caller.
+  let parsed: unknown;
+  try {
+    parsed = typeof value === "string" ? JSON.parse(value) : value;
+  } catch {
+    return [];
+  }
   return Array.isArray(parsed)
     ? parsed.filter((entry): entry is string => typeof entry === "string")
     : [];

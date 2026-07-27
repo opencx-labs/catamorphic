@@ -54,7 +54,7 @@ describe("createClient", () => {
 
     const pending = workflows.listOrders({ status: "open" });
     const message = sent.at(-1);
-    if (!message || message.kind !== "call") throw new Error("no call sent");
+    if (message?.kind !== "call") throw new Error("no call sent");
     expect(message.workflowName).toBe("listOrders");
     expect(message.mode).toBe("invoke");
     expect(message.input).toEqual({ status: "open" });
@@ -69,8 +69,7 @@ describe("createClient", () => {
 
     const pendingStart = workflows.reconcile.start({ month: "2026-07" });
     const startMessage = sent.at(-1);
-    if (!startMessage || startMessage.kind !== "call")
-      throw new Error("no call sent");
+    if (startMessage?.kind !== "call") throw new Error("no call sent");
     expect(startMessage.mode).toBe("start");
     hostReply(startMessage, { runId: "run-1" });
     const handle = await pendingStart;
@@ -79,8 +78,7 @@ describe("createClient", () => {
     const pendingResult = handle.result({ pollIntervalMs: 1 });
     // First poll: running; second poll: completed.
     const firstPoll = sent.at(-1);
-    if (!firstPoll || firstPoll.kind !== "poll-run")
-      throw new Error("no poll sent");
+    if (firstPoll?.kind !== "poll-run") throw new Error("no poll sent");
     hostReply(firstPoll, {
       runId: "run-1",
       status: "running",
@@ -89,12 +87,11 @@ describe("createClient", () => {
     });
     await vi.waitFor(() => {
       const message = sent.at(-1);
-      if (!message || message.kind !== "poll-run" || message === firstPoll)
+      if (message?.kind !== "poll-run" || message === firstPoll)
         throw new Error("second poll not sent yet");
     });
     const secondPoll = sent.at(-1);
-    if (!secondPoll || secondPoll.kind !== "poll-run")
-      throw new Error("no second poll");
+    if (secondPoll?.kind !== "poll-run") throw new Error("no second poll");
     hostReply(secondPoll, {
       runId: "run-1",
       status: "completed",
@@ -110,7 +107,7 @@ describe("createClient", () => {
 
     const pending = workflows.listOrders({ status: "open" });
     const message = sent.at(-1);
-    if (!message || message.kind !== "call") throw new Error("no call sent");
+    if (message?.kind !== "call") throw new Error("no call sent");
     hostReply(message, undefined, false);
     // vi.resetModules() re-instantiates the module, so match on shape rather
     // than class identity.
@@ -129,7 +126,7 @@ describe("createClient", () => {
       new MessageEvent("message", { data: { random: "noise" } }),
     );
     const message = sent.at(-1);
-    if (!message || message.kind !== "call") throw new Error("no call sent");
+    if (message?.kind !== "call") throw new Error("no call sent");
     hostReply(message, []);
     expect(await pending).toEqual([]);
   });

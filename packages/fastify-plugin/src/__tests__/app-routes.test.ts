@@ -1,3 +1,4 @@
+import { AppVersionNotFoundError } from "@catamorphic/core";
 import { afterEach, describe, expect, it } from "vitest";
 import { createApp } from "../app.js";
 
@@ -88,5 +89,105 @@ describe("app route contracts", () => {
       },
     });
     expect([400, 503]).toContain(response.statusCode);
+  });
+
+  it("rejects a commitSha that is not a hex object name", async () => {
+    const app = createApp();
+    apps.push(app);
+    const response = await app.inject({
+      method: "POST",
+      url: `/api/projects/${PROJECT_ID}/apps/ops-dashboard/builds`,
+      payload: { kind: "published", commitSha: "../../etc" },
+      headers: {
+        "x-catamorphic-tenant-id": "tenant-1",
+        "x-external-user-id": "user-1",
+      },
+    });
+    // Schema rejects before the handler's 503 core check.
+    expect(response.statusCode).toBe(400);
+  });
+});
+
+describe("bundle route caching", () => {
+  function appWithBundleCore(calls: string[]) {
+    const core = {
+      apps: {
+        assertBundleReadable: async () => {
+          calls.push("assertBundleReadable");
+        },
+        getBundle: async () => {
+          calls.push("getBundle");
+          return { code: "/* bundle */", css: ".a{}", etag: `"${VERSION_ID}"` };
+        },
+      },
+    };
+    const app = createApp({ core: core as never });
+    apps.push(app);
+    return app;
+  }
+
+  const bundleUrl = `/api/projects/${PROJECT_ID}/app-versions/${VERSION_ID}/bundle`;
+  const headers = {
+    "x-catamorphic-tenant-id": "tenant-1",
+    "x-external-user-id": "user-1",
+  };
+
+  it("serves the bundle with an immutable validator", async () => {
+    const calls: string[] = [];
+    const response = await appWithBundleCore(calls).inject({
+      method: "GET",
+      url: bundleUrl,
+      headers,
+    });
+    expect(response.statusCode).toBe(200);
+    expect(response.headers.etag).toBe(`"${VERSION_ID}"`);
+    expect(response.headers["cache-control"]).toContain("immutable");
+    expect(calls).toEqual(["getBundle"]);
+  });
+
+  it("revalidates with 304 without reloading the bundle bytes", async () => {
+    const calls: string[] = [];
+    const response = await appWithBundleCore(calls).inject({
+      method: "GET",
+      url: bundleUrl,
+      headers: { ...headers, "if-none-match": `"${VERSION_ID}"` },
+    });
+    expect(response.statusCode).toBe(304);
+    expect(calls).not.toContain("getBundle");
+  });
+
+  it("authorizes the conditional request before answering 304", async () => {
+    // The validator is derived from the caller's own URL, so a 304 answered
+    // without an access check would be an existence oracle for any version.
+    const calls: string[] = [];
+    const response = await appWithBundleCore(calls).inject({
+      method: "GET",
+      url: bundleUrl,
+      headers: { ...headers, "if-none-match": `"${VERSION_ID}"` },
+    });
+    expect(response.statusCode).toBe(304);
+    expect(calls).toEqual(["assertBundleReadable"]);
+  });
+
+  it("a denied conditional request does not become a 304", async () => {
+    const app = createApp({
+      core: {
+        apps: {
+          assertBundleReadable: async () => {
+            throw new AppVersionNotFoundError(VERSION_ID);
+          },
+          getBundle: async () => {
+            throw new Error("must not load bytes");
+          },
+        },
+      } as never,
+    });
+    apps.push(app);
+    const response = await app.inject({
+      method: "GET",
+      url: bundleUrl,
+      headers: { ...headers, "if-none-match": `"${VERSION_ID}"` },
+    });
+    expect(response.statusCode).toBe(404);
   });
 });

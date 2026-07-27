@@ -6,6 +6,8 @@ Catamorphic is a framework for building workflow automations and apps. You embed
 
 > **Embeddable framework.** Catamorphic ships as libraries a host application mounts in-process. The host provides auth, the user/org model, the database, and the deployment surface. There is no default identity or tenant — every request carries identity from the host's auth context. See [`INTEGRATION.md`](INTEGRATION.md) for the host integration flow.
 
+> **Greenfield: no production users yet.** Nothing here is deployed to real users, so there is no installed base to preserve. Prefer the correct design over a compatible one: change schemas, rename APIs, and delete dead paths outright rather than adding migrations-on-migrations, compatibility shims, deprecation aliases, or feature flags to protect callers that do not exist. Breaking changes are cheap right now and get expensive the day we ship — spend that budget while it is free. (This does not license skipping tests or leaving things half-finished; it is about not paying for backwards compatibility nobody needs.)
+
 ## The developer surface
 
 | Package | What it is |

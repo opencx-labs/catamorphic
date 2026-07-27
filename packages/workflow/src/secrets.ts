@@ -54,6 +54,11 @@ export function defineSecrets<const T extends SecretDeclarations>(
   return new Proxy({} as Secrets<T>, {
     get(_target, property) {
       if (typeof property !== "string") return undefined;
+      // The accessor reads only what was declared — reaching other env vars
+      // through it would make the runtime wider than the types claim.
+      // Undefined (not a throw) so benign introspection (`then` during await,
+      // `toJSON` during stringify) behaves like a plain object.
+      if (!Object.hasOwn(declarations, property)) return undefined;
       const value = process.env[property];
       if (value === undefined || value === "") {
         throw new MissingSecretError(property);
@@ -61,7 +66,9 @@ export function defineSecrets<const T extends SecretDeclarations>(
       return value;
     },
     has(_target, property) {
-      return typeof property === "string" && property in declarations;
+      return (
+        typeof property === "string" && Object.hasOwn(declarations, property)
+      );
     },
     ownKeys() {
       return Object.keys(declarations);

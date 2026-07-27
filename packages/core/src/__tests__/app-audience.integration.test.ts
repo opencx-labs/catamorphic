@@ -181,7 +181,7 @@ describeIf("app audience enforcement", () => {
         "listOrders",
       ]);
     } finally {
-      await policies.upsert({ tenantId, workflowAllowlist: undefined });
+      await policies.upsert({ tenantId, workflowAllowlist: null });
     }
   });
 
@@ -194,6 +194,63 @@ describeIf("app audience enforcement", () => {
       ).rejects.toThrow(AppAccessDeniedError);
     } finally {
       await policies.upsert({ tenantId, appsEnabled: true });
+    }
+  });
+
+  it("policy upsert merges: omitted fields keep their stored values", async () => {
+    const policies = new AppPoliciesService(db);
+    await policies.upsert({
+      tenantId,
+      appsEnabled: false,
+      workflowAllowlist: ["listOrders"],
+      maxBundleBytes: 1024,
+    });
+    try {
+      // A one-field tweak must not resurrect apps or drop the allowlist.
+      const after = await policies.upsert({ tenantId, maxAppsPerProject: 3 });
+      expect(after.appsEnabled).toBe(false);
+      expect(after.workflowAllowlist).toEqual(["listOrders"]);
+      expect(after.maxBundleBytes).toBe(1024);
+      expect(after.maxAppsPerProject).toBe(3);
+
+      // Explicit null clears a nullable field.
+      const cleared = await policies.upsert({
+        tenantId,
+        workflowAllowlist: null,
+        maxBundleBytes: null,
+        maxAppsPerProject: null,
+      });
+      expect(cleared.workflowAllowlist).toBeUndefined();
+      expect(cleared.maxBundleBytes).toBeUndefined();
+      expect(cleared.appsEnabled).toBe(false);
+    } finally {
+      await policies.upsert({ tenantId, appsEnabled: true });
+    }
+  });
+
+  it("a corrupt frozen set denies everything instead of erroring", async () => {
+    await db
+      .updateTable("app_versions")
+      .set({ allowed_workflows: sql`'"not-an-array"'::jsonb` })
+      .where("id", "=", activeVersionId)
+      .execute();
+    try {
+      await expect(
+        assertWorkflowAllowed({
+          db,
+          identity: viewer,
+          projectId,
+          workflowName: "listOrders",
+        }),
+      ).rejects.toThrow(AppAccessDeniedError);
+    } finally {
+      await db
+        .updateTable("app_versions")
+        .set({
+          allowed_workflows: JSON.stringify(["listOrders", "getOrderDetail"]),
+        })
+        .where("id", "=", activeVersionId)
+        .execute();
     }
   });
 });

@@ -16,6 +16,16 @@ const MAX_HEIGHT_PX = 2000;
 /** Guests are untrusted: bound the payload before it leaves the iframe. */
 const MAX_INPUT_BYTES = 256 * 1024;
 const MAX_INPUT_DEPTH = 32;
+/**
+ * In-flight guest-originated requests per mount. Every `call` is a queued run
+ * and every `poll-run` is a host-authenticated API request, so a misbehaving
+ * guest looping either would otherwise amplify at postMessage speed. Polls
+ * get the larger budget: one in-flight poll per outstanding run is normal.
+ * Server-side tenant budgets (ADR 0028) still apply; this is the cheap first
+ * line.
+ */
+const MAX_IN_FLIGHT_CALLS = 8;
+const MAX_IN_FLIGHT_POLLS = 16;
 
 export interface AppMountProps {
   projectId: string;
@@ -70,6 +80,8 @@ export function AppMount({
   const frameRef = useRef<HTMLIFrameElement>(null);
   const [view, setView] = useState<ViewState>({ state: "loading" });
   const [height, setHeight] = useState(MIN_HEIGHT_PX);
+  const inFlightCalls = useRef(0);
+  const inFlightPolls = useRef(0);
 
   useEffect(() => {
     let cancelled = false;
@@ -114,6 +126,8 @@ export function AppMount({
   const handleGuestMessage = useCallback(
     async (message: GuestToHostMessage) => {
       if (view.state !== "ready" || !audienceHeaders) return;
+      // Narrowed copy the hoisted handleCall below can close over.
+      const headers = audienceHeaders;
       const frame = frameRef.current;
       if (!frame?.contentWindow) return;
       const reply = (payload: HostToGuestMessage) => {
@@ -145,56 +159,41 @@ export function AppMount({
             fail("not_serializable", inputProblem);
             return;
           }
-          const response = await apiClient.POST(
-            "/api/projects/{projectId}/workflows/{name}/runs",
-            {
-              params: { path: { projectId, name: message.workflowName } },
-              // Input was JSON-validated above; the generated body type wants
-              // the JsonValueInput shape.
-              body: { input: message.input } as never,
-              headers: audienceHeaders,
-            },
-          );
-          if (response.error || !response.data) {
-            fail("denied", "This app is not authorized to call that workflow");
+          if (inFlightCalls.current >= MAX_IN_FLIGHT_CALLS) {
+            fail(
+              "denied",
+              `Too many concurrent calls (limit ${MAX_IN_FLIGHT_CALLS})`,
+            );
             return;
           }
-          const runId = response.data.id;
-          if (message.mode === "start") {
-            reply({
-              catamorphicApp: APP_PROTOCOL_VERSION,
-              kind: "result",
-              callId: message.callId,
-              ok: true,
-              value: { runId },
-            });
-            return;
-          }
-          const outcome = await pollUntilTerminal({
-            apiClient,
-            runId,
-            headers: audienceHeaders,
-          });
-          if (outcome.status === "completed") {
-            reply({
-              catamorphicApp: APP_PROTOCOL_VERSION,
-              kind: "result",
-              callId: message.callId,
-              ok: true,
-              value: outcome.output,
-            });
-          } else {
-            fail("workflow_failed", outcome.error ?? `Run ${outcome.status}`);
+          inFlightCalls.current += 1;
+          try {
+            await handleCall(message);
+          } finally {
+            inFlightCalls.current -= 1;
           }
           return;
         }
 
         if (message.kind === "poll-run") {
-          const snapshot = await fetchRunSnapshot({
-            apiClient,
-            runId: message.runId,
-            headers: audienceHeaders,
-          });
+          if (inFlightPolls.current >= MAX_IN_FLIGHT_POLLS) {
+            fail(
+              "denied",
+              `Too many concurrent polls (limit ${MAX_IN_FLIGHT_POLLS})`,
+            );
+            return;
+          }
+          inFlightPolls.current += 1;
+          let snapshot: BrokerRunSnapshot | null;
+          try {
+            snapshot = await fetchRunSnapshot({
+              apiClient,
+              runId: message.runId,
+              headers,
+            });
+          } finally {
+            inFlightPolls.current -= 1;
+          }
           if (!snapshot) {
             fail("denied", "Run not found");
             return;
@@ -212,6 +211,61 @@ export function AppMount({
           "internal",
           error instanceof Error ? error.message : "App call failed",
         );
+      }
+
+      async function handleCall(
+        message: Extract<GuestToHostMessage, { kind: "call" }>,
+      ): Promise<void> {
+        const response = await apiClient.POST(
+          "/api/projects/{projectId}/workflows/{name}/runs",
+          {
+            params: { path: { projectId, name: message.workflowName } },
+            // Input was JSON-validated above; the generated body type wants
+            // the JsonValueInput shape.
+            body: { input: message.input } as never,
+            headers,
+          },
+        );
+        if (response.error || !response.data) {
+          fail("denied", "This app is not authorized to call that workflow");
+          return;
+        }
+        const runId = response.data.id;
+        if (message.mode === "start") {
+          reply({
+            catamorphicApp: APP_PROTOCOL_VERSION,
+            kind: "result",
+            callId: message.callId,
+            ok: true,
+            value: { runId },
+          });
+          return;
+        }
+        const outcome = await pollUntilTerminal({
+          apiClient,
+          runId,
+          headers,
+        });
+        if (outcome.status === "completed") {
+          reply({
+            catamorphicApp: APP_PROTOCOL_VERSION,
+            kind: "result",
+            callId: message.callId,
+            ok: true,
+            value: outcome.output,
+          });
+        } else if (outcome.timedOut) {
+          // The run is still going server-side; the guest can start+poll
+          // instead of invoke if it expects long work. Distinct code so
+          // apps don't render "workflow failed" for a workflow that may
+          // yet succeed.
+          fail(
+            "timeout",
+            `App call timed out after ${RUN_POLL_TIMEOUT_MS / 1000}s; run ${runId} may still complete`,
+          );
+        } else {
+          fail("workflow_failed", outcome.error ?? `Run ${outcome.status}`);
+        }
       }
     },
     [apiClient, audienceHeaders, projectId, view.state],
@@ -278,12 +332,34 @@ function buildGuestDocument(view: ViewStateReady): string {
     "<!doctype html>",
     '<html><head><meta charset="utf-8">',
     `<meta http-equiv="Content-Security-Policy" content="${csp}">`,
-    `<style>${view.css}</style>`,
+    `<style>${escapeStyleContent(view.css)}</style>`,
     "</head><body>",
     '<div id="root"></div>',
-    `<script>${view.code}</script>`,
+    `<script>${escapeScriptContent(view.code)}</script>`,
     "</body></html>",
   ].join("");
+}
+
+/**
+ * A literal `</script` inside the bundle — a string constant is enough —
+ * would terminate the inline script early and dump the rest of the bundle
+ * into the document as markup. `<\/` is identical to the JS parser (in
+ * strings, template literals, and regex alike) but invisible to the HTML
+ * tokenizer.
+ *
+ * `<!--` is deliberately NOT rewritten: it is valid JS outside a string
+ * (`a<!--b` parses as `a < !(--b)`, which minifiers emit), and `\x3C` is only
+ * an escape *inside* a string literal, so blind replacement turns a working
+ * bundle into a SyntaxError. It cannot break out of the script element on its
+ * own — only `</script` can.
+ */
+function escapeScriptContent(code: string): string {
+  return code.replaceAll(/<\/(script)/gi, "<\\/$1");
+}
+
+/** `</style` in CSS content would end the style block and inject markup. */
+function escapeStyleContent(css: string): string {
+  return css.replaceAll(/<\/(style)/gi, "<\\/$1");
 }
 
 function defaultStateText(
@@ -384,7 +460,7 @@ async function pollUntilTerminal(args: {
   apiClient: BrokerClient;
   runId: string;
   headers: Record<string, string>;
-}): Promise<BrokerRunSnapshot> {
+}): Promise<BrokerRunSnapshot & { timedOut?: boolean }> {
   const startedAt = Date.now();
   for (;;) {
     const snapshot = await fetchRunSnapshot(args);
@@ -400,7 +476,7 @@ async function pollUntilTerminal(args: {
       return snapshot;
     }
     if (Date.now() - startedAt > RUN_POLL_TIMEOUT_MS) {
-      return { ...snapshot, status: "failed", error: "App call timed out" };
+      return { ...snapshot, timedOut: true };
     }
     await new Promise((resolve) => setTimeout(resolve, RUN_POLL_INTERVAL_MS));
   }

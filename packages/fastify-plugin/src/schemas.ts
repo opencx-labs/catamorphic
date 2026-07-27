@@ -86,7 +86,10 @@ export const AppViewStateSchema = z.discriminatedUnion("state", [
 
 export const BuildAppSchema = z.object({
   kind: z.enum(["preview", "published"]),
-  commitSha: z.string().optional(),
+  commitSha: z
+    .string()
+    .regex(/^[0-9a-f]{7,64}$/i)
+    .optional(),
 });
 
 // --- Templates ---

@@ -65,7 +65,8 @@ class GuestBridge {
   }
 
   send(message: OutboundCall): Promise<unknown> {
-    const callId = `c${(this.counter += 1)}`;
+    this.counter += 1;
+    const callId = `c${this.counter}`;
     const full: GuestToHostMessage = {
       ...message,
       callId,

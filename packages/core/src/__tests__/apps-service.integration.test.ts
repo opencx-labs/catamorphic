@@ -49,6 +49,9 @@ class BuildFakeProvider implements SandboxProvider {
   readonly workspaceRoot = "/workspace";
   readonly commands: { command: string; cwd?: string }[] = [];
   readonly uploads: { basePath: string; fileCount: number }[] = [];
+  /** Start/end ticks of each `bun install`, to detect overlapping builds. */
+  readonly installWindows: { start: number; end: number }[] = [];
+  private tick = 0;
   failBuild = false;
 
   async createSandbox() {
@@ -73,6 +76,15 @@ class BuildFakeProvider implements SandboxProvider {
     opts?: { cwd?: string },
   ) {
     this.commands.push({ command, cwd: opts?.cwd });
+    if (command === "bun install") {
+      this.tick += 1;
+      const start = this.tick;
+      // Yield so a concurrent build can interleave if it is not held back.
+      await new Promise((resolve) => setTimeout(resolve, 5));
+      this.tick += 1;
+      this.installWindows.push({ start, end: this.tick });
+      return { exitCode: 0, result: "" };
+    }
     if (command === "bun run build" && this.failBuild) {
       return { exitCode: 1, result: "error: cannot resolve ./missing" };
     }
@@ -224,10 +236,14 @@ describeIf("AppsService integration", () => {
 
     expect(version.status).toBe("ready");
     expect(version.commitSha).toBe(commitSha);
-    // The pinned commit was materialized into a scratch dir, not built in place.
+    // The pinned commit was materialized into a scratch dir keyed by version
+    // id (not sha: concurrent same-commit publishes must not share a root),
+    // not built in place.
     expect(provider.uploads.length).toBeGreaterThan(before);
     expect(
-      provider.uploads.at(-1)?.basePath.includes(`app-builds/${commitSha}`),
+      provider.uploads.some((upload) =>
+        upload.basePath.includes(`app-builds/${version.id}`),
+      ),
     ).toBe(true);
     // Scratch checkout is removed afterwards.
     expect(
@@ -339,5 +355,83 @@ describeIf("AppsService integration", () => {
     await expect(apps.list({ identity: stranger, projectId })).rejects.toThrow(
       /not found/i,
     );
+  });
+
+  it("rejects a commitSha that is not a hex object name", async () => {
+    // The sha reaches shell commands and scratch paths inside the caller's
+    // sandbox; a traversal value must never get that far.
+    for (const commit of ["../project", "..", "main; rm -rf /", "zzz"]) {
+      await expect(
+        apps.build({
+          identity,
+          projectId,
+          appName: "ops-dashboard",
+          kind: "published",
+          commitSha: commit,
+        }),
+      ).rejects.toThrow(/hex git object name/);
+    }
+    // Nothing was executed for the rejected builds.
+    expect(
+      provider.commands.some((entry) => entry.command.includes("..")),
+    ).toBe(false);
+  });
+
+  it("serializes concurrent preview builds of the same dev tree", async () => {
+    // Previews mutate the dev tree in place (strip manifests → install →
+    // restore), so overlapping builds would install against restored
+    // manifests or persist a stripped one.
+    const before = provider.installWindows.length;
+    const results = await Promise.all([
+      apps.build({
+        identity,
+        projectId,
+        appName: "ops-dashboard",
+        kind: "preview",
+      }),
+      apps.build({
+        identity,
+        projectId,
+        appName: "ops-dashboard",
+        kind: "preview",
+      }),
+      apps.build({
+        identity,
+        projectId,
+        appName: "ops-dashboard",
+        kind: "preview",
+      }),
+    ]);
+    expect(results.every((version) => version.status === "ready")).toBe(true);
+    const windows = provider.installWindows.slice(before);
+    expect(windows.length).toBe(3);
+    // No two install windows overlap.
+    const sorted = [...windows].sort((a, b) => a.start - b.start);
+    for (let index = 1; index < sorted.length; index += 1) {
+      const previous = sorted[index - 1];
+      const current = sorted[index];
+      if (!previous || !current) throw new Error("missing window");
+      expect(current.start).toBeGreaterThanOrEqual(previous.end);
+    }
+  });
+
+  it("keeps building after a failed build releases the lock", async () => {
+    provider.failBuild = true;
+    const failed = await apps.build({
+      identity,
+      projectId,
+      appName: "ops-dashboard",
+      kind: "preview",
+    });
+    expect(failed.status).toBe("failed");
+    provider.failBuild = false;
+    // A rejected build must not wedge the queue for the next one.
+    const recovered = await apps.build({
+      identity,
+      projectId,
+      appName: "ops-dashboard",
+      kind: "preview",
+    });
+    expect(recovered.status).toBe("ready");
   });
 });

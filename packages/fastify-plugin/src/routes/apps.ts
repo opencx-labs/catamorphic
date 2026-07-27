@@ -157,7 +157,12 @@ export function registerAppRoutes(app: FastifyInstance, ctx: RouteContext) {
     schema: {
       params: ProjectAppVersionParamsSchema,
       response: {
-        200: z.object({ code: z.string(), css: z.string() }),
+        200: z.object({
+          code: z.string(),
+          css: z.string(),
+          etag: z.string(),
+        }),
+        304: z.null(),
         404: ErrorSchema,
         503: ErrorSchema,
       },
@@ -166,12 +171,35 @@ export function registerAppRoutes(app: FastifyInstance, ctx: RouteContext) {
       if (!ctx.core?.apps)
         return reply.status(503).send({ error: "Apps not configured" });
       try {
+        const identity = resolveIdentity(request);
+        // Version-addressed and append-only: the same versionId always names
+        // the same bytes, so a revalidation can skip loading the bundle and a
+        // fresh response can be cached indefinitely. Authorization happens
+        // first either way — the validator comes from the caller's own URL,
+        // so a 304 answered before the access check would be an existence
+        // oracle for arbitrary version ids.
+        const etag = `"${request.params.versionId}"`;
+        if (request.headers["if-none-match"] === etag) {
+          await ctx.core.apps.assertBundleReadable({
+            identity,
+            projectId: request.params.projectId,
+            versionId: request.params.versionId,
+          });
+          return reply
+            .status(304)
+            .header("etag", etag)
+            .header("cache-control", "private, max-age=31536000, immutable")
+            .send(null);
+        }
         const bundle = await ctx.core.apps.getBundle({
-          identity: resolveIdentity(request),
+          identity,
           projectId: request.params.projectId,
           versionId: request.params.versionId,
         });
-        return reply.send(bundle);
+        return reply
+          .header("etag", bundle.etag)
+          .header("cache-control", "private, max-age=31536000, immutable")
+          .send(bundle);
       } catch (err) {
         if (err instanceof AppVersionNotFoundError)
           return reply.status(404).send({ error: err.message });

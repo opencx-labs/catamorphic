@@ -1,8 +1,12 @@
 import { APP_PROTOCOL_VERSION } from "@catamorphic/app";
 import { CatamorphicProvider } from "@catamorphic/react";
-import { render, screen, waitFor } from "@testing-library/react";
-import { describe, expect, it, vi } from "vitest";
+import { cleanup, render, screen, waitFor } from "@testing-library/react";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { AppMount } from "./app-mount.js";
+
+// Each mount installs a window message listener; unmount between tests so a
+// stray guest message cannot be handled by a previous test's broker.
+afterEach(cleanup);
 
 const PROJECT_ID = "a1b2c3d4-e5f6-4890-abcd-ef1234567890";
 const APP_ID = "b2c3d4e5-f6a7-4890-bcde-a12345678901";
@@ -56,6 +60,36 @@ function mount(apiClient: ReturnType<typeof makeApiClient>) {
   );
 }
 
+/**
+ * Waits for the iframe *and* for the broker's message listener to be
+ * installed. The listener is registered by an effect that runs after the
+ * frame paints, so a guest message dispatched too early is silently dropped.
+ * A `resize` probe is the cheap observable: it is handled before any
+ * authorization or network path and only mutates the frame's height.
+ */
+async function mountReadyFrame(apiClient: ReturnType<typeof makeApiClient>) {
+  const { container } = mount(apiClient);
+  await waitFor(() => {
+    if (!container.querySelector("iframe")) throw new Error("no iframe");
+  });
+  const frame = container.querySelector("iframe");
+  if (!frame?.contentWindow) throw new Error("no frame window");
+  await waitFor(() => {
+    window.dispatchEvent(
+      new MessageEvent("message", {
+        source: frame.contentWindow,
+        data: {
+          catamorphicApp: APP_PROTOCOL_VERSION,
+          kind: "resize",
+          height: 321,
+        },
+      }),
+    );
+    expect(frame.style.height).toBe("321px");
+  });
+  return { container, frame };
+}
+
 describe("AppMount", () => {
   it("renders non-ready view states as copy, not errors", async () => {
     const apiClient = makeApiClient({ viewState: { state: "not_published" } });
@@ -90,12 +124,7 @@ describe("AppMount", () => {
         return { data: { id: "run-1" }, error: null };
       },
     });
-    const { container } = mount(apiClient);
-    await waitFor(() => {
-      if (!container.querySelector("iframe")) throw new Error("no iframe");
-    });
-    const frame = container.querySelector("iframe");
-    if (!frame?.contentWindow) throw new Error("no frame window");
+    const { frame } = await mountReadyFrame(apiClient);
 
     window.dispatchEvent(
       new MessageEvent("message", {
@@ -127,12 +156,7 @@ describe("AppMount", () => {
         return { data: { id: "run-1" }, error: null };
       },
     });
-    const { container } = mount(apiClient);
-    await waitFor(() => {
-      if (!container.querySelector("iframe")) throw new Error("no iframe");
-    });
-    const frame = container.querySelector("iframe");
-    if (!frame?.contentWindow) throw new Error("no frame window");
+    const { frame } = await mountReadyFrame(apiClient);
 
     const replies: unknown[] = [];
     vi.spyOn(frame.contentWindow, "postMessage").mockImplementation(
@@ -174,10 +198,9 @@ describe("AppMount", () => {
         return { data: { id: "run-1" }, error: null };
       },
     });
-    const { container } = mount(apiClient);
-    await waitFor(() => {
-      if (!container.querySelector("iframe")) throw new Error("no iframe");
-    });
+    // Ready frame first, so a dropped message proves the source check —
+    // not that the listener simply was not installed yet.
+    await mountReadyFrame(apiClient);
 
     // Same shape, wrong source window.
     window.dispatchEvent(
@@ -196,5 +219,109 @@ describe("AppMount", () => {
 
     await new Promise((resolve) => setTimeout(resolve, 50));
     expect(posts).toHaveLength(0);
+  });
+
+  it("neutralizes a </script> sequence in the bundle", async () => {
+    // A bundle carrying the literal closing tag (a string constant is enough)
+    // would otherwise end the inline script and spill into the document.
+    const apiClient = makeApiClient({
+      viewState: {
+        state: "ready",
+        appId: APP_ID,
+        versionId: VERSION_ID,
+        code: 'const s = "</script><img src=x onerror=alert(1)>";',
+        css: "a{content:'</style><b>'}",
+        allowedWorkflows: [],
+      },
+    });
+    const { container } = mount(apiClient);
+    await waitFor(() => {
+      if (!container.querySelector("iframe")) throw new Error("no iframe");
+    });
+    const srcdoc =
+      container.querySelector("iframe")?.getAttribute("srcdoc") ?? "";
+    // Exactly one real closing tag each: the bundle's copies are escaped.
+    expect(srcdoc.match(/<\/script>/g)).toHaveLength(1);
+    expect(srcdoc.match(/<\/style>/g)).toHaveLength(1);
+    expect(srcdoc).toContain("<\\/script>");
+    // The injected markup stays inside the script text, never parsed as HTML.
+    expect(srcdoc).toContain("<\\/script><img src=x onerror=alert(1)>");
+  });
+
+  it("leaves JS that merely looks like an HTML comment intact", async () => {
+    // `a<!--b` is valid JS (a < !(--b)) and minifiers emit it. Rewriting it
+    // to \x3C outside a string literal would be a SyntaxError at load.
+    const code = "let a=5,b=1;const c=a<!--b;";
+    const apiClient = makeApiClient({
+      viewState: {
+        state: "ready",
+        appId: APP_ID,
+        versionId: VERSION_ID,
+        code,
+        css: "",
+        allowedWorkflows: [],
+      },
+    });
+    const { container } = mount(apiClient);
+    await waitFor(() => {
+      if (!container.querySelector("iframe")) throw new Error("no iframe");
+    });
+    const srcdoc =
+      container.querySelector("iframe")?.getAttribute("srcdoc") ?? "";
+    expect(srcdoc).toContain(code);
+    expect(srcdoc).not.toContain("\\x3C");
+  });
+
+  it("caps concurrent guest calls", async () => {
+    let release: (() => void) | undefined;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const posts: unknown[] = [];
+    const apiClient = makeApiClient({
+      onPost: (url, init) => {
+        posts.push({ url, init });
+        // Hold every call open so the cap is what ends the flood.
+        return gate.then(() => ({ data: { id: "run-1" }, error: null }));
+      },
+    });
+    const { frame } = await mountReadyFrame(apiClient);
+
+    const replies: { error?: { code?: string } }[] = [];
+    vi.spyOn(frame.contentWindow, "postMessage").mockImplementation(
+      (data: unknown) => {
+        replies.push(data as { error?: { code?: string } });
+      },
+    );
+
+    for (let index = 0; index < 12; index += 1) {
+      window.dispatchEvent(
+        new MessageEvent("message", {
+          source: frame.contentWindow,
+          data: {
+            catamorphicApp: APP_PROTOCOL_VERSION,
+            kind: "call",
+            callId: `c${index}`,
+            workflowName: "listOrders",
+            mode: "start",
+            input: {},
+          },
+        }),
+      );
+    }
+
+    await waitFor(() => {
+      if (replies.length < 4) throw new Error("no rejections yet");
+    });
+    // 8 admitted, the rest refused without reaching the network.
+    expect(posts).toHaveLength(8);
+    expect(
+      replies.filter((reply) => reply.error?.code === "denied").length,
+    ).toBe(4);
+    // Drain the held calls so no in-flight work leaks into the next test.
+    release?.();
+    await waitFor(() => {
+      if (replies.length < 12) throw new Error("calls still in flight");
+    });
   });
 });

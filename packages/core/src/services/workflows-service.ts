@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import type { ProjectManager, ProjectRepo } from "@catamorphic/git";
 import {
   type DeclaredSecret,
@@ -99,7 +100,13 @@ export class WorkflowsService {
     });
   }
 
-  /** Secrets the project declares in its own code via `defineSecrets`. */
+  /**
+   * Secrets the project declares in its own code via `defineSecrets`. Called
+   * on every run trigger (secret injection), so the ts-morph parse is cached
+   * per content hash of the parseable sources — the dev tree has no stable
+   * ref, and hashing file bytes is orders of magnitude cheaper than parsing
+   * them. Exact invalidation: any source change produces a new key.
+   */
   async listDeclaredSecrets(args: {
     identity: Identity;
     projectId: string;
@@ -110,9 +117,20 @@ export class WorkflowsService {
       const files = args.ref
         ? await repo.readAllFilesAtRef(args.ref)
         : await repo.readAllFiles();
-      return parseProject(files).secrets;
+      const key = `${args.projectId}:${hashParseableSources(files)}`;
+      const hit = this.declaredSecretsCache.get(key);
+      if (hit) return hit;
+      const secrets = parseProject(files).secrets;
+      if (this.declaredSecretsCache.size >= DECLARED_SECRETS_CACHE_MAX) {
+        const oldest = this.declaredSecretsCache.keys().next().value;
+        if (oldest !== undefined) this.declaredSecretsCache.delete(oldest);
+      }
+      this.declaredSecretsCache.set(key, secrets);
+      return secrets;
     });
   }
+
+  private readonly declaredSecretsCache = new Map<string, DeclaredSecret[]>();
 
   private async requireProject(
     identity: Identity,
@@ -144,4 +162,19 @@ export class WorkflowsService {
       await repo.dispose();
     }
   }
+}
+
+const DECLARED_SECRETS_CACHE_MAX = 256;
+
+/** Digest of the sources parseProject reads, in stable path order. */
+function hashParseableSources(files: Record<string, string>): string {
+  const hash = createHash("sha256");
+  for (const filePath of Object.keys(files).sort()) {
+    if (!filePath.endsWith(".ts") && !filePath.endsWith(".tsx")) continue;
+    hash.update(filePath);
+    hash.update("\0");
+    hash.update(files[filePath] ?? "");
+    hash.update("\0");
+  }
+  return hash.digest("hex");
 }

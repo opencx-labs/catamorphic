@@ -32,6 +32,7 @@ import {
   AppAccessDeniedError,
   assertProjectSurface,
   assertWorkflowAllowed,
+  resolveAppAudience,
 } from "./app-audience.js";
 import type { AppPoliciesService } from "./app-policies-service.js";
 import type {
@@ -494,7 +495,29 @@ export class RunsService {
         "workflow_run_states.active_workflow_step_attempt_id",
       ])
       .executeTakeFirst();
-    if (!row) throw new RunNotFoundError(args.runId);
+    if (!row) {
+      // Uniform denial for audience identities: a 404-for-missing /
+      // 403-for-denied split would let a guest probe which run ids exist.
+      if (args.identity.appAudience) throw new AppAccessDeniedError();
+      throw new RunNotFoundError(args.runId);
+    }
+    if (args.identity.appAudience) {
+      // Run polling mirrors triggering (ADR 0036): an audience identity may
+      // read only production runs of workflows in its frozen set, within the
+      // project its version belongs to — never arbitrary tenant runs by id.
+      const context = await resolveAppAudience({
+        db: this.db,
+        identity: args.identity,
+        projectId: row.project_id,
+        policies: this.deps.appPolicies,
+      });
+      if (
+        row.mode !== "production" ||
+        !context?.allowedWorkflows.has(row.workflow_name)
+      ) {
+        throw new AppAccessDeniedError();
+      }
+    }
     const [pause, batches, steps, attempts] = await Promise.all([
       this.db
         .selectFrom("workflow_pauses")
@@ -646,6 +669,12 @@ export class RunsService {
 
   async list(args: ListRunsInput): Promise<ListRunsResult> {
     await this.requireProject(args.identity, args.projectId);
+    const audience = await resolveAppAudience({
+      db: this.db,
+      identity: args.identity,
+      projectId: args.projectId,
+      policies: this.deps.appPolicies,
+    });
     const limit = Math.max(1, Math.min(args.limit ?? 50, 100));
     const offset = Math.max(0, args.offset ?? 0);
     let query = this.db
@@ -659,6 +688,24 @@ export class RunsService {
     let countQuery = this.db
       .selectFrom("workflow_runs")
       .where("project_id", "=", args.projectId);
+    if (audience) {
+      // Audience identities see only production runs of their frozen set —
+      // the read-side mirror of the trigger gate (ADR 0036).
+      if (
+        args.mode === "test" ||
+        (args.workflowName && !audience.allowedWorkflows.has(args.workflowName))
+      ) {
+        throw new AppAccessDeniedError();
+      }
+      const frozen = [...audience.allowedWorkflows];
+      if (frozen.length === 0) return { items: [], total: 0 };
+      query = query
+        .where("workflow_name", "in", frozen)
+        .where("mode", "=", "production");
+      countQuery = countQuery
+        .where("workflow_name", "in", frozen)
+        .where("mode", "=", "production");
+    }
     if (args.workflowName) {
       query = query.where("workflow_name", "=", args.workflowName);
       countQuery = countQuery.where("workflow_name", "=", args.workflowName);

@@ -17,9 +17,19 @@ export interface TenantAppPolicy {
   workflowAllowlist?: string[];
 }
 
+/**
+ * Merge semantics: an omitted (undefined) field keeps its stored value, so a
+ * host adjusting one cap cannot silently flip the kill switch or drop the
+ * allowlist. Nullable fields clear with an explicit `null`.
+ */
 export type UpsertTenantAppPolicyInput = {
   tenantId: string;
-} & Partial<Omit<TenantAppPolicy, "tenantId">>;
+  appsEnabled?: boolean;
+  maxAppsPerProject?: number | null;
+  maxBundleBytes?: number | null;
+  allowedNetworkOrigins?: string[];
+  workflowAllowlist?: string[] | null;
+};
 
 export class AppsDisabledError extends Error {
   constructor(readonly tenantId: string) {
@@ -53,16 +63,39 @@ export class AppPoliciesService {
   }
 
   async upsert(input: UpsertTenantAppPolicyInput): Promise<TenantAppPolicy> {
-    if (input.maxAppsPerProject !== undefined) {
+    if (input.maxAppsPerProject != null) {
       requirePositiveInteger(input.maxAppsPerProject, "maxAppsPerProject");
     }
-    if (input.maxBundleBytes !== undefined) {
+    if (input.maxBundleBytes != null) {
       requirePositiveInteger(input.maxBundleBytes, "maxBundleBytes");
     }
     for (const origin of input.allowedNetworkOrigins ?? []) {
       requireHttpsOrigin(origin);
     }
     const now = new Date();
+    // undefined = keep the stored value; null = clear it. Only provided
+    // fields enter the conflict update, so a one-field tweak can never reset
+    // the kill switch or the allowlist to defaults.
+    const provided = {
+      ...(input.appsEnabled !== undefined && {
+        apps_enabled: input.appsEnabled,
+      }),
+      ...(input.maxAppsPerProject !== undefined && {
+        max_apps_per_project: input.maxAppsPerProject,
+      }),
+      ...(input.maxBundleBytes !== undefined && {
+        max_bundle_bytes: input.maxBundleBytes,
+      }),
+      ...(input.allowedNetworkOrigins !== undefined && {
+        allowed_network_origins: JSON.stringify(input.allowedNetworkOrigins),
+      }),
+      ...(input.workflowAllowlist !== undefined && {
+        workflow_allowlist:
+          input.workflowAllowlist === null
+            ? null
+            : JSON.stringify(input.workflowAllowlist),
+      }),
+    };
     const row = await this.db
       .insertInto("tenant_app_policies")
       .values({
@@ -79,18 +112,9 @@ export class AppPoliciesService {
         updated_at: now,
       })
       .onConflict((conflict) =>
-        conflict.column("tenant_id").doUpdateSet({
-          apps_enabled: input.appsEnabled ?? true,
-          max_apps_per_project: input.maxAppsPerProject ?? null,
-          max_bundle_bytes: input.maxBundleBytes ?? null,
-          allowed_network_origins: JSON.stringify(
-            input.allowedNetworkOrigins ?? [],
-          ),
-          workflow_allowlist: input.workflowAllowlist
-            ? JSON.stringify(input.workflowAllowlist)
-            : null,
-          updated_at: now,
-        }),
+        conflict
+          .column("tenant_id")
+          .doUpdateSet({ ...provided, updated_at: now }),
       )
       .returningAll()
       .executeTakeFirstOrThrow();
@@ -116,7 +140,12 @@ function mapPolicy(
 }
 
 function stringArray(value: unknown): string[] {
-  const parsed: unknown = typeof value === "string" ? JSON.parse(value) : value;
+  let parsed: unknown;
+  try {
+    parsed = typeof value === "string" ? JSON.parse(value) : value;
+  } catch {
+    return [];
+  }
   return Array.isArray(parsed)
     ? parsed.filter((entry): entry is string => typeof entry === "string")
     : [];

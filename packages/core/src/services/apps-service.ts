@@ -32,6 +32,12 @@ import { ProjectNotFoundError } from "./projects-service.js";
 const tracer = getTracer("@catamorphic/core");
 
 const APP_NAME_PATTERN = /^[a-z0-9][a-z0-9-]*$/;
+/**
+ * Hex object name only. The sha lands in shell commands and scratch-directory
+ * paths inside the caller's sandbox, so a malformed value (e.g. `../project`)
+ * must be rejected before it can traverse out of the build root.
+ */
+const COMMIT_SHA_PATTERN = /^[0-9a-f]{7,64}$/i;
 const DEFAULT_MAX_BUNDLE_BYTES = 5 * 1024 * 1024;
 /** Preview builds kept per app; older ones are pruned with their bundles. */
 const PREVIEW_VERSIONS_KEPT = 3;
@@ -70,6 +76,12 @@ export interface AppVersion {
 export interface AppBundle {
   code: string;
   css: string;
+  /**
+   * Cache validator for the version's bundle bytes. Versions are append-only
+   * and never rebuilt in place, so a matching etag is always safe to serve
+   * from cache.
+   */
+  etag: string;
 }
 
 export class AppNotFoundError extends Error {
@@ -129,6 +141,15 @@ export class AppPublishStateError extends Error {
  * commit under a scratch directory. No new sandbox type is required.
  */
 export class AppsService {
+  /**
+   * Serializes compiles that share a build root. Preview builds mutate the
+   * caller's dev tree in place (strip manifests → install → restore), so two
+   * interleaved previews could install against restored manifests or restore
+   * a stripped manifest as the "original". Published builds get their own
+   * per-version scratch root and never contend.
+   */
+  private readonly buildLocks = new Map<string, Promise<unknown>>();
+
   constructor(
     private readonly db: Kysely<DB>,
     private readonly deps: {
@@ -140,6 +161,20 @@ export class AppsService {
       maxBundleBytes?: number;
     },
   ) {}
+
+  private withBuildLock<T>(key: string, fn: () => Promise<T>): Promise<T> {
+    const previous = this.buildLocks.get(key) ?? Promise.resolve();
+    const run = previous.then(fn, fn);
+    const settled = run.then(
+      () => undefined,
+      () => undefined,
+    );
+    this.buildLocks.set(key, settled);
+    void settled.then(() => {
+      if (this.buildLocks.get(key) === settled) this.buildLocks.delete(key);
+    });
+    return run;
+  }
 
   /** Apps present in the repo, merged with build/publish state. */
   async list(args: {
@@ -213,14 +248,21 @@ export class AppsService {
           const names = await this.appNamesFromRepo(args);
           if (names.length > policy.maxAppsPerProject) {
             throw new AppLimitExceededError(
-              `This project has ${names.length} apps; the tenant limit is ${policy.maxAppsPerProject}`,
+              `This project has ${names.length} apps but the tenant allows ${policy.maxAppsPerProject}; remove apps from the repo to build again`,
             );
           }
         }
-        if (args.kind === "published" && !args.commitSha) {
-          throw new AppPublishStateError(
-            "A published build requires a commitSha",
-          );
+        if (args.kind === "published") {
+          if (!args.commitSha) {
+            throw new AppPublishStateError(
+              "A published build requires a commitSha",
+            );
+          }
+          if (!COMMIT_SHA_PATTERN.test(args.commitSha)) {
+            throw new AppPublishStateError(
+              "commitSha must be a hex git object name",
+            );
+          }
         }
 
         const appId = await this.ensureAppRow(args);
@@ -238,16 +280,26 @@ export class AppsService {
         span.setAttribute("catamorphic.app.version_id", version.id);
 
         try {
-          const [bundle, allowedWorkflows] = await Promise.all([
-            this.compile(args),
-            this.resolveAllowedWorkflows(args),
-          ]);
+          // One snapshot feeds both the authorization parse and the compile
+          // upload, so the frozen set and the bundle come from the same tree
+          // — for previews too, where the dev repo can move mid-build.
+          const files = await this.projectSnapshot(args);
+          const allowedWorkflows = this.resolveAllowedWorkflows(files);
+          const bundle = await (args.kind === "preview"
+            ? this.withBuildLock(
+                `${args.projectId}:${args.identity.externalUserId}`,
+                () => this.compile({ ...args, versionId: version.id, files }),
+              )
+            : this.compile({ ...args, versionId: version.id, files }));
           const installLimit =
             this.deps.maxBundleBytes ?? DEFAULT_MAX_BUNDLE_BYTES;
           const limit = policy.maxBundleBytes
             ? Math.min(installLimit, policy.maxBundleBytes)
             : installLimit;
-          const bundleBytes = byteLength(bundle.code) + byteLength(bundle.css);
+          const encoder = new TextEncoder();
+          const codeBytes = encoder.encode(bundle.code);
+          const cssBytes = encoder.encode(bundle.css);
+          const bundleBytes = codeBytes.byteLength + cssBytes.byteLength;
           if (bundleBytes > limit) {
             throw new AppBundleTooLargeError(bundleBytes, limit);
           }
@@ -260,14 +312,8 @@ export class AppsService {
           };
           const bundleKey = appBundleKey({ ...keyArgs, file: "app.js" });
           const cssKey = appBundleKey({ ...keyArgs, file: "app.css" });
-          await this.deps.bundleStore.put(
-            bundleKey,
-            new TextEncoder().encode(bundle.code),
-          );
-          await this.deps.bundleStore.put(
-            cssKey,
-            new TextEncoder().encode(bundle.css),
-          );
+          await this.deps.bundleStore.put(bundleKey, codeBytes);
+          await this.deps.bundleStore.put(cssKey, cssBytes);
 
           const ready = await this.db
             .updateTable("app_versions")
@@ -368,6 +414,29 @@ export class AppsService {
     return rows.map((row) => mapVersion(row, row.app_name));
   }
 
+  /**
+   * Authorizes a bundle read without loading the bytes. A conditional request
+   * (`If-None-Match`) must pass exactly the same access checks as a full one:
+   * the validator is derived from the caller-supplied version id, so
+   * answering 304 before authorizing would let anyone probe which versions
+   * exist in any tenant.
+   */
+  async assertBundleReadable(args: {
+    identity: Identity;
+    projectId: string;
+    versionId: string;
+  }): Promise<void> {
+    await this.requireProject(args.identity, args.projectId);
+    const version = await this.db
+      .selectFrom("app_versions")
+      .innerJoin("apps", "apps.id", "app_versions.app_id")
+      .where("app_versions.id", "=", args.versionId)
+      .where("apps.project_id", "=", args.projectId)
+      .select("app_versions.id")
+      .executeTakeFirst();
+    if (!version) throw new AppVersionNotFoundError(args.versionId);
+  }
+
   /** Loads the stored bundle for one version. */
   async getBundle(args: {
     identity: Identity;
@@ -391,7 +460,11 @@ export class AppsService {
     ]);
     if (!code || !css) throw new AppVersionNotFoundError(args.versionId);
     const decoder = new TextDecoder();
-    return { code: decoder.decode(code.data), css: decoder.decode(css.data) };
+    return {
+      code: decoder.decode(code.data),
+      css: decoder.decode(css.data),
+      etag: `"${args.versionId}"`,
+    };
   }
 
   /**
@@ -469,31 +542,38 @@ export class AppsService {
     projectId: string;
     appName: string;
     kind: AppVersionKind;
-    commitSha?: string;
-  }): Promise<AppBundle> {
+    versionId: string;
+    /** The snapshot to build — the same file set the frozen set was parsed from. */
+    files: Record<string, string>;
+  }): Promise<Pick<AppBundle, "code" | "css">> {
     const sandbox = await this.deps.devSandboxes.ensure({
       identity: args.identity,
       projectId: args.projectId,
-      refresh: args.kind === "preview",
+      refresh: false,
     });
 
     let buildRoot = sandbox.projectDirectory;
-    if (args.kind === "published" && args.commitSha) {
+    if (args.kind === "published") {
       // Published artifacts must be reproducible from git alone, so they build
       // from a pristine checkout rather than the user's mutable dev tree.
-      buildRoot = `${this.deps.provider.workspaceRoot}/app-builds/${args.commitSha}`;
-      const files = await this.readFilesAtCommit(args, args.commitSha);
+      // Keyed by version id: two apps published from the same commit build
+      // concurrently, and a sha-keyed directory would be torn down by one
+      // build's cleanup while the other is mid-install.
+      buildRoot = `${this.deps.provider.workspaceRoot}/app-builds/${args.versionId}`;
       await this.deps.provider.executeCommand(
         sandbox.providerId,
         `rm -rf ${shellQuote(buildRoot)} && mkdir -p ${shellQuote(buildRoot)}`,
         { timeout: 30 },
       );
-      await this.deps.provider.uploadFiles(
-        sandbox.providerId,
-        files,
-        buildRoot,
-      );
     }
+    // Both kinds build the snapshot: uploading it (rather than trusting the
+    // sandbox's current tree for previews) is what keeps the compiled bundle
+    // and the frozen authorization set on the same commit of reality.
+    await this.deps.provider.uploadFiles(
+      sandbox.providerId,
+      args.files,
+      buildRoot,
+    );
 
     const appDir = `${buildRoot}/${APP_SOURCE_ROOT}/${args.appName}`;
     try {
@@ -577,47 +657,55 @@ export class AppsService {
   }
 
   /**
-   * The workflows this version may invoke, frozen from `app-api.ts` at the
-   * built ref. Same tree the bundle compiled from, so the authorization set
-   * and the type surface cannot disagree. A project with apps but no valid
-   * contract surface fails the build: a version with no frozen set would
-   * either be uncallable or unbounded, and both are worse than an error.
+   * One file snapshot per build: published versions read the pinned commit,
+   * previews read the dev tree once. The same snapshot is parsed for the
+   * frozen workflow set and uploaded for the compile, so the authorization
+   * set and the bundle cannot come from different states of the repo.
    */
-  private async resolveAllowedWorkflows(args: {
+  private async projectSnapshot(args: {
     identity: Identity;
     projectId: string;
     kind: AppVersionKind;
     commitSha?: string;
-  }): Promise<string[]> {
+  }): Promise<Record<string, string>> {
     const repo = await this.deps.projectManager.openDev(
       args.identity.tenantId,
       args.projectId,
       args.identity.externalUserId,
     );
     try {
-      const files =
-        args.kind === "published" && args.commitSha
-          ? await repo.readAllFilesAtRef(args.commitSha)
-          : await repo.readAllFiles();
-      const parsed = parseProject(files);
-      const surface: AppApiSurface | null = parsed.appApi;
-      const contractErrors = parsed.errors.filter((error) =>
-        error.file?.endsWith("app-api.ts"),
-      );
-      if (contractErrors.length > 0) {
-        throw new AppContractError(
-          contractErrors.map((error) => error.message).join("\n"),
-        );
-      }
-      if (!surface) {
-        throw new AppContractError(
-          "workflows/src/app-api.ts is missing. Export the contract object listing the workflows apps may call.",
-        );
-      }
-      return surface.entries.map((entry) => entry.workflowName).sort();
+      return args.kind === "published" && args.commitSha
+        ? await repo.readAllFilesAtRef(args.commitSha)
+        : await repo.readAllFiles();
     } finally {
       await repo.dispose();
     }
+  }
+
+  /**
+   * The workflows this version may invoke, frozen from `app-api.ts` in the
+   * snapshot the bundle compiles from, so the authorization set and the type
+   * surface cannot disagree. A project with apps but no valid contract
+   * surface fails the build: a version with no frozen set would either be
+   * uncallable or unbounded, and both are worse than an error.
+   */
+  private resolveAllowedWorkflows(files: Record<string, string>): string[] {
+    const parsed = parseProject(files);
+    const surface: AppApiSurface | null = parsed.appApi;
+    const contractErrors = parsed.errors.filter((error) =>
+      error.file?.endsWith("app-api.ts"),
+    );
+    if (contractErrors.length > 0) {
+      throw new AppContractError(
+        contractErrors.map((error) => error.message).join("\n"),
+      );
+    }
+    if (!surface) {
+      throw new AppContractError(
+        "workflows/src/app-api.ts is missing. Export the contract object listing the workflows apps may call.",
+      );
+    }
+    return surface.entries.map((entry) => entry.workflowName).sort();
   }
 
   /** Manifests under the build root that declare @catamorphic/app. */
@@ -643,22 +731,6 @@ export class AppsService {
       }),
     );
     return manifests;
-  }
-
-  private async readFilesAtCommit(
-    args: { identity: Identity; projectId: string },
-    commitSha: string,
-  ): Promise<Record<string, string>> {
-    const repo = await this.deps.projectManager.openDev(
-      args.identity.tenantId,
-      args.projectId,
-      args.identity.externalUserId,
-    );
-    try {
-      return await repo.readAllFilesAtRef(commitSha);
-    } finally {
-      await repo.dispose();
-    }
   }
 
   private async appNamesFromRepo(args: {
@@ -765,7 +837,12 @@ function mapVersion(
 
 function parseAllowedWorkflows(value: unknown): string[] | null {
   if (value == null) return null;
-  const parsed: unknown = typeof value === "string" ? JSON.parse(value) : value;
+  let parsed: unknown;
+  try {
+    parsed = typeof value === "string" ? JSON.parse(value) : value;
+  } catch {
+    return null;
+  }
   return Array.isArray(parsed)
     ? parsed.filter((entry): entry is string => typeof entry === "string")
     : null;
@@ -775,10 +852,6 @@ function assertAppName(name: string): void {
   if (!APP_NAME_PATTERN.test(name) || name.length > 100) {
     throw new AppNotFoundError(name);
   }
-}
-
-function byteLength(text: string): number {
-  return new TextEncoder().encode(text).byteLength;
 }
 
 function shellQuote(path: string): string {
