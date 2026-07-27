@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { parseProject, parseWorkflowFromProject } from "../parser.js";
+import { executionFiles } from "../types.js";
 
 describe("parseProject", () => {
   it("discovers a single workflow from a single file", () => {
@@ -24,6 +25,46 @@ async function sendEmail({ to }: { to: string }) {
     expect(result.workflows[0]?.filePath).toContain("welcome.ts");
     expect(result.workflows[0]?.graph.name).toBe("welcomeUser");
     expect(result.workflows[0]?.graph.projectFiles).toEqual(["src/welcome.ts"]);
+  });
+
+  it("ignores frontend app sources when discovering workflows and steps", () => {
+    const files = {
+      "workflows/src/welcome.ts": `
+export async function welcomeUser({ email }: { email: string }) {
+  "use workflow";
+  await sendEmail({ to: email });
+}
+
+/**
+ * @displayname Send Email
+ */
+async function sendEmail({ to }: { to: string }) {
+  "use step";
+}
+`,
+      // Same step name in app code must not override the workflow's step, and
+      // an app-side workflow directive must not be discovered.
+      "apps/dashboard/src/main.tsx": `
+async function sendEmail({ to }: { to: string }) {
+  "use step";
+}
+
+export async function appSideWorkflow() {
+  "use workflow";
+}
+`,
+    };
+
+    const result = parseProject(files);
+
+    expect(result.errors).toHaveLength(0);
+    expect(result.workflows.map((workflow) => workflow.functionName)).toEqual([
+      "welcomeUser",
+    ]);
+    const step = result.workflows[0]?.graph.nodes.find(
+      (node) => node.type === "step",
+    );
+    expect(step?.label).toBe("Send Email");
   });
 
   it("discovers multiple workflows across multiple files", () => {
@@ -314,7 +355,7 @@ async function sendNotification({ to }: { to: string }) {
 
   it("resolves by workflow file path when the exported function was renamed", () => {
     const files = {
-      "src/untitled-workflow2.ts": `
+      "workflows/src/untitled-workflow2.ts": `
 /**
  * @displayname Hello
  */
@@ -335,5 +376,197 @@ async function printHelloWorld() {
 
     const step = graph!.nodes.find((n) => n.type === "step");
     expect(step?.functionName).toBe("printHelloWorld");
+  });
+});
+
+describe("declared secrets", () => {
+  it("collects defineSecrets declarations with their options", () => {
+    const files = {
+      "workflows/src/secrets.ts": `
+import { defineSecrets } from "@catamorphic/workflow";
+
+export const secrets = defineSecrets({
+  STRIPE_API_KEY: { description: "Stripe secret key" },
+  REGION: { required: false, default: "eu-west-1" },
+});
+`,
+    };
+
+    const result = parseProject(files);
+
+    expect(result.errors).toEqual([]);
+    expect(result.secrets).toEqual([
+      {
+        name: "REGION",
+        label: undefined,
+        description: undefined,
+        required: false,
+        default: "eu-west-1",
+        filePath: "workflows/src/secrets.ts",
+      },
+      {
+        name: "STRIPE_API_KEY",
+        label: undefined,
+        description: "Stripe secret key",
+        required: true,
+        default: undefined,
+        filePath: "workflows/src/secrets.ts",
+      },
+    ]);
+  });
+
+  it("reports an error when the declaration is not statically readable", () => {
+    const files = {
+      "workflows/src/secrets.ts": `
+import { defineSecrets } from "@catamorphic/workflow";
+const declarations = { STRIPE_API_KEY: {} };
+export const secrets = defineSecrets(declarations);
+`,
+    };
+
+    const result = parseProject(files);
+
+    expect(result.secrets).toEqual([]);
+    expect(result.errors[0]?.message).toMatch(/inline object literal/);
+  });
+});
+
+describe("app-api contract surface", () => {
+  const ordersFile = `
+export async function listOrders({ status }: { status: string }) {
+  "use workflow";
+  return [];
+}
+
+export async function refundOrder({ id }: { id: string }) {
+  "use workflow";
+  return { refunded: true };
+}
+`;
+
+  it("resolves exported entries to workflows via bindings", () => {
+    const files = {
+      "workflows/src/orders.ts": ordersFile,
+      "workflows/src/app-api.ts": `
+import { listOrders, refundOrder as refund } from "./orders.js";
+
+export const appApi = { listOrders, refundOrders: refund };
+`,
+    };
+
+    const result = parseProject(files);
+
+    expect(result.errors).toEqual([]);
+    expect(result.appApi?.entries).toEqual([
+      {
+        exposedName: "listOrders",
+        workflowName: "listOrders",
+        capabilities: expect.objectContaining({
+          persistedContinuations: false,
+        }),
+      },
+      {
+        exposedName: "refundOrders",
+        workflowName: "refundOrder",
+        capabilities: expect.objectContaining({
+          persistedContinuations: false,
+        }),
+      },
+    ]);
+  });
+
+  it("accepts a satisfies expression around the contract object", () => {
+    const files = {
+      "workflows/src/orders.ts": ordersFile,
+      "workflows/src/app-api.ts": `
+import { listOrders } from "./orders.js";
+type AppContract = { listOrders: unknown };
+
+export const appApi = { listOrders } satisfies AppContract;
+`,
+    };
+
+    const result = parseProject(files);
+    expect(result.errors).toEqual([]);
+    expect(result.appApi?.entries.map((entry) => entry.workflowName)).toEqual([
+      "listOrders",
+    ]);
+  });
+
+  it("is null when the project has no app-api.ts", () => {
+    const result = parseProject({ "workflows/src/orders.ts": ordersFile });
+    expect(result.appApi).toBeNull();
+    expect(result.errors).toEqual([]);
+  });
+
+  it("fails closed when an entry does not resolve to a workflow", () => {
+    const files = {
+      "workflows/src/orders.ts": ordersFile,
+      "workflows/src/app-api.ts": `
+import { listOrders } from "./orders.js";
+
+const helper = async () => [];
+
+export const appApi = { listOrders, sneaky: helper };
+`,
+    };
+
+    const result = parseProject(files);
+    // The whole surface is rejected, not just the bad entry: a partially
+    // resolved surface would silently narrow an authorization set.
+    expect(result.appApi).toBeNull();
+    expect(result.errors.some((e) => e.message.includes("sneaky"))).toBe(true);
+  });
+
+  it("rejects computed or non-identifier entries", () => {
+    const files = {
+      "workflows/src/orders.ts": ordersFile,
+      "workflows/src/app-api.ts": `
+import * as orders from "./orders.js";
+
+export const appApi = { listOrders: orders.listOrders };
+`,
+    };
+
+    const result = parseProject(files);
+    expect(result.appApi).toBeNull();
+    expect(
+      result.errors.some((e) => e.message.includes("identifier references")),
+    ).toBe(true);
+  });
+});
+
+describe("executionFiles", () => {
+  it("drops app sources and strips the frontend-only runtime dependency", () => {
+    const files = {
+      "package.json": JSON.stringify({
+        name: "root",
+        workspaces: ["contracts"],
+      }),
+      "contracts/package.json": JSON.stringify({
+        name: "@project/contracts",
+        devDependencies: { "@catamorphic/app": "0.0.1" },
+      }),
+      "workflows/package.json": JSON.stringify({
+        name: "@project/workflows",
+        dependencies: { "@catamorphic/workflow": "0.0.2" },
+      }),
+      "workflows/src/a.ts": "export const a = 1;",
+      "apps/dashboard/src/main.tsx": "export {};",
+    };
+
+    const result = executionFiles(files);
+
+    expect(Object.keys(result).sort()).toEqual([
+      "contracts/package.json",
+      "package.json",
+      "workflows/package.json",
+      "workflows/src/a.ts",
+    ]);
+    expect(result["contracts/package.json"]).not.toContain("@catamorphic/app");
+    // Untouched manifests pass through byte-identical (digest stability).
+    expect(result["workflows/package.json"]).toBe(
+      files["workflows/package.json"],
+    );
   });
 });

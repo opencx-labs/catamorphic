@@ -1,6 +1,7 @@
 export type { CatamorphicCoreConfig } from "./core.js";
 export { CatamorphicCore, createCatamorphicCore } from "./core.js";
 export {
+  type AppAudience,
   authorFor,
   type ExternalUserId,
   type Identity,
@@ -17,6 +18,35 @@ export {
   AgentSessionsService,
   type SyncedFileChange,
 } from "./services/agent-sessions-service.js";
+export {
+  AppAccessDeniedError,
+  assertProjectSurface,
+  assertWorkflowAllowed,
+  resolveAppAudience,
+} from "./services/app-audience.js";
+export type { AppBundleStore } from "./services/app-bundle-store.js";
+export { appBundleKey, appVersionPrefix } from "./services/app-bundle-store.js";
+export {
+  AppLimitExceededError,
+  AppPoliciesService,
+  AppsDisabledError,
+  type TenantAppPolicy,
+  type UpsertTenantAppPolicyInput,
+} from "./services/app-policies-service.js";
+export {
+  AppBuildFailedError,
+  type AppBundle,
+  AppBundleTooLargeError,
+  AppContractError,
+  AppNotFoundError,
+  AppPublishStateError,
+  type AppSummary,
+  AppsService,
+  type AppVersion,
+  type AppVersionKind,
+  AppVersionNotFoundError,
+  type AppVersionStatus,
+} from "./services/apps-service.js";
 export { DbSandboxStore } from "./services/db-sandbox-store.js";
 export {
   createDeploymentArtifactIdentity,

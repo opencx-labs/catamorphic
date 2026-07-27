@@ -8,17 +8,19 @@ describe("durable order approval template", () => {
     const template = findTemplate("durable-order-approval");
     if (!template) throw new Error("Durable workflow template is missing");
 
-    expect(JSON.parse(template.files["package.json"] ?? "{}")).toMatchObject({
+    expect(
+      JSON.parse(template.files["workflows/package.json"] ?? "{}"),
+    ).toMatchObject({
       dependencies: {
         "@catamorphic/workflow": WORKFLOW_PACKAGE_VERSION,
       },
     });
 
     const parsed = parseProject(template.files);
-    expect(template.files["src/approve-order.ts"]).toContain(
+    expect(template.files["workflows/src/approve-order.ts"]).toContain(
       "@displayname Request Approval",
     );
-    expect(template.files["src/finish-order.ts"]).toContain(
+    expect(template.files["workflows/src/finish-order.ts"]).toContain(
       "@displayname Finalize Order",
     );
     expect(parsed.errors).toEqual([]);

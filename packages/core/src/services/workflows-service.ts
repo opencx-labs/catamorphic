@@ -1,5 +1,6 @@
 import type { ProjectManager, ProjectRepo } from "@catamorphic/git";
 import {
+  type DeclaredSecret,
   layoutGraph,
   parseProject,
   parseWorkflowFromProject,
@@ -8,6 +9,7 @@ import {
   type WorkflowGraph,
 } from "@catamorphic/parser";
 import type { Identity } from "../identity.js";
+import { assertProjectSurface } from "./app-audience.js";
 import {
   ProjectNotFoundError,
   type ProjectsService,
@@ -97,10 +99,26 @@ export class WorkflowsService {
     });
   }
 
+  /** Secrets the project declares in its own code via `defineSecrets`. */
+  async listDeclaredSecrets(args: {
+    identity: Identity;
+    projectId: string;
+    ref?: string;
+  }): Promise<DeclaredSecret[]> {
+    await this.requireProject(args.identity, args.projectId);
+    return this.withDev(args.identity, args.projectId, async (repo) => {
+      const files = args.ref
+        ? await repo.readAllFilesAtRef(args.ref)
+        : await repo.readAllFiles();
+      return parseProject(files).secrets;
+    });
+  }
+
   private async requireProject(
     identity: Identity,
     projectId: string,
   ): Promise<void> {
+    assertProjectSurface(identity);
     // Delegates to ProjectsService so "project exists" logic lives in one place.
     try {
       await this.projects.get(identity, projectId);

@@ -16,7 +16,11 @@ import {
 } from "@catamorphic/git";
 import { S3ObjectStore, S3RemoteBackend } from "@catamorphic/s3";
 import type { SandboxProvider } from "@catamorphic/sandbox";
-import { type Catamorphic, createCatamorphic } from "@catamorphic/server-sdk";
+import {
+  type AppBundleStore,
+  type Catamorphic,
+  createCatamorphic,
+} from "@catamorphic/server-sdk";
 
 /** Fixed demo identity — the playground stands in for the host's auth. */
 export const DEMO_TENANT_ID = "00000000-0000-4000-8000-000000000001";
@@ -167,6 +171,60 @@ function resolveCodingAgentModel(model: string) {
   );
 }
 
+/**
+ * App bundles go to the same S3 bucket as code storage when configured;
+ * otherwise a filesystem store under .data keeps the demo self-contained.
+ */
+function resolveAppBundleStore(): AppBundleStore {
+  const bucket = process.env.S3_BUCKET;
+  const accessKeyId = process.env.S3_ACCESS_KEY_ID;
+  const secretAccessKey = process.env.S3_SECRET_ACCESS_KEY;
+  if (bucket && accessKeyId && secretAccessKey) {
+    return new S3ObjectStore({
+      bucket,
+      endpoint: process.env.S3_ENDPOINT,
+      region: process.env.S3_REGION,
+      forcePathStyle: process.env.S3_FORCE_PATH_STYLE === "true",
+      credentials: { accessKeyId, secretAccessKey },
+    });
+  }
+  return new FsBundleStore(path.join(DATA_DIR, "app-bundles"));
+}
+
+class FsBundleStore implements AppBundleStore {
+  constructor(private readonly root: string) {}
+
+  private resolve(key: string): string {
+    const target = path.join(this.root, key);
+    if (!target.startsWith(this.root + path.sep)) {
+      throw new Error(`Invalid bundle key: ${key}`);
+    }
+    return target;
+  }
+
+  async get(key: string) {
+    const fs = await import("node:fs/promises");
+    try {
+      const data = await fs.readFile(this.resolve(key));
+      return { data: new Uint8Array(data), etag: "fs" };
+    } catch {
+      return null;
+    }
+  }
+
+  async put(key: string, data: Uint8Array) {
+    const fs = await import("node:fs/promises");
+    const target = this.resolve(key);
+    await fs.mkdir(path.dirname(target), { recursive: true });
+    await fs.writeFile(target, data);
+  }
+
+  async deletePrefix(prefix: string) {
+    const fs = await import("node:fs/promises");
+    await fs.rm(this.resolve(prefix), { recursive: true, force: true });
+  }
+}
+
 export async function bootCatamorphic(): Promise<Catamorphic> {
   const remoteBackend = await resolveRemoteBackend();
   const sandboxProvider = resolveSandboxProvider();
@@ -183,6 +241,7 @@ export async function bootCatamorphic(): Promise<Catamorphic> {
     },
     sandboxProvider,
     codingAgent: resolveCodingAgent(sandboxProvider),
+    appBundleStore: resolveAppBundleStore(),
   });
 
   const { applied } = await catamorphic.migrate();

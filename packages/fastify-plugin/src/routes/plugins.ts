@@ -7,6 +7,7 @@ import type { FastifyInstance } from "fastify";
 import type { ZodTypeProvider } from "fastify-type-provider-zod";
 import { z } from "zod";
 import type { RouteContext } from "../app.js";
+import { resolveIdentity } from "../http-identity.js";
 import {
   AttachedPluginSchema,
   AttachPluginSchema,
@@ -132,6 +133,7 @@ export function registerPluginRoutes(app: FastifyInstance, ctx: RouteContext) {
       if (!ctx.core?.secrets)
         return reply.status(503).send({ error: "Secrets not configured" });
       const list = await ctx.core.secrets.list({
+        identity: resolveIdentity(request),
         projectId: request.params.projectId,
         environment: request.query.environment,
       });
@@ -157,6 +159,7 @@ export function registerPluginRoutes(app: FastifyInstance, ctx: RouteContext) {
         return reply.status(503).send({ error: "Secrets not configured" });
       try {
         const status = await ctx.core.secrets.upsert({
+          identity: resolveIdentity(request),
           projectId: request.params.projectId,
           environment: request.query.environment,
           name: request.params.name,
@@ -210,6 +213,7 @@ export function registerPluginRoutes(app: FastifyInstance, ctx: RouteContext) {
       if (!ctx.core?.secrets)
         return reply.status(503).send({ error: "Secrets not configured" });
       const ok = await ctx.core.secrets.delete({
+        identity: resolveIdentity(request),
         projectId: request.params.projectId,
         environment: request.query.environment,
         name: request.params.name,

@@ -1,4 +1,5 @@
 import type {
+  AppBundleStore,
   CatamorphicCore,
   DeploymentRuntimeCleanupResult,
   DeploymentRuntimeHealthResult,
@@ -87,6 +88,14 @@ export interface CreateCatamorphicConfig {
     maxConcurrency?: number;
     autoStopMinutes?: number;
   };
+  /**
+   * Where built app bundles are stored (`S3ObjectStore` from `@catamorphic/s3`
+   * satisfies this). Requires `sandboxProvider`; without both, app
+   * build/publish surfaces are unavailable.
+   */
+  appBundleStore?: AppBundleStore;
+  /** Hard cap on a built app bundle (js + css). Defaults to 5 MiB. */
+  maxAppBundleBytes?: number;
 }
 
 function resolveDatabase(config: DatabaseConfig): {
@@ -157,6 +166,8 @@ export class Catamorphic {
       ...(config.deploymentRuntime === undefined
         ? {}
         : { deploymentRuntime: config.deploymentRuntime }),
+      appBundleStore: config.appBundleStore,
+      maxAppBundleBytes: config.maxAppBundleBytes,
     });
   }
 

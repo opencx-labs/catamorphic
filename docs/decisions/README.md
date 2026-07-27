@@ -44,4 +44,9 @@ Settled design decisions live here as short Architecture Decision Records. They 
 | [0029](0029-queue-and-rate-correctness-at-scale.md) | Queue claim cost, lease fencing, and rate budget accuracy at scale | Accepted; retention gap it identified is closed by 0030 |
 | [0030](0030-run-retention.md) | Run retention | Accepted |
 | [0031](0031-execution-hot-path-costs.md) | Execution hot-path costs: parked deferrals, bucket round trips, heartbeat HOT updates | Accepted |
+| [0032](0032-projects-are-bun-workspaces.md) | Projects are bun workspaces holding workflows, contracts, and apps | Accepted |
+| [0033](0033-user-declared-secrets.md) | Projects declare their own secrets in code | Accepted |
 | [0034](0034-batch-write-scalability-and-claim-receipts.md) | Batch admission counters, concurrent sinks, and claim receipts | Accepted |
+| [0035](0035-app-entity-and-build-pipeline.md) | App entity, build pipeline, and bundle storage | Accepted |
+| [0036](0036-app-authorization-and-audience.md) | App authorization: contract surface, frozen sets, audience identities | Accepted |
+| [0037](0037-app-guest-runtime-and-mount.md) | App guest runtime (`@catamorphic/app`) and host mount | Accepted |

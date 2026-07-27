@@ -1,5 +1,6 @@
 import type { PluginResolver, ResolvedPlugin } from "@catamorphic/plugins";
 import type { RunPluginPayload } from "@catamorphic/sandbox";
+import type { Identity } from "../identity.js";
 import type { PluginsService } from "./plugins-service.js";
 import type { SecretEnvironment, SecretsService } from "./secrets-service.js";
 
@@ -22,15 +23,17 @@ export class RunPluginsLoader {
   ) {}
 
   async load(opts: {
+    identity: Identity;
     projectId: string;
     environment: SecretEnvironment;
   }): Promise<RunPluginBundle> {
-    const { projectId, environment } = opts;
+    const { identity, projectId, environment } = opts;
     const attached = await this.plugins.loadAttachedResolved(projectId);
     const payloads = await Promise.all(
       attached.map((plugin) => this.buildPayload(plugin)),
     );
     const { values, missingRequired } = await this.secrets.loadForRun({
+      identity,
       projectId,
       environment,
     });

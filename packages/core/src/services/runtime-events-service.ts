@@ -6,6 +6,7 @@ import type {
 } from "@catamorphic/sandbox";
 import { RuntimeEventReportingError } from "@catamorphic/sandbox";
 import type { Kysely, Transaction } from "kysely";
+import { sql } from "kysely";
 
 const tracer = getTracer("@catamorphic/core");
 
@@ -215,7 +216,7 @@ async function ingestEvents(args: {
         sequence: event.sequence,
         attempt: event.attempt,
         type: event.type,
-        payload,
+        payload: jsonbColumn(payload),
         created_at: new Date(event.timestamp),
       })),
     )
@@ -303,7 +304,7 @@ async function insertStartedStep(args: {
       occurrence: args.event.occurrence,
       name: args.event.name,
       status: "running",
-      input,
+      input: jsonbColumn(input),
       attempt: args.event.attempt,
       started_at: args.timestamp,
     })
@@ -319,7 +320,7 @@ async function insertStartedStep(args: {
     .updateTable("workflow_run_steps")
     .set({
       name: args.event.name,
-      input,
+      input: jsonbColumn(input),
       attempt: args.event.attempt,
       started_at: args.timestamp,
     })
@@ -358,7 +359,7 @@ async function upsertTerminalStep(args: {
       occurrence: args.event.occurrence,
       name: args.event.name,
       status,
-      output,
+      output: jsonbColumn(output),
       error,
       attempt: args.event.attempt,
       started_at: args.timestamp,
@@ -412,7 +413,7 @@ async function upsertTerminalStep(args: {
     .set({
       name: args.event.name,
       status,
-      output,
+      output: jsonbColumn(output),
       error,
       attempt: args.event.attempt,
       completed_at: args.timestamp,
@@ -511,6 +512,15 @@ function validateEvent(event: RuntimeInvocationEvent): void {
   ) {
     throw new Error("Runtime event has invalid identity or timestamp");
   }
+}
+
+/**
+ * jsonb parameters must be sent as JSON text: node-postgres serializes JS
+ * arrays as Postgres array literals, so a bare-array value (a step returning
+ * an array) fails with "invalid input syntax for type json".
+ */
+function jsonbColumn(value: Json) {
+  return sql<Json>`${JSON.stringify(value)}::jsonb`;
 }
 
 function toJson(value: unknown): Json {

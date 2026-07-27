@@ -5,6 +5,8 @@ export type {
 export { AgentChatDock } from "./agent-chat-dock.js";
 export type { AIBarProps } from "./ai-bar.js";
 export { AIBar } from "./ai-bar.js";
+export type { AppMountProps } from "./app-mount.js";
+export { AppMount } from "./app-mount.js";
 export { WorkflowCanvas } from "./canvas.js";
 export type {
   CodeEditorRenderProps,

@@ -21,17 +21,21 @@ describe("ProjectManager", () => {
     await fs.rm(tmpDir, { recursive: true, force: true });
   });
 
-  it("create initializes a repo with package.json, tsconfig.json, and initial commit", async () => {
+  it("create initializes a workspace repo with contracts, workflows, and initial commit", async () => {
     const repo = await manager.create(TENANT, PROJECT, {
       name: "test-project",
     });
 
     const files = await repo.listFiles();
     expect(files).toContain("package.json");
-    expect(files).toContain("tsconfig.json");
+    expect(files).toContain("contracts/package.json");
+    expect(files).toContain("contracts/src/index.ts");
+    expect(files).toContain("workflows/package.json");
+    expect(files).toContain("workflows/tsconfig.json");
 
     const pkg = JSON.parse(await repo.readFile("package.json"));
     expect(pkg.name).toBe("test-project");
+    expect(pkg.workspaces).toEqual(["contracts", "workflows", "apps/*"]);
 
     const commits = await repo.log();
     expect(commits).toHaveLength(1);

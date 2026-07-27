@@ -1,3 +1,65 @@
+/**
+ * Workspace roots inside a user project. A project is a bun workspace holding
+ * backend workflows and frontend apps in one repo; `contracts` carries only
+ * types and is the sole package both sides may depend on.
+ */
+export const WORKFLOW_SOURCE_ROOT = "workflows";
+export const CONTRACTS_SOURCE_ROOT = "contracts";
+export const APP_SOURCE_ROOT = "apps";
+
+/** Guest runtime package; frontend-only, never resolvable in execution installs. */
+export const APP_RUNTIME_PACKAGE = "@catamorphic/app";
+
+/**
+ * Drops frontend app sources from a project file set, and strips the
+ * frontend-only `@catamorphic/app` dependency from remaining manifests
+ * (contracts declares it for types). Apps never execute in a workflow
+ * sandbox, so excluding them keeps app edits from invalidating the execution
+ * artifact digest and keeps frontend dependencies out of the execution
+ * sandbox — including from its `bun install`, where an unresolvable
+ * registry-less package would fail the run.
+ */
+export function executionFiles(
+  files: Record<string, string>,
+): Record<string, string> {
+  return Object.fromEntries(
+    Object.entries(files)
+      .filter(
+        ([filePath]) =>
+          !filePath.replace(/^\/+/, "").startsWith(`${APP_SOURCE_ROOT}/`),
+      )
+      .map(([filePath, content]) => [
+        filePath,
+        filePath.endsWith("package.json")
+          ? stripAppRuntimeDependency(content)
+          : content,
+      ]),
+  );
+}
+
+function stripAppRuntimeDependency(packageJson: string): string {
+  if (!packageJson.includes(APP_RUNTIME_PACKAGE)) return packageJson;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(packageJson);
+  } catch {
+    return packageJson;
+  }
+  if (typeof parsed !== "object" || parsed === null) return packageJson;
+  const manifest = parsed as Record<string, unknown>;
+  for (const section of [
+    "dependencies",
+    "devDependencies",
+    "optionalDependencies",
+  ]) {
+    const deps = manifest[section];
+    if (typeof deps === "object" && deps !== null) {
+      delete (deps as Record<string, unknown>)[APP_RUNTIME_PACKAGE];
+    }
+  }
+  return JSON.stringify(manifest, null, 2);
+}
+
 export type WorkflowNodeType =
   | "trigger"
   | "source"
@@ -197,5 +259,38 @@ export interface ParseError {
 
 export interface ProjectParseResult {
   workflows: DiscoveredWorkflow[];
+  secrets: DeclaredSecret[];
+  /**
+   * The app-facing contract surface, when `workflows/src/app-api.ts` exists.
+   * Property names on the exported contract object become the callable set
+   * apps are authorized against.
+   */
+  appApi: AppApiSurface | null;
   errors: ParseError[];
+}
+
+/** Conventional location of the app contract surface inside a project. */
+export const APP_API_SOURCE_PATH = "workflows/src/app-api.ts";
+
+export interface AppApiSurface {
+  filePath: string;
+  entries: AppApiEntry[];
+}
+
+export interface AppApiEntry {
+  /** Name apps call — the property name on the contract object. */
+  exposedName: string;
+  /** The workflow function it resolves to. */
+  workflowName: string;
+  capabilities: WorkflowCapabilities;
+}
+
+/** A secret declared in project code via `defineSecrets({ ... })`. */
+export interface DeclaredSecret {
+  name: string;
+  label?: string;
+  description?: string;
+  required: boolean;
+  default?: string;
+  filePath: string;
 }

@@ -65,6 +65,7 @@ export {
 import type { WorkflowSummary as CoreWorkflowSummary } from "@catamorphic/core";
 
 export type WorkflowCapabilities = CoreWorkflowSummary["capabilities"];
+export type { AppBundleStore } from "@catamorphic/core";
 export type { DB } from "@catamorphic/db";
 export { createDatabase, migrateToLatest } from "@catamorphic/db";
 export {

@@ -67,6 +67,32 @@ export interface AgentSessions {
   updated_at: Generated<Timestamp>;
 }
 
+export interface Apps {
+  created_at: Generated<Timestamp>;
+  id: Generated<string>;
+  name: string;
+  project_id: string;
+  updated_at: Generated<Timestamp>;
+}
+
+export interface AppVersions {
+  allowed_workflows: Json | null;
+  app_id: string;
+  built_by_external_user_id: string;
+  bundle_bytes: Int8 | null;
+  bundle_key: string | null;
+  commit_sha: string | null;
+  created_at: Generated<Timestamp>;
+  css_key: string | null;
+  error: string | null;
+  id: Generated<string>;
+  is_active: Generated<boolean>;
+  kind: string;
+  published_at: Timestamp | null;
+  ready_at: Timestamp | null;
+  status: Generated<string>;
+}
+
 export interface BatchExecutionStates {
   completed_count: Generated<Int8>;
   created_at: Generated<Timestamp>;
@@ -77,6 +103,7 @@ export interface BatchExecutionStates {
   run_id: string;
   sink_artifact: Json | null;
   sink_completed_chunks: Generated<Int8>;
+  sink_concurrency: Generated<number>;
   sink_state: Json | null;
   sink_state_present: Generated<boolean>;
   sink_total_chunks: Generated<Int8>;
@@ -292,6 +319,17 @@ export interface RateReservationBuckets {
   updated_at: Generated<Timestamp>;
 }
 
+export interface TenantAppPolicies {
+  allowed_network_origins: Generated<Json>;
+  apps_enabled: Generated<boolean>;
+  created_at: Generated<Timestamp>;
+  max_apps_per_project: number | null;
+  max_bundle_bytes: Int8 | null;
+  tenant_id: string;
+  updated_at: Generated<Timestamp>;
+  workflow_allowlist: Json | null;
+}
+
 export interface TenantExecutionPolicies {
   created_at: Generated<Timestamp>;
   jobs_enabled: Generated<boolean>;
@@ -414,6 +452,8 @@ export interface DB {
   active_run_invocations: ActiveRunInvocations;
   agent_messages: AgentMessages;
   agent_sessions: AgentSessions;
+  app_versions: AppVersions;
+  apps: Apps;
   batch_execution_states: BatchExecutionStates;
   batch_item_steps: BatchItemSteps;
   batch_items: BatchItems;
@@ -428,6 +468,7 @@ export interface DB {
   project_secrets: ProjectSecrets;
   projects: Projects;
   rate_reservation_buckets: RateReservationBuckets;
+  tenant_app_policies: TenantAppPolicies;
   tenant_execution_policies: TenantExecutionPolicies;
   tenants: Tenants;
   workflow_pauses: WorkflowPauses;

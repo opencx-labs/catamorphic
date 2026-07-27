@@ -8,11 +8,13 @@ describe("customer feedback batch template", () => {
     const template = findTemplate("customer-feedback-analysis");
     if (!template) throw new Error("Customer feedback template is missing");
 
-    expect(template.files["src/batch.ts"]).toBeUndefined();
-    expect(template.files["src/customer-feedback.ts"]).toContain(
+    expect(template.files["workflows/src/batch.ts"]).toBeUndefined();
+    expect(template.files["workflows/src/customer-feedback.ts"]).toContain(
       'from "@catamorphic/workflow"',
     );
-    expect(JSON.parse(template.files["package.json"] ?? "{}")).toMatchObject({
+    expect(
+      JSON.parse(template.files["workflows/package.json"] ?? "{}"),
+    ).toMatchObject({
       dependencies: {
         "@catamorphic/workflow": WORKFLOW_PACKAGE_VERSION,
       },

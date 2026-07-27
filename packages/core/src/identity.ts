@@ -15,6 +15,20 @@
 export interface Identity {
   tenantId: string;
   externalUserId: string;
+  /**
+   * Present when this request reaches catamorphic through a published app
+   * rather than the project surface. An audience-carrying identity may invoke
+   * exactly the workflows frozen into that app version and nothing else —
+   * no project reads, no file writes, no deploys. The host decides which of
+   * its users get an audience-scoped identity (app viewers) versus a full one
+   * (project builders); catamorphic only enforces the boundary.
+   */
+  appAudience?: AppAudience;
+}
+
+export interface AppAudience {
+  appId: string;
+  appVersionId: string;
 }
 
 export type TenantId = string;

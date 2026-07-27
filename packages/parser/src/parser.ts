@@ -20,9 +20,12 @@ import {
 } from "ts-morph";
 import { extractJsDocMetadata, extractParameterInfo } from "./jsdoc.js";
 import type {
+  AppApiEntry,
+  AppApiSurface,
   BatchExecutionDescriptor,
   BoundaryExecutionDescriptor,
   BoundaryRateLimitDescriptor,
+  DeclaredSecret,
   DiscoveredWorkflow,
   ParameterInfo,
   ParseError,
@@ -35,6 +38,11 @@ import type {
   WorkflowEdge,
   WorkflowGraph,
   WorkflowNode,
+} from "./types.js";
+import {
+  APP_API_SOURCE_PATH,
+  APP_SOURCE_ROOT,
+  WORKFLOW_SOURCE_ROOT,
 } from "./types.js";
 
 let nodeCounter = 0;
@@ -1366,17 +1374,27 @@ type FoundWorkflow =
   | FoundDefinedWorkflow
   | FoundObsoleteBatchWorkflow;
 
-/** Matches app convention: `src/<kebab>.ts` for a workflow identifier. */
+/** Matches project convention: `workflows/src/<kebab>.ts` for a workflow identifier. */
 export function defaultWorkflowSourcePath(workflowName: string): string {
   const fileSafe = workflowName
     .replace(/([a-z0-9])([A-Z])/g, "$1-$2")
     .replace(/[^a-zA-Z0-9-]/g, "-")
     .toLowerCase();
-  return `src/${fileSafe}.ts`;
+  return `${WORKFLOW_SOURCE_ROOT}/src/${fileSafe}.ts`;
 }
 
 function normalizeProjectPath(p: string): string {
   return p.replace(/\\/g, "/").replace(/^\/+/, "");
+}
+
+/**
+ * Frontend app sources are excluded from workflow parsing. Step functions are
+ * collected into one flat name-keyed map, so an app-side function sharing a
+ * name with a step would otherwise override it in both the rendered graph and
+ * the execution transform.
+ */
+function isAppSourcePath(filePath: string): boolean {
+  return normalizeProjectPath(filePath).startsWith(`${APP_SOURCE_ROOT}/`);
 }
 
 function projectPathsEqual(a: string, b: string): boolean {
@@ -2464,6 +2482,7 @@ function createMultiFileProject(files: Record<string, string>): Project {
   const seen = new Set<string>();
   for (const [filePath, content] of Object.entries(files)) {
     if (!filePath.endsWith(".ts") && !filePath.endsWith(".tsx")) continue;
+    if (isAppSourcePath(filePath)) continue;
     const key = normalizePath(filePath);
     if (seen.has(key)) continue;
     seen.add(key);
@@ -2549,7 +2568,258 @@ export function parseProject(
     }
   }
 
-  return { workflows: discovered, errors };
+  const secrets = findDeclaredSecrets(sourceFiles, errors);
+  const appApi = resolveAppApi({
+    sourceFiles,
+    workflows: discovered,
+    errors,
+  });
+
+  return { workflows: discovered, secrets, appApi, errors };
+}
+
+/**
+ * Resolves the app-facing contract surface: `workflows/src/app-api.ts` exports
+ * an object literal (conventionally `appApi`) whose property values reference
+ * workflow functions. The property names become the callable set apps are
+ * authorized against, so resolution is strict — every value must resolve, via
+ * ts-morph bindings rather than text matching, to a workflow discovered in
+ * this parse. Anything else is an error, not a skip: an entry that silently
+ * failed to resolve would silently widen or narrow an authorization surface.
+ */
+function resolveAppApi(opts: {
+  sourceFiles: readonly SourceFile[];
+  workflows: readonly DiscoveredWorkflow[];
+  errors: ParseError[];
+}): AppApiSurface | null {
+  const appApiFile = opts.sourceFiles.find((sf) =>
+    projectPathsEqual(sf.getFilePath(), APP_API_SOURCE_PATH),
+  );
+  if (!appApiFile) return null;
+  const filePath = normalizePath(appApiFile.getFilePath());
+
+  const surfaces: AppApiEntry[][] = [];
+  for (const statement of appApiFile.getVariableStatements()) {
+    if (!statement.isExported()) continue;
+    for (const declaration of statement.getDeclarations()) {
+      const initializer = declaration.getInitializer();
+      if (!initializer) continue;
+      const literal = Node.isObjectLiteralExpression(initializer)
+        ? initializer
+        : Node.isSatisfiesExpression(initializer) &&
+            Node.isObjectLiteralExpression(initializer.getExpression())
+          ? initializer.getExpression()
+          : undefined;
+      if (!literal || !Node.isObjectLiteralExpression(literal)) continue;
+      const entries = collectAppApiEntries({
+        literal,
+        workflows: opts.workflows,
+        filePath,
+        errors: opts.errors,
+      });
+      if (entries) surfaces.push(entries);
+    }
+  }
+
+  if (surfaces.length === 0) {
+    opts.errors.push({
+      file: filePath,
+      message:
+        "app-api.ts must export an object literal mapping names to workflow functions.",
+    });
+    return null;
+  }
+  if (surfaces.length > 1) {
+    opts.errors.push({
+      file: filePath,
+      message:
+        "app-api.ts must export exactly one contract object; found several.",
+    });
+    return null;
+  }
+  const entries = surfaces[0] ?? [];
+  return { filePath, entries };
+}
+
+function collectAppApiEntries(opts: {
+  literal: ObjectLiteralExpression;
+  workflows: readonly DiscoveredWorkflow[];
+  filePath: string;
+  errors: ParseError[];
+}): AppApiEntry[] | null {
+  const byName = new Map(
+    opts.workflows.map((workflow) => [workflow.functionName, workflow]),
+  );
+  const entries: AppApiEntry[] = [];
+  let failed = false;
+
+  for (const property of opts.literal.getProperties()) {
+    let exposedName: string | undefined;
+    let valueNode: Node | undefined;
+    let shorthand = false;
+    if (Node.isShorthandPropertyAssignment(property)) {
+      exposedName = property.getName();
+      valueNode = property.getNameNode();
+      shorthand = true;
+    } else if (Node.isPropertyAssignment(property)) {
+      exposedName = readPropertyName(property.getNameNode());
+      valueNode = property.getInitializer();
+    }
+    if (!exposedName || !valueNode || !Node.isIdentifier(valueNode)) {
+      opts.errors.push({
+        file: opts.filePath,
+        message:
+          "app-api.ts entries must be plain identifier references to workflow functions.",
+      });
+      failed = true;
+      continue;
+    }
+
+    // Follow the binding to its declaration; import specifiers resolve
+    // across files, so a renamed import still lands on the real function.
+    const workflowName = resolveWorkflowBinding(valueNode, byName, shorthand);
+    if (!workflowName) {
+      opts.errors.push({
+        file: opts.filePath,
+        message: `app-api.ts entry '${exposedName}' does not resolve to a workflow in this project.`,
+      });
+      failed = true;
+      continue;
+    }
+    const workflow = byName.get(workflowName);
+    if (!workflow) {
+      failed = true;
+      continue;
+    }
+    entries.push({
+      exposedName,
+      workflowName,
+      capabilities: workflow.capabilities,
+    });
+  }
+
+  return failed ? null : entries;
+}
+
+function resolveWorkflowBinding(
+  identifier: Node,
+  workflowsByName: ReadonlyMap<string, DiscoveredWorkflow>,
+  shorthand: boolean,
+): string | undefined {
+  if (!Node.isIdentifier(identifier)) return undefined;
+  // In `{ listOrders }` the identifier's own symbol is the *property*; the
+  // value binding lives behind the checker's shorthand-assignment lookup.
+  const symbol = shorthand
+    ? identifier
+        .getProject()
+        .getTypeChecker()
+        .getShorthandAssignmentValueSymbol(identifier.getParent())
+    : identifier.getSymbol();
+  for (const declaration of symbol?.getDeclarations() ?? []) {
+    if (Node.isImportSpecifier(declaration)) {
+      // getNameNode() is the original exported name even when the import is
+      // aliased, and the workflow is discovered under its exported name.
+      const original = declaration.getNameNode().getText();
+      if (workflowsByName.has(original)) return original;
+      continue;
+    }
+    if (Node.isFunctionDeclaration(declaration)) {
+      const name = declaration.getName();
+      if (name && workflowsByName.has(name)) return name;
+      continue;
+    }
+    if (Node.isVariableDeclaration(declaration)) {
+      const name = declaration.getNameNode().getText();
+      if (workflowsByName.has(name)) return name;
+    }
+  }
+  return undefined;
+}
+
+/**
+ * Collects `defineSecrets({ ... })` declarations. Only statically analyzable
+ * object literals are recognized: the declared set gates which secret values a
+ * project may store, so a name that cannot be read from source must not be
+ * silently granted.
+ */
+function findDeclaredSecrets(
+  sourceFiles: readonly SourceFile[],
+  errors: ParseError[],
+): DeclaredSecret[] {
+  const byName = new Map<string, DeclaredSecret>();
+
+  for (const sf of sourceFiles) {
+    const filePath = normalizePath(sf.getFilePath());
+    for (const call of sf.getDescendantsOfKind(SyntaxKind.CallExpression)) {
+      const callee = call.getExpression();
+      if (!Node.isIdentifier(callee) || callee.getText() !== "defineSecrets") {
+        continue;
+      }
+      const [argument] = call.getArguments();
+      if (!argument || !Node.isObjectLiteralExpression(argument)) {
+        errors.push({
+          file: filePath,
+          message:
+            "defineSecrets requires an inline object literal so declared secrets can be read from source.",
+        });
+        continue;
+      }
+
+      for (const property of argument.getProperties()) {
+        if (!Node.isPropertyAssignment(property)) continue;
+        const name = readPropertyName(property.getNameNode());
+        if (!name) continue;
+        const initializer = property.getInitializer();
+        const options =
+          initializer && Node.isObjectLiteralExpression(initializer)
+            ? initializer
+            : undefined;
+        byName.set(name, {
+          name,
+          label: readStringProperty(options, "label"),
+          description: readStringProperty(options, "description"),
+          required: readBooleanProperty(options, "required") ?? true,
+          default: readStringProperty(options, "default"),
+          filePath,
+        });
+      }
+    }
+  }
+
+  return [...byName.values()].sort((left, right) =>
+    left.name.localeCompare(right.name),
+  );
+}
+
+function readPropertyName(nameNode: Node): string | undefined {
+  if (Node.isIdentifier(nameNode)) return nameNode.getText();
+  if (Node.isStringLiteral(nameNode)) return nameNode.getLiteralValue();
+  return undefined;
+}
+
+function readStringProperty(
+  object: ObjectLiteralExpression | undefined,
+  name: string,
+): string | undefined {
+  const property = object?.getProperty(name);
+  if (!property || !Node.isPropertyAssignment(property)) return undefined;
+  const initializer = property.getInitializer();
+  return initializer && Node.isStringLiteral(initializer)
+    ? initializer.getLiteralValue()
+    : undefined;
+}
+
+function readBooleanProperty(
+  object: ObjectLiteralExpression | undefined,
+  name: string,
+): boolean | undefined {
+  const property = object?.getProperty(name);
+  if (!property || !Node.isPropertyAssignment(property)) return undefined;
+  const initializer = property.getInitializer();
+  if (!initializer) return undefined;
+  if (initializer.getKind() === SyntaxKind.TrueKeyword) return true;
+  if (initializer.getKind() === SyntaxKind.FalseKeyword) return false;
+  return undefined;
 }
 
 export function parseWorkflowFromProject(

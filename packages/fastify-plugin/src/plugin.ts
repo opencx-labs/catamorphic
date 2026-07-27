@@ -1,4 +1,5 @@
 import type { CatamorphicCore } from "@catamorphic/core";
+import { AppAccessDeniedError } from "@catamorphic/core";
 import type { FastifyPluginAsync } from "fastify";
 import {
   serializerCompiler,
@@ -6,6 +7,7 @@ import {
 } from "fastify-type-provider-zod";
 import { HttpIdentityError } from "./http-identity.js";
 import { registerAgentRoutes } from "./routes/agent.js";
+import { registerAppRoutes } from "./routes/apps.js";
 import { registerPlaygroundRoutes } from "./routes/playground.js";
 import { registerPluginRoutes } from "./routes/plugins.js";
 import { registerProjectRoutes } from "./routes/projects.js";
@@ -55,6 +57,9 @@ export const catamorphicPlugin: FastifyPluginAsync<
     if (err instanceof HttpIdentityError) {
       return reply.status(400).send({ error: err.message });
     }
+    if (err instanceof AppAccessDeniedError) {
+      return reply.status(403).send({ error: err.message });
+    }
     app.log.error(err);
     return reply.send(err);
   });
@@ -65,6 +70,7 @@ export const catamorphicPlugin: FastifyPluginAsync<
   registerWorkflowRoutes(app, ctx);
   registerRunRoutes(app, ctx);
   registerAgentRoutes(app, ctx);
+  registerAppRoutes(app, ctx);
   registerTemplateRoutes(app);
   registerPluginRoutes(app, ctx);
   registerPlaygroundRoutes(app, ctx);

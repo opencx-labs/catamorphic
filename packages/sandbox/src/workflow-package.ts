@@ -4,6 +4,7 @@ import path from "node:path";
 import type { PluginPayload } from "./run-executor.js";
 
 export const WORKFLOW_PACKAGE_NAME = "@catamorphic/workflow";
+export const APP_PACKAGE_NAME = "@catamorphic/app";
 
 export interface WorkflowPackagePayload extends PluginPayload {
   version: string;
@@ -22,7 +23,23 @@ export async function resolveWorkflowPackageFallback(args: {
 export function removeWorkflowPackageDependency(args: {
   packageJson: string;
 }): string {
+  return removePackageDependencies({
+    packageJson: args.packageJson,
+    packageNames: [WORKFLOW_PACKAGE_NAME],
+  });
+}
+
+/**
+ * Strips locally-provided packages from a package.json so `bun install` does
+ * not try (and fail) to resolve them from the registry; their payloads are
+ * uploaded into node_modules instead.
+ */
+export function removePackageDependencies(args: {
+  packageJson: string;
+  packageNames: readonly string[];
+}): string {
   const parsed = parseJsonObject(args.packageJson);
+  const remove = new Set(args.packageNames);
   const dependencySections = new Set([
     "dependencies",
     "optionalDependencies",
@@ -36,12 +53,41 @@ export function removeWorkflowPackageDependency(args: {
       key,
       value: Object.fromEntries(
         Object.entries(value).filter(
-          ([packageName]) => packageName !== WORKFLOW_PACKAGE_NAME,
+          ([packageName]) => !remove.has(packageName),
         ),
       ),
     });
   });
   return JSON.stringify(Object.fromEntries(entries), null, 2);
+}
+
+/**
+ * The @catamorphic/app runtime for in-sandbox app builds, read from the local
+ * install the same way the workflow fallback is. Uploaded into node_modules
+ * because the package is not published to a registry.
+ */
+export async function loadAppPackagePayload(): Promise<PluginPayload> {
+  const require = createRequire(import.meta.url);
+  const packageJsonPath = require.resolve(`${APP_PACKAGE_NAME}/package.json`);
+  const packageRoot = path.dirname(packageJsonPath);
+  const [packageJson, javascript, javascriptMap, types, typesMap] =
+    await Promise.all([
+      readFile(packageJsonPath, "utf8"),
+      readFile(path.join(packageRoot, "dist/index.js"), "utf8"),
+      readFile(path.join(packageRoot, "dist/index.js.map"), "utf8"),
+      readFile(path.join(packageRoot, "dist/index.d.ts"), "utf8"),
+      readFile(path.join(packageRoot, "dist/index.d.ts.map"), "utf8"),
+    ]);
+  return {
+    packageName: APP_PACKAGE_NAME,
+    files: {
+      "package.json": packageJson,
+      "dist/index.js": javascript,
+      "dist/index.js.map": javascriptMap,
+      "dist/index.d.ts": types,
+      "dist/index.d.ts.map": typesMap,
+    },
+  };
 }
 
 export async function loadWorkflowPackagePayload(): Promise<WorkflowPackagePayload> {

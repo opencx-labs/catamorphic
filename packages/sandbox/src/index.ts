@@ -69,7 +69,10 @@ export {
 } from "./types.js";
 export type { WorkflowPackagePayload } from "./workflow-package.js";
 export {
+  APP_PACKAGE_NAME,
+  loadAppPackagePayload,
   loadWorkflowPackagePayload,
+  removePackageDependencies,
   removeWorkflowPackageDependency,
   resolveWorkflowPackageFallback,
   WORKFLOW_PACKAGE_NAME,

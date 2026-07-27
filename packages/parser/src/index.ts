@@ -14,10 +14,13 @@ export {
   parseWorkflowFromProject,
 } from "./parser.js";
 export type {
+  AppApiEntry,
+  AppApiSurface,
   BatchExecutionDescriptor,
   BatchFailurePolicyDescriptor,
   BoundaryExecutionDescriptor,
   BoundaryRetryDescriptor,
+  DeclaredSecret,
   DiscoveredWorkflow,
   ParameterInfo,
   ParseError,
@@ -36,4 +39,12 @@ export type {
   WorkflowGraph,
   WorkflowNode,
   WorkflowNodeType,
+} from "./types.js";
+export {
+  APP_API_SOURCE_PATH,
+  APP_RUNTIME_PACKAGE,
+  APP_SOURCE_ROOT,
+  CONTRACTS_SOURCE_ROOT,
+  executionFiles,
+  WORKFLOW_SOURCE_ROOT,
 } from "./types.js";

@@ -1,0 +1,29 @@
+{
+  "name": "@catamorphic/app",
+  "version": "0.0.1",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "import": "./dist/index.js",
+      "types": "./dist/index.d.ts"
+    },
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "dist",
+    "package.json",
+    "README.md"
+  ],
+  "scripts": {
+    "build": "tsup && tsc --project tsconfig.json --noEmit false --emitDeclarationOnly",
+    "dev": "tsup --watch",
+    "test": "vitest run --config ../../vitest.config.ts",
+    "typecheck": "tsgo --project ./tsconfig.json"
+  },
+  "devDependencies": {
+    "@types/node": "^26.1.1",
+    "jsdom": "^29.1.1"
+  }
+}

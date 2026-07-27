@@ -1,35 +1,126 @@
 import type { DB } from "@catamorphic/db";
 import type { Kysely } from "kysely";
+import type { Identity } from "../identity.js";
+import { assertProjectSurface } from "./app-audience.js";
 import {
   type PluginsService,
   UndeclaredSecretError,
 } from "./plugins-service.js";
+import { ProjectNotFoundError } from "./projects-service.js";
 
 export interface SecretStatus {
   name: string;
   hasValue: boolean;
   updatedAt: string | null;
+  label?: string;
+  description?: string;
+  required: boolean;
+  /** Where the declaration came from, for UI grouping. */
+  source: "project" | "plugin";
 }
 
 export type SecretEnvironment = "test" | "production";
+
+interface DeclaredSecretEntry {
+  label?: string;
+  description?: string;
+  required: boolean;
+  default?: string;
+  source: "project" | "plugin";
+}
+
+/**
+ * Resolves the secrets a project declares in its own code via `defineSecrets`.
+ * Supplied by the host so this service stays free of git and parser concerns.
+ */
+export type ProjectSecretDeclarationsReader = (args: {
+  identity: Identity;
+  projectId: string;
+}) => Promise<
+  readonly {
+    name: string;
+    label?: string;
+    description?: string;
+    required: boolean;
+    default?: string;
+  }[]
+>;
 
 /**
  * Per-project secret store. Values are only read back through
  * {@link loadForRun}; the dashboard APIs expose presence metadata but never
  * the raw value.
+ *
+ * A secret must be declared before a value can be stored for it, either by an
+ * attached plugin's manifest or by the project's own `defineSecrets` call.
+ * Plugin declarations win on name conflict, since the plugin's code reads the
+ * value and its manifest states the contract.
  */
+async function requireTenantProject(
+  db: Kysely<DB>,
+  identity: Identity,
+  projectId: string,
+): Promise<void> {
+  const row = await db
+    .selectFrom("projects")
+    .where("id", "=", projectId)
+    .where("tenant_id", "=", identity.tenantId)
+    .select("id")
+    .executeTakeFirst();
+  if (!row) throw new ProjectNotFoundError(projectId);
+}
+
 export class SecretsService {
   constructor(
     private readonly db: Kysely<DB>,
-    private readonly plugins: PluginsService,
+    private readonly plugins?: PluginsService,
+    private readonly projectDeclarations?: ProjectSecretDeclarationsReader,
   ) {}
 
+  private async declaredSecrets(args: {
+    identity: Identity;
+    projectId: string;
+  }): Promise<Map<string, DeclaredSecretEntry>> {
+    const { identity, projectId } = args;
+    const declared = new Map<string, DeclaredSecretEntry>();
+
+    for (const secret of (await this.projectDeclarations?.({
+      identity,
+      projectId,
+    })) ?? []) {
+      declared.set(secret.name, {
+        label: secret.label,
+        description: secret.description,
+        required: secret.required,
+        default: secret.default,
+        source: "project",
+      });
+    }
+
+    for (const [name, secret] of (await this.plugins?.getDeclaredSecrets(
+      projectId,
+    )) ?? new Map()) {
+      declared.set(name, {
+        label: secret.label,
+        description: secret.description,
+        required: secret.required,
+        default: secret.default,
+        source: "plugin",
+      });
+    }
+
+    return declared;
+  }
+
   async list(opts: {
+    identity: Identity;
     projectId: string;
     environment: SecretEnvironment;
   }): Promise<SecretStatus[]> {
-    const { projectId, environment } = opts;
-    const declared = await this.plugins.getDeclaredSecrets(projectId);
+    assertProjectSurface(opts.identity);
+    const { identity, projectId, environment } = opts;
+    await requireTenantProject(this.db, identity, projectId);
+    const declared = await this.declaredSecrets({ identity, projectId });
     if (declared.size === 0) return [];
 
     const names = [...declared.keys()];
@@ -42,22 +133,33 @@ export class SecretsService {
       .execute();
 
     const byName = new Map(rows.map((r) => [r.name, r.updated_at]));
-    return names.map((name) => ({
-      name,
-      hasValue: byName.has(name),
-      updatedAt: byName.get(name)?.toISOString() ?? null,
-    }));
+    return names.map((name) => {
+      const entry = declared.get(name);
+      return {
+        name,
+        hasValue: byName.has(name),
+        updatedAt: byName.get(name)?.toISOString() ?? null,
+        label: entry?.label,
+        description: entry?.description,
+        required: entry?.required ?? true,
+        source: entry?.source ?? "project",
+      };
+    });
   }
 
   async upsert(opts: {
+    identity: Identity;
     projectId: string;
     environment: SecretEnvironment;
     name: string;
     value: string;
   }): Promise<SecretStatus> {
-    const { projectId, environment, name, value } = opts;
-    const declared = await this.plugins.getDeclaredSecrets(projectId);
-    if (!declared.has(name)) {
+    assertProjectSurface(opts.identity);
+    const { identity, projectId, environment, name, value } = opts;
+    await requireTenantProject(this.db, identity, projectId);
+    const declared = await this.declaredSecrets({ identity, projectId });
+    const entry = declared.get(name);
+    if (!entry) {
       throw new UndeclaredSecretError(name);
     }
 
@@ -79,15 +181,26 @@ export class SecretsService {
       )
       .execute();
 
-    return { name, hasValue: true, updatedAt: now.toISOString() };
+    return {
+      name,
+      hasValue: true,
+      updatedAt: now.toISOString(),
+      label: entry.label,
+      description: entry.description,
+      required: entry.required,
+      source: entry.source,
+    };
   }
 
   async delete(opts: {
+    identity: Identity;
     projectId: string;
     environment: SecretEnvironment;
     name: string;
   }): Promise<boolean> {
-    const { projectId, environment, name } = opts;
+    assertProjectSurface(opts.identity);
+    const { identity, projectId, environment, name } = opts;
+    await requireTenantProject(this.db, identity, projectId);
     const result = await this.db
       .deleteFrom("project_secrets")
       .where("project_id", "=", projectId)
@@ -99,19 +212,20 @@ export class SecretsService {
 
   /**
    * Materialize secret name/value pairs for run-time injection. Applies the
-   * `default` declared by the plugin manifest when the user hasn't set an
-   * explicit value. Required secrets with no value + no default are returned
-   * as missing so the caller can surface a clear error.
+   * declared `default` when the user hasn't set an explicit value. Required
+   * secrets with no value + no default are returned as missing so the caller
+   * can surface a clear error.
    */
   async loadForRun(opts: {
+    identity: Identity;
     projectId: string;
     environment: SecretEnvironment;
   }): Promise<{
     values: Record<string, string>;
     missingRequired: string[];
   }> {
-    const { projectId, environment } = opts;
-    const declared = await this.plugins.getDeclaredSecrets(projectId);
+    const { identity, projectId, environment } = opts;
+    const declared = await this.declaredSecrets({ identity, projectId });
     if (declared.size === 0) {
       return { values: {}, missingRequired: [] };
     }

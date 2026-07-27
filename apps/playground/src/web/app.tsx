@@ -6,10 +6,12 @@ import {
 } from "@catamorphic/react";
 import { useState } from "react";
 import { AgentChat } from "@/components/catamorphic/agent-chat.js";
+import { AppsScreen } from "./apps-screen.js";
 import { WorkflowScreen } from "./workflow-screen.js";
 
 export function App() {
   const [activeProjectId, setActiveProjectId] = useState<string | null>(null);
+  const [showApps, setShowApps] = useState(false);
   const [selection, setSelection] = useState<{
     projectId: string;
     workflowName: string;
@@ -25,6 +27,16 @@ export function App() {
       <header className="pg-header">
         <h1>Catamorphic Playground</h1>
         <span className="pg-badge">Cloudflare Sandbox + Artifacts</span>
+        {activeProjectId && (
+          <button
+            type="button"
+            className="pg-item"
+            style={{ marginLeft: "auto", width: "auto" }}
+            onClick={() => setShowApps((current) => !current)}
+          >
+            {showApps ? "Workflows" : "Apps"}
+          </button>
+        )}
       </header>
       <div className="pg-main">
         <Sidebar
@@ -36,7 +48,9 @@ export function App() {
           }
         />
         <main className="pg-editor-pane">
-          {selection ? (
+          {showApps && activeProjectId ? (
+            <AppsScreen key={activeProjectId} projectId={activeProjectId} />
+          ) : selection ? (
             <WorkflowScreen
               key={`${selection.projectId}/${selection.workflowName}`}
               projectId={selection.projectId}

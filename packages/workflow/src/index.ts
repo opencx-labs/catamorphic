@@ -36,6 +36,12 @@ export {
   validateKeyedBatchOutcomes,
 } from "./batch.js";
 export type {
+  SecretDeclaration,
+  SecretDeclarations,
+  Secrets,
+} from "./secrets.js";
+export { defineSecrets, MissingSecretError } from "./secrets.js";
+export type {
   BoundaryContext,
   BoundaryDefinition,
   BoundaryOptions,

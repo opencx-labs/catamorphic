@@ -231,12 +231,12 @@ describe("@catamorphic/db schema integration", () => {
       expect(batchColumnNames.has("batch_items.output_storage")).toBe(false);
       expect(batchColumnNames.has("batch_items.value_reference")).toBe(false);
       expect(batchColumnNames.has("batch_items.output_reference")).toBe(false);
-      expect(
-        batchColumnNames.has("batch_step_invocations.member_count"),
-      ).toBe(true);
-      expect(
-        batchColumnNames.has("batch_step_invocations.member_bytes"),
-      ).toBe(true);
+      expect(batchColumnNames.has("batch_step_invocations.member_count")).toBe(
+        true,
+      );
+      expect(batchColumnNames.has("batch_step_invocations.member_bytes")).toBe(
+        true,
+      );
       expect(batchColumnNames.has("batch_step_members.occurrence")).toBe(true);
       expect(batchColumnNames.has("batch_step_members.output_present")).toBe(
         true,

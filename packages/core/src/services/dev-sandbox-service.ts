@@ -3,6 +3,7 @@ import type {
   ProjectManager,
   ProjectRepo,
 } from "@catamorphic/git";
+import { WORKFLOW_SOURCE_ROOT } from "@catamorphic/parser";
 import type { SandboxProvider } from "@catamorphic/sandbox";
 import {
   resolveWorkflowPackageFallback,
@@ -72,7 +73,11 @@ export class DevSandboxService {
         );
       }
       const workflowPackage = await resolveWorkflowPackageFallback({
-        packageJson: await repo.readFile("package.json").catch(() => undefined),
+        packageJson:
+          (await repo
+            .readFile(`${WORKFLOW_SOURCE_ROOT}/package.json`)
+            .catch(() => undefined)) ??
+          (await repo.readFile("package.json").catch(() => undefined)),
       });
       await uploadPluginPayloads({
         provider: this.deps.provider,

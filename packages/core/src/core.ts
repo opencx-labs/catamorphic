@@ -9,6 +9,9 @@ import { instrumentSandboxProvider } from "@catamorphic/sandbox";
 import type { Kysely } from "kysely";
 import { AgentContextService } from "./services/agent-context-service.js";
 import { AgentSessionsService } from "./services/agent-sessions-service.js";
+import type { AppBundleStore } from "./services/app-bundle-store.js";
+import { AppPoliciesService } from "./services/app-policies-service.js";
+import { AppsService } from "./services/apps-service.js";
 import { BatchExecutionHandler } from "./services/batch-execution-handler.js";
 import { BoundaryExecutionHandler } from "./services/boundary-execution-handler.js";
 import { DbSandboxStore } from "./services/db-sandbox-store.js";
@@ -72,6 +75,14 @@ export interface CatamorphicCoreConfig {
      */
     autoStopMinutes?: number;
   };
+  /**
+   * Where built app bundles are stored (`S3ObjectStore` from `@catamorphic/s3`
+   * satisfies this). Apps require both this and `sandboxProvider`; without
+   * either, app build/publish surfaces are unavailable.
+   */
+  appBundleStore?: AppBundleStore;
+  /** Hard cap on a built app bundle (js + css). Defaults to 5 MiB. */
+  maxAppBundleBytes?: number;
 }
 
 /**
@@ -103,6 +114,8 @@ export class CatamorphicCore {
   readonly devSandboxes?: DevSandboxService;
   readonly agentContext?: AgentContextService;
   readonly agentSessions?: AgentSessionsService;
+  readonly apps?: AppsService;
+  readonly appPolicies: AppPoliciesService;
 
   constructor(config: CatamorphicCoreConfig) {
     this.db = config.db;
@@ -118,6 +131,19 @@ export class CatamorphicCore {
           store: new DbSandboxStore(this.db),
         })
       : undefined;
+
+    this.appPolicies = new AppPoliciesService(this.db);
+    this.apps =
+      this.sandboxProvider && this.devSandboxes && config.appBundleStore
+        ? new AppsService(this.db, {
+            projectManager: this.projectManager,
+            devSandboxes: this.devSandboxes,
+            provider: this.sandboxProvider,
+            bundleStore: config.appBundleStore,
+            policies: this.appPolicies,
+            maxBundleBytes: config.maxAppBundleBytes,
+          })
+        : undefined;
 
     this.projects = new ProjectsService(this.db, this.projectManager);
     this.workflows = new WorkflowsService(this.projectManager, this.projects);
@@ -147,7 +173,13 @@ export class CatamorphicCore {
 
     if (this.pluginResolver) {
       this.plugins = new PluginsService(this.db, this.pluginResolver);
-      this.secrets = new SecretsService(this.db, this.plugins);
+    }
+    // Secrets exist independently of plugins: a project declares its own with
+    // `defineSecrets` in code, and plugins may declare additional ones.
+    this.secrets = new SecretsService(this.db, this.plugins, (args) =>
+      this.workflows.listDeclaredSecrets(args),
+    );
+    if (this.plugins && this.pluginResolver) {
       this.runPluginsLoader = new RunPluginsLoader(
         this.plugins,
         this.secrets,
@@ -164,6 +196,7 @@ export class CatamorphicCore {
       coordinator.handleExhaustedJob(args),
     );
     this.runs = new RunsService(this.db, {
+      appPolicies: this.appPolicies,
       projectManager: this.projectManager,
       sandboxProvider: this.sandboxProvider,
       devSandboxes: this.devSandboxes,

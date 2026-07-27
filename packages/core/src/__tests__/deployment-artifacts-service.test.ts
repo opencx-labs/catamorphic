@@ -1,5 +1,6 @@
 import {
   EXECUTION_TRANSFORM_VERSION,
+  executionFiles,
   prepareWorkflowExecution,
 } from "@catamorphic/parser";
 import { DEPLOYMENT_RUNTIME_VERSION } from "@catamorphic/sandbox";
@@ -77,5 +78,32 @@ export async function plainChild({ value }: { value: string }) {
       runtimeVersion: DEPLOYMENT_RUNTIME_VERSION,
     });
     expect(parentIdentity.artifactDigest).toMatch(/^[0-9a-f]{64}$/);
+  });
+
+  it("is unchanged by frontend app sources", async () => {
+    const workflowFiles = {
+      "workflows/src/plain.ts": `
+export async function plain({ value }: { value: string }) {
+  "use workflow";
+  return finish({ value });
+}
+`,
+    };
+    const withApp = {
+      ...workflowFiles,
+      "apps/dashboard/src/main.tsx": "export const ui = 1;\n",
+      "apps/dashboard/package.json": '{ "name": "dashboard" }',
+    };
+
+    const baseline = await createDeploymentArtifactIdentity({
+      commitSha: "a".repeat(40),
+      files: executionFiles(workflowFiles),
+    });
+    const withAppIdentity = await createDeploymentArtifactIdentity({
+      commitSha: "a".repeat(40),
+      files: executionFiles(withApp),
+    });
+
+    expect(withAppIdentity).toEqual(baseline);
   });
 });

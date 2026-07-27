@@ -16,6 +16,7 @@ import {
   DURABLE_WORKFLOW_SKILL_PATH,
   SEED_SKILLS,
 } from "../templates.js";
+import { assertProjectSurface } from "./app-audience.js";
 import type { DevSandboxService } from "./dev-sandbox-service.js";
 import type { PluginsService } from "./plugins-service.js";
 import { ProjectNotFoundError } from "./projects-service.js";
@@ -686,6 +687,7 @@ export class AgentSessionsService {
     identity: Identity,
     projectId: string,
   ): Promise<void> {
+    assertProjectSurface(identity);
     const row = await this.db
       .selectFrom("projects")
       .where("id", "=", projectId)

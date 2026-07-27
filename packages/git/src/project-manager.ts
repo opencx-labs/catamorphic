@@ -4,8 +4,48 @@ import { push } from "./git-sync.js";
 import { ProjectRepoImpl } from "./project-repo.js";
 import type { ProjectRepo, RemoteBackend, StorageBackend } from "./types.js";
 
-const DEFAULT_PKG = (name: string) =>
-  JSON.stringify({ name, version: "0.1.0", private: true }, null, 2);
+/**
+ * Blank-project scaffold. A project is a bun workspace so one repo can hold
+ * backend workflows and frontend apps: `contracts` carries only types and is
+ * the sole package both sides depend on, which is what keeps workflow code
+ * (and anything it imports) out of a browser bundle.
+ */
+const DEFAULT_ROOT_PKG = (name: string) =>
+  JSON.stringify(
+    {
+      name,
+      version: "0.1.0",
+      private: true,
+      workspaces: ["contracts", "workflows", "apps/*"],
+    },
+    null,
+    2,
+  );
+
+const DEFAULT_CONTRACTS_PKG = JSON.stringify(
+  {
+    name: "@project/contracts",
+    version: "0.1.0",
+    private: true,
+    type: "module",
+    types: "./src/index.ts",
+    exports: { ".": { types: "./src/index.ts" } },
+  },
+  null,
+  2,
+);
+
+const DEFAULT_WORKFLOWS_PKG = JSON.stringify(
+  {
+    name: "@project/workflows",
+    version: "0.1.0",
+    private: true,
+    type: "module",
+    dependencies: { "@project/contracts": "workspace:*" },
+  },
+  null,
+  2,
+);
 
 const DEFAULT_TSCONFIG = JSON.stringify(
   {
@@ -22,6 +62,14 @@ const DEFAULT_TSCONFIG = JSON.stringify(
   null,
   2,
 );
+
+const DEFAULT_CONTRACTS_INDEX = `/**
+ * Shared types between workflows and apps. This package must never contain
+ * runtime code: apps bundle what they import, and a types-only package has no
+ * JavaScript to pull into the browser.
+ */
+export {};
+`;
 
 const SYSTEM_AUTHOR = {
   name: "Catamorphic",
@@ -114,10 +162,34 @@ export class ProjectManager {
 
     await fs.writeFile(
       path.join(repoPath, "package.json"),
-      DEFAULT_PKG(projectName),
+      DEFAULT_ROOT_PKG(projectName),
     );
-    await fs.writeFile(path.join(repoPath, "tsconfig.json"), DEFAULT_TSCONFIG);
-    await fs.mkdir(path.join(repoPath, "src"), { recursive: true });
+    await fs.mkdir(path.join(repoPath, "contracts", "src"), {
+      recursive: true,
+    });
+    await fs.writeFile(
+      path.join(repoPath, "contracts", "package.json"),
+      DEFAULT_CONTRACTS_PKG,
+    );
+    await fs.writeFile(
+      path.join(repoPath, "contracts", "tsconfig.json"),
+      DEFAULT_TSCONFIG,
+    );
+    await fs.writeFile(
+      path.join(repoPath, "contracts", "src", "index.ts"),
+      DEFAULT_CONTRACTS_INDEX,
+    );
+    await fs.mkdir(path.join(repoPath, "workflows", "src"), {
+      recursive: true,
+    });
+    await fs.writeFile(
+      path.join(repoPath, "workflows", "package.json"),
+      DEFAULT_WORKFLOWS_PKG,
+    );
+    await fs.writeFile(
+      path.join(repoPath, "workflows", "tsconfig.json"),
+      DEFAULT_TSCONFIG,
+    );
 
     if (opts?.initialFiles) {
       for (const [filePath, content] of Object.entries(opts.initialFiles)) {

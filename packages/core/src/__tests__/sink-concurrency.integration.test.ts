@@ -77,8 +77,7 @@ new BatchExecutionHandler(db, {
     const input = args.input as Record<string, unknown>;
     sinkCalls.push({
       operation: args.operation ?? "",
-      chunkKey:
-        typeof input.chunkKey === "string" ? input.chunkKey : undefined,
+      chunkKey: typeof input.chunkKey === "string" ? input.chunkKey : undefined,
       statePresent: Object.hasOwn(input, "state"),
     });
     if (args.operation === "inspect") {
@@ -294,9 +293,10 @@ describeIf("sink write concurrency", () => {
 
     // The window is bounded by concurrency: exactly 2 of 3 chunks enqueued.
     const firstWave = await claimSinkJobs();
-    expect(
-      firstWave.map((job) => payloadOf(job).operation).sort(),
-    ).toEqual(["write", "write"]);
+    expect(firstWave.map((job) => payloadOf(job).operation).sort()).toEqual([
+      "write",
+      "write",
+    ]);
     for (const job of firstWave) {
       expect((await runJob(job)).error).toBeUndefined();
     }
@@ -367,14 +367,10 @@ describeIf("sink write concurrency", () => {
 
     const [start] = await claimSinkJobs();
     const outcome = await runJob(start!);
-    expect(outcome.error).toContain(
-      "cannot declare concurrency > 1",
-    );
+    expect(outcome.error).toContain("cannot declare concurrency > 1");
     // The failure happened before initialize — the sink was never touched
     // beyond inspection.
-    expect(
-      sinkCalls.map((call) => call.operation),
-    ).toEqual(["inspect"]);
+    expect(sinkCalls.map((call) => call.operation)).toEqual(["inspect"]);
   }, 30_000);
 
   it("fails a chunk whose concurrent sink returns state anyway", async () => {

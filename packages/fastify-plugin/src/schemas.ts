@@ -39,6 +39,56 @@ export const PaginationQuerySchema = z.object({
   offset: z.coerce.number().int().min(0).default(0),
 });
 
+// --- Apps ---
+export const ProjectAppParamsSchema = ProjectIdParamsSchema.extend({
+  appName: z.string().regex(/^[a-z0-9][a-z0-9-]*$/),
+});
+
+export const ProjectAppVersionParamsSchema = ProjectIdParamsSchema.extend({
+  versionId: z.string().uuid(),
+});
+
+export const AppSummarySchema = z.object({
+  name: z.string(),
+  id: z.string().uuid().nullable(),
+  activeVersionId: z.string().uuid().nullable(),
+  publishedAt: z.string().datetime().nullable(),
+});
+
+export const AppVersionSchema = z.object({
+  id: z.string().uuid(),
+  appId: z.string().uuid(),
+  appName: z.string(),
+  kind: z.enum(["preview", "published"]),
+  status: z.enum(["building", "ready", "failed"]),
+  commitSha: z.string().nullable(),
+  bundleBytes: z.number().nullable(),
+  allowedWorkflows: z.array(z.string()).nullable(),
+  error: z.string().nullable(),
+  isActive: z.boolean(),
+  createdAt: z.string().datetime(),
+  readyAt: z.string().datetime().nullable(),
+  publishedAt: z.string().datetime().nullable(),
+});
+
+export const AppViewStateSchema = z.discriminatedUnion("state", [
+  z.object({ state: z.literal("not_found") }),
+  z.object({ state: z.literal("not_published") }),
+  z.object({
+    state: z.literal("ready"),
+    appId: z.string().uuid(),
+    versionId: z.string().uuid(),
+    code: z.string(),
+    css: z.string(),
+    allowedWorkflows: z.array(z.string()),
+  }),
+]);
+
+export const BuildAppSchema = z.object({
+  kind: z.enum(["preview", "published"]),
+  commitSha: z.string().optional(),
+});
+
 // --- Templates ---
 export const TemplateSchema = z.object({
   id: z.string(),
@@ -696,6 +746,10 @@ export const SecretStatusSchema = z.object({
   name: z.string(),
   hasValue: z.boolean(),
   updatedAt: z.string().datetime().nullable(),
+  label: z.string().optional(),
+  description: z.string().optional(),
+  required: z.boolean(),
+  source: z.enum(["project", "plugin"]),
 });
 
 export const UpsertSecretSchema = z.object({

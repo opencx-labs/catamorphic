@@ -6,7 +6,9 @@ import {
 } from "@catamorphic/git";
 import { getTracer, withSpan } from "@catamorphic/otel";
 import {
+  executionFiles,
   prepareWorkflowExecution,
+  WORKFLOW_SOURCE_ROOT,
   type WorkflowCapabilities,
   type WorkflowExecutionDescriptor,
   type WorkflowGraph,
@@ -26,6 +28,12 @@ import {
 } from "@catamorphic/sandbox";
 import type { Kysely, Selectable } from "kysely";
 import type { Identity } from "../identity.js";
+import {
+  AppAccessDeniedError,
+  assertProjectSurface,
+  assertWorkflowAllowed,
+} from "./app-audience.js";
+import type { AppPoliciesService } from "./app-policies-service.js";
 import type {
   DeploymentArtifact,
   DeploymentArtifactsService,
@@ -414,6 +422,7 @@ function isCorrelationKeyConflict(error: unknown): boolean {
 }
 
 interface RunsServiceDeps {
+  appPolicies?: AppPoliciesService;
   projectManager: ProjectManager;
   sandboxProvider?: SandboxProvider;
   devSandboxes?: DevSandboxService;
@@ -550,6 +559,7 @@ export class RunsService {
   }
 
   async listItems(args: ListBatchItemsInput): Promise<ListBatchItemsResult> {
+    assertProjectSurface(args.identity);
     await this.requireBatchScope(args);
     const limit = Math.max(1, Math.min(args.limit ?? 100, 500));
     const offset = Math.max(0, args.offset ?? 0);
@@ -598,6 +608,7 @@ export class RunsService {
   }
 
   async listItemSteps(args: ListBatchItemStepsInput): Promise<BatchItemStep[]> {
+    assertProjectSurface(args.identity);
     await this.requireBatchScope(args);
     const item = await this.db
       .selectFrom("batch_items")
@@ -743,6 +754,7 @@ export class RunsService {
   }
 
   async cancel(args: CancelRunInput): Promise<Run> {
+    assertProjectSurface(args.identity);
     const invocations = await this.deps.coordinator.cancel(args);
     await Promise.all(
       invocations.map((invocation) =>
@@ -753,6 +765,7 @@ export class RunsService {
   }
 
   async pause(args: PauseRunInput): Promise<Run> {
+    assertProjectSurface(args.identity);
     const outcome = await this.deps.coordinator.pauseOperator(args);
     if (outcome === "unavailable") {
       throw new RunCapabilityError("pauseProcessing", "pause");
@@ -761,6 +774,7 @@ export class RunsService {
   }
 
   async resume(args: ResumeRunInput): Promise<Run> {
+    assertProjectSurface(args.identity);
     const outcome = await this.deps.coordinator.resumeOperator(args);
     if (outcome === "unavailable") {
       throw new RunCapabilityError("resumeProcessing", "resume");
@@ -769,6 +783,7 @@ export class RunsService {
   }
 
   async resumePause(args: ResumeRunPauseInput): Promise<Run> {
+    assertProjectSurface(args.identity);
     await this.deps.coordinator.resumePause(args);
     return this.get(args);
   }
@@ -790,6 +805,7 @@ export class RunsService {
     idempotencyKey: string;
     value: Json;
   }): Promise<Run> {
+    assertProjectSurface(args.identity);
     const run = await this.findActiveByKey(args);
     if (!run) {
       throw new RunSignalNotFoundError(
@@ -836,6 +852,7 @@ export class RunsService {
     correlationKey: string;
     reason?: string;
   }): Promise<Run | null> {
+    assertProjectSurface(args.identity);
     const run = await this.findActiveByKey(args);
     if (!run) return null;
     return this.cancel({
@@ -931,7 +948,11 @@ export class RunsService {
     const source = await this.prepareProductionSource(args);
     if (!source.commitSha)
       throw new ProductionDeploymentNotFoundError(args.projectId);
-    const plugins = await this.loadPlugins(args.projectId, "production");
+    const plugins = await this.loadPlugins(
+      args.identity,
+      args.projectId,
+      "production",
+    );
     return this.deps.deploymentArtifacts.ensure({
       tenantId: args.identity.tenantId,
       projectId: args.projectId,
@@ -971,7 +992,7 @@ export class RunsService {
     if (!deploymentRuntime) throw new SandboxProviderNotConfiguredError();
     const [source, plugins, artifact] = await Promise.all([
       this.prepareProductionSource(args),
-      this.loadPlugins(args.projectId, "production"),
+      this.loadPlugins(args.identity, args.projectId, "production"),
       this.deps.deploymentArtifacts.get({ artifactId: args.artifactId }),
     ]);
     if (!artifact) {
@@ -1031,7 +1052,7 @@ export class RunsService {
     }
     const [source, plugins, artifact] = await Promise.all([
       this.prepareProductionSource(args),
-      this.loadPlugins(args.projectId, "production"),
+      this.loadPlugins(args.identity, args.projectId, "production"),
       this.deps.deploymentArtifacts.get({ artifactId: args.artifactId }),
     ]);
     const runtimePackagesForArtifact = runtimePackages({
@@ -1181,6 +1202,18 @@ export class RunsService {
         },
       },
       async (span) => {
+        if (args.identity.appAudience) {
+          // App viewers reach exactly the frozen workflow set, and only in
+          // production: test runs execute the builder's mutable dev tree.
+          if (args.mode !== "production") throw new AppAccessDeniedError();
+          await assertWorkflowAllowed({
+            db: this.db,
+            identity: args.identity,
+            projectId: args.projectId,
+            workflowName: args.workflowName,
+            policies: this.deps.appPolicies,
+          });
+        }
         const run = await this.triggerInner(args);
         span.setAttribute("catamorphic.run.id", run.id);
         span.setAttribute("catamorphic.run.status", run.status);
@@ -1229,7 +1262,11 @@ export class RunsService {
     if (args.mode === "test" && source.graph.execution.steps.length > 0) {
       throw new RunCapabilityError("persistedContinuations", "triggerTest");
     }
-    const plugins = await this.loadPlugins(args.projectId, args.mode);
+    const plugins = await this.loadPlugins(
+      args.identity,
+      args.projectId,
+      args.mode,
+    );
     const input = args.input ?? null;
     const runId = crypto.randomUUID();
     const provenance: RunProvenance = source.commitSha
@@ -1404,7 +1441,7 @@ export class RunsService {
       throw new Error("Defined workflow was dispatched as a plain workflow");
     }
     const [plugins, artifact] = await Promise.all([
-      this.loadPlugins(row.project_id, "production"),
+      this.loadPlugins(identity, row.project_id, "production"),
       this.deps.deploymentArtifacts.get({
         artifactId: row.deployment_artifact_id,
       }),
@@ -1816,9 +1853,14 @@ export class RunsService {
     return hit;
   }
 
-  private async loadPlugins(projectId: string, mode: RunMode) {
+  private async loadPlugins(
+    identity: Identity,
+    projectId: string,
+    mode: RunMode,
+  ) {
     if (!this.deps.runPluginsLoader) return undefined;
     const plugins = await this.deps.runPluginsLoader.load({
+      identity,
       projectId,
       environment: mode,
     });
@@ -1895,8 +1937,9 @@ async function prepareSource(args: {
   originalFiles: Record<string, string>;
   commitSha: string | null;
 }): Promise<PreparedSource> {
+  const files = executionFiles(args.files);
   const prepared = prepareWorkflowExecution({
-    files: args.files,
+    files,
     workflowName: args.workflowName,
   });
   if (!prepared?.graph.filePath) {
@@ -1904,14 +1947,24 @@ async function prepareSource(args: {
   }
   return {
     files: prepared.files,
-    originalFiles: args.originalFiles,
+    originalFiles: executionFiles(args.originalFiles),
     workflowFile: prepared.graph.filePath,
     graph: prepared.graph,
     commitSha: args.commitSha,
     workflowPackage: await resolveWorkflowPackageFallback({
-      packageJson: args.files["package.json"],
+      packageJson: workflowPackageJson(files),
     }),
   };
+}
+
+/**
+ * The workflow package declaration lives in the workflows workspace member;
+ * projects predating the workspace layout keep it at the root.
+ */
+function workflowPackageJson(
+  files: Record<string, string>,
+): string | undefined {
+  return files[`${WORKFLOW_SOURCE_ROOT}/package.json`] ?? files["package.json"];
 }
 
 function mapRun(args: {

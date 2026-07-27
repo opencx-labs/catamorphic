@@ -8,6 +8,7 @@ import {
   type ProjectTemplate,
   SEED_SKILLS,
 } from "../templates.js";
+import { assertProjectSurface } from "./app-audience.js";
 
 const tracer = getTracer("@catamorphic/core");
 
@@ -86,6 +87,7 @@ export class ProjectsService {
     identity: Identity,
     input: CreateProjectInput,
   ): Promise<Project> {
+    assertProjectSurface(identity);
     return withSpan(
       {
         tracer,
@@ -146,6 +148,7 @@ export class ProjectsService {
     identity: Identity,
     input: ListProjectsInput = {},
   ): Promise<ListProjectsResult> {
+    assertProjectSurface(identity);
     const { tenantId } = identity;
     const limit = input.limit ?? 50;
     const offset = input.offset ?? 0;
@@ -279,6 +282,7 @@ export class ProjectsService {
     identity: Identity,
     projectId: string,
   ): Promise<ProjectRow> {
+    assertProjectSurface(identity);
     const row = await this.db
       .selectFrom("projects")
       .where("id", "=", projectId)
@@ -293,6 +297,7 @@ export class ProjectsService {
     identity: Identity,
     projectId: string,
   ): Promise<void> {
+    assertProjectSurface(identity);
     const row = await this.db
       .selectFrom("projects")
       .where("id", "=", projectId)

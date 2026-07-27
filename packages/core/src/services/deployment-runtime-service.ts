@@ -1,5 +1,8 @@
 import { getTracer, withSpan } from "@catamorphic/otel";
-import { EXECUTION_TRANSFORM_VERSION } from "@catamorphic/parser";
+import {
+  EXECUTION_TRANSFORM_VERSION,
+  WORKFLOW_SOURCE_ROOT,
+} from "@catamorphic/parser";
 import {
   type CloneSource,
   DEPLOYMENT_RUNTIME_VERSION,
@@ -555,8 +558,15 @@ export class DeploymentRuntimeService {
     const workflowFallback = args.plugins?.find(
       (plugin) => plugin.packageName === WORKFLOW_PACKAGE_NAME,
     );
+    // The workflow package is declared by the workflows workspace member;
+    // projects predating the workspace layout keep it at the repo root.
+    const packageJsonPath =
+      `${WORKFLOW_SOURCE_ROOT}/package.json` in args.files ||
+      `${WORKFLOW_SOURCE_ROOT}/package.json` in args.originalFiles
+        ? `${WORKFLOW_SOURCE_ROOT}/package.json`
+        : "package.json";
     const packageJson =
-      args.files["package.json"] ?? args.originalFiles["package.json"];
+      args.files[packageJsonPath] ?? args.originalFiles[packageJsonPath];
     if (
       workflowFallback &&
       ("bun.lock" in args.files ||
@@ -577,7 +587,7 @@ export class DeploymentRuntimeService {
       await this.deps.provider.uploadFiles(
         args.sandboxId,
         {
-          "package.json": removeWorkflowPackageDependency({ packageJson }),
+          [packageJsonPath]: removeWorkflowPackageDependency({ packageJson }),
         },
         args.projectDirectory,
       );
@@ -595,7 +605,7 @@ export class DeploymentRuntimeService {
     if (workflowFallback && packageJson) {
       await this.deps.provider.uploadFiles(
         args.sandboxId,
-        { "package.json": packageJson },
+        { [packageJsonPath]: packageJson },
         args.projectDirectory,
       );
     }
