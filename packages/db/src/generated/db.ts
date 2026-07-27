@@ -222,6 +222,7 @@ export interface ExecutionJobs {
   completed_at: Timestamp | null;
   created_at: Generated<Timestamp>;
   dedupe_key: string | null;
+  exhaustion_handled: Generated<boolean>;
   exhaustion_handled_at: Timestamp | null;
   heartbeat_at: Timestamp | null;
   id: Generated<string>;

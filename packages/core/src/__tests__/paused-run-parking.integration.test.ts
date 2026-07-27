@@ -124,6 +124,79 @@ describeIf("paused run job parking", () => {
     expect(claimed.every((job) => job.workflowRunId === runId)).toBe(true);
   });
 
+  it("wakes a parked release when the run resumed mid-flight", async () => {
+    const runId = await createRun("paused");
+    const job = await jobs.enqueue({
+      tenantId,
+      workflowRunId: runId,
+      kind: "batch_item",
+      payload: {},
+    });
+    const [claimed] = await jobs.claim({
+      workerId: "worker-3",
+      kinds: ["batch_item"],
+      limit: 5,
+    });
+    expect(claimed?.id).toBe(job.id);
+    if (!claimed) return;
+
+    // The run resumes while the job is still leased: the resume's wake only
+    // reaches pending jobs, so the release must notice and not park.
+    await db
+      .updateTable("workflow_runs")
+      .set({ status: "running" })
+      .where("id", "=", runId)
+      .execute();
+    await jobs.release({
+      jobId: claimed.id,
+      workerId: "worker-3",
+      leaseToken: claimed.leaseToken ?? "",
+      leaseGeneration: claimed.leaseGeneration,
+      availableAt: new Date(Date.now() + 60 * 60 * 1_000),
+      parkedForPausedRunId: runId,
+    });
+
+    const next = await jobs.claim({
+      workerId: "worker-3",
+      kinds: ["batch_item"],
+      limit: 5,
+    });
+    expect(next.map((row) => row.id)).toEqual([job.id]);
+  });
+
+  it("keeps a parked release parked while the run stays paused", async () => {
+    const runId = await createRun("paused");
+    const job = await jobs.enqueue({
+      tenantId,
+      workflowRunId: runId,
+      kind: "batch_item",
+      payload: {},
+    });
+    const [claimed] = await jobs.claim({
+      workerId: "worker-4",
+      kinds: ["batch_item"],
+      limit: 5,
+    });
+    expect(claimed?.id).toBe(job.id);
+    if (!claimed) return;
+
+    await jobs.release({
+      jobId: claimed.id,
+      workerId: "worker-4",
+      leaseToken: claimed.leaseToken ?? "",
+      leaseGeneration: claimed.leaseGeneration,
+      availableAt: new Date(Date.now() + 60 * 60 * 1_000),
+      parkedForPausedRunId: runId,
+    });
+
+    const next = await jobs.claim({
+      workerId: "worker-4",
+      kinds: ["batch_item"],
+      limit: 5,
+    });
+    expect(next).toHaveLength(0);
+  });
+
   it("leaves a job that is already due alone", async () => {
     const runId = await createRun("running");
     await jobs.enqueue({
