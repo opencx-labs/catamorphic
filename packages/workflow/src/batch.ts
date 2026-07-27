@@ -40,6 +40,13 @@ export interface BatchSource<
     config: Config;
     context: BatchExecutionContext;
   }): Promise<SourceInitialization<Cursor, Snapshot>>;
+  /**
+   * Must be a side-effect-free read. A worker crash after a page commits but
+   * before its job completes replays the same page on retry, so a readPage
+   * that mutates external state (marks rows consumed, advances a remote
+   * offset) would double-apply that effect. Items are deduplicated by key, so
+   * replays never duplicate work downstream.
+   */
   readPage(args: {
     config: Config;
     snapshot: Snapshot;
@@ -207,7 +214,12 @@ export interface BatchSinkRecord<Result> {
 }
 
 export interface BatchSinkWriteResult<State> {
-  state: State;
+  /**
+   * Threaded into the next writeBatch call and finalize. Returning state
+   * forces chunks to be written serially in source order; omit it (and
+   * `initialize`) to allow `concurrency` > 1.
+   */
+  state?: State;
   acknowledgedKeys: readonly string[];
 }
 
@@ -224,6 +236,15 @@ export interface BatchFailurePolicy {
 }
 
 export interface BatchSink<Result, State = JsonValue, Artifact = JsonValue> {
+  /**
+   * How many chunks may be written at once. Defaults to 1 (serial, in source
+   * order). A sink that threads state MUST stay at 1: state is a single value
+   * carried from one writeBatch to the next, so concurrent writers would race
+   * on it — the runtime rejects a sink that declares both. Every chunk is
+   * still delivered at least once and acknowledged exactly once; a concurrent
+   * sink must therefore not depend on chunk order.
+   */
+  concurrency?: number;
   initialize?(args: { context: BatchExecutionContext }): Promise<State>;
   writeBatch(args: {
     chunkKey: string;

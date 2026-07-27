@@ -584,13 +584,8 @@ export class RunsService {
         key: row.item_key,
         sourceOrder: Number(row.source_order),
         status: parseBatchItemStatus(row.status),
-        value: row.value_storage === "inline" ? row.value : row.value_reference,
-        output:
-          row.output_storage === "inline"
-            ? row.output
-            : row.output_storage === "reference"
-              ? row.output_reference
-              : null,
+        value: row.value,
+        output: row.output,
         error: row.error,
         currentNodeId: row.current_node_id,
         attempt: row.attempt,

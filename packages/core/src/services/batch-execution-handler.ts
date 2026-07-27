@@ -316,8 +316,6 @@ export class BatchExecutionHandler {
                   item_key: item.key,
                   source_order: Number(state.discovered_count) + index,
                   value: jsonColumn(item.value),
-                  value_storage: "inline",
-                  value_reference: null,
                 })),
               )
               .onConflict((conflict) =>
@@ -415,16 +413,6 @@ export class BatchExecutionHandler {
       .executeTakeFirst();
     if (!item || isTerminalItem(item.status)) return;
     const itemAttempt = Math.max(baseAttempt, item.attempt || 1);
-    if (item.value_storage !== "inline") {
-      await this.completeItem({
-        context,
-        job: args.job,
-        itemId,
-        status: "failed",
-        error: "Referenced batch values require a host resolver",
-      });
-      return;
-    }
     await this.deps.coordinator.setPhase({
       runId: context.runId,
       workflowStepAttemptId: context.workflowStepAttemptId,
@@ -525,6 +513,7 @@ export class BatchExecutionHandler {
       }),
     );
     const closesAt = new Date(Date.now() + args.suspension.policy.maxWaitMs);
+    const inputBytes = jsonByteLength(args.suspension.input);
     const invocation = await this.db.transaction().execute(async (trx) => {
       await sql`SELECT pg_advisory_xact_lock(hashtextextended(${compatibilityKey}, 0))`.execute(
         trx,
@@ -537,7 +526,7 @@ export class BatchExecutionHandler {
         compatibilityKey,
         maxItems: args.suspension.policy.maxItems,
         maxBytes: args.suspension.policy.maxBytes,
-        input: args.suspension.input,
+        inputBytes,
       });
       const physical =
         candidate ??
@@ -554,7 +543,7 @@ export class BatchExecutionHandler {
           })
           .returning(["id", "closes_at"])
           .executeTakeFirstOrThrow());
-      await trx
+      const admitted = await trx
         .insertInto("batch_step_members")
         .values({
           run_id: args.context.runId,
@@ -576,7 +565,23 @@ export class BatchExecutionHandler {
             ])
             .doNothing(),
         )
-        .execute();
+        .returning("item_id")
+        .executeTakeFirst();
+      // The counters make admission O(1): capacity is read off the invocation
+      // row instead of re-summing every member under the advisory lock, which
+      // cost O(members) per admission and O(members²) per coalescing window.
+      // Only a winning insert counts — a redelivered job must not double-add.
+      if (admitted) {
+        await trx
+          .updateTable("batch_step_invocations")
+          .set((eb) => ({
+            member_count: eb("member_count", "+", 1),
+            member_bytes: eb("member_bytes", "+", String(inputBytes)),
+            updated_at: new Date(),
+          }))
+          .where("id", "=", physical.id)
+          .execute();
+      }
       await trx
         .insertInto("batch_item_steps")
         .values({
@@ -617,21 +622,15 @@ export class BatchExecutionHandler {
         })
         .where("id", "=", args.item.id)
         .execute();
-      const count = await trx
-        .selectFrom("batch_step_members")
-        .where("run_id", "=", args.context.runId)
-        .where(
-          "workflow_step_attempt_id",
-          "=",
-          args.context.workflowStepAttemptId,
-        )
-        .where("invocation_id", "=", physical.id)
-        .select((eb) => eb.fn.countAll<number>().as("count"))
+      const counters = await trx
+        .selectFrom("batch_step_invocations")
+        .where("id", "=", physical.id)
+        .select("member_count")
         .executeTakeFirstOrThrow();
       return {
         id: physical.id,
         closesAt: physical.closes_at,
-        full: Number(count.count) >= args.suspension.policy.maxItems,
+        full: Number(counters.member_count) >= args.suspension.policy.maxItems,
       };
     });
     const dedupeKey = scopeKey(args.context, `physical:${invocation.id}`);
@@ -997,7 +996,6 @@ export class BatchExecutionHandler {
         .set({
           status: args.status,
           output: args.output === undefined ? null : jsonColumn(args.output),
-          output_storage: args.output === undefined ? null : "inline",
           error: args.error ?? null,
           completed_at: now,
           updated_at: now,
@@ -1230,6 +1228,14 @@ export class BatchExecutionHandler {
       await this.completeBatchStep({ context: args.context, job: args.job });
       return;
     }
+    const concurrency = sinkConcurrency(inspection);
+    if (concurrency > 1 && inspection.hasInitialize === true) {
+      // State is one value threaded from chunk to chunk; concurrent writers
+      // would race on it, so the combination is a sink authoring error.
+      throw new Error(
+        "A batch sink with initialize (state) cannot declare concurrency > 1",
+      );
+    }
     const state =
       inspection.hasInitialize === true
         ? await this.invokeSink({
@@ -1247,6 +1253,7 @@ export class BatchExecutionHandler {
           sink_state:
             state === undefined ? null : jsonColumn(requireJson(state)),
           sink_state_present: state !== undefined,
+          sink_concurrency: concurrency,
           updated_at: new Date(),
         })
         .where("run_id", "=", args.context.runId)
@@ -1363,7 +1370,7 @@ export class BatchExecutionHandler {
           "=",
           args.context.workflowStepAttemptId,
         )
-        .select(["sink_state", "sink_state_present"])
+        .select(["sink_state", "sink_state_present", "sink_concurrency"])
         .executeTakeFirstOrThrow(),
       this.db
         .selectFrom("batch_items")
@@ -1381,8 +1388,6 @@ export class BatchExecutionHandler {
           "source_order",
           "status",
           "output",
-          "output_reference",
-          "output_storage",
           "error",
           "attempt",
         ])
@@ -1414,10 +1419,7 @@ export class BatchExecutionHandler {
                 ? {
                     key: item.item_key,
                     status: "succeeded",
-                    result:
-                      item.output_storage === "inline"
-                        ? item.output
-                        : item.output_reference,
+                    result: item.output,
                   }
                 : item.status === "failed"
                   ? {
@@ -1447,6 +1449,13 @@ export class BatchExecutionHandler {
     ) {
       throw new Error(
         `Batch sink chunk '${chunk.chunk_key}' was not fully acknowledged`,
+      );
+    }
+    if (state.sink_concurrency > 1 && result.state !== undefined) {
+      // Concurrent writers would race on the single state row; a sink that
+      // wants state must stay serial.
+      throw new Error(
+        "A batch sink with concurrency > 1 must not return state",
       );
     }
     await this.db.transaction().execute(async (trx) => {
@@ -1587,10 +1596,32 @@ export class BatchExecutionHandler {
       .execute((trx) => this.enqueueNextSinkWork({ trx, context }));
   }
 
+  /**
+   * Keeps the sink pipeline full up to the sink's declared concurrency.
+   *
+   * Serial sinks (the default, and any sink that threads state) see exactly
+   * the old behaviour: one chunk job at a time, in source order. A sink that
+   * declared `concurrency` gets the next N pending chunks enqueued at once —
+   * the per-chunk dedupe key makes re-enqueueing an already-queued chunk a
+   * no-op, so every completion can top the window back up without
+   * coordination. Finalize waits for every chunk to complete, not merely for
+   * the pending set to drain, so an in-flight sibling cannot be finalized
+   * over.
+   */
   private async enqueueNextSinkWork(args: {
     trx: Transaction<DB>;
     context: BatchContext;
   }): Promise<void> {
+    const state = await args.trx
+      .selectFrom("batch_execution_states")
+      .where("run_id", "=", args.context.runId)
+      .where(
+        "workflow_step_attempt_id",
+        "=",
+        args.context.workflowStepAttemptId,
+      )
+      .select("sink_concurrency")
+      .executeTakeFirstOrThrow();
     const next = await args.trx
       .selectFrom("batch_sink_chunks")
       .where("run_id", "=", args.context.runId)
@@ -1602,23 +1633,43 @@ export class BatchExecutionHandler {
       .where("status", "=", "pending")
       .select("id")
       .orderBy("first_order")
+      .limit(Math.max(1, state.sink_concurrency))
+      .execute();
+    if (next.length > 0) {
+      await this.deps.jobs.enqueueMany({
+        trx: args.trx,
+        jobs: next.map((chunk) => ({
+          tenantId: args.context.identity.tenantId,
+          workflowRunId: args.context.runId,
+          workflowStepAttemptId: args.context.workflowStepAttemptId,
+          kind: "batch_sink" as const,
+          payload: { operation: "write", chunkId: chunk.id },
+          dedupeKey: scopeKey(args.context, `sink:chunk:${chunk.id}`),
+        })),
+      });
+      return;
+    }
+    const incomplete = await args.trx
+      .selectFrom("batch_sink_chunks")
+      .where("run_id", "=", args.context.runId)
+      .where(
+        "workflow_step_attempt_id",
+        "=",
+        args.context.workflowStepAttemptId,
+      )
+      .where("status", "!=", "completed")
+      .select("id")
       .limit(1)
       .executeTakeFirst();
-    const operation = next ? "write" : "finalize";
+    if (incomplete) return;
     await this.deps.jobs.enqueue({
       trx: args.trx,
       tenantId: args.context.identity.tenantId,
       workflowRunId: args.context.runId,
       workflowStepAttemptId: args.context.workflowStepAttemptId,
       kind: "batch_sink",
-      payload: {
-        operation,
-        ...(next ? { chunkId: next.id } : {}),
-      },
-      dedupeKey: scopeKey(
-        args.context,
-        next ? `sink:chunk:${next.id}` : "sink:finalize",
-      ),
+      payload: { operation: "finalize" },
+      dedupeKey: scopeKey(args.context, "sink:finalize"),
     });
   }
 
@@ -1843,9 +1894,11 @@ export class BatchExecutionHandler {
     if (context.status === "paused") {
       // Park rather than poll: every item job on a paused batch would other-
       // wise cycle through claim+release indefinitely, burning queue capacity
-      // that the tenant's live runs need. `resume` wakes them explicitly.
+      // that the tenant's live runs need. `resume` wakes them explicitly, and
+      // release re-checks the run for a resume that landed mid-flight.
       throw new ExecutionJobDeferredError(
         new Date(Date.now() + PAUSED_RUN_PARK_MS),
+        { parkedForPausedRunId: context.runId },
       );
     }
     return !["canceling", "canceled", "completed", "failed"].includes(
@@ -1869,6 +1922,15 @@ function batchAttributes(context: BatchContext): SpanAttributes {
   };
 }
 
+/**
+ * Finds an open invocation with room for one more member.
+ *
+ * Capacity comes from the counters on the invocation row, maintained by the
+ * same advisory-lock-serialized transaction that admits members. The previous
+ * shape re-read every member's input to re-derive fullness, which made each
+ * admission O(members) inside the serial section — a full coalescing window
+ * cost O(members²) in payload bytes.
+ */
 async function findCompatibleInvocation(args: {
   trx: Transaction<DB>;
   context: BatchContext;
@@ -1877,9 +1939,9 @@ async function findCompatibleInvocation(args: {
   compatibilityKey: string;
   maxItems: number;
   maxBytes?: number;
-  input: unknown;
+  inputBytes: number;
 }): Promise<{ id: string; closes_at: Date } | null> {
-  const candidates = await args.trx
+  let query = args.trx
     .selectFrom("batch_step_invocations")
     .where("run_id", "=", args.context.runId)
     .where("workflow_step_attempt_id", "=", args.context.workflowStepAttemptId)
@@ -1888,33 +1950,22 @@ async function findCompatibleInvocation(args: {
     .where("compatibility_key", "=", args.compatibilityKey)
     .where("status", "=", "pending")
     .where("closes_at", ">", new Date())
+    .where("member_count", "<", args.maxItems);
+  if (args.maxBytes !== undefined) {
+    query = query.where(
+      "member_bytes",
+      "<=",
+      String(args.maxBytes - args.inputBytes),
+    );
+  }
+  const candidate = await query
     .select(["id", "closes_at"])
     .orderBy("created_at")
+    .limit(1)
     .forUpdate()
     .skipLocked()
-    .execute();
-  for (const candidate of candidates) {
-    const members = await args.trx
-      .selectFrom("batch_step_members")
-      .where("run_id", "=", args.context.runId)
-      .where(
-        "workflow_step_attempt_id",
-        "=",
-        args.context.workflowStepAttemptId,
-      )
-      .where("invocation_id", "=", candidate.id)
-      .select("input")
-      .execute();
-    if (members.length >= args.maxItems) continue;
-    const bytes =
-      members.reduce(
-        (total, member) => total + jsonByteLength(member.input),
-        0,
-      ) + jsonByteLength(args.input);
-    if (args.maxBytes !== undefined && bytes > args.maxBytes) continue;
-    return candidate;
-  }
-  return null;
+    .executeTakeFirst();
+  return candidate ?? null;
 }
 
 function physicalTarget(args: {
@@ -2084,6 +2135,21 @@ function parseBatchOutcomes(args: {
 
 function batchPolicyJson(policy: RuntimeBatchStepSuspension["policy"]): Json {
   return toJson(policy);
+}
+
+const MAX_SINK_CONCURRENCY = 16;
+
+function sinkConcurrency(inspection: Record<string, unknown>): number {
+  const declared = inspection.concurrency;
+  if (declared === undefined) return 1;
+  if (
+    typeof declared !== "number" ||
+    !Number.isInteger(declared) ||
+    declared < 1
+  ) {
+    throw new Error("Batch sink concurrency must be a positive integer");
+  }
+  return Math.min(declared, MAX_SINK_CONCURRENCY);
 }
 
 function readRateLimits(args: {
