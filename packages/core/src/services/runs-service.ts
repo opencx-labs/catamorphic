@@ -953,6 +953,43 @@ export class RunsService {
     return (await this.prepareProductionSource(args)).graph.execution;
   }
 
+  /**
+   * Materializes the production runtime for an artifact before any run needs
+   * it, so the first trigger does not pay the full cold start (sandbox create,
+   * workspace upload, dependency install, supervisor boot) on its critical
+   * path. Hosts call this at deploy time; it is the same ensure the invoke
+   * path uses, so a warm runtime is simply found and reused.
+   */
+  async warmProductionRuntime(args: {
+    identity: Identity;
+    projectId: string;
+    workflowName: string;
+    commitSha: string;
+    artifactId: string;
+  }): Promise<void> {
+    const deploymentRuntime = this.deps.deploymentRuntime;
+    if (!deploymentRuntime) throw new SandboxProviderNotConfiguredError();
+    const [source, plugins, artifact] = await Promise.all([
+      this.prepareProductionSource(args),
+      this.loadPlugins(args.projectId, "production"),
+      this.deps.deploymentArtifacts.get({ artifactId: args.artifactId }),
+    ]);
+    if (!artifact) {
+      throw new Error(`Deployment artifact '${args.artifactId}' not found`);
+    }
+    await deploymentRuntime.ensure({
+      projectId: args.projectId,
+      artifact,
+      files: source.files,
+      originalFiles: source.originalFiles,
+      cloneSource: source.cloneSource,
+      plugins: runtimePackages({
+        plugins: plugins?.plugins,
+        workflowPackage: source.workflowPackage,
+      }),
+    });
+  }
+
   async resolveProductionWorkflow(args: {
     identity: Identity;
     projectId: string;
@@ -1674,7 +1711,7 @@ export class RunsService {
     // reused. Without a sha the caller is asking "whatever main is now", which
     // has to hit the remote to answer.
     const cached = args.commitSha
-      ? this.preparedSources.get(
+      ? this.recallPreparedSource(
           preparedSourceKey({ ...args, commitSha: args.commitSha }),
         )
       : undefined;
@@ -1752,7 +1789,11 @@ export class RunsService {
     if (!args.commitSha) return load;
     const key = preparedSourceKey({ ...args, commitSha: args.commitSha });
     // Each deploy strands its predecessor's entry, so the map is capped and
-    // evicted oldest-first (Map preserves insertion order).
+    // evicted least-recently-used (recallPreparedSource refreshes recency, and
+    // Map preserves insertion order). Evicting by insertion alone would purge
+    // the busiest entry on schedule under multi-tenant load: with more than
+    // PREPARED_SOURCE_CACHE_MAX live (tenant, project, workflow, sha) keys,
+    // the hottest batch re-pays a git fetch and full parse every cycle.
     if (this.preparedSources.size >= PREPARED_SOURCE_CACHE_MAX) {
       const oldest = this.preparedSources.keys().next();
       if (!oldest.done) this.preparedSources.delete(oldest.value);
@@ -1762,6 +1803,17 @@ export class RunsService {
     // cached rejection forever.
     void load.catch(() => this.preparedSources.delete(key));
     return load;
+  }
+
+  /** Cache hit that also refreshes the entry's recency for LRU eviction. */
+  private recallPreparedSource(
+    key: string,
+  ): Promise<PreparedSource> | undefined {
+    const hit = this.preparedSources.get(key);
+    if (!hit) return undefined;
+    this.preparedSources.delete(key);
+    this.preparedSources.set(key, hit);
+    return hit;
   }
 
   private async loadPlugins(projectId: string, mode: RunMode) {

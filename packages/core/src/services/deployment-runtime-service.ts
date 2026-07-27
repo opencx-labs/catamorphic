@@ -64,6 +64,7 @@ export class DeploymentRuntimeService {
       provider: SandboxProvider;
       artifacts: Pick<DeploymentArtifactsService, "markStatus" | "verify">;
       maxConcurrency?: number;
+      autoStopMinutes?: number;
       now?: () => Date;
     },
   ) {}
@@ -115,7 +116,7 @@ export class DeploymentRuntimeService {
               (
                 await this.deps.provider.createSandbox({
                   language: "typescript",
-                  autoStopInterval: 15,
+                  autoStopInterval: this.deps.autoStopMinutes ?? 15,
                   labels: {
                     purpose: "deployment-runtime",
                     projectId: args.projectId,
