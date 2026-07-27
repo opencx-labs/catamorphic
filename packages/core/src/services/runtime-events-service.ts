@@ -187,29 +187,35 @@ async function ingestEvents(args: {
   const counts = { accepted: 0, duplicates: 0 };
   if (args.events.length === 0) return counts;
 
-  const payloads = new Map<number, Json>();
-  for (const event of args.events) {
+  // Each event is paired with its own serialized payload. A batch may
+  // interleave events from several invocations (and can even repeat an
+  // (invocation, sequence) pair), so a lookup keyed on sequence alone would
+  // attach one event's payload to another's row.
+  const entries = args.events.map((event) => {
     validateEvent(event);
     if (args.invocationId && event.invocationId !== args.invocationId) {
       throw new Error(
         `Runtime event invocation '${event.invocationId}' does not match '${args.invocationId}'`,
       );
     }
-    payloads.set(event.sequence, toJson(event));
-  }
+    return { event, payload: toJson(event) };
+  });
 
   // One insert for the whole batch rather than one per event. Events arrive in
   // groups, and each statement is a round trip held inside this transaction.
+  // ON CONFLICT DO NOTHING also swallows conflicts between rows of this same
+  // statement, so an intra-batch duplicate keeps the first row and the second
+  // falls through to the duplicate check below.
   const inserted = await args.trx
     .insertInto("workflow_run_events")
     .values(
-      args.events.map((event) => ({
+      entries.map(({ event, payload }) => ({
         run_id: args.runId,
         invocation_id: event.invocationId,
         sequence: event.sequence,
         attempt: event.attempt,
         type: event.type,
-        payload: payloads.get(event.sequence) ?? null,
+        payload,
         created_at: new Date(event.timestamp),
       })),
     )
@@ -222,17 +228,21 @@ async function ingestEvents(args: {
     inserted.map((row) => `${row.invocation_id} ${row.sequence}`),
   );
 
-  for (const event of args.events) {
-    if (!accepted.has(`${event.invocationId} ${event.sequence}`)) {
+  for (const { event, payload } of entries) {
+    const key = `${event.invocationId} ${event.sequence}`;
+    if (!accepted.has(key)) {
       await assertDuplicateMatches({
         trx: args.trx,
         runId: args.runId,
         event,
-        payload: payloads.get(event.sequence) ?? null,
+        payload,
       });
       counts.duplicates += 1;
       continue;
     }
+    // The insert accepted exactly one row per key; a repeat inside this batch
+    // must be validated as a duplicate, not applied twice.
+    accepted.delete(key);
     counts.accepted += 1;
     await applyEvent({ trx: args.trx, runId: args.runId, event });
   }
