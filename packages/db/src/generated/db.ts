@@ -102,15 +102,11 @@ export interface BatchItems {
   id: Generated<string>;
   item_key: string;
   output: Json | null;
-  output_reference: Json | null;
-  output_storage: string | null;
   run_id: string;
   source_order: Int8;
   status: Generated<string>;
   updated_at: Generated<Timestamp>;
-  value: Json | null;
-  value_reference: Json | null;
-  value_storage: string;
+  value: Json;
   workflow_step_attempt_id: string;
 }
 
@@ -162,6 +158,8 @@ export interface BatchStepInvocations {
   error: string | null;
   function_name: string;
   id: Generated<string>;
+  member_bytes: Generated<Int8>;
+  member_count: Generated<number>;
   node_id: string;
   policy: Json;
   run_id: string;

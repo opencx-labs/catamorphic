@@ -269,11 +269,15 @@ async function executeInvocationTarget(args: {
     const sink = Reflect.get(definition, "sink");
     const operation = args.invocation.target.operation;
     if (operation === "inspect") {
+      const concurrency = isRecord(sink)
+        ? Reflect.get(sink, "concurrency")
+        : undefined;
       return {
         present: isRecord(sink),
         hasInitialize:
           isRecord(sink) &&
           typeof Reflect.get(sink, "initialize") === "function",
+        concurrency: typeof concurrency === "number" ? concurrency : 1,
       };
     }
     if (!isRecord(sink)) throw new Error("Batch definition has no sink");

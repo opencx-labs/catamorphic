@@ -209,6 +209,7 @@ describe("@catamorphic/db schema integration", () => {
             'batch_execution_states',
             'batch_items',
             'batch_step_members',
+            'batch_step_invocations',
             'batch_item_steps'
           )
       `.execute(db);
@@ -224,8 +225,18 @@ describe("@catamorphic/db schema integration", () => {
       expect(
         batchColumnNames.has("batch_execution_states.sink_state_present"),
       ).toBe(true);
-      expect(batchColumnNames.has("batch_items.value_storage")).toBe(true);
-      expect(batchColumnNames.has("batch_items.output_storage")).toBe(true);
+      // Reference storage was dropped in 032: inline payloads are the only
+      // representation, so the discriminators must be gone.
+      expect(batchColumnNames.has("batch_items.value_storage")).toBe(false);
+      expect(batchColumnNames.has("batch_items.output_storage")).toBe(false);
+      expect(batchColumnNames.has("batch_items.value_reference")).toBe(false);
+      expect(batchColumnNames.has("batch_items.output_reference")).toBe(false);
+      expect(
+        batchColumnNames.has("batch_step_invocations.member_count"),
+      ).toBe(true);
+      expect(
+        batchColumnNames.has("batch_step_invocations.member_bytes"),
+      ).toBe(true);
       expect(batchColumnNames.has("batch_step_members.occurrence")).toBe(true);
       expect(batchColumnNames.has("batch_step_members.output_present")).toBe(
         true,

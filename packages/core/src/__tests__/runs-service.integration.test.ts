@@ -1573,14 +1573,7 @@ describeIf("unified RunsService integration", () => {
       db
         .selectFrom("batch_items")
         .where("run_id", "=", run.id)
-        .select([
-          "item_key",
-          "source_order",
-          "value",
-          "value_storage",
-          "output",
-          "output_storage",
-        ])
+        .select(["item_key", "source_order", "value", "output"])
         .orderBy("source_order")
         .execute(),
     ]);
@@ -1598,35 +1591,12 @@ describeIf("unified RunsService integration", () => {
         key: item.item_key,
         order: Number(item.source_order),
         value: item.value,
-        valueStorage: item.value_storage,
         output: item.output,
-        outputStorage: item.output_storage,
       })),
     ).toEqual([
-      {
-        key: "null-1",
-        order: 0,
-        value: null,
-        valueStorage: "inline",
-        output: null,
-        outputStorage: "inline",
-      },
-      {
-        key: "null-2",
-        order: 1,
-        value: null,
-        valueStorage: "inline",
-        output: null,
-        outputStorage: "inline",
-      },
-      {
-        key: "null-3",
-        order: 2,
-        value: null,
-        valueStorage: "inline",
-        output: null,
-        outputStorage: "inline",
-      },
+      { key: "null-1", order: 0, value: null, output: null },
+      { key: "null-2", order: 1, value: null, output: null },
+      { key: "null-3", order: 2, value: null, output: null },
     ]);
   }, 20_000);
 
