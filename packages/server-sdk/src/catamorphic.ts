@@ -78,6 +78,15 @@ export interface CreateCatamorphicConfig {
    * runs forever. Per-tenant windows go through `tenantPolicies`.
    */
   retention?: RetentionConfig;
+  /**
+   * Production runtime sandbox tuning: supervisor concurrency and the idle
+   * auto-stop window. Defaults match the previous hardcoded values (4
+   * concurrent invocations, 15 idle minutes).
+   */
+  deploymentRuntime?: {
+    maxConcurrency?: number;
+    autoStopMinutes?: number;
+  };
 }
 
 function resolveDatabase(config: DatabaseConfig): {
@@ -145,6 +154,9 @@ export class Catamorphic {
       ...(config.retention === undefined
         ? {}
         : { retention: config.retention }),
+      ...(config.deploymentRuntime === undefined
+        ? {}
+        : { deploymentRuntime: config.deploymentRuntime }),
     });
   }
 
@@ -199,6 +211,27 @@ export class Catamorphic {
    */
   get tenantPolicies() {
     return this.core.tenantPolicies;
+  }
+
+  /**
+   * Materialize a deployment's runtime ahead of its first trigger, so the
+   * cold start (sandbox create, workspace upload, dependency install,
+   * supervisor boot) happens at deploy time instead of on the first run's
+   * critical path. Idempotent: a warm runtime is found and reused.
+   */
+  warmDeploymentRuntime(args: {
+    tenantId: string;
+    externalUserId: string;
+    projectId: string;
+    workflowName: string;
+    commitSha: string;
+    artifactId: string;
+  }): Promise<void> {
+    const { tenantId, externalUserId, ...rest } = args;
+    return this.core.runs.warmProductionRuntime({
+      ...rest,
+      identity: { tenantId, externalUserId },
+    });
   }
 
   reconcileDeploymentRuntimeHealth(

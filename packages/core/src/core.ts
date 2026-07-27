@@ -53,6 +53,25 @@ export interface CatamorphicCoreConfig {
    * different window through `tenantPolicies`.
    */
   retention?: RetentionConfig;
+  /**
+   * Production runtime sandbox tuning. Everything here trades cold-start
+   * latency against idle sandbox cost; the defaults match the previous
+   * hardcoded values.
+   */
+  deploymentRuntime?: {
+    /**
+     * Concurrent invocations one runtime supervisor accepts before queueing.
+     * Defaults to 4.
+     */
+    maxConcurrency?: number;
+    /**
+     * Minutes of idleness before the provider auto-stops a sandbox. A stopped
+     * sandbox restarts much faster than a fresh one materializes, but every
+     * stop still puts the next invocation through sandbox-start plus a health
+     * poll. Defaults to 15.
+     */
+    autoStopMinutes?: number;
+  };
 }
 
 /**
@@ -110,6 +129,8 @@ export class CatamorphicCore {
           {
             provider: this.sandboxProvider,
             artifacts: this.deploymentArtifacts,
+            maxConcurrency: config.deploymentRuntime?.maxConcurrency,
+            autoStopMinutes: config.deploymentRuntime?.autoStopMinutes,
           },
         )
       : undefined;
@@ -118,6 +139,7 @@ export class CatamorphicCore {
     const executionWorker = new ExecutionWorkerService(
       executionJobs,
       this.retention,
+      this.db,
     );
     const runtimeEvents = new RuntimeEventsService(this.db);
     const rateReservations = new RateReservationsService(this.db);
