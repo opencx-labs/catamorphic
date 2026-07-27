@@ -1,3 +1,4 @@
+import { knownPoolSize } from "@catamorphic/db";
 import { getTracer, type SpanAttributes, withSpan } from "@catamorphic/otel";
 import type {
   ExecutionJob,
@@ -49,9 +50,21 @@ const ALL_JOB_KINDS: readonly ExecutionJobKind[] = [
 const MAINTENANCE_SWEEP_INTERVAL_MS = 5_000;
 
 export class ExecutionJobDeferredError extends Error {
-  constructor(readonly availableAt: Date) {
+  /**
+   * Set when the deferral parks the job for a paused run. Release then
+   * re-checks the run's status under lock: a resume that landed while this
+   * job was still leased would otherwise never wake it, because resume only
+   * pulls forward jobs that are already `pending`.
+   */
+  readonly parkedForPausedRunId?: string;
+
+  constructor(
+    readonly availableAt: Date,
+    options?: { parkedForPausedRunId?: string },
+  ) {
     super(`Execution job deferred until ${availableAt.toISOString()}`);
     this.name = "ExecutionJobDeferredError";
+    this.parkedForPausedRunId = options?.parkedForPausedRunId;
   }
 }
 
@@ -73,6 +86,8 @@ export class ExecutionWorkerService {
   constructor(
     private readonly jobs: ExecutionJobsService,
     private readonly retention?: RetentionService,
+    /** The Kysely instance behind {@link jobs}, for the pool-size check. */
+    private readonly db?: object,
   ) {}
 
   registerHandler(args: {
@@ -98,6 +113,17 @@ export class ExecutionWorkerService {
       minimum: 1,
       maximum: 32,
     });
+    // A loop holds a connection per transaction and each in-flight job also
+    // heartbeats from a timer, so a worker sized past the pool turns into
+    // acquire timeouts that read as database trouble. The pool size is only
+    // knowable for databases built by createDatabase; hosts that bring their
+    // own Kysely instance are on their own.
+    const poolSize = this.db ? knownPoolSize(this.db) : undefined;
+    if (poolSize !== undefined && concurrency * 2 > poolSize) {
+      console.warn(
+        `[catamorphic] worker concurrency ${concurrency} needs up to ${concurrency * 2} connections (job + heartbeat), but the pool holds ${poolSize}; raise poolSize or lower concurrency to avoid acquire timeouts`,
+      );
+    }
     const claimLimit = boundedInteger({
       value: options.claimLimit ?? 1,
       name: "claimLimit",
@@ -214,9 +240,12 @@ export class ExecutionWorkerService {
   /**
    * Runs the terminal handler for jobs that exhausted their attempts.
    *
-   * The claim is exclusive, so a job is handled once across every loop and
-   * every process. A handler that throws releases its claim, which requeues the
-   * job for a later sweep rather than stranding it as permanently handled.
+   * The claim is exclusive while it is fresh, so a job is handled once across
+   * every loop and every process. A handler that throws releases its claim,
+   * which requeues the job for a later sweep rather than stranding it as
+   * permanently handled; a claimer that crashes outright leaves a stamp that
+   * expires, so the job is reclaimed instead of stranded. Only the confirmed
+   * receipt retires it for good.
    */
   private async drainExhausted(): Promise<void> {
     if (!this.exhaustedHandler) return;
@@ -228,6 +257,7 @@ export class ExecutionWorkerService {
             job,
             error: job.lastError ?? "Execution job attempts exhausted",
           });
+          await this.jobs.confirmExhaustionHandled({ jobId: job.id });
         } catch (error) {
           await this.jobs
             .releaseExhaustionClaim({ jobId: job.id })
@@ -375,6 +405,7 @@ export class ExecutionWorkerService {
               leaseToken: requireLeaseToken(args.job),
               leaseGeneration: args.job.leaseGeneration,
               availableAt: error.availableAt,
+              parkedForPausedRunId: error.parkedForPausedRunId,
             });
             return;
           }
@@ -419,6 +450,7 @@ export class ExecutionWorkerService {
     if (!(await this.jobs.claimExhaustionFor({ jobId: args.job.id }))) return;
     try {
       await this.handleExhausted(args);
+      await this.jobs.confirmExhaustionHandled({ jobId: args.job.id });
     } catch (error) {
       await this.jobs
         .releaseExhaustionClaim({ jobId: args.job.id })

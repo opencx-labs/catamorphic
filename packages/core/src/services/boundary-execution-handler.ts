@@ -102,10 +102,11 @@ export class BoundaryExecutionHandler {
       // Park rather than poll. A 100ms retry made every job on a paused run
       // spin through claim+release forever — at ~3ms a cycle, 10k paused jobs
       // demanded more database time than exists. `resume` wakes these jobs
-      // explicitly, so parking costs no latency; the interval is only a
-      // backstop if a wake is ever missed.
+      // explicitly, and release re-checks the run for a resume that landed
+      // while this job was still leased; the interval is only a backstop.
       throw new ExecutionJobDeferredError(
         new Date(Date.now() + PAUSED_RUN_PARK_MS),
+        { parkedForPausedRunId: context.runId },
       );
     }
     const invocationId = `${context.runId}:step:${context.stepIndex}:attempt:${context.attempt}`;

@@ -42,12 +42,34 @@ export type CreateDatabaseOptions =
  */
 export const DEFAULT_POOL_SIZE = 20;
 
+/**
+ * Pool ceilings by Kysely instance, recorded at construction.
+ *
+ * Kysely keeps its dialect (and therefore the pg pool) behind private fields,
+ * so a consumer that wants to sanity-check its own concurrency against the
+ * pool — the worker does — cannot reach the number after the fact. Recording
+ * it here at the only points where the pool passes through our hands makes
+ * the check possible without holding the pool itself alive.
+ */
+const poolSizes = new WeakMap<object, number>();
+
+/**
+ * The connection ceiling of the pool behind a {@link createDatabase} instance,
+ * or undefined for databases that did not pass through it.
+ */
+export function knownPoolSize(db: object): number | undefined {
+  return poolSizes.get(db);
+}
+
 export function createDatabase(options: CreateDatabaseOptions) {
   if ("pool" in options) {
-    return new Kysely<import("./generated/db.js").DB>({
+    const db = new Kysely<import("./generated/db.js").DB>({
       dialect: new PostgresDialect({ pool: options.pool }),
       plugins: [new WithSchemaPlugin(options.schema ?? DEFAULT_SCHEMA)],
     });
+    const max = options.pool.options?.max;
+    if (typeof max === "number") poolSizes.set(db, max);
+    return db;
   }
 
   const escapedSchema = options.schema?.replaceAll('"', '""');
@@ -60,7 +82,9 @@ export function createDatabase(options: CreateDatabaseOptions) {
     max: options.poolSize ?? DEFAULT_POOL_SIZE,
   });
 
-  return new Kysely<import("./generated/db.js").DB>({
+  const db = new Kysely<import("./generated/db.js").DB>({
     dialect: new PostgresDialect({ pool }),
   });
+  poolSizes.set(db, options.poolSize ?? DEFAULT_POOL_SIZE);
+  return db;
 }

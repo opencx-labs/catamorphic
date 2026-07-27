@@ -69,9 +69,20 @@ function reviveTerminalJob(eb: {
       string | null
     >`CASE WHEN ${isTerminal} THEN NULL ELSE ${eb.ref("execution_jobs.last_error")} END`,
     exhaustion_handled_at: sql<Date | null>`CASE WHEN ${isTerminal} THEN NULL ELSE ${eb.ref("execution_jobs.exhaustion_handled_at")} END`,
+    exhaustion_handled: sql<boolean>`CASE WHEN ${isTerminal} THEN false ELSE ${eb.ref("execution_jobs.exhaustion_handled")} END`,
     updated_at: new Date(),
   };
 }
+
+/**
+ * How long an exhaustion claim is honoured before a sweep may retake it.
+ *
+ * The terminal handler runs a handful of statements, so anything alive
+ * finishes well inside this. Long enough that a healthy-but-slow handler is
+ * not double-run; short enough that a crashed claimer delays the run's
+ * terminal failure by minutes, not forever.
+ */
+const EXHAUSTION_CLAIM_MS = 10 * 60 * 1_000;
 
 export class ExecutionJobsService {
   constructor(private readonly db: Kysely<DB>) {}
@@ -372,13 +383,34 @@ export class ExecutionJobsService {
     leaseToken: string;
     leaseGeneration: string;
     availableAt: Date;
+    /**
+     * When set, `availableAt` applies only while this run is still paused.
+     *
+     * A job that observed a paused run parks itself an hour out, but the
+     * resume that should wake it only pulls forward `pending` jobs — a job
+     * still leased when the resume commits would sleep out the full park.
+     * Locking the run here serializes with `resumeOperator`'s run lock, so
+     * either the resume sees this job pending and wakes it, or this release
+     * sees the resumed status and comes back immediately.
+     */
+    parkedForPausedRunId?: string;
   }): Promise<boolean> {
     return this.db.transaction().execute(async (trx) => {
+      let availableAt = args.availableAt;
+      if (args.parkedForPausedRunId) {
+        const run = await trx
+          .selectFrom("workflow_runs")
+          .where("id", "=", args.parkedForPausedRunId)
+          .select("status")
+          .forShare()
+          .executeTakeFirst();
+        if (run?.status !== "paused") availableAt = new Date();
+      }
       const result = await trx
         .updateTable("execution_jobs")
         .set((eb) => ({
           status: "pending",
-          available_at: args.availableAt,
+          available_at: availableAt,
           leased_by: null,
           lease_token: null,
           heartbeat_at: null,
@@ -558,6 +590,7 @@ export class ExecutionJobsService {
         last_error: null,
         completed_at: null,
         exhaustion_handled_at: null,
+        exhaustion_handled: false,
         updated_at: new Date(),
       })
       .where("id", "=", args.jobId)
@@ -656,22 +689,37 @@ export class ExecutionJobsService {
    * selects makes the claim exclusive, and `SKIP LOCKED` keeps concurrent
    * claimers from queueing behind one another.
    *
-   * The stamp is a claim, not a receipt: a handler that fails must call
-   * {@link releaseExhaustionClaim} so the job is retried rather than stranded.
+   * The stamp is a claim, not a receipt. A handler that fails must call
+   * {@link releaseExhaustionClaim} so the job is retried rather than stranded,
+   * and a handler that succeeds must call {@link confirmExhaustionHandled} —
+   * a crash between claim and receipt leaves only a stamp, which expires
+   * after {@link EXHAUSTION_CLAIM_MS} and gets reclaimed by a later sweep.
+   * The handler tolerates the resulting rare re-run: it no-ops against a
+   * step or run that is already terminal.
    */
   async claimExhausted(args: { limit?: number }): Promise<ExecutionJob[]> {
     const limit = Math.max(1, Math.min(args.limit ?? 100, 1_000));
     const rows = await this.db
       .updateTable("execution_jobs")
       .set({ exhaustion_handled_at: sql<Date>`clock_timestamp()` })
-      .where(({ eb, selectFrom }) =>
+      .where(({ eb, selectFrom, or }) =>
         eb(
           "id",
           "in",
           selectFrom("execution_jobs")
             .select("id")
             .where("status", "=", "failed")
-            .where("exhaustion_handled_at", "is", null)
+            .where("exhaustion_handled", "=", false)
+            .where(
+              or([
+                eb("exhaustion_handled_at", "is", null),
+                eb(
+                  "exhaustion_handled_at",
+                  "<",
+                  sql<Date>`clock_timestamp() - make_interval(secs => ${EXHAUSTION_CLAIM_MS / 1_000})`,
+                ),
+              ]),
+            )
             .orderBy("completed_at", "asc")
             .limit(limit)
             .forUpdate()
@@ -686,8 +734,9 @@ export class ExecutionJobsService {
   /**
    * Claims one exhausted job, for the worker that just exhausted it inline.
    *
-   * Returns false when a sweep already claimed it, so the terminal handler
-   * still runs exactly once no matter which path reaches the job first.
+   * Returns false when a sweep already holds a live claim (or the receipt is
+   * already written), so the terminal handler runs once no matter which path
+   * reaches the job first.
    */
   async claimExhaustionFor(args: { jobId: string }): Promise<boolean> {
     const result = await this.db
@@ -695,9 +744,28 @@ export class ExecutionJobsService {
       .set({ exhaustion_handled_at: sql<Date>`clock_timestamp()` })
       .where("id", "=", args.jobId)
       .where("status", "=", "failed")
-      .where("exhaustion_handled_at", "is", null)
+      .where("exhaustion_handled", "=", false)
+      .where(({ eb, or }) =>
+        or([
+          eb("exhaustion_handled_at", "is", null),
+          eb(
+            "exhaustion_handled_at",
+            "<",
+            sql<Date>`clock_timestamp() - make_interval(secs => ${EXHAUSTION_CLAIM_MS / 1_000})`,
+          ),
+        ]),
+      )
       .executeTakeFirst();
     return Number(result.numUpdatedRows) === 1;
+  }
+
+  /** Writes the receipt: the terminal handler's side effect has landed. */
+  async confirmExhaustionHandled(args: { jobId: string }): Promise<void> {
+    await this.db
+      .updateTable("execution_jobs")
+      .set({ exhaustion_handled: true })
+      .where("id", "=", args.jobId)
+      .execute();
   }
 
   /** Returns a claimed job to the unhandled set after its handler failed. */
