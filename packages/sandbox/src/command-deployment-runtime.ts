@@ -384,9 +384,13 @@ export class CommandDeploymentRuntimeProvider
       `curl --fail --silent --show-error ` +
         `--max-time ${waitSeconds + EVENT_REQUEST_GRACE_SECONDS} ` +
         `-H ${shellQuote(`Authorization: Bearer ${args.record.token}`)} ` +
-        `http://127.0.0.1:${args.record.port}/v1/invocations/` +
-        `${encodeURIComponent(args.invocation.invocationId)}/events` +
-        `?afterSequence=${args.cursor.sequence}&waitMs=${waitMs}`,
+        // The query string must be quoted: an unquoted `&` splits the shell
+        // command, backgrounding curl and masking its exit code with 0.
+        shellQuote(
+          `http://127.0.0.1:${args.record.port}/v1/invocations/` +
+            `${encodeURIComponent(args.invocation.invocationId)}/events` +
+            `?afterSequence=${args.cursor.sequence}&waitMs=${waitMs}`,
+        ),
       {
         cwd: args.record.runtimeDirectory,
         timeout: waitSeconds + EVENT_REQUEST_GRACE_SECONDS + 1,
