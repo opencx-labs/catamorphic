@@ -196,6 +196,18 @@
         "@types/node": "^26.1.1",
       },
     },
+    "packages/microsandbox": {
+      "name": "@catamorphic/microsandbox",
+      "version": "0.0.1",
+      "dependencies": {
+        "@catamorphic/runtime": "workspace:*",
+        "@catamorphic/sandbox": "workspace:*",
+        "microsandbox": "^0.6.7",
+      },
+      "devDependencies": {
+        "@types/node": "^26.1.1",
+      },
+    },
     "packages/otel": {
       "name": "@catamorphic/otel",
       "version": "0.0.1",
@@ -521,6 +533,8 @@
     "@catamorphic/fastify-plugin": ["@catamorphic/fastify-plugin@workspace:packages/fastify-plugin"],
 
     "@catamorphic/git": ["@catamorphic/git@workspace:packages/git"],
+
+    "@catamorphic/microsandbox": ["@catamorphic/microsandbox@workspace:packages/microsandbox"],
 
     "@catamorphic/otel": ["@catamorphic/otel@workspace:packages/otel"],
 
@@ -1073,6 +1087,16 @@
     "@speed-highlight/core": ["@speed-highlight/core@1.2.15", "", {}, "sha512-BMq1K3DsElxDWawkX6eLg9+CKJrTVGCBAWVuHXVUV2u0s2711qiChLSId6ikYPfxhdYocLNt3wWwSvDiTvFabw=="],
 
     "@standard-schema/spec": ["@standard-schema/spec@1.1.0", "", {}, "sha512-l2aFy5jALhniG5HgqrD6jXLi/rUWrKvqN/qJx6yoJsgKhblVd+iqqU4RCXavm/jPityDo5TCvKMnpjKnOriy0w=="],
+
+    "@superradcompany/microsandbox-darwin-arm64": ["@superradcompany/microsandbox-darwin-arm64@0.6.7", "", { "os": "darwin", "cpu": "arm64" }, "sha512-uaRsjIoWJqaUSqGoUxxpodTVJECDHJO1wJR0rh9FXevweNAnQlwqsGzmE9j/NF7Q5l/KB4sTjp7LVTAtw8wqTg=="],
+
+    "@superradcompany/microsandbox-linux-arm64-gnu": ["@superradcompany/microsandbox-linux-arm64-gnu@0.6.7", "", { "os": "linux", "cpu": "arm64" }, "sha512-oL5l8YQg9owGuHsGZKJv1biaVGjMvye87R6t4cfg1sPMfxxU8Z8pY4HSv3cd92/auDo/MiXqtpPM8GOpPcAk1w=="],
+
+    "@superradcompany/microsandbox-linux-x64-gnu": ["@superradcompany/microsandbox-linux-x64-gnu@0.6.7", "", { "os": "linux", "cpu": "x64" }, "sha512-fFTDskm79zYOBFFMMi3ok4JUHD0lxRCN0X2vghdMutLnAoa/T/FjTzzvuQ9A98oddwKSaD0Mtow5Ggp+hEtzdQ=="],
+
+    "@superradcompany/microsandbox-win32-arm64-msvc": ["@superradcompany/microsandbox-win32-arm64-msvc@0.6.7", "", { "os": "win32", "cpu": "arm64" }, "sha512-qxp4QftpSUq0d0TCXv/jXdzRZr0QDS7vtDaF/8Ghq51NuMy6e47BYUmcjapj0Is+KJhTHhum/IQsx7en/IMwoQ=="],
+
+    "@superradcompany/microsandbox-win32-x64-msvc": ["@superradcompany/microsandbox-win32-x64-msvc@0.6.7", "", { "os": "win32", "cpu": "x64" }, "sha512-a5SH8e2brZzI+dPBdAr4i4e+1mZXdMdKXbgTudBJMR8zGuUl3y3bQKe0iLxInSjlmt5CMHkNkVsyZocPuvRozQ=="],
 
     "@tailwindcss/node": ["@tailwindcss/node@4.3.3", "", { "dependencies": { "@jridgewell/remapping": "^2.3.5", "enhanced-resolve": "^5.24.1", "jiti": "^2.7.0", "lightningcss": "1.32.0", "magic-string": "^0.30.21", "source-map-js": "^1.2.1", "tailwindcss": "4.3.3" } }, "sha512-/T8IKEsf9VTU6tLjgC7+sv2mOPtQxzE2jMw7u4Tt40Tx+QSZxpzh95/H6cMKoja9XuW7iMdLJYBB0o9G1CaAgg=="],
 
@@ -1691,6 +1715,8 @@
     "merge2": ["merge2@1.4.1", "", {}, "sha512-8q7VEgMJW4J8tcfVPy8g09NcQwZdbwFEqhe/WZkoIzjn/3TGDwtOCYtXGxA3O8tPzpczCCDgv+P2P5y00ZJOOg=="],
 
     "micromatch": ["micromatch@4.0.8", "", { "dependencies": { "braces": "^3.0.3", "picomatch": "^2.3.1" } }, "sha512-PXwfBhYu0hBCPw8Dn0E+WDYb7af3dSLVWKi3HGv84IdF4TyFoC0ysxFd0Goxw7nSv4T/PzEJQxsYsEiFCKo2BA=="],
+
+    "microsandbox": ["microsandbox@0.6.7", "", { "optionalDependencies": { "@superradcompany/microsandbox-darwin-arm64": "0.6.7", "@superradcompany/microsandbox-linux-arm64-gnu": "0.6.7", "@superradcompany/microsandbox-linux-x64-gnu": "0.6.7", "@superradcompany/microsandbox-win32-arm64-msvc": "0.6.7", "@superradcompany/microsandbox-win32-x64-msvc": "0.6.7" }, "bin": { "microsandbox": "bin/microsandbox.cjs", "msb": "bin/microsandbox.cjs" } }, "sha512-N7yUmOPxSYNrwV2uf21pVrMuZ1+/TReFBrFx1WK0T5aQ9KB9kqRHceMlJsA8WpxUl3CZwlSmvOA4F0ygYbfQ5Q=="],
 
     "mime": ["mime@3.0.0", "", { "bin": { "mime": "cli.js" } }, "sha512-jSCU7/VB1loIWBZe14aEYHU/+1UMEHoaO7qxCOVJOw9GgH72VAWppxNcjU+x9a2k3GSIBXNKxXQFqRvvZ7vr3A=="],
 

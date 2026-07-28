@@ -12,15 +12,23 @@ import { toProtocolJson } from "./supervisor-protocol.js";
 
 export interface BunWorkerFactoryOptions {
   workerEntryUrl?: URL;
+  /**
+   * Where invocation children write stdout. Framed transports (stdio
+   * supervisor) reserve the supervisor's stdout for protocol frames, so
+   * workflow output must go to stderr instead of being inherited.
+   */
+  childStdout?: "inherit" | "stderr";
 }
 
 export class BunWorkerFactory implements RuntimeInvocationWorkerFactory {
   private readonly workerEntryUrl: URL;
+  private readonly childStdout: "inherit" | "stderr";
 
   constructor(options: BunWorkerFactoryOptions = {}) {
     this.workerEntryUrl =
       options.workerEntryUrl ??
       new URL("./supervisor-worker.js", import.meta.url);
+    this.childStdout = options.childStdout ?? "inherit";
   }
 
   create(args: {
@@ -29,6 +37,7 @@ export class BunWorkerFactory implements RuntimeInvocationWorkerFactory {
     return new BunInvocationWorker({
       invocation: args.invocation,
       workerEntryUrl: this.workerEntryUrl,
+      childStdout: this.childStdout,
     });
   }
 }
@@ -36,6 +45,7 @@ export class BunWorkerFactory implements RuntimeInvocationWorkerFactory {
 interface BunInvocationWorkerOptions {
   invocation: ResolvedRuntimeInvocation;
   workerEntryUrl: URL;
+  childStdout: "inherit" | "stderr";
 }
 
 class BunInvocationWorker implements RuntimeInvocationWorker {
@@ -80,7 +90,12 @@ class BunInvocationWorker implements RuntimeInvocationWorker {
           ),
         },
         serialization: "json",
-        stdio: ["ignore", "inherit", "inherit", "ipc"],
+        stdio: [
+          "ignore",
+          this.options.childStdout === "stderr" ? 2 : "inherit",
+          "inherit",
+          "ipc",
+        ],
       });
     } catch (error) {
       return Promise.reject(this.infrastructureError(error));

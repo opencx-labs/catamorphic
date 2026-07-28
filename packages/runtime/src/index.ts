@@ -26,6 +26,15 @@ export {
   startBunSupervisor,
 } from "./supervisor-http.js";
 export type {
+  StdioSupervisor,
+  StdioSupervisorErrorCode,
+  StdioSupervisorInput,
+  StdioSupervisorFrame,
+  StdioSupervisorOptions,
+  StdioSupervisorRequestFrame,
+} from "./supervisor-stdio.js";
+export { startStdioSupervisor } from "./supervisor-stdio.js";
+export type {
   RuntimeArtifactIdentity,
   RuntimeBatchProcessTarget,
   RuntimeBatchSinkTarget,
