@@ -14,7 +14,6 @@ import {
 } from "@catamorphic/ui";
 import { useSetAtom } from "jotai";
 import { useCallback, useEffect, useRef, useState } from "react";
-import { AgentChat } from "../components/catamorphic/agent-chat.js";
 import { MonacoCodeEditor } from "../components/catamorphic/monaco-editor.js";
 
 export function WorkflowScreen({
@@ -143,14 +142,6 @@ function WorkflowScreenInner({
         <div className="flex min-h-0 flex-1">
           <div className="relative min-w-0 flex-1">
             <WorkflowCanvas />
-            <div className="pointer-events-none absolute inset-x-0 bottom-4 z-10 flex justify-center px-6">
-              <AgentChat
-                projectId={projectId}
-                className="pointer-events-auto"
-                title={workflowName}
-                placeholder="Describe a change to this workflow…"
-              />
-            </div>
           </div>
           <DetailPanel
             code={code}

@@ -111,6 +111,59 @@ kbd {
 .app-drag {
   -webkit-app-region: drag;
 }
+
+/* New chat bubble pop-in (width reveal + scale, one shot on mount) */
+@keyframes bubble-in {
+  from {
+    width: 0;
+    transform: scale(0.4);
+    opacity: 0;
+  }
+  to {
+    width: 36px;
+    transform: scale(1);
+    opacity: 1;
+  }
+}
+
+.animate-bubble-in {
+  animation: bubble-in 200ms cubic-bezier(0.2, 0, 0, 1);
+}
+
+/* Closed chat bubble collapse (bubble-in reversed; forwards so the element
+   holds the collapsed frame until React unmounts it on animationend) */
+@keyframes bubble-out {
+  from {
+    width: 36px;
+    transform: scale(1);
+    opacity: 1;
+  }
+  to {
+    width: 0;
+    transform: scale(0.4);
+    opacity: 0;
+  }
+}
+
+.animate-bubble-out {
+  animation: bubble-out 200ms cubic-bezier(0.2, 0, 0, 1) forwards;
+}
+
+/* Chat dock rise-in, matching its collapse transition in reverse */
+@keyframes dock-in {
+  from {
+    transform: translateY(16px) scale(0.985);
+    opacity: 0;
+  }
+  to {
+    transform: translateY(0) scale(1);
+    opacity: 1;
+  }
+}
+
+.animate-dock-in {
+  animation: dock-in 200ms cubic-bezier(0.2, 0, 0, 1);
+}
 .app-no-drag {
   -webkit-app-region: no-drag;
 }
