@@ -1,0 +1,25 @@
+appId: dev.catamorphic.desktop
+productName: Catamorphic
+directories:
+  output: release
+files:
+  - out/**
+  - package.json
+# Packages that load assets or native code from disk at runtime must escape
+# the asar archive: pglite (wasm), microsandbox (NAPI addon + platform
+# binaries), catamorphic db migrations (.sql read via fs), and the runtime
+# dist files the stdio provider uploads into sandboxes.
+asarUnpack:
+  - "**/node_modules/@electric-sql/pglite/**"
+  - "**/node_modules/microsandbox/**"
+  - "**/node_modules/@superradcompany/**"
+  - "**/node_modules/@catamorphic/db/migrations/**"
+  - "**/node_modules/@catamorphic/runtime/dist/**"
+mac:
+  category: public.app-category.developer-tools
+  target:
+    - dmg
+    - zip
+linux:
+  target:
+    - AppImage

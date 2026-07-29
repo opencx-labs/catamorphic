@@ -240,7 +240,7 @@ export class AgentSessionsService {
       .selectFrom("agent_messages")
       .where("session_id", "=", sessionId)
       .selectAll()
-      .orderBy("created_at", "asc")
+      .orderBy("seq", "asc")
       .execute();
     return { ...mapSession(row), messages: messages.map(mapMessage) };
   }

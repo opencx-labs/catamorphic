@@ -1,0 +1,14 @@
+{
+  "$schema": "https://ui.shadcn.com/schema/registry-item.json",
+  "name": "sessions-list",
+  "type": "registry:component",
+  "description": "List of a project's agent sessions. Headers and new-chat actions are host chrome; pair selection with a controlled AgentChat sessionId. Uses useAgentSessions from @catamorphic/react.",
+  "dependencies": ["@catamorphic/react", "lucide-react"],
+  "registryDependencies": ["@catamorphic/catamorphic-provider"],
+  "files": [
+    {
+      "path": "components/catamorphic/sessions-list.tsx",
+      "type": "registry:component"
+    }
+  ]
+}

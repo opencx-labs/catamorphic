@@ -327,9 +327,7 @@ export class StdioDeploymentRuntimeProvider
             (event) => event.sequence > cursor.sequence,
           );
           if (fresh.length === 0) return;
-          cursor.sequence = Math.max(
-            ...fresh.map((event) => event.sequence),
-          );
+          cursor.sequence = Math.max(...fresh.map((event) => event.sequence));
           reporting = reporting.then(() =>
             sink
               .report({

@@ -1,12 +1,12 @@
-import {
-  type CreateSandboxOpts,
-  type DeploymentRuntimeProvider,
-  type ExecOpts,
-  type ExecResult,
-  type GitCloneOpts,
-  type SandboxHandle,
-  type SandboxProvider,
-  type SandboxStatus,
+import type {
+  CreateSandboxOpts,
+  DeploymentRuntimeProvider,
+  ExecOpts,
+  ExecResult,
+  GitCloneOpts,
+  SandboxHandle,
+  SandboxProvider,
+  SandboxStatus,
 } from "@catamorphic/sandbox";
 import { Sandbox } from "microsandbox";
 import { StdioDeploymentRuntimeProvider } from "./stdio-runtime-provider.js";
@@ -36,7 +36,19 @@ export interface MicrosandboxProviderConfig {
   /** Seconds of inactivity before the sandbox auto-stops. */
   idleTimeoutSeconds?: number;
   namePrefix?: string;
+  /**
+   * Shell command run once inside every new sandbox before it is handed to
+   * the caller. Defaults to installing git when the image lacks it — core's
+   * agent sessions require git for change detection, and common runtime
+   * images (oven/bun) don't ship it. Pass an empty string to disable.
+   */
+  setupCommand?: string;
 }
+
+/** Runs once per new sandbox; ~20s on first use, no-op when git exists. */
+const DEFAULT_SETUP_COMMAND =
+  "command -v git >/dev/null 2>&1 || " +
+  "(apt-get update -qq && apt-get install -y -qq git)";
 
 export class MicrosandboxSandboxProvider implements SandboxProvider {
   readonly workspaceRoot = "/workspace";
@@ -51,6 +63,7 @@ export class MicrosandboxSandboxProvider implements SandboxProvider {
       cpus: config?.cpus ?? DEFAULT_CPUS,
       idleTimeoutSeconds: config?.idleTimeoutSeconds ?? 15 * 60,
       namePrefix: config?.namePrefix ?? "cata",
+      setupCommand: config?.setupCommand ?? DEFAULT_SETUP_COMMAND,
     };
     this.deploymentRuntime = new StdioDeploymentRuntimeProvider({
       connect: (sandboxId) => this.connect(sandboxId),
@@ -74,6 +87,15 @@ export class MicrosandboxSandboxProvider implements SandboxProvider {
     if (opts.labels) builder = builder.labels(opts.labels);
     const sandbox = await builder.create();
     this.connections.set(name, sandbox);
+    if (this.config.setupCommand) {
+      const setup = await this.executeCommand(name, this.config.setupCommand, {
+        timeout: 300,
+      });
+      if (setup.exitCode !== 0) {
+        await this.destroySandbox(name).catch(() => {});
+        throw new Error(`Sandbox setup command failed: ${setup.result}`);
+      }
+    }
     return {
       id: name,
       providerId: name,
@@ -125,7 +147,8 @@ export class MicrosandboxSandboxProvider implements SandboxProvider {
     const stderr = output.stderr();
     return {
       exitCode: output.code,
-      result: stderr.length > 0 ? `${stdout}${stdout ? "\n" : ""}${stderr}` : stdout,
+      result:
+        stderr.length > 0 ? `${stdout}${stdout ? "\n" : ""}${stderr}` : stdout,
     };
   }
 
@@ -166,7 +189,9 @@ export class MicrosandboxSandboxProvider implements SandboxProvider {
     opts?: GitCloneOpts,
   ): Promise<void> {
     const cloneUrl = withCredentials(url, opts);
-    const branchArg = opts?.branch ? ` --branch ${shellQuote(opts.branch)}` : "";
+    const branchArg = opts?.branch
+      ? ` --branch ${shellQuote(opts.branch)}`
+      : "";
     const clone = await this.executeCommand(
       sandboxId,
       `git clone${branchArg} ${shellQuote(cloneUrl)} ${shellQuote(path)}`,

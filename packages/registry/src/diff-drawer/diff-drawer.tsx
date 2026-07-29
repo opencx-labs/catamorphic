@@ -25,11 +25,11 @@ export interface DiffDrawerProps {
 
 function defaultRenderDiff(item: DiffItem) {
   return (
-    <div className="grid h-full grid-cols-2 divide-x divide-neutral-800">
-      <pre className="m-0 overflow-auto bg-neutral-950 p-3 text-xs text-neutral-200 font-mono whitespace-pre">
+    <div className="grid h-full grid-cols-2 divide-x divide-border">
+      <pre className="m-0 overflow-auto bg-bg-inset p-3 text-xs text-fg font-mono whitespace-pre">
         {item.original || "(empty)"}
       </pre>
-      <pre className="m-0 overflow-auto bg-neutral-950 p-3 text-xs text-neutral-200 font-mono whitespace-pre">
+      <pre className="m-0 overflow-auto bg-bg-inset p-3 text-xs text-fg font-mono whitespace-pre">
         {item.modified || "(empty)"}
       </pre>
     </div>
@@ -55,24 +55,22 @@ export function DiffDrawer({
 
   return (
     <div className="fixed inset-0 z-50 flex items-stretch justify-end bg-black/60">
-      <div className="bg-neutral-950 border-l border-neutral-800 w-[90vw] max-w-[1200px] flex flex-col">
-        <div className="flex items-center justify-between px-4 py-3 border-b border-neutral-800 shrink-0">
-          <div className="text-sm font-semibold text-neutral-200">{title}</div>
+      <div className="bg-bg-inset border-l border-border w-[90vw] max-w-[1200px] flex flex-col">
+        <div className="flex items-center justify-between px-4 py-3 border-b border-border shrink-0">
+          <div className="text-sm font-semibold text-fg">{title}</div>
           <button
             type="button"
             onClick={onClose}
-            className="text-neutral-400 hover:text-neutral-100 text-lg leading-none cursor-pointer"
+            className="text-fg-muted hover:text-fg text-lg leading-none cursor-pointer"
             aria-label="Close"
           >
             ×
           </button>
         </div>
         <div className="flex flex-1 min-h-0">
-          <div className="w-[260px] shrink-0 border-r border-neutral-800 overflow-y-auto py-2">
+          <div className="w-[260px] shrink-0 border-r border-border overflow-y-auto py-2">
             {diffs.length === 0 ? (
-              <div className="px-3 py-2 text-xs text-neutral-500">
-                No changes
-              </div>
+              <div className="px-3 py-2 text-xs text-fg-muted">No changes</div>
             ) : (
               diffs.map((d) => (
                 <button
@@ -81,8 +79,8 @@ export function DiffDrawer({
                   onClick={() => setActivePath(d.path)}
                   className={`w-full text-left px-3 py-1.5 text-xs font-mono truncate cursor-pointer ${
                     d.path === activePath
-                      ? "bg-neutral-800 text-neutral-100"
-                      : "text-neutral-400 hover:bg-neutral-900"
+                      ? "bg-bg-overlay text-fg"
+                      : "text-fg-muted hover:bg-bg-overlay"
                   }`}
                   title={d.path}
                 >
@@ -95,14 +93,14 @@ export function DiffDrawer({
             {active ? (
               renderDiff(active)
             ) : (
-              <div className="p-6 text-sm text-neutral-500">
+              <div className="p-6 text-sm text-fg-muted">
                 Select a file to view the diff.
               </div>
             )}
           </div>
         </div>
         {footer && (
-          <div className="px-4 py-3 border-t border-neutral-800 flex items-center justify-end gap-2 shrink-0">
+          <div className="px-4 py-3 border-t border-border flex items-center justify-end gap-2 shrink-0">
             {footer}
           </div>
         )}

@@ -88,7 +88,7 @@ export function ProjectEditor({
     <div className="flex flex-col h-full">
       <div className="flex flex-1 min-h-0">
         {renderSidebar ? (
-          <div className="w-[240px] shrink-0 border-r border-neutral-800">
+          <div className="w-[240px] shrink-0 border-r border-border">
             {renderSidebar({
               files,
               activeFile,
@@ -105,8 +105,8 @@ export function ProjectEditor({
           />
         )}
         <div className="flex-1 min-w-0 flex flex-col">
-          <div className="flex items-center justify-between border-b border-neutral-800 bg-neutral-950 px-3 py-1.5">
-            <span className="text-xs font-mono text-neutral-400">
+          <div className="flex items-center justify-between border-b border-border bg-bg-inset px-3 py-1.5">
+            <span className="text-xs font-mono text-fg-muted">
               {activeFile ?? "(no file selected)"}
             </span>
             {activeFile && drafts[activeFile] !== undefined ? (
@@ -114,7 +114,7 @@ export function ProjectEditor({
                 type="button"
                 onClick={handleSave}
                 disabled={writeFile.isPending}
-                className="h-7 cursor-pointer rounded border border-neutral-700 bg-neutral-900 px-2 text-xs text-neutral-200 hover:border-neutral-500 disabled:opacity-50"
+                className="h-7 cursor-pointer rounded border border-border-strong bg-bg-overlay px-2 text-xs text-fg hover:border-border-strong disabled:opacity-50"
               >
                 {writeFile.isPending ? "Saving…" : "Save"}
               </button>
@@ -129,7 +129,7 @@ export function ProjectEditor({
                 readOnly,
               })
             ) : (
-              <div className="flex h-full items-center justify-center text-sm text-neutral-500">
+              <div className="flex h-full items-center justify-center text-sm text-fg-muted">
                 Select a file from the tree to start editing.
               </div>
             )}
@@ -155,7 +155,7 @@ function DefaultFileList({
   onSelectFile: (path: string) => void;
 }) {
   return (
-    <ul className="w-[240px] shrink-0 overflow-auto border-r border-neutral-800 bg-neutral-950 p-1 text-sm">
+    <ul className="w-[240px] shrink-0 overflow-auto border-r border-border bg-bg-inset p-1 text-sm">
       {files.map((file) => {
         const isActive = file.path === activeFile;
         const isModified = modifiedFiles.has(file.path);
@@ -167,8 +167,8 @@ function DefaultFileList({
               className={
                 "w-full text-left px-2 py-1 rounded font-mono text-xs " +
                 (isActive
-                  ? "bg-neutral-800 text-neutral-100"
-                  : "text-neutral-400 hover:bg-neutral-900 hover:text-neutral-200")
+                  ? "bg-bg-overlay text-fg"
+                  : "text-fg-muted hover:bg-bg-overlay hover:text-fg")
               }
             >
               {isModified ? "● " : "  "}

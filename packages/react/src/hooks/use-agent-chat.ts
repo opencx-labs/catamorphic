@@ -8,6 +8,18 @@ import { useAgentSession } from "./use-agent-session.js";
 import { useCreateAgentSession } from "./use-create-agent-session.js";
 import { useSendAgentMessage } from "./use-send-agent-message.js";
 
+export interface UseAgentChatOptions {
+  /**
+   * Open an existing session instead of lazily creating one on first send.
+   * When provided, the hook resets its chat state whenever this changes, so
+   * hosts can drive session selection from a sidebar. Lazily created sessions
+   * are reported through {@link UseAgentChatOptions.onSessionCreated}.
+   */
+  sessionId?: string;
+  /** Called when the hook lazily creates a session on first send. */
+  onSessionCreated?: (sessionId: string) => void;
+}
+
 export interface UseAgentChatResult {
   sessionId: string | null;
   messages: AgentMessage[];
@@ -34,24 +46,43 @@ type QueuedMessage = OptimisticAgentMessage;
  */
 export function useAgentChat(
   projectId: string | undefined,
+  options: UseAgentChatOptions = {},
 ): UseAgentChatResult {
+  const controlledSessionId = options.sessionId ?? null;
   const [activeSession, setActiveSession] = useState<{
     projectId: string | undefined;
+    controlledSessionId: string | null;
     sessionId: string | null;
-  }>({ projectId, sessionId: null });
-  if (activeSession.projectId !== projectId) {
-    setActiveSession({ projectId, sessionId: null });
-  }
+  }>({ projectId, controlledSessionId, sessionId: controlledSessionId });
   const [sendInProgress, setSendInProgress] = useState(false);
   const [optimisticMessages, setOptimisticMessages] = useState<
     OptimisticAgentMessage[]
   >([]);
   const activeSessionRef = useRef<{
     projectId: string | undefined;
+    controlledSessionId: string | null;
     sessionId: string | null;
-  }>({ projectId, sessionId: null });
-  if (activeSessionRef.current.projectId !== projectId) {
-    activeSessionRef.current = { projectId, sessionId: null };
+  }>({ projectId, controlledSessionId, sessionId: controlledSessionId });
+  if (
+    activeSession.projectId !== projectId ||
+    activeSession.controlledSessionId !== controlledSessionId
+  ) {
+    setActiveSession({
+      projectId,
+      controlledSessionId,
+      sessionId: controlledSessionId,
+    });
+    setOptimisticMessages([]);
+  }
+  if (
+    activeSessionRef.current.projectId !== projectId ||
+    activeSessionRef.current.controlledSessionId !== controlledSessionId
+  ) {
+    activeSessionRef.current = {
+      projectId,
+      controlledSessionId,
+      sessionId: controlledSessionId,
+    };
   }
   const queueRef = useRef<QueuedMessage[]>([]);
   const processingRef = useRef(false);
@@ -73,8 +104,17 @@ export function useAgentChat(
     const targetSessionId =
       existingSessionId ?? (await createSession.mutateAsync({})).id;
     if (!existingSessionId) {
-      activeSessionRef.current = { projectId, sessionId: targetSessionId };
-      setActiveSession({ projectId, sessionId: targetSessionId });
+      activeSessionRef.current = {
+        projectId,
+        controlledSessionId,
+        sessionId: targetSessionId,
+      };
+      setActiveSession({
+        projectId,
+        controlledSessionId,
+        sessionId: targetSessionId,
+      });
+      options.onSessionCreated?.(targetSessionId);
     }
 
     await sendMessage.mutateAsync({
@@ -139,8 +179,12 @@ export function useAgentChat(
     send,
     startNewSession: () => {
       if (!processingRef.current) {
-        activeSessionRef.current = { projectId, sessionId: null };
-        setActiveSession({ projectId, sessionId: null });
+        activeSessionRef.current = {
+          projectId,
+          controlledSessionId,
+          sessionId: null,
+        };
+        setActiveSession({ projectId, controlledSessionId, sessionId: null });
         setOptimisticMessages([]);
       }
     },

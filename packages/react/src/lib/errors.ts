@@ -76,10 +76,12 @@ function extractMessage(body: unknown): string | undefined {
   if (typeof body === "string") return body || undefined;
   if (typeof body !== "object") return undefined;
   const record = body as Record<string, unknown>;
-  const err = record.error;
-  if (typeof err === "string" && err.length > 0) return err;
+  // Fastify error envelopes put the generic status text in `error`
+  // ("Internal Server Error") and the actual cause in `message` — prefer it.
   const msg = record.message;
   if (typeof msg === "string" && msg.length > 0) return msg;
+  const err = record.error;
+  if (typeof err === "string" && err.length > 0) return err;
   return undefined;
 }
 

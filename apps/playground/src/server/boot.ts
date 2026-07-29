@@ -20,6 +20,7 @@ import {
   type AppBundleStore,
   type Catamorphic,
   createCatamorphic,
+  FsBundleStore,
 } from "@catamorphic/server-sdk";
 
 /** Fixed demo identity — the playground stands in for the host's auth. */
@@ -189,40 +190,6 @@ function resolveAppBundleStore(): AppBundleStore {
     });
   }
   return new FsBundleStore(path.join(DATA_DIR, "app-bundles"));
-}
-
-class FsBundleStore implements AppBundleStore {
-  constructor(private readonly root: string) {}
-
-  private resolve(key: string): string {
-    const target = path.join(this.root, key);
-    if (!target.startsWith(this.root + path.sep)) {
-      throw new Error(`Invalid bundle key: ${key}`);
-    }
-    return target;
-  }
-
-  async get(key: string) {
-    const fs = await import("node:fs/promises");
-    try {
-      const data = await fs.readFile(this.resolve(key));
-      return { data: new Uint8Array(data), etag: "fs" };
-    } catch {
-      return null;
-    }
-  }
-
-  async put(key: string, data: Uint8Array) {
-    const fs = await import("node:fs/promises");
-    const target = this.resolve(key);
-    await fs.mkdir(path.dirname(target), { recursive: true });
-    await fs.writeFile(target, data);
-  }
-
-  async deletePrefix(prefix: string) {
-    const fs = await import("node:fs/promises");
-    await fs.rm(this.resolve(prefix), { recursive: true, force: true });
-  }
 }
 
 export async function bootCatamorphic(): Promise<Catamorphic> {

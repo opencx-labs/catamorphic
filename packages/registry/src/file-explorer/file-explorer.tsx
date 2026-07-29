@@ -60,7 +60,7 @@ function TreeNode({
     return (
       <div>
         <div
-          className="flex items-center gap-1.5 px-2 py-1 text-xs text-neutral-500 select-none"
+          className="flex items-center gap-1.5 px-2 py-1 text-xs text-fg-muted select-none"
           style={{ paddingLeft: 8 + depth * 12 }}
         >
           <svg
@@ -68,7 +68,7 @@ function TreeNode({
             height="12"
             viewBox="0 0 16 16"
             fill="currentColor"
-            className="shrink-0 text-neutral-600"
+            className="shrink-0 text-fg-faint"
             role="img"
             aria-label="Folder"
           >
@@ -96,8 +96,8 @@ function TreeNode({
       onClick={() => onSelect(node.path)}
       className={`w-full text-left flex items-center gap-1.5 px-2 py-1 text-xs transition-colors ${
         isActive
-          ? "bg-blue-500/10 text-blue-400"
-          : "text-neutral-400 hover:bg-neutral-800 hover:text-neutral-200"
+          ? "bg-accent/10 text-info"
+          : "text-fg-muted hover:bg-bg-overlay hover:text-fg"
       }`}
       style={{ paddingLeft: 8 + depth * 12 }}
     >
@@ -106,7 +106,7 @@ function TreeNode({
         height="12"
         viewBox="0 0 16 16"
         fill="currentColor"
-        className="shrink-0 text-neutral-600"
+        className="shrink-0 text-fg-faint"
         role="img"
         aria-label="File"
       >
@@ -114,7 +114,7 @@ function TreeNode({
       </svg>
       <span className="truncate">{node.name}</span>
       {isModified && (
-        <span className="ml-auto w-1.5 h-1.5 rounded-full bg-blue-400 shrink-0" />
+        <span className="ml-auto w-1.5 h-1.5 rounded-full bg-accent shrink-0" />
       )}
     </button>
   );
@@ -136,8 +136,8 @@ export function FileExplorer({
   const tree = useMemo(() => buildTree({ paths: Object.keys(files) }), [files]);
 
   return (
-    <div className="h-full flex flex-col bg-neutral-950 border-r border-neutral-800">
-      <div className="px-3 py-2 text-xs font-semibold text-neutral-500 uppercase tracking-wider border-b border-neutral-800">
+    <div className="h-full flex flex-col bg-bg-inset border-r border-border">
+      <div className="px-3 py-2 text-xs font-semibold text-fg-muted uppercase tracking-wider border-b border-border">
         Explorer
       </div>
       <div className="flex-1 overflow-y-auto py-1">

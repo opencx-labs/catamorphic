@@ -61,21 +61,21 @@ export function PluginsSettings({ projectId }: Props) {
       <div className="flex items-center justify-between mb-4">
         <div>
           <h2 className="text-lg font-semibold">Plugins</h2>
-          <p className="text-xs text-neutral-500 mt-1">
+          <p className="text-xs text-fg-muted mt-1">
             Attach packages that expose triggers and actions for this project.
           </p>
         </div>
         <button
           type="button"
           onClick={() => setPicking((v) => !v)}
-          className="h-9 cursor-pointer rounded border border-neutral-700 bg-neutral-900 px-3 text-sm font-medium text-neutral-200 transition-colors hover:border-neutral-500"
+          className="h-9 cursor-pointer rounded border border-border-strong bg-bg-overlay px-3 text-sm font-medium text-fg transition-colors hover:border-border-strong"
         >
           {picking ? "Cancel" : "Add plugin"}
         </button>
       </div>
 
       {error ? (
-        <div className="mb-4 rounded border border-red-800 bg-red-950/40 p-3 text-sm text-red-300">
+        <div className="mb-4 rounded border border-danger/60 bg-danger/10 p-3 text-sm text-danger">
           {error}
         </div>
       ) : null}
@@ -88,8 +88,8 @@ export function PluginsSettings({ projectId }: Props) {
             onClick={() => setEnvironment(value)}
             className={`h-8 rounded border px-3 text-xs font-medium ${
               environment === value
-                ? "border-blue-600 bg-blue-600/20 text-blue-300"
-                : "border-neutral-700 text-neutral-400"
+                ? "border-accent bg-accent/15 text-accent"
+                : "border-border-strong text-fg-muted"
             }`}
           >
             {value === "test" ? "Test secrets" : "Production secrets"}
@@ -98,11 +98,11 @@ export function PluginsSettings({ projectId }: Props) {
       </div>
 
       {picking ? (
-        <div className="mb-4 rounded border border-neutral-800 p-4">
+        <div className="mb-4 rounded border border-border p-4">
           {available.length === 0 ? (
-            <p className="text-sm text-neutral-500">
+            <p className="text-sm text-fg-muted">
               No plugins found in the local catalog. Set
-              <code className="ml-1 rounded bg-neutral-900 px-1">
+              <code className="ml-1 rounded bg-bg-overlay px-1">
                 CATAMORPHIC_LOCAL_PLUGINS_DIR
               </code>{" "}
               on the server and drop plugin packages in that directory.
@@ -115,14 +115,14 @@ export function PluginsSettings({ projectId }: Props) {
                   className="flex items-center justify-between gap-4"
                 >
                   <div>
-                    <p className="text-sm text-neutral-200">
+                    <p className="text-sm text-fg">
                       {plugin.displayName}{" "}
-                      <span className="text-neutral-500 font-mono text-xs">
+                      <span className="text-fg-muted font-mono text-xs">
                         {plugin.packageName}
                       </span>
                     </p>
                     {plugin.description ? (
-                      <p className="text-xs text-neutral-500 mt-1">
+                      <p className="text-xs text-fg-muted mt-1">
                         {plugin.description}
                       </p>
                     ) : null}
@@ -130,7 +130,7 @@ export function PluginsSettings({ projectId }: Props) {
                   <button
                     type="button"
                     onClick={() => handleAttach(plugin.packageName)}
-                    className="h-8 cursor-pointer rounded border border-blue-600 bg-blue-600/20 px-3 text-xs font-medium text-blue-300 transition-colors hover:bg-blue-600/30"
+                    className="h-8 cursor-pointer rounded border border-blue-600 bg-blue-600/20 px-3 text-xs font-medium text-blue-300 transition-colors hover:bg-accent/25"
                   >
                     Attach
                   </button>
@@ -142,11 +142,11 @@ export function PluginsSettings({ projectId }: Props) {
       ) : null}
 
       {loading && !attached ? (
-        <div className="text-sm text-neutral-500">Loading…</div>
+        <div className="text-sm text-fg-muted">Loading…</div>
       ) : null}
 
       {attached && attached.length === 0 ? (
-        <div className="border border-dashed border-neutral-800 rounded-lg p-6 text-center text-neutral-500 text-sm">
+        <div className="border border-dashed border-border rounded-lg p-6 text-center text-fg-muted text-sm">
           No plugins attached yet.
         </div>
       ) : null}
@@ -183,31 +183,29 @@ function AttachedPluginCard({
   onDetach: () => void | Promise<void>;
 }) {
   return (
-    <li className="rounded-lg border border-neutral-800 p-4">
+    <li className="rounded-lg border border-border p-4">
       <header className="flex items-start justify-between gap-4 mb-3">
         <div>
           <h3 className="text-sm font-medium">{plugin.displayName}</h3>
-          <p className="text-xs font-mono text-neutral-500">
+          <p className="text-xs font-mono text-fg-muted">
             {plugin.packageName}
             {plugin.version ? `@${plugin.version}` : ""}
           </p>
           {plugin.description ? (
-            <p className="text-xs text-neutral-500 mt-1">
-              {plugin.description}
-            </p>
+            <p className="text-xs text-fg-muted mt-1">{plugin.description}</p>
           ) : null}
         </div>
         <button
           type="button"
           onClick={onDetach}
-          className="h-8 cursor-pointer rounded border border-neutral-700 px-2 text-xs text-neutral-400 transition-colors hover:border-red-700 hover:text-red-300"
+          className="h-8 cursor-pointer rounded border border-border-strong px-2 text-xs text-fg-muted transition-colors hover:border-danger/60 hover:text-danger"
         >
           Detach
         </button>
       </header>
 
       {plugin.secrets.length === 0 ? (
-        <p className="text-xs text-neutral-500">
+        <p className="text-xs text-fg-muted">
           This plugin doesn&apos;t require any secrets.
         </p>
       ) : (
@@ -259,22 +257,22 @@ function SecretField({
     <form onSubmit={handleSave} className="grid gap-1">
       <label
         htmlFor={inputId}
-        className="text-xs text-neutral-300 flex items-center gap-2"
+        className="text-xs text-fg flex items-center gap-2"
       >
         <span>{secret.label}</span>
         {secret.required ? (
-          <span className="text-[10px] uppercase tracking-wider text-amber-400">
+          <span className="text-[10px] uppercase tracking-wider text-warning">
             required
           </span>
         ) : null}
         {hasValue ? (
-          <span className="text-[10px] uppercase tracking-wider text-emerald-400">
+          <span className="text-[10px] uppercase tracking-wider text-success">
             set
           </span>
         ) : null}
       </label>
       {secret.description ? (
-        <p className="text-[11px] text-neutral-500">{secret.description}</p>
+        <p className="text-[11px] text-fg-muted">{secret.description}</p>
       ) : null}
       <div className="flex gap-2">
         <input
@@ -289,20 +287,18 @@ function SecretField({
                 : "Enter value"
           }
           onChange={(e) => setValue(e.target.value)}
-          className="flex-1 h-8 rounded border border-neutral-700 bg-neutral-950 px-2 text-sm font-mono text-neutral-200 focus:border-blue-600 focus:outline-none"
+          className="flex-1 h-8 rounded border border-border-strong bg-bg-inset px-2 text-sm font-mono text-fg focus:border-accent focus:outline-none"
         />
         <button
           type="submit"
           disabled={!value || upsert.isPending}
-          className="h-8 cursor-pointer rounded border border-neutral-700 bg-neutral-900 px-3 text-xs font-medium text-neutral-200 transition-colors hover:border-neutral-500 disabled:cursor-not-allowed disabled:opacity-50"
+          className="h-8 cursor-pointer rounded border border-border-strong bg-bg-overlay px-3 text-xs font-medium text-fg transition-colors hover:border-border-strong disabled:cursor-not-allowed disabled:opacity-50"
         >
           {upsert.isPending ? "Saving…" : "Save"}
         </button>
       </div>
-      {err ? <p className="text-[11px] text-red-400">{err}</p> : null}
-      <code className="text-[10px] text-neutral-600 font-mono">
-        {secret.name}
-      </code>
+      {err ? <p className="text-[11px] text-danger">{err}</p> : null}
+      <code className="text-[10px] text-fg-faint font-mono">{secret.name}</code>
     </form>
   );
 }

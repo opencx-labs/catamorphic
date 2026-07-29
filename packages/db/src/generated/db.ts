@@ -50,6 +50,7 @@ export interface AgentMessages {
   id: Generated<string>;
   metadata: Json | null;
   role: string;
+  seq: Generated<Int8>;
   session_id: string;
 }
 

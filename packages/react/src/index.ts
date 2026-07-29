@@ -20,6 +20,7 @@ export {
   showRunDialogAtom,
 } from "./atoms.js";
 export {
+  type UseAgentChatOptions,
   type UseAgentChatResult,
   useAgentChat,
 } from "./hooks/use-agent-chat.js";

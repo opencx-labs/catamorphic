@@ -6,6 +6,8 @@ dist/
 .next/
 .turbo/
 *.tsbuildinfo
+apps/desktop/out/
+apps/desktop/release/
 
 # Environment
 .env

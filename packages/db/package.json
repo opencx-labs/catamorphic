@@ -36,6 +36,7 @@
     "pg": "^8.22.0"
   },
   "devDependencies": {
+    "@electric-sql/pglite": "^0.5.4",
     "@types/pg": "^8.20.0",
     "kysely-codegen": "^0.20.0"
   }

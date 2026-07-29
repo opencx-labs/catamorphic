@@ -1,0 +1,116 @@
+@import "tailwindcss";
+
+/*
+ * Catamorphic Desktop design tokens. See DESIGN.md for the rules.
+ * Dark-first: :root is the dark theme; light lives behind [data-theme=light].
+ */
+:root {
+  /* Surfaces */
+  --color-bg: #0a0a0b;
+  --color-bg-raised: #101012;
+  --color-bg-overlay: #16161a;
+  --color-bg-inset: #060607;
+
+  /* Borders */
+  --color-border: #232329;
+  --color-border-strong: #33333b;
+
+  /* Text */
+  --color-fg: #e6e6e9;
+  --color-fg-muted: #9a9aa3;
+  --color-fg-faint: #5c5c66;
+
+  /* Accent: muted terminal amber */
+  --color-accent: #d9a86c;
+  --color-accent-fg: #14100a;
+
+  /* Status (low chroma) */
+  --color-success: #7fb069;
+  --color-warning: #d9a86c;
+  --color-danger: #c46d6d;
+  --color-info: #6d9ec4;
+
+  /* Message tints */
+  --color-user-tint: #14202e;
+  --color-agent-tint: #101012;
+}
+
+[data-theme="light"] {
+  --color-bg: #f7f7f5;
+  --color-bg-raised: #ffffff;
+  --color-bg-overlay: #efefec;
+  --color-bg-inset: #ececea;
+  --color-border: #dcdcd7;
+  --color-border-strong: #c4c4bd;
+  --color-fg: #1c1c1f;
+  --color-fg-muted: #5f5f66;
+  --color-fg-faint: #9a9aa0;
+  --color-accent: #a8763a;
+  --color-accent-fg: #ffffff;
+  --color-success: #4d7a3a;
+  --color-warning: #a8763a;
+  --color-danger: #a04848;
+  --color-info: #3a6ea0;
+  --color-user-tint: #e3edf7;
+  --color-agent-tint: #ffffff;
+}
+
+@theme inline {
+  --color-bg: var(--color-bg);
+  --color-bg-raised: var(--color-bg-raised);
+  --color-bg-overlay: var(--color-bg-overlay);
+  --color-bg-inset: var(--color-bg-inset);
+  --color-border: var(--color-border);
+  --color-border-strong: var(--color-border-strong);
+  --color-fg: var(--color-fg);
+  --color-fg-muted: var(--color-fg-muted);
+  --color-fg-faint: var(--color-fg-faint);
+  --color-accent: var(--color-accent);
+  --color-accent-fg: var(--color-accent-fg);
+  --color-success: var(--color-success);
+  --color-warning: var(--color-warning);
+  --color-danger: var(--color-danger);
+  --color-info: var(--color-info);
+
+  --font-sans: "Inter", system-ui, -apple-system, sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, "SF Mono", monospace;
+
+  --radius-sm: 4px;
+  --radius-md: 6px;
+  --radius-lg: 10px;
+
+  --ease-standard: cubic-bezier(0.2, 0, 0, 1);
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+  margin: 0;
+}
+
+body {
+  background: var(--color-bg);
+  color: var(--color-fg);
+  font-family: var(--font-sans);
+  font-size: 13px;
+  -webkit-font-smoothing: antialiased;
+}
+
+code,
+pre,
+kbd {
+  font-family: var(--font-mono);
+}
+
+/* macOS traffic-light drag region */
+.app-drag {
+  -webkit-app-region: drag;
+}
+.app-no-drag {
+  -webkit-app-region: no-drag;
+}

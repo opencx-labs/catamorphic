@@ -38,6 +38,18 @@ async function readRegistryItem(itemDir: string): Promise<RegistryItem> {
   return JSON.parse(raw) as RegistryItem;
 }
 
+/**
+ * Cross-item imports in source live at `../<item>/<file>.js`; installed
+ * files all land flat in the same target directory, so rewrite them to
+ * sibling imports (`./<file>`).
+ */
+function rewriteCrossItemImports(content: string): string {
+  return content.replaceAll(
+    /from "\.\.\/[\w-]+\/([\w-]+)\.js"/g,
+    'from "./$1"',
+  );
+}
+
 async function inlineFiles(
   itemDir: string,
   item: RegistryItem,
@@ -47,7 +59,7 @@ async function inlineFiles(
     const sourceName = path.basename(file.path);
     const sourcePath = path.join(itemDir, sourceName);
     const content = await fs.readFile(sourcePath, "utf8");
-    files.push({ ...file, content });
+    files.push({ ...file, content: rewriteCrossItemImports(content) });
   }
   return { ...item, files };
 }

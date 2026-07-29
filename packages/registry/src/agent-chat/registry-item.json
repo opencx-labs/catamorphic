@@ -2,9 +2,12 @@
   "$schema": "https://ui.shadcn.com/schema/registry-item.json",
   "name": "agent-chat",
   "type": "registry:component",
-  "description": "Bottom-docked coding-agent chat with optimistic queued messages, live activity, expandable conversation history, and changed-file metadata.",
+  "description": "Coding-agent chat with optimistic queued messages, live activity, changed-file metadata, and dock/full variants. Renders conversation through chat-timeline.",
   "dependencies": ["@catamorphic/react", "lucide-react", "use-stick-to-bottom"],
-  "registryDependencies": ["@catamorphic/catamorphic-provider"],
+  "registryDependencies": [
+    "@catamorphic/catamorphic-provider",
+    "@catamorphic/chat-timeline"
+  ],
   "files": [
     {
       "path": "components/catamorphic/agent-chat.tsx",

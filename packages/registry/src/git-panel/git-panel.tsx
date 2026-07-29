@@ -54,12 +54,12 @@ export function GitPanel({ projectId, modifiedFiles }: GitPanelProps) {
   };
 
   return (
-    <div className="border-t border-neutral-800 bg-neutral-950 flex flex-col shrink-0">
+    <div className="border-t border-border bg-bg-inset flex flex-col shrink-0">
       <div className="flex items-center gap-2 px-3 py-1.5 w-full">
         <button
           type="button"
           onClick={() => setIsOpen((v) => !v)}
-          className="flex items-center gap-2 text-xs font-semibold text-neutral-500 uppercase tracking-wider hover:text-neutral-300 cursor-pointer"
+          className="flex items-center gap-2 text-xs font-semibold text-fg-muted uppercase tracking-wider hover:text-fg cursor-pointer"
         >
           <span
             className={`inline-block transition-transform ${isOpen ? "rotate-90" : ""}`}
@@ -69,19 +69,17 @@ export function GitPanel({ projectId, modifiedFiles }: GitPanelProps) {
           <span>Git</span>
         </button>
 
-        <span className="text-xs text-neutral-400">⎇ {branch}</span>
+        <span className="text-xs text-fg-muted">⎇ {branch}</span>
 
         {status && (status.ahead > 0 || status.behind > 0) ? (
-          <span className="text-xs text-neutral-500">
+          <span className="text-xs text-fg-muted">
             {status.ahead > 0 ? `↑${status.ahead}` : null}
             {status.behind > 0 ? ` ↓${status.behind}` : null}
           </span>
         ) : null}
 
         {modified.length > 0 ? (
-          <span className="text-xs text-blue-400">
-            {modified.length} modified
-          </span>
+          <span className="text-xs text-info">{modified.length} modified</span>
         ) : null}
 
         <div className="ml-auto flex items-center gap-2">
@@ -90,7 +88,7 @@ export function GitPanel({ projectId, modifiedFiles }: GitPanelProps) {
               type="button"
               onClick={handleDeploy}
               disabled={deploy.isPending}
-              className="text-xs px-2 py-1 rounded bg-blue-600 text-white hover:bg-blue-500 disabled:opacity-50 cursor-pointer"
+              className="text-xs px-2 py-1 rounded bg-accent text-accent-fg hover:opacity-90 disabled:opacity-50 cursor-pointer"
             >
               {deploy.isPending ? "Deploying…" : "Deploy"}
             </button>
@@ -101,25 +99,25 @@ export function GitPanel({ projectId, modifiedFiles }: GitPanelProps) {
       {isOpen ? (
         <div className="overflow-y-auto" style={{ maxHeight: 220 }}>
           {isDirty ? (
-            <div className="px-3 py-2 border-b border-neutral-900">
+            <div className="px-3 py-2 border-b border-border">
               <input
                 type="text"
                 value={commitMessage}
                 onChange={(e) => setCommitMessage(e.target.value)}
                 placeholder="Commit message (optional)"
-                className="w-full text-xs bg-neutral-900 border border-neutral-800 rounded px-2 py-1 text-neutral-200 placeholder-neutral-600 focus:outline-none focus:border-neutral-600"
+                className="w-full text-xs bg-bg-overlay border border-border rounded px-2 py-1 text-fg placeholder-fg-faint focus:outline-none focus:border-border-strong"
               />
             </div>
           ) : null}
 
           {error ? (
-            <div className="px-3 py-2 text-xs text-red-400 border-b border-neutral-900">
+            <div className="px-3 py-2 text-xs text-danger border-b border-border">
               {error}
             </div>
           ) : null}
 
           {modified.length === 0 ? (
-            <div className="px-3 py-4 text-xs text-neutral-600 text-center">
+            <div className="px-3 py-4 text-xs text-fg-faint text-center">
               No local changes
             </div>
           ) : (
@@ -127,9 +125,9 @@ export function GitPanel({ projectId, modifiedFiles }: GitPanelProps) {
               {modified.map((path) => (
                 <div
                   key={path}
-                  className="flex items-center gap-2 px-2 py-1 text-xs text-neutral-300"
+                  className="flex items-center gap-2 px-2 py-1 text-xs text-fg"
                 >
-                  <span className="text-blue-400 font-medium shrink-0">M</span>
+                  <span className="text-info font-medium shrink-0">M</span>
                   <span className="font-mono truncate">{path}</span>
                 </div>
               ))}
@@ -137,17 +135,17 @@ export function GitPanel({ projectId, modifiedFiles }: GitPanelProps) {
           )}
 
           {commitsQuery.data && commitsQuery.data.items.length > 0 ? (
-            <div className="px-1 pb-2 border-t border-neutral-900 mt-1 pt-2">
-              <div className="px-2 py-1 text-[10px] uppercase tracking-wider text-neutral-600">
+            <div className="px-1 pb-2 border-t border-border mt-1 pt-2">
+              <div className="px-2 py-1 text-[10px] uppercase tracking-wider text-fg-faint">
                 Recent commits
               </div>
               {commitsQuery.data.items.slice(0, 5).map((c) => (
                 <div
                   key={c.sha}
-                  className="flex items-center gap-2 px-2 py-1 text-xs text-neutral-400"
+                  className="flex items-center gap-2 px-2 py-1 text-xs text-fg-muted"
                   title={`${c.sha.slice(0, 7)} · ${c.author.name}`}
                 >
-                  <span className="text-neutral-600 font-mono shrink-0">
+                  <span className="text-fg-faint font-mono shrink-0">
                     {c.sha.slice(0, 7)}
                   </span>
                   <span className="truncate">{c.message}</span>

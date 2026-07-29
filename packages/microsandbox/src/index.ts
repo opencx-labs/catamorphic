@@ -1,6 +1,6 @@
 export {
-  MicrosandboxSandboxProvider,
   type MicrosandboxProviderConfig,
+  MicrosandboxSandboxProvider,
 } from "./sandbox-provider.js";
 export {
   StdioDeploymentRuntimeProvider,

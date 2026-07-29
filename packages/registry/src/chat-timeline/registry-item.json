@@ -1,0 +1,20 @@
+{
+  "$schema": "https://ui.shadcn.com/schema/registry-item.json",
+  "name": "chat-timeline",
+  "type": "registry:component",
+  "description": "Presentational conversation log: message bubbles, changed-file chips, live activity line, stick-to-bottom scrolling. Stateless \u2014 feed it from useAgentChat. Used by agent-chat.",
+  "dependencies": [
+    "@catamorphic/react",
+    "lucide-react",
+    "react-markdown",
+    "remark-gfm",
+    "use-stick-to-bottom"
+  ],
+  "registryDependencies": [],
+  "files": [
+    {
+      "path": "components/catamorphic/chat-timeline.tsx",
+      "type": "registry:component"
+    }
+  ]
+}

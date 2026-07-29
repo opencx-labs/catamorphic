@@ -1,5 +1,45 @@
 @import "tailwindcss";
 
+/*
+ * Catamorphic design tokens (see apps/desktop/DESIGN.md). Registry
+ * components style themselves exclusively through these.
+ */
+:root {
+  --color-bg: #0a0a0b;
+  --color-bg-raised: #101012;
+  --color-bg-overlay: #16161a;
+  --color-bg-inset: #060607;
+  --color-border: #232329;
+  --color-border-strong: #33333b;
+  --color-fg: #e6e6e9;
+  --color-fg-muted: #9a9aa3;
+  --color-fg-faint: #5c5c66;
+  --color-accent: #d9a86c;
+  --color-accent-fg: #14100a;
+  --color-success: #7fb069;
+  --color-warning: #d9a86c;
+  --color-danger: #c46d6d;
+  --color-info: #6d9ec4;
+}
+
+@theme inline {
+  --color-bg: var(--color-bg);
+  --color-bg-raised: var(--color-bg-raised);
+  --color-bg-overlay: var(--color-bg-overlay);
+  --color-bg-inset: var(--color-bg-inset);
+  --color-border: var(--color-border);
+  --color-border-strong: var(--color-border-strong);
+  --color-fg: var(--color-fg);
+  --color-fg-muted: var(--color-fg-muted);
+  --color-fg-faint: var(--color-fg-faint);
+  --color-accent: var(--color-accent);
+  --color-accent-fg: var(--color-accent-fg);
+  --color-success: var(--color-success);
+  --color-warning: var(--color-warning);
+  --color-danger: var(--color-danger);
+  --color-info: var(--color-info);
+}
+
 * {
   box-sizing: border-box;
 }

@@ -2,13 +2,13 @@
 
 /* Agent chat dock */
 .catamorphic-agent-dock {
-  --agent-dock-border: #303030;
+  --agent-dock-border: var(--color-border, #303030);
   --agent-dock-surface: rgba(18, 18, 18, 0.96);
-  --agent-dock-muted: #8a8a8a;
+  --agent-dock-muted: var(--color-fg-muted, #8a8a8a);
   display: flex;
   flex-direction: column;
   width: min(760px, 100%);
-  color: #f5f5f5;
+  color: var(--color-fg, #f5f5f5);
   font-family: system-ui, -apple-system, sans-serif;
   filter: drop-shadow(0 18px 45px rgba(0, 0, 0, 0.42));
 }
@@ -81,7 +81,7 @@
 
 .catamorphic-agent-dock-queued {
   margin-left: auto;
-  color: #737373;
+  color: var(--color-fg-muted, #737373);
   font-size: 11px;
   font-variant-numeric: tabular-nums;
 }
@@ -91,7 +91,7 @@
   justify-content: space-between;
   min-height: 48px;
   padding: 0 14px;
-  border-bottom: 1px solid #282828;
+  border-bottom: 1px solid var(--color-border, #282828);
 }
 
 .catamorphic-agent-dock-heading {
@@ -109,10 +109,10 @@
   width: 28px;
   height: 28px;
   flex: 0 0 auto;
-  border: 1px solid #3a3a3a;
+  border: 1px solid var(--color-border-strong, #3a3a3a);
   border-radius: 50%;
-  background: #222;
-  color: #d4d4d4;
+  background: var(--color-bg-overlay, #222);
+  color: var(--color-fg, #d4d4d4);
 }
 
 .catamorphic-agent-dock-actions {
@@ -132,7 +132,7 @@
   border: 0;
   border-radius: 7px;
   background: transparent;
-  color: #a3a3a3;
+  color: var(--color-fg-muted, #a3a3a3);
   cursor: pointer;
 }
 
@@ -185,7 +185,7 @@
 
 .catamorphic-agent-dock-role {
   margin-bottom: 4px;
-  color: #717171;
+  color: var(--color-fg-faint, #717171);
   font-size: 10px;
   font-weight: 650;
   letter-spacing: 0.08em;
@@ -201,7 +201,7 @@
 
 .catamorphic-agent-dock-working {
   gap: 8px;
-  color: #a3a3a3;
+  color: var(--color-fg-muted, #a3a3a3);
   font-size: 12px;
 }
 
@@ -212,7 +212,12 @@
 
 .catamorphic-agent-dock-shimmer {
   color: transparent;
-  background: linear-gradient(90deg, #737373 10%, #f5f5f5 42%, #737373 72%);
+  background: linear-gradient(
+    90deg,
+    var(--color-fg-muted, #737373) 10%,
+    var(--color-fg, #f5f5f5) 42%,
+    var(--color-fg-muted, #737373) 72%
+  );
   background-size: 220% 100%;
   background-clip: text;
   animation: catamorphic-agent-shimmer 1.7s linear infinite;
@@ -259,14 +264,14 @@
   border: 0;
   outline: 0;
   background: transparent;
-  color: #f5f5f5;
+  color: var(--color-fg, #f5f5f5);
   font: inherit;
   font-size: 13px;
   line-height: 1.35;
 }
 
 .catamorphic-agent-dock-composer:focus-within {
-  box-shadow: inset 0 -1px 0 #737373;
+  box-shadow: inset 0 -1px 0 var(--color-fg-muted, #737373);
 }
 
 .catamorphic-agent-dock-composer textarea::placeholder {
@@ -276,13 +281,13 @@
 .catamorphic-agent-dock-send {
   flex: 0 0 auto;
   border-radius: 9px;
-  background: #f5f5f5;
-  color: #111;
+  background: var(--color-fg, #f5f5f5);
+  color: var(--color-bg-raised, #111);
 }
 
 .catamorphic-agent-dock-expand {
   flex: 0 0 auto;
-  color: #8a8a8a;
+  color: var(--color-fg-muted, #8a8a8a);
 }
 
 .catamorphic-agent-dock-expand:hover:not(:disabled) {
@@ -294,10 +299,10 @@
   position: absolute;
   right: 18px;
   bottom: 14px;
-  border: 1px solid #3a3a3a;
+  border: 1px solid var(--color-border-strong, #3a3a3a);
   border-radius: 999px;
   background: #1b1b1b;
-  color: #d4d4d4;
+  color: var(--color-fg, #d4d4d4);
   box-shadow: 0 6px 20px rgba(0, 0, 0, 0.35);
 }
 
@@ -368,8 +373,8 @@
   flex-direction: column;
   width: 100%;
   height: 100%;
-  background: #0a0a0a;
-  color: #fafafa;
+  background: var(--color-bg, #0a0a0a);
+  color: var(--color-fg, #fafafa);
   font-family: system-ui, -apple-system, sans-serif;
 }
 
@@ -379,8 +384,8 @@
   justify-content: space-between;
   align-items: center;
   padding: 8px 16px;
-  border-bottom: 1px solid #262626;
-  background: #0f0f0f;
+  border-bottom: 1px solid var(--color-border, #262626);
+  background: var(--color-bg-raised, #0f0f0f);
 }
 
 .catamorphic-toolbar-left,
@@ -401,17 +406,17 @@
 .catamorphic-toolbar-btn {
   padding: 6px 12px;
   border-radius: 6px;
-  border: 1px solid #333;
-  background: #1a1a1a;
-  color: #a3a3a3;
+  border: 1px solid var(--color-border-strong, #333);
+  background: var(--color-bg-overlay, #1a1a1a);
+  color: var(--color-fg-muted, #a3a3a3);
   font-size: 13px;
   cursor: pointer;
   transition: all 0.15s;
 }
 
 .catamorphic-toolbar-btn:hover {
-  background: #262626;
-  color: #fafafa;
+  background: var(--color-border, #262626);
+  color: var(--color-fg, #fafafa);
 }
 
 .catamorphic-toolbar-btn-active {
@@ -421,13 +426,13 @@
 }
 
 .catamorphic-toolbar-run {
-  background: #1d4ed8;
-  border-color: #2563eb;
-  color: #fff;
+  background: var(--color-accent, #1d4ed8);
+  border-color: var(--color-accent, #2563eb);
+  color: var(--color-accent-fg, #fff);
 }
 
 .catamorphic-toolbar-run:hover {
-  background: #2563eb;
+  opacity: 0.9;
 }
 
 .catamorphic-toolbar-btn:disabled {
@@ -454,17 +459,17 @@
 .catamorphic-detail-panel {
   width: 420px;
   min-width: 340px;
-  border-left: 1px solid #262626;
+  border-left: 1px solid var(--color-border, #262626);
   display: flex;
   flex-direction: column;
-  background: #0f0f0f;
+  background: var(--color-bg-raised, #0f0f0f);
 }
 
 .catamorphic-detail-panel-header {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  border-bottom: 1px solid #262626;
+  border-bottom: 1px solid var(--color-border, #262626);
   padding: 0 8px 0 0;
 }
 
@@ -475,7 +480,7 @@
 .catamorphic-detail-tab {
   padding: 10px 20px;
   font-size: 13px;
-  color: #737373;
+  color: var(--color-fg-muted, #737373);
   background: none;
   border: none;
   border-bottom: 2px solid transparent;
@@ -484,12 +489,12 @@
 }
 
 .catamorphic-detail-tab:hover {
-  color: #a3a3a3;
+  color: var(--color-fg-muted, #a3a3a3);
 }
 
 .catamorphic-detail-tab-active {
-  color: #fafafa;
-  border-bottom-color: #3b82f6;
+  color: var(--color-fg, #fafafa);
+  border-bottom-color: var(--color-accent, #3b82f6);
 }
 
 .catamorphic-detail-close {
@@ -501,15 +506,15 @@
   border-radius: 6px;
   border: none;
   background: none;
-  color: #525252;
+  color: var(--color-fg-faint, #525252);
   cursor: pointer;
   font-size: 14px;
   transition: all 0.15s;
 }
 
 .catamorphic-detail-close:hover {
-  background: #262626;
-  color: #a3a3a3;
+  background: var(--color-border, #262626);
+  color: var(--color-fg-muted, #a3a3a3);
 }
 
 .catamorphic-detail-panel-body {
@@ -579,19 +584,19 @@
 
 .catamorphic-detail-icon {
   font-size: 14px;
-  color: #a3a3a3;
+  color: var(--color-fg-muted, #a3a3a3);
 }
 
 .catamorphic-detail-title {
   font-size: 18px;
   font-weight: 600;
   margin: 0;
-  color: #fafafa;
+  color: var(--color-fg, #fafafa);
 }
 
 .catamorphic-detail-description {
   font-size: 14px;
-  color: #a3a3a3;
+  color: var(--color-fg-muted, #a3a3a3);
   line-height: 1.5;
   margin: 0;
 }
@@ -607,24 +612,24 @@
   font-weight: 600;
   text-transform: uppercase;
   letter-spacing: 0.5px;
-  color: #525252;
+  color: var(--color-fg-faint, #525252);
 }
 
 .catamorphic-detail-code-inline {
   font-family: "Fira Code", "SF Mono", "JetBrains Mono", monospace;
   font-size: 13px;
-  color: #e5e5e5;
-  background: #1a1a1a;
+  color: var(--color-fg, #e5e5e5);
+  background: var(--color-bg-overlay, #1a1a1a);
   padding: 6px 10px;
   border-radius: 6px;
-  border: 1px solid #262626;
+  border: 1px solid var(--color-border, #262626);
   display: block;
   word-break: break-all;
 }
 
 .catamorphic-detail-source-range {
   font-size: 13px;
-  color: #737373;
+  color: var(--color-fg-muted, #737373);
   font-family: "Fira Code", "SF Mono", "JetBrains Mono", monospace;
 }
 
@@ -636,8 +641,8 @@
 
 .catamorphic-detail-param {
   padding: 10px 12px;
-  background: #1a1a1a;
-  border: 1px solid #262626;
+  background: var(--color-bg-overlay, #1a1a1a);
+  border: 1px solid var(--color-border, #262626);
   border-radius: 8px;
 }
 
@@ -650,35 +655,35 @@
 .catamorphic-detail-param-name {
   font-family: "Fira Code", "SF Mono", "JetBrains Mono", monospace;
   font-size: 13px;
-  color: #e5e5e5;
+  color: var(--color-fg, #e5e5e5);
   font-weight: 500;
 }
 
 .catamorphic-detail-param-type {
   font-size: 11px;
   padding: 2px 6px;
-  background: #262626;
+  background: var(--color-border, #262626);
   border-radius: 4px;
-  color: #3b82f6;
+  color: var(--color-accent, #3b82f6);
   font-family: "Fira Code", "SF Mono", "JetBrains Mono", monospace;
 }
 
 .catamorphic-detail-param-optional {
   font-size: 10px;
-  color: #525252;
+  color: var(--color-fg-faint, #525252);
   font-style: italic;
 }
 
 .catamorphic-detail-param-desc {
   font-size: 12px;
-  color: #737373;
+  color: var(--color-fg-muted, #737373);
   margin: 4px 0 0;
   line-height: 1.4;
 }
 
 .catamorphic-detail-param-default {
   font-size: 11px;
-  color: #a3a3a3;
+  color: var(--color-fg-muted, #a3a3a3);
   margin: 3px 0 0;
   font-style: italic;
 }
@@ -691,8 +696,8 @@
 
 .catamorphic-detail-arg {
   padding: 10px 12px;
-  background: #1a1a1a;
-  border: 1px solid #262626;
+  background: var(--color-bg-overlay, #1a1a1a);
+  border: 1px solid var(--color-border, #262626);
   border-radius: 8px;
 }
 
@@ -702,7 +707,7 @@
 
 .catamorphic-detail-arg-name {
   font-size: 13px;
-  color: #e5e5e5;
+  color: var(--color-fg, #e5e5e5);
   font-weight: 500;
 }
 
@@ -716,16 +721,16 @@
 .catamorphic-detail-arg-value code {
   font-family: "Fira Code", "SF Mono", "JetBrains Mono", monospace;
   font-size: 12px;
-  color: #a3a3a3;
-  background: #0f0f0f;
+  color: var(--color-fg-muted, #a3a3a3);
+  background: var(--color-bg-raised, #0f0f0f);
   padding: 3px 8px;
   border-radius: 4px;
-  border: 1px solid #1a1a1a;
+  border: 1px solid var(--color-bg-overlay, #1a1a1a);
 }
 
 .catamorphic-detail-arg-source {
   font-size: 11px;
-  color: #3b82f6;
+  color: var(--color-accent, #3b82f6);
   white-space: nowrap;
 }
 
@@ -747,8 +752,8 @@
   align-items: center;
   gap: 8px;
   padding: 8px 12px;
-  background: #1a1a1a;
-  border: 1px solid #262626;
+  background: var(--color-bg-overlay, #1a1a1a);
+  border: 1px solid var(--color-border, #262626);
   border-radius: 8px;
 }
 
@@ -766,7 +771,7 @@
 
 .catamorphic-detail-branch-cond {
   font-size: 12px;
-  color: #a3a3a3;
+  color: var(--color-fg-muted, #a3a3a3);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -785,8 +790,8 @@
   font-family: "Fira Code", "SF Mono", "JetBrains Mono", monospace;
   font-size: 13px;
   line-height: 1.6;
-  background: #0a0a0a;
-  color: #e5e5e5;
+  background: var(--color-bg, #0a0a0a);
+  color: var(--color-fg, #e5e5e5);
   border: none;
   outline: none;
   resize: none;
@@ -803,8 +808,8 @@
   gap: 10px;
   padding: 12px 16px;
   border-radius: 10px;
-  border: 1.5px solid #333;
-  background: #171717;
+  border: 1.5px solid var(--color-border-strong, #333);
+  background: var(--color-bg-raised, #171717);
   width: 240px;
   box-sizing: border-box;
   box-shadow: 0 2px 12px rgba(0, 0, 0, 0.4);
@@ -816,7 +821,7 @@
 }
 
 .catamorphic-node:hover {
-  border-color: #525252;
+  border-color: var(--color-fg-faint, #525252);
   box-shadow: 0 4px 16px rgba(0, 0, 0, 0.5);
 }
 
@@ -837,7 +842,7 @@
 .catamorphic-node-label {
   font-size: 13px;
   font-weight: 500;
-  color: #fafafa;
+  color: var(--color-fg, #fafafa);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -845,7 +850,7 @@
 
 .catamorphic-node-description {
   font-size: 11px;
-  color: #737373;
+  color: var(--color-fg-muted, #737373);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -853,7 +858,7 @@
 
 .catamorphic-node-subtitle {
   font-size: 11px;
-  color: #525252;
+  color: var(--color-fg-faint, #525252);
   font-family: monospace;
   word-break: break-all;
 }
@@ -868,9 +873,9 @@
 .catamorphic-param-badge {
   font-size: 10px;
   padding: 2px 6px;
-  background: #262626;
+  background: var(--color-border, #262626);
   border-radius: 4px;
-  color: #a3a3a3;
+  color: var(--color-fg-muted, #a3a3a3);
 }
 
 .catamorphic-trigger-node {
@@ -897,7 +902,7 @@
 }
 
 .catamorphic-step-node {
-  border-color: #2563eb;
+  border-color: var(--color-accent, #2563eb);
   background: linear-gradient(135deg, #0f172a, #171717);
 }
 
@@ -1073,7 +1078,7 @@
 }
 
 .catamorphic-delay-node {
-  border-color: #737373;
+  border-color: var(--color-fg-muted, #737373);
   background: linear-gradient(135deg, #171717, #171717);
 }
 
@@ -1088,34 +1093,34 @@
   align-items: center;
   gap: 8px;
   padding: 12px 16px;
-  border-top: 1px solid #262626;
-  background: #0f0f0f;
+  border-top: 1px solid var(--color-border, #262626);
+  background: var(--color-bg-raised, #0f0f0f);
 }
 
 .catamorphic-ai-input {
   flex: 1;
   padding: 10px 16px;
   border-radius: 8px;
-  border: 1px solid #333;
-  background: #1a1a1a;
-  color: #fafafa;
+  border: 1px solid var(--color-border-strong, #333);
+  background: var(--color-bg-overlay, #1a1a1a);
+  color: var(--color-fg, #fafafa);
   font-size: 14px;
   outline: none;
 }
 
 .catamorphic-ai-input:focus {
-  border-color: #525252;
+  border-color: var(--color-fg-faint, #525252);
 }
 
 .catamorphic-ai-input::placeholder {
-  color: #525252;
+  color: var(--color-fg-faint, #525252);
 }
 
 .catamorphic-ai-send {
   padding: 10px 20px;
   border-radius: 8px;
   border: none;
-  background: #2563eb;
+  background: var(--color-accent, #2563eb);
   color: #fff;
   font-size: 14px;
   cursor: pointer;
@@ -1123,7 +1128,7 @@
 }
 
 .catamorphic-ai-send:hover {
-  background: #3b82f6;
+  background: var(--color-accent, #3b82f6);
 }
 
 .catamorphic-ai-send:disabled {
@@ -1141,7 +1146,7 @@
 
 /* React Flow dark theme overrides */
 .react-flow__background {
-  background: #0a0a0a;
+  background: var(--color-bg, #0a0a0a);
 }
 
 /* The wide invisible hit area for edges — we disable it so dragging over
@@ -1151,7 +1156,7 @@
 }
 
 .react-flow__edge-path {
-  stroke: #737373;
+  stroke: var(--color-fg-muted, #737373);
   stroke-width: 1.5;
 }
 
@@ -1171,25 +1176,25 @@
 }
 
 .react-flow__controls {
-  background: #171717;
-  border: 1px solid #333;
+  background: var(--color-bg-raised, #171717);
+  border: 1px solid var(--color-border-strong, #333);
   border-radius: 8px;
   box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
 }
 
 .react-flow__controls-button {
-  background: #171717;
-  color: #a3a3a3;
-  border-bottom: 1px solid #262626;
+  background: var(--color-bg-raised, #171717);
+  color: var(--color-fg-muted, #a3a3a3);
+  border-bottom: 1px solid var(--color-border, #262626);
 }
 
 .react-flow__controls-button:hover {
-  background: #262626;
+  background: var(--color-border, #262626);
 }
 
 .react-flow__minimap {
-  background: #0f0f0f;
-  border: 1px solid #333;
+  background: var(--color-bg-raised, #0f0f0f);
+  border: 1px solid var(--color-border-strong, #333);
   border-radius: 8px;
 }
 
@@ -1336,7 +1341,7 @@
 /* Selected node highlight */
 .react-flow__node.selected .catamorphic-node {
   box-shadow:
-    0 0 0 2px #3b82f6,
+    0 0 0 2px var(--color-accent, #3b82f6),
     0 4px 16px rgba(59, 130, 246, 0.2);
 }
 
@@ -1418,7 +1423,7 @@
 /* --- Node Execution Status --- */
 .catamorphic-node[data-execution-status="running"] {
   animation: catamorphic-node-pulse 1.2s ease-in-out infinite;
-  border-color: #3b82f6;
+  border-color: var(--color-accent, #3b82f6);
 }
 
 .catamorphic-node[data-execution-status="completed"] {
@@ -1454,7 +1459,7 @@
 }
 
 .catamorphic-node-exec-indicator[data-status="running"] {
-  background: #3b82f6;
+  background: var(--color-accent, #3b82f6);
   animation: catamorphic-node-pulse 1.2s ease-in-out infinite;
 }
 
@@ -1481,8 +1486,8 @@
 }
 
 .catamorphic-run-dialog {
-  background: #171717;
-  border: 1px solid #333;
+  background: var(--color-bg-raised, #171717);
+  border: 1px solid var(--color-border-strong, #333);
   border-radius: 12px;
   width: 480px;
   max-width: 90vw;
@@ -1497,13 +1502,13 @@
   align-items: center;
   justify-content: space-between;
   padding: 16px 20px;
-  border-bottom: 1px solid #262626;
+  border-bottom: 1px solid var(--color-border, #262626);
 }
 
 .catamorphic-run-dialog-title {
   font-size: 16px;
   font-weight: 600;
-  color: #fafafa;
+  color: var(--color-fg, #fafafa);
   margin: 0;
 }
 
@@ -1521,13 +1526,13 @@
   justify-content: flex-end;
   gap: 8px;
   padding: 16px 20px;
-  border-top: 1px solid #262626;
+  border-top: 1px solid var(--color-border, #262626);
 }
 
 .catamorphic-run-mode-toggle {
   display: flex;
   gap: 4px;
-  background: #0f0f0f;
+  background: var(--color-bg-raised, #0f0f0f);
   border-radius: 6px;
   padding: 2px;
   align-self: flex-start;
@@ -1537,7 +1542,7 @@
   padding: 4px 12px;
   border: none;
   background: none;
-  color: #737373;
+  color: var(--color-fg-muted, #737373);
   font-size: 12px;
   border-radius: 4px;
   cursor: pointer;
@@ -1545,12 +1550,12 @@
 }
 
 .catamorphic-run-mode-btn:hover {
-  color: #a3a3a3;
+  color: var(--color-fg-muted, #a3a3a3);
 }
 
 .catamorphic-run-mode-btn-active {
-  background: #262626;
-  color: #fafafa;
+  background: var(--color-border, #262626);
+  color: var(--color-fg, #fafafa);
 }
 
 .catamorphic-run-fields {
@@ -1574,51 +1579,51 @@
 .catamorphic-run-field-label {
   font-size: 13px;
   font-weight: 500;
-  color: #e5e5e5;
+  color: var(--color-fg, #e5e5e5);
 }
 
 .catamorphic-run-field-type {
   font-size: 10px;
   padding: 2px 6px;
-  background: #262626;
+  background: var(--color-border, #262626);
   border-radius: 4px;
-  color: #3b82f6;
+  color: var(--color-accent, #3b82f6);
   font-family: "Fira Code", "SF Mono", monospace;
 }
 
 .catamorphic-run-field-optional {
   font-size: 10px;
-  color: #525252;
+  color: var(--color-fg-faint, #525252);
   font-style: italic;
 }
 
 .catamorphic-run-field-desc {
   font-size: 11px;
-  color: #737373;
+  color: var(--color-fg-muted, #737373);
 }
 
 .catamorphic-run-input {
   padding: 8px 12px;
-  border: 1px solid #333;
+  border: 1px solid var(--color-border-strong, #333);
   border-radius: 6px;
-  background: #0f0f0f;
-  color: #fafafa;
+  background: var(--color-bg-raised, #0f0f0f);
+  color: var(--color-fg, #fafafa);
   font-size: 13px;
   outline: none;
   transition: border-color 0.15s;
 }
 
 .catamorphic-run-input:focus {
-  border-color: #525252;
+  border-color: var(--color-fg-faint, #525252);
 }
 
 .catamorphic-run-textarea,
 .catamorphic-run-json-editor {
   padding: 8px 12px;
-  border: 1px solid #333;
+  border: 1px solid var(--color-border-strong, #333);
   border-radius: 6px;
-  background: #0f0f0f;
-  color: #fafafa;
+  background: var(--color-bg-raised, #0f0f0f);
+  color: var(--color-fg, #fafafa);
   font-size: 13px;
   font-family: "Fira Code", "SF Mono", monospace;
   outline: none;
@@ -1628,7 +1633,7 @@
 
 .catamorphic-run-textarea:focus,
 .catamorphic-run-json-editor:focus {
-  border-color: #525252;
+  border-color: var(--color-fg-faint, #525252);
 }
 
 .catamorphic-run-checkbox-row {
@@ -1638,17 +1643,17 @@
 }
 
 .catamorphic-run-checkbox {
-  accent-color: #3b82f6;
+  accent-color: var(--color-accent, #3b82f6);
 }
 
 .catamorphic-run-checkbox-label {
   font-size: 13px;
-  color: #a3a3a3;
+  color: var(--color-fg-muted, #a3a3a3);
 }
 
 .catamorphic-run-no-params {
   font-size: 14px;
-  color: #737373;
+  color: var(--color-fg-muted, #737373);
   text-align: center;
   padding: 20px;
 }
@@ -1657,10 +1662,10 @@
 .catamorphic-runs-sidebar {
   width: min(720px, 60vw);
   min-width: 480px;
-  border-left: 1px solid #262626;
+  border-left: 1px solid var(--color-border, #262626);
   display: flex;
   flex-direction: column;
-  background: #0f0f0f;
+  background: var(--color-bg-raised, #0f0f0f);
   overflow: hidden;
 }
 
@@ -1674,7 +1679,7 @@
 
 .catamorphic-runs-loading {
   font-size: 11px;
-  color: #737373;
+  color: var(--color-fg-muted, #737373);
 }
 
 .catamorphic-run-empty {
@@ -1684,7 +1689,7 @@
   justify-content: center;
   padding: 48px 20px;
   gap: 8px;
-  color: #737373;
+  color: var(--color-fg-muted, #737373);
   font-size: 14px;
 }
 
@@ -1696,7 +1701,7 @@
 
 .catamorphic-run-empty-hint {
   font-size: 12px;
-  color: #525252;
+  color: var(--color-fg-faint, #525252);
 }
 
 .catamorphic-run-status {
@@ -1730,11 +1735,11 @@
 
 .catamorphic-run-json {
   font-size: 12px;
-  color: #a3a3a3;
-  background: #0f0f0f;
+  color: var(--color-fg-muted, #a3a3a3);
+  background: var(--color-bg-raised, #0f0f0f);
   padding: 8px 12px;
   border-radius: 6px;
-  border: 1px solid #262626;
+  border: 1px solid var(--color-border, #262626);
   margin: 0;
   white-space: pre-wrap;
   word-break: break-word;
@@ -1754,7 +1759,7 @@
 .catamorphic-runs-list {
   min-width: 0;
   overflow-y: auto;
-  border-right: 1px solid #262626;
+  border-right: 1px solid var(--color-border, #262626);
   background: #0c0c0c;
 }
 
@@ -1763,9 +1768,9 @@
   z-index: 2;
   top: 0;
   padding: 10px 12px;
-  border-bottom: 1px solid #262626;
+  border-bottom: 1px solid var(--color-border, #262626);
   background: rgba(12, 12, 12, 0.96);
-  color: #737373;
+  color: var(--color-fg-muted, #737373);
   font-size: 10px;
   font-weight: 700;
   letter-spacing: 0.09em;
@@ -1783,7 +1788,7 @@
   border: 0;
   border-bottom: 1px solid #1f1f1f;
   background: transparent;
-  color: #737373;
+  color: var(--color-fg-muted, #737373);
   font-size: 10px;
   text-align: left;
   cursor: pointer;
@@ -1791,11 +1796,11 @@
 
 .catamorphic-runs-list-row:hover,
 .catamorphic-runs-list-row.is-selected {
-  background: #171717;
+  background: var(--color-bg-raised, #171717);
 }
 
 .catamorphic-runs-list-row.is-selected {
-  box-shadow: inset 2px 0 0 #3b82f6;
+  box-shadow: inset 2px 0 0 var(--color-accent, #3b82f6);
 }
 
 .catamorphic-runs-list-row > span:first-child {
@@ -1805,7 +1810,7 @@
 }
 
 .catamorphic-runs-list-row small {
-  color: #525252;
+  color: var(--color-fg-faint, #525252);
   font-size: 10px;
 }
 
@@ -1824,7 +1829,7 @@
 
 .catamorphic-run-detail-empty {
   padding: 30px 16px;
-  color: #737373;
+  color: var(--color-fg-muted, #737373);
   font-size: 12px;
   text-align: center;
 }
@@ -1847,7 +1852,7 @@
   display: block;
   overflow: hidden;
   max-width: 100%;
-  color: #a3a3a3;
+  color: var(--color-fg-muted, #a3a3a3);
   font-family: "Fira Code", "SF Mono", monospace;
   font-size: 10px;
   text-overflow: ellipsis;
@@ -1860,13 +1865,13 @@
   flex-wrap: wrap;
   gap: 7px;
   margin-top: 5px;
-  color: #737373;
+  color: var(--color-fg-muted, #737373);
   font-size: 11px;
 }
 
 .catamorphic-run-duration {
   flex-shrink: 0;
-  color: #525252;
+  color: var(--color-fg-faint, #525252);
   font-family: "Fira Code", "SF Mono", monospace;
   font-size: 10px;
 }
@@ -1887,18 +1892,18 @@
 .catamorphic-run-action,
 .catamorphic-run-pagination button {
   padding: 6px 9px;
-  border: 1px solid #333;
+  border: 1px solid var(--color-border-strong, #333);
   border-radius: 6px;
-  background: #171717;
-  color: #d4d4d4;
+  background: var(--color-bg-raised, #171717);
+  color: var(--color-fg, #d4d4d4);
   font-size: 11px;
   cursor: pointer;
 }
 
 .catamorphic-run-action-primary {
   align-self: flex-start;
-  border-color: #2563eb;
-  background: #1d4ed8;
+  border-color: var(--color-accent, #2563eb);
+  background: var(--color-accent, #1d4ed8);
   color: #fff;
 }
 
@@ -1930,7 +1935,7 @@
 }
 
 .catamorphic-run-input-deadline {
-  color: #a3a3a3;
+  color: var(--color-fg-muted, #a3a3a3);
   font-size: 10px;
 }
 
@@ -1942,17 +1947,17 @@
 
 .catamorphic-run-section {
   padding-top: 12px;
-  border-top: 1px solid #262626;
+  border-top: 1px solid var(--color-border, #262626);
 }
 
 .catamorphic-run-section > strong,
 .catamorphic-run-section-heading strong {
-  color: #d4d4d4;
+  color: var(--color-fg, #d4d4d4);
   font-size: 11px;
 }
 
 .catamorphic-run-section-heading span {
-  color: #737373;
+  color: var(--color-fg-muted, #737373);
   font-size: 10px;
 }
 
@@ -1960,7 +1965,7 @@
   height: 6px;
   overflow: hidden;
   border-radius: 999px;
-  background: #262626;
+  background: var(--color-border, #262626);
 }
 
 .catamorphic-run-progress > div {
@@ -1980,13 +1985,13 @@
 
 .catamorphic-run-metrics div {
   padding: 7px;
-  border: 1px solid #262626;
+  border: 1px solid var(--color-border, #262626);
   border-radius: 6px;
-  background: #111;
+  background: var(--color-bg-raised, #111);
 }
 
 .catamorphic-run-metrics dt {
-  color: #525252;
+  color: var(--color-fg-faint, #525252);
   font-size: 9px;
   letter-spacing: 0.05em;
   text-transform: uppercase;
@@ -1994,17 +1999,17 @@
 
 .catamorphic-run-metrics dd {
   margin: 3px 0 0;
-  color: #d4d4d4;
+  color: var(--color-fg, #d4d4d4);
   font-size: 12px;
 }
 
 .catamorphic-run-select {
   min-width: 0;
   padding: 5px 7px;
-  border: 1px solid #333;
+  border: 1px solid var(--color-border-strong, #333);
   border-radius: 5px;
-  background: #171717;
-  color: #d4d4d4;
+  background: var(--color-bg-raised, #171717);
+  color: var(--color-fg, #d4d4d4);
   font-size: 10px;
 }
 
@@ -2032,7 +2037,7 @@
   border-right: 0;
   border-left: 0;
   background: transparent;
-  color: #737373;
+  color: var(--color-fg-muted, #737373);
   font-size: 10px;
   text-align: left;
   cursor: pointer;
@@ -2047,14 +2052,14 @@
 .catamorphic-run-item strong,
 .catamorphic-run-attempts > button span:first-child {
   overflow: hidden;
-  color: #d4d4d4;
+  color: var(--color-fg, #d4d4d4);
   font-size: 11px;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
 .catamorphic-run-item small {
-  color: #525252;
+  color: var(--color-fg-faint, #525252);
   font-size: 9px;
 }
 
@@ -2062,18 +2067,18 @@
   gap: 5px;
   margin: 0 0 8px 8px;
   padding-left: 9px;
-  border-left: 1px solid #333;
+  border-left: 1px solid var(--color-border-strong, #333);
 }
 
 .catamorphic-run-item-history > div {
   display: grid;
   gap: 2px;
-  color: #737373;
+  color: var(--color-fg-muted, #737373);
   font-size: 10px;
 }
 
 .catamorphic-run-item-history > div strong {
-  color: #a3a3a3;
+  color: var(--color-fg-muted, #a3a3a3);
 }
 
 .catamorphic-run-item-history > div small {
@@ -2082,7 +2087,7 @@
 
 .catamorphic-run-pagination {
   padding-top: 8px;
-  color: #737373;
+  color: var(--color-fg-muted, #737373);
   font-size: 10px;
 }
 
@@ -2116,7 +2121,7 @@
     max-height: 190px;
     flex: 0 0 auto;
     border-right: 0;
-    border-bottom: 1px solid #262626;
+    border-bottom: 1px solid var(--color-border, #262626);
   }
 
   .catamorphic-runs-detail-pane {
@@ -2136,4 +2141,128 @@
     align-items: flex-start;
     flex-direction: column;
   }
+}
+
+/* --- Chat markdown (rendered by the chat-timeline registry item) -------- */
+
+.cat-markdown > *:first-child {
+  margin-top: 0;
+}
+.cat-markdown > *:last-child {
+  margin-bottom: 0;
+}
+.cat-markdown p,
+.cat-markdown ul,
+.cat-markdown ol,
+.cat-markdown pre,
+.cat-markdown blockquote,
+.cat-markdown table {
+  margin: 0.5em 0;
+}
+.cat-markdown h1,
+.cat-markdown h2,
+.cat-markdown h3,
+.cat-markdown h4 {
+  margin: 0.75em 0 0.25em;
+  font-weight: 600;
+  color: var(--color-fg, #e6e6e9);
+}
+.cat-markdown h1 {
+  font-size: 1.15em;
+}
+.cat-markdown h2 {
+  font-size: 1.1em;
+}
+.cat-markdown h3,
+.cat-markdown h4 {
+  font-size: 1em;
+}
+.cat-markdown ul {
+  list-style: disc;
+  padding-left: 1.4em;
+}
+.cat-markdown ol {
+  list-style: decimal;
+  padding-left: 1.4em;
+}
+.cat-markdown li {
+  margin: 0.15em 0;
+}
+.cat-markdown code {
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: 0.9em;
+  background: var(--color-bg-inset, #060607);
+  border: 1px solid var(--color-border, #232329);
+  border-radius: 4px;
+  padding: 0.1em 0.35em;
+}
+.cat-markdown pre {
+  background: var(--color-bg-inset, #060607);
+  border: 1px solid var(--color-border, #232329);
+  border-radius: 8px;
+  padding: 10px 12px;
+  overflow-x: auto;
+}
+.cat-markdown pre code {
+  background: none;
+  border: none;
+  padding: 0;
+  font-size: 0.85em;
+  line-height: 1.55;
+}
+.cat-markdown blockquote {
+  border-left: 2px solid var(--color-border-strong, #33333b);
+  padding-left: 0.8em;
+  color: var(--color-fg-muted, #9a9aa3);
+}
+.cat-markdown a {
+  color: var(--color-accent, #d9a86c);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+.cat-markdown table {
+  border-collapse: collapse;
+  font-size: 0.95em;
+}
+.cat-markdown th,
+.cat-markdown td {
+  border: 1px solid var(--color-border, #232329);
+  padding: 4px 8px;
+  text-align: left;
+}
+.cat-markdown th {
+  background: var(--color-bg-overlay, #16161a);
+  font-weight: 600;
+}
+.cat-markdown hr {
+  border: none;
+  border-top: 1px solid var(--color-border, #232329);
+  margin: 0.75em 0;
+}
+
+/* --- Scrollbars ---------------------------------------------------------
+   Dark, thin, token-driven. Applied globally so embedded scroll areas
+   (chat timeline, detail panel, code blocks) match the theme. */
+
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--color-border-strong, #33333b) transparent;
+}
+*::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+*::-webkit-scrollbar-track {
+  background: transparent;
+}
+*::-webkit-scrollbar-thumb {
+  background: var(--color-border-strong, #33333b);
+  border: 3px solid transparent;
+  background-clip: padding-box;
+  border-radius: 6px;
+}
+*::-webkit-scrollbar-thumb:hover {
+  background: var(--color-fg-faint, #5c5c66);
+  border: 3px solid transparent;
+  background-clip: padding-box;
 }

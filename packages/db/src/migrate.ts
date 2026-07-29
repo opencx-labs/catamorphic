@@ -11,6 +11,7 @@ import {
 import { createDatabase } from "./database.js";
 import { isExecutedDirectly } from "./is-main.js";
 import { getMigrationsDir } from "./migrations-dir.js";
+import { splitSqlStatements } from "./split-sql.js";
 
 export interface MigrateToLatestOptions<T> {
   /**
@@ -72,7 +73,11 @@ export async function migrateToLatest<T>({
       if (appliedSet.has(file)) continue;
       const content = fs.readFileSync(path.join(migrationsDir, file), "utf-8");
       await sql.raw(`SET LOCAL search_path TO ${quotedSchema}`).execute(trx);
-      await sql.raw(content).execute(trx);
+      // Statement-by-statement so single-connection dialects (PGlite) that
+      // reject multi-command strings can run migrations too.
+      for (const statement of splitSqlStatements(content)) {
+        await sql.raw(statement).execute(trx);
+      }
       await sql`
         INSERT INTO ${sql.raw(migrationsTable)} (name)
         VALUES (${file})

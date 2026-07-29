@@ -229,6 +229,97 @@ describe("useAgentChat", () => {
     await waitFor(() => expect(sends).toBe(2));
   });
 
+  it("opens a controlled session and resets when it changes", async () => {
+    const OTHER_SESSION_ID = "00000000-0000-4000-8000-000000000004";
+    server.use(
+      http.get(
+        apiUrl(`/api/projects/${PROJECT_ID}/agent/sessions/${SESSION_ID}`),
+        () =>
+          HttpResponse.json({
+            ...session,
+            messages: [
+              {
+                id: crypto.randomUUID(),
+                sessionId: SESSION_ID,
+                role: "user",
+                content: "Earlier message",
+                commitSha: null,
+                metadata: null,
+                createdAt: new Date().toISOString(),
+              },
+            ],
+          }),
+      ),
+      http.get(
+        apiUrl(
+          `/api/projects/${PROJECT_ID}/agent/sessions/${OTHER_SESSION_ID}`,
+        ),
+        () =>
+          HttpResponse.json({
+            ...session,
+            id: OTHER_SESSION_ID,
+            messages: [],
+          }),
+      ),
+    );
+    const { result, rerender } = renderHookWithProviders(
+      ({ sessionId }: { sessionId?: string }) =>
+        useAgentChat(PROJECT_ID, { sessionId }),
+      { initialProps: { sessionId: SESSION_ID } },
+    );
+
+    expect(result.current.sessionId).toBe(SESSION_ID);
+    await waitFor(() =>
+      expect(result.current.messages).toEqual([
+        expect.objectContaining({ content: "Earlier message" }),
+      ]),
+    );
+
+    rerender({ sessionId: OTHER_SESSION_ID });
+    expect(result.current.sessionId).toBe(OTHER_SESSION_ID);
+    await waitFor(() => expect(result.current.messages).toEqual([]));
+  });
+
+  it("reports lazily created sessions through onSessionCreated", async () => {
+    server.use(
+      http.post(apiUrl(`/api/projects/${PROJECT_ID}/agent/sessions`), () =>
+        HttpResponse.json(session, { status: 201 }),
+      ),
+      http.post(
+        apiUrl(
+          `/api/projects/${PROJECT_ID}/agent/sessions/${SESSION_ID}/messages`,
+        ),
+        () =>
+          HttpResponse.json(
+            {
+              id: crypto.randomUUID(),
+              sessionId: SESSION_ID,
+              role: "assistant",
+              content: "Done",
+              commitSha: null,
+              metadata: null,
+              createdAt: new Date().toISOString(),
+            },
+            { status: 201 },
+          ),
+      ),
+      http.get(
+        apiUrl(`/api/projects/${PROJECT_ID}/agent/sessions/${SESSION_ID}`),
+        () => HttpResponse.json({ ...session, messages: [] }),
+      ),
+    );
+    const created: string[] = [];
+    const { result } = renderHookWithProviders(() =>
+      useAgentChat(PROJECT_ID, {
+        onSessionCreated: (id) => created.push(id),
+      }),
+    );
+
+    await act(() => result.current.send("First"));
+
+    expect(created).toEqual([SESSION_ID]);
+  });
+
   it("drops the active session when the project changes", async () => {
     server.use(
       http.post(apiUrl(`/api/projects/${PROJECT_ID}/agent/sessions`), () =>

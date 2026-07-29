@@ -19,6 +19,11 @@
     "indentStyle": "space",
     "indentWidth": 2
   },
+  "css": {
+    "parser": {
+      "tailwindDirectives": true
+    }
+  },
   "javascript": {
     "formatter": {
       "quoteStyle": "double",
@@ -30,6 +35,8 @@
       "**",
       "!**/node_modules",
       "!**/dist",
+      "!**/apps/desktop/out",
+      "!**/apps/desktop/release",
       "!**/.next",
       "!**/.turbo",
       "!**/.wrangler",

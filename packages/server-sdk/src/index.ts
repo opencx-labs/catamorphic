@@ -82,6 +82,7 @@ export type {
   StorageConfig,
 } from "./catamorphic.js";
 export { Catamorphic, createCatamorphic } from "./catamorphic.js";
+export { FsBundleStore } from "./fs-bundle-store.js";
 export type {
   FilesResource,
   ProjectsResource,

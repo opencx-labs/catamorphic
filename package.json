@@ -6,8 +6,12 @@
     "packages/*",
     "apps/*"
   ],
+  "trustedDependencies": [
+    "electron"
+  ],
   "scripts": {
     "dev": "docker compose up -d --wait && turbo dev --filter=catamorphic-playground --filter=@catamorphic/cloudflare-sandbox-bridge",
+    "dev:desktop": "turbo dev --filter=catamorphic-desktop",
     "build": "turbo build",
     "test": "turbo test",
     "typecheck": "turbo typecheck",
