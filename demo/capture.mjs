@@ -55,7 +55,7 @@ const CURSOR_OVERLAY = `
         const ring = document.createElement('div');
         ring.style.cssText =
           'position:fixed;pointer-events:none;z-index:2147483646;' +
-          'width:34px;height:34px;border-radius:50%;border:2.5px solid #f59e0b;' +
+          'width:34px;height:34px;border-radius:50%;border:2.5px solid #f95225;' +
           'left:' + (e.clientX - 17) + 'px;top:' + (e.clientY - 17) + 'px;' +
           'opacity:0.9;transform:scale(0.4);' +
           'transition:transform 0.45s ease-out,opacity 0.45s ease-out;';

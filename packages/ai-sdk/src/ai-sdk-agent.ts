@@ -10,11 +10,14 @@ import { buildPluginsPreamble, stagedPluginFiles } from "@catamorphic/sandbox";
 import { type LanguageModel, type ModelMessage, ToolLoopAgent, tool } from "ai";
 import { z } from "zod";
 
-const DEFAULT_INSTRUCTIONS = `You are a coding agent working in a Catamorphic project.
+const DEFAULT_INSTRUCTIONS = `You are working in a Catamorphic project.
 Use the provided tools to inspect and edit the project in your working directory.
 Read AGENTS.md and relevant .agents/skills/*/SKILL.md files before making substantial changes.
 Keep changes focused, run relevant checks, and do not commit changes.`;
 const MAX_TOOL_OUTPUT_LENGTH = 100_000;
+const EXA_MCP_URL = "https://mcp.exa.ai/mcp";
+const WEBFETCH_MAX_BYTES = 5 * 1024 * 1024;
+const WEBFETCH_TIMEOUT_MS = 30_000;
 
 export interface AiSdkCodingAgentOpts {
   /** AI SDK model supplied and configured by the host application. */
@@ -266,6 +269,30 @@ function createTools(context: ToolContext) {
           return `Edited ${relativePath}`;
         }),
     }),
+    websearch: tool({
+      description:
+        "Search the web and return results with content excerpts optimized for reading. Use it for up-to-date information, documentation, or anything outside the project.",
+      inputSchema: z.object({
+        query: z.string().describe("Web search query"),
+        numResults: z
+          .number()
+          .int()
+          .positive()
+          .max(20)
+          .optional()
+          .describe("Number of results to return (default 8)"),
+      }),
+      execute: async ({ query, numResults }) =>
+        truncateToolOutput(await exaWebSearch(query, numResults ?? 8)),
+    }),
+    webfetch: tool({
+      description:
+        "Fetch a URL and return its content as text. Use it to read pages found via websearch or URLs provided by the user.",
+      inputSchema: z.object({
+        url: z.string().describe("The http(s) URL to fetch"),
+      }),
+      execute: async ({ url }) => truncateToolOutput(await webFetch(url)),
+    }),
     bash: tool({
       description:
         "Run a shell command in the project sandbox. Use it for listing, searching, tests, builds, and other project operations.",
@@ -323,4 +350,114 @@ function errorMessage(error: unknown): string {
 function truncateToolOutput(output: string): string {
   if (output.length <= MAX_TOOL_OUTPUT_LENGTH) return output;
   return `${output.slice(0, MAX_TOOL_OUTPUT_LENGTH)}\n...[output truncated]`;
+}
+
+/** Free keyless web search via Exa's public MCP endpoint (same approach as opencode). */
+async function exaWebSearch(
+  query: string,
+  numResults: number,
+): Promise<string> {
+  const response = await fetch(EXA_MCP_URL, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Accept: "application/json, text/event-stream",
+    },
+    body: JSON.stringify({
+      jsonrpc: "2.0",
+      id: 1,
+      method: "tools/call",
+      params: {
+        name: "web_search_exa",
+        arguments: { query, numResults, type: "auto", livecrawl: "fallback" },
+      },
+    }),
+    signal: AbortSignal.timeout(WEBFETCH_TIMEOUT_MS),
+  });
+  if (!response.ok) {
+    throw new Error(`Web search failed with status ${response.status}`);
+  }
+  const body = await response.text();
+  const result = parseMcpToolResult(body);
+  return result ?? "No search results found. Try a different query.";
+}
+
+function parseMcpToolResult(body: string): string | undefined {
+  const payloads = body.trim().startsWith("{")
+    ? [body.trim()]
+    : body
+        .split("\n")
+        .filter((line) => line.startsWith("data: "))
+        .map((line) => line.slice(6));
+  for (const payload of payloads) {
+    try {
+      const data = JSON.parse(payload) as {
+        result?: { content?: Array<{ text?: string }> };
+      };
+      const text = data.result?.content?.find((item) => item.text)?.text;
+      if (text) return text;
+    } catch {
+      // skip malformed SSE payloads
+    }
+  }
+  return undefined;
+}
+
+async function webFetch(url: string): Promise<string> {
+  if (!url.startsWith("http://") && !url.startsWith("https://")) {
+    throw new Error("URL must start with http:// or https://");
+  }
+  const response = await fetch(url, {
+    headers: {
+      "User-Agent":
+        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/143.0.0.0 Safari/537.36",
+      Accept:
+        "text/markdown;q=1.0, text/plain;q=0.9, text/html;q=0.8, */*;q=0.1",
+      "Accept-Language": "en-US,en;q=0.9",
+    },
+    signal: AbortSignal.timeout(WEBFETCH_TIMEOUT_MS),
+    redirect: "follow",
+  });
+  if (!response.ok) {
+    throw new Error(`Fetch failed with status ${response.status}`);
+  }
+  const contentLength = response.headers.get("content-length");
+  if (
+    contentLength &&
+    Number.parseInt(contentLength, 10) > WEBFETCH_MAX_BYTES
+  ) {
+    throw new Error("Response too large (exceeds 5MB limit)");
+  }
+  const buffer = await response.arrayBuffer();
+  if (buffer.byteLength > WEBFETCH_MAX_BYTES) {
+    throw new Error("Response too large (exceeds 5MB limit)");
+  }
+  const contentType = response.headers.get("content-type") ?? "";
+  if (
+    contentType &&
+    !/text|json|xml|javascript|markdown|html/i.test(contentType)
+  ) {
+    throw new Error(`Unsupported content type: ${contentType}`);
+  }
+  const text = new TextDecoder().decode(buffer);
+  return contentType.includes("html") ? htmlToText(text) : text;
+}
+
+function htmlToText(html: string): string {
+  return html
+    .replace(/<script[\s\S]*?<\/script>/gi, "")
+    .replace(/<style[\s\S]*?<\/style>/gi, "")
+    .replace(/<!--[\s\S]*?-->/g, "")
+    .replace(/<br\s*\/?>/gi, "\n")
+    .replace(/<\/(p|div|h[1-6]|li|tr|section|article|blockquote|pre)>/gi, "\n")
+    .replace(/<[^>]+>/g, " ")
+    .replace(/&nbsp;/g, " ")
+    .replace(/&amp;/g, "&")
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;/g, "'")
+    .replace(/[ \t]+/g, " ")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
 }

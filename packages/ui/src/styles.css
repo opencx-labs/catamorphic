@@ -426,8 +426,8 @@
 }
 
 .catamorphic-toolbar-run {
-  background: var(--color-accent, #1d4ed8);
-  border-color: var(--color-accent, #2563eb);
+  background: var(--color-accent, #f95225);
+  border-color: var(--color-accent, #f95225);
   color: var(--color-accent-fg, #fff);
 }
 
@@ -494,7 +494,7 @@
 
 .catamorphic-detail-tab-active {
   color: var(--color-fg, #fafafa);
-  border-bottom-color: var(--color-accent, #3b82f6);
+  border-bottom-color: var(--color-accent, #f95225);
 }
 
 .catamorphic-detail-close {
@@ -664,7 +664,7 @@
   padding: 2px 6px;
   background: var(--color-border, #262626);
   border-radius: 4px;
-  color: var(--color-accent, #3b82f6);
+  color: var(--color-accent, #f95225);
   font-family: "Fira Code", "SF Mono", "JetBrains Mono", monospace;
 }
 
@@ -730,7 +730,7 @@
 
 .catamorphic-detail-arg-source {
   font-size: 11px;
-  color: var(--color-accent, #3b82f6);
+  color: var(--color-accent, #f95225);
   white-space: nowrap;
 }
 
@@ -902,7 +902,7 @@
 }
 
 .catamorphic-step-node {
-  border-color: var(--color-accent, #2563eb);
+  border-color: var(--color-accent, #f95225);
   background: linear-gradient(135deg, #0f172a, #171717);
 }
 
@@ -1120,7 +1120,7 @@
   padding: 10px 20px;
   border-radius: 8px;
   border: none;
-  background: var(--color-accent, #2563eb);
+  background: var(--color-accent, #f95225);
   color: #fff;
   font-size: 14px;
   cursor: pointer;
@@ -1128,7 +1128,7 @@
 }
 
 .catamorphic-ai-send:hover {
-  background: var(--color-accent, #3b82f6);
+  background: var(--color-accent, #f95225);
 }
 
 .catamorphic-ai-send:disabled {
@@ -1341,7 +1341,7 @@
 /* Selected node highlight */
 .react-flow__node.selected .catamorphic-node {
   box-shadow:
-    0 0 0 2px var(--color-accent, #3b82f6),
+    0 0 0 2px var(--color-accent, #f95225),
     0 4px 16px rgba(59, 130, 246, 0.2);
 }
 
@@ -1423,7 +1423,7 @@
 /* --- Node Execution Status --- */
 .catamorphic-node[data-execution-status="running"] {
   animation: catamorphic-node-pulse 1.2s ease-in-out infinite;
-  border-color: var(--color-accent, #3b82f6);
+  border-color: var(--color-accent, #f95225);
 }
 
 .catamorphic-node[data-execution-status="completed"] {
@@ -1459,7 +1459,7 @@
 }
 
 .catamorphic-node-exec-indicator[data-status="running"] {
-  background: var(--color-accent, #3b82f6);
+  background: var(--color-accent, #f95225);
   animation: catamorphic-node-pulse 1.2s ease-in-out infinite;
 }
 
@@ -1587,7 +1587,7 @@
   padding: 2px 6px;
   background: var(--color-border, #262626);
   border-radius: 4px;
-  color: var(--color-accent, #3b82f6);
+  color: var(--color-accent, #f95225);
   font-family: "Fira Code", "SF Mono", monospace;
 }
 
@@ -1643,7 +1643,7 @@
 }
 
 .catamorphic-run-checkbox {
-  accent-color: var(--color-accent, #3b82f6);
+  accent-color: var(--color-accent, #f95225);
 }
 
 .catamorphic-run-checkbox-label {
@@ -1800,7 +1800,7 @@
 }
 
 .catamorphic-runs-list-row.is-selected {
-  box-shadow: inset 2px 0 0 var(--color-accent, #3b82f6);
+  box-shadow: inset 2px 0 0 var(--color-accent, #f95225);
 }
 
 .catamorphic-runs-list-row > span:first-child {
@@ -1902,8 +1902,8 @@
 
 .catamorphic-run-action-primary {
   align-self: flex-start;
-  border-color: var(--color-accent, #2563eb);
-  background: var(--color-accent, #1d4ed8);
+  border-color: var(--color-accent, #f95225);
+  background: var(--color-accent, #f95225);
   color: #fff;
 }
 
@@ -2216,7 +2216,7 @@
   color: var(--color-fg-muted, #9a9aa3);
 }
 .cat-markdown a {
-  color: var(--color-accent, #d9a86c);
+  color: var(--color-accent, #f95225);
   text-decoration: underline;
   text-underline-offset: 2px;
 }

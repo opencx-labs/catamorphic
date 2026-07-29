@@ -10,7 +10,7 @@ terminal-editor calm. Everything visual flows from the tokens in
    `[data-theme="light"]`, never the default.
 2. **Flat depth.** Hierarchy comes from surface steps and 1px borders, not drop
    shadows. Shadows are reserved for true overlays (menus, dialogs).
-3. **One accent.** A single muted terminal amber. If something needs to stand
+3. **One accent.** A single Catamorphic orange. If something needs to stand
    out beyond the accent, the layout is wrong, not the palette.
 4. **Desktop density.** 13px base type, 28px list rows, 4px spacing grid. This
    is a tool, not a marketing page.
@@ -50,7 +50,7 @@ Semantic layer only — components never hardcode hex values.
 (placeholders, disabled).
 
 ### Accent
-`--color-accent` (muted amber `#d9a86c` dark / `#a8763a` light) with
+`--color-accent` (Catamorphic orange `#f95225` dark / `#d63c0c` light) with
 `--color-accent-fg` for text on accent. Used for: primary buttons, active
 selection indicators, focus rings.
 

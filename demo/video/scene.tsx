@@ -9,7 +9,7 @@ import {
 import clipDurations from "./clips.json";
 
 const BG = "#0a0a0a";
-const ACCENT = "#f59e0b";
+const ACCENT = "#f95225";
 const TEXT = "#fafafa";
 const MUTED = "#a3a3a3";
 const FONT = "'Helvetica Neue', Helvetica, Arial, sans-serif";
@@ -96,7 +96,7 @@ export default makeScene2D("demo", function* (view) {
       />
       <Rect
         ref={introBadge}
-        fill="#27170a"
+        fill="#1a0a05"
         stroke={ACCENT}
         lineWidth={2}
         radius={999}
