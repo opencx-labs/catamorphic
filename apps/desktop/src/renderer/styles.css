@@ -107,6 +107,13 @@ kbd {
   font-family: var(--font-mono);
 }
 
+/* Keyboard focus ring on the accent token (Chromium's outline:auto default
+   is an amber that clashes with the palette) */
+:focus-visible {
+  outline: 2px solid var(--color-accent);
+  outline-offset: 1px;
+}
+
 /* macOS traffic-light drag region */
 .app-drag {
   -webkit-app-region: drag;

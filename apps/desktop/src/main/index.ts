@@ -5,6 +5,20 @@ import { type EmbeddedServer, startEmbeddedServer } from "./server/boot.js";
 import { resolveDataPaths } from "./server/paths.js";
 import { SettingsStore } from "./server/settings.js";
 
+// PGlite is single-writer: a second instance opening the same data dir
+// aborts deep in WASM ("Aborted(). Build with -sASSERTIONS"). Refuse to
+// start and surface the first instance's window instead.
+if (!app.requestSingleInstanceLock()) {
+  app.quit();
+}
+app.on("second-instance", () => {
+  const window = BrowserWindow.getAllWindows()[0];
+  if (window) {
+    if (window.isMinimized()) window.restore();
+    window.focus();
+  }
+});
+
 const paths = resolveDataPaths();
 const settingsStore = new SettingsStore(paths.settingsFile);
 
