@@ -295,15 +295,19 @@ a { color: inherit; }
   color: var(--fg-muted);
 }
 
-.graph-svg {
-  display: block;
-  width: 100%;
-  height: 100%;
+.graph-viewport {
+  position: relative;
   flex: 1;
   min-height: 0;
-  background:
-    radial-gradient(circle, var(--border) 1px, transparent 1px);
-  background-size: 22px 22px;
+}
+
+.graph-img {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  object-position: center;
 }
 
 /* ---------- code window ---------- */
@@ -635,7 +639,7 @@ footer {
   .duo { grid-template-columns: 1fr; }
   .duo-link { flex-direction: row; padding: 2px 0; }
   .duo-link svg { transform: rotate(90deg); }
-  .graph-svg { max-height: 420px; }
+  .graph-viewport { min-height: 480px; }
   .split { grid-template-columns: 1fr; gap: 40px; }
   .principles { grid-template-columns: 1fr; }
   .principle { border-right: none; border-bottom: 1px solid var(--border); }

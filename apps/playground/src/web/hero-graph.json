@@ -1,0 +1,257 @@
+{
+  "name": "welcomeUser",
+  "capabilities": {
+    "persistedContinuations": false,
+    "batchProcessing": false,
+    "cancellation": false
+  },
+  "execution": {
+    "exportTarget": {
+      "modulePath": "workflow.ts",
+      "exportName": "welcomeUser"
+    },
+    "steps": []
+  },
+  "displayName": "Welcome New User",
+  "description": "Onboard a new user",
+  "trigger": {
+    "parameters": [
+      {
+        "name": "email",
+        "type": "string",
+        "optional": false
+      },
+      {
+        "name": "name",
+        "type": "string",
+        "optional": false
+      }
+    ]
+  },
+  "nodes": [
+    {
+      "id": "node_1",
+      "type": "trigger",
+      "label": "Welcome New User",
+      "description": "Onboard a new user",
+      "sourceRange": {
+        "start": 458,
+        "end": 803,
+        "startLine": 20,
+        "startColumn": 1,
+        "endLine": 31,
+        "endColumn": 2
+      },
+      "metadata": {
+        "displayname": "Welcome New User",
+        "description": "Onboard a new user"
+      },
+      "parameters": [
+        {
+          "name": "email",
+          "type": "string",
+          "optional": false
+        },
+        {
+          "name": "name",
+          "type": "string",
+          "optional": false
+        }
+      ]
+    },
+    {
+      "id": "node_2",
+      "type": "step",
+      "label": "Create the account",
+      "sourceRange": {
+        "start": 565,
+        "end": 612,
+        "startLine": 23,
+        "startColumn": 3,
+        "endLine": 23,
+        "endColumn": 50
+      },
+      "metadata": {
+        "displayname": "Create the account"
+      },
+      "functionName": "createUser",
+      "parameters": [
+        {
+          "name": "email",
+          "type": "string",
+          "optional": false
+        },
+        {
+          "name": "name",
+          "type": "string",
+          "optional": false
+        }
+      ],
+      "arguments": [
+        {
+          "name": "email",
+          "value": "email",
+          "source": {
+            "variable": "email",
+            "stepNodeId": "node_1",
+            "stepLabel": "Welcome New User"
+          }
+        },
+        {
+          "name": "name",
+          "value": "name",
+          "source": {
+            "variable": "name",
+            "stepNodeId": "node_1",
+            "stepLabel": "Welcome New User"
+          }
+        }
+      ]
+    },
+    {
+      "id": "node_3",
+      "type": "step",
+      "label": "Send a welcome email",
+      "sourceRange": {
+        "start": 615,
+        "end": 658,
+        "startLine": 24,
+        "startColumn": 3,
+        "endLine": 24,
+        "endColumn": 46
+      },
+      "metadata": {
+        "displayname": "Send a welcome email"
+      },
+      "functionName": "sendWelcomeEmail",
+      "parameters": [
+        {
+          "name": "to",
+          "type": "string",
+          "optional": false
+        }
+      ],
+      "arguments": [
+        {
+          "name": "to",
+          "value": "user.email",
+          "source": {
+            "variable": "user",
+            "stepNodeId": "node_2",
+            "stepLabel": "Create the account"
+          }
+        }
+      ]
+    },
+    {
+      "id": "node_4",
+      "type": "if-block",
+      "label": "",
+      "sourceRange": {
+        "start": 662,
+        "end": 750,
+        "startLine": 26,
+        "startColumn": 3,
+        "endLine": 28,
+        "endColumn": 4
+      },
+      "metadata": {}
+    },
+    {
+      "id": "node_5",
+      "type": "branch",
+      "label": "user.plan === \"premium\"",
+      "sourceRange": {
+        "start": 662,
+        "end": 750,
+        "startLine": 26,
+        "startColumn": 3,
+        "endLine": 28,
+        "endColumn": 4
+      },
+      "metadata": {
+        "branchType": "if"
+      },
+      "condition": "user.plan === \"premium\"",
+      "parentId": "node_4"
+    },
+    {
+      "id": "node_6",
+      "type": "step",
+      "label": "Unlock premium benefits",
+      "sourceRange": {
+        "start": 697,
+        "end": 746,
+        "startLine": 27,
+        "startColumn": 5,
+        "endLine": 27,
+        "endColumn": 54
+      },
+      "metadata": {
+        "displayname": "Unlock premium benefits"
+      },
+      "functionName": "assignPremiumBenefits",
+      "parameters": [
+        {
+          "name": "userId",
+          "type": "string",
+          "optional": false
+        }
+      ],
+      "arguments": [
+        {
+          "name": "userId",
+          "value": "user.id",
+          "source": {
+            "variable": "user",
+            "stepNodeId": "node_2",
+            "stepLabel": "Create the account"
+          }
+        }
+      ],
+      "parentId": "node_5"
+    },
+    {
+      "id": "node_7",
+      "type": "return",
+      "label": "Return",
+      "sourceRange": {
+        "start": 754,
+        "end": 801,
+        "startLine": 30,
+        "startColumn": 3,
+        "endLine": 30,
+        "endColumn": 50
+      },
+      "metadata": {},
+      "returnExpression": "{ status: \"complete\", userId: user.id }"
+    }
+  ],
+  "edges": [
+    {
+      "id": "node_1->node_2",
+      "source": "node_1",
+      "target": "node_2",
+      "type": "sequential"
+    },
+    {
+      "id": "node_2->node_3",
+      "source": "node_2",
+      "target": "node_3",
+      "type": "sequential"
+    },
+    {
+      "id": "node_3->node_5",
+      "source": "node_3",
+      "target": "node_5",
+      "type": "sequential"
+    },
+    {
+      "id": "node_5->node_7",
+      "source": "node_5",
+      "target": "node_7",
+      "type": "sequential"
+    }
+  ],
+  "sourceCode": "/** @displayname Create the account */\nasync function createUser({ email, name }: { email: string; name: string }) {\n  \"use step\";\n}\n\n/** @displayname Send a welcome email */\nasync function sendWelcomeEmail({ to }: { to: string }) {\n  \"use step\";\n}\n\n/** @displayname Unlock premium benefits */\nasync function assignPremiumBenefits({ userId }: { userId: string }) {\n  \"use step\";\n}\n\n/**\n * @displayname Welcome New User\n * @description Onboard a new user\n */\nexport async function welcomeUser({ email, name }: { email: string; name: string }) {\n  \"use workflow\";\n\n  const user = await createUser({ email, name });\n  await sendWelcomeEmail({ to: user.email });\n\n  if (user.plan === \"premium\") {\n    await assignPremiumBenefits({ userId: user.id });\n  }\n\n  return { status: \"complete\", userId: user.id };\n}"
+}
