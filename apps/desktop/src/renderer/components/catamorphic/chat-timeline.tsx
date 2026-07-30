@@ -55,8 +55,11 @@ export function ChatTimeline({
             {emptyState}
           </div>
         )}
-        {messages.map((message) => (
-          <Message key={message.id} message={message} />
+        {messages.map((message, index) => (
+          <Message
+            key={timelineKey(message, index, messages)}
+            message={message}
+          />
         ))}
         {activity && (
           <div className="flex items-center gap-2 text-xs text-fg-muted">
@@ -78,6 +81,27 @@ export function ChatTimeline({
       <ScrollToLatest />
     </StickToBottom>
   );
+}
+
+/**
+ * Content-position identity instead of message.id: when an optimistic user
+ * message is replaced by its persisted twin, the id flips (uuid → db id) but
+ * the rendered content is identical. A content-based key keeps the same DOM
+ * node, so the settle is invisible instead of a remount (fade-in replay).
+ */
+function timelineKey(
+  message: ChatTimelineMessage,
+  index: number,
+  messages: ChatTimelineMessage[],
+): string {
+  let occurrence = 0;
+  for (let i = 0; i < index; i += 1) {
+    const other = messages[i];
+    if (other?.role === message.role && other?.content === message.content) {
+      occurrence += 1;
+    }
+  }
+  return `${message.role}:${occurrence}:${message.content}`;
 }
 
 function Message({ message }: { message: ChatTimelineMessage }) {

@@ -5,6 +5,17 @@ import { type EmbeddedServer, startEmbeddedServer } from "./server/boot.js";
 import { resolveDataPaths } from "./server/paths.js";
 import { SettingsStore } from "./server/settings.js";
 
+// macOS 26.x + Apple Silicon: V8's background compiler threads race the
+// OS's MAP_JIT write-protection and SIGTRAP in ThreadIsolation::
+// RegisterInstructionStreamAllocation (electron/electron#51351 family).
+// Keep JIT compilation on the main thread until Electron ships a fix.
+if (process.platform === "darwin") {
+  app.commandLine.appendSwitch(
+    "js-flags",
+    "--no-concurrent-sparkplug --no-concurrent-recompilation",
+  );
+}
+
 // PGlite is single-writer: a second instance opening the same data dir
 // aborts deep in WASM ("Aborted(). Build with -sASSERTIONS"). Refuse to
 // start and surface the first instance's window instead.

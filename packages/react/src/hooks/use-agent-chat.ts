@@ -63,6 +63,16 @@ export function useAgentChat(
     controlledSessionId: string | null;
     sessionId: string | null;
   }>({ projectId, controlledSessionId, sessionId: controlledSessionId });
+  const queueRef = useRef<QueuedMessage[]>([]);
+  const processingRef = useRef(false);
+  // A controlled-id change normally means the host switched sessions, so chat
+  // state resets. But when the host echoes back the id this hook just created
+  // (via onSessionCreated), it is the SAME conversation — resetting would
+  // wipe optimistic messages mid-send and flicker the timeline.
+  const adoptedOwnSession =
+    projectId === activeSession.projectId &&
+    controlledSessionId !== null &&
+    controlledSessionId === activeSession.sessionId;
   if (
     activeSession.projectId !== projectId ||
     activeSession.controlledSessionId !== controlledSessionId
@@ -72,20 +82,26 @@ export function useAgentChat(
       controlledSessionId,
       sessionId: controlledSessionId,
     });
-    setOptimisticMessages([]);
+    if (!adoptedOwnSession) setOptimisticMessages([]);
   }
   if (
     activeSessionRef.current.projectId !== projectId ||
     activeSessionRef.current.controlledSessionId !== controlledSessionId
   ) {
+    const refAdoptedOwnSession =
+      projectId === activeSessionRef.current.projectId &&
+      controlledSessionId !== null &&
+      controlledSessionId === activeSessionRef.current.sessionId;
     activeSessionRef.current = {
       projectId,
       controlledSessionId,
       sessionId: controlledSessionId,
     };
+    if (!refAdoptedOwnSession && processingRef.current) {
+      // Real session switch mid-send: drop the stale queue.
+      queueRef.current = [];
+    }
   }
-  const queueRef = useRef<QueuedMessage[]>([]);
-  const processingRef = useRef(false);
   const sessionId =
     activeSession.projectId === projectId ? activeSession.sessionId : null;
   const queryClient = useQueryClient();
