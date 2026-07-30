@@ -92,7 +92,7 @@ a { color: inherit; }
   gap: 4px;
 }
 
-.nav-links a {
+.nav-links a:not(.btn) {
   text-decoration: none;
   color: var(--fg-muted);
   font-size: 14px;
@@ -101,7 +101,7 @@ a { color: inherit; }
   transition: color 150ms var(--ease), background-color 150ms var(--ease);
 }
 
-.nav-links a:hover {
+.nav-links a:not(.btn):hover {
   color: var(--fg);
   background: var(--bg-overlay);
 }
