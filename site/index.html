@@ -53,12 +53,14 @@
       <span class="copy-hint" id="copy-hint">copy</span>
     </button>
 
-    <div class="code-window reveal">
-      <div class="code-titlebar">
-        <span class="dots"><i></i><i></i><i></i></span>
-        <span class="filename">workflows/welcome-user.ts</span>
-      </div>
-      <pre><code><span class="tk-cm">/**
+    <div class="duo reveal">
+      <div class="code-window">
+        <div class="code-titlebar">
+          <span class="dots"><i></i><i></i><i></i></span>
+          <span class="filename">workflows/welcome-user.ts</span>
+          <span class="pane-tag">what engineers &amp; agents write</span>
+        </div>
+        <pre><code><span class="tk-cm">/**
  * @displayname Welcome New User
  * @description Onboard a new user
  */</span>
@@ -66,7 +68,7 @@
   <span class="tk-dir">"use workflow"</span><span class="tk-pn">;</span>
 
   <span class="tk-kw">const</span> user <span class="tk-pn">=</span> <span class="tk-kw">await</span> <span class="tk-fn">createUser</span><span class="tk-pn">({</span> email, name <span class="tk-pn">});</span>
-  <span class="tk-kw">await</span> <span class="tk-fn">sendWelcomeEmail</span><span class="tk-pn">({</span> to<span class="tk-pn">:</span> user.email, name<span class="tk-pn">:</span> user.name <span class="tk-pn">});</span>
+  <span class="tk-kw">await</span> <span class="tk-fn">sendWelcomeEmail</span><span class="tk-pn">({</span> to<span class="tk-pn">:</span> user.email <span class="tk-pn">});</span>
 
   <span class="tk-kw">if</span> <span class="tk-pn">(</span>user.plan <span class="tk-pn">===</span> <span class="tk-str">"premium"</span><span class="tk-pn">)</span> <span class="tk-pn">{</span>
     <span class="tk-kw">await</span> <span class="tk-fn">assignPremiumBenefits</span><span class="tk-pn">({</span> userId<span class="tk-pn">:</span> user.id <span class="tk-pn">});</span>
@@ -74,6 +76,61 @@
 
   <span class="tk-kw">return</span> <span class="tk-pn">{</span> status<span class="tk-pn">:</span> <span class="tk-str">"complete"</span>, userId<span class="tk-pn">:</span> user.id <span class="tk-pn">};</span>
 <span class="tk-pn">}</span></code></pre>
+      </div>
+
+      <div class="duo-link" aria-hidden="true">
+        <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14"/><path d="m13 6 6 6-6 6"/></svg>
+        <span>parsed</span>
+      </div>
+
+      <div class="graph-window" aria-label="The same workflow rendered as a visual graph">
+        <div class="code-titlebar">
+          <span class="graph-title">Welcome New User</span>
+          <span class="pane-tag">what your users see</span>
+        </div>
+        <svg class="graph-svg" viewBox="0 0 460 396" fill="none" role="img">
+          <defs>
+            <marker id="garr" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="6.5" markerHeight="6.5" orient="auto-start-reverse">
+              <path d="M0 0 L8 4 L0 8 Z" fill="#5c5c66"/>
+            </marker>
+          </defs>
+          <!-- edges -->
+          <path d="M230 58 V76" stroke="#33333b" stroke-width="1.5" marker-end="url(#garr)"/>
+          <path d="M230 128 V146" stroke="#33333b" stroke-width="1.5" marker-end="url(#garr)"/>
+          <path d="M186 198 C130 214 118 224 118 240" stroke="#33333b" stroke-width="1.5" marker-end="url(#garr)"/>
+          <path d="M274 198 C330 214 342 224 342 240" stroke="#33333b" stroke-width="1.5" marker-end="url(#garr)"/>
+          <path d="M118 292 C118 312 160 320 204 326" stroke="#33333b" stroke-width="1.5" marker-end="url(#garr)"/>
+          <path d="M342 292 C342 312 300 320 256 326" stroke="#33333b" stroke-width="1.5" marker-end="url(#garr)"/>
+          <!-- edge labels -->
+          <rect x="96" y="207" width="76" height="18" rx="9" fill="#0a0a0b" stroke="#232329"/>
+          <text x="134" y="220" text-anchor="middle" fill="#9a9aa3" font-family="JetBrains Mono, monospace" font-size="10">premium</text>
+          <rect x="304" y="207" width="50" height="18" rx="9" fill="#0a0a0b" stroke="#232329"/>
+          <text x="329" y="220" text-anchor="middle" fill="#9a9aa3" font-family="JetBrains Mono, monospace" font-size="10">else</text>
+          <!-- trigger -->
+          <rect x="160" y="16" width="140" height="42" rx="21" fill="#16161a" stroke="#33333b"/>
+          <circle cx="184" cy="37" r="4" fill="#f95225"/>
+          <text x="198" y="41" fill="#e6e6e9" font-family="JetBrains Mono, monospace" font-size="12">trigger</text>
+          <!-- createUser -->
+          <rect x="140" y="76" width="180" height="52" rx="8" fill="#101012" stroke="#232329"/>
+          <text x="158" y="98" fill="#e6e6e9" font-family="JetBrains Mono, monospace" font-size="12">createUser</text>
+          <text x="158" y="115" fill="#5c5c66" font-family="JetBrains Mono, monospace" font-size="10">step</text>
+          <!-- sendWelcomeEmail -->
+          <rect x="140" y="146" width="180" height="52" rx="8" fill="#101012" stroke="#232329"/>
+          <text x="158" y="168" fill="#e6e6e9" font-family="JetBrains Mono, monospace" font-size="12">sendWelcomeEmail</text>
+          <text x="158" y="185" fill="#5c5c66" font-family="JetBrains Mono, monospace" font-size="10">step</text>
+          <!-- assignPremiumBenefits -->
+          <rect x="28" y="240" width="180" height="52" rx="8" fill="#101012" stroke="#232329"/>
+          <text x="46" y="262" fill="#e6e6e9" font-family="JetBrains Mono, monospace" font-size="12">assignPremium…</text>
+          <text x="46" y="279" fill="#5c5c66" font-family="JetBrains Mono, monospace" font-size="10">step · conditional</text>
+          <!-- pass-through node -->
+          <rect x="252" y="240" width="180" height="52" rx="8" fill="#0a0a0b" stroke="#232329" stroke-dasharray="4 4"/>
+          <text x="270" y="266" fill="#5c5c66" font-family="JetBrains Mono, monospace" font-size="11">skip</text>
+          <!-- return -->
+          <rect x="160" y="326" width="140" height="42" rx="8" fill="#101012" stroke="#f95225" stroke-opacity="0.6"/>
+          <circle cx="184" cy="347" r="4" fill="#7fb069"/>
+          <text x="198" y="351" fill="#e6e6e9" font-family="JetBrains Mono, monospace" font-size="12">complete</text>
+        </svg>
+      </div>
     </div>
   </div>
 </header>

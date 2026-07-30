@@ -243,13 +243,74 @@ a { color: inherit; }
 .install .prompt { color: var(--accent); user-select: none; }
 .install .copy-hint { color: var(--fg-faint); font-family: var(--font-sans); font-size: 12px; }
 
+/* ---------- code + graph duo ---------- */
+.duo {
+  display: grid;
+  grid-template-columns: minmax(0, 1.2fr) auto minmax(0, 1fr);
+  align-items: stretch;
+  gap: 18px;
+  margin: 64px auto 0;
+  width: 100%;
+  max-width: 1080px;
+}
+
+.duo-link {
+  align-self: center;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  color: var(--fg-faint);
+}
+
+.duo-link svg { color: var(--accent); }
+
+.duo-link span {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  letter-spacing: 0.05em;
+}
+
+.pane-tag {
+  margin-left: auto;
+  font-size: 11.5px;
+  color: var(--fg-faint);
+  font-family: var(--font-sans);
+}
+
+.graph-window {
+  display: flex;
+  flex-direction: column;
+  background: var(--bg-raised);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  text-align: left;
+  overflow: hidden;
+  box-shadow: 0 24px 80px -32px rgba(0, 0, 0, 0.8);
+}
+
+.graph-title {
+  font-size: 12.5px;
+  font-weight: 500;
+  color: var(--fg-muted);
+}
+
+.graph-svg {
+  display: block;
+  width: 100%;
+  height: 100%;
+  flex: 1;
+  min-height: 0;
+  background:
+    radial-gradient(circle, var(--border) 1px, transparent 1px);
+  background-size: 22px 22px;
+}
+
 /* ---------- code window ---------- */
 .code-window {
   position: relative;
-  margin: 64px auto 0;
   width: 100%;
   min-width: 0;
-  max-width: 860px;
   background: var(--bg-inset);
   border: 1px solid var(--border);
   border-radius: var(--radius-lg);
@@ -279,6 +340,8 @@ a { color: inherit; }
   font-size: 12px;
   color: var(--fg-muted);
 }
+
+.duo .code-window pre { font-size: 12.5px; padding: 18px 20px; }
 
 .code-window pre {
   margin: 0;
@@ -569,6 +632,10 @@ footer {
 /* ---------- responsive ---------- */
 @media (max-width: 900px) {
   .grid { grid-template-columns: repeat(2, 1fr); }
+  .duo { grid-template-columns: 1fr; }
+  .duo-link { flex-direction: row; padding: 2px 0; }
+  .duo-link svg { transform: rotate(90deg); }
+  .graph-svg { max-height: 420px; }
   .split { grid-template-columns: 1fr; gap: 40px; }
   .principles { grid-template-columns: 1fr; }
   .principle { border-right: none; border-bottom: 1px solid var(--border); }
