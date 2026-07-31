@@ -8298,7 +8298,8 @@
                     "enum": ["preview", "published"]
                   },
                   "commitSha": {
-                    "type": "string"
+                    "type": "string",
+                    "pattern": "^[0-9a-f]{7,64}$"
                   }
                 },
                 "required": ["kind"]
@@ -8791,10 +8792,25 @@
                     },
                     "css": {
                       "type": "string"
+                    },
+                    "etag": {
+                      "type": "string"
                     }
                   },
-                  "required": ["code", "css"],
+                  "required": ["code", "css", "etag"],
                   "additionalProperties": false
+                }
+              }
+            }
+          },
+          "304": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "string",
+                  "nullable": true,
+                  "enum": [null]
                 }
               }
             }

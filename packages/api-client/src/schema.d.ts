@@ -4166,7 +4166,17 @@ export interface paths {
                         "application/json": {
                             code: string;
                             css: string;
+                            etag: string;
                         };
+                    };
+                };
+                /** @description Default Response */
+                304: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": null;
                     };
                 };
                 /** @description Default Response */

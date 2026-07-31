@@ -128,6 +128,9 @@ export const ProjectSchema = z.object({
   updatedAt: z.string().datetime(),
 });
 
+// Deliberately no rootPath/importExisting here: explicit filesystem locations
+// are a library-direct capability for single-machine hosts, never something a
+// remote HTTP client may choose.
 export const CreateProjectSchema = z.object({
   name: z.string().min(1),
   templateId: z.string().optional(),

@@ -3,9 +3,10 @@ import {
   useProjects,
   useWorkflows,
 } from "@catamorphic/react";
-import type { AgentSession } from "@catamorphic/react/types";
+import type { AgentSession, ProjectSummary } from "@catamorphic/react/types";
 import {
   ChevronRight,
+  FolderPlus,
   LayoutGrid,
   PanelLeft,
   Plus,
@@ -19,9 +20,10 @@ import {
   useRef,
   useState,
 } from "react";
-import { ProjectsList } from "./components/catamorphic/projects-list.js";
 import { ChatBubbles } from "./components/chat-bubbles.js";
 import { ChatDock, type ChatDockEntry } from "./components/chat-dock.js";
+import { DeleteProjectModal } from "./components/delete-project-modal.js";
+import { ProjectModal } from "./components/project-modal.js";
 import { ProjectSwitcher } from "./components/project-switcher.js";
 import {
   tabKey,
@@ -55,7 +57,10 @@ export function App({ hasCodingAgent }: { hasCodingAgent: boolean }) {
   const [activeProjectId, setActiveProjectId] = useState<string>();
   const [workspaces, setWorkspaces] = useState<Record<string, Workspace>>({});
   const [showSettings, setShowSettings] = useState(false);
-  const [creatingProject, setCreatingProject] = useState(false);
+  const [projectModalOpen, setProjectModalOpen] = useState(false);
+  const [deletingProject, setDeletingProject] = useState<ProjectSummary | null>(
+    null,
+  );
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [sendingByChat, setSendingByChat] = useState<Record<string, boolean>>(
     {},
@@ -239,8 +244,14 @@ export function App({ hasCodingAgent }: { hasCodingAgent: boolean }) {
 
   const selectProject = (id: string) => {
     setActiveProjectId(id);
-    setCreatingProject(false);
     setShowSettings(false);
+  };
+
+  const onProjectDeleted = (deletedId: string) => {
+    setDeletingProject(null);
+    setWorkspaces(({ [deletedId]: _removed, ...rest }) => rest);
+    defaultWorkspacesRef.current.delete(deletedId);
+    if (activeProjectId === deletedId) setActiveProjectId(undefined);
   };
 
   const activeTab = workspace.tabs.find(
@@ -264,71 +275,68 @@ export function App({ hasCodingAgent }: { hasCodingAgent: boolean }) {
               projects={projects}
               activeProjectId={projectId}
               onSelect={selectProject}
-              onNewProject={() => setCreatingProject(true)}
+              onNewProject={() => setProjectModalOpen(true)}
+              onDeleteProject={setDeletingProject}
             />
           </div>
 
           <div className="min-h-0 flex-1 overflow-y-auto px-2">
-            {creatingProject || projects.length === 0 ? (
-              <ProjectsList onOpen={(project) => selectProject(project.id)} />
-            ) : (
-              projectId && (
-                <>
-                  <SidebarSection title="Workflows" defaultOpen>
-                    <WorkflowsNav
-                      projectId={projectId}
-                      active={
-                        activeTab?.kind === "workflow"
-                          ? activeTab.name
-                          : undefined
-                      }
-                      onSelect={(workflow) =>
-                        openTab({
-                          kind: "workflow",
-                          name: workflow.name,
-                          label: workflow.displayName ?? workflow.name,
-                        })
-                      }
-                    />
-                  </SidebarSection>
-                  <SidebarSection title="Apps" defaultOpen>
-                    <AppsNav
-                      projectId={projectId}
-                      active={
-                        activeTab?.kind === "app" ? activeTab.name : undefined
-                      }
-                      onSelect={(appName) =>
-                        openTab({ kind: "app", name: appName })
-                      }
-                    />
-                  </SidebarSection>
-                  <SidebarSection
-                    title="Chats"
-                    defaultOpen
-                    action={
-                      <button
-                        type="button"
-                        onClick={addChat}
-                        className="grid size-6 cursor-pointer place-items-center rounded text-fg-muted transition-colors duration-150 hover:bg-bg-overlay hover:text-fg"
-                        aria-label="New chat"
-                        title="New chat"
-                      >
-                        <Plus className="size-3.5" />
-                      </button>
+            {projectId && (
+              <>
+                <SidebarSection title="Workflows" defaultOpen>
+                  <WorkflowsNav
+                    projectId={projectId}
+                    active={
+                      activeTab?.kind === "workflow"
+                        ? activeTab.name
+                        : undefined
                     }
-                  >
-                    <SessionsNav
-                      projectId={projectId}
-                      activeSessionId={
-                        workspace.chats.find(
-                          (chat) => chat.localId === workspace.activeChatId,
-                        )?.sessionId
-                      }
-                      onSelect={openSession}
-                    />
-                  </SidebarSection>
-                </>
-              )
+                    onSelect={(workflow) =>
+                      openTab({
+                        kind: "workflow",
+                        name: workflow.name,
+                        label: workflow.displayName ?? workflow.name,
+                      })
+                    }
+                  />
+                </SidebarSection>
+                <SidebarSection title="Apps" defaultOpen>
+                  <AppsNav
+                    projectId={projectId}
+                    active={
+                      activeTab?.kind === "app" ? activeTab.name : undefined
+                    }
+                    onSelect={(appName) =>
+                      openTab({ kind: "app", name: appName })
+                    }
+                  />
+                </SidebarSection>
+                <SidebarSection
+                  title="Chats"
+                  defaultOpen
+                  action={
+                    <button
+                      type="button"
+                      onClick={addChat}
+                      className="grid size-6 cursor-pointer place-items-center rounded text-fg-muted transition-colors duration-150 hover:bg-bg-overlay hover:text-fg"
+                      aria-label="New chat"
+                      title="New chat"
+                    >
+                      <Plus className="size-3.5" />
+                    </button>
+                  }
+                >
+                  <SessionsNav
+                    projectId={projectId}
+                    activeSessionId={
+                      workspace.chats.find(
+                        (chat) => chat.localId === workspace.activeChatId,
+                      )?.sessionId
+                    }
+                    onSelect={openSession}
+                  />
+                </SidebarSection>
+              </>
             )}
           </div>
 
@@ -429,9 +437,26 @@ export function App({ hasCodingAgent }: { hasCodingAgent: boolean }) {
             </div>
           </>
         ) : (
-          <EmptyState loading={projectsQuery.isLoading} />
+          <EmptyState
+            loading={projectsQuery.isLoading}
+            onNewProject={() => setProjectModalOpen(true)}
+          />
         )}
       </main>
+
+      <ProjectModal
+        open={projectModalOpen}
+        onClose={() => setProjectModalOpen(false)}
+        onCreated={(project) => {
+          setProjectModalOpen(false);
+          selectProject(project.id);
+        }}
+      />
+      <DeleteProjectModal
+        project={deletingProject}
+        onClose={() => setDeletingProject(null)}
+        onDeleted={onProjectDeleted}
+      />
     </div>
   );
 }
@@ -624,7 +649,13 @@ function TabEmptyState({ hasCodingAgent }: { hasCodingAgent: boolean }) {
   );
 }
 
-function EmptyState({ loading }: { loading: boolean }) {
+function EmptyState({
+  loading,
+  onNewProject,
+}: {
+  loading: boolean;
+  onNewProject: () => void;
+}) {
   return (
     <div className="grid flex-1 place-items-center">
       <div className="max-w-sm text-center">
@@ -633,11 +664,16 @@ function EmptyState({ loading }: { loading: boolean }) {
         ) : (
           <>
             <p className="text-sm text-fg-muted">
-              Create a project to start chatting with the assistant.
+              Create a project from scratch or import an existing folder.
             </p>
-            <p className="mt-2 text-xs text-fg-faint">
-              Use the folder button in the sidebar.
-            </p>
+            <button
+              type="button"
+              onClick={onNewProject}
+              className="mt-4 inline-flex h-8 cursor-pointer items-center gap-2 rounded-md bg-accent px-3 text-[13px] font-medium text-accent-fg transition-opacity duration-150 hover:opacity-90"
+            >
+              <FolderPlus className="size-3.5" />
+              New project
+            </button>
           </>
         )}
       </div>

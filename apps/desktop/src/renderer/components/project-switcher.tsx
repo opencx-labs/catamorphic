@@ -1,5 +1,5 @@
 import type { ProjectSummary } from "@catamorphic/react/types";
-import { Box, Check, ChevronsUpDown, FolderPlus } from "lucide-react";
+import { Box, Check, ChevronsUpDown, FolderPlus, Trash2 } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 
 export interface ProjectSwitcherProps {
@@ -7,6 +7,7 @@ export interface ProjectSwitcherProps {
   activeProjectId?: string;
   onSelect: (projectId: string) => void;
   onNewProject: () => void;
+  onDeleteProject: (project: ProjectSummary) => void;
 }
 
 export function ProjectSwitcher({
@@ -14,6 +15,7 @@ export function ProjectSwitcher({
   activeProjectId,
   onSelect,
   onNewProject,
+  onDeleteProject,
 }: ProjectSwitcherProps) {
   const [open, setOpen] = useState(false);
   const rootRef = useRef<HTMLDivElement>(null);
@@ -70,26 +72,42 @@ export function ProjectSwitcher({
           {projects.map((project) => {
             const isActive = project.id === activeProjectId;
             return (
-              <button
+              <div
                 key={project.id}
-                type="button"
-                role="option"
-                aria-selected={isActive}
-                onClick={() => {
-                  onSelect(project.id);
-                  setOpen(false);
-                }}
-                className={`flex h-8 w-full cursor-pointer items-center gap-2 rounded-md px-2 text-left text-[13px] transition-colors duration-150 ${
-                  isActive
-                    ? "text-fg"
-                    : "text-fg-muted hover:bg-bg-raised hover:text-fg"
+                className={`group flex h-8 w-full items-center rounded-md transition-colors duration-150 ${
+                  isActive ? "text-fg" : "text-fg-muted hover:bg-bg-raised"
                 }`}
               >
-                <span className="min-w-0 flex-1 truncate">{project.name}</span>
-                {isActive && (
-                  <Check className="size-3.5 shrink-0 text-accent" />
-                )}
-              </button>
+                <button
+                  type="button"
+                  role="option"
+                  aria-selected={isActive}
+                  onClick={() => {
+                    onSelect(project.id);
+                    setOpen(false);
+                  }}
+                  className="flex h-full min-w-0 flex-1 cursor-pointer items-center gap-2 px-2 text-left text-[13px] hover:text-fg"
+                >
+                  <span className="min-w-0 flex-1 truncate">
+                    {project.name}
+                  </span>
+                  {isActive && (
+                    <Check className="size-3.5 shrink-0 text-accent" />
+                  )}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    onDeleteProject(project);
+                    setOpen(false);
+                  }}
+                  className="mr-1 hidden size-6 shrink-0 cursor-pointer place-items-center rounded text-fg-faint transition-colors duration-150 hover:text-danger group-hover:grid"
+                  aria-label={`Delete ${project.name}`}
+                  title="Delete project"
+                >
+                  <Trash2 className="size-3.5" />
+                </button>
+              </div>
             );
           })}
           {projects.length === 0 && (

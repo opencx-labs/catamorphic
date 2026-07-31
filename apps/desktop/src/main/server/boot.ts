@@ -15,6 +15,7 @@ import Fastify, { type FastifyInstance } from "fastify";
 import { Kysely, PGliteDialect, WithSchemaPlugin } from "kysely";
 import { resolveCodingAgent } from "./coding-agent.js";
 import type { DataPaths } from "./paths.js";
+import { ProjectRootsStore } from "./project-roots.js";
 import type { DesktopSettings } from "./settings.js";
 
 /** The desktop app is single-tenant: one fixed identity for the machine. */
@@ -24,6 +25,7 @@ export const DESKTOP_USER_ID = "desktop-user";
 export interface EmbeddedServer {
   url: string;
   catamorphic: Catamorphic;
+  projectRoots: ProjectRootsStore;
   hasCodingAgent: boolean;
   shutdown: () => Promise<void>;
 }
@@ -43,11 +45,19 @@ export async function startEmbeddedServer(
   const sandboxProvider = new MicrosandboxSandboxProvider();
   const codingAgent = resolveCodingAgent(settings, sandboxProvider);
 
+  // Desktop projects live in user-visible folders; the mapping is desktop
+  // state (its own PGlite schema), injected into storage as a resolver so
+  // the shared catamorphic schema never learns about filesystem paths.
+  const projectRoots = new ProjectRootsStore(pglite);
+  await projectRoots.init();
+
   const catamorphic = createCatamorphic({
     database: { db },
     storage: {
       projectsPath: paths.projects,
       remotesPath: paths.remotes,
+      projectPathResolver: (_tenantId, projectId) =>
+        projectRoots.get(projectId),
     },
     sandboxProvider,
     codingAgent,
@@ -104,6 +114,7 @@ export async function startEmbeddedServer(
   return {
     url,
     catamorphic,
+    projectRoots,
     hasCodingAgent: codingAgent !== undefined,
     shutdown,
   };

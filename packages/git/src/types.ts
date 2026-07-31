@@ -10,6 +10,22 @@ export interface GitCredentials {
   password: string;
 }
 
+/**
+ * Host-provided lookup for projects whose working copy lives at an explicit
+ * filesystem location (e.g. a user-visible folder chosen in a desktop app).
+ * Returning `null` falls back to the backend's own internal layout.
+ */
+export type ProjectPathResolver = (
+  tenantId: string,
+  projectId: string,
+) => Promise<string | null>;
+
+export interface InitProjectOptions {
+  externalUserId?: string;
+  /** Explicit absolute directory to initialize the project in. */
+  rootPath?: string;
+}
+
 export interface StorageBackend {
   acquireProject(
     tenantId: string,
@@ -19,7 +35,7 @@ export interface StorageBackend {
   initProject(
     tenantId: string,
     projectId: string,
-    externalUserId?: string,
+    opts?: InitProjectOptions,
   ): Promise<string>;
   deleteProject(tenantId: string, projectId: string): Promise<void>;
   exists(

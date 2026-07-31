@@ -18,6 +18,7 @@ import {
   DEFAULT_SCHEMA,
   migrateToLatest,
 } from "@catamorphic/db";
+import type { ProjectPathResolver } from "@catamorphic/git";
 import { FsBackend, FsRemoteBackend, ProjectManager } from "@catamorphic/git";
 import type { PluginResolver } from "@catamorphic/plugins";
 import type {
@@ -53,7 +54,18 @@ export type StorageConfig =
    * `ProjectManager` with `ArtifactsRemoteBackend` from
    * `@catamorphic/cloudflare` and pass it as `projectManager`.
    */
-  | { projectsPath: string; remotesPath: string }
+  | {
+      projectsPath: string;
+      remotesPath: string;
+      /**
+       * Optional host-owned lookup mapping a project to an explicit working
+       * copy directory (e.g. the desktop app's user-visible project folders).
+       * Return null to use the internal projectsPath layout. The host also
+       * owns persisting that mapping — catamorphic never stores filesystem
+       * paths.
+       */
+      projectPathResolver?: ProjectPathResolver;
+    }
   /** Custom `ProjectManager` wiring (e.g. Artifacts remote backend). */
   | { projectManager: ProjectManager };
 
@@ -126,7 +138,7 @@ function resolveStorage(config: StorageConfig): ProjectManager {
     return config.projectManager;
   }
   return new ProjectManager(
-    new FsBackend(config.projectsPath),
+    new FsBackend(config.projectsPath, config.projectPathResolver),
     new FsRemoteBackend(config.remotesPath),
   );
 }

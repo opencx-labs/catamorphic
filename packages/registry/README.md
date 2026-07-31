@@ -21,8 +21,8 @@ submission, selectable Batch processing scopes, and item inspection/history,
 including prior failed or canceled attempts. Do not add separate panels for
 Workflow authoring or execution capabilities.
 
-Items currently shipped: `catamorphic-provider`, `projects-list`,
-`project-editor`, `file-explorer`, `git-panel`, `diff-drawer`, `runs-panel`,
+Items currently shipped: `catamorphic-provider`, `project-editor`,
+`file-explorer`, `git-panel`, `diff-drawer`, `runs-panel`,
 `plugins-settings`, `monaco-editor`, and `agent-chat`.
 
 The `agent-chat` item is a complete bottom-docked coding-agent conversation.

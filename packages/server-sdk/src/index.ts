@@ -73,6 +73,7 @@ export {
   FsRemoteBackend,
   ProjectManager,
 } from "@catamorphic/git";
+export type { ProjectPathResolver } from "@catamorphic/git";
 export type { PluginResolver } from "@catamorphic/plugins";
 export { LocalPluginResolver } from "@catamorphic/plugins";
 export type { SandboxProvider } from "@catamorphic/sandbox";

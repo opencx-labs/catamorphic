@@ -1,4 +1,4 @@
-import type { StorageBackend } from "@catamorphic/git";
+import type { InitProjectOptions, StorageBackend } from "@catamorphic/git";
 import { Daytona } from "@daytonaio/sdk";
 
 const PROJECT_DIR = "project";
@@ -24,8 +24,12 @@ export class DaytonaBackend implements StorageBackend {
   async initProject(
     tenantId: string,
     projectId: string,
-    externalUserId?: string,
+    opts?: InitProjectOptions,
   ): Promise<string> {
+    const externalUserId = opts?.externalUserId;
+    if (opts?.rootPath) {
+      throw new Error("DaytonaBackend does not support explicit root paths");
+    }
     const sandbox = await this.client.create({
       language: "typescript",
       autoStopInterval: 15,

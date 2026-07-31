@@ -28,6 +28,16 @@ export interface Project {
 export interface CreateProjectInput {
   name: string;
   templateId?: string;
+  /**
+   * Absolute directory the working copy should live in. Library-direct only —
+   * deliberately not exposed over HTTP, since a remote client must never pick
+   * server filesystem paths. Hosts that use it (e.g. the desktop app) own the
+   * projectId → path mapping and supply a matching `projectPathResolver` to
+   * their storage config.
+   */
+  rootPath?: string;
+  /** Adopt the folder's existing contents instead of scaffolding. */
+  importExisting?: boolean;
 }
 
 export interface UpdateProjectInput {
@@ -113,6 +123,10 @@ export class ProjectsService {
       throw new Error(`Template '${input.templateId}' not found`);
     }
 
+    if (input.rootPath !== undefined && !input.rootPath.startsWith("/")) {
+      throw new Error("rootPath must be an absolute path");
+    }
+
     const projectId = crypto.randomUUID();
 
     await this.ensureTenant(tenantId);
@@ -127,13 +141,24 @@ export class ProjectsService {
       })
       .execute();
 
-    // Blank projects still get the seed skills so the coding agent knows the
-    // workflow conventions from its first session (templates already include
-    // them in their file maps).
-    await this.projectManager.create(tenantId, projectId, {
-      name: input.name,
-      initialFiles: template?.files ?? SEED_SKILLS,
-    });
+    try {
+      // Blank projects still get the seed skills so the coding agent knows the
+      // workflow conventions from its first session (templates already include
+      // them in their file maps).
+      await this.projectManager.create(tenantId, projectId, {
+        name: input.name,
+        initialFiles: template?.files ?? SEED_SKILLS,
+        rootPath: input.rootPath,
+        importExisting: input.importExisting,
+      });
+    } catch (err) {
+      await this.db
+        .deleteFrom("projects")
+        .where("id", "=", projectId)
+        .execute()
+        .catch(() => {});
+      throw err;
+    }
 
     const row = await this.db
       .selectFrom("projects")

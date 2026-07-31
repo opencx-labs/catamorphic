@@ -2,7 +2,11 @@ import nodeFs from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import git from "isomorphic-git";
-import type { StorageBackend } from "./types.js";
+import type {
+  InitProjectOptions,
+  ProjectPathResolver,
+  StorageBackend,
+} from "./types.js";
 
 const UUID_RE =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -14,16 +18,22 @@ function assertUuid(value: string): void {
 }
 
 /**
- * Filesystem-backed project storage. Dev working copies live under:
+ * Filesystem-backed project storage. When a `pathResolver` maps a project to
+ * an explicit root directory (a user-visible folder), that folder IS the
+ * working copy — shared by all users of this single-machine backend.
+ * Otherwise dev working copies live under the internal layout:
  *   <basePath>/<tenantId>/<projectId>/dev/<externalUserId>/
  * When `externalUserId` is omitted, falls back to the legacy layout
  *   <basePath>/<tenantId>/<projectId>/
  * so older tests and single-user usage remain compatible.
  */
 export class FsBackend implements StorageBackend {
-  constructor(private readonly basePath: string) {}
+  constructor(
+    private readonly basePath: string,
+    private readonly pathResolver?: ProjectPathResolver,
+  ) {}
 
-  private resolveProjectPath(
+  private resolveInternalPath(
     tenantId: string,
     projectId: string,
     externalUserId?: string,
@@ -40,12 +50,22 @@ export class FsBackend implements StorageBackend {
     return dir;
   }
 
+  private async resolveProjectPath(
+    tenantId: string,
+    projectId: string,
+    externalUserId?: string,
+  ): Promise<string> {
+    const rootPath = await this.pathResolver?.(tenantId, projectId);
+    if (rootPath) return rootPath;
+    return this.resolveInternalPath(tenantId, projectId, externalUserId);
+  }
+
   async acquireProject(
     tenantId: string,
     projectId: string,
     externalUserId?: string,
   ): Promise<{ repoPath: string; release: () => Promise<void> }> {
-    const projectPath = this.resolveProjectPath(
+    const projectPath = await this.resolveProjectPath(
       tenantId,
       projectId,
       externalUserId,
@@ -64,19 +84,30 @@ export class FsBackend implements StorageBackend {
   async initProject(
     tenantId: string,
     projectId: string,
-    externalUserId?: string,
+    opts?: InitProjectOptions,
   ): Promise<string> {
-    const projectPath = this.resolveProjectPath(
-      tenantId,
-      projectId,
-      externalUserId,
-    );
+    const projectPath =
+      opts?.rootPath ??
+      (await this.resolveProjectPath(
+        tenantId,
+        projectId,
+        opts?.externalUserId,
+      ));
     await fs.mkdir(projectPath, { recursive: true });
-    await git.init({ fs: nodeFs, dir: projectPath, defaultBranch: "main" });
+    const gitDir = path.join(projectPath, ".git");
+    const hasRepo = await fs.access(gitDir).then(
+      () => true,
+      () => false,
+    );
+    if (!hasRepo) {
+      await git.init({ fs: nodeFs, dir: projectPath, defaultBranch: "main" });
+    }
     return projectPath;
   }
 
   async deleteProject(tenantId: string, projectId: string): Promise<void> {
+    // Only internal storage is removed. Explicitly-rooted folders belong to
+    // the user; the host decides separately whether to trash them.
     const projectRoot = path.join(this.basePath, tenantId, projectId);
     await fs.rm(projectRoot, { recursive: true, force: true });
   }
@@ -86,7 +117,7 @@ export class FsBackend implements StorageBackend {
     projectId: string,
     externalUserId?: string,
   ): Promise<boolean> {
-    const projectPath = this.resolveProjectPath(
+    const projectPath = await this.resolveProjectPath(
       tenantId,
       projectId,
       externalUserId,

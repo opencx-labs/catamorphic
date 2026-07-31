@@ -120,11 +120,9 @@ export class ProjectManager {
       return this.open(tenantId, projectId, externalUserId);
     }
 
-    const repoPath = await this.storage.initProject(
-      tenantId,
-      projectId,
+    const repoPath = await this.storage.initProject(tenantId, projectId, {
       externalUserId,
-    );
+    });
     const { release } = await this.storage.acquireProject(
       tenantId,
       projectId,
@@ -151,62 +149,90 @@ export class ProjectManager {
       name?: string;
       initialFiles?: Record<string, string>;
       externalUserId?: string;
+      /** Explicit directory for the working copy (user-visible folder). */
+      rootPath?: string;
+      /**
+       * Adopt the folder's existing contents instead of scaffolding a blank
+       * workspace. Existing files are never overwritten; a git repo is
+       * initialized only when the folder is not already one.
+       */
+      importExisting?: boolean;
     },
   ): Promise<ProjectRepo> {
-    const repoPath = await this.storage.initProject(
-      tenantId,
-      projectId,
-      opts?.externalUserId,
-    );
+    const repoPath = await this.storage.initProject(tenantId, projectId, {
+      externalUserId: opts?.externalUserId,
+      rootPath: opts?.rootPath,
+    });
     const projectName = opts?.name ?? "my-project";
 
-    await fs.writeFile(
-      path.join(repoPath, "package.json"),
-      DEFAULT_ROOT_PKG(projectName),
-    );
-    await fs.mkdir(path.join(repoPath, "contracts", "src"), {
-      recursive: true,
-    });
-    await fs.writeFile(
-      path.join(repoPath, "contracts", "package.json"),
-      DEFAULT_CONTRACTS_PKG,
-    );
-    await fs.writeFile(
-      path.join(repoPath, "contracts", "tsconfig.json"),
-      DEFAULT_TSCONFIG,
-    );
-    await fs.writeFile(
-      path.join(repoPath, "contracts", "src", "index.ts"),
-      DEFAULT_CONTRACTS_INDEX,
-    );
-    await fs.mkdir(path.join(repoPath, "workflows", "src"), {
-      recursive: true,
-    });
-    await fs.writeFile(
-      path.join(repoPath, "workflows", "package.json"),
-      DEFAULT_WORKFLOWS_PKG,
-    );
-    await fs.writeFile(
-      path.join(repoPath, "workflows", "tsconfig.json"),
-      DEFAULT_TSCONFIG,
-    );
+    if (!opts?.importExisting) {
+      await fs.writeFile(
+        path.join(repoPath, "package.json"),
+        DEFAULT_ROOT_PKG(projectName),
+      );
+      await fs.mkdir(path.join(repoPath, "contracts", "src"), {
+        recursive: true,
+      });
+      await fs.writeFile(
+        path.join(repoPath, "contracts", "package.json"),
+        DEFAULT_CONTRACTS_PKG,
+      );
+      await fs.writeFile(
+        path.join(repoPath, "contracts", "tsconfig.json"),
+        DEFAULT_TSCONFIG,
+      );
+      await fs.writeFile(
+        path.join(repoPath, "contracts", "src", "index.ts"),
+        DEFAULT_CONTRACTS_INDEX,
+      );
+      await fs.mkdir(path.join(repoPath, "workflows", "src"), {
+        recursive: true,
+      });
+      await fs.writeFile(
+        path.join(repoPath, "workflows", "package.json"),
+        DEFAULT_WORKFLOWS_PKG,
+      );
+      await fs.writeFile(
+        path.join(repoPath, "workflows", "tsconfig.json"),
+        DEFAULT_TSCONFIG,
+      );
+    }
 
     if (opts?.initialFiles) {
       for (const [filePath, content] of Object.entries(opts.initialFiles)) {
         const fullPath = path.join(repoPath, filePath);
+        if (opts.importExisting) {
+          const exists = await fs.access(fullPath).then(
+            () => true,
+            () => false,
+          );
+          if (exists) continue;
+        }
         await fs.mkdir(path.dirname(fullPath), { recursive: true });
         await fs.writeFile(fullPath, content);
       }
     }
 
-    const { release } = await this.storage.acquireProject(
-      tenantId,
-      projectId,
-      opts?.externalUserId,
-    );
-    const repo = new ProjectRepoImpl(projectId, repoPath, release);
+    // Use the path initProject returned rather than re-acquiring: when the
+    // host maps this project to an explicit rootPath, its resolver may not
+    // know the id yet (hosts record the mapping after create returns).
+    const repo = new ProjectRepoImpl(projectId, repoPath, async () => {});
 
-    await repo.commit("Initial commit", SYSTEM_AUTHOR);
+    const hasHead = await repo.resolveRef("HEAD").then(
+      () => true,
+      () => false,
+    );
+    if (!hasHead) {
+      await repo.commit(
+        opts?.importExisting ? "Import project" : "Initial commit",
+        SYSTEM_AUTHOR,
+      );
+    } else if (opts?.importExisting) {
+      const status = await repo.status();
+      if (status.dirty) {
+        await repo.commit("Import project into Catamorphic", SYSTEM_AUTHOR);
+      }
+    }
 
     if (this.remote) {
       await this.remote.initRemote(tenantId, projectId);
