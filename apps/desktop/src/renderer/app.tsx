@@ -75,7 +75,6 @@ export function App({ hasCodingAgent }: { hasCodingAgent: boolean }) {
   const projectsQuery = useProjects();
   const [activeProjectId, setActiveProjectId] = useState<string>();
   const [workspaces, setWorkspaces] = useState<Record<string, Workspace>>({});
-  const [showSettings, setShowSettings] = useState(false);
   const [projectModalOpen, setProjectModalOpen] = useState(false);
   const [deletingProject, setDeletingProject] = useState<ProjectSummary | null>(
     null,
@@ -396,7 +395,6 @@ export function App({ hasCodingAgent }: { hasCodingAgent: boolean }) {
 
   const selectProject = (id: string) => {
     setActiveProjectId(id);
-    setShowSettings(false);
   };
 
   const onProjectDeleted = (deletedId: string) => {
@@ -517,9 +515,11 @@ export function App({ hasCodingAgent }: { hasCodingAgent: boolean }) {
           <footer className="border-t border-border p-2">
             <button
               type="button"
-              onClick={() => setShowSettings((value) => !value)}
+              onClick={() =>
+                openTab({ kind: "settings", name: "settings", label: "Settings" })
+              }
               className={`flex h-7 w-full cursor-pointer items-center gap-2 rounded-md px-2 text-[13px] transition-colors duration-150 ${
-                showSettings
+                activeTab?.kind === "settings"
                   ? "bg-bg-overlay text-fg"
                   : "text-fg-muted hover:bg-bg-overlay hover:text-fg"
               }`}
@@ -554,7 +554,7 @@ export function App({ hasCodingAgent }: { hasCodingAgent: boolean }) {
               </button>
             </ShortcutHint>
           </span>
-          {!showSettings && projectId && (
+          {projectId && (
             <WorkspaceTabBar
               tabs={allTabs}
               activeKey={workspace.activeTabKey}
@@ -564,9 +564,7 @@ export function App({ hasCodingAgent }: { hasCodingAgent: boolean }) {
           )}
         </div>
 
-        {showSettings ? (
-          <SettingsScreen onClose={() => setShowSettings(false)} />
-        ) : projectId ? (
+        {projectId ? (
           <>
             <div className="relative flex min-h-0 flex-1 flex-col">
               {activeTab?.kind === "workflow" ? (
@@ -576,6 +574,10 @@ export function App({ hasCodingAgent }: { hasCodingAgent: boolean }) {
                 />
               ) : activeTab?.kind === "app" ? (
                 <AppScreen projectId={projectId} appName={activeTab.name} />
+              ) : activeTab?.kind === "settings" ? (
+                <SettingsScreen
+                  onClose={() => closeTab(tabKey(activeTab))}
+                />
               ) : activeChatTabId ? null : (
                 <TabEmptyState hasCodingAgent={hasCodingAgent} />
               )}

@@ -1,6 +1,7 @@
 import {
   LayoutGrid,
   MessageSquare,
+  Settings as SettingsIcon,
   Workflow as WorkflowIcon,
   X,
 } from "lucide-react";
@@ -12,7 +13,8 @@ import { ShortcutHint } from "./shortcut-hint";
 export type WorkspaceTab =
   | { kind: "workflow"; name: string; label?: string }
   | { kind: "app"; name: string; label?: string }
-  | { kind: "chat"; name: string; label?: string };
+  | { kind: "chat"; name: string; label?: string }
+  | { kind: "settings"; name: string; label?: string };
 
 export const tabKey = (tab: WorkspaceTab) => `${tab.kind}:${tab.name}`;
 
@@ -20,6 +22,7 @@ const TAB_ICONS = {
   workflow: WorkflowIcon,
   app: LayoutGrid,
   chat: MessageSquare,
+  settings: SettingsIcon,
 } as const;
 
 interface RenderedTab {
