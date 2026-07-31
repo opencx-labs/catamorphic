@@ -22,6 +22,10 @@ import { DeploymentService } from "./services/deployment-service.js";
 import { DevSandboxService } from "./services/dev-sandbox-service.js";
 import { ExecutionJobsService } from "./services/execution-jobs-service.js";
 import { ExecutionWorkerService } from "./services/execution-worker-service.js";
+import {
+  GithubService,
+  type GithubServiceConfig,
+} from "./services/github-service.js";
 import { PluginsService } from "./services/plugins-service.js";
 import { ProjectsService } from "./services/projects-service.js";
 import { RateReservationsService } from "./services/rate-reservations-service.js";
@@ -83,6 +87,12 @@ export interface CatamorphicCoreConfig {
   appBundleStore?: AppBundleStore;
   /** Hard cap on a built app bundle (js + css). Defaults to 5 MiB. */
   maxAppBundleBytes?: number;
+  /**
+   * GitHub App registration for repo import + push-back. Hosts bring their
+   * own app (client id, and the secret when using the server web flow).
+   * Without it, the GitHub surfaces are unavailable.
+   */
+  github?: GithubServiceConfig;
 }
 
 /**
@@ -116,6 +126,7 @@ export class CatamorphicCore {
   readonly agentSessions?: AgentSessionsService;
   readonly apps?: AppsService;
   readonly appPolicies: AppPoliciesService;
+  readonly github?: GithubService;
 
   constructor(config: CatamorphicCoreConfig) {
     this.db = config.db;
@@ -146,6 +157,14 @@ export class CatamorphicCore {
         : undefined;
 
     this.projects = new ProjectsService(this.db, this.projectManager);
+    this.github = config.github
+      ? new GithubService(
+          this.db,
+          this.projectManager,
+          this.projects,
+          config.github,
+        )
+      : undefined;
     this.workflows = new WorkflowsService(this.projectManager, this.projects);
     this.deployment = new DeploymentService(this.projectManager);
     this.deploymentArtifacts = new DeploymentArtifactsService(this.db);

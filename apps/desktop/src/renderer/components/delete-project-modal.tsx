@@ -3,6 +3,7 @@ import { useQueryClient } from "@tanstack/react-query";
 import { useEffect, useState } from "react";
 import { desktopApi } from "../lib/desktop-api.js";
 import { Modal } from "./modal.js";
+import { PendingButton } from "./pending-button.js";
 
 export function DeleteProjectModal({
   project,
@@ -93,19 +94,16 @@ export function DeleteProjectModal({
         >
           Cancel
         </button>
-        <button
+        <PendingButton
           type="button"
           onClick={confirm}
-          disabled={pending}
+          pending={pending}
+          pendingLabel="Deleting…"
           data-testid="delete-confirm"
           className="h-8 cursor-pointer rounded-md bg-danger px-3 text-[13px] font-medium text-white transition-opacity duration-150 hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
         >
-          {pending
-            ? "Deleting…"
-            : alsoTrash
-              ? "Delete and trash folder"
-              : "Delete project"}
-        </button>
+          {alsoTrash ? "Delete and trash folder" : "Delete project"}
+        </PendingButton>
       </footer>
     </Modal>
   );

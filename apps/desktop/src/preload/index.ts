@@ -35,6 +35,26 @@ const api = {
     ipcRenderer.invoke("catamorphic:project-root", projectId),
   revealFolder: (folderPath: string): Promise<void> =>
     ipcRenderer.invoke("catamorphic:reveal-folder", folderPath),
+  githubConnectStart: (): Promise<{
+    userCode: string;
+    verificationUri: string;
+  }> => ipcRenderer.invoke("catamorphic:github-connect-start"),
+  githubDisconnect: (): Promise<void> =>
+    ipcRenderer.invoke("catamorphic:github-disconnect"),
+  githubManageRepos: (): Promise<void> =>
+    ipcRenderer.invoke("catamorphic:github-manage-repos"),
+  githubImport: (input: {
+    fullName: string;
+    name?: string;
+    rootPath: string;
+  }): Promise<{ id: string; name: string }> =>
+    ipcRenderer.invoke("catamorphic:github-import", input),
+  onGithubConnected: (listener: (result: unknown) => void): (() => void) => {
+    const handler = (_event: unknown, result: unknown) => listener(result);
+    ipcRenderer.on("catamorphic:github-connected", handler);
+    return () =>
+      ipcRenderer.removeListener("catamorphic:github-connected", handler);
+  },
   onServerChanged: (listener: (info: ServerInfo) => void): (() => void) => {
     const handler = (_event: unknown, info: ServerInfo) => listener(info);
     ipcRenderer.on("catamorphic:server-changed", handler);

@@ -770,6 +770,35 @@ export const SecretEnvironmentQuerySchema = z.object({
   environment: RunModeSchema.default("production"),
 });
 
+// --- GitHub ---
+export const GithubStatusSchema = z.object({
+  connected: z.boolean(),
+  login: z.string().optional(),
+});
+
+export const GithubConnectSchema = z.object({
+  /** Authorization code from the GitHub web-flow callback. */
+  code: z.string().min(1),
+  /** Must match the redirect_uri sent to /login/oauth/authorize, if any. */
+  redirectUri: z.string().optional(),
+});
+
+export const GithubRepoSchema = z.object({
+  id: z.number(),
+  fullName: z.string(),
+  name: z.string(),
+  owner: z.string(),
+  private: z.boolean(),
+  defaultBranch: z.string(),
+  description: z.string().nullable(),
+  pushedAt: z.string().nullable(),
+});
+
+export const GithubImportSchema = z.object({
+  fullName: z.string().regex(/^[\w.-]+\/[\w.-]+$/, "Expected owner/repo"),
+  name: z.string().min(1).optional(),
+});
+
 // --- Generic ---
 export const ErrorSchema = z.object({
   error: z.string(),

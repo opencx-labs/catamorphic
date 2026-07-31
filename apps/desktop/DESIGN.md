@@ -68,6 +68,17 @@ Low-chroma so run states don't scream: `--color-success`, `--color-warning`,
 `--color-user-tint` (user bubbles, faint blue-slate), `--color-agent-tint`
 (assistant, same as raised surface — the agent is "part of the app").
 
+## Buttons
+
+- **A button never changes size when it enters a pending/loading state.**
+  Use `<PendingButton>` (`components/pending-button.tsx`): it stacks the idle
+  and pending labels in one grid cell so the button always reserves the width
+  of the widest label, and pending merely toggles visibility. Never swap a
+  button's child text on `pending ?` directly — that reflows the layout
+  mid-action.
+- Pending buttons are also disabled while pending (PendingButton enforces
+  this).
+
 ## Shape & spacing
 
 - Radii: `--radius-sm` 4px (inputs, chips), `--radius-md` 6px (buttons, list

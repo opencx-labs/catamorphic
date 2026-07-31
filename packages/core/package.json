@@ -21,6 +21,7 @@
   "dependencies": {
     "@catamorphic/db": "workspace:*",
     "@catamorphic/git": "workspace:*",
+    "@catamorphic/github": "workspace:*",
     "@catamorphic/otel": "workspace:*",
     "@catamorphic/parser": "workspace:*",
     "@catamorphic/plugins": "workspace:*",
@@ -30,6 +31,7 @@
   },
   "devDependencies": {
     "@catamorphic/cloudflare": "workspace:*",
+    "@electric-sql/pglite": "^0.5.4",
     "@types/node": "^26.1.1"
   }
 }

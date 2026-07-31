@@ -19,6 +19,7 @@
     "@catamorphic/db": "workspace:*",
     "@catamorphic/fastify-plugin": "workspace:*",
     "@catamorphic/git": "workspace:*",
+    "@catamorphic/github": "workspace:*",
     "@catamorphic/microsandbox": "workspace:*",
     "@catamorphic/react": "workspace:*",
     "@catamorphic/sandbox": "workspace:*",

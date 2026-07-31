@@ -16,7 +16,26 @@ export interface UpdateSettingsInput {
   apiKey?: string | null;
 }
 
+export type GithubConnectResult =
+  | { connected: true; login: string }
+  | { error: string }
+  | null;
+
 export interface CatamorphicDesktopApi {
+  githubConnectStart: () => Promise<{
+    userCode: string;
+    verificationUri: string;
+  }>;
+  githubDisconnect: () => Promise<void>;
+  githubManageRepos: () => Promise<void>;
+  githubImport: (input: {
+    fullName: string;
+    name?: string;
+    rootPath: string;
+  }) => Promise<{ id: string; name: string }>;
+  onGithubConnected: (
+    listener: (result: GithubConnectResult) => void,
+  ) => () => void;
   getServerState: () => Promise<ServerInfo>;
   getSettings: () => Promise<PublicSettings>;
   setSettings: (input: UpdateSettingsInput) => Promise<PublicSettings>;

@@ -8,6 +8,12 @@ export {
 } from "./git-sync.js";
 export { migrateWorkflowToProject } from "./migrate-workflow.js";
 export {
+  type CloneFromRemoteOptions,
+  cloneFromRemote,
+  fetchFromRemote,
+  pushToRemote,
+} from "./network.js";
+export {
   generateWorkBranchName,
   ProjectManager,
   WORK_BRANCH_PREFIX,

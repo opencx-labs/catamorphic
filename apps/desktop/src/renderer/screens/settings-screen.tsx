@@ -1,5 +1,6 @@
 import { X } from "lucide-react";
 import { type FormEvent, useEffect, useState } from "react";
+import { PendingButton } from "../components/pending-button.js";
 import {
   desktopApi,
   type PublicSettings,
@@ -127,13 +128,15 @@ export function SettingsScreen({ onClose }: { onClose: () => void }) {
             <p className="text-xs text-success">Saved — server restarted.</p>
           )}
 
-          <button
+          <PendingButton
             type="submit"
-            disabled={saving || (!settings.hasApiKey && !apiKey.trim())}
+            pending={saving}
+            pendingLabel="Applying…"
+            disabled={!settings.hasApiKey && !apiKey.trim()}
             className="h-8 cursor-pointer rounded-md bg-accent px-4 text-[13px] font-medium text-accent-fg disabled:cursor-not-allowed disabled:opacity-50"
           >
-            {saving ? "Applying…" : "Save"}
-          </button>
+            Save
+          </PendingButton>
         </form>
       )}
     </div>

@@ -24,6 +24,7 @@
         "@catamorphic/db": "workspace:*",
         "@catamorphic/fastify-plugin": "workspace:*",
         "@catamorphic/git": "workspace:*",
+        "@catamorphic/github": "workspace:*",
         "@catamorphic/microsandbox": "workspace:*",
         "@catamorphic/react": "workspace:*",
         "@catamorphic/sandbox": "workspace:*",
@@ -174,6 +175,7 @@
       "dependencies": {
         "@catamorphic/db": "workspace:*",
         "@catamorphic/git": "workspace:*",
+        "@catamorphic/github": "workspace:*",
         "@catamorphic/otel": "workspace:*",
         "@catamorphic/parser": "workspace:*",
         "@catamorphic/plugins": "workspace:*",
@@ -183,6 +185,7 @@
       },
       "devDependencies": {
         "@catamorphic/cloudflare": "workspace:*",
+        "@electric-sql/pglite": "^0.5.4",
         "@types/node": "^26.1.1",
       },
     },
@@ -221,6 +224,7 @@
         "@catamorphic/core": "workspace:*",
         "@catamorphic/db": "workspace:*",
         "@catamorphic/git": "workspace:*",
+        "@catamorphic/github": "workspace:*",
         "@catamorphic/parser": "workspace:*",
         "@catamorphic/plugins": "workspace:*",
         "@catamorphic/sandbox": "workspace:*",
@@ -239,6 +243,13 @@
       "dependencies": {
         "isomorphic-git": "^1.38.6",
       },
+      "devDependencies": {
+        "@types/node": "^26.1.1",
+      },
+    },
+    "packages/github": {
+      "name": "@catamorphic/github",
+      "version": "0.0.1",
       "devDependencies": {
         "@types/node": "^26.1.1",
       },
@@ -383,6 +394,7 @@
         "@catamorphic/core": "workspace:*",
         "@catamorphic/db": "workspace:*",
         "@catamorphic/git": "workspace:*",
+        "@catamorphic/github": "workspace:*",
         "@catamorphic/plugins": "workspace:*",
         "@catamorphic/sandbox": "workspace:*",
         "kysely": "^0.29.3",
@@ -617,6 +629,8 @@
     "@catamorphic/fastify-plugin": ["@catamorphic/fastify-plugin@workspace:packages/fastify-plugin"],
 
     "@catamorphic/git": ["@catamorphic/git@workspace:packages/git"],
+
+    "@catamorphic/github": ["@catamorphic/github@workspace:packages/github"],
 
     "@catamorphic/microsandbox": ["@catamorphic/microsandbox@workspace:packages/microsandbox"],
 

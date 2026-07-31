@@ -6,6 +6,7 @@ import type {
   DeploymentRuntimeRetirementResult,
   ExecutionWorkerHandle,
   ExecutionWorkerOptions,
+  GithubServiceConfig,
   RetentionConfig,
 } from "@catamorphic/core";
 import {
@@ -108,6 +109,13 @@ export interface CreateCatamorphicConfig {
   appBundleStore?: AppBundleStore;
   /** Hard cap on a built app bundle (js + css). Defaults to 5 MiB. */
   maxAppBundleBytes?: number;
+  /**
+   * GitHub App registration enabling repo import + push-back. Embedders
+   * register their own GitHub App and pass its client id (and, when using the
+   * server-side web OAuth flow, its client secret). Omit to leave the GitHub
+   * surfaces disabled.
+   */
+  github?: GithubServiceConfig;
 }
 
 function resolveDatabase(config: DatabaseConfig): {
@@ -180,6 +188,7 @@ export class Catamorphic {
         : { deploymentRuntime: config.deploymentRuntime }),
       appBundleStore: config.appBundleStore,
       maxAppBundleBytes: config.maxAppBundleBytes,
+      github: config.github,
     });
   }
 

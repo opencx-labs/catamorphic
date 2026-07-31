@@ -146,6 +146,14 @@ export {
   useSendAgentMessage,
 } from "./hooks/use-send-agent-message.js";
 // Project hooks
+export {
+  type GithubRepoSummary,
+  type GithubStatus,
+  type ImportGithubRepoInput,
+  useGithubRepos,
+  useGithubStatus,
+  useImportGithubRepo,
+} from "./hooks/use-github.js";
 export { useTemplates } from "./hooks/use-templates.js";
 export {
   type UpdateProjectInput,

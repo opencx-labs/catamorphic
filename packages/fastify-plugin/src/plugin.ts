@@ -8,6 +8,7 @@ import {
 import { HttpIdentityError } from "./http-identity.js";
 import { registerAgentRoutes } from "./routes/agent.js";
 import { registerAppRoutes } from "./routes/apps.js";
+import { registerGithubRoutes } from "./routes/github.js";
 import { registerPlaygroundRoutes } from "./routes/playground.js";
 import { registerPluginRoutes } from "./routes/plugins.js";
 import { registerProjectRoutes } from "./routes/projects.js";
@@ -72,6 +73,7 @@ export const catamorphicPlugin: FastifyPluginAsync<
   registerAgentRoutes(app, ctx);
   registerAppRoutes(app, ctx);
   registerTemplateRoutes(app);
+  registerGithubRoutes(app, ctx);
   registerPluginRoutes(app, ctx);
   registerPlaygroundRoutes(app, ctx);
 };

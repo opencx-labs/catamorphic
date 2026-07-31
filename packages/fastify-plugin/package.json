@@ -19,6 +19,7 @@
   },
   "dependencies": {
     "@catamorphic/core": "workspace:*",
+    "@catamorphic/github": "workspace:*",
     "@catamorphic/db": "workspace:*",
     "@catamorphic/git": "workspace:*",
     "@catamorphic/parser": "workspace:*",

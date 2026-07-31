@@ -15,6 +15,7 @@ import {
 import { useSetAtom } from "jotai";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { MonacoCodeEditor } from "../components/catamorphic/monaco-editor.js";
+import { PendingButton } from "../components/pending-button.js";
 
 export function WorkflowScreen({
   projectId,
@@ -126,18 +127,16 @@ function WorkflowScreenInner({
       <GraphWiring code={code} onParse={onParse} />
       <div className="flex min-h-0 flex-1 flex-col">
         <div className="flex h-10 shrink-0 items-center justify-end border-b border-border px-3">
-          <button
+          <PendingButton
             type="button"
+            pending={saveState === "saving"}
+            pendingLabel="Saving…"
             className="h-7 cursor-pointer rounded-md bg-accent px-3 text-xs font-medium text-accent-fg transition-opacity duration-150 hover:opacity-90 disabled:opacity-50"
             onClick={() => void handleSave()}
-            disabled={saveState === "saving" || code === initialCode}
+            disabled={code === initialCode}
           >
-            {saveState === "saving"
-              ? "Saving…"
-              : saveState === "saved"
-                ? "Saved"
-                : "Save"}
-          </button>
+            {saveState === "saved" ? "Saved" : "Save"}
+          </PendingButton>
         </div>
         <div className="flex min-h-0 flex-1">
           <div className="relative min-w-0 flex-1">

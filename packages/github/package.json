@@ -1,5 +1,5 @@
 {
-  "name": "@catamorphic/server-sdk",
+  "name": "@catamorphic/github",
   "version": "0.0.1",
   "private": true,
   "type": "module",
@@ -18,18 +18,7 @@
     "test": "vitest run --config ../../vitest.config.ts",
     "typecheck": "tsgo --project ./tsconfig.json"
   },
-  "dependencies": {
-    "@catamorphic/core": "workspace:*",
-    "@catamorphic/github": "workspace:*",
-    "@catamorphic/db": "workspace:*",
-    "@catamorphic/git": "workspace:*",
-    "@catamorphic/plugins": "workspace:*",
-    "@catamorphic/sandbox": "workspace:*",
-    "kysely": "^0.29.3",
-    "pg": "^8.22.0"
-  },
   "devDependencies": {
-    "@types/node": "^26.1.1",
-    "@types/pg": "^8.20.0"
+    "@types/node": "^26.1.1"
   }
 }

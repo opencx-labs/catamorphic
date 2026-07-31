@@ -1,7 +1,14 @@
 import path from "node:path";
+import {
+  buildInstallationUrl,
+  GithubAuthError,
+  pollDeviceToken,
+  requestDeviceCode,
+} from "@catamorphic/github";
 import { app, BrowserWindow, dialog, ipcMain, shell } from "electron";
 import type { EmbeddedServer } from "./server/boot.js";
 import { DESKTOP_TENANT_ID, DESKTOP_USER_ID } from "./server/boot.js";
+import { GITHUB_APP } from "./server/github.js";
 import {
   DEFAULT_MODELS,
   type DesktopSettings,
@@ -148,6 +155,103 @@ export function registerIpcHandlers(
   ipcMain.handle("catamorphic:reveal-folder", (_event, folderPath: string) => {
     if (path.isAbsolute(folderPath)) shell.openPath(folderPath);
   });
+
+  // --- GitHub device flow ---
+  // The flow lives in the main process: it opens the system browser and
+  // polls GitHub, while the renderer only ever sees the short user code and
+  // the final connected/failed state. Tokens go straight into the embedded
+  // server's GithubService (encrypted via safeStorage before touching disk).
+  let deviceFlowGeneration = 0;
+
+  ipcMain.handle("catamorphic:github-connect-start", async () => {
+    const grant = await requestDeviceCode(GITHUB_APP);
+    const generation = ++deviceFlowGeneration;
+    void shell.openExternal(grant.verificationUri);
+
+    const poll = async (): Promise<void> => {
+      const started = Date.now();
+      let intervalMs = grant.interval * 1000;
+      while (Date.now() - started < grant.expiresIn * 1000) {
+        // A newer connect attempt or an app shutdown obsoletes this loop.
+        if (generation !== deviceFlowGeneration) return;
+        await new Promise((resolve) => setTimeout(resolve, intervalMs));
+        const server = state.current;
+        if (!server) return;
+        try {
+          const result = await pollDeviceToken(GITHUB_APP, grant.deviceCode);
+          if (result.tokens) {
+            const status = await server.catamorphic.core.github?.connect(
+              identity,
+              result.tokens,
+            );
+            state.broadcast("catamorphic:github-connected", status ?? null);
+            return;
+          }
+          if (result.retryAfter > 0) intervalMs = result.retryAfter * 1000;
+        } catch (cause) {
+          state.broadcast("catamorphic:github-connected", {
+            error:
+              cause instanceof GithubAuthError
+                ? cause.message
+                : "GitHub authorization failed",
+          });
+          return;
+        }
+      }
+      state.broadcast("catamorphic:github-connected", {
+        error: "The GitHub device code expired — try connecting again",
+      });
+    };
+    void poll();
+
+    return {
+      userCode: grant.userCode,
+      verificationUri: grant.verificationUri,
+    };
+  });
+
+  // Repo access is granted by *installing* the GitHub App, not by the OAuth
+  // authorization itself — send users to the installation page where GitHub
+  // shows the repository picker.
+  ipcMain.handle("catamorphic:github-manage-repos", () => {
+    void shell.openExternal(buildInstallationUrl(GITHUB_APP));
+  });
+
+  ipcMain.handle("catamorphic:github-disconnect", async () => {
+    deviceFlowGeneration += 1;
+    const server = state.current;
+    if (!server) return;
+    await server.catamorphic.core.github?.disconnect(identity);
+  });
+
+  // Import runs through IPC (not HTTP) for the same reason project-create
+  // does: the destination folder is a desktop-owned filesystem path.
+  ipcMain.handle(
+    "catamorphic:github-import",
+    async (
+      _event,
+      input: { fullName: string; name?: string; rootPath: string },
+    ) => {
+      const server = state.current;
+      if (!server) throw new Error("Server not running");
+      if (!server.catamorphic.core.github) {
+        throw new Error("GitHub integration not configured");
+      }
+      if (!path.isAbsolute(input.rootPath)) {
+        throw new Error("rootPath must be an absolute path");
+      }
+      const project = await server.catamorphic.core.github.importRepo(
+        identity,
+        {
+          fullName: input.fullName,
+          name: input.name,
+          rootPath: input.rootPath,
+        },
+      );
+      await server.projectRoots.set(project.id, input.rootPath);
+      return { id: project.id, name: project.name };
+    },
+  );
 
   ipcMain.handle(
     "catamorphic:settings-get",

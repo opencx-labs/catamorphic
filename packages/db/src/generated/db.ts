@@ -280,6 +280,7 @@ export interface Projects {
   default_branch: Generated<string>;
   id: Generated<string>;
   name: string;
+  remote_branch: string | null;
   remote_url: string | null;
   storage_type: Generated<string>;
   tenant_id: string;

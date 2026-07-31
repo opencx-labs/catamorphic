@@ -87,6 +87,15 @@ export {
   ExecutionWorkerService,
 } from "./services/execution-worker-service.js";
 export {
+  type GithubConnectionStatus,
+  GithubNotConnectedError,
+  GithubService,
+  type GithubServiceConfig,
+  GithubTokenExpiredError,
+  type ImportGithubRepoInput,
+  ProjectNotLinkedToGithubError,
+} from "./services/github-service.js";
+export {
   type AttachedPluginInfo,
   type PluginInfo,
   PluginNotAttachedError,

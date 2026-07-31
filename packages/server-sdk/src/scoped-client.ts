@@ -6,7 +6,9 @@ import type {
   WorkflowSummary as CoreWorkflowSummary,
   CreateProjectInput,
   GetRunInput,
+  GithubConnectionStatus,
   Identity,
+  ImportGithubRepoInput,
   ListBatchItemStepsInput,
   ListBatchItemsInput,
   ListBatchItemsResult,
@@ -27,6 +29,7 @@ import type {
   WriteFileInput,
 } from "@catamorphic/core";
 import type { Json } from "@catamorphic/db";
+import type { GithubRepo, GithubTokenSet } from "@catamorphic/github";
 
 export type WorkflowSummary = Omit<CoreWorkflowSummary, "execution">;
 type PublicWorkflowNode = Omit<
@@ -43,6 +46,25 @@ export interface ProjectsResource {
   get(args: { projectId: string }): Promise<Project>;
   update(args: { projectId: string } & UpdateProjectInput): Promise<Project>;
   delete(args: { projectId: string }): Promise<void>;
+}
+
+/**
+ * GitHub connection + import surface. Unavailable (methods throw) unless the
+ * host configured `github` on `createCatamorphic`. Token acquisition is
+ * host-owned: obtain a `GithubTokenSet` via the device flow or web flow
+ * helpers in `@catamorphic/github`, then hand it to `connect`.
+ */
+export interface GithubResource {
+  status(): Promise<GithubConnectionStatus>;
+  connect(args: { tokens: GithubTokenSet }): Promise<GithubConnectionStatus>;
+  connectWithCode(args: {
+    code: string;
+    redirectUri?: string;
+  }): Promise<GithubConnectionStatus>;
+  disconnect(): Promise<void>;
+  listRepos(): Promise<GithubRepo[]>;
+  importRepo(args: ImportGithubRepoInput): Promise<Project>;
+  pushProject(args: { projectId: string }): Promise<void>;
 }
 
 export interface WorkflowsResource {
@@ -152,6 +174,29 @@ function buildFiles(core: CatamorphicCore, identity: Identity): FilesResource {
   };
 }
 
+function buildGithub(
+  core: CatamorphicCore,
+  identity: Identity,
+): GithubResource {
+  const github = () => {
+    if (!core.github) {
+      throw new Error(
+        "GitHub integration not configured — pass `github` to createCatamorphic",
+      );
+    }
+    return core.github;
+  };
+  return {
+    status: () => github().status(identity),
+    connect: ({ tokens }) => github().connect(identity, tokens),
+    connectWithCode: (args) => github().connectWithCode(identity, args),
+    disconnect: () => github().disconnect(identity),
+    listRepos: () => github().listRepos(identity),
+    importRepo: (args) => github().importRepo(identity, args),
+    pushProject: ({ projectId }) => github().pushProject(identity, projectId),
+  };
+}
+
 function buildRuns(core: CatamorphicCore, identity: Identity): RunsResource {
   return {
     triggerProduction: (args) =>
@@ -181,6 +226,7 @@ export class ScopedClient {
   readonly workflows: WorkflowsResource;
   readonly files: FilesResource;
   readonly runs: RunsResource;
+  readonly github: GithubResource;
 
   constructor(
     core: CatamorphicCore,
@@ -190,6 +236,7 @@ export class ScopedClient {
     this.workflows = buildWorkflows(core, identity);
     this.files = buildFiles(core, identity);
     this.runs = buildRuns(core, identity);
+    this.github = buildGithub(core, identity);
   }
 
   get tenantId(): string {

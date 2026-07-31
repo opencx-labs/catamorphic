@@ -1,5 +1,9 @@
 import type { DB } from "@catamorphic/db";
-import type { ProjectManager, ProjectRepo } from "@catamorphic/git";
+import type {
+  GitCredentials,
+  ProjectManager,
+  ProjectRepo,
+} from "@catamorphic/git";
 import { getTracer, withSpan } from "@catamorphic/otel";
 import type { Kysely, Selectable } from "kysely";
 import { authorFor, type Identity } from "../identity.js";
@@ -38,6 +42,16 @@ export interface CreateProjectInput {
   rootPath?: string;
   /** Adopt the folder's existing contents instead of scaffolding. */
   importExisting?: boolean;
+  /**
+   * Populate the project by cloning a network git remote instead of
+   * scaffolding. Library-direct only (like `rootPath`) — HTTP callers go
+   * through the GitHub surface, which resolves credentials server-side.
+   */
+  cloneFrom?: {
+    url: string;
+    credentials?: GitCredentials;
+    branch?: string;
+  };
 }
 
 export interface UpdateProjectInput {
@@ -150,6 +164,7 @@ export class ProjectsService {
         initialFiles: template?.files ?? SEED_SKILLS,
         rootPath: input.rootPath,
         importExisting: input.importExisting,
+        cloneFrom: input.cloneFrom,
       });
     } catch (err) {
       await this.db

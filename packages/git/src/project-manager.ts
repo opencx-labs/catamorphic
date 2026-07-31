@@ -1,8 +1,14 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { push } from "./git-sync.js";
+import { cloneFromRemote } from "./network.js";
 import { ProjectRepoImpl } from "./project-repo.js";
-import type { ProjectRepo, RemoteBackend, StorageBackend } from "./types.js";
+import type {
+  GitCredentials,
+  ProjectRepo,
+  RemoteBackend,
+  StorageBackend,
+} from "./types.js";
 
 /**
  * Blank-project scaffold. A project is a bun workspace so one repo can hold
@@ -157,6 +163,17 @@ export class ProjectManager {
        * initialized only when the folder is not already one.
        */
       importExisting?: boolean;
+      /**
+       * Populate the working copy by cloning a network git remote (e.g. a
+       * GitHub repo) instead of scaffolding. Mutually exclusive with
+       * `importExisting`; `initialFiles` are skipped so the imported history
+       * stays pristine.
+       */
+      cloneFrom?: {
+        url: string;
+        credentials?: GitCredentials;
+        branch?: string;
+      };
     },
   ): Promise<ProjectRepo> {
     const repoPath = await this.storage.initProject(tenantId, projectId, {
@@ -164,6 +181,27 @@ export class ProjectManager {
       rootPath: opts?.rootPath,
     });
     const projectName = opts?.name ?? "my-project";
+
+    if (opts?.cloneFrom) {
+      await cloneFromRemote({
+        repoPath,
+        url: opts.cloneFrom.url,
+        credentials: opts.cloneFrom.credentials,
+        branch: opts.cloneFrom.branch,
+      });
+      const repo = new ProjectRepoImpl(projectId, repoPath, async () => {});
+      if (this.remote) {
+        await this.remote.initRemote(tenantId, projectId);
+        await push({
+          dev: repo,
+          remote: this.remote,
+          tenantId,
+          projectId,
+          remoteBranch: "main",
+        });
+      }
+      return repo;
+    }
 
     if (!opts?.importExisting) {
       await fs.writeFile(

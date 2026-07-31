@@ -13,6 +13,8 @@ export interface DataPaths {
   appBundles: string;
   /** settings.json lives directly under userData. */
   settingsFile: string;
+  /** GitHub connection (safeStorage-encrypted), beside settings.json. */
+  githubFile: string;
 }
 
 export function resolveDataPaths(): DataPaths {
@@ -25,5 +27,6 @@ export function resolveDataPaths(): DataPaths {
     remotes: path.join(root, "remotes"),
     appBundles: path.join(root, "app-bundles"),
     settingsFile: path.join(userData, "settings.json"),
+    githubFile: path.join(userData, "github.json"),
   };
 }

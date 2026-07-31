@@ -14,6 +14,7 @@ import cors from "@fastify/cors";
 import Fastify, { type FastifyInstance } from "fastify";
 import { Kysely, PGliteDialect, WithSchemaPlugin } from "kysely";
 import { resolveCodingAgent } from "./coding-agent.js";
+import { FileGithubTokenStore, GITHUB_APP } from "./github.js";
 import type { DataPaths } from "./paths.js";
 import { ProjectRootsStore } from "./project-roots.js";
 import type { DesktopSettings } from "./settings.js";
@@ -62,6 +63,10 @@ export async function startEmbeddedServer(
     sandboxProvider,
     codingAgent,
     appBundleStore: new FsBundleStore(paths.appBundles),
+    github: {
+      app: GITHUB_APP,
+      tokenStore: new FileGithubTokenStore(paths.githubFile),
+    },
   });
 
   const { applied } = await catamorphic.migrate();
