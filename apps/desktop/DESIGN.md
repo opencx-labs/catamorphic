@@ -214,3 +214,34 @@ memory of *why* the app is the way it is.
   then settles. Rationale: the user should notice the agent renamed their
   chat without a toast or modal. This is the one sanctioned exception to
   the "no decorative motion" rule — it's a state-change signal, not decor.
+
+### 2026-07-31 — New-chat default mode, tab exit animation, shortcut hints
+- The + (new chat) button opens a **floating partial dock**, not a full
+  tab — unless the workspace is completely empty (no tabs, no expanded
+  chat), where a full chat tab is the right landing. Rationale: while
+  working in a tab/app, a new chat is an aside; stealing the whole
+  workspace was disorienting. Empty workspace = chat IS the workspace.
+- Workspace tabs animate on close, not just open: the closing tab stays
+  mounted while `tab-out` collapses its width (and swallows the flex gap),
+  so neighbors slide into place instead of teleporting. Same easing and
+  ~duration as `tab-in` so open/close read as one system.
+- Keyboard shortcuts that mirror a button get a `ShortcutHint` popover on
+  that button (hover, ~500ms delay, shows label + ⌘-key chip) instead of a
+  native `title`. First instance: ⌘B ↔ the sidebar toggle. Rule: any new
+  button-with-shortcut pair uses ShortcutHint so discovery is uniform.
+
+### 2026-07-31 — Bubbles are minimized chats, X means close
+- Simplified the chat surface model: closing a chat tab (X) **closes the
+  chat** — it does not fall back to a bubble. Safe because sessions
+  persist in the sidebar's Chats list; a closed chat is one click away.
+- Clicking a bubble opens the **floating dock**, never a full tab. The
+  `lastExpandedMode` memory is gone: bubbles stay bubbles until the user
+  explicitly promotes one (expand button on the dock).
+- A workspace may have **zero chats** — the strip then shows just the +
+  bubble. The old invariant (always ≥1 chat, close button hidden on the
+  last bubble) was dropped; "no chats" is a legitimate state and the
+  empty-tab hint covers it.
+- New chat (+) and opening a sidebar session both open **floating** by
+  default, but open as a **full tab** when no tabs are open at all — with
+  nothing behind it, the floating dock looks unanchored and the chat is
+  effectively the workspace.

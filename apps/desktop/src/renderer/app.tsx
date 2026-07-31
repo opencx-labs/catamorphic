@@ -26,6 +26,7 @@ import { ChatDock, type ChatDockEntry } from "./components/chat-dock.js";
 import { DeleteProjectModal } from "./components/delete-project-modal.js";
 import { ProjectModal } from "./components/project-modal.js";
 import { ProjectSwitcher } from "./components/project-switcher.js";
+import { ShortcutHint } from "./components/shortcut-hint.js";
 import {
   tabKey,
   type WorkspaceTab,
@@ -42,21 +43,12 @@ interface Workspace {
   activeChatId?: string;
 }
 
-const newChatEntry = (mode: ChatDockEntry["mode"] = "tab"): ChatDockEntry => ({
+const newChatEntry = (mode: ChatDockEntry["mode"]): ChatDockEntry => ({
   localId: crypto.randomUUID(),
   mode,
-  lastExpandedMode: mode === "min" ? "tab" : mode,
 });
 
-const emptyWorkspace = (): Workspace => {
-  const chat = newChatEntry("tab");
-  return {
-    tabs: [],
-    chats: [chat],
-    activeChatId: chat.localId,
-    activeTabKey: chatTabKey(chat.localId),
-  };
-};
+const emptyWorkspace = (): Workspace => ({ tabs: [], chats: [] });
 
 const chatTabKey = (localId: string) => `chat:${localId}`;
 
@@ -153,15 +145,16 @@ export function App({ hasCodingAgent }: { hasCodingAgent: boolean }) {
 
   const closeTab = (key: string) =>
     updateWorkspace((ws) => {
-      // Closing a chat tab returns the chat to its bubble.
+      // Closing a chat tab closes the chat (the session stays in the
+      // sidebar); it does NOT linger as a bubble.
       if (key.startsWith("chat:")) {
         const localId = key.slice("chat:".length);
-        const chats = ws.chats.map((chat) =>
-          chat.localId === localId ? { ...chat, mode: "min" as const } : chat,
-        );
+        const chats = ws.chats.filter((chat) => chat.localId !== localId);
         return {
           ...ws,
           chats,
+          activeChatId:
+            ws.activeChatId === localId ? undefined : ws.activeChatId,
           activeTabKey:
             ws.activeTabKey === key
               ? nextActiveTabKey(ws, key, chats)
@@ -199,16 +192,18 @@ export function App({ hasCodingAgent }: { hasCodingAgent: boolean }) {
       if (!target) return ws;
       const isExpandedActive =
         target.mode !== "min" && ws.activeChatId === localId;
-      const nextMode = isExpandedActive ? "min" : target.lastExpandedMode;
+      // Bubbles reopen as the floating dock, never as a full tab — going
+      // to a tab is always an explicit gesture (the expand button).
+      const nextMode = isExpandedActive
+        ? ("min" as const)
+        : ("partial" as const);
       return {
         ...ws,
         activeChatId: localId,
         activeTabKey:
-          nextMode === "tab"
-            ? chatTabKey(localId)
-            : ws.activeTabKey === chatTabKey(localId)
-              ? nextActiveTabKey(ws, chatTabKey(localId), ws.chats)
-              : ws.activeTabKey,
+          ws.activeTabKey === chatTabKey(localId)
+            ? nextActiveTabKey(ws, chatTabKey(localId), ws.chats)
+            : ws.activeTabKey,
         chats: ws.chats.map((chat) => {
           if (chat.localId !== localId) {
             // Floating docks are exclusive; background chat tabs stay put.
@@ -222,22 +217,24 @@ export function App({ hasCodingAgent }: { hasCodingAgent: boolean }) {
   const closeChat = (localId: string) =>
     updateWorkspace((ws) => {
       const chats = ws.chats.filter((chat) => chat.localId !== localId);
-      const ensured = chats.length > 0 ? chats : [newChatEntry("min")];
       return {
         ...ws,
-        chats: ensured,
-        activeChatId:
-          ws.activeChatId === localId ? ensured[0]?.localId : ws.activeChatId,
+        chats,
+        activeChatId: ws.activeChatId === localId ? undefined : ws.activeChatId,
         activeTabKey:
           ws.activeTabKey === chatTabKey(localId)
-            ? nextActiveTabKey(ws, chatTabKey(localId), ensured)
+            ? nextActiveTabKey(ws, chatTabKey(localId), chats)
             : ws.activeTabKey,
       };
     });
 
   const addChat = () =>
     updateWorkspace((ws) => {
-      const entry = newChatEntry("tab");
+      // New chats float as a partial dock by default; with no tabs open at
+      // all, the chat becomes the workspace, so open it as a full tab.
+      const noTabsOpen =
+        ws.tabs.length === 0 && ws.chats.every((chat) => chat.mode !== "tab");
+      const entry = newChatEntry(noTabsOpen ? "tab" : "partial");
       return {
         ...ws,
         chats: [
@@ -247,18 +244,27 @@ export function App({ hasCodingAgent }: { hasCodingAgent: boolean }) {
           entry,
         ],
         activeChatId: entry.localId,
-        activeTabKey: chatTabKey(entry.localId),
+        activeTabKey:
+          entry.mode === "tab" ? chatTabKey(entry.localId) : ws.activeTabKey,
       };
     });
 
   const openSession = (session: AgentSession) =>
     updateWorkspace((ws) => {
       const existing = ws.chats.find((chat) => chat.sessionId === session.id);
+      // Already-tabbed chats stay tabs; everything else opens as the
+      // floating dock — unless no tabs are open, where a tab is the
+      // natural landing (same rule as addChat).
+      const noTabsOpen =
+        ws.tabs.length === 0 && ws.chats.every((chat) => chat.mode !== "tab");
+      const mode =
+        existing?.mode === "tab" || noTabsOpen
+          ? ("tab" as const)
+          : ("partial" as const);
       const entry = existing ?? {
-        ...newChatEntry("tab"),
+        ...newChatEntry(mode),
         sessionId: session.id,
       };
-      const mode = existing ? existing.lastExpandedMode : "tab";
       return {
         ...ws,
         chats: [
@@ -320,6 +326,23 @@ export function App({ hasCodingAgent }: { hasCodingAgent: boolean }) {
       });
     }
   }, [workspace.chats, unreadByChat]);
+
+  // Cmd+B toggles the sidebar, same as clicking the toggle button.
+  useEffect(() => {
+    const onKeyDown = (event: globalThis.KeyboardEvent) => {
+      if (
+        event.key === "b" &&
+        event.metaKey &&
+        !event.ctrlKey &&
+        !event.altKey
+      ) {
+        event.preventDefault();
+        setSidebarOpen((value) => !value);
+      }
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, []);
 
   const selectProject = (id: string) => {
     setActiveProjectId(id);
@@ -457,18 +480,23 @@ export function App({ hasCodingAgent }: { hasCodingAgent: boolean }) {
       <main className="relative flex min-w-0 flex-1 flex-col">
         {/* One chrome row: drag region + sidebar toggle + tabs. */}
         <div className="app-drag flex h-10 shrink-0 items-center gap-1 border-b border-border pl-2 pr-3">
-          <button
-            type="button"
-            onClick={() => setSidebarOpen((value) => !value)}
-            className={`app-no-drag grid size-7 shrink-0 cursor-pointer place-items-center rounded-md text-fg-muted transition-colors duration-150 hover:bg-bg-overlay hover:text-fg ${
+          <span
+            className={`app-no-drag transition-[margin] duration-200 ease-[cubic-bezier(0.2,0,0,1)] ${
               sidebarOpen ? "" : "ml-[70px]"
             }`}
-            aria-label={sidebarOpen ? "Collapse sidebar" : "Expand sidebar"}
-            aria-expanded={sidebarOpen}
-            title={sidebarOpen ? "Collapse sidebar" : "Expand sidebar"}
           >
-            <PanelLeft className="size-4" />
-          </button>
+            <ShortcutHint label="Toggle sidebar" shortcut="⌘B">
+              <button
+                type="button"
+                onClick={() => setSidebarOpen((value) => !value)}
+                className="grid size-7 shrink-0 cursor-pointer place-items-center rounded-md text-fg-muted transition-colors duration-150 hover:bg-bg-overlay hover:text-fg"
+                aria-label={sidebarOpen ? "Collapse sidebar" : "Expand sidebar"}
+                aria-expanded={sidebarOpen}
+              >
+                <PanelLeft className="size-4" />
+              </button>
+            </ShortcutHint>
+          </span>
           {!showSettings && projectId && (
             <WorkspaceTabBar
               tabs={allTabs}

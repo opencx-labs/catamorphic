@@ -91,6 +91,23 @@ switch (cmd) {
     await click(args[0]);
     console.log("clicked", args[0]);
     break;
+  case "hover": {
+    const box = await evalJs(`(() => {
+      const el = document.querySelector(${JSON.stringify(args[0])});
+      if (!el) return null;
+      el.scrollIntoView({ block: "center" });
+      const r = el.getBoundingClientRect();
+      return { x: r.x + r.width / 2, y: r.y + r.height / 2 };
+    })()`);
+    if (!box) throw new Error(`not found: ${args[0]}`);
+    await send("Input.dispatchMouseEvent", {
+      type: "mouseMoved",
+      x: box.x,
+      y: box.y,
+    });
+    console.log("hovering", args[0]);
+    break;
+  }
   case "type": {
     await click(args[0]);
     await send("Input.insertText", { text: args.slice(1).join(" ") });

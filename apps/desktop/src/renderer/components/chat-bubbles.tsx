@@ -231,7 +231,7 @@ export function ChatBubbles({
                     }`}
                   />
                 </button>
-                {entries.length > 1 && !exiting && (
+                {!exiting && (
                   <button
                     type="button"
                     onClick={() => onClose(entry.localId)}

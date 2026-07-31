@@ -16,6 +16,14 @@ export interface ChatTimelineMessage {
   metadata?: unknown;
 }
 
+/**
+ * Sent as the ask_user tool result when the user dismisses the question
+ * panel. The timeline recognizes it by content and renders a muted note
+ * instead of a user bubble.
+ */
+export const QUESTIONS_DISMISSED_MESSAGE =
+  "The user dismissed these questions without answering them. Continue without their input, using your best judgment.";
+
 export interface AgentQuestionOption {
   label: string;
   description: string;
@@ -132,6 +140,17 @@ function Message({ message }: { message: ChatTimelineMessage }) {
     const frame = requestAnimationFrame(() => setEntered(true));
     return () => cancelAnimationFrame(frame);
   }, []);
+
+  if (
+    message.role === "user" &&
+    message.content === QUESTIONS_DISMISSED_MESSAGE
+  ) {
+    return (
+      <div className="text-center text-xs italic text-fg-faint">
+        Questions dismissed
+      </div>
+    );
+  }
 
   return (
     <article

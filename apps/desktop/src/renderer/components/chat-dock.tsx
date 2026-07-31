@@ -14,7 +14,11 @@ import {
   useState,
 } from "react";
 import { AgentQuestionPanel } from "./agent-question-panel";
-import { ChatTimeline, toTimeline } from "./catamorphic/chat-timeline";
+import {
+  ChatTimeline,
+  QUESTIONS_DISMISSED_MESSAGE,
+  toTimeline,
+} from "./catamorphic/chat-timeline";
 
 export type ChatMode = "min" | "partial" | "tab";
 
@@ -22,8 +26,6 @@ export interface ChatDockEntry {
   localId: string;
   sessionId?: string;
   mode: ChatMode;
-  /** Mode to restore when the bubble un-minimizes the chat. */
-  lastExpandedMode: "partial" | "tab";
 }
 
 export interface ChatDockProps {
@@ -84,12 +86,7 @@ export function ChatDock({
   const isTab = entry.mode === "tab";
   const expanded = entry.mode === "partial" || (isTab && tabActive);
 
-  const setMode = (mode: ChatMode) =>
-    onEntryChange({
-      ...entry,
-      mode,
-      lastExpandedMode: mode === "min" ? entry.lastExpandedMode : mode,
-    });
+  const setMode = (mode: ChatMode) => onEntryChange({ ...entry, mode });
 
   const submit = (event?: FormEvent) => {
     event?.preventDefault();
@@ -235,6 +232,8 @@ export function ChatDock({
               <AgentQuestionPanel
                 questions={questions}
                 onSubmit={(answer) => void chat.send(answer)}
+                onDismiss={() => void chat.send(QUESTIONS_DISMISSED_MESSAGE)}
+                disabled={!expanded}
               />
             )}
             <form

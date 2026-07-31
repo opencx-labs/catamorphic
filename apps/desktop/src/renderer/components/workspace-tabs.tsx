@@ -4,6 +4,7 @@ import {
   Workflow as WorkflowIcon,
   X,
 } from "lucide-react";
+import { useRef, useState } from "react";
 import { AnimatedTitle } from "./animated-title";
 
 export type WorkspaceTab =
@@ -18,6 +19,39 @@ const TAB_ICONS = {
   app: LayoutGrid,
   chat: MessageSquare,
 } as const;
+
+interface RenderedTab {
+  tab: WorkspaceTab;
+  exiting: boolean;
+}
+
+/**
+ * Merge incoming tabs with the previous render list so removed tabs stay
+ * mounted (at their old position) while their exit animation plays. The
+ * width collapse of an exiting tab is what slides its neighbors over.
+ */
+function mergeRendered(
+  previous: RenderedTab[],
+  tabs: WorkspaceTab[],
+): RenderedTab[] {
+  const byKey = new Map(tabs.map((tab) => [tabKey(tab), tab]));
+  const seen = new Set<string>();
+  const merged: RenderedTab[] = [];
+  for (const entry of previous) {
+    const key = tabKey(entry.tab);
+    const current = byKey.get(key);
+    if (current) {
+      seen.add(key);
+      merged.push({ tab: current, exiting: false });
+    } else {
+      merged.push({ tab: entry.tab, exiting: true });
+    }
+  }
+  for (const tab of tabs) {
+    if (!seen.has(tabKey(tab))) merged.push({ tab, exiting: false });
+  }
+  return merged;
+}
 
 /**
  * Tab strip only — the host owns the surrounding top bar (drag region,
@@ -34,21 +68,41 @@ export function WorkspaceTabBar({
   onSelect: (key: string) => void;
   onClose: (key: string) => void;
 }) {
-  if (tabs.length === 0) return null;
+  const [rendered, setRendered] = useState<RenderedTab[]>(() =>
+    mergeRendered([], tabs),
+  );
+  const prevTabsRef = useRef(tabs);
+  if (prevTabsRef.current !== tabs) {
+    prevTabsRef.current = tabs;
+    setRendered((previous) => mergeRendered(previous, tabs));
+  }
+
+  const removeExited = (key: string) =>
+    setRendered((previous) =>
+      previous.filter((entry) => !(entry.exiting && tabKey(entry.tab) === key)),
+    );
+
+  if (rendered.length === 0) return null;
   return (
     <div className="app-no-drag flex min-w-0 flex-1 items-end gap-1 self-stretch overflow-x-auto">
-      {tabs.map((tab) => {
+      {rendered.map(({ tab, exiting }) => {
         const key = tabKey(tab);
-        const active = key === activeKey;
+        const active = !exiting && key === activeKey;
         const Icon = TAB_ICONS[tab.kind];
         return (
           <div
             key={key}
-            className={`group animate-tab-in -mb-px flex h-8 shrink-0 items-center rounded-t-lg border px-1 text-[12px] transition-colors duration-150 ${
+            onAnimationEnd={(event) => {
+              if (event.animationName === "tab-out") removeExited(key);
+            }}
+            className={`group -mb-px flex h-8 shrink-0 items-center rounded-t-lg border px-1 text-[12px] transition-colors duration-150 ${
+              exiting ? "animate-tab-out pointer-events-none" : "animate-tab-in"
+            } ${
               active
                 ? "border-border border-b-bg bg-bg text-fg"
                 : "border-transparent text-fg-muted hover:bg-bg-overlay/60 hover:text-fg"
             }`}
+            aria-hidden={exiting || undefined}
           >
             <button
               type="button"
