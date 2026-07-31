@@ -74,7 +74,7 @@ export function SettingsScreen({ onClose }: { onClose: () => void }) {
                 setProvider(next);
                 setModel(SUGGESTED_MODELS[next][0] ?? "");
               }}
-              className="h-8 rounded-md border border-border bg-bg-inset px-2 text-[13px] text-fg"
+              className="field h-8 px-2 text-[13px] text-fg"
             >
               <option value="anthropic">Anthropic</option>
               <option value="openai">OpenAI</option>
@@ -87,7 +87,7 @@ export function SettingsScreen({ onClose }: { onClose: () => void }) {
               value={model}
               onChange={(event) => setModel(event.target.value)}
               list="model-suggestions"
-              className="h-8 rounded-md border border-border bg-bg-inset px-2 font-mono text-[13px] text-fg"
+              className="field h-8 px-2 font-mono text-[13px] text-fg"
               spellCheck={false}
             />
             <datalist id="model-suggestions">
@@ -113,7 +113,7 @@ export function SettingsScreen({ onClose }: { onClose: () => void }) {
                     ? "sk-ant-…"
                     : "sk-…"
               }
-              className="h-8 rounded-md border border-border bg-bg-inset px-2 font-mono text-[13px] text-fg placeholder:font-sans placeholder:text-fg-faint"
+              className="field h-8 px-2 font-mono text-[13px] text-fg placeholder:font-sans placeholder:text-fg-faint"
               autoComplete="off"
             />
             <span className="text-fg-faint">

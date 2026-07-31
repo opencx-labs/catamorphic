@@ -108,8 +108,12 @@ kbd {
 }
 
 /* Keyboard focus ring on the accent token (Chromium's outline:auto default
-   is an amber that clashes with the palette) */
-:focus-visible {
+   is an amber that clashes with the palette). Excluded: .field elements and
+   text controls inside one — the field carries its own border+glow focus
+   treatment (via :focus-within for wrappers like the chat composer), and
+   this rule would stack a second ring inside it. Buttons inside a field
+   (e.g. the composer's send button) keep the ring. */
+:focus-visible:not(.field, .field textarea, .field input, .field select) {
   outline: 2px solid var(--color-accent);
   outline-offset: 1px;
 }
@@ -170,6 +174,35 @@ kbd {
 
 .animate-dock-in {
   animation: dock-in 200ms cubic-bezier(0.2, 0, 0, 1);
+}
+
+/* Text fields (inputs, selects, folder pickers, composer wrappers): one
+   focus treatment — an animated accent border + soft glow — replacing the
+   global :focus-visible outline, which stacked a second ring on top of the
+   field's own border. In the components layer so per-field Tailwind
+   utilities can still override radius/background. */
+@layer components {
+  .field {
+    border: 1px solid var(--color-border);
+    border-radius: 8px;
+    background-color: var(--color-bg-inset);
+    transition:
+      border-color 150ms var(--ease-standard),
+      box-shadow 150ms var(--ease-standard);
+  }
+
+  .field:hover {
+    border-color: var(--color-border-strong);
+  }
+
+  .field:focus,
+  .field:focus-visible,
+  .field:focus-within {
+    outline: none;
+    border-color: var(--color-accent);
+    box-shadow: 0 0 0 3px
+      color-mix(in srgb, var(--color-accent) 18%, transparent);
+  }
 }
 
 /* Content crossfade when modal sections swap (paired with a height tween) */

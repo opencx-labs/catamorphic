@@ -94,6 +94,15 @@ export function ChatDock({
     }
   };
 
+  // Expanding (bubble click, new chat) should land the user ready to type.
+  // rAF waits out the `inert` removal — focus() is a no-op on inert subtrees.
+  const inputRef = useRef<HTMLTextAreaElement>(null);
+  useEffect(() => {
+    if (!expanded) return;
+    const frame = requestAnimationFrame(() => inputRef.current?.focus());
+    return () => cancelAnimationFrame(frame);
+  }, [expanded]);
+
   // Window-level so Escape minimizes the expanded chat regardless of what
   // has focus. Only one chat is expanded at a time, so at most one dock
   // attaches this listener; open popovers get first dibs via defaultPrevented.
@@ -172,10 +181,11 @@ export function ChatDock({
             error={chat.error?.message ?? null}
           />
           <form
-            className="m-3 mt-1 flex shrink-0 items-center gap-2 rounded-xl border border-border bg-bg-raised/95 p-1.5"
+            className="field m-3 mt-1 flex shrink-0 items-center gap-2 rounded-xl bg-bg-raised/95 p-1.5"
             onSubmit={submit}
           >
             <textarea
+              ref={inputRef}
               className="field-sizing-content max-h-24 min-h-9 min-w-0 flex-1 resize-none bg-transparent px-2.5 py-1.5 text-sm outline-none placeholder:text-fg-faint"
               value={draft}
               onChange={(event) => setDraft(event.target.value)}

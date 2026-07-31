@@ -138,7 +138,7 @@ export function ProjectModal({
                   type="button"
                   onClick={browseImport}
                   data-testid="import-folder-picker"
-                  className="flex h-8 cursor-pointer items-center gap-2 rounded-md border border-border bg-bg-inset px-2.5 text-left text-[13px] transition-colors duration-150 hover:border-border-strong"
+                  className="field flex h-8 cursor-pointer items-center gap-2 px-2.5 text-left text-[13px]"
                 >
                   <FolderOpen className="size-3.5 shrink-0 text-fg-faint" />
                   {importDir ? (
@@ -163,7 +163,7 @@ export function ProjectModal({
                 // biome-ignore lint/a11y/noAutofocus: modal's primary field
                 autoFocus
                 data-testid="project-name-input"
-                className="h-8 rounded-md border border-border bg-bg-inset px-2.5 text-[13px] text-fg placeholder:text-fg-faint focus:border-accent focus:outline-none"
+                className="field h-8 px-2.5 text-[13px] text-fg placeholder:text-fg-faint"
               />
             </label>
 
@@ -176,7 +176,7 @@ export function ProjectModal({
                       type="button"
                       onClick={browseParent}
                       data-testid="location-picker"
-                      className="flex h-8 min-w-0 flex-1 cursor-pointer items-center gap-2 rounded-md border border-border bg-bg-inset px-2.5 text-left text-[13px] transition-colors duration-150 hover:border-border-strong"
+                      className="field flex h-8 min-w-0 flex-1 cursor-pointer items-center gap-2 px-2.5 text-left text-[13px]"
                     >
                       <FolderOpen className="size-3.5 shrink-0 text-fg-faint" />
                       <span className="truncate text-fg" dir="rtl">
@@ -194,7 +194,7 @@ export function ProjectModal({
                       onChange={(event) =>
                         setTemplateId(event.target.value || undefined)
                       }
-                      className="h-8 rounded-md border border-border bg-bg-inset px-2 text-[13px] text-fg"
+                      className="field h-8 px-2 text-[13px] text-fg"
                     >
                       <option value="">Empty project</option>
                       {templatesQuery.data.map((template) => (
