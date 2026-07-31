@@ -32,6 +32,7 @@ import {
   type WorkspaceTab,
   WorkspaceTabBar,
 } from "./components/workspace-tabs.js";
+import { desktopApi } from "./lib/desktop-api.js";
 import { AppScreen, useApps } from "./screens/app-screen.js";
 import { SettingsScreen } from "./screens/settings-screen.js";
 import { WorkflowScreen } from "./screens/workflow-screen.js";
@@ -48,7 +49,17 @@ const newChatEntry = (mode: ChatDockEntry["mode"]): ChatDockEntry => ({
   mode,
 });
 
-const emptyWorkspace = (): Workspace => ({ tabs: [], chats: [] });
+// A fresh project workspace greets the user with a chat tab ready to type
+// into; closing everything later (zero chats, zero tabs) is still fine.
+const emptyWorkspace = (): Workspace => {
+  const chat = newChatEntry("tab");
+  return {
+    tabs: [],
+    chats: [chat],
+    activeChatId: chat.localId,
+    activeTabKey: chatTabKey(chat.localId),
+  };
+};
 
 const chatTabKey = (localId: string) => `chat:${localId}`;
 
@@ -228,13 +239,14 @@ export function App({ hasCodingAgent }: { hasCodingAgent: boolean }) {
       };
     });
 
-  const addChat = () =>
+  const addChat = (forceMode?: "tab") =>
     updateWorkspace((ws) => {
       // New chats float as a partial dock by default; with no tabs open at
       // all, the chat becomes the workspace, so open it as a full tab.
+      // Cmd+T asks for a tab explicitly.
       const noTabsOpen =
         ws.tabs.length === 0 && ws.chats.every((chat) => chat.mode !== "tab");
-      const entry = newChatEntry(noTabsOpen ? "tab" : "partial");
+      const entry = newChatEntry(forceMode ?? (noTabsOpen ? "tab" : "partial"));
       return {
         ...ws,
         chats: [
@@ -248,6 +260,14 @@ export function App({ hasCodingAgent }: { hasCodingAgent: boolean }) {
           entry.mode === "tab" ? chatTabKey(entry.localId) : ws.activeTabKey,
       };
     });
+
+  const minimizeFloatingChats = () =>
+    updateWorkspace((ws) => ({
+      ...ws,
+      chats: ws.chats.map((chat) =>
+        chat.mode === "partial" ? { ...chat, mode: "min" as const } : chat,
+      ),
+    }));
 
   const openSession = (session: AgentSession) =>
     updateWorkspace((ws) => {
@@ -327,17 +347,39 @@ export function App({ hasCodingAgent }: { hasCodingAgent: boolean }) {
     }
   }, [workspace.chats, unreadByChat]);
 
-  // Cmd+B toggles the sidebar, same as clicking the toggle button.
+  // Cmd+W (via the app menu) closes the most specific surface in focus:
+  // the floating chat if one is open, else the active workspace tab.
+  const workspaceRef = useRef(workspace);
+  workspaceRef.current = workspace;
+  const closeChatRef = useRef(closeChat);
+  closeChatRef.current = closeChat;
+  const closeTabRef = useRef(closeTab);
+  closeTabRef.current = closeTab;
+  useEffect(() => {
+    return desktopApi.onCloseSurface(() => {
+      const ws = workspaceRef.current;
+      const floating = ws.chats.find((chat) => chat.mode === "partial");
+      if (floating) {
+        closeChatRef.current(floating.localId);
+        return;
+      }
+      if (ws.activeTabKey) closeTabRef.current(ws.activeTabKey);
+    });
+  }, []);
+
+  // Cmd+B toggles the sidebar (like clicking the toggle button); Cmd+T
+  // opens a new chat as a full tab.
+  const addChatRef = useRef(addChat);
+  addChatRef.current = addChat;
   useEffect(() => {
     const onKeyDown = (event: globalThis.KeyboardEvent) => {
-      if (
-        event.key === "b" &&
-        event.metaKey &&
-        !event.ctrlKey &&
-        !event.altKey
-      ) {
+      if (!event.metaKey || event.ctrlKey || event.altKey) return;
+      if (event.key === "b") {
         event.preventDefault();
         setSidebarOpen((value) => !value);
+      } else if (event.key === "t") {
+        event.preventDefault();
+        addChatRef.current("tab");
       }
     };
     window.addEventListener("keydown", onKeyDown);
@@ -435,15 +477,16 @@ export function App({ hasCodingAgent }: { hasCodingAgent: boolean }) {
                   title="Chats"
                   defaultOpen
                   action={
-                    <button
-                      type="button"
-                      onClick={addChat}
-                      className="grid size-6 cursor-pointer place-items-center rounded text-fg-muted transition-colors duration-150 hover:bg-bg-overlay hover:text-fg"
-                      aria-label="New chat"
-                      title="New chat"
-                    >
-                      <Plus className="size-3.5" />
-                    </button>
+                    <ShortcutHint label="New chat" shortcut="⌘T">
+                      <button
+                        type="button"
+                        onClick={() => addChat()}
+                        className="grid size-6 cursor-pointer place-items-center rounded text-fg-muted transition-colors duration-150 hover:bg-bg-overlay hover:text-fg"
+                        aria-label="New chat"
+                      >
+                        <Plus className="size-3.5" />
+                      </button>
+                    </ShortcutHint>
                   }
                 >
                   <SessionsNav
@@ -567,7 +610,8 @@ export function App({ hasCodingAgent }: { hasCodingAgent: boolean }) {
                 onCollapsedChange={setBubblesCollapsed}
                 onToggle={toggleChat}
                 onClose={closeChat}
-                onNewChat={addChat}
+                onNewChat={() => addChat()}
+                onCollapse={minimizeFloatingChats}
               />
             </div>
           </>
@@ -766,19 +810,14 @@ function sessionLabel(session: AgentSession): string {
   return `Chat ${created.toLocaleDateString()} ${created.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}`;
 }
 
+/** Blank canvas when nothing is open; only surfaces the missing-key warning. */
 function TabEmptyState({ hasCodingAgent }: { hasCodingAgent: boolean }) {
+  if (hasCodingAgent) return null;
   return (
     <div className="grid flex-1 place-items-center px-6">
-      <div className="max-w-sm text-center">
-        {!hasCodingAgent && (
-          <div className="mb-3 rounded-md border border-warning/40 bg-warning/10 px-3 py-2 text-xs text-warning">
-            No model API key configured — the assistant is disabled. Add one in
-            Settings.
-          </div>
-        )}
-        <p className="text-sm text-fg-muted">
-          Open a workflow or app from the sidebar, or talk to the assistant.
-        </p>
+      <div className="max-w-sm rounded-md border border-warning/40 bg-warning/10 px-3 py-2 text-center text-xs text-warning">
+        No model API key configured — the assistant is disabled. Add one in
+        Settings.
       </div>
     </div>
   );

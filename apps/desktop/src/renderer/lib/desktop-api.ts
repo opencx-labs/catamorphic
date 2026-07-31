@@ -40,6 +40,7 @@ export interface CatamorphicDesktopApi {
   getSettings: () => Promise<PublicSettings>;
   setSettings: (input: UpdateSettingsInput) => Promise<PublicSettings>;
   onServerChanged: (listener: (info: ServerInfo) => void) => () => void;
+  onCloseSurface: (listener: () => void) => () => void;
   defaultProjectsDir: () => Promise<string>;
   pickFolder: (opts?: {
     title?: string;

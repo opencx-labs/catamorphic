@@ -216,7 +216,7 @@ export function ProjectModal({
 
             {(mode !== "github" || selectedRepo !== null) && (
               <label className="flex flex-col gap-1.5 text-xs text-fg-muted">
-                Name
+                Project Name
                 <input
                   value={name}
                   onChange={(event) => setName(event.target.value)}
@@ -231,25 +231,28 @@ export function ProjectModal({
               </label>
             )}
 
+            {(mode === "create" ||
+              (mode === "github" && selectedRepo !== null)) && (
+              <label className="flex flex-col gap-1.5 text-xs text-fg-muted">
+                Location
+                <div className="flex items-center gap-1.5">
+                  <button
+                    type="button"
+                    onClick={browseParent}
+                    data-testid="location-picker"
+                    className="field flex h-8 min-w-0 flex-1 cursor-pointer items-center gap-2 px-2.5 text-left text-[13px]"
+                  >
+                    <FolderOpen className="size-3.5 shrink-0 text-fg-faint" />
+                    <span className="truncate text-fg" dir="rtl">
+                      {parentDir || "…"}
+                    </span>
+                  </button>
+                </div>
+              </label>
+            )}
+
             {mode === "create" && (
               <>
-                <label className="flex flex-col gap-1.5 text-xs text-fg-muted">
-                  Location
-                  <div className="flex items-center gap-1.5">
-                    <button
-                      type="button"
-                      onClick={browseParent}
-                      data-testid="location-picker"
-                      className="field flex h-8 min-w-0 flex-1 cursor-pointer items-center gap-2 px-2.5 text-left text-[13px]"
-                    >
-                      <FolderOpen className="size-3.5 shrink-0 text-fg-faint" />
-                      <span className="truncate text-fg" dir="rtl">
-                        {parentDir || "…"}
-                      </span>
-                    </button>
-                  </div>
-                </label>
-
                 {templatesQuery.data && templatesQuery.data.length > 0 && (
                   <label className="flex flex-col gap-1.5 text-xs text-fg-muted">
                     Template

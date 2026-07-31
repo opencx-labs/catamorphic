@@ -59,7 +59,7 @@ export function ProjectSwitcher({
       </button>
 
       <div
-        className={`absolute inset-x-0 top-full z-50 mt-1 origin-top rounded-lg border border-border bg-bg-overlay p-1 shadow-2xl transition-[opacity,transform] duration-150 ease-[cubic-bezier(0.2,0,0,1)] ${
+        className={`absolute inset-x-0 top-full z-50 mt-1 origin-top rounded-lg border border-border bg-bg-overlay p-1 shadow-2xl transition-[opacity,scale] duration-150 ease-[cubic-bezier(0.2,0,0,1)] ${
           open
             ? "scale-100 opacity-100"
             : "pointer-events-none scale-95 opacity-0"

@@ -6,6 +6,7 @@ import {
 } from "lucide-react";
 import { useRef, useState } from "react";
 import { AnimatedTitle } from "./animated-title";
+import { ShortcutHint } from "./shortcut-hint";
 
 export type WorkspaceTab =
   | { kind: "workflow"; name: string; label?: string }
@@ -53,6 +54,36 @@ function mergeRendered(
   return merged;
 }
 
+function CloseButton({
+  hint,
+  label,
+  className,
+  onClick,
+}: {
+  hint: boolean;
+  label: string;
+  className: string;
+  onClick: () => void;
+}) {
+  const button = (
+    <button
+      type="button"
+      onClick={onClick}
+      className={`grid size-5 cursor-pointer place-items-center rounded text-fg-faint transition-opacity duration-150 hover:text-fg ${className}`}
+      aria-label={label}
+    >
+      <X className="size-3" />
+    </button>
+  );
+  return hint ? (
+    <ShortcutHint label="Close tab" shortcut="⌘W">
+      {button}
+    </ShortcutHint>
+  ) : (
+    button
+  );
+}
+
 /**
  * Tab strip only — the host owns the surrounding top bar (drag region,
  * sidebar toggle) so tabs and window chrome share one row.
@@ -84,7 +115,10 @@ export function WorkspaceTabBar({
 
   if (rendered.length === 0) return null;
   return (
-    <div className="app-no-drag flex min-w-0 flex-1 items-end gap-1 self-stretch overflow-x-auto">
+    // overflow-y-hidden: tabs hang 1px below the row (-mb-px overlaps the
+    // border), and overflow-x-auto alone turns that spill into a phantom
+    // vertical scrollbar in the corner.
+    <div className="app-no-drag flex min-w-0 flex-1 items-end gap-1 self-stretch overflow-x-auto overflow-y-hidden">
       {rendered.map(({ tab, exiting }) => {
         const key = tabKey(tab);
         const active = !exiting && key === activeKey;
@@ -115,16 +149,13 @@ export function WorkspaceTabBar({
                 className="max-w-40"
               />
             </button>
-            <button
-              type="button"
+            {/* ⌘W closes the ACTIVE tab, so only its X advertises it. */}
+            <CloseButton
+              hint={active}
+              label={`Close ${tab.label ?? tab.name}`}
+              className={active ? "" : "opacity-0 group-hover:opacity-100"}
               onClick={() => onClose(key)}
-              className={`grid size-5 cursor-pointer place-items-center rounded text-fg-faint transition-opacity duration-150 hover:text-fg ${
-                active ? "" : "opacity-0 group-hover:opacity-100"
-              }`}
-              aria-label={`Close ${tab.label ?? tab.name}`}
-            >
-              <X className="size-3" />
-            </button>
+            />
           </div>
         );
       })}

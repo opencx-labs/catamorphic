@@ -22,6 +22,37 @@ import {
 
 export type ChatMode = "min" | "partial" | "tab";
 
+/** Short, charismatic empty-state openers; one is picked per chat. */
+const EMPTY_STATE_PHRASES = [
+  "Ready when you are.",
+  "Where are we headed?",
+  "What are we building?",
+  "Let's make something.",
+  "Your move.",
+  "What's on your mind?",
+  "Big or small — bring it.",
+  "Let's get into it.",
+  "What's next?",
+  "Say the word.",
+  "Blank canvas. Go.",
+  "What should exist?",
+  "Start anywhere.",
+  "I'm all ears.",
+  "Let's build.",
+] as const;
+
+/** Stable per-chat pick: hash the id so re-renders don't re-roll. */
+const emptyStateFor = (localId: string): string => {
+  let hash = 0;
+  for (let i = 0; i < localId.length; i += 1) {
+    hash = (hash * 31 + localId.charCodeAt(i)) | 0;
+  }
+  return (
+    EMPTY_STATE_PHRASES[Math.abs(hash) % EMPTY_STATE_PHRASES.length] ??
+    EMPTY_STATE_PHRASES[0]
+  );
+};
+
 export interface ChatDockEntry {
   localId: string;
   sessionId?: string;
@@ -116,25 +147,25 @@ export function ChatDock({
     return () => cancelAnimationFrame(frame);
   }, [expanded]);
 
-  // Window-level so Escape minimizes the floating dock regardless of what
-  // has focus. Tab-mode chats are regular workspace tabs — Escape must NOT
-  // dismiss them. Only one dock floats at a time, so at most one listener;
+  // Window-level so Escape works regardless of what has focus. Escape steps
+  // the chat down one size: full tab → floating dock → bubble. At most one
+  // chat is the active tab or floating at a time, so at most one listener;
   // open popovers get first dibs via defaultPrevented.
-  const floating = entry.mode === "partial";
+  const escapeTarget = entry.mode === "partial" || (isTab && tabActive);
   useEffect(() => {
-    if (!floating) return;
+    if (!escapeTarget) return;
     const onWindowKeyDown = (event: globalThis.KeyboardEvent) => {
       if (event.key !== "Escape" || event.isComposing) return;
       if (event.defaultPrevented) return;
       event.preventDefault();
       onEntryChangeRef.current({
         ...entryRef.current,
-        mode: "min",
+        mode: entryRef.current.mode === "tab" ? "partial" : "min",
       });
     };
     window.addEventListener("keydown", onWindowKeyDown);
     return () => window.removeEventListener("keydown", onWindowKeyDown);
-  }, [floating]);
+  }, [escapeTarget]);
 
   return (
     <div
@@ -143,7 +174,7 @@ export function ChatDock({
       }`}
     >
       <section
-        className={`pointer-events-auto relative flex w-full origin-bottom flex-col overflow-hidden backdrop-blur-xl transition-[max-width,height,opacity,transform,background-color,border-radius,border-color] duration-250 ease-[cubic-bezier(0.2,0,0,1)] ${
+        className={`pointer-events-auto relative flex w-full origin-bottom flex-col overflow-hidden backdrop-blur-xl transition-[max-width,height,opacity,translate,scale,background-color,border-radius,border-color] duration-250 ease-[cubic-bezier(0.2,0,0,1)] ${
           isTab
             ? "h-full max-w-full rounded-none border-0 border-transparent bg-bg"
             : "h-[min(560px,100%)] max-w-3xl rounded-2xl border border-border bg-bg-raised/95 drop-shadow-2xl"
@@ -212,6 +243,7 @@ export function ChatDock({
             activity={activity}
             queuedCount={Math.max(0, chat.queuedMessageCount - 1)}
             error={chat.error?.message ?? null}
+            emptyState={emptyStateFor(entry.localId)}
           />
           {/* Keep the composer clear of the bubble UI: bottom padding for
               the expanded strip, side padding for the corner bubble. */}

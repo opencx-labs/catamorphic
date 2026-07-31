@@ -245,3 +245,33 @@ memory of *why* the app is the way it is.
   default, but open as a **full tab** when no tabs are open at all — with
   nothing behind it, the floating dock looks unanchored and the chat is
   effectively the workspace.
+
+### 2026-07-31 — Individual transform transitions, Cmd+W, GitHub clone location
+- Transition lists must name `translate`/`scale`/`rotate`, not `transform`:
+  Tailwind v4 utilities like `translate-y-4` and `scale-95` set the
+  individual CSS properties, which `transition: transform` does NOT cover.
+  The dock's collapse looked like a "shift" because translate/scale
+  snapped instantly while opacity animated. Swept the app for
+  `transition-[...transform...]` and fixed all toggled cases.
+- Cmd+W closes the most specific surface: the floating chat dock if one
+  is open, else the active workspace tab. Implemented as an app-menu
+  accelerator (File → Close Tab) forwarded to the renderer over IPC —
+  the default menu's Cmd+W would close the whole window.
+- GitHub import gets the same Location picker as project creation; the
+  clone destination is user-chosen (defaults to the projects dir) and the
+  name field is labeled "Project Name" everywhere.
+
+### 2026-07-31 — ShortcutHint is the standard shortcut popover
+- Any button whose action also has a keyboard shortcut gets a
+  `ShortcutHint` wrapper (components/shortcut-hint.tsx) — never a native
+  `title` and never a bespoke tooltip. One look everywhere: quiet pill
+  (bg-overlay, hairline ring, muted label + fainter key), 800ms hover
+  delay, 200ms fade+slide in/out, exit animates before unmount.
+- Portal-rendered to document.body with fixed positioning measured from
+  the anchor. Reason: hosts sit inside overflow-hidden / transformed
+  containers (bubble pill, sidebar, tab strip) that clip absolutely-
+  positioned popovers — a CSS-only version shipped broken because DOM
+  checks passed while pixels were clipped. Verify popovers visually.
+- Current coverage: sidebar toggle ⌘B, both New-chat + buttons ⌘T,
+  active tab close ✕ ⌘W (active tab only — that is what ⌘W targets),
+  question-panel dismiss ✕ Esc.

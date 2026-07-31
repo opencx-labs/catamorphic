@@ -78,7 +78,7 @@ export function AgentChat({
         {activity ?? messages.at(-1)?.content}
       </span>
       <div
-        className={`origin-bottom overflow-hidden rounded-t-2xl border-border bg-bg-raised/95 backdrop-blur-xl transition-[height,opacity,transform,margin,border-width] duration-200 ease-out ${
+        className={`origin-bottom overflow-hidden rounded-t-2xl border-border bg-bg-raised/95 backdrop-blur-xl transition-[height,opacity,translate,scale,margin,border-width] duration-200 ease-out ${
           isFull
             ? "mb-[-1px] min-h-0 flex-1 border"
             : expanded

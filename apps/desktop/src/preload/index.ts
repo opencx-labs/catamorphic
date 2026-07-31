@@ -55,6 +55,12 @@ const api = {
     return () =>
       ipcRenderer.removeListener("catamorphic:github-connected", handler);
   },
+  onCloseSurface: (listener: () => void): (() => void) => {
+    const handler = () => listener();
+    ipcRenderer.on("catamorphic:close-surface", handler);
+    return () =>
+      ipcRenderer.removeListener("catamorphic:close-surface", handler);
+  },
   onServerChanged: (listener: (info: ServerInfo) => void): (() => void) => {
     const handler = (_event: unknown, info: ServerInfo) => listener(info);
     ipcRenderer.on("catamorphic:server-changed", handler);

@@ -7,6 +7,7 @@ import {
 } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import type { ChatDockEntry } from "./chat-dock";
+import { ShortcutHint } from "./shortcut-hint";
 
 export interface ChatBubblesProps {
   /** All chats; tab-mode chats contribute indicators but no strip bubble. */
@@ -27,6 +28,8 @@ export interface ChatBubblesProps {
   onToggle: (localId: string) => void;
   onClose: (localId: string) => void;
   onNewChat: () => void;
+  /** Manual strip collapse (>>) also minimizes any open floating chat. */
+  onCollapse?: () => void;
 }
 
 /**
@@ -55,6 +58,7 @@ export function ChatBubbles({
   onToggle,
   onClose,
   onNewChat,
+  onCollapse,
 }: ChatBubblesProps) {
   // User override: true = collapsed, false = expanded, null = follow
   // autoCollapse. Re-arms (back to null) whenever autoCollapse turns on, so
@@ -154,7 +158,7 @@ export function ChatBubbles({
       {/* The pill slides between centered (expanded) and right-docked
           (collapsed) via left+transform, both animatable. */}
       <div
-        className={`pointer-events-auto absolute bottom-3 flex items-center rounded-full border border-border bg-bg-raised/95 shadow-2xl backdrop-blur-xl transition-[left,transform,padding] duration-250 ease-[cubic-bezier(0.2,0,0,1)] ${
+        className={`pointer-events-auto absolute bottom-3 flex items-center rounded-full border border-border bg-bg-raised/95 shadow-2xl backdrop-blur-xl transition-[left,translate,padding] duration-250 ease-[cubic-bezier(0.2,0,0,1)] ${
           collapsed
             ? "left-full -translate-x-[calc(100%+12px)] p-1"
             : "left-1/2 -translate-x-1/2 gap-1.5 p-1.5"
@@ -195,7 +199,7 @@ export function ChatBubbles({
                 <button
                   type="button"
                   onClick={() => onToggle(entry.localId)}
-                  className={`relative grid size-9 cursor-pointer place-items-center rounded-full border transition-[background-color,border-color,transform] duration-150 ease-[cubic-bezier(0.2,0,0,1)] active:scale-95 ${
+                  className={`relative grid size-9 cursor-pointer place-items-center rounded-full border transition-[background-color,border-color,scale] duration-150 ease-[cubic-bezier(0.2,0,0,1)] active:scale-95 ${
                     expanded
                       ? "border-accent/60 bg-accent/15 text-accent"
                       : "border-border bg-bg-overlay text-fg-muted hover:border-border-strong hover:text-fg"
@@ -211,7 +215,7 @@ export function ChatBubbles({
                   {/* Stacked icons cross-fade on the sending transition. */}
                   <span className="relative grid size-4 place-items-center">
                     <MessageSquare
-                      className={`col-start-1 row-start-1 size-4 transition-[opacity,transform] duration-200 ease-[cubic-bezier(0.2,0,0,1)] ${
+                      className={`col-start-1 row-start-1 size-4 transition-[opacity,scale] duration-200 ease-[cubic-bezier(0.2,0,0,1)] ${
                         isSending
                           ? "scale-50 opacity-0"
                           : "scale-100 opacity-100"
@@ -224,7 +228,7 @@ export function ChatBubbles({
                     />
                   </span>
                   <span
-                    className={`absolute -right-0.5 -top-0.5 size-2 rounded-full bg-accent transition-[opacity,transform] duration-200 ease-[cubic-bezier(0.2,0,0,1)] ${
+                    className={`absolute -right-0.5 -top-0.5 size-2 rounded-full bg-accent transition-[opacity,scale] duration-200 ease-[cubic-bezier(0.2,0,0,1)] ${
                       isUnread && !isSending
                         ? "scale-100 opacity-100"
                         : "scale-0 opacity-0"
@@ -244,18 +248,22 @@ export function ChatBubbles({
               </div>
             );
           })}
+          <ShortcutHint label="New chat" shortcut="⌘T" side="top">
+            <button
+              type="button"
+              onClick={onNewChat}
+              className="grid size-9 cursor-pointer place-items-center rounded-full border border-dashed border-border text-fg-faint transition-colors duration-150 hover:border-border-strong hover:text-fg"
+              aria-label="New chat"
+            >
+              <Plus className="size-4" />
+            </button>
+          </ShortcutHint>
           <button
             type="button"
-            onClick={onNewChat}
-            className="grid size-9 cursor-pointer place-items-center rounded-full border border-dashed border-border text-fg-faint transition-colors duration-150 hover:border-border-strong hover:text-fg"
-            aria-label="New chat"
-            title="New chat"
-          >
-            <Plus className="size-4" />
-          </button>
-          <button
-            type="button"
-            onClick={() => setCollapseOverride(true)}
+            onClick={() => {
+              setCollapseOverride(true);
+              onCollapse?.();
+            }}
             className="grid size-9 cursor-pointer place-items-center rounded-full text-fg-faint transition-colors duration-150 hover:text-fg"
             aria-label="Collapse chat bubbles"
             title="Collapse"
@@ -280,7 +288,7 @@ export function ChatBubbles({
         >
           <span className="relative grid size-4 place-items-center">
             <MessageSquare
-              className={`col-start-1 row-start-1 size-4 transition-[opacity,transform] duration-200 ease-[cubic-bezier(0.2,0,0,1)] ${
+              className={`col-start-1 row-start-1 size-4 transition-[opacity,scale] duration-200 ease-[cubic-bezier(0.2,0,0,1)] ${
                 anySending ? "scale-50 opacity-0" : "scale-100 opacity-100"
               }`}
             />
@@ -296,7 +304,7 @@ export function ChatBubbles({
             </span>
           )}
           <span
-            className={`absolute -right-0.5 -top-0.5 size-2 rounded-full bg-accent transition-[opacity,transform] duration-200 ease-[cubic-bezier(0.2,0,0,1)] ${
+            className={`absolute -right-0.5 -top-0.5 size-2 rounded-full bg-accent transition-[opacity,scale] duration-200 ease-[cubic-bezier(0.2,0,0,1)] ${
               anyUnread && !anySending
                 ? "scale-100 opacity-100"
                 : "scale-0 opacity-0"

@@ -1,5 +1,5 @@
 import path from "node:path";
-import { app, BrowserWindow, dialog } from "electron";
+import { app, BrowserWindow, dialog, Menu } from "electron";
 import { registerIpcHandlers, type ServerState } from "./ipc.js";
 import { type EmbeddedServer, startEmbeddedServer } from "./server/boot.js";
 import { resolveDataPaths } from "./server/paths.js";
@@ -90,7 +90,43 @@ function createWindow(): BrowserWindow {
   return window;
 }
 
+// The default menu binds Cmd+W to "Close Window". The workspace has its
+// own closable surfaces (tabs, floating chats), so Cmd+W is forwarded to
+// the renderer, which closes the most specific thing in focus.
+function buildMenu(): Menu {
+  return Menu.buildFromTemplate([
+    ...(process.platform === "darwin" ? [{ role: "appMenu" } as const] : []),
+    {
+      label: "File",
+      submenu: [
+        {
+          label: "Close Tab",
+          accelerator: "CmdOrCtrl+W",
+          click: (_item, window) => {
+            if (window && "webContents" in window) {
+              window.webContents.send("catamorphic:close-surface");
+            }
+          },
+        },
+      ],
+    },
+    { role: "editMenu" },
+    { role: "viewMenu" },
+    {
+      label: "Window",
+      submenu: [
+        { role: "minimize" },
+        { role: "zoom" },
+        ...(process.platform === "darwin"
+          ? [{ type: "separator" } as const, { role: "front" } as const]
+          : [{ role: "close" } as const]),
+      ],
+    },
+  ]);
+}
+
 app.whenReady().then(async () => {
+  Menu.setApplicationMenu(buildMenu());
   registerIpcHandlers(settingsStore, state);
   const window = createWindow();
 
