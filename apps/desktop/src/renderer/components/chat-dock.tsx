@@ -1,5 +1,11 @@
 import { useAgentChat } from "@catamorphic/react";
-import { ArrowUp, Bot, Maximize2, Minimize2, Minus } from "lucide-react";
+import {
+  ArrowUp,
+  Bot,
+  Maximize2,
+  Minus,
+  PictureInPicture2,
+} from "lucide-react";
 import {
   type FormEvent,
   type KeyboardEvent,
@@ -7,16 +13,17 @@ import {
   useRef,
   useState,
 } from "react";
+import { AgentQuestionPanel } from "./agent-question-panel";
 import { ChatTimeline, toTimeline } from "./catamorphic/chat-timeline";
 
-export type ChatMode = "min" | "partial" | "full";
+export type ChatMode = "min" | "partial" | "tab";
 
 export interface ChatDockEntry {
   localId: string;
   sessionId?: string;
   mode: ChatMode;
   /** Mode to restore when the bubble un-minimizes the chat. */
-  lastExpandedMode: "partial" | "full";
+  lastExpandedMode: "partial" | "tab";
 }
 
 export interface ChatDockProps {
@@ -24,6 +31,14 @@ export interface ChatDockProps {
   entry: ChatDockEntry;
   title: string;
   placeholder?: string;
+  /** Whether this chat's workspace tab is the active tab (tab mode only). */
+  tabActive: boolean;
+  /**
+   * How the bubble UI occupies the bottom edge while this chat is a tab:
+   * "strip" = expanded centered strip (reserve bottom height), "corner" =
+   * single collapsed bubble at the right (side padding only), "none".
+   */
+  bubbleClearance: "none" | "corner" | "strip";
   onEntryChange: (entry: ChatDockEntry) => void;
   onSessionCreated: (localId: string, sessionId: string) => void;
   onSendingChange: (localId: string, sending: boolean) => void;
@@ -32,13 +47,15 @@ export interface ChatDockProps {
 /**
  * One chat surface tied to one bottom bubble. Stays mounted while minimized
  * so queued sends and drafts survive; the panel morphs between a floating
- * partial dock and a near-fullscreen sheet.
+ * partial dock and a full workspace tab (the bubble hides while tabbed).
  */
 export function ChatDock({
   projectId,
   entry,
   title,
   placeholder = "Describe what you want to build…",
+  tabActive,
+  bubbleClearance,
   onEntryChange,
   onSessionCreated,
   onSendingChange,
@@ -48,7 +65,7 @@ export function ChatDock({
     onSessionCreated: (sessionId) => onSessionCreated(entry.localId, sessionId),
   });
   const [draft, setDraft] = useState("");
-  const { messages, activity } = toTimeline(
+  const { messages, activity, questions } = toTimeline(
     chat.messages,
     chat.optimisticMessages,
     chat.isSending,
@@ -64,9 +81,8 @@ export function ChatDock({
   const onEntryChangeRef = useRef(onEntryChange);
   onEntryChangeRef.current = onEntryChange;
 
-  const expanded = entry.mode !== "min";
-  const sizeMode = entry.mode === "min" ? entry.lastExpandedMode : entry.mode;
-  const isFull = sizeMode === "full";
+  const isTab = entry.mode === "tab";
+  const expanded = entry.mode === "partial" || (isTab && tabActive);
 
   const setMode = (mode: ChatMode) =>
     onEntryChange({
@@ -103,11 +119,13 @@ export function ChatDock({
     return () => cancelAnimationFrame(frame);
   }, [expanded]);
 
-  // Window-level so Escape minimizes the expanded chat regardless of what
-  // has focus. Only one chat is expanded at a time, so at most one dock
-  // attaches this listener; open popovers get first dibs via defaultPrevented.
+  // Window-level so Escape minimizes the floating dock regardless of what
+  // has focus. Tab-mode chats are regular workspace tabs — Escape must NOT
+  // dismiss them. Only one dock floats at a time, so at most one listener;
+  // open popovers get first dibs via defaultPrevented.
+  const floating = entry.mode === "partial";
   useEffect(() => {
-    if (!expanded) return;
+    if (!floating) return;
     const onWindowKeyDown = (event: globalThis.KeyboardEvent) => {
       if (event.key !== "Escape" || event.isComposing) return;
       if (event.defaultPrevented) return;
@@ -119,15 +137,19 @@ export function ChatDock({
     };
     window.addEventListener("keydown", onWindowKeyDown);
     return () => window.removeEventListener("keydown", onWindowKeyDown);
-  }, [expanded]);
+  }, [floating]);
 
   return (
-    <div className="pointer-events-none absolute inset-0 z-30 flex flex-col items-center justify-end px-6 pb-16 pt-3">
+    <div
+      className={`pointer-events-none absolute inset-0 z-30 flex flex-col items-center justify-end transition-[padding] duration-250 ease-[cubic-bezier(0.2,0,0,1)] ${
+        isTab ? "p-0" : "px-6 pb-16 pt-3"
+      }`}
+    >
       <section
-        className={`pointer-events-auto flex w-full origin-bottom flex-col overflow-hidden rounded-2xl border border-border backdrop-blur-xl transition-[max-width,height,opacity,transform,background-color] duration-200 ease-[cubic-bezier(0.2,0,0,1)] ${
-          isFull
-            ? "h-full max-w-full bg-bg/90"
-            : "h-[min(560px,100%)] max-w-3xl bg-bg-raised/95 drop-shadow-2xl"
+        className={`pointer-events-auto relative flex w-full origin-bottom flex-col overflow-hidden backdrop-blur-xl transition-[max-width,height,opacity,transform,background-color,border-radius,border-color] duration-250 ease-[cubic-bezier(0.2,0,0,1)] ${
+          isTab
+            ? "h-full max-w-full rounded-none border-0 border-transparent bg-bg"
+            : "h-[min(560px,100%)] max-w-3xl rounded-2xl border border-border bg-bg-raised/95 drop-shadow-2xl"
         } ${
           expanded
             ? "translate-y-0 scale-100 opacity-100 animate-dock-in"
@@ -140,69 +162,105 @@ export function ChatDock({
         <span className="sr-only" aria-live="polite">
           {activity ?? messages.at(-1)?.content}
         </span>
-        <header className="flex h-11 shrink-0 items-center justify-between border-b border-border px-3 text-xs font-semibold">
+        {/* The tab already names the chat — in tab mode the header collapses
+            and its controls float over the timeline's top-right corner. */}
+        <header
+          className={`flex shrink-0 items-center justify-between overflow-hidden border-b px-3 text-xs font-semibold transition-[height,border-color] duration-250 ease-[cubic-bezier(0.2,0,0,1)] ${
+            isTab ? "h-0 border-transparent" : "h-11 border-border"
+          }`}
+          aria-hidden={isTab}
+        >
           <span className="flex min-w-0 items-center gap-2">
             <span className="grid size-6 shrink-0 place-items-center rounded-full border border-border-strong bg-bg-overlay">
               <Bot className="size-3.5" />
             </span>
             <span className="truncate">{title}</span>
           </span>
-          <span className="flex items-center gap-1">
-            <button
-              type="button"
-              className="grid size-7 cursor-pointer place-items-center rounded-lg text-fg-muted transition-colors duration-150 hover:bg-bg-overlay hover:text-fg"
-              onClick={() => setMode(isFull ? "partial" : "full")}
-              aria-label={isFull ? "Exit fullscreen" : "Fullscreen"}
-              title={isFull ? "Exit fullscreen" : "Fullscreen"}
-            >
-              {isFull ? (
-                <Minimize2 className="size-3.5" />
-              ) : (
-                <Maximize2 className="size-3.5" />
-              )}
-            </button>
-            <button
-              type="button"
-              className="grid size-7 cursor-pointer place-items-center rounded-lg text-fg-muted transition-colors duration-150 hover:bg-bg-overlay hover:text-fg"
-              onClick={() => setMode("min")}
-              aria-label="Minimize chat"
-              title="Minimize"
-            >
-              <Minus className="size-3.5" />
-            </button>
-          </span>
         </header>
-        <div className="mx-auto flex min-h-0 w-full max-w-3xl flex-1 flex-col">
+        <span className="absolute right-2 top-2 z-10 flex items-center gap-1">
+          <button
+            type="button"
+            className="grid size-7 cursor-pointer place-items-center rounded-lg text-fg-muted transition-colors duration-150 hover:bg-bg-overlay hover:text-fg"
+            onClick={() => setMode(isTab ? "partial" : "tab")}
+            aria-label={isTab ? "Pop out to floating chat" : "Open as tab"}
+            title={isTab ? "Pop out to floating chat" : "Open as tab"}
+          >
+            {isTab ? (
+              <PictureInPicture2 className="size-3.5" />
+            ) : (
+              <Maximize2 className="size-3.5" />
+            )}
+          </button>
+          <button
+            type="button"
+            className="grid size-7 cursor-pointer place-items-center rounded-lg text-fg-muted transition-colors duration-150 hover:bg-bg-overlay hover:text-fg"
+            onClick={() => setMode("min")}
+            aria-label="Minimize chat to bubble"
+            title="Minimize to bubble"
+          >
+            <Minus className="size-3.5" />
+          </button>
+        </span>
+        {/* In tab mode the scroller spans the full tab (scrollbar at the
+            edge) while the content column stays centered and readable. */}
+        <div
+          className={`flex min-h-0 w-full flex-1 flex-col ${
+            isTab ? "" : "mx-auto max-w-3xl"
+          }`}
+        >
           <ChatTimeline
             className="min-h-0 flex-1"
+            contentClassName={isTab ? "mx-auto w-full max-w-4xl" : ""}
             messages={messages}
             activity={activity}
             queuedCount={Math.max(0, chat.queuedMessageCount - 1)}
             error={chat.error?.message ?? null}
           />
-          <form
-            className="field m-3 mt-1 flex shrink-0 items-center gap-2 rounded-xl bg-bg-raised/95 p-1.5"
-            onSubmit={submit}
+          {/* Keep the composer clear of the bubble UI: bottom padding for
+              the expanded strip, side padding for the corner bubble. */}
+          <div
+            className={`flex w-full flex-col transition-[padding] duration-250 ease-[cubic-bezier(0.2,0,0,1)] ${
+              isTab
+                ? `mx-auto max-w-4xl ${
+                    bubbleClearance === "strip"
+                      ? "pb-[52px]"
+                      : bubbleClearance === "corner"
+                        ? "px-16"
+                        : ""
+                  }`
+                : ""
+            }`}
           >
-            <textarea
-              ref={inputRef}
-              className="field-sizing-content max-h-24 min-h-9 min-w-0 flex-1 resize-none bg-transparent px-2.5 py-1.5 text-sm outline-none placeholder:text-fg-faint"
-              value={draft}
-              onChange={(event) => setDraft(event.target.value)}
-              onKeyDown={onKeyDown}
-              placeholder={placeholder}
-              rows={1}
-              aria-label="Message the assistant"
-            />
-            <button
-              type="submit"
-              className="grid size-8 shrink-0 place-items-center rounded-lg bg-accent text-accent-fg transition-opacity duration-150 disabled:opacity-35"
-              disabled={!draft.trim()}
-              aria-label="Send message"
+            {questions && !chat.isSending && (
+              <AgentQuestionPanel
+                questions={questions}
+                onSubmit={(answer) => void chat.send(answer)}
+              />
+            )}
+            <form
+              className="field m-3 mt-1 flex shrink-0 items-center gap-2 rounded-xl bg-bg-raised/95 p-1.5"
+              onSubmit={submit}
             >
-              <ArrowUp className="size-4" />
-            </button>
-          </form>
+              <textarea
+                ref={inputRef}
+                className="field-sizing-content max-h-24 min-h-9 min-w-0 flex-1 resize-none bg-transparent px-2.5 py-1.5 text-sm outline-none placeholder:text-fg-faint"
+                value={draft}
+                onChange={(event) => setDraft(event.target.value)}
+                onKeyDown={onKeyDown}
+                placeholder={placeholder}
+                rows={1}
+                aria-label="Message the assistant"
+              />
+              <button
+                type="submit"
+                className="grid size-8 shrink-0 place-items-center rounded-lg bg-accent text-accent-fg transition-opacity duration-150 disabled:opacity-35"
+                disabled={!draft.trim()}
+                aria-label="Send message"
+              >
+                <ArrowUp className="size-4" />
+              </button>
+            </form>
+          </div>
         </div>
       </section>
     </div>

@@ -1,11 +1,28 @@
-import { LayoutGrid, Workflow as WorkflowIcon, X } from "lucide-react";
+import {
+  LayoutGrid,
+  MessageSquare,
+  Workflow as WorkflowIcon,
+  X,
+} from "lucide-react";
+import { AnimatedTitle } from "./animated-title";
 
 export type WorkspaceTab =
   | { kind: "workflow"; name: string; label?: string }
-  | { kind: "app"; name: string; label?: string };
+  | { kind: "app"; name: string; label?: string }
+  | { kind: "chat"; name: string; label?: string };
 
 export const tabKey = (tab: WorkspaceTab) => `${tab.kind}:${tab.name}`;
 
+const TAB_ICONS = {
+  workflow: WorkflowIcon,
+  app: LayoutGrid,
+  chat: MessageSquare,
+} as const;
+
+/**
+ * Tab strip only — the host owns the surrounding top bar (drag region,
+ * sidebar toggle) so tabs and window chrome share one row.
+ */
 export function WorkspaceTabBar({
   tabs,
   activeKey,
@@ -19,14 +36,15 @@ export function WorkspaceTabBar({
 }) {
   if (tabs.length === 0) return null;
   return (
-    <div className="flex h-9 shrink-0 items-end gap-1 overflow-x-auto border-b border-border px-3">
+    <div className="app-no-drag flex min-w-0 flex-1 items-end gap-1 self-stretch overflow-x-auto">
       {tabs.map((tab) => {
         const key = tabKey(tab);
         const active = key === activeKey;
+        const Icon = TAB_ICONS[tab.kind];
         return (
           <div
             key={key}
-            className={`group -mb-px flex h-8 shrink-0 items-center rounded-t-lg border px-1 text-[12px] transition-colors duration-150 ${
+            className={`group animate-tab-in -mb-px flex h-8 shrink-0 items-center rounded-t-lg border px-1 text-[12px] transition-colors duration-150 ${
               active
                 ? "border-border border-b-bg bg-bg text-fg"
                 : "border-transparent text-fg-muted hover:bg-bg-overlay/60 hover:text-fg"
@@ -37,12 +55,11 @@ export function WorkspaceTabBar({
               onClick={() => onSelect(key)}
               className="flex cursor-pointer items-center gap-1.5 px-1.5"
             >
-              {tab.kind === "workflow" ? (
-                <WorkflowIcon className="size-3.5 shrink-0" />
-              ) : (
-                <LayoutGrid className="size-3.5 shrink-0" />
-              )}
-              <span className="max-w-40 truncate">{tab.label ?? tab.name}</span>
+              <Icon className="size-3.5 shrink-0" />
+              <AnimatedTitle
+                text={tab.label ?? tab.name}
+                className="max-w-40"
+              />
             </button>
             <button
               type="button"

@@ -4,6 +4,12 @@ The desktop app aims for the OpenCode / Obsidian feel: minimal chrome, dark-firs
 terminal-editor calm. Everything visual flows from the tokens in
 [`src/renderer/styles.css`](src/renderer/styles.css).
 
+**North star: this is a really high-quality product meant for daily use.
+Every user interaction matters and should be polished.** When in doubt,
+spend the extra effort on the transition, the empty state, the keyboard
+path, the edge case. Test every UI change visually, end to end, before
+calling it done.
+
 ## Principles
 
 1. **Dark-first.** `:root` *is* the dark theme. Light mode is an override behind
@@ -73,18 +79,23 @@ Low-chroma so run states don't scream: `--color-success`, `--color-warning`,
 ## Layout
 
 ```
-┌───────────┬──────────────────────────┬───────────┐
-│  sidebar  │       chat surface       │   runs    │
-│  260px    │        (flexible)        │  380px    │
-│           │                          │ (toggle)  │
-│ projects  │  full-height AgentChat   │ RunsPanel │
-│ sessions  │                          │           │
-│ ⚙ settings│                          │           │
-└───────────┴──────────────────────────┴───────────┘
+┌───────────┬──────────────────────────────────────┐
+│  sidebar  │ drag ▸ ⧉ ▸ [wf tab][app tab][chat]   │  ← one 40px chrome row
+│  260px    ├──────────────────────────────────────┤
+│           │                                      │
+│ workflows │        active tab content            │
+│ apps      │  (workflow canvas / app / chat)      │
+│ chats     │                                      │
+│           │        ○ ○ ○ +  ‹bubble strip›       │
+│ ⚙ settings│                                      │
+└───────────┴──────────────────────────────────────┘
 ```
 
-- macOS: `titleBarStyle: hiddenInset`; the sidebar's top 40px is a drag region
-  (`.app-drag`).
+- One chrome row: the macOS drag region (`titleBarStyle: hiddenInset`,
+  `.app-drag`), sidebar toggle, and the workspace tab strip share the top
+  40px. No dead space above tabs.
+- Workspace tabs host workflows, apps, and chats alike; minimized chats live
+  in the bottom bubble strip (see the design log for collapse behavior).
 - Empty states are quiet: one sentence of `--color-fg-muted` + one action.
 
 ## Registry component rules
@@ -106,3 +117,89 @@ Low-chroma so run states don't scream: `--color-success`, `--color-warning`,
 - Light theme flips by setting `data-theme="light"` on `<html>`.
 - Tokens are mapped into Tailwind 4 via `@theme inline` so utilities and
   registry components pick them up without a config file.
+
+## Design log
+
+Big product/design decisions and their reasoning, newest last. Add an entry
+whenever a decision shapes how a surface works or feels — this file is the
+memory of *why* the app is the way it is.
+
+### 2026-07-29 — Palette, buttons, and registry decoupling
+- Accent is Catamorphic orange (`#f95225` dark / `#d63c0c` light), sampled
+  from the zevals logo. **No blue buttons** — primary actions are always
+  `bg-accent text-accent-fg`.
+- Registry components ship **no buttons or action chrome**; hosts own
+  toolbars/save/chat placement. Prefer small composable pieces
+  (WorkflowCanvas + DetailPanel + WorkflowEditorScope) over all-in-one shells.
+- Animations stay simple and purposeful: 120–250ms, `--ease-standard`, no
+  decorative motion.
+
+### 2026-07-30 — Projects live in user-visible folders
+- Desktop projects are real folders the user can see (root_path); deleting a
+  project unlinks it by default, moving to trash is opt-in. The desktop app
+  must never feel like it's hiding the user's work in an opaque store.
+
+### 2026-07-31 — Human-in-the-loop questions (`ask_user`)
+- The agent asks structured questions through an `ask_user` tool (AI SDK
+  tool without `execute`, so the loop pauses; the answer resumes it as the
+  tool result). Questions persist as `awaiting_input` metadata on the
+  assistant message — refresh-safe, works across chat surfaces.
+- The question panel follows the Claude Code VSCode extension pattern:
+  **one tab per question** with a numbered chip that becomes a check when
+  answered, animated slide between panels, options carry a label plus a
+  description of effects/trade-offs, "Other" free-text is always available,
+  single-select auto-advances to the next unanswered question.
+- Tool-prompt philosophy: the agent must use the tool (never plain-text
+  question lists) both when blocked on a user-owned decision AND when the
+  user asks to be interviewed; routine implementation choices pick a stated
+  default instead of asking. Recommended option goes first with
+  "(Recommended)" appended.
+
+### 2026-07-31 — Chats are workspace tabs, not fullscreen overlays
+- The old fullscreen chat mode is gone. A chat expands into a **real
+  workspace tab** next to workflows and apps (`ChatMode`: min / partial /
+  tab). Rationale: fullscreen-over-everything hid the workspace; tabs make
+  chats first-class citizens users can switch between.
+- The tab already names the chat, so the in-chat header title is removed in
+  tab mode (no duplicated labels); the pop-out/minimize controls float in
+  the tab's top-right corner.
+- Window chrome is one row: drag region + sidebar toggle + tab strip share
+  the 40px top bar. No dead space above tabs.
+- In tab mode the timeline scroller spans the full tab (scrollbar at the
+  window edge) while content stays a centered `max-w-4xl` column (`max-w-3xl`
+  in the floating dock).
+
+### 2026-07-31 — Bubble strip collapse
+- Minimized chats live as bubbles in a bottom-center pill. When a chat tab
+  is focused the strip **auto-collapses into a single bubble docked at the
+  bottom-right**, keeping the composer clear; clicking it slides the pill
+  back to center and re-expands. Manual collapse via a chevron button; the
+  auto-collapse re-arms each time a chat tab regains focus.
+- The collapsed bubble keeps aggregate signal: spinner if any chat is
+  sending, unread dot if any chat has unread, and a count badge when
+  multiple chats are minimized. Indicators must never be lost by collapsing.
+- The chat-tab composer trades clearance with the bubble UI: bottom padding
+  when the strip is expanded, side padding when collapsed to the corner.
+- The bubble pill **never disappears entirely** while any chat exists — even
+  when every chat is a tab, the collapsed corner bubble stays visible.
+  Rationale: chat surfaces silently vanishing is disorienting; there must
+  always be a visible anchor for "where my chats live". Its indicators
+  (spinner/unread) aggregate across ALL chats, including tab-mode ones.
+
+### 2026-07-31 — Escape scope and conversation titles
+- Escape only minimizes the **floating** chat dock. Tab-mode chats are real
+  workspace tabs and Escape must never dismiss them — tabs are dismissed
+  explicitly (close button / minimize control), like in an editor.
+- Conversations get real names: the first user message seeds a provisional
+  title, and the agent owns a `set_title` tool (prompted to call it once the
+  topic is clear, and again on substantial topic shifts). Titles flow from
+  `agent_sessions` into the sidebar and tab labels (truncated ~40 chars).
+  Generic "Chat N" labels appear only before a session exists.
+- Re-title trigger: whenever the current title **no longer describes the
+  conversation** (topic moved on, scope changed, title turned out wrong) —
+  not only on dramatic topic shifts, but never for minor detours.
+- Title changes play a noticeable-but-calm animation (`AnimatedTitle`):
+  new text slides in with a ~1.2s accent-color flash in the tab and sidebar,
+  then settles. Rationale: the user should notice the agent renamed their
+  chat without a toast or modal. This is the one sanctioned exception to
+  the "no decorative motion" rule — it's a state-change signal, not decor.

@@ -28,6 +28,8 @@ export type { SandboxStore } from "./sandbox-manager.js";
 export { SandboxManagerImpl } from "./sandbox-manager.js";
 export type {
   AgentEvent,
+  AgentQuestion,
+  AgentQuestionOption,
   AgentSession,
   CancelRuntimeInvocationArgs,
   CloneSource,

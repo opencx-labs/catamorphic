@@ -278,12 +278,39 @@ export interface RunExecutor {
   }): Promise<RunResult>;
 }
 
+export interface AgentQuestionOption {
+  /** Concise display label (1-5 words). */
+  label: string;
+  /** Explanation of what this option means or implies. */
+  description: string;
+}
+
+export interface AgentQuestion {
+  /** The complete question, e.g. "Which library should we use?" */
+  question: string;
+  /** Very short chip/tag label (max ~12 chars), e.g. "Auth method". */
+  header: string;
+  /** Whether multiple options may be selected. */
+  multiSelect: boolean;
+  options: AgentQuestionOption[];
+}
+
 export interface AgentEvent {
-  type: "text" | "tool_call" | "file_edit" | "command" | "error" | "done";
+  type:
+    | "text"
+    | "tool_call"
+    | "file_edit"
+    | "command"
+    | "question"
+    | "title"
+    | "error"
+    | "done";
   content?: string;
   toolName?: string;
   toolInput?: unknown;
   filePath?: string;
+  /** Set on "question" events: the agent is pausing for user input. */
+  questions?: AgentQuestion[];
 }
 
 export interface AgentSession {

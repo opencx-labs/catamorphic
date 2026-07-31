@@ -20,6 +20,7 @@ import {
   useRef,
   useState,
 } from "react";
+import { AnimatedTitle } from "./components/animated-title.js";
 import { ChatBubbles } from "./components/chat-bubbles.js";
 import { ChatDock, type ChatDockEntry } from "./components/chat-dock.js";
 import { DeleteProjectModal } from "./components/delete-project-modal.js";
@@ -41,16 +42,26 @@ interface Workspace {
   activeChatId?: string;
 }
 
-const newChatEntry = (mode: ChatDockEntry["mode"] = "full"): ChatDockEntry => ({
+const newChatEntry = (mode: ChatDockEntry["mode"] = "tab"): ChatDockEntry => ({
   localId: crypto.randomUUID(),
   mode,
-  lastExpandedMode: mode === "min" ? "full" : mode,
+  lastExpandedMode: mode === "min" ? "tab" : mode,
 });
 
 const emptyWorkspace = (): Workspace => {
-  const chat = newChatEntry("full");
-  return { tabs: [], chats: [chat], activeChatId: chat.localId };
+  const chat = newChatEntry("tab");
+  return {
+    tabs: [],
+    chats: [chat],
+    activeChatId: chat.localId,
+    activeTabKey: chatTabKey(chat.localId),
+  };
 };
+
+const chatTabKey = (localId: string) => `chat:${localId}`;
+
+const truncateLabel = (value: string): string =>
+  value.length <= 40 ? value : `${value.slice(0, 39)}…`;
 
 export function App({ hasCodingAgent }: { hasCodingAgent: boolean }) {
   const projectsQuery = useProjects();
@@ -66,11 +77,18 @@ export function App({ hasCodingAgent }: { hasCodingAgent: boolean }) {
     {},
   );
   const [unreadByChat, setUnreadByChat] = useState<Record<string, boolean>>({});
+  const [bubblesCollapsed, setBubblesCollapsed] = useState(false);
 
   const projects = projectsQuery.data?.items ?? [];
   const activeProject =
     projects.find((project) => project.id === activeProjectId) ?? projects[0];
   const projectId = activeProject?.id;
+
+  // Shared with SessionsNav via the query cache; titles feed tab labels.
+  const sessionsQuery = useAgentSessions(projectId);
+  const sessionsById = new Map(
+    (sessionsQuery.data?.items ?? []).map((session) => [session.id, session]),
+  );
 
   // Stable per-project default so pre-first-write renders and the first
   // state update agree on the initial chat's localId.
@@ -109,71 +127,127 @@ export function App({ hasCodingAgent }: { hasCodingAgent: boolean }) {
         ...ws,
         tabs: exists ? ws.tabs : [...ws.tabs, tab],
         activeTabKey: key,
-        // Opening a tab drops the chat out of fullscreen so the tab shows.
-        chats: ws.chats.map((chat) =>
-          chat.mode === "full"
-            ? { ...chat, mode: "partial", lastExpandedMode: "partial" }
-            : chat,
-        ),
       };
     });
 
+  /** Tab bar entries: fixed tabs plus one derived tab per tab-mode chat. */
+  const chatTabs = (ws: Workspace, chatLabels: Record<string, string>) =>
+    ws.chats
+      .filter((chat) => chat.mode === "tab")
+      .map(
+        (chat): WorkspaceTab => ({
+          kind: "chat",
+          name: chat.localId,
+          label: chatLabels[chat.localId] ?? "Chat",
+        }),
+      );
+
+  const selectTab = (key: string) =>
+    updateWorkspace((ws) => ({
+      ...ws,
+      activeTabKey: key,
+      ...(key.startsWith("chat:")
+        ? { activeChatId: key.slice("chat:".length) }
+        : {}),
+    }));
+
   const closeTab = (key: string) =>
     updateWorkspace((ws) => {
+      // Closing a chat tab returns the chat to its bubble.
+      if (key.startsWith("chat:")) {
+        const localId = key.slice("chat:".length);
+        const chats = ws.chats.map((chat) =>
+          chat.localId === localId ? { ...chat, mode: "min" as const } : chat,
+        );
+        return {
+          ...ws,
+          chats,
+          activeTabKey:
+            ws.activeTabKey === key
+              ? nextActiveTabKey(ws, key, chats)
+              : ws.activeTabKey,
+        };
+      }
       const tabs = ws.tabs.filter((tab) => tabKey(tab) !== key);
       return {
         ...ws,
         tabs,
         activeTabKey:
           ws.activeTabKey === key
-            ? tabs.length > 0
-              ? tabKey(tabs[tabs.length - 1] as WorkspaceTab)
-              : undefined
+            ? nextActiveTabKey({ ...ws, tabs }, key, ws.chats)
             : ws.activeTabKey,
       };
     });
 
+  const nextActiveTabKey = (
+    ws: Workspace,
+    closedKey: string,
+    chats: ChatDockEntry[],
+  ): string | undefined => {
+    const keys = [
+      ...ws.tabs.map(tabKey),
+      ...chats
+        .filter((chat) => chat.mode === "tab")
+        .map((chat) => chatTabKey(chat.localId)),
+    ].filter((key) => key !== closedKey);
+    return keys.at(-1);
+  };
+
   const toggleChat = (localId: string) =>
-    updateWorkspace((ws) => ({
-      ...ws,
-      activeChatId: localId,
-      chats: ws.chats.map((chat) => {
-        if (chat.localId !== localId) {
-          // Only one chat is expanded at a time.
-          return chat.mode === "min" ? chat : { ...chat, mode: "min" };
-        }
-        const isExpandedActive =
-          chat.mode !== "min" && ws.activeChatId === localId;
-        return {
-          ...chat,
-          mode: isExpandedActive ? "min" : chat.lastExpandedMode,
-        };
-      }),
-    }));
+    updateWorkspace((ws) => {
+      const target = ws.chats.find((chat) => chat.localId === localId);
+      if (!target) return ws;
+      const isExpandedActive =
+        target.mode !== "min" && ws.activeChatId === localId;
+      const nextMode = isExpandedActive ? "min" : target.lastExpandedMode;
+      return {
+        ...ws,
+        activeChatId: localId,
+        activeTabKey:
+          nextMode === "tab"
+            ? chatTabKey(localId)
+            : ws.activeTabKey === chatTabKey(localId)
+              ? nextActiveTabKey(ws, chatTabKey(localId), ws.chats)
+              : ws.activeTabKey,
+        chats: ws.chats.map((chat) => {
+          if (chat.localId !== localId) {
+            // Floating docks are exclusive; background chat tabs stay put.
+            return chat.mode === "partial" ? { ...chat, mode: "min" } : chat;
+          }
+          return { ...chat, mode: nextMode };
+        }),
+      };
+    });
 
   const closeChat = (localId: string) =>
     updateWorkspace((ws) => {
       const chats = ws.chats.filter((chat) => chat.localId !== localId);
+      const ensured = chats.length > 0 ? chats : [newChatEntry("min")];
       return {
         ...ws,
-        chats: chats.length > 0 ? chats : [newChatEntry("min")],
+        chats: ensured,
         activeChatId:
-          ws.activeChatId === localId ? chats[0]?.localId : ws.activeChatId,
+          ws.activeChatId === localId ? ensured[0]?.localId : ws.activeChatId,
+        activeTabKey:
+          ws.activeTabKey === chatTabKey(localId)
+            ? nextActiveTabKey(ws, chatTabKey(localId), ensured)
+            : ws.activeTabKey,
       };
     });
 
   const addChat = () =>
     updateWorkspace((ws) => {
-      const entry = newChatEntry(ws.tabs.length > 0 ? "partial" : "full");
+      const entry = newChatEntry("tab");
       return {
         ...ws,
         chats: [
           ...ws.chats.map((chat) =>
-            chat.mode === "min" ? chat : { ...chat, mode: "min" as const },
+            chat.mode === "partial" ? { ...chat, mode: "min" as const } : chat,
           ),
           entry,
         ],
         activeChatId: entry.localId,
+        activeTabKey: chatTabKey(entry.localId),
       };
     });
 
@@ -181,20 +255,25 @@ export function App({ hasCodingAgent }: { hasCodingAgent: boolean }) {
     updateWorkspace((ws) => {
       const existing = ws.chats.find((chat) => chat.sessionId === session.id);
       const entry = existing ?? {
-        ...newChatEntry(ws.tabs.length > 0 ? "partial" : "full"),
+        ...newChatEntry("tab"),
         sessionId: session.id,
       };
+      const mode = existing ? existing.lastExpandedMode : "tab";
       return {
         ...ws,
         chats: [
           ...ws.chats
             .filter((chat) => chat.localId !== entry.localId)
             .map((chat) =>
-              chat.mode === "min" ? chat : { ...chat, mode: "min" as const },
+              chat.mode === "partial"
+                ? { ...chat, mode: "min" as const }
+                : chat,
             ),
-          { ...entry, mode: entry.lastExpandedMode },
+          { ...entry, mode },
         ],
         activeChatId: entry.localId,
+        activeTabKey:
+          mode === "tab" ? chatTabKey(entry.localId) : ws.activeTabKey,
       };
     });
 
@@ -257,6 +336,24 @@ export function App({ hasCodingAgent }: { hasCodingAgent: boolean }) {
   const activeTab = workspace.tabs.find(
     (tab) => tabKey(tab) === workspace.activeTabKey,
   );
+
+  const chatLabels = Object.fromEntries(
+    workspace.chats.map((chat, index) => {
+      const session = sessionsById.get(chat.sessionId ?? "");
+      return [
+        chat.localId,
+        session?.title
+          ? truncateLabel(session.title)
+          : chat.sessionId
+            ? `Chat ${index + 1}`
+            : "New chat",
+      ];
+    }),
+  );
+  const allTabs = [...workspace.tabs, ...chatTabs(workspace, chatLabels)];
+  const activeChatTabId = workspace.activeTabKey?.startsWith("chat:")
+    ? workspace.activeTabKey.slice("chat:".length)
+    : undefined;
 
   return (
     <div className="flex h-full">
@@ -358,11 +455,12 @@ export function App({ hasCodingAgent }: { hasCodingAgent: boolean }) {
       </aside>
 
       <main className="relative flex min-w-0 flex-1 flex-col">
-        <div className="app-drag flex h-10 shrink-0 items-center px-2">
+        {/* One chrome row: drag region + sidebar toggle + tabs. */}
+        <div className="app-drag flex h-10 shrink-0 items-center gap-1 border-b border-border pl-2 pr-3">
           <button
             type="button"
             onClick={() => setSidebarOpen((value) => !value)}
-            className={`app-no-drag grid size-7 cursor-pointer place-items-center rounded-md text-fg-muted transition-colors duration-150 hover:bg-bg-overlay hover:text-fg ${
+            className={`app-no-drag grid size-7 shrink-0 cursor-pointer place-items-center rounded-md text-fg-muted transition-colors duration-150 hover:bg-bg-overlay hover:text-fg ${
               sidebarOpen ? "" : "ml-[70px]"
             }`}
             aria-label={sidebarOpen ? "Collapse sidebar" : "Expand sidebar"}
@@ -371,20 +469,20 @@ export function App({ hasCodingAgent }: { hasCodingAgent: boolean }) {
           >
             <PanelLeft className="size-4" />
           </button>
+          {!showSettings && projectId && (
+            <WorkspaceTabBar
+              tabs={allTabs}
+              activeKey={workspace.activeTabKey}
+              onSelect={selectTab}
+              onClose={closeTab}
+            />
+          )}
         </div>
 
         {showSettings ? (
           <SettingsScreen onClose={() => setShowSettings(false)} />
         ) : projectId ? (
           <>
-            <WorkspaceTabBar
-              tabs={workspace.tabs}
-              activeKey={workspace.activeTabKey}
-              onSelect={(key) =>
-                updateWorkspace((ws) => ({ ...ws, activeTabKey: key }))
-              }
-              onClose={closeTab}
-            />
             <div className="relative flex min-h-0 flex-1 flex-col">
               {activeTab?.kind === "workflow" ? (
                 <WorkflowScreen
@@ -393,7 +491,7 @@ export function App({ hasCodingAgent }: { hasCodingAgent: boolean }) {
                 />
               ) : activeTab?.kind === "app" ? (
                 <AppScreen projectId={projectId} appName={activeTab.name} />
-              ) : (
+              ) : activeChatTabId ? null : (
                 <TabEmptyState hasCodingAgent={hasCodingAgent} />
               )}
 
@@ -402,11 +500,25 @@ export function App({ hasCodingAgent }: { hasCodingAgent: boolean }) {
                   key={entry.localId}
                   projectId={projectId}
                   entry={entry}
-                  title={activeProject?.name ?? "AI assistant"}
+                  title={chatLabels[entry.localId] ?? "AI assistant"}
+                  tabActive={entry.localId === activeChatTabId}
+                  bubbleClearance={bubblesCollapsed ? "corner" : "strip"}
                   onEntryChange={(next) =>
                     updateWorkspace((ws) => ({
                       ...ws,
                       activeChatId: next.localId,
+                      activeTabKey:
+                        next.mode === "tab"
+                          ? chatTabKey(next.localId)
+                          : ws.activeTabKey === chatTabKey(next.localId)
+                            ? nextActiveTabKey(
+                                ws,
+                                chatTabKey(next.localId),
+                                ws.chats.map((chat) =>
+                                  chat.localId === next.localId ? next : chat,
+                                ),
+                              )
+                            : ws.activeTabKey,
                       chats: ws.chats.map((chat) =>
                         chat.localId === next.localId ? next : chat,
                       ),
@@ -419,17 +531,12 @@ export function App({ hasCodingAgent }: { hasCodingAgent: boolean }) {
 
               <ChatBubbles
                 entries={workspace.chats}
-                labels={Object.fromEntries(
-                  workspace.chats.map((chat, index) => [
-                    chat.localId,
-                    chat.sessionId
-                      ? `Chat ${index + 1}`
-                      : `New chat ${index + 1}`,
-                  ]),
-                )}
+                labels={chatLabels}
                 sending={sendingByChat}
                 unread={unreadByChat}
                 activeLocalId={workspace.activeChatId}
+                autoCollapse={activeChatTabId !== undefined}
+                onCollapsedChange={setBubblesCollapsed}
                 onToggle={toggleChat}
                 onClose={closeChat}
                 onNewChat={addChat}
@@ -617,7 +724,7 @@ function SessionsNav({
             }`}
             aria-current={session.id === activeSessionId || undefined}
           >
-            <span className="truncate">{sessionLabel(session)}</span>
+            <AnimatedTitle text={sessionLabel(session)} />
           </button>
         </li>
       ))}

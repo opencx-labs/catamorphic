@@ -221,3 +221,64 @@ kbd {
 .app-no-drag {
   -webkit-app-region: no-drag;
 }
+
+/* Agent question panel arrival: rise + settle, slightly springier than the
+   dock so it draws the eye without being decorative */
+@keyframes question-in {
+  from {
+    transform: translateY(10px) scale(0.99);
+    opacity: 0;
+  }
+  to {
+    transform: translateY(0) scale(1);
+    opacity: 1;
+  }
+}
+
+.animate-question-in {
+  animation: question-in 260ms cubic-bezier(0.2, 0, 0, 1);
+}
+
+/* Workspace tab arrival (new tab opened, incl. chat promoted to a tab) */
+@keyframes tab-in {
+  from {
+    max-width: 0;
+    opacity: 0;
+    transform: translateY(3px);
+  }
+  to {
+    max-width: 220px;
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.animate-tab-in {
+  animation: tab-in 200ms cubic-bezier(0.2, 0, 0, 1);
+  overflow: hidden;
+}
+
+/* Conversation renamed: new text slides in with a brief accent flash so
+   the change catches the eye, then settles back to normal color */
+@keyframes title-change {
+  0% {
+    transform: translateY(6px);
+    opacity: 0;
+    color: var(--color-accent);
+  }
+  25% {
+    transform: translateY(0);
+    opacity: 1;
+    color: var(--color-accent);
+  }
+  70% {
+    color: var(--color-accent);
+  }
+  100% {
+    color: inherit;
+  }
+}
+
+.animate-title-change {
+  animation: title-change 1200ms cubic-bezier(0.2, 0, 0, 1);
+}

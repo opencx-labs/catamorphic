@@ -420,19 +420,33 @@ export class AgentSessionsService {
         sandboxProviderId,
       );
 
+      const questionEvent = [...events]
+        .reverse()
+        .find((event) => event.type === "question");
       const content =
         textParts.join("\n\n") ||
         events
           .filter((event) => event.type === "error")
           .map((event) => event.content)
           .join("\n") ||
-        "(no response)";
+        (questionEvent ? "" : "(no response)");
 
       const failed = events.some((event) => event.type === "error");
       const metadata: JsonObject = {
-        status: failed ? "failed" : "completed",
+        status: failed
+          ? "failed"
+          : questionEvent
+            ? "awaiting_input"
+            : "completed",
         events: JSON.parse(JSON.stringify(events)) as JsonObject[],
         changedFiles: changedFiles.map((change) => ({ ...change })),
+        ...(questionEvent?.questions
+          ? {
+              questions: JSON.parse(
+                JSON.stringify(questionEvent.questions),
+              ) as JsonObject[],
+            }
+          : {}),
       };
 
       const row = await this.db
@@ -442,11 +456,20 @@ export class AgentSessionsService {
         .returningAll()
         .executeTakeFirstOrThrow();
 
+      // The agent's set_title tool wins; otherwise the first user message
+      // seeds a provisional title.
+      const titleEvent = [...events]
+        .reverse()
+        .find((event) => event.type === "title" && event.content);
       await this.db
         .updateTable("agent_sessions")
         .set({
           updated_at: new Date(),
-          ...(session.title === null ? { title: truncate(message, 500) } : {}),
+          ...(titleEvent?.content
+            ? { title: truncate(titleEvent.content, 500) }
+            : session.title === null
+              ? { title: truncate(message, 500) }
+              : {}),
         })
         .where("id", "=", sessionId)
         .execute();
@@ -731,6 +754,8 @@ export function activityLabel(event: AgentEvent): string {
   if (event.type === "tool_call") {
     return event.toolName ? `Using ${event.toolName}` : "Using a tool...";
   }
+  if (event.type === "question") return "Waiting for your answer...";
+  if (event.type === "title") return "Thinking...";
   if (event.type === "error") return event.content ?? "Agent failed";
   if (event.type === "text") return event.content ?? "Thinking...";
   return "Thinking...";

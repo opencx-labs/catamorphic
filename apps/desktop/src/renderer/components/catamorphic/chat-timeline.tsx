@@ -16,6 +16,18 @@ export interface ChatTimelineMessage {
   metadata?: unknown;
 }
 
+export interface AgentQuestionOption {
+  label: string;
+  description: string;
+}
+
+export interface AgentQuestion {
+  question: string;
+  header: string;
+  multiSelect: boolean;
+  options: AgentQuestionOption[];
+}
+
 export interface ChatTimelineProps {
   /** Persisted + optimistic messages, in order. */
   messages: ChatTimelineMessage[];
@@ -26,6 +38,11 @@ export interface ChatTimelineProps {
   error?: string | null;
   emptyState?: string;
   className?: string;
+  /**
+   * Extra classes for the scrolled content column. Lets hosts center a
+   * max-width column while the scrollbar hugs the container edge.
+   */
+  contentClassName?: string;
 }
 
 /**
@@ -41,6 +58,7 @@ export function ChatTimeline({
   error,
   emptyState = "Ask the agent to build or change your project.",
   className = "",
+  contentClassName = "",
 }: ChatTimelineProps) {
   return (
     <StickToBottom
@@ -49,7 +67,9 @@ export function ChatTimeline({
       resize="smooth"
       role="log"
     >
-      <StickToBottom.Content className="flex min-h-full flex-col gap-3 p-5">
+      <StickToBottom.Content
+        className={`flex min-h-full flex-col gap-3 p-5 ${contentClassName}`}
+      >
         {messages.length === 0 && !activity && (
           <div className="m-auto max-w-sm text-center text-sm leading-6 text-fg-muted">
             {emptyState}
@@ -148,12 +168,18 @@ function Message({ message }: { message: ChatTimelineMessage }) {
 /**
  * Derive the visible timeline from raw agent-session messages: hides
  * in-progress assistant placeholders and surfaces them as an activity line.
+ * When the latest assistant message is awaiting user input, its parsed
+ * questions are exposed so hosts can render an answer UI.
  */
 export function toTimeline(
   persisted: AgentMessage[],
   optimistic: ChatTimelineMessage[],
   isSending: boolean,
-): { messages: ChatTimelineMessage[]; activity: string | undefined } {
+): {
+  messages: ChatTimelineMessage[];
+  activity: string | undefined;
+  questions: AgentQuestion[] | undefined;
+} {
   const messages = [...persisted, ...optimistic].filter(isConversationMessage);
   const pending = latestPendingAssistant(persisted);
   const activity =
@@ -162,7 +188,54 @@ export function toTimeline(
       : isSending && optimistic.length > 0
         ? "Thinking..."
         : undefined;
-  return { messages, activity };
+  return { messages, activity, questions: pendingQuestions(persisted) };
+}
+
+/**
+ * Questions from the latest assistant turn, but only while they are still
+ * unanswered — i.e. the awaiting-input assistant message is the last one.
+ */
+function pendingQuestions(
+  persisted: AgentMessage[],
+): AgentQuestion[] | undefined {
+  const last = persisted.at(-1);
+  if (last?.role !== "assistant") return undefined;
+  const metadata = asRecord(last.metadata);
+  if (metadata?.status !== "awaiting_input") return undefined;
+  const raw = metadata.questions;
+  if (!Array.isArray(raw)) return undefined;
+  const questions = raw.flatMap((entry): AgentQuestion[] => {
+    const question = asRecord(entry);
+    if (typeof question?.question !== "string") return [];
+    const options = Array.isArray(question.options)
+      ? question.options.flatMap((option): AgentQuestionOption[] => {
+          const record = asRecord(option);
+          return typeof record?.label === "string"
+            ? [
+                {
+                  label: record.label,
+                  description:
+                    typeof record.description === "string"
+                      ? record.description
+                      : "",
+                },
+              ]
+            : [];
+        })
+      : [];
+    return [
+      {
+        question: question.question,
+        header:
+          typeof question.header === "string" && question.header.length > 0
+            ? question.header
+            : "Question",
+        multiSelect: question.multiSelect === true,
+        options,
+      },
+    ];
+  });
+  return questions.length > 0 ? questions : undefined;
 }
 
 function latestPendingAssistant(
@@ -171,17 +244,19 @@ function latestPendingAssistant(
   for (let index = messages.length - 1; index >= 0; index -= 1) {
     const message = messages[index];
     if (message?.role === "assistant") {
-      return isConversationMessage(message) ? undefined : message;
+      return asRecord(message.metadata)?.status === "in_progress"
+        ? message
+        : undefined;
     }
   }
   return undefined;
 }
 
 function isConversationMessage(message: ChatTimelineMessage): boolean {
-  return !(
-    message.role === "assistant" &&
-    asRecord(message.metadata)?.status === "in_progress"
-  );
+  if (message.role !== "assistant") return true;
+  if (asRecord(message.metadata)?.status === "in_progress") return false;
+  // Question-only turns have no prose; the question panel is the content.
+  return message.content.trim().length > 0;
 }
 
 function changedFiles(message: ChatTimelineMessage): string[] {

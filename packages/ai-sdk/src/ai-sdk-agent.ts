@@ -1,6 +1,7 @@
 import path from "node:path";
 import type {
   AgentEvent,
+  AgentQuestion,
   CodingAgentProvider,
   ProviderSession,
   SandboxProvider,
@@ -13,7 +14,8 @@ import { z } from "zod";
 const DEFAULT_INSTRUCTIONS = `You are working in a Catamorphic project.
 Use the provided tools to inspect and edit the project in your working directory.
 Read AGENTS.md and relevant .agents/skills/*/SKILL.md files before making substantial changes.
-Keep changes focused, run relevant checks, and do not commit changes.`;
+Keep changes focused, run relevant checks, and do not commit changes.
+At the start of a new conversation, once the topic is clear from the first user message, call set_title with a concise conversation title; update it whenever the current title no longer fits the conversation, but not for minor detours.`;
 const MAX_TOOL_OUTPUT_LENGTH = 100_000;
 const EXA_MCP_URL = "https://mcp.exa.ai/mcp";
 const WEBFETCH_MAX_BYTES = 5 * 1024 * 1024;
@@ -34,6 +36,8 @@ interface AiSdkSessionState {
   sandboxId: string;
   workingDirectory: string;
   running: boolean;
+  /** Set when the turn ended on an ask_user call awaiting the user's answer. */
+  pendingAsk?: { toolCallId: string };
 }
 
 /**
@@ -116,12 +120,30 @@ export class AiSdkCodingAgent implements CodingAgentProvider {
     }
 
     state.running = true;
+    // Answers to a pending ask_user call resume the tool loop as the tool's
+    // result; anything else is a regular user message.
+    const pendingAsk = state.pendingAsk;
+    state.pendingAsk = undefined;
     const requestMessages: ModelMessage[] = [
       ...state.messages,
-      { role: "user", content: message },
+      pendingAsk
+        ? {
+            role: "tool",
+            content: [
+              {
+                type: "tool-result",
+                toolCallId: pendingAsk.toolCallId,
+                toolName: "ask_user",
+                output: { type: "text", value: message },
+              },
+            ],
+          }
+        : { role: "user", content: message },
     ];
     state.messages = requestMessages;
     let text = "";
+    let askedToolCallId: string | undefined;
+    let askedQuestions: AgentQuestion[] | undefined;
 
     try {
       const result = await state.agent.stream({ messages: requestMessages });
@@ -134,6 +156,11 @@ export class AiSdkCodingAgent implements CodingAgentProvider {
           if (text.trim().length > 0) {
             yield { type: "text", content: text };
             text = "";
+          }
+          if (part.toolName === "ask_user") {
+            askedToolCallId = part.toolCallId;
+            askedQuestions = parseAskUserInput(part.input);
+            continue;
           }
           yield mapToolCall(part.toolName, part.input);
           continue;
@@ -154,6 +181,10 @@ export class AiSdkCodingAgent implements CodingAgentProvider {
         yield { type: "text", content: text };
       }
       state.messages = [...requestMessages, ...(await result.responseMessages)];
+      if (askedToolCallId && askedQuestions) {
+        state.pendingAsk = { toolCallId: askedToolCallId };
+        yield { type: "question", questions: askedQuestions };
+      }
       yield { type: "done" };
     } catch (error) {
       if (text.trim().length > 0) {
@@ -293,6 +324,64 @@ function createTools(context: ToolContext) {
       }),
       execute: async ({ url }) => truncateToolOutput(await webFetch(url)),
     }),
+    set_title: tool({
+      description:
+        "Set the title of this conversation as shown in the user's chat list and tabs. Call it once near the start of a new conversation with a concise, specific title (2-5 words, sentence case, no trailing punctuation) describing what the conversation is about. Call it again whenever the current title no longer describes the conversation — the topic moved on, the scope changed, or the original title turned out to be wrong. Don't re-title for minor detours. Examples: 'Daily sales report workflow', 'Fixing checkout bug', 'Getting to know you'.",
+      inputSchema: z.object({
+        title: z
+          .string()
+          .min(1)
+          .max(80)
+          .describe("The new conversation title (2-5 words)"),
+      }),
+      execute: async ({ title }) => `Conversation titled: ${title}`,
+    }),
+    // No execute: calling it ends the tool loop; the user's answer comes
+    // back as the tool result on the next sendMessage.
+    ask_user: tool({
+      description: `Ask the user one or more multiple-choice questions and wait for their answers. ALWAYS use this tool instead of writing questions as plain text whenever you are asking the user something and their answer shapes what you do next. Use it when (1) you are blocked on a decision that is genuinely the user's to make — one you cannot resolve from the request, the project, or sensible defaults, e.g. choosing between data sources, schedules, external services, or destructive vs. safe variants of an operation; or (2) the user asks you to interview them, gather their preferences, or otherwise requests that you ask them questions — a request like "ask me some questions" should go through this tool, batching up to 4 questions per call and calling it again for follow-ups. For routine implementation choices, pick a sensible default and state it instead of asking. Each option needs a concise label and a description explaining its effects, implications, or trade-offs; for open-ended questions offer plausible example answers as options — the user can always answer with free text instead of picking one. If you recommend an option, make it the first one and append " (Recommended)" to its label. Do not use it to ask "should I proceed?" or to confirm work you already described.`,
+      inputSchema: z.object({
+        questions: z
+          .array(
+            z.object({
+              question: z
+                .string()
+                .describe(
+                  "The complete question to ask, ending with a question mark",
+                ),
+              header: z
+                .string()
+                .describe(
+                  "Very short label shown as the question's tab (max 12 chars), e.g. 'Data source'",
+                ),
+              multiSelect: z
+                .boolean()
+                .describe(
+                  "Whether the user may select multiple options instead of one",
+                ),
+              options: z
+                .array(
+                  z.object({
+                    label: z
+                      .string()
+                      .describe("Concise display text (1-5 words)"),
+                    description: z
+                      .string()
+                      .describe(
+                        "What this option means or what happens if chosen — effects, implications, trade-offs",
+                      ),
+                  }),
+                )
+                .min(2)
+                .max(4)
+                .describe("2-4 distinct, mutually exclusive choices"),
+            }),
+          )
+          .min(1)
+          .max(4)
+          .describe("Questions to ask the user (1-4)"),
+      }),
+    }),
     bash: tool({
       description:
         "Run a shell command in the project sandbox. Use it for listing, searching, tests, builds, and other project operations.",
@@ -319,8 +408,50 @@ function createTools(context: ToolContext) {
   };
 }
 
+function parseAskUserInput(input: unknown): AgentQuestion[] {
+  const record = asRecord(input);
+  const rawQuestions = Array.isArray(record?.questions) ? record.questions : [];
+  return rawQuestions.flatMap((raw): AgentQuestion[] => {
+    const question = asRecord(raw);
+    if (typeof question?.question !== "string") return [];
+    const options = Array.isArray(question.options)
+      ? question.options.flatMap((option): AgentQuestion["options"] => {
+          const entry = asRecord(option);
+          return typeof entry?.label === "string"
+            ? [
+                {
+                  label: entry.label,
+                  description:
+                    typeof entry.description === "string"
+                      ? entry.description
+                      : "",
+                },
+              ]
+            : [];
+        })
+      : [];
+    return [
+      {
+        question: question.question,
+        header:
+          typeof question.header === "string" && question.header.length > 0
+            ? question.header
+            : "Question",
+        multiSelect: question.multiSelect === true,
+        options,
+      },
+    ];
+  });
+}
+
 function mapToolCall(toolName: string, input: unknown): AgentEvent {
   const values = asRecord(input);
+  if (toolName === "set_title") {
+    return {
+      type: "title",
+      content: typeof values?.title === "string" ? values.title : "",
+    };
+  }
   if (toolName === "bash") {
     return {
       type: "command",
