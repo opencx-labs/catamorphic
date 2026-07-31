@@ -1,4 +1,4 @@
-import { X } from "lucide-react";
+import { RotateCcw, X } from "lucide-react";
 import { type FormEvent, useEffect, useState } from "react";
 import { PendingButton } from "../components/pending-button.js";
 import {
@@ -6,6 +6,12 @@ import {
   type PublicSettings,
   type UpdateSettingsInput,
 } from "../lib/desktop-api.js";
+import {
+  DEFAULT_KEYBINDINGS,
+  formatBinding,
+  type KeybindingAction,
+  useKeybindings,
+} from "../lib/keybindings.js";
 
 const SUGGESTED_MODELS: Record<"anthropic" | "openai", string[]> = {
   anthropic: ["claude-sonnet-4-5", "claude-opus-4-5"],
@@ -139,6 +145,107 @@ export function SettingsScreen({ onClose }: { onClose: () => void }) {
           </PendingButton>
         </form>
       )}
+
+      <ShortcutsSection />
     </div>
+  );
+}
+
+const SHORTCUT_LABELS: Record<KeybindingAction, string> = {
+  "new-chat": "New chat",
+  "toggle-sidebar": "Toggle sidebar",
+  "close-tab": "Close tab",
+};
+
+/**
+ * Keyboard shortcuts editor. Each row captures the next keypress while
+ * recording. Saves apply immediately (no Save button) — the main process
+ * rewrites keybindings.json, which broadcasts back to every window.
+ */
+function ShortcutsSection() {
+  const bindings = useKeybindings();
+  const [recording, setRecording] = useState<KeybindingAction | null>(null);
+  const [file, setFile] = useState<string>("");
+
+  useEffect(() => {
+    void desktopApi.keybindingsFile().then(setFile);
+  }, []);
+
+  useEffect(() => {
+    if (!recording) return;
+    const onKeyDown = (event: KeyboardEvent) => {
+      event.preventDefault();
+      event.stopPropagation();
+      if (event.key === "Escape") {
+        setRecording(null);
+        return;
+      }
+      // Wait for a real key, not a bare modifier press.
+      if (["Meta", "Control", "Alt", "Shift"].includes(event.key)) return;
+      const parts = [
+        ...(event.metaKey ? ["Cmd"] : []),
+        ...(event.ctrlKey ? ["Ctrl"] : []),
+        ...(event.altKey ? ["Alt"] : []),
+        ...(event.shiftKey ? ["Shift"] : []),
+        event.key.length === 1 ? event.key.toUpperCase() : event.key,
+      ];
+      void desktopApi.setKeybindings({
+        ...bindings,
+        [recording]: parts.join("+"),
+      });
+      setRecording(null);
+    };
+    window.addEventListener("keydown", onKeyDown, { capture: true });
+    return () =>
+      window.removeEventListener("keydown", onKeyDown, { capture: true });
+  }, [recording, bindings]);
+
+  const isDefault = (Object.keys(bindings) as KeybindingAction[]).every(
+    (action) => bindings[action] === DEFAULT_KEYBINDINGS[action],
+  );
+
+  return (
+    <section className="mt-8 border-t border-border pt-6">
+      <div className="mb-3 flex items-center justify-between">
+        <h2 className="text-sm font-semibold">Keyboard shortcuts</h2>
+        {!isDefault && (
+          <button
+            type="button"
+            onClick={() => void desktopApi.setKeybindings(DEFAULT_KEYBINDINGS)}
+            className="flex cursor-pointer items-center gap-1 text-xs text-fg-muted hover:text-fg"
+          >
+            <RotateCcw className="size-3" />
+            Reset to defaults
+          </button>
+        )}
+      </div>
+      <div className="flex flex-col gap-1.5">
+        {(Object.keys(SHORTCUT_LABELS) as KeybindingAction[]).map((action) => (
+          <div
+            key={action}
+            className="flex h-9 items-center justify-between rounded-lg border border-border bg-bg-raised/40 px-3"
+          >
+            <span className="text-[13px]">{SHORTCUT_LABELS[action]}</span>
+            <button
+              type="button"
+              onClick={() => setRecording(recording === action ? null : action)}
+              className={`h-6 cursor-pointer rounded-md border px-2 font-sans text-[12px] transition-colors duration-150 ${
+                recording === action
+                  ? "border-accent bg-accent/10 text-accent"
+                  : "border-border-strong bg-bg-inset text-fg-muted hover:border-fg-faint hover:text-fg"
+              }`}
+            >
+              {recording === action
+                ? "Press keys…"
+                : formatBinding(bindings[action])}
+            </button>
+          </div>
+        ))}
+      </div>
+      <p className="mt-2 text-xs text-fg-faint">
+        Changes apply immediately, in every project. Also editable as JSON at{" "}
+        <span className="font-mono">{file}</span>
+      </p>
+    </section>
   );
 }

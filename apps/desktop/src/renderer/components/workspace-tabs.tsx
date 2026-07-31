@@ -5,6 +5,7 @@ import {
   X,
 } from "lucide-react";
 import { useRef, useState } from "react";
+import { formatBinding, useKeybindings } from "../lib/keybindings";
 import { AnimatedTitle } from "./animated-title";
 import { ShortcutHint } from "./shortcut-hint";
 
@@ -65,6 +66,7 @@ function CloseButton({
   className: string;
   onClick: () => void;
 }) {
+  const keybindings = useKeybindings();
   const button = (
     <button
       type="button"
@@ -76,7 +78,10 @@ function CloseButton({
     </button>
   );
   return hint ? (
-    <ShortcutHint label="Close tab" shortcut="⌘W">
+    <ShortcutHint
+      label="Close tab"
+      shortcut={formatBinding(keybindings["close-tab"])}
+    >
       {button}
     </ShortcutHint>
   ) : (

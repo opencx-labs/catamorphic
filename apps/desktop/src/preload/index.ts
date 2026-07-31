@@ -55,6 +55,23 @@ const api = {
     return () =>
       ipcRenderer.removeListener("catamorphic:github-connected", handler);
   },
+  getKeybindings: (): Promise<Record<string, string>> =>
+    ipcRenderer.invoke("catamorphic:keybindings-get"),
+  setKeybindings: (
+    bindings: Record<string, string>,
+  ): Promise<Record<string, string>> =>
+    ipcRenderer.invoke("catamorphic:keybindings-set", bindings),
+  keybindingsFile: (): Promise<string> =>
+    ipcRenderer.invoke("catamorphic:keybindings-file"),
+  onKeybindingsChanged: (
+    listener: (bindings: Record<string, string>) => void,
+  ): (() => void) => {
+    const handler = (_event: unknown, bindings: Record<string, string>) =>
+      listener(bindings);
+    ipcRenderer.on("catamorphic:keybindings-changed", handler);
+    return () =>
+      ipcRenderer.removeListener("catamorphic:keybindings-changed", handler);
+  },
   onCloseSurface: (listener: () => void): (() => void) => {
     const handler = () => listener();
     ipcRenderer.on("catamorphic:close-surface", handler);

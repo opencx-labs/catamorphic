@@ -6,6 +6,7 @@ import {
   X,
 } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
+import { formatBinding, useKeybindings } from "../lib/keybindings";
 import type { ChatDockEntry } from "./chat-dock";
 import { ShortcutHint } from "./shortcut-hint";
 
@@ -60,6 +61,7 @@ export function ChatBubbles({
   onNewChat,
   onCollapse,
 }: ChatBubblesProps) {
+  const keybindings = useKeybindings();
   // User override: true = collapsed, false = expanded, null = follow
   // autoCollapse. Re-arms (back to null) whenever autoCollapse turns on, so
   // focusing a chat tab folds the strip again even after a manual expand.
@@ -248,7 +250,11 @@ export function ChatBubbles({
               </div>
             );
           })}
-          <ShortcutHint label="New chat" shortcut="⌘T" side="top">
+          <ShortcutHint
+            label="New chat"
+            shortcut={formatBinding(keybindings["new-chat"])}
+            side="top"
+          >
             <button
               type="button"
               onClick={onNewChat}

@@ -13,7 +13,9 @@ import { pgcrypto } from "@electric-sql/pglite/contrib/pgcrypto";
 import cors from "@fastify/cors";
 import Fastify, { type FastifyInstance } from "fastify";
 import { Kysely, PGliteDialect, WithSchemaPlugin } from "kysely";
+import type { KeybindingsStore } from "../keybindings.js";
 import { resolveCodingAgent } from "./coding-agent.js";
+import { DesktopConfigAgent } from "./desktop-config-agent.js";
 import { FileGithubTokenStore, GITHUB_APP } from "./github.js";
 import type { DataPaths } from "./paths.js";
 import { ProjectRootsStore } from "./project-roots.js";
@@ -34,6 +36,7 @@ export interface EmbeddedServer {
 export async function startEmbeddedServer(
   paths: DataPaths,
   settings: DesktopSettings,
+  keybindingsStore: KeybindingsStore,
 ): Promise<EmbeddedServer> {
   fs.mkdirSync(paths.db, { recursive: true });
 
@@ -44,7 +47,12 @@ export async function startEmbeddedServer(
   });
 
   const sandboxProvider = new MicrosandboxSandboxProvider();
-  const codingAgent = resolveCodingAgent(settings, sandboxProvider);
+  const baseAgent = resolveCodingAgent(settings, sandboxProvider);
+  // Desktop-config wrapper: lets the chat agent read and edit app-level
+  // settings (keyboard shortcuts) via mirror files in its sandbox.
+  const codingAgent = baseAgent
+    ? new DesktopConfigAgent(baseAgent, sandboxProvider, keybindingsStore)
+    : undefined;
 
   // Desktop projects live in user-visible folders; the mapping is desktop
   // state (its own PGlite schema), injected into storage as a resolver so

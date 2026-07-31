@@ -6,6 +6,11 @@ import {
   requestDeviceCode,
 } from "@catamorphic/github";
 import { app, BrowserWindow, dialog, ipcMain, shell } from "electron";
+import {
+  type Keybindings,
+  type KeybindingsStore,
+  normalizeKeybindings,
+} from "./keybindings.js";
 import type { EmbeddedServer } from "./server/boot.js";
 import { DESKTOP_TENANT_ID, DESKTOP_USER_ID } from "./server/boot.js";
 import { GITHUB_APP } from "./server/github.js";
@@ -35,8 +40,24 @@ export interface UpdateSettingsInput {
 
 export function registerIpcHandlers(
   store: SettingsStore,
+  keybindings: KeybindingsStore,
   state: ServerState,
 ): void {
+  ipcMain.handle("catamorphic:keybindings-get", () => keybindings.load());
+
+  // Saving triggers the same file watcher that external edits do, which
+  // rebuilds the menu and broadcasts the change to windows.
+  ipcMain.handle(
+    "catamorphic:keybindings-set",
+    (_event, input: unknown): Keybindings => {
+      const next = normalizeKeybindings(input);
+      keybindings.save(next);
+      return next;
+    },
+  );
+
+  ipcMain.handle("catamorphic:keybindings-file", () => keybindings.file);
+
   ipcMain.handle("catamorphic:server-state", () => ({
     url: state.current?.url ?? null,
     hasCodingAgent: state.current?.hasCodingAgent ?? false,

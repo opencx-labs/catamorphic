@@ -17,6 +17,7 @@ loader.config({ monaco });
 
 import { App } from "./app.js";
 import { CatamorphicAppProvider } from "./components/catamorphic/catamorphic-provider.js";
+import { KeybindingsProvider } from "./lib/keybindings.js";
 import { desktopApi, type ServerInfo } from "./lib/desktop-api.js";
 import "@catamorphic/ui/styles.css";
 import "./styles.css";
@@ -46,7 +47,9 @@ function Root() {
 
   return (
     <CatamorphicAppProvider key={server.url} baseUrl={server.url}>
-      <App hasCodingAgent={server.hasCodingAgent} />
+      <KeybindingsProvider>
+        <App hasCodingAgent={server.hasCodingAgent} />
+      </KeybindingsProvider>
     </CatamorphicAppProvider>
   );
 }

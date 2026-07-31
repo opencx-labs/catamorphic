@@ -1,6 +1,11 @@
 import path from "node:path";
 import { app, BrowserWindow, dialog, Menu } from "electron";
 import { registerIpcHandlers, type ServerState } from "./ipc.js";
+import {
+  type Keybindings,
+  KeybindingsStore,
+  toAccelerator,
+} from "./keybindings.js";
 import { type EmbeddedServer, startEmbeddedServer } from "./server/boot.js";
 import { resolveDataPaths } from "./server/paths.js";
 import { SettingsStore } from "./server/settings.js";
@@ -32,6 +37,7 @@ app.on("second-instance", () => {
 
 const paths = resolveDataPaths();
 const settingsStore = new SettingsStore(paths.settingsFile);
+const keybindingsStore = new KeybindingsStore(paths.keybindingsFile);
 
 let server: EmbeddedServer | null = null;
 let restarting: Promise<EmbeddedServer> | null = null;
@@ -47,7 +53,7 @@ const state: ServerState = {
     restarting ??= (async () => {
       try {
         await server?.shutdown();
-        server = await startEmbeddedServer(paths, settings);
+        server = await startEmbeddedServer(paths, settings, keybindingsStore);
         return server;
       } finally {
         restarting = null;
@@ -91,9 +97,11 @@ function createWindow(): BrowserWindow {
 }
 
 // The default menu binds Cmd+W to "Close Window". The workspace has its
-// own closable surfaces (tabs, floating chats), so Cmd+W is forwarded to
-// the renderer, which closes the most specific thing in focus.
-function buildMenu(): Menu {
+// own closable surfaces (tabs, floating chats), so close-tab is forwarded
+// to the renderer, which closes the most specific thing in focus.
+// Accelerators come from the user's keybindings file; new-chat and
+// toggle-sidebar are window-level shortcuts handled in the renderer.
+function buildMenu(bindings: Keybindings): Menu {
   return Menu.buildFromTemplate([
     ...(process.platform === "darwin" ? [{ role: "appMenu" } as const] : []),
     {
@@ -101,7 +109,7 @@ function buildMenu(): Menu {
       submenu: [
         {
           label: "Close Tab",
-          accelerator: "CmdOrCtrl+W",
+          accelerator: toAccelerator(bindings["close-tab"]),
           click: (_item, window) => {
             if (window && "webContents" in window) {
               window.webContents.send("catamorphic:close-surface");
@@ -125,13 +133,24 @@ function buildMenu(): Menu {
   ]);
 }
 
+function applyKeybindings(bindings: Keybindings): void {
+  Menu.setApplicationMenu(buildMenu(bindings));
+  state.broadcast("catamorphic:keybindings-changed", bindings);
+}
+
 app.whenReady().then(async () => {
-  Menu.setApplicationMenu(buildMenu());
-  registerIpcHandlers(settingsStore, state);
+  Menu.setApplicationMenu(buildMenu(keybindingsStore.load()));
+  // Live-reload: agents and users edit keybindings.json directly.
+  keybindingsStore.watch(applyKeybindings);
+  registerIpcHandlers(settingsStore, keybindingsStore, state);
   const window = createWindow();
 
   try {
-    server = await startEmbeddedServer(paths, settingsStore.load());
+    server = await startEmbeddedServer(
+      paths,
+      settingsStore.load(),
+      keybindingsStore,
+    );
     state.broadcast("catamorphic:server-changed", {
       url: server.url,
       hasCodingAgent: server.hasCodingAgent,
@@ -154,6 +173,7 @@ app.whenReady().then(async () => {
 
 let quitting = false;
 app.on("before-quit", (event) => {
+  keybindingsStore.dispose();
   if (quitting || !server) return;
   event.preventDefault();
   quitting = true;

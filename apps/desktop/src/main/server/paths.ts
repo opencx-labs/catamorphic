@@ -15,6 +15,8 @@ export interface DataPaths {
   settingsFile: string;
   /** GitHub connection (safeStorage-encrypted), beside settings.json. */
   githubFile: string;
+  /** User keyboard shortcuts (plain JSON, agent-editable). */
+  keybindingsFile: string;
 }
 
 export function resolveDataPaths(): DataPaths {
@@ -28,5 +30,6 @@ export function resolveDataPaths(): DataPaths {
     appBundles: path.join(root, "app-bundles"),
     settingsFile: path.join(userData, "settings.json"),
     githubFile: path.join(userData, "github.json"),
+    keybindingsFile: path.join(userData, "keybindings.json"),
   };
 }

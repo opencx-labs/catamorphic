@@ -33,6 +33,11 @@ import {
   WorkspaceTabBar,
 } from "./components/workspace-tabs.js";
 import { desktopApi } from "./lib/desktop-api.js";
+import {
+  formatBinding,
+  matchesBinding,
+  useKeybindings,
+} from "./lib/keybindings.js";
 import { AppScreen, useApps } from "./screens/app-screen.js";
 import { SettingsScreen } from "./screens/settings-screen.js";
 import { WorkflowScreen } from "./screens/workflow-screen.js";
@@ -367,17 +372,20 @@ export function App({ hasCodingAgent }: { hasCodingAgent: boolean }) {
     });
   }, []);
 
-  // Cmd+B toggles the sidebar (like clicking the toggle button); Cmd+T
-  // opens a new chat as a full tab.
+  // User-configurable window-level shortcuts: toggle-sidebar and new-chat
+  // (close-tab arrives from the app menu as a close-surface event).
+  const keybindings = useKeybindings();
   const addChatRef = useRef(addChat);
   addChatRef.current = addChat;
+  const keybindingsRef = useRef(keybindings);
+  keybindingsRef.current = keybindings;
   useEffect(() => {
     const onKeyDown = (event: globalThis.KeyboardEvent) => {
-      if (!event.metaKey || event.ctrlKey || event.altKey) return;
-      if (event.key === "b") {
+      const bindings = keybindingsRef.current;
+      if (matchesBinding(event, bindings["toggle-sidebar"])) {
         event.preventDefault();
         setSidebarOpen((value) => !value);
-      } else if (event.key === "t") {
+      } else if (matchesBinding(event, bindings["new-chat"])) {
         event.preventDefault();
         addChatRef.current("tab");
       }
@@ -477,7 +485,10 @@ export function App({ hasCodingAgent }: { hasCodingAgent: boolean }) {
                   title="Chats"
                   defaultOpen
                   action={
-                    <ShortcutHint label="New chat" shortcut="⌘T">
+                    <ShortcutHint
+                      label="New chat"
+                      shortcut={formatBinding(keybindings["new-chat"])}
+                    >
                       <button
                         type="button"
                         onClick={() => addChat()}
@@ -528,7 +539,10 @@ export function App({ hasCodingAgent }: { hasCodingAgent: boolean }) {
               sidebarOpen ? "" : "ml-[70px]"
             }`}
           >
-            <ShortcutHint label="Toggle sidebar" shortcut="⌘B">
+            <ShortcutHint
+              label="Toggle sidebar"
+              shortcut={formatBinding(keybindings["toggle-sidebar"])}
+            >
               <button
                 type="button"
                 onClick={() => setSidebarOpen((value) => !value)}

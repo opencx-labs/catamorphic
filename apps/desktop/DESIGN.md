@@ -275,3 +275,25 @@ memory of *why* the app is the way it is.
 - Current coverage: sidebar toggle ⌘B, both New-chat + buttons ⌘T,
   active tab close ✕ ⌘W (active tab only — that is what ⌘W targets),
   question-panel dismiss ✕ Esc.
+
+### 2026-07-31 — User-global keybindings + agent-configurable app settings
+- Keyboard shortcuts live in `<userData>/keybindings.json` — plain JSON,
+  user-global (not per project), file-watched: edits from the Settings
+  UI, a text editor, or an agent all apply live (menu rebuild + broadcast
+  to renderers). Actions: new-chat, toggle-sidebar, close-tab. Binding
+  format "Cmd+Shift+T"; invalid entries fall back to defaults.
+- Renderer consumes bindings via KeybindingsProvider/useKeybindings;
+  ShortcutHint labels derive from the config (formatBinding → ⌘⇧T), so
+  hints can never drift from actual bindings. close-tab stays an
+  app-menu accelerator (main), the rest are window-level listeners.
+- Settings → "Keyboard shortcuts": click a binding, press keys to
+  rebind (Esc cancels), instant apply, reset-to-defaults. The file path
+  is shown so users/agents know where the JSON lives.
+- The chat agent can reconfigure the app: DesktopConfigAgent wraps the
+  coding agent, staging a `configuring-catamorphic-desktop` skill and a
+  fresh keybindings mirror at `.catamorphic/desktop/keybindings.json` in
+  the sandbox before every turn, and applying mirror edits after the
+  turn (in a `finally`, before core's draft sync). Mirror commits keep
+  config files out of the user's project drafts. Mechanism generalizes:
+  future app settings should be added as more mirror files, not new
+  bespoke tools.

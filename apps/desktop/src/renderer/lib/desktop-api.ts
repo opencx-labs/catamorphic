@@ -41,6 +41,14 @@ export interface CatamorphicDesktopApi {
   setSettings: (input: UpdateSettingsInput) => Promise<PublicSettings>;
   onServerChanged: (listener: (info: ServerInfo) => void) => () => void;
   onCloseSurface: (listener: () => void) => () => void;
+  getKeybindings: () => Promise<Record<string, string>>;
+  setKeybindings: (
+    bindings: Record<string, string>,
+  ) => Promise<Record<string, string>>;
+  keybindingsFile: () => Promise<string>;
+  onKeybindingsChanged: (
+    listener: (bindings: Record<string, string>) => void,
+  ) => () => void;
   defaultProjectsDir: () => Promise<string>;
   pickFolder: (opts?: {
     title?: string;
