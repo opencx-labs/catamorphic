@@ -48,7 +48,10 @@ export function useSendAgentMessage(
           );
           return assertApiOk(result, "Send agent message failed");
         }),
-      onSuccess: (_data, { sessionId }) => {
+      // Settled, not success: on failure the server has still persisted the
+      // user message and a failed assistant message — without a refetch the
+      // timeline would keep showing the stale in-progress placeholder.
+      onSettled: (_data, _error, { sessionId }) => {
         queryClient.invalidateQueries({
           queryKey: [
             "cat",

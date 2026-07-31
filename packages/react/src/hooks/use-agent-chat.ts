@@ -107,8 +107,14 @@ export function useAgentChat(
   const queryClient = useQueryClient();
   const createSession = useCreateAgentSession(projectId);
   const sendMessage = useSendAgentMessage(projectId);
+  // Poll while a send is in flight OR the server still reports an
+  // in-progress assistant turn. The latter covers sends that end in an HTTP
+  // error: the server persists the terminal (failed) message, and without a
+  // final refetch the cached snapshot would show a spinning placeholder
+  // forever.
   const session = useAgentSession(projectId, sessionId ?? undefined, {
-    refetchInterval: sendInProgress ? 500 : false,
+    refetchInterval: (data) =>
+      sendInProgress || hasPendingAssistant(data?.messages) ? 500 : false,
   });
 
   const isSending =
@@ -205,6 +211,13 @@ export function useAgentChat(
       }
     },
   };
+}
+
+function hasPendingAssistant(messages: AgentMessage[] | undefined): boolean {
+  const last = messages?.at(-1);
+  if (last?.role !== "assistant") return false;
+  const metadata = last.metadata as Record<string, unknown> | null;
+  return metadata?.status === "in_progress";
 }
 
 function reconcileOptimisticMessages(

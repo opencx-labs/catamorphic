@@ -10,7 +10,10 @@ import { useCatamorphic } from "../provider.js";
 import type { AgentSessionDetail } from "../types.js";
 
 export interface UseAgentSessionOptions {
-  refetchInterval?: number | false;
+  refetchInterval?:
+    | number
+    | false
+    | ((data: AgentSessionDetail | undefined) => number | false);
 }
 
 /**
@@ -40,6 +43,11 @@ export function useAgentSession(
         return assertApiOk(result, "Agent session response empty");
       }),
     enabled: Boolean(projectId && sessionId),
-    refetchInterval: options.refetchInterval,
+    refetchInterval: (query) => {
+      const interval = options.refetchInterval;
+      return typeof interval === "function"
+        ? interval(query.state.data)
+        : (interval ?? false);
+    },
   });
 }
