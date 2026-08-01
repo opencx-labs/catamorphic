@@ -7,12 +7,17 @@ import {
 } from "react";
 import { desktopApi } from "./desktop-api.js";
 
-export type KeybindingAction = "new-chat" | "toggle-sidebar" | "close-tab";
+export type KeybindingAction =
+  | "new-chat"
+  | "new-floating-chat"
+  | "toggle-sidebar"
+  | "close-tab";
 
 export type Keybindings = Record<KeybindingAction, string>;
 
 export const DEFAULT_KEYBINDINGS: Keybindings = {
   "new-chat": "Cmd+T",
+  "new-floating-chat": "Cmd+N",
   "toggle-sidebar": "Cmd+B",
   "close-tab": "Cmd+W",
 };

@@ -10,12 +10,20 @@ import path from "node:path";
  * Binding format: modifiers `Cmd`, `Ctrl`, `Alt`, `Shift` joined with `+`,
  * ending in a key name ("Cmd+T", "Ctrl+Shift+P", "Alt+Escape").
  */
-export type KeybindingAction = "new-chat" | "toggle-sidebar" | "close-tab";
+export type KeybindingAction =
+  | "new-chat"
+  | "new-floating-chat"
+  | "toggle-sidebar"
+  | "close-tab";
 
 export type Keybindings = Record<KeybindingAction, string>;
 
 export const DEFAULT_KEYBINDINGS: Keybindings = {
+  // Chrome muscle memory: Cmd+T always opens a full tab (a new chat tab).
   "new-chat": "Cmd+T",
+  // The floating quick-chat aside: Cmd+N ("new") — free because the app
+  // is single-window, so Chrome's new-window meaning can't collide.
+  "new-floating-chat": "Cmd+N",
   "toggle-sidebar": "Cmd+B",
   "close-tab": "Cmd+W",
 };

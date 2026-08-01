@@ -84,6 +84,177 @@ const api = {
     return () =>
       ipcRenderer.removeListener("catamorphic:server-changed", handler);
   },
+
+  // --- browser tabs ---
+  webviewPreloadPath: (): Promise<string> =>
+    ipcRenderer.invoke("catamorphic:webview-preload"),
+  browserPrepareProfile: (profileId: string): Promise<string> =>
+    ipcRenderer.invoke("catamorphic:browser-prepare-profile", profileId),
+  browserRecordHistory: (input: {
+    profileId: string;
+    url: string;
+    title: string;
+  }): Promise<void> =>
+    ipcRenderer.invoke("catamorphic:browser-history-record", input),
+  browserRetitleHistory: (input: {
+    profileId: string;
+    url: string;
+    title: string;
+  }): Promise<void> =>
+    ipcRenderer.invoke("catamorphic:browser-history-retitle", input),
+  browserSuggest: (input: {
+    profileId: string;
+    query: string;
+  }): Promise<{
+    matches: { url: string; title: string }[];
+    inline: string | null;
+  }> => ipcRenderer.invoke("catamorphic:browser-suggest", input),
+  onBrowserOpenUrl: (listener: (url: string) => void): (() => void) => {
+    const handler = (_event: unknown, payload: { url: string }) =>
+      listener(payload.url);
+    ipcRenderer.on("catamorphic:browser-open-url", handler);
+    return () =>
+      ipcRenderer.removeListener("catamorphic:browser-open-url", handler);
+  },
+  onBrowserFocusAddress: (
+    listener: (webContentsId: number) => void,
+  ): (() => void) => {
+    const handler = (_event: unknown, payload: { webContentsId: number }) =>
+      listener(payload.webContentsId);
+    ipcRenderer.on("catamorphic:browser-focus-address", handler);
+    return () =>
+      ipcRenderer.removeListener("catamorphic:browser-focus-address", handler);
+  },
+  onBrowserGuestKey: (
+    listener: (key: {
+      webContentsId: number;
+      key: string;
+      meta: boolean;
+      control: boolean;
+      alt: boolean;
+      shift: boolean;
+    }) => void,
+  ): (() => void) => {
+    const handler = (_event: unknown, payload: Parameters<typeof listener>[0]) =>
+      listener(payload);
+    ipcRenderer.on("catamorphic:browser-guest-key", handler);
+    return () =>
+      ipcRenderer.removeListener("catamorphic:browser-guest-key", handler);
+  },
+
+  // --- profiles ---
+  profilesList: (): Promise<unknown> =>
+    ipcRenderer.invoke("catamorphic:profiles-list"),
+  profilesCreate: (name: string): Promise<unknown> =>
+    ipcRenderer.invoke("catamorphic:profiles-create", name),
+  profilesUpdate: (
+    id: string,
+    patch: { name?: string; color?: string; defaultProjectId?: string },
+  ): Promise<unknown> =>
+    ipcRenderer.invoke("catamorphic:profiles-update", id, patch),
+  profilesSetDefault: (id: string): Promise<void> =>
+    ipcRenderer.invoke("catamorphic:profiles-set-default", id),
+  profilesRemove: (id: string): Promise<boolean> =>
+    ipcRenderer.invoke("catamorphic:profiles-remove", id),
+  profilesClaimProject: (
+    profileId: string,
+    projectId: string,
+  ): Promise<void> =>
+    ipcRenderer.invoke("catamorphic:profiles-claim-project", profileId, projectId),
+  profilesForProject: (projectId: string): Promise<unknown> =>
+    ipcRenderer.invoke("catamorphic:profiles-for-project", projectId),
+  profilesReleaseProject: (projectId: string): Promise<void> =>
+    ipcRenderer.invoke("catamorphic:profiles-release-project", projectId),
+  onProfilesChanged: (listener: (data: unknown) => void): (() => void) => {
+    const handler = (_event: unknown, data: unknown) => listener(data);
+    ipcRenderer.on("catamorphic:profiles-changed", handler);
+    return () =>
+      ipcRenderer.removeListener("catamorphic:profiles-changed", handler);
+  },
+
+  // --- password vault ---
+  vaultList: (input: {
+    profileId: string;
+    origin?: string;
+  }): Promise<unknown[]> => ipcRenderer.invoke("catamorphic:vault-list", input),
+  vaultReveal: (input: { profileId: string; id: string }): Promise<unknown> =>
+    ipcRenderer.invoke("catamorphic:vault-reveal", input),
+  vaultSave: (input: {
+    profileId: string;
+    origin: string;
+    username: string;
+    password: string;
+  }): Promise<unknown> => ipcRenderer.invoke("catamorphic:vault-save", input),
+  vaultRemove: (input: { profileId: string; id: string }): Promise<void> =>
+    ipcRenderer.invoke("catamorphic:vault-remove", input),
+  deviceAuthAvailable: (): Promise<boolean> =>
+    ipcRenderer.invoke("catamorphic:device-auth-available"),
+
+  // --- bookmarks ---
+  bookmarksGet: (input: {
+    projectId: string;
+    profileId: string;
+  }): Promise<unknown> => ipcRenderer.invoke("catamorphic:bookmarks-get", input),
+  bookmarksAdd: (input: {
+    projectId: string;
+    profileId: string;
+    label: string;
+    url: string;
+    folderId?: string;
+  }): Promise<unknown> => ipcRenderer.invoke("catamorphic:bookmarks-add", input),
+  bookmarksAddFolder: (input: {
+    projectId: string;
+    profileId: string;
+    label: string;
+  }): Promise<unknown> =>
+    ipcRenderer.invoke("catamorphic:bookmarks-add-folder", input),
+  bookmarksUpdate: (input: {
+    projectId: string;
+    profileId: string;
+    id: string;
+    label?: string;
+    url?: string;
+    folderId?: string | null;
+  }): Promise<void> => ipcRenderer.invoke("catamorphic:bookmarks-update", input),
+  bookmarksRemove: (input: {
+    projectId: string;
+    profileId: string;
+    id: string;
+  }): Promise<void> => ipcRenderer.invoke("catamorphic:bookmarks-remove", input),
+  bookmarksPin: (input: {
+    projectId: string;
+    profileId: string;
+    id: string;
+  }): Promise<void> => ipcRenderer.invoke("catamorphic:bookmarks-pin", input),
+  bookmarksUnpin: (input: {
+    projectId: string;
+    profileId: string;
+    id: string;
+  }): Promise<void> => ipcRenderer.invoke("catamorphic:bookmarks-unpin", input),
+  bookmarksRemovePinned: (input: {
+    projectId: string;
+    profileId: string;
+    id: string;
+  }): Promise<void> =>
+    ipcRenderer.invoke("catamorphic:bookmarks-remove-pinned", input),
+  onBookmarksChanged: (listener: (data: unknown) => void): (() => void) => {
+    const handler = (_event: unknown, data: unknown) => listener(data);
+    ipcRenderer.on("catamorphic:bookmarks-changed", handler);
+    return () =>
+      ipcRenderer.removeListener("catamorphic:bookmarks-changed", handler);
+  },
+
+  // --- sidebar config ---
+  sidebarConfigGet: (): Promise<unknown> =>
+    ipcRenderer.invoke("catamorphic:sidebar-config-get"),
+  sidebarConfigFile: (): Promise<string> =>
+    ipcRenderer.invoke("catamorphic:sidebar-config-file"),
+  onSidebarConfigChanged: (listener: (config: unknown) => void): (() => void) => {
+    const handler = (_event: unknown, config: unknown) => listener(config);
+    ipcRenderer.on("catamorphic:sidebar-config-changed", handler);
+    return () =>
+      ipcRenderer.removeListener("catamorphic:sidebar-config-changed", handler);
+  },
 };
 
 export type CatamorphicDesktopApi = typeof api;

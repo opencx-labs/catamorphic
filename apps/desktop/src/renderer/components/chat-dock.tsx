@@ -73,6 +73,8 @@ export interface ChatDockProps {
    */
   bubbleClearance: "none" | "corner" | "strip";
   onEntryChange: (entry: ChatDockEntry) => void;
+  /** Close the chat entirely (dismissing an empty chat removes it). */
+  onClose: (localId: string) => void;
   onSessionCreated: (localId: string, sessionId: string) => void;
   onSendingChange: (localId: string, sending: boolean) => void;
 }
@@ -90,6 +92,7 @@ export function ChatDock({
   tabActive,
   bubbleClearance,
   onEntryChange,
+  onClose,
   onSessionCreated,
   onSendingChange,
 }: ChatDockProps) {
@@ -118,6 +121,24 @@ export function ChatDock({
   const expanded = entry.mode === "partial" || (isTab && tabActive);
 
   const setMode = (mode: ChatMode) => onEntryChange({ ...entry, mode });
+
+  // An untouched chat has nothing worth keeping — dismissing it (Escape
+  // or the minimize button) closes it instead of parking an empty bubble.
+  // A typed-but-unsent draft counts as worth keeping.
+  const isEmpty =
+    messages.length === 0 &&
+    !chat.isSending &&
+    chat.queuedMessageCount === 0 &&
+    draft.trim() === "";
+  const isEmptyRef = useRef(isEmpty);
+  isEmptyRef.current = isEmpty;
+  const onCloseRef = useRef(onClose);
+  onCloseRef.current = onClose;
+
+  const dismiss = () => {
+    if (isEmpty) onClose(entry.localId);
+    else setMode("min");
+  };
 
   const submit = (event?: FormEvent) => {
     event?.preventDefault();
@@ -158,10 +179,14 @@ export function ChatDock({
       if (event.key !== "Escape" || event.isComposing) return;
       if (event.defaultPrevented) return;
       event.preventDefault();
-      onEntryChangeRef.current({
-        ...entryRef.current,
-        mode: entryRef.current.mode === "tab" ? "partial" : "min",
-      });
+      if (entryRef.current.mode === "tab") {
+        onEntryChangeRef.current({ ...entryRef.current, mode: "partial" });
+      } else if (isEmptyRef.current) {
+        // Escaping an untouched floating chat closes it — no empty bubble.
+        onCloseRef.current(entryRef.current.localId);
+      } else {
+        onEntryChangeRef.current({ ...entryRef.current, mode: "min" });
+      }
     };
     window.addEventListener("keydown", onWindowKeyDown);
     return () => window.removeEventListener("keydown", onWindowKeyDown);
@@ -222,9 +247,9 @@ export function ChatDock({
           <button
             type="button"
             className="grid size-7 cursor-pointer place-items-center rounded-lg text-fg-muted transition-colors duration-150 hover:bg-bg-overlay hover:text-fg"
-            onClick={() => setMode("min")}
-            aria-label="Minimize chat to bubble"
-            title="Minimize to bubble"
+            onClick={dismiss}
+            aria-label={isEmpty ? "Close chat" : "Minimize chat to bubble"}
+            title={isEmpty ? "Close" : "Minimize to bubble"}
           >
             <Minus className="size-3.5" />
           </button>

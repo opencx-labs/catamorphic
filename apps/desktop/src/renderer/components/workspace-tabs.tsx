@@ -1,6 +1,8 @@
 import {
+  Globe,
   LayoutGrid,
   MessageSquare,
+  Plus,
   Settings as SettingsIcon,
   Workflow as WorkflowIcon,
   X,
@@ -14,6 +16,7 @@ export type WorkspaceTab =
   | { kind: "workflow"; name: string; label?: string }
   | { kind: "app"; name: string; label?: string }
   | { kind: "chat"; name: string; label?: string }
+  | { kind: "browser"; name: string; label?: string; faviconUrl?: string | null }
   | { kind: "settings"; name: string; label?: string };
 
 export const tabKey = (tab: WorkspaceTab) => `${tab.kind}:${tab.name}`;
@@ -22,6 +25,7 @@ const TAB_ICONS = {
   workflow: WorkflowIcon,
   app: LayoutGrid,
   chat: MessageSquare,
+  browser: Globe,
   settings: SettingsIcon,
 } as const;
 
@@ -101,12 +105,16 @@ export function WorkspaceTabBar({
   activeKey,
   onSelect,
   onClose,
+  onNew,
 }: {
   tabs: WorkspaceTab[];
   activeKey?: string;
   onSelect: (key: string) => void;
   onClose: (key: string) => void;
+  /** Chrome-style + after the last tab; always opens a new tab. */
+  onNew?: () => void;
 }) {
+  const keybindings = useKeybindings();
   const [rendered, setRendered] = useState<RenderedTab[]>(() =>
     mergeRendered([], tabs),
   );
@@ -121,7 +129,7 @@ export function WorkspaceTabBar({
       previous.filter((entry) => !(entry.exiting && tabKey(entry.tab) === key)),
     );
 
-  if (rendered.length === 0) return null;
+  if (rendered.length === 0 && !onNew) return null;
   return (
     // overflow-y-hidden: tabs hang 1px below the row (-mb-px overlaps the
     // border), and overflow-x-auto alone turns that spill into a phantom
@@ -151,7 +159,15 @@ export function WorkspaceTabBar({
               onClick={() => onSelect(key)}
               className="flex cursor-pointer items-center gap-1.5 px-1.5"
             >
-              <Icon className="size-3.5 shrink-0" />
+              {tab.kind === "browser" && tab.faviconUrl ? (
+                <img
+                  src={tab.faviconUrl}
+                  alt=""
+                  className="size-3.5 shrink-0 rounded-[3px]"
+                />
+              ) : (
+                <Icon className="size-3.5 shrink-0" />
+              )}
               <AnimatedTitle
                 text={tab.label ?? tab.name}
                 className="max-w-40"
@@ -167,6 +183,23 @@ export function WorkspaceTabBar({
           </div>
         );
       })}
+      {onNew && (
+        <ShortcutHint
+          label="New chat tab"
+          shortcut={formatBinding(keybindings["new-chat"])}
+        >
+          <button
+            type="button"
+            onClick={onNew}
+            // self-center: the + rides mid-row, not glued to the tab
+            // baseline (matches Chrome).
+            className="grid size-7 shrink-0 cursor-pointer place-items-center self-center rounded-md text-fg-muted transition-colors duration-150 hover:bg-bg-overlay hover:text-fg"
+            aria-label="New tab"
+          >
+            <Plus className="size-4" />
+          </button>
+        </ShortcutHint>
+      )}
     </div>
   );
 }

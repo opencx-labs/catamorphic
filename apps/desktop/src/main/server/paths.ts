@@ -17,6 +17,8 @@ export interface DataPaths {
   githubFile: string;
   /** User keyboard shortcuts (plain JSON, agent-editable). */
   keybindingsFile: string;
+  /** Chrome-style profiles (plain JSON). */
+  profilesFile: string;
 }
 
 export function resolveDataPaths(): DataPaths {
@@ -31,5 +33,6 @@ export function resolveDataPaths(): DataPaths {
     settingsFile: path.join(userData, "settings.json"),
     githubFile: path.join(userData, "github.json"),
     keybindingsFile: path.join(userData, "keybindings.json"),
+    profilesFile: path.join(userData, "profiles.json"),
   };
 }

@@ -297,3 +297,166 @@ memory of *why* the app is the way it is.
   config files out of the user's project drafts. Mechanism generalizes:
   future app settings should be added as more mirror files, not new
   bespoke tools.
+
+### 2026-08-01 — Catamorphic is a browser: tabs, address bar, autocomplete
+- Browser pages are **workspace tabs** (`kind: "browser"`), rendered as
+  `<webview>` guests (not WebContentsViews): they composite into the
+  renderer, so app overlays (suggestion dropdown, chat dock, bubbles)
+  stack above pages naturally. Browser screens stay mounted but hidden
+  on tab switch — unmounting a webview would reload the page.
+- The address bar lives **inside the browser tab** (under the tab strip,
+  scoped to the page), not in the window chrome. Toolbar = back/forward,
+  reload/stop, pill-shaped address field, bookmark star. Cmd+L focuses
+  and selects it Chrome-style — including when focus is inside page
+  content (main observes the guest's `before-input-event` and forwards).
+- Address input resolves Chrome-style: URL-shaped → https, `localhost` →
+  http, anything else → Google search. Autocomplete combines a first row
+  (search or go-to-URL) with frecency-ranked history matches (per
+  profile, `history.json`), plus **inline completion** of the best host
+  prefix (applied synchronously to the DOM — async state + RAF corrupts
+  fast typing). Never completes while deleting.
+- Links that request a new window (`target=_blank` / `window.open`)
+  **open as new workspace tabs** — guests have `allowpopups` so the
+  main-process `setWindowOpenHandler` can reroute (deny + broadcast).
+  Without allowpopups the handler never fires.
+- Untrusted pages are fully sandboxed (`sandbox: true`, no node). The
+  guest preload talks only to the embedding renderer via `sendToHost`.
+
+### 2026-08-01 — Profiles: Chrome-model identity, projects, and auth
+- **Profiles** (`profiles.json`) mirror Chrome's: each owns a persistent
+  Chromium session partition (`persist:profile-<id>`) — cookies/logins
+  (e.g. a Google session) survive restarts, per profile, verified. Each
+  profile also owns its **projects** (sidebar shows only the active
+  profile's), a **default project** (first claim; switching profiles
+  lands there), and there is a **default profile** (starred in the
+  switcher; the app opens into it). Pre-profile projects are lazily
+  adopted by the default profile.
+- The switcher sits at the **bottom of the sidebar** (color-dot
+  identity, star = default, inline "New profile" input). Deleting a
+  profile moves its projects to the default profile; the last profile
+  can't be deleted.
+- Sessions serve the underlying **Chrome UA** (Electron token stripped)
+  so Google sign-in flows stay on the normal path. Permission requests
+  default to allow only low-risk ones (clipboard-write, fullscreen,
+  notifications); device-level permissions are denied until a prompt UI
+  exists.
+- **Unpacked Chrome extensions** load per profile from
+  `profiles/<id>/extensions/*` at session prepare (content scripts run
+  in browser tabs — verified). This is the on-ramp for password-manager
+  extensions later.
+
+### 2026-08-01 — Passwords: KDBX vault + device auth, Chrome behavior
+- Per-profile vault is a standard **KDBX4 database** (kdbxweb — the
+  battle-tested KeePass format; hash-wasm provides Argon2). Portable to
+  KeePassXC/Strongbox by design; a Google Passwords CSV import lands
+  here later. The master key is random, never typed, encrypted via
+  `safeStorage` (macOS Keychain) at `profiles/<id>/vault.key`.
+- Chrome-mimicking UX, one bar under the toolbar: submit a login form →
+  **offer-to-save** (guest preload detects password fields, captures
+  submit/click in the capture phase, reports via `sendToHost`); revisit
+  a page with a saved login → **offer-to-fill** (fills via native value
+  setters + input events so React forms register). Save bar survives
+  the post-login navigation as long as the origin matches.
+- Revealing/filling a secret is gated by **local device auth** (Touch
+  ID via `systemPreferences.promptTouchID`, once per app run per
+  profile), mirroring Chrome-on-macOS. Listing origins/usernames is not
+  gated. Vault keys never enter the renderer; only the fill payload
+  crosses, over the guest's isolated IPC.
+
+### 2026-08-01 — Customizable sidebar (sidebar.js) + bookmarks
+- The sidebar layout is user-owned: **`<userData>/sidebar.js`**, a real
+  JS file (same philosophy as keybindings.json — plain, agent-editable,
+  file-watched, applies live). It evaluates in an isolated `vm` context
+  (no require/fs, 250ms timeout) and exports ordered sections. Types:
+  built-ins (`workflows`/`apps`/`chats`), `bookmarks`, and `links`
+  (static custom links). Attributes: `title`, `collapsed`, and `open`.
+- `open` controls click behavior: `"tab"` = always a new browser tab;
+  `"replace"` (default for bookmarks/links) = reuse the focused browser
+  tab, **falling back to a new tab when the focused tab isn't a browser
+  tab**. Verified both modes.
+- **Bookmarks are per project** (with one level of folders — deliberately
+  shallow), saved via the address-bar star. **Pinning is the one
+  cross-project mechanism**: pinning *moves* a bookmark from the project
+  scope to a profile-wide pinned list shown at the top of the Bookmarks
+  section. Considered making sections/items generally pinnable and
+  rejected it — one pinnable thing (the bookmark) keeps the mental
+  model simple: project bookmarks belong to the work, pinned bookmarks
+  belong to you. Unpinning drops the bookmark into the current project.
+
+### 2026-08-01 — Cmd+T is Chrome's Cmd+T; the aside gets Cmd+N
+- Revises 2026-07-31 "new-chat default mode": **Cmd+T and the tab-strip
+  + always open a full chat tab** — with browser tabs in the workspace,
+  Cmd+T carries Chrome muscle memory and must never do something
+  smaller. The floating quick-chat aside moved to its own binding,
+  **Cmd+N** (`new-floating-chat`), which the sidebar/bubble + buttons
+  and their hints now advertise. Cmd+N is free because the app is
+  single-window — Chrome's "new window" meaning can't collide, and
+  "N = new" beats an arbitrary letter. The empty-workspace rule stands:
+  a floating chat with nothing behind it opens as a tab anyway.
+- A Chrome-style **+ button sits after the last tab** in the strip and
+  always creates a new chat tab (hint shows the Cmd+T binding).
+- App shortcuts now work while focus is inside webview page content:
+  guests' `before-input-event` forwards Cmd-combos to the renderer
+  (`browser-guest-key`), which runs them through the same
+  user-configurable binding dispatch as window keydowns. Without this,
+  any shortcut died silently whenever a page had focus.
+- **Cmd+R / Cmd+Shift+R reload the focused browser tab's page** (soft /
+  cache-ignoring), from both window focus and inside page content. The
+  stock `viewMenu` role was stealing these to reload the whole app —
+  replaced with a custom View menu; app force-reload moved to
+  **Cmd+Alt+R** ("Reload App"). Rule: inside a browser tab, Chrome's
+  shortcuts always win over app-development conveniences.
+
+### 2026-08-01 — Dismissing an empty floating chat closes it
+- Escaping or minimizing (−) a floating chat that has **no messages, no
+  queued sends, and no typed draft** closes the chat instead of parking
+  an empty bubble in the strip. Rationale: an untouched chat holds
+  nothing worth restoring; empty bubbles are clutter that the user then
+  has to close by hand. A typed-but-unsent draft counts as content and
+  still minimizes to a bubble. The − button's label/tooltip switches to
+  "Close" when the chat is empty so the behavior is announced, not
+  sprung. Tab-mode Escape is unchanged (tab → floating step-down).
+
+### 2026-08-01 — Exit animations must swallow their flex gap
+- `bubble-out` now animates `margin-left: 0 → -6px` alongside the width
+  collapse, matching the strip's `gap-1.5`. Without it the bubble's own
+  width finished animating and the strip then *snapped* the remaining
+  6px when React unmounted the element — read as "hangs, then jumps".
+  `tab-out` already did this (gap-1 → -4px). **Rule: any exit animation
+  inside a flex row with `gap` must animate a trailing negative margin
+  equal to the gap**, or the unmount produces a terminal jump.
+
+### 2026-08-01 — Catamorphic presents as Chrome, at every layer
+- **There is no way to become a "legitimate browser" in Google's eyes.**
+  No registration, no allowlist, no vendor UA program — the
+  supported-browser gate is pure sniffing. Vivaldi (same engine,
+  millions of users) proved the targeting was by *name*: misspelling
+  their token "Vivaldo" made Google properties work again, so in 2019
+  they shipped a Chrome UA by default. Edge does the same. Since the
+  engine genuinely is Chrome's, presenting as Chrome is the honest,
+  permanent answer — not a stopgap.
+- The failure mode is **inconsistency between layers**, so all three
+  now agree:
+  1. **UA string** — `app.userAgentFallback` strips the Electron and
+     app tokens once, app-wide, before `ready` (main/index.ts). This
+     also feeds Chromium's own brand derivation.
+  2. **Request headers** — profile sessions rewrite `Sec-CH-UA` and
+     `Sec-CH-UA-Full-Version-List` to Chrome's brand list via
+     `webRequest.onBeforeSendHeaders`; Chromium builds these from its
+     internal brand table, which no `setUserAgent` call reaches.
+  3. **JS** — the guest preload patches `navigator.userAgentData`
+     (`brands`, `getHighEntropyValues`) through
+     `contextBridge.executeInMainWorld`. Two traps: plain
+     `executeJavaScript` runs in the *isolated* world site scripts
+     can't see, and the override must go on the **prototype** —
+     `navigator.userAgentData` returns a fresh object per access, so
+     an own-property definition is discarded on the next read.
+  `fullVersionList` reports Google Chrome at the real Chrome version
+  (not the `Not;A=Brand` placeholder's 8.0.0.0) — a mismatch there is
+  exactly the tell a checker looks for.
+- Verified end to end: accounts.google.com serves the normal sign-in
+  form, and a live request echo shows UA + Sec-CH-UA agreeing.
+- Testing note: **webview guests composite separately and do NOT appear
+  in a host-page CDP screenshot** — a blank page area in `drive.mjs shot`
+  is a capture artifact, not a broken page. Screenshot the guest's own
+  CDP target to see real pixels.

@@ -7,6 +7,7 @@ import type { AgentSession, ProjectSummary } from "@catamorphic/react/types";
 import {
   ChevronRight,
   FolderPlus,
+  Globe,
   LayoutGrid,
   PanelLeft,
   Plus,
@@ -21,9 +22,11 @@ import {
   useState,
 } from "react";
 import { AnimatedTitle } from "./components/animated-title.js";
+import { BookmarksNav } from "./components/bookmarks-nav.js";
 import { ChatBubbles } from "./components/chat-bubbles.js";
 import { ChatDock, type ChatDockEntry } from "./components/chat-dock.js";
 import { DeleteProjectModal } from "./components/delete-project-modal.js";
+import { ProfileBar } from "./components/profile-bar.js";
 import { ProjectModal } from "./components/project-modal.js";
 import { ProjectSwitcher } from "./components/project-switcher.js";
 import { ShortcutHint } from "./components/shortcut-hint.js";
@@ -32,7 +35,17 @@ import {
   type WorkspaceTab,
   WorkspaceTabBar,
 } from "./components/workspace-tabs.js";
-import { desktopApi } from "./lib/desktop-api.js";
+import {
+  desktopApi,
+  type Profile,
+  type ProfilesData,
+  type SidebarConfig,
+  type SidebarSectionConfig,
+} from "./lib/desktop-api.js";
+import {
+  type BrowserPageState,
+  BrowserScreen,
+} from "./screens/browser-screen.js";
 import {
   formatBinding,
   matchesBinding,
@@ -42,11 +55,22 @@ import { AppScreen, useApps } from "./screens/app-screen.js";
 import { SettingsScreen } from "./screens/settings-screen.js";
 import { WorkflowScreen } from "./screens/workflow-screen.js";
 
+interface BrowserEntry {
+  localId: string;
+  /** Session/profile the page lives in — fixed at tab creation. */
+  profileId: string;
+  initialUrl: string;
+  url: string;
+  title: string;
+  faviconUrl: string | null;
+}
+
 interface Workspace {
   tabs: WorkspaceTab[];
   activeTabKey?: string;
   chats: ChatDockEntry[];
   activeChatId?: string;
+  browsers: BrowserEntry[];
 }
 
 const newChatEntry = (mode: ChatDockEntry["mode"]): ChatDockEntry => ({
@@ -63,10 +87,12 @@ const emptyWorkspace = (): Workspace => {
     chats: [chat],
     activeChatId: chat.localId,
     activeTabKey: chatTabKey(chat.localId),
+    browsers: [],
   };
 };
 
 const chatTabKey = (localId: string) => `chat:${localId}`;
+const browserTabKey = (localId: string) => `browser:${localId}`;
 
 const truncateLabel = (value: string): string =>
   value.length <= 40 ? value : `${value.slice(0, 39)}…`;
@@ -86,10 +112,60 @@ export function App({ hasCodingAgent }: { hasCodingAgent: boolean }) {
   const [unreadByChat, setUnreadByChat] = useState<Record<string, boolean>>({});
   const [bubblesCollapsed, setBubblesCollapsed] = useState(false);
 
-  const projects = projectsQuery.data?.items ?? [];
+  // Chrome-style profiles: each owns a session partition and a set of
+  // projects. The sidebar shows only the active profile's projects.
+  const [profilesData, setProfilesData] = useState<ProfilesData | null>(null);
+  const [activeProfileId, setActiveProfileId] = useState<string>();
+
+  useEffect(() => {
+    void desktopApi.profilesList().then((data) => {
+      setProfilesData(data);
+      setActiveProfileId((current) => current ?? data.defaultProfileId);
+    });
+    return desktopApi.onProfilesChanged(setProfilesData);
+  }, []);
+
+  const activeProfile: Profile | undefined =
+    profilesData?.profiles.find((profile) => profile.id === activeProfileId) ??
+    profilesData?.profiles[0];
+
+  // User-customizable sidebar layout (sidebar.js, file-watched).
+  const [sidebarConfig, setSidebarConfig] = useState<SidebarConfig | null>(
+    null,
+  );
+  useEffect(() => {
+    void desktopApi.sidebarConfigGet().then(setSidebarConfig);
+    return desktopApi.onSidebarConfigChanged(setSidebarConfig);
+  }, []);
+
+  const allProjects = projectsQuery.data?.items ?? [];
+  // Projects created before profiles existed have no owner; the default
+  // profile shows them (matches main-process lazy adoption).
+  const ownedElsewhere = new Set(
+    profilesData?.profiles
+      .filter((profile) => profile.id !== activeProfile?.id)
+      .flatMap((profile) => profile.projectIds) ?? [],
+  );
+  const projects = activeProfile
+    ? allProjects.filter(
+        (project) =>
+          activeProfile.projectIds.includes(project.id) ||
+          (activeProfile.id === profilesData?.defaultProfileId &&
+            !ownedElsewhere.has(project.id)),
+      )
+    : allProjects;
   const activeProject =
-    projects.find((project) => project.id === activeProjectId) ?? projects[0];
+    projects.find((project) => project.id === activeProjectId) ??
+    projects.find((project) => project.id === activeProfile?.defaultProjectId) ??
+    projects[0];
   const projectId = activeProject?.id;
+
+  const switchProfile = (profile: Profile) => {
+    setActiveProfileId(profile.id);
+    // Land on the profile's default project (Chrome opens the profile's
+    // own window; we open its default project workspace).
+    setActiveProjectId(profile.defaultProjectId);
+  };
 
   // Shared with SessionsNav via the query cache; titles feed tab labels.
   const sessionsQuery = useAgentSessions(projectId);
@@ -149,6 +225,16 @@ export function App({ hasCodingAgent }: { hasCodingAgent: boolean }) {
         }),
       );
 
+  const browserTabs = (ws: Workspace) =>
+    ws.browsers.map(
+      (browser): WorkspaceTab => ({
+        kind: "browser",
+        name: browser.localId,
+        label: browser.title || "New Tab",
+        faviconUrl: browser.faviconUrl,
+      }),
+    );
+
   const selectTab = (key: string) =>
     updateWorkspace((ws) => ({
       ...ws,
@@ -158,8 +244,96 @@ export function App({ hasCodingAgent }: { hasCodingAgent: boolean }) {
         : {}),
     }));
 
+  /** Open a page in a new browser tab (profile session of the workspace). */
+  const openBrowserTab = useCallback(
+    (url: string, opts?: { background?: boolean }) => {
+      if (!activeProfile) return;
+      const entry: BrowserEntry = {
+        localId: crypto.randomUUID(),
+        profileId: activeProfile.id,
+        initialUrl: url,
+        url,
+        title: url || "New Tab",
+        faviconUrl: null,
+      };
+      updateWorkspace((ws) => ({
+        ...ws,
+        browsers: [...ws.browsers, entry],
+        activeTabKey: opts?.background
+          ? ws.activeTabKey
+          : browserTabKey(entry.localId),
+      }));
+    },
+    [activeProfile, updateWorkspace],
+  );
+
+  const onBrowserState = useCallback(
+    (localId: string, state: BrowserPageState) =>
+      updateWorkspace((ws) => ({
+        ...ws,
+        browsers: ws.browsers.map((browser) =>
+          browser.localId === localId
+            ? {
+                ...browser,
+                url: state.url || browser.url,
+                title: state.title || browser.title,
+                faviconUrl: state.faviconUrl ?? browser.faviconUrl,
+              }
+            : browser,
+        ),
+      })),
+    [updateWorkspace],
+  );
+
+  // target=_blank / window.open from any page in this window → new tab.
+  const openBrowserTabRef = useRef(openBrowserTab);
+  openBrowserTabRef.current = openBrowserTab;
+  useEffect(() => {
+    return desktopApi.onBrowserOpenUrl((url) =>
+      openBrowserTabRef.current(url),
+    );
+  }, []);
+
+  // navigate(url) handles per live browser tab, for "open in current tab"
+  // (bookmarks/links with open:"replace").
+  const browserNavigatorsRef = useRef(new Map<string, (url: string) => void>());
+
+  /**
+   * Bookmark/link click behavior: "replace" reuses the focused browser
+   * tab; anything else (or no focused browser tab) opens a new tab.
+   */
+  const openUrl = (url: string, mode: "tab" | "replace") => {
+    const ws = workspaceRef.current;
+    const focusedBrowserId = ws.activeTabKey?.startsWith("browser:")
+      ? ws.activeTabKey.slice("browser:".length)
+      : undefined;
+    const navigate = focusedBrowserId
+      ? browserNavigatorsRef.current.get(focusedBrowserId)
+      : undefined;
+    if (mode === "replace" && navigate) {
+      navigate(url);
+      return;
+    }
+    openBrowserTab(url);
+  };
+
   const closeTab = (key: string) =>
     updateWorkspace((ws) => {
+      if (key.startsWith("browser:")) {
+        const localId = key.slice("browser:".length);
+        browserNavigatorsRef.current.delete(localId);
+        const browsers = ws.browsers.filter(
+          (browser) => browser.localId !== localId,
+        );
+        return {
+          ...ws,
+          browsers,
+          activeTabKey:
+            ws.activeTabKey === key
+              ? nextActiveTabKey({ ...ws, browsers }, key, ws.chats)
+              : ws.activeTabKey,
+        };
+      }
       // Closing a chat tab closes the chat (the session stays in the
       // sidebar); it does NOT linger as a bubble.
       if (key.startsWith("chat:")) {
@@ -194,6 +368,7 @@ export function App({ hasCodingAgent }: { hasCodingAgent: boolean }) {
   ): string | undefined => {
     const keys = [
       ...ws.tabs.map(tabKey),
+      ...ws.browsers.map((browser) => browserTabKey(browser.localId)),
       ...chats
         .filter((chat) => chat.mode === "tab")
         .map((chat) => chatTabKey(chat.localId)),
@@ -243,13 +418,16 @@ export function App({ hasCodingAgent }: { hasCodingAgent: boolean }) {
       };
     });
 
+  // Cmd+T and the tab-strip + always open a full chat tab (Chrome muscle
+  // memory); the sidebar +, bubble +, and Cmd+E open the floating aside.
   const addChat = (forceMode?: "tab") =>
     updateWorkspace((ws) => {
-      // New chats float as a partial dock by default; with no tabs open at
-      // all, the chat becomes the workspace, so open it as a full tab.
-      // Cmd+T asks for a tab explicitly.
+      // Floating chats become a full tab anyway when the workspace is
+      // empty — with nothing behind it, the chat IS the workspace.
       const noTabsOpen =
-        ws.tabs.length === 0 && ws.chats.every((chat) => chat.mode !== "tab");
+        ws.tabs.length === 0 &&
+        ws.browsers.length === 0 &&
+        ws.chats.every((chat) => chat.mode !== "tab");
       const entry = newChatEntry(forceMode ?? (noTabsOpen ? "tab" : "partial"));
       return {
         ...ws,
@@ -280,7 +458,9 @@ export function App({ hasCodingAgent }: { hasCodingAgent: boolean }) {
       // floating dock — unless no tabs are open, where a tab is the
       // natural landing (same rule as addChat).
       const noTabsOpen =
-        ws.tabs.length === 0 && ws.chats.every((chat) => chat.mode !== "tab");
+        ws.tabs.length === 0 &&
+        ws.browsers.length === 0 &&
+        ws.chats.every((chat) => chat.mode !== "tab");
       const mode =
         existing?.mode === "tab" || noTabsOpen
           ? ("tab" as const)
@@ -379,18 +559,49 @@ export function App({ hasCodingAgent }: { hasCodingAgent: boolean }) {
   const keybindingsRef = useRef(keybindings);
   keybindingsRef.current = keybindings;
   useEffect(() => {
-    const onKeyDown = (event: globalThis.KeyboardEvent) => {
+    // Returns true when the key matched an app shortcut. Also fed by
+    // guest-key forwarding: shortcuts pressed inside webview page content
+    // never reach this window, so main relays them (see main/browser.ts).
+    const dispatchShortcut = (event: {
+      key: string;
+      metaKey: boolean;
+      ctrlKey: boolean;
+      altKey: boolean;
+      shiftKey: boolean;
+    }): boolean => {
       const bindings = keybindingsRef.current;
-      if (matchesBinding(event, bindings["toggle-sidebar"])) {
-        event.preventDefault();
+      const keyEvent = event as globalThis.KeyboardEvent;
+      if (matchesBinding(keyEvent, bindings["toggle-sidebar"])) {
         setSidebarOpen((value) => !value);
-      } else if (matchesBinding(event, bindings["new-chat"])) {
-        event.preventDefault();
+      } else if (matchesBinding(keyEvent, bindings["new-chat"])) {
         addChatRef.current("tab");
+      } else if (matchesBinding(keyEvent, bindings["new-floating-chat"])) {
+        addChatRef.current();
+      } else if (matchesBinding(keyEvent, "Cmd+Shift+T")) {
+        openBrowserTabRef.current("");
+      } else {
+        return false;
       }
+      return true;
+    };
+
+    const onKeyDown = (event: globalThis.KeyboardEvent) => {
+      if (dispatchShortcut(event)) event.preventDefault();
     };
     window.addEventListener("keydown", onKeyDown);
-    return () => window.removeEventListener("keydown", onKeyDown);
+    const unsubscribeGuestKeys = desktopApi.onBrowserGuestKey((key) =>
+      dispatchShortcut({
+        key: key.key,
+        metaKey: key.meta,
+        ctrlKey: key.control,
+        altKey: key.alt,
+        shiftKey: key.shift,
+      }),
+    );
+    return () => {
+      window.removeEventListener("keydown", onKeyDown);
+      unsubscribeGuestKeys();
+    };
   }, []);
 
   const selectProject = (id: string) => {
@@ -401,6 +612,7 @@ export function App({ hasCodingAgent }: { hasCodingAgent: boolean }) {
     setDeletingProject(null);
     setWorkspaces(({ [deletedId]: _removed, ...rest }) => rest);
     defaultWorkspacesRef.current.delete(deletedId);
+    void desktopApi.profilesReleaseProject(deletedId);
     if (activeProjectId === deletedId) setActiveProjectId(undefined);
   };
 
@@ -421,9 +633,16 @@ export function App({ hasCodingAgent }: { hasCodingAgent: boolean }) {
       ];
     }),
   );
-  const allTabs = [...workspace.tabs, ...chatTabs(workspace, chatLabels)];
+  const allTabs = [
+    ...workspace.tabs,
+    ...browserTabs(workspace),
+    ...chatTabs(workspace, chatLabels),
+  ];
   const activeChatTabId = workspace.activeTabKey?.startsWith("chat:")
     ? workspace.activeTabKey.slice("chat:".length)
+    : undefined;
+  const activeBrowserTabId = workspace.activeTabKey?.startsWith("browser:")
+    ? workspace.activeTabKey.slice("browser:".length)
     : undefined;
 
   return (
@@ -449,70 +668,38 @@ export function App({ hasCodingAgent }: { hasCodingAgent: boolean }) {
           </div>
 
           <div className="min-h-0 flex-1 overflow-y-auto px-2">
-            {projectId && (
-              <>
-                <SidebarSection title="Workflows" defaultOpen>
-                  <WorkflowsNav
-                    projectId={projectId}
-                    active={
-                      activeTab?.kind === "workflow"
-                        ? activeTab.name
-                        : undefined
-                    }
-                    onSelect={(workflow) =>
-                      openTab({
-                        kind: "workflow",
-                        name: workflow.name,
-                        label: workflow.displayName ?? workflow.name,
-                      })
-                    }
-                  />
-                </SidebarSection>
-                <SidebarSection title="Apps" defaultOpen>
-                  <AppsNav
-                    projectId={projectId}
-                    active={
-                      activeTab?.kind === "app" ? activeTab.name : undefined
-                    }
-                    onSelect={(appName) =>
-                      openTab({ kind: "app", name: appName })
-                    }
-                  />
-                </SidebarSection>
-                <SidebarSection
-                  title="Chats"
-                  defaultOpen
-                  action={
-                    <ShortcutHint
-                      label="New chat"
-                      shortcut={formatBinding(keybindings["new-chat"])}
-                    >
-                      <button
-                        type="button"
-                        onClick={() => addChat()}
-                        className="grid size-6 cursor-pointer place-items-center rounded text-fg-muted transition-colors duration-150 hover:bg-bg-overlay hover:text-fg"
-                        aria-label="New chat"
-                      >
-                        <Plus className="size-3.5" />
-                      </button>
-                    </ShortcutHint>
+            {projectId &&
+              (sidebarConfig?.sections ?? []).map((section, index) => (
+                <ConfiguredSection
+                  key={`${section.type}:${index}`}
+                  section={section}
+                  projectId={projectId}
+                  profileId={activeProfile?.id}
+                  activeTab={activeTab}
+                  activeChatSessionId={
+                    workspace.chats.find(
+                      (chat) => chat.localId === workspace.activeChatId,
+                    )?.sessionId
                   }
-                >
-                  <SessionsNav
-                    projectId={projectId}
-                    activeSessionId={
-                      workspace.chats.find(
-                        (chat) => chat.localId === workspace.activeChatId,
-                      )?.sessionId
-                    }
-                    onSelect={openSession}
-                  />
-                </SidebarSection>
-              </>
-            )}
+                  keybindingLabel={formatBinding(
+                    keybindings["new-floating-chat"],
+                  )}
+                  onOpenTab={openTab}
+                  onNewChat={() => addChat()}
+                  onOpenSession={openSession}
+                  onOpenUrl={openUrl}
+                />
+              ))}
           </div>
 
           <footer className="border-t border-border p-2">
+            {profilesData && activeProfile && (
+              <ProfileBar
+                data={profilesData}
+                activeProfileId={activeProfile.id}
+                onSwitch={switchProfile}
+              />
+            )}
             <button
               type="button"
               onClick={() =>
@@ -560,7 +747,20 @@ export function App({ hasCodingAgent }: { hasCodingAgent: boolean }) {
               activeKey={workspace.activeTabKey}
               onSelect={selectTab}
               onClose={closeTab}
+              onNew={() => addChat("tab")}
             />
+          )}
+          {projectId && (
+            <ShortcutHint label="New browser tab" shortcut="⌘⇧T">
+              <button
+                type="button"
+                onClick={() => openBrowserTab("")}
+                className="app-no-drag grid size-7 shrink-0 cursor-pointer place-items-center rounded-md text-fg-muted transition-colors duration-150 hover:bg-bg-overlay hover:text-fg"
+                aria-label="New browser tab"
+              >
+                <Globe className="size-4" />
+              </button>
+            </ShortcutHint>
           )}
         </div>
 
@@ -578,9 +778,40 @@ export function App({ hasCodingAgent }: { hasCodingAgent: boolean }) {
                 <SettingsScreen
                   onClose={() => closeTab(tabKey(activeTab))}
                 />
-              ) : activeChatTabId ? null : (
+              ) : activeChatTabId || activeBrowserTabId ? null : (
                 <TabEmptyState hasCodingAgent={hasCodingAgent} />
               )}
+
+              {/* Browser tabs stay mounted while hidden — unmounting a
+                  webview would reload the page on every tab switch. */}
+              {workspace.browsers.map((browser) => (
+                <div
+                  key={browser.localId}
+                  className={
+                    browser.localId === activeBrowserTabId
+                      ? "absolute inset-0 flex flex-col"
+                      : "hidden"
+                  }
+                >
+                  <BrowserScreen
+                    profileId={browser.profileId}
+                    projectId={projectId}
+                    // Remounts (project/profile switches) resume at the
+                    // last known URL, not the tab's original one.
+                    initialUrl={browser.url || browser.initialUrl}
+                    active={browser.localId === activeBrowserTabId}
+                    onStateChange={(state) =>
+                      onBrowserState(browser.localId, state)
+                    }
+                    registerNavigate={(navigate) =>
+                      browserNavigatorsRef.current.set(
+                        browser.localId,
+                        navigate,
+                      )
+                    }
+                  />
+                </div>
+              ))}
 
               {workspace.chats.map((entry) => (
                 <ChatDock
@@ -611,6 +842,7 @@ export function App({ hasCodingAgent }: { hasCodingAgent: boolean }) {
                       ),
                     }))
                   }
+                  onClose={closeChat}
                   onSessionCreated={onSessionCreated}
                   onSendingChange={onSendingChange}
                 />
@@ -644,6 +876,10 @@ export function App({ hasCodingAgent }: { hasCodingAgent: boolean }) {
         onClose={() => setProjectModalOpen(false)}
         onCreated={(project) => {
           setProjectModalOpen(false);
+          // New projects belong to the profile they were created in.
+          if (activeProfile) {
+            void desktopApi.profilesClaimProject(activeProfile.id, project.id);
+          }
           selectProject(project.id);
         }}
       />
@@ -654,6 +890,133 @@ export function App({ hasCodingAgent }: { hasCodingAgent: boolean }) {
       />
     </div>
   );
+}
+
+/** One sidebar section, shaped by the user's sidebar.js config. */
+function ConfiguredSection({
+  section,
+  projectId,
+  profileId,
+  activeTab,
+  activeChatSessionId,
+  keybindingLabel,
+  onOpenTab,
+  onNewChat,
+  onOpenSession,
+  onOpenUrl,
+}: {
+  section: SidebarSectionConfig;
+  projectId: string;
+  profileId?: string;
+  activeTab?: WorkspaceTab;
+  activeChatSessionId?: string;
+  keybindingLabel: string;
+  onOpenTab: (tab: WorkspaceTab) => void;
+  onNewChat: () => void;
+  onOpenSession: (session: AgentSession) => void;
+  onOpenUrl: (url: string, mode: "tab" | "replace") => void;
+}) {
+  const defaultOpen = !section.collapsed;
+  switch (section.type) {
+    case "workflows":
+      return (
+        <SidebarSection
+          title={section.title ?? "Workflows"}
+          defaultOpen={defaultOpen}
+        >
+          <WorkflowsNav
+            projectId={projectId}
+            active={activeTab?.kind === "workflow" ? activeTab.name : undefined}
+            onSelect={(workflow) =>
+              onOpenTab({
+                kind: "workflow",
+                name: workflow.name,
+                label: workflow.displayName ?? workflow.name,
+              })
+            }
+          />
+        </SidebarSection>
+      );
+    case "apps":
+      return (
+        <SidebarSection
+          title={section.title ?? "Apps"}
+          defaultOpen={defaultOpen}
+        >
+          <AppsNav
+            projectId={projectId}
+            active={activeTab?.kind === "app" ? activeTab.name : undefined}
+            onSelect={(appName) => onOpenTab({ kind: "app", name: appName })}
+          />
+        </SidebarSection>
+      );
+    case "chats":
+      return (
+        <SidebarSection
+          title={section.title ?? "Chats"}
+          defaultOpen={defaultOpen}
+          action={
+            <ShortcutHint label="New chat" shortcut={keybindingLabel}>
+              <button
+                type="button"
+                onClick={onNewChat}
+                className="grid size-6 cursor-pointer place-items-center rounded text-fg-muted transition-colors duration-150 hover:bg-bg-overlay hover:text-fg"
+                aria-label="New chat"
+              >
+                <Plus className="size-3.5" />
+              </button>
+            </ShortcutHint>
+          }
+        >
+          <SessionsNav
+            projectId={projectId}
+            activeSessionId={activeChatSessionId}
+            onSelect={onOpenSession}
+          />
+        </SidebarSection>
+      );
+    case "bookmarks":
+      if (!profileId) return null;
+      return (
+        <SidebarSection
+          title={section.title ?? "Bookmarks"}
+          defaultOpen={defaultOpen}
+        >
+          <BookmarksNav
+            projectId={projectId}
+            profileId={profileId}
+            onOpen={(url) => onOpenUrl(url, section.open ?? "replace")}
+          />
+        </SidebarSection>
+      );
+    case "links":
+      return (
+        <SidebarSection
+          title={section.title ?? "Links"}
+          defaultOpen={defaultOpen}
+        >
+          <ul className="flex flex-col gap-0.5">
+            {(section.links ?? []).map((link) => (
+              <li key={`${link.label}:${link.url}`}>
+                <button
+                  type="button"
+                  onClick={() =>
+                    onOpenUrl(link.url, link.open ?? section.open ?? "replace")
+                  }
+                  className="flex h-7 w-full cursor-pointer items-center gap-2 rounded-md px-2 text-left text-[13px] text-fg-muted transition-colors duration-150 hover:bg-bg-overlay/60 hover:text-fg"
+                  title={link.url}
+                >
+                  <Globe className="size-3.5 shrink-0 text-fg-faint" />
+                  <span className="truncate">{link.label}</span>
+                </button>
+              </li>
+            ))}
+          </ul>
+        </SidebarSection>
+      );
+    default:
+      return null;
+  }
 }
 
 function SidebarSection({

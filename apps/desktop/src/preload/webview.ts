@@ -1,0 +1,209 @@
+import { contextBridge, ipcRenderer } from "electron";
+
+/**
+ * Guest preload for browser-tab webviews. Runs inside untrusted pages with
+ * context isolation — talks ONLY to the embedding renderer via sendToHost
+ * (never straight to main). Jobs, all Chrome-like:
+ *  - present Chrome's client-hint brands to JS (see below),
+ *  - detect login forms and report submissions (offer-to-save),
+ *  - fill credentials into the current login form on command.
+ */
+
+/**
+ * `navigator.userAgentData.brands` is the JS-visible twin of the Sec-CH-UA
+ * header (rewritten in main/browser.ts). Electron reports Chromium only;
+ * leaving JS and headers disagreeing is exactly the mismatch a
+ * supported-browser check keys on. Injected into the page's main world —
+ * the preload's isolated world isn't what site scripts read.
+ */
+interface UaBrand {
+  brand: string;
+  version: string;
+}
+
+interface UaData {
+  brands: UaBrand[];
+  getHighEntropyValues: (
+    hints: string[],
+  ) => Promise<{ brands?: UaBrand[]; fullVersionList?: UaBrand[] }>;
+}
+
+function alignClientHintBrands(): void {
+  const major = /Chrome\/(\d+)/.exec(navigator.userAgent)?.[1];
+  if (!major) return;
+  // executeInMainWorld runs in the page's world (where site scripts look);
+  // the preload's isolated world is invisible to them. `args` is the only
+  // channel across the boundary — the function body can't close over
+  // preload scope.
+  if (typeof contextBridge.executeInMainWorld !== "function") {
+    ipcRenderer.sendToHost("catamorphic:brand-align-failed", {
+      reason: "executeInMainWorld unavailable",
+    });
+    return;
+  }
+  contextBridge.executeInMainWorld({
+    func: (version: string) => {
+      const data = (navigator as Navigator & { userAgentData?: UaData })
+        .userAgentData;
+      if (!data) return;
+      const brands = [
+        { brand: "Google Chrome", version },
+        { brand: "Chromium", version },
+        { brand: "Not;A=Brand", version: "8" },
+      ];
+      const copy = () => brands.map((brand) => ({ ...brand }));
+      // Patch the prototype, not the instance: `navigator.userAgentData`
+      // yields a fresh object per access, so an own-property override is
+      // discarded on the next read.
+      const proto = Object.getPrototypeOf(data) as object;
+      Object.defineProperty(proto, "brands", {
+        get: copy,
+        configurable: true,
+      });
+      const getHighEntropyValues = data.getHighEntropyValues;
+      Object.defineProperty(proto, "getHighEntropyValues", {
+        value: function (this: UaData, hints: string[]) {
+          return getHighEntropyValues.call(this, hints).then((values) => {
+            if (!values.fullVersionList) {
+              return { ...values, brands: copy() };
+            }
+            // Real Chrome lists Google Chrome at the *Chrome* version;
+            // mapping the placeholder brand's version onto it (8.0.0.0)
+            // is precisely the tell a checker looks for.
+            const chromium = values.fullVersionList.find(
+              (entry) => entry.brand === "Chromium",
+            );
+            const fullVersion = chromium?.version ?? version;
+            return {
+              ...values,
+              brands: copy(),
+              fullVersionList: [
+                { brand: "Google Chrome", version: fullVersion },
+                { brand: "Chromium", version: fullVersion },
+                { brand: "Not;A=Brand", version: "8.0.0.0" },
+              ],
+            };
+          });
+        },
+        configurable: true,
+        writable: true,
+      });
+    },
+    args: [major],
+  });
+}
+alignClientHintBrands();
+
+interface LoginForm {
+  form: HTMLFormElement | null;
+  username: HTMLInputElement | null;
+  password: HTMLInputElement;
+}
+
+function visible(el: HTMLElement): boolean {
+  const rect = el.getBoundingClientRect();
+  return rect.width > 0 && rect.height > 0;
+}
+
+function findLoginForms(): LoginForm[] {
+  const passwords = [
+    ...document.querySelectorAll<HTMLInputElement>('input[type="password"]'),
+  ].filter(visible);
+  return passwords.map((password) => {
+    const form = password.closest("form");
+    const scope: ParentNode = form ?? document;
+    const username =
+      [
+        ...scope.querySelectorAll<HTMLInputElement>(
+          'input[type="email"], input[autocomplete="username"], input[autocomplete="email"], input[type="text"], input[type="tel"]',
+        ),
+      ]
+        .filter(visible)
+        // The username field is the closest eligible input above the
+        // password field in DOM order.
+        .filter(
+          (candidate) =>
+            candidate.compareDocumentPosition(password) &
+            Node.DOCUMENT_POSITION_FOLLOWING,
+        )
+        .at(-1) ?? null;
+    return { form, username, password };
+  });
+}
+
+function announceForms(): void {
+  const forms = findLoginForms();
+  if (forms.length > 0) {
+    ipcRenderer.sendToHost("catamorphic:login-form-detected", {
+      origin: location.origin,
+    });
+  }
+}
+
+// Detect forms on load and as SPAs render them.
+const observer = new MutationObserver(() => {
+  clearTimeout(observeDebounce);
+  observeDebounce = setTimeout(announceForms, 400);
+});
+let observeDebounce: ReturnType<typeof setTimeout>;
+
+window.addEventListener("DOMContentLoaded", () => {
+  announceForms();
+  observer.observe(document.documentElement, {
+    childList: true,
+    subtree: true,
+  });
+});
+
+// Offer-to-save: capture submitted credentials. Capture phase on the
+// window sees submissions even when the page cancels the event later.
+function captureSubmission(): void {
+  for (const { username, password } of findLoginForms()) {
+    if (password.value) {
+      ipcRenderer.sendToHost("catamorphic:credentials-submitted", {
+        origin: location.origin,
+        username: username?.value ?? "",
+        password: password.value,
+      });
+      return;
+    }
+  }
+}
+window.addEventListener("submit", captureSubmission, { capture: true });
+// Many SPAs sign in from a button click without a submit event.
+window.addEventListener(
+  "click",
+  (event) => {
+    const target = event.target as HTMLElement | null;
+    const button = target?.closest?.(
+      'button[type="submit"], input[type="submit"], button:not([type])',
+    );
+    if (button) captureSubmission();
+  },
+  { capture: true },
+);
+
+function setNativeValue(input: HTMLInputElement, value: string): void {
+  // React and friends ignore direct .value writes; go through the native
+  // setter and fire input events so frameworks see the change.
+  const setter = Object.getOwnPropertyDescriptor(
+    HTMLInputElement.prototype,
+    "value",
+  )?.set;
+  setter?.call(input, value);
+  input.dispatchEvent(new Event("input", { bubbles: true }));
+  input.dispatchEvent(new Event("change", { bubbles: true }));
+}
+
+ipcRenderer.on(
+  "catamorphic:fill-credentials",
+  (_event, payload: { username: string; password: string }) => {
+    const target = findLoginForms()[0];
+    if (!target) return;
+    if (target.username && payload.username) {
+      setNativeValue(target.username, payload.username);
+    }
+    setNativeValue(target.password, payload.password);
+    target.password.focus();
+  },
+);
