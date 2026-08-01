@@ -6,10 +6,21 @@ import type {
   StartSessionOpts,
 } from "@catamorphic/sandbox";
 import {
+  DEFAULT_KEYBINDINGS,
+  KEYBINDING_ACTIONS,
   type Keybindings,
   type KeybindingsStore,
   normalizeKeybindings,
 } from "../keybindings.js";
+
+/** What each action does, for the agent's prompt. */
+const ACTION_DESCRIPTIONS: Record<string, string> = {
+  "new-chat": "open a new chat tab",
+  "new-floating-chat": "open the small floating chat",
+  "new-browser-tab": "open a new browser tab",
+  "toggle-sidebar": "show/hide the sidebar",
+  "close-tab": "close the focused chat or tab",
+};
 
 export const DESKTOP_CONFIG_SKILL_PATH =
   ".agents/skills/configuring-catamorphic-desktop/SKILL.md";
@@ -38,15 +49,13 @@ the start of every one of your turns, so it always reflects reality).
 To change bindings, edit that file, keeping ALL keys present:
 
 \`\`\`json
-{
-  "new-chat": "Cmd+T",
-  "toggle-sidebar": "Cmd+B",
-  "close-tab": "Cmd+W"
-}
+${JSON.stringify(DEFAULT_KEYBINDINGS, null, 2)}
 \`\`\`
 
-Actions: \`new-chat\` (open a new chat tab), \`toggle-sidebar\`,
-\`close-tab\` (closes the focused chat or tab).
+Actions:
+${KEYBINDING_ACTIONS.map(
+  (action) => `- \`${action}\` — ${ACTION_DESCRIPTIONS[action] ?? action}`,
+).join("\n")}
 
 Binding format: zero or more modifiers (\`Cmd\`, \`Ctrl\`, \`Alt\`,
 \`Shift\`) joined with \`+\`, then a key: \`"Cmd+T"\`,

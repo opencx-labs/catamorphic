@@ -250,9 +250,10 @@ export function ChatBubbles({
               </div>
             );
           })}
+          {/* The bubble + opens the floating aside, not a tab. */}
           <ShortcutHint
             label="New chat"
-            shortcut={formatBinding(keybindings["new-chat"])}
+            shortcut={formatBinding(keybindings["new-floating-chat"])}
             side="top"
           >
             <button

@@ -577,7 +577,7 @@ export function App({ hasCodingAgent }: { hasCodingAgent: boolean }) {
         addChatRef.current("tab");
       } else if (matchesBinding(keyEvent, bindings["new-floating-chat"])) {
         addChatRef.current();
-      } else if (matchesBinding(keyEvent, "Cmd+Shift+T")) {
+      } else if (matchesBinding(keyEvent, bindings["new-browser-tab"])) {
         openBrowserTabRef.current("");
       } else {
         return false;
@@ -751,7 +751,10 @@ export function App({ hasCodingAgent }: { hasCodingAgent: boolean }) {
             />
           )}
           {projectId && (
-            <ShortcutHint label="New browser tab" shortcut="⌘⇧T">
+            <ShortcutHint
+              label="New browser tab"
+              shortcut={formatBinding(keybindings["new-browser-tab"])}
+            >
               <button
                 type="button"
                 onClick={() => openBrowserTab("")}

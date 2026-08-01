@@ -154,6 +154,7 @@ export function SettingsScreen({ onClose }: { onClose: () => void }) {
 const SHORTCUT_LABELS: Record<KeybindingAction, string> = {
   "new-chat": "New chat tab",
   "new-floating-chat": "New floating chat",
+  "new-browser-tab": "New browser tab",
   "toggle-sidebar": "Toggle sidebar",
   "close-tab": "Close tab",
 };

@@ -13,6 +13,7 @@ import path from "node:path";
 export type KeybindingAction =
   | "new-chat"
   | "new-floating-chat"
+  | "new-browser-tab"
   | "toggle-sidebar"
   | "close-tab";
 
@@ -24,6 +25,7 @@ export const DEFAULT_KEYBINDINGS: Keybindings = {
   // The floating quick-chat aside: Cmd+N ("new") — free because the app
   // is single-window, so Chrome's new-window meaning can't collide.
   "new-floating-chat": "Cmd+N",
+  "new-browser-tab": "Cmd+Shift+T",
   "toggle-sidebar": "Cmd+B",
   "close-tab": "Cmd+W",
 };

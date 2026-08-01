@@ -275,6 +275,15 @@ memory of *why* the app is the way it is.
 - Current coverage: sidebar toggle ⌘B, both New-chat + buttons ⌘T,
   active tab close ✕ ⌘W (active tab only — that is what ⌘W targets),
   question-panel dismiss ✕ Esc.
+- **keybindings.json is the single source of truth.** Every shortcut is
+  a named action there; handlers match with `matchesBinding(...,
+  bindings[action])` and hints render `formatBinding(bindings[action])`.
+  Never hardcode a binding literal or a "⌘…" string in a component —
+  a rebind must move the handler AND every button's hint together. The
+  agent-facing prompt (desktop-config-agent) also generates its action
+  list and example JSON from `DEFAULT_KEYBINDINGS`, so it can't drift
+  either. Adding a shortcut = add the action to `DEFAULT_KEYBINDINGS`
+  (main + renderer mirror) and a label in the Settings map.
 
 ### 2026-07-31 — User-global keybindings + agent-configurable app settings
 - Keyboard shortcuts live in `<userData>/keybindings.json` — plain JSON,
