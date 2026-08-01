@@ -12,6 +12,7 @@ import {
 import { type EmbeddedServer, startEmbeddedServer } from "./server/boot.js";
 import { resolveDataPaths } from "./server/paths.js";
 import { SettingsStore } from "./server/settings.js";
+import { ThemeStore, windowBackgroundColor } from "./theme.js";
 
 // macOS 26.x + Apple Silicon: V8's background compiler threads race the
 // OS's MAP_JIT write-protection and SIGTRAP in ThreadIsolation::
@@ -57,6 +58,7 @@ const keybindingsStore = new KeybindingsStore(paths.keybindingsFile);
 const profilesStore = new ProfilesStore(paths.profilesFile);
 // One instance shared by IPC and the chat agent's config mirror.
 const sidebarConfigStore = new SidebarConfigStore(paths.sidebarFile);
+const themeStore = new ThemeStore(paths.themeFile);
 
 let server: EmbeddedServer | null = null;
 let restarting: Promise<EmbeddedServer> | null = null;
@@ -77,6 +79,7 @@ const state: ServerState = {
           settings,
           keybindingsStore,
           sidebarConfigStore,
+          themeStore,
         );
         return server;
       } finally {
@@ -100,7 +103,8 @@ function createWindow(): BrowserWindow {
     minHeight: 480,
     title: "Catamorphic",
     titleBarStyle: process.platform === "darwin" ? "hiddenInset" : "default",
-    backgroundColor: "#0a0a0b",
+    // Pre-paint background from the theme so window open doesn't flash.
+    backgroundColor: windowBackgroundColor(themeStore.resolved()),
     webPreferences: {
       preload: path.join(import.meta.dirname, "../preload/index.cjs"),
       contextIsolation: true,
@@ -187,7 +191,15 @@ app.whenReady().then(async () => {
   Menu.setApplicationMenu(buildMenu(keybindingsStore.load()));
   // Live-reload: agents and users edit keybindings.json directly.
   keybindingsStore.watch(applyKeybindings);
-  registerIpcHandlers(settingsStore, keybindingsStore, state);
+  // Same for theme.json: broadcast resolved colors, keep the native window
+  // background in sync so resizes don't flash the old color.
+  themeStore.watch((theme) => {
+    for (const window of BrowserWindow.getAllWindows()) {
+      window.setBackgroundColor(windowBackgroundColor(theme));
+    }
+    state.broadcast("catamorphic:theme-changed", theme);
+  });
+  registerIpcHandlers(settingsStore, keybindingsStore, themeStore, state);
   browserSupport = registerBrowserSupport(profilesStore, sidebarConfigStore);
   ipcMain.handle("catamorphic:webview-preload", () =>
     path.join(import.meta.dirname, "../preload/webview.cjs"),
@@ -200,6 +212,7 @@ app.whenReady().then(async () => {
       settingsStore.load(),
       keybindingsStore,
       sidebarConfigStore,
+      themeStore,
     );
     state.broadcast("catamorphic:server-changed", {
       url: server.url,
@@ -226,6 +239,7 @@ let browserSupport: ReturnType<typeof registerBrowserSupport> | null = null;
 let quitting = false;
 app.on("before-quit", (event) => {
   keybindingsStore.dispose();
+  themeStore.dispose();
   browserSupport?.dispose();
   if (quitting || !server) return;
   event.preventDefault();

@@ -15,6 +15,7 @@ import Fastify, { type FastifyInstance } from "fastify";
 import { Kysely, PGliteDialect, WithSchemaPlugin } from "kysely";
 import type { KeybindingsStore } from "../keybindings.js";
 import type { SidebarConfigStore } from "../sidebar-config.js";
+import type { ThemeStore } from "../theme.js";
 import { resolveCodingAgent } from "./coding-agent.js";
 import { DesktopConfigAgent } from "./desktop-config-agent.js";
 import { FileGithubTokenStore, GITHUB_APP } from "./github.js";
@@ -39,6 +40,7 @@ export async function startEmbeddedServer(
   settings: DesktopSettings,
   keybindingsStore: KeybindingsStore,
   sidebarConfigStore: SidebarConfigStore,
+  themeStore: ThemeStore,
 ): Promise<EmbeddedServer> {
   fs.mkdirSync(paths.db, { recursive: true });
 
@@ -51,13 +53,15 @@ export async function startEmbeddedServer(
   const sandboxProvider = new MicrosandboxSandboxProvider();
   const baseAgent = resolveCodingAgent(settings, sandboxProvider);
   // Desktop-config wrapper: lets the chat agent read and edit app-level
-  // settings (keyboard shortcuts) via mirror files in its sandbox.
+  // settings (keyboard shortcuts, sidebar, theme) via mirror files in its
+  // sandbox.
   const codingAgent = baseAgent
     ? new DesktopConfigAgent(
         baseAgent,
         sandboxProvider,
         keybindingsStore,
         sidebarConfigStore,
+        themeStore,
       )
     : undefined;
 

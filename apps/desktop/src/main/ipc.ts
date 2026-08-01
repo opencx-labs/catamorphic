@@ -11,6 +11,14 @@ import {
   type KeybindingsStore,
   normalizeKeybindings,
 } from "./keybindings.js";
+import {
+  normalizeTheme,
+  type ResolvedTheme,
+  resolveTheme,
+  THEME_PRESETS,
+  type ThemeStore,
+  windowBackgroundColor,
+} from "./theme.js";
 import type { EmbeddedServer } from "./server/boot.js";
 import { DESKTOP_TENANT_ID, DESKTOP_USER_ID } from "./server/boot.js";
 import { GITHUB_APP } from "./server/github.js";
@@ -41,9 +49,34 @@ export interface UpdateSettingsInput {
 export function registerIpcHandlers(
   store: SettingsStore,
   keybindings: KeybindingsStore,
+  theme: ThemeStore,
   state: ServerState,
 ): void {
   ipcMain.handle("catamorphic:keybindings-get", () => keybindings.load());
+
+  ipcMain.handle("catamorphic:theme-get", () => theme.resolved());
+
+  ipcMain.handle("catamorphic:theme-presets", () =>
+    THEME_PRESETS.map(({ id, label, colors }) => ({ id, label, colors })),
+  );
+
+  // Saving triggers the file watcher, which syncs the native window
+  // background and broadcasts the resolved theme to every window.
+  ipcMain.handle(
+    "catamorphic:theme-set",
+    (event, input: unknown): ResolvedTheme => {
+      const next = normalizeTheme(input);
+      theme.save(next);
+      const resolved = resolveTheme(next);
+      // Apply to the calling window synchronously so the UI can't flash
+      // between the click and the watcher's debounce.
+      const window = BrowserWindow.fromWebContents(event.sender);
+      window?.setBackgroundColor(windowBackgroundColor(resolved));
+      return resolved;
+    },
+  );
+
+  ipcMain.handle("catamorphic:theme-file", () => theme.file);
 
   // Saving triggers the same file watcher that external edits do, which
   // rebuilds the menu and broadcasts the change to windows.

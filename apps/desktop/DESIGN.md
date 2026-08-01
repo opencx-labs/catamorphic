@@ -123,9 +123,17 @@ Low-chroma so run states don't scream: `--color-success`, `--color-warning`,
 
 ## Theming rules
 
-- New colors enter as a semantic token pair (dark + light) in `styles.css`,
-  documented here, then used via Tailwind (`bg-bg-raised`, `text-fg-muted`, …).
-- Light theme flips by setting `data-theme="light"` on `<html>`.
+- New colors enter as a semantic token in **every preset** in
+  `src/main/theme.ts` (the source of truth for palettes), in the `:root` +
+  `[data-theme=light]` blocks in `styles.css` (the pre-JS first paint), and
+  documented here — then used via Tailwind (`bg-bg-raised`, `text-fg-muted`, …).
+- The active theme lives in `<userData>/theme.json`
+  (`{ preset, overrides }`) — user-global, file-watched, agent-editable.
+  ThemeProvider writes each resolved color as an inline CSS variable on
+  `<html>`, sets `color-scheme`, and mirrors the appearance to
+  `data-theme` for anything keyed on it.
+- The `dark` preset in `theme.ts` and the `:root` block in `styles.css`
+  must stay identical — `:root` is what paints before JS runs.
 - Tokens are mapped into Tailwind 4 via `@theme inline` so utilities and
   registry components pick them up without a config file.
 
@@ -527,3 +535,27 @@ memory of *why* the app is the way it is.
   in a host-page CDP screenshot** — a blank page area in `drive.mjs shot`
   is a capture artifact, not a broken page. Screenshot the guest's own
   CDP target to see real pixels.
+
+### 2026-08-01 — Themes: every color is a user decision
+- The palette became data: **`<userData>/theme.json`** holds
+  `{ preset, overrides }`, following the keybindings/sidebar pattern —
+  plain JSON, user-global, file-watched, applies live, and staged as an
+  agent mirror file (`.catamorphic/desktop/theme.json`) so "make the
+  accent purple" is a chat request.
+- Four presets ship in `src/main/theme.ts`: **Catamorphic Dark**
+  (default — identical to the old hardcoded palette), **Catamorphic
+  Light**, **Midnight** (blue-slate dark with a periwinkle accent), and
+  **Paper** (warm parchment light). `overrides` layers on top of the
+  chosen preset, so "every color is editable" without forking a preset.
+- Appearance (dark/light) is **derived from the resolved bg luminance**,
+  not declared per preset: a dark preset overridden to a white background
+  must still get light scrollbars (`color-scheme`), a light Monaco theme,
+  and light `data-theme` styling.
+- The renderer applies colors as inline CSS variables on `<html>` —
+  `styles.css` keeps the dark palette in `:root` purely as the pre-JS
+  first paint, and the `dark` preset must stay byte-identical to it.
+  The BrowserWindow `backgroundColor` also follows the theme (set at
+  create + on every change) so window open/resize never flashes.
+- Settings → Theme: preset swatch cards (bg/raised/accent/fg quadrants)
+  plus an "Edit colors…" list with a native color input per token; edits
+  write overrides immediately and an accent dot marks overridden tokens.

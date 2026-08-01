@@ -4,6 +4,8 @@ import { PendingButton } from "../components/pending-button.js";
 import {
   desktopApi,
   type PublicSettings,
+  type ThemePreset,
+  type ThemeToken,
   type UpdateSettingsInput,
 } from "../lib/desktop-api.js";
 import {
@@ -12,6 +14,7 @@ import {
   type KeybindingAction,
   useKeybindings,
 } from "../lib/keybindings.js";
+import { useTheme } from "../lib/theme.js";
 
 const SUGGESTED_MODELS: Record<"anthropic" | "openai", string[]> = {
   anthropic: ["claude-sonnet-4-5", "claude-opus-4-5"],
@@ -146,10 +149,169 @@ export function SettingsScreen({ onClose }: { onClose: () => void }) {
         </form>
       )}
 
+      <ThemeSection />
       <ShortcutsSection />
       <SidebarSection />
     </div>
   );
+}
+
+const TOKEN_LABELS: Record<ThemeToken, string> = {
+  bg: "Background",
+  "bg-raised": "Raised surface",
+  "bg-overlay": "Overlay",
+  "bg-inset": "Inset",
+  border: "Border",
+  "border-strong": "Border (strong)",
+  fg: "Text",
+  "fg-muted": "Text (muted)",
+  "fg-faint": "Text (faint)",
+  accent: "Accent",
+  "accent-fg": "Text on accent",
+  success: "Success",
+  warning: "Warning",
+  danger: "Danger",
+  info: "Info",
+  "user-tint": "User message tint",
+  "agent-tint": "Agent message tint",
+};
+
+/**
+ * Theme picker: preset swatch cards plus a per-token color editor. Changes
+ * apply immediately — the main process rewrites theme.json, which
+ * broadcasts the resolved theme back to every window.
+ */
+function ThemeSection() {
+  const theme = useTheme();
+  const [presets, setPresets] = useState<ThemePreset[]>([]);
+  const [file, setFile] = useState("");
+  const [editing, setEditing] = useState(false);
+
+  useEffect(() => {
+    void desktopApi.themePresets().then(setPresets);
+    void desktopApi.themeFile().then(setFile);
+  }, []);
+
+  if (!theme) return null;
+
+  const overridden = Object.keys(theme.overrides).length > 0;
+
+  return (
+    <section className="mt-8 border-t border-border pt-6">
+      <div className="mb-3 flex items-center justify-between">
+        <h2 className="text-sm font-semibold">Theme</h2>
+        {overridden && (
+          <button
+            type="button"
+            onClick={() =>
+              void desktopApi.setTheme({ preset: theme.preset, overrides: {} })
+            }
+            className="flex cursor-pointer items-center gap-1 text-xs text-fg-muted hover:text-fg"
+          >
+            <RotateCcw className="size-3" />
+            Clear color edits
+          </button>
+        )}
+      </div>
+
+      <div className="grid grid-cols-2 gap-2">
+        {presets.map((preset) => {
+          const active = preset.id === theme.preset;
+          return (
+            <button
+              key={preset.id}
+              type="button"
+              onClick={() =>
+                void desktopApi.setTheme({ preset: preset.id, overrides: {} })
+              }
+              className={`flex cursor-pointer items-center gap-2.5 rounded-lg border p-2.5 text-left transition-colors duration-150 ${
+                active
+                  ? "border-accent bg-accent/10"
+                  : "border-border bg-bg-raised/40 hover:border-border-strong"
+              }`}
+            >
+              <span
+                className="grid size-9 shrink-0 grid-cols-2 overflow-hidden rounded-md border"
+                style={{ borderColor: preset.colors.border }}
+              >
+                <span style={{ background: preset.colors.bg }} />
+                <span style={{ background: preset.colors["bg-raised"] }} />
+                <span style={{ background: preset.colors.accent }} />
+                <span style={{ background: preset.colors.fg }} />
+              </span>
+              <span className="min-w-0">
+                <span className="block truncate text-[13px]">
+                  {preset.label}
+                </span>
+                <span className="block text-[11px] text-fg-faint">
+                  {active && overridden ? "Active · edited" : active ? "Active" : " "}
+                </span>
+              </span>
+            </button>
+          );
+        })}
+      </div>
+
+      <button
+        type="button"
+        onClick={() => setEditing((value) => !value)}
+        className="mt-3 cursor-pointer text-xs text-fg-muted hover:text-fg"
+      >
+        {editing ? "Hide colors" : "Edit colors…"}
+      </button>
+
+      {editing && (
+        <div className="mt-2 flex flex-col gap-1">
+          {(Object.keys(TOKEN_LABELS) as ThemeToken[]).map((token) => (
+            <div
+              key={token}
+              className="flex h-8 items-center justify-between rounded-md border border-border bg-bg-raised/40 px-2.5"
+            >
+              <span className="text-xs">
+                {TOKEN_LABELS[token]}
+                {theme.overrides[token] && (
+                  <span className="ml-1.5 text-accent">•</span>
+                )}
+              </span>
+              <span className="flex items-center gap-2">
+                <span className="font-mono text-[11px] text-fg-faint">
+                  {theme.colors[token]}
+                </span>
+                <input
+                  type="color"
+                  value={toHex6(theme.colors[token])}
+                  onChange={(event) =>
+                    void desktopApi.setTheme({
+                      preset: theme.preset,
+                      overrides: {
+                        ...theme.overrides,
+                        [token]: event.target.value,
+                      },
+                    })
+                  }
+                  aria-label={`${TOKEN_LABELS[token]} color`}
+                  className="size-5 cursor-pointer appearance-none border-none bg-transparent p-0"
+                />
+              </span>
+            </div>
+          ))}
+        </div>
+      )}
+
+      <p className="mt-2 text-xs text-fg-faint">
+        Changes apply immediately. Also editable as JSON at{" "}
+        <span className="font-mono">{file}</span>
+      </p>
+    </section>
+  );
+}
+
+/** <input type=color> only accepts #rrggbb; expand #rgb, pass others as-is. */
+function toHex6(color: string): string {
+  const short = /^#([0-9a-f]{3})$/i.exec(color)?.[1];
+  if (short) return `#${[...short].map((c) => c + c).join("")}`;
+  const long = /^#([0-9a-f]{6})/i.exec(color)?.[1];
+  return long ? `#${long}` : "#000000";
 }
 
 /**

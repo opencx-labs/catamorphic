@@ -72,6 +72,19 @@ const api = {
     return () =>
       ipcRenderer.removeListener("catamorphic:keybindings-changed", handler);
   },
+  getTheme: (): Promise<unknown> => ipcRenderer.invoke("catamorphic:theme-get"),
+  setTheme: (config: unknown): Promise<unknown> =>
+    ipcRenderer.invoke("catamorphic:theme-set", config),
+  themePresets: (): Promise<unknown[]> =>
+    ipcRenderer.invoke("catamorphic:theme-presets"),
+  themeFile: (): Promise<string> =>
+    ipcRenderer.invoke("catamorphic:theme-file"),
+  onThemeChanged: (listener: (theme: unknown) => void): (() => void) => {
+    const handler = (_event: unknown, theme: unknown) => listener(theme);
+    ipcRenderer.on("catamorphic:theme-changed", handler);
+    return () =>
+      ipcRenderer.removeListener("catamorphic:theme-changed", handler);
+  },
   onCloseSurface: (listener: () => void): (() => void) => {
     const handler = () => listener();
     ipcRenderer.on("catamorphic:close-surface", handler);

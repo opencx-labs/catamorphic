@@ -21,6 +21,8 @@ export interface DataPaths {
   profilesFile: string;
   /** User-defined sidebar layout (plain JS, agent-editable). */
   sidebarFile: string;
+  /** Color theme (plain JSON, agent-editable). */
+  themeFile: string;
 }
 
 export function resolveDataPaths(): DataPaths {
@@ -37,5 +39,6 @@ export function resolveDataPaths(): DataPaths {
     keybindingsFile: path.join(userData, "keybindings.json"),
     profilesFile: path.join(userData, "profiles.json"),
     sidebarFile: path.join(userData, "sidebar.js"),
+    themeFile: path.join(userData, "theme.json"),
   };
 }

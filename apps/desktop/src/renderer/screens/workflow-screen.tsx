@@ -16,6 +16,7 @@ import { useSetAtom } from "jotai";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { MonacoCodeEditor } from "../components/catamorphic/monaco-editor.js";
 import { PendingButton } from "../components/pending-button.js";
+import { useTheme } from "../lib/theme.js";
 
 export function WorkflowScreen({
   projectId,
@@ -68,6 +69,7 @@ function WorkflowScreenInner({
   filePath: string;
   initialCode: string;
 }) {
+  const theme = useTheme();
   const [code, setCode] = useState(initialCode);
   const previousInitialCode = useRef(initialCode);
   useEffect(() => {
@@ -151,6 +153,7 @@ function WorkflowScreenInner({
                 onChange={onChange}
                 readOnly={readOnly}
                 path={`file:///${filePath}`}
+                theme={theme?.appearance === "light" ? "light" : "vs-dark"}
               />
             )}
           />

@@ -13,6 +13,12 @@ import {
   normalizeKeybindings,
 } from "../keybindings.js";
 import type { SidebarConfigStore } from "../sidebar-config.js";
+import {
+  normalizeTheme,
+  THEME_PRESETS,
+  THEME_TOKENS,
+  type ThemeStore,
+} from "../theme.js";
 
 /** What each action does, for the agent's prompt. */
 const ACTION_DESCRIPTIONS: Record<string, string> = {
@@ -29,17 +35,19 @@ export const DESKTOP_KEYBINDINGS_WORKSPACE_PATH =
   ".catamorphic/desktop/keybindings.json";
 export const DESKTOP_SIDEBAR_WORKSPACE_PATH =
   ".catamorphic/desktop/sidebar.js";
+export const DESKTOP_THEME_WORKSPACE_PATH = ".catamorphic/desktop/theme.json";
 
 /** Every mirror file staged into (and read back from) the sandbox. */
 const MIRROR_PATHS = [
   DESKTOP_CONFIG_SKILL_PATH,
   DESKTOP_KEYBINDINGS_WORKSPACE_PATH,
   DESKTOP_SIDEBAR_WORKSPACE_PATH,
+  DESKTOP_THEME_WORKSPACE_PATH,
 ];
 
 export const DESKTOP_CONFIG_SKILL = `---
 name: configuring-catamorphic-desktop
-description: Change Catamorphic desktop app settings — keyboard shortcuts and the left sidebar's sections/items — when the user asks to customize the app itself, e.g. "rebind new chat to Cmd+N", "hide the workflows section", "add a Docs section with these links", "put a Copy link option on my bookmarks".
+description: Change Catamorphic desktop app settings — keyboard shortcuts, the left sidebar's sections/items, and the color theme — when the user asks to customize the app itself, e.g. "rebind new chat to Cmd+N", "hide the workflows section", "add a Docs section with these links", "switch to the light theme", "make the accent purple".
 ---
 
 # Configuring the Catamorphic desktop app
@@ -127,6 +135,27 @@ file falls back to the default sidebar, so verify your edit is syntactically
 correct. Preserve the user's existing sections unless they asked otherwise,
 and keep the explanatory comments at the top intact.
 
+## Color theme
+
+The app's colors: \`${DESKTOP_THEME_WORKSPACE_PATH}\` (refreshed every
+turn). Format:
+
+\`\`\`json
+{
+  "preset": "dark",
+  "overrides": { "accent": "#7c5cff" }
+}
+\`\`\`
+
+Presets: ${THEME_PRESETS.map((preset) => `\`${preset.id}\` (${preset.label})`).join(", ")}.
+\`overrides\` replaces individual colors on top of the preset — any CSS
+color works. Tokens:
+${THEME_TOKENS.map((token) => `\`${token}\``).join(", ")}.
+
+Unknown presets, tokens, or invalid colors are ignored. Keep overrides
+minimal (prefer picking the closest preset); when changing surface colors,
+keep enough contrast with the text tokens.
+
 ## Other app settings
 
 Model provider, model id, and API keys are configured in the app's
@@ -150,6 +179,7 @@ export class DesktopConfigAgent implements CodingAgentProvider {
     private readonly sandboxProvider: SandboxProvider,
     private readonly keybindings: KeybindingsStore,
     private readonly sidebar: SidebarConfigStore,
+    private readonly theme: ThemeStore,
   ) {
     this.name = inner.name;
   }
@@ -195,6 +225,11 @@ export class DesktopConfigAgent implements CodingAgentProvider {
             2,
           )}\n`,
           [DESKTOP_SIDEBAR_WORKSPACE_PATH]: this.sidebar.read(),
+          [DESKTOP_THEME_WORKSPACE_PATH]: `${JSON.stringify(
+            this.theme.load(),
+            null,
+            2,
+          )}\n`,
         },
         session.workingDirectory,
       );
@@ -211,6 +246,7 @@ export class DesktopConfigAgent implements CodingAgentProvider {
     // swallow a valid keybindings edit made in the same turn.
     await this.applyKeybindings(session);
     await this.applySidebar(session);
+    await this.applyTheme(session);
     try {
       // Commit even when unchanged: an agent edit that normalizes to the
       // current state must still not sync back as a project draft.
@@ -254,6 +290,23 @@ export class DesktopConfigAgent implements CodingAgentProvider {
       this.sidebar.write(source);
     } catch (cause) {
       console.warn("[desktop] Failed to apply sidebar edits:", cause);
+    }
+  }
+
+  private async applyTheme(session: ProviderSession): Promise<void> {
+    try {
+      const raw = await this.sandboxProvider.downloadFile(
+        session.sandboxId,
+        `${session.workingDirectory}/${DESKTOP_THEME_WORKSPACE_PATH}`,
+      );
+      const next = normalizeTheme(JSON.parse(raw));
+      if (JSON.stringify(next) !== JSON.stringify(this.theme.load())) {
+        // save() rewrites theme.json; the file watcher applies it live
+        // (window background + renderer broadcast).
+        this.theme.save(next);
+      }
+    } catch (cause) {
+      console.warn("[desktop] Failed to apply theme edits:", cause);
     }
   }
 

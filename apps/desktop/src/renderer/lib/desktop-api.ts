@@ -113,6 +113,43 @@ export interface SidebarConfig {
   sections: SidebarSectionConfig[];
 }
 
+export type ThemeToken =
+  | "bg"
+  | "bg-raised"
+  | "bg-overlay"
+  | "bg-inset"
+  | "border"
+  | "border-strong"
+  | "fg"
+  | "fg-muted"
+  | "fg-faint"
+  | "accent"
+  | "accent-fg"
+  | "success"
+  | "warning"
+  | "danger"
+  | "info"
+  | "user-tint"
+  | "agent-tint";
+
+export type ThemeColors = Record<ThemeToken, string>;
+
+export interface ThemePreset {
+  id: string;
+  label: string;
+  colors: ThemeColors;
+}
+
+export interface ThemeConfig {
+  preset: string;
+  overrides: Partial<ThemeColors>;
+}
+
+export interface ResolvedTheme extends ThemeConfig {
+  colors: ThemeColors;
+  appearance: "dark" | "light";
+}
+
 export interface CatamorphicDesktopApi {
   githubConnectStart: () => Promise<{
     userCode: string;
@@ -274,6 +311,12 @@ export interface CatamorphicDesktopApi {
     label: string;
   }) => Promise<void>;
   onBookmarksChanged: (listener: (data: BookmarksChange) => void) => () => void;
+
+  getTheme: () => Promise<ResolvedTheme>;
+  setTheme: (config: ThemeConfig) => Promise<ResolvedTheme>;
+  themePresets: () => Promise<ThemePreset[]>;
+  themeFile: () => Promise<string>;
+  onThemeChanged: (listener: (theme: ResolvedTheme) => void) => () => void;
 
   sidebarConfigGet: () => Promise<SidebarConfig>;
   sidebarConfigFile: () => Promise<string>;

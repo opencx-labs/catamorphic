@@ -18,6 +18,7 @@ loader.config({ monaco });
 import { App } from "./app.js";
 import { CatamorphicAppProvider } from "./components/catamorphic/catamorphic-provider.js";
 import { KeybindingsProvider } from "./lib/keybindings.js";
+import { ThemeProvider } from "./lib/theme.js";
 import { desktopApi, type ServerInfo } from "./lib/desktop-api.js";
 import "@catamorphic/ui/styles.css";
 import "./styles.css";
@@ -56,6 +57,9 @@ function Root() {
 
 createRoot(document.getElementById("root") as HTMLElement).render(
   <StrictMode>
-    <Root />
+    {/* Outside Root: the theme must cover the pre-server "Starting…" state. */}
+    <ThemeProvider>
+      <Root />
+    </ThemeProvider>
   </StrictMode>,
 );
