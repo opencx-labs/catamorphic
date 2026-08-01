@@ -19,6 +19,8 @@ export interface DataPaths {
   keybindingsFile: string;
   /** Chrome-style profiles (plain JSON). */
   profilesFile: string;
+  /** User-defined sidebar layout (plain JS, agent-editable). */
+  sidebarFile: string;
 }
 
 export function resolveDataPaths(): DataPaths {
@@ -34,5 +36,6 @@ export function resolveDataPaths(): DataPaths {
     githubFile: path.join(userData, "github.json"),
     keybindingsFile: path.join(userData, "keybindings.json"),
     profilesFile: path.join(userData, "profiles.json"),
+    sidebarFile: path.join(userData, "sidebar.js"),
   };
 }

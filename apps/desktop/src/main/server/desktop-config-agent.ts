@@ -12,6 +12,7 @@ import {
   type KeybindingsStore,
   normalizeKeybindings,
 } from "../keybindings.js";
+import type { SidebarConfigStore } from "../sidebar-config.js";
 
 /** What each action does, for the agent's prompt. */
 const ACTION_DESCRIPTIONS: Record<string, string> = {
@@ -26,10 +27,19 @@ export const DESKTOP_CONFIG_SKILL_PATH =
   ".agents/skills/configuring-catamorphic-desktop/SKILL.md";
 export const DESKTOP_KEYBINDINGS_WORKSPACE_PATH =
   ".catamorphic/desktop/keybindings.json";
+export const DESKTOP_SIDEBAR_WORKSPACE_PATH =
+  ".catamorphic/desktop/sidebar.js";
+
+/** Every mirror file staged into (and read back from) the sandbox. */
+const MIRROR_PATHS = [
+  DESKTOP_CONFIG_SKILL_PATH,
+  DESKTOP_KEYBINDINGS_WORKSPACE_PATH,
+  DESKTOP_SIDEBAR_WORKSPACE_PATH,
+];
 
 export const DESKTOP_CONFIG_SKILL = `---
 name: configuring-catamorphic-desktop
-description: Change Catamorphic desktop app settings (keyboard shortcuts) when the user asks to customize the app itself, e.g. "rebind new chat to Cmd+N" or "change my shortcuts".
+description: Change Catamorphic desktop app settings — keyboard shortcuts and the left sidebar's sections/items — when the user asks to customize the app itself, e.g. "rebind new chat to Cmd+N", "hide the workflows section", "add a Docs section with these links", "put a Copy link option on my bookmarks".
 ---
 
 # Configuring the Catamorphic desktop app
@@ -66,6 +76,57 @@ bindings are ignored and fall back to the default.
 Warn the user if they pick a binding that collides with a common OS or
 app shortcut (Cmd+Q, Cmd+C/V/X/A/Z, Cmd+N).
 
+## Left sidebar
+
+The sidebar is fully user-defined: \`${DESKTOP_SIDEBAR_WORKSPACE_PATH}\`
+(also refreshed every turn). It is a real JS file exporting an ordered
+list of sections — the list IS the sidebar. Edit it to reorder, retitle,
+**hide** (delete the entry), or invent sections.
+
+Built-in section types: \`workflows\`, \`apps\`, \`chats\`, \`bookmarks\`.
+Bookmarks are real browser bookmarks — the user creates them with the
+star in the address bar; you never hand-write bookmark data here, you
+only control how the section is presented.
+
+Your own section:
+
+\`\`\`js
+{
+  type: "custom",
+  title: "Docs",
+  open: "replace",
+  items: [
+    { label: "MDN", url: "https://developer.mozilla.org", icon: "Globe" },
+  ],
+}
+\`\`\`
+
+- \`open\`: \`"tab"\` (new browser tab) or \`"replace"\` (reuse the focused
+  browser tab, falling back to a new tab). Set per section or per item.
+- \`icon\`: any lucide-react icon name, e.g. \`"Globe"\`, \`"FileText"\`.
+- \`collapsed: true\` starts a section collapsed.
+
+Hover menu (the ⋯ button on an item) — set on a section (applies to all
+its items) or on a single item:
+
+\`\`\`js
+menu: [
+  { label: "Open in new tab", action: "open-tab" },
+  { label: "Copy link", action: "copy-url" },
+  { label: "Delete", action: "remove", danger: true },
+]
+\`\`\`
+
+Actions: \`open\`, \`open-tab\`, \`open-here\`, \`copy-url\`, \`pin\`,
+\`unpin\`, \`rename\`, \`remove\`. \`menu: []\` removes the ⋯ button.
+\`pin\`/\`unpin\`/\`rename\`/\`remove\` only do anything on bookmarks.
+
+Rules: keep it valid JavaScript with a \`module.exports = { sections: [...] }\`.
+It is evaluated in a sandbox — no \`require\`, no I/O, no async. An invalid
+file falls back to the default sidebar, so verify your edit is syntactically
+correct. Preserve the user's existing sections unless they asked otherwise,
+and keep the explanatory comments at the top intact.
+
 ## Other app settings
 
 Model provider, model id, and API keys are configured in the app's
@@ -88,6 +149,7 @@ export class DesktopConfigAgent implements CodingAgentProvider {
     private readonly inner: CodingAgentProvider,
     private readonly sandboxProvider: SandboxProvider,
     private readonly keybindings: KeybindingsStore,
+    private readonly sidebar: SidebarConfigStore,
   ) {
     this.name = inner.name;
   }
@@ -132,6 +194,7 @@ export class DesktopConfigAgent implements CodingAgentProvider {
             null,
             2,
           )}\n`,
+          [DESKTOP_SIDEBAR_WORKSPACE_PATH]: this.sidebar.read(),
         },
         session.workingDirectory,
       );
@@ -144,6 +207,20 @@ export class DesktopConfigAgent implements CodingAgentProvider {
 
   /** Pull the agent's mirror edits (if any) into the real config. */
   private async applyEdits(session: ProviderSession): Promise<void> {
+    // Each mirror applies independently: a broken sidebar edit must not
+    // swallow a valid keybindings edit made in the same turn.
+    await this.applyKeybindings(session);
+    await this.applySidebar(session);
+    try {
+      // Commit even when unchanged: an agent edit that normalizes to the
+      // current state must still not sync back as a project draft.
+      await this.commitMirrors(session, "apply desktop config");
+    } catch (cause) {
+      console.warn("[desktop] Failed to commit desktop config:", cause);
+    }
+  }
+
+  private async applyKeybindings(session: ProviderSession): Promise<void> {
     try {
       const raw = await this.sandboxProvider.downloadFile(
         session.sandboxId,
@@ -155,11 +232,28 @@ export class DesktopConfigAgent implements CodingAgentProvider {
         // live (menu rebuild + renderer broadcast).
         this.keybindings.save(next);
       }
-      // Commit even when unchanged: an agent edit that normalizes to the
-      // current state must still not sync back as a project draft.
-      await this.commitMirrors(session, "apply desktop config");
     } catch (cause) {
-      console.warn("[desktop] Failed to apply desktop config edits:", cause);
+      console.warn("[desktop] Failed to apply keybindings edits:", cause);
+    }
+  }
+
+  private async applySidebar(session: ProviderSession): Promise<void> {
+    try {
+      const source = await this.sandboxProvider.downloadFile(
+        session.sandboxId,
+        `${session.workingDirectory}/${DESKTOP_SIDEBAR_WORKSPACE_PATH}`,
+      );
+      if (source.trim() === "" || source === this.sidebar.read()) return;
+      // Refuse a config that doesn't evaluate to sections: writing it would
+      // silently collapse the user's sidebar to the defaults.
+      if (!this.sidebar.isValidSource(source)) {
+        console.warn("[desktop] Ignoring invalid sidebar.js from agent");
+        return;
+      }
+      // write() triggers the file watcher, which reloads and broadcasts.
+      this.sidebar.write(source);
+    } catch (cause) {
+      console.warn("[desktop] Failed to apply sidebar edits:", cause);
     }
   }
 
@@ -167,11 +261,12 @@ export class DesktopConfigAgent implements CodingAgentProvider {
     session: ProviderSession,
     message: string,
   ): Promise<void> {
+    const paths = MIRROR_PATHS.map((mirror) => `'${mirror}'`).join(" ");
     await this.sandboxProvider.executeCommand(
       session.sandboxId,
       `cd '${session.workingDirectory}' && ` +
-        `git add '${DESKTOP_CONFIG_SKILL_PATH}' '${DESKTOP_KEYBINDINGS_WORKSPACE_PATH}' && ` +
-        `(git diff --cached --quiet -- '${DESKTOP_CONFIG_SKILL_PATH}' '${DESKTOP_KEYBINDINGS_WORKSPACE_PATH}' || ` +
+        `git add ${paths} && ` +
+        `(git diff --cached --quiet -- ${paths} || ` +
         `git -c user.name=catamorphic -c user.email=desktop@catamorphic.local ` +
         `commit -q -m '${message}')`,
     );

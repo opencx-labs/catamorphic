@@ -435,6 +435,36 @@ memory of *why* the app is the way it is.
   "Close" when the chat is empty so the behavior is announced, not
   sprung. Tab-mode Escape is unchanged (tab → floating step-down).
 
+### 2026-08-01 — The sidebar is user-authored, and agent-authored
+- `sidebar.js` is now the whole sidebar, not a list of toggles: sections
+  are `workflows` / `apps` / `chats` / `bookmarks` / `custom`, and the
+  array IS the order. Deleting an entry hides that section; a `custom`
+  entry invents one with `{ label, url, icon, open, menu }` items
+  (`icon` = any lucide-react name).
+- **The chat agent can rewrite it.** `sidebar.js` joins keybindings.json
+  as a mirror file staged into the sandbox each turn and applied after,
+  so "hide workflows", "add a Docs section", "put Copy link on my
+  bookmarks" are chat requests. Two guards learned the hard way: each
+  mirror applies **independently** (a bad sidebar edit must not swallow
+  a good keybindings edit from the same turn), and an agent-written
+  config is **rejected unless it evaluates to ≥1 section** — silently
+  writing a broken file would collapse the user's sidebar to defaults
+  with no explanation. A broken file the *user* writes still falls back
+  to defaults, with the parse error logged.
+- **One ⋯ menu per row, never a row of icon buttons.** Bookmarks had
+  grown pin + delete side by side and every new capability made it
+  worse. `SidebarItemRow` renders icon + label + a single hover ⋯, and
+  it is shared by bookmarks and config-defined items, so a custom item
+  gets identical interaction for free. The menu is **data**
+  (`{label, action, danger}`) because the config is evaluated in a vm
+  in main and crosses IPC — a callback can't. Actions: `open`,
+  `open-tab`, `open-here`, `copy-url`, `pin`, `unpin`, `rename`,
+  `remove`; `menu: []` means no ⋯ at all. Menus resolve item → section
+  → built-in default.
+- Bookmarks stay the *native* store (bookmarks.json, written by the
+  address-bar star). The config controls presentation only; the agent
+  never hand-writes bookmark data.
+
 ### 2026-08-01 — Don't mount a webview during a tab animation
 - Opening a bookmark in a new tab looked jaggy because mounting the
   `<webview>` guest and starting its first paint stalls the renderer

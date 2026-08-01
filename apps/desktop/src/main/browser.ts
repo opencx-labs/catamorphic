@@ -13,7 +13,10 @@ import { BookmarksStore } from "./bookmarks.js";
 import { BrowserHistoryStore } from "./browser-history.js";
 import { PasswordVault } from "./browser-vault.js";
 import type { ProfilesStore } from "./profiles.js";
-import { SidebarConfigStore } from "./sidebar-config.js";
+import {
+  DEFAULT_SIDEBAR_FILE,
+  type SidebarConfigStore,
+} from "./sidebar-config.js";
 
 /**
  * Browser support for workspace tabs. Pages render in `<webview>` tags in
@@ -117,13 +120,16 @@ export interface BrowserSupport {
   dispose: () => void;
 }
 
-export function registerBrowserSupport(profiles: ProfilesStore): BrowserSupport {
+export function registerBrowserSupport(
+  profiles: ProfilesStore,
+  /** Shared with the config agent so chat edits and IPC hit one store. */
+  sidebarConfig: SidebarConfigStore,
+): BrowserSupport {
   const userData = app.getPath("userData");
   const profilesDir = path.join(userData, "profiles");
   const history = new BrowserHistoryStore(profilesDir);
   const vault = new PasswordVault(profilesDir);
   const bookmarks = new BookmarksStore(path.join(userData, "bookmarks.json"));
-  const sidebarConfig = new SidebarConfigStore(path.join(userData, "sidebar.js"));
   sidebarConfig.ensureFile();
 
   const broadcast = (channel: string, payload: unknown) => {
@@ -382,6 +388,21 @@ export function registerBrowserSupport(profiles: ProfilesStore): BrowserSupport 
     },
   );
   ipcMain.handle(
+    "catamorphic:bookmarks-rename",
+    (
+      _event,
+      input: {
+        projectId: string;
+        profileId: string;
+        id: string;
+        label: string;
+      },
+    ) => {
+      bookmarks.rename(input.projectId, input.profileId, input.id, input.label);
+      bookmarksChanged(input.projectId, input.profileId);
+    },
+  );
+  ipcMain.handle(
     "catamorphic:bookmarks-remove-pinned",
     (
       _event,
@@ -395,6 +416,12 @@ export function registerBrowserSupport(profiles: ProfilesStore): BrowserSupport 
   // --- sidebar config ---
   ipcMain.handle("catamorphic:sidebar-config-get", () => sidebarConfig.load());
   ipcMain.handle("catamorphic:sidebar-config-file", () => sidebarConfig.file);
+  ipcMain.handle("catamorphic:sidebar-config-source", () =>
+    sidebarConfig.read(),
+  );
+  ipcMain.handle("catamorphic:sidebar-config-reset", () => {
+    sidebarConfig.write(DEFAULT_SIDEBAR_FILE);
+  });
   sidebarConfig.watch((config) =>
     broadcast("catamorphic:sidebar-config-changed", config),
   );

@@ -23,6 +23,7 @@ import {
 } from "react";
 import { AnimatedTitle } from "./components/animated-title.js";
 import { BookmarksNav } from "./components/bookmarks-nav.js";
+import { SidebarItemRow } from "./components/sidebar-item-row.js";
 import { ChatBubbles } from "./components/chat-bubbles.js";
 import { ChatDock, type ChatDockEntry } from "./components/chat-dock.js";
 import { DeleteProjectModal } from "./components/delete-project-modal.js";
@@ -40,6 +41,7 @@ import {
   type Profile,
   type ProfilesData,
   type SidebarConfig,
+  type SidebarMenuEntry,
   type SidebarSectionConfig,
 } from "./lib/desktop-api.js";
 import {
@@ -93,6 +95,12 @@ const emptyWorkspace = (): Workspace => {
 
 const chatTabKey = (localId: string) => `chat:${localId}`;
 const browserTabKey = (localId: string) => `browser:${localId}`;
+
+/** Offered to config-defined items that don't declare their own menu. */
+const DEFAULT_CUSTOM_MENU: SidebarMenuEntry[] = [
+  { label: "Open in new tab", action: "open-tab" },
+  { label: "Copy link", action: "copy-url" },
+];
 
 const truncateLabel = (value: string): string =>
   value.length <= 40 ? value : `${value.slice(0, 39)}…`;
@@ -988,38 +996,85 @@ function ConfiguredSection({
           <BookmarksNav
             projectId={projectId}
             profileId={profileId}
-            onOpen={(url) => onOpenUrl(url, section.open ?? "replace")}
+            menuOverride={section.menu}
+            onOpen={(url, mode) =>
+              onOpenUrl(url, mode ?? section.open ?? "replace")
+            }
           />
         </SidebarSection>
       );
-    case "links":
+    case "custom":
       return (
         <SidebarSection
           title={section.title ?? "Links"}
           defaultOpen={defaultOpen}
         >
-          <ul className="flex flex-col gap-0.5">
-            {(section.links ?? []).map((link) => (
-              <li key={`${link.label}:${link.url}`}>
-                <button
-                  type="button"
-                  onClick={() =>
-                    onOpenUrl(link.url, link.open ?? section.open ?? "replace")
-                  }
-                  className="flex h-7 w-full cursor-pointer items-center gap-2 rounded-md px-2 text-left text-[13px] text-fg-muted transition-colors duration-150 hover:bg-bg-overlay/60 hover:text-fg"
-                  title={link.url}
-                >
-                  <Globe className="size-3.5 shrink-0 text-fg-faint" />
-                  <span className="truncate">{link.label}</span>
-                </button>
-              </li>
-            ))}
-          </ul>
+          <CustomItems section={section} onOpenUrl={onOpenUrl} />
         </SidebarSection>
       );
     default:
       return null;
   }
+}
+
+/**
+ * A user-defined section's items. Same row component as bookmarks, so a
+ * config-authored item gets the identical ⋯ menu behavior; only the
+ * bookmark-specific actions (pin/rename/remove) are inert here.
+ */
+function CustomItems({
+  section,
+  onOpenUrl,
+}: {
+  section: SidebarSectionConfig;
+  onOpenUrl: (url: string, mode: "tab" | "replace") => void;
+}) {
+  const items = section.items ?? [];
+  if (items.length === 0) {
+    return (
+      <p className="px-2 py-1 text-xs text-fg-faint">
+        No items — add some in sidebar.js.
+      </p>
+    );
+  }
+  return (
+    <ul className="flex flex-col gap-0.5">
+      {items.map((item) => {
+        const mode = item.open ?? section.open ?? "replace";
+        return (
+          <li key={`${item.label}:${item.url}`}>
+            <SidebarItemRow
+              label={item.label}
+              title={item.url}
+              icon={item.icon ?? "Globe"}
+              menu={item.menu ?? section.menu ?? DEFAULT_CUSTOM_MENU}
+              onOpen={() => onOpenUrl(item.url, mode)}
+              onAction={(entry) => {
+                switch (entry.action) {
+                  case "open":
+                    onOpenUrl(item.url, mode);
+                    break;
+                  case "open-tab":
+                    onOpenUrl(item.url, "tab");
+                    break;
+                  case "open-here":
+                    onOpenUrl(item.url, "replace");
+                    break;
+                  case "copy-url":
+                    void navigator.clipboard.writeText(item.url);
+                    break;
+                  // pin/unpin/rename/remove are bookmark-only; a config
+                  // may list them, but there's nothing to act on here.
+                  default:
+                    break;
+                }
+              }}
+            />
+          </li>
+        );
+      })}
+    </ul>
+  );
 }
 
 function SidebarSection({

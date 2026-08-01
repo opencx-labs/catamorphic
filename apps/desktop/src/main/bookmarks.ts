@@ -164,6 +164,32 @@ export class BookmarksStore {
     this.save();
   }
 
+  /** Rename works in either scope — the caller may not know which. */
+  rename(
+    projectId: string,
+    profileId: string,
+    id: string,
+    label: string,
+  ): void {
+    const trimmed = label.trim();
+    if (!trimmed) return;
+    const owned = this.data.byProject[projectId]?.bookmarks.find(
+      (entry) => entry.id === id,
+    );
+    if (owned) {
+      owned.label = trimmed;
+      this.save();
+      return;
+    }
+    const pinned = this.data.pinnedByProfile[profileId]?.find(
+      (entry) => entry.id === id,
+    );
+    if (pinned) {
+      pinned.label = trimmed;
+      this.save();
+    }
+  }
+
   removePinned(profileId: string, id: string): void {
     const pinned = this.data.pinnedByProfile[profileId] ?? [];
     this.data.pinnedByProfile[profileId] = pinned.filter(

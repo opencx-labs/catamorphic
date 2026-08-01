@@ -237,6 +237,13 @@ const api = {
     id: string;
   }): Promise<void> =>
     ipcRenderer.invoke("catamorphic:bookmarks-remove-pinned", input),
+  bookmarksRename: (input: {
+    projectId: string;
+    profileId: string;
+    id: string;
+    label: string;
+  }): Promise<void> =>
+    ipcRenderer.invoke("catamorphic:bookmarks-rename", input),
   onBookmarksChanged: (listener: (data: unknown) => void): (() => void) => {
     const handler = (_event: unknown, data: unknown) => listener(data);
     ipcRenderer.on("catamorphic:bookmarks-changed", handler);
@@ -249,6 +256,10 @@ const api = {
     ipcRenderer.invoke("catamorphic:sidebar-config-get"),
   sidebarConfigFile: (): Promise<string> =>
     ipcRenderer.invoke("catamorphic:sidebar-config-file"),
+  sidebarConfigSource: (): Promise<string> =>
+    ipcRenderer.invoke("catamorphic:sidebar-config-source"),
+  sidebarConfigReset: (): Promise<void> =>
+    ipcRenderer.invoke("catamorphic:sidebar-config-reset"),
   onSidebarConfigChanged: (listener: (config: unknown) => void): (() => void) => {
     const handler = (_event: unknown, config: unknown) => listener(config);
     ipcRenderer.on("catamorphic:sidebar-config-changed", handler);

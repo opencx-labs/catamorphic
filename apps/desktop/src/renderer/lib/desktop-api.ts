@@ -76,18 +76,37 @@ export interface BookmarksChange extends BookmarksData {
   profileId: string;
 }
 
-export interface SidebarLink {
+export type SidebarAction =
+  | "open"
+  | "open-tab"
+  | "open-here"
+  | "copy-url"
+  | "pin"
+  | "unpin"
+  | "rename"
+  | "remove";
+
+export interface SidebarMenuEntry {
+  label: string;
+  action: SidebarAction;
+  danger?: boolean;
+}
+
+export interface SidebarItem {
   label: string;
   url: string;
+  icon?: string;
   open?: "tab" | "replace";
+  menu?: SidebarMenuEntry[];
 }
 
 export interface SidebarSectionConfig {
-  type: "workflows" | "apps" | "chats" | "bookmarks" | "links";
+  type: "workflows" | "apps" | "chats" | "bookmarks" | "custom";
   title?: string;
   collapsed?: boolean;
-  links?: SidebarLink[];
+  items?: SidebarItem[];
   open?: "tab" | "replace";
+  menu?: SidebarMenuEntry[];
 }
 
 export interface SidebarConfig {
@@ -248,10 +267,18 @@ export interface CatamorphicDesktopApi {
     profileId: string;
     id: string;
   }) => Promise<void>;
+  bookmarksRename: (input: {
+    projectId: string;
+    profileId: string;
+    id: string;
+    label: string;
+  }) => Promise<void>;
   onBookmarksChanged: (listener: (data: BookmarksChange) => void) => () => void;
 
   sidebarConfigGet: () => Promise<SidebarConfig>;
   sidebarConfigFile: () => Promise<string>;
+  sidebarConfigSource: () => Promise<string>;
+  sidebarConfigReset: () => Promise<void>;
   onSidebarConfigChanged: (
     listener: (config: SidebarConfig) => void,
   ) => () => void;

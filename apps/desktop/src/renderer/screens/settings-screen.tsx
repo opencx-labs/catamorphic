@@ -147,7 +147,42 @@ export function SettingsScreen({ onClose }: { onClose: () => void }) {
       )}
 
       <ShortcutsSection />
+      <SidebarSection />
     </div>
+  );
+}
+
+/**
+ * The sidebar is defined by a JS file, not a settings form — this section
+ * points at it and offers a way back from a bad edit.
+ */
+function SidebarSection() {
+  const [file, setFile] = useState("");
+  useEffect(() => {
+    void desktopApi.sidebarConfigFile().then(setFile);
+  }, []);
+
+  return (
+    <section className="mt-8 border-t border-border pt-6">
+      <h2 className="mb-1 text-sm font-semibold">Sidebar</h2>
+      <p className="text-xs text-fg-muted">
+        The left sidebar's sections and items are defined in a JavaScript
+        file. Edit it directly, or ask the assistant to change it for you
+        (&ldquo;hide the workflows section&rdquo;, &ldquo;add a Docs
+        section&rdquo;). Changes apply live.
+      </p>
+      <p className="mt-2 text-xs text-fg-faint">
+        <span className="font-mono">{file}</span>
+      </p>
+      <button
+        type="button"
+        onClick={() => void desktopApi.sidebarConfigReset()}
+        className="mt-3 flex cursor-pointer items-center gap-1 text-xs text-fg-muted hover:text-fg"
+      >
+        <RotateCcw className="size-3" />
+        Reset sidebar to default
+      </button>
+    </section>
   );
 }
 

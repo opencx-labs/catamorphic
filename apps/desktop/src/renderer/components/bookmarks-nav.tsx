@@ -1,43 +1,55 @@
-import {
-  Bookmark as BookmarkIcon,
-  ChevronRight,
-  Folder,
-  Pin,
-  PinOff,
-  Trash2,
-} from "lucide-react";
+import { Bookmark as BookmarkIcon, ChevronRight, Folder, Pin } from "lucide-react";
 import { useEffect, useState } from "react";
 import {
   type Bookmark,
   type BookmarksData,
   desktopApi,
+  type SidebarMenuEntry,
 } from "../lib/desktop-api.js";
+import { SidebarItemRow } from "./sidebar-item-row.js";
+
+/** Fallbacks when sidebar.js doesn't override the section's menu. */
+const PROJECT_MENU: SidebarMenuEntry[] = [
+  { label: "Open in new tab", action: "open-tab" },
+  { label: "Copy link", action: "copy-url" },
+  { label: "Pin across projects", action: "pin" },
+  { label: "Rename…", action: "rename" },
+  { label: "Delete", action: "remove", danger: true },
+];
+
+const PINNED_MENU: SidebarMenuEntry[] = [
+  { label: "Open in new tab", action: "open-tab" },
+  { label: "Copy link", action: "copy-url" },
+  { label: "Unpin into this project", action: "unpin" },
+  { label: "Rename…", action: "rename" },
+  { label: "Delete", action: "remove", danger: true },
+];
 
 /**
  * Per-project bookmarks with one level of folders, plus the profile-wide
- * "Pinned" group on top. Pinning moves a bookmark out of the project so
- * it follows the user across projects (pinned = "mine", project = "the
- * work's"); pinning whole sections/items was considered and rejected —
- * one pinnable thing keeps the model simple.
+ * "pinned" group on top. Rows are the shared SidebarItemRow, so a
+ * bookmark and a config-defined custom item behave identically.
  */
 export function BookmarksNav({
   projectId,
   profileId,
+  menuOverride,
   onOpen,
 }: {
   projectId: string;
   profileId: string;
-  onOpen: (url: string) => void;
+  /** `menu` from sidebar.js for this section, if the user set one. */
+  menuOverride?: SidebarMenuEntry[];
+  onOpen: (url: string, mode?: "tab" | "replace") => void;
 }) {
   const [data, setData] = useState<BookmarksData | null>(null);
+  const [renamingId, setRenamingId] = useState<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
-    void desktopApi
-      .bookmarksGet({ projectId, profileId })
-      .then((loaded) => {
-        if (!cancelled) setData(loaded);
-      });
+    void desktopApi.bookmarksGet({ projectId, profileId }).then((loaded) => {
+      if (!cancelled) setData(loaded);
+    });
     const unsubscribe = desktopApi.onBookmarksChanged((change) => {
       if (change.projectId === projectId && change.profileId === profileId) {
         setData({ project: change.project, pinned: change.pinned });
@@ -51,9 +63,6 @@ export function BookmarksNav({
 
   if (!data) return null;
   const { project, pinned } = data;
-  const rootBookmarks = project.bookmarks.filter(
-    (bookmark) => !bookmark.folderId,
-  );
 
   if (
     pinned.length === 0 &&
@@ -67,69 +76,76 @@ export function BookmarksNav({
     );
   }
 
+  const runAction = (
+    entry: SidebarMenuEntry,
+    bookmark: Bookmark,
+    isPinned: boolean,
+  ) => {
+    const scope = { projectId, profileId, id: bookmark.id };
+    switch (entry.action) {
+      case "open":
+        onOpen(bookmark.url);
+        break;
+      case "open-tab":
+        onOpen(bookmark.url, "tab");
+        break;
+      case "open-here":
+        onOpen(bookmark.url, "replace");
+        break;
+      case "copy-url":
+        void navigator.clipboard.writeText(bookmark.url);
+        break;
+      case "pin":
+        void desktopApi.bookmarksPin(scope);
+        break;
+      case "unpin":
+        void desktopApi.bookmarksUnpin(scope);
+        break;
+      case "rename":
+        setRenamingId(bookmark.id);
+        break;
+      case "remove":
+        void (isPinned
+          ? desktopApi.bookmarksRemovePinned(scope)
+          : desktopApi.bookmarksRemove(scope));
+        break;
+    }
+  };
+
   const row = (bookmark: Bookmark, isPinned: boolean) => (
     <li key={bookmark.id}>
-      <div className="group flex h-7 items-center rounded-md transition-colors duration-150 hover:bg-bg-overlay/60">
-        <button
-          type="button"
-          onClick={() => onOpen(bookmark.url)}
-          className="flex h-full min-w-0 flex-1 cursor-pointer items-center gap-2 px-2 text-left text-[13px] text-fg-muted hover:text-fg"
-          title={bookmark.url}
-        >
-          {isPinned ? (
+      <SidebarItemRow
+        label={bookmark.label}
+        title={bookmark.url}
+        icon={
+          isPinned ? (
             <Pin className="size-3.5 shrink-0 text-fg-faint" />
           ) : (
             <BookmarkIcon className="size-3.5 shrink-0 text-fg-faint" />
-          )}
-          <span className="truncate">{bookmark.label}</span>
-        </button>
-        <button
-          type="button"
-          onClick={() =>
-            void (isPinned
-              ? desktopApi.bookmarksUnpin({
-                  projectId,
-                  profileId,
-                  id: bookmark.id,
-                })
-              : desktopApi.bookmarksPin({
-                  projectId,
-                  profileId,
-                  id: bookmark.id,
-                }))
+          )
+        }
+        menu={menuOverride ?? (isPinned ? PINNED_MENU : PROJECT_MENU)}
+        onOpen={() => onOpen(bookmark.url)}
+        onAction={(entry) => runAction(entry, bookmark, isPinned)}
+        renaming={renamingId === bookmark.id}
+        onRenameSubmit={(label) => {
+          setRenamingId(null);
+          if (label.trim() && label !== bookmark.label) {
+            void desktopApi.bookmarksRename({
+              projectId,
+              profileId,
+              id: bookmark.id,
+              label,
+            });
           }
-          className="hidden size-6 shrink-0 cursor-pointer place-items-center rounded text-fg-faint transition-colors duration-150 hover:text-fg group-hover:grid"
-          aria-label={isPinned ? "Unpin into this project" : "Pin across projects"}
-          title={isPinned ? "Unpin into this project" : "Pin across projects"}
-        >
-          {isPinned ? (
-            <PinOff className="size-3" />
-          ) : (
-            <Pin className="size-3" />
-          )}
-        </button>
-        <button
-          type="button"
-          onClick={() =>
-            void (isPinned
-              ? desktopApi.bookmarksRemovePinned({
-                  projectId,
-                  profileId,
-                  id: bookmark.id,
-                })
-              : desktopApi.bookmarksRemove({
-                  projectId,
-                  profileId,
-                  id: bookmark.id,
-                }))
-          }
-          className="mr-1 hidden size-6 shrink-0 cursor-pointer place-items-center rounded text-fg-faint transition-colors duration-150 hover:text-danger group-hover:grid"
-          aria-label={`Delete bookmark ${bookmark.label}`}
-        >
-          <Trash2 className="size-3" />
-        </button>
-      </div>
+        }}
+        onRenameCancel={() => setRenamingId(null)}
+      />
     </li>
+  );
+
+  const rootBookmarks = project.bookmarks.filter(
+    (bookmark) => !bookmark.folderId,
   );
 
   return (

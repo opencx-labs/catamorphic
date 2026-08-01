@@ -7,38 +7,83 @@ import vm from "node:vm";
  * `<userData>/sidebar.js` (same philosophy as keybindings.json: plain,
  * user-visible, agent-editable, file-watched, applies live). The file
  * evaluates in an isolated vm context — no require/process/fs — and
- * exports an ordered list of sections.
+ * exports an ordered list of sections. Removing a section from the list
+ * hides it; adding a `custom` section invents a new one.
  *
- * Section types the renderer knows how to draw:
- *  - "workflows" | "apps" | "chats"  — the built-in project sections
- *  - "bookmarks"                     — per-project browser bookmarks
- *  - "links"                         — static list of custom links
- *
- * Items/links carry an `open` attribute: "tab" opens a new browser tab,
- * "replace" navigates the current browser tab (falling back to a new tab
- * when the focused tab isn't a browser tab).
+ * Everything crossing into the renderer is DATA: the config is evaluated
+ * in the main process and sent over IPC, so menu entries name a declared
+ * `action` rather than carrying a callback.
  */
-export interface SidebarLink {
+
+/** What a click (or menu entry) does. Declarative so it can cross IPC. */
+export type SidebarAction =
+  | "open" // open the item's url per its `open` mode
+  | "open-tab" // force a new browser tab
+  | "open-here" // force reuse of the focused browser tab
+  | "copy-url"
+  | "pin" // bookmarks: promote to the profile-wide list
+  | "unpin"
+  | "rename"
+  | "remove";
+
+export interface SidebarMenuEntry {
+  label: string;
+  action: SidebarAction;
+  /** Render in the danger color (destructive). */
+  danger?: boolean;
+}
+
+export interface SidebarItem {
   label: string;
   url: string;
+  /** Icon name from lucide-react, e.g. "Globe", "FileText". */
+  icon?: string;
   open?: "tab" | "replace";
+  /** Hover menu (three-dots). Omit for the section default. */
+  menu?: SidebarMenuEntry[];
 }
 
 export interface SidebarSectionConfig {
-  type: "workflows" | "apps" | "chats" | "bookmarks" | "links";
+  type: "workflows" | "apps" | "chats" | "bookmarks" | "custom";
   /** Override the section heading. */
   title?: string;
   /** Start collapsed (default open). */
   collapsed?: boolean;
-  /** For type "links": the static entries. */
-  links?: SidebarLink[];
-  /** For type "bookmarks": how bookmark clicks open. Default "tab". */
+  /** For type "custom": the entries to render. */
+  items?: SidebarItem[];
+  /** Default click behavior for this section's items. */
   open?: "tab" | "replace";
+  /** Override the per-item hover menu for the whole section. */
+  menu?: SidebarMenuEntry[];
 }
 
 export interface SidebarConfig {
   sections: SidebarSectionConfig[];
 }
+
+/** Hover menu for a project bookmark when the config doesn't override it. */
+export const DEFAULT_BOOKMARK_MENU: SidebarMenuEntry[] = [
+  { label: "Open in new tab", action: "open-tab" },
+  { label: "Copy link", action: "copy-url" },
+  { label: "Pin across projects", action: "pin" },
+  { label: "Rename…", action: "rename" },
+  { label: "Delete", action: "remove", danger: true },
+];
+
+/** Same, for an already-pinned bookmark. */
+export const DEFAULT_PINNED_MENU: SidebarMenuEntry[] = [
+  { label: "Open in new tab", action: "open-tab" },
+  { label: "Copy link", action: "copy-url" },
+  { label: "Unpin into this project", action: "unpin" },
+  { label: "Rename…", action: "rename" },
+  { label: "Delete", action: "remove", danger: true },
+];
+
+/** Menu offered to custom items that don't declare their own. */
+export const DEFAULT_CUSTOM_MENU: SidebarMenuEntry[] = [
+  { label: "Open in new tab", action: "open-tab" },
+  { label: "Copy link", action: "copy-url" },
+];
 
 export const DEFAULT_SIDEBAR_CONFIG: SidebarConfig = {
   sections: [
@@ -49,21 +94,39 @@ export const DEFAULT_SIDEBAR_CONFIG: SidebarConfig = {
   ],
 };
 
-const DEFAULT_FILE_CONTENTS = `// Catamorphic sidebar configuration.
-// This file is plain JavaScript, evaluated in a sandbox (no require/fs).
-// Edit and save — the sidebar updates live.
+export const DEFAULT_SIDEBAR_FILE = `// Catamorphic sidebar configuration.
 //
-// Section types:
-//   "workflows" | "apps" | "chats"  built-in project sections
-//   "bookmarks"                     per-project browser bookmarks
-//   "links"                         your own static links
+// Plain JavaScript, evaluated in a sandbox (no require/fs/network).
+// Edit and save — the sidebar updates live, no restart.
+// You can also just ask the assistant to change this for you.
 //
-// Common attributes:
-//   title:     override the section heading
+// SECTIONS — the list below is the sidebar, in order.
+//   Remove a section to hide it. Reorder freely. Add your own.
+//
+//   { type: "workflows" }   built-in: this project's workflows
+//   { type: "apps" }        built-in: this project's apps
+//   { type: "chats" }       built-in: this project's chats
+//   { type: "bookmarks" }   built-in: browser bookmarks (the address-bar
+//                           star writes these; stored in bookmarks.json)
+//   { type: "custom", title: "…", items: [ … ] }   your own list
+//
+// COMMON ATTRIBUTES
+//   title:     override the heading
 //   collapsed: start collapsed
-//   open:      "tab" (new browser tab) or "replace" (reuse the focused
-//              browser tab; falls back to a new tab if the focused tab
-//              isn't a browser tab). Default for bookmarks/links: "replace".
+//   open:      "tab"     — always open in a new browser tab
+//              "replace" — reuse the focused browser tab (falls back to a
+//                          new tab when the focused tab isn't a browser)
+//
+// CUSTOM ITEMS
+//   { label, url, icon?, open?, menu? }
+//   icon: any lucide-react name, e.g. "Globe", "FileText", "Github".
+//
+// HOVER MENU (the ⋯ button on an item)
+//   menu: [{ label, action, danger? }]
+//   Actions: "open", "open-tab", "open-here", "copy-url",
+//            "pin", "unpin", "rename", "remove".
+//   Set menu: [] to give an item no ⋯ button at all.
+//   On a section, \`menu\` overrides the menu for all of its items.
 
 module.exports = {
   sections: [
@@ -71,11 +134,20 @@ module.exports = {
     { type: "apps" },
     { type: "chats" },
     { type: "bookmarks" },
+
+    // Example — uncomment to add your own section:
     // {
-    //   type: "links",
+    //   type: "custom",
     //   title: "Docs",
-    //   links: [
-    //     { label: "MDN", url: "https://developer.mozilla.org", open: "tab" },
+    //   open: "replace",
+    //   items: [
+    //     { label: "MDN", url: "https://developer.mozilla.org", icon: "Globe" },
+    //     {
+    //       label: "Electron",
+    //       url: "https://electronjs.org/docs",
+    //       open: "tab",
+    //       menu: [{ label: "Copy link", action: "copy-url" }],
+    //     },
     //   ],
     // },
   ],
@@ -87,8 +159,66 @@ const VALID_TYPES = new Set([
   "apps",
   "chats",
   "bookmarks",
-  "links",
+  "custom",
 ]);
+
+const VALID_ACTIONS = new Set<SidebarAction>([
+  "open",
+  "open-tab",
+  "open-here",
+  "copy-url",
+  "pin",
+  "unpin",
+  "rename",
+  "remove",
+]);
+
+const asOpenMode = (value: unknown): "tab" | "replace" | undefined =>
+  value === "tab" || value === "replace" ? value : undefined;
+
+function sanitizeMenu(raw: unknown): SidebarMenuEntry[] | undefined {
+  if (!Array.isArray(raw)) return undefined;
+  // An explicit [] means "no menu button"; keep it distinct from absent.
+  return raw.flatMap((entry): SidebarMenuEntry[] => {
+    if (typeof entry !== "object" || entry === null) return [];
+    const record = entry as Record<string, unknown>;
+    if (
+      typeof record.label !== "string" ||
+      typeof record.action !== "string" ||
+      !VALID_ACTIONS.has(record.action as SidebarAction)
+    ) {
+      return [];
+    }
+    return [
+      {
+        label: record.label,
+        action: record.action as SidebarAction,
+        danger: record.danger === true,
+      },
+    ];
+  });
+}
+
+function sanitizeItems(raw: unknown): SidebarItem[] | undefined {
+  if (!Array.isArray(raw)) return undefined;
+  return raw.flatMap((entry): SidebarItem[] => {
+    if (typeof entry !== "object" || entry === null) return [];
+    const record = entry as Record<string, unknown>;
+    if (typeof record.url !== "string") return [];
+    return [
+      {
+        label:
+          typeof record.label === "string" && record.label
+            ? record.label
+            : record.url,
+        url: record.url,
+        icon: typeof record.icon === "string" ? record.icon : undefined,
+        open: asOpenMode(record.open),
+        menu: sanitizeMenu(record.menu),
+      },
+    ];
+  });
+}
 
 function sanitize(raw: unknown): SidebarConfig {
   const record =
@@ -103,38 +233,17 @@ function sanitize(raw: unknown): SidebarConfig {
     if (typeof section.type !== "string" || !VALID_TYPES.has(section.type)) {
       continue;
     }
-    const links = Array.isArray(section.links)
-      ? section.links
-          .filter(
-            (link): link is Record<string, unknown> =>
-              typeof link === "object" &&
-              link !== null &&
-              typeof (link as Record<string, unknown>).url === "string",
-          )
-          .map(
-            (link): SidebarLink => ({
-              label:
-                typeof link.label === "string"
-                  ? link.label
-                  : String(link.url),
-              url: String(link.url),
-              open: link.open === "tab" ? "tab" : link.open === "replace" ? "replace" : undefined,
-            }),
-          )
-      : undefined;
     sections.push({
       type: section.type as SidebarSectionConfig["type"],
       title: typeof section.title === "string" ? section.title : undefined,
       collapsed: section.collapsed === true,
-      links,
-      open:
-        section.open === "tab"
-          ? "tab"
-          : section.open === "replace"
-            ? "replace"
-            : undefined,
+      items: sanitizeItems(section.items),
+      open: asOpenMode(section.open),
+      menu: sanitizeMenu(section.menu),
     });
   }
+  // An empty/invalid config would leave the user with no sidebar and no
+  // obvious way back, so fall back to the defaults.
   return sections.length > 0 ? { sections } : DEFAULT_SIDEBAR_CONFIG;
 }
 
@@ -144,20 +253,53 @@ export class SidebarConfigStore {
 
   constructor(readonly file: string) {}
 
-  /** Write the commented default template on first run. */
+  /** Write the commented template on first run. */
   ensureFile(): void {
     if (!fs.existsSync(this.file)) {
       fs.mkdirSync(path.dirname(this.file), { recursive: true });
-      fs.writeFileSync(this.file, DEFAULT_FILE_CONTENTS);
+      fs.writeFileSync(this.file, DEFAULT_SIDEBAR_FILE);
+    }
+  }
+
+  read(): string {
+    try {
+      return fs.readFileSync(this.file, "utf-8");
+    } catch {
+      return DEFAULT_SIDEBAR_FILE;
+    }
+  }
+
+  write(source: string): void {
+    fs.mkdirSync(path.dirname(this.file), { recursive: true });
+    fs.writeFileSync(this.file, source);
+  }
+
+  /**
+   * Does this source evaluate to at least one usable section? Guards the
+   * agent-edit path: silently writing a broken file would collapse the
+   * user's sidebar to the defaults with no explanation.
+   */
+  isValidSource(source: string): boolean {
+    try {
+      const module = { exports: {} as unknown };
+      const context = vm.createContext({ module, exports: module.exports });
+      vm.runInContext(source, context, { filename: this.file, timeout: 250 });
+      const exported = module.exports as { sections?: unknown };
+      return (
+        Array.isArray(exported?.sections) &&
+        sanitize(module.exports).sections.length > 0 &&
+        exported.sections.length > 0
+      );
+    } catch {
+      return false;
     }
   }
 
   load(): SidebarConfig {
     try {
-      const source = fs.readFileSync(this.file, "utf-8");
       const module = { exports: {} as unknown };
       const context = vm.createContext({ module, exports: module.exports });
-      vm.runInContext(source, context, {
+      vm.runInContext(this.read(), context, {
         filename: this.file,
         timeout: 250,
       });

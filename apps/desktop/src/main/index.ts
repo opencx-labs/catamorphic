@@ -3,6 +3,7 @@ import { app, BrowserWindow, dialog, ipcMain, Menu } from "electron";
 import { registerBrowserSupport } from "./browser.js";
 import { registerIpcHandlers, type ServerState } from "./ipc.js";
 import { ProfilesStore } from "./profiles.js";
+import { SidebarConfigStore } from "./sidebar-config.js";
 import {
   type Keybindings,
   KeybindingsStore,
@@ -54,6 +55,8 @@ const paths = resolveDataPaths();
 const settingsStore = new SettingsStore(paths.settingsFile);
 const keybindingsStore = new KeybindingsStore(paths.keybindingsFile);
 const profilesStore = new ProfilesStore(paths.profilesFile);
+// One instance shared by IPC and the chat agent's config mirror.
+const sidebarConfigStore = new SidebarConfigStore(paths.sidebarFile);
 
 let server: EmbeddedServer | null = null;
 let restarting: Promise<EmbeddedServer> | null = null;
@@ -69,7 +72,12 @@ const state: ServerState = {
     restarting ??= (async () => {
       try {
         await server?.shutdown();
-        server = await startEmbeddedServer(paths, settings, keybindingsStore);
+        server = await startEmbeddedServer(
+          paths,
+          settings,
+          keybindingsStore,
+          sidebarConfigStore,
+        );
         return server;
       } finally {
         restarting = null;
@@ -180,7 +188,7 @@ app.whenReady().then(async () => {
   // Live-reload: agents and users edit keybindings.json directly.
   keybindingsStore.watch(applyKeybindings);
   registerIpcHandlers(settingsStore, keybindingsStore, state);
-  browserSupport = registerBrowserSupport(profilesStore);
+  browserSupport = registerBrowserSupport(profilesStore, sidebarConfigStore);
   ipcMain.handle("catamorphic:webview-preload", () =>
     path.join(import.meta.dirname, "../preload/webview.cjs"),
   );
@@ -191,6 +199,7 @@ app.whenReady().then(async () => {
       paths,
       settingsStore.load(),
       keybindingsStore,
+      sidebarConfigStore,
     );
     state.broadcast("catamorphic:server-changed", {
       url: server.url,
