@@ -72,6 +72,9 @@ interface SaveOffer {
   password: string;
 }
 
+/** Matches the `tab-in` keyframe duration in styles.css. */
+const TAB_OPEN_ANIMATION_MS = 200;
+
 /**
  * Match bookmarks by normalized URL so "example.com" and "example.com/"
  * (or a trailing #fragment) are the same page — otherwise the star reads
@@ -139,6 +142,21 @@ export function BrowserScreen({
 
   // Session partition + guest preload must exist before mounting the
   // webview (both attributes are load-time-only).
+  //
+  // Mounting a guest and starting its first paint stalls this thread for
+  // ~50ms a few times over. Doing that while the tab-open animation runs
+  // made opening a bookmark visibly jaggy (measured: 2–3 stalled frames
+  // inside the 200ms animation, every time). Deferring the mount past the
+  // animation keeps the open smooth; the load cost then lands on frames
+  // where nothing is animating, which is what a real browser does too.
+  // A tab opened with no URL has nothing to show and mounts on navigate.
+  const [mountReady, setMountReady] = useState(initialUrl === "");
+  useEffect(() => {
+    if (mountReady) return;
+    const timer = setTimeout(() => setMountReady(true), TAB_OPEN_ANIMATION_MS);
+    return () => clearTimeout(timer);
+  }, [mountReady]);
+
   useEffect(() => {
     let cancelled = false;
     void Promise.all([
@@ -474,7 +492,8 @@ export function BrowserScreen({
 
   const showSuggestions = editing && suggestions.length > 0;
 
-  const ready = partition !== undefined && preloadPath !== undefined;
+  const ready =
+    partition !== undefined && preloadPath !== undefined && mountReady;
 
   const suggestionRow = (suggestion: Suggestion, index: number) => (
     <button
@@ -652,8 +671,12 @@ export function BrowserScreen({
         />
       )}
 
+      {/* Stay on the app background until the guest actually mounts —
+          flashing white for the pre-mount frames is its own kind of jank. */}
       <div
-        className={`relative min-h-0 flex-1 ${firstUrl ? "bg-white" : "bg-bg"}`}
+        className={`relative min-h-0 flex-1 ${
+          ready && firstUrl ? "bg-white" : "bg-bg"
+        }`}
       >
         {ready && firstUrl ? (
           <webview
@@ -673,9 +696,7 @@ export function BrowserScreen({
             style={{ width: "100%", height: "100%" }}
           />
         ) : firstUrl ? (
-          <div className="grid h-full place-items-center bg-bg text-sm text-fg-muted">
-            Loading…
-          </div>
+          <div className="h-full bg-bg" />
         ) : (
           <div className="grid h-full place-items-center">
             <p className="text-sm text-fg-faint">Search or enter an address</p>

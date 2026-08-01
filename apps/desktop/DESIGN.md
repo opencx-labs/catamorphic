@@ -435,6 +435,25 @@ memory of *why* the app is the way it is.
   "Close" when the chat is empty so the behavior is announced, not
   sprung. Tab-mode Escape is unchanged (tab → floating step-down).
 
+### 2026-08-01 — Don't mount a webview during a tab animation
+- Opening a bookmark in a new tab looked jaggy because mounting the
+  `<webview>` guest and starting its first paint stalls the renderer
+  thread ~50ms several times, landing squarely inside the 200ms
+  `tab-in` animation. Measured before/after on the same interaction:
+  2–3 stalled frames per open → zero. The mount is now deferred past
+  the animation, so the unavoidable load cost falls on frames where
+  nothing is moving (what a real browser does too).
+- **Rule: never start expensive work in the same frames as an entrance
+  animation** — defer it past the animation duration. The perceived
+  smoothness of the transition matters more than shaving 200ms off a
+  page load the user is already waiting on.
+- Debugging note: measure the *animation window* specifically
+  (`rAF` deltas while `now - t0 < animationMs`), not total frames — a
+  post-animation stall during page render is normal and drowns out the
+  signal. Verify with a git-stash A/B on the identical interaction;
+  three theories (IPC cost, guest-process spawn, the macOS `js-flags`
+  JIT workaround) all looked plausible and were all wrong.
+
 ### 2026-08-01 — Exit animations must swallow their flex gap
 - `bubble-out` now animates `margin-left: 0 → -6px` alongside the width
   collapse, matching the strip's `gap-1.5`. Without it the bubble's own
