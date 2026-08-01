@@ -382,6 +382,15 @@ memory of *why* the app is the way it is.
   rejected it — one pinnable thing (the bookmark) keeps the mental
   model simple: project bookmarks belong to the work, pinned bookmarks
   belong to you. Unpinning drops the bookmark into the current project.
+- The address-bar **star is a toggle bound to real state**, never a
+  fire-and-forget "add": it subscribes to the bookmark store, fills when
+  the current URL is saved, and removes on the second click (matching
+  pinned entries too, so starring a pinned page can't fork a duplicate).
+  URLs compare normalized (trailing slash and #fragment ignored) or the
+  star reads unstarred immediately after starring. **A control that
+  looks stateful must derive from state** — the first version flashed a
+  1.2s fake "starred" animation that always reverted, so every click
+  silently appended another copy.
 
 ### 2026-08-01 — Cmd+T is Chrome's Cmd+T; the aside gets Cmd+N
 - Revises 2026-07-31 "new-chat default mode": **Cmd+T and the tab-strip

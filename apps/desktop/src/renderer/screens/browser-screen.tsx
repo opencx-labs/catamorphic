@@ -10,6 +10,8 @@ import {
 } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
+  type Bookmark,
+  type BookmarksData,
   desktopApi,
   type SavedCredential,
 } from "../lib/desktop-api.js";
@@ -70,6 +72,24 @@ interface SaveOffer {
   password: string;
 }
 
+/**
+ * Match bookmarks by normalized URL so "example.com" and "example.com/"
+ * (or a trailing #fragment) are the same page — otherwise the star reads
+ * as unstarred right after starring.
+ */
+function sameUrl(a: string, b: string): boolean {
+  const normalize = (raw: string) => {
+    try {
+      const url = new URL(raw);
+      url.hash = "";
+      return url.href.replace(/\/$/, "");
+    } catch {
+      return raw.replace(/\/$/, "");
+    }
+  };
+  return normalize(a) === normalize(b);
+}
+
 export function BrowserScreen({
   profileId,
   projectId,
@@ -104,7 +124,10 @@ export function BrowserScreen({
   const [selectedIndex, setSelectedIndex] = useState(0);
   const [saveOffer, setSaveOffer] = useState<SaveOffer | null>(null);
   const [fillOffer, setFillOffer] = useState<SavedCredential[] | null>(null);
-  const [starred, setStarred] = useState(false);
+  // Bookmarks for this project+profile, so the star reflects real state
+  // (Chrome: filled = saved, click again removes) instead of firing a
+  // one-way "add" that silently duplicates on every press.
+  const [bookmarks, setBookmarks] = useState<BookmarksData | null>(null);
   const pageTitleRef = useRef("");
   const suggestSeq = useRef(0);
   // Inline completion must only appear while typing forward, never while
@@ -308,6 +331,61 @@ export function BrowserScreen({
   useEffect(() => {
     if (active && firstUrl === null) focusAddress();
   }, [active, firstUrl, focusAddress]);
+
+  // Follow bookmark changes from anywhere (this star, another tab's star,
+  // the sidebar's delete/pin) so the star never drifts from the sidebar.
+  useEffect(() => {
+    let cancelled = false;
+    void desktopApi.bookmarksGet({ projectId, profileId }).then((loaded) => {
+      if (!cancelled) setBookmarks(loaded);
+    });
+    const unsubscribe = desktopApi.onBookmarksChanged((change) => {
+      if (change.projectId === projectId && change.profileId === profileId) {
+        setBookmarks({ project: change.project, pinned: change.pinned });
+      }
+    });
+    return () => {
+      cancelled = true;
+      unsubscribe();
+    };
+  }, [projectId, profileId]);
+
+  // The saved entry for the current page, if any — pinned bookmarks count
+  // too, so starring a pinned page doesn't create a project duplicate.
+  const currentBookmark: (Bookmark & { pinned: boolean }) | undefined = (() => {
+    if (!bookmarks) return undefined;
+    const pinned = bookmarks.pinned.find((entry) =>
+      sameUrl(entry.url, pageUrl),
+    );
+    if (pinned) return { ...pinned, pinned: true };
+    const owned = bookmarks.project.bookmarks.find((entry) =>
+      sameUrl(entry.url, pageUrl),
+    );
+    return owned ? { ...owned, pinned: false } : undefined;
+  })();
+
+  const toggleBookmark = () => {
+    if (!currentBookmark) {
+      void desktopApi.bookmarksAdd({
+        projectId,
+        profileId,
+        label: pageTitleRef.current || pageUrl,
+        url: pageUrl,
+      });
+      return;
+    }
+    void (currentBookmark.pinned
+      ? desktopApi.bookmarksRemovePinned({
+          projectId,
+          profileId,
+          id: currentBookmark.id,
+        })
+      : desktopApi.bookmarksRemove({
+          projectId,
+          profileId,
+          id: currentBookmark.id,
+        }));
+  };
 
   const updateSuggestions = useCallback(
     async (query: string, typedForward: boolean) => {
@@ -525,29 +603,23 @@ export function BrowserScreen({
           )}
         </div>
 
-        {/* Bookmark star, Chrome-style, only when a page is loaded. */}
+        {/* Bookmark star, Chrome-style: filled means saved, click toggles. */}
         {firstUrl && (
           <button
             type="button"
-            onClick={() =>
-              void desktopApi
-                .bookmarksAdd({
-                  projectId,
-                  profileId,
-                  label: pageTitleRef.current || pageUrl,
-                  url: pageUrl,
-                })
-                .then(() => {
-                  setStarred(true);
-                  setTimeout(() => setStarred(false), 1200);
-                })
+            onClick={toggleBookmark}
+            className={`grid size-7 shrink-0 cursor-pointer place-items-center rounded-md transition-colors duration-150 hover:bg-bg-overlay ${
+              currentBookmark ? "text-accent" : "text-fg-muted hover:text-fg"
+            }`}
+            aria-label={
+              currentBookmark ? "Remove bookmark" : "Bookmark this page"
             }
-            className="grid size-7 shrink-0 cursor-pointer place-items-center rounded-md text-fg-muted transition-colors duration-150 hover:bg-bg-overlay hover:text-fg"
-            aria-label="Bookmark this page"
+            aria-pressed={Boolean(currentBookmark)}
+            title={currentBookmark ? "Remove bookmark" : "Bookmark this page"}
           >
             <Star
-              className={`size-3.5 transition-colors duration-150 ${
-                starred ? "fill-current text-accent" : ""
+              className={`size-3.5 transition-[fill,color,scale] duration-150 ease-[cubic-bezier(0.2,0,0,1)] ${
+                currentBookmark ? "scale-110 fill-current" : "scale-100"
               }`}
             />
           </button>
