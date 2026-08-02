@@ -133,7 +133,11 @@ export function ChatDock({
   }, []);
 
   const isTab = entry.mode === "tab";
-  const expanded = entry.mode === "partial" || (isTab && tabActive);
+  // Closing an empty chat plays the same 250ms collapse as minimizing —
+  // `closing` drops the expanded classes first, the unmount follows.
+  const [closing, setClosing] = useState(false);
+  const expanded =
+    !closing && (entry.mode === "partial" || (isTab && tabActive));
 
   const setMode = (mode: ChatMode) => onEntryChange({ ...entry, mode });
 
@@ -150,8 +154,15 @@ export function ChatDock({
   const onCloseRef = useRef(onClose);
   onCloseRef.current = onClose;
 
+  const animatedClose = () => {
+    setClosing(true);
+    window.setTimeout(() => onCloseRef.current(entryRef.current.localId), 250);
+  };
+  const animatedCloseRef = useRef(animatedClose);
+  animatedCloseRef.current = animatedClose;
+
   const dismiss = () => {
-    if (isEmpty) onClose(entry.localId);
+    if (isEmpty) animatedClose();
     else setMode("min");
   };
 
@@ -198,7 +209,7 @@ export function ChatDock({
         onEntryChangeRef.current({ ...entryRef.current, mode: "partial" });
       } else if (isEmptyRef.current) {
         // Escaping an untouched floating chat closes it — no empty bubble.
-        onCloseRef.current(entryRef.current.localId);
+        animatedCloseRef.current();
       } else {
         onEntryChangeRef.current({ ...entryRef.current, mode: "min" });
       }

@@ -85,15 +85,18 @@ const newChatEntry = (mode: ChatDockEntry["mode"]): ChatDockEntry => ({
   mode,
 });
 
-// A fresh project workspace greets the user with a chat tab ready to type
-// into; closing everything later (zero chats, zero tabs) is still fine.
+// A fresh project workspace greets the user with a palette "New Tab" —
+// same surface as Cmd+T; closing everything later (zero tabs) is fine.
 const emptyWorkspace = (): Workspace => {
-  const chat = newChatEntry("tab");
+  const tab: WorkspaceTab = {
+    kind: "palette",
+    name: crypto.randomUUID(),
+    label: "New Tab",
+  };
   return {
-    tabs: [],
-    chats: [chat],
-    activeChatId: chat.localId,
-    activeTabKey: chatTabKey(chat.localId),
+    tabs: [tab],
+    chats: [],
+    activeTabKey: tabKey(tab),
     browsers: [],
   };
 };
@@ -440,6 +443,16 @@ export function App({ hasCodingAgent }: { hasCodingAgent: boolean }) {
   // memory); the sidebar +, bubble +, and Cmd+E open the floating aside.
   const addChat = (forceMode?: "tab") =>
     updateWorkspace((ws) => {
+      // Already looking at a fresh chat (no session yet)? Don't stack
+      // another empty one on top — Cmd+N/+ is a no-op there.
+      const active = ws.chats.find((chat) => chat.localId === ws.activeChatId);
+      const activeIsVisible =
+        active?.mode === "partial" ||
+        (active?.mode === "tab" &&
+          ws.activeTabKey === chatTabKey(active.localId));
+      if (activeIsVisible && !active.sessionId && !active.pendingMessage) {
+        return ws;
+      }
       // Floating chats become a full tab anyway when the workspace is
       // empty — with nothing behind it, the chat IS the workspace.
       const noTabsOpen =
