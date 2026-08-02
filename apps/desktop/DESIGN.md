@@ -597,3 +597,26 @@ memory of *why* the app is the way it is.
   spots (main + renderer keybindings, settings labels, config-agent
   descriptions). Both work while focus is inside a webview via the
   existing guest-key relay.
+
+### 2026-08-02 — One registry for actions (shared/actions.ts)
+- Everything an action needs to exist anywhere — id, label, prose
+  description, default binding, palette keywords, palette visibility —
+  lives in **`src/shared/actions.ts`** as plain data. Both processes
+  import it: main derives the keybinding union/defaults and the config
+  agent's action docs; the renderer derives Settings rows and the
+  palette's action items. Adding an action = one registry entry + one
+  handler.
+- Handlers stay in app.tsx (they close over workspace state) but as a
+  single `Record<ActionId, () => void>` map consumed by BOTH the
+  shortcut dispatcher and the palette — a key press and a palette pick
+  can never diverge. The old per-binding if/else chain is gone.
+- Icons are deliberately NOT in the registry — lucide components would
+  drag React into main-process imports. They live in a renderer-side
+  `ACTION_ICONS` lookup with a Zap fallback for unknown ids.
+- Plugin-readiness without a plugin system: `ActionDefinition` is an
+  open interface with string ids (future plugin actions would be
+  namespaced "plugin:action" entries appended at runtime); only
+  `BUILTIN_ACTIONS`-derived types assume the set is closed. opencx's
+  alternative — a live registry populated by hook registration — was
+  rejected because main-process consumers (menu accelerators, agent
+  docs) can't read a renderer-side registry.

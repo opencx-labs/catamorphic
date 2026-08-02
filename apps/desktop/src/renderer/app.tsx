@@ -21,6 +21,10 @@ import {
   useRef,
   useState,
 } from "react";
+import {
+  type ActionId,
+  KEYBINDING_ACTIONS,
+} from "../shared/actions.js";
 import { AnimatedTitle } from "./components/animated-title.js";
 import { BookmarksNav } from "./components/bookmarks-nav.js";
 import { CommandPalette } from "./components/command-palette.js";
@@ -588,13 +592,24 @@ export function App({ hasCodingAgent }: { hasCodingAgent: boolean }) {
     return desktopApi.onCloseSurface(closeActiveSurface);
   }, [closeActiveSurface]);
 
-  // User-configurable window-level shortcuts: toggle-sidebar, new-tab, the
-  // palette (close-tab arrives from the app menu as a close-surface event).
+  // One handler per registry action (shared/actions.ts). Consumed by the
+  // shortcut dispatcher below AND the palette's action rows, so a key
+  // press and a palette pick always do the same thing. Rebuilt per render
+  // (closures over fresh state), read through a ref by the listeners.
+  const actionHandlers: Record<ActionId, () => void> = {
+    "new-tab": openPaletteTab,
+    "command-palette": () => setPaletteOpen((value) => !value),
+    "new-floating-chat": () => addChat(),
+    "new-browser-tab": () => openBrowserTab(""),
+    "toggle-sidebar": () => setSidebarOpen((value) => !value),
+    "close-tab": closeActiveSurface,
+  };
+  const actionHandlersRef = useRef(actionHandlers);
+  actionHandlersRef.current = actionHandlers;
+
+  // User-configurable window-level shortcuts (close-tab also arrives from
+  // the app menu as a close-surface event).
   const keybindings = useKeybindings();
-  const addChatRef = useRef(addChat);
-  addChatRef.current = addChat;
-  const openPaletteTabRef = useRef(openPaletteTab);
-  openPaletteTabRef.current = openPaletteTab;
   const keybindingsRef = useRef(keybindings);
   keybindingsRef.current = keybindings;
   useEffect(() => {
@@ -610,19 +625,11 @@ export function App({ hasCodingAgent }: { hasCodingAgent: boolean }) {
     }): boolean => {
       const bindings = keybindingsRef.current;
       const keyEvent = event as globalThis.KeyboardEvent;
-      if (matchesBinding(keyEvent, bindings["toggle-sidebar"])) {
-        setSidebarOpen((value) => !value);
-      } else if (matchesBinding(keyEvent, bindings["new-tab"])) {
-        openPaletteTabRef.current();
-      } else if (matchesBinding(keyEvent, bindings["command-palette"])) {
-        setPaletteOpen((value) => !value);
-      } else if (matchesBinding(keyEvent, bindings["new-floating-chat"])) {
-        addChatRef.current();
-      } else if (matchesBinding(keyEvent, bindings["new-browser-tab"])) {
-        openBrowserTabRef.current("");
-      } else {
-        return false;
-      }
+      const action = KEYBINDING_ACTIONS.find((candidate) =>
+        matchesBinding(keyEvent, bindings[candidate]),
+      );
+      if (!action) return false;
+      actionHandlersRef.current[action]();
       return true;
     };
 
@@ -703,10 +710,7 @@ export function App({ hasCodingAgent }: { hasCodingAgent: boolean }) {
         onSelectProject: selectProject,
         onSwitchProfile: switchProfile,
         onSendToAgent: sendToAgent,
-        onNewFloatingChat: () => addChat(),
-        onNewBrowserTab: () => openBrowserTab(""),
-        onToggleSidebar: () => setSidebarOpen((value) => !value),
-        onCloseActiveSurface: closeActiveSurface,
+        actionHandlers,
       }
     : null;
 

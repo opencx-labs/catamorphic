@@ -7,11 +7,11 @@ import type {
 } from "@catamorphic/sandbox";
 import {
   DEFAULT_KEYBINDINGS,
-  KEYBINDING_ACTIONS,
   type Keybindings,
   type KeybindingsStore,
   normalizeKeybindings,
 } from "../keybindings.js";
+import { BUILTIN_ACTIONS } from "../../shared/actions.js";
 import type { SidebarConfigStore } from "../sidebar-config.js";
 import {
   normalizeTheme,
@@ -19,16 +19,6 @@ import {
   THEME_TOKENS,
   type ThemeStore,
 } from "../theme.js";
-
-/** What each action does, for the agent's prompt. */
-const ACTION_DESCRIPTIONS: Record<string, string> = {
-  "new-tab": "open a new tab (the command palette)",
-  "command-palette": "open the command palette overlay",
-  "new-floating-chat": "open the small floating chat",
-  "new-browser-tab": "open a new browser tab",
-  "toggle-sidebar": "show/hide the sidebar",
-  "close-tab": "close the focused chat or tab",
-};
 
 export const DESKTOP_CONFIG_SKILL_PATH =
   ".agents/skills/configuring-catamorphic-desktop/SKILL.md";
@@ -72,9 +62,9 @@ ${JSON.stringify(DEFAULT_KEYBINDINGS, null, 2)}
 \`\`\`
 
 Actions:
-${KEYBINDING_ACTIONS.map(
-  (action) => `- \`${action}\` — ${ACTION_DESCRIPTIONS[action] ?? action}`,
-).join("\n")}
+${BUILTIN_ACTIONS.filter((action) => action.defaultBinding !== null)
+  .map((action) => `- \`${action.id}\` — ${action.description}`)
+  .join("\n")}
 
 Binding format: zero or more modifiers (\`Cmd\`, \`Ctrl\`, \`Alt\`,
 \`Shift\`) joined with \`+\`, then a key: \`"Cmd+T"\`,

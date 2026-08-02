@@ -1,4 +1,8 @@
 import { RotateCcw, X } from "lucide-react";
+import {
+  ACTION_LABELS,
+  KEYBINDING_ACTIONS,
+} from "../../shared/actions.js";
 import { type FormEvent, useEffect, useState } from "react";
 import { PendingButton } from "../components/pending-button.js";
 import {
@@ -348,14 +352,6 @@ function SidebarSection() {
   );
 }
 
-const SHORTCUT_LABELS: Record<KeybindingAction, string> = {
-  "new-tab": "New tab",
-  "command-palette": "Command palette",
-  "new-floating-chat": "New floating chat",
-  "new-browser-tab": "New browser tab",
-  "toggle-sidebar": "Toggle sidebar",
-  "close-tab": "Close tab",
-};
 
 /**
  * Keyboard shortcuts editor. Each row captures the next keypress while
@@ -420,12 +416,12 @@ function ShortcutsSection() {
         )}
       </div>
       <div className="flex flex-col gap-1.5">
-        {(Object.keys(SHORTCUT_LABELS) as KeybindingAction[]).map((action) => (
+        {KEYBINDING_ACTIONS.map((action) => (
           <div
             key={action}
             className="flex h-9 items-center justify-between rounded-lg border border-border bg-bg-raised/40 px-3"
           >
-            <span className="text-[13px]">{SHORTCUT_LABELS[action]}</span>
+            <span className="text-[13px]">{ACTION_LABELS[action]}</span>
             <button
               type="button"
               onClick={() => setRecording(recording === action ? null : action)}

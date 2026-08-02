@@ -15,8 +15,15 @@ import {
   UserRound,
   Workflow as WorkflowIcon,
   X,
+  Zap,
 } from "lucide-react";
 import * as lucide from "lucide-react";
+import {
+  type ActionDefinition,
+  type ActionId,
+  BUILTIN_ACTIONS,
+  type KeybindingAction,
+} from "../../shared/actions.js";
 import {
   type KeyboardEvent,
   useEffect,
@@ -49,6 +56,18 @@ import type { WorkspaceTab } from "./workspace-tabs.js";
  */
 
 type CommitMode = "replace" | "tab";
+
+/**
+ * Icons stay renderer-side (the shared registry is plain data usable by
+ * the main process). Unknown ids — e.g. future plugin actions — fall back
+ * to Zap.
+ */
+const ACTION_ICONS: Partial<Record<ActionId, LucideIcon>> = {
+  "new-floating-chat": MessageSquarePlus,
+  "new-browser-tab": Globe,
+  "toggle-sidebar": PanelLeft,
+  "close-tab": X,
+};
 
 interface PaletteItem {
   id: string;
@@ -102,10 +121,7 @@ export function CommandPalette({
   onSelectProject,
   onSwitchProfile,
   onSendToAgent,
-  onNewFloatingChat,
-  onNewBrowserTab,
-  onToggleSidebar,
-  onCloseActiveSurface,
+  actionHandlers,
 }: {
   variant: "overlay" | "tab";
   /**
@@ -128,10 +144,8 @@ export function CommandPalette({
   onSelectProject: (id: string) => void;
   onSwitchProfile: (profile: Profile) => void;
   onSendToAgent: (message: string, mode: "float" | "tab") => void;
-  onNewFloatingChat: () => void;
-  onNewBrowserTab: () => void;
-  onToggleSidebar: () => void;
-  onCloseActiveSurface: () => void;
+  /** One handler per registry action — the same map the shortcuts use. */
+  actionHandlers: Record<ActionId, () => void>;
 }) {
   const [query, setQuery] = useState("");
   const [selectedIndex, setSelectedIndex] = useState(0);
@@ -197,52 +211,32 @@ export function CommandPalette({
     return () => clearTimeout(timer);
   }, [open]);
 
+  // Action rows come straight from the shared registry — one entry there
+  // yields the shortcut, the Settings row, the agent doc, and this row.
+  // Handlers are read through a ref: the map is rebuilt every app render
+  // (closures over fresh state), and letting it invalidate this memo
+  // would cascade into the results memo and the FLIP pass per render.
+  const actionHandlersRef = useRef(actionHandlers);
+  actionHandlersRef.current = actionHandlers;
   const actionItems = useMemo<PaletteItem[]>(
-    () => [
-      {
-        id: "action:new-floating-chat",
-        icon: MessageSquarePlus,
-        label: "New floating chat",
-        keywords: ["chat", "assistant", "agent", "ai", "quick"],
-        shortcut: formatBinding(keybindings["new-floating-chat"]),
-        kind: "action",
-        run: onNewFloatingChat,
-      },
-      {
-        id: "action:new-browser-tab",
-        icon: Globe,
-        label: "New browser tab",
-        keywords: ["browser", "web", "page", "open"],
-        shortcut: formatBinding(keybindings["new-browser-tab"]),
-        kind: "action",
-        run: onNewBrowserTab,
-      },
-      {
-        id: "action:toggle-sidebar",
-        icon: PanelLeft,
-        label: "Toggle sidebar",
-        keywords: ["sidebar", "hide", "show", "collapse", "expand", "panel"],
-        shortcut: formatBinding(keybindings["toggle-sidebar"]),
-        kind: "action",
-        run: onToggleSidebar,
-      },
-      {
-        id: "action:close-tab",
-        icon: X,
-        label: "Close tab",
-        keywords: ["close", "tab", "quit", "dismiss"],
-        shortcut: formatBinding(keybindings["close-tab"]),
-        kind: "action",
-        run: onCloseActiveSurface,
-      },
-    ],
-    [
-      keybindings,
-      onNewFloatingChat,
-      onNewBrowserTab,
-      onToggleSidebar,
-      onCloseActiveSurface,
-    ],
+    () =>
+      BUILTIN_ACTIONS.filter(
+        (action: ActionDefinition) => !action.hiddenInPalette,
+      ).map(
+        (action) => ({
+          id: `action:${action.id}`,
+          icon: ACTION_ICONS[action.id] ?? Zap,
+          label: action.label,
+          keywords: [...action.keywords],
+          shortcut:
+            action.id in keybindings
+              ? formatBinding(keybindings[action.id as KeybindingAction])
+              : undefined,
+          kind: "action" as const,
+          run: () => actionHandlersRef.current[action.id](),
+        }),
+      ),
+    [keybindings],
   );
 
   const projectItems = useMemo<PaletteItem[]>(

@@ -1,42 +1,30 @@
 import fs from "node:fs";
 import path from "node:path";
 
+import {
+  DEFAULT_KEYBINDINGS,
+  KEYBINDING_ACTIONS,
+  type KeybindingAction,
+  type Keybindings,
+} from "../shared/actions.js";
+
+export {
+  DEFAULT_KEYBINDINGS,
+  KEYBINDING_ACTIONS,
+  type KeybindingAction,
+  type Keybindings,
+};
+
 /**
  * User-level keyboard shortcuts, stored as plain JSON at
  * `<userData>/keybindings.json` so both the Settings UI and outside agents
  * (or the user in a text editor) can edit them. The file is watched and
- * changes apply live — no restart.
+ * changes apply live — no restart. Actions and their defaults come from
+ * the shared registry (shared/actions.ts).
  *
  * Binding format: modifiers `Cmd`, `Ctrl`, `Alt`, `Shift` joined with `+`,
  * ending in a key name ("Cmd+T", "Ctrl+Shift+P", "Alt+Escape").
  */
-export type KeybindingAction =
-  | "new-tab"
-  | "command-palette"
-  | "new-floating-chat"
-  | "new-browser-tab"
-  | "toggle-sidebar"
-  | "close-tab";
-
-export type Keybindings = Record<KeybindingAction, string>;
-
-export const DEFAULT_KEYBINDINGS: Keybindings = {
-  // Chrome muscle memory: Cmd+T always opens a full tab (the command
-  // palette as New Tab page).
-  "new-tab": "Cmd+T",
-  // The same palette as an overlay above whatever is on screen.
-  "command-palette": "Cmd+P",
-  // The floating quick-chat aside: Cmd+N ("new") — free because the app
-  // is single-window, so Chrome's new-window meaning can't collide.
-  "new-floating-chat": "Cmd+N",
-  "new-browser-tab": "Cmd+Shift+T",
-  "toggle-sidebar": "Cmd+B",
-  "close-tab": "Cmd+W",
-};
-
-export const KEYBINDING_ACTIONS = Object.keys(
-  DEFAULT_KEYBINDINGS,
-) as KeybindingAction[];
 
 const BINDING_PATTERN = /^((Cmd|Ctrl|Alt|Shift)\+)*[\w]([\w-]*)$/;
 

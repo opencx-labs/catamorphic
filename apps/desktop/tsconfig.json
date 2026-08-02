@@ -9,5 +9,5 @@
     },
     "types": ["vite/client"]
   },
-  "include": ["src/renderer", "src/preload"]
+  "include": ["src/renderer", "src/preload", "src/shared"]
 }

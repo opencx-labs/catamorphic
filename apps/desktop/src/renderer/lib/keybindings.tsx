@@ -5,31 +5,14 @@ import {
   useEffect,
   useState,
 } from "react";
+import {
+  DEFAULT_KEYBINDINGS,
+  type KeybindingAction,
+  type Keybindings,
+} from "../../shared/actions.js";
 import { desktopApi } from "./desktop-api.js";
 
-export type KeybindingAction =
-  | "new-tab"
-  | "command-palette"
-  | "new-floating-chat"
-  | "new-browser-tab"
-  | "toggle-sidebar"
-  | "close-tab";
-
-export type Keybindings = Record<KeybindingAction, string>;
-
-/**
- * Mirrors main/keybindings.ts. These are only the pre-load fallback: the
- * real values arrive from keybindings.json via KeybindingsProvider, and
- * every hint derives from that, so a rebind updates the buttons too.
- */
-export const DEFAULT_KEYBINDINGS: Keybindings = {
-  "new-tab": "Cmd+T",
-  "command-palette": "Cmd+P",
-  "new-floating-chat": "Cmd+N",
-  "new-browser-tab": "Cmd+Shift+T",
-  "toggle-sidebar": "Cmd+B",
-  "close-tab": "Cmd+W",
-};
+export { DEFAULT_KEYBINDINGS, type KeybindingAction, type Keybindings };
 
 const KeybindingsContext = createContext<Keybindings>(DEFAULT_KEYBINDINGS);
 
