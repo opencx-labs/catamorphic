@@ -23,6 +23,7 @@ import {
 } from "react";
 import { AnimatedTitle } from "./components/animated-title.js";
 import { BookmarksNav } from "./components/bookmarks-nav.js";
+import { CommandPalette } from "./components/command-palette.js";
 import { SidebarItemRow } from "./components/sidebar-item-row.js";
 import { ChatBubbles } from "./components/chat-bubbles.js";
 import { ChatDock, type ChatDockEntry } from "./components/chat-dock.js";
@@ -114,6 +115,7 @@ export function App({ hasCodingAgent }: { hasCodingAgent: boolean }) {
     null,
   );
   const [sidebarOpen, setSidebarOpen] = useState(true);
+  const [paletteOpen, setPaletteOpen] = useState(false);
   const [sendingByChat, setSendingByChat] = useState<Record<string, boolean>>(
     {},
   );
@@ -220,6 +222,10 @@ export function App({ hasCodingAgent }: { hasCodingAgent: boolean }) {
         activeTabKey: key,
       };
     });
+
+  // Chrome's New Tab analog: a fresh tab whose content is the palette.
+  const openPaletteTab = () =>
+    openTab({ kind: "palette", name: crypto.randomUUID(), label: "New Tab" });
 
   /** Tab bar entries: fixed tabs plus one derived tab per tab-mode chat. */
   const chatTabs = (ws: Workspace, chatLabels: Record<string, string>) =>
@@ -451,6 +457,28 @@ export function App({ hasCodingAgent }: { hasCodingAgent: boolean }) {
       };
     });
 
+  // Palette "Send to agent": a new chat born with its first message
+  // attached; ChatDock auto-sends it on mount.
+  const sendToAgent = (message: string, mode: "float" | "tab") =>
+    updateWorkspace((ws) => {
+      const entry: ChatDockEntry = {
+        ...newChatEntry(mode === "tab" ? "tab" : "partial"),
+        pendingMessage: message,
+      };
+      return {
+        ...ws,
+        chats: [
+          ...ws.chats.map((chat) =>
+            chat.mode === "partial" ? { ...chat, mode: "min" as const } : chat,
+          ),
+          entry,
+        ],
+        activeChatId: entry.localId,
+        activeTabKey:
+          entry.mode === "tab" ? chatTabKey(entry.localId) : ws.activeTabKey,
+      };
+    });
+
   const minimizeFloatingChats = () =>
     updateWorkspace((ws) => ({
       ...ws,
@@ -547,23 +575,26 @@ export function App({ hasCodingAgent }: { hasCodingAgent: boolean }) {
   closeChatRef.current = closeChat;
   const closeTabRef = useRef(closeTab);
   closeTabRef.current = closeTab;
-  useEffect(() => {
-    return desktopApi.onCloseSurface(() => {
-      const ws = workspaceRef.current;
-      const floating = ws.chats.find((chat) => chat.mode === "partial");
-      if (floating) {
-        closeChatRef.current(floating.localId);
-        return;
-      }
-      if (ws.activeTabKey) closeTabRef.current(ws.activeTabKey);
-    });
+  const closeActiveSurface = useCallback(() => {
+    const ws = workspaceRef.current;
+    const floating = ws.chats.find((chat) => chat.mode === "partial");
+    if (floating) {
+      closeChatRef.current(floating.localId);
+      return;
+    }
+    if (ws.activeTabKey) closeTabRef.current(ws.activeTabKey);
   }, []);
+  useEffect(() => {
+    return desktopApi.onCloseSurface(closeActiveSurface);
+  }, [closeActiveSurface]);
 
-  // User-configurable window-level shortcuts: toggle-sidebar and new-chat
-  // (close-tab arrives from the app menu as a close-surface event).
+  // User-configurable window-level shortcuts: toggle-sidebar, new-tab, the
+  // palette (close-tab arrives from the app menu as a close-surface event).
   const keybindings = useKeybindings();
   const addChatRef = useRef(addChat);
   addChatRef.current = addChat;
+  const openPaletteTabRef = useRef(openPaletteTab);
+  openPaletteTabRef.current = openPaletteTab;
   const keybindingsRef = useRef(keybindings);
   keybindingsRef.current = keybindings;
   useEffect(() => {
@@ -581,8 +612,10 @@ export function App({ hasCodingAgent }: { hasCodingAgent: boolean }) {
       const keyEvent = event as globalThis.KeyboardEvent;
       if (matchesBinding(keyEvent, bindings["toggle-sidebar"])) {
         setSidebarOpen((value) => !value);
-      } else if (matchesBinding(keyEvent, bindings["new-chat"])) {
-        addChatRef.current("tab");
+      } else if (matchesBinding(keyEvent, bindings["new-tab"])) {
+        openPaletteTabRef.current();
+      } else if (matchesBinding(keyEvent, bindings["command-palette"])) {
+        setPaletteOpen((value) => !value);
       } else if (matchesBinding(keyEvent, bindings["new-floating-chat"])) {
         addChatRef.current();
       } else if (matchesBinding(keyEvent, bindings["new-browser-tab"])) {
@@ -652,6 +685,30 @@ export function App({ hasCodingAgent }: { hasCodingAgent: boolean }) {
   const activeBrowserTabId = workspace.activeTabKey?.startsWith("browser:")
     ? workspace.activeTabKey.slice("browser:".length)
     : undefined;
+
+  // Everything the palette searches and acts on, shared by both hosts
+  // (the Cmd+P overlay and palette "New Tab" tabs).
+  const paletteProps = projectId
+    ? {
+        projectId,
+        profileId: activeProfile?.id,
+        projects,
+        activeProjectId: projectId,
+        profiles: profilesData?.profiles ?? [],
+        activeProfileId: activeProfile?.id,
+        sidebarConfig,
+        onOpenUrl: openUrl,
+        onOpenTab: openTab,
+        onOpenSession: openSession,
+        onSelectProject: selectProject,
+        onSwitchProfile: switchProfile,
+        onSendToAgent: sendToAgent,
+        onNewFloatingChat: () => addChat(),
+        onNewBrowserTab: () => openBrowserTab(""),
+        onToggleSidebar: () => setSidebarOpen((value) => !value),
+        onCloseActiveSurface: closeActiveSurface,
+      }
+    : null;
 
   return (
     <div className="flex h-full">
@@ -755,7 +812,7 @@ export function App({ hasCodingAgent }: { hasCodingAgent: boolean }) {
               activeKey={workspace.activeTabKey}
               onSelect={selectTab}
               onClose={closeTab}
-              onNew={() => addChat("tab")}
+              onNew={openPaletteTab}
             />
           )}
           {projectId && (
@@ -788,6 +845,13 @@ export function App({ hasCodingAgent }: { hasCodingAgent: boolean }) {
               ) : activeTab?.kind === "settings" ? (
                 <SettingsScreen
                   onClose={() => closeTab(tabKey(activeTab))}
+                />
+              ) : activeTab?.kind === "palette" && paletteProps ? (
+                <CommandPalette
+                  key={tabKey(activeTab)}
+                  variant="tab"
+                  onClose={() => closeTab(tabKey(activeTab))}
+                  {...paletteProps}
                 />
               ) : activeChatTabId || activeBrowserTabId ? null : (
                 <TabEmptyState hasCodingAgent={hasCodingAgent} />
@@ -881,6 +945,16 @@ export function App({ hasCodingAgent }: { hasCodingAgent: boolean }) {
           />
         )}
       </main>
+
+      {/* Stays mounted so the close transition can play out. */}
+      {paletteProps && (
+        <CommandPalette
+          variant="overlay"
+          open={paletteOpen}
+          onClose={() => setPaletteOpen(false)}
+          {...paletteProps}
+        />
+      )}
 
       <ProjectModal
         open={projectModalOpen}

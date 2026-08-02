@@ -57,6 +57,8 @@ export interface ChatDockEntry {
   localId: string;
   sessionId?: string;
   mode: ChatMode;
+  /** Auto-sent as the first message on mount (palette "Send to agent"). */
+  pendingMessage?: string;
 }
 
 export interface ChatDockProps {
@@ -116,6 +118,19 @@ export function ChatDock({
   entryRef.current = entry;
   const onEntryChangeRef = useRef(onEntryChange);
   onEntryChangeRef.current = onEntryChange;
+
+  // Palette "Send to agent": the entry arrives with the message attached;
+  // fire it once on mount and strip it so remounts don't re-send.
+  const sendRef = useRef(chat.send);
+  sendRef.current = chat.send;
+  const pendingSentRef = useRef(false);
+  useEffect(() => {
+    const pending = entryRef.current.pendingMessage;
+    if (!pending || pendingSentRef.current) return;
+    pendingSentRef.current = true;
+    void sendRef.current(pending);
+    onEntryChangeRef.current({ ...entryRef.current, pendingMessage: undefined });
+  }, []);
 
   const isTab = entry.mode === "tab";
   const expanded = entry.mode === "partial" || (isTab && tabActive);

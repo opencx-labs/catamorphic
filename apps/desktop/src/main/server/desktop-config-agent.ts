@@ -22,7 +22,8 @@ import {
 
 /** What each action does, for the agent's prompt. */
 const ACTION_DESCRIPTIONS: Record<string, string> = {
-  "new-chat": "open a new chat tab",
+  "new-tab": "open a new tab (the command palette)",
+  "command-palette": "open the command palette overlay",
   "new-floating-chat": "open the small floating chat",
   "new-browser-tab": "open a new browser tab",
   "toggle-sidebar": "show/hide the sidebar",

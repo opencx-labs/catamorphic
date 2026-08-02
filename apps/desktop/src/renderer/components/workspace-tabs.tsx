@@ -3,6 +3,7 @@ import {
   LayoutGrid,
   MessageSquare,
   Plus,
+  Search,
   Settings as SettingsIcon,
   Workflow as WorkflowIcon,
   X,
@@ -17,7 +18,8 @@ export type WorkspaceTab =
   | { kind: "app"; name: string; label?: string }
   | { kind: "chat"; name: string; label?: string }
   | { kind: "browser"; name: string; label?: string; faviconUrl?: string | null }
-  | { kind: "settings"; name: string; label?: string };
+  | { kind: "settings"; name: string; label?: string }
+  | { kind: "palette"; name: string; label?: string };
 
 export const tabKey = (tab: WorkspaceTab) => `${tab.kind}:${tab.name}`;
 
@@ -27,6 +29,7 @@ const TAB_ICONS = {
   chat: MessageSquare,
   browser: Globe,
   settings: SettingsIcon,
+  palette: Search,
 } as const;
 
 interface RenderedTab {
@@ -185,8 +188,8 @@ export function WorkspaceTabBar({
       })}
       {onNew && (
         <ShortcutHint
-          label="New chat tab"
-          shortcut={formatBinding(keybindings["new-chat"])}
+          label="New tab"
+          shortcut={formatBinding(keybindings["new-tab"])}
         >
           <button
             type="button"

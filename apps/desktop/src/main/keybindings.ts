@@ -11,7 +11,8 @@ import path from "node:path";
  * ending in a key name ("Cmd+T", "Ctrl+Shift+P", "Alt+Escape").
  */
 export type KeybindingAction =
-  | "new-chat"
+  | "new-tab"
+  | "command-palette"
   | "new-floating-chat"
   | "new-browser-tab"
   | "toggle-sidebar"
@@ -20,8 +21,11 @@ export type KeybindingAction =
 export type Keybindings = Record<KeybindingAction, string>;
 
 export const DEFAULT_KEYBINDINGS: Keybindings = {
-  // Chrome muscle memory: Cmd+T always opens a full tab (a new chat tab).
-  "new-chat": "Cmd+T",
+  // Chrome muscle memory: Cmd+T always opens a full tab (the command
+  // palette as New Tab page).
+  "new-tab": "Cmd+T",
+  // The same palette as an overlay above whatever is on screen.
+  "command-palette": "Cmd+P",
   // The floating quick-chat aside: Cmd+N ("new") — free because the app
   // is single-window, so Chrome's new-window meaning can't collide.
   "new-floating-chat": "Cmd+N",

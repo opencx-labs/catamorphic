@@ -115,6 +115,11 @@ const api = {
     title: string;
   }): Promise<void> =>
     ipcRenderer.invoke("catamorphic:browser-history-retitle", input),
+  browserRecentHistory: (input: {
+    profileId: string;
+    limit?: number;
+  }): Promise<{ url: string; title: string }[]> =>
+    ipcRenderer.invoke("catamorphic:browser-history-recent", input),
   browserSuggest: (input: {
     profileId: string;
     query: string;

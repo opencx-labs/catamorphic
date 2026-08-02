@@ -349,7 +349,8 @@ function SidebarSection() {
 }
 
 const SHORTCUT_LABELS: Record<KeybindingAction, string> = {
-  "new-chat": "New chat tab",
+  "new-tab": "New tab",
+  "command-palette": "Command palette",
   "new-floating-chat": "New floating chat",
   "new-browser-tab": "New browser tab",
   "toggle-sidebar": "Toggle sidebar",

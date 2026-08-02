@@ -128,8 +128,9 @@ function createWindow(): BrowserWindow {
 // The default menu binds Cmd+W to "Close Window". The workspace has its
 // own closable surfaces (tabs, floating chats), so close-tab is forwarded
 // to the renderer, which closes the most specific thing in focus.
-// Accelerators come from the user's keybindings file; new-chat and
-// toggle-sidebar are window-level shortcuts handled in the renderer.
+// Accelerators come from the user's keybindings file; new-tab, the command
+// palette, and toggle-sidebar are window-level shortcuts handled in the
+// renderer.
 function buildMenu(bindings: Keybindings): Menu {
   return Menu.buildFromTemplate([
     ...(process.platform === "darwin" ? [{ role: "appMenu" } as const] : []),

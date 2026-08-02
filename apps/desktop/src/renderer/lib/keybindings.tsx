@@ -8,7 +8,8 @@ import {
 import { desktopApi } from "./desktop-api.js";
 
 export type KeybindingAction =
-  | "new-chat"
+  | "new-tab"
+  | "command-palette"
   | "new-floating-chat"
   | "new-browser-tab"
   | "toggle-sidebar"
@@ -22,7 +23,8 @@ export type Keybindings = Record<KeybindingAction, string>;
  * every hint derives from that, so a rebind updates the buttons too.
  */
 export const DEFAULT_KEYBINDINGS: Keybindings = {
-  "new-chat": "Cmd+T",
+  "new-tab": "Cmd+T",
+  "command-palette": "Cmd+P",
   "new-floating-chat": "Cmd+N",
   "new-browser-tab": "Cmd+Shift+T",
   "toggle-sidebar": "Cmd+B",

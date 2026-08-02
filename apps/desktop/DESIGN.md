@@ -559,3 +559,41 @@ memory of *why* the app is the way it is.
 - Settings → Theme: preset swatch cards (bg/raised/accent/fg quadrants)
   plus an "Edit colors…" list with a native color input per token; edits
   write overrides immediately and an accent dot marks overridden tokens.
+
+### 2026-08-02 — The command palette is the front door (Cmd+P / Cmd+T)
+- One palette, two hosts: **Cmd+P** overlays it above whatever is on
+  screen; **Cmd+T** opens it as the content of a fresh tab — the Chrome
+  New-Tab analog. Both are the same component
+  (`components/command-palette.tsx`), differing only in chrome and
+  commit semantics. The tab-strip + opens the palette tab too.
+- **Matching is Superhuman's command-score** (`lib/command-score.ts`),
+  ported (~100 lines, MIT) rather than adopting cmdk + Radix — the app
+  is deliberately component-library-free, and the matcher IS the
+  smoothness: subsequences ("gto proj"), word-boundary bonuses,
+  transposition tolerance, keyword/synonym fields per item. Filtering
+  is fully synchronous per keystroke over memoized sources; no debounce
+  needed at this scale (a few hundred items).
+- It searches everything that has a name: sidebar items (workflows,
+  apps, chats, bookmarks, custom links), keybinding actions (chips show
+  live bindings), projects ("Go to …"), profiles ("Switch to …"),
+  recent browsing history (new `browser-history-recent` IPC, frecency
+  store already existed), plus a web search/open-URL fallback row that
+  reuses the address bar's `resolveInput`.
+- **Enter vs Cmd+Enter mirrors the bookmark rule**: overlay Enter
+  replaces the current browser tab's page, Cmd+Enter opens a new tab.
+  In a palette tab both land in that tab itself — the palette tab is
+  consumed by whatever it opens (pure actions like toggle-sidebar leave
+  it in place).
+- **The input is a textarea, and long input becomes a message.** The
+  box grows vertically (`field-sizing-content`); when the query is long
+  (>60 chars), multiline, or matches nothing, "Send to agent" takes the
+  top slot — a new chat is born with the text attached
+  (`ChatDockEntry.pendingMessage`, auto-sent on mount). Overlay: Enter →
+  floating chat, Cmd+Enter → chat tab. Palette tab: the tab becomes the
+  chat. Cmd+T therefore replaces the old "Cmd+T = new chat tab": the
+  palette is a superset — type and hit Send to agent.
+- Keybindings follow the established registry convention: `new-tab`
+  (Cmd+T) and `command-palette` (Cmd+P) added across the four mirrored
+  spots (main + renderer keybindings, settings labels, config-agent
+  descriptions). Both work while focus is inside a webview via the
+  existing guest-key relay.

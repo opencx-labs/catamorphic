@@ -203,6 +203,12 @@ export function registerBrowserSupport(
   );
 
   ipcMain.handle(
+    "catamorphic:browser-history-recent",
+    (_event, input: { profileId: string; limit?: number }) =>
+      history.recent(input.profileId, input.limit ?? 150),
+  );
+
+  ipcMain.handle(
     "catamorphic:browser-suggest",
     (_event, input: { profileId: string; query: string }) => ({
       matches: history.suggest(input.profileId, input.query),

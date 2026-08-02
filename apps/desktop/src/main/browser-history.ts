@@ -130,6 +130,14 @@ export class BrowserHistoryStore {
       .map(({ entry }) => ({ url: entry.url, title: entry.title }));
   }
 
+  /** Most recently visited pages, newest first. */
+  recent(profileId: string, limit: number): HistorySuggestion[] {
+    return [...this.load(profileId)]
+      .sort((a, b) => b.lastVisitAt - a.lastVisitAt)
+      .slice(0, limit)
+      .map((entry) => ({ url: entry.url, title: entry.title }));
+  }
+
   /** Best URL whose bare form starts with the input (inline autocomplete). */
   inlineMatch(profileId: string, query: string): string | null {
     const needle = query.trim().toLowerCase();

@@ -208,6 +208,10 @@ export interface CatamorphicDesktopApi {
     url: string;
     title: string;
   }) => Promise<void>;
+  browserRecentHistory: (input: {
+    profileId: string;
+    limit?: number;
+  }) => Promise<{ url: string; title: string }[]>;
   browserSuggest: (input: {
     profileId: string;
     query: string;
