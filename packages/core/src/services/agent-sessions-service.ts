@@ -361,7 +361,7 @@ export class AgentSessionsService {
       );
     }
 
-    const assistantMessageId = await this.db
+    let assistantMessageId = await this.db
       .transaction()
       .execute(async (trx) => {
         await trx
@@ -392,22 +392,64 @@ export class AgentSessionsService {
     };
 
     const events: AgentEvent[] = [];
-    const textParts: string[] = [];
+    // Events since the last flushed preamble — each assistant message keeps
+    // only its own segment's events.
+    let segmentEvents: AgentEvent[] = [];
+    // The provider yields text at tool-call boundaries (preambles) and once
+    // at the end (the answer). A segment is held until we know which it is:
+    // more work following it makes it a preamble, pushed immediately as its
+    // own completed message with a fresh in-progress placeholder after it.
+    let heldText: string | undefined;
+    let lastFlushed: { id: string; events: AgentEvent[] } | undefined;
+    const flushHeldText = async () => {
+      if (heldText === undefined) return;
+      const metadata: JsonObject = {
+        status: "completed",
+        events: JSON.parse(JSON.stringify(segmentEvents)) as JsonObject[],
+      };
+      await this.db
+        .updateTable("agent_messages")
+        .set({ content: heldText, metadata })
+        .where("id", "=", assistantMessageId)
+        .execute();
+      lastFlushed = { id: assistantMessageId, events: segmentEvents };
+      heldText = undefined;
+      segmentEvents = [];
+      const next = await this.db
+        .insertInto("agent_messages")
+        .values({
+          session_id: sessionId,
+          role: "assistant",
+          content: "Thinking...",
+          metadata: progressMetadata([]),
+        })
+        .returning("id")
+        .executeTakeFirstOrThrow();
+      assistantMessageId = next.id;
+    };
+    const continuesTurn = (event: AgentEvent): boolean =>
+      event.type === "text" ||
+      event.type === "tool_call" ||
+      event.type === "command" ||
+      event.type === "file_edit";
+
     try {
       for await (const event of this.codingAgent.sendMessage(
         providerSession,
         message,
       )) {
+        if (continuesTurn(event)) await flushHeldText();
         events.push(event);
+        segmentEvents.push(event);
         if (event.type === "text" && event.content) {
-          textParts.push(event.content);
+          heldText = event.content;
         }
         if (event.type !== "done") {
           await this.db
             .updateTable("agent_messages")
             .set({
               content: activityLabel(event),
-              metadata: progressMetadata(events),
+              metadata: progressMetadata(segmentEvents),
             })
             .where("id", "=", assistantMessageId)
             .execute();
@@ -423,22 +465,38 @@ export class AgentSessionsService {
       const questionEvent = [...events]
         .reverse()
         .find((event) => event.type === "question");
-      const content =
-        textParts.join("\n\n") ||
-        events
-          .filter((event) => event.type === "error")
-          .map((event) => event.content)
-          .join("\n") ||
-        (questionEvent ? "" : "(no response)");
-
       const failed = events.some((event) => event.type === "error");
+
+      // The turn ended right after a flushed preamble (no closing text,
+      // error, or question): that preamble IS the final message. Drop the
+      // dangling placeholder and finalize the flushed row instead.
+      const settleFlushed =
+        heldText === undefined && !failed && !questionEvent && lastFlushed;
+      if (settleFlushed) {
+        await this.db
+          .deleteFrom("agent_messages")
+          .where("id", "=", assistantMessageId)
+          .execute();
+        assistantMessageId = settleFlushed.id;
+        segmentEvents = [...settleFlushed.events, ...segmentEvents];
+      }
+
+      const content = settleFlushed
+        ? undefined
+        : (heldText ??
+          (events
+            .filter((event) => event.type === "error")
+            .map((event) => event.content)
+            .join("\n") ||
+            (questionEvent ? "" : "(no response)")));
+
       const metadata: JsonObject = {
         status: failed
           ? "failed"
           : questionEvent
             ? "awaiting_input"
             : "completed",
-        events: JSON.parse(JSON.stringify(events)) as JsonObject[],
+        events: JSON.parse(JSON.stringify(segmentEvents)) as JsonObject[],
         changedFiles: changedFiles.map((change) => ({ ...change })),
         ...(questionEvent?.questions
           ? {
@@ -451,7 +509,7 @@ export class AgentSessionsService {
 
       const row = await this.db
         .updateTable("agent_messages")
-        .set({ content, metadata })
+        .set({ ...(content === undefined ? {} : { content }), metadata })
         .where("id", "=", assistantMessageId)
         .returningAll()
         .executeTakeFirstOrThrow();
