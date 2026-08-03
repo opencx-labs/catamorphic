@@ -11,14 +11,6 @@ import {
   type KeybindingsStore,
   normalizeKeybindings,
 } from "./keybindings.js";
-import {
-  normalizeTheme,
-  type ResolvedTheme,
-  resolveTheme,
-  THEME_PRESETS,
-  type ThemeStore,
-  windowBackgroundColor,
-} from "./theme.js";
 import type { EmbeddedServer } from "./server/boot.js";
 import { DESKTOP_TENANT_ID, DESKTOP_USER_ID } from "./server/boot.js";
 import { GITHUB_APP } from "./server/github.js";
@@ -30,6 +22,14 @@ import {
   type SettingsStore,
   toPublicSettings,
 } from "./server/settings.js";
+import {
+  normalizeTheme,
+  type ResolvedTheme,
+  resolveTheme,
+  THEME_PRESETS,
+  type ThemeStore,
+  windowBackgroundColor,
+} from "./theme.js";
 
 export interface ServerState {
   current: EmbeddedServer | null;
@@ -124,9 +124,12 @@ export function registerIpcHandlers(
   }
 
   // Where new projects go by default: ~/Catamorphic/<name>. Always a real,
-  // user-visible folder — project data never hides in app data.
+  // user-visible folder — project data never hides in app data. E2E runs
+  // keep projects inside the throwaway userData dir instead of the home.
   ipcMain.handle("catamorphic:default-projects-dir", () =>
-    path.join(app.getPath("home"), "Catamorphic"),
+    process.env.CATAMORPHIC_E2E_DATA_DIR
+      ? path.join(process.env.CATAMORPHIC_E2E_DATA_DIR, "Catamorphic")
+      : path.join(app.getPath("home"), "Catamorphic"),
   );
 
   const identity = {

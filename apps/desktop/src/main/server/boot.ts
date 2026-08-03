@@ -18,6 +18,7 @@ import type { SidebarConfigStore } from "../sidebar-config.js";
 import type { ThemeStore } from "../theme.js";
 import { resolveCodingAgent } from "./coding-agent.js";
 import { DesktopConfigAgent } from "./desktop-config-agent.js";
+import { E2eFakeCodingAgent, E2eLocalSandboxProvider } from "./e2e-fakes.js";
 import { FileGithubTokenStore, GITHUB_APP } from "./github.js";
 import type { DataPaths } from "./paths.js";
 import { ProjectRootsStore } from "./project-roots.js";
@@ -50,8 +51,14 @@ export async function startEmbeddedServer(
     plugins: [new WithSchemaPlugin(DEFAULT_SCHEMA)],
   });
 
-  const sandboxProvider = new MicrosandboxSandboxProvider();
-  const baseAgent = resolveCodingAgent(settings, sandboxProvider);
+  // E2E runs swap the real sandbox + model for deterministic local fakes.
+  const e2eFakeAgent = process.env.CATAMORPHIC_E2E_FAKE_AGENT === "1";
+  const sandboxProvider = e2eFakeAgent
+    ? new E2eLocalSandboxProvider()
+    : new MicrosandboxSandboxProvider();
+  const baseAgent = e2eFakeAgent
+    ? new E2eFakeCodingAgent(sandboxProvider)
+    : resolveCodingAgent(settings, sandboxProvider);
   // Desktop-config wrapper: lets the chat agent read and edit app-level
   // settings (keyboard shortcuts, sidebar, theme) via mirror files in its
   // sandbox.

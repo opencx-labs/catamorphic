@@ -2,16 +2,16 @@ import path from "node:path";
 import { app, BrowserWindow, dialog, ipcMain, Menu } from "electron";
 import { registerBrowserSupport } from "./browser.js";
 import { registerIpcHandlers, type ServerState } from "./ipc.js";
-import { ProfilesStore } from "./profiles.js";
-import { SidebarConfigStore } from "./sidebar-config.js";
 import {
   type Keybindings,
   KeybindingsStore,
   toAccelerator,
 } from "./keybindings.js";
+import { ProfilesStore } from "./profiles.js";
 import { type EmbeddedServer, startEmbeddedServer } from "./server/boot.js";
 import { resolveDataPaths } from "./server/paths.js";
 import { SettingsStore } from "./server/settings.js";
+import { SidebarConfigStore } from "./sidebar-config.js";
 import { ThemeStore, windowBackgroundColor } from "./theme.js";
 
 // macOS 26.x + Apple Silicon: V8's background compiler threads race the
@@ -38,10 +38,17 @@ app.userAgentFallback = app.userAgentFallback
   .replace(new RegExp(` ${app.name}/[\\d.]+`), "")
   .replace(/ catamorphic-desktop\/[\d.]+/, "");
 
+// E2E runs point userData at a throwaway dir so tests never touch real
+// settings/projects/DB, and may run beside a normally-running app.
+const e2eDataDir = process.env.CATAMORPHIC_E2E_DATA_DIR;
+if (e2eDataDir) {
+  app.setPath("userData", e2eDataDir);
+}
+
 // PGlite is single-writer: a second instance opening the same data dir
 // aborts deep in WASM ("Aborted(). Build with -sASSERTIONS"). Refuse to
 // start and surface the first instance's window instead.
-if (!app.requestSingleInstanceLock()) {
+if (!e2eDataDir && !app.requestSingleInstanceLock()) {
   app.quit();
 }
 app.on("second-instance", () => {

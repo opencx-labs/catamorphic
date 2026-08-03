@@ -1,0 +1,231 @@
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { type AppHandle, launchApp } from "./harness.js";
+
+/**
+ * End-to-end flows against the real Electron app: isolated userData dir,
+ * embedded server with the deterministic fake agent (no API key, no real
+ * sandbox). One app instance for the whole file; tests build on each other
+ * in order (project → tabs → chats), matching how a user session flows.
+ */
+
+let app: AppHandle;
+
+beforeAll(async () => {
+  app = await launchApp();
+});
+
+afterAll(async () => {
+  await app?.stop();
+});
+
+/** DOM helpers injected into every eval — keep selectors in one place. */
+const helpers = `
+  const $ = (selector) => document.querySelector(selector);
+  const $$ = (selector) => [...document.querySelectorAll(selector)];
+  const byText = (selector, text) =>
+    $$(selector).find((el) => el.textContent.trim().includes(text));
+  const visibleDock = () =>
+    $$('section[aria-label]').find((el) => !el.inert && el.querySelector('textarea'));
+  const setReactValue = (el, value) => {
+    const proto = el instanceof HTMLTextAreaElement
+      ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;
+    Object.getOwnPropertyDescriptor(proto, 'value').set.call(el, value);
+    el.dispatchEvent(new Event('input', { bubbles: true }));
+  };
+  const pressKey = (key, mods = {}) =>
+    window.dispatchEvent(new KeyboardEvent('keydown',
+      { key, bubbles: true, cancelable: true, ...mods }));
+  const timelineMessages = () =>
+    $$('[role="log"] article').map((el) => ({
+      role: el.querySelector('div')?.textContent.trim(),
+      text: el.textContent.trim(),
+    }));
+`;
+
+const run = <T>(body: string) =>
+  app.eval<T>(`(() => { ${helpers}\n${body} })()`);
+const runWait = <T>(
+  body: string,
+  opts?: { timeoutMs?: number; label?: string },
+) => app.waitFor<T>(`(() => { ${helpers}\n${body} })()`, opts);
+
+describe("first launch", () => {
+  it("boots to the empty state with no projects", async () => {
+    await runWait(`return !!byText('button', 'New project');`, {
+      label: "empty-state New project button",
+    });
+  });
+
+  it("creates a project and lands on a palette New Tab", async () => {
+    await run(`byText('button', 'New project').click(); return true;`);
+    await runWait(`return !!$('[data-testid="project-name-input"]');`);
+    // Point the location at a temp folder (bypasses the native folder picker).
+    await run(`
+      setReactValue($('[data-testid="project-name-input"]'), 'e2e-project');
+      return true;
+    `);
+    await runWait(
+      `const btn = $('[data-testid="project-submit"]');
+       if (btn && !btn.disabled) { btn.click(); return true; } return false;`,
+      { label: "project submit enabled" },
+    );
+    // First workspace tab is the palette "New Tab" (same as Cmd+T).
+    await runWait(
+      `return !!byText('[role="tab"], button', 'New Tab') &&
+              !!$('textarea[placeholder*="Search or ask"]');`,
+      { timeoutMs: 60_000, label: "palette New Tab after project creation" },
+    );
+  });
+});
+
+describe("browser tabs", () => {
+  it("opens a browser tab from the tab-strip button", async () => {
+    await run(
+      `$('button[aria-label="New browser tab"]').click(); return true;`,
+    );
+    await runWait(`return !!$('input[aria-label="Address and search bar"]');`, {
+      timeoutMs: 30_000,
+      label: "browser address bar",
+    });
+  });
+
+  it("navigates the address bar to a data: page", async () => {
+    // data: URL keeps the test offline and deterministic.
+    await run(`
+      const input = $('input[aria-label="Address and search bar"]');
+      input.focus();
+      setReactValue(input, 'data:text/html,<title>E2E Page</title><h1>hello e2e</h1>');
+      input.dispatchEvent(new KeyboardEvent('keydown',
+        { key: 'Enter', bubbles: true, cancelable: true }));
+      return true;
+    `);
+    // The tab label follows the page <title> via webview events.
+    await runWait(`return !!byText('button', 'E2E Page');`, {
+      timeoutMs: 30_000,
+      label: "browser tab titled from page",
+    });
+  });
+
+  it("closes the browser tab with the close-tab shortcut", async () => {
+    await run(`pressKey('w', { metaKey: true }); return true;`);
+    await runWait(`return !$('input[aria-label="Address and search bar"]');`, {
+      label: "browser tab closed",
+    });
+  });
+});
+
+describe("chat flows", () => {
+  it("Cmd+N opens a floating chat; repeated Cmd+N does not stack empties", async () => {
+    await run(`pressKey('n', { metaKey: true }); return true;`);
+    await runWait(`return !!visibleDock();`, { label: "floating chat open" });
+    await run(`
+      pressKey('n', { metaKey: true });
+      pressKey('n', { metaKey: true });
+      return true;
+    `);
+    const dockCount = await run<number>(
+      `return $$('section[aria-label]').filter((el) => el.querySelector('textarea')).length;`,
+    );
+    expect(dockCount).toBe(1);
+  });
+
+  it("sends a message and renders the fake agent's reply", async () => {
+    await run(`
+      const dock = visibleDock();
+      const ta = dock.querySelector('textarea');
+      setReactValue(ta, 'hello agent');
+      ta.closest('form').requestSubmit();
+      return true;
+    `);
+    await runWait(
+      `return timelineMessages().some((m) => m.text.includes('You said: hello agent'));`,
+      { timeoutMs: 30_000, label: "agent reply in timeline" },
+    );
+    // set_title flowed through: the session shows up renamed in the sidebar.
+    await runWait(`return !!byText('button', 'Quick chat');`, {
+      timeoutMs: 30_000,
+      label: "session title in sidebar",
+    });
+  });
+
+  it("streams preambles as separate completed messages", async () => {
+    await run(
+      `byText('button', 'New chat')?.click() ?? pressKey('n', { metaKey: true }); return true;`,
+    );
+    await runWait(`return !!visibleDock();`);
+    await run(`
+      const ta = visibleDock().querySelector('textarea');
+      setReactValue(ta, 'do the preamble dance');
+      ta.closest('form').requestSubmit();
+      return true;
+    `);
+    await runWait(
+      `return timelineMessages().some((m) => m.text.includes('two preambles, one summary'));`,
+      { timeoutMs: 30_000, label: "final summary message" },
+    );
+    const agentTexts = await run<string[]>(`
+      return timelineMessages()
+        .filter((m) => m.role === 'Agent')
+        .map((m) => m.text);
+    `);
+    // Three separate agent messages, in emission order — not one merged blob.
+    expect(
+      agentTexts.filter((text) =>
+        /look at the project|writing some notes|two preambles/.test(text),
+      ),
+    ).toHaveLength(3);
+    // The file the fake agent wrote synced back as a changed-file chip.
+    await runWait(`return !!byText('[role="log"] code', 'NOTES.md');`, {
+      label: "changed-file chip",
+    });
+  });
+});
+
+describe("question flow", () => {
+  it("an interview prompt raises the question panel", async () => {
+    await run(`pressKey('n', { metaKey: true }); return true;`);
+    await runWait(`return !!visibleDock();`);
+    await run(`
+      const ta = visibleDock().querySelector('textarea');
+      setReactValue(ta, 'ask me a bunch of questions about myself');
+      ta.closest('form').requestSubmit();
+      return true;
+    `);
+    await runWait(
+      `return !!$('section[aria-label="The agent has a question"]');`,
+      { timeoutMs: 30_000, label: "question panel visible" },
+    );
+    // The preamble the agent sent before asking is already in the timeline.
+    await runWait(
+      `return timelineMessages().some((m) => m.text.includes('quick questions first'));`,
+      { label: "question preamble message" },
+    );
+  });
+
+  it("answers the questions and the agent acknowledges", async () => {
+    await run(`
+      const panel = $('section[aria-label="The agent has a question"]');
+      byText('section[aria-label="The agent has a question"] button', 'Orange').click();
+      return true;
+    `);
+    // Single-select auto-advances to question 2 after its 220ms glide.
+    await runWait(
+      `const panel = $('section[aria-label="The agent has a question"]');
+       const cats = byText('section[aria-label="The agent has a question"] button', 'Cats');
+       if (!cats || cats.closest('[inert]')) return false;
+       cats.click(); return true;`,
+      { label: "second question selectable" },
+    );
+    await runWait(
+      `const submit = byText('section[aria-label="The agent has a question"] button', 'Submit');
+       if (!submit || submit.disabled) return false;
+       submit.click(); return true;`,
+      { label: "submit answers" },
+    );
+    await runWait(
+      `return timelineMessages().some((m) => m.text.includes('Got it — noted'))
+           && !$('section[aria-label="The agent has a question"]');`,
+      { timeoutMs: 30_000, label: "agent acknowledgment, panel gone" },
+    );
+  });
+});

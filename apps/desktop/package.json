@@ -9,7 +9,8 @@
     "build": "electron-vite build",
     "typecheck": "tsgo --project ./tsconfig.json && tsgo --project ./tsconfig.node.json",
     "package": "electron-vite build && electron-builder",
-    "test": "vitest run --config ../../vitest.config.ts"
+    "test": "vitest run --config ../../vitest.config.ts",
+    "test:e2e": "electron-vite build && vitest run --config ./vitest.e2e.config.ts"
   },
   "dependencies": {
     "@ai-sdk/anthropic": "^4.0.18",
