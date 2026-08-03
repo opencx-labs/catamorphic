@@ -34,8 +34,13 @@ first launch → project creation → palette New Tab, browser tabs
 (open/navigate/close), chat create + send + reply, Cmd+N idempotency,
 streamed preamble messages, and the ask_user question panel.
 
-- Suite: `e2e/app.e2e.ts`, harness: `e2e/harness.ts`, config:
+- Suites: `e2e/app.e2e.ts` (user flows) and `e2e/motion.e2e.ts` (the motion
+  contract from `DESIGN.md` — easing/duration bounds, enter/exit pairing,
+  animate-before-unmount). Harness: `e2e/harness.ts`, config:
   `vitest.e2e.config.ts`.
+- If a motion test fails after a UI change, the animation is presumed wrong,
+  not the test — read the "Motion contract" section of `DESIGN.md` before
+  touching the test constants.
 - Tests within the file run in order and share one app instance — later
   groups assume the project created in "first launch" exists.
 - The fake agent (`src/main/server/e2e-fakes.ts`) is prompt-keyed: "ask

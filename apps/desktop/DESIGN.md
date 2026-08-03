@@ -23,8 +23,10 @@ calling it done.
 5. **Registry components are themed only through tokens.** Never edit installed
    files under `src/renderer/components/catamorphic/` for visual tweaks — adjust
    tokens, or improve the component upstream in `packages/registry`.
-6. **No decorative motion.** Transitions are 120–180ms with `--ease-standard`,
-   and only on state changes (hover, expand, enter). Nothing loops or bounces.
+6. **No decorative motion.** Every animation is a state-change signal (hover,
+   expand, enter, exit) on the standard easing. Nothing loops or bounces. The
+   exact rules are the "Motion contract" section below — and they are enforced
+   by `e2e/motion.e2e.ts`.
 
 ## Typography
 
@@ -86,6 +88,58 @@ Low-chroma so run states don't scream: `--color-success`, `--color-warning`,
 - Spacing on a 4px grid. Common paddings: 8 (compact), 12 (row), 16 (panel).
 - Sidebar rows are 28px tall; sidebar width 260px; right panel 380px.
 - Borders over shadows: `1px solid var(--color-border)`.
+
+## Motion contract
+
+The rules that keep the app feeling like one system as it grows. They are
+**enforced by `e2e/motion.e2e.ts`** — changing a value below is fine, but do
+it deliberately: update the CSS, this section, and the test constants in the
+same change. If a new animation fails the suite, the default assumption is
+the animation is wrong, not the test.
+
+### The rules
+
+1. **One easing.** All motion uses `--ease-standard`
+   (`cubic-bezier(0.2, 0, 0, 1)`). No `ease-in-out`, no springs, no bounces.
+2. **Duration bounds: 100–300ms.** Micro-feedback (hover, color) sits at
+   100–150ms; structural motion (panels, tabs, docks) at 180–250ms. Anything
+   longer reads as sluggish; anything shorter as a glitch.
+3. **Nothing loops** except indeterminate-progress indicators
+   (`animate-spin`, `animate-pulse` on loading states).
+4. **Paired motion mirrors.** A surface's exit is its enter reversed: same
+   duration (±50ms when an exit is deliberately snappier, like `tab-out`),
+   same easing, and the exit's resting pose equals the enter's starting pose.
+   When open uses a keyframe and close uses a transition (the chat dock),
+   their durations must be equal — one system, two mechanisms.
+5. **Animate before unmount.** Nothing that animated in may vanish
+   instantly. Exit pattern: keep the element mounted with an `animate-*-out`
+   class (or a transition to the hidden pose), remove it on
+   `animationend`/after the duration. Width-collapsing exits swallow their
+   flex gap with a negative margin so neighbors slide, never snap
+   (`tab-out`, `bubble-out`).
+6. **Transitions only on state changes** — hover, focus, expand/collapse,
+   enter/exit. Never on load, never ambient.
+
+### Current motion inventory
+
+| Animation | Duration | Pairs with |
+|---|---|---|
+| `dock-in` (chat dock open) | 250ms | dock collapse transition (250ms) |
+| `bubble-in` / `bubble-out` | 200ms | each other |
+| `tab-in` / `tab-out` | 200ms / 180ms | each other (exit snappier) |
+| `fade-in` (modal section swap) | 200ms | height tween |
+| `question-in` (ask_user panel) | 260ms | — |
+| `title-change` (rename flash) | 1200ms | **sanctioned exception** — the
+  one decorative-adjacent signal (see design log 2026-07-31); allowlisted in
+  the test's `DURATION_EXCEPTIONS` |
+
+### Sanctioned exceptions
+
+- `animate-spin` / `animate-pulse`: indeterminate progress may loop.
+- `title-change` (1200ms): a deliberate noticed-but-calm rename signal.
+
+New exceptions require adding to both this list and the test allowlist —
+that friction is intentional.
 
 ## Layout
 
