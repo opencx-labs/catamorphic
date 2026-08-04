@@ -40,6 +40,14 @@ const helpers = `
       role: el.querySelector('div')?.textContent.trim(),
       text: el.textContent.trim(),
     }));
+  const spinnersOn = () => $$('svg.animate-spin').filter((el) => {
+    let node = el, opacity = 1;
+    while (node && node !== document.body) {
+      opacity *= parseFloat(getComputedStyle(node).opacity);
+      node = node.parentElement;
+    }
+    return opacity > 0.5;
+  }).length;
 `;
 
 const run = <T>(body: string) =>
@@ -79,10 +87,8 @@ describe("first launch", () => {
 });
 
 describe("browser tabs", () => {
-  it("opens a browser tab from the tab-strip button", async () => {
-    await run(
-      `$('button[aria-label="New browser tab"]').click(); return true;`,
-    );
+  it("opens a browser tab with the new-browser-tab shortcut", async () => {
+    await run(`pressKey('t', { metaKey: true, shiftKey: true }); return true;`);
     await runWait(`return !!$('input[aria-label="Address and search bar"]');`, {
       timeoutMs: 30_000,
       label: "browser address bar",
@@ -344,6 +350,27 @@ describe("chat tab activity indicators", () => {
     // Leave a clean slate: close the chat tab and the extra palette tab.
     await run(`pressKey('w', { metaKey: true }); return true;`);
     await run(`pressKey('w', { metaKey: true }); return true;`);
+  });
+
+  it("closing a chat mid-turn clears its activity", async () => {
+    await run(`pressKey('n', { metaKey: true }); return true;`);
+    await runWait(`return !!visibleDock();`, { label: "floating chat open" });
+    await run(`
+      const ta = visibleDock().querySelector('textarea');
+      setReactValue(ta, 'work slowly please');
+      ta.closest('form').requestSubmit();
+      return true;
+    `);
+    await runWait(`return spinnersOn() > 0;`, {
+      label: "spinner during the turn",
+    });
+    // Close the chat while the agent is still working: no orphaned
+    // activity indicator may stay behind anywhere.
+    await run(`pressKey('w', { metaKey: true }); return true;`);
+    await runWait(`return spinnersOn() === 0;`, {
+      timeoutMs: 2_000,
+      label: "no visible spinners after the close",
+    });
   });
 });
 

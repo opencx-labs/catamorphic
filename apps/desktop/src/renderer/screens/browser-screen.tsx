@@ -530,9 +530,7 @@ export function BrowserScreen({
       <span className="truncate">{suggestion.label}</span>
       {suggestion.detail && (
         <span className="truncate text-[12px] text-fg-faint">
-          {suggestion.kind === "search"
-            ? `— ${suggestion.detail}`
-            : suggestion.detail}
+          {suggestion.detail}
         </span>
       )}
     </button>

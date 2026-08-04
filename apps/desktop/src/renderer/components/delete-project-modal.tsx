@@ -55,8 +55,8 @@ export function DeleteProjectModal({
           Delete {project?.name ?? "project"}?
         </h2>
         <p className="mt-2 text-[13px] leading-relaxed text-fg-muted">
-          The project is removed from Catamorphic — its chats, workflows, and
-          run history are deleted.
+          The project is removed from Catamorphic. Its chats, workflows, and run
+          history are deleted.
           {rootPath
             ? " The folder on disk is kept unless you say otherwise."
             : ""}

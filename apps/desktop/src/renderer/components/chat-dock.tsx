@@ -30,7 +30,7 @@ const EMPTY_STATE_PHRASES = [
   "Let's make something.",
   "Your move.",
   "What's on your mind?",
-  "Big or small — bring it.",
+  "Big or small, bring it.",
   "Let's get into it.",
   "What's next?",
   "Say the word.",

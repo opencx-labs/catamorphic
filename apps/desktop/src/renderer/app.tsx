@@ -8,7 +8,6 @@ import type { AgentSession, ProjectSummary } from "@catamorphic/react/types";
 import {
   ChevronRight,
   FolderPlus,
-  Globe,
   LayoutGrid,
   PanelLeft,
   Plus,
@@ -1079,21 +1078,6 @@ export function App() {
               onNew={openPaletteTab}
             />
           )}
-          {projectId && (
-            <ShortcutHint
-              label="New browser tab"
-              shortcut={formatBinding(keybindings["new-browser-tab"])}
-            >
-              <button
-                type="button"
-                onClick={() => openBrowserTab("")}
-                className="app-no-drag grid size-7 shrink-0 cursor-pointer place-items-center rounded-md text-fg-muted transition-colors duration-150 hover:bg-bg-overlay hover:text-fg"
-                aria-label="New browser tab"
-              >
-                <Globe className="size-4" />
-              </button>
-            </ShortcutHint>
-          )}
         </div>
 
         {projectId ? (
@@ -1407,7 +1391,7 @@ function CustomItems({
   if (items.length === 0) {
     return (
       <p className="px-2 py-1 text-xs text-fg-faint">
-        No items — add some in sidebar.js.
+        No items yet. Add some in sidebar.js.
       </p>
     );
   }

@@ -244,21 +244,25 @@ export function WorkspaceTabBar({
         );
       })}
       {onNew && (
-        <ShortcutHint
-          label="New tab"
-          shortcut={formatBinding(keybindings["new-tab"])}
-        >
-          <button
-            type="button"
-            onClick={onNew}
-            // self-center: the + rides mid-row, not glued to the tab
-            // baseline (matches Chrome).
-            className="grid size-7 shrink-0 cursor-pointer place-items-center self-center rounded-md text-fg-muted transition-colors duration-150 hover:bg-bg-overlay hover:text-fg"
-            aria-label="New tab"
+        // self-stretch + items-center: the + rides mid-row like the
+        // sidebar toggle, not glued to the tabs' hanging baseline. The
+        // ShortcutHint wrapper is the flex item, so centering lives on
+        // this container, not the button.
+        <div className="flex shrink-0 items-center self-stretch">
+          <ShortcutHint
+            label="New tab"
+            shortcut={formatBinding(keybindings["new-tab"])}
           >
-            <Plus className="size-4" />
-          </button>
-        </ShortcutHint>
+            <button
+              type="button"
+              onClick={onNew}
+              className="grid size-7 shrink-0 cursor-pointer place-items-center rounded-md text-fg-muted transition-colors duration-150 hover:bg-bg-overlay hover:text-fg"
+              aria-label="New tab"
+            >
+              <Plus className="size-4" />
+            </button>
+          </ShortcutHint>
+        </div>
       )}
     </div>
   );

@@ -82,7 +82,7 @@ export async function openRouterPkceLogin(
       const received = url.searchParams.get("code");
       response.writeHead(200, { "content-type": "text/html" });
       response.end(
-        "<body style='font-family:system-ui;padding:2rem'>Signed in — you can close this tab and return to Catamorphic.</body>",
+        "<body style='font-family:system-ui;padding:2rem'>Signed in. You can close this tab and return to Catamorphic.</body>",
       );
       if (received) {
         cleanup();

@@ -536,7 +536,7 @@ end tell`;
         }
       }
       state.broadcast("catamorphic:github-connected", {
-        error: "The GitHub device code expired — try connecting again",
+        error: "The GitHub device code expired. Try connecting again",
       });
     };
     void poll();
