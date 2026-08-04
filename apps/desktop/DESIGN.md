@@ -704,3 +704,29 @@ Patterned on what best-in-class palettes converged on (Chrome omnibox
   is active. No onboarding tooltips — the footer plus zero-state rows
   teach by being visible at the moment of use.
 - Covered by the "palette intent" group in `e2e/app.e2e.ts`.
+
+### 2026-08-04 — Activity indicators are server-truth, and turns can't spin forever
+- **An activity indicator must always converge.** The old bubble spinner
+  tracked only the client's in-flight send request; a turn that died with
+  the process (app quit, crash, dev restart) left its `in_progress`
+  assistant row in the DB forever, so reopening the session pulsed
+  "Thinking..." and polled every 500ms for eternity.
+- Two-part contract:
+  1. **Server self-heals**: `AgentSessionsService` tracks turns running in
+     this process; a session read that finds an `in_progress` assistant
+     message with no live turn settles it as failed ("This response was
+     interrupted before it finished."). Reads are the recovery point — no
+     background sweeper needed, and a fresh process settles everything on
+     first load.
+  2. **Clients indicate `isWorking`, not `isSending`**: `useAgentChat`
+     exposes `isWorking` = send in flight OR the server reports an
+     in-progress turn. Indicators driven by it survive reloads and reflect
+     turns this client didn't start; combined with (1) they can never stick.
+- **Chat tabs carry the same signals as bubbles**: the tab icon cross-fades
+  to a spinner while the agent works (same 200ms stacked-icon treatment as
+  the bubble), and a reply landing while the tab is hidden — minimized OR
+  behind another tab — marks it unread (accent dot on the icon). "Read"
+  means the chat's surface was actually on screen: the floating dock, or
+  its tab focused. Background chat tabs no longer count as read.
+- Covered by "chat tab activity indicators" in `e2e/app.e2e.ts` and the
+  kill-and-relaunch flow in `e2e/recovery.e2e.ts`.

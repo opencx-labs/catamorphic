@@ -14,6 +14,7 @@ export interface ChatBubblesProps {
   /** All chats; tab-mode chats contribute indicators but no strip bubble. */
   entries: ChatDockEntry[];
   labels: Record<string, string>;
+  /** The agent is working on the chat (send in flight OR server-side turn). */
   sending: Record<string, boolean>;
   /** Response arrived while the chat was minimized; shown as a dot. */
   unread: Record<string, boolean>;

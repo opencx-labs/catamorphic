@@ -243,6 +243,10 @@ export function App({ hasCodingAgent }: { hasCodingAgent: boolean }) {
           kind: "chat",
           name: chat.localId,
           label: chatLabels[chat.localId] ?? "Chat",
+          // Same signals as the chat's bubble: spinner while the agent
+          // works, dot for a reply that landed while the tab was hidden.
+          sending: sendingByChat[chat.localId] ?? false,
+          unread: unreadByChat[chat.localId] ?? false,
         }),
       );
 
@@ -551,9 +555,14 @@ export function App({ hasCodingAgent }: { hasCodingAgent: boolean }) {
     [updateWorkspace],
   );
 
-  // Latest chat modes for callbacks that outlive a render.
-  const chatsRef = useRef(workspace.chats);
-  chatsRef.current = workspace.chats;
+  // Latest workspace for callbacks that outlive a render.
+  const workspaceRef = useRef(workspace);
+  workspaceRef.current = workspace;
+
+  // A chat's surface is on screen: the floating dock, or its focused tab.
+  const chatVisible = (ws: Workspace, chat: ChatDockEntry) =>
+    chat.mode === "partial" ||
+    (chat.mode === "tab" && ws.activeTabKey === chatTabKey(chat.localId));
 
   const sendingRef = useRef<Record<string, boolean>>({});
   const onSendingChange = useCallback((localId: string, sending: boolean) => {
@@ -561,19 +570,19 @@ export function App({ hasCodingAgent }: { hasCodingAgent: boolean }) {
     if (wasSending === sending) return;
     sendingRef.current = { ...sendingRef.current, [localId]: sending };
     setSendingByChat(sendingRef.current);
-    // Response landed while the chat was minimized → unread dot.
-    const chat = chatsRef.current.find(
-      (candidate) => candidate.localId === localId,
-    );
-    if (!sending && wasSending && chat?.mode === "min") {
+    // Response landed while the chat was hidden (minimized bubble or a
+    // background tab) → unread dot.
+    const ws = workspaceRef.current;
+    const chat = ws.chats.find((candidate) => candidate.localId === localId);
+    if (!sending && wasSending && chat && !chatVisible(ws, chat)) {
       setUnreadByChat((unread) => ({ ...unread, [localId]: true }));
     }
   }, []);
 
-  // Expanding a chat marks it read.
+  // Bringing a chat's surface on screen marks it read.
   useEffect(() => {
     const readIds = workspace.chats
-      .filter((chat) => chat.mode !== "min")
+      .filter((chat) => chatVisible(workspace, chat))
       .map((chat) => chat.localId);
     if (readIds.some((id) => unreadByChat[id])) {
       setUnreadByChat((current) => {
@@ -582,12 +591,10 @@ export function App({ hasCodingAgent }: { hasCodingAgent: boolean }) {
         return next;
       });
     }
-  }, [workspace.chats, unreadByChat]);
+  }, [workspace, unreadByChat]);
 
   // Cmd+W (via the app menu) closes the most specific surface in focus:
   // the floating chat if one is open, else the active workspace tab.
-  const workspaceRef = useRef(workspace);
-  workspaceRef.current = workspace;
   const closeChatRef = useRef(closeChat);
   closeChatRef.current = closeChat;
   const closeTabRef = useRef(closeTab);

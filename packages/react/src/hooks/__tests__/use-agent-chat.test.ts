@@ -229,6 +229,40 @@ describe("useAgentChat", () => {
     await waitFor(() => expect(sends).toBe(2));
   });
 
+  it("reports isWorking while the server has an in-progress turn, without a local send", async () => {
+    let status = "in_progress";
+    server.use(
+      http.get(
+        apiUrl(`/api/projects/${PROJECT_ID}/agent/sessions/${SESSION_ID}`),
+        () =>
+          HttpResponse.json({
+            ...session,
+            messages: [
+              {
+                id: "00000000-0000-4000-8000-00000000000a",
+                sessionId: SESSION_ID,
+                role: "assistant",
+                content: "Thinking...",
+                commitSha: null,
+                metadata: { status },
+                createdAt: new Date().toISOString(),
+              },
+            ],
+          }),
+      ),
+    );
+    const { result } = renderHookWithProviders(() =>
+      useAgentChat(PROJECT_ID, { sessionId: SESSION_ID }),
+    );
+
+    await waitFor(() => expect(result.current.isWorking).toBe(true));
+    expect(result.current.isSending).toBe(false);
+
+    // The turn settles server-side (e.g. finished or marked interrupted).
+    status = "completed";
+    await waitFor(() => expect(result.current.isWorking).toBe(false));
+  });
+
   it("opens a controlled session and resets when it changes", async () => {
     const OTHER_SESSION_ID = "00000000-0000-4000-8000-000000000004";
     server.use(

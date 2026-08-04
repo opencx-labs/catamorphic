@@ -291,6 +291,62 @@ describe("palette intent", () => {
   });
 });
 
+describe("chat tab activity indicators", () => {
+  // The tab strip is the only .app-no-drag flex row with items-end.
+  const tabStrip = `document.querySelector('.app-no-drag.items-end')`;
+  const tabSpinnerOn = `[...${tabStrip}.querySelectorAll('svg.animate-spin')]
+    .some((el) => getComputedStyle(el).opacity === '1')`;
+  const tabDotOn = `[...${tabStrip}.querySelectorAll('span.bg-accent')]
+    .some((el) => getComputedStyle(el).opacity === '1')`;
+
+  it("the tab icon cross-fades to a spinner while the agent works", async () => {
+    await run(`pressKey('n', { metaKey: true }); return true;`);
+    await runWait(`return !!visibleDock();`);
+    // Make sure the chat is a workspace tab. With no other tabs open Cmd+N
+    // already lands as a tab (no promote button); otherwise promote it.
+    await run(`
+      $$('button[aria-label="Open as tab"]')
+        .find((el) => !el.closest('[inert]'))?.click();
+      return true;
+    `);
+    await runWait(`return !!byText('button', 'New chat');`, {
+      label: "chat tab in the strip",
+    });
+    await run(`
+      const ta = visibleDock().querySelector('textarea');
+      setReactValue(ta, 'work slowly please');
+      ta.closest('form').requestSubmit();
+      return true;
+    `);
+    await runWait(`return ${tabSpinnerOn};`, {
+      label: "tab icon spinner during the turn",
+    });
+  });
+
+  it("finishing while the tab is hidden lands an unread dot; opening clears it", async () => {
+    // Hide the chat tab behind a fresh palette tab mid-turn.
+    await run(`pressKey('t', { metaKey: true }); return true;`);
+    await runWait(`return ${tabDotOn};`, {
+      timeoutMs: 30_000,
+      label: "unread dot on the hidden chat tab",
+    });
+    await run(`return ${tabSpinnerOn};`).then((spinning) =>
+      expect(spinning).toBe(false),
+    );
+    // Selecting the chat tab marks it read (the tab is renamed to the
+    // session title once the sessions list refetches).
+    await runWait(
+      `const tab = byText('button', 'Slow burn');
+       if (!tab) return false; tab.click(); return true;`,
+      { label: "chat tab selectable by its title" },
+    );
+    await runWait(`return !(${tabDotOn});`, { label: "dot cleared on open" });
+    // Leave a clean slate: close the chat tab and the extra palette tab.
+    await run(`pressKey('w', { metaKey: true }); return true;`);
+    await run(`pressKey('w', { metaKey: true }); return true;`);
+  });
+});
+
 describe("question flow", () => {
   it("an interview prompt raises the question panel", async () => {
     await run(`pressKey('n', { metaKey: true }); return true;`);

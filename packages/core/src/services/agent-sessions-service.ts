@@ -9,7 +9,7 @@ import type {
   ProviderSession,
   SandboxProvider,
 } from "@catamorphic/sandbox";
-import type { Kysely, Selectable } from "kysely";
+import { type Kysely, type Selectable, sql } from "kysely";
 import type { Identity } from "../identity.js";
 import {
   BATCH_WORKFLOW_SKILL_PATH,
@@ -72,6 +72,10 @@ export interface SyncedFileChange {
 }
 
 const tracer = getTracer("@catamorphic/core");
+
+/** Shown in place of a turn that died with the process. */
+export const INTERRUPTED_TURN_MESSAGE =
+  "This response was interrupted before it finished. Send a new message to continue.";
 
 const WORKFLOW_AUTHORING_SYSTEM_PROMPT = `Before editing workflow code, inspect the existing export and preserve its authoring model unless the user explicitly requests a conversion. A plain workflow is an exported async function with a "use workflow" directive. A defined workflow is an exported defineWorkflow(({ defineBoundary, defineBatch }) => ({ steps })) value; production runs execute ordered boundary and batch scopes against an immutable deployment, with continuation state persisted in Postgres. Mutable-source defined test execution is not supported. Cancellation is a host-issued terminal control declared with controls: { cancel: true }, never a BoundaryContext transition. Only exported defineBatchStep calls inside defineBatch.process are physically coalesced. For authoring primitives, use the project's established SaaS wrapper when present; otherwise use @catamorphic/workflow. Never create local copies. Consult .agents/skills/writing-workflows/SKILL.md, .agents/skills/durable-workflows/SKILL.md, and .agents/skills/batch-workflows/SKILL.md, when present, before creating or restructuring workflows.`;
 
@@ -185,6 +189,13 @@ export class AgentSessionsService {
   private readonly plugins?: PluginsService;
   private readonly pluginResolver?: PluginResolver;
   private readonly devSandboxes: DevSandboxService;
+  /**
+   * Sessions with a turn currently executing in this process. Turns run
+   * inside the send request, so an `in_progress` message whose session is
+   * not in this set is orphaned (the app/server died mid-turn) — reads
+   * settle it as failed so clients never spin on a dead turn.
+   */
+  private readonly runningTurns = new Set<string>();
 
   constructor(
     private readonly db: Kysely<DB>,
@@ -242,7 +253,54 @@ export class AgentSessionsService {
       .selectAll()
       .orderBy("seq", "asc")
       .execute();
-    return { ...mapSession(row), messages: messages.map(mapMessage) };
+    const settled = await this.settleOrphanedTurns(sessionId, messages);
+    return { ...mapSession(row), messages: settled.map(mapMessage) };
+  }
+
+  /**
+   * Finalize `in_progress` assistant messages left behind by a turn that
+   * died with the process (app quit, crash, dev restart). Without this the
+   * placeholder stays in-progress forever and every client shows a spinner
+   * that never stops.
+   */
+  private async settleOrphanedTurns(
+    sessionId: string,
+    messages: MessageRow[],
+  ): Promise<MessageRow[]> {
+    if (this.runningTurns.has(sessionId)) return messages;
+    const orphaned = messages.filter(
+      (message) =>
+        message.role === "assistant" &&
+        (message.metadata as JsonObject | null)?.status === "in_progress",
+    );
+    if (orphaned.length === 0) return messages;
+
+    const updated = new Map<string, MessageRow>();
+    for (const message of orphaned) {
+      const row = await this.db
+        .updateTable("agent_messages")
+        .set({
+          content: INTERRUPTED_TURN_MESSAGE,
+          metadata: {
+            ...(message.metadata as JsonObject | null),
+            status: "failed",
+            interrupted: true,
+          },
+        })
+        .where("id", "=", message.id)
+        // The turn may have finished (or been settled by a concurrent read)
+        // between our select and this update — only settle a still-pending row.
+        .where(
+          sql`metadata ->> 'status'`,
+          "=",
+          "in_progress",
+        )
+        .returningAll()
+        .executeTakeFirst();
+      if (row) updated.set(row.id, row);
+    }
+    if (updated.size === 0) return messages;
+    return messages.map((message) => updated.get(message.id) ?? message);
   }
 
   async create(
@@ -337,7 +395,23 @@ export class AgentSessionsService {
     if (session.status !== "active") {
       throw new AgentSessionClosedError(sessionId);
     }
+    // Marked running BEFORE the placeholder row exists, so a concurrent
+    // get() can never mistake this turn's placeholder for an orphan.
+    this.runningTurns.add(sessionId);
+    try {
+      return await this.runTurn(identity, projectId, sessionId, message, session);
+    } finally {
+      this.runningTurns.delete(sessionId);
+    }
+  }
 
+  private async runTurn(
+    identity: Identity,
+    projectId: string,
+    sessionId: string,
+    message: string,
+    session: SessionRow,
+  ): Promise<AgentMessage> {
     const sandboxProviderId = await this.resolveSandboxProviderId(session);
     const workingDirectory = this.projectDir();
     const batchSkillStaged = await ensureBatchWorkflowSkill({

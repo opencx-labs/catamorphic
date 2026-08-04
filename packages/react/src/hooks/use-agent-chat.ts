@@ -27,6 +27,13 @@ export interface UseAgentChatResult {
   queuedMessageCount: number;
   isLoading: boolean;
   isSending: boolean;
+  /**
+   * The agent is working on this chat: a send is in flight from this client
+   * OR the server reports an in-progress assistant turn. Prefer this over
+   * {@link isSending} for activity indicators — it stays accurate when the
+   * request and the turn don't line up (reloads, other clients).
+   */
+  isWorking: boolean;
   error: CatamorphicError | null;
   send: (message: string) => Promise<void>;
   startNewSession: () => void;
@@ -119,6 +126,7 @@ export function useAgentChat(
 
   const isSending =
     sendInProgress || createSession.isPending || sendMessage.isPending;
+  const isWorking = isSending || hasPendingAssistant(session.data?.messages);
   const performSend = async (content: string) => {
     if (!projectId) return;
 
@@ -197,6 +205,7 @@ export function useAgentChat(
     queuedMessageCount: queueRef.current.length,
     isLoading: session.isLoading,
     isSending,
+    isWorking,
     error: createSession.error ?? sendMessage.error ?? session.error ?? null,
     send,
     startNewSession: () => {

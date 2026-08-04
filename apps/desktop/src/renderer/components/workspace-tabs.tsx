@@ -1,6 +1,7 @@
 import {
   Globe,
   LayoutGrid,
+  LoaderCircle,
   MessageSquare,
   Plus,
   Search,
@@ -13,13 +14,23 @@ import { formatBinding, useKeybindings } from "../lib/keybindings";
 import { AnimatedTitle } from "./animated-title";
 import { ShortcutHint } from "./shortcut-hint";
 
-export type WorkspaceTab =
+/** Live activity signals mirrored onto a tab's icon (chat tabs today). */
+interface TabIndicators {
+  /** Agent working → the icon cross-fades to a spinner. */
+  sending?: boolean;
+  /** Response landed while the tab was hidden → dot on the icon. */
+  unread?: boolean;
+}
+
+export type WorkspaceTab = (
   | { kind: "workflow"; name: string; label?: string }
   | { kind: "app"; name: string; label?: string }
   | { kind: "chat"; name: string; label?: string }
   | { kind: "browser"; name: string; label?: string; faviconUrl?: string | null }
   | { kind: "settings"; name: string; label?: string }
-  | { kind: "palette"; name: string; label?: string };
+  | { kind: "palette"; name: string; label?: string }
+) &
+  TabIndicators;
 
 export const tabKey = (tab: WorkspaceTab) => `${tab.kind}:${tab.name}`;
 
@@ -162,15 +173,37 @@ export function WorkspaceTabBar({
               onClick={() => onSelect(key)}
               className="flex cursor-pointer items-center gap-1.5 px-1.5"
             >
-              {tab.kind === "browser" && tab.faviconUrl ? (
-                <img
-                  src={tab.faviconUrl}
-                  alt=""
-                  className="size-3.5 shrink-0 rounded-[3px]"
+              {/* Stacked like the chat bubbles: icon cross-fades to a
+                  spinner while the agent works; unread lands as a dot. */}
+              <span className="relative grid size-3.5 shrink-0 place-items-center">
+                {tab.kind === "browser" && tab.faviconUrl ? (
+                  <img
+                    src={tab.faviconUrl}
+                    alt=""
+                    className={`col-start-1 row-start-1 size-3.5 rounded-[3px] transition-[opacity,scale] duration-200 ease-[cubic-bezier(0.2,0,0,1)] ${
+                      tab.sending ? "scale-50 opacity-0" : "scale-100 opacity-100"
+                    }`}
+                  />
+                ) : (
+                  <Icon
+                    className={`col-start-1 row-start-1 size-3.5 transition-[opacity,scale] duration-200 ease-[cubic-bezier(0.2,0,0,1)] ${
+                      tab.sending ? "scale-50 opacity-0" : "scale-100 opacity-100"
+                    }`}
+                  />
+                )}
+                <LoaderCircle
+                  className={`col-start-1 row-start-1 size-3.5 animate-spin text-accent transition-[opacity] duration-200 ${
+                    tab.sending ? "opacity-100" : "opacity-0"
+                  }`}
                 />
-              ) : (
-                <Icon className="size-3.5 shrink-0" />
-              )}
+                <span
+                  className={`absolute -right-1 -top-1 size-1.5 rounded-full bg-accent transition-[opacity,scale] duration-200 ease-[cubic-bezier(0.2,0,0,1)] ${
+                    tab.unread && !tab.sending
+                      ? "scale-100 opacity-100"
+                      : "scale-0 opacity-0"
+                  }`}
+                />
+              </span>
               <AnimatedTitle
                 text={tab.label ?? tab.name}
                 className="max-w-40"

@@ -26,12 +26,23 @@ export interface AppHandle {
   screenshot: (filePath: string) => Promise<void>;
   userDataDir: string;
   stop: () => Promise<void>;
+  /**
+   * SIGKILL without cleanup — simulates a crash/quit mid-operation. The
+   * userData dir survives so a follow-up launchApp({ userDataDir }) can
+   * exercise recovery paths.
+   */
+  kill: () => Promise<void>;
 }
 
-export async function launchApp(): Promise<AppHandle> {
-  const userDataDir = fs.mkdtempSync(
-    path.join(os.tmpdir(), "catamorphic-e2e-data-"),
-  );
+export interface LaunchOpts {
+  /** Reuse an existing userData dir (relaunch scenarios). */
+  userDataDir?: string;
+}
+
+export async function launchApp(opts: LaunchOpts = {}): Promise<AppHandle> {
+  const userDataDir =
+    opts.userDataDir ??
+    fs.mkdtempSync(path.join(os.tmpdir(), "catamorphic-e2e-data-"));
 
   // The real binary, not the .bin CLI wrapper — the wrapper spawns Electron
   // as its own child, so killing the wrapper would orphan the app.
@@ -79,6 +90,15 @@ export async function launchApp(): Promise<AppHandle> {
         ws.close();
         await terminate(child);
         fs.rmSync(userDataDir, { recursive: true, force: true });
+      },
+      kill: async () => {
+        ws.close();
+        if (child.exitCode === null) {
+          child.kill("SIGKILL");
+          await new Promise<void>((resolve) => {
+            child.once("exit", () => resolve());
+          });
+        }
       },
     };
   } catch (error) {

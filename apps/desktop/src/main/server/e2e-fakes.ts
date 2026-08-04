@@ -123,6 +123,8 @@ export class E2eLocalSandboxProvider implements SandboxProvider {
  *   final summary (exercises the streamed-preamble message split).
  * - "edit a file" → writes a file in the sandbox (exercises changed-file
  *   sync-back and chips).
+ * - "slowly" → a ~4s turn (exercises mid-turn UI: spinners, minimize,
+ *   mode flips, kill-and-relaunch recovery).
  * - anything else → set_title + one text reply echoing the message.
  */
 export class E2eFakeCodingAgent implements CodingAgentProvider {
@@ -221,6 +223,18 @@ export class E2eFakeCodingAgent implements CodingAgentProvider {
         state.workingDirectory,
       );
       yield { type: "text", content: "All done: two preambles, one summary." };
+      yield { type: "done" };
+      return;
+    }
+
+    // "slowly" → a multi-second turn, so tests can exercise mid-turn UI
+    // (spinners, minimize, mode flips) before the agent completes.
+    if (prompt.includes("slowly")) {
+      yield { type: "title", content: "Slow burn" };
+      yield { type: "text", content: "Working on it, give me a moment." };
+      yield { type: "command", content: "sleep" };
+      await new Promise((resolve) => setTimeout(resolve, 4000));
+      yield { type: "text", content: "Done after a long think." };
       yield { type: "done" };
       return;
     }

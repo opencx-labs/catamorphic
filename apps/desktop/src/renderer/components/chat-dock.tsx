@@ -78,6 +78,7 @@ export interface ChatDockProps {
   /** Close the chat entirely (dismissing an empty chat removes it). */
   onClose: (localId: string) => void;
   onSessionCreated: (localId: string, sessionId: string) => void;
+  /** The agent started/stopped working on this chat (drives indicators). */
   onSendingChange: (localId: string, sending: boolean) => void;
 }
 
@@ -109,9 +110,11 @@ export function ChatDock({
     chat.isSending,
   );
 
+  // isWorking, not isSending: it also covers turns this client didn't start
+  // (reloads) and can't stick forever — the server settles orphaned turns.
   useEffect(() => {
-    onSendingChange(entry.localId, chat.isSending);
-  }, [chat.isSending, entry.localId, onSendingChange]);
+    onSendingChange(entry.localId, chat.isWorking);
+  }, [chat.isWorking, entry.localId, onSendingChange]);
 
   // Fresh values for the window Escape listener without re-subscribing.
   const entryRef = useRef(entry);
