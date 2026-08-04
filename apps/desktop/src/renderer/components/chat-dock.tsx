@@ -128,8 +128,12 @@ export function ChatDock({
 
   // isWorking, not isSending: it also covers turns this client didn't start
   // (reloads) and can't stick forever — the server settles orphaned turns.
+  // The unmount cleanup matters: closing a chat mid-turn must clear its
+  // activity flag, or the aggregate bubble spins forever for a chat that
+  // no longer exists.
   useEffect(() => {
     onSendingChange(entry.localId, chat.isWorking);
+    return () => onSendingChange(entry.localId, false);
   }, [chat.isWorking, entry.localId, onSendingChange]);
 
   // Fresh values for the window Escape listener without re-subscribing.

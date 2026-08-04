@@ -49,6 +49,9 @@ export interface BrowserPageState {
 export function resolveInput(raw: string): string {
   const input = raw.trim();
   if (/^https?:\/\//i.test(input)) return input;
+  // Non-web schemes are still navigations, not searches (data: pages,
+  // about:blank, view-source:, file:).
+  if (/^(data|about|file|view-source|chrome):/i.test(input)) return input;
   if (
     /^[\w-]+(\.[\w-]+)+(:\d+)?(\/\S*)?$/.test(input) &&
     !input.includes(" ")
