@@ -48,6 +48,8 @@ export interface HarnessModelInfo {
   id: string;
   name: string;
   description?: string;
+  /** Versioned model id an alias resolves to (e.g. "sonnet" → "claude-sonnet-5"). */
+  resolvedId?: string;
 }
 
 export interface OpenRouterModelInfo {

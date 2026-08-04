@@ -4,6 +4,8 @@ export interface ClaudeCodeModel {
   id: string;
   name: string;
   description?: string;
+  /** Versioned model id an alias resolves to (e.g. "sonnet" → "claude-sonnet-5"). */
+  resolvedId?: string;
 }
 
 /**
@@ -40,6 +42,7 @@ export async function listClaudeCodeModels(opts?: {
       id: model.value,
       name: model.displayName,
       description: model.description,
+      resolvedId: model.resolvedModel,
     }));
   } finally {
     release();

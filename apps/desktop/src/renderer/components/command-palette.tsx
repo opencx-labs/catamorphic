@@ -172,6 +172,8 @@ export interface PaletteMode {
   id: "agent" | "web";
   /** Typed trigger, matched with or without the leading @. */
   trigger: string;
+  /** Alternate typed names that commit the same mode (e.g. "chat"). */
+  aliases?: string[];
   /** Chip text once committed. */
   chip: string;
   icon: LucideIcon;
@@ -185,6 +187,7 @@ export const PALETTE_MODES: PaletteMode[] = [
   {
     id: "agent",
     trigger: "agent",
+    aliases: ["chat"],
     chip: "Ask agent",
     icon: Bot,
     label: "Ask the agent",
@@ -202,14 +205,26 @@ export const PALETTE_MODES: PaletteMode[] = [
   },
 ];
 
-/** "@age" or "age" → the agent mode, once unambiguous. */
+/** A mode's typed names: the trigger plus any aliases. */
+const modeNames = (mode: PaletteMode): string[] => [
+  mode.trigger,
+  ...(mode.aliases ?? []),
+];
+
+/** "@age", "age", or "chat" → the agent mode, once unambiguous. */
 const matchMode = (input: string): PaletteMode | undefined => {
-  const raw = input.startsWith("@") ? input.slice(1) : input;
+  const raw = (input.startsWith("@") ? input.slice(1) : input).toLowerCase();
   if (raw.length === 0) return undefined;
   const matches = PALETTE_MODES.filter((mode) =>
-    mode.trigger.startsWith(raw.toLowerCase()),
+    modeNames(mode).some((name) => name.startsWith(raw)),
   );
   return matches.length === 1 ? matches[0] : undefined;
+};
+
+/** The input IS a full mode name (trigger or alias), no @ needed. */
+const isFullModeName = (input: string): boolean => {
+  const raw = input.toLowerCase();
+  return PALETTE_MODES.some((mode) => modeNames(mode).includes(raw));
 };
 
 function FooterHint({ keycap, label }: { keycap: string; label: string }) {
@@ -695,6 +710,8 @@ export function CommandPalette({
           .sort(
             (a, b) => Number(b.free) - Number(a.free) || b.created - a.created,
           );
+        // Zero state: the newest free models only — the browsable shortlist.
+        // Typing searches the whole catalog.
         const matched = trimmed
           ? models
               .map((model) => ({
@@ -704,7 +721,10 @@ export function CommandPalette({
               .filter((entry) => entry.score > 0)
               .sort((a, b) => b.score - a.score)
               .map((entry) => entry.model)
-          : models;
+          : models
+              .filter((model) => model.free)
+              .sort((a, b) => b.created - a.created)
+              .slice(0, 20);
         for (const model of matched.slice(0, 50)) {
           rows.push({
             id: `pick:model:${model.id}`,
@@ -751,7 +771,8 @@ export function CommandPalette({
           id: `pick:model:${model.id}`,
           icon: Cpu,
           label: model.name,
-          detail: `${model.id}${model.id === current ? " · current" : ""}`,
+          // Aliases ("sonnet") show the versioned id they resolve to.
+          detail: `${model.resolvedId ?? model.id}${model.id === current ? " · current" : ""}`,
           keywords: [],
           kind: "action",
           run: () => onPickModel(agent.id, model.id),
@@ -821,11 +842,17 @@ export function CommandPalette({
                       ((focusedChat?.agentId ?? defaultAgentId) || "")
                     ? " · current"
                     : "";
+              const accountBit =
+                agent.auth === "local"
+                  ? " · this machine"
+                  : agent.auth === "account"
+                    ? " · separate account"
+                    : " · API key";
               return {
                 id: `pick:agent:${agent.id}`,
                 icon: Bot,
                 label: agent.name,
-                detail: `${HARNESS_LABELS[agent.harness]}${marker}`,
+                detail: `${HARNESS_LABELS[agent.harness]}${accountBit}${marker}`,
                 keywords: [agent.name, agent.harness, agent.model],
                 kind: "action" as const,
                 run: () =>
@@ -909,7 +936,7 @@ export function CommandPalette({
     if (trimmed.startsWith("@")) {
       const partial = trimmed.slice(1).toLowerCase();
       const modeRows = PALETTE_MODES.filter((candidate) =>
-        candidate.trigger.startsWith(partial),
+        modeNames(candidate).some((name) => name.startsWith(partial)),
       ).map(
         (candidate): PaletteItem => ({
           id: `mode-row:${candidate.id}`,
@@ -1198,8 +1225,7 @@ export function CommandPalette({
       !mode &&
       (event.key === "Tab" || event.key === " ") &&
       trimmed.length > 1 &&
-      (trimmed.startsWith("@") ||
-        matchMode(trimmed)?.trigger === trimmed.toLowerCase())
+      (trimmed.startsWith("@") || isFullModeName(trimmed))
     ) {
       const candidate = matchMode(trimmed);
       if (candidate) {

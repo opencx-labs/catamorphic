@@ -230,6 +230,11 @@ describe("agents and profiles", () => {
               paletteRows().some((el) => el.textContent.includes('Fake Model B'));`,
       { label: "harness-supplied model rows" },
     );
+    // Aliased ids surface their resolved, versioned id in the faded detail.
+    await runWait(
+      `return paletteRows().some((el) => el.textContent.includes('fake-model-a-2.1'));`,
+      { label: "resolved id in the model row detail" },
+    );
     await run(`setReactValue(paletteInput(), 'my-custom-model'); return true;`);
     await runWait(pickOption('Use "my-custom-model"'), {
       label: "typed model row",
@@ -247,6 +252,39 @@ describe("agents and profiles", () => {
         el.textContent.includes('my-custom-model') &&
         el.textContent.includes('current'));`,
       { label: "current marker on the new model" },
+    );
+    await run(paletteEscape);
+  });
+
+  it("commits the Ask agent chip from the chat alias", async () => {
+    await ensurePalette();
+    await resetPalette();
+    await run(`setReactValue(paletteInput(), 'chat'); return true;`);
+    await run(`
+      paletteInput().dispatchEvent(new KeyboardEvent('keydown',
+        { key: 'Tab', bubbles: true, cancelable: true }));
+      return true;
+    `);
+    await runWait(
+      `const chip = $('[data-testid="palette-mode-chip"]');
+       return !!chip && chip.textContent.includes('Ask agent') &&
+              paletteInput().value === '';`,
+      { label: "agent chip committed from 'chat'" },
+    );
+    await resetPalette();
+    await runWait(`return !$('[data-testid="palette-mode-chip"]');`, {
+      label: "chip popped",
+    });
+    await run(paletteEscape);
+  });
+
+  it("shows the agent's account in the picker row detail", async () => {
+    // The seeded fake agents authenticate with an API key; that shows up
+    // as faded detail beside the harness label.
+    await openPicker("Change default agent", "Default agent");
+    await runWait(
+      `return paletteRows().some((el) => el.textContent.includes('API key'));`,
+      { label: "account detail on agent rows" },
     );
     await run(paletteEscape);
   });

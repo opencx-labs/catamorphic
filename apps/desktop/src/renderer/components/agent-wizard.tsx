@@ -21,7 +21,13 @@ import { PendingButton } from "./pending-button.js";
  */
 
 type Step = "choose" | "claude-code" | "codex" | "api-key";
-type Flow = "claude-code" | "codex" | "free";
+/** One create-and-sign-in path; "-account" = a separate, per-agent login. */
+type Flow =
+  | "claude-code"
+  | "claude-code-account"
+  | "codex"
+  | "codex-account"
+  | "free";
 type AiSdkProvider = "anthropic" | "openai" | "openrouter";
 
 const OPTIONS: Array<{
@@ -32,24 +38,22 @@ const OPTIONS: Array<{
   {
     id: "claude-code",
     title: "Claude Code",
-    description: "Uses your existing Claude Code setup on this machine.",
+    description: "Uses this machine's Claude Code setup.",
   },
   {
     id: "codex",
     title: "Codex",
-    description: "Sign in with ChatGPT — runs locally via the Codex CLI.",
+    description: "Sign in with ChatGPT, via the Codex CLI.",
   },
   {
     id: "api-key",
     title: "Bring an API key",
-    description:
-      "The built-in agent on an Anthropic, OpenAI, or OpenRouter key.",
+    description: "Anthropic, OpenAI, or OpenRouter key.",
   },
   {
     id: "free",
     title: "Continue with free models",
-    description:
-      "OpenRouter's best free model — approve once in the browser, no key.",
+    description: "Free OpenRouter models. No API key needed.",
   },
 ];
 
@@ -70,7 +74,14 @@ export function AgentWizard({
     codex: boolean;
   } | null>(null);
   const [busy, setBusy] = useState(false);
+  // Which flow the busy state belongs to, so only the clicked button of a
+  // two-choice step shows its pending label.
+  const [busyFlow, setBusyFlow] = useState<Flow | null>(null);
   const [error, setError] = useState<string | null>(null);
+
+  // Optional custom agent name, shared by the detail steps (each step
+  // resets it on entry via goto).
+  const [name, setName] = useState("");
 
   // Claude Code terminal sign-in.
   const [ccCommand, setCcCommand] = useState<string | null>(null);
@@ -101,7 +112,9 @@ export function AgentWizard({
     if (!modalOpen) return;
     setStep("choose");
     setBusy(false);
+    setBusyFlow(null);
     setError(null);
+    setName("");
     setCcCommand(null);
     setCcStarted(false);
     setWaitingFlow(null);
@@ -118,14 +131,19 @@ export function AgentWizard({
       waitingRef.current = null;
       setWaitingFlow(null);
       setBusy(false);
+      setBusyFlow(null);
       if (ok) onDoneRef.current();
-      else setError("Sign-in did not complete — try again.");
+      else setError("Sign-in did not complete. Try again.");
     });
   }, []);
 
   const goto = (next: Step) => {
     setError(null);
     setBusy(false);
+    setBusyFlow(null);
+    setName("");
+    setCcCommand(null);
+    setCcStarted(false);
     setWaitingFlow(null);
     waitingRef.current = null;
     setStep(next);
@@ -135,6 +153,7 @@ export function AgentWizard({
   const ensureAgent = async (flow: Flow): Promise<string> => {
     const existing = createdRef.current[flow];
     if (existing) return existing;
+    const customName = name.trim() ? { name: name.trim() } : {};
     const agent =
       flow === "free"
         ? await desktopApi.agentsCreate({
@@ -143,7 +162,23 @@ export function AgentWizard({
             provider: "openrouter",
             auth: "account",
           })
-        : await desktopApi.agentsCreate({ harness: flow, auth: "local" });
+        : flow === "claude-code-account"
+          ? await desktopApi.agentsCreate({
+              harness: "claude-code",
+              auth: "account",
+              ...customName,
+            })
+          : flow === "codex-account"
+            ? await desktopApi.agentsCreate({
+                harness: "codex",
+                auth: "account",
+                ...customName,
+              })
+            : await desktopApi.agentsCreate({
+                harness: flow,
+                auth: "local",
+                ...customName,
+              });
     createdRef.current[flow] = agent.id;
     return agent.id;
   };
@@ -152,20 +187,25 @@ export function AgentWizard({
   const addExistingSetup = async (flow: "claude-code" | "codex") => {
     setError(null);
     setBusy(true);
+    setBusyFlow(flow);
     try {
       await ensureAgent(flow);
       onDone();
     } catch (cause) {
       setBusy(false);
+      setBusyFlow(null);
       setError(cause instanceof Error ? cause.message : String(cause));
     }
   };
 
   /** Browser sign-in path (Codex, free models): login then wait for the
    * finished event. Stays busy while the browser round-trip is pending. */
-  const startBrowserSignIn = async (flow: "codex" | "free") => {
+  const startBrowserSignIn = async (
+    flow: "codex" | "codex-account" | "free",
+  ) => {
     setError(null);
     setBusy(true);
+    setBusyFlow(flow);
     try {
       const id = await ensureAgent(flow);
       const result = await desktopApi.agentLogin(id);
@@ -174,23 +214,28 @@ export function AgentWizard({
         setWaitingFlow(flow);
       } else if (result.error) {
         setBusy(false);
+        setBusyFlow(null);
         setError(result.error);
       } else {
-        // Nothing to start — the harness is already signed in.
+        // Nothing to start: the harness is already signed in.
         onDone();
       }
     } catch (cause) {
       setBusy(false);
+      setBusyFlow(null);
       setError(cause instanceof Error ? cause.message : String(cause));
     }
   };
 
   /** Claude Code terminal sign-in: surfaces the CLI command to finish with. */
-  const startTerminalSignIn = async () => {
+  const startTerminalSignIn = async (
+    flow: "claude-code" | "claude-code-account",
+  ) => {
     setError(null);
     setBusy(true);
+    setBusyFlow(flow);
     try {
-      const id = await ensureAgent("claude-code");
+      const id = await ensureAgent(flow);
       const result = await desktopApi.agentLogin(id);
       if (result.error) {
         setError(result.error);
@@ -202,6 +247,7 @@ export function AgentWizard({
       setError(cause instanceof Error ? cause.message : String(cause));
     } finally {
       setBusy(false);
+      setBusyFlow(null);
     }
   };
 
@@ -216,6 +262,7 @@ export function AgentWizard({
         provider,
         auth: "api-key",
         apiKey: apiKey.trim(),
+        ...(name.trim() ? { name: name.trim() } : {}),
       });
       onDone();
     } catch (cause) {
@@ -230,6 +277,48 @@ export function AgentWizard({
     window.setTimeout(() => setCopied(false), 1500);
   };
 
+  /** Optional agent name, offered on every detail step. */
+  const nameField = (placeholder: string) => (
+    <label className="flex flex-col gap-1 text-xs text-fg-muted">
+      Name
+      <input
+        type="text"
+        value={name}
+        onChange={(event) => setName(event.target.value)}
+        placeholder={placeholder}
+        autoComplete="off"
+        className="field h-8 px-2 text-[13px] text-fg placeholder:text-fg-faint"
+      />
+    </label>
+  );
+
+  /** The terminal sign-in command block (Claude Code flows). */
+  const commandBlock = ccCommand && (
+    <div className="mt-3 flex flex-col gap-1.5">
+      <div className="flex items-center gap-1.5">
+        <code className="min-w-0 flex-1 truncate rounded-md border border-border bg-bg-inset px-2 py-1 font-mono text-[11px] text-fg-muted">
+          {ccCommand}
+        </code>
+        <button
+          type="button"
+          onClick={() => copyCommand(ccCommand)}
+          className="grid size-6 shrink-0 cursor-pointer place-items-center rounded text-fg-muted transition-colors duration-150 hover:text-fg"
+          aria-label="Copy sign-in command"
+          title="Copy command"
+        >
+          {copied ? (
+            <Check className="size-3 text-success" />
+          ) : (
+            <Copy className="size-3" />
+          )}
+        </button>
+      </div>
+      <p className="text-[11px] text-fg-faint">
+        Finish sign-in in your terminal, then continue.
+      </p>
+    </div>
+  );
+
   const content = (
     // Re-mounting on step swap restarts the fade-in for the new content.
     <div key={step} className="animate-fade-in">
@@ -240,7 +329,7 @@ export function AgentWizard({
             <h2 className="text-[16px] font-semibold">Choose your agent</h2>
           </div>
           <p className="mb-4 text-[13px] text-fg-muted">
-            Pick an agent to power this profile's chats — you can add more or
+            Pick an agent to power this profile's chats. You can add more or
             switch anytime in Settings or the command palette.
           </p>
           <ul className="flex flex-col gap-2" aria-label="Agent choices">
@@ -288,8 +377,8 @@ export function AgentWizard({
           {error && <p className="mt-3 text-[12px] text-danger">{error}</p>}
           {variant === "tab" && (
             <p className="mt-4 text-[12px] text-fg-faint">
-              Closing this tab skips setup — the wizard comes back when you
-              start a chat.
+              Closing this tab skips setup. The wizard comes back when you start
+              a chat.
             </p>
           )}
         </>
@@ -312,18 +401,46 @@ export function AgentWizard({
                   Claude Code is already set up on this machine
                 </h2>
                 <p className="mt-2 text-[13px] text-fg-muted">
-                  Catamorphic can use that sign-in directly — nothing else to
-                  configure.
+                  Catamorphic can use that sign-in directly. Nothing else to
+                  configure. Or sign in with a different account, kept separate
+                  for this agent.
                 </p>
-                <PendingButton
-                  type="button"
-                  pending={busy}
-                  pendingLabel="Adding…"
-                  onClick={() => void addExistingSetup("claude-code")}
-                  className="mt-4 h-8 cursor-pointer rounded-md bg-accent px-4 text-[13px] font-medium text-accent-fg transition-opacity duration-150 hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
-                >
-                  Use my existing setup
-                </PendingButton>
+                <div className="mt-3">{nameField("Claude Code")}</div>
+                {commandBlock}
+                {ccStarted ? (
+                  <button
+                    type="button"
+                    onClick={onDone}
+                    className="mt-4 h-8 cursor-pointer rounded-md bg-accent px-4 text-[13px] font-medium text-accent-fg transition-opacity duration-150 hover:opacity-90"
+                  >
+                    Continue
+                  </button>
+                ) : (
+                  <div className="mt-4 flex items-center gap-2">
+                    <PendingButton
+                      type="button"
+                      pending={busy && busyFlow === "claude-code"}
+                      pendingLabel="Adding…"
+                      disabled={busy}
+                      onClick={() => void addExistingSetup("claude-code")}
+                      className="h-8 cursor-pointer rounded-md bg-accent px-4 text-[13px] font-medium text-accent-fg transition-opacity duration-150 hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
+                    >
+                      Use my existing setup
+                    </PendingButton>
+                    <PendingButton
+                      type="button"
+                      pending={busy && busyFlow === "claude-code-account"}
+                      pendingLabel="Starting…"
+                      disabled={busy}
+                      onClick={() =>
+                        void startTerminalSignIn("claude-code-account")
+                      }
+                      className="h-8 cursor-pointer rounded-md px-3 text-[13px] text-fg-muted transition-colors duration-150 hover:bg-bg-overlay hover:text-fg disabled:cursor-not-allowed disabled:opacity-50"
+                    >
+                      Sign in with a different account
+                    </PendingButton>
+                  </div>
+                )}
               </>
             ) : (
               <>
@@ -335,31 +452,8 @@ export function AgentWizard({
                   it here, finish it there, and you're set on this machine for
                   good.
                 </p>
-                {ccCommand && (
-                  <div className="mt-3 flex flex-col gap-1.5">
-                    <div className="flex items-center gap-1.5">
-                      <code className="min-w-0 flex-1 truncate rounded-md border border-border bg-bg-inset px-2 py-1 font-mono text-[11px] text-fg-muted">
-                        {ccCommand}
-                      </code>
-                      <button
-                        type="button"
-                        onClick={() => copyCommand(ccCommand)}
-                        className="grid size-6 shrink-0 cursor-pointer place-items-center rounded text-fg-muted transition-colors duration-150 hover:text-fg"
-                        aria-label="Copy sign-in command"
-                        title="Copy command"
-                      >
-                        {copied ? (
-                          <Check className="size-3 text-success" />
-                        ) : (
-                          <Copy className="size-3" />
-                        )}
-                      </button>
-                    </div>
-                    <p className="text-[11px] text-fg-faint">
-                      Finish sign-in in your terminal, then continue.
-                    </p>
-                  </div>
-                )}
+                <div className="mt-3">{nameField("Claude Code")}</div>
+                {commandBlock}
                 <div className="mt-4 flex items-center gap-2">
                   {ccStarted ? (
                     <button
@@ -374,7 +468,7 @@ export function AgentWizard({
                       type="button"
                       pending={busy}
                       pendingLabel="Starting…"
-                      onClick={() => void startTerminalSignIn()}
+                      onClick={() => void startTerminalSignIn("claude-code")}
                       className="h-8 cursor-pointer rounded-md bg-accent px-4 text-[13px] font-medium text-accent-fg transition-opacity duration-150 hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
                     >
                       Sign in in Terminal
@@ -398,18 +492,38 @@ export function AgentWizard({
                   Codex is already signed in on this machine
                 </h2>
                 <p className="mt-2 text-[13px] text-fg-muted">
-                  Catamorphic can use that sign-in directly — nothing else to
-                  configure.
+                  Catamorphic can use that sign-in directly. Nothing else to
+                  configure. Or sign in with a different ChatGPT account, kept
+                  separate for this agent.
                 </p>
-                <PendingButton
-                  type="button"
-                  pending={busy}
-                  pendingLabel="Adding…"
-                  onClick={() => void addExistingSetup("codex")}
-                  className="mt-4 h-8 cursor-pointer rounded-md bg-accent px-4 text-[13px] font-medium text-accent-fg transition-opacity duration-150 hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
-                >
-                  Use my existing sign-in
-                </PendingButton>
+                <div className="mt-3">{nameField("Codex")}</div>
+                <div className="mt-4 flex items-center gap-2">
+                  <PendingButton
+                    type="button"
+                    pending={busy && busyFlow === "codex"}
+                    pendingLabel="Adding…"
+                    disabled={busy}
+                    onClick={() => void addExistingSetup("codex")}
+                    className="h-8 cursor-pointer rounded-md bg-accent px-4 text-[13px] font-medium text-accent-fg transition-opacity duration-150 hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
+                  >
+                    Use my existing sign-in
+                  </PendingButton>
+                  <PendingButton
+                    type="button"
+                    pending={busy && busyFlow === "codex-account"}
+                    pendingLabel="Opening…"
+                    disabled={busy}
+                    onClick={() => void startBrowserSignIn("codex-account")}
+                    className="h-8 cursor-pointer rounded-md px-3 text-[13px] text-fg-muted transition-colors duration-150 hover:bg-bg-overlay hover:text-fg disabled:cursor-not-allowed disabled:opacity-50"
+                  >
+                    Sign in with a different ChatGPT account
+                  </PendingButton>
+                </div>
+                {waitingFlow === "codex-account" && (
+                  <p className="mt-2 text-[12px] text-fg-faint">
+                    Finish signing in in your browser…
+                  </p>
+                )}
               </>
             ) : (
               <>
@@ -420,6 +534,7 @@ export function AgentWizard({
                   Codex runs locally via the Codex CLI and signs in with your
                   ChatGPT account in the browser.
                 </p>
+                <div className="mt-3">{nameField("Codex")}</div>
                 <PendingButton
                   type="button"
                   pending={busy}
@@ -440,6 +555,7 @@ export function AgentWizard({
           {step === "api-key" && (
             <form onSubmit={submitApiKey} className="flex flex-col gap-3">
               <h2 className="text-[15px] font-semibold">Bring an API key</h2>
+              {nameField("Built-in")}
               <label className="flex flex-col gap-1 text-xs text-fg-muted">
                 Provider
                 <select
@@ -475,7 +591,7 @@ export function AgentWizard({
               </label>
               <p className="text-xs text-fg-faint">
                 Stored encrypted with your OS keychain. Model defaults are
-                picked automatically — change them later in Settings.
+                picked automatically; change them later in Settings.
               </p>
               <PendingButton
                 type="submit"

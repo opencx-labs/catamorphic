@@ -9,6 +9,8 @@ export interface HarnessModel {
   id: string;
   name: string;
   description?: string;
+  /** Versioned model id an alias resolves to (claude-code aliases only). */
+  resolvedId?: string;
 }
 
 /**
@@ -31,7 +33,12 @@ export async function listAgentModels(
   // E2E: deterministic stub, no CLIs or network.
   if (process.env.CATAMORPHIC_E2E_FAKE_AGENT === "1") {
     return [
-      { id: "fake-model-a", name: "Fake Model A", description: "Stub" },
+      {
+        id: "fake-model-a",
+        name: "Fake Model A",
+        description: "Stub",
+        resolvedId: "fake-model-a-2.1",
+      },
       { id: "fake-model-b", name: "Fake Model B", description: "Stub" },
     ];
   }
