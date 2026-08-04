@@ -9,6 +9,11 @@ import { instrumentSandboxProvider } from "@catamorphic/sandbox";
 import type { Kysely } from "kysely";
 import { AgentContextService } from "./services/agent-context-service.js";
 import { AgentSessionsService } from "./services/agent-sessions-service.js";
+import {
+  type CodingAgentRegistry,
+  isCodingAgentRegistry,
+  singleAgentRegistry,
+} from "./services/coding-agent-registry.js";
 import type { AppBundleStore } from "./services/app-bundle-store.js";
 import { AppPoliciesService } from "./services/app-policies-service.js";
 import { AppsService } from "./services/apps-service.js";
@@ -48,12 +53,21 @@ export interface CatamorphicCoreConfig {
   sandboxProvider?: SandboxProvider;
   pluginResolver?: PluginResolver;
   /**
-   * Pluggable coding agent (e.g. `AiSdkCodingAgent` from
-   * `@catamorphic/ai-sdk`, `CodexAgent` from `@catamorphic/codex`, or a host-supplied
-   * implementation). Requires `sandboxProvider` — agent sessions operate on a
-   * per-(project, user) dev sandbox.
+   * Pluggable coding agent(s). Pass a single provider (e.g. `AiSdkCodingAgent`
+   * from `@catamorphic/ai-sdk`) for the classic one-agent setup, or a
+   * {@link CodingAgentRegistry} when the host offers several agents (the
+   * desktop app registers one per configured profile agent). Requires
+   * `sandboxProvider` — sandbox-execution agents operate on a per-(project,
+   * user) dev sandbox.
    */
-  codingAgent?: CodingAgentProvider;
+  codingAgent?: CodingAgentProvider | CodingAgentRegistry;
+  /**
+   * Resolve a project's directory on the host filesystem, required for
+   * registry agents with `execution: "host"` (Claude Code, Codex).
+   */
+  hostProjectPathResolver?: (
+    projectId: string,
+  ) => Promise<string | undefined> | string | undefined;
   /**
    * How long finished runs are kept. Defaults to 90 days; set
    * `{ enabled: false }` to keep everything. Individual tenants can be given a
@@ -247,10 +261,14 @@ export class CatamorphicCore {
     this.skills = new SkillsService(this.db, this.projectManager);
 
     if (config.codingAgent && this.sandboxProvider && this.devSandboxes) {
+      const codingAgents = isCodingAgentRegistry(config.codingAgent)
+        ? config.codingAgent
+        : singleAgentRegistry(config.codingAgent);
       this.agentSessions = new AgentSessionsService(this.db, {
         projectManager: this.projectManager,
         sandboxProvider: this.sandboxProvider,
-        codingAgent: config.codingAgent,
+        codingAgents,
+        hostProjectPath: config.hostProjectPathResolver,
         devSandboxes: this.devSandboxes,
         plugins: this.plugins,
         pluginResolver: this.pluginResolver,

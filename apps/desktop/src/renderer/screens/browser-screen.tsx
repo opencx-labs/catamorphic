@@ -49,7 +49,10 @@ export interface BrowserPageState {
 export function resolveInput(raw: string): string {
   const input = raw.trim();
   if (/^https?:\/\//i.test(input)) return input;
-  if (/^[\w-]+(\.[\w-]+)+(:\d+)?(\/\S*)?$/.test(input) && !input.includes(" ")) {
+  if (
+    /^[\w-]+(\.[\w-]+)+(:\d+)?(\/\S*)?$/.test(input) &&
+    !input.includes(" ")
+  ) {
     return `https://${input}`;
   }
   if (input === "localhost" || /^localhost:\d+/.test(input)) {
@@ -358,8 +361,14 @@ export function BrowserScreen({
       if (!cancelled) setBookmarks(loaded);
     });
     const unsubscribe = desktopApi.onBookmarksChanged((change) => {
-      if (change.projectId === projectId && change.profileId === profileId) {
+      if (change.profileId !== profileId) return;
+      if (change.projectId === projectId && change.project) {
         setBookmarks({ project: change.project, pinned: change.pinned });
+      } else if (change.projectId === null) {
+        // Profile-wide change (e.g. browser import): pinned only.
+        setBookmarks((current) =>
+          current ? { ...current, pinned: change.pinned } : current,
+        );
       }
     });
     return () => {
@@ -419,7 +428,8 @@ export function BrowserScreen({
       });
       if (seq !== suggestSeq.current) return;
 
-      const urlish = /^[\w-]+(\.[\w-]+)+/.test(trimmed) || /^https?:/i.test(trimmed);
+      const urlish =
+        /^[\w-]+(\.[\w-]+)+/.test(trimmed) || /^https?:/i.test(trimmed);
       const first: Suggestion = urlish
         ? { kind: "url", label: trimmed, target: trimmed }
         : {
@@ -651,7 +661,11 @@ export function BrowserScreen({
           icon={<KeyRound className="size-3.5 text-fg-muted" />}
           text={`Save password for ${saveOffer.username || "this site"} on ${new URL(saveOffer.origin).host}?`}
           actions={[
-            { label: "Save", primary: true, onClick: () => void saveCredentials() },
+            {
+              label: "Save",
+              primary: true,
+              onClick: () => void saveCredentials(),
+            },
             { label: "Never", onClick: () => setSaveOffer(null) },
           ]}
         />

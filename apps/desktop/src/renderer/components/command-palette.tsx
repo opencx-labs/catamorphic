@@ -4,6 +4,8 @@ import * as lucide from "lucide-react";
 import {
   ArrowRight,
   Bot,
+  Cpu,
+  Gauge,
   Globe,
   LayoutGrid,
   type LucideIcon,
@@ -35,8 +37,12 @@ import {
 } from "../../shared/actions.js";
 import { commandScore } from "../lib/command-score.js";
 import {
+  type AgentEffort,
+  type AgentInfo,
   type Bookmark,
   desktopApi,
+  type HarnessModelInfo,
+  type OpenRouterCatalog,
   type Profile,
   type SidebarConfig,
 } from "../lib/desktop-api.js";
@@ -68,7 +74,73 @@ const ACTION_ICONS: Partial<Record<ActionId, LucideIcon>> = {
   "new-browser-tab": Globe,
   "toggle-sidebar": PanelLeft,
   "close-tab": X,
+  "setup-agent": Bot,
+  "default-agent": Bot,
+  "switch-agent": Bot,
+  "change-effort": Gauge,
+  "switch-model": Cpu,
 };
+
+/**
+ * Pickers: palette-local flows where a command narrows the list to one
+ * question ("which agent?", "which effort?"). Same chip visual as the @
+ * modes; Backspace on empty input pops back out.
+ */
+export type PaletteInPicker =
+  | "default-agent"
+  | "switch-agent"
+  | "effort"
+  | "model";
+
+const PICKER_CHIPS: Record<
+  PaletteInPicker,
+  { chip: string; icon: LucideIcon; placeholder: string }
+> = {
+  "default-agent": {
+    chip: "Default agent",
+    icon: Bot,
+    placeholder: "Pick the profile's default agent…",
+  },
+  "switch-agent": {
+    chip: "Chat agent",
+    icon: Bot,
+    placeholder: "Pick an agent for this chat…",
+  },
+  effort: {
+    chip: "Effort",
+    icon: Gauge,
+    placeholder: "Pick reasoning effort…",
+  },
+  model: {
+    chip: "Model",
+    icon: Cpu,
+    placeholder: "Type or pick a model…",
+  },
+};
+
+/** Action rows that open a picker instead of running an app handler. */
+const PICKER_ACTIONS: Partial<Record<ActionId, PaletteInPicker>> = {
+  "default-agent": "default-agent",
+  "switch-agent": "switch-agent",
+  "change-effort": "effort",
+  "switch-model": "model",
+};
+
+const HARNESS_LABELS: Record<AgentInfo["harness"], string> = {
+  "ai-sdk": "Built-in",
+  "claude-code": "Claude Code",
+  codex: "Codex",
+};
+
+const EFFORT_LEVELS: Array<{
+  id: AgentEffort;
+  label: string;
+  description: string;
+}> = [
+  { id: "low", label: "Low effort", description: "Fast, direct responses" },
+  { id: "medium", label: "Medium effort", description: "Balanced reasoning" },
+  { id: "high", label: "High effort", description: "Deep, thorough reasoning" },
+];
 
 interface PaletteItem {
   id: string;
@@ -186,6 +258,15 @@ export function CommandPalette({
   onSwitchProfile,
   onSendToAgent,
   actionHandlers,
+  agents,
+  defaultAgentId,
+  focusedChat,
+  onPickDefaultAgent,
+  onPickSessionAgent,
+  onPickEffort,
+  onPickModel,
+  onHighlightTarget,
+  pickerRequest,
 }: {
   variant: "overlay" | "tab";
   /**
@@ -210,12 +291,37 @@ export function CommandPalette({
   onSendToAgent: (message: string, mode: "float" | "tab") => void;
   /** One handler per registry action — the same map the shortcuts use. */
   actionHandlers: Record<ActionId, () => void>;
+  /** The profile's configured agents (for the agent/effort pickers). */
+  agents: AgentInfo[];
+  defaultAgentId: string | null;
+  /** The chat the session-scoped commands act on; null = none focused. */
+  focusedChat: {
+    agentId: string | null;
+    effort: AgentEffort | null;
+  } | null;
+  onPickDefaultAgent: (agentId: string) => void;
+  onPickSessionAgent: (agentId: string) => void;
+  onPickEffort: (effort: AgentEffort) => void;
+  /** Change the target agent's model ("" = the automatic default). */
+  onPickModel: (agentId: string, model: string) => void;
+  /**
+   * The highlighted row targets a specific surface ("chat" = the focused
+   * chat, "close" = whatever close-tab would close) — reported up so the
+   * app can accent that surface's border while the row is highlighted.
+   */
+  onHighlightTarget?: (target: "chat" | "close" | null) => void;
+  /** Overlay only: open straight into a picker (Cmd+P agent commands). */
+  pickerRequest?: { kind: PaletteInPicker; nonce: string } | null;
 }) {
   const [query, setQuery] = useState("");
   const [selectedIndex, setSelectedIndex] = useState(0);
   const [mode, setMode] = useState<PaletteMode | null>(null);
   // Exiting chip lingers to play chip-out; removed on animationend.
   const [exitingMode, setExitingMode] = useState<PaletteMode | null>(null);
+  const [picker, setPicker] = useState<PaletteInPicker | null>(null);
+  const [exitingPicker, setExitingPicker] = useState<PaletteInPicker | null>(
+    null,
+  );
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const listRef = useRef<HTMLDivElement>(null);
   const sizerRef = useRef<HTMLDivElement>(null);
@@ -223,6 +329,8 @@ export function CommandPalette({
   const enterMode = useCallback((next: PaletteMode) => {
     setMode(next);
     setExitingMode(null);
+    setPicker(null);
+    setExitingPicker(null);
     setQuery("");
     setSelectedIndex(0);
     inputRef.current?.focus();
@@ -234,6 +342,69 @@ export function CommandPalette({
       return null;
     });
   }, []);
+
+  // OpenRouter catalog for the model picker, fetched when first needed
+  // (main caches it for an hour).
+  const [catalog, setCatalog] = useState<OpenRouterCatalog | null>(null);
+  // Per-agent supported models (Claude Code / Codex / provider APIs),
+  // resolved live by main — never a hardcoded list.
+  const [harnessModels, setHarnessModels] = useState<{
+    agentId: string;
+    models: HarnessModelInfo[];
+  } | null>(null);
+
+  const enterPicker = useCallback((next: PaletteInPicker) => {
+    setPicker(next);
+    setExitingPicker(null);
+    setMode(null);
+    setExitingMode(null);
+    setQuery("");
+    setSelectedIndex(0);
+    inputRef.current?.focus();
+  }, []);
+
+  const exitPicker = useCallback(() => {
+    setPicker((current) => {
+      if (current) setExitingPicker(current);
+      return null;
+    });
+  }, []);
+
+  // The model picker's target: the focused chat's agent, else the default.
+  const targetAgent = agents.find(
+    (candidate) =>
+      candidate.id === ((focusedChat?.agentId ?? defaultAgentId) || ""),
+  );
+
+  useEffect(() => {
+    if (picker !== "model" || !targetAgent) return;
+    let cancelled = false;
+    if (
+      targetAgent.harness === "ai-sdk" &&
+      targetAgent.provider === "openrouter"
+    ) {
+      if (catalog === null) {
+        void desktopApi.openrouterModels().then((data) => {
+          if (!cancelled) setCatalog(data);
+        });
+      }
+    } else if (harnessModels?.agentId !== targetAgent.id) {
+      void desktopApi.agentModels(targetAgent.id).then((data) => {
+        if (!cancelled) {
+          setHarnessModels({ agentId: targetAgent.id, models: data.models });
+        }
+      });
+    }
+    return () => {
+      cancelled = true;
+    };
+  }, [picker, catalog, harnessModels, targetAgent]);
+
+  // Cmd+P agent commands open the overlay already inside a picker.
+  useEffect(() => {
+    if (variant !== "overlay" || !pickerRequest) return;
+    enterPicker(pickerRequest.kind);
+  }, [variant, pickerRequest, enterPicker]);
 
   const keybindings = useKeybindings();
 
@@ -251,7 +422,16 @@ export function CommandPalette({
       }
     });
     const unsubscribe = desktopApi.onBookmarksChanged((change) => {
-      if (change.projectId === projectId && change.profileId === profileId) {
+      if (change.profileId !== profileId) return;
+      // Profile-wide changes (projectId null, e.g. a browser import) have
+      // no project scope attached — refetch the combined view.
+      if (change.projectId === null) {
+        void desktopApi.bookmarksGet({ projectId, profileId }).then((data) => {
+          setBookmarks([...data.pinned, ...data.project.bookmarks]);
+        });
+        return;
+      }
+      if (change.projectId === projectId && change.project) {
         setBookmarks([...change.pinned, ...change.project.bookmarks]);
       }
     });
@@ -291,6 +471,8 @@ export function CommandPalette({
       setSelectedIndex(0);
       setMode(null);
       setExitingMode(null);
+      setPicker(null);
+      setExitingPicker(null);
       // Next open is a fresh first paint — the panel's enter animation
       // covers it; stale row positions would fade-rise every row.
       rowTopsRef.current.clear();
@@ -305,23 +487,34 @@ export function CommandPalette({
   // would cascade into the results memo and the FLIP pass per render.
   const actionHandlersRef = useRef(actionHandlers);
   actionHandlersRef.current = actionHandlers;
+  const hasFocusedChat = focusedChat !== null;
   const actionItems = useMemo<PaletteItem[]>(
     () =>
       BUILTIN_ACTIONS.filter(
-        (action: ActionDefinition) => !action.hiddenInPalette,
-      ).map((action) => ({
-        id: `action:${action.id}`,
-        icon: ACTION_ICONS[action.id] ?? Zap,
-        label: action.label,
-        keywords: [...action.keywords],
-        shortcut:
-          action.id in keybindings
-            ? formatBinding(keybindings[action.id as KeybindingAction])
-            : undefined,
-        kind: "action" as const,
-        run: () => actionHandlersRef.current[action.id](),
-      })),
-    [keybindings],
+        (action: ActionDefinition) =>
+          !action.hiddenInPalette &&
+          // Session-scoped: only offered while a chat is focused.
+          (action.id !== "switch-agent" || hasFocusedChat),
+      ).map((action) => {
+        const targetPicker = PICKER_ACTIONS[action.id];
+        return {
+          id: `action:${action.id}`,
+          icon: ACTION_ICONS[action.id] ?? Zap,
+          label: action.label,
+          keywords: [...action.keywords],
+          shortcut:
+            action.id in keybindings
+              ? formatBinding(keybindings[action.id as KeybindingAction])
+              : undefined,
+          kind: "action" as const,
+          // Picker commands swap palette state in place (like mode rows);
+          // everything else runs the shared handler.
+          run: targetPicker
+            ? () => enterPicker(targetPicker)
+            : () => actionHandlersRef.current[action.id](),
+        };
+      }),
+    [keybindings, hasFocusedChat, enterPicker],
   );
 
   const projectItems = useMemo<PaletteItem[]>(
@@ -461,6 +654,215 @@ export function CommandPalette({
 
   const trimmed = query.trim();
   const results = useMemo<PaletteItem[]>(() => {
+    // Picker active: the list IS the question. Agent rows or effort rows,
+    // narrowed by whatever is typed; picking answers and closes.
+    if (picker === "model") {
+      if (!targetAgent) {
+        return [
+          {
+            id: "pick:none",
+            icon: SettingsIcon,
+            label: "No agents configured",
+            detail: "Open Settings to add one",
+            keywords: [],
+            kind: "navigate",
+            run: () =>
+              onOpenTab({
+                kind: "settings",
+                name: "settings",
+                label: "Settings",
+              }),
+          },
+        ];
+      }
+      const agent = targetAgent;
+      const current = agent.model;
+      const rows: PaletteItem[] = [];
+      if (agent.harness === "ai-sdk" && agent.provider === "openrouter") {
+        rows.push({
+          id: "pick:model:",
+          icon: Cpu,
+          label: "Best free model (automatic)",
+          detail: `${catalog?.bestFreeModelId ?? "resolved from the catalog"}${
+            current === "" ? " · current" : ""
+          }`,
+          keywords: ["best", "free", "auto", "default"],
+          kind: "action",
+          run: () => onPickModel(agent.id, ""),
+        });
+        const models = (catalog?.models ?? [])
+          .slice()
+          .sort(
+            (a, b) => Number(b.free) - Number(a.free) || b.created - a.created,
+          );
+        const matched = trimmed
+          ? models
+              .map((model) => ({
+                model,
+                score: commandScore(`${model.name} ${model.id}`, trimmed, []),
+              }))
+              .filter((entry) => entry.score > 0)
+              .sort((a, b) => b.score - a.score)
+              .map((entry) => entry.model)
+          : models;
+        for (const model of matched.slice(0, 50)) {
+          rows.push({
+            id: `pick:model:${model.id}`,
+            icon: Cpu,
+            label: model.name,
+            detail: `${model.id}${model.free ? " · free" : ""}${
+              model.id === current ? " · current" : ""
+            }`,
+            keywords: [],
+            kind: "action",
+            run: () => onPickModel(agent.id, model.id),
+          });
+        }
+        return rows;
+      }
+      // CLIs run their own default; Anthropic/OpenAI need an explicit id.
+      if (agent.harness !== "ai-sdk") {
+        rows.push({
+          id: "pick:model:",
+          icon: Cpu,
+          label: "Harness default (automatic)",
+          detail: current === "" ? "current" : undefined,
+          keywords: ["default", "auto"],
+          kind: "action",
+          run: () => onPickModel(agent.id, ""),
+        });
+      }
+      // Supported values straight from the harness (Claude Code's own
+      // catalog, `codex debug models`, or the provider's /v1/models).
+      const supported =
+        harnessModels?.agentId === agent.id ? harnessModels.models : [];
+      const matchedSupported = trimmed
+        ? supported
+            .map((model) => ({
+              model,
+              score: commandScore(`${model.name} ${model.id}`, trimmed, []),
+            }))
+            .filter((entry) => entry.score > 0)
+            .sort((a, b) => b.score - a.score)
+            .map((entry) => entry.model)
+        : supported;
+      for (const model of matchedSupported.slice(0, 50)) {
+        rows.push({
+          id: `pick:model:${model.id}`,
+          icon: Cpu,
+          label: model.name,
+          detail: `${model.id}${model.id === current ? " · current" : ""}`,
+          keywords: [],
+          kind: "action",
+          run: () => onPickModel(agent.id, model.id),
+        });
+      }
+      if (current && !supported.some((model) => model.id === current)) {
+        rows.push({
+          id: `pick:model:${current}`,
+          icon: Cpu,
+          label: current,
+          detail: "current",
+          keywords: [],
+          kind: "action",
+          run: () => onPickModel(agent.id, current),
+        });
+      }
+      if (
+        trimmed &&
+        trimmed !== current &&
+        !supported.some((model) => model.id === trimmed)
+      ) {
+        rows.push({
+          id: `pick:model-custom`,
+          icon: Cpu,
+          label: `Use "${trimmed}"`,
+          detail: "Set this model id",
+          keywords: [],
+          kind: "action",
+          run: () => onPickModel(agent.id, trimmed),
+        });
+      }
+      return rows;
+    }
+
+    if (picker) {
+      const rows: PaletteItem[] =
+        picker === "effort"
+          ? EFFORT_LEVELS.map((level) => {
+              const referenceAgentId =
+                (focusedChat ? focusedChat.agentId : null) ?? defaultAgentId;
+              const agentDefault = agents.find(
+                (agent) => agent.id === referenceAgentId,
+              )?.effort;
+              const current = focusedChat
+                ? (focusedChat.effort ?? agentDefault)
+                : agentDefault;
+              return {
+                id: `pick:effort:${level.id}`,
+                icon: Gauge,
+                label: level.label,
+                detail:
+                  level.id === current
+                    ? `${level.description} · current`
+                    : level.description,
+                keywords: [level.id, "effort", "reasoning"],
+                kind: "action" as const,
+                run: () => onPickEffort(level.id),
+              };
+            })
+          : agents.map((agent) => {
+              const marker =
+                picker === "default-agent"
+                  ? agent.id === defaultAgentId
+                    ? " · default"
+                    : ""
+                  : agent.id ===
+                      ((focusedChat?.agentId ?? defaultAgentId) || "")
+                    ? " · current"
+                    : "";
+              return {
+                id: `pick:agent:${agent.id}`,
+                icon: Bot,
+                label: agent.name,
+                detail: `${HARNESS_LABELS[agent.harness]}${marker}`,
+                keywords: [agent.name, agent.harness, agent.model],
+                kind: "action" as const,
+                run: () =>
+                  picker === "default-agent"
+                    ? onPickDefaultAgent(agent.id)
+                    : onPickSessionAgent(agent.id),
+              };
+            });
+      if (rows.length === 0) {
+        return [
+          {
+            id: "pick:none",
+            icon: SettingsIcon,
+            label: "No agents configured",
+            detail: "Open Settings to add one",
+            keywords: [],
+            kind: "navigate",
+            run: () =>
+              onOpenTab({
+                kind: "settings",
+                name: "settings",
+                label: "Settings",
+              }),
+          },
+        ];
+      }
+      if (!trimmed) return rows;
+      return rows
+        .map((item) => ({
+          item,
+          score: commandScore(item.label, trimmed, item.keywords),
+        }))
+        .filter((entry) => entry.score > 0)
+        .sort((a, b) => b.score - a.score)
+        .map((entry) => entry.item);
+    }
+
     // Chip mode active: the whole input belongs to that mode. One row —
     // Enter commits it — so typing never drifts into unrelated matches.
     if (mode) {
@@ -603,6 +1005,10 @@ export function CommandPalette({
     trimmed,
     query,
     mode,
+    picker,
+    agents,
+    defaultAgentId,
+    focusedChat,
     enterMode,
     actionItems,
     projectItems,
@@ -611,6 +1017,14 @@ export function CommandPalette({
     historyItems,
     onSendToAgent,
     onOpenUrl,
+    onOpenTab,
+    onPickDefaultAgent,
+    onPickSessionAgent,
+    onPickEffort,
+    onPickModel,
+    targetAgent,
+    catalog,
+    harnessModels,
   ]);
 
   // Two-part list animation, both measured in a layout effect so targets
@@ -701,10 +1115,54 @@ export function CommandPalette({
 
   const selected = Math.min(selectedIndex, Math.max(results.length - 1, 0));
 
+  // The surface the highlighted row would act on, reported up so the app
+  // accents its border — a scoped command visibly points at its target.
+  const selectedId = results[selected]?.id;
+  const highlightTarget: "chat" | "close" | null =
+    variant === "overlay" && !open
+      ? null
+      : picker === "switch-agent"
+        ? "chat"
+        : picker === "effort" || picker === "model"
+          ? focusedChat
+            ? "chat"
+            : null
+          : selectedId === "action:switch-agent"
+            ? "chat"
+            : selectedId === "action:change-effort" ||
+                selectedId === "action:switch-model"
+              ? focusedChat
+                ? "chat"
+                : null
+              : selectedId === "action:close-tab"
+                ? "close"
+                : null;
+  const onHighlightTargetRef = useRef(onHighlightTarget);
+  onHighlightTargetRef.current = onHighlightTarget;
+  useEffect(() => {
+    onHighlightTargetRef.current?.(highlightTarget);
+    return () => onHighlightTargetRef.current?.(null);
+  }, [highlightTarget]);
+
   const commit = (item: PaletteItem, withCmd: boolean) => {
     // Entering a chip mode swaps palette state — the palette stays open.
     if (item.id.startsWith("mode-row:")) {
       item.run("replace");
+      return;
+    }
+    // Picker-opening commands likewise swap palette state in place.
+    if (
+      item.id.startsWith("action:") &&
+      PICKER_ACTIONS[item.id.slice("action:".length) as ActionId]
+    ) {
+      item.run("replace");
+      return;
+    }
+    // Picking an answer runs it and puts the palette away.
+    if (item.id.startsWith("pick:")) {
+      if (variant === "overlay") onClose();
+      item.run("replace");
+      exitPicker();
       return;
     }
     // A chip-mode row with nothing typed has nothing to do yet.
@@ -756,6 +1214,11 @@ export function CommandPalette({
       exitMode();
       return;
     }
+    if (picker && event.key === "Backspace" && query === "") {
+      event.preventDefault();
+      exitPicker();
+      return;
+    }
     if (event.key === "ArrowDown") {
       event.preventDefault();
       moveSelection(1);
@@ -785,8 +1248,25 @@ export function CommandPalette({
       window.removeEventListener("keydown", onKeyDown, { capture: true });
   }, [variant, open, onClose]);
 
-  // The rendered chip: the live mode, or the exiting one mid chip-out.
-  const chipMode = mode ?? exitingMode;
+  // The rendered chip: the live mode/picker, or the exiting one mid
+  // chip-out. Pickers reuse the mode chip's exact visual vocabulary.
+  const chip = mode
+    ? { icon: mode.icon, label: mode.chip, live: true }
+    : picker
+      ? {
+          icon: PICKER_CHIPS[picker].icon,
+          label: PICKER_CHIPS[picker].chip,
+          live: true,
+        }
+      : exitingMode
+        ? { icon: exitingMode.icon, label: exitingMode.chip, live: false }
+        : exitingPicker
+          ? {
+              icon: PICKER_CHIPS[exitingPicker].icon,
+              label: PICKER_CHIPS[exitingPicker].chip,
+              live: false,
+            }
+          : null;
 
   const panel = (
     <div
@@ -795,18 +1275,21 @@ export function CommandPalette({
       className="pointer-events-auto flex w-full max-w-2xl flex-col overflow-hidden rounded-2xl border border-border bg-bg-raised/95 drop-shadow-2xl backdrop-blur-xl"
     >
       <div className="mx-3 flex items-start gap-2 border-b border-border">
-        {chipMode && (
+        {chip && (
           <span
-            data-testid={mode ? "palette-mode-chip" : undefined}
+            data-testid={chip.live ? "palette-mode-chip" : undefined}
             onAnimationEnd={(event) => {
-              if (event.animationName === "chip-out") setExitingMode(null);
+              if (event.animationName === "chip-out") {
+                setExitingMode(null);
+                setExitingPicker(null);
+              }
             }}
             className={`mt-[9px] flex shrink-0 items-center gap-1.5 overflow-hidden whitespace-nowrap rounded-md bg-accent/15 py-1 pl-1.5 pr-2 text-[12px] font-medium text-accent ${
-              mode ? "animate-chip-in" : "animate-chip-out"
+              chip.live ? "animate-chip-in" : "animate-chip-out"
             }`}
           >
-            <chipMode.icon className="size-3.5 shrink-0" />
-            {chipMode.chip}
+            <chip.icon className="size-3.5 shrink-0" />
+            {chip.label}
           </span>
         )}
         <textarea
@@ -820,7 +1303,13 @@ export function CommandPalette({
           onKeyDown={onInputKeyDown}
           rows={1}
           spellCheck={false}
-          placeholder={mode ? mode.placeholder : "Search or ask anything…"}
+          placeholder={
+            mode
+              ? mode.placeholder
+              : picker
+                ? PICKER_CHIPS[picker].placeholder
+                : "Search or ask anything…"
+          }
           aria-label="Search commands, pages, and more"
           className="field-sizing-content max-h-40 w-full resize-none bg-transparent px-1 py-3 text-sm outline-none placeholder:text-fg-faint"
           style={{ outline: "none" }}
@@ -881,7 +1370,7 @@ export function CommandPalette({
         data-testid="palette-footer"
         className="flex shrink-0 items-center gap-3 border-t border-border px-4 py-1.5 text-[11px] text-fg-faint"
       >
-        {mode ? (
+        {mode || picker ? (
           <FooterHint keycap="⌫" label="exit mode" />
         ) : (
           <>

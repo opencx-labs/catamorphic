@@ -1,18 +1,20 @@
 import path from "node:path";
-import { app, BrowserWindow, dialog, ipcMain, Menu } from "electron";
+import {
+  app,
+  BrowserWindow,
+  dialog,
+  ipcMain,
+  Menu,
+  type WebContents,
+} from "electron";
 import { registerBrowserSupport } from "./browser.js";
 import { registerIpcHandlers, type ServerState } from "./ipc.js";
-import {
-  type Keybindings,
-  KeybindingsStore,
-  toAccelerator,
-} from "./keybindings.js";
+import { type Keybindings, toAccelerator } from "./keybindings.js";
+import { ProfileConfigManager } from "./profile-config.js";
 import { ProfilesStore } from "./profiles.js";
 import { type EmbeddedServer, startEmbeddedServer } from "./server/boot.js";
 import { resolveDataPaths } from "./server/paths.js";
-import { SettingsStore } from "./server/settings.js";
-import { SidebarConfigStore } from "./sidebar-config.js";
-import { ThemeStore, windowBackgroundColor } from "./theme.js";
+import { windowBackgroundColor } from "./theme.js";
 
 // macOS 26.x + Apple Silicon: V8's background compiler threads race the
 // OS's MAP_JIT write-protection and SIGTRAP in ThreadIsolation::
@@ -60,40 +62,16 @@ app.on("second-instance", () => {
 });
 
 const paths = resolveDataPaths();
-const settingsStore = new SettingsStore(paths.settingsFile);
-const keybindingsStore = new KeybindingsStore(paths.keybindingsFile);
 const profilesStore = new ProfilesStore(paths.profilesFile);
-// One instance shared by IPC and the chat agent's config mirror.
-const sidebarConfigStore = new SidebarConfigStore(paths.sidebarFile);
-const themeStore = new ThemeStore(paths.themeFile);
+// Per-profile config (theme, keybindings, sidebar, agents) — one manager
+// shared by IPC, the window layer, and the chat agent's config mirror.
+const profileConfig = new ProfileConfigManager(paths, profilesStore);
 
 let server: EmbeddedServer | null = null;
-let restarting: Promise<EmbeddedServer> | null = null;
 
 const state: ServerState = {
   get current() {
     return server;
-  },
-  set current(value) {
-    server = value;
-  },
-  restart: (settings) => {
-    restarting ??= (async () => {
-      try {
-        await server?.shutdown();
-        server = await startEmbeddedServer(
-          paths,
-          settings,
-          keybindingsStore,
-          sidebarConfigStore,
-          themeStore,
-        );
-        return server;
-      } finally {
-        restarting = null;
-      }
-    })();
-    return restarting;
   },
   broadcast: (channel, payload) => {
     for (const window of BrowserWindow.getAllWindows()) {
@@ -102,7 +80,64 @@ const state: ServerState = {
   },
 };
 
-function createWindow(): BrowserWindow {
+/**
+ * Which profile each window shows. Windows are born with a profile (theme
+ * pre-painted from it) and can switch in place when their workspace is
+ * empty; broadcasts of per-profile state (theme, keybindings, sidebar,
+ * agents) go only to that profile's windows.
+ */
+const windowProfiles = new Map<number, string>();
+
+export interface WindowProfileRegistry {
+  profileFor(sender: WebContents): string;
+  windowsFor(profileId: string): BrowserWindow[];
+  assign(sender: WebContents, profileId: string): void;
+  openWindow(profileId: string): void;
+}
+
+const windows: WindowProfileRegistry = {
+  profileFor(sender) {
+    return (
+      windowProfiles.get(sender.id) ?? profilesStore.lastActiveProfile().id
+    );
+  },
+  windowsFor(profileId) {
+    return BrowserWindow.getAllWindows().filter(
+      (window) => windowProfiles.get(window.webContents.id) === profileId,
+    );
+  },
+  assign(sender, profileId) {
+    windowProfiles.set(sender.id, profileId);
+    profilesStore.setLastActiveProfile(profileId);
+    const window = BrowserWindow.fromWebContents(sender);
+    window?.setBackgroundColor(
+      windowBackgroundColor(
+        profileConfig.forProfile(profileId).theme.resolved(),
+      ),
+    );
+    applyMenuForFocusedWindow();
+  },
+  openWindow(profileId) {
+    const window = createWindow(profileId);
+    window.focus();
+  },
+};
+
+function sendToProfile(
+  profileId: string,
+  channel: string,
+  payload: unknown,
+): void {
+  for (const window of windows.windowsFor(profileId)) {
+    window.webContents.send(channel, payload);
+  }
+}
+
+function createWindow(profileId?: string): BrowserWindow {
+  const profile = profileId
+    ? (profilesStore.get(profileId) ?? profilesStore.lastActiveProfile())
+    : profilesStore.lastActiveProfile();
+  const stores = profileConfig.forProfile(profile.id);
   const window = new BrowserWindow({
     width: 1200,
     height: 800,
@@ -110,8 +145,8 @@ function createWindow(): BrowserWindow {
     minHeight: 480,
     title: "Catamorphic",
     titleBarStyle: process.platform === "darwin" ? "hiddenInset" : "default",
-    // Pre-paint background from the theme so window open doesn't flash.
-    backgroundColor: windowBackgroundColor(themeStore.resolved()),
+    // Pre-paint background from the profile's theme so open doesn't flash.
+    backgroundColor: windowBackgroundColor(stores.theme.resolved()),
     webPreferences: {
       preload: path.join(import.meta.dirname, "../preload/index.cjs"),
       contextIsolation: true,
@@ -120,6 +155,11 @@ function createWindow(): BrowserWindow {
       // Browser tabs render as <webview> guests (see main/browser.ts).
       webviewTag: true,
     },
+  });
+  windowProfiles.set(window.webContents.id, profile.id);
+  profilesStore.setLastActiveProfile(profile.id);
+  window.on("closed", () => {
+    windowProfiles.delete(window.webContents.id);
   });
 
   if (process.env.ELECTRON_RENDERER_URL) {
@@ -135,9 +175,9 @@ function createWindow(): BrowserWindow {
 // The default menu binds Cmd+W to "Close Window". The workspace has its
 // own closable surfaces (tabs, floating chats), so close-tab is forwarded
 // to the renderer, which closes the most specific thing in focus.
-// Accelerators come from the user's keybindings file; new-tab, the command
-// palette, and toggle-sidebar are window-level shortcuts handled in the
-// renderer.
+// Accelerators come from the focused window's profile keybindings; new-tab,
+// the command palette, and toggle-sidebar are window-level shortcuts handled
+// in the renderer.
 function buildMenu(bindings: Keybindings): Menu {
   return Menu.buildFromTemplate([
     ...(process.platform === "darwin" ? [{ role: "appMenu" } as const] : []),
@@ -190,38 +230,54 @@ function buildMenu(bindings: Keybindings): Menu {
   ]);
 }
 
-function applyKeybindings(bindings: Keybindings): void {
-  Menu.setApplicationMenu(buildMenu(bindings));
-  state.broadcast("catamorphic:keybindings-changed", bindings);
+/** Menu accelerators follow the focused window's profile. */
+function applyMenuForFocusedWindow(): void {
+  const focused = BrowserWindow.getFocusedWindow();
+  const profileId = focused
+    ? (windowProfiles.get(focused.webContents.id) ??
+      profilesStore.lastActiveProfile().id)
+    : profilesStore.lastActiveProfile().id;
+  Menu.setApplicationMenu(
+    buildMenu(profileConfig.forProfile(profileId).keybindings.load()),
+  );
 }
 
 app.whenReady().then(async () => {
-  Menu.setApplicationMenu(buildMenu(keybindingsStore.load()));
-  // Live-reload: agents and users edit keybindings.json directly.
-  keybindingsStore.watch(applyKeybindings);
-  // Same for theme.json: broadcast resolved colors, keep the native window
-  // background in sync so resizes don't flash the old color.
-  themeStore.watch((theme) => {
-    for (const window of BrowserWindow.getAllWindows()) {
-      window.setBackgroundColor(windowBackgroundColor(theme));
-    }
-    state.broadcast("catamorphic:theme-changed", theme);
+  // Legacy config migration first: it seeds the default profile's agent
+  // roster from the old settings.json, whose key needs safeStorage (only
+  // usable once the app is ready).
+  profileConfig.migrate();
+  applyMenuForFocusedWindow();
+  // Live-reload: agents and users edit the per-profile config files
+  // directly. Changes fan out only to that profile's windows.
+  profileConfig.onKeybindingsChanged((profileId, bindings) => {
+    applyMenuForFocusedWindow();
+    sendToProfile(profileId, "catamorphic:keybindings-changed", bindings);
   });
-  registerIpcHandlers(settingsStore, keybindingsStore, themeStore, state);
-  browserSupport = registerBrowserSupport(profilesStore, sidebarConfigStore);
+  profileConfig.onThemeChanged((profileId, theme) => {
+    for (const window of windows.windowsFor(profileId)) {
+      window.setBackgroundColor(windowBackgroundColor(theme));
+      window.webContents.send("catamorphic:theme-changed", theme);
+    }
+  });
+  profileConfig.onSidebarChanged((profileId, config) => {
+    sendToProfile(profileId, "catamorphic:sidebar-config-changed", config);
+  });
+  app.on("browser-window-focus", applyMenuForFocusedWindow);
+
+  registerIpcHandlers(profileConfig, state, windows, paths);
+  browserSupport = registerBrowserSupport(
+    profilesStore,
+    profileConfig,
+    windows,
+  );
   ipcMain.handle("catamorphic:webview-preload", () =>
     path.join(import.meta.dirname, "../preload/webview.cjs"),
   );
   const window = createWindow();
 
   try {
-    server = await startEmbeddedServer(
-      paths,
-      settingsStore.load(),
-      keybindingsStore,
-      sidebarConfigStore,
-      themeStore,
-    );
+    server = await startEmbeddedServer(paths, profilesStore, profileConfig);
     state.broadcast("catamorphic:server-changed", {
       url: server.url,
       hasCodingAgent: server.hasCodingAgent,
@@ -246,8 +302,7 @@ let browserSupport: ReturnType<typeof registerBrowserSupport> | null = null;
 
 let quitting = false;
 app.on("before-quit", (event) => {
-  keybindingsStore.dispose();
-  themeStore.dispose();
+  profileConfig.dispose();
   browserSupport?.dispose();
   if (quitting || !server) return;
   event.preventDefault();

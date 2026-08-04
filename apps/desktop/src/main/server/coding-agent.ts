@@ -2,7 +2,7 @@ import { createAnthropic } from "@ai-sdk/anthropic";
 import { createOpenAI } from "@ai-sdk/openai";
 import { AiSdkCodingAgent } from "@catamorphic/ai-sdk";
 import type { SandboxProvider } from "@catamorphic/sandbox";
-import type { DesktopSettings } from "./settings.js";
+import type { AgentConfig } from "../agents-store.js";
 
 const INSTRUCTIONS = `You are the Catamorphic assistant, an interactive agent built into the Catamorphic desktop app. You help users with their day-to-day work and with building automations in their project. Use the instructions below and the tools available to you to assist the user.
 
@@ -37,18 +37,34 @@ You work in a sandboxed copy of the project. After each of your turns, your edit
 - You can call multiple tools in a single response. When tool calls are independent, make them in parallel. When one depends on another's result, run them sequentially.
 - Never use placeholders or guess missing parameters in tool calls.`;
 
-export function resolveCodingAgent(
-  settings: DesktopSettings,
+/**
+ * Build the built-in agent (sandboxed AI-SDK tool loop) from a profile
+ * agent config. Returns undefined until the config has an API key and a
+ * resolved model id (OpenRouter's default arrives from the live catalog).
+ */
+export function buildAiSdkAgent(
+  config: AgentConfig,
   sandboxProvider: SandboxProvider,
+  modelId: string,
 ): AiSdkCodingAgent | undefined {
-  if (!settings.apiKey) return undefined;
-  const model =
-    settings.provider === "anthropic"
-      ? createAnthropic({ apiKey: settings.apiKey })(settings.model)
-      : createOpenAI({ apiKey: settings.apiKey })(settings.model);
+  if (!config.apiKey || !modelId) return undefined;
+  const provider = config.provider ?? "anthropic";
+  const resolveModel = (id: string) =>
+    provider === "anthropic"
+      ? createAnthropic({ apiKey: config.apiKey ?? "" })(id)
+      : provider === "openrouter"
+        ? // OpenRouter speaks the OpenAI chat API; only the base URL differs.
+          createOpenAI({
+            apiKey: config.apiKey ?? "",
+            baseURL: "https://openrouter.ai/api/v1",
+          })(id)
+        : createOpenAI({ apiKey: config.apiKey ?? "" })(id);
   return new AiSdkCodingAgent({
-    model,
+    model: resolveModel(modelId),
     sandboxProvider,
     instructions: INSTRUCTIONS,
+    effort: config.effort,
+    // Model switches arrive per turn, so live sessions survive them.
+    resolveModel,
   });
 }

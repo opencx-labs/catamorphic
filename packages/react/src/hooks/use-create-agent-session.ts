@@ -15,6 +15,9 @@ import type { AgentSession } from "../types.js";
 
 export interface CreateAgentSessionInput {
   systemPrompt?: string;
+  /** Host-registry key of the agent to run the session on. */
+  agentId?: string;
+  effort?: "low" | "medium" | "high";
 }
 
 /**

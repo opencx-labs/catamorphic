@@ -57,7 +57,9 @@ function score(
         candidate *= SCORE_CONTINUE_MATCH;
       } else if (IS_GAP.test(string.charAt(index - 1))) {
         candidate *= SCORE_NON_SPACE_WORD_JUMP;
-        const skippedGaps = string.slice(stringIndex, index - 1).match(COUNT_GAPS);
+        const skippedGaps = string
+          .slice(stringIndex, index - 1)
+          .match(COUNT_GAPS);
         if (skippedGaps && stringIndex > 0) {
           candidate *= PENALTY_SKIPPED ** skippedGaps.length;
         }

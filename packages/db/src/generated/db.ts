@@ -55,15 +55,18 @@ export interface AgentMessages {
 }
 
 export interface AgentSessions {
+  agent_id: string | null;
   base_commit_sha: string | null;
   created_at: Generated<Timestamp>;
   external_user_id: string;
   id: Generated<string>;
+  model_effort: string | null;
   project_id: string;
   provider: string;
   provider_session_id: string | null;
   sandbox_id: string | null;
   status: Generated<string>;
+  system_prompt: string | null;
   title: string | null;
   updated_at: Generated<Timestamp>;
 }

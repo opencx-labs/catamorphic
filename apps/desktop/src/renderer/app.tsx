@@ -1,6 +1,7 @@
 import {
   useAgentSessions,
   useProjects,
+  useUpdateAgentSession,
   useWorkflows,
 } from "@catamorphic/react";
 import type { AgentSession, ProjectSummary } from "@catamorphic/react/types";
@@ -21,27 +22,27 @@ import {
   useRef,
   useState,
 } from "react";
-import {
-  type ActionId,
-  KEYBINDING_ACTIONS,
-} from "../shared/actions.js";
+import { type ActionId, KEYBINDING_ACTIONS } from "../shared/actions.js";
+import { AgentWizard } from "./components/agent-wizard.js";
 import { AnimatedTitle } from "./components/animated-title.js";
 import { BookmarksNav } from "./components/bookmarks-nav.js";
-import { CommandPalette } from "./components/command-palette.js";
-import { SidebarItemRow } from "./components/sidebar-item-row.js";
 import { ChatBubbles } from "./components/chat-bubbles.js";
 import { ChatDock, type ChatDockEntry } from "./components/chat-dock.js";
+import { CommandPalette } from "./components/command-palette.js";
 import { DeleteProjectModal } from "./components/delete-project-modal.js";
 import { ProfileBar } from "./components/profile-bar.js";
 import { ProjectModal } from "./components/project-modal.js";
 import { ProjectSwitcher } from "./components/project-switcher.js";
 import { ShortcutHint } from "./components/shortcut-hint.js";
+import { SidebarItemRow } from "./components/sidebar-item-row.js";
 import {
   tabKey,
   type WorkspaceTab,
   WorkspaceTabBar,
 } from "./components/workspace-tabs.js";
 import {
+  type AgentEffort,
+  type AgentsData,
   desktopApi,
   type Profile,
   type ProfilesData,
@@ -50,15 +51,15 @@ import {
   type SidebarSectionConfig,
 } from "./lib/desktop-api.js";
 import {
-  type BrowserPageState,
-  BrowserScreen,
-} from "./screens/browser-screen.js";
-import {
   formatBinding,
   matchesBinding,
   useKeybindings,
 } from "./lib/keybindings.js";
 import { AppScreen, useApps } from "./screens/app-screen.js";
+import {
+  type BrowserPageState,
+  BrowserScreen,
+} from "./screens/browser-screen.js";
 import { SettingsScreen } from "./screens/settings-screen.js";
 import { WorkflowScreen } from "./screens/workflow-screen.js";
 
@@ -113,7 +114,7 @@ const DEFAULT_CUSTOM_MENU: SidebarMenuEntry[] = [
 const truncateLabel = (value: string): string =>
   value.length <= 40 ? value : `${value.slice(0, 39)}…`;
 
-export function App({ hasCodingAgent }: { hasCodingAgent: boolean }) {
+export function App() {
   const projectsQuery = useProjects();
   const [activeProjectId, setActiveProjectId] = useState<string>();
   const [workspaces, setWorkspaces] = useState<Record<string, Workspace>>({});
@@ -129,15 +130,19 @@ export function App({ hasCodingAgent }: { hasCodingAgent: boolean }) {
   const [unreadByChat, setUnreadByChat] = useState<Record<string, boolean>>({});
   const [bubblesCollapsed, setBubblesCollapsed] = useState(false);
 
-  // Chrome-style profiles: each owns a session partition and a set of
-  // projects. The sidebar shows only the active profile's projects.
+  // Profiles own the whole environment: session partition, projects,
+  // theme/keys/sidebar, and the AI agent roster. Each window is born on a
+  // profile (main assigns it); the sidebar shows that profile's projects.
   const [profilesData, setProfilesData] = useState<ProfilesData | null>(null);
   const [activeProfileId, setActiveProfileId] = useState<string>();
 
   useEffect(() => {
-    void desktopApi.profilesList().then((data) => {
+    void Promise.all([
+      desktopApi.profilesList(),
+      desktopApi.windowProfile(),
+    ]).then(([data, windowProfileId]) => {
       setProfilesData(data);
-      setActiveProfileId((current) => current ?? data.defaultProfileId);
+      setActiveProfileId((current) => current ?? windowProfileId);
     });
     return desktopApi.onProfilesChanged(setProfilesData);
   }, []);
@@ -145,6 +150,35 @@ export function App({ hasCodingAgent }: { hasCodingAgent: boolean }) {
   const activeProfile: Profile | undefined =
     profilesData?.profiles.find((profile) => profile.id === activeProfileId) ??
     profilesData?.profiles[0];
+
+  // The active profile's AI agents (per-profile agents.json).
+  const [agentsData, setAgentsData] = useState<AgentsData | null>(null);
+  useEffect(() => {
+    void desktopApi.agentsList().then(setAgentsData);
+    return desktopApi.onAgentsChanged(setAgentsData);
+  }, []);
+
+  // The agent setup wizard: one experience behind every entry point — the
+  // auto-opened tab on agent-less profiles, the modal that gates starting
+  // a chat with no agents, Settings' "Add agent", and the palette command.
+  const [wizardModalOpen, setWizardModalOpen] = useState(false);
+  // Profiles whose auto-opened setup tab the user closed this session —
+  // closing it skips setup (the modal still gates chat attempts).
+  const setupDismissedRef = useRef(new Set<string>());
+  const hasAgents = (agentsData?.agents.length ?? 0) > 0;
+  /** True = chat may start; false = the wizard modal took over. */
+  const requireAgents = (): boolean => {
+    if (agentsData === null || hasAgents) return true;
+    setWizardModalOpen(true);
+    return false;
+  };
+
+  // In-place profile switch: a full-window veil fades up, the workspace
+  // swaps beneath it, and the veil fades away (see switchProfile).
+  const [profileVeil, setProfileVeil] = useState<{
+    stage: "in" | "out";
+    target?: Profile;
+  } | null>(null);
 
   // User-customizable sidebar layout (sidebar.js, file-watched).
   const [sidebarConfig, setSidebarConfig] = useState<SidebarConfig | null>(
@@ -173,16 +207,83 @@ export function App({ hasCodingAgent }: { hasCodingAgent: boolean }) {
     : allProjects;
   const activeProject =
     projects.find((project) => project.id === activeProjectId) ??
-    projects.find((project) => project.id === activeProfile?.defaultProjectId) ??
+    projects.find(
+      (project) => project.id === activeProfile?.defaultProjectId,
+    ) ??
     projects[0];
   const projectId = activeProject?.id;
 
+  /**
+   * Switching profile follows the workspace's occupancy: an empty
+   * workspace (no tabs, no browsers, no chats) switches this window in
+   * place under a full-window fade; anything open means real work — that
+   * stays put and the profile opens in its own window instead.
+   */
   const switchProfile = (profile: Profile) => {
-    setActiveProfileId(profile.id);
-    // Land on the profile's default project (Chrome opens the profile's
-    // own window; we open its default project workspace).
-    setActiveProjectId(profile.defaultProjectId);
+    if (profile.id === activeProfileId) return;
+    const ws = workspaceRef.current;
+    // Palette "New Tab" pages don't count as open work — a fresh workspace
+    // is seeded with one, and Chrome's New Tab page has the same non-claim
+    // on the window.
+    const emptyWorkspaceNow =
+      ws.browsers.length === 0 &&
+      ws.chats.length === 0 &&
+      ws.tabs.every(
+        (tab) => tab.kind === "palette" || tab.kind === "agent-setup",
+      );
+    if (!emptyWorkspaceNow) {
+      void desktopApi.openProfileWindow(profile.id);
+      return;
+    }
+    setProfileVeil({ stage: "in", target: profile });
   };
+
+  /** Veil is fully opaque: swap everything beneath it, then fade it away. */
+  const completingSwitchRef = useRef(false);
+  const completeProfileSwitch = async (profile: Profile) => {
+    if (completingSwitchRef.current) return;
+    completingSwitchRef.current = true;
+    try {
+      await desktopApi.windowSetProfile(profile.id);
+      // Unknown until the refetch lands — anything keyed on the agent
+      // roster (the setup-tab auto-open, chat gating) must not act on the
+      // OLD profile's roster while the NEW profile's project is active.
+      setAgentsData(null);
+      setActiveProfileId(profile.id);
+      setActiveProjectId(profile.defaultProjectId);
+      // Providers above App (theme, keybindings) refetch on this signal —
+      // in-place switches get no main-process broadcast to this window.
+      window.dispatchEvent(new Event("catamorphic:profile-refetch"));
+      const [sidebar, agents] = await Promise.all([
+        desktopApi.sidebarConfigGet(),
+        desktopApi.agentsList(),
+      ]);
+      setSidebarConfig(sidebar);
+      setAgentsData(agents);
+      setProfileVeil({ stage: "out" });
+    } finally {
+      completingSwitchRef.current = false;
+    }
+  };
+  const completeProfileSwitchRef = useRef(completeProfileSwitch);
+  completeProfileSwitchRef.current = completeProfileSwitch;
+
+  // The veil sequence is driven by animationend AND a clock fallback: an
+  // occluded window throttles animation events (Chromium background
+  // throttling), and a stuck opaque veil would be the worst possible
+  // failure mode. Whichever signal lands first wins; the completion guard
+  // above keeps the switch single-flight.
+  useEffect(() => {
+    if (!profileVeil) return;
+    const timer = window.setTimeout(() => {
+      if (profileVeil.stage === "in" && profileVeil.target) {
+        void completeProfileSwitchRef.current(profileVeil.target);
+      } else if (profileVeil.stage === "out") {
+        setProfileVeil(null);
+      }
+    }, 300);
+    return () => window.clearTimeout(timer);
+  }, [profileVeil]);
 
   // Shared with SessionsNav via the query cache; titles feed tab labels.
   const sessionsQuery = useAgentSessions(projectId);
@@ -314,9 +415,7 @@ export function App({ hasCodingAgent }: { hasCodingAgent: boolean }) {
   const openBrowserTabRef = useRef(openBrowserTab);
   openBrowserTabRef.current = openBrowserTab;
   useEffect(() => {
-    return desktopApi.onBrowserOpenUrl((url) =>
-      openBrowserTabRef.current(url),
-    );
+    return desktopApi.onBrowserOpenUrl((url) => openBrowserTabRef.current(url));
   }, []);
 
   // navigate(url) handles per live browser tab, for "open in current tab"
@@ -374,6 +473,11 @@ export function App({ hasCodingAgent }: { hasCodingAgent: boolean }) {
               ? nextActiveTabKey(ws, key, chats)
               : ws.activeTabKey,
         };
+      }
+      // Closing the auto-opened setup tab skips setup for this profile
+      // (this session); the modal still gates starting a chat.
+      if (key.startsWith("agent-setup:") && activeProfileId) {
+        setupDismissedRef.current.add(activeProfileId);
       }
       const tabs = ws.tabs.filter((tab) => tabKey(tab) !== key);
       return {
@@ -445,7 +549,8 @@ export function App({ hasCodingAgent }: { hasCodingAgent: boolean }) {
 
   // Cmd+T and the tab-strip + always open a full chat tab (Chrome muscle
   // memory); the sidebar +, bubble +, and Cmd+E open the floating aside.
-  const addChat = (forceMode?: "tab") =>
+  const addChat = (forceMode?: "tab") => {
+    if (!requireAgents()) return;
     updateWorkspace((ws) => {
       // Already looking at a fresh chat (no session yet)? Don't stack
       // another empty one on top — Cmd+N/+ is a no-op there.
@@ -477,10 +582,12 @@ export function App({ hasCodingAgent }: { hasCodingAgent: boolean }) {
           entry.mode === "tab" ? chatTabKey(entry.localId) : ws.activeTabKey,
       };
     });
+  };
 
   // Palette "Send to agent": a new chat born with its first message
   // attached; ChatDock auto-sends it on mount.
-  const sendToAgent = (message: string, mode: "float" | "tab") =>
+  const sendToAgent = (message: string, mode: "float" | "tab") => {
+    if (!requireAgents()) return;
     updateWorkspace((ws) => {
       const entry: ChatDockEntry = {
         ...newChatEntry(mode === "tab" ? "tab" : "partial"),
@@ -499,6 +606,26 @@ export function App({ hasCodingAgent }: { hasCodingAgent: boolean }) {
           entry.mode === "tab" ? chatTabKey(entry.localId) : ws.activeTabKey,
       };
     });
+  };
+
+  // Agent-less profiles greet the user with the setup wizard as a real,
+  // closable tab: close it to skip; it returns as a modal on chat attempts.
+  useEffect(() => {
+    if (!projectId || agentsData === null || hasAgents) return;
+    if (!activeProfileId || setupDismissedRef.current.has(activeProfileId)) {
+      return;
+    }
+    updateWorkspace((ws) => {
+      const key = "agent-setup:setup";
+      if (ws.tabs.some((tab) => tabKey(tab) === key)) return ws;
+      const tab: WorkspaceTab = {
+        kind: "agent-setup",
+        name: "setup",
+        label: "Set up agent",
+      };
+      return { ...ws, tabs: [...ws.tabs, tab], activeTabKey: key };
+    });
+  }, [projectId, agentsData, hasAgents, activeProfileId, updateWorkspace]);
 
   const minimizeFloatingChats = () =>
     updateWorkspace((ws) => ({
@@ -612,6 +739,96 @@ export function App({ hasCodingAgent }: { hasCodingAgent: boolean }) {
     return desktopApi.onCloseSurface(closeActiveSurface);
   }, [closeActiveSurface]);
 
+  // --- agent commands (palette pickers) ---
+
+  // The chat the agent commands act on: the active chat while its surface
+  // is on screen (floating dock or focused tab).
+  const focusedChat = workspace.chats.find(
+    (chat) =>
+      chat.localId === workspace.activeChatId && chatVisible(workspace, chat),
+  );
+  const focusedSession = focusedChat?.sessionId
+    ? sessionsById.get(focusedChat.sessionId)
+    : undefined;
+
+  const updateSession = useUpdateAgentSession(projectId);
+
+  // The surface a highlighted palette command would act on gets an accent
+  // border while the row is selected — the command points at its target.
+  const [paletteTarget, setPaletteTarget] = useState<"chat" | "close" | null>(
+    null,
+  );
+  const floatingChat = workspace.chats.find((chat) => chat.mode === "partial");
+  const targetedChat =
+    paletteTarget === "chat"
+      ? focusedChat
+      : paletteTarget === "close"
+        ? floatingChat
+        : undefined;
+  const targetedTabKey =
+    paletteTarget === "close" && !floatingChat
+      ? workspace.activeTabKey
+      : paletteTarget === "chat" && focusedChat?.mode === "tab"
+        ? chatTabKey(focusedChat.localId)
+        : undefined;
+
+  // Overlay palette opened straight into a picker (Cmd+P commands run
+  // from anywhere; palette tabs enter pickers through their own rows).
+  const [pickerRequest, setPickerRequest] = useState<{
+    kind: "default-agent" | "switch-agent" | "effort" | "model";
+    nonce: string;
+  } | null>(null);
+  const openPalettePicker = (
+    kind: "default-agent" | "switch-agent" | "effort" | "model",
+  ) => {
+    setPaletteOpen(true);
+    setPickerRequest({ kind, nonce: crypto.randomUUID() });
+  };
+
+  const pickDefaultAgent = (agentId: string) => {
+    void desktopApi.agentsSetDefault(agentId);
+  };
+
+  const pickSessionAgent = (agentId: string) => {
+    const chat = workspaceRef.current.chats.find(
+      (candidate) => candidate.localId === workspaceRef.current.activeChatId,
+    );
+    if (!chat) return;
+    if (chat.sessionId) {
+      updateSession.mutate({ sessionId: chat.sessionId, agentId });
+      return;
+    }
+    // No session yet: remember the choice; lazy creation sends it along.
+    updateWorkspace((ws) => ({
+      ...ws,
+      chats: ws.chats.map((candidate) =>
+        candidate.localId === chat.localId
+          ? { ...candidate, agentId }
+          : candidate,
+      ),
+    }));
+  };
+
+  /** Change the model on the focused chat's agent (or the default one). */
+  const pickModel = (agentId: string, model: string) => {
+    void desktopApi.agentsUpdate(agentId, { model });
+  };
+
+  const pickEffort = (effort: AgentEffort) => {
+    const chat = workspaceRef.current.chats.find(
+      (candidate) => candidate.localId === workspaceRef.current.activeChatId,
+    );
+    if (chat?.sessionId) {
+      updateSession.mutate({ sessionId: chat.sessionId, effort });
+      return;
+    }
+    // No focused session: the effort applies to the profile's default agent.
+    const defaultAgentId = agentsData?.defaultAgentId;
+    if (defaultAgentId) {
+      void desktopApi.agentsUpdate(defaultAgentId, { effort });
+    }
+  };
+
   // One handler per registry action (shared/actions.ts). Consumed by the
   // shortcut dispatcher below AND the palette's action rows, so a key
   // press and a palette pick always do the same thing. Rebuilt per render
@@ -623,6 +840,11 @@ export function App({ hasCodingAgent }: { hasCodingAgent: boolean }) {
     "new-browser-tab": () => openBrowserTab(""),
     "toggle-sidebar": () => setSidebarOpen((value) => !value),
     "close-tab": closeActiveSurface,
+    "setup-agent": () => setWizardModalOpen(true),
+    "default-agent": () => openPalettePicker("default-agent"),
+    "switch-agent": () => openPalettePicker("switch-agent"),
+    "change-effort": () => openPalettePicker("effort"),
+    "switch-model": () => openPalettePicker("model"),
   };
   const actionHandlersRef = useRef(actionHandlers);
   actionHandlersRef.current = actionHandlers;
@@ -731,6 +953,19 @@ export function App({ hasCodingAgent }: { hasCodingAgent: boolean }) {
         onSwitchProfile: switchProfile,
         onSendToAgent: sendToAgent,
         actionHandlers,
+        agents: agentsData?.agents ?? [],
+        defaultAgentId: agentsData?.defaultAgentId ?? null,
+        focusedChat: focusedChat
+          ? {
+              agentId: focusedSession?.agentId ?? focusedChat.agentId ?? null,
+              effort: focusedSession?.modelEffort ?? null,
+            }
+          : null,
+        onPickDefaultAgent: pickDefaultAgent,
+        onPickSessionAgent: pickSessionAgent,
+        onPickEffort: pickEffort,
+        onPickModel: pickModel,
+        onHighlightTarget: setPaletteTarget,
       }
     : null;
 
@@ -792,7 +1027,11 @@ export function App({ hasCodingAgent }: { hasCodingAgent: boolean }) {
             <button
               type="button"
               onClick={() =>
-                openTab({ kind: "settings", name: "settings", label: "Settings" })
+                openTab({
+                  kind: "settings",
+                  name: "settings",
+                  label: "Settings",
+                })
               }
               className={`flex h-7 w-full cursor-pointer items-center gap-2 rounded-md px-2 text-[13px] transition-colors duration-150 ${
                 activeTab?.kind === "settings"
@@ -834,6 +1073,7 @@ export function App({ hasCodingAgent }: { hasCodingAgent: boolean }) {
             <WorkspaceTabBar
               tabs={allTabs}
               activeKey={workspace.activeTabKey}
+              highlightKey={targetedTabKey}
               onSelect={selectTab}
               onClose={closeTab}
               onNew={openPaletteTab}
@@ -869,6 +1109,7 @@ export function App({ hasCodingAgent }: { hasCodingAgent: boolean }) {
               ) : activeTab?.kind === "settings" ? (
                 <SettingsScreen
                   onClose={() => closeTab(tabKey(activeTab))}
+                  onAddAgent={() => setWizardModalOpen(true)}
                 />
               ) : activeTab?.kind === "palette" && paletteProps ? (
                 <CommandPalette
@@ -877,9 +1118,13 @@ export function App({ hasCodingAgent }: { hasCodingAgent: boolean }) {
                   onClose={() => closeTab(tabKey(activeTab))}
                   {...paletteProps}
                 />
-              ) : activeChatTabId || activeBrowserTabId ? null : (
-                <TabEmptyState hasCodingAgent={hasCodingAgent} />
-              )}
+              ) : activeTab?.kind === "agent-setup" ? (
+                <AgentWizard
+                  variant="tab"
+                  onClose={() => closeTab(tabKey(activeTab))}
+                  onDone={() => closeTab(tabKey(activeTab))}
+                />
+              ) : null}
 
               {/* Browser tabs stay mounted while hidden — unmounting a
                   webview would reload the page on every tab switch. */}
@@ -920,6 +1165,8 @@ export function App({ hasCodingAgent }: { hasCodingAgent: boolean }) {
                   title={chatLabels[entry.localId] ?? "AI assistant"}
                   tabActive={entry.localId === activeChatTabId}
                   bubbleClearance={bubblesCollapsed ? "corner" : "strip"}
+                  defaultAgentId={agentsData?.defaultAgentId ?? undefined}
+                  paletteTargeted={entry.localId === targetedChat?.localId}
                   onEntryChange={(next) =>
                     updateWorkspace((ws) => ({
                       ...ws,
@@ -976,7 +1223,36 @@ export function App({ hasCodingAgent }: { hasCodingAgent: boolean }) {
           variant="overlay"
           open={paletteOpen}
           onClose={() => setPaletteOpen(false)}
+          pickerRequest={pickerRequest}
           {...paletteProps}
+        />
+      )}
+
+      {/* The wizard modal: same experience as the setup tab, reachable from
+          chat gating, Settings, and the palette command. */}
+      <AgentWizard
+        variant="modal"
+        open={wizardModalOpen}
+        onClose={() => setWizardModalOpen(false)}
+        onDone={() => setWizardModalOpen(false)}
+      />
+
+      {/* In-place profile switch veil: opaque at the midpoint, so the
+          workspace swap beneath it is never visible. */}
+      {profileVeil && (
+        <div
+          className={`fixed inset-0 z-[300] bg-bg ${
+            profileVeil.stage === "in"
+              ? "animate-profile-veil-in"
+              : "animate-profile-veil-out"
+          }`}
+          onAnimationEnd={() => {
+            if (profileVeil.stage === "in" && profileVeil.target) {
+              void completeProfileSwitch(profileVeil.target);
+            } else if (profileVeil.stage === "out") {
+              setProfileVeil(null);
+            }
+          }}
         />
       )}
 
@@ -1343,19 +1619,6 @@ function sessionLabel(session: AgentSession): string {
   if (session.title) return session.title;
   const created = new Date(session.createdAt);
   return `Chat ${created.toLocaleDateString()} ${created.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}`;
-}
-
-/** Blank canvas when nothing is open; only surfaces the missing-key warning. */
-function TabEmptyState({ hasCodingAgent }: { hasCodingAgent: boolean }) {
-  if (hasCodingAgent) return null;
-  return (
-    <div className="grid flex-1 place-items-center px-6">
-      <div className="max-w-sm rounded-md border border-warning/40 bg-warning/10 px-3 py-2 text-center text-xs text-warning">
-        No model API key configured — the assistant is disabled. Add one in
-        Settings.
-      </div>
-    </div>
-  );
 }
 
 function EmptyState({

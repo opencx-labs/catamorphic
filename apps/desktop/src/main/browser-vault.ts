@@ -1,6 +1,6 @@
+import { randomBytes } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
-import { randomBytes } from "node:crypto";
 import { safeStorage, systemPreferences } from "electron";
 import { argon2d, argon2id } from "hash-wasm";
 import * as kdbx from "kdbxweb";
@@ -18,7 +18,8 @@ import * as kdbx from "kdbxweb";
 // kdbxweb needs an external Argon2; hash-wasm is small and WASM-based.
 kdbx.CryptoEngine.setArgon2Impl(
   async (password, salt, memory, iterations, length, parallelism, type) => {
-    const fn = type === kdbx.CryptoEngine.Argon2TypeArgon2d ? argon2d : argon2id;
+    const fn =
+      type === kdbx.CryptoEngine.Argon2TypeArgon2d ? argon2d : argon2id;
     const hash = await fn({
       password: new Uint8Array(password),
       salt: new Uint8Array(salt),
@@ -202,8 +203,7 @@ export class PasswordVault {
         this.originOf(entry) === input.origin &&
         this.fieldText(entry, "UserName") === input.username,
     );
-    const entry =
-      existing ?? vault.db.createEntry(vault.db.getDefaultGroup());
+    const entry = existing ?? vault.db.createEntry(vault.db.getDefaultGroup());
     entry.fields.set("Title", new URL(input.origin).host);
     entry.fields.set("URL", input.origin);
     entry.fields.set("UserName", input.username);

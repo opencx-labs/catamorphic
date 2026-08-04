@@ -1,4 +1,4 @@
-import { Check, Plus, Star } from "lucide-react";
+import { Check, Pencil, Plus, Star } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import type { Profile, ProfilesData } from "../lib/desktop-api.js";
 import { desktopApi } from "../lib/desktop-api.js";
@@ -22,8 +22,12 @@ export function ProfileBar({
   const [open, setOpen] = useState(false);
   const [creating, setCreating] = useState(false);
   const [newName, setNewName] = useState("");
+  // Inline rename (every profile is renameable, "Default Profile" included).
+  const [renamingId, setRenamingId] = useState<string | null>(null);
+  const [renameValue, setRenameValue] = useState("");
   const containerRef = useRef<HTMLDivElement | null>(null);
   const createInputRef = useRef<HTMLInputElement | null>(null);
+  const renameInputRef = useRef<HTMLInputElement | null>(null);
 
   const active: Profile | undefined =
     data.profiles.find((profile) => profile.id === activeProfileId) ??
@@ -44,6 +48,18 @@ export function ProfileBar({
   useEffect(() => {
     if (creating) createInputRef.current?.focus();
   }, [creating]);
+
+  useEffect(() => {
+    if (renamingId) renameInputRef.current?.select();
+  }, [renamingId]);
+
+  const commitRename = async () => {
+    const id = renamingId;
+    const name = renameValue.trim();
+    setRenamingId(null);
+    if (!id || !name) return;
+    await desktopApi.profilesUpdate(id, { name });
+  };
 
   const create = async () => {
     const name = newName.trim();
@@ -77,22 +93,49 @@ export function ProfileBar({
                   isActive ? "text-fg" : "text-fg-muted hover:bg-bg-raised"
                 }`}
               >
+                {renamingId === profile.id ? (
+                  <input
+                    ref={renameInputRef}
+                    value={renameValue}
+                    onChange={(event) => setRenameValue(event.target.value)}
+                    onKeyDown={(event) => {
+                      if (event.key === "Enter") void commitRename();
+                      if (event.key === "Escape") setRenamingId(null);
+                    }}
+                    onBlur={() => void commitRename()}
+                    aria-label={`Rename ${profile.name}`}
+                    className="field mx-1 h-7 min-w-0 flex-1 rounded-md px-2 text-[13px] text-fg"
+                  />
+                ) : (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setOpen(false);
+                      if (!isActive) onSwitch(profile);
+                    }}
+                    className="flex h-full min-w-0 flex-1 cursor-pointer items-center gap-2 px-2 text-left text-[13px]"
+                  >
+                    <span
+                      className="size-2.5 shrink-0 rounded-full"
+                      style={{ backgroundColor: profile.color }}
+                    />
+                    <span className="truncate">{profile.name}</span>
+                    {isActive && (
+                      <Check className="ml-auto size-3.5 shrink-0 text-fg-muted" />
+                    )}
+                  </button>
+                )}
                 <button
                   type="button"
                   onClick={() => {
-                    setOpen(false);
-                    if (!isActive) onSwitch(profile);
+                    setRenamingId(profile.id);
+                    setRenameValue(profile.name);
                   }}
-                  className="flex h-full min-w-0 flex-1 cursor-pointer items-center gap-2 px-2 text-left text-[13px]"
+                  className="grid size-6 shrink-0 cursor-pointer place-items-center rounded text-fg-faint opacity-0 transition-colors duration-150 hover:text-fg group-hover:opacity-100"
+                  aria-label={`Rename ${profile.name}`}
+                  title="Rename"
                 >
-                  <span
-                    className="size-2.5 shrink-0 rounded-full"
-                    style={{ backgroundColor: profile.color }}
-                  />
-                  <span className="truncate">{profile.name}</span>
-                  {isActive && (
-                    <Check className="ml-auto size-3.5 shrink-0 text-fg-muted" />
-                  )}
+                  <Pencil className="size-3" />
                 </button>
                 <button
                   type="button"
@@ -148,7 +191,9 @@ export function ProfileBar({
         type="button"
         onClick={() => setOpen((value) => !value)}
         className={`flex h-7 w-full cursor-pointer items-center gap-2 rounded-md px-2 text-[13px] transition-colors duration-150 ${
-          open ? "bg-bg-overlay text-fg" : "text-fg-muted hover:bg-bg-overlay hover:text-fg"
+          open
+            ? "bg-bg-overlay text-fg"
+            : "text-fg-muted hover:bg-bg-overlay hover:text-fg"
         }`}
         aria-haspopup="menu"
         aria-expanded={open}

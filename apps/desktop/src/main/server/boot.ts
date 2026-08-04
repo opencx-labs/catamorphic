@@ -13,16 +13,13 @@ import { pgcrypto } from "@electric-sql/pglite/contrib/pgcrypto";
 import cors from "@fastify/cors";
 import Fastify, { type FastifyInstance } from "fastify";
 import { Kysely, PGliteDialect, WithSchemaPlugin } from "kysely";
-import type { KeybindingsStore } from "../keybindings.js";
-import type { SidebarConfigStore } from "../sidebar-config.js";
-import type { ThemeStore } from "../theme.js";
-import { resolveCodingAgent } from "./coding-agent.js";
-import { DesktopConfigAgent } from "./desktop-config-agent.js";
-import { E2eFakeCodingAgent, E2eLocalSandboxProvider } from "./e2e-fakes.js";
+import type { ProfileConfigManager } from "../profile-config.js";
+import type { ProfilesStore } from "../profiles.js";
+import { DesktopAgentRegistry } from "./agent-registry.js";
+import { E2eLocalSandboxProvider } from "./e2e-fakes.js";
 import { FileGithubTokenStore, GITHUB_APP } from "./github.js";
 import type { DataPaths } from "./paths.js";
 import { ProjectRootsStore } from "./project-roots.js";
-import type { DesktopSettings } from "./settings.js";
 
 /** The desktop app is single-tenant: one fixed identity for the machine. */
 export const DESKTOP_TENANT_ID = "00000000-0000-4000-8000-00000000d001";
@@ -32,16 +29,16 @@ export interface EmbeddedServer {
   url: string;
   catamorphic: Catamorphic;
   projectRoots: ProjectRootsStore;
+  /** Dynamic roster of configured agents (per-profile agents.json files). */
+  agentRegistry: DesktopAgentRegistry;
   hasCodingAgent: boolean;
   shutdown: () => Promise<void>;
 }
 
 export async function startEmbeddedServer(
   paths: DataPaths,
-  settings: DesktopSettings,
-  keybindingsStore: KeybindingsStore,
-  sidebarConfigStore: SidebarConfigStore,
-  themeStore: ThemeStore,
+  profiles: ProfilesStore,
+  profileConfig: ProfileConfigManager,
 ): Promise<EmbeddedServer> {
   fs.mkdirSync(paths.db, { recursive: true });
 
@@ -51,26 +48,30 @@ export async function startEmbeddedServer(
     plugins: [new WithSchemaPlugin(DEFAULT_SCHEMA)],
   });
 
-  // E2E runs swap the real sandbox + model for deterministic local fakes.
+  // E2E runs swap the real sandbox + agents for deterministic local fakes.
   const e2eFakeAgent = process.env.CATAMORPHIC_E2E_FAKE_AGENT === "1";
   const sandboxProvider = e2eFakeAgent
     ? new E2eLocalSandboxProvider()
     : new MicrosandboxSandboxProvider();
-  const baseAgent = e2eFakeAgent
-    ? new E2eFakeCodingAgent(sandboxProvider)
-    : resolveCodingAgent(settings, sandboxProvider);
-  // Desktop-config wrapper: lets the chat agent read and edit app-level
-  // settings (keyboard shortcuts, sidebar, theme) via mirror files in its
-  // sandbox.
-  const codingAgent = baseAgent
-    ? new DesktopConfigAgent(
-        baseAgent,
-        sandboxProvider,
-        keybindingsStore,
-        sidebarConfigStore,
-        themeStore,
-      )
-    : undefined;
+
+  // Agents resolve dynamically from the per-profile agents.json files, so
+  // adding or editing an agent in Settings needs no server restart. In e2e
+  // mode the default profile is seeded with two fake-backed agents so the
+  // renderer's agent flows (lists, switching, effort) run for real.
+  const agentRegistry = new DesktopAgentRegistry({
+    profiles,
+    profileConfig,
+    sandboxProvider,
+    agentHomesDir: paths.agentHomesDir,
+    e2eFake: e2eFakeAgent,
+  });
+  if (e2eFakeAgent) {
+    const agents = profileConfig.forDefaultProfile().agents;
+    if (agents.list().length === 0) {
+      agents.create({ name: "Fake Agent", harness: "ai-sdk" });
+      agents.create({ name: "Other Fake", harness: "ai-sdk" });
+    }
+  }
 
   // Desktop projects live in user-visible folders; the mapping is desktop
   // state (its own PGlite schema), injected into storage as a resolver so
@@ -87,7 +88,11 @@ export async function startEmbeddedServer(
         projectRoots.get(projectId),
     },
     sandboxProvider,
-    codingAgent,
+    codingAgent: agentRegistry,
+    // Host-execution agents (Claude Code, Codex) run right in the project's
+    // user-visible folder.
+    hostProjectPathResolver: async (projectId) =>
+      (await projectRoots.get(projectId)) ?? undefined,
     appBundleStore: new FsBundleStore(paths.appBundles),
     github: {
       app: GITHUB_APP,
@@ -146,7 +151,10 @@ export async function startEmbeddedServer(
     url,
     catamorphic,
     projectRoots,
-    hasCodingAgent: codingAgent !== undefined,
+    agentRegistry,
+    get hasCodingAgent() {
+      return agentRegistry.hasAgents();
+    },
     shutdown,
   };
 }

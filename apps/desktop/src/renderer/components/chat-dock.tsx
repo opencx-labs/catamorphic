@@ -59,6 +59,12 @@ export interface ChatDockEntry {
   mode: ChatMode;
   /** Auto-sent as the first message on mount (palette "Send to agent"). */
   pendingMessage?: string;
+  /**
+   * Agent picked for this chat before its session exists (palette "Switch
+   * agent" on a fresh chat). Once a session is live, the session row owns
+   * the choice.
+   */
+  agentId?: string;
 }
 
 export interface ChatDockProps {
@@ -74,6 +80,13 @@ export interface ChatDockProps {
    * single collapsed bubble at the right (side padding only), "none".
    */
   bubbleClearance: "none" | "corner" | "strip";
+  /** Profile-default agent for lazily created sessions. */
+  defaultAgentId?: string;
+  /**
+   * A highlighted palette command targets this chat — accent the floating
+   * dock's border so the command visibly points at it before Enter.
+   */
+  paletteTargeted?: boolean;
   onEntryChange: (entry: ChatDockEntry) => void;
   /** Close the chat entirely (dismissing an empty chat removes it). */
   onClose: (localId: string) => void;
@@ -94,6 +107,8 @@ export function ChatDock({
   placeholder = "Describe what you want to build…",
   tabActive,
   bubbleClearance,
+  defaultAgentId,
+  paletteTargeted,
   onEntryChange,
   onClose,
   onSessionCreated,
@@ -101,6 +116,7 @@ export function ChatDock({
 }: ChatDockProps) {
   const chat = useAgentChat(projectId, {
     sessionId: entry.sessionId,
+    agentId: entry.agentId ?? defaultAgentId,
     onSessionCreated: (sessionId) => onSessionCreated(entry.localId, sessionId),
   });
   const [draft, setDraft] = useState("");
@@ -132,7 +148,10 @@ export function ChatDock({
     if (!pending || pendingSentRef.current) return;
     pendingSentRef.current = true;
     void sendRef.current(pending);
-    onEntryChangeRef.current({ ...entryRef.current, pendingMessage: undefined });
+    onEntryChangeRef.current({
+      ...entryRef.current,
+      pendingMessage: undefined,
+    });
   }, []);
 
   const isTab = entry.mode === "tab";
@@ -228,10 +247,13 @@ export function ChatDock({
       }`}
     >
       <section
+        data-palette-target={(paletteTargeted && !isTab) || undefined}
         className={`pointer-events-auto relative flex w-full origin-bottom flex-col overflow-hidden backdrop-blur-xl transition-[max-width,height,opacity,translate,scale,background-color,border-radius,border-color] duration-250 ease-[cubic-bezier(0.2,0,0,1)] ${
           isTab
             ? "h-full max-w-full rounded-none border-0 border-transparent bg-bg"
-            : "h-[min(560px,100%)] max-w-3xl rounded-2xl border border-border bg-bg-raised/95 drop-shadow-2xl"
+            : `h-[min(560px,100%)] max-w-3xl rounded-2xl border bg-bg-raised/95 drop-shadow-2xl ${
+                paletteTargeted ? "border-accent" : "border-border"
+              }`
         } ${
           expanded
             ? "translate-y-0 scale-100 opacity-100 animate-dock-in"

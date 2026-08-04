@@ -27,9 +27,7 @@ export function ShortcutHint({
   children: ReactNode;
 }) {
   const anchorRef = useRef<HTMLSpanElement>(null);
-  const timerRef = useRef<ReturnType<typeof setTimeout> | undefined>(
-    undefined,
-  );
+  const timerRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const [position, setPosition] = useState<{ x: number; y: number } | null>(
     null,
   );

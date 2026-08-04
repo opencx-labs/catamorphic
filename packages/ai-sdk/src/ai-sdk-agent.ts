@@ -1,11 +1,13 @@
 import path from "node:path";
 import type {
+  AgentEffort,
   AgentEvent,
   AgentQuestion,
   CodingAgentProvider,
   ProviderSession,
   SandboxProvider,
   StartSessionOpts,
+  TurnOptions,
 } from "@catamorphic/sandbox";
 import { buildPluginsPreamble, stagedPluginFiles } from "@catamorphic/sandbox";
 import { type LanguageModel, type ModelMessage, ToolLoopAgent, tool } from "ai";
@@ -28,10 +30,23 @@ export interface AiSdkCodingAgentOpts {
   sandboxProvider: SandboxProvider;
   /** Host-level instructions prepended to every session. */
   instructions?: string;
+  /**
+   * Default reasoning effort, mapped onto the provider's native knob
+   * (Anthropic thinking budgets, OpenAI reasoning effort). Overridable per
+   * turn via {@link TurnOptions}.
+   */
+  effort?: AgentEffort;
+  /**
+   * Turn a model id into a model instance, enabling per-turn
+   * {@link TurnOptions.model} overrides (the host binds provider + key).
+   * Without it, per-turn model overrides are ignored.
+   */
+  resolveModel?: (modelId: string) => LanguageModel;
 }
 
 interface AiSdkSessionState {
-  agent: ToolLoopAgent<never, ReturnType<typeof createTools>>;
+  instructions: string;
+  tools: ReturnType<typeof createTools>;
   messages: ModelMessage[];
   sandboxId: string;
   workingDirectory: string;
@@ -71,14 +86,11 @@ export class AiSdkCodingAgent implements CodingAgentProvider {
     const providerSessionId = crypto.randomUUID();
 
     this.sessions.set(providerSessionId, {
-      agent: new ToolLoopAgent({
-        model: this.opts.model,
-        instructions,
-        tools: createTools({
-          provider: this.opts.sandboxProvider,
-          sandboxId: opts.sandboxId,
-          workingDirectory: opts.workingDirectory,
-        }),
+      instructions,
+      tools: createTools({
+        provider: this.opts.sandboxProvider,
+        sandboxId: opts.sandboxId,
+        workingDirectory: opts.workingDirectory,
       }),
       messages: [],
       sandboxId: opts.sandboxId,
@@ -105,6 +117,7 @@ export class AiSdkCodingAgent implements CodingAgentProvider {
   async *sendMessage(
     session: ProviderSession,
     message: string,
+    opts?: TurnOptions,
   ): AsyncIterable<AgentEvent> {
     const state = this.sessions.get(session.providerSessionId);
     if (!state) {
@@ -118,6 +131,21 @@ export class AiSdkCodingAgent implements CodingAgentProvider {
       yield { type: "error", content: "A message is already running" };
       return;
     }
+    // The agent object is stateless (history lives in state.messages), so
+    // each turn builds one with that turn's effort and model — a model
+    // switch mid-conversation keeps the session, because the session IS
+    // the message history.
+    const effort = opts?.effort ?? this.opts.effort;
+    const model =
+      opts?.model && this.opts.resolveModel
+        ? this.opts.resolveModel(opts.model)
+        : this.opts.model;
+    const agent = new ToolLoopAgent({
+      model,
+      instructions: state.instructions,
+      tools: state.tools,
+      ...(effort ? { providerOptions: effortProviderOptions(effort) } : {}),
+    });
 
     state.running = true;
     // Answers to a pending ask_user call resume the tool loop as the tool's
@@ -146,7 +174,7 @@ export class AiSdkCodingAgent implements CodingAgentProvider {
     let askedQuestions: AgentQuestion[] | undefined;
 
     try {
-      const result = await state.agent.stream({ messages: requestMessages });
+      const result = await agent.stream({ messages: requestMessages });
       for await (const part of result.stream) {
         if (part.type === "text-delta") {
           text += part.text;
@@ -199,6 +227,26 @@ export class AiSdkCodingAgent implements CodingAgentProvider {
   async dispose(session: ProviderSession): Promise<void> {
     this.sessions.delete(session.providerSessionId);
   }
+}
+
+/**
+ * Map the normalized effort scale onto each provider's native reasoning
+ * knob. Both keys are always present — providers ignore options addressed
+ * to someone else, so the same object works for Anthropic and OpenAI models.
+ */
+function effortProviderOptions(effort: AgentEffort) {
+  return {
+    anthropic:
+      effort === "low"
+        ? { thinking: { type: "disabled" } }
+        : {
+            thinking: {
+              type: "enabled",
+              budgetTokens: effort === "high" ? 32_000 : 10_000,
+            },
+          },
+    openai: { reasoningEffort: effort },
+  };
 }
 
 interface ToolContext {

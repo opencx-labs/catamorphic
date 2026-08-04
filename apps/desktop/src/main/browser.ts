@@ -4,19 +4,22 @@ import {
   app,
   BrowserWindow,
   ipcMain,
-  session,
   type Session,
+  session,
   systemPreferences,
   type WebContents,
 } from "electron";
 import { BookmarksStore } from "./bookmarks.js";
 import { BrowserHistoryStore } from "./browser-history.js";
-import { PasswordVault } from "./browser-vault.js";
-import type { ProfilesStore } from "./profiles.js";
 import {
-  DEFAULT_SIDEBAR_FILE,
-  type SidebarConfigStore,
-} from "./sidebar-config.js";
+  listImportableBrowsers,
+  readBrowserBookmarks,
+} from "./browser-import/index.js";
+import { PasswordVault } from "./browser-vault.js";
+import type { WindowProfileRegistry } from "./index.js";
+import type { ProfileConfigManager } from "./profile-config.js";
+import type { ProfilesStore } from "./profiles.js";
+import { DEFAULT_SIDEBAR_FILE } from "./sidebar-config.js";
 
 /**
  * Browser support for workspace tabs. Pages render in `<webview>` tags in
@@ -109,7 +112,10 @@ async function prepareProfileSession(
         await extensionHost.loadExtension(extPath);
         console.log(`[desktop] loaded extension ${entry.name} (${profileId})`);
       } catch (cause) {
-        console.warn(`[desktop] failed to load extension ${entry.name}:`, cause);
+        console.warn(
+          `[desktop] failed to load extension ${entry.name}:`,
+          cause,
+        );
       }
     }
   }
@@ -122,15 +128,15 @@ export interface BrowserSupport {
 
 export function registerBrowserSupport(
   profiles: ProfilesStore,
-  /** Shared with the config agent so chat edits and IPC hit one store. */
-  sidebarConfig: SidebarConfigStore,
+  /** Shared with the config agent so chat edits and IPC hit one store set. */
+  profileConfig: ProfileConfigManager,
+  windows: WindowProfileRegistry,
 ): BrowserSupport {
   const userData = app.getPath("userData");
   const profilesDir = path.join(userData, "profiles");
   const history = new BrowserHistoryStore(profilesDir);
   const vault = new PasswordVault(profilesDir);
   const bookmarks = new BookmarksStore(path.join(userData, "bookmarks.json"));
-  sidebarConfig.ensureFile();
 
   const broadcast = (channel: string, payload: unknown) => {
     for (const window of BrowserWindow.getAllWindows()) {
@@ -365,30 +371,21 @@ export function registerBrowserSupport(
   );
   ipcMain.handle(
     "catamorphic:bookmarks-remove",
-    (
-      _event,
-      input: { projectId: string; profileId: string; id: string },
-    ) => {
+    (_event, input: { projectId: string; profileId: string; id: string }) => {
       bookmarks.remove(input.projectId, input.id);
       bookmarksChanged(input.projectId, input.profileId);
     },
   );
   ipcMain.handle(
     "catamorphic:bookmarks-pin",
-    (
-      _event,
-      input: { projectId: string; profileId: string; id: string },
-    ) => {
+    (_event, input: { projectId: string; profileId: string; id: string }) => {
       bookmarks.pin(input.projectId, input.profileId, input.id);
       bookmarksChanged(input.projectId, input.profileId);
     },
   );
   ipcMain.handle(
     "catamorphic:bookmarks-unpin",
-    (
-      _event,
-      input: { projectId: string; profileId: string; id: string },
-    ) => {
+    (_event, input: { projectId: string; profileId: string; id: string }) => {
       bookmarks.unpin(input.profileId, input.projectId, input.id);
       bookmarksChanged(input.projectId, input.profileId);
     },
@@ -410,33 +407,93 @@ export function registerBrowserSupport(
   );
   ipcMain.handle(
     "catamorphic:bookmarks-remove-pinned",
-    (
-      _event,
-      input: { projectId: string; profileId: string; id: string },
-    ) => {
+    (_event, input: { projectId: string; profileId: string; id: string }) => {
       bookmarks.removePinned(input.profileId, input.id);
       bookmarksChanged(input.projectId, input.profileId);
     },
   );
 
-  // --- sidebar config ---
-  ipcMain.handle("catamorphic:sidebar-config-get", () => sidebarConfig.load());
-  ipcMain.handle("catamorphic:sidebar-config-file", () => sidebarConfig.file);
-  ipcMain.handle("catamorphic:sidebar-config-source", () =>
-    sidebarConfig.read(),
+  // --- sidebar config (per sender profile) ---
+  const sidebarFor = (event: Electron.IpcMainInvokeEvent) =>
+    profileConfig.forProfile(windows.profileFor(event.sender)).sidebar;
+
+  ipcMain.handle("catamorphic:sidebar-config-get", (event) =>
+    sidebarFor(event).load(),
   );
-  ipcMain.handle("catamorphic:sidebar-config-reset", () => {
-    sidebarConfig.write(DEFAULT_SIDEBAR_FILE);
+  ipcMain.handle(
+    "catamorphic:sidebar-config-file",
+    (event) => sidebarFor(event).file,
+  );
+  ipcMain.handle("catamorphic:sidebar-config-source", (event) =>
+    sidebarFor(event).read(),
+  );
+  ipcMain.handle("catamorphic:sidebar-config-reset", (event) => {
+    sidebarFor(event).write(DEFAULT_SIDEBAR_FILE);
   });
-  sidebarConfig.watch((config) =>
-    broadcast("catamorphic:sidebar-config-changed", config),
+  // Change fan-out lives in main/index.ts (profileConfig.onSidebarChanged),
+  // scoped to the owning profile's windows.
+
+  // --- import from other browsers ---
+  // Detection + parsing lives in ./browser-import (pure, per-browser).
+  // Imported bookmarks land in a profile's pinned list; a source profile
+  // can also become a brand-new Catamorphic profile.
+  ipcMain.handle("catamorphic:browser-import-list", () =>
+    listImportableBrowsers(),
+  );
+
+  ipcMain.handle(
+    "catamorphic:browser-import-run",
+    (
+      event,
+      input: {
+        browserId: string;
+        imports: Array<{
+          sourceProfileId: string;
+          sourceProfileName: string;
+          target: "current" | "new-profile";
+        }>;
+      },
+    ) => {
+      const currentProfileId = windows.profileFor(event.sender);
+      let bookmarksImported = 0;
+      const profilesCreated: string[] = [];
+
+      for (const item of input.imports) {
+        const imported = readBrowserBookmarks(
+          input.browserId,
+          item.sourceProfileId,
+        );
+        let targetProfileId = currentProfileId;
+        if (item.target === "new-profile") {
+          const profile = profiles.create(item.sourceProfileName);
+          profilesCreated.push(profile.id);
+          targetProfileId = profile.id;
+        }
+        bookmarksImported += bookmarks.importPinned(
+          targetProfileId,
+          imported.bookmarks,
+        );
+        if (targetProfileId === currentProfileId) {
+          broadcast("catamorphic:bookmarks-changed", {
+            projectId: null,
+            project: null,
+            profileId: targetProfileId,
+            pinned: bookmarks.pinned(targetProfileId),
+          });
+        }
+      }
+
+      if (profilesCreated.length > 0) {
+        broadcast("catamorphic:profiles-changed", profiles.list());
+      }
+      return { bookmarksImported, profilesCreated };
+    },
   );
 
   return {
     history,
     dispose: () => {
       history.dispose();
-      sidebarConfig.dispose();
     },
   };
 }

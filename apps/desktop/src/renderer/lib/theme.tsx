@@ -29,13 +29,19 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
   const [theme, setTheme] = useState<ResolvedTheme | null>(null);
   useEffect(() => {
     let mounted = true;
-    void desktopApi.getTheme().then((loaded) => {
-      if (mounted) setTheme(loaded);
-    });
+    const load = () =>
+      void desktopApi.getTheme().then((loaded) => {
+        if (mounted) setTheme(loaded);
+      });
+    load();
     const unsubscribe = desktopApi.onThemeChanged(setTheme);
+    // In-place profile switches change which theme file backs this window
+    // without a main-process broadcast — App signals a refetch instead.
+    window.addEventListener("catamorphic:profile-refetch", load);
     return () => {
       mounted = false;
       unsubscribe();
+      window.removeEventListener("catamorphic:profile-refetch", load);
     };
   }, []);
   useEffect(() => {

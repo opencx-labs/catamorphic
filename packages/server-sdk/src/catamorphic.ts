@@ -1,6 +1,7 @@
 import type {
   AppBundleStore,
   CatamorphicCore,
+  CodingAgentRegistry,
   DeploymentRuntimeCleanupResult,
   DeploymentRuntimeHealthResult,
   DeploymentRuntimeRetirementResult,
@@ -81,11 +82,19 @@ export interface CreateCatamorphicConfig {
   /** Required once the host uses plugins + secrets. */
   pluginResolver?: PluginResolver;
   /**
-   * Pluggable coding agent for AI-assisted editing (e.g. `AiSdkCodingAgent`
-   * from `@catamorphic/ai-sdk` or `CodexAgent` from `@catamorphic/codex`).
-   * Requires `sandboxProvider`; enables the agent-session APIs.
+   * Pluggable coding agent(s) for AI-assisted editing: a single provider
+   * (e.g. `AiSdkCodingAgent` from `@catamorphic/ai-sdk`) or a
+   * `CodingAgentRegistry` when the host offers several agents. Requires
+   * `sandboxProvider`; enables the agent-session APIs.
    */
-  codingAgent?: CodingAgentProvider;
+  codingAgent?: CodingAgentProvider | CodingAgentRegistry;
+  /**
+   * Resolve a project's directory on the host filesystem, required for
+   * registry agents with `execution: "host"` (Claude Code, Codex).
+   */
+  hostProjectPathResolver?: (
+    projectId: string,
+  ) => Promise<string | undefined> | string | undefined;
   /**
    * How long finished runs are kept before they and everything hanging off
    * them are purged. Defaults to 90 days; pass `{ enabled: false }` to keep
@@ -180,6 +189,7 @@ export class Catamorphic {
       sandboxProvider: config.sandboxProvider,
       pluginResolver: config.pluginResolver,
       codingAgent: config.codingAgent,
+      hostProjectPathResolver: config.hostProjectPathResolver,
       ...(config.retention === undefined
         ? {}
         : { retention: config.retention }),

@@ -31,6 +31,19 @@ export interface ProviderSession {
   workingDirectory: string;
 }
 
+/**
+ * Normalized reasoning-effort scale shared by every harness. Each provider
+ * maps it onto its native knob (thinking budgets, reasoning effort levels);
+ * providers that have no such knob ignore it.
+ */
+export type AgentEffort = "low" | "medium" | "high";
+
+/** Per-turn overrides; anything unset falls back to the provider's defaults. */
+export interface TurnOptions {
+  model?: string;
+  effort?: AgentEffort;
+}
+
 export interface CodingAgentProvider {
   readonly name: string;
 
@@ -41,6 +54,7 @@ export interface CodingAgentProvider {
   sendMessage(
     session: ProviderSession,
     message: string,
+    opts?: TurnOptions,
   ): AsyncIterable<AgentEvent>;
 
   dispose(session: ProviderSession): Promise<void>;

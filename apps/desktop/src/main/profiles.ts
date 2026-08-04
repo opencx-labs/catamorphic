@@ -1,6 +1,6 @@
+import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
-import { randomUUID } from "node:crypto";
 
 /**
  * Chrome-style profiles. Each profile owns:
@@ -25,6 +25,8 @@ export interface Profile {
 export interface ProfilesFile {
   profiles: Profile[];
   defaultProfileId: string;
+  /** Profile the user last worked in; new windows open here. */
+  lastActiveProfileId?: string;
 }
 
 const PROFILE_COLORS: string[] = [
@@ -59,7 +61,7 @@ export class ProfilesStore {
     }
     const initial: Profile = {
       id: randomUUID(),
-      name: "Default",
+      name: "Default Profile",
       color: FALLBACK_COLOR,
       projectIds: [],
     };
@@ -108,7 +110,8 @@ export class ProfilesStore {
   ): Profile | undefined {
     const profile = this.get(id);
     if (!profile) return undefined;
-    if (patch.name !== undefined) profile.name = patch.name.trim() || profile.name;
+    if (patch.name !== undefined)
+      profile.name = patch.name.trim() || profile.name;
     if (patch.color !== undefined) profile.color = patch.color;
     if ("defaultProjectId" in patch) {
       profile.defaultProjectId = patch.defaultProjectId;
@@ -120,6 +123,22 @@ export class ProfilesStore {
   setDefaultProfile(id: string): void {
     if (this.get(id)) {
       this.data.defaultProfileId = id;
+      this.save();
+    }
+  }
+
+  /** Where new windows open. Falls back to the default profile. */
+  lastActiveProfile(): Profile {
+    return (
+      (this.data.lastActiveProfileId
+        ? this.get(this.data.lastActiveProfileId)
+        : undefined) ?? this.defaultProfile()
+    );
+  }
+
+  setLastActiveProfile(id: string): void {
+    if (this.get(id) && this.data.lastActiveProfileId !== id) {
+      this.data.lastActiveProfileId = id;
       this.save();
     }
   }

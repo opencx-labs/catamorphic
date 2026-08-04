@@ -1,5 +1,5 @@
-import { MoreHorizontal } from "lucide-react";
 import * as icons from "lucide-react";
+import { MoreHorizontal } from "lucide-react";
 import {
   type ReactNode,
   useEffect,
@@ -82,7 +82,12 @@ export function SidebarItemRow({
 
   const IconComponent =
     typeof icon === "string"
-      ? (icons as unknown as Record<string, React.ComponentType<{ className?: string }>>)[icon]
+      ? (
+          icons as unknown as Record<
+            string,
+            React.ComponentType<{ className?: string }>
+          >
+        )[icon]
       : undefined;
 
   return (

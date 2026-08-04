@@ -9,10 +9,12 @@ export {
   stagePluginDocs,
 } from "./coding-agent/plugin-staging.js";
 export type {
+  AgentEffort,
   AttachedPluginForAgent,
   CodingAgentProvider,
   ProviderSession,
   StartSessionOpts,
+  TurnOptions,
 } from "./coding-agent/types.js";
 export { CommandDeploymentRuntimeProvider } from "./command-deployment-runtime.js";
 export type { DeploymentRuntimeExecutorOptions } from "./deployment-runtime-executor.js";

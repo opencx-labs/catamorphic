@@ -3,17 +3,91 @@ export interface ServerInfo {
   hasCodingAgent: boolean;
 }
 
-export interface PublicSettings {
-  provider: "anthropic" | "openai";
+export type AgentHarness = "ai-sdk" | "claude-code" | "codex";
+export type AgentEffort = "low" | "medium" | "high";
+export type AgentAuthMode = "local" | "account" | "api-key";
+
+export interface AgentInfo {
+  id: string;
+  name: string;
+  harness: AgentHarness;
+  provider?: "anthropic" | "openai" | "openrouter";
   model: string;
+  effort: AgentEffort;
+  auth: AgentAuthMode;
   hasApiKey: boolean;
   apiKeyMasked: string | null;
 }
 
-export interface UpdateSettingsInput {
-  provider: "anthropic" | "openai";
+export interface AgentsData {
+  agents: AgentInfo[];
+  defaultAgentId: string | null;
+}
+
+export interface CreateAgentInput {
+  name?: string;
+  harness: AgentHarness;
+  provider?: "anthropic" | "openai" | "openrouter";
   model?: string;
+  effort?: AgentEffort;
+  auth?: AgentAuthMode;
   apiKey?: string | null;
+}
+
+export interface UpdateAgentInput {
+  name?: string;
+  provider?: "anthropic" | "openai" | "openrouter";
+  model?: string;
+  effort?: AgentEffort;
+  auth?: AgentAuthMode;
+  /** New key; omit to keep the stored one, null to clear it. */
+  apiKey?: string | null;
+}
+
+export interface HarnessModelInfo {
+  id: string;
+  name: string;
+  description?: string;
+}
+
+export interface OpenRouterModelInfo {
+  id: string;
+  name: string;
+  contextLength: number;
+  free: boolean;
+  created: number;
+}
+
+export interface OpenRouterCatalog {
+  models: OpenRouterModelInfo[];
+  /** Current best free model per the catalog heuristic; null if none. */
+  bestFreeModelId: string | null;
+}
+
+export interface ImportableProfile {
+  id: string;
+  name: string;
+  bookmarkCount: number;
+}
+
+export interface ImportableBrowser {
+  id: string;
+  label: string;
+  profiles: ImportableProfile[];
+}
+
+export interface BrowserImportRequest {
+  browserId: string;
+  imports: Array<{
+    sourceProfileId: string;
+    sourceProfileName: string;
+    target: "current" | "new-profile";
+  }>;
+}
+
+export interface BrowserImportResult {
+  bookmarksImported: number;
+  profilesCreated: string[];
 }
 
 export type GithubConnectResult =
@@ -71,9 +145,12 @@ export interface BookmarksData {
   pinned: Bookmark[];
 }
 
-export interface BookmarksChange extends BookmarksData {
-  projectId: string;
+export interface BookmarksChange {
+  /** Null for profile-wide changes (e.g. a browser import touching pinned). */
+  projectId: string | null;
+  project: ProjectBookmarks | null;
   profileId: string;
+  pinned: Bookmark[];
 }
 
 export type SidebarAction =
@@ -166,9 +243,36 @@ export interface CatamorphicDesktopApi {
     listener: (result: GithubConnectResult) => void,
   ) => () => void;
   getServerState: () => Promise<ServerInfo>;
-  getSettings: () => Promise<PublicSettings>;
-  setSettings: (input: UpdateSettingsInput) => Promise<PublicSettings>;
   onServerChanged: (listener: (info: ServerInfo) => void) => () => void;
+
+  windowProfile: () => Promise<string>;
+  windowSetProfile: (profileId: string) => Promise<string>;
+  openProfileWindow: (profileId: string) => Promise<void>;
+
+  agentsList: () => Promise<AgentsData>;
+  agentsCreate: (input: CreateAgentInput) => Promise<AgentInfo>;
+  agentsUpdate: (
+    id: string,
+    patch: UpdateAgentInput,
+  ) => Promise<AgentInfo | null>;
+  agentsRemove: (id: string) => Promise<boolean>;
+  agentsSetDefault: (id: string) => Promise<void>;
+  agentModels: (id: string) => Promise<{ models: HarnessModelInfo[] }>;
+  agentSetupStatus: () => Promise<{ claudeCode: boolean; codex: boolean }>;
+  agentLogin: (
+    id: string,
+  ) => Promise<{ started: boolean; command?: string; error?: string }>;
+  agentLoginStatus: (id: string) => Promise<boolean>;
+  onAgentsChanged: (listener: (data: AgentsData) => void) => () => void;
+  onAgentLoginFinished: (
+    listener: (result: { agentId: string; ok: boolean }) => void,
+  ) => () => void;
+
+  openrouterModels: () => Promise<OpenRouterCatalog>;
+  browserImportList: () => Promise<ImportableBrowser[]>;
+  browserImportRun: (
+    input: BrowserImportRequest,
+  ) => Promise<BrowserImportResult>;
   onCloseSurface: (listener: () => void) => () => void;
   getKeybindings: () => Promise<Record<string, string>>;
   setKeybindings: (
@@ -239,10 +343,7 @@ export interface CatamorphicDesktopApi {
   ) => Promise<Profile | undefined>;
   profilesSetDefault: (id: string) => Promise<void>;
   profilesRemove: (id: string) => Promise<boolean>;
-  profilesClaimProject: (
-    profileId: string,
-    projectId: string,
-  ) => Promise<void>;
+  profilesClaimProject: (profileId: string, projectId: string) => Promise<void>;
   profilesForProject: (projectId: string) => Promise<Profile>;
   profilesReleaseProject: (projectId: string) => Promise<void>;
   onProfilesChanged: (listener: (data: ProfilesData) => void) => () => void;

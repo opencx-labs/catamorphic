@@ -3345,6 +3345,9 @@ export interface paths {
                                 providerSessionId: string | null;
                                 /** Format: uuid */
                                 sandboxId: string | null;
+                                agentId: string | null;
+                                /** @enum {string|null} */
+                                modelEffort: "low" | "medium" | "high" | null;
                                 title: string | null;
                                 /** @enum {string} */
                                 status: "active" | "closed";
@@ -3385,6 +3388,9 @@ export interface paths {
                 content: {
                     "application/json": {
                         systemPrompt?: string;
+                        agentId?: string;
+                        /** @enum {string} */
+                        effort?: "low" | "medium" | "high";
                     };
                 };
             };
@@ -3405,6 +3411,9 @@ export interface paths {
                             providerSessionId: string | null;
                             /** Format: uuid */
                             sandboxId: string | null;
+                            agentId: string | null;
+                            /** @enum {string|null} */
+                            modelEffort: "low" | "medium" | "high" | null;
                             title: string | null;
                             /** @enum {string} */
                             status: "active" | "closed";
@@ -3413,6 +3422,17 @@ export interface paths {
                             createdAt: string;
                             /** Format: date-time */
                             updatedAt: string;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                400: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
                         };
                     };
                 };
@@ -3481,6 +3501,9 @@ export interface paths {
                             providerSessionId: string | null;
                             /** Format: uuid */
                             sandboxId: string | null;
+                            agentId: string | null;
+                            /** @enum {string|null} */
+                            modelEffort: "low" | "medium" | "high" | null;
                             title: string | null;
                             /** @enum {string} */
                             status: "active" | "closed";
@@ -3561,6 +3584,9 @@ export interface paths {
                             providerSessionId: string | null;
                             /** Format: uuid */
                             sandboxId: string | null;
+                            agentId: string | null;
+                            /** @enum {string|null} */
+                            modelEffort: "low" | "medium" | "high" | null;
                             title: string | null;
                             /** @enum {string} */
                             status: "active" | "closed";
@@ -3598,7 +3624,102 @@ export interface paths {
         };
         options?: never;
         head?: never;
-        patch?: never;
+        patch: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    projectId: string;
+                    sessionId: string;
+                };
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": {
+                        agentId?: string;
+                        /** @enum {string|null} */
+                        effort?: "low" | "medium" | "high" | null;
+                    };
+                };
+            };
+            responses: {
+                /** @description Default Response */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            /** Format: uuid */
+                            id: string;
+                            /** Format: uuid */
+                            projectId: string;
+                            externalUserId: string;
+                            provider: string;
+                            providerSessionId: string | null;
+                            /** Format: uuid */
+                            sandboxId: string | null;
+                            agentId: string | null;
+                            /** @enum {string|null} */
+                            modelEffort: "low" | "medium" | "high" | null;
+                            title: string | null;
+                            /** @enum {string} */
+                            status: "active" | "closed";
+                            baseCommitSha: string | null;
+                            /** Format: date-time */
+                            createdAt: string;
+                            /** Format: date-time */
+                            updatedAt: string;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                400: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                409: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                503: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                        };
+                    };
+                };
+            };
+        };
         trace?: never;
     };
     "/api/projects/{projectId}/agent/sessions/{sessionId}/messages": {

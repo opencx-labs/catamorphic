@@ -1,6 +1,8 @@
 import {
+  AgentNotConfiguredError,
   AgentSessionClosedError,
   AgentSessionNotFoundError,
+  AgentTurnInProgressError,
   ProjectNotFoundError,
 } from "@catamorphic/core";
 import type { FastifyInstance } from "fastify";
@@ -19,6 +21,7 @@ import {
   ProjectIdParamsSchema,
   SendMessageSchema,
   SkillSchema,
+  UpdateAgentSessionSchema,
 } from "../schemas.js";
 
 export function registerAgentRoutes(app: FastifyInstance, ctx: RouteContext) {
@@ -30,7 +33,12 @@ export function registerAgentRoutes(app: FastifyInstance, ctx: RouteContext) {
     schema: {
       params: ProjectIdParamsSchema,
       body: CreateAgentSessionSchema,
-      response: { 201: AgentSessionSchema, 404: ErrorSchema, 503: ErrorSchema },
+      response: {
+        201: AgentSessionSchema,
+        400: ErrorSchema,
+        404: ErrorSchema,
+        503: ErrorSchema,
+      },
     },
     handler: async (request, reply) => {
       const agentSessions = ctx.core?.agentSessions;
@@ -41,12 +49,69 @@ export function registerAgentRoutes(app: FastifyInstance, ctx: RouteContext) {
         const session = await agentSessions.create(
           identity,
           request.params.projectId,
-          { systemPrompt: request.body.systemPrompt },
+          {
+            systemPrompt: request.body.systemPrompt,
+            agentId: request.body.agentId,
+            effort: request.body.effort,
+          },
         );
         return reply.status(201).send(session);
       } catch (err) {
         if (err instanceof ProjectNotFoundError) {
           return reply.status(404).send({ error: "Project not found" });
+        }
+        if (err instanceof AgentNotConfiguredError) {
+          return reply.status(400).send({ error: err.message });
+        }
+        throw err;
+      }
+    },
+  });
+
+  typed.route({
+    method: "PATCH",
+    url: "/projects/:projectId/agent/sessions/:sessionId",
+    schema: {
+      params: AgentSessionIdParamsSchema,
+      body: UpdateAgentSessionSchema,
+      response: {
+        200: AgentSessionSchema,
+        400: ErrorSchema,
+        404: ErrorSchema,
+        409: ErrorSchema,
+        503: ErrorSchema,
+      },
+    },
+    handler: async (request, reply) => {
+      const agentSessions = ctx.core?.agentSessions;
+      if (!agentSessions)
+        return reply.status(503).send({ error: "Coding agent not configured" });
+      const identity = resolveIdentity(request);
+      try {
+        const session = await agentSessions.update(
+          identity,
+          request.params.projectId,
+          request.params.sessionId,
+          request.body,
+        );
+        return reply.send(session);
+      } catch (err) {
+        if (
+          err instanceof ProjectNotFoundError ||
+          err instanceof AgentSessionNotFoundError
+        ) {
+          return reply.status(404).send({ error: "Session not found" });
+        }
+        if (err instanceof AgentNotConfiguredError) {
+          return reply.status(400).send({ error: err.message });
+        }
+        if (err instanceof AgentSessionClosedError) {
+          return reply.status(409).send({ error: "Session is closed" });
+        }
+        if (err instanceof AgentTurnInProgressError) {
+          return reply
+            .status(409)
+            .send({ error: "A turn is in progress; try again when it settles" });
         }
         throw err;
       }

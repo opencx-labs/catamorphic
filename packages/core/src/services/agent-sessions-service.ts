@@ -3,11 +3,12 @@ import type { ProjectManager } from "@catamorphic/git";
 import { getTracer, withSpan } from "@catamorphic/otel";
 import type { PluginResolver } from "@catamorphic/plugins";
 import type {
+  AgentEffort,
   AgentEvent,
   AttachedPluginForAgent,
-  CodingAgentProvider,
   ProviderSession,
   SandboxProvider,
+  TurnOptions,
 } from "@catamorphic/sandbox";
 import { type Kysely, type Selectable, sql } from "kysely";
 import type { Identity } from "../identity.js";
@@ -17,6 +18,10 @@ import {
   SEED_SKILLS,
 } from "../templates.js";
 import { assertProjectSurface } from "./app-audience.js";
+import type {
+  CodingAgentRegistry,
+  RegisteredCodingAgent,
+} from "./coding-agent-registry.js";
 import type { DevSandboxService } from "./dev-sandbox-service.js";
 import type { PluginsService } from "./plugins-service.js";
 import { ProjectNotFoundError } from "./projects-service.js";
@@ -31,6 +36,10 @@ export interface AgentSession {
   provider: string;
   providerSessionId: string | null;
   sandboxId: string | null;
+  /** Host-registry key of the agent this session runs on; null = default. */
+  agentId: string | null;
+  /** Per-session reasoning-effort override; null = the agent's default. */
+  modelEffort: AgentEffort | null;
   title: string | null;
   status: "active" | "closed";
   baseCommitSha: string | null;
@@ -63,6 +72,26 @@ export class AgentSessionClosedError extends Error {
   constructor(readonly sessionId: string) {
     super(`Agent session '${sessionId}' is closed`);
     this.name = "AgentSessionClosedError";
+  }
+}
+
+/** The named agent (or the default) is not present in the host's registry. */
+export class AgentNotConfiguredError extends Error {
+  constructor(readonly agentId: string | undefined) {
+    super(
+      agentId
+        ? `Coding agent '${agentId}' is not configured`
+        : "No coding agent is configured",
+    );
+    this.name = "AgentNotConfiguredError";
+  }
+}
+
+/** The session has a turn executing right now; retry after it settles. */
+export class AgentTurnInProgressError extends Error {
+  constructor(readonly sessionId: string) {
+    super(`Agent session '${sessionId}' has a turn in progress`);
+    this.name = "AgentTurnInProgressError";
   }
 }
 
@@ -163,29 +192,38 @@ const SYNC_IGNORED_PREFIXES = ["_plugins/", "node_modules/", ".git/"];
 interface AgentSessionsDeps {
   projectManager: ProjectManager;
   sandboxProvider: SandboxProvider;
-  codingAgent: CodingAgentProvider;
+  codingAgents: CodingAgentRegistry;
   devSandboxes: DevSandboxService;
+  /**
+   * Resolve a project's directory on the host filesystem, for `host`
+   * execution-mode agents (Claude Code, Codex — runtimes that operate on
+   * local paths). Hosts that only register sandbox agents can omit it.
+   */
+  hostProjectPath?: (
+    projectId: string,
+  ) => Promise<string | undefined> | string | undefined;
   plugins?: PluginsService;
   pluginResolver?: PluginResolver;
 }
 
 /**
- * Orchestrates coding-agent sessions:
+ * Orchestrates coding-agent sessions across the host's registry of agents:
  *
- * 1. Ensures a per-(project, user) **dev sandbox** exists and contains the
- *    user's current working-copy state (cloned from the project origin when
- *    it is in sync, uploaded otherwise).
- * 2. Starts a session with the pluggable {@link CodingAgentProvider} pointed
- *    at the sandbox project directory.
- * 3. Persists the conversation to `agent_sessions` / `agent_messages`.
- * 4. After each assistant turn, syncs files the agent changed inside the
- *    sandbox back into the user's dev working copy as an uncommitted draft —
- *    the user reviews and deploys through the normal git flow.
+ * 1. Sessions are created lazily — the row exists immediately, and the
+ *    provider session (plus, for sandbox agents, the per-(project, user)
+ *    dev sandbox) is anchored on the first turn. Switching a session to a
+ *    different agent just clears the anchor; the next turn re-anchors.
+ * 2. `sandbox` agents run against the dev sandbox and their changes sync
+ *    back into the user's dev working copy as an uncommitted draft.
+ *    `host` agents run directly in the project's host directory — their
+ *    edits land in place, so no sync step and no draft.
+ * 3. The conversation persists to `agent_sessions` / `agent_messages`.
  */
 export class AgentSessionsService {
   private readonly projectManager: ProjectManager;
   private readonly sandboxProvider: SandboxProvider;
-  private readonly codingAgent: CodingAgentProvider;
+  private readonly codingAgents: CodingAgentRegistry;
+  private readonly hostProjectPath?: AgentSessionsDeps["hostProjectPath"];
   private readonly plugins?: PluginsService;
   private readonly pluginResolver?: PluginResolver;
   private readonly devSandboxes: DevSandboxService;
@@ -203,14 +241,11 @@ export class AgentSessionsService {
   ) {
     this.projectManager = deps.projectManager;
     this.sandboxProvider = deps.sandboxProvider;
-    this.codingAgent = deps.codingAgent;
+    this.codingAgents = deps.codingAgents;
+    this.hostProjectPath = deps.hostProjectPath;
     this.devSandboxes = deps.devSandboxes;
     this.plugins = deps.plugins;
     this.pluginResolver = deps.pluginResolver;
-  }
-
-  get providerName(): string {
-    return this.codingAgent.name;
   }
 
   async list(
@@ -306,7 +341,7 @@ export class AgentSessionsService {
   async create(
     identity: Identity,
     projectId: string,
-    input: { systemPrompt?: string } = {},
+    input: { systemPrompt?: string; agentId?: string; effort?: AgentEffort } = {},
   ): Promise<AgentSession> {
     return withSpan(
       {
@@ -315,7 +350,9 @@ export class AgentSessionsService {
         attributes: {
           "catamorphic.project.id": projectId,
           "catamorphic.tenant.id": identity.tenantId,
-          "catamorphic.agent.provider": this.codingAgent.name,
+          ...(input.agentId
+            ? { "catamorphic.agent.id": input.agentId }
+            : {}),
         },
       },
       () => this.createInner(identity, projectId, input),
@@ -325,43 +362,96 @@ export class AgentSessionsService {
   private async createInner(
     identity: Identity,
     projectId: string,
-    input: { systemPrompt?: string },
+    input: { systemPrompt?: string; agentId?: string; effort?: AgentEffort },
   ): Promise<AgentSession> {
     await this.requireProject(identity, projectId);
+    // Validate up front so a bad agent id fails at create, not first send.
+    const agent = this.resolveAgent(input.agentId ?? null);
 
-    const { handle, baseCommitSha } = await this.prepareDevSandbox(
-      identity,
-      projectId,
-    );
-
-    const workingDirectory = this.projectDir();
-    const attachedPlugins = await this.loadAttachedPlugins(projectId);
-
-    const providerSession = await this.codingAgent.startSession({
-      projectId,
-      userId: identity.externalUserId,
-      sandboxId: handle.providerId,
-      workingDirectory,
-      systemPrompt: buildAgentSystemPrompt({
-        systemPrompt: input.systemPrompt,
-      }),
-      attachedPlugins,
-    });
-
+    // Lazy anchoring: the provider session (and, for sandbox agents, the dev
+    // sandbox) is established on the first turn. Creating a session is a
+    // metadata write — cheap, and switching agents before the first message
+    // costs nothing.
     const row = await this.db
       .insertInto("agent_sessions")
       .values({
         project_id: projectId,
         external_user_id: identity.externalUserId,
-        provider: this.codingAgent.name,
-        provider_session_id: providerSession.providerSessionId,
-        sandbox_id: handle.id,
+        provider: agent.provider.name,
+        provider_session_id: null,
+        agent_id: input.agentId ?? null,
+        model_effort: input.effort ?? null,
+        system_prompt: input.systemPrompt ?? null,
+        sandbox_id: null,
         status: "active",
-        base_commit_sha: baseCommitSha,
+        base_commit_sha: null,
       })
       .returningAll()
       .executeTakeFirstOrThrow();
 
+    return mapSession(row);
+  }
+
+  /**
+   * Re-point a session at another registered agent and/or change its
+   * reasoning-effort override (`effort: null` clears the override back to
+   * the agent's default). Switching agents drops the provider anchor; the
+   * next turn re-anchors against the new provider (same working state, but
+   * the new provider starts from its own fresh context).
+   */
+  async update(
+    identity: Identity,
+    projectId: string,
+    sessionId: string,
+    patch: { agentId?: string; effort?: AgentEffort | null },
+  ): Promise<AgentSession> {
+    const session = await this.requireSession(identity, projectId, sessionId);
+    if (session.status !== "active") {
+      throw new AgentSessionClosedError(sessionId);
+    }
+    if (this.runningTurns.has(sessionId)) {
+      throw new AgentTurnInProgressError(sessionId);
+    }
+
+    const updates: Partial<{
+      agent_id: string;
+      provider: string;
+      provider_session_id: null;
+      model_effort: string | null;
+    }> = {};
+
+    if (patch.agentId !== undefined && patch.agentId !== session.agent_id) {
+      const agent = this.codingAgents.get(patch.agentId);
+      if (!agent) throw new AgentNotConfiguredError(patch.agentId);
+      // Let the outgoing provider release its in-memory state.
+      if (session.provider_session_id) {
+        const previous = this.codingAgents.get(
+          session.agent_id ?? this.codingAgents.defaultAgentId() ?? "",
+        );
+        await previous?.provider
+          .dispose({
+            providerSessionId: session.provider_session_id,
+            sandboxId: "",
+            workingDirectory: "",
+          })
+          .catch(() => {});
+      }
+      updates.agent_id = patch.agentId;
+      updates.provider = agent.provider.name;
+      updates.provider_session_id = null;
+    }
+    if (patch.effort !== undefined) {
+      updates.model_effort = patch.effort;
+    }
+
+    if (Object.keys(updates).length === 0) return mapSession(session);
+
+    const row = await this.db
+      .updateTable("agent_sessions")
+      .set({ ...updates, updated_at: new Date() })
+      .where("id", "=", sessionId)
+      .returningAll()
+      .executeTakeFirstOrThrow();
     return mapSession(row);
   }
 
@@ -378,7 +468,6 @@ export class AgentSessionsService {
         attributes: {
           "catamorphic.project.id": projectId,
           "catamorphic.agent.session.id": sessionId,
-          "catamorphic.agent.provider": this.codingAgent.name,
         },
       },
       () => this.sendMessageInner(identity, projectId, sessionId, message),
@@ -412,29 +501,19 @@ export class AgentSessionsService {
     message: string,
     session: SessionRow,
   ): Promise<AgentMessage> {
-    const sandboxProviderId = await this.resolveSandboxProviderId(session);
-    const workingDirectory = this.projectDir();
-    const batchSkillStaged = await ensureBatchWorkflowSkill({
-      sandboxProvider: this.sandboxProvider,
-      sandboxProviderId,
-      projectDir: workingDirectory,
-    });
-    const durableSkillStaged = await ensureDurableWorkflowSkill({
-      sandboxProvider: this.sandboxProvider,
-      sandboxProviderId,
-      projectDir: workingDirectory,
-    });
-    const stagedSkillPaths = [
-      ...(batchSkillStaged ? [BATCH_WORKFLOW_SKILL_PATH] : []),
-      ...(durableSkillStaged ? [DURABLE_WORKFLOW_SKILL_PATH] : []),
-    ];
-    if (stagedSkillPaths.length > 0) {
-      await this.commitWorkflowSkillBaseline(
-        sandboxProviderId,
-        stagedSkillPaths,
-      );
-    }
+    const agent = this.resolveAgent(session.agent_id);
+    const turnOptions: TurnOptions = {
+      ...agent.defaults,
+      ...(session.model_effort
+        ? { effort: session.model_effort as AgentEffort }
+        : {}),
+    };
 
+    // Persist the user message and the in-progress placeholder BEFORE the
+    // (potentially slow) provider/sandbox anchoring: the turn is then
+    // visible and crash-recoverable from the moment it starts — a process
+    // death during anchoring settles as an interrupted turn instead of a
+    // silently vanished message.
     let assistantMessageId = await this.db
       .transaction()
       .execute(async (trx) => {
@@ -458,12 +537,6 @@ export class AgentSessionsService {
           .executeTakeFirstOrThrow();
         return assistant.id;
       });
-
-    const providerSession: ProviderSession = {
-      providerSessionId: session.provider_session_id ?? "",
-      sandboxId: sandboxProviderId,
-      workingDirectory,
-    };
 
     const events: AgentEvent[] = [];
     // Events since the last flushed preamble — each assistant message keeps
@@ -508,9 +581,41 @@ export class AgentSessionsService {
       event.type === "file_edit";
 
     try {
-      for await (const event of this.codingAgent.sendMessage(
-        providerSession,
+      const anchor = await this.ensureAnchor(
+        identity,
+        projectId,
+        session,
+        agent,
+      );
+
+      if (anchor.sandboxProviderId) {
+        const workingDirectory = this.projectDir();
+        const batchSkillStaged = await ensureBatchWorkflowSkill({
+          sandboxProvider: this.sandboxProvider,
+          sandboxProviderId: anchor.sandboxProviderId,
+          projectDir: workingDirectory,
+        });
+        const durableSkillStaged = await ensureDurableWorkflowSkill({
+          sandboxProvider: this.sandboxProvider,
+          sandboxProviderId: anchor.sandboxProviderId,
+          projectDir: workingDirectory,
+        });
+        const stagedSkillPaths = [
+          ...(batchSkillStaged ? [BATCH_WORKFLOW_SKILL_PATH] : []),
+          ...(durableSkillStaged ? [DURABLE_WORKFLOW_SKILL_PATH] : []),
+        ];
+        if (stagedSkillPaths.length > 0) {
+          await this.commitWorkflowSkillBaseline(
+            anchor.sandboxProviderId,
+            stagedSkillPaths,
+          );
+        }
+      }
+
+      for await (const event of agent.provider.sendMessage(
+        anchor.providerSession,
         message,
+        turnOptions,
       )) {
         if (continuesTurn(event)) await flushHeldText();
         events.push(event);
@@ -530,11 +635,13 @@ export class AgentSessionsService {
         }
       }
 
-      const changedFiles = await this.syncBackChanges(
-        identity,
-        projectId,
-        sandboxProviderId,
-      );
+      const changedFiles = anchor.sandboxProviderId
+        ? await this.syncBackChanges(
+            identity,
+            projectId,
+            anchor.sandboxProviderId,
+          )
+        : hostChangedFiles(events, anchor.providerSession.workingDirectory);
 
       const questionEvent = [...events]
         .reverse()
@@ -631,7 +738,10 @@ export class AgentSessionsService {
     const session = await this.requireSession(identity, projectId, sessionId);
 
     if (session.provider_session_id) {
-      await this.codingAgent
+      const agent = this.codingAgents.get(
+        session.agent_id ?? this.codingAgents.defaultAgentId() ?? "",
+      );
+      await agent?.provider
         .dispose({
           providerSessionId: session.provider_session_id,
           sandboxId: "",
@@ -648,6 +758,116 @@ export class AgentSessionsService {
       .executeTakeFirstOrThrow();
 
     return mapSession(row);
+  }
+
+  // --- Agent resolution & anchoring ---
+
+  private resolveAgent(agentId: string | null): RegisteredCodingAgent {
+    const id = agentId ?? this.codingAgents.defaultAgentId();
+    if (!id) throw new AgentNotConfiguredError(undefined);
+    const agent = this.codingAgents.get(id);
+    if (!agent) throw new AgentNotConfiguredError(id);
+    return agent;
+  }
+
+  /**
+   * Make sure the session has a live provider session for its current agent,
+   * establishing one (and, for sandbox agents, the dev sandbox) when the
+   * session is new, was switched to another agent, or the registry now maps
+   * its agent to a different harness.
+   */
+  private async ensureAnchor(
+    identity: Identity,
+    projectId: string,
+    session: SessionRow,
+    agent: RegisteredCodingAgent,
+  ): Promise<{
+    providerSession: ProviderSession;
+    sandboxProviderId?: string;
+  }> {
+    const anchored =
+      session.provider_session_id !== null &&
+      session.provider === agent.provider.name;
+
+    if (agent.execution === "host") {
+      const workingDirectory = await this.resolveHostPath(projectId);
+      if (anchored && session.provider_session_id) {
+        return {
+          providerSession: {
+            providerSessionId: session.provider_session_id,
+            sandboxId: "",
+            workingDirectory,
+          },
+        };
+      }
+      const providerSession = await agent.provider.startSession({
+        projectId,
+        userId: identity.externalUserId,
+        sandboxId: "",
+        workingDirectory,
+        systemPrompt: buildAgentSystemPrompt({
+          systemPrompt: session.system_prompt ?? undefined,
+        }),
+        attachedPlugins: await this.loadAttachedPlugins(projectId),
+      });
+      await this.db
+        .updateTable("agent_sessions")
+        .set({
+          provider: agent.provider.name,
+          provider_session_id: providerSession.providerSessionId,
+        })
+        .where("id", "=", session.id)
+        .execute();
+      return { providerSession };
+    }
+
+    if (anchored && session.provider_session_id && session.sandbox_id) {
+      const sandboxProviderId = await this.resolveSandboxProviderId(session);
+      return {
+        providerSession: {
+          providerSessionId: session.provider_session_id,
+          sandboxId: sandboxProviderId,
+          workingDirectory: this.projectDir(),
+        },
+        sandboxProviderId,
+      };
+    }
+
+    const { handle, baseCommitSha } = await this.prepareDevSandbox(
+      identity,
+      projectId,
+    );
+    const providerSession = await agent.provider.startSession({
+      projectId,
+      userId: identity.externalUserId,
+      sandboxId: handle.providerId,
+      workingDirectory: this.projectDir(),
+      systemPrompt: buildAgentSystemPrompt({
+        systemPrompt: session.system_prompt ?? undefined,
+      }),
+      attachedPlugins: await this.loadAttachedPlugins(projectId),
+    });
+    await this.db
+      .updateTable("agent_sessions")
+      .set({
+        provider: agent.provider.name,
+        provider_session_id: providerSession.providerSessionId,
+        sandbox_id: handle.id,
+        base_commit_sha: baseCommitSha,
+      })
+      .where("id", "=", session.id)
+      .execute();
+    return { providerSession, sandboxProviderId: handle.providerId };
+  }
+
+  private async resolveHostPath(projectId: string): Promise<string> {
+    const path = await this.hostProjectPath?.(projectId);
+    if (!path) {
+      throw new Error(
+        "This agent runs on the host machine, but the project has no host directory",
+      );
+    }
+    return path;
   }
 
   // --- Dev sandbox lifecycle ---
@@ -893,6 +1113,32 @@ export function activityLabel(event: AgentEvent): string {
   return "Thinking...";
 }
 
+/**
+ * Changed files for a host-execution turn: there is no sandbox baseline to
+ * diff, so the provider's `file_edit` events are the record. Paths are
+ * relativized to the working directory so chips read like repo paths.
+ */
+export function hostChangedFiles(
+  events: AgentEvent[],
+  workingDirectory: string,
+): SyncedFileChange[] {
+  const root = workingDirectory.endsWith("/")
+    ? workingDirectory
+    : `${workingDirectory}/`;
+  const seen = new Set<string>();
+  const changes: SyncedFileChange[] = [];
+  for (const event of events) {
+    if (event.type !== "file_edit" || !event.filePath) continue;
+    const path = event.filePath.startsWith(root)
+      ? event.filePath.slice(root.length)
+      : event.filePath;
+    if (seen.has(path)) continue;
+    seen.add(path);
+    changes.push({ path, kind: "modified" });
+  }
+  return changes;
+}
+
 interface PorcelainChange {
   path: string;
   kind: "modified" | "deleted";
@@ -952,6 +1198,8 @@ function mapSession(row: SessionRow): AgentSession {
     provider: row.provider,
     providerSessionId: row.provider_session_id,
     sandboxId: row.sandbox_id,
+    agentId: row.agent_id,
+    modelEffort: (row.model_effort as AgentEffort | null) ?? null,
     title: row.title,
     status: row.status as "active" | "closed",
     baseCommitSha: row.base_commit_sha,

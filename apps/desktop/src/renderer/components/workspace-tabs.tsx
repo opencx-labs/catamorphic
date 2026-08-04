@@ -1,4 +1,5 @@
 import {
+  Bot,
   Globe,
   LayoutGrid,
   LoaderCircle,
@@ -26,9 +27,15 @@ export type WorkspaceTab = (
   | { kind: "workflow"; name: string; label?: string }
   | { kind: "app"; name: string; label?: string }
   | { kind: "chat"; name: string; label?: string }
-  | { kind: "browser"; name: string; label?: string; faviconUrl?: string | null }
+  | {
+      kind: "browser";
+      name: string;
+      label?: string;
+      faviconUrl?: string | null;
+    }
   | { kind: "settings"; name: string; label?: string }
   | { kind: "palette"; name: string; label?: string }
+  | { kind: "agent-setup"; name: string; label?: string }
 ) &
   TabIndicators;
 
@@ -41,6 +48,7 @@ const TAB_ICONS = {
   browser: Globe,
   settings: SettingsIcon,
   palette: Search,
+  "agent-setup": Bot,
 } as const;
 
 interface RenderedTab {
@@ -117,12 +125,18 @@ function CloseButton({
 export function WorkspaceTabBar({
   tabs,
   activeKey,
+  highlightKey,
   onSelect,
   onClose,
   onNew,
 }: {
   tabs: WorkspaceTab[];
   activeKey?: string;
+  /**
+   * Tab a highlighted palette command would act on — rendered with an
+   * accent border so "Close tab" (etc.) points at its target before Enter.
+   */
+  highlightKey?: string;
   onSelect: (key: string) => void;
   onClose: (key: string) => void;
   /** Chrome-style + after the last tab; always opens a new tab. */
@@ -152,19 +166,25 @@ export function WorkspaceTabBar({
       {rendered.map(({ tab, exiting }) => {
         const key = tabKey(tab);
         const active = !exiting && key === activeKey;
+        const highlighted = !exiting && key === highlightKey;
         const Icon = TAB_ICONS[tab.kind];
         return (
           <div
             key={key}
+            data-palette-target={highlighted || undefined}
             onAnimationEnd={(event) => {
               if (event.animationName === "tab-out") removeExited(key);
             }}
             className={`group -mb-px flex h-8 shrink-0 items-center rounded-t-lg border px-1 text-[12px] transition-colors duration-150 ${
               exiting ? "animate-tab-out pointer-events-none" : "animate-tab-in"
             } ${
-              active
-                ? "border-border border-b-bg bg-bg text-fg"
-                : "border-transparent text-fg-muted hover:bg-bg-overlay/60 hover:text-fg"
+              highlighted
+                ? active
+                  ? "border-accent border-b-bg bg-bg text-fg"
+                  : "border-accent text-fg"
+                : active
+                  ? "border-border border-b-bg bg-bg text-fg"
+                  : "border-transparent text-fg-muted hover:bg-bg-overlay/60 hover:text-fg"
             }`}
             aria-hidden={exiting || undefined}
           >
@@ -181,13 +201,17 @@ export function WorkspaceTabBar({
                     src={tab.faviconUrl}
                     alt=""
                     className={`col-start-1 row-start-1 size-3.5 rounded-[3px] transition-[opacity,scale] duration-200 ease-[cubic-bezier(0.2,0,0,1)] ${
-                      tab.sending ? "scale-50 opacity-0" : "scale-100 opacity-100"
+                      tab.sending
+                        ? "scale-50 opacity-0"
+                        : "scale-100 opacity-100"
                     }`}
                   />
                 ) : (
                   <Icon
                     className={`col-start-1 row-start-1 size-3.5 transition-[opacity,scale] duration-200 ease-[cubic-bezier(0.2,0,0,1)] ${
-                      tab.sending ? "scale-50 opacity-0" : "scale-100 opacity-100"
+                      tab.sending
+                        ? "scale-50 opacity-0"
+                        : "scale-100 opacity-100"
                     }`}
                   />
                 )}

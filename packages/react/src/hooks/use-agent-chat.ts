@@ -3,7 +3,7 @@
 import { useQueryClient } from "@tanstack/react-query";
 import { useRef, useState } from "react";
 import type { CatamorphicError } from "../lib/errors.js";
-import type { AgentMessage } from "../types.js";
+import type { AgentMessage, AgentSessionDetail } from "../types.js";
 import { useAgentSession } from "./use-agent-session.js";
 import { useCreateAgentSession } from "./use-create-agent-session.js";
 import { useSendAgentMessage } from "./use-send-agent-message.js";
@@ -18,10 +18,18 @@ export interface UseAgentChatOptions {
   sessionId?: string;
   /** Called when the hook lazily creates a session on first send. */
   onSessionCreated?: (sessionId: string) => void;
+  /**
+   * Host-registry key of the agent for lazily created sessions. Read at
+   * send time, so hosts can change it up until the first message. Existing
+   * sessions are unaffected — switch those via `useUpdateAgentSession`.
+   */
+  agentId?: string;
 }
 
 export interface UseAgentChatResult {
   sessionId: string | null;
+  /** The live session detail (agent, effort, title); null before creation. */
+  session: AgentSessionDetail | null;
   messages: AgentMessage[];
   optimisticMessages: OptimisticAgentMessage[];
   queuedMessageCount: number;
@@ -114,6 +122,9 @@ export function useAgentChat(
   const queryClient = useQueryClient();
   const createSession = useCreateAgentSession(projectId);
   const sendMessage = useSendAgentMessage(projectId);
+  // Read at send time so the host's latest default applies to lazy creation.
+  const agentIdRef = useRef(options.agentId);
+  agentIdRef.current = options.agentId;
   // Poll while a send is in flight OR the server still reports an
   // in-progress assistant turn. The latter covers sends that end in an HTTP
   // error: the server persists the terminal (failed) message, and without a
@@ -132,7 +143,12 @@ export function useAgentChat(
 
     const existingSessionId = activeSessionRef.current.sessionId;
     const targetSessionId =
-      existingSessionId ?? (await createSession.mutateAsync({})).id;
+      existingSessionId ??
+      (
+        await createSession.mutateAsync(
+          agentIdRef.current ? { agentId: agentIdRef.current } : {},
+        )
+      ).id;
     if (!existingSessionId) {
       activeSessionRef.current = {
         projectId,
@@ -197,6 +213,7 @@ export function useAgentChat(
 
   return {
     sessionId,
+    session: session.data ?? null,
     messages: session.data?.messages ?? [],
     optimisticMessages: reconcileOptimisticMessages(
       session.data?.messages ?? [],

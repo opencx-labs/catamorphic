@@ -145,6 +145,10 @@ export {
   type SendAgentMessageInput,
   useSendAgentMessage,
 } from "./hooks/use-send-agent-message.js";
+export {
+  type UpdateAgentSessionInput,
+  useUpdateAgentSession,
+} from "./hooks/use-update-agent-session.js";
 // Project hooks
 export {
   type GithubRepoSummary,

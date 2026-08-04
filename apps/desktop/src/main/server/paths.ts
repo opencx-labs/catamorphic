@@ -11,18 +11,30 @@ export interface DataPaths {
   remotes: string;
   /** FsBundleStore app bundles. */
   appBundles: string;
-  /** settings.json lives directly under userData. */
+  /** Legacy pre-profile settings.json (seeds the default profile's agents). */
   settingsFile: string;
   /** GitHub connection (safeStorage-encrypted), beside settings.json. */
   githubFile: string;
-  /** User keyboard shortcuts (plain JSON, agent-editable). */
+  /** Legacy pre-profile keybindings.json (migrated into the default profile). */
   keybindingsFile: string;
   /** Chrome-style profiles (plain JSON). */
   profilesFile: string;
-  /** User-defined sidebar layout (plain JS, agent-editable). */
+  /** Legacy pre-profile sidebar.js (migrated into the default profile). */
   sidebarFile: string;
-  /** Color theme (plain JSON, agent-editable). */
+  /** Legacy pre-profile theme.json (migrated into the default profile). */
   themeFile: string;
+  /**
+   * Per-profile home: `profiles/<id>/` holds that profile's theme.json,
+   * keybindings.json, sidebar.js, agents.json — plus the browser state that
+   * already lived here (history, vault, extensions).
+   */
+  profilesDir: string;
+  /**
+   * Per-agent credential homes: `agent-homes/<agentId>/` becomes
+   * CLAUDE_CONFIG_DIR / CODEX_HOME for account-authenticated agents, so two
+   * agents on the same harness can sign into different accounts.
+   */
+  agentHomesDir: string;
 }
 
 export function resolveDataPaths(): DataPaths {
@@ -40,5 +52,7 @@ export function resolveDataPaths(): DataPaths {
     profilesFile: path.join(userData, "profiles.json"),
     sidebarFile: path.join(userData, "sidebar.js"),
     themeFile: path.join(userData, "theme.json"),
+    profilesDir: path.join(userData, "profiles"),
+    agentHomesDir: path.join(userData, "agent-homes"),
   };
 }

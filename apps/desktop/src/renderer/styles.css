@@ -276,6 +276,36 @@ kbd {
 .animate-fade-in {
   animation: fade-in 200ms cubic-bezier(0.2, 0, 0, 1);
 }
+
+/* In-place profile switch: a full-window veil fades up over the old
+   profile, the workspace swaps underneath, and the veil fades away. The
+   pair is an exact mirror; profile-veil-out holds its final frame so the
+   element can be removed on animationend without a flash. */
+@keyframes profile-veil-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+@keyframes profile-veil-out {
+  from {
+    opacity: 1;
+  }
+  to {
+    opacity: 0;
+  }
+}
+
+.animate-profile-veil-in {
+  animation: profile-veil-in 200ms cubic-bezier(0.2, 0, 0, 1) both;
+}
+
+.animate-profile-veil-out {
+  animation: profile-veil-out 200ms cubic-bezier(0.2, 0, 0, 1) forwards;
+}
 .app-no-drag {
   -webkit-app-region: no-drag;
 }

@@ -650,6 +650,8 @@ export const SandboxSchema = z.object({
 });
 
 // --- Agent Sessions ---
+export const AgentEffortSchema = z.enum(["low", "medium", "high"]);
+
 export const AgentSessionSchema = z.object({
   id: z.string().uuid(),
   projectId: z.string().uuid(),
@@ -657,6 +659,8 @@ export const AgentSessionSchema = z.object({
   provider: z.string(),
   providerSessionId: z.string().nullable(),
   sandboxId: z.string().uuid().nullable(),
+  agentId: z.string().nullable(),
+  modelEffort: AgentEffortSchema.nullable(),
   title: z.string().nullable(),
   status: z.enum(["active", "closed"]),
   baseCommitSha: z.string().length(40).nullable(),
@@ -670,6 +674,15 @@ export const AgentSessionIdParamsSchema = ProjectIdParamsSchema.extend({
 
 export const CreateAgentSessionSchema = z.object({
   systemPrompt: z.string().optional(),
+  /** Host-registry key of the agent to run this session on. */
+  agentId: z.string().optional(),
+  effort: AgentEffortSchema.optional(),
+});
+
+export const UpdateAgentSessionSchema = z.object({
+  agentId: z.string().optional(),
+  /** `null` clears the override back to the agent's default. */
+  effort: AgentEffortSchema.nullable().optional(),
 });
 
 export const AgentMessageSchema = z.object({

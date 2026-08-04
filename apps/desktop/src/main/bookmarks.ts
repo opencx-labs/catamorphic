@@ -1,6 +1,6 @@
+import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
-import { randomUUID } from "node:crypto";
 
 /**
  * Browser bookmarks. Two scopes, Chrome-flavored but project-aware:
@@ -133,6 +133,33 @@ export class BookmarksStore {
       );
     }
     this.save();
+  }
+
+  /**
+   * Bulk-add pinned bookmarks (the browser-import path). Exact-URL matches
+   * against the profile's existing pinned list are skipped so re-importing
+   * is idempotent. Returns how many were actually added.
+   */
+  importPinned(
+    profileId: string,
+    items: Array<{ label: string; url: string }>,
+  ): number {
+    const pinned = this.data.pinnedByProfile[profileId] ?? [];
+    this.data.pinnedByProfile[profileId] = pinned;
+    const existing = new Set(pinned.map((bookmark) => bookmark.url));
+    let added = 0;
+    for (const item of items) {
+      if (!item.url || existing.has(item.url)) continue;
+      existing.add(item.url);
+      pinned.push({
+        id: randomUUID(),
+        label: item.label.trim() || item.url,
+        url: item.url,
+      });
+      added += 1;
+    }
+    if (added > 0) this.save();
+    return added;
   }
 
   /** Move a project bookmark to the profile-wide pinned list. */

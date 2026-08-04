@@ -1,3 +1,6 @@
+import { spawn } from "node:child_process";
+import fs from "node:fs";
+import { createRequire } from "node:module";
 import path from "node:path";
 import {
   buildInstallationUrl,
@@ -7,66 +10,99 @@ import {
 } from "@catamorphic/github";
 import { app, BrowserWindow, dialog, ipcMain, shell } from "electron";
 import {
-  type Keybindings,
-  type KeybindingsStore,
-  normalizeKeybindings,
-} from "./keybindings.js";
+  type AgentsStore,
+  type CreateAgentInput,
+  type PublicAgentConfig,
+  toPublicAgent,
+  type UpdateAgentInput,
+} from "./agents-store.js";
+import type { WindowProfileRegistry } from "./index.js";
+import { type Keybindings, normalizeKeybindings } from "./keybindings.js";
+import {
+  bestFreeModelId,
+  fetchOpenRouterModels,
+  openRouterPkceLogin,
+} from "./openrouter.js";
+import type { ProfileConfigManager } from "./profile-config.js";
 import type { EmbeddedServer } from "./server/boot.js";
 import { DESKTOP_TENANT_ID, DESKTOP_USER_ID } from "./server/boot.js";
 import { GITHUB_APP } from "./server/github.js";
-import {
-  DEFAULT_MODELS,
-  type DesktopSettings,
-  type ModelProvider,
-  type PublicSettings,
-  type SettingsStore,
-  toPublicSettings,
-} from "./server/settings.js";
+import { listAgentModels } from "./server/harness-models.js";
+import type { DataPaths } from "./server/paths.js";
 import {
   normalizeTheme,
   type ResolvedTheme,
   resolveTheme,
   THEME_PRESETS,
-  type ThemeStore,
   windowBackgroundColor,
 } from "./theme.js";
 
 export interface ServerState {
   current: EmbeddedServer | null;
-  /** Restart the embedded server with fresh settings; resolves to the new URL. */
-  restart: (settings: DesktopSettings) => Promise<EmbeddedServer>;
-  /** Notify open windows that the server URL changed. */
+  /** Notify every open window (all profiles). */
   broadcast: (channel: string, payload: unknown) => void;
 }
 
-export interface UpdateSettingsInput {
-  provider: ModelProvider;
-  model?: string;
-  /** New API key; omit to keep the stored one, null to clear it. */
-  apiKey?: string | null;
+export interface AgentsSnapshot {
+  agents: PublicAgentConfig[];
+  defaultAgentId: string | null;
 }
 
 export function registerIpcHandlers(
-  store: SettingsStore,
-  keybindings: KeybindingsStore,
-  theme: ThemeStore,
+  profileConfig: ProfileConfigManager,
   state: ServerState,
+  windows: WindowProfileRegistry,
+  paths: DataPaths,
 ): void {
-  ipcMain.handle("catamorphic:keybindings-get", () => keybindings.load());
+  const storesFor = (event: Electron.IpcMainInvokeEvent) =>
+    profileConfig.forProfile(windows.profileFor(event.sender));
 
-  ipcMain.handle("catamorphic:theme-get", () => theme.resolved());
+  // --- window ↔ profile ---
+
+  ipcMain.handle("catamorphic:window-profile", (event) =>
+    windows.profileFor(event.sender),
+  );
+
+  // In-place switch (empty workspace): rebind the window, then the renderer
+  // refetches all profile-scoped state under its full-surface fade.
+  ipcMain.handle(
+    "catamorphic:window-set-profile",
+    (event, profileId: string) => {
+      windows.assign(event.sender, profileId);
+      return windows.profileFor(event.sender);
+    },
+  );
+
+  // Occupied workspace: the profile opens in its own window instead.
+  ipcMain.handle(
+    "catamorphic:open-profile-window",
+    (_event, profileId: string) => {
+      windows.openWindow(profileId);
+    },
+  );
+
+  // --- per-profile config (theme, keybindings) ---
+
+  ipcMain.handle("catamorphic:keybindings-get", (event) =>
+    storesFor(event).keybindings.load(),
+  );
+
+  ipcMain.handle("catamorphic:theme-get", (event) =>
+    storesFor(event).theme.resolved(),
+  );
 
   ipcMain.handle("catamorphic:theme-presets", () =>
     THEME_PRESETS.map(({ id, label, colors }) => ({ id, label, colors })),
   );
 
   // Saving triggers the file watcher, which syncs the native window
-  // background and broadcasts the resolved theme to every window.
+  // background and broadcasts the resolved theme to the profile's windows.
   ipcMain.handle(
     "catamorphic:theme-set",
     (event, input: unknown): ResolvedTheme => {
+      const store = storesFor(event).theme;
       const next = normalizeTheme(input);
-      theme.save(next);
+      store.save(next);
       const resolved = resolveTheme(next);
       // Apply to the calling window synchronously so the UI can't flash
       // between the click and the watcher's debounce.
@@ -76,20 +112,264 @@ export function registerIpcHandlers(
     },
   );
 
-  ipcMain.handle("catamorphic:theme-file", () => theme.file);
+  ipcMain.handle(
+    "catamorphic:theme-file",
+    (event) => storesFor(event).theme.file,
+  );
 
   // Saving triggers the same file watcher that external edits do, which
-  // rebuilds the menu and broadcasts the change to windows.
+  // rebuilds the menu and broadcasts the change to the profile's windows.
   ipcMain.handle(
     "catamorphic:keybindings-set",
-    (_event, input: unknown): Keybindings => {
+    (event, input: unknown): Keybindings => {
+      const store = storesFor(event).keybindings;
       const next = normalizeKeybindings(input);
-      keybindings.save(next);
+      store.save(next);
       return next;
     },
   );
 
-  ipcMain.handle("catamorphic:keybindings-file", () => keybindings.file);
+  ipcMain.handle(
+    "catamorphic:keybindings-file",
+    (event) => storesFor(event).keybindings.file,
+  );
+
+  // --- per-profile agents ---
+
+  const agentsSnapshot = (store: AgentsStore): AgentsSnapshot => ({
+    agents: store.list().map(toPublicAgent),
+    defaultAgentId: store.defaultAgentId() ?? null,
+  });
+
+  const agentsChanged = (
+    event: Electron.IpcMainInvokeEvent,
+    store: AgentsStore,
+  ) => {
+    const profileId = windows.profileFor(event.sender);
+    for (const window of windows.windowsFor(profileId)) {
+      window.webContents.send(
+        "catamorphic:agents-changed",
+        agentsSnapshot(store),
+      );
+    }
+    // Chat affordances across all windows key off "any agent configured".
+    state.broadcast("catamorphic:server-changed", {
+      url: state.current?.url ?? null,
+      hasCodingAgent: state.current?.hasCodingAgent ?? false,
+    });
+  };
+
+  ipcMain.handle("catamorphic:agents-list", (event) =>
+    agentsSnapshot(storesFor(event).agents),
+  );
+
+  ipcMain.handle(
+    "catamorphic:agents-create",
+    (event, input: CreateAgentInput) => {
+      const store = storesFor(event).agents;
+      const agent = store.create(input);
+      agentsChanged(event, store);
+      return toPublicAgent(agent);
+    },
+  );
+
+  ipcMain.handle(
+    "catamorphic:agents-update",
+    (event, id: string, patch: UpdateAgentInput) => {
+      const store = storesFor(event).agents;
+      const agent = store.update(id, patch);
+      agentsChanged(event, store);
+      return agent ? toPublicAgent(agent) : null;
+    },
+  );
+
+  ipcMain.handle("catamorphic:agents-remove", (event, id: string) => {
+    const store = storesFor(event).agents;
+    const removed = store.remove(id);
+    if (removed) agentsChanged(event, store);
+    return removed;
+  });
+
+  ipcMain.handle("catamorphic:agents-set-default", (event, id: string) => {
+    const store = storesFor(event).agents;
+    store.setDefault(id);
+    agentsChanged(event, store);
+  });
+
+  // OpenRouter's public catalog: feeds the searchable model selector and
+  // reports the current best free model (nothing hardcoded app-side).
+  ipcMain.handle("catamorphic:openrouter-models", async () => {
+    const models = await fetchOpenRouterModels();
+    return { models, bestFreeModelId: bestFreeModelId(models) ?? null };
+  });
+
+  // Local CLI setup detection for the agent wizard: does this machine
+  // already have a Claude Code / Codex login the `local` auth mode can
+  // inherit? (E2E reports both present so wizard flows stay scripted.)
+  ipcMain.handle("catamorphic:agent-setup-status", () => {
+    if (process.env.CATAMORPHIC_E2E_FAKE_AGENT === "1") {
+      return { claudeCode: true, codex: true };
+    }
+    const home = app.getPath("home");
+    return {
+      claudeCode: [
+        path.join(home, ".claude", ".credentials.json"),
+        path.join(home, ".claude.json"),
+      ].some((file) => fs.existsSync(file)),
+      codex: fs.existsSync(path.join(home, ".codex", "auth.json")),
+    };
+  });
+
+  // Supported models for one agent, resolved live per harness (Claude
+  // Code's own catalog, `codex debug models`, provider /v1/models).
+  ipcMain.handle("catamorphic:agent-models", async (event, id: string) => {
+    const agent = storesFor(event).agents.get(id);
+    if (!agent) return { models: [] };
+    try {
+      return {
+        models: await listAgentModels(agent, {
+          agentHome,
+          codexBinary: resolveCodexBinary,
+        }),
+      };
+    } catch (cause) {
+      console.warn("[desktop] model listing failed:", cause);
+      return { models: [] };
+    }
+  });
+
+  // --- account login for host harnesses ---
+  // Each account-auth agent owns a private home dir (CLAUDE_CONFIG_DIR /
+  // CODEX_HOME), so two agents on one harness can hold different accounts.
+
+  const agentHome = (agentId: string): string => {
+    const dir = path.join(paths.agentHomesDir, agentId);
+    fs.mkdirSync(dir, { recursive: true });
+    return dir;
+  };
+
+  ipcMain.handle("catamorphic:agent-login-status", (event, id: string) => {
+    const agent = storesFor(event).agents.get(id);
+    if (!agent) return false;
+    if (agent.auth === "api-key" || agent.harness === "ai-sdk") {
+      return agent.apiKey !== null;
+    }
+    // `local` reads the machine's own CLI home; `account` the agent's.
+    const home =
+      agent.auth === "local"
+        ? agent.harness === "codex"
+          ? path.join(app.getPath("home"), ".codex")
+          : path.join(app.getPath("home"), ".claude")
+        : path.join(paths.agentHomesDir, id);
+    const credentialFiles =
+      agent.harness === "codex"
+        ? [path.join(home, "auth.json")]
+        : [path.join(home, ".credentials.json")];
+    return credentialFiles.some((file) => fs.existsSync(file));
+  });
+
+  ipcMain.handle("catamorphic:agent-login", async (event, id: string) => {
+    const store = storesFor(event).agents;
+    const agent = store.get(id);
+    if (agent === undefined || agent.auth === "api-key") {
+      return { started: false, error: "This agent authenticates with a key" };
+    }
+
+    // E2E: logins would open browsers/terminals — stamp a fake credential
+    // so onboarding flows run end to end without leaving the machine.
+    if (process.env.CATAMORPHIC_E2E_FAKE_AGENT === "1") {
+      if (agent.harness === "ai-sdk") {
+        store.update(id, { apiKey: "sk-or-e2e-fake" });
+        agentsChanged(event, store);
+      }
+      // Deferred so the renderer's agentLogin() call resolves (and the
+      // wizard registers the pending agent) before completion lands —
+      // real logins always take longer than the invoke round-trip.
+      setTimeout(() => {
+        state.broadcast("catamorphic:agent-login-finished", {
+          agentId: id,
+          ok: true,
+        });
+      }, 50);
+      return { started: true };
+    }
+
+    // Built-in agent on OpenRouter: browser PKCE — the scoped key lands in
+    // the agent config, so the user never pastes one.
+    if (agent.harness === "ai-sdk") {
+      if (agent.provider !== "openrouter") {
+        return { started: false, error: "This provider uses an API key" };
+      }
+      void openRouterPkceLogin((url) => void shell.openExternal(url))
+        .then((key) => {
+          store.update(id, { apiKey: key });
+          agentsChanged(event, store);
+          state.broadcast("catamorphic:agent-login-finished", {
+            agentId: id,
+            ok: true,
+          });
+        })
+        .catch((cause) => {
+          console.warn("[desktop] OpenRouter sign-in failed:", cause);
+          state.broadcast("catamorphic:agent-login-finished", {
+            agentId: id,
+            ok: false,
+          });
+        });
+      return { started: true };
+    }
+    const home = agentHome(id);
+
+    if (agent.harness === "codex") {
+      // The Codex CLI runs the whole OAuth dance itself: local callback
+      // server + browser hand-off; the process exits when login completes.
+      const binary = resolveCodexBinary();
+      if (!binary) {
+        return { started: false, error: "Codex CLI binary not found" };
+      }
+      const child = spawn(binary, ["login"], {
+        // `local` signs into ~/.codex — shared with the user's own CLI.
+        env:
+          agent.auth === "account"
+            ? { ...process.env, CODEX_HOME: home }
+            : { ...process.env },
+        stdio: ["ignore", "pipe", "pipe"],
+      });
+      let opened = false;
+      const watchForUrl = (chunk: Buffer) => {
+        const match = /https:\/\/\S+/.exec(chunk.toString());
+        if (match && !opened) {
+          opened = true;
+          void shell.openExternal(match[0]);
+        }
+      };
+      child.stdout.on("data", watchForUrl);
+      child.stderr.on("data", watchForUrl);
+      child.on("exit", (code) => {
+        state.broadcast("catamorphic:agent-login-finished", {
+          agentId: id,
+          ok: code === 0,
+        });
+      });
+      return { started: true };
+    }
+
+    // Claude Code's login is an interactive TUI — hand it to the user's
+    // terminal (with a private config dir only for isolated accounts).
+    const command =
+      agent.auth === "account"
+        ? `CLAUDE_CONFIG_DIR='${home}' claude /login`
+        : "claude /login";
+    if (process.platform === "darwin") {
+      const script = `tell application "Terminal"
+  activate
+  do script "${command.replace(/"/g, '\\"')}"
+end tell`;
+      spawn("osascript", ["-e", script], { stdio: "ignore" });
+      return { started: true, command };
+    }
+    return { started: false, command };
+  });
 
   ipcMain.handle("catamorphic:server-state", () => ({
     url: state.current?.url ?? null,
@@ -309,32 +589,35 @@ export function registerIpcHandlers(
       return { id: project.id, name: project.name };
     },
   );
+}
 
-  ipcMain.handle(
-    "catamorphic:settings-get",
-    (): PublicSettings => toPublicSettings(store.load()),
-  );
-
-  ipcMain.handle(
-    "catamorphic:settings-set",
-    async (_event, input: UpdateSettingsInput): Promise<PublicSettings> => {
-      const previous = store.load();
-      const next: DesktopSettings = {
-        provider: input.provider,
-        model: input.model?.trim() || DEFAULT_MODELS[input.provider],
-        apiKey:
-          input.apiKey === undefined
-            ? previous.apiKey
-            : input.apiKey?.trim() || null,
-      };
-      store.save(next);
-
-      const server = await state.restart(next);
-      state.broadcast("catamorphic:server-changed", {
-        url: server.url,
-        hasCodingAgent: server.hasCodingAgent,
-      });
-      return toPublicSettings(next);
-    },
-  );
+/**
+ * The Codex SDK vendors the native CLI per platform under
+ * `@openai/codex/vendor/<rust-target>/bin/codex` — resolve it so login runs
+ * the exact binary the agent will use, with no PATH assumptions.
+ */
+function resolveCodexBinary(): string | null {
+  const targets: Record<string, string> = {
+    "darwin-arm64": "aarch64-apple-darwin",
+    "darwin-x64": "x86_64-apple-darwin",
+    "linux-x64": "x86_64-unknown-linux-musl",
+    "linux-arm64": "aarch64-unknown-linux-musl",
+    "win32-x64": "x86_64-pc-windows-msvc",
+  };
+  const target = targets[`${process.platform}-${process.arch}`];
+  if (!target) return null;
+  try {
+    const require = createRequire(import.meta.url);
+    const pkg = require.resolve("@openai/codex/package.json");
+    const binary = path.join(
+      path.dirname(pkg),
+      "vendor",
+      target,
+      "bin",
+      process.platform === "win32" ? "codex.exe" : "codex",
+    );
+    return fs.existsSync(binary) ? binary : null;
+  } catch {
+    return null;
+  }
 }

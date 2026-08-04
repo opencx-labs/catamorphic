@@ -20,14 +20,23 @@ const KeybindingsContext = createContext<Keybindings>(DEFAULT_KEYBINDINGS);
 export function KeybindingsProvider({ children }: { children: ReactNode }) {
   const [bindings, setBindings] = useState<Keybindings>(DEFAULT_KEYBINDINGS);
   useEffect(() => {
-    void desktopApi
-      .getKeybindings()
-      .then((loaded) =>
-        setBindings({ ...DEFAULT_KEYBINDINGS, ...loaded } as Keybindings),
-      );
-    return desktopApi.onKeybindingsChanged((changed) =>
+    const load = () =>
+      void desktopApi
+        .getKeybindings()
+        .then((loaded) =>
+          setBindings({ ...DEFAULT_KEYBINDINGS, ...loaded } as Keybindings),
+        );
+    load();
+    const unsubscribe = desktopApi.onKeybindingsChanged((changed) =>
       setBindings({ ...DEFAULT_KEYBINDINGS, ...changed } as Keybindings),
     );
+    // In-place profile switches swap this window's keybindings file with no
+    // broadcast — App signals a refetch instead.
+    window.addEventListener("catamorphic:profile-refetch", load);
+    return () => {
+      unsubscribe();
+      window.removeEventListener("catamorphic:profile-refetch", load);
+    };
   }, []);
   return (
     <KeybindingsContext.Provider value={bindings}>

@@ -11,13 +11,22 @@ export {
 export { AgentContextService } from "./services/agent-context-service.js";
 export {
   type AgentMessage,
+  AgentNotConfiguredError,
   type AgentSession,
   AgentSessionClosedError,
   type AgentSessionDetail,
   AgentSessionNotFoundError,
   AgentSessionsService,
+  AgentTurnInProgressError,
   type SyncedFileChange,
 } from "./services/agent-sessions-service.js";
+export {
+  type AgentExecutionMode,
+  type CodingAgentRegistry,
+  isCodingAgentRegistry,
+  type RegisteredCodingAgent,
+  singleAgentRegistry,
+} from "./services/coding-agent-registry.js";
 export {
   AppAccessDeniedError,
   assertProjectSurface,

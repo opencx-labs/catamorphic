@@ -72,6 +72,70 @@ export const BUILTIN_ACTIONS = [
     defaultBinding: "Cmd+W",
     keywords: ["close", "tab", "quit", "dismiss"],
   },
+  {
+    id: "setup-agent",
+    label: "Set up a new agent…",
+    description:
+      "open the agent setup wizard (Claude Code, Codex, API key, or free models)",
+    defaultBinding: null,
+    keywords: [
+      "agent",
+      "setup",
+      "add",
+      "new",
+      "claude",
+      "codex",
+      "openrouter",
+      "free",
+    ],
+  },
+  {
+    id: "default-agent",
+    label: "Change default agent…",
+    description: "pick which configured AI agent new chats in this profile use",
+    defaultBinding: null,
+    keywords: [
+      "agent",
+      "default",
+      "model",
+      "claude",
+      "codex",
+      "built-in",
+      "ai",
+    ],
+  },
+  {
+    id: "switch-agent",
+    label: "Switch agent for this chat…",
+    description:
+      "move the focused chat to another configured agent (its next turn runs there)",
+    defaultBinding: null,
+    keywords: ["agent", "switch", "chat", "claude", "codex", "built-in", "ai"],
+  },
+  {
+    id: "switch-model",
+    label: "Change model…",
+    description:
+      "change the model of the focused chat's agent, or the default agent when no chat is focused",
+    defaultBinding: null,
+    keywords: ["model", "switch", "llm", "openrouter", "claude", "gpt", "free"],
+  },
+  {
+    id: "change-effort",
+    label: "Change model effort…",
+    description:
+      "set reasoning effort for the focused chat, or the default agent when no chat is focused",
+    defaultBinding: null,
+    keywords: [
+      "effort",
+      "reasoning",
+      "thinking",
+      "model",
+      "low",
+      "medium",
+      "high",
+    ],
+  },
 ] as const satisfies readonly ActionDefinition[];
 
 /** Union of built-in action ids ("new-tab" | "command-palette" | …). */

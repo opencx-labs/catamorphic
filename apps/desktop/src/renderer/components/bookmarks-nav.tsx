@@ -1,4 +1,9 @@
-import { Bookmark as BookmarkIcon, ChevronRight, Folder, Pin } from "lucide-react";
+import {
+  Bookmark as BookmarkIcon,
+  ChevronRight,
+  Folder,
+  Pin,
+} from "lucide-react";
 import { useEffect, useState } from "react";
 import {
   type Bookmark,
@@ -51,8 +56,14 @@ export function BookmarksNav({
       if (!cancelled) setData(loaded);
     });
     const unsubscribe = desktopApi.onBookmarksChanged((change) => {
-      if (change.projectId === projectId && change.profileId === profileId) {
+      if (change.profileId !== profileId) return;
+      if (change.projectId === projectId && change.project) {
         setData({ project: change.project, pinned: change.pinned });
+      } else if (change.projectId === null) {
+        // Profile-wide change (e.g. browser import): pinned only.
+        setData((current) =>
+          current ? { ...current, pinned: change.pinned } : current,
+        );
       }
     });
     return () => {

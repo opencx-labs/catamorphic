@@ -128,6 +128,7 @@ the animation is wrong, not the test.
 | `bubble-in` / `bubble-out` | 200ms | each other |
 | `tab-in` / `tab-out` | 200ms / 180ms | each other (exit snappier) |
 | `fade-in` (modal section swap) | 200ms | height tween |
+| `profile-veil-in` / `profile-veil-out` (in-place profile switch) | 200ms | each other (exact mirror) |
 | `question-in` (ask_user panel) | 260ms | — |
 | `title-change` (rename flash) | 1200ms | **sanctioned exception** — the
   one decorative-adjacent signal (see design log 2026-07-31); allowlisted in
@@ -730,3 +731,72 @@ Patterned on what best-in-class palettes converged on (Chrome omnibox
   its tab focused. Background chat tabs no longer count as read.
 - Covered by "chat tab activity indicators" in `e2e/app.e2e.ts` and the
   kill-and-relaunch flow in `e2e/recovery.e2e.ts`.
+
+### 2026-08-04 — Profiles own everything; agents are per-profile; harnesses are pluggable
+
+- **A profile is the whole environment.** Beyond the Chromium partition,
+  projects, history, and vault it always owned, a profile now owns its
+  theme, keyboard shortcuts, sidebar layout, and AI agent roster — all in
+  `profiles/<id>/` (`theme.json`, `keybindings.json`, `sidebar.js`,
+  `agents.json`). Switching profile switches the entire feel of the app,
+  which is the point: work-me and home-me are different people. Legacy
+  root-level config files migrate into the default profile once; the
+  default profile is named "Default Profile" and is renameable like any
+  other (pencil in the profile menu).
+- **Switching follows workspace occupancy.** An empty workspace (no tabs,
+  no browsers, no chats) switches the window in place under a full-window
+  veil — `profile-veil-in`/`-out`, 200ms exact mirrors; the veil is opaque
+  at the midpoint so the swap beneath (theme refetch, sidebar, agents,
+  projects) is never visible. The sequence is driven by animationend plus a clock fallback — occluded windows throttle animation events, and a stuck opaque veil would be the worst possible failure mode. An occupied workspace means real work: it
+  stays put, and the profile opens in its own window (`createWindow` now
+  takes a profile; main keeps a webContents→profile map so per-profile
+  broadcasts — theme, keybindings, sidebar, agents — reach only that
+  profile's windows, and the app menu follows the focused window).
+- **Agents are named configurations of a harness.** Three harnesses:
+  `ai-sdk` ("Built-in": the sandboxed AI-SDK tool loop with draft
+  sync-back, on an Anthropic, OpenAI, or OpenRouter model),
+  `claude-code` (the Claude Code CLI on this machine), and `codex` (the
+  Codex CLI). A profile can hold several — two Claude Code agents on
+  different accounts and a Codex, say. Account auth isolates credentials
+  per agent through a private home dir (`agent-homes/<id>` as
+  CLAUDE_CONFIG_DIR / CODEX_HOME); API keys encrypt via safeStorage.
+  Host harnesses work directly in the project's folder (their own
+  runtimes provide the isolation: Codex's workspace-write sandbox,
+  Claude Code's permission allowlist); the built-in agent keeps the
+  dev-sandbox + uncommitted-draft flow. Core routes sessions through a
+  `CodingAgentRegistry` resolved live per turn — adding an agent in
+  Settings needs no server restart (ADR 0038).
+- **The palette is where agents are switched.** Three registry commands:
+  "Change default agent…" (profile-wide), "Switch agent for this chat…"
+  (listed only while a chat is focused; the session's next turn runs on
+  the new agent), and "Change model effort…" (focused chat's session, or
+  the default agent when none is focused; low/medium/high maps onto each
+  harness's native reasoning knob). They open palette **pickers** — the
+  same chip vocabulary as the `@` modes, one question per chip, Backspace
+  pops out. Session-scoped commands appearing only when a session is
+  focused is the palette's first context-sensitive visibility rule; the
+  precedent for future scoped commands. Scoped commands also **point at
+  their target while highlighted**: selecting "Switch agent for this
+  chat…" / "Change model effort…" accents the focused dock's border (or
+  the chat's tab), and "Close tab" accents whatever it would close — the
+  same border-color transition the surfaces already own, no new motion.
+- **One setup wizard behind every entry point.** Agent-less profiles get
+  the wizard auto-opened as a real, closable tab (closing it skips setup);
+  starting a chat with no agents summons the same wizard as a modal; and
+  Settings' "Add agent" plus the "Set up a new agent…" palette command
+  open it too. The CLI harnesses default to `local` auth — the machine's
+  existing `claude login` / `codex login` is inherited with zero
+  configuration (Codex offers "Sign in with ChatGPT" when absent); API
+  keys are a separate explicit option, and the zero-friction path is
+  last: "Continue with free models" runs OpenRouter's browser PKCE flow,
+  so the user approves once and never pastes a key. No model ids are pinned in
+  code: an OpenRouter agent with no model resolves to the catalog's
+  current best free model (newest free model with a ≥32k context), and
+  the Settings model field for OpenRouter is a searchable selector over
+  the live catalog with "Best free model (automatic)" as the first row.
+- **Import is "from other browsers", not "from Chrome".** A generic
+  Chromium importer (Chrome, Edge, Brave, Arc, Chromium) reads Local
+  State profiles + Bookmarks files; Settings lets each source profile
+  import into the current profile or become a new Catamorphic profile.
+  Bookmarks land as pinned bookmarks (folders flatten — pinned is the
+  bookmarks-bar analog); re-import is idempotent by URL.

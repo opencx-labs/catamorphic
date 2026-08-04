@@ -8,9 +8,64 @@ export interface ServerInfo {
 const api = {
   getServerState: (): Promise<ServerInfo> =>
     ipcRenderer.invoke("catamorphic:server-state"),
-  getSettings: () => ipcRenderer.invoke("catamorphic:settings-get"),
-  setSettings: (input: unknown) =>
-    ipcRenderer.invoke("catamorphic:settings-set", input),
+
+  // --- window ↔ profile ---
+  windowProfile: (): Promise<string> =>
+    ipcRenderer.invoke("catamorphic:window-profile"),
+  windowSetProfile: (profileId: string): Promise<string> =>
+    ipcRenderer.invoke("catamorphic:window-set-profile", profileId),
+  openProfileWindow: (profileId: string): Promise<void> =>
+    ipcRenderer.invoke("catamorphic:open-profile-window", profileId),
+
+  // --- per-profile agents ---
+  agentsList: (): Promise<unknown> =>
+    ipcRenderer.invoke("catamorphic:agents-list"),
+  agentsCreate: (input: unknown): Promise<unknown> =>
+    ipcRenderer.invoke("catamorphic:agents-create", input),
+  agentsUpdate: (id: string, patch: unknown): Promise<unknown> =>
+    ipcRenderer.invoke("catamorphic:agents-update", id, patch),
+  agentsRemove: (id: string): Promise<boolean> =>
+    ipcRenderer.invoke("catamorphic:agents-remove", id),
+  agentsSetDefault: (id: string): Promise<void> =>
+    ipcRenderer.invoke("catamorphic:agents-set-default", id),
+  agentModels: (id: string): Promise<unknown> =>
+    ipcRenderer.invoke("catamorphic:agent-models", id),
+  agentSetupStatus: (): Promise<{ claudeCode: boolean; codex: boolean }> =>
+    ipcRenderer.invoke("catamorphic:agent-setup-status"),
+  agentLogin: (
+    id: string,
+  ): Promise<{ started: boolean; command?: string; error?: string }> =>
+    ipcRenderer.invoke("catamorphic:agent-login", id),
+  agentLoginStatus: (id: string): Promise<boolean> =>
+    ipcRenderer.invoke("catamorphic:agent-login-status", id),
+  onAgentsChanged: (listener: (data: unknown) => void): (() => void) => {
+    const handler = (_event: unknown, data: unknown) => listener(data);
+    ipcRenderer.on("catamorphic:agents-changed", handler);
+    return () =>
+      ipcRenderer.removeListener("catamorphic:agents-changed", handler);
+  },
+  onAgentLoginFinished: (
+    listener: (result: { agentId: string; ok: boolean }) => void,
+  ): (() => void) => {
+    const handler = (
+      _event: unknown,
+      result: { agentId: string; ok: boolean },
+    ) => listener(result);
+    ipcRenderer.on("catamorphic:agent-login-finished", handler);
+    return () =>
+      ipcRenderer.removeListener("catamorphic:agent-login-finished", handler);
+  },
+
+  // --- OpenRouter catalog (searchable model selector, best-free default) ---
+  openrouterModels: (): Promise<unknown> =>
+    ipcRenderer.invoke("catamorphic:openrouter-models"),
+
+  // --- import from other browsers ---
+  browserImportList: (): Promise<unknown[]> =>
+    ipcRenderer.invoke("catamorphic:browser-import-list"),
+  browserImportRun: (input: unknown): Promise<unknown> =>
+    ipcRenderer.invoke("catamorphic:browser-import-run", input),
+
   devWindow: (action: string, width?: number, height?: number) =>
     ipcRenderer.invoke("catamorphic:dev-window", action, width, height),
   defaultProjectsDir: (): Promise<string> =>
@@ -153,8 +208,10 @@ const api = {
       shift: boolean;
     }) => void,
   ): (() => void) => {
-    const handler = (_event: unknown, payload: Parameters<typeof listener>[0]) =>
-      listener(payload);
+    const handler = (
+      _event: unknown,
+      payload: Parameters<typeof listener>[0],
+    ) => listener(payload);
     ipcRenderer.on("catamorphic:browser-guest-key", handler);
     return () =>
       ipcRenderer.removeListener("catamorphic:browser-guest-key", handler);
@@ -174,11 +231,12 @@ const api = {
     ipcRenderer.invoke("catamorphic:profiles-set-default", id),
   profilesRemove: (id: string): Promise<boolean> =>
     ipcRenderer.invoke("catamorphic:profiles-remove", id),
-  profilesClaimProject: (
-    profileId: string,
-    projectId: string,
-  ): Promise<void> =>
-    ipcRenderer.invoke("catamorphic:profiles-claim-project", profileId, projectId),
+  profilesClaimProject: (profileId: string, projectId: string): Promise<void> =>
+    ipcRenderer.invoke(
+      "catamorphic:profiles-claim-project",
+      profileId,
+      projectId,
+    ),
   profilesForProject: (projectId: string): Promise<unknown> =>
     ipcRenderer.invoke("catamorphic:profiles-for-project", projectId),
   profilesReleaseProject: (projectId: string): Promise<void> =>
@@ -212,14 +270,16 @@ const api = {
   bookmarksGet: (input: {
     projectId: string;
     profileId: string;
-  }): Promise<unknown> => ipcRenderer.invoke("catamorphic:bookmarks-get", input),
+  }): Promise<unknown> =>
+    ipcRenderer.invoke("catamorphic:bookmarks-get", input),
   bookmarksAdd: (input: {
     projectId: string;
     profileId: string;
     label: string;
     url: string;
     folderId?: string;
-  }): Promise<unknown> => ipcRenderer.invoke("catamorphic:bookmarks-add", input),
+  }): Promise<unknown> =>
+    ipcRenderer.invoke("catamorphic:bookmarks-add", input),
   bookmarksAddFolder: (input: {
     projectId: string;
     profileId: string;
@@ -233,12 +293,14 @@ const api = {
     label?: string;
     url?: string;
     folderId?: string | null;
-  }): Promise<void> => ipcRenderer.invoke("catamorphic:bookmarks-update", input),
+  }): Promise<void> =>
+    ipcRenderer.invoke("catamorphic:bookmarks-update", input),
   bookmarksRemove: (input: {
     projectId: string;
     profileId: string;
     id: string;
-  }): Promise<void> => ipcRenderer.invoke("catamorphic:bookmarks-remove", input),
+  }): Promise<void> =>
+    ipcRenderer.invoke("catamorphic:bookmarks-remove", input),
   bookmarksPin: (input: {
     projectId: string;
     profileId: string;
@@ -278,7 +340,9 @@ const api = {
     ipcRenderer.invoke("catamorphic:sidebar-config-source"),
   sidebarConfigReset: (): Promise<void> =>
     ipcRenderer.invoke("catamorphic:sidebar-config-reset"),
-  onSidebarConfigChanged: (listener: (config: unknown) => void): (() => void) => {
+  onSidebarConfigChanged: (
+    listener: (config: unknown) => void,
+  ): (() => void) => {
     const handler = (_event: unknown, config: unknown) => listener(config);
     ipcRenderer.on("catamorphic:sidebar-config-changed", handler);
     return () =>

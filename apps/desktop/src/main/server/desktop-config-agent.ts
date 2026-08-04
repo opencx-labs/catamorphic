@@ -4,28 +4,22 @@ import type {
   ProviderSession,
   SandboxProvider,
   StartSessionOpts,
+  TurnOptions,
 } from "@catamorphic/sandbox";
+import { BUILTIN_ACTIONS } from "../../shared/actions.js";
 import {
   DEFAULT_KEYBINDINGS,
   type Keybindings,
-  type KeybindingsStore,
   normalizeKeybindings,
 } from "../keybindings.js";
-import { BUILTIN_ACTIONS } from "../../shared/actions.js";
-import type { SidebarConfigStore } from "../sidebar-config.js";
-import {
-  normalizeTheme,
-  THEME_PRESETS,
-  THEME_TOKENS,
-  type ThemeStore,
-} from "../theme.js";
+import type { ProfileStores } from "../profile-config.js";
+import { normalizeTheme, THEME_PRESETS, THEME_TOKENS } from "../theme.js";
 
 export const DESKTOP_CONFIG_SKILL_PATH =
   ".agents/skills/configuring-catamorphic-desktop/SKILL.md";
 export const DESKTOP_KEYBINDINGS_WORKSPACE_PATH =
   ".catamorphic/desktop/keybindings.json";
-export const DESKTOP_SIDEBAR_WORKSPACE_PATH =
-  ".catamorphic/desktop/sidebar.js";
+export const DESKTOP_SIDEBAR_WORKSPACE_PATH = ".catamorphic/desktop/sidebar.js";
 export const DESKTOP_THEME_WORKSPACE_PATH = ".catamorphic/desktop/theme.json";
 
 /** Every mirror file staged into (and read back from) the sandbox. */
@@ -44,7 +38,8 @@ description: Change Catamorphic desktop app settings — keyboard shortcuts, the
 # Configuring the Catamorphic desktop app
 
 The user is talking to you from the Catamorphic desktop app. App-level
-settings are user-global (not per project). You change them by editing
+settings belong to the user's current profile (not to a project). You
+change them by editing
 mirror files under \`.catamorphic/desktop/\` in this workspace; the app
 applies your edits the moment your turn ends. No restart needed — tell
 the user the change is live. These mirror files never appear in the
@@ -149,9 +144,10 @@ keep enough contrast with the text tokens.
 
 ## Other app settings
 
-Model provider, model id, and API keys are configured in the app's
-Settings screen — API keys are OS-keychain encrypted and cannot be edited
-from here. If the user asks about those, point them to Settings.
+AI agents (harness, model, effort, API keys, accounts) are configured in
+the app's Settings screen or the command palette — credentials are
+OS-keychain encrypted and cannot be edited from here. If the user asks
+about those, point them to Settings.
 `;
 
 /**
@@ -164,19 +160,25 @@ from here. If the user asks about those, point them to Settings.
  */
 export class DesktopConfigAgent implements CodingAgentProvider {
   readonly name: string;
+  /**
+   * Session → owning project, captured at startSession so later turns can
+   * resolve the right profile's stores. Sessions resumed after a host
+   * restart are absent — those fall back to the default profile's stores.
+   */
+  private readonly sessionProjects = new Map<string, string>();
 
   constructor(
     private readonly inner: CodingAgentProvider,
     private readonly sandboxProvider: SandboxProvider,
-    private readonly keybindings: KeybindingsStore,
-    private readonly sidebar: SidebarConfigStore,
-    private readonly theme: ThemeStore,
+    /** Config is per profile; the session's project names the profile. */
+    private readonly storesFor: (projectId?: string) => ProfileStores,
   ) {
     this.name = inner.name;
   }
 
   async startSession(opts: StartSessionOpts): Promise<ProviderSession> {
     const session = await this.inner.startSession(opts);
+    this.sessionProjects.set(session.providerSessionId, opts.projectId);
     await this.stage(session);
     return session;
   }
@@ -188,10 +190,11 @@ export class DesktopConfigAgent implements CodingAgentProvider {
   async *sendMessage(
     session: ProviderSession,
     message: string,
+    opts?: TurnOptions,
   ): AsyncIterable<AgentEvent> {
     await this.stage(session);
     try {
-      yield* this.inner.sendMessage(session, message);
+      yield* this.inner.sendMessage(session, message, opts);
     } finally {
       // Runs before core's draft sync (we're still inside its for-await),
       // so applied mirrors are committed and never become project drafts —
@@ -201,23 +204,31 @@ export class DesktopConfigAgent implements CodingAgentProvider {
   }
 
   dispose(session: ProviderSession): Promise<void> {
+    this.sessionProjects.delete(session.providerSessionId);
     return this.inner.dispose(session);
   }
 
+  private stores(session: ProviderSession): ProfileStores {
+    return this.storesFor(this.sessionProjects.get(session.providerSessionId));
+  }
+
   private async stage(session: ProviderSession): Promise<void> {
+    // Host-execution sessions have no sandbox to stage mirrors into.
+    if (!session.sandboxId) return;
     try {
+      const stores = this.stores(session);
       await this.sandboxProvider.uploadFiles(
         session.sandboxId,
         {
           [DESKTOP_CONFIG_SKILL_PATH]: DESKTOP_CONFIG_SKILL,
           [DESKTOP_KEYBINDINGS_WORKSPACE_PATH]: `${JSON.stringify(
-            this.keybindings.load(),
+            stores.keybindings.load(),
             null,
             2,
           )}\n`,
-          [DESKTOP_SIDEBAR_WORKSPACE_PATH]: this.sidebar.read(),
+          [DESKTOP_SIDEBAR_WORKSPACE_PATH]: stores.sidebar.read(),
           [DESKTOP_THEME_WORKSPACE_PATH]: `${JSON.stringify(
-            this.theme.load(),
+            stores.theme.load(),
             null,
             2,
           )}\n`,
@@ -233,6 +244,7 @@ export class DesktopConfigAgent implements CodingAgentProvider {
 
   /** Pull the agent's mirror edits (if any) into the real config. */
   private async applyEdits(session: ProviderSession): Promise<void> {
+    if (!session.sandboxId) return;
     // Each mirror applies independently: a broken sidebar edit must not
     // swallow a valid keybindings edit made in the same turn.
     await this.applyKeybindings(session);
@@ -253,11 +265,12 @@ export class DesktopConfigAgent implements CodingAgentProvider {
         session.sandboxId,
         `${session.workingDirectory}/${DESKTOP_KEYBINDINGS_WORKSPACE_PATH}`,
       );
+      const store = this.stores(session).keybindings;
       const next = normalizeKeybindings(JSON.parse(raw));
-      if (!sameBindings(next, this.keybindings.load())) {
+      if (!sameBindings(next, store.load())) {
         // save() rewrites keybindings.json; the file watcher applies it
         // live (menu rebuild + renderer broadcast).
-        this.keybindings.save(next);
+        store.save(next);
       }
     } catch (cause) {
       console.warn("[desktop] Failed to apply keybindings edits:", cause);
@@ -270,15 +283,16 @@ export class DesktopConfigAgent implements CodingAgentProvider {
         session.sandboxId,
         `${session.workingDirectory}/${DESKTOP_SIDEBAR_WORKSPACE_PATH}`,
       );
-      if (source.trim() === "" || source === this.sidebar.read()) return;
+      const store = this.stores(session).sidebar;
+      if (source.trim() === "" || source === store.read()) return;
       // Refuse a config that doesn't evaluate to sections: writing it would
       // silently collapse the user's sidebar to the defaults.
-      if (!this.sidebar.isValidSource(source)) {
+      if (!store.isValidSource(source)) {
         console.warn("[desktop] Ignoring invalid sidebar.js from agent");
         return;
       }
       // write() triggers the file watcher, which reloads and broadcasts.
-      this.sidebar.write(source);
+      store.write(source);
     } catch (cause) {
       console.warn("[desktop] Failed to apply sidebar edits:", cause);
     }
@@ -290,11 +304,12 @@ export class DesktopConfigAgent implements CodingAgentProvider {
         session.sandboxId,
         `${session.workingDirectory}/${DESKTOP_THEME_WORKSPACE_PATH}`,
       );
+      const store = this.stores(session).theme;
       const next = normalizeTheme(JSON.parse(raw));
-      if (JSON.stringify(next) !== JSON.stringify(this.theme.load())) {
+      if (JSON.stringify(next) !== JSON.stringify(store.load())) {
         // save() rewrites theme.json; the file watcher applies it live
         // (window background + renderer broadcast).
-        this.theme.save(next);
+        store.save(next);
       }
     } catch (cause) {
       console.warn("[desktop] Failed to apply theme edits:", cause);
