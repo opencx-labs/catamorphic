@@ -12,5 +12,9 @@ export default defineConfig({
     fileParallelism: false,
     testTimeout: 120_000,
     hookTimeout: 120_000,
+    // Motion tests sample computed styles on a 25ms cadence; a loaded
+    // machine (cold build in the same run) can starve the sampler past
+    // an animation. One retry absorbs that without hiding real breaks.
+    retry: 1,
   },
 });

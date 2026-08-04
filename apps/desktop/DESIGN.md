@@ -674,3 +674,33 @@ memory of *why* the app is the way it is.
   alternative — a live registry populated by hook registration — was
   rejected because main-process consumers (menu accelerators, agent
   docs) can't read a renderer-side registry.
+
+### 2026-08-03 — Palette intent: implicit ranking + explicit modes
+Patterned on what best-in-class palettes converged on (Chrome omnibox
+@-shortcuts, Raycast, VS Code quick open, cmdk):
+
+- **Implicit intent is ranking-only, never rerouting.** A full-string
+  URL-shaped input (scheme / domain+path / localhost) pins "Open <url>"
+  to the first row; long (>60 chars) or multiline input promotes "Send
+  to agent" to first. The other options remain right below — the palette
+  suggests, the user decides. (Warp is the only tool that auto-reroutes
+  natural language, and it needs a denylist + off switch to survive;
+  Notion/Chrome offer AI as a row instead.)
+- **Explicit modes are chips** (`PALETTE_MODES`: `agent`, `web`). Typing
+  `@agent`/`agent` + **Tab or Space** commits the mode: the trigger text
+  becomes an accent chip left of the input, the input clears and its
+  placeholder switches, and everything typed feeds only that mode.
+  Both commit keys deliberately — Chrome removed Space-to-activate in
+  2021 and rolled it back after community outrage.
+- **Backspace on empty input pops the chip; Escape closes** (the cmdk
+  convention: `Escape || (Backspace && !search)` pops one level).
+- **`@` on empty/partial input lists the modes as selectable rows**
+  (Chrome's @-shortcut pills) — the zero-state IS the discoverability
+  surface: click a row or keep typing the trigger.
+- **`>` filters to command rows only** (VS Code quick-open muscle
+  memory; prefix stays in the text, one-shot).
+- **A persistent footer hint bar** (Raycast pattern) advertises `@ modes`
+  and `> commands` with keycaps, swapping to `⌫ exit mode` while a chip
+  is active. No onboarding tooltips — the footer plus zero-state rows
+  teach by being visible at the moment of use.
+- Covered by the "palette intent" group in `e2e/app.e2e.ts`.

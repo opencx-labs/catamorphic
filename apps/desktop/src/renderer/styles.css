@@ -166,6 +166,56 @@ kbd {
   animation: bubble-out 200ms cubic-bezier(0.2, 0, 0, 1) forwards;
 }
 
+/* Palette mode chip commit: width reveal + fade, swallowing the flex gap
+   while collapsed (same negative-margin trick as bubble-out/tab-out) */
+@keyframes chip-in {
+  from {
+    max-width: 0;
+    padding-left: 0;
+    padding-right: 0;
+    margin-right: -8px;
+    transform: scale(0.9);
+    opacity: 0;
+  }
+  to {
+    max-width: 200px;
+    padding-left: 6px;
+    padding-right: 8px;
+    margin-right: 0;
+    transform: scale(1);
+    opacity: 1;
+  }
+}
+
+.animate-chip-in {
+  animation: chip-in 200ms cubic-bezier(0.2, 0, 0, 1);
+}
+
+/* Chip pop (Backspace on empty input): chip-in reversed; forwards so the
+   element holds the collapsed frame until React unmounts on animationend */
+@keyframes chip-out {
+  from {
+    max-width: 200px;
+    padding-left: 6px;
+    padding-right: 8px;
+    margin-right: 0;
+    transform: scale(1);
+    opacity: 1;
+  }
+  to {
+    max-width: 0;
+    padding-left: 0;
+    padding-right: 0;
+    margin-right: -8px;
+    transform: scale(0.9);
+    opacity: 0;
+  }
+}
+
+.animate-chip-out {
+  animation: chip-out 200ms cubic-bezier(0.2, 0, 0, 1) forwards;
+}
+
 /* Chat dock rise-in, matching its collapse transition in reverse */
 @keyframes dock-in {
   from {

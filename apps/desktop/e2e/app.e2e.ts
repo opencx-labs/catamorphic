@@ -181,6 +181,116 @@ describe("chat flows", () => {
   });
 });
 
+describe("palette intent", () => {
+  // Prefer the focused palette input (Cmd+P focuses the overlay's); fall
+  // back to any non-inert one. Blind Cmd+P would TOGGLE an already-open
+  // overlay closed, so ensurePalette checks before pressing.
+  const paletteInput = `(
+    $$('textarea[aria-label="Search commands, pages, and more"]')
+      .find((el) => document.activeElement === el) ??
+    $$('textarea[aria-label="Search commands, pages, and more"]')
+      .find((el) => !el.closest('[inert]'))
+  )`;
+  const ensurePalette = async () => {
+    await run(
+      `if (!(${paletteInput})) pressKey('p', { metaKey: true }); return true;`,
+    );
+    await runWait(`return !!(${paletteInput});`, { label: "palette open" });
+  };
+  const paletteKey = (key: string, mods = "{}") => `
+    const input = ${paletteInput};
+    input.dispatchEvent(new KeyboardEvent('keydown',
+      { key: '${key}', bubbles: true, cancelable: true, ...${mods} }));
+    return true;
+  `;
+
+  it("opens the palette", async () => {
+    await ensurePalette();
+  });
+
+  // All lookups scoped to the input's own dialog — the New Tab palette
+  // and the overlay can both be mounted.
+  const inDialog = (selector: string) =>
+    `[...(${paletteInput}).closest('[role="dialog"]').querySelectorAll('${selector}')]`;
+
+  it("puts Open <url> first for URL-shaped input", async () => {
+    await run(
+      `setReactValue(${paletteInput}, 'example.com/docs'); return true;`,
+    );
+    await runWait(
+      `return ${inDialog('[role="option"]')}[0]?.textContent.includes('Open example.com/docs');`,
+      { label: "open-url row first" },
+    );
+  });
+
+  it("lists modes on @ and commits a chip with Tab", async () => {
+    await run(`setReactValue(${paletteInput}, '@'); return true;`);
+    await runWait(
+      `const options = ${inDialog('[role="option"]')};
+       return options.some((el) => el.textContent.includes('Ask the agent')) &&
+              options.some((el) => el.textContent.includes('Search the web'));`,
+      { label: "@ zero-state mode rows" },
+    );
+    await run(`setReactValue(${paletteInput}, '@agent'); return true;`);
+    await run(paletteKey("Tab"));
+    await runWait(
+      `const chip = ${inDialog('[data-testid="palette-mode-chip"]')}[0];
+       return !!chip && chip.textContent.includes('Ask agent') &&
+              (${paletteInput}).value === '';`,
+      { label: "agent chip committed, input cleared" },
+    );
+  });
+
+  it("in agent mode, Enter sends the message to a new chat", async () => {
+    await run(
+      `setReactValue(${paletteInput}, 'hello from palette mode'); return true;`,
+    );
+    await runWait(
+      `return ${inDialog('[role="option"]')}[0]?.textContent.includes('Ask agent: hello from palette mode');`,
+      { label: "agent mode row reflects input" },
+    );
+    await run(paletteKey("Enter"));
+    await runWait(
+      `return timelineMessages().some((m) => m.text.includes('You said: hello from palette mode'));`,
+      { timeoutMs: 30_000, label: "palette message reached the agent" },
+    );
+  });
+
+  it("Backspace on empty input pops the mode chip", async () => {
+    await ensurePalette();
+    await run(`setReactValue(${paletteInput}, '@web'); return true;`);
+    await run(paletteKey("Tab"));
+    await runWait(
+      `return ${inDialog('[data-testid="palette-mode-chip"]')}.length === 1;`,
+      { label: "web chip committed" },
+    );
+    await run(paletteKey("Backspace"));
+    await runWait(
+      `return ${inDialog('[data-testid="palette-mode-chip"]')}.length === 0;`,
+      { label: "chip popped" },
+    );
+  });
+
+  it("> filters to command rows only, and the footer shows hints", async () => {
+    await ensurePalette();
+    await run(`setReactValue(${paletteInput}, '>'); return true;`);
+    await runWait(
+      `const options = ${inDialog('[role="option"]')};
+       return options.length > 0 &&
+              options.some((el) => el.textContent.includes('Toggle sidebar')) &&
+              !options.some((el) => el.textContent.includes('Settings'));`,
+      { label: "> shows commands, hides navigate rows" },
+    );
+    const footer = await run<boolean>(
+      `const footer = ${inDialog('[data-testid="palette-footer"]')}[0];
+       return !!footer && footer.textContent.includes('modes') &&
+              footer.textContent.includes('commands');`,
+    );
+    expect(footer).toBe(true);
+    await run(`pressKey('Escape'); return true;`);
+  });
+});
+
 describe("question flow", () => {
   it("an interview prompt raises the question panel", async () => {
     await run(`pressKey('n', { metaKey: true }); return true;`);

@@ -1,5 +1,6 @@
-import type { AgentSession, ProjectSummary } from "@catamorphic/react/types";
 import { useAgentSessions, useWorkflows } from "@catamorphic/react";
+import type { AgentSession, ProjectSummary } from "@catamorphic/react/types";
+import * as lucide from "lucide-react";
 import {
   ArrowRight,
   Bot,
@@ -17,21 +18,21 @@ import {
   X,
   Zap,
 } from "lucide-react";
-import * as lucide from "lucide-react";
-import {
-  type ActionDefinition,
-  type ActionId,
-  BUILTIN_ACTIONS,
-  type KeybindingAction,
-} from "../../shared/actions.js";
 import {
   type KeyboardEvent,
+  useCallback,
   useEffect,
   useLayoutEffect,
   useMemo,
   useRef,
   useState,
 } from "react";
+import {
+  type ActionDefinition,
+  type ActionId,
+  BUILTIN_ACTIONS,
+  type KeybindingAction,
+} from "../../shared/actions.js";
 import { commandScore } from "../lib/command-score.js";
 import {
   type Bookmark,
@@ -40,8 +41,8 @@ import {
   type SidebarConfig,
 } from "../lib/desktop-api.js";
 import { formatBinding, useKeybindings } from "../lib/keybindings.js";
-import { resolveInput } from "../screens/browser-screen.js";
 import { useApps } from "../screens/app-screen.js";
+import { resolveInput } from "../screens/browser-screen.js";
 import type { WorkspaceTab } from "./workspace-tabs.js";
 
 /**
@@ -83,9 +84,72 @@ interface PaletteItem {
   run: (mode: CommitMode) => void;
 }
 
-const URLISH = /^[\w-]+(\.[\w-]+)+/;
+/** The whole input is URL-shaped: scheme, or domain(+path) with no spaces. */
+const URLISH =
+  /^(https?:\/\/\S+|[\w-]+(\.[\w-]+)+(:\d+)?(\/\S*)?|localhost(:\d+)?(\/\S*)?)$/i;
 const LONG_QUERY = 60;
 const LIST_MAX_HEIGHT = 350;
+
+/**
+ * Explicit intent modes (Chrome omnibox @-shortcuts pattern): typing the
+ * trigger then Tab/Space — or picking the zero-state row — commits the
+ * mode as a chip; the input then only feeds that mode. Backspace on empty
+ * input pops the chip (cmdk convention).
+ */
+export interface PaletteMode {
+  id: "agent" | "web";
+  /** Typed trigger, matched with or without the leading @. */
+  trigger: string;
+  /** Chip text once committed. */
+  chip: string;
+  icon: LucideIcon;
+  /** Zero-state row label + description. */
+  label: string;
+  description: string;
+  placeholder: string;
+}
+
+export const PALETTE_MODES: PaletteMode[] = [
+  {
+    id: "agent",
+    trigger: "agent",
+    chip: "Ask agent",
+    icon: Bot,
+    label: "Ask the agent",
+    description: "Send everything you type to a new chat",
+    placeholder: "Message the agent…",
+  },
+  {
+    id: "web",
+    trigger: "web",
+    chip: "Search web",
+    icon: Search,
+    label: "Search the web",
+    description: "Google search in a browser tab",
+    placeholder: "Search the web…",
+  },
+];
+
+/** "@age" or "age" → the agent mode, once unambiguous. */
+const matchMode = (input: string): PaletteMode | undefined => {
+  const raw = input.startsWith("@") ? input.slice(1) : input;
+  if (raw.length === 0) return undefined;
+  const matches = PALETTE_MODES.filter((mode) =>
+    mode.trigger.startsWith(raw.toLowerCase()),
+  );
+  return matches.length === 1 ? matches[0] : undefined;
+};
+
+function FooterHint({ keycap, label }: { keycap: string; label: string }) {
+  return (
+    <span className="flex items-center gap-1">
+      <kbd className="rounded border border-border bg-bg-inset px-1 py-px font-sans text-[10px]">
+        {keycap}
+      </kbd>
+      {label}
+    </span>
+  );
+}
 
 const hostOf = (url: string): string => {
   try {
@@ -149,9 +213,27 @@ export function CommandPalette({
 }) {
   const [query, setQuery] = useState("");
   const [selectedIndex, setSelectedIndex] = useState(0);
+  const [mode, setMode] = useState<PaletteMode | null>(null);
+  // Exiting chip lingers to play chip-out; removed on animationend.
+  const [exitingMode, setExitingMode] = useState<PaletteMode | null>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const listRef = useRef<HTMLDivElement>(null);
   const sizerRef = useRef<HTMLDivElement>(null);
+
+  const enterMode = useCallback((next: PaletteMode) => {
+    setMode(next);
+    setExitingMode(null);
+    setQuery("");
+    setSelectedIndex(0);
+    inputRef.current?.focus();
+  }, []);
+
+  const exitMode = useCallback(() => {
+    setMode((current) => {
+      if (current) setExitingMode(current);
+      return null;
+    });
+  }, []);
 
   const keybindings = useKeybindings();
 
@@ -207,6 +289,11 @@ export function CommandPalette({
     const timer = setTimeout(() => {
       setQuery("");
       setSelectedIndex(0);
+      setMode(null);
+      setExitingMode(null);
+      // Next open is a fresh first paint — the panel's enter animation
+      // covers it; stale row positions would fade-rise every row.
+      rowTopsRef.current.clear();
     }, 250);
     return () => clearTimeout(timer);
   }, [open]);
@@ -222,20 +309,18 @@ export function CommandPalette({
     () =>
       BUILTIN_ACTIONS.filter(
         (action: ActionDefinition) => !action.hiddenInPalette,
-      ).map(
-        (action) => ({
-          id: `action:${action.id}`,
-          icon: ACTION_ICONS[action.id] ?? Zap,
-          label: action.label,
-          keywords: [...action.keywords],
-          shortcut:
-            action.id in keybindings
-              ? formatBinding(keybindings[action.id as KeybindingAction])
-              : undefined,
-          kind: "action" as const,
-          run: () => actionHandlersRef.current[action.id](),
-        }),
-      ),
+      ).map((action) => ({
+        id: `action:${action.id}`,
+        icon: ACTION_ICONS[action.id] ?? Zap,
+        label: action.label,
+        keywords: [...action.keywords],
+        shortcut:
+          action.id in keybindings
+            ? formatBinding(keybindings[action.id as KeybindingAction])
+            : undefined,
+        kind: "action" as const,
+        run: () => actionHandlersRef.current[action.id](),
+      })),
     [keybindings],
   );
 
@@ -282,8 +367,7 @@ export function CommandPalette({
         detail: "Workflow",
         keywords: [workflow.name, "workflow", "go to", "open"],
         kind: "navigate",
-        run: () =>
-          onOpenTab({ kind: "workflow", name: workflow.name, label }),
+        run: () => onOpenTab({ kind: "workflow", name: workflow.name, label }),
       });
     }
     for (const app of apps) {
@@ -315,7 +399,12 @@ export function CommandPalette({
         icon: Star,
         label: bookmark.label,
         detail: hostOf(bookmark.url),
-        keywords: [bookmark.label, hostOf(bookmark.url), bareUrl(bookmark.url), "bookmark"],
+        keywords: [
+          bookmark.label,
+          hostOf(bookmark.url),
+          bareUrl(bookmark.url),
+          "bookmark",
+        ],
         kind: "navigate",
         run: (mode) => onOpenUrl(bookmark.url, mode),
       });
@@ -345,7 +434,16 @@ export function CommandPalette({
         onOpenTab({ kind: "settings", name: "settings", label: "Settings" }),
     });
     return items;
-  }, [workflows, apps, sessions, bookmarks, sidebarConfig, onOpenTab, onOpenSession, onOpenUrl]);
+  }, [
+    workflows,
+    apps,
+    sessions,
+    bookmarks,
+    sidebarConfig,
+    onOpenTab,
+    onOpenSession,
+    onOpenUrl,
+  ]);
 
   const historyItems = useMemo<PaletteItem[]>(
     () =>
@@ -363,6 +461,83 @@ export function CommandPalette({
 
   const trimmed = query.trim();
   const results = useMemo<PaletteItem[]>(() => {
+    // Chip mode active: the whole input belongs to that mode. One row —
+    // Enter commits it — so typing never drifts into unrelated matches.
+    if (mode) {
+      const modeQuery = trimmed;
+      if (mode.id === "agent") {
+        return [
+          {
+            id: "mode:agent",
+            icon: Bot,
+            label: modeQuery ? `Ask agent: ${modeQuery}` : "Ask the agent",
+            detail: modeQuery ? undefined : "Type a message",
+            keywords: [],
+            kind: "navigate",
+            run: (commitMode) => {
+              if (!modeQuery) return;
+              onSendToAgent(query, commitMode === "tab" ? "tab" : "float");
+            },
+          },
+        ];
+      }
+      return [
+        {
+          id: "mode:web",
+          icon: Search,
+          label: modeQuery
+            ? `Search the web for "${modeQuery}"`
+            : "Search the web",
+          detail: modeQuery ? "Google Search" : "Type a query",
+          keywords: [],
+          kind: "navigate",
+          run: (commitMode) => {
+            if (!modeQuery) return;
+            onOpenUrl(
+              `https://www.google.com/search?q=${encodeURIComponent(modeQuery)}`,
+              commitMode,
+            );
+          },
+        },
+      ];
+    }
+
+    // "@" zero-state: list the modes as selectable rows (Chrome's
+    // @-shortcut pills). Narrows as the trigger is typed.
+    if (trimmed.startsWith("@")) {
+      const partial = trimmed.slice(1).toLowerCase();
+      const modeRows = PALETTE_MODES.filter((candidate) =>
+        candidate.trigger.startsWith(partial),
+      ).map(
+        (candidate): PaletteItem => ({
+          id: `mode-row:${candidate.id}`,
+          icon: candidate.icon,
+          label: candidate.label,
+          detail: candidate.description,
+          shortcut: "Tab",
+          keywords: [],
+          kind: "action",
+          run: () => enterMode(candidate),
+        }),
+      );
+      if (modeRows.length > 0) return modeRows;
+    }
+
+    // ">" filters to command rows only (VS Code quick-open convention).
+    if (trimmed.startsWith(">")) {
+      const commandQuery = trimmed.slice(1).trim();
+      const commands = [...actionItems, ...projectItems, ...profileItems];
+      if (!commandQuery) return commands;
+      return commands
+        .map((item) => ({
+          item,
+          score: commandScore(item.label, commandQuery, item.keywords),
+        }))
+        .filter((entry) => entry.score > 0)
+        .sort((a, b) => b.score - a.score)
+        .map((entry) => entry.item);
+    }
+
     if (!trimmed) {
       return [
         ...actionItems,
@@ -402,7 +577,7 @@ export function CommandPalette({
       kind: "navigate",
       run: (mode) => onSendToAgent(query, mode === "tab" ? "tab" : "float"),
     };
-    const urlish = URLISH.test(trimmed) || /^https?:/i.test(trimmed);
+    const urlish = URLISH.test(trimmed);
     const webItem: PaletteItem | null = multiline
       ? null
       : {
@@ -415,6 +590,11 @@ export function CommandPalette({
           run: (mode) => onOpenUrl(resolveInput(trimmed), mode),
         };
 
+    // A pasted/typed URL is an unambiguous intent: open it. Everything
+    // else (fuzzy matches on the URL's characters) is noise below it.
+    if (urlish && webItem) {
+      return [webItem, ...scored, sendItem];
+    }
     if (scored.length === 0 || multiline || query.length > LONG_QUERY) {
       return [sendItem, ...scored, ...(webItem ? [webItem] : [])];
     }
@@ -422,6 +602,8 @@ export function CommandPalette({
   }, [
     trimmed,
     query,
+    mode,
+    enterMode,
     actionItems,
     projectItems,
     profileItems,
@@ -459,8 +641,11 @@ export function CommandPalette({
     // style writes forces a reflow per row (measured as a multi-hundred-ms
     // main-thread stall on large lists).
     const previousTops = rowTopsRef.current;
+    // First paint of this palette: the panel's own enter animation covers
+    // it; per-row enters on top would double the motion.
+    const firstPass = previousTops.size === 0;
     const nextTops = new Map<string, number>();
-    const rows: { row: HTMLElement; delta: number }[] = [];
+    const rows: { row: HTMLElement; delta: number; entering: boolean }[] = [];
     for (const node of sizer.children) {
       const row = node as HTMLElement;
       const id = row.dataset.itemId;
@@ -469,7 +654,10 @@ export function CommandPalette({
       nextTops.set(id, top);
       const before = previousTops.get(id);
       if (before === undefined) {
-        rows.push({ row, delta: 0 });
+        // A row the previous result set didn't have (paste replaced the
+        // whole list, delete-all brought the zero-state back): fade-rise
+        // it in so full swaps read as motion, not a snap.
+        rows.push({ row, delta: 0, entering: !firstPass });
         continue;
       }
       // A keystroke can land mid-glide; the row's true visual position is
@@ -477,29 +665,35 @@ export function CommandPalette({
       // glide from the raw layout delta would teleport it backwards.
       const matrix = new DOMMatrixReadOnly(getComputedStyle(row).transform);
       const delta = before + matrix.m42 - top;
-      rows.push({ row, delta: Math.round(delta) });
+      rows.push({ row, delta: Math.round(delta), entering: false });
     }
     rowTopsRef.current = nextTops;
-    for (const { row, delta } of rows) {
+    for (const { row, delta, entering } of rows) {
       if (delta) {
         // FLIP: jump to the old position without animating the jump.
         row.style.transition = "none";
         row.style.transform = `translateY(${delta}px)`;
+      } else if (entering) {
+        row.style.transition = "none";
+        row.style.transform = "translateY(4px)";
+        row.style.opacity = "0";
       } else {
         // Back to the class transition (transition-colors) untouched.
         row.style.transition = "";
         row.style.transform = "";
+        row.style.opacity = "";
       }
     }
-    if (rows.some(({ delta }) => delta)) {
+    if (rows.some(({ delta, entering }) => delta || entering)) {
       requestAnimationFrame(() => {
-        for (const { row, delta } of rows) {
-          if (!delta) continue;
+        for (const { row, delta, entering } of rows) {
+          if (!delta && !entering) continue;
           // Colors stay in the list so the selection fade keeps working
           // while (and after) the row glides.
           row.style.transition =
-            "transform 200ms cubic-bezier(0.2, 0, 0, 1), background-color 100ms, color 100ms";
+            "transform 200ms cubic-bezier(0.2, 0, 0, 1), opacity 200ms cubic-bezier(0.2, 0, 0, 1), background-color 100ms, color 100ms";
           row.style.transform = "";
+          row.style.opacity = "";
         }
       });
     }
@@ -508,10 +702,17 @@ export function CommandPalette({
   const selected = Math.min(selectedIndex, Math.max(results.length - 1, 0));
 
   const commit = (item: PaletteItem, withCmd: boolean) => {
+    // Entering a chip mode swaps palette state — the palette stays open.
+    if (item.id.startsWith("mode-row:")) {
+      item.run("replace");
+      return;
+    }
+    // A chip-mode row with nothing typed has nothing to do yet.
+    if (item.id.startsWith("mode:") && trimmed === "") return;
     const inTab = variant === "tab";
-    const mode: CommitMode = inTab || withCmd ? "tab" : "replace";
+    const commitMode: CommitMode = inTab || withCmd ? "tab" : "replace";
     if (variant === "overlay") onClose();
-    item.run(mode);
+    item.run(commitMode);
     // A palette tab is consumed by whatever it opened; pure actions
     // (toggle sidebar, …) leave it in place.
     if (inTab && item.kind === "navigate") onClose();
@@ -532,6 +733,29 @@ export function CommandPalette({
 
   const onInputKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>) => {
     if (event.nativeEvent.isComposing) return;
+    // Tab or Space commits a typed mode trigger into a chip ("@agent" →
+    // [Ask agent]). Both keys, deliberately — Chrome removed Space once
+    // and had to bring it back.
+    if (
+      !mode &&
+      (event.key === "Tab" || event.key === " ") &&
+      trimmed.length > 1 &&
+      (trimmed.startsWith("@") ||
+        matchMode(trimmed)?.trigger === trimmed.toLowerCase())
+    ) {
+      const candidate = matchMode(trimmed);
+      if (candidate) {
+        event.preventDefault();
+        enterMode(candidate);
+        return;
+      }
+    }
+    // Backspace on empty input pops the chip (cmdk convention).
+    if (mode && event.key === "Backspace" && query === "") {
+      event.preventDefault();
+      exitMode();
+      return;
+    }
     if (event.key === "ArrowDown") {
       event.preventDefault();
       moveSelection(1);
@@ -561,13 +785,30 @@ export function CommandPalette({
       window.removeEventListener("keydown", onKeyDown, { capture: true });
   }, [variant, open, onClose]);
 
+  // The rendered chip: the live mode, or the exiting one mid chip-out.
+  const chipMode = mode ?? exitingMode;
+
   const panel = (
     <div
       role="dialog"
       aria-label="Command palette"
       className="pointer-events-auto flex w-full max-w-2xl flex-col overflow-hidden rounded-2xl border border-border bg-bg-raised/95 drop-shadow-2xl backdrop-blur-xl"
     >
-      <div className="mx-3 border-b border-border">
+      <div className="mx-3 flex items-start gap-2 border-b border-border">
+        {chipMode && (
+          <span
+            data-testid={mode ? "palette-mode-chip" : undefined}
+            onAnimationEnd={(event) => {
+              if (event.animationName === "chip-out") setExitingMode(null);
+            }}
+            className={`mt-[9px] flex shrink-0 items-center gap-1.5 overflow-hidden whitespace-nowrap rounded-md bg-accent/15 py-1 pl-1.5 pr-2 text-[12px] font-medium text-accent ${
+              mode ? "animate-chip-in" : "animate-chip-out"
+            }`}
+          >
+            <chipMode.icon className="size-3.5 shrink-0" />
+            {chipMode.chip}
+          </span>
+        )}
         <textarea
           ref={inputRef}
           value={query}
@@ -579,7 +820,7 @@ export function CommandPalette({
           onKeyDown={onInputKeyDown}
           rows={1}
           spellCheck={false}
-          placeholder="Search or ask anything…"
+          placeholder={mode ? mode.placeholder : "Search or ask anything…"}
           aria-label="Search commands, pages, and more"
           className="field-sizing-content max-h-40 w-full resize-none bg-transparent px-1 py-3 text-sm outline-none placeholder:text-fg-faint"
           style={{ outline: "none" }}
@@ -592,48 +833,66 @@ export function CommandPalette({
         aria-label="Results"
       >
         <div ref={sizerRef} className="p-2">
-        {results.map((item, index) => {
-          const Icon = item.icon;
-          const isSelected = index === selected;
-          return (
-            <button
-              key={item.id}
-              data-item-id={item.id}
-              type="button"
-              role="option"
-              aria-selected={isSelected}
-              // mousedown so the textarea's focus never flickers away.
-              onMouseDown={(event) => {
-                event.preventDefault();
-                commit(item, event.metaKey);
-              }}
-              onMouseEnter={() => setSelectedIndex(index)}
-              className={`flex h-9 w-full cursor-pointer items-center gap-2.5 rounded-lg px-2.5 text-left text-[13px] transition-colors duration-100 ${
-                isSelected ? "bg-bg-overlay text-fg" : "text-fg-muted"
-              }`}
-            >
-              <Icon className="size-4 shrink-0 text-fg-faint" />
-              <span className="truncate">{item.label}</span>
-              {item.detail && (
-                <span className="min-w-0 truncate text-[12px] text-fg-faint">
-                  {item.detail}
-                </span>
-              )}
-              {item.shortcut && (
-                <kbd className="ml-auto shrink-0 rounded border border-border bg-bg-inset px-1.5 py-0.5 text-[11px] text-fg-faint">
-                  {item.shortcut}
-                </kbd>
-              )}
-            </button>
-          );
-        })}
-        {results.length === 0 && (
-          <p className="py-6 text-center text-xs text-fg-faint">
-            Nothing here yet.
-          </p>
-        )}
+          {results.map((item, index) => {
+            const Icon = item.icon;
+            const isSelected = index === selected;
+            return (
+              <button
+                key={item.id}
+                data-item-id={item.id}
+                type="button"
+                role="option"
+                aria-selected={isSelected}
+                // mousedown so the textarea's focus never flickers away.
+                onMouseDown={(event) => {
+                  event.preventDefault();
+                  commit(item, event.metaKey);
+                }}
+                onMouseEnter={() => setSelectedIndex(index)}
+                className={`flex h-9 w-full cursor-pointer items-center gap-2.5 rounded-lg px-2.5 text-left text-[13px] transition-colors duration-100 ${
+                  isSelected ? "bg-bg-overlay text-fg" : "text-fg-muted"
+                }`}
+              >
+                <Icon className="size-4 shrink-0 text-fg-faint" />
+                <span className="truncate">{item.label}</span>
+                {item.detail && (
+                  <span className="min-w-0 truncate text-[12px] text-fg-faint">
+                    {item.detail}
+                  </span>
+                )}
+                {item.shortcut && (
+                  <kbd className="ml-auto shrink-0 rounded border border-border bg-bg-inset px-1.5 py-0.5 text-[11px] text-fg-faint">
+                    {item.shortcut}
+                  </kbd>
+                )}
+              </button>
+            );
+          })}
+          {results.length === 0 && (
+            <p className="py-6 text-center text-xs text-fg-faint">
+              Nothing here yet.
+            </p>
+          )}
         </div>
       </div>
+      {/* Footer hint bar (Raycast pattern): the modes' discoverability
+          surface. Backspace hint replaces the entry hints while chipped. */}
+      <footer
+        data-testid="palette-footer"
+        className="flex shrink-0 items-center gap-3 border-t border-border px-4 py-1.5 text-[11px] text-fg-faint"
+      >
+        {mode ? (
+          <FooterHint keycap="⌫" label="exit mode" />
+        ) : (
+          <>
+            <FooterHint keycap="@" label="modes" />
+            <FooterHint keycap=">" label="commands" />
+          </>
+        )}
+        <span className="ml-auto" />
+        <FooterHint keycap="↵" label="open" />
+        <FooterHint keycap="⌘↵" label="new tab" />
+      </footer>
     </div>
   );
 
