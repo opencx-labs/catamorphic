@@ -415,14 +415,19 @@ export function App() {
     [projectId, defaultWorkspaceFor],
   );
 
-  const openTab = (tab: WorkspaceTab) =>
+  const openTab = (tab: WorkspaceTab, mode?: "side") =>
     updateWorkspace((ws) => {
       const key = tabKey(tab);
       const exists = ws.tabs.some((existing) => tabKey(existing) === key);
+      const split =
+        mode === "side" && ws.activeTabKey && ws.activeTabKey !== key
+          ? { leftKey: ws.activeTabKey, rightKey: key, ratio: 0.5 }
+          : null;
       return {
         ...ws,
         tabs: exists ? ws.tabs : [...ws.tabs, tab],
         activeTabKey: key,
+        split,
       };
     });
 
@@ -542,24 +547,31 @@ export function App() {
   );
 
   /** Open a terminal tab; the shell starts in the project folder. */
-  const openTerminalTab = (opts?: { chatLocalId?: string }) => {
+  const openTerminalTab = (opts?: { chatLocalId?: string; side?: boolean }) => {
     const entry: TerminalEntry = {
       localId: crypto.randomUUID(),
       title: "",
       chatLocalId: opts?.chatLocalId,
     };
-    updateWorkspace((ws) => ({
-      ...ws,
-      terminals: [...ws.terminals, entry],
-      activeTabKey: terminalTabKey(entry.localId),
-      split: null,
-    }));
+    updateWorkspace((ws) => {
+      const key = terminalTabKey(entry.localId);
+      return {
+        ...ws,
+        terminals: [...ws.terminals, entry],
+        activeTabKey: key,
+        split:
+          opts?.side && ws.activeTabKey
+            ? { leftKey: ws.activeTabKey, rightKey: key, ratio: 0.5 }
+            : null,
+      };
+    });
   };
 
   /** Open an editor tab; without a file it greets with the quick-open. */
   const openEditorTab = (opts?: {
     filePath?: string;
     chatLocalId?: string;
+    side?: boolean;
   }) => {
     const entry: EditorEntry = {
       localId: crypto.randomUUID(),
@@ -567,12 +579,18 @@ export function App() {
       dirty: false,
       chatLocalId: opts?.chatLocalId,
     };
-    updateWorkspace((ws) => ({
-      ...ws,
-      editors: [...ws.editors, entry],
-      activeTabKey: editorTabKey(entry.localId),
-      split: null,
-    }));
+    updateWorkspace((ws) => {
+      const key = editorTabKey(entry.localId);
+      return {
+        ...ws,
+        editors: [...ws.editors, entry],
+        activeTabKey: key,
+        split:
+          opts?.side && ws.activeTabKey
+            ? { leftKey: ws.activeTabKey, rightKey: key, ratio: 0.5 }
+            : null,
+      };
+    });
   };
 
   const onTerminalTitle = useCallback(
@@ -1582,7 +1600,7 @@ export function App() {
     }));
   };
 
-  const actionHandlers: Record<ActionId, () => void> = {
+  const actionHandlers: Record<ActionId, (mode?: "side") => void> = {
     "new-tab": openPaletteTab,
     "command-palette": () => setPaletteOpen((value) => !value),
     "new-floating-chat": () => addChat(),
@@ -1593,10 +1611,13 @@ export function App() {
     "prev-tab": () => cycleTab(-1),
     "next-tab": () => cycleTab(1),
     "split-view": toggleSplit,
-    "new-browser-tab": () => openBrowserTab(""),
+    "new-browser-tab": (mode) =>
+      openBrowserTab("", mode === "side" ? { side: true } : undefined),
     "reopen-tab": reopenTab,
-    "new-terminal-tab": openTerminalTab,
-    "new-editor-tab": openEditorTab,
+    "new-terminal-tab": (mode) =>
+      openTerminalTab(mode === "side" ? { side: true } : undefined),
+    "new-editor-tab": (mode) =>
+      openEditorTab(mode === "side" ? { side: true } : undefined),
     "toggle-sidebar": () => setSidebarOpen((value) => !value),
     "close-tab": closeActiveSurface,
     "setup-agent": () => setWizardModalOpen(true),

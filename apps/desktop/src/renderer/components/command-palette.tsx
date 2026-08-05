@@ -349,13 +349,13 @@ export function CommandPalette({
   activeProfileId?: string;
   sidebarConfig: SidebarConfig | null;
   onOpenUrl: (url: string, mode: CommitMode) => void;
-  onOpenTab: (tab: WorkspaceTab) => void;
+  onOpenTab: (tab: WorkspaceTab, mode?: "side") => void;
   onOpenSession: (session: AgentSession) => void;
   onSelectProject: (id: string) => void;
   onSwitchProfile: (profile: Profile) => void;
   onSendToAgent: (message: string, mode: "float" | "tab") => void;
   /** One handler per registry action — the same map the shortcuts use. */
-  actionHandlers: Record<ActionId, () => void>;
+  actionHandlers: Record<ActionId, (mode?: "side") => void>;
   /** The profile's configured agents (for the agent/effort pickers). */
   agents: AgentInfo[];
   defaultAgentId: string | null;
@@ -576,7 +576,10 @@ export function CommandPalette({
           // everything else runs the shared handler.
           run: targetPicker
             ? () => enterPicker(targetPicker)
-            : () => actionHandlersRef.current[action.id](),
+            : (mode) =>
+                actionHandlersRef.current[action.id](
+                  mode === "side" ? "side" : undefined,
+                ),
         };
       }),
     [keybindings, hasFocusedChat, enterPicker],
@@ -625,7 +628,11 @@ export function CommandPalette({
         detail: "Workflow",
         keywords: [workflow.name, "workflow", "go to", "open"],
         kind: "navigate",
-        run: () => onOpenTab({ kind: "workflow", name: workflow.name, label }),
+        run: (mode) =>
+          onOpenTab(
+            { kind: "workflow", name: workflow.name, label },
+            mode === "side" ? "side" : undefined,
+          ),
       });
     }
     for (const app of apps) {
@@ -636,7 +643,11 @@ export function CommandPalette({
         detail: "App",
         keywords: [app.name, "app", "go to", "open"],
         kind: "navigate",
-        run: () => onOpenTab({ kind: "app", name: app.name }),
+        run: (mode) =>
+          onOpenTab(
+            { kind: "app", name: app.name },
+            mode === "side" ? "side" : undefined,
+          ),
       });
     }
     for (const session of sessions) {
@@ -1301,7 +1312,8 @@ export function CommandPalette({
     } else if (event.key === "ArrowUp") {
       event.preventDefault();
       moveSelection(-1);
-    } else if (event.key === "Enter" && !event.shiftKey) {
+    } else if (event.key === "Enter" && (!event.shiftKey || event.metaKey)) {
+      // Shift+Enter alone stays a newline; ⌘⇧↵ is the side commit.
       event.preventDefault();
       const item = results[selected];
       if (item) {
