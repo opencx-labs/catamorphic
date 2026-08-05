@@ -132,7 +132,19 @@ export function TerminalScreen({
             onExitRef.current();
           }),
         );
+        // Typing pins the cursor solid (like native terminals); the blink
+        // resumes after a short idle beat.
+        let blinkTimer: number | undefined;
+        const pinCursorWhileTyping = () => {
+          term?.renderer?.setCursorBlink(false);
+          window.clearTimeout(blinkTimer);
+          blinkTimer = window.setTimeout(() => {
+            term?.renderer?.setCursorBlink(true);
+          }, 600);
+        };
+        unsubscribes.push(() => window.clearTimeout(blinkTimer));
         term.onData((data) => {
+          pinCursorWhileTyping();
           if (sessionId) void desktopApi.terminalWrite(sessionId, data);
         });
         term.onResize(({ cols, rows }) => {
