@@ -93,7 +93,7 @@ describe("first launch", () => {
 
 describe("browser tabs", () => {
   it("opens a browser tab with the new-browser-tab shortcut", async () => {
-    await run(`pressKey('t', { metaKey: true, shiftKey: true }); return true;`);
+    await run(`pressKey('t', { metaKey: true, altKey: true }); return true;`);
     await runWait(`return !!$('input[aria-label="Address and search bar"]');`, {
       timeoutMs: 30_000,
       label: "browser address bar",
@@ -121,6 +121,20 @@ describe("browser tabs", () => {
     await run(`pressKey('w', { metaKey: true }); return true;`);
     await runWait(`return !$('input[aria-label="Address and search bar"]');`, {
       label: "browser tab closed",
+    });
+  });
+
+  it("Cmd+Shift+T reopens the closed browser tab at its URL", async () => {
+    await run(`pressKey('T', { metaKey: true, shiftKey: true }); return true;`);
+    await runWait(
+      `return !!$('input[aria-label="Address and search bar"]') &&
+              !!byText('button', 'E2E Page');`,
+      { timeoutMs: 30_000, label: "browser tab restored" },
+    );
+    // Close it again so later groups start from the same slate as before.
+    await run(`pressKey('w', { metaKey: true }); return true;`);
+    await runWait(`return !$('input[aria-label="Address and search bar"]');`, {
+      label: "restored tab closed again",
     });
   });
 });
