@@ -950,3 +950,12 @@ Patterned on what best-in-class palettes converged on (Chrome omnibox
   that side. mergeRendered now follows the INCOMING tab order so reorders
   actually move rows; exiting tabs still hold their old spot while
   animating out.
+
+### 2026-08-06 — Launch shows one composed frame
+- The window opens hidden (`show: false` + `ready-to-show`), the
+  pre-server state is a silent themed backdrop (no "Starting…" flash),
+  and a **boot veil** covers the workspace until profiles, agents, the
+  sidebar config, and the project list have all loaded — then it fades
+  (250ms). Launch presents a single finished frame instead of chrome
+  popping in piecemeal. An 8s failsafe reveals regardless, so a wedged
+  query can never hold the app hostage.

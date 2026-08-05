@@ -148,7 +148,9 @@ function createWindow(profileId?: string): BrowserWindow {
     minHeight: 480,
     title: "Catamorphic",
     titleBarStyle: process.platform === "darwin" ? "hiddenInset" : "default",
-    // Pre-paint background from the profile's theme so open doesn't flash.
+    // Pre-paint background from the profile's theme so open doesn't flash;
+    // stay hidden until the renderer has actually painted a frame.
+    show: false,
     backgroundColor: windowBackgroundColor(stores.theme.resolved()),
     webPreferences: {
       preload: path.join(import.meta.dirname, "../preload/index.cjs"),
@@ -159,6 +161,7 @@ function createWindow(profileId?: string): BrowserWindow {
       webviewTag: true,
     },
   });
+  window.once("ready-to-show", () => window.show());
   // Captured now: `closed` fires after destruction, when touching
   // window.webContents throws "Object has been destroyed".
   const webContentsId = window.webContents.id;

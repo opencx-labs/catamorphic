@@ -39,11 +39,9 @@ function Root() {
   }, []);
 
   if (!server?.url) {
-    return (
-      <div className="grid h-full place-items-center">
-        <p className="animate-pulse text-sm text-fg-muted">Starting…</p>
-      </div>
-    );
+    // Silent themed backdrop — the boot veil in App carries the reveal;
+    // flashing a "Starting…" label first reads as flicker.
+    return <div className="h-full bg-bg" />;
   }
 
   return (

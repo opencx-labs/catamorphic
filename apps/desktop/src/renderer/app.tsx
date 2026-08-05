@@ -209,6 +209,12 @@ function PaneUnsplitButton({ onClick }: { onClick: () => void }) {
 
 export function App() {
   const projectsQuery = useProjects();
+
+  // Boot veil: the window shows nothing but the themed backdrop until the
+  // workspace's first paint is complete — profiles, agents, sidebar, and
+  // the project list all loaded. No piecemeal popping on launch.
+  const [bootRevealed, setBootRevealed] = useState(false);
+  const [bootVeilGone, setBootVeilGone] = useState(false);
   const [activeProjectId, setActiveProjectId] = useState<string>();
   const [workspaces, setWorkspaces] = useState<Record<string, Workspace>>({});
   const [projectModalOpen, setProjectModalOpen] = useState(false);
@@ -1686,6 +1692,23 @@ export function App() {
     if (activeProjectId === deletedId) setActiveProjectId(undefined);
   };
 
+  const bootReady =
+    profilesData !== null &&
+    agentsData !== null &&
+    sidebarConfig !== null &&
+    !projectsQuery.isLoading;
+  useEffect(() => {
+    if (bootRevealed) return;
+    if (bootReady) {
+      // One frame for the ready layout to commit, then fade the veil.
+      const frame = requestAnimationFrame(() => setBootRevealed(true));
+      return () => cancelAnimationFrame(frame);
+    }
+    // Failsafe: a wedged query must never leave the veil up forever.
+    const timer = window.setTimeout(() => setBootRevealed(true), 8000);
+    return () => window.clearTimeout(timer);
+  }, [bootReady, bootRevealed]);
+
   const activeTab = workspace.tabs.find(
     (tab) => tabKey(tab) === workspace.activeTabKey,
   );
@@ -2331,6 +2354,20 @@ export function App() {
         onClose={() => setWizardModalOpen(false)}
         onDone={() => setWizardModalOpen(false)}
       />
+
+      {/* Boot veil: covers the workspace until its first real paint is
+          ready, then fades — launch shows one composed frame, not pieces
+          popping in. */}
+      {!bootVeilGone && (
+        <div
+          className={`fixed inset-0 z-[400] bg-bg transition-opacity duration-250 ease-[cubic-bezier(0.2,0,0,1)] ${
+            bootRevealed ? "pointer-events-none opacity-0" : "opacity-100"
+          }`}
+          onTransitionEnd={() => {
+            if (bootRevealed) setBootVeilGone(true);
+          }}
+        />
+      )}
 
       {/* In-place profile switch veil: opaque at the midpoint, so the
           workspace swap beneath it is never visible. */}
