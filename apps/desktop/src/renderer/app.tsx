@@ -1307,8 +1307,36 @@ export function App() {
   /**
    * Open an attached surface: "tab" focuses it full-width; "split" tiles
    * it to the right of whatever the view shows now, and focuses it.
+   *
+   * Un-siding from a split is two-phase: tween the ratio to the pane's
+   * edge (the pane edges transition, so this reads as the pane growing
+   * across while its neighbor squeezes away), then drop the split once
+   * the tween lands.
    */
-  const openSurface = (key: string, mode: "tab" | "split") =>
+  const unsplitTimerRef = useRef<number | undefined>(undefined);
+  const openSurface = (key: string, mode: "tab" | "split") => {
+    const current = workspaceRef.current;
+    if (
+      mode === "tab" &&
+      current.split &&
+      (key === current.split.leftKey || key === current.split.rightKey)
+    ) {
+      const target = key === current.split.leftKey ? 1 : 0;
+      updateWorkspace((ws) =>
+        ws.split
+          ? {
+              ...ws,
+              activeTabKey: key,
+              split: { ...ws.split, ratio: target },
+            }
+          : ws,
+      );
+      window.clearTimeout(unsplitTimerRef.current);
+      unsplitTimerRef.current = window.setTimeout(() => {
+        updateWorkspace((ws) => ({ ...ws, split: null, activeTabKey: key }));
+      }, 220);
+      return;
+    }
     updateWorkspace((ws) => {
       if (mode === "tab") return { ...ws, split: null, activeTabKey: key };
       const anchor =
@@ -1320,6 +1348,7 @@ export function App() {
         activeTabKey: key,
       };
     });
+  };
 
   // Cmd+, / Cmd+. walk the non-tab chats in bubble-strip order, showing
   // each as the floating dock (the docks' own expand/collapse motion
