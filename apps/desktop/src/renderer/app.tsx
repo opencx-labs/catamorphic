@@ -108,6 +108,28 @@ interface SplitView {
   ratio: number;
 }
 
+/** Snapshot of a closed tab, enough to bring it back (Cmd+Shift+T). */
+type ClosedTab = (
+  | {
+      kind: "browser";
+      url: string;
+      title: string;
+      faviconUrl: string | null;
+      profileId: string;
+      chatLocalId?: string;
+    }
+  | { kind: "terminal"; chatLocalId?: string }
+  | { kind: "editor"; filePath: string | null; chatLocalId?: string }
+  | { kind: "chat"; sessionId?: string }
+  | { kind: "screen"; tab: WorkspaceTab }
+) & {
+  /** The other pane when this tab was half of a split, to re-tile. */
+  splitPartnerKey?: string;
+  splitSide?: "left" | "right";
+};
+
+const CLOSED_TABS_KEPT = 10;
+
 interface Workspace {
   tabs: WorkspaceTab[];
   activeTabKey?: string;
@@ -123,6 +145,8 @@ interface Workspace {
    * mutations write it.
    */
   tabOrder: string[];
+  /** Recently closed tabs, newest last (Cmd+Shift+T restores). */
+  closedTabs: ClosedTab[];
 }
 
 const newChatEntry = (mode: ChatDockEntry["mode"]): ChatDockEntry => ({
@@ -147,6 +171,7 @@ const emptyWorkspace = (): Workspace => {
     editors: [],
     split: null,
     tabOrder: [],
+    closedTabs: [],
   };
 };
 
@@ -633,15 +658,43 @@ export function App() {
 
   const closeTab = (key: string) =>
     updateWorkspace((ws) => {
+      // Snapshot enough to bring the tab back with Cmd+Shift+T — plus its
+      // split context so a reopened pane re-tiles with its partner.
+      const splitContext =
+        ws.split && key === ws.split.leftKey
+          ? { splitPartnerKey: ws.split.rightKey, splitSide: "left" as const }
+          : ws.split && key === ws.split.rightKey
+            ? { splitPartnerKey: ws.split.leftKey, splitSide: "right" as const }
+            : {};
+      const remember = (record: ClosedTab | null): ClosedTab[] =>
+        record
+          ? [...ws.closedTabs, record].slice(-CLOSED_TABS_KEPT)
+          : ws.closedTabs;
       if (key.startsWith("browser:")) {
         const localId = key.slice("browser:".length);
         browserNavigatorsRef.current.delete(localId);
+        const closing = ws.browsers.find(
+          (browser) => browser.localId === localId,
+        );
         const browsers = ws.browsers.filter(
           (browser) => browser.localId !== localId,
         );
         return {
           ...ws,
           browsers,
+          closedTabs: remember(
+            closing
+              ? {
+                  kind: "browser",
+                  url: closing.url || closing.initialUrl,
+                  title: closing.title,
+                  faviconUrl: closing.faviconUrl,
+                  profileId: closing.profileId,
+                  chatLocalId: closing.chatLocalId,
+                  ...splitContext,
+                }
+              : null,
+          ),
           activeTabKey:
             ws.activeTabKey === key
               ? nextActiveTabKey({ ...ws, browsers }, key, ws.chats)
@@ -649,15 +702,27 @@ export function App() {
         };
       }
       // Closing a terminal tab kills its shell (the screen's unmount
-      // cleanup sends the PTY kill).
+      // cleanup sends the PTY kill); reopening starts a fresh shell.
       if (key.startsWith("terminal:")) {
         const localId = key.slice("terminal:".length);
+        const closing = ws.terminals.find(
+          (terminal) => terminal.localId === localId,
+        );
         const terminals = ws.terminals.filter(
           (terminal) => terminal.localId !== localId,
         );
         return {
           ...ws,
           terminals,
+          closedTabs: remember(
+            closing
+              ? {
+                  kind: "terminal",
+                  chatLocalId: closing.chatLocalId,
+                  ...splitContext,
+                }
+              : null,
+          ),
           activeTabKey:
             ws.activeTabKey === key
               ? nextActiveTabKey({ ...ws, terminals }, key, ws.chats)
@@ -667,12 +732,23 @@ export function App() {
       // Closing an editor tab drops its unsaved drafts.
       if (key.startsWith("editor:")) {
         const localId = key.slice("editor:".length);
+        const closing = ws.editors.find((editor) => editor.localId === localId);
         const editors = ws.editors.filter(
           (editor) => editor.localId !== localId,
         );
         return {
           ...ws,
           editors,
+          closedTabs: remember(
+            closing
+              ? {
+                  kind: "editor",
+                  filePath: closing.filePath,
+                  chatLocalId: closing.chatLocalId,
+                  ...splitContext,
+                }
+              : null,
+          ),
           activeTabKey:
             ws.activeTabKey === key
               ? nextActiveTabKey({ ...ws, editors }, key, ws.chats)
@@ -683,10 +759,20 @@ export function App() {
       // sidebar); it does NOT linger as a bubble.
       if (key.startsWith("chat:")) {
         const localId = key.slice("chat:".length);
+        const closing = ws.chats.find((chat) => chat.localId === localId);
         const chats = ws.chats.filter((chat) => chat.localId !== localId);
         return {
           ...ws,
           chats,
+          closedTabs: remember(
+            closing
+              ? {
+                  kind: "chat",
+                  sessionId: closing.sessionId,
+                  ...splitContext,
+                }
+              : null,
+          ),
           activeChatId:
             ws.activeChatId === localId ? undefined : ws.activeChatId,
           activeTabKey:
@@ -700,15 +786,105 @@ export function App() {
       if (key.startsWith("agent-setup:") && activeProfileId) {
         setupDismissedRef.current.add(activeProfileId);
       }
+      const closingTab = ws.tabs.find((tab) => tabKey(tab) === key);
       const tabs = ws.tabs.filter((tab) => tabKey(tab) !== key);
       return {
         ...ws,
         tabs,
+        // Palette "New Tab"s and the setup wizard aren't worth restoring.
+        closedTabs: remember(
+          closingTab &&
+            closingTab.kind !== "palette" &&
+            closingTab.kind !== "agent-setup"
+            ? { kind: "screen", tab: closingTab, ...splitContext }
+            : null,
+        ),
         activeTabKey:
           ws.activeTabKey === key
             ? nextActiveTabKey({ ...ws, tabs }, key, ws.chats)
             : ws.activeTabKey,
       };
+    });
+
+  /** Cmd+Shift+T: restore the most recently closed tab (re-tiled when
+      its old split partner is still open). */
+  const reopenTab = () =>
+    updateWorkspace((ws) => {
+      const record = ws.closedTabs.at(-1);
+      if (!record) return ws;
+      const closedTabs = ws.closedTabs.slice(0, -1);
+      let key: string;
+      let patch: Partial<Workspace> = {};
+      switch (record.kind) {
+        case "browser": {
+          const entry: BrowserEntry = {
+            localId: crypto.randomUUID(),
+            profileId: record.profileId,
+            initialUrl: record.url,
+            url: record.url,
+            title: record.title,
+            faviconUrl: record.faviconUrl,
+            chatLocalId: record.chatLocalId,
+          };
+          key = browserTabKey(entry.localId);
+          patch = { browsers: [...ws.browsers, entry] };
+          break;
+        }
+        case "terminal": {
+          const entry: TerminalEntry = {
+            localId: crypto.randomUUID(),
+            title: "",
+            chatLocalId: record.chatLocalId,
+          };
+          key = terminalTabKey(entry.localId);
+          patch = { terminals: [...ws.terminals, entry] };
+          break;
+        }
+        case "editor": {
+          const entry: EditorEntry = {
+            localId: crypto.randomUUID(),
+            filePath: record.filePath,
+            dirty: false,
+            chatLocalId: record.chatLocalId,
+          };
+          key = editorTabKey(entry.localId);
+          patch = { editors: [...ws.editors, entry] };
+          break;
+        }
+        case "chat": {
+          const entry: ChatDockEntry = {
+            ...newChatEntry("tab"),
+            sessionId: record.sessionId,
+          };
+          key = chatTabKey(entry.localId);
+          patch = { chats: [...ws.chats, entry], activeChatId: entry.localId };
+          break;
+        }
+        case "screen": {
+          key = tabKey(record.tab);
+          patch = ws.tabs.some((tab) => tabKey(tab) === key)
+            ? {}
+            : { tabs: [...ws.tabs, record.tab] };
+          break;
+        }
+      }
+      const partnerAlive =
+        record.splitPartnerKey &&
+        orderedTabKeys(ws).includes(record.splitPartnerKey);
+      const split = partnerAlive
+        ? record.splitSide === "left"
+          ? {
+              leftKey: key,
+              rightKey: record.splitPartnerKey as string,
+              ratio: 0.5,
+            }
+          : {
+              leftKey: record.splitPartnerKey as string,
+              rightKey: key,
+              ratio: 0.5,
+            }
+        : null;
+      return { ...ws, ...patch, closedTabs, activeTabKey: key, split };
     });
 
   const nextActiveTabKey = (
@@ -1418,6 +1594,7 @@ export function App() {
     "next-tab": () => cycleTab(1),
     "split-view": toggleSplit,
     "new-browser-tab": () => openBrowserTab(""),
+    "reopen-tab": reopenTab,
     "new-terminal-tab": openTerminalTab,
     "new-editor-tab": openEditorTab,
     "toggle-sidebar": () => setSidebarOpen((value) => !value),

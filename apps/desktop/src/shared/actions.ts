@@ -55,8 +55,16 @@ export const BUILTIN_ACTIONS = [
     id: "new-browser-tab",
     label: "New browser tab",
     description: "open a new browser tab",
-    defaultBinding: "Cmd+Shift+T",
+    defaultBinding: "Cmd+Alt+T",
     keywords: ["browser", "web", "page", "open"],
+  },
+  {
+    id: "reopen-tab",
+    label: "Reopen closed tab",
+    description:
+      "restore the most recently closed tab (its split partner too, when it had one)",
+    defaultBinding: "Cmd+Shift+T",
+    keywords: ["reopen", "restore", "closed", "tab", "undo", "recover"],
   },
   {
     id: "toggle-chat-minimized",
