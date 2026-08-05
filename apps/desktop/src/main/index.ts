@@ -75,7 +75,7 @@ const state: ServerState = {
   },
   broadcast: (channel, payload) => {
     for (const window of BrowserWindow.getAllWindows()) {
-      window.webContents.send(channel, payload);
+      if (!window.isDestroyed()) window.webContents.send(channel, payload);
     }
   },
 };
@@ -103,7 +103,9 @@ const windows: WindowProfileRegistry = {
   },
   windowsFor(profileId) {
     return BrowserWindow.getAllWindows().filter(
-      (window) => windowProfiles.get(window.webContents.id) === profileId,
+      (window) =>
+        !window.isDestroyed() &&
+        windowProfiles.get(window.webContents.id) === profileId,
     );
   },
   assign(sender, profileId) {
@@ -156,10 +158,13 @@ function createWindow(profileId?: string): BrowserWindow {
       webviewTag: true,
     },
   });
-  windowProfiles.set(window.webContents.id, profile.id);
+  // Captured now: `closed` fires after destruction, when touching
+  // window.webContents throws "Object has been destroyed".
+  const webContentsId = window.webContents.id;
+  windowProfiles.set(webContentsId, profile.id);
   profilesStore.setLastActiveProfile(profile.id);
   window.on("closed", () => {
-    windowProfiles.delete(window.webContents.id);
+    windowProfiles.delete(webContentsId);
   });
 
   if (process.env.ELECTRON_RENDERER_URL) {

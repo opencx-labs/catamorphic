@@ -140,7 +140,7 @@ export function registerBrowserSupport(
 
   const broadcast = (channel: string, payload: unknown) => {
     for (const window of BrowserWindow.getAllWindows()) {
-      window.webContents.send(channel, payload);
+      if (!window.isDestroyed()) window.webContents.send(channel, payload);
     }
   };
 
