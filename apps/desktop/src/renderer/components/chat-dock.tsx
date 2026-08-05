@@ -8,7 +8,6 @@ import {
   Maximize2,
   Minus,
   PictureInPicture2,
-  Plus,
   SquareTerminal,
 } from "lucide-react";
 import {
@@ -24,6 +23,7 @@ import {
   QUESTIONS_DISMISSED_MESSAGE,
   toTimeline,
 } from "./catamorphic/chat-timeline";
+import { ShortcutHint } from "./shortcut-hint";
 
 export type ChatMode = "min" | "partial" | "tab";
 
@@ -88,6 +88,11 @@ export interface ChatDockEntry {
    * the choice.
    */
   agentId?: string;
+  /**
+   * The chat's attached tabs are folded under its tab in the strip
+   * (host-managed; only meaningful while the chat is a tab).
+   */
+  surfacesCollapsed?: boolean;
 }
 
 export interface ChatDockProps {
@@ -102,6 +107,10 @@ export interface ChatDockProps {
    * of a split. Floating/minimized modes ignore it.
    */
   slot?: "full" | "left" | "right";
+  /** Left pane's width fraction while the view is split. */
+  splitRatio?: number;
+  /** True while the split divider is being dragged (disables tweens). */
+  splitResizing?: boolean;
   /**
    * How the bubble UI occupies the bottom edge while this chat is a tab:
    * "strip" = expanded centered strip (reserve bottom height), "corner" =
@@ -122,12 +131,20 @@ export interface ChatDockProps {
    * tiles it to the right of the current view.
    */
   onOpenSurface?: (key: string, mode: "tab" | "split") => void;
-  /** Open a fresh terminal attached to this chat. */
-  onNewTerminal?: () => void;
   /** Set while this tab is the unfocused pane of a split: click focuses. */
   onFocusRequest?: () => void;
-  /** Agent-message link clicked — opens as an attached browser tab. */
-  onLinkClick?: (url: string) => void;
+  /** Set while this tab sits in a split: return it to a full-width tab. */
+  onUnsplit?: () => void;
+  /**
+   * Agent-message link clicked — opens as an attached browser tab. The
+   * modifiers follow the palette's grammar: plain opens (a fullscreen
+   * chat steps down to the floating dock), ⌘ opens a new tab with the
+   * chat untouched, ⌘⇧ tiles it to the side of the current view.
+   */
+  onLinkClick?: (
+    url: string,
+    modifiers: { metaKey: boolean; shiftKey: boolean },
+  ) => void;
   /** Changed-file chip clicked — opens the file in an attached editor. */
   onFileClick?: (path: string) => void;
   onEntryChange: (entry: ChatDockEntry) => void;
@@ -156,13 +173,15 @@ export function ChatDock({
   placeholder = "Describe what you want to build…",
   tabActive,
   slot = "full",
+  splitRatio = 0.5,
+  splitResizing = false,
   bubbleClearance,
   defaultAgentId,
   paletteTargeted,
   surfaces = [],
   onOpenSurface,
-  onNewTerminal,
   onFocusRequest,
+  onUnsplit,
   onLinkClick,
   onFileClick,
   onEntryChange,
@@ -305,19 +324,31 @@ export function ChatDock({
     return () => window.removeEventListener("keydown", onWindowKeyDown);
   }, [escapeTarget]);
 
+  // In a split, a tabbed chat occupies only its (ratio-sized) share of
+  // the view; floating chats always overlay the full area.
+  const splitPane = isTab && tabActive && slot !== "full";
   return (
     <div
-      className={`pointer-events-none absolute z-30 flex flex-col items-center justify-end transition-[padding] duration-250 ease-[cubic-bezier(0.2,0,0,1)] ${
-        // In a split, a tabbed chat occupies only its half of the view;
-        // floating chats always overlay the full area.
-        isTab && tabActive && slot === "left"
-          ? "inset-y-0 left-0 right-1/2 border-r border-border p-0"
-          : isTab && tabActive && slot === "right"
-            ? "inset-y-0 left-1/2 right-0 p-0"
+      className={`pointer-events-none absolute z-30 flex flex-col items-center justify-end ${
+        splitResizing
+          ? "transition-[padding]"
+          : "transition-[padding,left,right]"
+      } duration-250 ease-[cubic-bezier(0.2,0,0,1)] ${
+        splitPane && slot === "left"
+          ? "inset-y-0 left-0 border-r border-border p-0"
+          : splitPane && slot === "right"
+            ? "inset-y-0 right-0 p-0"
             : isTab
               ? "inset-0 p-0"
               : "inset-0 px-6 pb-16 pt-3"
       }`}
+      style={
+        splitPane
+          ? slot === "left"
+            ? { right: `${(1 - splitRatio) * 100}%` }
+            : { left: `${splitRatio * 100}%` }
+          : undefined
+      }
     >
       <section
         onMouseDownCapture={onFocusRequest}
@@ -355,29 +386,47 @@ export function ChatDock({
             <span className="truncate">{title}</span>
           </span>
         </header>
-        <span className="absolute right-2 top-2 z-10 flex items-center gap-1">
-          <button
-            type="button"
-            className="grid size-7 cursor-pointer place-items-center rounded-lg text-fg-muted transition-colors duration-150 hover:bg-bg-overlay hover:text-fg"
-            onClick={() => setMode(isTab ? "partial" : "tab")}
-            aria-label={isTab ? "Pop out to floating chat" : "Open as tab"}
-            title={isTab ? "Pop out to floating chat" : "Open as tab"}
+        {/* A snug pill behind the controls so they never blend into (or
+            hide) timeline content scrolled beneath them. */}
+        <span className="absolute right-2 top-2 z-10 flex items-center gap-0.5 rounded-lg border border-border bg-bg-raised/95 p-0.5 backdrop-blur-sm">
+          {isTab && onUnsplit && (
+            <ShortcutHint label="Full width">
+              <button
+                type="button"
+                className="grid size-7 cursor-pointer place-items-center rounded-md text-fg-muted transition-colors duration-150 hover:bg-bg-overlay hover:text-fg"
+                onClick={onUnsplit}
+                aria-label="Full width"
+              >
+                <Columns2 className="size-3.5" />
+              </button>
+            </ShortcutHint>
+          )}
+          <ShortcutHint
+            label={isTab ? "Pop out to floating chat" : "Open as tab"}
           >
-            {isTab ? (
-              <PictureInPicture2 className="size-3.5" />
-            ) : (
-              <Maximize2 className="size-3.5" />
-            )}
-          </button>
-          <button
-            type="button"
-            className="grid size-7 cursor-pointer place-items-center rounded-lg text-fg-muted transition-colors duration-150 hover:bg-bg-overlay hover:text-fg"
-            onClick={dismiss}
-            aria-label={isEmpty ? "Close chat" : "Minimize chat to bubble"}
-            title={isEmpty ? "Close" : "Minimize to bubble"}
-          >
-            <Minus className="size-3.5" />
-          </button>
+            <button
+              type="button"
+              className="grid size-7 cursor-pointer place-items-center rounded-md text-fg-muted transition-colors duration-150 hover:bg-bg-overlay hover:text-fg"
+              onClick={() => setMode(isTab ? "partial" : "tab")}
+              aria-label={isTab ? "Pop out to floating chat" : "Open as tab"}
+            >
+              {isTab ? (
+                <PictureInPicture2 className="size-3.5" />
+              ) : (
+                <Maximize2 className="size-3.5" />
+              )}
+            </button>
+          </ShortcutHint>
+          <ShortcutHint label={isEmpty ? "Close chat" : "Minimize to bubble"}>
+            <button
+              type="button"
+              className="grid size-7 cursor-pointer place-items-center rounded-md text-fg-muted transition-colors duration-150 hover:bg-bg-overlay hover:text-fg"
+              onClick={dismiss}
+              aria-label={isEmpty ? "Close chat" : "Minimize chat to bubble"}
+            >
+              <Minus className="size-3.5" />
+            </button>
+          </ShortcutHint>
         </span>
         {/* In tab mode the scroller spans the full tab (scrollbar at the
             edge) while the content column stays centered and readable. */}
@@ -415,68 +464,54 @@ export function ChatDock({
             {/* The surfaces rail: the agent's working tabs (linked pages,
                 terminals, changed files) live with the chat. Click opens
                 the tab; the split button (or Cmd+click) tiles it to the
-                right of the current view. Appears once a conversation is
-                under way — fresh empty chats stay clean. */}
-            {(surfaces.length > 0 || messages.length > 0) &&
-              (onOpenSurface || onNewTerminal) && (
-                <div className="mx-3 flex items-center gap-1.5 overflow-x-auto pt-1">
-                  {surfaces.map((surface) => {
-                    const Icon = SURFACE_ICONS[surface.kind];
-                    return (
-                      <span
-                        key={surface.key}
-                        className="group/chip flex shrink-0 items-center overflow-hidden rounded-md border border-border bg-bg-inset text-[11px] text-fg-muted"
-                      >
-                        <button
-                          type="button"
-                          onClick={(event) =>
-                            onOpenSurface?.(
-                              surface.key,
-                              event.metaKey ? "split" : "tab",
-                            )
-                          }
-                          className="flex min-w-0 cursor-pointer items-center gap-1.5 py-1 pl-2 pr-1.5 transition-colors duration-100 hover:text-fg"
-                          title={`Open ${surface.label}`}
-                        >
-                          {surface.kind === "browser" && surface.faviconUrl ? (
-                            <img
-                              src={surface.faviconUrl}
-                              alt=""
-                              className="size-3 shrink-0 rounded-[2px]"
-                            />
-                          ) : (
-                            <Icon className="size-3 shrink-0" />
-                          )}
-                          <span className="max-w-36 truncate">
-                            {surface.label}
-                          </span>
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => onOpenSurface?.(surface.key, "split")}
-                          className="grid size-6 shrink-0 cursor-pointer place-items-center text-fg-faint opacity-60 transition-[color,opacity] duration-100 hover:text-fg group-hover/chip:opacity-100"
-                          aria-label={`Open ${surface.label} to the right`}
-                          title="Open to the right (⌘-click)"
-                        >
-                          <Columns2 className="size-3" />
-                        </button>
-                      </span>
-                    );
-                  })}
-                  {onNewTerminal && (
-                    <button
-                      type="button"
-                      onClick={onNewTerminal}
-                      className="flex shrink-0 cursor-pointer items-center gap-1 rounded-md border border-dashed border-border py-1 pl-1.5 pr-2 text-[11px] text-fg-faint transition-colors duration-100 hover:border-border-strong hover:text-fg-muted"
-                      title="Open a terminal attached to this chat"
+                right of the current view. Only real surfaces earn a chip —
+                the new-terminal affordance lives with the header controls. */}
+            {surfaces.length > 0 && onOpenSurface && (
+              <div className="mx-3 flex items-center gap-1.5 overflow-x-auto pt-1">
+                {surfaces.map((surface) => {
+                  const Icon = SURFACE_ICONS[surface.kind];
+                  return (
+                    <span
+                      key={surface.key}
+                      className="group/chip flex shrink-0 items-center overflow-hidden rounded-md border border-border bg-bg-inset text-[11px] text-fg-muted"
                     >
-                      <Plus className="size-3" />
-                      <SquareTerminal className="size-3" />
-                      Terminal
-                    </button>
-                  )}
-                </div>
-              )}
+                      <button
+                        type="button"
+                        onClick={(event) =>
+                          onOpenSurface?.(
+                            surface.key,
+                            event.metaKey ? "split" : "tab",
+                          )
+                        }
+                        className="flex min-w-0 cursor-pointer items-center gap-1.5 py-1 pl-2 pr-1.5 transition-colors duration-100 hover:text-fg"
+                      >
+                        {surface.kind === "browser" && surface.faviconUrl ? (
+                          <img
+                            src={surface.faviconUrl}
+                            alt=""
+                            className="size-3 shrink-0 rounded-[2px]"
+                          />
+                        ) : (
+                          <Icon className="size-3 shrink-0" />
+                        )}
+                        <span className="max-w-36 truncate">
+                          {surface.label}
+                        </span>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => onOpenSurface?.(surface.key, "split")}
+                        className="grid size-6 shrink-0 cursor-pointer place-items-center text-fg-faint opacity-60 transition-[color,opacity] duration-100 hover:text-fg group-hover/chip:opacity-100"
+                        aria-label={`Open ${surface.label} to the right`}
+                        title="Open to the right (⌘-click)"
+                      >
+                        <Columns2 className="size-3" />
+                      </button>
+                    </span>
+                  );
+                })}
+              </div>
+            )}
             {questions && !chat.isSending && (
               <AgentQuestionPanel
                 questions={questions}
@@ -499,14 +534,16 @@ export function ChatDock({
                 rows={1}
                 aria-label="Message the assistant"
               />
-              <button
-                type="submit"
-                className="grid size-8 shrink-0 place-items-center rounded-lg bg-accent text-accent-fg transition-opacity duration-150 disabled:opacity-35"
-                disabled={!draft.trim()}
-                aria-label="Send message"
-              >
-                <ArrowUp className="size-4" />
-              </button>
+              <ShortcutHint label="Send" shortcut="↵">
+                <button
+                  type="submit"
+                  className="grid size-8 shrink-0 place-items-center rounded-lg bg-accent text-accent-fg transition-opacity duration-150 disabled:opacity-35"
+                  disabled={!draft.trim()}
+                  aria-label="Send message"
+                >
+                  <ArrowUp className="size-4" />
+                </button>
+              </ShortcutHint>
             </form>
           </div>
         </div>

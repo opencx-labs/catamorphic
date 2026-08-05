@@ -7,6 +7,7 @@ import {
 import type { AgentSession, ProjectSummary } from "@catamorphic/react/types";
 import {
   ChevronRight,
+  Columns2,
   FolderPlus,
   LayoutGrid,
   PanelLeft,
@@ -15,6 +16,7 @@ import {
   Workflow as WorkflowIcon,
 } from "lucide-react";
 import {
+  type MouseEvent as ReactMouseEvent,
   type ReactNode,
   useCallback,
   useEffect,
@@ -102,6 +104,8 @@ interface EditorEntry {
 interface SplitView {
   leftKey: string;
   rightKey: string;
+  /** Left pane's fraction of the width (drag the divider to change). */
+  ratio: number;
 }
 
 interface Workspace {
@@ -113,6 +117,12 @@ interface Workspace {
   terminals: TerminalEntry[];
   editors: EditorEntry[];
   split: SplitView | null;
+  /**
+   * User-arranged strip order (drag to reorder). Keys not listed append
+   * in their natural per-kind order; stale keys are ignored — only drag
+   * mutations write it.
+   */
+  tabOrder: string[];
 }
 
 const newChatEntry = (mode: ChatDockEntry["mode"]): ChatDockEntry => ({
@@ -136,6 +146,7 @@ const emptyWorkspace = (): Workspace => {
     terminals: [],
     editors: [],
     split: null,
+    tabOrder: [],
   };
 };
 
@@ -152,6 +163,24 @@ const DEFAULT_CUSTOM_MENU: SidebarMenuEntry[] = [
 
 const truncateLabel = (value: string): string =>
   value.length <= 40 ? value : `${value.slice(0, 39)}…`;
+
+/** Floating "return to full width" control on non-browser split panes. */
+function PaneUnsplitButton({ onClick }: { onClick: () => void }) {
+  return (
+    <span className="absolute right-2 top-2 z-10">
+      <ShortcutHint label="Full width">
+        <button
+          type="button"
+          onClick={onClick}
+          className="grid size-7 cursor-pointer place-items-center rounded-lg border border-border bg-bg-raised/95 text-fg-muted backdrop-blur-sm transition-colors duration-150 hover:bg-bg-overlay hover:text-fg"
+          aria-label="Full width"
+        >
+          <Columns2 className="size-3.5" />
+        </button>
+      </ShortcutHint>
+    </span>
+  );
+}
 
 export function App() {
   const projectsQuery = useProjects();
@@ -438,8 +467,8 @@ export function App() {
           ? ws.split
           : splitActive
             ? ws.activeTabKey === ws.split.leftKey
-              ? { leftKey: key, rightKey: ws.split.rightKey }
-              : { leftKey: ws.split.leftKey, rightKey: key }
+              ? { ...ws.split, leftKey: key }
+              : { ...ws.split, rightKey: key }
             : null;
       return {
         ...ws,
@@ -453,7 +482,10 @@ export function App() {
 
   /** Open a page in a new browser tab (profile session of the workspace). */
   const openBrowserTab = useCallback(
-    (url: string, opts?: { background?: boolean; chatLocalId?: string }) => {
+    (
+      url: string,
+      opts?: { background?: boolean; chatLocalId?: string; side?: boolean },
+    ) => {
       if (!activeProfile) return;
       const entry: BrowserEntry = {
         localId: crypto.randomUUID(),
@@ -464,14 +496,22 @@ export function App() {
         faviconUrl: null,
         chatLocalId: opts?.chatLocalId,
       };
-      updateWorkspace((ws) => ({
-        ...ws,
-        browsers: [...ws.browsers, entry],
-        activeTabKey: opts?.background
-          ? ws.activeTabKey
-          : browserTabKey(entry.localId),
-        split: opts?.background ? ws.split : null,
-      }));
+      updateWorkspace((ws) => {
+        const key = browserTabKey(entry.localId);
+        // Side: tile the new page to the right of the current view.
+        const split =
+          opts?.side && ws.activeTabKey
+            ? { leftKey: ws.activeTabKey, rightKey: key, ratio: 0.5 }
+            : opts?.background
+              ? ws.split
+              : null;
+        return {
+          ...ws,
+          browsers: [...ws.browsers, entry],
+          activeTabKey: opts?.background ? ws.activeTabKey : key,
+          split,
+        };
+      });
     },
     [activeProfile, updateWorkspace],
   );
@@ -576,7 +616,7 @@ export function App() {
    * Bookmark/link click behavior: "replace" reuses the focused browser
    * tab; anything else (or no focused browser tab) opens a new tab.
    */
-  const openUrl = (url: string, mode: "tab" | "replace") => {
+  const openUrl = (url: string, mode: "tab" | "replace" | "side") => {
     const ws = workspaceRef.current;
     const focusedBrowserId = ws.activeTabKey?.startsWith("browser:")
       ? ws.activeTabKey.slice("browser:".length)
@@ -588,7 +628,7 @@ export function App() {
       navigate(url);
       return;
     }
-    openBrowserTab(url);
+    openBrowserTab(url, mode === "side" ? { side: true } : undefined);
   };
 
   const closeTab = (key: string) =>
@@ -1053,16 +1093,60 @@ export function App() {
     });
   };
 
-  /** Tab-strip order — must mirror allTabs below. */
-  const orderedTabKeys = (ws: Workspace) => [
-    ...ws.tabs.map(tabKey),
-    ...ws.browsers.map((browser) => browserTabKey(browser.localId)),
-    ...ws.terminals.map((terminal) => terminalTabKey(terminal.localId)),
-    ...ws.editors.map((editor) => editorTabKey(editor.localId)),
-    ...ws.chats
-      .filter((chat) => chat.mode === "tab")
-      .map((chat) => chatTabKey(chat.localId)),
+  /** Tab keys attached to a chat, in per-kind order. */
+  const attachedTabKeys = (ws: Workspace, chatLocalId: string) => [
+    ...ws.browsers
+      .filter((browser) => browser.chatLocalId === chatLocalId)
+      .map((browser) => browserTabKey(browser.localId)),
+    ...ws.terminals
+      .filter((terminal) => terminal.chatLocalId === chatLocalId)
+      .map((terminal) => terminalTabKey(terminal.localId)),
+    ...ws.editors
+      .filter((editor) => editor.chatLocalId === chatLocalId)
+      .map((editor) => editorTabKey(editor.localId)),
   ];
+
+  /**
+   * Tab-strip order, the single source for the strip AND keyboard cycling:
+   * `tabOrder` (drag-arranged) first, unknown keys appended in per-kind
+   * order — then tabs attached to a tab-mode chat are pulled out and
+   * clustered right after their chat (the group), unless collapsed.
+   */
+  const orderedTabKeys = (
+    ws: Workspace,
+    opts?: { includeCollapsed?: boolean },
+  ): string[] => {
+    const tabChats = ws.chats.filter((chat) => chat.mode === "tab");
+    const tabChatIds = new Set(tabChats.map((chat) => chat.localId));
+    const grouped = new Set(
+      tabChats.flatMap((chat) => attachedTabKeys(ws, chat.localId)),
+    );
+    const natural = [
+      ...ws.tabs.map(tabKey),
+      ...ws.browsers.map((browser) => browserTabKey(browser.localId)),
+      ...ws.terminals.map((terminal) => terminalTabKey(terminal.localId)),
+      ...ws.editors.map((editor) => editorTabKey(editor.localId)),
+      ...tabChats.map((chat) => chatTabKey(chat.localId)),
+    ];
+    const naturalSet = new Set(natural);
+    const order = [
+      ...ws.tabOrder.filter((key) => naturalSet.has(key)),
+      ...natural.filter((key) => !ws.tabOrder.includes(key)),
+    ];
+    const result: string[] = [];
+    for (const key of order) {
+      if (grouped.has(key)) continue; // clustered after its chat below
+      result.push(key);
+      if (!key.startsWith("chat:")) continue;
+      const chatId = key.slice("chat:".length);
+      if (!tabChatIds.has(chatId)) continue;
+      const chat = ws.chats.find((candidate) => candidate.localId === chatId);
+      if (!chat?.surfacesCollapsed || opts?.includeCollapsed) {
+        result.push(...attachedTabKeys(ws, chatId));
+      }
+    }
+    return result;
+  };
 
   const cycleTab = (direction: -1 | 1) => {
     const ws = workspaceRef.current;
@@ -1122,8 +1206,102 @@ export function App() {
     if (!partner) return;
     updateWorkspace((current) => ({
       ...current,
-      split: { leftKey: active, rightKey: partner },
+      split: { leftKey: active, rightKey: partner, ratio: 0.5 },
     }));
+  };
+
+  /** Fold/unfold a chat's attached tabs under its tab in the strip. */
+  const toggleChatGroup = (chatLocalId: string) =>
+    updateWorkspace((ws) => {
+      const chat = ws.chats.find(
+        (candidate) => candidate.localId === chatLocalId,
+      );
+      if (!chat) return ws;
+      const collapsing = !chat.surfacesCollapsed;
+      // Folding away the active tab lands focus on the group's chat.
+      const activeTabKey =
+        collapsing &&
+        ws.activeTabKey &&
+        attachedTabKeys(ws, chatLocalId).includes(ws.activeTabKey)
+          ? chatTabKey(chatLocalId)
+          : ws.activeTabKey;
+      return {
+        ...ws,
+        activeTabKey,
+        chats: ws.chats.map((candidate) =>
+          candidate.localId === chatLocalId
+            ? { ...candidate, surfacesCollapsed: collapsing }
+            : candidate,
+        ),
+      };
+    });
+
+  /** Drag-reorder: move a tab before another (null = to the end). */
+  const reorderTab = (key: string, beforeKey: string | null) =>
+    updateWorkspace((ws) => {
+      const order = orderedTabKeys(ws, { includeCollapsed: true }).filter(
+        (candidate) => candidate !== key,
+      );
+      const at = beforeKey ? order.indexOf(beforeKey) : -1;
+      if (at === -1) order.push(key);
+      else order.splice(at, 0, key);
+      return { ...ws, tabOrder: order };
+    });
+
+  /** Drop a dragged tab onto a side of the content area: tile it there. */
+  const dropTabToSide = (key: string, side: "left" | "right") => {
+    const ws = workspaceRef.current;
+    const anchor =
+      ws.activeTabKey && ws.activeTabKey !== key
+        ? ws.activeTabKey
+        : (previousActiveTabKeyRef.current ?? null);
+    if (!anchor || anchor === key || !orderedTabKeys(ws).includes(anchor)) {
+      return;
+    }
+    updateWorkspace((current) => ({
+      ...current,
+      split:
+        side === "left"
+          ? { leftKey: key, rightKey: anchor, ratio: 0.5 }
+          : { leftKey: anchor, rightKey: key, ratio: 0.5 },
+      activeTabKey: key,
+      ...(key.startsWith("chat:")
+        ? { activeChatId: key.slice("chat:".length) }
+        : {}),
+    }));
+  };
+
+  // The tab being dragged from the strip (drop targets render while set).
+  const [tabDragKey, setTabDragKey] = useState<string | null>(null);
+  const [dropSideHover, setDropSideHover] = useState<"left" | "right" | null>(
+    null,
+  );
+
+  // Divider drag: ratio updates live; the overlay keeps webviews from
+  // swallowing the mousemoves.
+  const [dividerDragging, setDividerDragging] = useState(false);
+  const startDividerDrag = (event: ReactMouseEvent<HTMLDivElement>) => {
+    event.preventDefault();
+    const region = event.currentTarget.parentElement;
+    if (!region) return;
+    const rect = region.getBoundingClientRect();
+    setDividerDragging(true);
+    const onMove = (move: globalThis.MouseEvent) => {
+      const ratio = Math.min(
+        0.8,
+        Math.max(0.2, (move.clientX - rect.left) / rect.width),
+      );
+      updateWorkspace((ws) =>
+        ws.split ? { ...ws, split: { ...ws.split, ratio } } : ws,
+      );
+    };
+    const onUp = () => {
+      setDividerDragging(false);
+      window.removeEventListener("mousemove", onMove);
+      window.removeEventListener("mouseup", onUp);
+    };
+    window.addEventListener("mousemove", onMove);
+    window.addEventListener("mouseup", onUp);
   };
 
   /**
@@ -1138,7 +1316,7 @@ export function App() {
       if (!anchor) return { ...ws, split: null, activeTabKey: key };
       return {
         ...ws,
-        split: { leftKey: anchor, rightKey: key },
+        split: { leftKey: anchor, rightKey: key, ratio: 0.5 },
         activeTabKey: key,
       };
     });
@@ -1298,13 +1476,39 @@ export function App() {
       ];
     }),
   );
-  const allTabs = [
-    ...workspace.tabs,
-    ...browserTabs(workspace),
-    ...terminalTabs(workspace),
-    ...editorTabs(workspace),
-    ...chatTabs(workspace, chatLabels),
-  ];
+  // Strip entries in visual order (drag-arranged + group-clustered), with
+  // group membership stamped for the grouped styling.
+  const tabByKey = new Map<string, WorkspaceTab>(
+    [
+      ...workspace.tabs,
+      ...browserTabs(workspace),
+      ...terminalTabs(workspace),
+      ...editorTabs(workspace),
+      ...chatTabs(workspace, chatLabels),
+    ].map((tab) => [tabKey(tab), tab]),
+  );
+  const groupOfKey = new Map<string, string>();
+  const tabGroups = workspace.chats
+    .filter((chat) => chat.mode === "tab")
+    .map((chat) => {
+      const memberKeys = attachedTabKeys(workspace, chat.localId);
+      for (const key of memberKeys) groupOfKey.set(key, chat.localId);
+      groupOfKey.set(chatTabKey(chat.localId), chat.localId);
+      return {
+        parentKey: chatTabKey(chat.localId),
+        memberKeys,
+        collapsed: Boolean(chat.surfacesCollapsed),
+      };
+    })
+    .filter((group) => group.memberKeys.length > 0);
+  const allTabs = orderedTabKeys(workspace)
+    .map((key) => {
+      const tab = tabByKey.get(key);
+      if (!tab) return null;
+      const groupId = groupOfKey.get(key);
+      return groupId ? { ...tab, groupId } : tab;
+    })
+    .filter((tab): tab is WorkspaceTab => tab !== null);
   const activeChatTabId = workspace.activeTabKey?.startsWith("chat:")
     ? workspace.activeTabKey.slice("chat:".length)
     : undefined;
@@ -1334,14 +1538,28 @@ export function App() {
     : workspace.activeTabKey
       ? { [workspace.activeTabKey]: "full" }
       : {};
+  const splitRatio = split?.ratio ?? 0.5;
   const SLOT_CLASSES = {
     full: "absolute inset-0 flex flex-col",
-    left: "absolute inset-y-0 left-0 right-1/2 flex flex-col border-r border-border",
-    right: "absolute inset-y-0 left-1/2 right-0 flex flex-col",
+    left: "absolute inset-y-0 left-0 flex flex-col border-r border-border",
+    right: "absolute inset-y-0 right-0 flex flex-col",
   } as const;
+  // Un-siding (and re-tiling) tweens the pane edges instead of snapping;
+  // the transition pauses during a divider drag so resizing tracks the
+  // pointer 1:1.
+  const paneGeometryTransition = dividerDragging
+    ? ""
+    : " transition-[left,right] duration-200 ease-[cubic-bezier(0.2,0,0,1)]";
   const paneClass = (key: string) => {
     const slot = viewSlots[key];
-    return slot ? SLOT_CLASSES[slot] : "hidden";
+    return slot ? SLOT_CLASSES[slot] + paneGeometryTransition : "hidden";
+  };
+  /** Ratio-driven pane geometry (50/50 until the divider is dragged). */
+  const paneStyle = (key: string): React.CSSProperties | undefined => {
+    const slot = viewSlots[key];
+    if (slot === "left") return { right: `${(1 - splitRatio) * 100}%` };
+    if (slot === "right") return { left: `${splitRatio * 100}%` };
+    return undefined;
   };
   /** Clicking anywhere in an unfocused pane focuses it. */
   const paneFocusProps = (key: string) =>
@@ -1520,9 +1738,16 @@ export function App() {
               activeKey={workspace.activeTabKey}
               secondaryKey={splitCompanionKey}
               highlightKey={targetedTabKey}
+              groups={tabGroups}
               onSelect={selectTab}
               onClose={closeTab}
               onNew={openPaletteTab}
+              onToggleGroup={toggleChatGroup}
+              onReorder={reorderTab}
+              onDragStateChange={(key) => {
+                setTabDragKey(key);
+                if (!key) setDropSideHover(null);
+              }}
             />
           )}
         </div>
@@ -1556,8 +1781,14 @@ export function App() {
                     <div
                       key={tabKey(tab)}
                       className={paneClass(tabKey(tab))}
+                      style={paneStyle(tabKey(tab))}
                       {...paneFocusProps(tabKey(tab))}
                     >
+                      {viewSlots[tabKey(tab)] !== "full" && (
+                        <PaneUnsplitButton
+                          onClick={() => openSurface(tabKey(tab), "tab")}
+                        />
+                      )}
                       {tab.kind === "workflow" ? (
                         <WorkflowScreen
                           projectId={projectId}
@@ -1593,6 +1824,7 @@ export function App() {
                   <div
                     key={browser.localId}
                     className={paneClass(browserTabKey(browser.localId))}
+                    style={paneStyle(browserTabKey(browser.localId))}
                     {...paneFocusProps(browserTabKey(browser.localId))}
                   >
                     <BrowserScreen
@@ -1611,6 +1843,13 @@ export function App() {
                           navigate,
                         )
                       }
+                      onUnsplit={
+                        viewSlots[browserTabKey(browser.localId)] &&
+                        viewSlots[browserTabKey(browser.localId)] !== "full"
+                          ? () =>
+                              openSurface(browserTabKey(browser.localId), "tab")
+                          : undefined
+                      }
                     />
                   </div>
                 ))}
@@ -1622,8 +1861,19 @@ export function App() {
                   <div
                     key={terminal.localId}
                     className={paneClass(terminalTabKey(terminal.localId))}
+                    style={paneStyle(terminalTabKey(terminal.localId))}
                     {...paneFocusProps(terminalTabKey(terminal.localId))}
                   >
+                    {viewSlots[terminalTabKey(terminal.localId)] !==
+                      undefined &&
+                      viewSlots[terminalTabKey(terminal.localId)] !==
+                        "full" && (
+                        <PaneUnsplitButton
+                          onClick={() =>
+                            openSurface(terminalTabKey(terminal.localId), "tab")
+                          }
+                        />
+                      )}
                     <TerminalScreen
                       projectId={projectId}
                       active={terminal.localId === activeTerminalTabId}
@@ -1639,8 +1889,17 @@ export function App() {
                   <div
                     key={editor.localId}
                     className={paneClass(editorTabKey(editor.localId))}
+                    style={paneStyle(editorTabKey(editor.localId))}
                     {...paneFocusProps(editorTabKey(editor.localId))}
                   >
+                    {viewSlots[editorTabKey(editor.localId)] !== undefined &&
+                      viewSlots[editorTabKey(editor.localId)] !== "full" && (
+                        <PaneUnsplitButton
+                          onClick={() =>
+                            openSurface(editorTabKey(editor.localId), "tab")
+                          }
+                        />
+                      )}
                     <EditorScreen
                       projectId={projectId}
                       filePath={editor.filePath}
@@ -1655,6 +1914,59 @@ export function App() {
                 ))}
               </div>
 
+              {/* Split divider: drag to resize. The full-region overlay
+                  during a drag keeps webviews from swallowing the moves. */}
+              {split && (
+                // biome-ignore lint/a11y/noStaticElementInteractions: pointer-only resize handle; the split is keyboard-reachable via Cmd+\ and tab focus
+                <div
+                  data-split-divider
+                  onMouseDown={startDividerDrag}
+                  className={`absolute inset-y-0 z-40 w-[7px] -translate-x-1/2 cursor-col-resize ${
+                    dividerDragging
+                      ? ""
+                      : "transition-[left] duration-200 ease-[cubic-bezier(0.2,0,0,1)]"
+                  }`}
+                  style={{ left: `${splitRatio * 100}%` }}
+                >
+                  <div className="mx-auto h-full w-px bg-transparent transition-colors duration-150 hover:bg-accent/60" />
+                </div>
+              )}
+              {dividerDragging && (
+                <div className="absolute inset-0 z-50 cursor-col-resize" />
+              )}
+
+              {/* Dragging a tab: side drop zones tile it left or right. */}
+              {tabDragKey && (
+                <div className="absolute inset-0 z-50 flex">
+                  {(["left", "right"] as const).map((side) => (
+                    // biome-ignore lint/a11y/noStaticElementInteractions: drop target for an in-progress HTML5 drag only
+                    <div
+                      key={side}
+                      onDragOver={(event) => {
+                        event.preventDefault();
+                        setDropSideHover(side);
+                      }}
+                      onDragLeave={() =>
+                        setDropSideHover((current) =>
+                          current === side ? null : current,
+                        )
+                      }
+                      onDrop={(event) => {
+                        event.preventDefault();
+                        dropTabToSide(tabDragKey, side);
+                        setTabDragKey(null);
+                        setDropSideHover(null);
+                      }}
+                      className={`flex-1 border-2 border-dashed transition-colors duration-150 ${
+                        dropSideHover === side
+                          ? "border-accent/60 bg-accent/10"
+                          : "border-transparent"
+                      }`}
+                    />
+                  ))}
+                </div>
+              )}
+
               {workspace.chats.map((entry) => (
                 <ChatDock
                   key={entry.localId}
@@ -1663,17 +1975,44 @@ export function App() {
                   title={chatLabels[entry.localId] ?? "AI assistant"}
                   tabActive={Boolean(viewSlots[chatTabKey(entry.localId)])}
                   slot={viewSlots[chatTabKey(entry.localId)] ?? "full"}
+                  splitRatio={splitRatio}
+                  splitResizing={dividerDragging}
                   bubbleClearance={bubblesCollapsed ? "corner" : "strip"}
                   defaultAgentId={agentsData?.defaultAgentId ?? undefined}
                   paletteTargeted={entry.localId === targetedChat?.localId}
                   surfaces={surfacesFor(entry)}
                   onOpenSurface={openSurface}
-                  onNewTerminal={() =>
-                    openTerminalTab({ chatLocalId: entry.localId })
-                  }
-                  onLinkClick={(url) =>
-                    openBrowserTab(url, { chatLocalId: entry.localId })
-                  }
+                  onLinkClick={(url, modifiers) => {
+                    // The palette's grammar, applied to links: plain =
+                    // open (the page takes the view, a fullscreen chat
+                    // steps down to the floating dock), ⌘ = new tab (the
+                    // chat keeps its place), ⌘⇧ = open to the side.
+                    if (modifiers.metaKey && modifiers.shiftKey) {
+                      openBrowserTab(url, {
+                        side: true,
+                        chatLocalId: entry.localId,
+                      });
+                      return;
+                    }
+                    if (modifiers.metaKey) {
+                      openBrowserTab(url, { chatLocalId: entry.localId });
+                      return;
+                    }
+                    openBrowserTab(url, { chatLocalId: entry.localId });
+                    if (entry.mode === "tab") {
+                      updateWorkspace((ws) => ({
+                        ...ws,
+                        activeChatId: entry.localId,
+                        chats: ws.chats.map((chat) =>
+                          chat.localId === entry.localId
+                            ? { ...chat, mode: "partial" }
+                            : chat.mode === "partial"
+                              ? { ...chat, mode: "min" }
+                              : chat,
+                        ),
+                      }));
+                    }
+                  }}
                   onFileClick={(path) =>
                     openEditorTab({
                       filePath: path,
@@ -1685,6 +2024,12 @@ export function App() {
                     viewSlots[chatTabKey(entry.localId)] &&
                     workspace.activeTabKey !== chatTabKey(entry.localId)
                       ? () => selectTab(chatTabKey(entry.localId))
+                      : undefined
+                  }
+                  onUnsplit={
+                    viewSlots[chatTabKey(entry.localId)] &&
+                    viewSlots[chatTabKey(entry.localId)] !== "full"
+                      ? () => openSurface(chatTabKey(entry.localId), "tab")
                       : undefined
                   }
                   onEntryChange={(next) =>

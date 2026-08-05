@@ -625,16 +625,11 @@ describe("tiling and chat surfaces", () => {
          .some((el) => el.title?.startsWith('Open '));`,
       { label: "browser chip on the surfaces rail" },
     );
-    // "+ Terminal" opens a terminal attached to this chat.
-    await run(
-      `[...floatingDock().querySelectorAll('button')]
-         .find((el) => el.title === 'Open a terminal attached to this chat')
-         .click();
-       return true;`,
-    );
+    // A terminal to anchor the upcoming split against.
+    await run(`pressKey('\u0060', { ctrlKey: true }); return true;`);
     await runWait(`return !!$('canvas');`, {
       timeoutMs: 30_000,
-      label: "attached terminal",
+      label: "terminal open",
     });
   });
 
@@ -647,16 +642,16 @@ describe("tiling and chat surfaces", () => {
        return true;`,
     );
     await runWait(
-      `return !!$('div[class*="right-1/2"]') &&
+      `return !!$('[data-split-divider]') &&
               $$('canvas').some((el) => !el.closest('div.hidden'));`,
       { label: "split view: terminal + browser" },
     );
     await run(`pressKey('\\\\', { metaKey: true }); return true;`);
-    await runWait(`return !$('div[class*="right-1/2"]');`, {
+    await runWait(`return !$('[data-split-divider]');`, {
       label: "unsplit to the focused tab",
     });
     await run(`pressKey('\\\\', { metaKey: true }); return true;`);
-    await runWait(`return !!$('div[class*="right-1/2"]');`, {
+    await runWait(`return !!$('[data-split-divider]');`, {
       label: "re-split with the previous tab",
     });
   });
@@ -669,7 +664,7 @@ describe("tiling and chat surfaces", () => {
     await runWait(`return !floatingDock();`, { label: "chat parked" });
     await run(`pressKey('w', { metaKey: true }); return true;`);
     await runWait(
-      `return !$('div[class*="right-1/2"]') &&
+      `return !$('[data-split-divider]') &&
               $$('canvas').some((el) => !el.closest('div.hidden'));`,
       { label: "split collapsed to the terminal" },
     );

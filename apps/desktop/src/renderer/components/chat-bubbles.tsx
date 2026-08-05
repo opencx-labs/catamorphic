@@ -199,45 +199,49 @@ export function ChatBubbles({
                   }
                 }}
               >
-                <button
-                  type="button"
-                  onClick={() => onToggle(entry.localId)}
-                  className={`relative grid size-9 cursor-pointer place-items-center rounded-full border transition-[background-color,border-color,scale] duration-150 ease-[cubic-bezier(0.2,0,0,1)] active:scale-95 ${
-                    expanded
-                      ? "border-accent/60 bg-accent/15 text-accent"
-                      : "border-border bg-bg-overlay text-fg-muted hover:border-border-strong hover:text-fg"
-                  }`}
-                  aria-label={
-                    expanded
-                      ? `Minimize ${labels[entry.localId] ?? "chat"}`
-                      : `Open ${labels[entry.localId] ?? "chat"}`
-                  }
-                  aria-expanded={expanded}
-                  title={labels[entry.localId] ?? "Chat"}
+                <ShortcutHint
+                  label={labels[entry.localId] ?? "Chat"}
+                  side="top"
                 >
-                  {/* Stacked icons cross-fade on the sending transition. */}
-                  <span className="relative grid size-4 place-items-center">
-                    <MessageSquare
-                      className={`col-start-1 row-start-1 size-4 transition-[opacity,scale] duration-200 ease-[cubic-bezier(0.2,0,0,1)] ${
-                        isSending
-                          ? "scale-50 opacity-0"
-                          : "scale-100 opacity-100"
-                      }`}
-                    />
-                    <LoaderCircle
-                      className={`col-start-1 row-start-1 size-4 animate-spin text-accent transition-[opacity] duration-200 ${
-                        isSending ? "opacity-100" : "opacity-0"
-                      }`}
-                    />
-                  </span>
-                  <span
-                    className={`absolute -right-0.5 -top-0.5 size-2 rounded-full bg-accent transition-[opacity,scale] duration-200 ease-[cubic-bezier(0.2,0,0,1)] ${
-                      isUnread && !isSending
-                        ? "scale-100 opacity-100"
-                        : "scale-0 opacity-0"
+                  <button
+                    type="button"
+                    onClick={() => onToggle(entry.localId)}
+                    className={`relative grid size-9 cursor-pointer place-items-center rounded-full border transition-[background-color,border-color,scale] duration-150 ease-[cubic-bezier(0.2,0,0,1)] active:scale-95 ${
+                      expanded
+                        ? "border-accent/60 bg-accent/15 text-accent"
+                        : "border-border bg-bg-overlay text-fg-muted hover:border-border-strong hover:text-fg"
                     }`}
-                  />
-                </button>
+                    aria-label={
+                      expanded
+                        ? `Minimize ${labels[entry.localId] ?? "chat"}`
+                        : `Open ${labels[entry.localId] ?? "chat"}`
+                    }
+                    aria-expanded={expanded}
+                  >
+                    {/* Stacked icons cross-fade on the sending transition. */}
+                    <span className="relative grid size-4 place-items-center">
+                      <MessageSquare
+                        className={`col-start-1 row-start-1 size-4 transition-[opacity,scale] duration-200 ease-[cubic-bezier(0.2,0,0,1)] ${
+                          isSending
+                            ? "scale-50 opacity-0"
+                            : "scale-100 opacity-100"
+                        }`}
+                      />
+                      <LoaderCircle
+                        className={`col-start-1 row-start-1 size-4 animate-spin text-accent transition-[opacity] duration-200 ${
+                          isSending ? "opacity-100" : "opacity-0"
+                        }`}
+                      />
+                    </span>
+                    <span
+                      className={`absolute -right-0.5 -top-0.5 size-2 rounded-full bg-accent transition-[opacity,scale] duration-200 ease-[cubic-bezier(0.2,0,0,1)] ${
+                        isUnread && !isSending
+                          ? "scale-100 opacity-100"
+                          : "scale-0 opacity-0"
+                      }`}
+                    />
+                  </button>
+                </ShortcutHint>
                 {!exiting && (
                   <button
                     type="button"
@@ -266,59 +270,61 @@ export function ChatBubbles({
               <Plus className="size-4" />
             </button>
           </ShortcutHint>
-          <button
-            type="button"
-            onClick={() => {
-              setCollapseOverride(true);
-              onCollapse?.();
-            }}
-            className="grid size-9 cursor-pointer place-items-center rounded-full text-fg-faint transition-colors duration-150 hover:text-fg"
-            aria-label="Collapse chat bubbles"
-            title="Collapse"
-          >
-            <ChevronsRight className="size-4" />
-          </button>
+          <ShortcutHint label="Collapse chat bubbles" side="top">
+            <button
+              type="button"
+              onClick={() => {
+                setCollapseOverride(true);
+                onCollapse?.();
+              }}
+              className="grid size-9 cursor-pointer place-items-center rounded-full text-fg-faint transition-colors duration-150 hover:text-fg"
+              aria-label="Collapse chat bubbles"
+            >
+              <ChevronsRight className="size-4" />
+            </button>
+          </ShortcutHint>
         </div>
 
         {/* Collapsed single bubble; carries aggregate indicators. */}
-        <button
-          type="button"
-          onClick={() => setCollapseOverride(false)}
-          className={`relative grid cursor-pointer place-items-center overflow-visible rounded-full border border-border bg-bg-overlay text-fg-muted transition-[max-width,opacity,background-color,border-color] duration-250 ease-[cubic-bezier(0.2,0,0,1)] hover:border-border-strong hover:text-fg ${
-            collapsed
-              ? "size-9 max-w-9 opacity-100"
-              : "pointer-events-none size-9 max-w-0 border-0 opacity-0"
-          }`}
-          aria-label="Expand chat bubbles"
-          aria-hidden={!collapsed}
-          inert={!collapsed ? true : undefined}
-          title="Expand chats"
-        >
-          <span className="relative grid size-4 place-items-center">
-            <MessageSquare
-              className={`col-start-1 row-start-1 size-4 transition-[opacity,scale] duration-200 ease-[cubic-bezier(0.2,0,0,1)] ${
-                anySending ? "scale-50 opacity-0" : "scale-100 opacity-100"
-              }`}
-            />
-            <LoaderCircle
-              className={`col-start-1 row-start-1 size-4 animate-spin text-accent transition-[opacity] duration-200 ${
-                anySending ? "opacity-100" : "opacity-0"
-              }`}
-            />
-          </span>
-          {stripEntries.length > 1 && (
-            <span className="absolute -bottom-0.5 -right-0.5 grid min-w-4 place-items-center rounded-full border border-border bg-bg-raised px-0.5 text-[9px] font-semibold leading-4 text-fg-muted">
-              {stripEntries.length}
-            </span>
-          )}
-          <span
-            className={`absolute -right-0.5 -top-0.5 size-2 rounded-full bg-accent transition-[opacity,scale] duration-200 ease-[cubic-bezier(0.2,0,0,1)] ${
-              anyUnread && !anySending
-                ? "scale-100 opacity-100"
-                : "scale-0 opacity-0"
+        <ShortcutHint label="Expand chat bubbles" side="top">
+          <button
+            type="button"
+            onClick={() => setCollapseOverride(false)}
+            className={`relative grid cursor-pointer place-items-center overflow-visible rounded-full border border-border bg-bg-overlay text-fg-muted transition-[max-width,opacity,background-color,border-color] duration-250 ease-[cubic-bezier(0.2,0,0,1)] hover:border-border-strong hover:text-fg ${
+              collapsed
+                ? "size-9 max-w-9 opacity-100"
+                : "pointer-events-none size-9 max-w-0 border-0 opacity-0"
             }`}
-          />
-        </button>
+            aria-label="Expand chat bubbles"
+            aria-hidden={!collapsed}
+            inert={!collapsed ? true : undefined}
+          >
+            <span className="relative grid size-4 place-items-center">
+              <MessageSquare
+                className={`col-start-1 row-start-1 size-4 transition-[opacity,scale] duration-200 ease-[cubic-bezier(0.2,0,0,1)] ${
+                  anySending ? "scale-50 opacity-0" : "scale-100 opacity-100"
+                }`}
+              />
+              <LoaderCircle
+                className={`col-start-1 row-start-1 size-4 animate-spin text-accent transition-[opacity] duration-200 ${
+                  anySending ? "opacity-100" : "opacity-0"
+                }`}
+              />
+            </span>
+            {stripEntries.length > 1 && (
+              <span className="absolute -bottom-0.5 -right-0.5 grid min-w-4 place-items-center rounded-full border border-border bg-bg-raised px-0.5 text-[9px] font-semibold leading-4 text-fg-muted">
+                {stripEntries.length}
+              </span>
+            )}
+            <span
+              className={`absolute -right-0.5 -top-0.5 size-2 rounded-full bg-accent transition-[opacity,scale] duration-200 ease-[cubic-bezier(0.2,0,0,1)] ${
+                anyUnread && !anySending
+                  ? "scale-100 opacity-100"
+                  : "scale-0 opacity-0"
+              }`}
+            />
+          </button>
+        </ShortcutHint>
       </div>
     </div>
   );

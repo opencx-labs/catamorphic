@@ -11,6 +11,7 @@ import { type FormEvent, useEffect, useRef, useState } from "react";
 import { desktopApi } from "../lib/desktop-api.js";
 import { Modal } from "./modal.js";
 import { PendingButton } from "./pending-button.js";
+import { ShortcutHint } from "./shortcut-hint.js";
 
 /**
  * Agent setup wizard — the one place agents are added. Shown as a full tab
@@ -299,19 +300,20 @@ export function AgentWizard({
         <code className="min-w-0 flex-1 truncate rounded-md border border-border bg-bg-inset px-2 py-1 font-mono text-[11px] text-fg-muted">
           {ccCommand}
         </code>
-        <button
-          type="button"
-          onClick={() => copyCommand(ccCommand)}
-          className="grid size-6 shrink-0 cursor-pointer place-items-center rounded text-fg-muted transition-colors duration-150 hover:text-fg"
-          aria-label="Copy sign-in command"
-          title="Copy command"
-        >
-          {copied ? (
-            <Check className="size-3 text-success" />
-          ) : (
-            <Copy className="size-3" />
-          )}
-        </button>
+        <ShortcutHint label="Copy command">
+          <button
+            type="button"
+            onClick={() => copyCommand(ccCommand)}
+            className="grid size-6 shrink-0 cursor-pointer place-items-center rounded text-fg-muted transition-colors duration-150 hover:text-fg"
+            aria-label="Copy sign-in command"
+          >
+            {copied ? (
+              <Check className="size-3 text-success" />
+            ) : (
+              <Copy className="size-3" />
+            )}
+          </button>
+        </ShortcutHint>
       </div>
       <p className="text-[11px] text-fg-faint">
         Finish sign-in in your terminal, then continue.

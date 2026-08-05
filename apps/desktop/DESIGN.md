@@ -80,6 +80,12 @@ Low-chroma so run states don't scream: `--color-success`, `--color-warning`,
   mid-action.
 - Pending buttons are also disabled while pending (PendingButton enforces
   this).
+- **Every icon-only button gets a `ShortcutHint` tooltip.** A button whose
+  meaning isn't carried by visible text must be wrapped in
+  `<ShortcutHint label="…">` (plus `shortcut` when one exists) — never the
+  native `title` attribute, which times and styles differently. Applies to
+  toolbars, pills, chips, strips, bubbles; registry components stay
+  presentational and inherit hints from their hosts where applicable.
 
 ## Shape & spacing
 
@@ -904,3 +910,43 @@ Patterned on what best-in-class palettes converged on (Chrome omnibox
 - Deliberate v1 limits: two panes, 50/50, no drag-resize; clicks inside a
   webview don't focus its pane (webview events don't bubble — use the
   address bar or tab strip).
+
+### 2026-08-05 — Split/groups follow-up: resize, drag, group folding, link flavors
+- **Activity indicator is now truly server-truth.** The turn runs inside
+  the send request; if that response stalls after the turn's messages are
+  persisted, the old `isSending || pending` computation spun forever.
+  `useAgentChat` now lets a settled server state (completed assistant
+  reply, nothing optimistic or queued) override a stuck request.
+- **The surfaces rail only shows real surfaces.** The "+ Terminal"
+  affordance moved into the chat's header controls — which now sit in a
+  snug bordered pill (bg-raised/95 + blur) so they never dissolve into
+  timeline content scrolled beneath them.
+- **Link clicks in agent messages follow the palette's grammar** (↵
+  open / ⌘↵ new tab, extended with a side commit): plain click opens —
+  the page takes the view and a fullscreen chat steps down to the
+  floating dock; ⌘-click opens a new tab with the chat untouched;
+  ⌘⇧-click tiles the page to the right of the current view. The palette
+  itself gained the same third gear: ⌘⇧↵ opens URL rows (addresses,
+  bookmarks, history) to the side, advertised in the footer hints.
+  Chat-control buttons now use ShortcutHint (the app-standard tooltip)
+  instead of native titles; the terminal button was dropped from the
+  pill — attached terminals come from agents, not chrome.
+- **A split pair merges in the strip.** When the two tiled tabs sit next
+  to each other, their facing corners square off, the inner borders and
+  the gap collapse — one bubble, two labels (bubbles merging). Non-
+  adjacent pairs keep the raised-companion styling.
+- **Splits resize.** `split.ratio` + a 7px drag handle on the divider
+  (transparent, accent line on hover); a full-region overlay during the
+  drag keeps webviews from eating the mousemoves. Every split pane offers
+  "Full width" — in the browser toolbar right of the star, as a floating
+  pill on other panes, in the chat's control pill for chat tabs.
+- **Groups fold.** Attached tabs cluster after their chat tab with a
+  2px accent/40 top border; a chevron at the group's end folds them under
+  the parent (members play tab-out), which then shows a »N badge that
+  unfolds them (tab-in). Folding away the active tab focuses the chat.
+- **Tabs drag.** The strip reorders by drag (`tabOrder` on the workspace;
+  groups travel with their parent and stay contiguous), and dragging a
+  tab over the content area offers left/right drop zones that tile it to
+  that side. mergeRendered now follows the INCOMING tab order so reorders
+  actually move rows; exiting tabs still hold their old spot while
+  animating out.

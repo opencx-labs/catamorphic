@@ -1,6 +1,7 @@
 import {
   ArrowLeft,
   ArrowRight,
+  Columns2,
   Globe,
   KeyRound,
   RotateCw,
@@ -9,6 +10,7 @@ import {
   X,
 } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
+import { ShortcutHint } from "../components/shortcut-hint.js";
 import {
   type Bookmark,
   type BookmarksData,
@@ -106,6 +108,7 @@ export function BrowserScreen({
   active,
   onStateChange,
   registerNavigate,
+  onUnsplit,
 }: {
   profileId: string;
   projectId: string;
@@ -113,6 +116,8 @@ export function BrowserScreen({
   /** This browser tab is the focused workspace tab. */
   active: boolean;
   onStateChange: (state: BrowserPageState) => void;
+  /** Set while this tab sits in a split: return it to a full-width tab. */
+  onUnsplit?: () => void;
   /** Hands the host a navigate(url) for "open in current tab" flows. */
   registerNavigate?: (navigate: (url: string) => void) => void;
 }) {
@@ -540,38 +545,46 @@ export function BrowserScreen({
     <div className="flex min-h-0 flex-1 flex-col">
       {/* Toolbar: back/forward/reload + address bar, scoped to this tab. */}
       <div className="relative flex h-10 shrink-0 items-center gap-1 border-b border-border bg-bg px-2">
-        <button
-          type="button"
-          onClick={() => webviewRef.current?.goBack()}
-          disabled={!canGoBack}
-          className="grid size-7 shrink-0 cursor-pointer place-items-center rounded-md text-fg-muted transition-colors duration-150 hover:bg-bg-overlay hover:text-fg disabled:cursor-default disabled:opacity-35 disabled:hover:bg-transparent"
-          aria-label="Back"
-        >
-          <ArrowLeft className="size-4" />
-        </button>
-        <button
-          type="button"
-          onClick={() => webviewRef.current?.goForward()}
-          disabled={!canGoForward}
-          className="grid size-7 shrink-0 cursor-pointer place-items-center rounded-md text-fg-muted transition-colors duration-150 hover:bg-bg-overlay hover:text-fg disabled:cursor-default disabled:opacity-35 disabled:hover:bg-transparent"
-          aria-label="Forward"
-        >
-          <ArrowRight className="size-4" />
-        </button>
-        <button
-          type="button"
-          onClick={() =>
-            loading ? webviewRef.current?.stop() : webviewRef.current?.reload()
-          }
-          className="grid size-7 shrink-0 cursor-pointer place-items-center rounded-md text-fg-muted transition-colors duration-150 hover:bg-bg-overlay hover:text-fg"
-          aria-label={loading ? "Stop" : "Reload"}
-        >
-          {loading ? (
-            <X className="size-4" />
-          ) : (
-            <RotateCw className="size-3.5" />
-          )}
-        </button>
+        <ShortcutHint label="Back">
+          <button
+            type="button"
+            onClick={() => webviewRef.current?.goBack()}
+            disabled={!canGoBack}
+            className="grid size-7 shrink-0 cursor-pointer place-items-center rounded-md text-fg-muted transition-colors duration-150 hover:bg-bg-overlay hover:text-fg disabled:cursor-default disabled:opacity-35 disabled:hover:bg-transparent"
+            aria-label="Back"
+          >
+            <ArrowLeft className="size-4" />
+          </button>
+        </ShortcutHint>
+        <ShortcutHint label="Forward">
+          <button
+            type="button"
+            onClick={() => webviewRef.current?.goForward()}
+            disabled={!canGoForward}
+            className="grid size-7 shrink-0 cursor-pointer place-items-center rounded-md text-fg-muted transition-colors duration-150 hover:bg-bg-overlay hover:text-fg disabled:cursor-default disabled:opacity-35 disabled:hover:bg-transparent"
+            aria-label="Forward"
+          >
+            <ArrowRight className="size-4" />
+          </button>
+        </ShortcutHint>
+        <ShortcutHint label={loading ? "Stop loading" : "Reload"}>
+          <button
+            type="button"
+            onClick={() =>
+              loading
+                ? webviewRef.current?.stop()
+                : webviewRef.current?.reload()
+            }
+            className="grid size-7 shrink-0 cursor-pointer place-items-center rounded-md text-fg-muted transition-colors duration-150 hover:bg-bg-overlay hover:text-fg"
+            aria-label={loading ? "Stop" : "Reload"}
+          >
+            {loading ? (
+              <X className="size-4" />
+            ) : (
+              <RotateCw className="size-3.5" />
+            )}
+          </button>
+        </ShortcutHint>
 
         <div className="relative min-w-0 flex-1">
           <input
@@ -635,24 +648,39 @@ export function BrowserScreen({
 
         {/* Bookmark star, Chrome-style: filled means saved, click toggles. */}
         {firstUrl && (
-          <button
-            type="button"
-            onClick={toggleBookmark}
-            className={`grid size-7 shrink-0 cursor-pointer place-items-center rounded-md transition-colors duration-150 hover:bg-bg-overlay ${
-              currentBookmark ? "text-accent" : "text-fg-muted hover:text-fg"
-            }`}
-            aria-label={
-              currentBookmark ? "Remove bookmark" : "Bookmark this page"
-            }
-            aria-pressed={Boolean(currentBookmark)}
-            title={currentBookmark ? "Remove bookmark" : "Bookmark this page"}
+          <ShortcutHint
+            label={currentBookmark ? "Remove bookmark" : "Bookmark this page"}
           >
-            <Star
-              className={`size-3.5 transition-[fill,color,scale] duration-150 ease-[cubic-bezier(0.2,0,0,1)] ${
-                currentBookmark ? "scale-110 fill-current" : "scale-100"
+            <button
+              type="button"
+              onClick={toggleBookmark}
+              className={`grid size-7 shrink-0 cursor-pointer place-items-center rounded-md transition-colors duration-150 hover:bg-bg-overlay ${
+                currentBookmark ? "text-accent" : "text-fg-muted hover:text-fg"
               }`}
-            />
-          </button>
+              aria-label={
+                currentBookmark ? "Remove bookmark" : "Bookmark this page"
+              }
+              aria-pressed={Boolean(currentBookmark)}
+            >
+              <Star
+                className={`size-3.5 transition-[fill,color,scale] duration-150 ease-[cubic-bezier(0.2,0,0,1)] ${
+                  currentBookmark ? "scale-110 fill-current" : "scale-100"
+                }`}
+              />
+            </button>
+          </ShortcutHint>
+        )}
+        {onUnsplit && (
+          <ShortcutHint label="Full width">
+            <button
+              type="button"
+              onClick={onUnsplit}
+              className="grid size-7 shrink-0 cursor-pointer place-items-center rounded-md text-fg-muted transition-colors duration-150 hover:bg-bg-overlay hover:text-fg"
+              aria-label="Full width"
+            >
+              <Columns2 className="size-3.5" />
+            </button>
+          </ShortcutHint>
         )}
       </div>
 

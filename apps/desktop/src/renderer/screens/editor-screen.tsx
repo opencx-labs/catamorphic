@@ -3,6 +3,7 @@ import Editor, { type OnMount } from "@monaco-editor/react";
 import { FileCode, Search } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { commandScore } from "../lib/command-score.js";
+import { ShortcutHint } from "../components/shortcut-hint.js";
 import { useTheme } from "../lib/theme.js";
 
 type EditorInstance = Parameters<OnMount>[0];
@@ -99,15 +100,16 @@ export function EditorScreen({
   return (
     <div className="flex min-h-0 flex-1 flex-col">
       <div className="flex h-9 shrink-0 items-center gap-2 border-b border-border bg-bg-inset px-3">
-        <button
-          type="button"
-          onClick={() => onFileChange(null)}
-          className="flex min-w-0 cursor-pointer items-center gap-1.5 rounded px-1.5 py-0.5 font-mono text-xs text-fg-muted transition-colors duration-150 hover:bg-bg-overlay hover:text-fg"
-          title="Open another file"
-        >
-          <Search className="size-3 shrink-0" />
-          <span className="truncate">{filePath}</span>
-        </button>
+        <ShortcutHint label="Open another file">
+          <button
+            type="button"
+            onClick={() => onFileChange(null)}
+            className="flex min-w-0 cursor-pointer items-center gap-1.5 rounded px-1.5 py-0.5 font-mono text-xs text-fg-muted transition-colors duration-150 hover:bg-bg-overlay hover:text-fg"
+          >
+            <Search className="size-3 shrink-0" />
+            <span className="truncate">{filePath}</span>
+          </button>
+        </ShortcutHint>
         {draft !== undefined && (
           <button
             type="button"

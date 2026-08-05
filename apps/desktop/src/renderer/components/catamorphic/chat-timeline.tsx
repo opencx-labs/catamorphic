@@ -54,8 +54,13 @@ export interface ChatTimelineProps {
   /**
    * A link in an agent message was clicked. Hosts route it to their own
    * surface (e.g. an attached browser tab) instead of the anchor default.
+   * Modifier state rides along so hosts can offer alternate flavors
+   * (background tab, minimize-and-open, ...).
    */
-  onLinkClick?: (url: string) => void;
+  onLinkClick?: (
+    url: string,
+    modifiers: { metaKey: boolean; shiftKey: boolean },
+  ) => void;
   /**
    * A changed-file chip was clicked. Hosts open the file (e.g. in an
    * editor surface). Without it the chips stay inert.
@@ -152,7 +157,10 @@ function Message({
   onFileClick,
 }: {
   message: ChatTimelineMessage;
-  onLinkClick?: (url: string) => void;
+  onLinkClick?: (
+    url: string,
+    modifiers: { metaKey: boolean; shiftKey: boolean },
+  ) => void;
   onFileClick?: (path: string) => void;
 }) {
   const files = changedFiles(message);
@@ -197,7 +205,12 @@ function Message({
                         href={href}
                         onClick={(event) => {
                           event.preventDefault();
-                          if (href) onLinkClick(href);
+                          if (href) {
+                            onLinkClick(href, {
+                              metaKey: event.metaKey,
+                              shiftKey: event.shiftKey,
+                            });
+                          }
                         }}
                       >
                         {children}

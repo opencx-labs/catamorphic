@@ -1,6 +1,7 @@
 import type { ProjectSummary } from "@catamorphic/react/types";
 import { Box, Check, ChevronsUpDown, FolderPlus, Trash2 } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
+import { ShortcutHint } from "./shortcut-hint.js";
 
 export interface ProjectSwitcherProps {
   projects: ProjectSummary[];
@@ -95,18 +96,19 @@ export function ProjectSwitcher({
                     <Check className="size-3.5 shrink-0 text-accent" />
                   )}
                 </button>
-                <button
-                  type="button"
-                  onClick={() => {
-                    onDeleteProject(project);
-                    setOpen(false);
-                  }}
-                  className="mr-1 hidden size-6 shrink-0 cursor-pointer place-items-center rounded text-fg-faint transition-colors duration-150 hover:text-danger group-hover:grid"
-                  aria-label={`Delete ${project.name}`}
-                  title="Delete project"
-                >
-                  <Trash2 className="size-3.5" />
-                </button>
+                <ShortcutHint label="Delete project">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      onDeleteProject(project);
+                      setOpen(false);
+                    }}
+                    className="mr-1 hidden size-6 shrink-0 cursor-pointer place-items-center rounded text-fg-faint transition-colors duration-150 hover:text-danger group-hover:grid"
+                    aria-label={`Delete ${project.name}`}
+                  >
+                    <Trash2 className="size-3.5" />
+                  </button>
+                </ShortcutHint>
               </div>
             );
           })}

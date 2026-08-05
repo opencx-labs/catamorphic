@@ -9,6 +9,19 @@ import {
 } from "react";
 import { createPortal } from "react-dom";
 import type { SidebarMenuEntry } from "../lib/desktop-api.js";
+import { ShortcutHint } from "./shortcut-hint";
+
+/** Optional hover hint (e.g. a bookmark's URL) in the app-standard style. */
+function TitleHint({
+  title,
+  children,
+}: {
+  title?: string;
+  children: React.ReactNode;
+}) {
+  if (!title) return <>{children}</>;
+  return <ShortcutHint label={title}>{children}</ShortcutHint>;
+}
 
 /**
  * One sidebar list row: icon + label, with a single ⋯ button revealed on
@@ -110,19 +123,20 @@ export function SidebarItemRow({
         />
       ) : (
         <>
-          <button
-            type="button"
-            onClick={onOpen}
-            className="flex h-full min-w-0 flex-1 cursor-pointer items-center gap-2 px-2 text-left text-[13px] text-fg-muted hover:text-fg"
-            title={title}
-          >
-            {IconComponent ? (
-              <IconComponent className="size-3.5 shrink-0 text-fg-faint" />
-            ) : (
-              icon
-            )}
-            <span className="truncate">{label}</span>
-          </button>
+          <TitleHint title={title}>
+            <button
+              type="button"
+              onClick={onOpen}
+              className="flex h-full min-w-0 flex-1 cursor-pointer items-center gap-2 px-2 text-left text-[13px] text-fg-muted hover:text-fg"
+            >
+              {IconComponent ? (
+                <IconComponent className="size-3.5 shrink-0 text-fg-faint" />
+              ) : (
+                icon
+              )}
+              <span className="truncate">{label}</span>
+            </button>
+          </TitleHint>
           {menu && menu.length > 0 && (
             <button
               ref={buttonRef}

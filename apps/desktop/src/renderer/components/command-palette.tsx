@@ -69,7 +69,12 @@ import type { WorkspaceTab } from "./workspace-tabs.js";
  * (the palette tab is consumed).
  */
 
-type CommitMode = "replace" | "tab";
+/**
+ * How a row's target opens, mirrored from the entry hints: ↵ opens in the
+ * current tab, ⌘↵ in a new tab, ⌘⇧↵ tiled to the side of the current
+ * view. Rows that can't tile (pure actions) treat "side" as "tab".
+ */
+type CommitMode = "replace" | "tab" | "side";
 
 /**
  * Icons stay renderer-side (the shared registry is plain data usable by
@@ -1213,7 +1218,7 @@ export function CommandPalette({
     return () => onHighlightTargetRef.current?.(null);
   }, [highlightTarget]);
 
-  const commit = (item: PaletteItem, withCmd: boolean) => {
+  const commit = (item: PaletteItem, withCmd: boolean, withShift = false) => {
     // Entering a chip mode swaps palette state — the palette stays open.
     if (item.id.startsWith("mode-row:")) {
       item.run("replace");
@@ -1237,7 +1242,8 @@ export function CommandPalette({
     // A chip-mode row with nothing typed has nothing to do yet.
     if (item.id.startsWith("mode:") && trimmed === "") return;
     const inTab = variant === "tab";
-    const commitMode: CommitMode = inTab || withCmd ? "tab" : "replace";
+    const commitMode: CommitMode =
+      withCmd && withShift ? "side" : inTab || withCmd ? "tab" : "replace";
     if (variant === "overlay") onClose();
     item.run(commitMode);
     // A palette tab is consumed by whatever it opened; pure actions
@@ -1296,7 +1302,9 @@ export function CommandPalette({
     } else if (event.key === "Enter" && !event.shiftKey) {
       event.preventDefault();
       const item = results[selected];
-      if (item) commit(item, event.metaKey || event.ctrlKey);
+      if (item) {
+        commit(item, event.metaKey || event.ctrlKey, event.shiftKey);
+      }
     }
   };
 
@@ -1403,7 +1411,7 @@ export function CommandPalette({
                 // mousedown so the textarea's focus never flickers away.
                 onMouseDown={(event) => {
                   event.preventDefault();
-                  commit(item, event.metaKey);
+                  commit(item, event.metaKey, event.shiftKey);
                 }}
                 onMouseEnter={() => setSelectedIndex(index)}
                 className={`flex h-9 w-full cursor-pointer items-center gap-2.5 rounded-lg px-2.5 text-left text-[13px] transition-colors duration-100 ${
@@ -1449,6 +1457,7 @@ export function CommandPalette({
         <span className="ml-auto" />
         <FooterHint keycap="↵" label="open" />
         <FooterHint keycap="⌘↵" label="new tab" />
+        <FooterHint keycap="⌘⇧↵" label="side" />
       </footer>
     </div>
   );
