@@ -131,6 +131,7 @@ function CloseButton({
 export function WorkspaceTabBar({
   tabs,
   activeKey,
+  secondaryKey,
   highlightKey,
   onSelect,
   onClose,
@@ -138,6 +139,8 @@ export function WorkspaceTabBar({
 }: {
   tabs: WorkspaceTab[];
   activeKey?: string;
+  /** The unfocused pane of a split view — styled active but muted. */
+  secondaryKey?: string;
   /**
    * Tab a highlighted palette command would act on — rendered with an
    * accent border so "Close tab" (etc.) points at its target before Enter.
@@ -172,6 +175,7 @@ export function WorkspaceTabBar({
       {rendered.map(({ tab, exiting }) => {
         const key = tabKey(tab);
         const active = !exiting && key === activeKey;
+        const secondary = !exiting && key === secondaryKey;
         const highlighted = !exiting && key === highlightKey;
         const Icon = TAB_ICONS[tab.kind];
         return (
@@ -190,7 +194,9 @@ export function WorkspaceTabBar({
                   : "border-accent text-fg"
                 : active
                   ? "border-border border-b-bg bg-bg text-fg"
-                  : "border-transparent text-fg-muted hover:bg-bg-overlay/60 hover:text-fg"
+                  : secondary
+                    ? "border-border border-b-bg bg-bg text-fg-muted"
+                    : "border-transparent text-fg-muted hover:bg-bg-overlay/60 hover:text-fg"
             }`}
             aria-hidden={exiting || undefined}
           >

@@ -74,6 +74,14 @@ export const BUILTIN_ACTIONS = [
     keywords: ["chat", "tab", "maximize", "expand", "full", "screen"],
   },
   {
+    id: "split-view",
+    label: "Split with previous tab",
+    description:
+      "tile the active tab beside the previously focused one; press again to unsplit",
+    defaultBinding: "Cmd+\\",
+    keywords: ["split", "tile", "side", "pane", "view", "two", "columns"],
+  },
+  {
     id: "prev-chat",
     label: "Previous chat",
     description: "show the previous chat in the floating dock",

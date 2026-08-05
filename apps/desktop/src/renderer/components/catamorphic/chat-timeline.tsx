@@ -51,6 +51,16 @@ export interface ChatTimelineProps {
    * max-width column while the scrollbar hugs the container edge.
    */
   contentClassName?: string;
+  /**
+   * A link in an agent message was clicked. Hosts route it to their own
+   * surface (e.g. an attached browser tab) instead of the anchor default.
+   */
+  onLinkClick?: (url: string) => void;
+  /**
+   * A changed-file chip was clicked. Hosts open the file (e.g. in an
+   * editor surface). Without it the chips stay inert.
+   */
+  onFileClick?: (path: string) => void;
 }
 
 /**
@@ -67,6 +77,8 @@ export function ChatTimeline({
   emptyState = "Ask the agent to build or change your project.",
   className = "",
   contentClassName = "",
+  onLinkClick,
+  onFileClick,
 }: ChatTimelineProps) {
   return (
     <StickToBottom
@@ -87,6 +99,8 @@ export function ChatTimeline({
           <Message
             key={timelineKey(message, index, messages)}
             message={message}
+            onLinkClick={onLinkClick}
+            onFileClick={onFileClick}
           />
         ))}
         {activity && (
@@ -132,7 +146,15 @@ function timelineKey(
   return `${message.role}:${occurrence}:${message.content}`;
 }
 
-function Message({ message }: { message: ChatTimelineMessage }) {
+function Message({
+  message,
+  onLinkClick,
+  onFileClick,
+}: {
+  message: ChatTimelineMessage;
+  onLinkClick?: (url: string) => void;
+  onFileClick?: (path: string) => void;
+}) {
   const files = changedFiles(message);
   const [entered, setEntered] = useState(false);
 
@@ -165,19 +187,51 @@ function Message({ message }: { message: ChatTimelineMessage }) {
         </div>
       ) : (
         <div className="cat-markdown min-w-0 break-words leading-6">
-          <Markdown remarkPlugins={REMARK_PLUGINS}>{message.content}</Markdown>
+          <Markdown
+            remarkPlugins={REMARK_PLUGINS}
+            components={
+              onLinkClick
+                ? {
+                    a: ({ href, children }) => (
+                      <a
+                        href={href}
+                        onClick={(event) => {
+                          event.preventDefault();
+                          if (href) onLinkClick(href);
+                        }}
+                      >
+                        {children}
+                      </a>
+                    ),
+                  }
+                : undefined
+            }
+          >
+            {message.content}
+          </Markdown>
         </div>
       )}
       {files.length > 0 && (
         <div className="mt-2 flex flex-wrap gap-1">
-          {files.map((file) => (
-            <code
-              key={file}
-              className="rounded border border-success/50 bg-success/10 px-1.5 py-0.5 text-[11px] text-success"
-            >
-              {file}
-            </code>
-          ))}
+          {files.map((file) =>
+            onFileClick ? (
+              <button
+                key={file}
+                type="button"
+                onClick={() => onFileClick(file)}
+                className="cursor-pointer rounded border border-success/50 bg-success/10 px-1.5 py-0.5 font-mono text-[11px] text-success transition-colors duration-100 hover:bg-success/20"
+              >
+                {file}
+              </button>
+            ) : (
+              <code
+                key={file}
+                className="rounded border border-success/50 bg-success/10 px-1.5 py-0.5 text-[11px] text-success"
+              >
+                {file}
+              </code>
+            ),
+          )}
         </div>
       )}
     </article>

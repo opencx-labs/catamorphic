@@ -873,3 +873,34 @@ Patterned on what best-in-class palettes converged on (Chrome omnibox
 - Caveats accepted deliberately: Cmd+[ / Cmd+] shadow Monaco's
   indent/outdent while an editor has focus (the editor wins there), and
   Cmd+, is free because the app has no Preferences accelerator.
+
+### 2026-08-05 — Tiling and chat surfaces (tab groups, the Catamorphic way)
+- **Tab groups anchor on chats, not colors.** Researched Arc (split views
+  as first-class sidebar entities, folders, Cmd+Shift+Plus) and Linear
+  (keyboard-first peek of related items). Chrome-style colored groups
+  don't fit a workspace whose tabs already have an owner: the natural
+  group is *the agent conversation*. Tabs born from a chat — pages the
+  agent linked, files it changed, terminals for its work — carry a
+  `chatLocalId` and appear on that chat's **surfaces rail**: chips above
+  the composer (favicon/kind icon + label). Click opens the tab; the
+  split button or ⌘-click tiles it **to the right of the current view**.
+  A dashed "+ Terminal" chip opens a project terminal attached to the
+  chat. The rail appears once a conversation is under way.
+- **Attachment sources today:** links clicked in agent messages (the
+  timeline's new `onLinkClick` — which also stops raw anchors from
+  navigating the app window), changed-file chips (`onFileClick` opens the
+  file in an attached editor), and the rail's terminal button. The same
+  `chatLocalId` field is the hook for agent-driven tab opening later.
+- **Tiling is one split, not a window manager.** `split: {leftKey,
+  rightKey}` on the workspace; every pane keeps its absolute-positioned
+  DOM node (webviews and terminals never remount) and just gets a
+  half-width slot. Cmd+\ tiles the active tab with the previously focused
+  one; again unsplits. Clicking a tab outside the split replaces the
+  focused pane (Arc's model); cycling (Cmd+[/]) exits the split; closing
+  a pane collapses to its partner. The split renders only while valid —
+  any mutation that breaks it falls back to the single view, so no state
+  updater needs split awareness. In the strip, the unfocused pane's tab
+  is raised like the active one but with muted text.
+- Deliberate v1 limits: two panes, 50/50, no drag-resize; clicks inside a
+  webview don't focus its pane (webview events don't bubble — use the
+  address bar or tab strip).

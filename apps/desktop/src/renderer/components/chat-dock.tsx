@@ -2,9 +2,14 @@ import { useAgentChat } from "@catamorphic/react";
 import {
   ArrowUp,
   Bot,
+  Columns2,
+  FileCode,
+  Globe,
   Maximize2,
   Minus,
   PictureInPicture2,
+  Plus,
+  SquareTerminal,
 } from "lucide-react";
 import {
   type FormEvent,
@@ -21,6 +26,24 @@ import {
 } from "./catamorphic/chat-timeline";
 
 export type ChatMode = "min" | "partial" | "tab";
+
+/**
+ * A workspace tab attached to this chat — the agent's working surfaces
+ * (browser pages it linked, terminals for its project, files it changed).
+ */
+export interface ChatSurface {
+  /** Workspace tab key ("browser:<id>" / "terminal:<id>" / "editor:<id>"). */
+  key: string;
+  kind: "browser" | "terminal" | "editor";
+  label: string;
+  faviconUrl?: string | null;
+}
+
+const SURFACE_ICONS = {
+  browser: Globe,
+  terminal: SquareTerminal,
+  editor: FileCode,
+} as const;
 
 /** Short, charismatic empty-state openers; one is picked per chat. */
 const EMPTY_STATE_PHRASES = [
@@ -72,8 +95,13 @@ export interface ChatDockProps {
   entry: ChatDockEntry;
   title: string;
   placeholder?: string;
-  /** Whether this chat's workspace tab is the active tab (tab mode only). */
+  /** Whether this chat's workspace tab occupies a view slot (tab mode). */
   tabActive: boolean;
+  /**
+   * Where the tab sits in the content view: the full area, or one half
+   * of a split. Floating/minimized modes ignore it.
+   */
+  slot?: "full" | "left" | "right";
   /**
    * How the bubble UI occupies the bottom edge while this chat is a tab:
    * "strip" = expanded centered strip (reserve bottom height), "corner" =
@@ -87,6 +115,21 @@ export interface ChatDockProps {
    * dock's border so the command visibly points at it before Enter.
    */
   paletteTargeted?: boolean;
+  /** Tabs attached to this chat, rendered as the surfaces rail. */
+  surfaces?: ChatSurface[];
+  /**
+   * Open an attached surface: "tab" focuses it as a full tab, "split"
+   * tiles it to the right of the current view.
+   */
+  onOpenSurface?: (key: string, mode: "tab" | "split") => void;
+  /** Open a fresh terminal attached to this chat. */
+  onNewTerminal?: () => void;
+  /** Set while this tab is the unfocused pane of a split: click focuses. */
+  onFocusRequest?: () => void;
+  /** Agent-message link clicked — opens as an attached browser tab. */
+  onLinkClick?: (url: string) => void;
+  /** Changed-file chip clicked — opens the file in an attached editor. */
+  onFileClick?: (path: string) => void;
   onEntryChange: (entry: ChatDockEntry) => void;
   /** Close the chat entirely (dismissing an empty chat removes it). */
   onClose: (localId: string) => void;
@@ -112,9 +155,16 @@ export function ChatDock({
   title,
   placeholder = "Describe what you want to build…",
   tabActive,
+  slot = "full",
   bubbleClearance,
   defaultAgentId,
   paletteTargeted,
+  surfaces = [],
+  onOpenSurface,
+  onNewTerminal,
+  onFocusRequest,
+  onLinkClick,
+  onFileClick,
   onEntryChange,
   onClose,
   registerClose,
@@ -257,11 +307,20 @@ export function ChatDock({
 
   return (
     <div
-      className={`pointer-events-none absolute inset-0 z-30 flex flex-col items-center justify-end transition-[padding] duration-250 ease-[cubic-bezier(0.2,0,0,1)] ${
-        isTab ? "p-0" : "px-6 pb-16 pt-3"
+      className={`pointer-events-none absolute z-30 flex flex-col items-center justify-end transition-[padding] duration-250 ease-[cubic-bezier(0.2,0,0,1)] ${
+        // In a split, a tabbed chat occupies only its half of the view;
+        // floating chats always overlay the full area.
+        isTab && tabActive && slot === "left"
+          ? "inset-y-0 left-0 right-1/2 border-r border-border p-0"
+          : isTab && tabActive && slot === "right"
+            ? "inset-y-0 left-1/2 right-0 p-0"
+            : isTab
+              ? "inset-0 p-0"
+              : "inset-0 px-6 pb-16 pt-3"
       }`}
     >
       <section
+        onMouseDownCapture={onFocusRequest}
         data-palette-target={(paletteTargeted && !isTab) || undefined}
         className={`pointer-events-auto relative flex w-full origin-bottom flex-col overflow-hidden backdrop-blur-xl transition-[max-width,height,opacity,translate,scale,background-color,border-radius,border-color] duration-250 ease-[cubic-bezier(0.2,0,0,1)] ${
           isTab
@@ -335,6 +394,8 @@ export function ChatDock({
             queuedCount={Math.max(0, chat.queuedMessageCount - 1)}
             error={chat.error?.message ?? null}
             emptyState={emptyStateFor(entry.localId)}
+            onLinkClick={onLinkClick}
+            onFileClick={onFileClick}
           />
           {/* Keep the composer clear of the bubble UI: bottom padding for
               the expanded strip, side padding for the corner bubble. */}
@@ -351,6 +412,71 @@ export function ChatDock({
                 : ""
             }`}
           >
+            {/* The surfaces rail: the agent's working tabs (linked pages,
+                terminals, changed files) live with the chat. Click opens
+                the tab; the split button (or Cmd+click) tiles it to the
+                right of the current view. Appears once a conversation is
+                under way — fresh empty chats stay clean. */}
+            {(surfaces.length > 0 || messages.length > 0) &&
+              (onOpenSurface || onNewTerminal) && (
+                <div className="mx-3 flex items-center gap-1.5 overflow-x-auto pt-1">
+                  {surfaces.map((surface) => {
+                    const Icon = SURFACE_ICONS[surface.kind];
+                    return (
+                      <span
+                        key={surface.key}
+                        className="group/chip flex shrink-0 items-center overflow-hidden rounded-md border border-border bg-bg-inset text-[11px] text-fg-muted"
+                      >
+                        <button
+                          type="button"
+                          onClick={(event) =>
+                            onOpenSurface?.(
+                              surface.key,
+                              event.metaKey ? "split" : "tab",
+                            )
+                          }
+                          className="flex min-w-0 cursor-pointer items-center gap-1.5 py-1 pl-2 pr-1.5 transition-colors duration-100 hover:text-fg"
+                          title={`Open ${surface.label}`}
+                        >
+                          {surface.kind === "browser" && surface.faviconUrl ? (
+                            <img
+                              src={surface.faviconUrl}
+                              alt=""
+                              className="size-3 shrink-0 rounded-[2px]"
+                            />
+                          ) : (
+                            <Icon className="size-3 shrink-0" />
+                          )}
+                          <span className="max-w-36 truncate">
+                            {surface.label}
+                          </span>
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => onOpenSurface?.(surface.key, "split")}
+                          className="grid size-6 shrink-0 cursor-pointer place-items-center text-fg-faint opacity-60 transition-[color,opacity] duration-100 hover:text-fg group-hover/chip:opacity-100"
+                          aria-label={`Open ${surface.label} to the right`}
+                          title="Open to the right (⌘-click)"
+                        >
+                          <Columns2 className="size-3" />
+                        </button>
+                      </span>
+                    );
+                  })}
+                  {onNewTerminal && (
+                    <button
+                      type="button"
+                      onClick={onNewTerminal}
+                      className="flex shrink-0 cursor-pointer items-center gap-1 rounded-md border border-dashed border-border py-1 pl-1.5 pr-2 text-[11px] text-fg-faint transition-colors duration-100 hover:border-border-strong hover:text-fg-muted"
+                      title="Open a terminal attached to this chat"
+                    >
+                      <Plus className="size-3" />
+                      <SquareTerminal className="size-3" />
+                      Terminal
+                    </button>
+                  )}
+                </div>
+              )}
             {questions && !chat.isSending && (
               <AgentQuestionPanel
                 questions={questions}

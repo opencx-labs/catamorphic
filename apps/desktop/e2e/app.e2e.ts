@@ -263,9 +263,12 @@ describe("chat flows", () => {
       ),
     ).toHaveLength(3);
     // The file the fake agent wrote synced back as a changed-file chip.
-    await runWait(`return !!byText('[role="log"] code', 'NOTES.md');`, {
-      label: "changed-file chip",
-    });
+    await runWait(
+      `return !!byText('[role="log"] button, [role="log"] code', 'NOTES.md');`,
+      {
+        label: "changed-file chip",
+      },
+    );
   });
 });
 
@@ -587,5 +590,88 @@ describe("navigation shortcuts", () => {
     await runWait(`return !$('canvas').closest('div.hidden');`, {
       label: "next tab active (terminal pane visible)",
     });
+  });
+});
+
+describe("tiling and chat surfaces", () => {
+  it("attaches agent-linked pages and rail terminals to the chat", async () => {
+    await run(`pressKey('n', { metaKey: true }); return true;`);
+    await runWait(`return !!floatingDock();`, { label: "chat open" });
+    // The fake agent echoes the message — markdown link included.
+    await run(`
+      const ta = floatingDock().querySelector('textarea');
+      setReactValue(ta, 'see [example](https://example.com/) ok');
+      ta.closest('form').requestSubmit();
+      return true;
+    `);
+    await runWait(
+      `return !!floatingDock()?.querySelector('.cat-markdown a');`,
+      {
+        timeoutMs: 30_000,
+        label: "agent reply renders the link",
+      },
+    );
+    // Clicking the agent's link opens an ATTACHED browser tab (the page
+    // itself may not load offline — the tab and rail chip still appear).
+    await run(
+      `floatingDock().querySelector('.cat-markdown a').click(); return true;`,
+    );
+    await runWait(`return !!$('input[aria-label="Address and search bar"]');`, {
+      timeoutMs: 30_000,
+      label: "attached browser tab",
+    });
+    await runWait(
+      `return [...(floatingDock()?.querySelectorAll('button') ?? [])]
+         .some((el) => el.title?.startsWith('Open '));`,
+      { label: "browser chip on the surfaces rail" },
+    );
+    // "+ Terminal" opens a terminal attached to this chat.
+    await run(
+      `[...floatingDock().querySelectorAll('button')]
+         .find((el) => el.title === 'Open a terminal attached to this chat')
+         .click();
+       return true;`,
+    );
+    await runWait(`return !!$('canvas');`, {
+      timeoutMs: 30_000,
+      label: "attached terminal",
+    });
+  });
+
+  it("opens a surface to the right as a split; Cmd+\\ toggles it", async () => {
+    // Terminal is the active tab; split-open the browser chip beside it.
+    await run(
+      `[...floatingDock().querySelectorAll('button')]
+         .find((el) => el.getAttribute('aria-label')?.endsWith('to the right'))
+         .click();
+       return true;`,
+    );
+    await runWait(
+      `return !!$('div[class*="right-1/2"]') &&
+              $$('canvas').some((el) => !el.closest('div.hidden'));`,
+      { label: "split view: terminal + browser" },
+    );
+    await run(`pressKey('\\\\', { metaKey: true }); return true;`);
+    await runWait(`return !$('div[class*="right-1/2"]');`, {
+      label: "unsplit to the focused tab",
+    });
+    await run(`pressKey('\\\\', { metaKey: true }); return true;`);
+    await runWait(`return !!$('div[class*="right-1/2"]');`, {
+      label: "re-split with the previous tab",
+    });
+  });
+
+  it("closing the focused pane collapses the split to its partner", async () => {
+    // Park the chat so Cmd+W targets the focused pane (retry-safe).
+    await run(
+      `if (floatingDock()) pressKey('m', { metaKey: true }); return true;`,
+    );
+    await runWait(`return !floatingDock();`, { label: "chat parked" });
+    await run(`pressKey('w', { metaKey: true }); return true;`);
+    await runWait(
+      `return !$('div[class*="right-1/2"]') &&
+              $$('canvas').some((el) => !el.closest('div.hidden'));`,
+      { label: "split collapsed to the terminal" },
+    );
   });
 });

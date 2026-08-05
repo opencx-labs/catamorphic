@@ -26,7 +26,11 @@ import { AgentWizard } from "./components/agent-wizard.js";
 import { AnimatedTitle } from "./components/animated-title.js";
 import { BookmarksNav } from "./components/bookmarks-nav.js";
 import { ChatBubbles } from "./components/chat-bubbles.js";
-import { ChatDock, type ChatDockEntry } from "./components/chat-dock.js";
+import {
+  ChatDock,
+  type ChatDockEntry,
+  type ChatSurface,
+} from "./components/chat-dock.js";
 import { CommandPalette } from "./components/command-palette.js";
 import { DeleteProjectModal } from "./components/delete-project-modal.js";
 import { ProfileBar } from "./components/profile-bar.js";
@@ -72,12 +76,16 @@ interface BrowserEntry {
   url: string;
   title: string;
   faviconUrl: string | null;
+  /** Chat this tab is attached to (its surfaces rail), if any. */
+  chatLocalId?: string;
 }
 
 interface TerminalEntry {
   localId: string;
   /** Shell title (OSC 0/2) — feeds the tab label. */
   title: string;
+  /** Chat this tab is attached to (its surfaces rail), if any. */
+  chatLocalId?: string;
 }
 
 interface EditorEntry {
@@ -86,6 +94,14 @@ interface EditorEntry {
   filePath: string | null;
   /** Unsaved draft in the tab — a dot on the tab icon. */
   dirty: boolean;
+  /** Chat this tab is attached to (its surfaces rail), if any. */
+  chatLocalId?: string;
+}
+
+/** Two tabs tiled side by side; the focused one is `activeTabKey`. */
+interface SplitView {
+  leftKey: string;
+  rightKey: string;
 }
 
 interface Workspace {
@@ -96,6 +112,7 @@ interface Workspace {
   browsers: BrowserEntry[];
   terminals: TerminalEntry[];
   editors: EditorEntry[];
+  split: SplitView | null;
 }
 
 const newChatEntry = (mode: ChatDockEntry["mode"]): ChatDockEntry => ({
@@ -118,6 +135,7 @@ const emptyWorkspace = (): Workspace => {
     browsers: [],
     terminals: [],
     editors: [],
+    split: null,
   };
 };
 
@@ -405,17 +423,37 @@ export function App() {
     );
 
   const selectTab = (key: string) =>
-    updateWorkspace((ws) => ({
-      ...ws,
-      activeTabKey: key,
-      ...(key.startsWith("chat:")
-        ? { activeChatId: key.slice("chat:".length) }
-        : {}),
-    }));
+    updateWorkspace((ws) => {
+      // While tiled, picking a tab outside the split replaces the focused
+      // pane (Arc's model) — picking a split member just moves focus.
+      const splitActive =
+        ws.split &&
+        (ws.activeTabKey === ws.split.leftKey ||
+          ws.activeTabKey === ws.split.rightKey);
+      const inSplit =
+        ws.split && (key === ws.split.leftKey || key === ws.split.rightKey);
+      const split = !ws.split
+        ? null
+        : inSplit
+          ? ws.split
+          : splitActive
+            ? ws.activeTabKey === ws.split.leftKey
+              ? { leftKey: key, rightKey: ws.split.rightKey }
+              : { leftKey: ws.split.leftKey, rightKey: key }
+            : null;
+      return {
+        ...ws,
+        split,
+        activeTabKey: key,
+        ...(key.startsWith("chat:")
+          ? { activeChatId: key.slice("chat:".length) }
+          : {}),
+      };
+    });
 
   /** Open a page in a new browser tab (profile session of the workspace). */
   const openBrowserTab = useCallback(
-    (url: string, opts?: { background?: boolean }) => {
+    (url: string, opts?: { background?: boolean; chatLocalId?: string }) => {
       if (!activeProfile) return;
       const entry: BrowserEntry = {
         localId: crypto.randomUUID(),
@@ -424,6 +462,7 @@ export function App() {
         url,
         title: url || "New Tab",
         faviconUrl: null,
+        chatLocalId: opts?.chatLocalId,
       };
       updateWorkspace((ws) => ({
         ...ws,
@@ -431,32 +470,43 @@ export function App() {
         activeTabKey: opts?.background
           ? ws.activeTabKey
           : browserTabKey(entry.localId),
+        split: opts?.background ? ws.split : null,
       }));
     },
     [activeProfile, updateWorkspace],
   );
 
   /** Open a terminal tab; the shell starts in the project folder. */
-  const openTerminalTab = () => {
-    const entry: TerminalEntry = { localId: crypto.randomUUID(), title: "" };
+  const openTerminalTab = (opts?: { chatLocalId?: string }) => {
+    const entry: TerminalEntry = {
+      localId: crypto.randomUUID(),
+      title: "",
+      chatLocalId: opts?.chatLocalId,
+    };
     updateWorkspace((ws) => ({
       ...ws,
       terminals: [...ws.terminals, entry],
       activeTabKey: terminalTabKey(entry.localId),
+      split: null,
     }));
   };
 
-  /** Open an editor tab; it greets with the file quick-open. */
-  const openEditorTab = () => {
+  /** Open an editor tab; without a file it greets with the quick-open. */
+  const openEditorTab = (opts?: {
+    filePath?: string;
+    chatLocalId?: string;
+  }) => {
     const entry: EditorEntry = {
       localId: crypto.randomUUID(),
-      filePath: null,
+      filePath: opts?.filePath ?? null,
       dirty: false,
+      chatLocalId: opts?.chatLocalId,
     };
     updateWorkspace((ws) => ({
       ...ws,
       editors: [...ws.editors, entry],
       activeTabKey: editorTabKey(entry.localId),
+      split: null,
     }));
   };
 
@@ -635,6 +685,14 @@ export function App() {
         .filter((chat) => chat.mode === "tab")
         .map((chat) => chatTabKey(chat.localId)),
     ].filter((key) => key !== closedKey);
+    // Closing one pane of a split lands on its partner, not the last tab.
+    const partner =
+      ws.split && closedKey === ws.split.leftKey
+        ? ws.split.rightKey
+        : ws.split && closedKey === ws.split.rightKey
+          ? ws.split.leftKey
+          : undefined;
+    if (partner && keys.includes(partner)) return partner;
     return keys.at(-1);
   };
 
@@ -1019,8 +1077,71 @@ export function App() {
         : keys[(index + direction + keys.length) % keys.length];
     if (!next || next === ws.activeTabKey) return;
     playPaneMotion(direction === 1 ? "right" : "left");
-    selectTab(next);
+    // Cycling walks single tabs — it exits a split rather than churning
+    // one of its panes.
+    updateWorkspace((current) => ({
+      ...current,
+      split: null,
+      activeTabKey: next,
+      ...(next.startsWith("chat:")
+        ? { activeChatId: next.slice("chat:".length) }
+        : {}),
+    }));
   };
+
+  // Cmd+\ pairs the active tab with the previously focused one — track a
+  // one-deep focus history for that.
+  const previousActiveTabKeyRef = useRef<string | undefined>(undefined);
+  const lastActiveTabKeyRef = useRef<string | undefined>(undefined);
+  useEffect(() => {
+    const current = workspace.activeTabKey;
+    if (current !== lastActiveTabKeyRef.current) {
+      previousActiveTabKeyRef.current = lastActiveTabKeyRef.current;
+      lastActiveTabKeyRef.current = current;
+    }
+  });
+
+  /** Cmd+\: tile the active tab beside the previously focused one. */
+  const toggleSplit = () => {
+    const ws = workspaceRef.current;
+    const keys = orderedTabKeys(ws);
+    const active = ws.activeTabKey;
+    if (!active || !keys.includes(active)) return;
+    if (
+      ws.split &&
+      (active === ws.split.leftKey || active === ws.split.rightKey)
+    ) {
+      updateWorkspace((current) => ({ ...current, split: null }));
+      return;
+    }
+    const previous = previousActiveTabKeyRef.current;
+    const partner =
+      previous && previous !== active && keys.includes(previous)
+        ? previous
+        : keys.find((key) => key !== active);
+    if (!partner) return;
+    updateWorkspace((current) => ({
+      ...current,
+      split: { leftKey: active, rightKey: partner },
+    }));
+  };
+
+  /**
+   * Open an attached surface: "tab" focuses it full-width; "split" tiles
+   * it to the right of whatever the view shows now, and focuses it.
+   */
+  const openSurface = (key: string, mode: "tab" | "split") =>
+    updateWorkspace((ws) => {
+      if (mode === "tab") return { ...ws, split: null, activeTabKey: key };
+      const anchor =
+        ws.activeTabKey && ws.activeTabKey !== key ? ws.activeTabKey : null;
+      if (!anchor) return { ...ws, split: null, activeTabKey: key };
+      return {
+        ...ws,
+        split: { leftKey: anchor, rightKey: key },
+        activeTabKey: key,
+      };
+    });
 
   // Cmd+, / Cmd+. walk the non-tab chats in bubble-strip order, showing
   // each as the floating dock (the docks' own expand/collapse motion
@@ -1088,6 +1209,7 @@ export function App() {
     "next-chat": () => cycleChat(1),
     "prev-tab": () => cycleTab(-1),
     "next-tab": () => cycleTab(1),
+    "split-view": toggleSplit,
     "new-browser-tab": () => openBrowserTab(""),
     "new-terminal-tab": openTerminalTab,
     "new-editor-tab": openEditorTab,
@@ -1192,9 +1314,71 @@ export function App() {
   const activeTerminalTabId = workspace.activeTabKey?.startsWith("terminal:")
     ? workspace.activeTabKey.slice("terminal:".length)
     : undefined;
-  const activeEditorTabId = workspace.activeTabKey?.startsWith("editor:")
-    ? workspace.activeTabKey.slice("editor:".length)
+  // The split renders only while valid: both panes still exist and one of
+  // them is focused. Any mutation that breaks that (a close, a chat mode
+  // change, a plain tab open) silently falls back to the single view —
+  // no updater needs to know about splits.
+  const allTabKeysNow = orderedTabKeys(workspace);
+  const split =
+    workspace.split &&
+    allTabKeysNow.includes(workspace.split.leftKey) &&
+    allTabKeysNow.includes(workspace.split.rightKey) &&
+    (workspace.activeTabKey === workspace.split.leftKey ||
+      workspace.activeTabKey === workspace.split.rightKey)
+      ? workspace.split
+      : null;
+
+  /** Which tabs the content area shows, and where. */
+  const viewSlots: Record<string, "full" | "left" | "right"> = split
+    ? { [split.leftKey]: "left", [split.rightKey]: "right" }
+    : workspace.activeTabKey
+      ? { [workspace.activeTabKey]: "full" }
+      : {};
+  const SLOT_CLASSES = {
+    full: "absolute inset-0 flex flex-col",
+    left: "absolute inset-y-0 left-0 right-1/2 flex flex-col border-r border-border",
+    right: "absolute inset-y-0 left-1/2 right-0 flex flex-col",
+  } as const;
+  const paneClass = (key: string) => {
+    const slot = viewSlots[key];
+    return slot ? SLOT_CLASSES[slot] : "hidden";
+  };
+  /** Clicking anywhere in an unfocused pane focuses it. */
+  const paneFocusProps = (key: string) =>
+    split && workspace.activeTabKey !== key && viewSlots[key]
+      ? { onMouseDownCapture: () => selectTab(key) }
+      : {};
+  const splitCompanionKey = split
+    ? workspace.activeTabKey === split.leftKey
+      ? split.rightKey
+      : split.leftKey
     : undefined;
+
+  /** The agent's working tabs for a chat — its surfaces rail. */
+  const surfacesFor = (chat: ChatDockEntry): ChatSurface[] => [
+    ...workspace.browsers
+      .filter((browser) => browser.chatLocalId === chat.localId)
+      .map((browser) => ({
+        key: browserTabKey(browser.localId),
+        kind: "browser" as const,
+        label: browser.title || browser.url || "Page",
+        faviconUrl: browser.faviconUrl,
+      })),
+    ...workspace.terminals
+      .filter((terminal) => terminal.chatLocalId === chat.localId)
+      .map((terminal) => ({
+        key: terminalTabKey(terminal.localId),
+        kind: "terminal" as const,
+        label: terminal.title || "Terminal",
+      })),
+    ...workspace.editors
+      .filter((editor) => editor.chatLocalId === chat.localId)
+      .map((editor) => ({
+        key: editorTabKey(editor.localId),
+        kind: "editor" as const,
+        label: editor.filePath?.split("/").at(-1) || "Editor",
+      })),
+  ];
 
   // Everything the palette searches and acts on, shared by both hosts
   // (the Cmd+P overlay and palette "New Tab" tabs).
@@ -1334,6 +1518,7 @@ export function App() {
             <WorkspaceTabBar
               tabs={allTabs}
               activeKey={workspace.activeTabKey}
+              secondaryKey={splitCompanionKey}
               highlightKey={targetedTabKey}
               onSelect={selectTab}
               onClose={closeTab}
@@ -1363,43 +1548,52 @@ export function App() {
                   }
                 }}
               >
-                {activeTab?.kind === "workflow" ? (
-                  <WorkflowScreen
-                    projectId={projectId}
-                    workflowName={activeTab.name}
-                  />
-                ) : activeTab?.kind === "app" ? (
-                  <AppScreen projectId={projectId} appName={activeTab.name} />
-                ) : activeTab?.kind === "settings" ? (
-                  <SettingsScreen
-                    onClose={() => closeTab(tabKey(activeTab))}
-                    onAddAgent={() => setWizardModalOpen(true)}
-                  />
-                ) : activeTab?.kind === "palette" && paletteProps ? (
-                  <CommandPalette
-                    key={tabKey(activeTab)}
-                    variant="tab"
-                    onClose={() => closeTab(tabKey(activeTab))}
-                    {...paletteProps}
-                  />
-                ) : activeTab?.kind === "agent-setup" ? (
-                  <AgentWizard
-                    variant="tab"
-                    onClose={() => closeTab(tabKey(activeTab))}
-                    onDone={() => closeTab(tabKey(activeTab))}
-                  />
-                ) : null}
+                {/* Screen-style tabs render whenever they occupy a view
+                    slot — in a split that can be two at once. */}
+                {workspace.tabs
+                  .filter((tab) => viewSlots[tabKey(tab)])
+                  .map((tab) => (
+                    <div
+                      key={tabKey(tab)}
+                      className={paneClass(tabKey(tab))}
+                      {...paneFocusProps(tabKey(tab))}
+                    >
+                      {tab.kind === "workflow" ? (
+                        <WorkflowScreen
+                          projectId={projectId}
+                          workflowName={tab.name}
+                        />
+                      ) : tab.kind === "app" ? (
+                        <AppScreen projectId={projectId} appName={tab.name} />
+                      ) : tab.kind === "settings" ? (
+                        <SettingsScreen
+                          onClose={() => closeTab(tabKey(tab))}
+                          onAddAgent={() => setWizardModalOpen(true)}
+                        />
+                      ) : tab.kind === "palette" && paletteProps ? (
+                        <CommandPalette
+                          key={tabKey(tab)}
+                          variant="tab"
+                          onClose={() => closeTab(tabKey(tab))}
+                          {...paletteProps}
+                        />
+                      ) : tab.kind === "agent-setup" ? (
+                        <AgentWizard
+                          variant="tab"
+                          onClose={() => closeTab(tabKey(tab))}
+                          onDone={() => closeTab(tabKey(tab))}
+                        />
+                      ) : null}
+                    </div>
+                  ))}
 
                 {/* Browser tabs stay mounted while hidden — unmounting a
                   webview would reload the page on every tab switch. */}
                 {workspace.browsers.map((browser) => (
                   <div
                     key={browser.localId}
-                    className={
-                      browser.localId === activeBrowserTabId
-                        ? "absolute inset-0 flex flex-col"
-                        : "hidden"
-                    }
+                    className={paneClass(browserTabKey(browser.localId))}
+                    {...paneFocusProps(browserTabKey(browser.localId))}
                   >
                     <BrowserScreen
                       profileId={browser.profileId}
@@ -1427,11 +1621,8 @@ export function App() {
                 {workspace.terminals.map((terminal) => (
                   <div
                     key={terminal.localId}
-                    className={
-                      terminal.localId === activeTerminalTabId
-                        ? "absolute inset-0 flex flex-col"
-                        : "hidden"
-                    }
+                    className={paneClass(terminalTabKey(terminal.localId))}
+                    {...paneFocusProps(terminalTabKey(terminal.localId))}
                   >
                     <TerminalScreen
                       projectId={projectId}
@@ -1447,11 +1638,8 @@ export function App() {
                 {workspace.editors.map((editor) => (
                   <div
                     key={editor.localId}
-                    className={
-                      editor.localId === activeEditorTabId
-                        ? "absolute inset-0 flex flex-col"
-                        : "hidden"
-                    }
+                    className={paneClass(editorTabKey(editor.localId))}
+                    {...paneFocusProps(editorTabKey(editor.localId))}
                   >
                     <EditorScreen
                       projectId={projectId}
@@ -1473,10 +1661,32 @@ export function App() {
                   projectId={projectId}
                   entry={entry}
                   title={chatLabels[entry.localId] ?? "AI assistant"}
-                  tabActive={entry.localId === activeChatTabId}
+                  tabActive={Boolean(viewSlots[chatTabKey(entry.localId)])}
+                  slot={viewSlots[chatTabKey(entry.localId)] ?? "full"}
                   bubbleClearance={bubblesCollapsed ? "corner" : "strip"}
                   defaultAgentId={agentsData?.defaultAgentId ?? undefined}
                   paletteTargeted={entry.localId === targetedChat?.localId}
+                  surfaces={surfacesFor(entry)}
+                  onOpenSurface={openSurface}
+                  onNewTerminal={() =>
+                    openTerminalTab({ chatLocalId: entry.localId })
+                  }
+                  onLinkClick={(url) =>
+                    openBrowserTab(url, { chatLocalId: entry.localId })
+                  }
+                  onFileClick={(path) =>
+                    openEditorTab({
+                      filePath: path,
+                      chatLocalId: entry.localId,
+                    })
+                  }
+                  onFocusRequest={
+                    split &&
+                    viewSlots[chatTabKey(entry.localId)] &&
+                    workspace.activeTabKey !== chatTabKey(entry.localId)
+                      ? () => selectTab(chatTabKey(entry.localId))
+                      : undefined
+                  }
                   onEntryChange={(next) =>
                     updateWorkspace((ws) => ({
                       ...ws,
