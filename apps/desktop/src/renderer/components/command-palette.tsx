@@ -1453,7 +1453,10 @@ export function CommandPalette({
 
   if (variant === "tab") {
     return (
-      <div className="flex min-h-0 flex-1 justify-center overflow-y-auto px-6 pt-[12vh]">
+      // items-start: this is a ROW flex, and its default stretch would
+      // pull the panel to full height — footer floating mid-card above a
+      // giant empty body (invisible in dark themes, glaring in light).
+      <div className="flex min-h-0 flex-1 items-start justify-center overflow-y-auto px-6 pb-6 pt-[12vh]">
         {panel}
       </div>
     );
