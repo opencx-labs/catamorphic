@@ -137,7 +137,23 @@ export function useAgentChat(
 
   const isSending =
     sendInProgress || createSession.isPending || sendMessage.isPending;
-  const isWorking = isSending || hasPendingAssistant(session.data?.messages);
+  const persistedMessages = session.data?.messages ?? [];
+  const reconciledOptimistic = reconcileOptimisticMessages(
+    persistedMessages,
+    optimisticMessages,
+  );
+  // Server truth beats local request state: the turn runs inside the send
+  // request, and if that response stalls after the turn's messages are
+  // already persisted, `isSending` would spin forever. Once the server
+  // shows the turn settled — last message is a completed assistant reply,
+  // nothing optimistic or queued left — the indicator stops.
+  const turnSettled =
+    persistedMessages.at(-1)?.role === "assistant" &&
+    !hasPendingAssistant(persistedMessages) &&
+    reconciledOptimistic.length === 0 &&
+    queueRef.current.length === 0;
+  const isWorking =
+    hasPendingAssistant(persistedMessages) || (isSending && !turnSettled);
   const performSend = async (content: string) => {
     if (!projectId) return;
 
@@ -215,10 +231,7 @@ export function useAgentChat(
     sessionId,
     session: session.data ?? null,
     messages: session.data?.messages ?? [],
-    optimisticMessages: reconcileOptimisticMessages(
-      session.data?.messages ?? [],
-      optimisticMessages,
-    ),
+    optimisticMessages: reconciledOptimistic,
     queuedMessageCount: queueRef.current.length,
     isLoading: session.isLoading,
     isSending,
