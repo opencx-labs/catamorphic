@@ -4,10 +4,10 @@ import { createPortal } from "react-dom";
 const SHOW_DELAY_MS = 800;
 
 /**
- * Hover popover that teaches a button's keyboard shortcut. Wrap any control
- * whose action also has a shortcut — the hint appears after a hover delay
- * and never intercepts the pointer. Use this instead of the native `title`
- * attribute for shortcut-bearing buttons so all hints look the same.
+ * Hover popover that teaches a button's keyboard shortcut, or (without a
+ * shortcut) acts as the app's standard tooltip. The hint appears after a
+ * hover delay and never intercepts the pointer. Use this instead of the
+ * native `title` attribute so all hints look and time the same.
  *
  * Rendered through a portal: hosts often sit inside overflow-hidden or
  * transformed containers (bubble pill, sidebar) that would clip an
@@ -21,8 +21,8 @@ export function ShortcutHint({
 }: {
   /** Short action name, e.g. "Toggle sidebar". */
   label: string;
-  /** Display form of the shortcut, e.g. "⌘B". */
-  shortcut: string;
+  /** Display form of the shortcut, e.g. "⌘B"; omit for a plain tooltip. */
+  shortcut?: string;
   side?: "bottom" | "top";
   children: ReactNode;
 }) {
@@ -89,7 +89,9 @@ export function ShortcutHint({
             }`}
           >
             {label}
-            <span className="ml-1.5 text-fg-faint">{shortcut}</span>
+            {shortcut && (
+              <span className="ml-1.5 text-fg-faint">{shortcut}</span>
+            )}
           </span>,
           document.body,
         )}

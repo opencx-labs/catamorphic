@@ -2,6 +2,7 @@ import { Check, Pencil, Plus, Star } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import type { Profile, ProfilesData } from "../lib/desktop-api.js";
 import { desktopApi } from "../lib/desktop-api.js";
+import { ShortcutHint } from "./shortcut-hint.js";
 
 /**
  * Chrome-style profile switcher, docked at the bottom of the sidebar.
@@ -49,6 +50,15 @@ export function ProfileBar({
     if (creating) createInputRef.current?.focus();
   }, [creating]);
 
+  // The menu stays mounted for its exit transition; closing it must still
+  // drop transient state (inline create/rename fields).
+  useEffect(() => {
+    if (open) return;
+    setCreating(false);
+    setNewName("");
+    setRenamingId(null);
+  }, [open]);
+
   useEffect(() => {
     if (renamingId) renameInputRef.current?.select();
   }, [renamingId]);
@@ -78,53 +88,61 @@ export function ProfileBar({
 
   return (
     <div ref={containerRef} className="relative">
-      {open && (
-        <div className="absolute inset-x-0 bottom-full z-50 mb-1 origin-bottom rounded-lg border border-border bg-bg-overlay p-1 shadow-2xl">
-          <p className="px-2 pb-1 pt-1.5 text-[11px] font-semibold uppercase tracking-wider text-fg-faint">
-            Profiles
-          </p>
-          {data.profiles.map((profile) => {
-            const isActive = profile.id === active.id;
-            const isDefault = profile.id === data.defaultProfileId;
-            return (
-              <div
-                key={profile.id}
-                className={`group flex h-8 items-center rounded-md transition-colors duration-150 ${
-                  isActive ? "text-fg" : "text-fg-muted hover:bg-bg-raised"
-                }`}
-              >
-                {renamingId === profile.id ? (
-                  <input
-                    ref={renameInputRef}
-                    value={renameValue}
-                    onChange={(event) => setRenameValue(event.target.value)}
-                    onKeyDown={(event) => {
-                      if (event.key === "Enter") void commitRename();
-                      if (event.key === "Escape") setRenamingId(null);
-                    }}
-                    onBlur={() => void commitRename()}
-                    aria-label={`Rename ${profile.name}`}
-                    className="field mx-1 h-7 min-w-0 flex-1 rounded-md px-2 text-[13px] text-fg"
+      <div
+        className={`absolute inset-x-0 bottom-full z-50 mb-1 origin-bottom rounded-lg border border-border bg-bg-overlay p-1 shadow-2xl transition-[opacity,translate,scale] duration-150 ease-[cubic-bezier(0.2,0,0,1)] ${
+          open
+            ? "translate-y-0 scale-100 opacity-100"
+            : "pointer-events-none translate-y-1 scale-[0.98] opacity-0"
+        }`}
+        aria-hidden={!open}
+        inert={!open ? true : undefined}
+      >
+        <p className="px-2 pb-1 pt-1.5 text-[11px] font-semibold uppercase tracking-wider text-fg-faint">
+          Profiles
+        </p>
+        {data.profiles.map((profile) => {
+          const isActive = profile.id === active.id;
+          const isDefault = profile.id === data.defaultProfileId;
+          return (
+            <div
+              key={profile.id}
+              className={`group flex h-8 items-center rounded-md transition-colors duration-150 ${
+                isActive ? "text-fg" : "text-fg-muted hover:bg-bg-raised"
+              }`}
+            >
+              {renamingId === profile.id ? (
+                <input
+                  ref={renameInputRef}
+                  value={renameValue}
+                  onChange={(event) => setRenameValue(event.target.value)}
+                  onKeyDown={(event) => {
+                    if (event.key === "Enter") void commitRename();
+                    if (event.key === "Escape") setRenamingId(null);
+                  }}
+                  onBlur={() => void commitRename()}
+                  aria-label={`Rename ${profile.name}`}
+                  className="field mx-1 h-7 min-w-0 flex-1 rounded-md px-2 text-[13px] text-fg"
+                />
+              ) : (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setOpen(false);
+                    if (!isActive) onSwitch(profile);
+                  }}
+                  className="flex h-full min-w-0 flex-1 cursor-pointer items-center gap-2 px-2 text-left text-[13px]"
+                >
+                  <span
+                    className="size-2.5 shrink-0 rounded-full"
+                    style={{ backgroundColor: profile.color }}
                   />
-                ) : (
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setOpen(false);
-                      if (!isActive) onSwitch(profile);
-                    }}
-                    className="flex h-full min-w-0 flex-1 cursor-pointer items-center gap-2 px-2 text-left text-[13px]"
-                  >
-                    <span
-                      className="size-2.5 shrink-0 rounded-full"
-                      style={{ backgroundColor: profile.color }}
-                    />
-                    <span className="truncate">{profile.name}</span>
-                    {isActive && (
-                      <Check className="ml-auto size-3.5 shrink-0 text-fg-muted" />
-                    )}
-                  </button>
-                )}
+                  <span className="truncate">{profile.name}</span>
+                  {isActive && (
+                    <Check className="ml-auto size-3.5 shrink-0 text-fg-muted" />
+                  )}
+                </button>
+              )}
+              <ShortcutHint side="top" label="Rename profile">
                 <button
                   type="button"
                   onClick={() => {
@@ -133,10 +151,18 @@ export function ProfileBar({
                   }}
                   className="grid size-6 shrink-0 cursor-pointer place-items-center rounded text-fg-faint opacity-0 transition-colors duration-150 hover:text-fg group-hover:opacity-100"
                   aria-label={`Rename ${profile.name}`}
-                  title="Rename"
                 >
                   <Pencil className="size-3" />
                 </button>
+              </ShortcutHint>
+              <ShortcutHint
+                side="top"
+                label={
+                  isDefault
+                    ? "Default profile. The app opens here."
+                    : "Make default. The app will open here."
+                }
+              >
                 <button
                   type="button"
                   onClick={() => void desktopApi.profilesSetDefault(profile.id)}
@@ -148,44 +174,43 @@ export function ProfileBar({
                       ? `${profile.name} is the default profile`
                       : `Make ${profile.name} the default profile`
                   }
-                  title={isDefault ? "Default profile" : "Make default"}
                 >
                   <Star
                     className={`size-3 ${isDefault ? "fill-current text-fg-muted" : ""}`}
                   />
                 </button>
-              </div>
-            );
-          })}
-          <div className="mx-1 my-1 border-t border-border" />
-          {creating ? (
-            <input
-              ref={createInputRef}
-              value={newName}
-              onChange={(event) => setNewName(event.target.value)}
-              onKeyDown={(event) => {
-                if (event.key === "Enter") void create();
-                if (event.key === "Escape") {
-                  setCreating(false);
-                  setNewName("");
-                }
-              }}
-              onBlur={() => void create()}
-              placeholder="Profile name"
-              className="field mx-1 mb-1 h-7 w-[calc(100%-8px)] rounded-md px-2 text-[13px] text-fg"
-            />
-          ) : (
-            <button
-              type="button"
-              onClick={() => setCreating(true)}
-              className="flex h-8 w-full cursor-pointer items-center gap-2 rounded-md px-2 text-left text-[13px] text-fg-muted transition-colors duration-150 hover:bg-bg-raised hover:text-fg"
-            >
-              <Plus className="size-3.5" />
-              New profile
-            </button>
-          )}
-        </div>
-      )}
+              </ShortcutHint>
+            </div>
+          );
+        })}
+        <div className="mx-1 my-1 border-t border-border" />
+        {creating ? (
+          <input
+            ref={createInputRef}
+            value={newName}
+            onChange={(event) => setNewName(event.target.value)}
+            onKeyDown={(event) => {
+              if (event.key === "Enter") void create();
+              if (event.key === "Escape") {
+                setCreating(false);
+                setNewName("");
+              }
+            }}
+            onBlur={() => void create()}
+            placeholder="Profile name"
+            className="field mx-1 mb-1 h-7 w-[calc(100%-8px)] rounded-md px-2 text-[13px] text-fg"
+          />
+        ) : (
+          <button
+            type="button"
+            onClick={() => setCreating(true)}
+            className="flex h-8 w-full cursor-pointer items-center gap-2 rounded-md px-2 text-left text-[13px] text-fg-muted transition-colors duration-150 hover:bg-bg-raised hover:text-fg"
+          >
+            <Plus className="size-3.5" />
+            New profile
+          </button>
+        )}
+      </div>
 
       <button
         type="button"
