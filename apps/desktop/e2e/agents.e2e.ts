@@ -279,12 +279,15 @@ describe("agents and profiles", () => {
   });
 
   it("shows the agent's account in the picker row detail", async () => {
-    // The seeded fake agents authenticate with an API key; that shows up
+    // The seeded fake agents are built-in/Anthropic on an API key: the
+    // detail names the provider and the auth, not the harness.
     // as faded detail beside the harness label.
     await openPicker("Change default agent", "Default agent");
     await runWait(
-      `return paletteRows().some((el) => el.textContent.includes('API key'));`,
-      { label: "account detail on agent rows" },
+      `return paletteRows().some((el) =>
+        el.textContent.includes('Anthropic') &&
+        el.textContent.includes('API key'));`,
+      { label: "provider and auth detail on agent rows" },
     );
     await run(paletteEscape);
   });

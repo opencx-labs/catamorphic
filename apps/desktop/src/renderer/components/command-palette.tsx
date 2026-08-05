@@ -132,6 +132,33 @@ const HARNESS_LABELS: Record<AgentInfo["harness"], string> = {
   codex: "Codex",
 };
 
+const PROVIDER_LABELS: Record<string, string> = {
+  anthropic: "Anthropic",
+  openai: "OpenAI",
+  openrouter: "OpenRouter",
+};
+
+/**
+ * What an agent runs on, for the faded detail: the built-in agent is
+ * named by its provider (the harness name says nothing useful next to a
+ * user-chosen agent name), the CLIs by the harness.
+ */
+function agentSourceLabel(agent: AgentInfo): string {
+  if (agent.harness === "ai-sdk" && agent.provider) {
+    return PROVIDER_LABELS[agent.provider] ?? agent.provider;
+  }
+  return HARNESS_LABELS[agent.harness];
+}
+
+/** How it authenticates, in the user's terms. */
+function agentAuthLabel(agent: AgentInfo): string {
+  if (agent.auth === "api-key") return "API key";
+  if (agent.auth === "local") return "this machine";
+  return agent.harness === "ai-sdk" && agent.provider === "openrouter"
+    ? "signed in"
+    : "separate account";
+}
+
 const EFFORT_LEVELS: Array<{
   id: AgentEffort;
   label: string;
@@ -842,18 +869,17 @@ export function CommandPalette({
                       ((focusedChat?.agentId ?? defaultAgentId) || "")
                     ? " · current"
                     : "";
-              const accountBit =
-                agent.auth === "local"
-                  ? " · this machine"
-                  : agent.auth === "account"
-                    ? " · separate account"
-                    : " · API key";
               return {
                 id: `pick:agent:${agent.id}`,
                 icon: Bot,
                 label: agent.name,
-                detail: `${HARNESS_LABELS[agent.harness]}${accountBit}${marker}`,
-                keywords: [agent.name, agent.harness, agent.model],
+                detail: `${agentSourceLabel(agent)} · ${agentAuthLabel(agent)}${marker}`,
+                keywords: [
+                  agent.name,
+                  agent.harness,
+                  agent.provider ?? "",
+                  agent.model,
+                ],
                 kind: "action" as const,
                 run: () =>
                   picker === "default-agent"

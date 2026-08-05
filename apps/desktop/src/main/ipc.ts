@@ -354,19 +354,29 @@ export function registerIpcHandlers(
       return { started: true };
     }
 
-    // Claude Code's login is an interactive TUI — hand it to the user's
-    // terminal (with a private config dir only for isolated accounts).
+    // Claude Code's login is an interactive TUI, so it needs a terminal.
+    // We launch it by `open`ing a .command script rather than scripting
+    // Terminal.app: AppleScript automation would demand a macOS Automation
+    // permission (attributed to whatever launched us), and asking for that
+    // to run a sign-in is a terrible first impression.
     const command =
       agent.auth === "account"
         ? `CLAUDE_CONFIG_DIR='${home}' claude /login`
         : "claude /login";
     if (process.platform === "darwin") {
-      const script = `tell application "Terminal"
-  activate
-  do script "${command.replace(/"/g, '\\"')}"
-end tell`;
-      spawn("osascript", ["-e", script], { stdio: "ignore" });
-      return { started: true, command };
+      try {
+        const script = path.join(agentHome(id), "sign-in.command");
+        fs.writeFileSync(
+          script,
+          `#!/bin/sh\nclear\necho "Signing in to Claude Code for '${agent.name.replace(/'/g, "")}'."\necho\n${command}\n`,
+          { mode: 0o755 },
+        );
+        spawn("open", [script], { stdio: "ignore" });
+        return { started: true, command };
+      } catch (cause) {
+        console.warn("[desktop] Failed to open the sign-in terminal:", cause);
+        return { started: false, command };
+      }
     }
     return { started: false, command };
   });
