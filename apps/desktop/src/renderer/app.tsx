@@ -59,7 +59,9 @@ import {
   type BrowserPageState,
   BrowserScreen,
 } from "./screens/browser-screen.js";
+import { EditorScreen } from "./screens/editor-screen.js";
 import { SettingsScreen } from "./screens/settings-screen.js";
+import { TerminalScreen } from "./screens/terminal-screen.js";
 import { WorkflowScreen } from "./screens/workflow-screen.js";
 
 interface BrowserEntry {
@@ -72,12 +74,28 @@ interface BrowserEntry {
   faviconUrl: string | null;
 }
 
+interface TerminalEntry {
+  localId: string;
+  /** Shell title (OSC 0/2) — feeds the tab label. */
+  title: string;
+}
+
+interface EditorEntry {
+  localId: string;
+  /** Open file (project-relative), or null while the picker shows. */
+  filePath: string | null;
+  /** Unsaved draft in the tab — a dot on the tab icon. */
+  dirty: boolean;
+}
+
 interface Workspace {
   tabs: WorkspaceTab[];
   activeTabKey?: string;
   chats: ChatDockEntry[];
   activeChatId?: string;
   browsers: BrowserEntry[];
+  terminals: TerminalEntry[];
+  editors: EditorEntry[];
 }
 
 const newChatEntry = (mode: ChatDockEntry["mode"]): ChatDockEntry => ({
@@ -98,11 +116,15 @@ const emptyWorkspace = (): Workspace => {
     chats: [],
     activeTabKey: tabKey(tab),
     browsers: [],
+    terminals: [],
+    editors: [],
   };
 };
 
 const chatTabKey = (localId: string) => `chat:${localId}`;
 const browserTabKey = (localId: string) => `browser:${localId}`;
+const terminalTabKey = (localId: string) => `terminal:${localId}`;
+const editorTabKey = (localId: string) => `editor:${localId}`;
 
 /** Offered to config-defined items that don't declare their own menu. */
 const DEFAULT_CUSTOM_MENU: SidebarMenuEntry[] = [
@@ -227,6 +249,8 @@ export function App() {
     const emptyWorkspaceNow =
       ws.browsers.length === 0 &&
       ws.chats.length === 0 &&
+      ws.terminals.length === 0 &&
+      ws.editors.length === 0 &&
       ws.tabs.every(
         (tab) => tab.kind === "palette" || tab.kind === "agent-setup",
       );
@@ -360,6 +384,26 @@ export function App() {
       }),
     );
 
+  const terminalTabs = (ws: Workspace) =>
+    ws.terminals.map(
+      (terminal): WorkspaceTab => ({
+        kind: "terminal",
+        name: terminal.localId,
+        label: terminal.title || "Terminal",
+      }),
+    );
+
+  const editorTabs = (ws: Workspace) =>
+    ws.editors.map(
+      (editor): WorkspaceTab => ({
+        kind: "editor",
+        name: editor.localId,
+        label: editor.filePath?.split("/").at(-1) || "Editor",
+        // Unsaved draft rides the same dot as an unread chat reply.
+        unread: editor.dirty,
+      }),
+    );
+
   const selectTab = (key: string) =>
     updateWorkspace((ws) => ({
       ...ws,
@@ -392,6 +436,59 @@ export function App() {
     [activeProfile, updateWorkspace],
   );
 
+  /** Open a terminal tab; the shell starts in the project folder. */
+  const openTerminalTab = () => {
+    const entry: TerminalEntry = { localId: crypto.randomUUID(), title: "" };
+    updateWorkspace((ws) => ({
+      ...ws,
+      terminals: [...ws.terminals, entry],
+      activeTabKey: terminalTabKey(entry.localId),
+    }));
+  };
+
+  /** Open an editor tab; it greets with the file quick-open. */
+  const openEditorTab = () => {
+    const entry: EditorEntry = {
+      localId: crypto.randomUUID(),
+      filePath: null,
+      dirty: false,
+    };
+    updateWorkspace((ws) => ({
+      ...ws,
+      editors: [...ws.editors, entry],
+      activeTabKey: editorTabKey(entry.localId),
+    }));
+  };
+
+  const onTerminalTitle = useCallback(
+    (localId: string, title: string) =>
+      updateWorkspace((ws) => {
+        const target = ws.terminals.find(
+          (terminal) => terminal.localId === localId,
+        );
+        // Shells re-announce the same title on every prompt — skip those.
+        if (!target || target.title === title) return ws;
+        return {
+          ...ws,
+          terminals: ws.terminals.map((terminal) =>
+            terminal.localId === localId ? { ...terminal, title } : terminal,
+          ),
+        };
+      }),
+    [updateWorkspace],
+  );
+
+  const onEditorState = useCallback(
+    (localId: string, patch: Partial<Omit<EditorEntry, "localId">>) =>
+      updateWorkspace((ws) => ({
+        ...ws,
+        editors: ws.editors.map((editor) =>
+          editor.localId === localId ? { ...editor, ...patch } : editor,
+        ),
+      })),
+    [updateWorkspace],
+  );
+
   const onBrowserState = useCallback(
     (localId: string, state: BrowserPageState) =>
       updateWorkspace((ws) => ({
@@ -420,6 +517,10 @@ export function App() {
   // navigate(url) handles per live browser tab, for "open in current tab"
   // (bookmarks/links with open:"replace").
   const browserNavigatorsRef = useRef(new Map<string, (url: string) => void>());
+
+  // Animated close per chat dock — external closers (Cmd+W) must play the
+  // same 250ms collapse Escape does, not unmount the dock mid-frame.
+  const chatClosersRef = useRef(new Map<string, () => void>());
 
   /**
    * Bookmark/link click behavior: "replace" reuses the focused browser
@@ -454,6 +555,37 @@ export function App() {
           activeTabKey:
             ws.activeTabKey === key
               ? nextActiveTabKey({ ...ws, browsers }, key, ws.chats)
+              : ws.activeTabKey,
+        };
+      }
+      // Closing a terminal tab kills its shell (the screen's unmount
+      // cleanup sends the PTY kill).
+      if (key.startsWith("terminal:")) {
+        const localId = key.slice("terminal:".length);
+        const terminals = ws.terminals.filter(
+          (terminal) => terminal.localId !== localId,
+        );
+        return {
+          ...ws,
+          terminals,
+          activeTabKey:
+            ws.activeTabKey === key
+              ? nextActiveTabKey({ ...ws, terminals }, key, ws.chats)
+              : ws.activeTabKey,
+        };
+      }
+      // Closing an editor tab drops its unsaved drafts.
+      if (key.startsWith("editor:")) {
+        const localId = key.slice("editor:".length);
+        const editors = ws.editors.filter(
+          (editor) => editor.localId !== localId,
+        );
+        return {
+          ...ws,
+          editors,
+          activeTabKey:
+            ws.activeTabKey === key
+              ? nextActiveTabKey({ ...ws, editors }, key, ws.chats)
               : ws.activeTabKey,
         };
       }
@@ -497,6 +629,8 @@ export function App() {
     const keys = [
       ...ws.tabs.map(tabKey),
       ...ws.browsers.map((browser) => browserTabKey(browser.localId)),
+      ...ws.terminals.map((terminal) => terminalTabKey(terminal.localId)),
+      ...ws.editors.map((editor) => editorTabKey(editor.localId)),
       ...chats
         .filter((chat) => chat.mode === "tab")
         .map((chat) => chatTabKey(chat.localId)),
@@ -532,7 +666,8 @@ export function App() {
       };
     });
 
-  const closeChat = (localId: string) =>
+  const closeChat = (localId: string) => {
+    chatClosersRef.current.delete(localId);
     updateWorkspace((ws) => {
       const chats = ws.chats.filter((chat) => chat.localId !== localId);
       return {
@@ -545,6 +680,7 @@ export function App() {
             : ws.activeTabKey,
       };
     });
+  };
 
   // Cmd+T and the tab-strip + always open a full chat tab (Chrome muscle
   // memory); the sidebar +, bubble +, and Cmd+E open the floating aside.
@@ -566,6 +702,8 @@ export function App() {
       const noTabsOpen =
         ws.tabs.length === 0 &&
         ws.browsers.length === 0 &&
+        ws.terminals.length === 0 &&
+        ws.editors.length === 0 &&
         ws.chats.every((chat) => chat.mode !== "tab");
       const entry = newChatEntry(forceMode ?? (noTabsOpen ? "tab" : "partial"));
       return {
@@ -643,6 +781,8 @@ export function App() {
       const noTabsOpen =
         ws.tabs.length === 0 &&
         ws.browsers.length === 0 &&
+        ws.terminals.length === 0 &&
+        ws.editors.length === 0 &&
         ws.chats.every((chat) => chat.mode !== "tab");
       const mode =
         existing?.mode === "tab" || noTabsOpen
@@ -729,7 +869,11 @@ export function App() {
     const ws = workspaceRef.current;
     const floating = ws.chats.find((chat) => chat.mode === "partial");
     if (floating) {
-      closeChatRef.current(floating.localId);
+      // Through the dock's animated close (same collapse as Escape);
+      // straight removal only if the dock never registered one.
+      const animated = chatClosersRef.current.get(floating.localId);
+      if (animated) animated();
+      else closeChatRef.current(floating.localId);
       return;
     }
     if (ws.activeTabKey) closeTabRef.current(ws.activeTabKey);
@@ -832,11 +976,40 @@ export function App() {
   // shortcut dispatcher below AND the palette's action rows, so a key
   // press and a palette pick always do the same thing. Rebuilt per render
   // (closures over fresh state), read through a ref by the listeners.
+  // Cmd+M / Cmd+Shift+M act on the active chat, falling back to the most
+  // recent one — so restoring works even when no chat surface is focused.
+  const actionChat = (ws: Workspace) =>
+    ws.chats.find((chat) => chat.localId === ws.activeChatId) ?? ws.chats.at(-1);
+
+  const toggleChatMinimized = () => {
+    const chat = actionChat(workspaceRef.current);
+    if (chat) toggleChat(chat.localId);
+  };
+
+  const expandChatToTab = () => {
+    const chat = actionChat(workspaceRef.current);
+    if (!chat) return;
+    updateWorkspace((ws) => ({
+      ...ws,
+      activeChatId: chat.localId,
+      activeTabKey: chatTabKey(chat.localId),
+      chats: ws.chats.map((candidate) =>
+        candidate.localId === chat.localId
+          ? { ...candidate, mode: "tab" }
+          : candidate,
+      ),
+    }));
+  };
+
   const actionHandlers: Record<ActionId, () => void> = {
     "new-tab": openPaletteTab,
     "command-palette": () => setPaletteOpen((value) => !value),
     "new-floating-chat": () => addChat(),
+    "toggle-chat-minimized": toggleChatMinimized,
+    "chat-to-tab": expandChatToTab,
     "new-browser-tab": () => openBrowserTab(""),
+    "new-terminal-tab": openTerminalTab,
+    "new-editor-tab": openEditorTab,
     "toggle-sidebar": () => setSidebarOpen((value) => !value),
     "close-tab": closeActiveSurface,
     "setup-agent": () => setWizardModalOpen(true),
@@ -925,6 +1098,8 @@ export function App() {
   const allTabs = [
     ...workspace.tabs,
     ...browserTabs(workspace),
+    ...terminalTabs(workspace),
+    ...editorTabs(workspace),
     ...chatTabs(workspace, chatLabels),
   ];
   const activeChatTabId = workspace.activeTabKey?.startsWith("chat:")
@@ -932,6 +1107,12 @@ export function App() {
     : undefined;
   const activeBrowserTabId = workspace.activeTabKey?.startsWith("browser:")
     ? workspace.activeTabKey.slice("browser:".length)
+    : undefined;
+  const activeTerminalTabId = workspace.activeTabKey?.startsWith("terminal:")
+    ? workspace.activeTabKey.slice("terminal:".length)
+    : undefined;
+  const activeEditorTabId = workspace.activeTabKey?.startsWith("editor:")
+    ? workspace.activeTabKey.slice("editor:".length)
     : undefined;
 
   // Everything the palette searches and acts on, shared by both hosts
@@ -1141,6 +1322,51 @@ export function App() {
                 </div>
               ))}
 
+              {/* Terminals stay mounted while hidden — unmounting kills
+                  the shell. Editors likewise, preserving undo history,
+                  scroll position, and unsaved drafts across switches. */}
+              {workspace.terminals.map((terminal) => (
+                <div
+                  key={terminal.localId}
+                  className={
+                    terminal.localId === activeTerminalTabId
+                      ? "absolute inset-0 flex flex-col"
+                      : "hidden"
+                  }
+                >
+                  <TerminalScreen
+                    projectId={projectId}
+                    active={terminal.localId === activeTerminalTabId}
+                    onTitle={(title) =>
+                      onTerminalTitle(terminal.localId, title)
+                    }
+                    onExit={() => closeTab(terminalTabKey(terminal.localId))}
+                  />
+                </div>
+              ))}
+
+              {workspace.editors.map((editor) => (
+                <div
+                  key={editor.localId}
+                  className={
+                    editor.localId === activeEditorTabId
+                      ? "absolute inset-0 flex flex-col"
+                      : "hidden"
+                  }
+                >
+                  <EditorScreen
+                    projectId={projectId}
+                    filePath={editor.filePath}
+                    onFileChange={(filePath) =>
+                      onEditorState(editor.localId, { filePath })
+                    }
+                    onDirtyChange={(dirty) =>
+                      onEditorState(editor.localId, { dirty })
+                    }
+                  />
+                </div>
+              ))}
+
               {workspace.chats.map((entry) => (
                 <ChatDock
                   key={entry.localId}
@@ -1173,6 +1399,9 @@ export function App() {
                     }))
                   }
                   onClose={closeChat}
+                  registerClose={(close) =>
+                    chatClosersRef.current.set(entry.localId, close)
+                  }
                   onSessionCreated={onSessionCreated}
                   onSendingChange={onSendingChange}
                 />

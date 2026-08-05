@@ -302,6 +302,25 @@ export interface CatamorphicDesktopApi {
   projectRoot: (projectId: string) => Promise<string | null>;
   revealFolder: (folderPath: string) => Promise<void>;
 
+  terminalCreate: (input: {
+    projectId?: string;
+    cols?: number;
+    rows?: number;
+  }) => Promise<{ sessionId: string; cwd: string }>;
+  terminalWrite: (sessionId: string, data: string) => Promise<void>;
+  terminalResize: (
+    sessionId: string,
+    cols: number,
+    rows: number,
+  ) => Promise<void>;
+  terminalKill: (sessionId: string) => Promise<void>;
+  onTerminalData: (
+    listener: (payload: { sessionId: string; data: string }) => void,
+  ) => () => void;
+  onTerminalExit: (
+    listener: (payload: { sessionId: string; exitCode: number }) => void,
+  ) => () => void;
+
   webviewPreloadPath: () => Promise<string>;
   browserPrepareProfile: (profileId: string) => Promise<string>;
   browserRecordHistory: (input: {

@@ -800,3 +800,58 @@ Patterned on what best-in-class palettes converged on (Chrome omnibox
   import into the current profile or become a new Catamorphic profile.
   Bookmarks land as pinned bookmarks (folders flatten — pinned is the
   bookmarks-bar analog); re-import is idempotent by URL.
+
+### 2026-08-05 — Terminal and editor tabs (libghostty in the workspace)
+- Two new tab kinds join the workspace: **terminal** and **editor**. Both
+  follow the browser-tab precedent — a per-tab entry array on the
+  workspace (`terminals` / `editors`), derived `WorkspaceTab`s, and
+  content that **stays mounted while hidden** (unmounting a terminal
+  kills the shell; keeping editors mounted preserves undo history and
+  unsaved drafts).
+- **The terminal is Ghostty, not xterm.js.** Emulation runs in-renderer
+  via `ghostty-web` — libghostty-vt (Ghostty's VT parser/state core)
+  compiled to WASM (~420 KB, inlined in the bundle) with a canvas
+  renderer and Ghostty's real key encoder. The PTY lives in main
+  (`main/terminal.ts`, `@lydell/node-pty` — prebuilt N-API binaries, no
+  Electron rebuild) and streams over `catamorphic:terminal-*` IPC.
+  Sessions are addressed by id, bound to their window, and reaped on
+  window close and app quit. Rationale: the same battle-tested VT core as
+  the native Ghostty app, with none of xterm.js's Unicode/grapheme gaps.
+- Terminal shells are **login shells cwd'd to the project root** (the
+  same `projectRoots` semantic host-execution agents use). The tab label
+  follows the shell's OSC title; the shell exiting closes the tab.
+  `Ctrl+\`` opens a new terminal (VS Code muscle memory). The terminal
+  theme derives from the app theme tokens (`bg-inset`, `fg`, accent
+  cursor/selection); the ANSI palette stays Ghostty's.
+- **App shortcuts beat the shell.** ghostty-web's key handler
+  stopPropagation()s every non-printable keydown, which would eat Cmd+W,
+  Cmd+T, Ctrl+`… while a terminal is focused. A custom key event handler
+  claims exactly the keys bound in the app's keybindings registry so they
+  bubble to the window-level dispatcher; everything else goes to the PTY.
+  Also: Chromium paints the hidden input textarea's caret even at
+  opacity 0 — `caret-color: transparent`, or a phantom caret blinks at
+  the terminal's top-left.
+- **The editor is one file per tab, fronted by quick-open.** A new editor
+  tab greets with a palette-style file picker (command-score over the
+  project file list); picking a file mounts Monaco (already self-hosted
+  for workflows) with the language inferred from the extension. Cmd+S and
+  a Save button write through the embedded server's file API. Unsaved
+  drafts survive switching files within the tab and surface as the same
+  accent dot chats use for unread — the tab label is the file's basename.
+- CSP note: `script-src` gains `'wasm-unsafe-eval'` (WebAssembly.compile
+  for the ghostty-web module) and `connect-src` gains `data:` (the WASM
+  ships as an inlined data: URL). Both are narrow, local-only allowances.
+
+### 2026-08-05 — Chat surface shortcuts, and external closes must animate
+- **Cmd+M minimizes/restores the active chat** (floating dock ↔ bubble),
+  falling back to the most recent chat so restoring works with nothing
+  focused. **Cmd+Shift+M expands it into a workspace tab.** Both live in
+  the shared action registry (palette rows + Settings + rebindable). The
+  Window menu's stock `minimize` role was replaced with a plain click
+  item: its built-in Cmd+M accelerator would have swallowed the shortcut
+  at the menu layer before the renderer ever saw it.
+- **Every close path plays the exit animation.** Escape already collapsed
+  the floating dock over 250ms; Cmd+W (close-surface) used to unmount it
+  mid-frame. Docks now register their animated close with the host
+  (`registerClose`), and `closeActiveSurface` goes through it — one
+  motion contract regardless of which key closed the surface.

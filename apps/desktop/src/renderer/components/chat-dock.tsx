@@ -90,6 +90,12 @@ export interface ChatDockProps {
   onEntryChange: (entry: ChatDockEntry) => void;
   /** Close the chat entirely (dismissing an empty chat removes it). */
   onClose: (localId: string) => void;
+  /**
+   * Hands the host this dock's animated close, so external closers
+   * (Cmd+W's close-surface) play the same 250ms collapse as Escape
+   * instead of unmounting the dock mid-frame.
+   */
+  registerClose?: (close: () => void) => void;
   onSessionCreated: (localId: string, sessionId: string) => void;
   /** The agent started/stopped working on this chat (drives indicators). */
   onSendingChange: (localId: string, sending: boolean) => void;
@@ -111,6 +117,7 @@ export function ChatDock({
   paletteTargeted,
   onEntryChange,
   onClose,
+  registerClose,
   onSessionCreated,
   onSendingChange,
 }: ChatDockProps) {
@@ -186,6 +193,10 @@ export function ChatDock({
   };
   const animatedCloseRef = useRef(animatedClose);
   animatedCloseRef.current = animatedClose;
+
+  useEffect(() => {
+    registerClose?.(() => animatedCloseRef.current());
+  }, [registerClose]);
 
   const dismiss = () => {
     if (isEmpty) animatedClose();

@@ -1,5 +1,6 @@
 import {
   Bot,
+  FileCode,
   Globe,
   LayoutGrid,
   LoaderCircle,
@@ -7,6 +8,7 @@ import {
   Plus,
   Search,
   Settings as SettingsIcon,
+  SquareTerminal,
   Workflow as WorkflowIcon,
   X,
 } from "lucide-react";
@@ -36,6 +38,8 @@ export type WorkspaceTab = (
   | { kind: "settings"; name: string; label?: string }
   | { kind: "palette"; name: string; label?: string }
   | { kind: "agent-setup"; name: string; label?: string }
+  | { kind: "terminal"; name: string; label?: string }
+  | { kind: "editor"; name: string; label?: string }
 ) &
   TabIndicators;
 
@@ -49,6 +53,8 @@ const TAB_ICONS = {
   settings: SettingsIcon,
   palette: Search,
   "agent-setup": Bot,
+  terminal: SquareTerminal,
+  editor: FileCode,
 } as const;
 
 interface RenderedTab {

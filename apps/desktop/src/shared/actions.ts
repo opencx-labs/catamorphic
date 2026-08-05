@@ -59,6 +59,35 @@ export const BUILTIN_ACTIONS = [
     keywords: ["browser", "web", "page", "open"],
   },
   {
+    id: "toggle-chat-minimized",
+    label: "Minimize/restore chat",
+    description:
+      "minimize the active chat to a bubble, or pop the bubble back open as a floating chat",
+    defaultBinding: "Cmd+M",
+    keywords: ["chat", "minimize", "restore", "bubble", "collapse", "expand"],
+  },
+  {
+    id: "chat-to-tab",
+    label: "Open chat as tab",
+    description: "expand the active chat into a full workspace tab",
+    defaultBinding: "Cmd+Shift+M",
+    keywords: ["chat", "tab", "maximize", "expand", "full", "screen"],
+  },
+  {
+    id: "new-terminal-tab",
+    label: "New terminal",
+    description: "open a terminal tab in the project folder",
+    defaultBinding: "Ctrl+`",
+    keywords: ["terminal", "shell", "console", "cli", "command line"],
+  },
+  {
+    id: "new-editor-tab",
+    label: "New editor",
+    description: "open a code editor tab (pick a project file)",
+    defaultBinding: null,
+    keywords: ["editor", "code", "file", "open", "monaco", "edit"],
+  },
+  {
     id: "toggle-sidebar",
     label: "Toggle sidebar",
     description: "show/hide the sidebar",

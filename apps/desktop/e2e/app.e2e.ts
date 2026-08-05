@@ -26,6 +26,11 @@ const helpers = `
     $$(selector).find((el) => el.textContent.trim().includes(text));
   const visibleDock = () =>
     $$('section[aria-label]').find((el) => !el.inert && el.querySelector('textarea'));
+  // Only the floating variant — a chat expanded into a tab is also a
+  // visible dock, but full-bleed (max-w-full).
+  const floatingDock = () =>
+    $$('section[aria-label]').find((el) =>
+      !el.inert && el.querySelector('textarea') && !el.className.includes('max-w-full'));
   const setReactValue = (el, value) => {
     const proto = el instanceof HTMLTextAreaElement
       ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;
@@ -116,6 +121,83 @@ describe("browser tabs", () => {
     await run(`pressKey('w', { metaKey: true }); return true;`);
     await runWait(`return !$('input[aria-label="Address and search bar"]');`, {
       label: "browser tab closed",
+    });
+  });
+});
+
+describe("terminal tabs", () => {
+  it("opens a terminal with the new-terminal-tab shortcut", async () => {
+    await run(`pressKey('\\u0060', { ctrlKey: true }); return true;`);
+    // The emulator (ghostty-web) mounts a canvas once its WASM module
+    // loads and the PTY session is live.
+    await runWait(
+      `return !!byText('button', 'Terminal') && !!$('canvas');`,
+      { timeoutMs: 30_000, label: "terminal tab with canvas" },
+    );
+  });
+
+  it("hides the input textarea's caret (no phantom top-left cursor)", async () => {
+    // Chromium paints a focused textarea's caret even at opacity 0; the
+    // terminal must neutralize it or a phantom caret blinks at (0,0).
+    await runWait(
+      `const ta = $('textarea[aria-label="Terminal input"]');
+       return !!ta && getComputedStyle(ta).caretColor === 'rgba(0, 0, 0, 0)';`,
+      { label: "terminal caret-color transparent" },
+    );
+  });
+
+  it("passes app shortcuts through the focused terminal (Cmd+W closes)", async () => {
+    // Dispatched on the terminal's own textarea, not the window: ghostty's
+    // key handler must let bound shortcuts bubble instead of eating them.
+    await run(`
+      const ta = $('textarea[aria-label="Terminal input"]');
+      ta.focus();
+      ta.dispatchEvent(new KeyboardEvent('keydown',
+        { key: 'w', code: 'KeyW', metaKey: true, bubbles: true, cancelable: true }));
+      return true;
+    `);
+    await runWait(`return !$('canvas');`, { label: "terminal tab closed" });
+  });
+});
+
+describe("editor tabs", () => {
+  it("opens an editor tab from the palette and quick-opens a file", async () => {
+    await run(`pressKey('p', { metaKey: true }); return true;`);
+    await runWait(`return !!$('textarea[placeholder*="Search or ask"]');`, {
+      label: "palette overlay",
+    });
+    await run(`
+      const input = $('textarea[placeholder*="Search or ask"]');
+      setReactValue(input, 'new editor');
+      return true;
+    `);
+    await runWait(
+      `const input = $('textarea[placeholder*="Search or ask"]');
+       if (!byText('button', 'New editor')) return false;
+       input.dispatchEvent(new KeyboardEvent('keydown',
+         { key: 'Enter', bubbles: true, cancelable: true }));
+       return true;`,
+      { label: "run New editor action" },
+    );
+    await runWait(`return !!$('input[placeholder*="Open a file"]');`, {
+      label: "editor quick-open",
+    });
+    // The project template seeds files; pick the root package.json.
+    await runWait(
+      `const row = byText('button', 'package.json');
+       if (!row) return false; row.click(); return true;`,
+      { label: "package.json in quick-open" },
+    );
+    await runWait(
+      `return !!$('.monaco-editor') && !!byText('button', 'package.json');`,
+      { timeoutMs: 60_000, label: "Monaco open on package.json" },
+    );
+  });
+
+  it("closes the editor tab with the close-tab shortcut", async () => {
+    await run(`pressKey('w', { metaKey: true }); return true;`);
+    await runWait(`return !$('.monaco-editor');`, {
+      label: "editor tab closed",
     });
   });
 });
@@ -420,5 +502,44 @@ describe("question flow", () => {
            && !$('section[aria-label="The agent has a question"]');`,
       { timeoutMs: 30_000, label: "agent acknowledgment, panel gone" },
     );
+  });
+});
+
+describe("chat surface shortcuts", () => {
+  it("Cmd+M minimizes the floating chat; Cmd+M again restores it", async () => {
+    await run(`pressKey('n', { metaKey: true }); return true;`);
+    await runWait(`return !!floatingDock();`, { label: "floating chat open" });
+    await run(`pressKey('m', { metaKey: true }); return true;`);
+    await runWait(`return !floatingDock();`, { label: "chat minimized" });
+    await run(`pressKey('m', { metaKey: true }); return true;`);
+    await runWait(`return !!floatingDock();`, { label: "chat restored" });
+  });
+
+  it("Cmd+Shift+M expands the chat into a workspace tab", async () => {
+    await run(`pressKey('M', { metaKey: true, shiftKey: true }); return true;`);
+    // Tab mode: the dock sheds its floating footprint and fills the tab.
+    await runWait(
+      `return !floatingDock() && !!visibleDock() &&
+              visibleDock().className.includes('max-w-full');`,
+      { label: "chat dock in tab mode" },
+    );
+  });
+
+  it("Cmd+W plays the exit collapse before removing the floating chat", async () => {
+    // Escape steps the tab back down to a floating dock first.
+    await run(`pressKey('Escape'); return true;`);
+    await runWait(`return !!floatingDock();`, { label: "back to floating dock" });
+    // Count docks (mounted sections), not just the visible one — minimized
+    // bubbles from earlier tests keep their sections mounted too.
+    const docks = `$$('section[aria-label]').filter((el) => el.querySelector('form textarea')).length`;
+    const before = await run<number>(`return ${docks};`);
+    await run(`pressKey('w', { metaKey: true }); return true;`);
+    // Immediately after Cmd+W the dock must still be mounted: the same
+    // 250ms collapse Escape plays, then the unmount.
+    const during = await run<number>(`return ${docks};`);
+    expect(during).toBe(before);
+    await runWait(`return ${docks} === ${before - 1};`, {
+      label: "dock unmounted after collapse",
+    });
   });
 });

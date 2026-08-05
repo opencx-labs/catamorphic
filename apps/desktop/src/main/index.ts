@@ -14,6 +14,7 @@ import { ProfileConfigManager } from "./profile-config.js";
 import { ProfilesStore } from "./profiles.js";
 import { type EmbeddedServer, startEmbeddedServer } from "./server/boot.js";
 import { resolveDataPaths } from "./server/paths.js";
+import { registerTerminalSupport } from "./terminal.js";
 import { windowBackgroundColor } from "./theme.js";
 
 // macOS 26.x + Apple Silicon: V8's background compiler threads race the
@@ -225,7 +226,14 @@ function buildMenu(bindings: Keybindings): Menu {
     {
       label: "Window",
       submenu: [
-        { role: "minimize" },
+        // Not the stock minimize role: its default Cmd+M accelerator would
+        // swallow the workspace's minimize/restore-chat shortcut.
+        {
+          label: "Minimize",
+          click: (_item, window) => {
+            if (window instanceof BrowserWindow) window.minimize();
+          },
+        },
         { role: "zoom" },
         ...(process.platform === "darwin"
           ? [{ type: "separator" } as const, { role: "front" } as const]
@@ -276,6 +284,7 @@ app.whenReady().then(async () => {
     profileConfig,
     windows,
   );
+  terminalSupport = registerTerminalSupport(state);
   ipcMain.handle("catamorphic:webview-preload", () =>
     path.join(import.meta.dirname, "../preload/webview.cjs"),
   );
@@ -304,11 +313,13 @@ app.whenReady().then(async () => {
 });
 
 let browserSupport: ReturnType<typeof registerBrowserSupport> | null = null;
+let terminalSupport: ReturnType<typeof registerTerminalSupport> | null = null;
 
 let quitting = false;
 app.on("before-quit", (event) => {
   profileConfig.dispose();
   browserSupport?.dispose();
+  terminalSupport?.dispose();
   if (quitting || !server) return;
   event.preventDefault();
   quitting = true;

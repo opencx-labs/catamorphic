@@ -11,6 +11,7 @@ files:
 # dist files the stdio provider uploads into sandboxes.
 asarUnpack:
   - "**/node_modules/@electric-sql/pglite/**"
+  - "**/node_modules/@lydell/node-pty*/**"
   - "**/node_modules/microsandbox/**"
   - "**/node_modules/@superradcompany/**"
   - "**/node_modules/@catamorphic/db/migrations/**"

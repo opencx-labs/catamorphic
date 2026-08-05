@@ -217,6 +217,46 @@ const api = {
       ipcRenderer.removeListener("catamorphic:browser-guest-key", handler);
   },
 
+  // --- terminal tabs (PTY sessions live in main; see main/terminal.ts) ---
+  terminalCreate: (input: {
+    projectId?: string;
+    cols?: number;
+    rows?: number;
+  }): Promise<{ sessionId: string; cwd: string }> =>
+    ipcRenderer.invoke("catamorphic:terminal-create", input),
+  terminalWrite: (sessionId: string, data: string): Promise<void> =>
+    ipcRenderer.invoke("catamorphic:terminal-write", sessionId, data),
+  terminalResize: (
+    sessionId: string,
+    cols: number,
+    rows: number,
+  ): Promise<void> =>
+    ipcRenderer.invoke("catamorphic:terminal-resize", sessionId, cols, rows),
+  terminalKill: (sessionId: string): Promise<void> =>
+    ipcRenderer.invoke("catamorphic:terminal-kill", sessionId),
+  onTerminalData: (
+    listener: (payload: { sessionId: string; data: string }) => void,
+  ): (() => void) => {
+    const handler = (
+      _event: unknown,
+      payload: { sessionId: string; data: string },
+    ) => listener(payload);
+    ipcRenderer.on("catamorphic:terminal-data", handler);
+    return () =>
+      ipcRenderer.removeListener("catamorphic:terminal-data", handler);
+  },
+  onTerminalExit: (
+    listener: (payload: { sessionId: string; exitCode: number }) => void,
+  ): (() => void) => {
+    const handler = (
+      _event: unknown,
+      payload: { sessionId: string; exitCode: number },
+    ) => listener(payload);
+    ipcRenderer.on("catamorphic:terminal-exit", handler);
+    return () =>
+      ipcRenderer.removeListener("catamorphic:terminal-exit", handler);
+  },
+
   // --- profiles ---
   profilesList: (): Promise<unknown> =>
     ipcRenderer.invoke("catamorphic:profiles-list"),
