@@ -130,10 +130,10 @@ describe("terminal tabs", () => {
     await run(`pressKey('\\u0060', { ctrlKey: true }); return true;`);
     // The emulator (ghostty-web) mounts a canvas once its WASM module
     // loads and the PTY session is live.
-    await runWait(
-      `return !!byText('button', 'Terminal') && !!$('canvas');`,
-      { timeoutMs: 30_000, label: "terminal tab with canvas" },
-    );
+    await runWait(`return !!byText('button', 'Terminal') && !!$('canvas');`, {
+      timeoutMs: 30_000,
+      label: "terminal tab with canvas",
+    });
   });
 
   it("hides the input textarea's caret (no phantom top-left cursor)", async () => {
@@ -528,7 +528,9 @@ describe("chat surface shortcuts", () => {
   it("Cmd+W plays the exit collapse before removing the floating chat", async () => {
     // Escape steps the tab back down to a floating dock first.
     await run(`pressKey('Escape'); return true;`);
-    await runWait(`return !!floatingDock();`, { label: "back to floating dock" });
+    await runWait(`return !!floatingDock();`, {
+      label: "back to floating dock",
+    });
     // Count docks (mounted sections), not just the visible one — minimized
     // bubbles from earlier tests keep their sections mounted too.
     const docks = `$$('section[aria-label]').filter((el) => el.querySelector('form textarea')).length`;
@@ -540,6 +542,50 @@ describe("chat surface shortcuts", () => {
     expect(during).toBe(before);
     await runWait(`return ${docks} === ${before - 1};`, {
       label: "dock unmounted after collapse",
+    });
+  });
+});
+
+describe("navigation shortcuts", () => {
+  it("Cmd+. / Cmd+, cycle the floating dock through chats", async () => {
+    // Fresh empty chat ("New chat") joins the titled chats from earlier
+    // groups — cycling must swap which chat the dock shows.
+    await run(`pressKey('n', { metaKey: true }); return true;`);
+    await runWait(`return !!floatingDock();`, { label: "dock open" });
+    const first = await run<string>(
+      `return floatingDock().getAttribute('aria-label');`,
+    );
+    await run(`pressKey('.', { metaKey: true }); return true;`);
+    await runWait(
+      `return !!floatingDock() &&
+              floatingDock().getAttribute('aria-label') !== ${JSON.stringify(first)};`,
+      { label: "next chat in the dock" },
+    );
+    await run(`pressKey(',', { metaKey: true }); return true;`);
+    await runWait(
+      `return !!floatingDock() &&
+              floatingDock().getAttribute('aria-label') === ${JSON.stringify(first)};`,
+      { label: "back to the first chat" },
+    );
+  });
+
+  it("Cmd+[ / Cmd+] cycle workspace tabs", async () => {
+    // A second tab to cycle against the palette New Tab.
+    await run(`pressKey('\\u0060', { ctrlKey: true }); return true;`);
+    await runWait(
+      `return !!$('canvas') && !$('canvas').closest('div.hidden');`,
+      {
+        timeoutMs: 30_000,
+        label: "terminal tab active",
+      },
+    );
+    await run(`pressKey('[', { metaKey: true }); return true;`);
+    await runWait(`return !!$('canvas').closest('div.hidden');`, {
+      label: "previous tab active (terminal pane hidden)",
+    });
+    await run(`pressKey(']', { metaKey: true }); return true;`);
+    await runWait(`return !$('canvas').closest('div.hidden');`, {
+      label: "next tab active (terminal pane visible)",
     });
   });
 });

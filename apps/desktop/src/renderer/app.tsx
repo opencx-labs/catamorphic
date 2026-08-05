@@ -976,10 +976,87 @@ export function App() {
   // shortcut dispatcher below AND the palette's action rows, so a key
   // press and a palette pick always do the same thing. Rebuilt per render
   // (closures over fresh state), read through a ref by the listeners.
+  // Keyboard tab cycling nudges the content pane in from the direction of
+  // travel (see styles.css pane-in-*). Cleared on animationend; the
+  // null-then-rAF dance restarts the keyframe on rapid consecutive cycles.
+  const [paneMotion, setPaneMotion] = useState<{
+    direction: "left" | "right";
+    nonce: number;
+  } | null>(null);
+  const paneMotionNonce = useRef(0);
+  const playPaneMotion = (direction: "left" | "right") => {
+    paneMotionNonce.current += 1;
+    const nonce = paneMotionNonce.current;
+    setPaneMotion(null);
+    requestAnimationFrame(() => {
+      if (paneMotionNonce.current === nonce) {
+        setPaneMotion({ direction, nonce });
+      }
+    });
+  };
+
+  /** Tab-strip order — must mirror allTabs below. */
+  const orderedTabKeys = (ws: Workspace) => [
+    ...ws.tabs.map(tabKey),
+    ...ws.browsers.map((browser) => browserTabKey(browser.localId)),
+    ...ws.terminals.map((terminal) => terminalTabKey(terminal.localId)),
+    ...ws.editors.map((editor) => editorTabKey(editor.localId)),
+    ...ws.chats
+      .filter((chat) => chat.mode === "tab")
+      .map((chat) => chatTabKey(chat.localId)),
+  ];
+
+  const cycleTab = (direction: -1 | 1) => {
+    const ws = workspaceRef.current;
+    const keys = orderedTabKeys(ws);
+    if (keys.length < 2) return;
+    const index = keys.indexOf(ws.activeTabKey ?? "");
+    const next =
+      index === -1
+        ? direction === 1
+          ? keys[0]
+          : keys.at(-1)
+        : keys[(index + direction + keys.length) % keys.length];
+    if (!next || next === ws.activeTabKey) return;
+    playPaneMotion(direction === 1 ? "right" : "left");
+    selectTab(next);
+  };
+
+  // Cmd+, / Cmd+. walk the non-tab chats in bubble-strip order, showing
+  // each as the floating dock (the docks' own expand/collapse motion
+  // narrates the swap).
+  const cycleChat = (direction: -1 | 1) =>
+    updateWorkspace((ws) => {
+      const cycle = ws.chats.filter((chat) => chat.mode !== "tab");
+      if (cycle.length === 0) return ws;
+      const index = cycle.findIndex(
+        (chat) => chat.localId === ws.activeChatId && chat.mode === "partial",
+      );
+      const next =
+        index === -1
+          ? direction === 1
+            ? cycle[0]
+            : cycle.at(-1)
+          : cycle[(index + direction + cycle.length) % cycle.length];
+      if (!next) return ws;
+      return {
+        ...ws,
+        activeChatId: next.localId,
+        chats: ws.chats.map((chat) =>
+          chat.localId === next.localId
+            ? { ...chat, mode: "partial" }
+            : chat.mode === "partial"
+              ? { ...chat, mode: "min" }
+              : chat,
+        ),
+      };
+    });
+
   // Cmd+M / Cmd+Shift+M act on the active chat, falling back to the most
   // recent one — so restoring works even when no chat surface is focused.
   const actionChat = (ws: Workspace) =>
-    ws.chats.find((chat) => chat.localId === ws.activeChatId) ?? ws.chats.at(-1);
+    ws.chats.find((chat) => chat.localId === ws.activeChatId) ??
+    ws.chats.at(-1);
 
   const toggleChatMinimized = () => {
     const chat = actionChat(workspaceRef.current);
@@ -1007,6 +1084,10 @@ export function App() {
     "new-floating-chat": () => addChat(),
     "toggle-chat-minimized": toggleChatMinimized,
     "chat-to-tab": expandChatToTab,
+    "prev-chat": () => cycleChat(-1),
+    "next-chat": () => cycleChat(1),
+    "prev-tab": () => cycleTab(-1),
+    "next-tab": () => cycleTab(1),
     "new-browser-tab": () => openBrowserTab(""),
     "new-terminal-tab": openTerminalTab,
     "new-editor-tab": openEditorTab,
@@ -1264,108 +1345,127 @@ export function App() {
         {projectId ? (
           <>
             <div className="relative flex min-h-0 flex-1 flex-col">
-              {activeTab?.kind === "workflow" ? (
-                <WorkflowScreen
-                  projectId={projectId}
-                  workflowName={activeTab.name}
-                />
-              ) : activeTab?.kind === "app" ? (
-                <AppScreen projectId={projectId} appName={activeTab.name} />
-              ) : activeTab?.kind === "settings" ? (
-                <SettingsScreen
-                  onClose={() => closeTab(tabKey(activeTab))}
-                  onAddAgent={() => setWizardModalOpen(true)}
-                />
-              ) : activeTab?.kind === "palette" && paletteProps ? (
-                <CommandPalette
-                  key={tabKey(activeTab)}
-                  variant="tab"
-                  onClose={() => closeTab(tabKey(activeTab))}
-                  {...paletteProps}
-                />
-              ) : activeTab?.kind === "agent-setup" ? (
-                <AgentWizard
-                  variant="tab"
-                  onClose={() => closeTab(tabKey(activeTab))}
-                  onDone={() => closeTab(tabKey(activeTab))}
-                />
-              ) : null}
-
-              {/* Browser tabs stay mounted while hidden — unmounting a
-                  webview would reload the page on every tab switch. */}
-              {workspace.browsers.map((browser) => (
-                <div
-                  key={browser.localId}
-                  className={
-                    browser.localId === activeBrowserTabId
-                      ? "absolute inset-0 flex flex-col"
-                      : "hidden"
+              {/* Every tab pane lives in this wrapper so keyboard cycling
+                  can nudge the visible content from the direction of
+                  travel; chat docks and bubbles stay outside (they own
+                  their own motion). */}
+              <div
+                className={`relative flex min-h-0 flex-1 flex-col ${
+                  paneMotion
+                    ? paneMotion.direction === "left"
+                      ? "animate-pane-in-left"
+                      : "animate-pane-in-right"
+                    : ""
+                }`}
+                onAnimationEnd={(event) => {
+                  if (event.animationName.startsWith("pane-in")) {
+                    setPaneMotion(null);
                   }
-                >
-                  <BrowserScreen
-                    profileId={browser.profileId}
+                }}
+              >
+                {activeTab?.kind === "workflow" ? (
+                  <WorkflowScreen
                     projectId={projectId}
-                    // Remounts (project/profile switches) resume at the
-                    // last known URL, not the tab's original one.
-                    initialUrl={browser.url || browser.initialUrl}
-                    active={browser.localId === activeBrowserTabId}
-                    onStateChange={(state) =>
-                      onBrowserState(browser.localId, state)
-                    }
-                    registerNavigate={(navigate) =>
-                      browserNavigatorsRef.current.set(
-                        browser.localId,
-                        navigate,
-                      )
-                    }
+                    workflowName={activeTab.name}
                   />
-                </div>
-              ))}
+                ) : activeTab?.kind === "app" ? (
+                  <AppScreen projectId={projectId} appName={activeTab.name} />
+                ) : activeTab?.kind === "settings" ? (
+                  <SettingsScreen
+                    onClose={() => closeTab(tabKey(activeTab))}
+                    onAddAgent={() => setWizardModalOpen(true)}
+                  />
+                ) : activeTab?.kind === "palette" && paletteProps ? (
+                  <CommandPalette
+                    key={tabKey(activeTab)}
+                    variant="tab"
+                    onClose={() => closeTab(tabKey(activeTab))}
+                    {...paletteProps}
+                  />
+                ) : activeTab?.kind === "agent-setup" ? (
+                  <AgentWizard
+                    variant="tab"
+                    onClose={() => closeTab(tabKey(activeTab))}
+                    onDone={() => closeTab(tabKey(activeTab))}
+                  />
+                ) : null}
 
-              {/* Terminals stay mounted while hidden — unmounting kills
+                {/* Browser tabs stay mounted while hidden — unmounting a
+                  webview would reload the page on every tab switch. */}
+                {workspace.browsers.map((browser) => (
+                  <div
+                    key={browser.localId}
+                    className={
+                      browser.localId === activeBrowserTabId
+                        ? "absolute inset-0 flex flex-col"
+                        : "hidden"
+                    }
+                  >
+                    <BrowserScreen
+                      profileId={browser.profileId}
+                      projectId={projectId}
+                      // Remounts (project/profile switches) resume at the
+                      // last known URL, not the tab's original one.
+                      initialUrl={browser.url || browser.initialUrl}
+                      active={browser.localId === activeBrowserTabId}
+                      onStateChange={(state) =>
+                        onBrowserState(browser.localId, state)
+                      }
+                      registerNavigate={(navigate) =>
+                        browserNavigatorsRef.current.set(
+                          browser.localId,
+                          navigate,
+                        )
+                      }
+                    />
+                  </div>
+                ))}
+
+                {/* Terminals stay mounted while hidden — unmounting kills
                   the shell. Editors likewise, preserving undo history,
                   scroll position, and unsaved drafts across switches. */}
-              {workspace.terminals.map((terminal) => (
-                <div
-                  key={terminal.localId}
-                  className={
-                    terminal.localId === activeTerminalTabId
-                      ? "absolute inset-0 flex flex-col"
-                      : "hidden"
-                  }
-                >
-                  <TerminalScreen
-                    projectId={projectId}
-                    active={terminal.localId === activeTerminalTabId}
-                    onTitle={(title) =>
-                      onTerminalTitle(terminal.localId, title)
+                {workspace.terminals.map((terminal) => (
+                  <div
+                    key={terminal.localId}
+                    className={
+                      terminal.localId === activeTerminalTabId
+                        ? "absolute inset-0 flex flex-col"
+                        : "hidden"
                     }
-                    onExit={() => closeTab(terminalTabKey(terminal.localId))}
-                  />
-                </div>
-              ))}
+                  >
+                    <TerminalScreen
+                      projectId={projectId}
+                      active={terminal.localId === activeTerminalTabId}
+                      onTitle={(title) =>
+                        onTerminalTitle(terminal.localId, title)
+                      }
+                      onExit={() => closeTab(terminalTabKey(terminal.localId))}
+                    />
+                  </div>
+                ))}
 
-              {workspace.editors.map((editor) => (
-                <div
-                  key={editor.localId}
-                  className={
-                    editor.localId === activeEditorTabId
-                      ? "absolute inset-0 flex flex-col"
-                      : "hidden"
-                  }
-                >
-                  <EditorScreen
-                    projectId={projectId}
-                    filePath={editor.filePath}
-                    onFileChange={(filePath) =>
-                      onEditorState(editor.localId, { filePath })
+                {workspace.editors.map((editor) => (
+                  <div
+                    key={editor.localId}
+                    className={
+                      editor.localId === activeEditorTabId
+                        ? "absolute inset-0 flex flex-col"
+                        : "hidden"
                     }
-                    onDirtyChange={(dirty) =>
-                      onEditorState(editor.localId, { dirty })
-                    }
-                  />
-                </div>
-              ))}
+                  >
+                    <EditorScreen
+                      projectId={projectId}
+                      filePath={editor.filePath}
+                      onFileChange={(filePath) =>
+                        onEditorState(editor.localId, { filePath })
+                      }
+                      onDirtyChange={(dirty) =>
+                        onEditorState(editor.localId, { dirty })
+                      }
+                    />
+                  </div>
+                ))}
+              </div>
 
               {workspace.chats.map((entry) => (
                 <ChatDock

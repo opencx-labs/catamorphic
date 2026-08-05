@@ -373,6 +373,40 @@ kbd {
   overflow: hidden;
 }
 
+/* Keyboard tab cycling (Cmd+[ / Cmd+]): the persistent content pane
+   nudges in from the direction of travel — a content-changed signal on
+   a wrapper that never unmounts (so no exit pair), like title-change.
+   Click-switching stays instant; only deliberate cycling narrates. */
+@keyframes pane-in-left {
+  from {
+    transform: translateX(-14px);
+    opacity: 0.3;
+  }
+  to {
+    transform: translateX(0);
+    opacity: 1;
+  }
+}
+
+@keyframes pane-in-right {
+  from {
+    transform: translateX(14px);
+    opacity: 0.3;
+  }
+  to {
+    transform: translateX(0);
+    opacity: 1;
+  }
+}
+
+.animate-pane-in-left {
+  animation: pane-in-left 200ms cubic-bezier(0.2, 0, 0, 1);
+}
+
+.animate-pane-in-right {
+  animation: pane-in-right 200ms cubic-bezier(0.2, 0, 0, 1);
+}
+
 /* Conversation renamed: new text slides in with a brief accent flash so
    the change catches the eye, then settles back to normal color */
 @keyframes title-change {

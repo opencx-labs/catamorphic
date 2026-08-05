@@ -130,6 +130,7 @@ the animation is wrong, not the test.
 | `fade-in` (modal section swap) | 200ms | height tween |
 | `profile-veil-in` / `profile-veil-out` (in-place profile switch) | 200ms | each other (exact mirror) |
 | `question-in` (ask_user panel) | 260ms | — |
+| `pane-in-left` / `pane-in-right` (keyboard tab cycling) | 200ms | — (content-changed signal on a persistent wrapper; no exit to pair) |
 | `title-change` (rename flash) | 1200ms | **sanctioned exception** — the
   one decorative-adjacent signal (see design log 2026-07-31); allowlisted in
   the test's `DURATION_EXCEPTIONS` |
@@ -855,3 +856,20 @@ Patterned on what best-in-class palettes converged on (Chrome omnibox
   mid-frame. Docks now register their animated close with the host
   (`registerClose`), and `closeActiveSurface` goes through it — one
   motion contract regardless of which key closed the surface.
+
+### 2026-08-05 — Keyboard navigation between chats and tabs
+- **Cmd+, / Cmd+. cycle the floating dock through the non-tab chats** in
+  bubble-strip order (wrapping). No new motion invented: the outgoing
+  dock plays its collapse while the incoming plays `dock-in` — the swap
+  narrates itself with the vocabulary the docks already own. With no dock
+  open, Cmd+. opens the first chat, Cmd+, the last.
+- **Cmd+[ / Cmd+] cycle workspace tabs** in strip order (wrapping). The
+  content pane nudges in 14px from the direction of travel
+  (`pane-in-left/right`, 200ms) — a content-changed signal on a wrapper
+  that never unmounts, in the same class as `title-change`: no exit
+  animation to pair because nothing enters or leaves the DOM.
+  Click-switching stays instant; only deliberate keyboard cycling
+  narrates direction. Chat tabs keep their own dock motion instead.
+- Caveats accepted deliberately: Cmd+[ / Cmd+] shadow Monaco's
+  indent/outdent while an editor has focus (the editor wins there), and
+  Cmd+, is free because the app has no Preferences accelerator.
