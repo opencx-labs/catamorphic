@@ -132,17 +132,95 @@ export function TerminalScreen({
             onExitRef.current();
           }),
         );
-        // Typing pins the cursor solid (like native terminals); the blink
-        // resumes after a short idle beat.
+        // Cursor states, native-terminal style: blinking solid block when
+        // focused and idle, pinned solid while typing, and a steady hollow
+        // outline while the terminal is unfocused.
+        let focused = true;
+        // ghostty-web has no hollow mode — shadow the renderer's
+        // renderCursor: unfocused, repaint the cell (erasing the previous
+        // solid block) and stroke the outline instead.
+        interface CursorRendererInternals {
+          renderCursor: (x: number, y: number) => void;
+          ctx: CanvasRenderingContext2D;
+          theme: { cursor: string; background: string };
+          currentBuffer: {
+            getLine: (row: number) => unknown[] | null;
+          } | null;
+          renderCellBackground: (cell: unknown, x: number, y: number) => void;
+          renderCellText: (cell: unknown, x: number, y: number) => void;
+        }
+        const renderer = term.renderer as unknown as
+          | (CursorRendererInternals & {
+              getMetrics: () => { width: number; height: number };
+            })
+          | undefined;
+        if (renderer) {
+          const solidRenderCursor = renderer.renderCursor.bind(renderer);
+          renderer.renderCursor = (x: number, y: number) => {
+            if (focused) {
+              solidRenderCursor(x, y);
+              return;
+            }
+            const metrics = renderer.getMetrics();
+            const px = x * metrics.width;
+            const py = y * metrics.height;
+            const ctx = renderer.ctx;
+            ctx.save();
+            // Erase whatever cursor was painted before, restore the cell.
+            ctx.fillStyle = renderer.theme.background;
+            ctx.fillRect(px, py, metrics.width, metrics.height);
+            const cell = renderer.currentBuffer?.getLine(y)?.[x];
+            if (cell) {
+              try {
+                renderer.renderCellBackground(cell, x, y);
+                renderer.renderCellText(cell, x, y);
+              } catch {
+                // Cell repaint is cosmetic; the outline still lands.
+              }
+            }
+            ctx.strokeStyle = renderer.theme.cursor;
+            ctx.lineWidth = 1;
+            ctx.strokeRect(
+              px + 0.5,
+              py + 0.5,
+              metrics.width - 1,
+              metrics.height - 1,
+            );
+            ctx.restore();
+          };
+        }
+        // Typing pins the cursor solid; the blink resumes after a short
+        // idle beat — unless the terminal blurred in the meantime.
         let blinkTimer: number | undefined;
         const pinCursorWhileTyping = () => {
           term?.renderer?.setCursorBlink(false);
           window.clearTimeout(blinkTimer);
           blinkTimer = window.setTimeout(() => {
-            term?.renderer?.setCursorBlink(true);
+            if (focused) term?.renderer?.setCursorBlink(true);
           }, 600);
         };
         unsubscribes.push(() => window.clearTimeout(blinkTimer));
+        const input = term.textarea;
+        if (input) {
+          const onFocus = () => {
+            focused = true;
+            term?.renderer?.setCursorBlink(true);
+          };
+          const onBlur = () => {
+            focused = false;
+            window.clearTimeout(blinkTimer);
+            // Steady hollow: no blink while unfocused.
+            term?.renderer?.setCursorBlink(false);
+          };
+          input.addEventListener("focus", onFocus);
+          input.addEventListener("blur", onBlur);
+          unsubscribes.push(() => {
+            input.removeEventListener("focus", onFocus);
+            input.removeEventListener("blur", onBlur);
+          });
+          focused = document.activeElement === input;
+          if (!focused) term.renderer?.setCursorBlink(false);
+        }
         term.onData((data) => {
           pinCursorWhileTyping();
           if (sessionId) void desktopApi.terminalWrite(sessionId, data);
