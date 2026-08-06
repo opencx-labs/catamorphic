@@ -636,7 +636,8 @@ describe("tiling and chat surfaces", () => {
     });
     await runWait(
       `return [...(floatingDock()?.querySelectorAll('button') ?? [])]
-         .some((el) => el.title?.startsWith('Open '));`,
+         .some((el) =>
+           (el.getAttribute('aria-label') ?? '').endsWith('to the right'));`,
       { label: "browser chip on the surfaces rail" },
     );
     // A terminal to anchor the upcoming split against.
