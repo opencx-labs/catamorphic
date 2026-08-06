@@ -350,18 +350,19 @@ export function WorkspaceTabBar({
               </button>
               {/* Collapsed group parent: expand its folded surfaces. */}
               {parentGroup?.collapsed && onToggleGroup && (
-                <button
-                  type="button"
-                  onClick={() =>
-                    onToggleGroup(parentGroup.parentKey.slice("chat:".length))
-                  }
-                  className="flex h-5 cursor-pointer items-center gap-0.5 rounded px-1 text-[10px] text-accent/80 transition-colors duration-150 hover:bg-bg-overlay hover:text-accent"
-                  aria-label={`Expand ${parentGroup.memberKeys.length} grouped tabs`}
-                  title="Expand grouped tabs"
-                >
-                  <ChevronsRight className="size-3" />
-                  {parentGroup.memberKeys.length}
-                </button>
+                <ShortcutHint label="Expand grouped tabs">
+                  <button
+                    type="button"
+                    onClick={() =>
+                      onToggleGroup(parentGroup.parentKey.slice("chat:".length))
+                    }
+                    className="flex h-5 cursor-pointer items-center gap-0.5 rounded px-1 text-[10px] text-accent/80 transition-colors duration-150 hover:bg-bg-overlay hover:text-accent"
+                    aria-label={`Expand ${parentGroup.memberKeys.length} grouped tabs`}
+                  >
+                    <ChevronsRight className="size-3" />
+                    {parentGroup.memberKeys.length}
+                  </button>
+                </ShortcutHint>
               )}
               {/* ⌘W closes the ACTIVE tab, so only its X advertises it. */}
               <CloseButton
@@ -373,17 +374,20 @@ export function WorkspaceTabBar({
             </div>
             {/* Last member of an expanded group: fold the group away. */}
             {closesGroup && onToggleGroup && (
-              <button
-                type="button"
-                onClick={() =>
-                  onToggleGroup(closesGroup.parentKey.slice("chat:".length))
-                }
-                className="grid size-6 shrink-0 cursor-pointer place-items-center self-center rounded text-accent/70 transition-colors duration-150 hover:bg-bg-overlay hover:text-accent"
-                aria-label="Collapse grouped tabs"
-                title="Collapse grouped tabs"
-              >
-                <ChevronsLeft className="size-3.5" />
-              </button>
+              <span className="self-center">
+                <ShortcutHint label="Collapse grouped tabs">
+                  <button
+                    type="button"
+                    onClick={() =>
+                      onToggleGroup(closesGroup.parentKey.slice("chat:".length))
+                    }
+                    className="grid size-6 shrink-0 cursor-pointer place-items-center rounded text-accent/70 transition-colors duration-150 hover:bg-bg-overlay hover:text-accent"
+                    aria-label="Collapse grouped tabs"
+                  >
+                    <ChevronsLeft className="size-3.5" />
+                  </button>
+                </ShortcutHint>
+              </span>
             )}
           </Fragment>
         );

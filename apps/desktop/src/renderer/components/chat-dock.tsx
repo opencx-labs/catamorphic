@@ -498,15 +498,19 @@ export function ChatDock({
                           {surface.label}
                         </span>
                       </button>
-                      <button
-                        type="button"
-                        onClick={() => onOpenSurface?.(surface.key, "split")}
-                        className="grid size-6 shrink-0 cursor-pointer place-items-center text-fg-faint opacity-60 transition-[color,opacity] duration-100 hover:text-fg group-hover/chip:opacity-100"
-                        aria-label={`Open ${surface.label} to the right`}
-                        title="Open to the right (⌘-click)"
+                      <ShortcutHint
+                        label="Open to the right"
+                        shortcut="⌘-click"
                       >
-                        <Columns2 className="size-3" />
-                      </button>
+                        <button
+                          type="button"
+                          onClick={() => onOpenSurface?.(surface.key, "split")}
+                          className="grid size-6 shrink-0 cursor-pointer place-items-center text-fg-faint opacity-60 transition-[color,opacity] duration-100 hover:text-fg group-hover/chip:opacity-100"
+                          aria-label={`Open ${surface.label} to the right`}
+                        >
+                          <Columns2 className="size-3" />
+                        </button>
+                      </ShortcutHint>
                     </span>
                   );
                 })}

@@ -1539,8 +1539,18 @@ export function App() {
     }
     updateWorkspace((ws) => {
       if (mode === "tab") return { ...ws, split: null, activeTabKey: key };
+      // The surface may already BE the active tab (a floating chat over
+      // the page it just opened) — anchor on the previously focused tab
+      // so "open to the right" still produces a split.
+      const previous = previousActiveTabKeyRef.current;
       const anchor =
-        ws.activeTabKey && ws.activeTabKey !== key ? ws.activeTabKey : null;
+        ws.activeTabKey && ws.activeTabKey !== key
+          ? ws.activeTabKey
+          : previous &&
+              previous !== key &&
+              orderedTabKeys(ws).includes(previous)
+            ? previous
+            : null;
       if (!anchor) return { ...ws, split: null, activeTabKey: key };
       return {
         ...ws,
