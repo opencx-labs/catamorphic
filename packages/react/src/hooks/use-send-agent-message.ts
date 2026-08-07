@@ -13,9 +13,17 @@ import {
 import { useCatamorphic } from "../provider.js";
 import type { SentAgentMessage } from "../types.js";
 
+export interface AgentChatAttachment {
+  kind: "image" | "document";
+  name: string;
+  mediaType: string;
+  dataBase64: string;
+}
+
 export interface SendAgentMessageInput {
   sessionId: string;
   message: string;
+  attachments?: AgentChatAttachment[];
 }
 
 /**
@@ -32,7 +40,7 @@ export function useSendAgentMessage(
   const queryClient = useQueryClient();
   return useMutation<SentAgentMessage, CatamorphicError, SendAgentMessageInput>(
     {
-      mutationFn: ({ sessionId, message }) =>
+      mutationFn: ({ sessionId, message, attachments }) =>
         runWithCatamorphicError(async () => {
           const result = await apiClient.POST(
             "/api/projects/{projectId}/agent/sessions/{sessionId}/messages",
@@ -43,7 +51,12 @@ export function useSendAgentMessage(
                   sessionId,
                 },
               },
-              body: { message },
+              body: {
+                message,
+                ...(attachments && attachments.length > 0
+                  ? { attachments }
+                  : {}),
+              },
             },
           );
           return assertApiOk(result, "Send agent message failed");

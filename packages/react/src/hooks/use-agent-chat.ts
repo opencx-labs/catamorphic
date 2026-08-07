@@ -3,10 +3,14 @@
 import { useQueryClient } from "@tanstack/react-query";
 import { useRef, useState } from "react";
 import type { CatamorphicError } from "../lib/errors.js";
+import { useCatamorphic } from "../provider.js";
 import type { AgentMessage, AgentSessionDetail } from "../types.js";
 import { useAgentSession } from "./use-agent-session.js";
 import { useCreateAgentSession } from "./use-create-agent-session.js";
-import { useSendAgentMessage } from "./use-send-agent-message.js";
+import {
+  type AgentChatAttachment,
+  useSendAgentMessage,
+} from "./use-send-agent-message.js";
 
 export interface UseAgentChatOptions {
   /**
@@ -26,12 +30,21 @@ export interface UseAgentChatOptions {
   agentId?: string;
 }
 
+/** A message waiting behind the in-flight turn. */
+export interface QueuedAgentMessage {
+  id: string;
+  content: string;
+  attachments: AgentChatAttachment[];
+}
+
 export interface UseAgentChatResult {
   sessionId: string | null;
   /** The live session detail (agent, effort, title); null before creation. */
   session: AgentSessionDetail | null;
   messages: AgentMessage[];
   optimisticMessages: OptimisticAgentMessage[];
+  /** Messages waiting behind the in-flight turn, in send order. */
+  queue: QueuedAgentMessage[];
   queuedMessageCount: number;
   isLoading: boolean;
   isSending: boolean;
@@ -43,7 +56,26 @@ export interface UseAgentChatResult {
    */
   isWorking: boolean;
   error: CatamorphicError | null;
-  send: (message: string) => Promise<void>;
+  send: (message: string, attachments?: AgentChatAttachment[]) => Promise<void>;
+  /** Jump the queue: front-of-line + interrupt the in-flight turn. */
+  sendNow: (
+    message: string,
+    attachments?: AgentChatAttachment[],
+  ) => Promise<void>;
+  updateQueued: (id: string, content: string) => void;
+  removeQueued: (id: string) => void;
+  /** Promote a queued message to the front and interrupt the current turn. */
+  sendQueuedNow: (id: string) => void;
+  /**
+   * Mark a queued message as being edited (null = none). While the edited
+   * message is at the head of the queue, dispatch waits for the edit to
+   * finish — its turn doesn't lapse, it sends when the user is done.
+   */
+  holdQueued: (id: string | null) => void;
+  /** Re-run the last failed turn in place (no new user message). */
+  retry: () => Promise<void>;
+  /** Abort the in-flight turn (and any scheduled auto-retry). */
+  interrupt: () => Promise<void>;
   startNewSession: () => void;
 }
 
@@ -51,13 +83,14 @@ export interface OptimisticAgentMessage {
   id: string;
   role: "user";
   content: string;
+  attachments?: AgentChatAttachment[];
 }
-
-type QueuedMessage = OptimisticAgentMessage;
 
 /**
  * Headless agent-chat orchestration. Hosts own the visual presentation while
- * this hook owns lazy session creation, message sending, and cache refreshes.
+ * this hook owns lazy session creation, message sending, the outgoing queue
+ * (messages sent while a turn runs wait their turn, editable until
+ * dispatched), and cache refreshes.
  */
 export function useAgentChat(
   projectId: string | undefined,
@@ -73,13 +106,17 @@ export function useAgentChat(
   const [optimisticMessages, setOptimisticMessages] = useState<
     OptimisticAgentMessage[]
   >([]);
+  const [queue, setQueue] = useState<QueuedAgentMessage[]>([]);
   const activeSessionRef = useRef<{
     projectId: string | undefined;
     controlledSessionId: string | null;
     sessionId: string | null;
   }>({ projectId, controlledSessionId, sessionId: controlledSessionId });
-  const queueRef = useRef<QueuedMessage[]>([]);
+  const queueRef = useRef<QueuedAgentMessage[]>([]);
+  const holdRef = useRef<string | null>(null);
   const processingRef = useRef(false);
+  const { apiClient } = useCatamorphic();
+  const syncQueue = () => setQueue([...queueRef.current]);
   // A controlled-id change normally means the host switched sessions, so chat
   // state resets. But when the host echoes back the id this hook just created
   // (via onSessionCreated), it is the SAME conversation — resetting would
@@ -97,7 +134,10 @@ export function useAgentChat(
       controlledSessionId,
       sessionId: controlledSessionId,
     });
-    if (!adoptedOwnSession) setOptimisticMessages([]);
+    if (!adoptedOwnSession) {
+      setOptimisticMessages([]);
+      setQueue([]);
+    }
   }
   if (
     activeSessionRef.current.projectId !== projectId ||
@@ -112,8 +152,8 @@ export function useAgentChat(
       controlledSessionId,
       sessionId: controlledSessionId,
     };
-    if (!refAdoptedOwnSession && processingRef.current) {
-      // Real session switch mid-send: drop the stale queue.
+    if (!refAdoptedOwnSession) {
+      // Real session switch: drop the stale queue.
       queueRef.current = [];
     }
   }
@@ -129,10 +169,15 @@ export function useAgentChat(
   // in-progress assistant turn. The latter covers sends that end in an HTTP
   // error: the server persists the terminal (failed) message, and without a
   // final refetch the cached snapshot would show a spinning placeholder
-  // forever.
+  // forever. Auto-retries also need the poll: their countdown and re-run
+  // happen entirely server-side.
   const session = useAgentSession(projectId, sessionId ?? undefined, {
     refetchInterval: (data) =>
-      sendInProgress || hasPendingAssistant(data?.messages) ? 500 : false,
+      sendInProgress ||
+      hasPendingAssistant(data?.messages) ||
+      hasScheduledAutoRetry(data?.messages)
+        ? 500
+        : false,
   });
 
   const isSending =
@@ -154,34 +199,36 @@ export function useAgentChat(
     queueRef.current.length === 0;
   const isWorking =
     hasPendingAssistant(persistedMessages) || (isSending && !turnSettled);
-  const performSend = async (content: string) => {
-    if (!projectId) return;
 
+  const ensureSessionId = async (): Promise<string | null> => {
+    if (!projectId) return null;
     const existingSessionId = activeSessionRef.current.sessionId;
-    const targetSessionId =
-      existingSessionId ??
-      (
-        await createSession.mutateAsync(
-          agentIdRef.current ? { agentId: agentIdRef.current } : {},
-        )
-      ).id;
-    if (!existingSessionId) {
-      activeSessionRef.current = {
-        projectId,
-        controlledSessionId,
-        sessionId: targetSessionId,
-      };
-      setActiveSession({
-        projectId,
-        controlledSessionId,
-        sessionId: targetSessionId,
-      });
-      options.onSessionCreated?.(targetSessionId);
-    }
+    if (existingSessionId) return existingSessionId;
+    const created = await createSession.mutateAsync(
+      agentIdRef.current ? { agentId: agentIdRef.current } : {},
+    );
+    activeSessionRef.current = {
+      projectId,
+      controlledSessionId,
+      sessionId: created.id,
+    };
+    setActiveSession({
+      projectId,
+      controlledSessionId,
+      sessionId: created.id,
+    });
+    options.onSessionCreated?.(created.id);
+    return created.id;
+  };
 
+  const performSend = async (queued: QueuedAgentMessage) => {
+    if (!projectId) return;
+    const targetSessionId = await ensureSessionId();
+    if (!targetSessionId) return;
     await sendMessage.mutateAsync({
       sessionId: targetSessionId,
-      message: content,
+      message: queued.content,
+      attachments: queued.attachments,
     });
     await queryClient.invalidateQueries({
       queryKey: ["cat", "project", projectId],
@@ -194,16 +241,32 @@ export function useAgentChat(
     setSendInProgress(true);
     try {
       while (queueRef.current.length > 0) {
-        const queued = queueRef.current[0];
-        if (!queued) continue;
+        const head = queueRef.current[0];
+        if (!head) continue;
+        // The head is being edited: its turn WAITS for the edit — the user
+        // finishes, the message sends. Nothing skips ahead of it.
+        if (holdRef.current === head.id) {
+          await new Promise((resolve) => setTimeout(resolve, 200));
+          continue;
+        }
+        queueRef.current.shift();
+        syncQueue();
+        const optimistic: OptimisticAgentMessage = {
+          id: head.id,
+          role: "user",
+          content: head.content,
+          ...(head.attachments.length > 0
+            ? { attachments: head.attachments }
+            : {}),
+        };
+        setOptimisticMessages((messages) => [...messages, optimistic]);
         try {
-          await performSend(queued.content);
+          await performSend(head);
         } catch {
           // Mutation state exposes the error to consumers; continue draining.
         } finally {
-          queueRef.current.shift();
           setOptimisticMessages((messages) =>
-            messages.filter((message) => message.id !== queued.id),
+            messages.filter((message) => message.id !== head.id),
           );
         }
       }
@@ -213,17 +276,59 @@ export function useAgentChat(
     }
   };
 
-  const send = (message: string) => {
-    const content = message.trim();
-    if (!content) return Promise.resolve();
-    const optimistic = {
+  const enqueue = (
+    message: string,
+    attachments: AgentChatAttachment[],
+    position: "back" | "front",
+  ) => {
+    const queued: QueuedAgentMessage = {
       id: crypto.randomUUID(),
-      role: "user" as const,
-      content,
+      content: message,
+      attachments,
     };
-    setOptimisticMessages((messages) => [...messages, optimistic]);
-    queueRef.current.push(optimistic);
+    if (position === "front") queueRef.current.unshift(queued);
+    else queueRef.current.push(queued);
+    syncQueue();
     void processQueue();
+  };
+
+  const interrupt = async () => {
+    const target = activeSessionRef.current.sessionId;
+    if (!projectId || !target) return;
+    await apiClient
+      .POST("/api/projects/{projectId}/agent/sessions/{sessionId}/interrupt", {
+        params: { path: { projectId, sessionId: target } },
+      })
+      .catch(() => {});
+    await queryClient.invalidateQueries({
+      queryKey: ["cat", "project", projectId, "agent", "session", target],
+    });
+  };
+
+  const [retryInProgress, setRetryInProgress] = useState(false);
+  const retry = async () => {
+    const target = activeSessionRef.current.sessionId;
+    if (!projectId || !target || retryInProgress) return;
+    setRetryInProgress(true);
+    try {
+      await apiClient.POST(
+        "/api/projects/{projectId}/agent/sessions/{sessionId}/retry",
+        { params: { path: { projectId, sessionId: target } } },
+      );
+    } finally {
+      setRetryInProgress(false);
+      await queryClient.invalidateQueries({
+        queryKey: ["cat", "project", projectId, "agent", "session", target],
+      });
+    }
+  };
+
+  const send = (message: string, attachments?: AgentChatAttachment[]) => {
+    const content = message.trim();
+    if (!content && (attachments?.length ?? 0) === 0) {
+      return Promise.resolve();
+    }
+    enqueue(content, attachments ?? [], "back");
     return Promise.resolve();
   };
 
@@ -232,12 +337,46 @@ export function useAgentChat(
     session: session.data ?? null,
     messages: session.data?.messages ?? [],
     optimisticMessages: reconciledOptimistic,
-    queuedMessageCount: queueRef.current.length,
+    queue,
+    queuedMessageCount: queue.length,
     isLoading: session.isLoading,
-    isSending,
-    isWorking,
+    isSending: isSending || retryInProgress,
+    isWorking: isWorking || retryInProgress,
     error: createSession.error ?? sendMessage.error ?? session.error ?? null,
     send,
+    sendNow: async (message, attachments) => {
+      const content = message.trim();
+      if (!content && (attachments?.length ?? 0) === 0) return;
+      enqueue(content, attachments ?? [], "front");
+      await interrupt();
+    },
+    updateQueued: (id, content) => {
+      queueRef.current = queueRef.current.map((queued) =>
+        queued.id === id ? { ...queued, content } : queued,
+      );
+      syncQueue();
+    },
+    removeQueued: (id) => {
+      queueRef.current = queueRef.current.filter((queued) => queued.id !== id);
+      if (holdRef.current === id) holdRef.current = null;
+      syncQueue();
+    },
+    sendQueuedNow: (id) => {
+      const index = queueRef.current.findIndex((queued) => queued.id === id);
+      if (index < 0) return;
+      const [queued] = queueRef.current.splice(index, 1);
+      if (!queued) return;
+      if (holdRef.current === id) holdRef.current = null;
+      queueRef.current.unshift(queued);
+      syncQueue();
+      void interrupt();
+      void processQueue();
+    },
+    holdQueued: (id) => {
+      holdRef.current = id;
+    },
+    retry,
+    interrupt,
     startNewSession: () => {
       if (!processingRef.current) {
         activeSessionRef.current = {
@@ -247,6 +386,8 @@ export function useAgentChat(
         };
         setActiveSession({ projectId, controlledSessionId, sessionId: null });
         setOptimisticMessages([]);
+        queueRef.current = [];
+        setQueue([]);
       }
     },
   };
@@ -257,6 +398,20 @@ function hasPendingAssistant(messages: AgentMessage[] | undefined): boolean {
   if (last?.role !== "assistant") return false;
   const metadata = last.metadata as Record<string, unknown> | null;
   return metadata?.status === "in_progress";
+}
+
+/** A failed turn with a scheduled auto-retry still needs the poll. */
+function hasScheduledAutoRetry(messages: AgentMessage[] | undefined): boolean {
+  const last = messages?.at(-1);
+  if (last?.role !== "assistant") return false;
+  const metadata = last.metadata as Record<string, unknown> | null;
+  if (metadata?.status !== "failed") return false;
+  const autoRetry = metadata?.autoRetry as { nextAtMs?: number } | undefined;
+  // Poll through the scheduled window (plus slack for the retry itself).
+  return (
+    typeof autoRetry?.nextAtMs === "number" &&
+    Date.now() < autoRetry.nextAtMs + 30_000
+  );
 }
 
 function reconcileOptimisticMessages(

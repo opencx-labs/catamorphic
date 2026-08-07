@@ -222,9 +222,13 @@ describe("useAgentChat", () => {
       void result.current.send("Repeat");
     });
     await waitFor(() => expect(result.current.sessionId).toBe(SESSION_ID));
+    // The in-flight copy reconciles against the one persisted "Repeat";
+    // the duplicate is NOT swallowed with it — it waits in the queue.
     await waitFor(() =>
-      expect(result.current.optimisticMessages).toHaveLength(1),
+      expect(result.current.optimisticMessages).toHaveLength(0),
     );
+    expect(result.current.queue).toHaveLength(1);
+    expect(result.current.queue[0]?.content).toBe("Repeat");
     finishFirst?.();
     await waitFor(() => expect(sends).toBe(2));
   });

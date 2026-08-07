@@ -20,6 +20,8 @@ export {
   showRunDialogAtom,
 } from "./atoms.js";
 export {
+  type OptimisticAgentMessage,
+  type QueuedAgentMessage,
   type UseAgentChatOptions,
   type UseAgentChatResult,
   useAgentChat,
@@ -71,6 +73,15 @@ export {
   useDetachPlugin,
 } from "./hooks/use-detach-plugin.js";
 export { useEditorKeyboard } from "./hooks/use-editor-keyboard.js";
+// Project hooks
+export {
+  type GithubRepoSummary,
+  type GithubStatus,
+  type ImportGithubRepoInput,
+  useGithubRepos,
+  useGithubStatus,
+  useImportGithubRepo,
+} from "./hooks/use-github.js";
 export { type UseOnParseOptions, useOnParse } from "./hooks/use-on-parse.js";
 export type {
   ParseWorkflowRequest,
@@ -142,23 +153,15 @@ export {
 } from "./hooks/use-runs.js";
 export { useSelectedNode } from "./hooks/use-selected-node.js";
 export {
+  type AgentChatAttachment,
   type SendAgentMessageInput,
   useSendAgentMessage,
 } from "./hooks/use-send-agent-message.js";
+export { useTemplates } from "./hooks/use-templates.js";
 export {
   type UpdateAgentSessionInput,
   useUpdateAgentSession,
 } from "./hooks/use-update-agent-session.js";
-// Project hooks
-export {
-  type GithubRepoSummary,
-  type GithubStatus,
-  type ImportGithubRepoInput,
-  useGithubRepos,
-  useGithubStatus,
-  useImportGithubRepo,
-} from "./hooks/use-github.js";
-export { useTemplates } from "./hooks/use-templates.js";
 export {
   type UpdateProjectInput,
   useUpdateProject,
