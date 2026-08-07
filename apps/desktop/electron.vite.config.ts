@@ -31,5 +31,24 @@ export default defineConfig({
     resolve: {
       alias: { "@": path.resolve(import.meta.dirname, "src/renderer") },
     },
+    // Workspace packages resolve from their dist/ builds. Left to vite's
+    // dependency optimizer they get PREBUNDLED AND CACHED — a running dev
+    // app keeps serving the stale prebundle after a package rebuild,
+    // while apps/desktop source hot-reloads live: the mismatch breaks the
+    // renderer in ways a "fresh" dev launch wouldn't. Exclude them from
+    // optimization (their dists are plain ESM) and un-ignore them in the
+    // watcher, so a package rebuild reloads the running app with current
+    // code instead.
+    optimizeDeps: {
+      exclude: [
+        "@catamorphic/api-client",
+        "@catamorphic/react",
+        "@catamorphic/ui",
+        "@catamorphic/workflow",
+      ],
+    },
+    server: {
+      watch: { ignored: ["!**/node_modules/@catamorphic/**"] },
+    },
   },
 });
