@@ -1,0 +1,169 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Catamorphic for AI agents: integrate it in a few commands</title>
+<meta name="description" content="Point your coding agent at Catamorphic and it can embed user-facing AI workflows, apps, and agents inside your product. Skill, llms.txt, and integration guide, all agent-readable.">
+<meta property="og:title" content="Catamorphic for AI agents">
+<meta property="og:description" content="Everything a coding agent needs to embed Catamorphic in your app: a skill, llms.txt, and a canonical integration guide.">
+<meta property="og:type" content="website">
+<meta property="og:url" content="https://catamorphic.ai/agents/">
+<meta property="og:site_name" content="Catamorphic">
+<meta property="og:image" content="https://catamorphic.ai/assets/og-card.png">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="630">
+<meta property="og:image:alt" content="Catamorphic: agents that work, for you and for your users.">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:image" content="https://catamorphic.ai/assets/og-card.png">
+<link rel="canonical" href="https://catamorphic.ai/agents/">
+<link rel="icon" type="image/svg+xml" href="/assets/favicon.svg">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;650;700&family=JetBrains+Mono:wght@400;500&display=swap">
+<link rel="stylesheet" href="/styles.css">
+<style>
+  .agent-block { background: #060607; border: 1px solid #232329; border-radius: 10px; padding: 18px 20px; margin: 14px 0 0; overflow-x: auto; }
+  .agent-block code { font-family: "JetBrains Mono", ui-monospace, monospace; font-size: 13px; line-height: 1.7; color: #e6e6e9; white-space: pre; display: block; }
+  .agent-block .c { color: #5c5c66; }
+  .agent-note { font-size: 13px; color: #9a9aa3; margin-top: 10px; }
+</style>
+</head>
+<body>
+
+<nav class="nav">
+  <div class="container nav-inner">
+    <a class="brand" href="/">
+      <svg width="26" height="26" viewBox="0 0 64 64" fill="none" aria-hidden="true">
+        <path d="M46 15.5 C42 12.6 37.2 11 32 11 C20.4 11 11 20.4 11 32 C11 43.6 20.4 53 32 53 C37.2 53 42 51.4 46 48.5" stroke="#f95225" stroke-width="6.5" stroke-linecap="round"/>
+        <line x1="24" y1="14.5" x2="24" y2="49.5" stroke="#f95225" stroke-width="6.5" stroke-linecap="round"/>
+      </svg>
+      catamorphic
+    </a>
+    <div class="nav-links">
+      <a href="/desktop/">Desktop</a>
+      <a href="/workflows/">Workflows</a>
+      <a href="/apps/">Apps</a>
+      <a href="/copilot/">Copilot</a>
+      <a class="btn btn-primary" href="https://github.com/opencx-labs/catamorphic">
+        <svg width="15" height="15" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27s1.36.09 2 .27c1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8Z"/></svg>
+        GitHub
+      </a>
+    </div>
+  </div>
+</nav>
+
+<header class="hero">
+  <div class="container hero-inner">
+    <span class="hero-badge"><span class="dot"></span>Agent-readable · llms.txt · installable skill</span>
+    <h1>Tell your agent to <span class="accent">embed Catamorphic</span></h1>
+    <p class="lede">Catamorphic is a library, the way libghostty is a library: the engine under our desktop app, published for anyone to build on. Your coding agent can wire it into any TypeScript host in a few commands, whether that's a SaaS backend on network Postgres or a desktop app on embedded pglite with local sandboxes, like ours. This page is written for agents as much as for you.</p>
+    <div class="hero-actions">
+      <a class="btn btn-primary" href="/llms.txt">llms.txt</a>
+      <a class="btn btn-ghost" href="https://github.com/opencx-labs/catamorphic/blob/main/INTEGRATION.md">Integration guide</a>
+    </div>
+  </div>
+</header>
+
+<section>
+  <div class="container">
+    <div class="section-header reveal">
+      <p class="eyebrow">// for humans</p>
+      <h2>Two ways to hand this to your agent</h2>
+      <p>Either works. The skill is better if you'll keep working on the integration over multiple sessions.</p>
+    </div>
+
+    <div class="split">
+      <div class="reveal">
+        <h3 style="font-size:16px; margin-bottom:4px">1 · Just ask, with the link</h3>
+        <p style="color:#9a9aa3; font-size:14px">Paste this into Claude Code, Cursor, Codex, or any agent that can browse:</p>
+        <div class="agent-block"><code>I want my users to be able to build workflows and apps,
+and run agents that do real work, inside our product.
+Use Catamorphic. Start from https://catamorphic.ai/llms.txt
+and follow the integration guide it links.</code></div>
+        <p class="agent-note">The agent reads llms.txt, pulls the skill and the integration guide, checks your dependencies, and walks you through the choices (storage, sandbox provider, auth wiring) before writing code.</p>
+      </div>
+      <div class="reveal">
+        <h3 style="font-size:16px; margin-bottom:4px">2 · Install the skill</h3>
+        <p style="color:#9a9aa3; font-size:14px">One command drops the embedding skill into your repo:</p>
+        <div class="agent-block"><code>mkdir -p .claude/skills/embed-catamorphic &amp;&amp; \
+curl -fsSL https://raw.githubusercontent.com/opencx-labs/\
+catamorphic/main/skills/embed-catamorphic/SKILL.md \
+  -o .claude/skills/embed-catamorphic/SKILL.md</code></div>
+        <p class="agent-note">From then on, any "let users build automations in our app" request triggers the skill automatically: dependency checklist, decision tree, quickstart, and the rules that keep integrations correct.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section>
+  <div class="container">
+    <div class="section-header reveal">
+      <p class="eyebrow">// for agents</p>
+      <h2>If you are the agent, start here</h2>
+      <p>Read <a href="/llms.txt">/llms.txt</a>, then the <a href="https://raw.githubusercontent.com/opencx-labs/catamorphic/main/skills/embed-catamorphic/SKILL.md">embed-catamorphic skill</a>, then <a href="https://raw.githubusercontent.com/opencx-labs/catamorphic/main/INTEGRATION.md">INTEGRATION.md</a>. The whole implementation is <a href="https://github.com/opencx-labs/catamorphic">open source</a>: when the docs leave a question open, clone the repo and read the package READMEs, the ADRs, and the desktop app's own embedding. The short version:</p>
+    </div>
+    <div class="grid">
+      <div class="card reveal">
+        <span class="icon"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m9 11 3 3L22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg></span>
+        <h3>Identify the host shape first</h3>
+        <p>Don't assume a server. Every dependency is an axis: network Postgres or embedded pglite; cloud sandboxes (Cloudflare, Daytona) or local (microsandbox) or none; S3-compatible storage or plain directories. Our own desktop app runs the lightest column: pglite, local sandboxes, no server.</p>
+      </div>
+      <div class="card reveal">
+        <span class="icon"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="16 18 22 12 16 6"/><polyline points="8 6 2 12 8 18"/></svg></span>
+        <h3>Boot once, scope per request</h3>
+        <p><code>createCatamorphic(…)</code> at startup, <code>migrate()</code> (idempotent), explicit <code>startExecutionWorker(…)</code>, then <code>forTenant(orgId).forUser(userId)</code> from the host's verified auth, never from browser-supplied values.</p>
+      </div>
+      <div class="card reveal">
+        <span class="icon"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/></svg></span>
+        <h3>Then verify end to end</h3>
+        <p>Create a project, write a workflow file, trigger a run, read its status through the same scoped client. Mount the Fastify plugin and React hooks only after the core loop works.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section class="cta">
+  <div class="container">
+    <h2>The engine is the product too</h2>
+    <p>Everything the desktop app does (projects, agents, durable runs, the visual graph) comes from these packages. Free, open source, embed-only: your auth, your Postgres, your deployment.</p>
+    <div class="hero-actions">
+      <a class="btn btn-primary" href="https://github.com/opencx-labs/catamorphic">
+        <svg width="15" height="15" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27s1.36.09 2 .27c1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8Z"/></svg>
+        View on GitHub
+      </a>
+      <a class="btn btn-ghost" href="/workflows/">The workflows framework</a>
+    </div>
+  </div>
+</section>
+
+<footer>
+  <div class="container footer-inner">
+    <a class="brand" href="/">
+      <svg width="20" height="20" viewBox="0 0 64 64" fill="none" aria-hidden="true">
+        <path d="M46 15.5 C42 12.6 37.2 11 32 11 C20.4 11 11 20.4 11 32 C11 43.6 20.4 53 32 53 C37.2 53 42 51.4 46 48.5" stroke="#f95225" stroke-width="6.5" stroke-linecap="round"/>
+        <line x1="24" y1="14.5" x2="24" y2="49.5" stroke="#f95225" stroke-width="6.5" stroke-linecap="round"/>
+      </svg>
+      catamorphic
+    </a>
+    <div class="footer-links">
+      <a href="/">Home</a>
+      <a href="/workflows/">Workflows</a>
+      <a href="/apps/">Apps</a>
+      <a href="/llms.txt">llms.txt</a>
+      <a href="/copilot/">Copilot</a>
+      <a href="https://github.com/opencx-labs/catamorphic">GitHub</a>
+    </div>
+    <span class="footer-note">⦇ catamorphic ⦈ · readable by humans and agents alike</span>
+  </div>
+</footer>
+
+<script>
+  const io = new IntersectionObserver((entries) => {
+    for (const e of entries) if (e.isIntersecting) { e.target.classList.add("in"); io.unobserve(e.target); }
+  }, { threshold: 0.12 });
+  document.querySelectorAll(".reveal").forEach((el) => io.observe(el));
+</script>
+
+</body>
+</html>

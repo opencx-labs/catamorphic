@@ -3,23 +3,31 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Catamorphic — Embeddable AI workflow automation for your SaaS</title>
-<meta name="description" content="Catamorphic is an embeddable framework that lets your users build their own automations and apps with AI. Workflows are TypeScript code in a git repo — rendered as a visual graph for everyone else.">
+<title>Catamorphic: a really good place to get work done</title>
+<meta name="description" content="Catamorphic is a free, open-source, local-first workspace for the agent era. Agents do real work on real surfaces: web, terminals, editors. You direct, and everything lives in files you own.">
 <meta property="og:title" content="Catamorphic">
-<meta property="og:description" content="Embed AI workflow automation inside your SaaS. Code is the source of truth.">
+<meta property="og:description" content="Agents that work, for you and for your users.">
 <meta property="og:type" content="website">
 <meta property="og:url" content="https://catamorphic.ai">
-<link rel="icon" type="image/svg+xml" href="assets/favicon.svg">
+<meta property="og:site_name" content="Catamorphic">
+<meta property="og:image" content="https://catamorphic.ai/assets/og-card.png">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="630">
+<meta property="og:image:alt" content="Catamorphic: agents that work, for you and for your users.">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:image" content="https://catamorphic.ai/assets/og-card.png">
+<link rel="canonical" href="https://catamorphic.ai">
+<link rel="icon" type="image/svg+xml" href="/assets/favicon.svg">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;650;700&family=JetBrains+Mono:wght@400;500&display=swap">
-<link rel="stylesheet" href="styles.css">
+<link rel="stylesheet" href="/styles.css">
 </head>
 <body>
 
 <nav class="nav">
   <div class="container nav-inner">
-    <a class="brand" href="#">
+    <a class="brand" href="/">
       <svg width="26" height="26" viewBox="0 0 64 64" fill="none" aria-hidden="true">
         <path d="M46 15.5 C42 12.6 37.2 11 32 11 C20.4 11 11 20.4 11 32 C11 43.6 20.4 53 32 53 C37.2 53 42 51.4 46 48.5" stroke="#f95225" stroke-width="6.5" stroke-linecap="round"/>
         <line x1="24" y1="14.5" x2="24" y2="49.5" stroke="#f95225" stroke-width="6.5" stroke-linecap="round"/>
@@ -27,9 +35,9 @@
       catamorphic
     </a>
     <div class="nav-links">
-      <a href="#product">Product</a>
-      <a href="#how">How it works</a>
-      <a href="#packages">Packages</a>
+      <a href="/desktop/">Desktop</a>
+      <a href="/workflows/">Workflows</a>
+      <a href="/apps/">Apps</a>
       <a class="btn btn-primary" href="https://github.com/opencx-labs/catamorphic">
         <svg width="15" height="15" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27s1.36.09 2 .27c1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8Z"/></svg>
         GitHub
@@ -40,196 +48,69 @@
 
 <header class="hero">
   <div class="container hero-inner">
-    <span class="hero-badge"><span class="dot"></span>Free &amp; open source · TypeScript-native</span>
-    <h1>Let your users automate <span class="accent">your product</span> with AI</h1>
-    <p class="lede">Catamorphic is a framework you embed inside your SaaS so your users can build their own workflow automations and apps — with an AI agent doing the heavy lifting, and real code underneath.</p>
+    <span class="hero-badge"><span class="dot"></span>Free &amp; open source · Local-first</span>
+    <h1>A really good place to <span class="accent">get work done</span></h1>
+    <p class="lede">Agents can do real work now. Catamorphic gives them real surfaces to do it on: web tabs with your logins, terminals, editors, and durable runs that survive anything. You direct, they produce, and all of it lives in files you own.</p>
     <div class="hero-actions">
-      <a class="btn btn-primary" href="https://github.com/opencx-labs/catamorphic">Get started</a>
-      <a class="btn btn-ghost" href="#how">See how it works</a>
-    </div>
-    <button class="install" id="install" type="button" aria-label="Copy install command">
-      <span class="prompt">$</span>
-      <span id="install-cmd">bun add @catamorphic/server-sdk</span>
-      <span class="copy-hint" id="copy-hint">copy</span>
-    </button>
-
-    <div class="duo reveal">
-      <div class="code-window">
-        <div class="code-titlebar">
-          <span class="dots"><i></i><i></i><i></i></span>
-          <span class="filename">workflows/welcome-user.ts</span>
-          <span class="pane-tag">what engineers &amp; agents write</span>
-        </div>
-        <pre><code><span class="tk-cm">/**
- * @displayname Welcome New User
- * @description Onboard a new user
- */</span>
-<span class="tk-kw">export async function</span> <span class="tk-fn">welcomeUser</span><span class="tk-pn">({</span> email, name <span class="tk-pn">}:</span> <span class="tk-pr">NewUserInput</span><span class="tk-pn">)</span> <span class="tk-pn">{</span>
-  <span class="tk-dir">"use workflow"</span><span class="tk-pn">;</span>
-
-  <span class="tk-kw">const</span> user <span class="tk-pn">=</span> <span class="tk-kw">await</span> <span class="tk-fn">createUser</span><span class="tk-pn">({</span> email, name <span class="tk-pn">});</span>
-  <span class="tk-kw">await</span> <span class="tk-fn">sendWelcomeEmail</span><span class="tk-pn">({</span> to<span class="tk-pn">:</span> user.email <span class="tk-pn">});</span>
-
-  <span class="tk-kw">if</span> <span class="tk-pn">(</span>user.plan <span class="tk-pn">===</span> <span class="tk-str">"premium"</span><span class="tk-pn">)</span> <span class="tk-pn">{</span>
-    <span class="tk-kw">await</span> <span class="tk-fn">assignPremiumBenefits</span><span class="tk-pn">({</span> userId<span class="tk-pn">:</span> user.id <span class="tk-pn">});</span>
-  <span class="tk-pn">}</span>
-
-  <span class="tk-kw">return</span> <span class="tk-pn">{</span> status<span class="tk-pn">:</span> <span class="tk-str">"complete"</span>, userId<span class="tk-pn">:</span> user.id <span class="tk-pn">};</span>
-<span class="tk-pn">}</span></code></pre>
-      </div>
-
-      <div class="duo-link" aria-hidden="true">
-        <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14"/><path d="m13 6 6 6-6 6"/></svg>
-        <span>parsed</span>
-      </div>
-
-      <div class="graph-window" aria-label="The same workflow rendered as a visual graph">
-        <div class="code-titlebar">
-          <span class="graph-title">Welcome New User</span>
-          <span class="pane-tag">what your users see</span>
-        </div>
-        <div class="graph-viewport">
-          <img class="graph-img" src="assets/hero-graph.png" width="1860" height="1650" alt="The welcomeUser workflow rendered as a visual graph: trigger, createUser and sendWelcomeEmail steps, an if-block for premium users, and a return node." loading="lazy">
-        </div>
-      </div>
+      <a class="btn btn-primary" href="/desktop/">The desktop app</a>
+      <a class="btn btn-ghost" href="/workflows/">Build with the framework</a>
     </div>
   </div>
 </header>
 
-<section id="product">
+<section id="idea">
   <div class="container">
     <div class="section-header reveal">
-      <p class="eyebrow">// why catamorphic</p>
-      <h2>Code is the source of truth</h2>
-      <p>Workflows and apps are stored as TypeScript in a git repository — never a proprietary DSL or a pile of JSON. The parser renders that code as a visual graph for non-technical users, while engineers and AI agents work directly with the code.</p>
+      <p class="eyebrow">// the idea</p>
+      <h2>Built to get real work out of agents</h2>
+      <p>Not a chat window with tools bolted on. A workspace where agent output becomes finished work: pages browsed, commands run, files shipped.</p>
     </div>
     <div class="grid">
       <div class="card reveal">
-        <span class="icon"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="16 18 22 12 16 6"/><polyline points="8 6 2 12 8 18"/></svg></span>
-        <h3>Real TypeScript, real npm</h3>
-        <p>User workflows run like normal apps — full IO, real dependencies, no crippled JS runtime. Executed with Bun inside an isolated sandbox.</p>
+        <span class="icon"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="3" width="20" height="14" rx="2"/><path d="M8 21h8m-4-4v4"/></svg></span>
+        <h3>Real work, real surfaces</h3>
+        <p>Agents browse in tabs that carry your logins, run commands in real terminals, and edit real files. The same surfaces you use, so what they produce is the work itself, not a transcript of it.</p>
       </div>
       <div class="card reveal">
-        <span class="icon"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="5" cy="6" r="3"/><circle cx="19" cy="18" r="3"/><path d="M5 9v3a3 3 0 0 0 3 3h8"/></svg></span>
-        <h3>Git-backed projects</h3>
-        <p>A project is just a git repo of TypeScript. Branches, history, and review come for free — for humans and agents alike.</p>
+        <span class="icon"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M13 2 3 14h9l-1 8 10-12h-9l1-8Z"/></svg></span>
+        <h3>Own every layer</h3>
+        <p>Bring your own agents: Claude Code, Codex, any API model, side by side on your own accounts. Projects, notes, and settings are plain files on your disk, and sync rides on git. No vendor lock, no usage meter.</p>
+      </div>
+      <div class="card reveal">
+        <span class="icon"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7Z"/><circle cx="12" cy="12" r="3"/></svg></span>
+        <h3>Control when you want it</h3>
+        <p>Watch a surface live, take it over with one click, or pull up a diff when a change deserves your eyes. Delegation with a dial, so you spend attention exactly where it matters.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section id="surfaces">
+  <div class="container">
+    <div class="section-header reveal">
+      <p class="eyebrow">// one engine, three faces</p>
+      <h2>An app you live in, an engine you embed</h2>
+      <p>The same open-source engine powers a desktop workspace for people, and an embeddable framework that puts workflows and apps your users build with AI inside your product.</p>
+    </div>
+    <div class="grid">
+      <div class="card reveal">
+        <span class="icon"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="3" width="20" height="14" rx="2"/><path d="M8 21h8m-4-4v4"/></svg></span>
+        <h3>Catamorphic Desktop</h3>
+        <p>A local-first workspace where your agents browse, run terminals, edit, and research beside you. Take-over control, on-demand diffs, per-profile everything. In active development.</p>
+        <p><a href="/desktop/">Explore the desktop app →</a></p>
+      </div>
+      <div class="card reveal">
+        <span class="icon"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="16 18 22 12 16 6"/><polyline points="8 6 2 12 8 18"/></svg></span>
+        <h3>Workflows</h3>
+        <p>Durable automations your users build with AI inside your product: TypeScript in git, rendered as a visual graph anyone can read, executed on Postgres with retries, pauses, signals, and batches.</p>
+        <p><a href="/workflows/">Explore workflows →</a></p>
       </div>
       <div class="card reveal">
         <span class="icon"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/></svg></span>
-        <h3>Visual graph for everyone</h3>
-        <p>The AST parser turns code into an intuitive React Flow canvas, so non-technical users can read, run, and reshape automations.</p>
+        <h3>Apps</h3>
+        <p>Real frontends your users build on top of their workflows: sandboxed, wired through a typed contract, with the agent writing both the UI and the logic behind it. Build app builders with it.</p>
+        <p><a href="/apps/">Explore apps →</a></p>
       </div>
-      <div class="card reveal">
-        <span class="icon"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2a4 4 0 0 1 4 4v1h1a3 3 0 0 1 3 3v8a3 3 0 0 1-3 3H7a3 3 0 0 1-3-3v-8a3 3 0 0 1 3-3h1V6a4 4 0 0 1 4-4Z"/><circle cx="9" cy="14" r="1"/><circle cx="15" cy="14" r="1"/></svg></span>
-        <h3>AI agents built in</h3>
-        <p>Coding agents write and edit workflows from natural language, driving a dev sandbox remotely. Ships with Vercel AI SDK and Codex plugins.</p>
-      </div>
-      <div class="card reveal">
-        <span class="icon"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 1 1-9-9"/><path d="M21 3v6h-6"/></svg></span>
-        <h3>Durable by default</h3>
-        <p>Persisted continuation, retries, pauses, signals, rate budgets, and batch processing — all backed by Postgres with <code>SKIP LOCKED</code>. No extra infrastructure.</p>
-      </div>
-      <div class="card reveal">
-        <span class="icon"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 7h-9m9 10h-9M4 7h1m-1 10h1"/><circle cx="8" cy="7" r="2.5"/><circle cx="8" cy="17" r="2.5"/></svg></span>
-        <h3>Host-injectable everything</h3>
-        <p>Auth, database, storage, sandbox and LLM credentials, telemetry — all injected by your app. No default identity, no hidden tenant model.</p>
-      </div>
-    </div>
-  </div>
-</section>
-
-<section id="how">
-  <div class="container">
-    <div class="section-header reveal">
-      <p class="eyebrow">// how it works</p>
-      <h2>Embed it, don't bolt it on</h2>
-      <p>Catamorphic ships as libraries your application mounts in-process. Your auth, your user model, your database, your deployment surface.</p>
-    </div>
-    <div class="split">
-      <div class="steps">
-        <div class="step reveal">
-          <span class="step-num">1</span>
-          <div>
-            <h3>Boot the SDK in your backend</h3>
-            <p>Point <code style="font-family:var(--font-mono);font-size:13px">createCatamorphic</code> at your Postgres and a sandbox provider. It manages its own schema-scoped tables and migrations.</p>
-          </div>
-        </div>
-        <div class="step reveal">
-          <span class="step-num">2</span>
-          <div>
-            <h3>Mount the HTTP API</h3>
-            <p>One Fastify plugin exposes the standard API to your frontend, carrying identity from your auth context on every request.</p>
-          </div>
-        </div>
-        <div class="step reveal">
-          <span class="step-num">3</span>
-          <div>
-            <h3>Drop in the UI — or build your own</h3>
-            <p>Ready-made React components for the workflow canvas and run history, headless hooks underneath, and shadcn-style registry components when you want to own the source.</p>
-          </div>
-        </div>
-        <div class="step reveal">
-          <span class="step-num">4</span>
-          <div>
-            <h3>Your users take it from there</h3>
-            <p>They describe what they want; the agent writes the workflow; the graph shows them exactly what it does. Runs execute durably in sandboxes.</p>
-          </div>
-        </div>
-      </div>
-
-      <div class="graph-panel reveal" aria-hidden="true">
-        <p class="panel-title"><span>welcomeUser</span><span>graph</span></p>
-        <svg viewBox="0 0 440 380" fill="none">
-          <defs>
-            <marker id="arr" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
-              <path d="M0 0 L8 4 L0 8 Z" fill="#5c5c66"/>
-            </marker>
-          </defs>
-          <!-- edges -->
-          <path d="M220 64 V96" stroke="#33333b" stroke-width="1.5" marker-end="url(#arr)"/>
-          <path d="M220 152 V184" stroke="#33333b" stroke-width="1.5" marker-end="url(#arr)"/>
-          <path d="M160 228 C120 244 110 254 110 272" stroke="#33333b" stroke-width="1.5" marker-end="url(#arr)"/>
-          <path d="M280 228 C320 244 330 254 330 272" stroke="#33333b" stroke-width="1.5" marker-end="url(#arr)"/>
-          <!-- trigger -->
-          <rect x="150" y="20" width="140" height="44" rx="8" fill="#16161a" stroke="#33333b"/>
-          <circle cx="172" cy="42" r="4" fill="#f95225"/>
-          <text x="186" y="46" fill="#e6e6e9" font-family="JetBrains Mono, monospace" font-size="12">trigger</text>
-          <!-- step 1 -->
-          <rect x="130" y="96" width="180" height="56" rx="8" fill="#101012" stroke="#232329"/>
-          <text x="148" y="120" fill="#e6e6e9" font-family="JetBrains Mono, monospace" font-size="12">createUser</text>
-          <text x="148" y="138" fill="#5c5c66" font-family="JetBrains Mono, monospace" font-size="10">step · retries ×3</text>
-          <!-- step 2 -->
-          <rect x="130" y="184" width="180" height="56" rx="8" fill="#101012" stroke="#232329"/>
-          <text x="148" y="208" fill="#e6e6e9" font-family="JetBrains Mono, monospace" font-size="12">sendWelcomeEmail</text>
-          <text x="148" y="226" fill="#5c5c66" font-family="JetBrains Mono, monospace" font-size="10">step · rate budget</text>
-          <!-- branch left -->
-          <rect x="24" y="272" width="172" height="56" rx="8" fill="#101012" stroke="#232329"/>
-          <text x="42" y="296" fill="#e6e6e9" font-family="JetBrains Mono, monospace" font-size="12">premiumBenefits</text>
-          <text x="42" y="314" fill="#5c5c66" font-family="JetBrains Mono, monospace" font-size="10">if plan === "premium"</text>
-          <!-- branch right -->
-          <rect x="244" y="272" width="172" height="56" rx="8" fill="#101012" stroke="#f95225" stroke-opacity="0.65"/>
-          <text x="262" y="296" fill="#e6e6e9" font-family="JetBrains Mono, monospace" font-size="12">followUpEmail</text>
-          <text x="262" y="314" fill="#7fb069" font-family="JetBrains Mono, monospace" font-size="10">● running</text>
-        </svg>
-      </div>
-    </div>
-  </div>
-</section>
-
-<section id="packages">
-  <div class="container">
-    <div class="section-header reveal">
-      <p class="eyebrow">// the developer surface</p>
-      <h2>Small packages, sharp edges</h2>
-      <p>Install only what you use. Every layer is opt-in, from the full editor UI down to the headless kernel.</p>
-    </div>
-    <div class="pkg-table reveal">
-      <div class="pkg-row"><code>@catamorphic/server-sdk</code><span>The core SDK for your Node or Bun backend — projects, workflows, file I/O, and durable execution on your Postgres.</span></div>
-      <div class="pkg-row"><code>@catamorphic/fastify-plugin</code><span>A mountable plugin exposing the standard HTTP API, plus a standalone factory for sidecar deployments.</span></div>
-      <div class="pkg-row"><code>@catamorphic/react</code><span>Headless React bindings: provider, TanStack Query hooks, and jotai atoms for fully custom UIs.</span></div>
-      <div class="pkg-row"><code>@catamorphic/ui</code><span>Ready-made components — the React Flow workflow canvas, detail panel, history sidebar, and AI bar.</span></div>
-      <div class="pkg-row"><code>@catamorphic/registry</code><span>shadcn-style copy-paste components for hosts that want to own and customize the source.</span></div>
-      <div class="pkg-row"><code>@catamorphic/workflow</code><span>Typed workflow-authoring primitives: boundaries, batches, signals, correlation keys, rate budgets.</span></div>
     </div>
   </div>
 </section>
@@ -238,19 +119,19 @@
   <div class="container">
     <div class="principles reveal">
       <div class="principle">
-        <span class="k">01 / no lock-in</span>
-        <h3>It's just TypeScript in git</h3>
-        <p>Eject any time — your users' automations are ordinary code in an ordinary repository, readable without Catamorphic.</p>
+        <span class="k">01 / local-first</span>
+        <h3>Files you can leave with</h3>
+        <p>Projects are ordinary folders, notes are markdown, config is JSON you can open in any editor. Delete Catamorphic and your work is still yours, intact.</p>
       </div>
       <div class="principle">
-        <span class="k">02 / no new infra</span>
-        <h3>Postgres is the whole engine</h3>
-        <p>Queues, retries, pauses, schedules, and batch state live in the database you already run. Sandboxes execute the code.</p>
+        <span class="k">02 / bring your own</span>
+        <h3>Agents, models, and clouds</h3>
+        <p>Run Claude Code and Codex side by side on your own accounts. Connect your GitHub for sync, or your Cloudflare account for a private cloud we host nothing of.</p>
       </div>
       <div class="principle">
-        <span class="k">03 / observable</span>
-        <h3>OpenTelemetry throughout</h3>
-        <p>Every layer instruments against the OTel API. Register your SDK and exporters, get full traces for free.</p>
+        <span class="k">03 / free &amp; open</span>
+        <h3>No tiers, no meters</h3>
+        <p>Permissively licensed open source. Sustainable because you bring your own infrastructure: there is no server bill for us to pass on to you.</p>
       </div>
     </div>
   </div>
@@ -258,21 +139,21 @@
 
 <section class="cta">
   <div class="container">
-    <h2>Free, open source, yours</h2>
-    <p>Catamorphic is completely free and open source — no paid tiers, no usage meters, no strings. Star the repo, read the integration guide, and embed it in an afternoon.</p>
+    <h2>Follow along</h2>
+    <p>Catamorphic is being built in the open. Star the repo, read the design log, and watch it become the place you get work done.</p>
     <div class="hero-actions">
       <a class="btn btn-primary" href="https://github.com/opencx-labs/catamorphic">
         <svg width="15" height="15" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27s1.36.09 2 .27c1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8Z"/></svg>
         View on GitHub
       </a>
-      <a class="btn btn-ghost" href="https://github.com/opencx-labs/catamorphic/blob/main/INTEGRATION.md">Integration guide</a>
+      <a class="btn btn-ghost" href="/desktop/">See the desktop app</a>
     </div>
   </div>
 </section>
 
 <footer>
   <div class="container footer-inner">
-    <a class="brand" href="#">
+    <a class="brand" href="/">
       <svg width="20" height="20" viewBox="0 0 64 64" fill="none" aria-hidden="true">
         <path d="M46 15.5 C42 12.6 37.2 11 32 11 C20.4 11 11 20.4 11 32 C11 43.6 20.4 53 32 53 C37.2 53 42 51.4 46 48.5" stroke="#f95225" stroke-width="6.5" stroke-linecap="round"/>
         <line x1="24" y1="14.5" x2="24" y2="49.5" stroke="#f95225" stroke-width="6.5" stroke-linecap="round"/>
@@ -280,11 +161,13 @@
       catamorphic
     </a>
     <div class="footer-links">
+      <a href="/desktop/">Desktop</a>
+      <a href="/workflows/">Workflows</a>
+      <a href="/apps/">Apps</a>
+      <a href="/agents/">For agents</a>
       <a href="https://github.com/opencx-labs/catamorphic">GitHub</a>
-      <a href="https://github.com/opencx-labs/catamorphic/blob/main/README.md">Docs</a>
-      <a href="https://github.com/opencx-labs/catamorphic/blob/main/INTEGRATION.md">Integration</a>
     </div>
-    <span class="footer-note">⦇ catamorphic ⦈ — fold your product into workflows</span>
+    <span class="footer-note">⦇ catamorphic ⦈ · the human side of the loop</span>
   </div>
 </footer>
 
@@ -293,14 +176,6 @@
     for (const e of entries) if (e.isIntersecting) { e.target.classList.add("in"); io.unobserve(e.target); }
   }, { threshold: 0.12 });
   document.querySelectorAll(".reveal").forEach((el) => io.observe(el));
-
-  const install = document.getElementById("install");
-  install.addEventListener("click", async () => {
-    await navigator.clipboard.writeText(document.getElementById("install-cmd").textContent);
-    const hint = document.getElementById("copy-hint");
-    hint.textContent = "copied";
-    setTimeout(() => (hint.textContent = "copy"), 1500);
-  });
 </script>
 
 </body>

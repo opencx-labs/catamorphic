@@ -1,0 +1,167 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Catamorphic Apps: your users build real frontends on their workflows</title>
+<meta name="description" content="Apps are real frontends your users build with AI on top of their workflows: sandboxed, wired through a typed contract, with durable runs behind every button. Embed an app platform inside your product, or build app builders with it.">
+<meta property="og:title" content="Catamorphic Apps">
+<meta property="og:description" content="Real frontends your users build on their workflows. Typed contract, sandboxed, agent writes both sides.">
+<meta property="og:type" content="website">
+<meta property="og:url" content="https://catamorphic.ai/apps/">
+<meta property="og:site_name" content="Catamorphic">
+<meta property="og:image" content="https://catamorphic.ai/assets/og-card.png">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="630">
+<meta property="og:image:alt" content="Catamorphic: agents that work, for you and for your users.">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:image" content="https://catamorphic.ai/assets/og-card.png">
+<link rel="canonical" href="https://catamorphic.ai/apps/">
+<link rel="icon" type="image/svg+xml" href="/assets/favicon.svg">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;650;700&family=JetBrains+Mono:wght@400;500&display=swap">
+<link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+
+<nav class="nav">
+  <div class="container nav-inner">
+    <a class="brand" href="/">
+      <svg width="26" height="26" viewBox="0 0 64 64" fill="none" aria-hidden="true">
+        <path d="M46 15.5 C42 12.6 37.2 11 32 11 C20.4 11 11 20.4 11 32 C11 43.6 20.4 53 32 53 C37.2 53 42 51.4 46 48.5" stroke="#f95225" stroke-width="6.5" stroke-linecap="round"/>
+        <line x1="24" y1="14.5" x2="24" y2="49.5" stroke="#f95225" stroke-width="6.5" stroke-linecap="round"/>
+      </svg>
+      catamorphic
+    </a>
+    <div class="nav-links">
+      <a href="/desktop/">Desktop</a>
+      <a href="/workflows/">Workflows</a>
+      <a href="/apps/">Apps</a>
+      <a href="/copilot/">Copilot</a>
+      <a class="btn btn-primary" href="https://github.com/opencx-labs/catamorphic">
+        <svg width="15" height="15" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27s1.36.09 2 .27c1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8Z"/></svg>
+        GitHub
+      </a>
+    </div>
+  </div>
+</nav>
+
+<header class="hero">
+  <div class="container hero-inner">
+    <span class="hero-badge"><span class="dot"></span>The youngest surface of the engine · Composable · moving fast</span>
+    <h1>Your users build <span class="accent">real apps</span></h1>
+    <p class="lede">Dashboards, internal tools, customer portals: real frontends your users describe and an agent builds, wired to their workflows through a typed contract. Every button press can trigger a durable run. You can even build app builders with it.</p>
+    <div class="hero-actions">
+      <a class="btn btn-primary" href="https://github.com/opencx-labs/catamorphic">Get started</a>
+      <a class="btn btn-ghost" href="/workflows/">See workflows first</a>
+    </div>
+
+    <div class="code-window reveal" style="margin-top:56px; width:100%; max-width:660px; text-align:left">
+      <div class="code-titlebar">
+        <span class="dots"><i></i><i></i><i></i></span>
+        <span class="filename">contracts.ts</span>
+        <span class="pane-tag">the app ↔ workflow boundary</span>
+      </div>
+      <pre><code><span class="tk-cm">// The app calls workflows through a typed, JSON-safe contract.
+// A Date that types as a Date but arrives as a string is exactly
+// the bug this catches at compile time.</span>
+<span class="tk-kw">export interface</span> <span class="tk-pr">ListOrders</span> <span class="tk-pn">{</span>
+  input<span class="tk-pn">:</span> <span class="tk-pn">{</span> status<span class="tk-pn">:</span> <span class="tk-str">"open"</span> <span class="tk-pn">|</span> <span class="tk-str">"all"</span> <span class="tk-pn">};</span>
+  output<span class="tk-pn">:</span> <span class="tk-pr">Order</span><span class="tk-pn">[];</span>
+<span class="tk-pn">}</span>
+
+<span class="tk-kw">export interface</span> <span class="tk-pr">AppContract</span> <span class="tk-pn">{</span>
+  listOrders<span class="tk-pn">:</span> <span class="tk-pr">PlainWorkflow</span><span class="tk-pn">&lt;</span><span class="tk-pr">ListOrders</span><span class="tk-pn">&gt;;</span>
+  reconcileLedger<span class="tk-pn">:</span> <span class="tk-pr">DurableWorkflow</span><span class="tk-pn">&lt;</span><span class="tk-pr">ReconcileLedger</span><span class="tk-pn">&gt;;</span>
+<span class="tk-pn">}</span></code></pre>
+    </div>
+  </div>
+</header>
+
+<section id="how">
+  <div class="container">
+    <div class="section-header reveal">
+      <p class="eyebrow">// why apps</p>
+      <h2>Workflows are the logic. Apps are the face.</h2>
+      <p>A workflow without a UI is a tool for operators. Give it a frontend and it becomes a product your users hand to their own teams and customers.</p>
+    </div>
+    <div class="grid">
+      <div class="card reveal">
+        <span class="icon"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2a4 4 0 0 1 4 4v1h1a3 3 0 0 1 3 3v8a3 3 0 0 1-3 3H7a3 3 0 0 1-3-3v-8a3 3 0 0 1 3-3h1V6a4 4 0 0 1 4-4Z"/><circle cx="9" cy="14" r="1"/><circle cx="15" cy="14" r="1"/></svg></span>
+        <h3>The agent writes both sides</h3>
+        <p>One conversation produces the frontend and the workflows behind it, in the same project, in the same git history. Change the UI and the logic together, from a prompt.</p>
+      </div>
+      <div class="card reveal">
+        <span class="icon"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="16 18 22 12 16 6"/><polyline points="8 6 2 12 8 18"/></svg></span>
+        <h3>A contract, not a prayer</h3>
+        <p>Apps call workflows through a typed contract with compile-time JSON safety: a Date, a Map, or a function that would not survive the boundary is a build error naming the offender, not a runtime surprise.</p>
+      </div>
+      <div class="card reveal">
+        <span class="icon"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M3 9h18M9 21V9"/></svg></span>
+        <h3>Sandboxed by construction</h3>
+        <p>User-built apps render in an isolated frame and reach the outside world only through the contract. They get exactly the workflows the project exposes, and nothing else.</p>
+      </div>
+      <div class="card reveal">
+        <span class="icon"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 1 1-9-9"/><path d="M21 3v6h-6"/></svg></span>
+        <h3>Durable runs behind every button</h3>
+        <p>A button press can trigger a plain call or a long-running durable workflow with retries, pauses, and signals. The app observes run state through the same protocol; nothing is faked.</p>
+      </div>
+      <div class="card reveal">
+        <span class="icon"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="5" cy="6" r="3"/><circle cx="19" cy="18" r="3"/><path d="M5 9v3a3 3 0 0 0 3 3h8"/></svg></span>
+        <h3>Code in git, like everything else</h3>
+        <p>An app is files in the project repo: reviewable, diffable, versioned, portable. No proprietary builder format to be trapped in.</p>
+      </div>
+      <div class="card reveal">
+        <span class="icon"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/></svg></span>
+        <h3>Build app builders</h3>
+        <p>Embed the whole surface in your SaaS and your product grows an app platform: your users building tools for their users, with AI doing the heavy lifting. Catamorphic is the substrate, you own the experience.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section class="cta">
+  <div class="container">
+    <h2>One project, logic and face together</h2>
+    <p>Workflows give your users durable automation. Apps give that automation a front door. Both are TypeScript in the same git repo, built by the same agent, embedded in your product.</p>
+    <div class="hero-actions">
+      <a class="btn btn-primary" href="https://github.com/opencx-labs/catamorphic">
+        <svg width="15" height="15" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27s1.36.09 2 .27c1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8Z"/></svg>
+        View on GitHub
+      </a>
+      <a class="btn btn-ghost" href="/workflows/">The workflows framework</a>
+    </div>
+  </div>
+</section>
+
+<footer>
+  <div class="container footer-inner">
+    <a class="brand" href="/">
+      <svg width="20" height="20" viewBox="0 0 64 64" fill="none" aria-hidden="true">
+        <path d="M46 15.5 C42 12.6 37.2 11 32 11 C20.4 11 11 20.4 11 32 C11 43.6 20.4 53 32 53 C37.2 53 42 51.4 46 48.5" stroke="#f95225" stroke-width="6.5" stroke-linecap="round"/>
+        <line x1="24" y1="14.5" x2="24" y2="49.5" stroke="#f95225" stroke-width="6.5" stroke-linecap="round"/>
+      </svg>
+      catamorphic
+    </a>
+    <div class="footer-links">
+      <a href="/">Home</a>
+      <a href="/desktop/">Desktop</a>
+      <a href="/workflows/">Workflows</a>
+      <a href="/agents/">For agents</a>
+      <a href="/copilot/">Copilot</a>
+      <a href="https://github.com/opencx-labs/catamorphic">GitHub</a>
+    </div>
+    <span class="footer-note">⦇ catamorphic ⦈ · logic and face, one repo</span>
+  </div>
+</footer>
+
+<script>
+  const io = new IntersectionObserver((entries) => {
+    for (const e of entries) if (e.isIntersecting) { e.target.classList.add("in"); io.unobserve(e.target); }
+  }, { threshold: 0.12 });
+  document.querySelectorAll(".reveal").forEach((el) => io.observe(el));
+</script>
+
+</body>
+</html>
