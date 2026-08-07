@@ -21,13 +21,6 @@ export {
   type SyncedFileChange,
 } from "./services/agent-sessions-service.js";
 export {
-  type AgentExecutionMode,
-  type CodingAgentRegistry,
-  isCodingAgentRegistry,
-  type RegisteredCodingAgent,
-  singleAgentRegistry,
-} from "./services/coding-agent-registry.js";
-export {
   AppAccessDeniedError,
   assertProjectSurface,
   assertWorkflowAllowed,
@@ -56,6 +49,13 @@ export {
   AppVersionNotFoundError,
   type AppVersionStatus,
 } from "./services/apps-service.js";
+export {
+  type AgentExecutionMode,
+  type CodingAgentRegistry,
+  isCodingAgentRegistry,
+  type RegisteredCodingAgent,
+  singleAgentRegistry,
+} from "./services/coding-agent-registry.js";
 export { DbSandboxStore } from "./services/db-sandbox-store.js";
 export {
   createDeploymentArtifactIdentity,

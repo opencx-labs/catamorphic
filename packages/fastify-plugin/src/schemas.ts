@@ -695,8 +695,20 @@ export const AgentMessageSchema = z.object({
   createdAt: z.string().datetime(),
 });
 
+export const OkSchema = z.object({ ok: z.literal(true) });
+
+export const AgentAttachmentSchema = z.object({
+  kind: z.enum(["image", "document"]),
+  name: z.string().min(1).max(200),
+  /** MIME type, e.g. "image/png", "application/pdf". */
+  mediaType: z.string().min(1).max(100),
+  /** ~10MB decoded per file (base64 is 4/3 the byte size). */
+  dataBase64: z.string().min(1).max(14_000_000),
+});
+
 export const SendMessageSchema = z.object({
   message: z.string().min(1),
+  attachments: z.array(AgentAttachmentSchema).max(8).optional(),
 });
 
 export const AgentSessionDetailSchema = AgentSessionSchema.extend({

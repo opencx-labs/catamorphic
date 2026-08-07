@@ -3,6 +3,7 @@ import type { ProjectManager } from "@catamorphic/git";
 import { getTracer, withSpan } from "@catamorphic/otel";
 import type { PluginResolver } from "@catamorphic/plugins";
 import type {
+  AgentAttachment,
   AgentEffort,
   AgentEvent,
   AttachedPluginForAgent,
@@ -234,6 +235,13 @@ export class AgentSessionsService {
    * settle it as failed so clients never spin on a dead turn.
    */
   private readonly runningTurns = new Set<string>();
+  /** Sessions whose in-flight turn was interrupted by the user. */
+  private readonly interruptedTurns = new Set<string>();
+  /** Scheduled automatic retries (transient provider failures). */
+  private readonly autoRetries = new Map<
+    string,
+    { timer: ReturnType<typeof setTimeout>; attempt: number }
+  >();
 
   constructor(
     private readonly db: Kysely<DB>,
@@ -325,11 +333,7 @@ export class AgentSessionsService {
         .where("id", "=", message.id)
         // The turn may have finished (or been settled by a concurrent read)
         // between our select and this update — only settle a still-pending row.
-        .where(
-          sql`metadata ->> 'status'`,
-          "=",
-          "in_progress",
-        )
+        .where(sql`metadata ->> 'status'`, "=", "in_progress")
         .returningAll()
         .executeTakeFirst();
       if (row) updated.set(row.id, row);
@@ -341,7 +345,11 @@ export class AgentSessionsService {
   async create(
     identity: Identity,
     projectId: string,
-    input: { systemPrompt?: string; agentId?: string; effort?: AgentEffort } = {},
+    input: {
+      systemPrompt?: string;
+      agentId?: string;
+      effort?: AgentEffort;
+    } = {},
   ): Promise<AgentSession> {
     return withSpan(
       {
@@ -350,9 +358,7 @@ export class AgentSessionsService {
         attributes: {
           "catamorphic.project.id": projectId,
           "catamorphic.tenant.id": identity.tenantId,
-          ...(input.agentId
-            ? { "catamorphic.agent.id": input.agentId }
-            : {}),
+          ...(input.agentId ? { "catamorphic.agent.id": input.agentId } : {}),
         },
       },
       () => this.createInner(identity, projectId, input),
@@ -452,6 +458,34 @@ export class AgentSessionsService {
       .where("id", "=", sessionId)
       .returningAll()
       .executeTakeFirstOrThrow();
+
+    // Leave a marker in the transcript so the conversation shows where the
+    // agent or effort changed. System rows with `metadata.marker` render as
+    // dividers, not messages.
+    const markers: Array<{ content: string; marker: JsonObject }> = [];
+    if (updates.agent_id !== undefined) {
+      markers.push({
+        content: "Agent changed",
+        marker: { kind: "agent_change", agentId: updates.agent_id },
+      });
+    }
+    if (updates.model_effort !== undefined && updates.agent_id === undefined) {
+      markers.push({
+        content: `Effort set to ${updates.model_effort ?? "default"}`,
+        marker: { kind: "effort_change", effort: updates.model_effort },
+      });
+    }
+    for (const entry of markers) {
+      await this.db
+        .insertInto("agent_messages")
+        .values({
+          session_id: sessionId,
+          role: "system",
+          content: entry.content,
+          metadata: { marker: entry.marker },
+        })
+        .execute();
+    }
     return mapSession(row);
   }
 
@@ -460,6 +494,7 @@ export class AgentSessionsService {
     projectId: string,
     sessionId: string,
     message: string,
+    input: { attachments?: AgentAttachment[] } = {},
   ): Promise<AgentMessage> {
     return withSpan(
       {
@@ -470,7 +505,8 @@ export class AgentSessionsService {
           "catamorphic.agent.session.id": sessionId,
         },
       },
-      () => this.sendMessageInner(identity, projectId, sessionId, message),
+      () =>
+        this.sendMessageInner(identity, projectId, sessionId, message, input),
     );
   }
 
@@ -479,19 +515,152 @@ export class AgentSessionsService {
     projectId: string,
     sessionId: string,
     message: string,
+    input: { attachments?: AgentAttachment[] } = {},
   ): Promise<AgentMessage> {
     const session = await this.requireSession(identity, projectId, sessionId);
     if (session.status !== "active") {
       throw new AgentSessionClosedError(sessionId);
     }
+    // A fresh user message supersedes any scheduled automatic retry.
+    this.cancelAutoRetry(sessionId);
     // Marked running BEFORE the placeholder row exists, so a concurrent
     // get() can never mistake this turn's placeholder for an orphan.
     this.runningTurns.add(sessionId);
     try {
-      return await this.runTurn(identity, projectId, sessionId, message, session);
+      return await this.runTurn(identity, projectId, sessionId, message, {
+        session,
+        attachments: input.attachments,
+      });
     } finally {
       this.runningTurns.delete(sessionId);
     }
+  }
+
+  /**
+   * Re-run the session's last failed turn in place: the failed assistant
+   * row flips back to in-progress and the harness re-executes without a
+   * new user message ({@link CodingAgentProvider.retryTurn}; harnesses
+   * without it get the last user message re-sent). `model_incompat`
+   * failures retry with sanitized reasoning history.
+   */
+  async retry(
+    identity: Identity,
+    projectId: string,
+    sessionId: string,
+    opts: { autoAttempt?: number } = {},
+  ): Promise<AgentMessage> {
+    const session = await this.requireSession(identity, projectId, sessionId);
+    if (session.status !== "active") {
+      throw new AgentSessionClosedError(sessionId);
+    }
+    if (this.runningTurns.has(sessionId)) {
+      throw new AgentTurnInProgressError(sessionId);
+    }
+    this.cancelAutoRetry(sessionId);
+
+    const messages = await this.db
+      .selectFrom("agent_messages")
+      .where("session_id", "=", sessionId)
+      .selectAll()
+      .orderBy("seq", "desc")
+      .limit(20)
+      .execute();
+    const failed = messages.find((row) => row.role === "assistant");
+    const failedMetadata = failed?.metadata as JsonObject | null;
+    if (!failed || failedMetadata?.status !== "failed") {
+      throw new Error("The last turn did not fail; nothing to retry");
+    }
+    const lastUser = messages.find((row) => row.role === "user");
+    if (!lastUser) throw new Error("No user message to retry");
+    const userMetadata = lastUser.metadata as JsonObject | null;
+
+    this.runningTurns.add(sessionId);
+    try {
+      return await this.runTurn(
+        identity,
+        projectId,
+        sessionId,
+        lastUser.content,
+        {
+          session,
+          attachments: (userMetadata?.attachments ??
+            undefined) as unknown as AgentAttachment[],
+          retryOfAssistantId: failed.id,
+          sanitizeReasoning: failedMetadata?.errorKind === "model_incompat",
+          autoAttempt: opts.autoAttempt,
+        },
+      );
+    } finally {
+      this.runningTurns.delete(sessionId);
+    }
+  }
+
+  /**
+   * Abort the session's in-flight turn (and cancel any scheduled
+   * auto-retry). The running turn settles as an interrupted failure; the
+   * session stays usable.
+   */
+  async interrupt(
+    identity: Identity,
+    projectId: string,
+    sessionId: string,
+  ): Promise<void> {
+    const session = await this.requireSession(identity, projectId, sessionId);
+    this.cancelAutoRetry(sessionId);
+    if (!this.runningTurns.has(sessionId)) return;
+    this.interruptedTurns.add(sessionId);
+    if (session.provider_session_id) {
+      try {
+        const agent = this.resolveAgent(session.agent_id);
+        agent.provider.interrupt?.(session.provider_session_id);
+      } catch {
+        // No resolvable agent — nothing to signal; the turn settles alone.
+      }
+    }
+  }
+
+  private cancelAutoRetry(sessionId: string): void {
+    const scheduled = this.autoRetries.get(sessionId);
+    if (!scheduled) return;
+    clearTimeout(scheduled.timer);
+    this.autoRetries.delete(sessionId);
+  }
+
+  /**
+   * Transient failures (rate limits, provider outages) retry on their own:
+   * 5s → 15s → 30s → then every 60s until the provider recovers, the user
+   * acts (new message, manual retry, interrupt), or the session closes.
+   * The failed row carries `autoRetry` metadata so clients can show the
+   * countdown.
+   */
+  private scheduleAutoRetry(
+    identity: Identity,
+    projectId: string,
+    sessionId: string,
+    assistantMessageId: string,
+    attempt: number,
+  ): void {
+    const delays = [5_000, 15_000, 30_000, 60_000];
+    const delay = delays[Math.min(attempt, delays.length - 1)] ?? 60_000;
+    void this.db
+      .updateTable("agent_messages")
+      .set(({ ref }) => ({
+        metadata: sql`${ref("metadata")} || ${JSON.stringify({
+          autoRetry: { attempt: attempt + 1, nextAtMs: Date.now() + delay },
+        })}::jsonb`,
+      }))
+      .where("id", "=", assistantMessageId)
+      .execute()
+      .catch(() => {});
+    const timer = setTimeout(() => {
+      this.autoRetries.delete(sessionId);
+      void this.retry(identity, projectId, sessionId, {
+        autoAttempt: attempt + 1,
+      }).catch(() => {
+        // A concurrent user action raced the retry — it owns the session.
+      });
+    }, delay);
+    this.autoRetries.set(sessionId, { timer, attempt });
   }
 
   private async runTurn(
@@ -499,30 +668,63 @@ export class AgentSessionsService {
     projectId: string,
     sessionId: string,
     message: string,
-    session: SessionRow,
+    extras: {
+      session: SessionRow;
+      attachments?: AgentAttachment[];
+      /** Retry: reuse this failed assistant row instead of inserting. */
+      retryOfAssistantId?: string;
+      sanitizeReasoning?: boolean;
+      /** Set on automatic retries; drives the next backoff step. */
+      autoAttempt?: number;
+    },
   ): Promise<AgentMessage> {
+    // Note: no stale-flag clearing needed here — interrupt() only sets the
+    // flag while a turn is marked running, and every turn consumes it on
+    // the way out (success and error paths both delete).
+    const { session } = extras;
     const agent = this.resolveAgent(session.agent_id);
+    const attachments = extras.attachments?.length
+      ? extras.attachments
+      : undefined;
     const turnOptions: TurnOptions = {
       ...agent.defaults,
       ...(session.model_effort
         ? { effort: session.model_effort as AgentEffort }
         : {}),
+      ...(attachments ? { attachments } : {}),
     };
 
     // Persist the user message and the in-progress placeholder BEFORE the
     // (potentially slow) provider/sandbox anchoring: the turn is then
     // visible and crash-recoverable from the moment it starts — a process
     // death during anchoring settles as an interrupted turn instead of a
-    // silently vanished message.
-    let assistantMessageId = await this.db
-      .transaction()
-      .execute(async (trx) => {
+    // silently vanished message. Retries reuse the failed assistant row —
+    // the conversation continues in place, no duplicate user message.
+    let assistantMessageId: string;
+    if (extras.retryOfAssistantId) {
+      assistantMessageId = extras.retryOfAssistantId;
+      await this.db
+        .updateTable("agent_messages")
+        .set({ content: "Thinking...", metadata: progressMetadata([]) })
+        .where("id", "=", assistantMessageId)
+        .execute();
+    } else {
+      assistantMessageId = await this.db.transaction().execute(async (trx) => {
         await trx
           .insertInto("agent_messages")
           .values({
             session_id: sessionId,
             role: "user",
             content: message,
+            ...(attachments
+              ? {
+                  metadata: {
+                    attachments: JSON.parse(
+                      JSON.stringify(attachments),
+                    ) as JsonObject[],
+                  },
+                }
+              : {}),
           })
           .execute();
         const assistant = await trx
@@ -537,6 +739,7 @@ export class AgentSessionsService {
           .executeTakeFirstOrThrow();
         return assistant.id;
       });
+    }
 
     const events: AgentEvent[] = [];
     // Events since the last flushed preamble — each assistant message keeps
@@ -612,11 +815,29 @@ export class AgentSessionsService {
         }
       }
 
-      for await (const event of agent.provider.sendMessage(
-        anchor.providerSession,
-        message,
-        turnOptions,
-      )) {
+      // An interrupt can land while the turn is still anchoring (rows,
+      // sandbox, skills) — before any provider signal exists to abort. The
+      // latched flag catches it here: the turn settles as interrupted
+      // without ever calling the provider. Checked with has() (not
+      // delete()) so the finalization below still reads it as interrupted.
+      const stream = this.interruptedTurns.has(sessionId)
+        ? (async function* (): AsyncIterable<AgentEvent> {
+            yield { type: "error", content: "Interrupted." };
+            yield { type: "done" };
+          })()
+        : // Retries prefer the harness's native re-run (no duplicated user
+          // message in its history); harnesses without one get a re-send.
+          extras.retryOfAssistantId && agent.provider.retryTurn
+          ? agent.provider.retryTurn(anchor.providerSession, {
+              ...turnOptions,
+              sanitizeReasoning: extras.sanitizeReasoning,
+            })
+          : agent.provider.sendMessage(
+              anchor.providerSession,
+              message,
+              turnOptions,
+            );
+      for await (const event of stream) {
         if (continuesTurn(event)) await flushHeldText();
         events.push(event);
         segmentEvents.push(event);
@@ -671,6 +892,13 @@ export class AgentSessionsService {
             .join("\n") ||
             (questionEvent ? "" : "(no response)")));
 
+      const interrupted = this.interruptedTurns.delete(sessionId);
+      const errorKind = interrupted
+        ? undefined
+        : [...events]
+            .reverse()
+            .find((event) => event.type === "error" && event.errorKind)
+            ?.errorKind;
       const metadata: JsonObject = {
         status: failed
           ? "failed"
@@ -679,6 +907,8 @@ export class AgentSessionsService {
             : "completed",
         events: JSON.parse(JSON.stringify(segmentEvents)) as JsonObject[],
         changedFiles: changedFiles.map((change) => ({ ...change })),
+        ...(errorKind ? { errorKind } : {}),
+        ...(interrupted && failed ? { interrupted: true } : {}),
         ...(questionEvent?.questions
           ? {
               questions: JSON.parse(
@@ -694,6 +924,21 @@ export class AgentSessionsService {
         .where("id", "=", assistantMessageId)
         .returningAll()
         .executeTakeFirstOrThrow();
+
+      // Transient provider failures keep retrying on their own; the user
+      // sees the error and the countdown, and can retry now or move on.
+      if (
+        failed &&
+        (errorKind === "rate_limit" || errorKind === "unavailable")
+      ) {
+        this.scheduleAutoRetry(
+          identity,
+          projectId,
+          sessionId,
+          assistantMessageId,
+          extras.autoAttempt ?? 0,
+        );
+      }
 
       // The agent's set_title tool wins; otherwise the first user message
       // seeds a provisional title.
@@ -715,6 +960,7 @@ export class AgentSessionsService {
 
       return mapMessage(row);
     } catch (error) {
+      this.interruptedTurns.delete(sessionId);
       await this.db
         .updateTable("agent_messages")
         .set({
@@ -736,6 +982,7 @@ export class AgentSessionsService {
     sessionId: string,
   ): Promise<AgentSession> {
     const session = await this.requireSession(identity, projectId, sessionId);
+    this.cancelAutoRetry(sessionId);
 
     if (session.provider_session_id) {
       const agent = this.codingAgents.get(
@@ -787,7 +1034,12 @@ export class AgentSessionsService {
   }> {
     const anchored =
       session.provider_session_id !== null &&
-      session.provider === agent.provider.name;
+      session.provider === agent.provider.name &&
+      // In-memory harness sessions die with a host restart or a provider
+      // rebuild (credential/config edits drop the cached instance). When
+      // the harness can tell us the session is gone, re-anchor with the
+      // persisted transcript instead of running into a dead session.
+      (agent.provider.hasSession?.(session.provider_session_id) ?? true);
 
     if (agent.execution === "host") {
       const workingDirectory = await this.resolveHostPath(projectId);
@@ -805,10 +1057,12 @@ export class AgentSessionsService {
         userId: identity.externalUserId,
         sandboxId: "",
         workingDirectory,
+        sessionId: session.id,
         systemPrompt: buildAgentSystemPrompt({
           systemPrompt: session.system_prompt ?? undefined,
         }),
         attachedPlugins: await this.loadAttachedPlugins(projectId),
+        history: await this.transcriptHistory(session.id),
       });
       await this.db
         .updateTable("agent_sessions")
@@ -842,10 +1096,12 @@ export class AgentSessionsService {
       userId: identity.externalUserId,
       sandboxId: handle.providerId,
       workingDirectory: this.projectDir(),
+      sessionId: session.id,
       systemPrompt: buildAgentSystemPrompt({
         systemPrompt: session.system_prompt ?? undefined,
       }),
       attachedPlugins: await this.loadAttachedPlugins(projectId),
+      history: await this.transcriptHistory(session.id),
     });
     await this.db
       .updateTable("agent_sessions")
@@ -858,6 +1114,56 @@ export class AgentSessionsService {
       .where("id", "=", session.id)
       .execute();
     return { providerSession, sandboxProviderId: handle.providerId };
+  }
+
+  /**
+   * The session's settled conversation, shaped for
+   * {@link StartSessionOpts.history}: completed user/assistant turns only —
+   * no markers, no failed/in-progress rows, and NOT the current turn (its
+   * user row is persisted before anchoring and travels as the message
+   * itself). Capped so resurrection never ships an unbounded transcript.
+   */
+  private async transcriptHistory(
+    sessionId: string,
+  ): Promise<Array<{ role: "user" | "assistant"; content: string }>> {
+    const rows = await this.db
+      .selectFrom("agent_messages")
+      .where("session_id", "=", sessionId)
+      .select(["role", "content", "metadata"])
+      .orderBy("seq", "asc")
+      .execute();
+    // Everything from the current turn's user row onward is in flight.
+    let lastUserIndex = -1;
+    for (let index = rows.length - 1; index >= 0; index -= 1) {
+      if (rows[index]?.role === "user") {
+        lastUserIndex = index;
+        break;
+      }
+    }
+    const settled = lastUserIndex === -1 ? rows : rows.slice(0, lastUserIndex);
+    const history = settled.flatMap(
+      (row): Array<{ role: "user" | "assistant"; content: string }> => {
+        if (row.role !== "user" && row.role !== "assistant") return [];
+        if (row.content.trim().length === 0) return [];
+        const status = (row.metadata as JsonObject | null)?.status;
+        if (
+          row.role === "assistant" &&
+          status !== "completed" &&
+          status !== "awaiting_input"
+        ) {
+          return [];
+        }
+        return [{ role: row.role, content: row.content }];
+      },
+    );
+    const capped: typeof history = [];
+    let totalChars = 0;
+    for (const turn of history.reverse()) {
+      totalChars += turn.content.length;
+      if (capped.length >= 40 || totalChars > 32_000) break;
+      capped.unshift(turn);
+    }
+    return capped;
   }
 
   private async resolveHostPath(projectId: string): Promise<string> {

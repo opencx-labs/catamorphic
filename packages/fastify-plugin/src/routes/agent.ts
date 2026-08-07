@@ -17,6 +17,7 @@ import {
   CreateAgentSessionSchema,
   ErrorSchema,
   ListSchema,
+  OkSchema,
   PaginationQuerySchema,
   ProjectIdParamsSchema,
   SendMessageSchema,
@@ -109,9 +110,9 @@ export function registerAgentRoutes(app: FastifyInstance, ctx: RouteContext) {
           return reply.status(409).send({ error: "Session is closed" });
         }
         if (err instanceof AgentTurnInProgressError) {
-          return reply
-            .status(409)
-            .send({ error: "A turn is in progress; try again when it settles" });
+          return reply.status(409).send({
+            error: "A turn is in progress; try again when it settles",
+          });
         }
         throw err;
       }
@@ -205,6 +206,7 @@ export function registerAgentRoutes(app: FastifyInstance, ctx: RouteContext) {
           request.params.projectId,
           request.params.sessionId,
           request.body.message,
+          { attachments: request.body.attachments },
         );
         return reply.status(201).send(message);
       } catch (err) {
@@ -216,6 +218,86 @@ export function registerAgentRoutes(app: FastifyInstance, ctx: RouteContext) {
         }
         if (err instanceof AgentSessionClosedError) {
           return reply.status(409).send({ error: "Session is closed" });
+        }
+        throw err;
+      }
+    },
+  });
+
+  // Re-run the last failed turn in place — no new user message; the failed
+  // assistant row flips back to in-progress and settles with the retry.
+  typed.route({
+    method: "POST",
+    url: "/projects/:projectId/agent/sessions/:sessionId/retry",
+    schema: {
+      params: AgentSessionIdParamsSchema,
+      response: {
+        201: AgentMessageSchema,
+        404: ErrorSchema,
+        409: ErrorSchema,
+        503: ErrorSchema,
+      },
+    },
+    handler: async (request, reply) => {
+      const agentSessions = ctx.core?.agentSessions;
+      if (!agentSessions)
+        return reply.status(503).send({ error: "Coding agent not configured" });
+      const identity = resolveIdentity(request);
+      try {
+        const message = await agentSessions.retry(
+          identity,
+          request.params.projectId,
+          request.params.sessionId,
+        );
+        return reply.status(201).send(message);
+      } catch (err) {
+        if (
+          err instanceof ProjectNotFoundError ||
+          err instanceof AgentSessionNotFoundError
+        ) {
+          return reply.status(404).send({ error: "Session not found" });
+        }
+        if (
+          err instanceof AgentSessionClosedError ||
+          err instanceof AgentTurnInProgressError
+        ) {
+          return reply.status(409).send({ error: "Session is busy or closed" });
+        }
+        throw err;
+      }
+    },
+  });
+
+  // Abort the in-flight turn (and cancel any scheduled auto-retry).
+  typed.route({
+    method: "POST",
+    url: "/projects/:projectId/agent/sessions/:sessionId/interrupt",
+    schema: {
+      params: AgentSessionIdParamsSchema,
+      response: {
+        200: OkSchema,
+        404: ErrorSchema,
+        503: ErrorSchema,
+      },
+    },
+    handler: async (request, reply) => {
+      const agentSessions = ctx.core?.agentSessions;
+      if (!agentSessions)
+        return reply.status(503).send({ error: "Coding agent not configured" });
+      const identity = resolveIdentity(request);
+      try {
+        await agentSessions.interrupt(
+          identity,
+          request.params.projectId,
+          request.params.sessionId,
+        );
+        return reply.status(200).send({ ok: true });
+      } catch (err) {
+        if (
+          err instanceof ProjectNotFoundError ||
+          err instanceof AgentSessionNotFoundError
+        ) {
+          return reply.status(404).send({ error: "Session not found" });
         }
         throw err;
       }

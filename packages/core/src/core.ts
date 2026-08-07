@@ -9,16 +9,16 @@ import { instrumentSandboxProvider } from "@catamorphic/sandbox";
 import type { Kysely } from "kysely";
 import { AgentContextService } from "./services/agent-context-service.js";
 import { AgentSessionsService } from "./services/agent-sessions-service.js";
-import {
-  type CodingAgentRegistry,
-  isCodingAgentRegistry,
-  singleAgentRegistry,
-} from "./services/coding-agent-registry.js";
 import type { AppBundleStore } from "./services/app-bundle-store.js";
 import { AppPoliciesService } from "./services/app-policies-service.js";
 import { AppsService } from "./services/apps-service.js";
 import { BatchExecutionHandler } from "./services/batch-execution-handler.js";
 import { BoundaryExecutionHandler } from "./services/boundary-execution-handler.js";
+import {
+  type CodingAgentRegistry,
+  isCodingAgentRegistry,
+  singleAgentRegistry,
+} from "./services/coding-agent-registry.js";
 import { DbSandboxStore } from "./services/db-sandbox-store.js";
 import { DeploymentArtifactsService } from "./services/deployment-artifacts-service.js";
 import { DeploymentRuntimeService } from "./services/deployment-runtime-service.js";
