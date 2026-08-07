@@ -1,12 +1,93 @@
 # Catamorphic
 
-Catamorphic is a framework for building workflow automations and apps. You embed it inside your SaaS product to let your users build their own automations and dashboards with AI.
+**A really good place to get work done.** Catamorphic puts everything you
+need for real work in one place: browser, terminals, editors, notes, and
+agents that help on the same surfaces. It is free, open source, and
+local-first: your projects, notes, config, and agent state are files and
+databases you own, on your disk.
 
-**Code is the source of truth.** Workflows and apps are stored as TypeScript code in a git repository — never as a proprietary DSL or JSON format. The parser renders that code as an intuitive visual graph for non-technical users, while technical users (and AI agents) work directly with the code. A *project* is a collection of workflows and apps: just a git repo containing TypeScript.
+Catamorphic is one vision with two surfaces:
 
-> **Embeddable framework.** Catamorphic ships as libraries a host application mounts in-process. The host provides auth, the user/org model, the database, and the deployment surface. There is no default identity or tenant — every request carries identity from the host's auth context. See [`INTEGRATION.md`](INTEGRATION.md) for the host integration flow.
+1. **The desktop app** ([`apps/desktop`](apps/desktop)): a local-first
+   workspace where AI agents (Claude Code, Codex, or any API model: bring
+   your own, side by side) do real work on surfaces you can *watch*: browser
+   tabs, terminals, editors. You can take over any surface at any moment,
+   and anything an agent produces (code, prose, config) is **inspectable
+   on demand**: diffs and track-changes when a change deserves your eyes,
+   trust when it doesn't. Notes, projects, and settings are plain files;
+   sync rides on git. The app is also the framework's **reference
+   implementation**: a working demo of what embedders can build with the
+   packages below. Read the product philosophy and decision log in
+   [`apps/desktop/DESIGN.md`](apps/desktop/DESIGN.md).
+2. **The embeddable framework** (everything under [`packages/`](packages)):
+   the engine underneath, also usable standalone: embed AI-built
+   **workflows and apps** inside your own product. Workflows are durable
+   TypeScript automations in git, rendered as a visual graph for
+   non-technical users, executed on Postgres. Apps are real frontends your
+   users build on top of those workflows, sandboxed and wired through a
+   typed contract. And underneath both sits the **copilot plumbing**: the
+   durable agent-session engine, multi-harness agent registry, and drop-in
+   chat components that let any product ship a real companion agent, with
+   the host's own skills and tools plugged in. See
+   [`INTEGRATION.md`](INTEGRATION.md).
 
-> **Greenfield: no production users yet.** Nothing here is deployed to real users, so there is no installed base to preserve. Prefer the correct design over a compatible one: change schemas, rename APIs, and delete dead paths outright rather than adding migrations-on-migrations, compatibility shims, deprecation aliases, or feature flags to protect callers that do not exist. Breaking changes are cheap right now and get expensive the day we ship — spend that budget while it is free. (This does not license skipping tests or leaving things half-finished; it is about not paying for backwards compatibility nobody needs.)
+Direction, positioning, and the competitive landscape live in
+[`docs/STRATEGY.md`](docs/STRATEGY.md); the strategic task list is
+[`TODO.md`](TODO.md).
+
+**Code is the source of truth.** Workflows, apps, notes: everything is
+stored as plain files (TypeScript, markdown) in a git repository, never a
+proprietary DSL or an opaque store. The parser renders workflow code as an
+intuitive visual graph for non-technical users, while technical users and AI
+agents work directly with the code. A *project* is just a git repo.
+
+> **Greenfield: no production users yet.** Nothing here is deployed to real users, so there is no installed base to preserve. Prefer the correct design over a compatible one: change schemas, rename APIs, and delete dead paths outright rather than adding migrations-on-migrations, compatibility shims, deprecation aliases, or feature flags to protect callers that do not exist. Breaking changes are cheap right now and get expensive the day we ship. Spend that budget while it is free. (This does not license skipping tests or leaving things half-finished; it is about not paying for backwards compatibility nobody needs.)
+
+---
+
+# The framework
+
+Catamorphic's engine ships as libraries a host application mounts
+in-process. The desktop app is itself such a host. The host provides auth,
+the user/org model, the database, and the deployment surface. There is no
+default identity or tenant: every request carries identity from the host's
+auth context. See [`INTEGRATION.md`](INTEGRATION.md) for the host
+integration flow.
+
+## Runs anywhere
+
+Durable agent-and-workflow infrastructure that does **not** assume a server.
+Every dependency is an axis with a heavy and a light end. Pick per axis:
+
+| Axis | Heavy end | Light end |
+| --- | --- | --- |
+| Database | Network Postgres (`{ pool }` / `{ connectionString }`) | **Embedded pglite** (Kysely `PGliteDialect` via `database: { db }`; migrations run statement-by-statement so single-connection dialects just work) |
+| Execution | Cloud sandboxes: `@catamorphic/cloudflare`, `@catamorphic/daytona` | **Local sandboxes** (`@catamorphic/microsandbox`), or none (read-only embed) |
+| Code storage | S3-compatible bucket (`@catamorphic/s3`) or Cloudflare Artifacts | Two writable directories |
+| Identity | Host org/user per request | One fixed tenant/user |
+| Surface | HTTP API + React UI | In-process SDK calls, or migrations-only |
+
+**The desktop app is the proof**: it runs the lightest column end to end
+(pglite, local sandboxes, filesystem storage, no server) by design
+([`apps/desktop/src/main/server/boot.ts`](apps/desktop/src/main/server/boot.ts)).
+No durable-execution vendor can run entirely inside a desktop app; this one
+does, and the same substrate is what offline-first agents need. Full matrix
+and host shapes: [`INTEGRATION.md`](INTEGRATION.md#host-shapes-catamorphic-runs-wherever-typescript-runs).
+
+Also worth knowing, because it's easy to miss from the package list:
+
+- **The product teaches agents from the inside.** Every project sandbox gets
+  skills staged into it (`writing-workflows`, `durable-workflows`,
+  `building-apps`), so coding agents learn Catamorphic's authoring model at
+  the moment they need it. The public
+  [`skills/embed-catamorphic`](skills/embed-catamorphic/SKILL.md) skill
+  extends the same idea to integrating Catamorphic itself.
+- **One Run model.** Plain functions, persisted-continuation scopes, and
+  batches all share the same Runs API, hooks, and UI: capabilities, not
+  categories.
+- **Observability is free for hosts.** Everything instruments against
+  `@opentelemetry/api`; register your SDK and Catamorphic's spans appear in
+  your traces.
 
 ## The developer surface
 
@@ -15,7 +96,7 @@ Catamorphic is a framework for building workflow automations and apps. You embed
 | `@catamorphic/server-sdk` | The core SDK for your Node/Bun backend. Takes a Postgres connection (or `pg.Pool`), manages its own schema-scoped tables and migrations, and exposes projects, workflow CRUD, file I/O, and execution. |
 | `@catamorphic/fastify-plugin` | A mountable Fastify plugin (`app.register(catamorphicPlugin, { core, prefix: "/api" })`) exposing the standard HTTP API for frontends. Also exports a standalone `createApp` factory for sidecar deployments. |
 | `@catamorphic/react` | Headless React bindings: `CatamorphicProvider`, TanStack Query hooks, and jotai atoms. Build a fully custom UI on top of these. |
-| `@catamorphic/ui` | Ready-made components: the React Flow workflow canvas, detail panel, history sidebar, AI bar. Every piece is opt-in — use the whole `WorkflowEditor` or compose the parts yourself. |
+| `@catamorphic/ui` | Ready-made components: the React Flow workflow canvas, detail panel, history sidebar, AI bar. Every piece is opt-in: use the whole `WorkflowEditor` or compose the parts yourself. |
 | `@catamorphic/registry` | shadcn-style copy-paste components for hosts that want to own and customize the component source. |
 | `@catamorphic/api-client` | Generated OpenAPI types + `openapi-fetch` client for the HTTP API. |
 | `@catamorphic/workflow` | Typed workflow-authoring primitives. Projects opt in directly, or a SaaS can wrap it and re-export only its approved surface. |
@@ -34,18 +115,18 @@ Supporting packages (consumed through the surface above, importable directly for
 | `@catamorphic/daytona` | Daytona backend plugin: `DaytonaSandboxProvider` + experimental Daytona git storage. |
 | `@catamorphic/ai-sdk` | Flagship coding-agent plugin: Vercel AI SDK `ToolLoopAgent` running in the host and driving the dev sandbox remotely. |
 | `@catamorphic/codex` | Coding-agent plugin backed by the OpenAI Codex SDK. |
-| `@catamorphic/otel` | Tiny OpenTelemetry helpers (`@opentelemetry/api` only — the host owns the SDK/exporters). |
+| `@catamorphic/otel` | Tiny OpenTelemetry helpers (`@opentelemetry/api` only: the host owns the SDK/exporters). |
 | `@catamorphic/runtime` | Execution harness that runs *inside* the sandbox and reports step results. |
 | `@catamorphic/plugins` | Plugin manifest contract + resolvers for host-provided packages and secrets. |
 | `@catamorphic/cloudflare-sandbox-bridge` | Deployable Cloudflare Worker exposing Cloudflare Sandbox over HTTP. |
 
-A reference host app lives in [`apps/playground`](apps/playground/README.md) — Fastify + Vite/React with Cloudflare Sandbox execution and S3-compatible, Artifacts, or filesystem git origins.
+A reference host app lives in [`apps/playground`](apps/playground/README.md): Fastify + Vite/React with Cloudflare Sandbox execution and S3-compatible, Artifacts, or filesystem git origins.
 
 ## Design principles
 
-- **Workflows are regular code.** User-defined workflows run like normal apps — full IO, real npm dependencies, no crippled JS runtime. Execution happens inside a sandbox (Cloudflare Sandbox by default) using **Bun** to run and bundle.
+- **Workflows are regular code.** User-defined workflows run like normal apps: full IO, real npm dependencies, no crippled JS runtime. Execution happens inside a sandbox (Cloudflare Sandbox by default) using **Bun** to run and bundle.
 - **Workflow code stays simple.** Both AI agents and humans must be able to write, edit, and understand workflows, and the parser must render them intuitively for non-technical users. See the code format below.
-- **Host-injectable everything.** Database connections, storage backends, sandbox credentials, LLM credentials, and telemetry are all injected by the host — nothing is hard-coded.
+- **Host-injectable everything.** Database connections, storage backends, sandbox credentials, LLM credentials, and telemetry are all injected by the host: nothing is hard-coded.
 - **Cloudflare-first infrastructure.** Cloudflare Sandbox is the default execution provider. S3-compatible storage, including Cloudflare R2, is the default git code storage until Cloudflare Artifacts access is generally available. Backends ship as vendor plugin packages so hosts install only what they use. Postgres is authoritative for runs, retries, pauses, batch-item state, queues, and scheduling via `SKIP LOCKED`.
 - **OpenTelemetry throughout.** Libraries instrument against `@opentelemetry/api` only; the host registers the SDK and exporters and gets full traces for free.
 
@@ -174,7 +255,7 @@ switch, or separate Run family for these capabilities.
 
 ### Long-lived journeys: correlation keys, signals, shared rate budgets
 
-A run may carry a **correlation key** — a host-meaningful identity for its
+A run may carry a **correlation key**: a host-meaningful identity for its
 subject (a contact, an account, a subscription). It is unique among live runs of
 the same workflow, which makes it at once an enrollment idempotency key and the
 address external events use to reach the run. A boundary declares the shared
@@ -233,7 +314,7 @@ await client.runs.cancelByKey({
 
 Waiting for capacity is not failure: a boundary that cannot reserve is
 rescheduled without consuming a retry and without holding a sandbox. When a
-provider answers with a 429, report it with `rateLimited({ retryAfterMs })` —
+provider answers with a 429, report it with `rateLimited({ retryAfterMs })`:
 that blocks every workflow sharing the account, not just the run that hit it.
 
 Hosts bound what any one tenant may consume from these shared resources via
@@ -256,7 +337,7 @@ await catamorphic.tenantPolicies.upsert({
 ### Retention
 
 Finished runs are purged after **90 days by default**, along with everything
-hanging off them — jobs, events, step attempts, batch items and their steps.
+hanging off them: jobs, events, step attempts, batch items and their steps.
 Without this, a daily 100k-item batch adds on the order of 1.5M rows a day and
 never gives any back.
 
@@ -299,7 +380,7 @@ cd packages/fastify-plugin && bun run generate-spec
 cd ../api-client && bun run generate
 ```
 
-Catamorphic itself is embed-only — in production you run a **host app** that boots it in-process. For local development, the root `bun run dev` boots the reference host (the playground) together with its dev dependencies: it runs `docker compose up -d --wait` (Postgres + OTel collector + ClickHouse), builds the workspace packages the playground consumes, then starts the Cloudflare sandbox bridge (`:8787`) and the playground (API `:8500`, Vite `:5173`) side by side. Which Postgres the playground connects to is controlled by `DATABASE_URL` in `apps/playground/.env`. To iterate on catamorphic alongside your own host instead, link the packages via `file:` (see `.cursor/skills/using-catamorphic/SKILL.md` → "Local dev linking").
+Catamorphic itself is embed-only: in production you run a **host app** that boots it in-process. For local development, the root `bun run dev` boots the reference host (the playground) together with its dev dependencies: it runs `docker compose up -d --wait` (Postgres + OTel collector + ClickHouse), builds the workspace packages the playground consumes, then starts the Cloudflare sandbox bridge (`:8787`) and the playground (API `:8500`, Vite `:5173`) side by side. Which Postgres the playground connects to is controlled by `DATABASE_URL` in `apps/playground/.env`. To iterate on catamorphic alongside your own host instead, link the packages via `file:` (see `.cursor/skills/using-catamorphic/SKILL.md` → "Local dev linking").
 
 ## Scripts
 
@@ -328,27 +409,27 @@ cd packages/parser && bun run test src/__tests__/parser.test.ts  # one file
 
 Integration tests hit the **real services** using the keys in the repo root `.env` (loaded automatically by the vitest config) and skip themselves when credentials are absent:
 
-- **Daytona** (`packages/daytona`) — runs whenever `DAYTONA_API_KEY` is set.
-- **Cloudflare Sandbox** (`packages/cloudflare`, `packages/core`) — needs `CLOUDFLARE_SANDBOX_API_URL` plus the explicit opt-in `CF_SANDBOX_INTEGRATION=1` (start the bridge first: `bun run dev` in `packages/cloudflare-sandbox-bridge`).
-- **Cloudflare Artifacts** (`packages/cloudflare`) — runs whenever the `CLOUDFLARE_ACCOUNT_ID` / `CLOUDFLARE_API_TOKEN` / `CLOUDFLARE_ARTIFACTS_NAMESPACE` keys are set and the account has Artifacts beta access; skips with a warning while feature-gated.
+- **Daytona** (`packages/daytona`): runs whenever `DAYTONA_API_KEY` is set.
+- **Cloudflare Sandbox** (`packages/cloudflare`, `packages/core`): needs `CLOUDFLARE_SANDBOX_API_URL` plus the explicit opt-in `CF_SANDBOX_INTEGRATION=1` (start the bridge first: `bun run dev` in `packages/cloudflare-sandbox-bridge`).
+- **Cloudflare Artifacts** (`packages/cloudflare`): runs whenever the `CLOUDFLARE_ACCOUNT_ID` / `CLOUDFLARE_API_TOKEN` / `CLOUDFLARE_ARTIFACTS_NAMESPACE` keys are set and the account has Artifacts beta access; skips with a warning while feature-gated.
 
 Unit tests run with no setup.
 
 ## Tech stack
 
-- **Bun** — runtime, package manager, bundler (also inside sandboxes)
-- **TypeScript** — tsgo for typechecking
-- **Postgres** — all state, schema-scoped; run queues, retries, pauses, and scheduling use the same DB
-- **Cloudflare** — Sandbox (execution), Artifacts (code storage)
-- **Fastify** — HTTP surface with Zod + OpenAPI (mounted by the host)
-- **React Flow** — workflow visualization; **Jotai** + **TanStack Query** — frontend state
-- **ts-morph** — TypeScript AST parsing
-- **Kysely** — type-safe SQL
-- **isomorphic-git** — portable git, no native CLI dependency
-- **OpenTelemetry** — `@opentelemetry/api` instrumentation throughout
-- **Turborepo** — build orchestration
+- **Bun**: runtime, package manager, bundler (also inside sandboxes)
+- **TypeScript**: tsgo for typechecking
+- **Postgres**: all state, schema-scoped; run queues, retries, pauses, and scheduling use the same DB
+- **Cloudflare**: Sandbox (execution), Artifacts (code storage)
+- **Fastify**: HTTP surface with Zod + OpenAPI (mounted by the host)
+- **React Flow**: workflow visualization; **Jotai** + **TanStack Query**: frontend state
+- **ts-morph**: TypeScript AST parsing
+- **Kysely**: type-safe SQL
+- **isomorphic-git**: portable git, no native CLI dependency
+- **OpenTelemetry**: `@opentelemetry/api` instrumentation throughout
+- **Turborepo**: build orchestration
 
 ## Roadmap
 
-- **Scheduled and cron triggers** — build trigger management on the existing Postgres execution queue without adding infrastructure.
-- **Apps** — first-class support for user-built dashboards/apps alongside workflows.
+- **Scheduled and cron triggers**: build trigger management on the existing Postgres execution queue without adding infrastructure.
+- **Apps**: first-class support for user-built dashboards/apps alongside workflows.
