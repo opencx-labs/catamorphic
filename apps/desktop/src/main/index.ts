@@ -7,6 +7,7 @@ import {
   Menu,
   type WebContents,
 } from "electron";
+import { registerAgentBridge } from "./agent-bridge.js";
 import { registerBrowserSupport } from "./browser.js";
 import { registerIpcHandlers, type ServerState } from "./ipc.js";
 import { type Keybindings, toAccelerator } from "./keybindings.js";
@@ -288,13 +289,19 @@ app.whenReady().then(async () => {
     windows,
   );
   terminalSupport = registerTerminalSupport(state);
+  agentBridge = registerAgentBridge(terminalSupport.agentTerminals);
   ipcMain.handle("catamorphic:webview-preload", () =>
     path.join(import.meta.dirname, "../preload/webview.cjs"),
   );
   const window = createWindow();
 
   try {
-    server = await startEmbeddedServer(paths, profilesStore, profileConfig);
+    server = await startEmbeddedServer(
+      paths,
+      profilesStore,
+      profileConfig,
+      agentBridge?.bridge,
+    );
     state.broadcast("catamorphic:server-changed", {
       url: server.url,
       hasCodingAgent: server.hasCodingAgent,
@@ -317,12 +324,14 @@ app.whenReady().then(async () => {
 
 let browserSupport: ReturnType<typeof registerBrowserSupport> | null = null;
 let terminalSupport: ReturnType<typeof registerTerminalSupport> | null = null;
+let agentBridge: ReturnType<typeof registerAgentBridge> | null = null;
 
 let quitting = false;
 app.on("before-quit", (event) => {
   profileConfig.dispose();
   browserSupport?.dispose();
   terminalSupport?.dispose();
+  agentBridge?.dispose();
   if (quitting || !server) return;
   event.preventDefault();
   quitting = true;

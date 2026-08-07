@@ -245,6 +245,21 @@ const api = {
     return () =>
       ipcRenderer.removeListener("catamorphic:terminal-data", handler);
   },
+  terminalBuffer: (
+    sessionId: string,
+  ): Promise<{ buffer: string; running: boolean } | null> =>
+    ipcRenderer.invoke("catamorphic:terminal-buffer", sessionId),
+  onTerminalBusy: (
+    listener: (payload: { sessionId: string; busy: boolean }) => void,
+  ): (() => void) => {
+    const handler = (
+      _event: unknown,
+      payload: { sessionId: string; busy: boolean },
+    ) => listener(payload);
+    ipcRenderer.on("catamorphic:terminal-busy", handler);
+    return () =>
+      ipcRenderer.removeListener("catamorphic:terminal-busy", handler);
+  },
   onTerminalExit: (
     listener: (payload: { sessionId: string; exitCode: number }) => void,
   ): (() => void) => {
@@ -256,6 +271,27 @@ const api = {
     return () =>
       ipcRenderer.removeListener("catamorphic:terminal-exit", handler);
   },
+
+  // --- agent workspace bridge ---
+  onBridgeRequest: (
+    listener: (payload: {
+      id: number;
+      method: string;
+      params: Record<string, unknown>;
+    }) => void,
+  ): (() => void) => {
+    const handler = (
+      _event: unknown,
+      payload: { id: number; method: string; params: Record<string, unknown> },
+    ) => listener(payload);
+    ipcRenderer.on("catamorphic:bridge-request", handler);
+    return () =>
+      ipcRenderer.removeListener("catamorphic:bridge-request", handler);
+  },
+  bridgeRespond: (payload: { id: number; result: unknown }): void =>
+    ipcRenderer.send("catamorphic:bridge-response", payload),
+  bridgeTakeover: (key: string): void =>
+    ipcRenderer.send("catamorphic:bridge-takeover", { key }),
 
   // --- profiles ---
   profilesList: (): Promise<unknown> =>

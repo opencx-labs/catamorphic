@@ -167,6 +167,11 @@ export class DesktopConfigAgent implements CodingAgentProvider {
    */
   private readonly sessionProjects = new Map<string, string>();
 
+  /** Forwarded only when the harness supports them (feature-detection). */
+  readonly interrupt?: (providerSessionId: string) => void;
+  readonly hasSession?: (providerSessionId: string) => boolean;
+  readonly retryTurn?: CodingAgentProvider["retryTurn"];
+
   constructor(
     private readonly inner: CodingAgentProvider,
     private readonly sandboxProvider: SandboxProvider,
@@ -174,6 +179,27 @@ export class DesktopConfigAgent implements CodingAgentProvider {
     private readonly storesFor: (projectId?: string) => ProfileStores,
   ) {
     this.name = inner.name;
+    if (inner.interrupt) {
+      this.interrupt = (providerSessionId) =>
+        inner.interrupt?.(providerSessionId);
+    }
+    if (inner.hasSession) {
+      this.hasSession = (providerSessionId) =>
+        inner.hasSession?.(providerSessionId) ?? true;
+    }
+    if (inner.retryTurn) {
+      // Retries get the same stage/apply bracketing as regular turns.
+      const innerRetry = inner.retryTurn.bind(inner);
+      const self = this;
+      this.retryTurn = async function* (session, opts) {
+        await self.stage(session);
+        try {
+          yield* innerRetry(session, opts);
+        } finally {
+          await self.applyEdits(session);
+        }
+      };
+    }
   }
 
   async startSession(opts: StartSessionOpts): Promise<ProviderSession> {

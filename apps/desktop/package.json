@@ -45,7 +45,8 @@
     "react-dom": "^19.2.7",
     "react-markdown": "^10.1.0",
     "remark-gfm": "^4.0.1",
-    "use-stick-to-bottom": "^1.1.6"
+    "use-stick-to-bottom": "^1.1.6",
+    "zod": "^4.1.8"
   },
   "devDependencies": {
     "@tailwindcss/vite": "^4.2.2",

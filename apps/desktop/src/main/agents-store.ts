@@ -60,6 +60,9 @@ interface AgentsFile {
   defaultAgentId?: string;
 }
 
+/** Media kinds an agent's chat input accepts (paste/attach gating). */
+export type AgentAttachmentKind = "image" | "document";
+
 /** Agent as exposed to the renderer: never the raw key. */
 export interface PublicAgentConfig {
   id: string;
@@ -71,6 +74,30 @@ export interface PublicAgentConfig {
   auth: AgentAuthMode;
   hasApiKey: boolean;
   apiKeyMasked: string | null;
+  /** What media the chat composer may attach for this agent. */
+  accepts: AgentAttachmentKind[];
+}
+
+/**
+ * Attachment support by harness/provider: Anthropic models read images and
+ * PDFs; other API providers get images only (model-dependent beyond that —
+ * failures surface as friendly errors). Claude Code reads image and
+ * document files natively via its Read tool; Codex has no media path yet.
+ */
+export function agentAccepts(config: {
+  harness: AgentHarness;
+  provider?: AiSdkProvider;
+}): AgentAttachmentKind[] {
+  switch (config.harness) {
+    case "ai-sdk":
+      return (config.provider ?? "anthropic") === "anthropic"
+        ? ["image", "document"]
+        : ["image"];
+    case "claude-code":
+      return ["image", "document"];
+    case "codex":
+      return [];
+  }
 }
 
 export const HARNESS_LABELS: Record<AgentHarness, string> = {
@@ -249,5 +276,6 @@ export function toPublicAgent(agent: AgentConfig): PublicAgentConfig {
     ...rest,
     hasApiKey: apiKey !== null,
     apiKeyMasked: apiKey ? `${apiKey.slice(0, 7)}…${apiKey.slice(-4)}` : null,
+    accepts: agentAccepts(agent),
   };
 }

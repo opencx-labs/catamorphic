@@ -13,6 +13,7 @@ import { pgcrypto } from "@electric-sql/pglite/contrib/pgcrypto";
 import cors from "@fastify/cors";
 import Fastify, { type FastifyInstance } from "fastify";
 import { Kysely, PGliteDialect, WithSchemaPlugin } from "kysely";
+import type { WorkspaceBridge } from "../agent-bridge.js";
 import type { ProfileConfigManager } from "../profile-config.js";
 import type { ProfilesStore } from "../profiles.js";
 import { DesktopAgentRegistry } from "./agent-registry.js";
@@ -39,6 +40,7 @@ export async function startEmbeddedServer(
   paths: DataPaths,
   profiles: ProfilesStore,
   profileConfig: ProfileConfigManager,
+  workspaceBridge?: WorkspaceBridge,
 ): Promise<EmbeddedServer> {
   fs.mkdirSync(paths.db, { recursive: true });
 
@@ -64,6 +66,7 @@ export async function startEmbeddedServer(
     sandboxProvider,
     agentHomesDir: paths.agentHomesDir,
     e2eFake: e2eFakeAgent,
+    workspaceBridge,
   });
   if (e2eFakeAgent) {
     const agents = profileConfig.forDefaultProfile().agents;
@@ -104,6 +107,26 @@ export async function startEmbeddedServer(
   if (applied.length > 0) {
     console.log(`[desktop] Applied migrations: ${applied.join(", ")}`);
   }
+
+  // The workspace toolkit's read_tab expands chat tabs into transcripts;
+  // the chat store only exists from here on.
+  agentRegistry.workspaceToolkit?.setChatTranscriptReader(
+    async (projectId, sessionId) => {
+      const detail = await catamorphic.core.agentSessions?.get(
+        { tenantId: DESKTOP_TENANT_ID, externalUserId: DESKTOP_USER_ID },
+        projectId,
+        sessionId,
+      );
+      if (!detail) return null;
+      return {
+        title: detail.title ?? null,
+        messages: detail.messages.map((message) => ({
+          role: message.role,
+          content: message.content,
+        })),
+      };
+    },
+  );
 
   const app: FastifyInstance = Fastify({ logger: { level: "warn" } });
   await app.register(cors, {

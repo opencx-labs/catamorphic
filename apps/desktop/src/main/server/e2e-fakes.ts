@@ -9,12 +9,15 @@ import type {
   CreateSandboxOpts,
   ExecOpts,
   ExecResult,
+  ExtraTool,
+  ExtraToolContext,
   GitCloneOpts,
   ProviderSession,
   SandboxHandle,
   SandboxProvider,
   SandboxStatus,
   StartSessionOpts,
+  TurnOptions,
 } from "@catamorphic/sandbox";
 
 const execFileAsync = promisify(execFile);
@@ -125,16 +128,52 @@ export class E2eLocalSandboxProvider implements SandboxProvider {
  *   sync-back and chips).
  * - "slowly" → a ~4s turn (exercises mid-turn UI: spinners, minimize,
  *   mode flips, kill-and-relaunch recovery).
+ * - "auth error" → the turn fails with a provider-style credential
+ *   rejection, verbatim OpenRouter 401 text (exercises the friendly
+ *   auth-error rewrite in agent-errors.ts).
  * - anything else → set_title + one text reply echoing the message.
  */
 export class E2eFakeCodingAgent implements CodingAgentProvider {
   readonly name = "e2e-fake";
   private readonly sessions = new Map<
     string,
-    { sandboxId: string; workingDirectory: string; askedQuestion: boolean }
+    {
+      sandboxId: string;
+      workingDirectory: string;
+      askedQuestion: boolean;
+      /**
+       * Per-prompt one-shot failures: a given trigger message fails once
+       * and recovers on retry (same content re-runs). A NEW trigger
+       * message fails again — reconnect/retry flows need fresh failures.
+       */
+      failedPrompts: Set<string>;
+      interrupted: boolean;
+      /** Context for driving the real workspace toolkit ("terminal:"). */
+      toolContext: ExtraToolContext;
+    }
   >();
 
-  constructor(private readonly sandboxProvider: SandboxProvider) {}
+  constructor(
+    private readonly sandboxProvider: SandboxProvider,
+    /**
+     * The real workspace toolkit, when the host has one: keyed prompts
+     * ("terminal: <cmd>", "terminal @<id>: <cmd>") execute the actual
+     * run_terminal tool, so e2e covers the bridge → renderer → chips
+     * path with the deterministic agent.
+     */
+    private readonly workspaceTools: ExtraTool[] = [],
+  ) {}
+
+  interrupt(providerSessionId: string): void {
+    const state = this.sessions.get(providerSessionId);
+    if (state) state.interrupted = true;
+  }
+
+  /** In-memory like the real ai-sdk harness — resurrection tests rely
+      on this reporting honestly after a relaunch. */
+  hasSession(providerSessionId: string): boolean {
+    return this.sessions.has(providerSessionId);
+  }
 
   async startSession(opts: StartSessionOpts): Promise<ProviderSession> {
     const providerSessionId = crypto.randomUUID();
@@ -142,6 +181,9 @@ export class E2eFakeCodingAgent implements CodingAgentProvider {
       sandboxId: opts.sandboxId,
       workingDirectory: opts.workingDirectory,
       askedQuestion: false,
+      failedPrompts: new Set(),
+      interrupted: false,
+      toolContext: { projectId: opts.projectId, sessionId: opts.sessionId },
     });
     return {
       providerSessionId,
@@ -162,13 +204,31 @@ export class E2eFakeCodingAgent implements CodingAgentProvider {
   async *sendMessage(
     session: ProviderSession,
     message: string,
+    opts?: TurnOptions,
   ): AsyncIterable<AgentEvent> {
     const state = this.sessions.get(session.providerSessionId);
     if (!state) {
       yield { type: "error", content: "Session not found" };
       return;
     }
+    state.interrupted = false;
     const prompt = message.toLowerCase();
+
+    // Media messages echo what arrived (exercises the attachment path).
+    if (opts?.attachments && opts.attachments.length > 0) {
+      const names = opts.attachments
+        .map((attachment) => attachment.name)
+        .join(", ");
+      yield { type: "title", content: "Media received" };
+      yield {
+        type: "text",
+        content: `Received ${opts.attachments.length} attachment${
+          opts.attachments.length > 1 ? "s" : ""
+        }: ${names}`,
+      };
+      yield { type: "done" };
+      return;
+    }
 
     if (state.askedQuestion) {
       state.askedQuestion = false;
@@ -228,13 +288,90 @@ export class E2eFakeCodingAgent implements CodingAgentProvider {
     }
 
     // "slowly" → a multi-second turn, so tests can exercise mid-turn UI
-    // (spinners, minimize, mode flips) before the agent completes.
+    // (spinners, minimize, mode flips, queueing, interrupts) before the
+    // agent completes. Interruptible: the sleep polls the abort flag.
     if (prompt.includes("slowly")) {
       yield { type: "title", content: "Slow burn" };
       yield { type: "text", content: "Working on it, give me a moment." };
       yield { type: "command", content: "sleep" };
-      await new Promise((resolve) => setTimeout(resolve, 4000));
+      const deadline = Date.now() + 4000;
+      while (Date.now() < deadline && !state.interrupted) {
+        await new Promise((resolve) => setTimeout(resolve, 100));
+      }
+      if (state.interrupted) {
+        yield { type: "error", content: "Interrupted." };
+        yield { type: "done" };
+        return;
+      }
       yield { type: "text", content: "Done after a long think." };
+      yield { type: "done" };
+      return;
+    }
+
+    // "auth error" → the turn dies exactly the way a revoked key does in
+    // production: the provider's raw 401 body as the error event. What the
+    // user must see instead is the actionable rewrite (agent-errors.ts) —
+    // the e2e asserts that mapping on the real send path. One-shot: the
+    // retry of the same message recovers (exercises retry-in-place).
+    // "terminal: <cmd>" / "terminal @<id>: <cmd>" → the REAL run_terminal
+    // workspace tool. E2e's only path through the bridge with the
+    // deterministic agent — chips, spinners, targeting all run for real.
+    const terminalRun = /^terminal(?:\s+@(\S+))?:\s*(.+)$/s.exec(
+      message.trim(),
+    );
+    if (terminalRun) {
+      const [, targetId, command] = terminalRun;
+      const tool = this.workspaceTools.find(
+        (candidate) => candidate.name === "run_terminal",
+      );
+      if (!tool || !command) {
+        yield { type: "error", content: "run_terminal unavailable" };
+        yield { type: "done" };
+        return;
+      }
+      yield { type: "title", content: "Terminal exercise" };
+      yield { type: "command", content: command };
+      try {
+        const result = await tool.execute(
+          { command, ...(targetId ? { terminalId: targetId } : {}) },
+          state.toolContext,
+        );
+        yield {
+          type: "text",
+          content: `terminal result: ${JSON.stringify(result)}`,
+        };
+      } catch (error) {
+        yield {
+          type: "text",
+          content: `terminal error: ${error instanceof Error ? error.message : String(error)}`,
+        };
+      }
+      yield { type: "done" };
+      return;
+    }
+
+    if (prompt.includes("auth error")) {
+      if (!state.failedPrompts.has(prompt)) {
+        state.failedPrompts.add(prompt);
+        yield { type: "error", content: "User not found." };
+        yield { type: "done" };
+        return;
+      }
+      yield { type: "text", content: "Recovered after reconnecting." };
+      yield { type: "done" };
+      return;
+    }
+
+    // "rate limit" → a provider-style 429, once per message; drives the
+    // auto-retry backoff loop, whose retry then recovers.
+    if (prompt.includes("rate limit")) {
+      if (!state.failedPrompts.has(prompt)) {
+        state.failedPrompts.add(prompt);
+        yield { type: "error", content: "429 rate limit exceeded" };
+        yield { type: "done" };
+        return;
+      }
+      yield { type: "text", content: "Recovered after the rate limit." };
       yield { type: "done" };
       return;
     }

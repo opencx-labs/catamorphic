@@ -10,13 +10,20 @@ import type {
   CodingAgentProvider,
   SandboxProvider,
 } from "@catamorphic/sandbox";
+import type { WorkspaceBridge } from "../agent-bridge.js";
 import type { AgentConfig } from "../agents-store.js";
 import { bestFreeModelId, fetchOpenRouterModels } from "../openrouter.js";
 import type { ProfileConfigManager } from "../profile-config.js";
 import type { ProfilesStore } from "../profiles.js";
+import { FriendlyAgentErrors } from "./agent-errors.js";
 import { buildAiSdkAgent } from "./coding-agent.js";
 import { DesktopConfigAgent } from "./desktop-config-agent.js";
 import { E2eFakeCodingAgent } from "./e2e-fakes.js";
+import { WorkspaceContextAgent } from "./workspace-context-agent.js";
+import {
+  buildWorkspaceToolkit,
+  type WorkspaceToolkit,
+} from "./workspace-tools.js";
 
 export interface DesktopAgentRegistryDeps {
   profiles: ProfilesStore;
@@ -24,6 +31,8 @@ export interface DesktopAgentRegistryDeps {
   sandboxProvider: SandboxProvider;
   /** `agent-homes/` root; each account-auth agent gets a private home. */
   agentHomesDir: string;
+  /** Agents' window into the user's workspace (tabs, browser, terminals). */
+  workspaceBridge?: WorkspaceBridge;
   /** E2E: every configured agent resolves to the scripted fake. */
   e2eFake?: boolean;
 }
@@ -51,7 +60,13 @@ export class DesktopAgentRegistry implements CodingAgentRegistry {
    */
   private openrouterDefault: string | undefined;
 
+  /** Workspace tools shared by every harness that can mount them. */
+  readonly workspaceToolkit: WorkspaceToolkit | undefined;
+
   constructor(private readonly deps: DesktopAgentRegistryDeps) {
+    this.workspaceToolkit = deps.workspaceBridge
+      ? buildWorkspaceToolkit(deps.workspaceBridge)
+      : undefined;
     void this.refreshOpenRouterDefault();
   }
 
@@ -156,12 +171,19 @@ export class DesktopAgentRegistry implements CodingAgentRegistry {
 
   private build(config: AgentConfig): RegisteredCodingAgent | undefined {
     // E2E: same registry mechanics, scripted provider — renderer flows
-    // (agent lists, switching, effort) exercise the real plumbing.
+    // (agent lists, switching, effort) exercise the real plumbing. The
+    // error decorator stays on so tests cover the auth-failure surfacing.
     if (this.deps.e2eFake) {
       return {
         id: config.id,
-        provider: this.wrapSandboxAgent(
-          new E2eFakeCodingAgent(this.deps.sandboxProvider),
+        provider: this.wrapErrors(
+          this.wrapSandboxAgent(
+            new E2eFakeCodingAgent(
+              this.deps.sandboxProvider,
+              this.workspaceToolkit?.tools,
+            ),
+          ),
+          config,
         ),
         execution: "sandbox",
         defaults: { effort: config.effort },
@@ -174,6 +196,7 @@ export class DesktopAgentRegistry implements CodingAgentRegistry {
           config,
           this.deps.sandboxProvider,
           this.resolvedModel(config) ?? "",
+          this.workspaceToolkit?.tools,
         );
         if (!provider) {
           // An unresolved OpenRouter default may just not have warmed yet.
@@ -184,7 +207,12 @@ export class DesktopAgentRegistry implements CodingAgentRegistry {
         }
         return {
           id: config.id,
-          provider: this.wrapSandboxAgent(provider),
+          provider: this.wrapErrors(
+            this.withWorkspace(this.wrapSandboxAgent(provider), {
+              hasTools: true,
+            }),
+            config,
+          ),
           execution: "sandbox",
           defaults: { effort: config.effort },
         };
@@ -202,11 +230,23 @@ export class DesktopAgentRegistry implements CodingAgentRegistry {
         };
         return {
           id: config.id,
-          provider: new ClaudeCodeAgent({
-            model: config.model || undefined,
-            effort: config.effort,
-            ...(Object.keys(env).length > 0 ? { env } : {}),
-          }),
+          provider: this.wrapErrors(
+            this.withWorkspace(
+              new ClaudeCodeAgent({
+                model: config.model || undefined,
+                effort: config.effort,
+                ...(Object.keys(env).length > 0 ? { env } : {}),
+                extraTools: this.workspaceToolkit?.tools,
+                // Claude Code's own Bash runs inside the CLI where we
+                // can't see or manage it. With workspace terminals
+                // available, every command goes through tabs the user
+                // can watch and take over — full interception.
+                disableBash: this.workspaceToolkit !== undefined,
+              }),
+              { hasTools: true },
+            ),
+            config,
+          ),
           execution: "host",
           defaults: {
             effort: config.effort,
@@ -219,16 +259,24 @@ export class DesktopAgentRegistry implements CodingAgentRegistry {
         // (or the ChatGPT sign-in the wizard runs) just works.
         return {
           id: config.id,
-          provider: new CodexAgent({
-            model: config.model || undefined,
-            effort: config.effort,
-            ...(config.auth === "api-key" && config.apiKey
-              ? { apiKey: config.apiKey }
-              : {}),
-            ...(config.auth === "account"
-              ? { env: { CODEX_HOME: this.agentHome(config.id) } }
-              : {}),
-          }),
+          // Codex has no extra-tool hook yet, so it gets workspace
+          // awareness (the per-turn context block) without the tools.
+          provider: this.wrapErrors(
+            this.withWorkspace(
+              new CodexAgent({
+                model: config.model || undefined,
+                effort: config.effort,
+                ...(config.auth === "api-key" && config.apiKey
+                  ? { apiKey: config.apiKey }
+                  : {}),
+                ...(config.auth === "account"
+                  ? { env: { CODEX_HOME: this.agentHome(config.id) } }
+                  : {}),
+              }),
+              { hasTools: false },
+            ),
+            config,
+          ),
           execution: "host",
           defaults: {
             effort: config.effort,
@@ -237,6 +285,43 @@ export class DesktopAgentRegistry implements CodingAgentRegistry {
         };
       }
     }
+  }
+
+  /**
+   * Auth failures arrive as raw provider bodies (OpenRouter's 401 is
+   * literally "User not found."); rewrite them into something the user
+   * can act on. Outermost wrapper so it sees every inner error.
+   */
+  private wrapErrors(
+    provider: CodingAgentProvider,
+    config: AgentConfig,
+  ): CodingAgentProvider {
+    const labels: Record<string, string> = {
+      anthropic: "Anthropic",
+      openai: "OpenAI",
+      openrouter: "OpenRouter",
+    };
+    const label =
+      config.harness === "claude-code"
+        ? "Claude Code"
+        : config.harness === "codex"
+          ? "Codex"
+          : (labels[config.provider ?? "anthropic"] ?? "The model provider");
+    return new FriendlyAgentErrors(provider, config.name, label);
+  }
+
+  /** Workspace awareness (context snapshots + playbook), when bridged. */
+  private withWorkspace(
+    provider: CodingAgentProvider,
+    opts: { hasTools: boolean },
+  ): CodingAgentProvider {
+    const bridge = this.deps.workspaceBridge;
+    if (!bridge) return provider;
+    return new WorkspaceContextAgent(
+      provider,
+      bridge,
+      opts.hasTools && this.workspaceToolkit !== undefined,
+    );
   }
 
   /**
