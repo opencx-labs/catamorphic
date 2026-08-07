@@ -4,6 +4,8 @@ import type {
   AgentEvent,
   AgentQuestion,
   CodingAgentProvider,
+  ExtraTool,
+  ExtraToolContext,
   ProviderSession,
   SandboxProvider,
   StartSessionOpts,
@@ -42,6 +44,12 @@ export interface AiSdkCodingAgentOpts {
    * Without it, per-turn model overrides are ignored.
    */
   resolveModel?: (modelId: string) => LanguageModel;
+  /**
+   * Host-supplied tools offered beside the built-in set (e.g. the desktop
+   * app's workspace tools). Executed with the session's project/session
+   * context; a thrown error becomes the tool's error result.
+   */
+  extraTools?: ExtraTool[];
 }
 
 interface AiSdkSessionState {
@@ -51,6 +59,8 @@ interface AiSdkSessionState {
   sandboxId: string;
   workingDirectory: string;
   running: boolean;
+  /** Aborts the in-flight turn (interrupt()); cleared when the turn ends. */
+  abort?: AbortController;
   /** Set when the turn ended on an ask_user call awaiting the user's answer. */
   pendingAsk?: { toolCallId: string };
 }
@@ -87,12 +97,20 @@ export class AiSdkCodingAgent implements CodingAgentProvider {
 
     this.sessions.set(providerSessionId, {
       instructions,
-      tools: createTools({
-        provider: this.opts.sandboxProvider,
-        sandboxId: opts.sandboxId,
-        workingDirectory: opts.workingDirectory,
-      }),
-      messages: [],
+      tools: createTools(
+        {
+          provider: this.opts.sandboxProvider,
+          sandboxId: opts.sandboxId,
+          workingDirectory: opts.workingDirectory,
+        },
+        this.opts.extraTools ?? [],
+        { projectId: opts.projectId, sessionId: opts.sessionId },
+      ),
+      // Resurrected sessions (host restart, provider rebuild after a
+      // credential change) start from the host's persisted transcript.
+      messages: (opts.history ?? []).map(
+        (turn): ModelMessage => ({ role: turn.role, content: turn.content }),
+      ),
       sandboxId: opts.sandboxId,
       workingDirectory: opts.workingDirectory,
       running: false,
@@ -103,6 +121,10 @@ export class AiSdkCodingAgent implements CodingAgentProvider {
       sandboxId: opts.sandboxId,
       workingDirectory: opts.workingDirectory,
     };
+  }
+
+  hasSession(providerSessionId: string): boolean {
+    return this.sessions.has(providerSessionId);
   }
 
   async resumeSession(providerSessionId: string): Promise<ProviderSession> {
@@ -131,23 +153,6 @@ export class AiSdkCodingAgent implements CodingAgentProvider {
       yield { type: "error", content: "A message is already running" };
       return;
     }
-    // The agent object is stateless (history lives in state.messages), so
-    // each turn builds one with that turn's effort and model — a model
-    // switch mid-conversation keeps the session, because the session IS
-    // the message history.
-    const effort = opts?.effort ?? this.opts.effort;
-    const model =
-      opts?.model && this.opts.resolveModel
-        ? this.opts.resolveModel(opts.model)
-        : this.opts.model;
-    const agent = new ToolLoopAgent({
-      model,
-      instructions: state.instructions,
-      tools: state.tools,
-      ...(effort ? { providerOptions: effortProviderOptions(effort) } : {}),
-    });
-
-    state.running = true;
     // Answers to a pending ask_user call resume the tool loop as the tool's
     // result; anything else is a regular user message.
     const pendingAsk = state.pendingAsk;
@@ -166,15 +171,80 @@ export class AiSdkCodingAgent implements CodingAgentProvider {
               },
             ],
           }
-        : { role: "user", content: message },
+        : userMessage(message, opts?.attachments ?? []),
     ];
+    yield* this.runTurn(state, requestMessages, opts);
+  }
+
+  /**
+   * Re-run the turn on the history as it stands (the failed turn's user
+   * message is already the tail — sendMessage appends before streaming).
+   * `sanitizeReasoning` drops reasoning parts from prior assistant turns:
+   * they carry model-specific signatures that a different model rejects.
+   */
+  async *retryTurn(
+    session: ProviderSession,
+    opts?: TurnOptions & { sanitizeReasoning?: boolean },
+  ): AsyncIterable<AgentEvent> {
+    const state = this.sessions.get(session.providerSessionId);
+    if (!state) {
+      yield {
+        type: "error",
+        content: "Session not found (host restarted?); start a new session",
+      };
+      return;
+    }
+    if (state.running) {
+      yield { type: "error", content: "A message is already running" };
+      return;
+    }
+    if (state.messages.length === 0) {
+      yield { type: "error", content: "Nothing to retry yet" };
+      return;
+    }
+    if (opts?.sanitizeReasoning) {
+      state.messages = stripReasoningParts(state.messages);
+    }
+    yield* this.runTurn(state, state.messages, opts);
+  }
+
+  interrupt(providerSessionId: string): void {
+    this.sessions.get(providerSessionId)?.abort?.abort();
+  }
+
+  private async *runTurn(
+    state: AiSdkSessionState,
+    requestMessages: ModelMessage[],
+    opts?: TurnOptions,
+  ): AsyncIterable<AgentEvent> {
+    // The agent object is stateless (history lives in state.messages), so
+    // each turn builds one with that turn's effort and model — a model
+    // switch mid-conversation keeps the session, because the session IS
+    // the message history.
+    const effort = opts?.effort ?? this.opts.effort;
+    const model =
+      opts?.model && this.opts.resolveModel
+        ? this.opts.resolveModel(opts.model)
+        : this.opts.model;
+    const agent = new ToolLoopAgent({
+      model,
+      instructions: state.instructions,
+      tools: state.tools,
+      ...(effort ? { providerOptions: effortProviderOptions(effort) } : {}),
+    });
+
+    state.running = true;
+    state.abort = new AbortController();
     state.messages = requestMessages;
     let text = "";
     let askedToolCallId: string | undefined;
     let askedQuestions: AgentQuestion[] | undefined;
 
     try {
-      const result = await agent.stream({ messages: requestMessages });
+      const result = await agent.stream({
+        messages: requestMessages,
+        abortSignal: state.abort.signal,
+      });
       for await (const part of result.stream) {
         if (part.type === "text-delta") {
           text += part.text;
@@ -218,15 +288,65 @@ export class AiSdkCodingAgent implements CodingAgentProvider {
       if (text.trim().length > 0) {
         yield { type: "text", content: text };
       }
-      yield { type: "error", content: errorMessage(error) };
+      if (state.abort?.signal.aborted) {
+        // Interrupted by the host (user takes over) — not a failure to
+        // classify or retry; the partial text above is kept.
+        yield { type: "error", content: "Interrupted." };
+      } else {
+        yield { type: "error", content: errorMessage(error) };
+      }
     } finally {
       state.running = false;
+      state.abort = undefined;
     }
   }
 
   async dispose(session: ProviderSession): Promise<void> {
     this.sessions.delete(session.providerSessionId);
   }
+}
+
+/** User message, with any attachments as image/file parts beside the text. */
+function userMessage(
+  message: string,
+  attachments: NonNullable<TurnOptions["attachments"]>,
+): ModelMessage {
+  if (attachments.length === 0) return { role: "user", content: message };
+  return {
+    role: "user",
+    content: [
+      { type: "text", text: message },
+      ...attachments.map((attachment) =>
+        attachment.kind === "image"
+          ? {
+              type: "image" as const,
+              image: attachment.dataBase64,
+              mediaType: attachment.mediaType,
+            }
+          : {
+              type: "file" as const,
+              data: attachment.dataBase64,
+              mediaType: attachment.mediaType,
+              filename: attachment.name,
+            },
+      ),
+    ],
+  };
+}
+
+/**
+ * Drop reasoning parts from assistant history. Reasoning output is signed
+ * by the model that produced it; after a mid-conversation model switch the
+ * new model rejects those signatures ("encrypted reasoning" errors).
+ */
+function stripReasoningParts(messages: ModelMessage[]): ModelMessage[] {
+  return messages.map((message) => {
+    if (message.role !== "assistant" || !Array.isArray(message.content)) {
+      return message;
+    }
+    const content = message.content.filter((part) => part.type !== "reasoning");
+    return { ...message, content };
+  });
 }
 
 /**
@@ -255,7 +375,11 @@ interface ToolContext {
   workingDirectory: string;
 }
 
-function createTools(context: ToolContext) {
+function createTools(
+  context: ToolContext,
+  extraTools: ExtraTool[] = [],
+  extraContext: ExtraToolContext = { projectId: "" },
+) {
   let mutationQueue = Promise.resolve();
   const serializeMutation = async <T>(operation: () => Promise<T>) => {
     const result = mutationQueue.then(operation, operation);
@@ -280,6 +404,22 @@ function createTools(context: ToolContext) {
   };
 
   return {
+    // Spread first: a host tool never shadows a built-in of the same name.
+    ...Object.fromEntries(
+      extraTools.map((extra) => [
+        extra.name,
+        tool({
+          description: extra.description,
+          inputSchema: z.object(extra.parameters as z.ZodRawShape),
+          execute: async (input: Record<string, unknown>) => {
+            const result = await extra.execute(input, extraContext);
+            return typeof result === "string"
+              ? truncateToolOutput(result)
+              : result;
+          },
+        }),
+      ]),
+    ),
     read: tool({
       description: "Read a UTF-8 text file from the project.",
       inputSchema: z.object({

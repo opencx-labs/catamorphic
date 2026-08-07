@@ -1,18 +1,27 @@
+import crypto from "node:crypto";
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import {
   type CanUseTool,
+  createSdkMcpServer,
   type Options,
   query,
   type SDKMessage,
+  tool as sdkTool,
 } from "@anthropic-ai/claude-agent-sdk";
 import type {
   AgentEffort,
   AgentEvent,
   CodingAgentProvider,
+  ExtraTool,
+  ExtraToolContext,
   ProviderSession,
   StartSessionOpts,
   TurnOptions,
 } from "@catamorphic/sandbox";
 import { buildPluginsPreamble, stagePluginDocs } from "@catamorphic/sandbox";
+import type { ZodRawShape } from "zod";
 
 export interface ClaudeCodeAgentOpts {
   /** Default model for sessions (e.g. "claude-sonnet-4-5"). */
@@ -36,6 +45,22 @@ export interface ClaudeCodeAgentOpts {
   executableArgs?: string[];
   /** Override the path to the Claude Code executable itself. */
   pathToClaudeCodeExecutable?: string;
+  /**
+   * Host-supplied tools offered to Claude Code as an in-process MCP server
+   * named "workspace" (tool ids `mcp__workspace__<name>`), pre-approved in
+   * the allowlist. This is how the desktop app hands Claude Code its
+   * embedded browser and terminals — the SDK's native tool-use loop drives
+   * them like any other MCP server.
+   */
+  extraTools?: ExtraTool[];
+  /**
+   * Remove the built-in Bash tool from the allowlist. Claude Code's own
+   * shell runs inside the CLI process where the host can't see or manage
+   * it; hosts that provide terminal tools via {@link extraTools} disable
+   * Bash so every command runs through terminals the host fully
+   * intercepts (and the user can watch and take over).
+   */
+  disableBash?: boolean;
 }
 
 /**
@@ -72,6 +97,8 @@ const denyUnlistedTools: CanUseTool = async () => ({
 interface SessionState {
   systemPrompt?: string;
   workingDirectory: string;
+  /** Context handed to extra (workspace) tools at execution time. */
+  toolContext?: ExtraToolContext;
 }
 
 /**
@@ -103,13 +130,18 @@ export class ClaudeCodeAgent implements CodingAgentProvider {
       [preamble, opts.systemPrompt ?? ""].filter(Boolean).join("\n\n") ||
       undefined;
 
+    const toolContext: ExtraToolContext = {
+      projectId: opts.projectId,
+      sessionId: opts.sessionId,
+    };
+
     // The SDK only reveals its session id once a query starts (the
     // system/init message carries it), so run a minimal kickoff turn and
     // capture the id from the stream.
     const kickoff = query({
       prompt: "Reply with exactly: OK.",
       options: {
-        ...this.buildOptions(opts.workingDirectory, systemPrompt),
+        ...this.buildOptions(opts.workingDirectory, systemPrompt, toolContext),
         maxTurns: 1,
       },
     });
@@ -131,6 +163,7 @@ export class ClaudeCodeAgent implements CodingAgentProvider {
     this.sessions.set(sessionId, {
       systemPrompt,
       workingDirectory: opts.workingDirectory,
+      toolContext,
     });
 
     return {
@@ -152,6 +185,11 @@ export class ClaudeCodeAgent implements CodingAgentProvider {
     };
   }
 
+  /** Abort the in-flight turn; the stream settles with an error event. */
+  interrupt(providerSessionId: string): void {
+    this.activeAborts.get(providerSessionId)?.abort();
+  }
+
   async *sendMessage(
     session: ProviderSession,
     message: string,
@@ -167,9 +205,18 @@ export class ClaudeCodeAgent implements CodingAgentProvider {
     let done = false;
     try {
       const turn = query({
-        prompt: message,
+        prompt: await withAttachments(
+          message,
+          opts?.attachments,
+          session.providerSessionId,
+        ),
         options: {
-          ...this.buildOptions(cwd, state?.systemPrompt, opts),
+          ...this.buildOptions(
+            cwd,
+            state?.systemPrompt,
+            state?.toolContext,
+            opts,
+          ),
           resume: session.providerSessionId,
           abortController: abort,
         },
@@ -212,8 +259,54 @@ export class ClaudeCodeAgent implements CodingAgentProvider {
   private buildOptions(
     cwd: string | undefined,
     systemPrompt: string | undefined,
+    toolContext: ExtraToolContext | undefined,
     turn?: TurnOptions,
   ): Options {
+    // Sessions resumed after a host restart have no stored context to run
+    // extra tools with, so they run without the workspace server (the CLI
+    // transcript survives; the tools return once the state is known again).
+    const extraTools = toolContext ? (this.opts.extraTools ?? []) : [];
+    const workspaceServer =
+      extraTools.length > 0 && toolContext
+        ? createSdkMcpServer({
+            name: "workspace",
+            version: "1.0.0",
+            tools: extraTools.map((def) =>
+              sdkTool(
+                def.name,
+                def.description,
+                def.parameters as ZodRawShape,
+                async (args) => {
+                  try {
+                    const result = await def.execute(
+                      args as Record<string, unknown>,
+                      toolContext,
+                    );
+                    return {
+                      content: [
+                        { type: "text", text: stringifyToolResult(result) },
+                      ],
+                    };
+                  } catch (error) {
+                    return {
+                      content: [
+                        {
+                          type: "text",
+                          text:
+                            error instanceof Error
+                              ? error.message
+                              : String(error),
+                        },
+                      ],
+                      isError: true,
+                    };
+                  }
+                },
+              ),
+            ),
+          })
+        : undefined;
+
     return {
       cwd,
       systemPrompt,
@@ -224,7 +317,17 @@ export class ClaudeCodeAgent implements CodingAgentProvider {
       model: turn?.model ?? this.opts.model,
       effort: turn?.effort ?? this.opts.effort,
       permissionMode: "acceptEdits",
-      allowedTools: [...ALLOWED_TOOLS],
+      ...(workspaceServer
+        ? { mcpServers: { workspace: workspaceServer } }
+        : {}),
+      allowedTools: [
+        ...ALLOWED_TOOLS.filter(
+          (name) => !(this.opts.disableBash && name === "Bash"),
+        ),
+        ...(workspaceServer
+          ? extraTools.map((def) => `mcp__workspace__${def.name}`)
+          : []),
+      ],
       canUseTool: denyUnlistedTools,
       // Ignore the user's own ~/.claude and project settings files — the
       // harness is self-contained.
@@ -269,13 +372,52 @@ function mapMessage(message: SDKMessage): AgentEvent[] {
   }
 }
 
+/**
+ * Claude Code takes a text prompt; media rides along as temp files the CLI
+ * reads with its own Read tool (which renders images natively). Files are
+ * grouped per provider session and cleaned up with the OS temp dir.
+ */
+async function withAttachments(
+  message: string,
+  attachments: TurnOptions["attachments"],
+  providerSessionId: string,
+): Promise<string> {
+  if (!attachments || attachments.length === 0) return message;
+  const dir = path.join(
+    os.tmpdir(),
+    "catamorphic-attachments",
+    providerSessionId,
+  );
+  await fs.mkdir(dir, { recursive: true });
+  const lines: string[] = [];
+  for (const attachment of attachments) {
+    // Names come from the user's clipboard/files — keep them readable but
+    // path-safe, and unique enough not to clobber a same-named sibling.
+    const safeName = `${crypto.randomUUID().slice(0, 8)}-${attachment.name.replace(/[^\w.-]+/g, "_")}`;
+    const filePath = path.join(dir, safeName);
+    await fs.writeFile(filePath, Buffer.from(attachment.dataBase64, "base64"));
+    lines.push(`- ${filePath} (${attachment.mediaType})`);
+  }
+  return `${message}\n\n[The user attached ${attachments.length === 1 ? "a file" : "files"} with this message — use the Read tool to view:\n${lines.join("\n")}]`;
+}
+
+/** MCP tool results are text; non-string tool returns ship as JSON. */
+function stringifyToolResult(result: unknown): string {
+  if (typeof result === "string") return result;
+  if (result === undefined) return "ok";
+  return JSON.stringify(result, null, 2);
+}
+
 function mapContentBlock(block: ContentBlockLike): AgentEvent | null {
   switch (block.type) {
     case "text":
       if (!block.text) return null;
       return { type: "text", content: block.text };
     case "tool_use": {
-      const name = block.name ?? "";
+      // Workspace MCP tools surface under their plain names — the
+      // transport prefix is harness plumbing, not activity the user
+      // should read.
+      const name = (block.name ?? "").replace(/^mcp__workspace__/, "");
       const input = block.input ?? {};
       if (name === "Bash") {
         return { type: "command", content: String(input.command ?? "") };

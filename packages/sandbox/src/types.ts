@@ -295,6 +295,19 @@ export interface AgentQuestion {
   options: AgentQuestionOption[];
 }
 
+/**
+ * Classified failure category on "error" events. Drives recovery UX:
+ * `auth` offers a re-connect path, `rate_limit`/`unavailable` auto-retry
+ * with backoff, `model_incompat` (e.g. reasoning blocks signed by another
+ * model after a mid-conversation switch) retries with sanitized history.
+ * Unclassified errors just offer a manual retry.
+ */
+export type AgentErrorKind =
+  | "auth"
+  | "rate_limit"
+  | "unavailable"
+  | "model_incompat";
+
 export interface AgentEvent {
   type:
     | "text"
@@ -311,6 +324,8 @@ export interface AgentEvent {
   filePath?: string;
   /** Set on "question" events: the agent is pausing for user input. */
   questions?: AgentQuestion[];
+  /** Set on classified "error" events (see {@link AgentErrorKind}). */
+  errorKind?: AgentErrorKind;
 }
 
 export interface AgentSession {

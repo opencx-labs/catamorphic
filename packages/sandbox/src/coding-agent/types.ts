@@ -21,8 +21,22 @@ export interface StartSessionOpts {
   userId: string;
   sandboxId: string;
   workingDirectory: string;
+  /**
+   * The host-side chat session id this provider session anchors (not the
+   * provider's own id). Lets host-supplied tools attribute the surfaces
+   * they create — e.g. a browser tab opened by an agent attaches to the
+   * chat that opened it.
+   */
+  sessionId?: string;
   systemPrompt?: string;
   attachedPlugins?: AttachedPluginForAgent[];
+  /**
+   * Prior conversation turns to seed the new provider session with —
+   * how a host resurrects a chat whose in-memory harness state is gone
+   * (host restart, provider rebuild after a credential change). Harnesses
+   * with their own durable transcripts (Claude Code) ignore it.
+   */
+  history?: Array<{ role: "user" | "assistant"; content: string }>;
 }
 
 export interface ProviderSession {
@@ -38,10 +52,49 @@ export interface ProviderSession {
  */
 export type AgentEffort = "low" | "medium" | "high";
 
+/** A media file sent along with a user message. */
+export interface AgentAttachment {
+  kind: "image" | "document";
+  name: string;
+  /** MIME type, e.g. "image/png", "application/pdf". */
+  mediaType: string;
+  dataBase64: string;
+}
+
 /** Per-turn overrides; anything unset falls back to the provider's defaults. */
 export interface TurnOptions {
   model?: string;
   effort?: AgentEffort;
+  /** Media sent with this turn's user message. */
+  attachments?: AgentAttachment[];
+}
+
+/** What a host-supplied tool knows about the session it runs in. */
+export interface ExtraToolContext {
+  projectId: string;
+  /** Host-side chat session id (see {@link StartSessionOpts.sessionId}). */
+  sessionId?: string;
+}
+
+/**
+ * A host-supplied tool injected into a harness beside its built-in set —
+ * how the desktop app hands agents workspace powers (driving browser
+ * tabs, terminals, tab discovery) without each harness knowing about them.
+ *
+ * `parameters` is a zod raw shape (`Record<string, ZodType>`), typed
+ * loosely so this package stays schema-library-free; harnesses cast it
+ * into their native declaration (ai-sdk `tool()`, Claude Agent SDK MCP
+ * tools). Throwing from `execute` is fine — harnesses surface the message
+ * to the model as the tool result.
+ */
+export interface ExtraTool {
+  name: string;
+  description: string;
+  parameters: Record<string, unknown>;
+  execute(
+    input: Record<string, unknown>,
+    context: ExtraToolContext,
+  ): Promise<unknown>;
 }
 
 export interface CodingAgentProvider {
@@ -55,6 +108,35 @@ export interface CodingAgentProvider {
     session: ProviderSession,
     message: string,
     opts?: TurnOptions,
+  ): AsyncIterable<AgentEvent>;
+
+  /**
+   * Abort the in-flight turn for this provider session, if any. The
+   * running {@link sendMessage} stream ends (an error/done pair is fine);
+   * the session itself stays usable for the next turn.
+   */
+  interrupt?(providerSessionId: string): void;
+
+  /**
+   * Whether this provider still holds live state for the session. Only
+   * meaningful for harnesses whose sessions are in-memory (ai-sdk): a
+   * `false` tells the host the session died with a restart or provider
+   * rebuild, so it can re-anchor (passing {@link StartSessionOpts.history})
+   * instead of running into a dead session. Durable harnesses omit it.
+   */
+  hasSession?(providerSessionId: string): boolean;
+
+  /**
+   * Re-run the last (failed) turn WITHOUT appending a new user message —
+   * the harness already holds the conversation up to and including that
+   * user message. `sanitizeReasoning` asks the harness to strip prior
+   * reasoning/thinking output from its history first (recovery for
+   * model-switch incompatibilities). Hosts fall back to re-sending the
+   * last user message when a harness doesn't implement this.
+   */
+  retryTurn?(
+    session: ProviderSession,
+    opts?: TurnOptions & { sanitizeReasoning?: boolean },
   ): AsyncIterable<AgentEvent>;
 
   dispose(session: ProviderSession): Promise<void>;

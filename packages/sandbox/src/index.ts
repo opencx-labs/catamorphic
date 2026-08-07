@@ -9,9 +9,12 @@ export {
   stagePluginDocs,
 } from "./coding-agent/plugin-staging.js";
 export type {
+  AgentAttachment,
   AgentEffort,
   AttachedPluginForAgent,
   CodingAgentProvider,
+  ExtraTool,
+  ExtraToolContext,
   ProviderSession,
   StartSessionOpts,
   TurnOptions,
@@ -29,6 +32,7 @@ export {
 export type { SandboxStore } from "./sandbox-manager.js";
 export { SandboxManagerImpl } from "./sandbox-manager.js";
 export type {
+  AgentErrorKind,
   AgentEvent,
   AgentQuestion,
   AgentQuestionOption,
