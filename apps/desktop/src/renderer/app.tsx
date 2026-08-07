@@ -80,6 +80,8 @@ interface BrowserEntry {
   faviconUrl: string | null;
   /** Chat this tab is attached to (its surfaces rail), if any. */
   chatLocalId?: string;
+  /** An agent is driving this page; user interaction waits on Take over. */
+  agentControlled?: boolean;
 }
 
 interface TerminalEntry {
@@ -88,6 +90,16 @@ interface TerminalEntry {
   title: string;
   /** Chat this tab is attached to (its surfaces rail), if any. */
   chatLocalId?: string;
+  /** Attached to an agent-owned PTY session instead of spawning one. */
+  attachSessionId?: string;
+  /** PTY session backing this tab (agents read terminals through it). */
+  ptySessionId?: string;
+  /** A foreground command is running right now (chip spinner). */
+  busy?: boolean;
+  /** The agent is driving this terminal; input waits on Take over. */
+  agentControlled?: boolean;
+  /** Agent terminals: process still running (activity indicator). */
+  running?: boolean;
 }
 
 interface EditorEntry {
@@ -188,6 +200,32 @@ const DEFAULT_CUSTOM_MENU: SidebarMenuEntry[] = [
 
 const truncateLabel = (value: string): string =>
   value.length <= 40 ? value : `${value.slice(0, 39)}…`;
+
+/**
+ * Veil over a surface an agent is driving: interaction is blocked (the
+ * page stays fully visible — watch the agent work live) until the user
+ * takes over. A hairline accent ring marks the surface as agent-held.
+ */
+function AgentControlOverlay({ onTakeOver }: { onTakeOver: () => void }) {
+  return (
+    // Pill at the top: the floating chat dock owns the bottom center.
+    <div className="absolute inset-0 z-20 flex items-start justify-center pt-4">
+      <div className="pointer-events-none absolute inset-0 animate-fade-in ring-2 ring-inset ring-accent/40" />
+      <div className="pointer-events-auto absolute inset-0" aria-hidden />
+      <button
+        type="button"
+        onClick={onTakeOver}
+        className="pointer-events-auto z-10 flex animate-fade-in items-center gap-2 rounded-full border border-border bg-bg-raised/95 py-1.5 pl-3 pr-4 text-xs text-fg shadow-2xl backdrop-blur-xl transition-colors duration-150 hover:border-accent"
+      >
+        <span className="relative flex size-2">
+          <span className="absolute inline-flex h-full w-full animate-pulse rounded-full bg-accent opacity-75" />
+          <span className="relative inline-flex size-2 rounded-full bg-accent" />
+        </span>
+        Agent is working — Take over
+      </button>
+    </div>
+  );
+}
 
 /** Floating "return to full width" control on non-browser split panes. */
 function PaneUnsplitButton({ onClick }: { onClick: () => void }) {
@@ -661,6 +699,10 @@ export function App() {
   // same 250ms collapse Escape does, not unmount the dock mid-frame.
   const chatClosersRef = useRef(new Map<string, () => void>());
 
+  // Webview guest WebContents ids per browser tab — the agent bridge
+  // drives pages from the main process by guest id.
+  const browserGuestIdsRef = useRef(new Map<string, number>());
+
   /**
    * Bookmark/link click behavior: "replace" reuses the focused browser
    * tab; anything else (or no focused browser tab) opens a new tab.
@@ -697,6 +739,7 @@ export function App() {
       if (key.startsWith("browser:")) {
         const localId = key.slice("browser:".length);
         browserNavigatorsRef.current.delete(localId);
+        browserGuestIdsRef.current.delete(localId);
         const closing = ws.browsers.find(
           (browser) => browser.localId === localId,
         );
@@ -1410,6 +1453,23 @@ export function App() {
     }));
   };
 
+  /** User claims an agent-driven surface; the agent is told on its next
+      action and may reclaim or move on. */
+  const takeOverSurface = (key: string) => {
+    desktopApi.bridgeTakeover(key);
+    updateWorkspace((ws) => ({
+      ...ws,
+      browsers: ws.browsers.map((b) =>
+        browserTabKey(b.localId) === key ? { ...b, agentControlled: false } : b,
+      ),
+      terminals: ws.terminals.map((t) =>
+        terminalTabKey(t.localId) === key
+          ? { ...t, agentControlled: false }
+          : t,
+      ),
+    }));
+  };
+
   /** Fold/unfold a chat's attached tabs under its tab in the strip. */
   const toggleChatGroup = (chatLocalId: string) =>
     updateWorkspace((ws) => {
@@ -1719,6 +1779,266 @@ export function App() {
     return () => window.clearTimeout(timer);
   }, [bootReady, bootRevealed]);
 
+  // --- agent workspace bridge -------------------------------------------
+  // Agents' workspace tools land here from main: discovery (overview /
+  // readTab), agent-spawned surfaces (browser tabs, terminals), and the
+  // control handoff. Every window answers; the ones without this project
+  // reply null and main takes the first real answer.
+  const sendingByChatRef = useRef(sendingByChat);
+  sendingByChatRef.current = sendingByChat;
+  const chatLabelsRef = useRef<Record<string, string>>({});
+  const projectIdRef = useRef(projectId);
+  projectIdRef.current = projectId;
+  const sidebarConfigRef = useRef<SidebarConfig | null>(sidebarConfig);
+  sidebarConfigRef.current = sidebarConfig;
+  const activeProfileRef = useRef(activeProfile);
+  activeProfileRef.current = activeProfile;
+  useEffect(() => {
+    /** The chat an agent-spawned surface belongs to: exact session match
+        first (the tools carry their chat's session id), then the mid-turn
+        heuristic for anything that arrives unattributed. */
+    const resolveWorkingChat = (sessionId?: string): string | undefined => {
+      const ws = workspaceRef.current;
+      if (sessionId) {
+        const owner = ws.chats.find((chat) => chat.sessionId === sessionId);
+        if (owner) return owner.localId;
+      }
+      const sending = ws.chats.filter(
+        (chat) => sendingByChatRef.current[chat.localId],
+      );
+      const preferred =
+        sending.find((chat) => chat.localId === ws.activeChatId) ??
+        sending.at(-1) ??
+        ws.chats.find((chat) => chat.localId === ws.activeChatId);
+      return preferred?.localId;
+    };
+
+    const handle = async (
+      method: string,
+      params: Record<string, unknown>,
+    ): Promise<unknown> => {
+      if (params.projectId && params.projectId !== projectIdRef.current) {
+        return null;
+      }
+      const ws = workspaceRef.current;
+      switch (method) {
+        case "overview": {
+          const keys = orderedTabKeys(ws, { includeCollapsed: true });
+          const tabs = keys.map((key) => {
+            const base: Record<string, unknown> = {
+              key,
+              active: key === ws.activeTabKey,
+            };
+            if (key.startsWith("browser:")) {
+              const id = key.slice("browser:".length);
+              const entry = ws.browsers.find((b) => b.localId === id);
+              return {
+                ...base,
+                kind: "browser",
+                title: entry?.title,
+                url: entry?.url,
+                agentControlled: entry?.agentControlled ?? false,
+              };
+            }
+            if (key.startsWith("terminal:")) {
+              const id = key.slice("terminal:".length);
+              const entry = ws.terminals.find((t) => t.localId === id);
+              return {
+                ...base,
+                kind: "terminal",
+                title: entry?.title || "Terminal",
+                running: entry?.running ?? true,
+                // What agents need to target this terminal (run_terminal
+                // terminalId) and to know whether it's mid-command.
+                terminalId: entry?.attachSessionId ?? entry?.ptySessionId,
+                busy: entry?.busy ?? false,
+                agentControlled: entry?.agentControlled ?? false,
+              };
+            }
+            if (key.startsWith("editor:")) {
+              const id = key.slice("editor:".length);
+              const entry = ws.editors.find((e) => e.localId === id);
+              return { ...base, kind: "editor", filePath: entry?.filePath };
+            }
+            if (key.startsWith("chat:")) {
+              const id = key.slice("chat:".length);
+              return {
+                ...base,
+                kind: "chat",
+                title: chatLabelsRef.current[id] ?? "Chat",
+              };
+            }
+            const [kind, name] = key.split(":", 2);
+            return { ...base, kind, name };
+          });
+          const chats = ws.chats.map((chat) => ({
+            key: chatTabKey(chat.localId),
+            title: chatLabelsRef.current[chat.localId] ?? "Chat",
+            state: chat.mode,
+            working: Boolean(sendingByChatRef.current[chat.localId]),
+            // Lets the context snapshot mark the asking agent's own chat.
+            sessionId: chat.sessionId ?? null,
+          }));
+          const sidebar = (sidebarConfigRef.current?.sections ?? []).map(
+            (section) => ({
+              type: section.type,
+              title: section.title,
+              items: (section.items ?? []).map((item) => ({
+                label: item.label,
+                url: item.url,
+              })),
+            }),
+          );
+          return { tabs, chats, sidebar, split: ws.split };
+        }
+        case "browserGuest": {
+          const key = String(params.key);
+          const id = key.slice("browser:".length);
+          const guestId = browserGuestIdsRef.current.get(id);
+          return guestId
+            ? { guestId }
+            : { error: `No live page for ${key} (tab closed or not loaded)` };
+        }
+        case "terminalId": {
+          const key = String(params.key);
+          const id = key.slice("terminal:".length);
+          const entry = ws.terminals.find((t) => t.localId === id);
+          const terminalId = entry?.attachSessionId ?? entry?.ptySessionId;
+          return terminalId ? { terminalId } : null;
+        }
+        case "terminalKey": {
+          // Reverse lookup: PTY session → workspace tab key (agent-targeted
+          // runs in existing terminals, including the user's own tabs).
+          const terminalId = String(params.terminalId);
+          const entry = ws.terminals.find(
+            (t) =>
+              t.attachSessionId === terminalId || t.ptySessionId === terminalId,
+          );
+          return entry ? { key: terminalTabKey(entry.localId) } : null;
+        }
+        case "readTab": {
+          const key = String(params.key);
+          if (key.startsWith("editor:")) {
+            const id = key.slice("editor:".length);
+            const entry = ws.editors.find((e) => e.localId === id);
+            return entry ? { kind: "editor", filePath: entry.filePath } : null;
+          }
+          if (key.startsWith("chat:")) {
+            const id = key.slice("chat:".length);
+            const chat = ws.chats.find((c) => c.localId === id);
+            return chat
+              ? {
+                  kind: "chat",
+                  sessionId: chat.sessionId ?? null,
+                  title: chatLabelsRef.current[id] ?? "Chat",
+                }
+              : null;
+          }
+          const tab = ws.tabs.find((t) => tabKey(t) === key);
+          return tab ? { kind: tab.kind, name: tab.name } : null;
+        }
+        case "openAgentBrowser": {
+          if (!activeProfileRef.current) return { error: "No profile" };
+          const localId = crypto.randomUUID();
+          const entry: BrowserEntry = {
+            localId,
+            profileId: activeProfileRef.current.id,
+            initialUrl: String(params.url),
+            url: String(params.url),
+            title: String(params.url),
+            faviconUrl: null,
+            chatLocalId: resolveWorkingChat(
+              typeof params.sessionId === "string"
+                ? params.sessionId
+                : undefined,
+            ),
+            agentControlled: true,
+          };
+          updateWorkspace((current) => ({
+            ...current,
+            browsers: [...current.browsers, entry],
+          }));
+          // The guest attaches once the (hidden) webview mounts.
+          const deadline = Date.now() + 10_000;
+          while (Date.now() < deadline) {
+            const guestId = browserGuestIdsRef.current.get(localId);
+            if (guestId) return { key: browserTabKey(localId) };
+            await new Promise((resolve) => setTimeout(resolve, 150));
+          }
+          return { error: "The page never finished mounting." };
+        }
+        case "attachAgentTerminal": {
+          const localId = crypto.randomUUID();
+          const entry: TerminalEntry = {
+            localId,
+            title: "Agent terminal",
+            chatLocalId: resolveWorkingChat(
+              typeof params.sessionId === "string"
+                ? params.sessionId
+                : undefined,
+            ),
+            attachSessionId: String(params.terminalId),
+            agentControlled: true,
+            running: true,
+          };
+          updateWorkspace((current) => ({
+            ...current,
+            terminals: [...current.terminals, entry],
+          }));
+          return { key: terminalTabKey(localId) };
+        }
+        case "surfaceControl": {
+          const key = String(params.key);
+          const controlled = Boolean(params.controlled);
+          updateWorkspace((current) => ({
+            ...current,
+            browsers: current.browsers.map((b) =>
+              browserTabKey(b.localId) === key
+                ? { ...b, agentControlled: controlled }
+                : b,
+            ),
+            terminals: current.terminals.map((t) =>
+              terminalTabKey(t.localId) === key
+                ? { ...t, agentControlled: controlled }
+                : t,
+            ),
+          }));
+          return { ok: true };
+        }
+        case "closeSurface": {
+          closeTabRef.current(String(params.key));
+          return { ok: true };
+        }
+        default:
+          return null;
+      }
+    };
+
+    return desktopApi.onBridgeRequest(({ id, method, params }) => {
+      void handle(method, params)
+        .catch((error: Error) => ({ error: error.message }))
+        .then((result) => desktopApi.bridgeRespond({ id, result }));
+    });
+  }, [updateWorkspace]);
+
+  // Foreground-command activity from main: chip spinners spin while a
+  // command runs, not for the shell's whole lifetime.
+  useEffect(
+    () =>
+      desktopApi.onTerminalBusy(({ sessionId, busy }) => {
+        updateWorkspace((ws) => ({
+          ...ws,
+          terminals: ws.terminals.map((terminal) =>
+            terminal.attachSessionId === sessionId ||
+            terminal.ptySessionId === sessionId
+              ? { ...terminal, busy }
+              : terminal,
+          ),
+        }));
+      }),
+    [updateWorkspace],
+  );
+
   const activeTab = workspace.tabs.find(
     (tab) => tabKey(tab) === workspace.activeTabKey,
   );
@@ -1782,6 +2102,7 @@ export function App() {
   // them is focused. Any mutation that breaks that (a close, a chat mode
   // change, a plain tab open) silently falls back to the single view —
   // no updater needs to know about splits.
+  chatLabelsRef.current = chatLabels;
   const allTabKeysNow = orderedTabKeys(workspace);
   const split =
     workspace.split &&
@@ -1812,7 +2133,13 @@ export function App() {
     : " transition-[left,right] duration-200 ease-[cubic-bezier(0.2,0,0,1)]";
   const paneClass = (key: string) => {
     const slot = viewSlots[key];
-    return slot ? SLOT_CLASSES[slot] + paneGeometryTransition : "hidden";
+    if (slot) return SLOT_CLASSES[slot] + paneGeometryTransition;
+    // Browser panes keep their layout while hidden — a display:none
+    // webview detaches its guest and background pages would stop
+    // loading (worse for agent-driven tabs).
+    return key.startsWith("browser:")
+      ? "invisible pointer-events-none absolute inset-0 flex flex-col"
+      : "hidden";
   };
   /** Ratio-driven pane geometry (50/50 until the divider is dragged). */
   const paneStyle = (key: string): React.CSSProperties | undefined => {
@@ -1841,6 +2168,7 @@ export function App() {
         kind: "browser" as const,
         label: browser.title || browser.url || "Page",
         faviconUrl: browser.faviconUrl,
+        active: Boolean(browser.agentControlled),
       })),
     ...workspace.terminals
       .filter((terminal) => terminal.chatLocalId === chat.localId)
@@ -1848,6 +2176,9 @@ export function App() {
         key: terminalTabKey(terminal.localId),
         kind: "terminal" as const,
         label: terminal.title || "Terminal",
+        // The spinner tracks the COMMAND, not the shell: busy means a
+        // foreground process is actually running in there right now.
+        active: terminal.busy === true,
       })),
     ...workspace.editors
       .filter((editor) => editor.chatLocalId === chat.localId)
@@ -2103,6 +2434,16 @@ export function App() {
                           navigate,
                         )
                       }
+                      registerGuest={(guestId) => {
+                        if (guestId === null) {
+                          browserGuestIdsRef.current.delete(browser.localId);
+                        } else {
+                          browserGuestIdsRef.current.set(
+                            browser.localId,
+                            guestId,
+                          );
+                        }
+                      }}
                       onUnsplit={
                         viewSlots[browserTabKey(browser.localId)] &&
                         viewSlots[browserTabKey(browser.localId)] !== "full"
@@ -2111,6 +2452,13 @@ export function App() {
                           : undefined
                       }
                     />
+                    {browser.agentControlled && (
+                      <AgentControlOverlay
+                        onTakeOver={() =>
+                          takeOverSurface(browserTabKey(browser.localId))
+                        }
+                      />
+                    )}
                   </div>
                 ))}
 
@@ -2137,11 +2485,45 @@ export function App() {
                     <TerminalScreen
                       projectId={projectId}
                       active={terminal.localId === activeTerminalTabId}
+                      attachSessionId={terminal.attachSessionId}
+                      readOnly={Boolean(terminal.agentControlled)}
                       onTitle={(title) =>
                         onTerminalTitle(terminal.localId, title)
                       }
-                      onExit={() => closeTab(terminalTabKey(terminal.localId))}
+                      onSession={(ptySessionId) =>
+                        updateWorkspace((ws) => ({
+                          ...ws,
+                          terminals: ws.terminals.map((t) =>
+                            t.localId === terminal.localId
+                              ? { ...t, ptySessionId }
+                              : t,
+                          ),
+                        }))
+                      }
+                      onExit={() => {
+                        // Agent terminals stay open to read; the activity
+                        // indicator stops. User terminals close as before.
+                        if (terminal.attachSessionId) {
+                          updateWorkspace((ws) => ({
+                            ...ws,
+                            terminals: ws.terminals.map((t) =>
+                              t.localId === terminal.localId
+                                ? { ...t, running: false }
+                                : t,
+                            ),
+                          }));
+                        } else {
+                          closeTab(terminalTabKey(terminal.localId));
+                        }
+                      }}
                     />
+                    {terminal.agentControlled && (
+                      <AgentControlOverlay
+                        onTakeOver={() =>
+                          takeOverSurface(terminalTabKey(terminal.localId))
+                        }
+                      />
+                    )}
                   </div>
                 ))}
 

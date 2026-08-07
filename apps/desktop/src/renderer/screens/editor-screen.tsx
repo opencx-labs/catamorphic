@@ -1,9 +1,13 @@
-import { useProjectFile, useProjectFiles, useWriteProjectFile } from "@catamorphic/react";
+import {
+  useProjectFile,
+  useProjectFiles,
+  useWriteProjectFile,
+} from "@catamorphic/react";
 import Editor, { type OnMount } from "@monaco-editor/react";
 import { FileCode, Search } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
-import { commandScore } from "../lib/command-score.js";
 import { ShortcutHint } from "../components/shortcut-hint.js";
+import { commandScore } from "../lib/command-score.js";
 import { useTheme } from "../lib/theme.js";
 
 type EditorInstance = Parameters<OnMount>[0];
@@ -75,13 +79,15 @@ export function EditorScreen({
     writeFile.mutate(
       { path: filePath, content },
       {
-        onSuccess: () =>
-          setDrafts(({ [filePath]: _saved, ...rest }) => rest),
+        onSuccess: () => setDrafts(({ [filePath]: _saved, ...rest }) => rest),
       },
     );
   };
 
-  const handleMount: OnMount = (editor: EditorInstance, monaco: MonacoInstance) => {
+  const handleMount: OnMount = (
+    editor: EditorInstance,
+    monaco: MonacoInstance,
+  ) => {
     editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyS, () =>
       saveRef.current(),
     );
@@ -90,10 +96,7 @@ export function EditorScreen({
 
   if (!filePath) {
     return (
-      <FilePicker
-        projectId={projectId}
-        onPick={(path) => onFileChange(path)}
-      />
+      <FilePicker projectId={projectId} onPick={(path) => onFileChange(path)} />
     );
   }
 
@@ -143,9 +146,7 @@ export function EditorScreen({
           />
         ) : (
           <div className="flex h-full items-center justify-center text-sm text-fg-muted">
-            {fileQuery.isError
-              ? `Couldn't open ${filePath}`
-              : "Loading…"}
+            {fileQuery.isError ? `Couldn't open ${filePath}` : "Loading…"}
           </div>
         )}
       </div>

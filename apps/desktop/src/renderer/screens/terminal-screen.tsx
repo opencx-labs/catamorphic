@@ -41,17 +41,34 @@ const TAB_OPEN_ANIMATION_MS = 200;
 export interface TerminalScreenProps {
   projectId: string;
   active: boolean;
+  /**
+   * Attach to an existing PTY session (an agent-spawned terminal)
+   * instead of creating one: history replays from the main-side buffer
+   * and output streams live. The session is NOT killed on unmount.
+   */
+  attachSessionId?: string;
+  /** Viewing only — keystrokes don't reach the PTY (agent in control). */
+  readOnly?: boolean;
   /** Shell title changes (OSC 0/2) — feeds the tab label. */
   onTitle: (title: string) => void;
   /** The shell exited (Ctrl+D, `exit`) — the tab closes itself. */
   onExit: () => void;
+  /**
+   * Reports the PTY session backing this tab. The workspace records it so
+   * agents can read what any terminal shows (main keeps a rolling buffer
+   * per session).
+   */
+  onSession?: (sessionId: string) => void;
 }
 
 export function TerminalScreen({
   projectId,
   active,
+  attachSessionId,
+  readOnly = false,
   onTitle,
   onExit,
+  onSession,
 }: TerminalScreenProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const termRef = useRef<Terminal | null>(null);
@@ -66,6 +83,10 @@ export function TerminalScreen({
   onTitleRef.current = onTitle;
   const onExitRef = useRef(onExit);
   onExitRef.current = onExit;
+  const onSessionRef = useRef(onSession);
+  onSessionRef.current = onSession;
+  const readOnlyRef = useRef(readOnly);
+  readOnlyRef.current = readOnly;
   const themeRef = useRef<ResolvedTheme | null>(theme);
   themeRef.current = theme;
 
@@ -111,16 +132,28 @@ export function TerminalScreen({
         fit.fit();
         fit.observeResize();
 
-        const created = await desktopApi.terminalCreate({
-          projectId,
-          cols: term.cols,
-          rows: term.rows,
-        });
-        if (disposed) {
-          void desktopApi.terminalKill(created.sessionId);
-          return;
+        if (attachSessionId) {
+          // Attach to the agent's live session: replay, then stream. The
+          // shared PTY snaps to this view's geometry (tmux-attach style) —
+          // the shell redraws on SIGWINCH, cleaning up replay wrapping.
+          sessionId = attachSessionId;
+          const history = await desktopApi.terminalBuffer(attachSessionId);
+          if (disposed) return;
+          if (history?.buffer) term.write(history.buffer);
+          void desktopApi.terminalResize(attachSessionId, term.cols, term.rows);
+        } else {
+          const created = await desktopApi.terminalCreate({
+            projectId,
+            cols: term.cols,
+            rows: term.rows,
+          });
+          if (disposed) {
+            void desktopApi.terminalKill(created.sessionId);
+            return;
+          }
+          sessionId = created.sessionId;
         }
-        sessionId = created.sessionId;
+        onSessionRef.current?.(sessionId);
 
         unsubscribes.push(
           desktopApi.onTerminalData((payload) => {
@@ -200,31 +233,40 @@ export function TerminalScreen({
           }, 600);
         };
         unsubscribes.push(() => window.clearTimeout(blinkTimer));
-        const input = term.textarea;
-        if (input) {
-          const onFocus = () => {
+        // Focus lands on different elements depending on how it arrived:
+        // term.focus() and tab-focus hit the contenteditable container,
+        // canvas clicks hit the hidden clipboard textarea. focusin/focusout
+        // on the container cover both (they bubble from descendants).
+        {
+          const onFocusIn = () => {
             focused = true;
             term?.renderer?.setCursorBlink(true);
           };
-          const onBlur = () => {
+          const onFocusOut = (event: FocusEvent) => {
+            // Focus hopping between the container and its textarea (the
+            // copy/paste flow) is not a blur.
+            if (container.contains(event.relatedTarget as Node | null)) return;
             focused = false;
             window.clearTimeout(blinkTimer);
             // Steady hollow: no blink while unfocused.
             term?.renderer?.setCursorBlink(false);
           };
-          input.addEventListener("focus", onFocus);
-          input.addEventListener("blur", onBlur);
+          container.addEventListener("focusin", onFocusIn);
+          container.addEventListener("focusout", onFocusOut);
           unsubscribes.push(() => {
-            input.removeEventListener("focus", onFocus);
-            input.removeEventListener("blur", onBlur);
+            container.removeEventListener("focusin", onFocusIn);
+            container.removeEventListener("focusout", onFocusOut);
           });
-          focused = document.activeElement === input;
+          focused = container.contains(document.activeElement);
           if (!focused) term.renderer?.setCursorBlink(false);
         }
         term.onData((data) => {
+          if (readOnlyRef.current) return;
           pinCursorWhileTyping();
           if (sessionId) void desktopApi.terminalWrite(sessionId, data);
         });
+        // Resize is viewing geometry, not input — readOnly only blocks
+        // keystrokes, so a watched agent terminal still fits this view.
         term.onResize(({ cols, rows }) => {
           if (sessionId) void desktopApi.terminalResize(sessionId, cols, rows);
         });
@@ -237,12 +279,15 @@ export function TerminalScreen({
       disposed = true;
       window.clearTimeout(timer);
       for (const unsubscribe of unsubscribes) unsubscribe();
-      if (sessionId) void desktopApi.terminalKill(sessionId);
+      // Attached (agent) sessions outlive their view; owned ones die here.
+      if (sessionId && !attachSessionId) {
+        void desktopApi.terminalKill(sessionId);
+      }
       fit?.dispose();
       term?.dispose();
       termRef.current = null;
     };
-  }, [projectId]);
+  }, [projectId, attachSessionId]);
 
   // Live theme edits restyle the running terminal.
   useEffect(() => {

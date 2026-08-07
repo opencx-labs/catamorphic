@@ -1,22 +1,28 @@
-import { useAgentChat } from "@catamorphic/react";
+import { type AgentChatAttachment, useAgentChat } from "@catamorphic/react";
 import {
   ArrowUp,
   Bot,
+  ChevronUp,
   Columns2,
   FileCode,
+  FileText,
   Globe,
+  LoaderCircle,
   Maximize2,
   Minus,
   PictureInPicture2,
   SquareTerminal,
+  X,
 } from "lucide-react";
 import {
+  type ClipboardEvent,
   type FormEvent,
   type KeyboardEvent,
   useEffect,
   useRef,
   useState,
 } from "react";
+import { type AgentInfo, desktopApi } from "../lib/desktop-api";
 import { AgentQuestionPanel } from "./agent-question-panel";
 import {
   ChatTimeline,
@@ -37,7 +43,18 @@ export interface ChatSurface {
   kind: "browser" | "terminal" | "editor";
   label: string;
   faviconUrl?: string | null;
+  /** The agent is actively working here (spinner on the chip). */
+  active?: boolean;
 }
+
+/** Chips group per kind once a chat collects this many surfaces. */
+const SURFACE_GROUP_THRESHOLD = 3;
+
+const SURFACE_GROUP_LABELS = {
+  browser: "pages",
+  terminal: "terminals",
+  editor: "files",
+} as const;
 
 const SURFACE_ICONS = {
   browser: Globe,
@@ -64,6 +81,47 @@ const EMPTY_STATE_PHRASES = [
   "Let's build.",
 ] as const;
 
+/** Document types the composer accepts as pasted/attached files. */
+const DOCUMENT_TYPES = new Set([
+  "application/pdf",
+  "application/json",
+  "text/plain",
+  "text/markdown",
+  "text/csv",
+]);
+
+const MAX_ATTACHMENT_BYTES = 10 * 1024 * 1024;
+
+interface ComposerAttachment extends AgentChatAttachment {
+  id: string;
+}
+
+async function fileToAttachment(
+  file: File,
+): Promise<ComposerAttachment | null> {
+  if (file.size === 0 || file.size > MAX_ATTACHMENT_BYTES) return null;
+  const kind = file.type.startsWith("image/")
+    ? ("image" as const)
+    : DOCUMENT_TYPES.has(file.type)
+      ? ("document" as const)
+      : null;
+  if (!kind) return null;
+  const buffer = await file.arrayBuffer();
+  let binary = "";
+  const bytes = new Uint8Array(buffer);
+  const chunk = 0x8000;
+  for (let i = 0; i < bytes.length; i += chunk) {
+    binary += String.fromCharCode(...bytes.subarray(i, i + chunk));
+  }
+  return {
+    id: crypto.randomUUID(),
+    kind,
+    name: file.name || (kind === "image" ? "pasted-image.png" : "pasted-file"),
+    mediaType: file.type,
+    dataBase64: btoa(binary),
+  };
+}
+
 /** Stable per-chat pick: hash the id so re-renders don't re-roll. */
 const emptyStateFor = (localId: string): string => {
   let hash = 0;
@@ -75,6 +133,216 @@ const emptyStateFor = (localId: string): string => {
     EMPTY_STATE_PHRASES[0]
   );
 };
+
+/** One surface chip: open on click, tile right on ⌘-click or the button. */
+function SurfaceChip({
+  surface,
+  onOpenSurface,
+}: {
+  surface: ChatSurface;
+  onOpenSurface: (key: string, mode: "tab" | "split") => void;
+}) {
+  const Icon = SURFACE_ICONS[surface.kind];
+  return (
+    <span
+      className="group/chip flex shrink-0 items-center overflow-hidden rounded-md border border-border bg-bg-inset text-[11px] text-fg-muted"
+      data-testid="surface-chip"
+      data-active={surface.active || undefined}
+    >
+      <button
+        type="button"
+        onClick={(event) =>
+          onOpenSurface(surface.key, event.metaKey ? "split" : "tab")
+        }
+        className="flex min-w-0 cursor-pointer items-center gap-1.5 py-1 pl-2 pr-1.5 transition-colors duration-100 hover:text-fg"
+      >
+        <span className="relative grid size-3 shrink-0 place-items-center">
+          {surface.kind === "browser" && surface.faviconUrl ? (
+            <img
+              src={surface.faviconUrl}
+              alt=""
+              className={`col-start-1 row-start-1 size-3 rounded-[2px] transition-opacity duration-200 ${
+                surface.active ? "opacity-0" : "opacity-100"
+              }`}
+            />
+          ) : (
+            <Icon
+              className={`col-start-1 row-start-1 size-3 transition-opacity duration-200 ${
+                surface.active ? "opacity-0" : "opacity-100"
+              }`}
+            />
+          )}
+          <LoaderCircle
+            className={`col-start-1 row-start-1 size-3 animate-spin text-accent transition-opacity duration-200 ${
+              surface.active ? "opacity-100" : "opacity-0"
+            }`}
+          />
+        </span>
+        <span className="max-w-36 truncate">{surface.label}</span>
+      </button>
+      <ShortcutHint label="Open to the right" shortcut="⌘-click">
+        <button
+          type="button"
+          onClick={() => onOpenSurface(surface.key, "split")}
+          className="grid size-6 shrink-0 cursor-pointer place-items-center text-fg-faint opacity-60 transition-[color,opacity] duration-100 hover:text-fg group-hover/chip:opacity-100"
+          aria-label={`Open ${surface.label} to the right`}
+        >
+          <Columns2 className="size-3" />
+        </button>
+      </ShortcutHint>
+    </span>
+  );
+}
+
+/**
+ * The surfaces rail. Kinds with many surfaces collapse into one group
+ * chip ("4 pages") whose popover expands upward; kinds with few show
+ * individual chips. Active surfaces (agent working, command running)
+ * carry a spinner that aggregates onto their group chip.
+ */
+function SurfacesRail({
+  surfaces,
+  onOpenSurface,
+}: {
+  surfaces: ChatSurface[];
+  onOpenSurface: (key: string, mode: "tab" | "split") => void;
+}) {
+  const [openGroup, setOpenGroup] = useState<ChatSurface["kind"] | null>(null);
+  const railRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!openGroup) return;
+    const onDocMouseDown = (event: MouseEvent) => {
+      if (!railRef.current?.contains(event.target as Node)) {
+        setOpenGroup(null);
+      }
+    };
+    const onKeyDown = (event: globalThis.KeyboardEvent) => {
+      if (event.key === "Escape") setOpenGroup(null);
+    };
+    document.addEventListener("mousedown", onDocMouseDown);
+    window.addEventListener("keydown", onKeyDown);
+    return () => {
+      document.removeEventListener("mousedown", onDocMouseDown);
+      window.removeEventListener("keydown", onKeyDown);
+    };
+  }, [openGroup]);
+
+  const byKind = new Map<ChatSurface["kind"], ChatSurface[]>();
+  for (const surface of surfaces) {
+    byKind.set(surface.kind, [...(byKind.get(surface.kind) ?? []), surface]);
+  }
+
+  return (
+    <div ref={railRef} className="relative mx-3">
+      {openGroup && byKind.get(openGroup) && (
+        <div className="absolute bottom-full left-0 z-20 mb-1.5 max-h-64 w-72 overflow-y-auto rounded-lg border border-border bg-bg-raised/95 p-1 shadow-2xl backdrop-blur-xl">
+          {(byKind.get(openGroup) ?? []).map((surface) => (
+            <div
+              key={surface.key}
+              className="group/chip flex items-center rounded-md text-[12px] text-fg-muted transition-colors duration-100 hover:bg-bg-overlay"
+            >
+              <button
+                type="button"
+                onClick={(event) => {
+                  onOpenSurface(surface.key, event.metaKey ? "split" : "tab");
+                  setOpenGroup(null);
+                }}
+                className="flex min-w-0 flex-1 cursor-pointer items-center gap-2 px-2 py-1.5 text-left hover:text-fg"
+              >
+                <span className="relative grid size-3.5 shrink-0 place-items-center">
+                  {surface.kind === "browser" && surface.faviconUrl ? (
+                    <img
+                      src={surface.faviconUrl}
+                      alt=""
+                      className={`col-start-1 row-start-1 size-3.5 rounded-[2px] ${surface.active ? "opacity-0" : ""}`}
+                    />
+                  ) : (
+                    (() => {
+                      const Icon = SURFACE_ICONS[surface.kind];
+                      return (
+                        <Icon
+                          className={`col-start-1 row-start-1 size-3.5 ${surface.active ? "opacity-0" : ""}`}
+                        />
+                      );
+                    })()
+                  )}
+                  {surface.active && (
+                    <LoaderCircle className="col-start-1 row-start-1 size-3.5 animate-spin text-accent" />
+                  )}
+                </span>
+                <span className="truncate">{surface.label}</span>
+              </button>
+              <ShortcutHint label="Open to the right" shortcut="⌘-click">
+                <button
+                  type="button"
+                  onClick={() => {
+                    onOpenSurface(surface.key, "split");
+                    setOpenGroup(null);
+                  }}
+                  className="mr-1 grid size-6 shrink-0 cursor-pointer place-items-center rounded text-fg-faint opacity-0 transition-opacity duration-100 hover:text-fg group-hover/chip:opacity-100"
+                  aria-label={`Open ${surface.label} to the right`}
+                >
+                  <Columns2 className="size-3" />
+                </button>
+              </ShortcutHint>
+            </div>
+          ))}
+        </div>
+      )}
+      <div className="flex items-center gap-1.5 overflow-x-auto pt-1">
+        {[...byKind.entries()].map(([kind, group]) =>
+          group.length > SURFACE_GROUP_THRESHOLD ? (
+            <button
+              key={kind}
+              type="button"
+              onClick={() =>
+                setOpenGroup((current) => (current === kind ? null : kind))
+              }
+              className={`flex shrink-0 cursor-pointer items-center gap-1.5 rounded-md border py-1 pl-2 pr-1.5 text-[11px] transition-colors duration-100 ${
+                openGroup === kind
+                  ? "border-border-strong bg-bg-overlay text-fg"
+                  : "border-border bg-bg-inset text-fg-muted hover:text-fg"
+              }`}
+              aria-expanded={openGroup === kind}
+              aria-label={`${group.length} ${SURFACE_GROUP_LABELS[kind]}`}
+            >
+              <span className="relative grid size-3 shrink-0 place-items-center">
+                {(() => {
+                  const Icon = SURFACE_ICONS[kind];
+                  const anyActive = group.some((surface) => surface.active);
+                  return (
+                    <>
+                      <Icon
+                        className={`col-start-1 row-start-1 size-3 transition-opacity duration-200 ${anyActive ? "opacity-0" : "opacity-100"}`}
+                      />
+                      <LoaderCircle
+                        className={`col-start-1 row-start-1 size-3 animate-spin text-accent transition-opacity duration-200 ${anyActive ? "opacity-100" : "opacity-0"}`}
+                      />
+                    </>
+                  );
+                })()}
+              </span>
+              {group.length} {SURFACE_GROUP_LABELS[kind]}
+              <ChevronUp
+                className={`size-3 text-fg-faint transition-transform duration-150 ${
+                  openGroup === kind ? "rotate-180" : ""
+                }`}
+              />
+            </button>
+          ) : (
+            group.map((surface) => (
+              <SurfaceChip
+                key={surface.key}
+                surface={surface}
+                onOpenSurface={onOpenSurface}
+              />
+            ))
+          ),
+        )}
+      </div>
+    </div>
+  );
+}
 
 export interface ChatDockEntry {
   localId: string;
@@ -196,11 +464,78 @@ export function ChatDock({
     onSessionCreated: (sessionId) => onSessionCreated(entry.localId, sessionId),
   });
   const [draft, setDraft] = useState("");
+  const [attachments, setAttachments] = useState<ComposerAttachment[]>([]);
   const { messages, activity, questions } = toTimeline(
     chat.messages,
     chat.optimisticMessages,
     chat.isSending,
   );
+
+  // The agent roster drives composer capabilities (what media this agent
+  // accepts), marker names, and the auth-error re-connect action.
+  const [roster, setRoster] = useState<{
+    agents: AgentInfo[];
+    defaultAgentId: string | null;
+  }>({ agents: [], defaultAgentId: null });
+  // Refetched when the session's agent changes: a switch may involve an
+  // agent created after this dock mounted (marker names, capabilities).
+  const sessionAgentId = chat.session?.agentId;
+  useEffect(() => {
+    let cancelled = false;
+    void desktopApi
+      .agentsList()
+      .then((data) => {
+        if (!cancelled) setRoster(data);
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, [sessionAgentId]);
+  const activeAgent = roster.agents.find(
+    (agent) =>
+      agent.id ===
+      (chat.session?.agentId ??
+        entry.agentId ??
+        defaultAgentId ??
+        roster.defaultAgentId),
+  );
+  // Unknown roster (fetch pending/failed): stay permissive; the server
+  // answers with a friendly error if the harness really can't take it.
+  const accepts = activeAgent?.accepts ?? ["image", "document"];
+  // Auth failures offer a one-click re-login only for account-auth agents
+  // (OpenRouter PKCE, Claude Code / Codex logins); API-key agents are
+  // pointed at Settings by the error text itself. A successful reconnect
+  // retries the failed turn on its own — the user already said what they
+  // wanted; fixing the credentials shouldn't cost them a re-send.
+  const awaitingReauthRef = useRef<string | null>(null);
+  const retryRef = useRef(chat.retry);
+  retryRef.current = chat.retry;
+  useEffect(
+    () =>
+      desktopApi.onAgentLoginFinished((result) => {
+        if (result.agentId !== awaitingReauthRef.current) return;
+        awaitingReauthRef.current = null;
+        if (result.ok) void retryRef.current();
+      }),
+    [],
+  );
+  const reauth =
+    activeAgent && activeAgent.auth === "account"
+      ? {
+          label:
+            activeAgent.provider === "openrouter"
+              ? "Reconnect OpenRouter"
+              : `Re-login ${activeAgent.name}`,
+          run: () => {
+            awaitingReauthRef.current = activeAgent.id;
+            void desktopApi.agentLogin(activeAgent.id).then((result) => {
+              // Login never started (e.g. key-auth agent): stop waiting.
+              if (!result.started) awaitingReauthRef.current = null;
+            });
+          },
+        }
+      : undefined;
 
   // isWorking, not isSending: it also covers turns this client didn't start
   // (reloads) and can't stick forever — the server settles orphaned turns.
@@ -250,7 +585,8 @@ export function ChatDock({
     messages.length === 0 &&
     !chat.isSending &&
     chat.queuedMessageCount === 0 &&
-    draft.trim() === "";
+    draft.trim() === "" &&
+    attachments.length === 0;
   const isEmptyRef = useRef(isEmpty);
   isEmptyRef.current = isEmpty;
   const onCloseRef = useRef(onClose);
@@ -272,23 +608,58 @@ export function ChatDock({
     else setMode("min");
   };
 
+  const takeComposer = (): {
+    message: string;
+    files: AgentChatAttachment[];
+  } | null => {
+    const message = draft.trim();
+    const files = attachments.map(({ id: _id, ...attachment }) => attachment);
+    if (!message && files.length === 0) return null;
+    setDraft("");
+    setAttachments([]);
+    return { message, files };
+  };
+
   const submit = (event?: FormEvent) => {
     event?.preventDefault();
-    const message = draft.trim();
-    if (!message) return;
-    setDraft("");
-    void chat.send(message);
+    const composed = takeComposer();
+    if (!composed) return;
+    void chat.send(composed.message, composed.files);
+  };
+
+  /** ⌘↵: jump the queue — interrupt the running turn and send this now. */
+  const submitNow = () => {
+    const composed = takeComposer();
+    if (!composed) return;
+    void chat.sendNow(composed.message, composed.files);
   };
 
   const onKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>) => {
-    if (
-      event.key === "Enter" &&
-      !event.shiftKey &&
-      !event.nativeEvent.isComposing
-    ) {
+    if (event.key !== "Enter" || event.nativeEvent.isComposing) return;
+    if (event.metaKey) {
+      event.preventDefault();
+      submitNow();
+      return;
+    }
+    if (!event.shiftKey) {
       event.preventDefault();
       submit();
     }
+  };
+
+  const onPaste = (event: ClipboardEvent<HTMLTextAreaElement>) => {
+    const files = [...(event.clipboardData?.files ?? [])];
+    if (files.length === 0) return;
+    event.preventDefault();
+    void Promise.all(files.map(fileToAttachment)).then((converted) => {
+      const usable = converted.filter(
+        (attachment): attachment is ComposerAttachment =>
+          attachment !== null && accepts.includes(attachment.kind),
+      );
+      if (usable.length > 0) {
+        setAttachments((current) => [...current, ...usable]);
+      }
+    });
   };
 
   // Expanding (bubble click, new chat) should land the user ready to type.
@@ -440,7 +811,17 @@ export function ChatDock({
             contentClassName={isTab ? "mx-auto w-full max-w-4xl" : ""}
             messages={messages}
             activity={activity}
-            queuedCount={Math.max(0, chat.queuedMessageCount - 1)}
+            queue={chat.queue}
+            onUpdateQueued={chat.updateQueued}
+            onRemoveQueued={chat.removeQueued}
+            onSendQueuedNow={chat.sendQueuedNow}
+            onHoldQueued={chat.holdQueued}
+            onRetry={() => void chat.retry()}
+            onReauth={reauth?.run}
+            reauthLabel={reauth?.label}
+            resolveAgentName={(agentId) =>
+              roster.agents.find((agent) => agent.id === agentId)?.name
+            }
             error={chat.error?.message ?? null}
             emptyState={emptyStateFor(entry.localId)}
             onLinkClick={onLinkClick}
@@ -467,54 +848,7 @@ export function ChatDock({
                 right of the current view. Only real surfaces earn a chip —
                 the new-terminal affordance lives with the header controls. */}
             {surfaces.length > 0 && onOpenSurface && (
-              <div className="mx-3 flex items-center gap-1.5 overflow-x-auto pt-1">
-                {surfaces.map((surface) => {
-                  const Icon = SURFACE_ICONS[surface.kind];
-                  return (
-                    <span
-                      key={surface.key}
-                      className="group/chip flex shrink-0 items-center overflow-hidden rounded-md border border-border bg-bg-inset text-[11px] text-fg-muted"
-                    >
-                      <button
-                        type="button"
-                        onClick={(event) =>
-                          onOpenSurface?.(
-                            surface.key,
-                            event.metaKey ? "split" : "tab",
-                          )
-                        }
-                        className="flex min-w-0 cursor-pointer items-center gap-1.5 py-1 pl-2 pr-1.5 transition-colors duration-100 hover:text-fg"
-                      >
-                        {surface.kind === "browser" && surface.faviconUrl ? (
-                          <img
-                            src={surface.faviconUrl}
-                            alt=""
-                            className="size-3 shrink-0 rounded-[2px]"
-                          />
-                        ) : (
-                          <Icon className="size-3 shrink-0" />
-                        )}
-                        <span className="max-w-36 truncate">
-                          {surface.label}
-                        </span>
-                      </button>
-                      <ShortcutHint
-                        label="Open to the right"
-                        shortcut="⌘-click"
-                      >
-                        <button
-                          type="button"
-                          onClick={() => onOpenSurface?.(surface.key, "split")}
-                          className="grid size-6 shrink-0 cursor-pointer place-items-center text-fg-faint opacity-60 transition-[color,opacity] duration-100 hover:text-fg group-hover/chip:opacity-100"
-                          aria-label={`Open ${surface.label} to the right`}
-                        >
-                          <Columns2 className="size-3" />
-                        </button>
-                      </ShortcutHint>
-                    </span>
-                  );
-                })}
-              </div>
+              <SurfacesRail surfaces={surfaces} onOpenSurface={onOpenSurface} />
             )}
             {questions && !chat.isSending && (
               <AgentQuestionPanel
@@ -525,29 +859,82 @@ export function ChatDock({
               />
             )}
             <form
-              className="field m-3 mt-1 flex shrink-0 items-center gap-2 rounded-xl bg-bg-raised/95 p-1.5"
+              className="field m-3 mt-1 flex shrink-0 flex-col rounded-xl bg-bg-raised/95 p-1.5"
               onSubmit={submit}
             >
-              <textarea
-                ref={inputRef}
-                className="field-sizing-content max-h-24 min-h-9 min-w-0 flex-1 resize-none bg-transparent px-2.5 py-1.5 text-sm outline-none placeholder:text-fg-faint"
-                value={draft}
-                onChange={(event) => setDraft(event.target.value)}
-                onKeyDown={onKeyDown}
-                placeholder={placeholder}
-                rows={1}
-                aria-label="Message the assistant"
-              />
-              <ShortcutHint label="Send" shortcut="↵">
-                <button
-                  type="submit"
-                  className="grid size-8 shrink-0 place-items-center rounded-lg bg-accent text-accent-fg transition-opacity duration-150 disabled:opacity-35"
-                  disabled={!draft.trim()}
-                  aria-label="Send message"
+              {/* Pasted media waits as chips until the message sends. */}
+              {attachments.length > 0 && (
+                <div
+                  className="flex flex-wrap gap-1.5 px-1.5 pb-1 pt-0.5"
+                  data-testid="composer-attachments"
                 >
-                  <ArrowUp className="size-4" />
-                </button>
-              </ShortcutHint>
+                  {attachments.map((attachment) => (
+                    <span
+                      key={attachment.id}
+                      className="group/att relative flex items-center gap-1.5 overflow-hidden rounded-lg border border-border bg-bg-inset text-[11px] text-fg-muted"
+                    >
+                      {attachment.kind === "image" ? (
+                        <img
+                          src={`data:${attachment.mediaType};base64,${attachment.dataBase64}`}
+                          alt={attachment.name}
+                          className="size-10 object-cover"
+                        />
+                      ) : (
+                        <span className="flex items-center gap-1.5 py-2 pl-2">
+                          <FileText className="size-3.5" />
+                          <span className="max-w-32 truncate">
+                            {attachment.name}
+                          </span>
+                        </span>
+                      )}
+                      <button
+                        type="button"
+                        onClick={() =>
+                          setAttachments((current) =>
+                            current.filter(
+                              (candidate) => candidate.id !== attachment.id,
+                            ),
+                          )
+                        }
+                        className="grid size-5 shrink-0 cursor-pointer place-items-center self-start text-fg-faint hover:text-fg"
+                        aria-label={`Remove ${attachment.name}`}
+                      >
+                        <X className="size-3" />
+                      </button>
+                    </span>
+                  ))}
+                </div>
+              )}
+              <div className="flex items-center gap-2">
+                <textarea
+                  ref={inputRef}
+                  className="field-sizing-content max-h-24 min-h-9 min-w-0 flex-1 resize-none bg-transparent px-2.5 py-1.5 text-sm outline-none placeholder:text-fg-faint"
+                  value={draft}
+                  onChange={(event) => setDraft(event.target.value)}
+                  onKeyDown={onKeyDown}
+                  onPaste={accepts.length > 0 ? onPaste : undefined}
+                  placeholder={
+                    accepts.length > 0
+                      ? placeholder
+                      : `${placeholder.replace(/…$/, "")} (text only)…`
+                  }
+                  rows={1}
+                  aria-label="Message the assistant"
+                />
+                <ShortcutHint
+                  label={chat.isWorking ? "Queue (⌘↵ sends now)" : "Send"}
+                  shortcut="↵"
+                >
+                  <button
+                    type="submit"
+                    className="grid size-8 shrink-0 place-items-center rounded-lg bg-accent text-accent-fg transition-opacity duration-150 disabled:opacity-35"
+                    disabled={!draft.trim() && attachments.length === 0}
+                    aria-label="Send message"
+                  >
+                    <ArrowUp className="size-4" />
+                  </button>
+                </ShortcutHint>
+              </div>
             </form>
           </div>
         </div>

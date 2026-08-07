@@ -108,6 +108,7 @@ export function BrowserScreen({
   active,
   onStateChange,
   registerNavigate,
+  registerGuest,
   onUnsplit,
 }: {
   profileId: string;
@@ -120,6 +121,8 @@ export function BrowserScreen({
   onUnsplit?: () => void;
   /** Hands the host a navigate(url) for "open in current tab" flows. */
   registerNavigate?: (navigate: (url: string) => void) => void;
+  /** Reports the webview guest's WebContents id (null when unmounted). */
+  registerGuest?: (guestId: number | null) => void;
 }) {
   const webviewRef = useRef<WebviewElement | null>(null);
   const inputRef = useRef<HTMLInputElement | null>(null);
@@ -183,11 +186,24 @@ export function BrowserScreen({
     };
   }, [profileId]);
 
+  const registerGuestRef = useRef(registerGuest);
+  registerGuestRef.current = registerGuest;
+
   const attachWebview = useCallback(
     (node: HTMLElement | null) => {
       const view = node as WebviewElement | null;
       webviewRef.current = view;
-      if (!view) return;
+      if (!view) {
+        registerGuestRef.current?.(null);
+        return;
+      }
+      view.addEventListener("dom-ready", () => {
+        try {
+          registerGuestRef.current?.(view.getWebContentsId());
+        } catch {
+          // Guest detached between events; the next dom-ready re-reports.
+        }
+      });
 
       const sync = () => {
         setCanGoBack(view.canGoBack());

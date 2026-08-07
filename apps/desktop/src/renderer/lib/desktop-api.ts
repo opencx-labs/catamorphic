@@ -17,6 +17,8 @@ export interface AgentInfo {
   auth: AgentAuthMode;
   hasApiKey: boolean;
   apiKeyMasked: string | null;
+  /** Media kinds this agent's chat composer accepts. */
+  accepts: Array<"image" | "document">;
 }
 
 export interface AgentsData {
@@ -314,12 +316,28 @@ export interface CatamorphicDesktopApi {
     rows: number,
   ) => Promise<void>;
   terminalKill: (sessionId: string) => Promise<void>;
+  terminalBuffer: (
+    sessionId: string,
+  ) => Promise<{ buffer: string; running: boolean } | null>;
+  onTerminalBusy: (
+    listener: (payload: { sessionId: string; busy: boolean }) => void,
+  ) => () => void;
   onTerminalData: (
     listener: (payload: { sessionId: string; data: string }) => void,
   ) => () => void;
   onTerminalExit: (
     listener: (payload: { sessionId: string; exitCode: number }) => void,
   ) => () => void;
+
+  onBridgeRequest: (
+    listener: (payload: {
+      id: number;
+      method: string;
+      params: Record<string, unknown>;
+    }) => void,
+  ) => () => void;
+  bridgeRespond: (payload: { id: number; result: unknown }) => void;
+  bridgeTakeover: (key: string) => void;
 
   webviewPreloadPath: () => Promise<string>;
   browserPrepareProfile: (profileId: string) => Promise<string>;
