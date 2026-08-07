@@ -42,7 +42,9 @@ const helpers = `
       { key, bubbles: true, cancelable: true, ...mods }));
   const timelineMessages = () =>
     $$('[role="log"] article').map((el) => ({
-      role: el.querySelector('div')?.textContent.trim(),
+      // No name tags in the timeline — side placement is the role: user
+      // bubbles hug the right (ml-auto), agent prose the left.
+      role: el.className.includes('ml-auto') ? 'You' : 'Agent',
       text: el.textContent.trim(),
     }));
   const spinnersOn = () => $$('svg.animate-spin').filter((el) => {

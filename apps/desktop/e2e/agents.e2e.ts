@@ -515,7 +515,7 @@ describe("agents and profiles", () => {
     await run(`pressKey('n', { metaKey: true }); return true;`);
     await runWait(`return !!visibleDock();`, { label: "chat opens" });
     await run(`
-      const ta = visibleDock().querySelector('textarea');
+      const ta = visibleDock().querySelector('form textarea');
       setReactValue(ta, 'hello free agent');
       ta.closest('form').requestSubmit();
       return true;
@@ -524,6 +524,420 @@ describe("agents and profiles", () => {
       `return $$('[role="log"] article')
         .some((el) => el.textContent.includes('You said: hello free agent'));`,
       { timeoutMs: 30_000, label: "reply from the onboarded agent" },
+    );
+  });
+
+  it("rewrites provider credential rejections into an actionable error", async () => {
+    // A dead key must not surface as the provider's bare 401 body
+    // ("User not found." — OpenRouter's) with no way forward. The fake
+    // fails the turn with that exact text; the chat must show the rewrite
+    // naming the agent and pointing at Settings, original preserved.
+    await runWait(`return !!visibleDock();`, { label: "chat still open" });
+    await run(`
+      const ta = visibleDock().querySelector('form textarea');
+      setReactValue(ta, 'please fail with an auth error');
+      ta.closest('form').requestSubmit();
+      return true;
+    `);
+    await runWait(
+      `return $$('[role="log"] article').some((el) =>
+        el.textContent.includes(
+          'OpenRouter rejected the credentials of the "Free models" agent') &&
+        el.textContent.includes('User not found.') &&
+        el.textContent.includes('Settings'));`,
+      { timeoutMs: 30_000, label: "friendly auth error in the chat" },
+    );
+    // The raw body alone must never be the whole message.
+    const bare = await run<boolean>(`
+      return $$('[role="log"] article')
+        .some((el) => el.textContent.trim() === 'User not found.');
+    `);
+    if (bare) throw new Error("raw provider 401 body leaked into the chat");
+
+    // The card offers Retry: the turn re-runs IN PLACE (no new user
+    // message) and the recovered reply replaces the failure.
+    await runWait(
+      `const btn = $('[data-testid="chat-retry"]');
+       if (!btn) return false; btn.click(); return true;`,
+      { label: "retry button on the error card" },
+    );
+    await runWait(
+      `return $$('[role="log"] article, [role="log"] div')
+        .some((el) => el.textContent.includes('Recovered after reconnecting.'));`,
+      { timeoutMs: 30_000, label: "retried turn recovered" },
+    );
+    const userEchoes = await run<number>(`
+      return $$('[role="log"] *').filter((el) =>
+        el.childElementCount === 0 &&
+        el.textContent.trim() === 'please fail with an auth error').length;
+    `);
+    if (userEchoes > 1) {
+      throw new Error("retry duplicated the user message in the timeline");
+    }
+  });
+
+  it("a successful reconnect retries the failed turn on its own", async () => {
+    await runWait(`return !!visibleDock();`, { label: "chat open" });
+    await run(`
+      const ta = visibleDock().querySelector('form textarea');
+      setReactValue(ta, 'one more auth error please');
+      ta.closest('form').requestSubmit();
+      return true;
+    `);
+    // Account-auth OpenRouter agent → the card offers a one-click
+    // reconnect beside Retry.
+    await runWait(
+      `return !!$('[data-testid="chat-error-card"]') &&
+              !!$('[data-testid="chat-reauth"]');`,
+      { timeoutMs: 30_000, label: "reconnect button on the auth card" },
+    );
+    await run(`$('[data-testid="chat-reauth"]').click(); return true;`);
+    // The e2e login stub completes ~immediately; the successful reconnect
+    // must retry the failed turn WITHOUT another click or message.
+    await runWait(
+      `return $$('[role="log"] article')
+        .some((el) => el.textContent.includes('Recovered after reconnecting.'));`,
+      { timeoutMs: 30_000, label: "reconnect auto-retried the turn" },
+    );
+  });
+
+  it("auto-retries rate-limited turns with a visible countdown", async () => {
+    await runWait(`return !!visibleDock();`, { label: "chat open" });
+    await run(`
+      const ta = visibleDock().querySelector('form textarea');
+      setReactValue(ta, 'please hit a rate limit');
+      ta.closest('form').requestSubmit();
+      return true;
+    `);
+    // The failure surfaces as a friendly card WITH the auto-retry ticker…
+    await runWait(
+      `return !!$('[data-testid="chat-error-card"]') &&
+              !!$('[data-testid="chat-auto-retry"]');`,
+      { timeoutMs: 30_000, label: "rate-limit card with auto-retry ticker" },
+    );
+    // …and the scheduled retry (5s backoff) recovers without user action.
+    await runWait(
+      `return $$('[role="log"] article')
+        .some((el) => el.textContent.includes('Recovered after the rate limit.'));`,
+      { timeoutMs: 30_000, label: "auto-retry recovered on its own" },
+    );
+  });
+
+  it("queues messages during a turn; edits hold their place until done", async () => {
+    await run(`
+      const ta = visibleDock().querySelector('form textarea');
+      setReactValue(ta, 'respond slowly please');
+      ta.closest('form').requestSubmit();
+      return true;
+    `);
+    // Queue two while the slow turn runs: one to edit, one to delete.
+    await run(`
+      const ta = visibleDock().querySelector('form textarea');
+      setReactValue(ta, 'wrong words');
+      ta.closest('form').requestSubmit();
+      setReactValue(ta, 'delete me');
+      ta.closest('form').requestSubmit();
+      return true;
+    `);
+    await runWait(
+      `return $$('[data-testid="chat-queued-message"]').length === 2;`,
+      { label: "two queued ghost bubbles" },
+    );
+    // Delete the second straight away.
+    await run(`
+      const items = $$('[data-testid="chat-queued-message"]');
+      items[1].querySelector('[data-testid="chat-queued-delete"]').click();
+      return true;
+    `);
+    await runWait(
+      `return $$('[data-testid="chat-queued-message"]').length === 1;`,
+      { label: "queued message deleted (animated out)" },
+    );
+    // Start editing the head; its dispatch must WAIT for the edit even
+    // after the slow turn finishes.
+    await run(`
+      $('[data-testid="chat-queued-message"]')
+        .querySelector('[aria-label="Edit queued message"]').click();
+      return true;
+    `);
+    await runWait(`return !!$('[data-testid="chat-queued-edit"]');`, {
+      label: "inline queue editor",
+    });
+    await run(`
+      setReactValue($('[data-testid="chat-queued-edit"]'), 'actually right words');
+      return true;
+    `);
+    // Slow turn (4s) settles while the edit is open — nothing dispatches.
+    await runWait(
+      `return $$('[role="log"] article')
+        .some((el) => el.textContent.includes('Done after a long think.'));`,
+      { timeoutMs: 30_000, label: "slow turn finished during the edit" },
+    );
+    const dispatchedEarly = await run<boolean>(`
+      return $$('[role="log"] article')
+        .some((el) => el.textContent.includes('You said: wrong words') ||
+                      el.textContent.includes('You said: actually right words'));
+    `);
+    if (dispatchedEarly) {
+      throw new Error("queued message dispatched while it was being edited");
+    }
+    // Committing the edit (Enter) releases it; the edited text sends.
+    await run(`
+      const editor = $('[data-testid="chat-queued-edit"]');
+      editor.dispatchEvent(new KeyboardEvent('keydown',
+        { key: 'Enter', bubbles: true, cancelable: true }));
+      return true;
+    `);
+    await runWait(
+      `return $$('[role="log"] article')
+        .some((el) => el.textContent.includes('You said: actually right words'));`,
+      { timeoutMs: 30_000, label: "edited queued message sent after commit" },
+    );
+  });
+
+  it("send-now and Cmd+Enter interrupt the running turn", async () => {
+    // Queue behind a slow turn, then promote via the bubble's send-now.
+    await run(`
+      const ta = visibleDock().querySelector('form textarea');
+      setReactValue(ta, 'respond slowly please');
+      ta.closest('form').requestSubmit();
+      setReactValue(ta, 'urgent now');
+      ta.closest('form').requestSubmit();
+      return true;
+    `);
+    await runWait(
+      `return $$('[data-testid="chat-queued-message"]').length === 1;`,
+      { label: "queued behind the slow turn" },
+    );
+    await run(`
+      $('[data-testid="chat-queued-send-now"]').click();
+      return true;
+    `);
+    await runWait(
+      `return $$('[role="log"] article')
+        .some((el) => el.textContent.includes('You said: urgent now'));`,
+      { timeoutMs: 30_000, label: "promoted message answered" },
+    );
+    try {
+      await runWait(
+        `return $$('[role="log"] div')
+          .some((el) => el.textContent.trim() === 'Interrupted');`,
+        { label: "interrupted note for the aborted turn" },
+      );
+    } catch (error) {
+      console.log(
+        "interrupt-debug:",
+        JSON.stringify(
+          await run<unknown>(`
+            return $$('[role="log"] article, [role="log"] .italic')
+              .map((el) => el.textContent.trim().slice(0, 60)).slice(-8);
+          `),
+        ),
+      );
+      console.log(
+        "app-tail:",
+        app
+          .getOutput()
+          .split("\n")
+          .filter(
+            (line) => line.includes("[fake]") || line.includes("interrupt"),
+          )
+          .slice(-10)
+          .join("\n"),
+      );
+      throw error;
+    }
+
+    // Cmd+Enter from the composer takes the same fast path.
+    await run(`
+      const ta = visibleDock().querySelector('form textarea');
+      setReactValue(ta, 'respond slowly please');
+      ta.closest('form').requestSubmit();
+      return true;
+    `);
+    await runWait(
+      `return $$('[role="log"] div, [role="log"] span')
+        .some((el) => el.textContent.includes('Working on it'));`,
+      { timeoutMs: 30_000, label: "second slow turn running" },
+    );
+    await run(`
+      const ta = visibleDock().querySelector('form textarea');
+      setReactValue(ta, 'jump the line');
+      ta.dispatchEvent(new KeyboardEvent('keydown',
+        { key: 'Enter', metaKey: true, bubbles: true, cancelable: true }));
+      return true;
+    `);
+    await runWait(
+      `return $$('[role="log"] article')
+        .some((el) => el.textContent.includes('You said: jump the line'));`,
+      { timeoutMs: 30_000, label: "Cmd+Enter message answered immediately" },
+    );
+  });
+
+  it("pastes an image as an attachment and sends it", async () => {
+    await run(`
+      const ta = visibleDock().querySelector('form textarea');
+      const dt = new DataTransfer();
+      dt.items.add(new File([new Uint8Array([137, 80, 78, 71, 13, 10, 26, 10])],
+        'pixel.png', { type: 'image/png' }));
+      ta.dispatchEvent(new ClipboardEvent('paste',
+        { clipboardData: dt, bubbles: true, cancelable: true }));
+      return true;
+    `);
+    await runWait(`return !!$('[data-testid="composer-attachments"] img');`, {
+      label: "pasted image chip in the composer",
+    });
+    await run(`
+      const ta = visibleDock().querySelector('form textarea');
+      setReactValue(ta, 'here is a screenshot');
+      ta.closest('form').requestSubmit();
+      return true;
+    `);
+    await runWait(
+      `return $$('[role="log"] article')
+        .some((el) => el.textContent.includes('Received 1 attachment: pixel.png'));`,
+      { timeoutMs: 30_000, label: "agent saw the attachment" },
+    );
+    // The sent message renders the image thumbnail in the timeline.
+    await runWait(`return $$('[role="log"] article img').length > 0;`, {
+      label: "image thumbnail on the sent message",
+    });
+  });
+
+  it("terminal chips appear, spin only while the command runs, and survive tab open/close", async () => {
+    await runWait(`return !!visibleDock();`, { label: "chat open" });
+    // A slow-ish command: the chip must spin DURING it and stop AFTER.
+    await run(`
+      const ta = visibleDock().querySelector('form textarea');
+      setReactValue(ta, 'terminal: sleep 3 && echo chip-done');
+      ta.closest('form').requestSubmit();
+      return true;
+    `);
+    try {
+      await runWait(
+        `return !!$('[data-testid="surface-chip"][data-active]');`,
+        {
+          timeoutMs: 30_000,
+          label: "chip spinning while the command runs",
+        },
+      );
+    } catch (error) {
+      console.log(
+        "chip-debug:",
+        JSON.stringify(
+          await run<unknown>(`
+            return {
+              chips: $$('[data-testid="surface-chip"]').map((el) => ({
+                active: el.hasAttribute('data-active'),
+                text: el.textContent.trim().slice(0, 30),
+              })),
+              lastArticles: $$('[role="log"] article')
+                .map((el) => el.textContent.trim().slice(0, 120)).slice(-3),
+            };
+          `),
+        ),
+      );
+      throw error;
+    }
+    await runWait(
+      `return $$('[role="log"] article')
+        .some((el) => el.textContent.includes('chip-done'));`,
+      { timeoutMs: 30_000, label: "command output returned to the agent" },
+    );
+    // Command over, shell still alive: the spinner must be OFF.
+    await runWait(
+      `return !!$('[data-testid="surface-chip"]') &&
+              !$('[data-testid="surface-chip"][data-active]');`,
+      { timeoutMs: 15_000, label: "chip idle once the command finished" },
+    );
+
+    // Open the chip as a tab, close the tab — later chats must still get
+    // their chips (regression: this used to strand future attachments).
+    await run(`
+      $('[data-testid="surface-chip"] button').click();
+      return true;
+    `);
+    await runWait(
+      `return $$('[role="tab"], button').some((el) =>
+        /Close .*[Tt]erminal/.test(el.getAttribute('aria-label') ?? ''));`,
+      { label: "terminal open as a tab" },
+    );
+    await run(`
+      $$('button').find((el) =>
+        /Close .*[Tt]erminal/.test(el.getAttribute('aria-label') ?? '')).click();
+      return true;
+    `);
+    await run(`pressKey('n', { metaKey: true }); return true;`);
+    await runWait(`return !!visibleDock();`, { label: "fresh chat open" });
+    await run(`
+      const ta = visibleDock().querySelector('form textarea');
+      setReactValue(ta, 'terminal: echo chip-two');
+      ta.closest('form').requestSubmit();
+      return true;
+    `);
+    await runWait(
+      `return $$('[role="log"] article')
+        .some((el) => el.textContent.includes('chip-two'));`,
+      { timeoutMs: 30_000, label: "second run returned output" },
+    );
+    await runWait(
+      `return !!visibleDock().querySelector('[data-testid="surface-chip"]');`,
+      { timeoutMs: 15_000, label: "new chat still gets its terminal chip" },
+    );
+  });
+
+  it("agents can target an existing terminal by id", async () => {
+    // Reuse the terminal from the previous message instead of opening
+    // another tab: extract its id from the tool result in the timeline.
+    const terminalId = await run<string | null>(`
+      const texts = $$('[role="log"] article').map((el) => el.textContent);
+      for (const text of texts.reverse()) {
+        const match = /"terminalId":"([0-9a-f-]+)"/.exec(text);
+        if (match) return match[1];
+      }
+      return null;
+    `);
+    if (!terminalId) throw new Error("no terminalId in prior tool results");
+    const tabsBefore = await run<number>(
+      `return $$('[data-testid="surface-chip"]').length;`,
+    );
+    await run(`
+      const ta = visibleDock().querySelector('form textarea');
+      setReactValue(ta, 'terminal @${terminalId}: echo targeted-run');
+      ta.closest('form').requestSubmit();
+      return true;
+    `);
+    await runWait(
+      `return $$('[role="log"] article')
+        .some((el) => el.textContent.includes('targeted-run') &&
+                      el.textContent.includes('terminal result'));`,
+      { timeoutMs: 30_000, label: "targeted run returned output" },
+    );
+    const tabsAfter = await run<number>(
+      `return $$('[data-testid="surface-chip"]').length;`,
+    );
+    if (tabsAfter > tabsBefore) {
+      throw new Error("targeting an existing terminal opened a new one");
+    }
+  });
+
+  it("marks agent switches in the transcript", async () => {
+    // A second agent to switch to (e2e mode: everything maps to the fake).
+    await run(`
+      return window.catamorphicDesktop.agentsCreate(
+        { name: 'Second Fake', harness: 'ai-sdk' });
+    `);
+    await ensurePalette();
+    await resetPalette();
+    await run(`setReactValue(paletteInput(), '>switch agent'); return true;`);
+    await runWait(pickOption("Switch agent for this chat"), {
+      label: "switch-agent picker",
+    });
+    await runWait(pickOption("Second Fake"), { label: "pick Second Fake" });
+    await runWait(
+      `return $$('[role="log"] div')
+        .some((el) => el.textContent.trim() === 'Switched to Second Fake');`,
+      { timeoutMs: 15_000, label: "agent-change marker in the timeline" },
     );
   });
 });

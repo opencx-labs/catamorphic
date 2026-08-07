@@ -31,8 +31,11 @@ const helpers = `
   const pressKey = (key, mods = {}) =>
     window.dispatchEvent(new KeyboardEvent('keydown',
       { key, bubbles: true, cancelable: true, ...mods }));
+  // Includes non-article rows: interrupted turns render as centered notes.
   const timelineMessages = () =>
-    $$('[role="log"] article').map((el) => el.textContent.trim());
+    $$('[role="log"] article, [role="log"] .italic').map((el) =>
+      el.textContent.trim(),
+    );
   const activityLines = () =>
     $$('[role="log"] .animate-pulse').map((el) => el.textContent.trim());
   const spinnersOn = () => $$('svg.animate-spin').filter((el) => {
@@ -111,5 +114,25 @@ describe("interrupted turn recovery", () => {
     );
     expect(await run<string[]>(`return activityLines();`)).toEqual([]);
     expect(await run<number>(`return spinnersOn();`)).toBe(0);
+
+    // The relaunch killed the harness's in-memory session. Sending again
+    // must NOT dead-end on "Session not found" — the host re-anchors with
+    // the persisted transcript and the conversation just continues.
+    await run(`
+      const dock = $$('section[aria-label]')
+        .find((el) => !el.inert && el.querySelector('textarea'));
+      const ta = dock.querySelector('form textarea');
+      const proto = HTMLTextAreaElement.prototype;
+      Object.getOwnPropertyDescriptor(proto, 'value').set.call(
+        ta, 'hello after the relaunch');
+      ta.dispatchEvent(new Event('input', { bubbles: true }));
+      ta.closest('form').requestSubmit();
+      return true;
+    `);
+    await runWait(
+      `return timelineMessages()
+        .some((m) => m.includes('You said: hello after the relaunch'));`,
+      { timeoutMs: 30_000, label: "resurrected session answers" },
+    );
   });
 });

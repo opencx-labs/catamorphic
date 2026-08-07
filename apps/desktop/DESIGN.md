@@ -959,3 +959,144 @@ Patterned on what best-in-class palettes converged on (Chrome omnibox
   (250ms). Launch presents a single finished frame instead of chrome
   popping in piecemeal. An 8s failsafe reveals regardless, so a wedged
   query can never hold the app hostage.
+
+### 2026-08-06 — Agents see and drive the workspace
+- **One bridge, every harness.** Chat agents get workspace tools —
+  `workspace_overview` / `read_tab` (discover and expand any open tab,
+  chat transcript, or sidebar item), `open_browser` / `browser_snapshot` /
+  `browser_act` (real tabs in the user's profile, chrome-devtools-mcp
+  grammar: snapshot → uids → act), `run_terminal` / `read_terminal` /
+  `write_terminal`, and `surface_control` (release / reclaim / close).
+  They're defined once as harness-neutral `ExtraTool`s over the main-
+  process `WorkspaceBridge`: the ai-sdk harness mounts them beside its
+  built-ins; Claude Code gets them as an in-process SDK MCP server
+  (`mcp__workspace__*`, pre-allowlisted) — its native tool loop drives
+  our embedded browser the way it would drive chrome-devtools-mcp.
+  Codex has no tool hook yet and gets awareness only.
+- **Every turn opens with `<workspace_context>`.** A provider decorator
+  (`WorkspaceContextAgent`) snapshots the live overview — active tab
+  marked "the user is looking at this", running terminals, other chats,
+  sidebar shortcuts — and prepends it at the provider boundary, so the
+  stored transcript stays clean but "this page" always resolves. A chat
+  floated over a web tab is context-aware from its first message. The
+  same decorator appends the workspace playbook (tool grammar + handoff
+  etiquette) to the system prompt.
+- **Control is a visible handoff.** Agent-opened surfaces are watchable
+  live (webviews stay mounted; agent terminals broadcast + replay their
+  buffer) but interaction-blocked behind a hairline accent ring and one
+  pill: "Agent is working — Take over". Taking over makes further agent
+  actions on that surface *fail with an explanation* — the agent decides
+  to wait, work around, or `reclaim` (the playbook says: only when the
+  task requires it, ask if the user is mid-flight). Release hands the tab
+  back; close also kills an agent terminal's process — nothing invisible
+  keeps running. Page actions flash an accent glow on the element the
+  agent touches, so watching feels like watching, not wondering.
+- **Attribution over heuristics.** `StartSessionOpts.sessionId` now
+  carries the chat's server id into harness tools, so a spawned surface
+  chips onto the chat that actually spawned it (mid-turn heuristic kept
+  as fallback). User terminals report their PTY session id, so agents
+  can *read* any terminal the user sees; writing stays limited to
+  agent-owned ones.
+- Also: the terminal cursor regression (always hollow) — focus tracking
+  listened on ghostty-web's clipboard textarea, but focus really lands on
+  the contenteditable container (term.focus(), tab-focus) or the textarea
+  (canvas clicks). `focusin`/`focusout` on the wrapper covers both.
+
+### 2026-08-06 — Chat: recoverable errors, queueing, media, markers
+- **Errors are cards with a way out, not dead ends.** Failed turns render
+  as an error card carrying the friendly classified message
+  (`server/agent-errors.ts`: auth / rate-limit / unavailable /
+  model-incompat) plus the actions that fix it: **Retry** re-runs the
+  turn *in place* — the failed row flips back to in-progress, no
+  duplicated user message (`retryTurn` on the harness when it has one;
+  re-send fallback otherwise; model-incompat retries strip stale
+  reasoning signatures). Auth failures on account-auth agents add a
+  one-click **Reconnect** (OpenRouter PKCE / CLI re-login). Transient
+  failures (rate limit, provider down) **auto-retry with backoff** —
+  5s → 15s → 30s → every 60s, server-side, survives the dock closing —
+  with a live "Retrying in Ns" ticker and Retry-now. Interrupts are not
+  errors: partial text stays, closed by a quiet centered "Interrupted"
+  divider.
+- **No name tags.** User bubbles hug the right, agent prose the left —
+  the sides carry the roles. Agent/effort switches leave a centered
+  hairline marker ("Switched to X") via system rows from core.
+- **The queue is visible, editable conversation.** Messages sent
+  mid-turn stack at the end of the chat as dashed ghost bubbles
+  (right-aligned, QUEUED tag). Each is editable inline (editing HOLDS
+  its dispatch — the turn ends, the queue waits for the commit),
+  deletable (animated out), and promotable: **send-now** interrupts the
+  running turn and jumps the line, as does **⌘↵** from the composer.
+  Queues >2 collapse behind a "+N more queued" pill. Interrupt is a
+  real cross-harness signal (AbortController in ai-sdk/claude-code) and
+  is latched in core so an interrupt during anchoring — before any
+  provider signal exists — still cancels the turn.
+- **Media rides the composer.** Paste images/documents (PDF, text,
+  CSV, JSON ≤10MB) straight into the input — chips with thumbnails,
+  removable, sent with the message and rendered in the timeline.
+  Capability-gated per agent (`accepts` on the roster): Anthropic
+  image+pdf, other API providers image, Claude Code image+document via
+  temp files its Read tool opens, Codex none (composer says text-only).
+
+### 2026-08-07 — Reconnect retries; sessions resurrect
+- **A successful reconnect retries the failed turn by itself.** The user
+  already said what they wanted — fixing credentials must not cost a
+  re-send. The dock listens for `agent-login-finished` after its
+  Reconnect button starts a login; `ok: true` for that agent fires the
+  in-place retry.
+- **"Session not found (host restarted?)" is gone as a dead end.**
+  In-memory harness sessions (ai-sdk, e2e fake) die with a host restart
+  — or a provider rebuild, which is exactly what a credential reconnect
+  triggers. Harnesses now report liveness (`hasSession`); core treats a
+  lost session as un-anchored and re-anchors with the persisted
+  transcript (`StartSessionOpts.history`, capped 40 turns / 32k chars,
+  completed turns only — the in-flight user row travels as the message
+  itself). The conversation just continues, context intact. Durable
+  harnesses (Claude Code) are untouched.
+
+### 2026-08-07 — Terminal chips tell the truth; agents choose terminals
+- **The chip spinner tracks the command, not the shell.** Main polls each
+  PTY's foreground process (node-pty `process` vs. the shell's name) and
+  pushes busy transitions to renderers; a finished `echo` stops spinning
+  even though the shell lives on. Agents see the same signal (`busy` on
+  read_terminal and workspace_overview) and `run_terminal` now WAITS for
+  the command (bounded at ~15s) and returns exactly the output it
+  produced — long runs return early with `commandRunning: true`.
+- **Agents pick where commands run.** `run_terminal` takes an optional
+  `terminalId` (from workspace_overview or a prior run): reuse beats a
+  tab per command. Targeting the user's own terminal flips it to
+  agent-controlled first (ring + "Take over"), busy terminals refuse
+  with advice, and taken-over ones stay refused.
+- **Claude Code's Bash is disabled when workspace terminals exist.** Its
+  built-in shell runs inside the CLI process — invisible, unmanageable.
+  With `disableBash`, every command goes through our terminal tabs: the
+  user watches live, can take over, and the app fully intercepts I/O.
+  Codex keeps native shell until it grows a tool-injection hook.
+- The e2e fake can now drive the REAL workspace toolkit ("terminal:"
+  keyed prompts), so chips/busy/targeting are covered by deterministic
+  tests instead of manual runs with a live model.
+
+### 2026-08-07 — Identity: the strategy doc exists; the browser is a feature, not the pitch
+- The project's direction, competitive landscape, and positioning are now
+  documented in [docs/STRATEGY.md](../../docs/STRATEGY.md) (repo root).
+  Summary of what it settles for this app: Catamorphic drifted from
+  "embeddable workflows-as-code for SaaS" into this desktop workspace, and
+  the workspace is the product with momentum. The browser **stays** — as the
+  user's daily surface and the agents' verification surface — but the
+  evidence (Arc post-mortem, Atlas EOL, Chrome share *rising* through the
+  AI-browser wave) says it must never be the public positioning. The
+  candidate story is "agents that work on visible surfaces you can watch and
+  take over, with local-first state" — which is exactly what the
+  WorkspaceBridge + take-over model already implements. Two standing
+  constraints from the doc that bind design work here: (1) agent access to
+  browser surfaces and agent access to the vault must stay architecturally
+  separated (prompt-injection → vault takeover is the category's worst
+  disclosed incident class); (2) the novelty-tax lesson — new concepts need
+  Chrome/VS Code muscle-memory anchors (as Cmd+T, Cmd+L, Ctrl+` already do)
+  rather than new mental models.
+- `dev:desktop` was fresh only at launch: `@catamorphic/*` dists got
+  prebundled into vite's dep cache, so a running app kept serving stale
+  package code after a rebuild while apps/desktop source hot-reloaded —
+  the mismatch behind several "works after restart" reports. The
+  renderer now excludes workspace packages from optimizeDeps (their
+  dists are plain ESM) and un-ignores them in the watcher: rebuilding a
+  package HMRs the running app with current code, state intact.

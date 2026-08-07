@@ -6,7 +6,9 @@ principles live in `DESIGN.md` — read it before UI work.
 
 ## Verification Checklist
 
-Run all of these from `apps/desktop` before committing any change:
+Run all of these from `apps/desktop` before finalizing any major change —
+"finalizing" means before you report the work as done, not merely before a
+commit. A change that hasn't passed the full checklist is not done:
 
 ### 1. Typecheck
 
@@ -45,9 +47,20 @@ streamed preamble messages, and the ask_user question panel.
   groups assume the project created in "first launch" exists.
 - The fake agent (`src/main/server/e2e-fakes.ts`) is prompt-keyed: "ask
   me ... questions" triggers the question flow, "preamble" triggers the
-  multi-segment text flow, "edit a file" writes into the sandbox. When
-  adding agent-facing UI behavior, extend it with a new keyed prompt and
-  cover the flow with a test.
+  multi-segment text flow, "edit a file" writes into the sandbox,
+  "slowly" runs an interruptible ~4s turn (queueing/interrupt tests),
+  "auth error" / "rate limit" fail the turn once with provider-style
+  rejections (the retry recovers — asserting the friendly rewrite and
+  retry/auto-retry paths from `server/agent-errors.ts`), any message
+  with attachments echoes what arrived, and "terminal: <cmd>" /
+  "terminal @<id>: <cmd>" execute the REAL `run_terminal` workspace tool
+  (the only e2e path through the bridge → renderer → chips machinery).
+  When adding agent-facing UI
+  behavior, extend it with a new keyed prompt and cover the flow with a
+  test.
+- The e2e agent is a fake: nothing here exercises real model-provider
+  APIs, so provider-side failures (revoked keys, quota) must be simulated
+  through keyed prompts like "auth error" — never assumed covered.
 
 ### 4. Visual verification (UI changes)
 

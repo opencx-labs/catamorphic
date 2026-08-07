@@ -24,6 +24,8 @@ export interface AppHandle {
     opts?: { timeoutMs?: number; label?: string },
   ) => Promise<T>;
   screenshot: (filePath: string) => Promise<void>;
+  /** Captured app stdout/stderr so far (diagnosing server-side behavior). */
+  getOutput: () => string;
   userDataDir: string;
   stop: () => Promise<void>;
   /**
@@ -85,6 +87,7 @@ export async function launchApp(opts: LaunchOpts = {}): Promise<AppHandle> {
     );
     return {
       ...client,
+      getOutput: () => output,
       userDataDir,
       stop: async () => {
         ws.close();
