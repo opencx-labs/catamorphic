@@ -10,8 +10,8 @@ import {
   type RuntimeTerminalResult,
 } from "../supervisor-protocol.js";
 import {
-  startStdioSupervisor,
   type StdioSupervisorFrame,
+  startStdioSupervisor,
 } from "../supervisor-stdio.js";
 
 function workerFactory(args: {
@@ -201,7 +201,10 @@ describe("stdio supervisor", () => {
     const unknown = await harness.waitForFrame(
       (frame) => frame.kind === "response" && frame.id === 4,
     );
-    expect(unknown).toMatchObject({ ok: false, error: { code: "bad_request" } });
+    expect(unknown).toMatchObject({
+      ok: false,
+      error: { code: "bad_request" },
+    });
 
     harness.write({ id: 5, op: "cancel", invocationId: "missing" });
     const missing = await harness.waitForFrame(
@@ -215,7 +218,9 @@ describe("stdio supervisor", () => {
     const harness = startHarness({});
     const line = `${JSON.stringify({ id: 9, op: "health" })}\n`;
     harness.writeRaw(line.slice(0, 10));
-    harness.writeRaw(line.slice(10) + `${JSON.stringify({ id: 10, op: "health" })}\n`);
+    harness.writeRaw(
+      line.slice(10) + `${JSON.stringify({ id: 10, op: "health" })}\n`,
+    );
     const first = await harness.waitForFrame(
       (frame) => frame.kind === "response" && frame.id === 9,
     );

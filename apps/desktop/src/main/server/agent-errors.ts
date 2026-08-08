@@ -75,17 +75,17 @@ export function rewriteAgentError(
     case "rate_limit":
       return (
         `${providerLabel} is rate-limiting the "${agentName}" agent ${said}. ` +
-        `I'll keep retrying automatically — or switch this chat to another agent.`
+        `I'll keep retrying automatically, or switch this chat to another agent.`
       );
     case "unavailable":
       return (
         `${providerLabel} seems to be having trouble right now ${said}. ` +
-        `I'll keep retrying automatically — or switch this chat to another agent.`
+        `I'll keep retrying automatically, or switch this chat to another agent.`
       );
     case "model_incompat":
       return (
         `The conversation history isn't compatible with the current model ` +
-        `${said}. This usually happens after switching models mid-conversation — ` +
+        `${said}. This usually happens after switching models mid-conversation. ` +
         `Retry repairs the history and continues.`
       );
   }

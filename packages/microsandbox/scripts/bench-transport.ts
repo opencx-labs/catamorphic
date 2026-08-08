@@ -67,9 +67,16 @@ await using sandbox = await Sandbox.builder("bench-transport")
   .create();
 
 // Start echo server in the guest and wait for readiness.
-const serverHandle = await sandbox.execStream("bun", ["run", "/app/echo-server.ts"]);
+const serverHandle = await sandbox.execStream("bun", [
+  "run",
+  "/app/echo-server.ts",
+]);
 for await (const event of serverHandle) {
-  if (event.kind === "stdout" && new TextDecoder().decode(event.data).includes("ready")) break;
+  if (
+    event.kind === "stdout" &&
+    new TextDecoder().decode(event.data).includes("ready")
+  )
+    break;
   if (event.kind === "exited") throw new Error("echo server died");
 }
 

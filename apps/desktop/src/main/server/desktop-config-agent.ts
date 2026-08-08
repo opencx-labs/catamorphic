@@ -32,7 +32,7 @@ const MIRROR_PATHS = [
 
 export const DESKTOP_CONFIG_SKILL = `---
 name: configuring-catamorphic-desktop
-description: Change Catamorphic desktop app settings — keyboard shortcuts, the left sidebar's sections/items, and the color theme — when the user asks to customize the app itself, e.g. "rebind new chat to Cmd+N", "hide the workflows section", "add a Docs section with these links", "switch to the light theme", "make the accent purple".
+description: Change Catamorphic desktop app settings (keyboard shortcuts, the left sidebar's sections/items, and the color theme) when the user asks to customize the app itself, e.g. "rebind new chat to Cmd+N", "hide the workflows section", "add a Docs section with these links", "switch to the light theme", "make the accent purple".
 ---
 
 # Configuring the Catamorphic desktop app
@@ -41,7 +41,7 @@ The user is talking to you from the Catamorphic desktop app. App-level
 settings belong to the user's current profile (not to a project). You
 change them by editing
 mirror files under \`.catamorphic/desktop/\` in this workspace; the app
-applies your edits the moment your turn ends. No restart needed — tell
+applies your edits the moment your turn ends. No restart needed: tell
 the user the change is live. These mirror files never appear in the
 user's project; they are configuration channels, not project files.
 
@@ -58,7 +58,7 @@ ${JSON.stringify(DEFAULT_KEYBINDINGS, null, 2)}
 
 Actions:
 ${BUILTIN_ACTIONS.filter((action) => action.defaultBinding !== null)
-  .map((action) => `- \`${action.id}\` — ${action.description}`)
+  .map((action) => `- \`${action.id}\`: ${action.description}`)
   .join("\n")}
 
 Binding format: zero or more modifiers (\`Cmd\`, \`Ctrl\`, \`Alt\`,
@@ -74,11 +74,11 @@ app shortcut (Cmd+Q, Cmd+C/V/X/A/Z, Cmd+N).
 
 The sidebar is fully user-defined: \`${DESKTOP_SIDEBAR_WORKSPACE_PATH}\`
 (also refreshed every turn). It is a real JS file exporting an ordered
-list of sections — the list IS the sidebar. Edit it to reorder, retitle,
+list of sections: the list IS the sidebar. Edit it to reorder, retitle,
 **hide** (delete the entry), or invent sections.
 
 Built-in section types: \`workflows\`, \`apps\`, \`chats\`, \`bookmarks\`.
-Bookmarks are real browser bookmarks — the user creates them with the
+Bookmarks are real browser bookmarks: the user creates them with the
 star in the address bar; you never hand-write bookmark data here, you
 only control how the section is presented.
 
@@ -100,7 +100,7 @@ Your own section:
 - \`icon\`: any lucide-react icon name, e.g. \`"Globe"\`, \`"FileText"\`.
 - \`collapsed: true\` starts a section collapsed.
 
-Hover menu (the ⋯ button on an item) — set on a section (applies to all
+Hover menu (the ⋯ button on an item): set on a section (applies to all
 its items) or on a single item:
 
 \`\`\`js
@@ -116,7 +116,7 @@ Actions: \`open\`, \`open-tab\`, \`open-here\`, \`copy-url\`, \`pin\`,
 \`pin\`/\`unpin\`/\`rename\`/\`remove\` only do anything on bookmarks.
 
 Rules: keep it valid JavaScript with a \`module.exports = { sections: [...] }\`.
-It is evaluated in a sandbox — no \`require\`, no I/O, no async. An invalid
+It is evaluated in a sandbox: no \`require\`, no I/O, no async. An invalid
 file falls back to the default sidebar, so verify your edit is syntactically
 correct. Preserve the user's existing sections unless they asked otherwise,
 and keep the explanatory comments at the top intact.
@@ -134,7 +134,7 @@ turn). Format:
 \`\`\`
 
 Presets: ${THEME_PRESETS.map((preset) => `\`${preset.id}\` (${preset.label})`).join(", ")}.
-\`overrides\` replaces individual colors on top of the preset — any CSS
+\`overrides\` replaces individual colors on top of the preset, and any CSS
 color works. Tokens:
 ${THEME_TOKENS.map((token) => `\`${token}\``).join(", ")}.
 
@@ -145,7 +145,7 @@ keep enough contrast with the text tokens.
 ## Other app settings
 
 AI agents (harness, model, effort, API keys, accounts) are configured in
-the app's Settings screen or the command palette — credentials are
+the app's Settings screen or the command palette. Credentials are
 OS-keychain encrypted and cannot be edited from here. If the user asks
 about those, point them to Settings.
 `;

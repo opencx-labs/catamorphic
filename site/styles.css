@@ -71,6 +71,15 @@ a {
 }
 
 /* ---------- nav ---------- */
+site-nav,
+site-footer {
+  display: block;
+}
+
+site-nav .nav-links a[aria-current] {
+  color: var(--fg);
+}
+
 .nav {
   position: sticky;
   top: 0;

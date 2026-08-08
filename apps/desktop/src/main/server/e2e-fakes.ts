@@ -232,7 +232,7 @@ export class E2eFakeCodingAgent implements CodingAgentProvider {
 
     if (state.askedQuestion) {
       state.askedQuestion = false;
-      yield { type: "text", content: `Got it — noted: ${message}` };
+      yield { type: "text", content: `Got it, noted: ${message}` };
       yield { type: "done" };
       return;
     }

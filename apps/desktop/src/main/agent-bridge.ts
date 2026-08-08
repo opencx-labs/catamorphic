@@ -139,7 +139,7 @@ const GUEST_HELPERS = `
     },
     click(uid) {
       const el = this.uids[uid];
-      if (!el) return { error: "Unknown uid " + uid + " — take a fresh snapshot." };
+      if (!el) return { error: "Unknown uid " + uid + ". Take a fresh snapshot." };
       highlight(el);
       el.scrollIntoView({ block: "center", behavior: "instant" });
       el.focus && el.focus();
@@ -148,7 +148,7 @@ const GUEST_HELPERS = `
     },
     fill(uid, text) {
       const el = this.uids[uid];
-      if (!el) return { error: "Unknown uid " + uid + " — take a fresh snapshot." };
+      if (!el) return { error: "Unknown uid " + uid + ". Take a fresh snapshot." };
       highlight(el);
       el.scrollIntoView({ block: "center", behavior: "instant" });
       el.focus && el.focus();
@@ -303,7 +303,7 @@ export function registerAgentBridge(agentTerminals: AgentTerminals): {
       const result = await rpc("overview", { projectId });
       if (!result) {
         throw new Error(
-          "No window has this project open — the workspace is not visible.",
+          "No window has this project open, so the workspace is not visible.",
         );
       }
       return result;
@@ -401,7 +401,7 @@ export function registerAgentBridge(agentTerminals: AgentTerminals): {
       if (targetTerminalId) {
         if (!agentTerminals.isRunning(targetTerminalId)) {
           throw new Error(
-            "That terminal's shell is not running — pick another from workspace_overview or omit terminalId for a fresh one.",
+            "That terminal's shell is not running. Pick another from workspace_overview or omit terminalId for a fresh one.",
           );
         }
         const found =
@@ -414,7 +414,7 @@ export function registerAgentBridge(agentTerminals: AgentTerminals): {
           )?.key;
         if (!found) {
           throw new Error(
-            "No workspace tab for that terminal id — check workspace_overview.",
+            "No workspace tab for that terminal id. Check workspace_overview.",
           );
         }
         key = found;

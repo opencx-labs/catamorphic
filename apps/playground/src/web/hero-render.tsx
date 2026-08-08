@@ -1,12 +1,10 @@
 // Dev-only harness: renders the marketing-site hero workflow through the real
 // WorkflowCanvas so the site can screenshot the genuine product rendering.
 // Open /hero-render.html while `bun run dev` is up.
-import {
-  reactFlowEdgesAtom,
-  reactFlowNodesAtom,
-} from "@catamorphic/react";
+
 import type { WorkflowEdge, WorkflowNode } from "@catamorphic/parser";
 import { layoutGraph } from "@catamorphic/parser/layout";
+import { reactFlowEdgesAtom, reactFlowNodesAtom } from "@catamorphic/react";
 import { WorkflowCanvas, WorkflowEditorScope } from "@catamorphic/ui";
 import type { Edge, Node } from "@xyflow/react";
 import { useSetAtom } from "jotai";

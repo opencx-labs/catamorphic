@@ -54,12 +54,16 @@ try {
 
   // 4. File upload (50 small files) + download
   const files: Record<string, string> = {};
-  for (let i = 0; i < 50; i++) files[`src/file-${i}.ts`] = `export const v${i} = ${i};\n`;
+  for (let i = 0; i < 50; i++)
+    files[`src/file-${i}.ts`] = `export const v${i} = ${i};\n`;
   await timed("upload 50 files", () =>
     provider.uploadFiles(h1.id, files, `${provider.workspaceRoot}/proj`),
   );
   await timed("download 1 file", () =>
-    provider.downloadFile(h1.id, `${provider.workspaceRoot}/proj/src/file-0.ts`),
+    provider.downloadFile(
+      h1.id,
+      `${provider.workspaceRoot}/proj/src/file-0.ts`,
+    ),
   );
 
   // 5. Guest + host memory for idle sandbox
@@ -100,6 +104,8 @@ try {
   console.log(`file persisted across restart: ${persisted.length > 0}`);
 } finally {
   const start = performance.now();
-  await Promise.all(handles.map((id) => provider.destroySandbox(id).catch(() => {})));
+  await Promise.all(
+    handles.map((id) => provider.destroySandbox(id).catch(() => {})),
+  );
   console.log(`destroy ${handles.length} sandboxes: ${ms(start)}`);
 }

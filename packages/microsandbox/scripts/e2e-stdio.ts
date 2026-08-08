@@ -45,7 +45,11 @@ function invocation(args: {
     ...(args.events
       ? {
           eventSink: {
-            report: async ({ events }: { events: readonly RuntimeInvocationEvent[] }) => {
+            report: async ({
+              events,
+            }: {
+              events: readonly RuntimeInvocationEvent[];
+            }) => {
               args.events?.push(...events);
             },
           },
@@ -63,7 +67,11 @@ try {
   console.log(`sandbox created: ${(performance.now() - start).toFixed(0)}ms`);
 
   const projectDirectory = `${provider.workspaceRoot}/project`;
-  await provider.uploadFiles(sandboxId, { "workflow.ts": WORKFLOW }, projectDirectory);
+  await provider.uploadFiles(
+    sandboxId,
+    { "workflow.ts": WORKFLOW },
+    projectDirectory,
+  );
 
   start = performance.now();
   const runtime = await runtimeProvider.ensureRuntime({
@@ -88,9 +96,12 @@ try {
     }),
   );
   console.log(`terminal: ${receipt.terminal.status}`);
-  if (receipt.terminal.status !== "completed") throw new Error("expected completed");
+  if (receipt.terminal.status !== "completed")
+    throw new Error("expected completed");
   console.log(`result: ${JSON.stringify(receipt.terminal.result)}`);
-  console.log(`event types (pushed): ${events.map((event) => event.type).join(", ")}`);
+  console.log(
+    `event types (pushed): ${events.map((event) => event.type).join(", ")}`,
+  );
   console.log(`steps recorded: ${receipt.terminal.steps.length}`);
 
   const dedupe = await runtimeProvider.invoke(
@@ -105,8 +116,12 @@ try {
     `idempotent redelivery returns same result: ${JSON.stringify(dedupe.terminal) === JSON.stringify(receipt.terminal)}`,
   );
 
-  const health = await runtimeProvider.getHealth({ runtimeId: runtime.runtimeId });
-  console.log(`health: ${health.runtimeStatus}, maxConcurrency=${health.maxConcurrency}`);
+  const health = await runtimeProvider.getHealth({
+    runtimeId: runtime.runtimeId,
+  });
+  console.log(
+    `health: ${health.runtimeStatus}, maxConcurrency=${health.maxConcurrency}`,
+  );
 
   console.log("\n== invocation latency (full invoke round trip) ==");
   {
@@ -175,7 +190,8 @@ try {
   }
 } finally {
   if (sandboxId) await provider.destroySandbox(sandboxId).catch(() => {});
-  const shutdown = (runtimeProvider as { shutdown?: () => Promise<void> }).shutdown;
+  const shutdown = (runtimeProvider as { shutdown?: () => Promise<void> })
+    .shutdown;
   if (shutdown) await shutdown.call(runtimeProvider).catch(() => {});
   console.log("\ncleaned up");
 }

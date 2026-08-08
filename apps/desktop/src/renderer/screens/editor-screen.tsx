@@ -4,6 +4,7 @@ import {
   useWriteProjectFile,
 } from "@catamorphic/react";
 import Editor, { type OnMount } from "@monaco-editor/react";
+import "../lib/monaco-setup.js";
 import { FileCode, Search } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { ShortcutHint } from "../components/shortcut-hint.js";

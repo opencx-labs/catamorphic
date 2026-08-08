@@ -517,7 +517,7 @@ describe("question flow", () => {
       { label: "submit answers" },
     );
     await runWait(
-      `return timelineMessages().some((m) => m.text.includes('Got it — noted'))
+      `return timelineMessages().some((m) => m.text.includes('Got it, noted'))
            && !$('section[aria-label="The agent has a question"]');`,
       { timeoutMs: 30_000, label: "agent acknowledgment, panel gone" },
     );
