@@ -1,7 +1,7 @@
 # @catamorphic/plugins
 
 Manifest contract + resolver backends for **plugin packages** that Catamorphic
-attaches to a project. Today that's only `@acme/example-sdk`, but any npm
+attaches to a project. Today the reference example is `@acme/example-sdk`, but any npm
 package can play as long as it ships the `catamorphic` manifest below.
 
 Plugin SDKs may depend on `@catamorphic/workflow` and re-export only the
@@ -115,18 +115,18 @@ README scraping, no convention sniffing.
   "name": "@acme/example-sdk",
   "version": "0.0.1",
   "catamorphic": {
-    "displayName": "OpenCX",
-    "description": "Trigger payloads and actions for OpenCX workflows.",
+    "displayName": "Acme",
+    "description": "Trigger payloads and actions for Acme workflows.",
     "secrets": [
       {
         "name": "EXAMPLE_API_KEY",
-        "label": "OpenCX API Key",
-        "description": "Bearer token from the OpenCX dashboard (Settings > API Tokens).",
+        "label": "Acme API Key",
+        "description": "Bearer token from the host dashboard (its API tokens settings).",
         "required": true
       },
       {
         "name": "EXAMPLE_API_URL",
-        "label": "OpenCX API URL",
+        "label": "Acme API URL",
         "description": "Override the default base URL (https://api.example.com).",
         "required": false,
         "default": "https://api.example.com"
@@ -274,8 +274,8 @@ await agentContextService.buildPrompt(projectId);
 // runtime. They are available to import from workflows and steps. Use their
 // exported functions and types; do NOT invent new names.
 //
-// ## @acme/example-sdk (OpenCX)
-// Trigger payloads and actions for OpenCX workflows.
+// ## @acme/example-sdk (Acme)
+// Trigger payloads and actions for Acme workflows.
 //
 // ### README
 // <full README.md body>
@@ -430,7 +430,7 @@ Mounted inside the host's project page.
 
 ## Setup — local dev walkthrough
 
-End-to-end steps to go from zero to a workflow that calls the OpenCX API.
+End-to-end steps to go from zero to a workflow that calls a host API.
 
 ### 1. Env vars (root `.env` of catamorphic)
 
@@ -448,7 +448,7 @@ CLOUDFLARE_SANDBOX_API_KEY=…
 OPENAI_API_KEY=…
 ```
 
-The host process (e.g. OpenCX's backend) owns the env. `CATAMORPHIC_LOCAL_PLUGINS_DIR`
+The host process (e.g. the host backend) owns the env. `CATAMORPHIC_LOCAL_PLUGINS_DIR`
 must be set in the host's `.env`, not inside the catamorphic repo — catamorphic is
 embed-only and has no dev server of its own.
 
@@ -458,7 +458,7 @@ embed-only and has no dev server of its own.
 
 ```bash
 cd host-app/packages/example-sdk
-pnpm build        # produces dist/index.cjs, .mjs, .d.ts
+npm run build        # produces dist/index.cjs, .mjs, .d.ts
 ```
 
 ### 3. Run migrations for `project_plugins` + `project_secrets`
@@ -466,13 +466,13 @@ pnpm build        # produces dist/index.cjs, .mjs, .d.ts
 ```bash
 cd catamorphic
 bun run --filter @catamorphic/db build
-pnpm -C backend exec catamorphic-db migrate   # from the host repo
+<host> exec catamorphic-db migrate   # from the host repo
 ```
 
 ### 4. Start the host
 
 Boot the host app with `CATAMORPHIC_ENABLED=true` + the env vars above so
-`@catamorphic/fastify-plugin` mounts inside it. For OpenCX: `cd opencx/backend && pnpm ddev`.
+`@catamorphic/fastify-plugin` mounts inside it. For Acme: `cd host-app/backend && <your host dev command>`.
 
 ### 5. Attach the plugin and set secrets
 
@@ -480,14 +480,14 @@ Boot the host app with `CATAMORPHIC_ENABLED=true` + the env vars above so
 2. Scroll to **Plugins**. `@acme/example-sdk` shows up in the catalog.
 3. Click **Add**.
 4. Expand the attached card. Enter `EXAMPLE_API_KEY` (a real bearer from
-   `Settings → API Tokens` in the OpenCX dashboard).
+   `Settings → API Tokens` in the host dashboard).
 5. For local development, override `EXAMPLE_API_URL` — see below.
 
 ### 6. Point the SDK at the right backend
 
 `@acme/example-sdk` defaults to `https://api.example.com`. That host is
-OpenCX's production gateway and does **not** expose the `/contacts/:id`
-public route (you'll get `404 Route GET:/contacts/… not found`).
+the SDK's default gateway and does **not** expose the `/records/:id`
+public route (you'll get `404 Route GET:/records/… not found`).
 
 For local development you want your own backend. Options:
 
@@ -509,7 +509,7 @@ Sanity check the URL from your machine before trusting it:
 
 ```bash
 curl -s -H "Authorization: Bearer $EXAMPLE_API_KEY" \
-  "$EXAMPLE_API_URL/contacts/<uuid>" | jq .
+  "$EXAMPLE_API_URL/records/<uuid>" | jq .
 ```
 
 ### 7. Run the workflow
@@ -518,8 +518,8 @@ Ask the workflow builder to generate code. It has the SDK's README + d.ts in
 its system prompt, so it should import symbols that actually exist:
 
 ```ts
-const { getContactDetails } = await import("@acme/example-sdk");
-const contact = await getContactDetails({ contactId });
+const { getRecordDetails } = await import("@acme/example-sdk");
+const contact = await getRecordDetails({ contactId });
 ```
 
 Hit **Run**. Expected test-mode path within the canonical Runs API:
@@ -532,7 +532,7 @@ Cloudflare sandbox
   /workspace/project/node_modules/@acme/example-sdk/dist/index.mjs
   /workspace/project/src/untitled-workflow.ts
   bun run harness.ts   EXAMPLE_API_KEY=… EXAMPLE_API_URL=…
-    → fetch(`${EXAMPLE_API_URL}/contacts/<uuid>`, { headers: { authorization } })
+    → fetch(`${EXAMPLE_API_URL}/records/<uuid>`, { headers: { authorization } })
 ```
 
 ---
@@ -546,14 +546,14 @@ Cloudflare sandbox
 even though upload returned `200 OK`.
 
 **Root cause.** `CloudflareSandboxProvider.buildFileRoute()` used to run
-each path segment through `encodeURIComponent`, which turns `@opencx` into
-`%40opencx`. The bridge writes the decoded URL segment to disk verbatim
+each path segment through `encodeURIComponent`, which turns `@acme` into
+`%40acme`. The bridge writes the decoded URL segment to disk verbatim
 and does **not** URL-decode, so the directory actually created on disk was
-`node_modules/%40opencx/workflow-sdk/`. Bun's resolver walks up looking for
-`@opencx` and never finds it.
+`node_modules/%40acme/workflow-sdk/`. Bun's resolver walks up looking for
+`@acme` and never finds it.
 
 Reproduced by uploading a scoped package and `ls -la node_modules/` — the
-dir name was literally `%40opencx`.
+dir name was literally `%40acme`.
 
 **Fix.** `encodePathSegment()` now decodes `%40` back to `@` after running
 `encodeURIComponent`. `@` is a valid `pchar` per RFC 3986 so the URL stays
@@ -563,10 +563,10 @@ well-formed. See `packages/cloudflare/src/sandbox-provider.ts` and the
 
 ### 2. Production base URL 404s
 
-**Symptom.** `OpenCX GET /contacts/<uuid> failed (404): Route GET:/contacts/… not found`.
+**Symptom.** `Host GET /records/<uuid> failed (404): Route GET:/records/… not found`.
 
-**Root cause.** SDK defaults to `https://api.example.com`, which is OpenCX's
-production gateway and doesn't mount the public API used by `getContactDetails`
+**Root cause.** SDK defaults to `https://api.example.com`, which is Acme's
+production gateway and doesn't mount the public API used by `getRecordDetails`
 (or at least not at the path the SDK expects).
 
 **Fix.** Override `EXAMPLE_API_URL` in the project's secrets. For local dev
@@ -605,10 +605,9 @@ env matters.
 ### 5. Workflow builder hallucinating SDK calls
 
 **Symptom.** AI-generated workflow invented functions like
-`opencx.getContactByUUID()` that don't exist.
+`acme.getRecordByUUID()` that don't exist.
 
-**Root cause.** `generateWorkflowCode` was a standalone OpenAI call from
-the Next.js server action, completely bypassing `CodexAgent`'s plugin
+**Root cause.** `generateWorkflowCode` was a standalone OpenAI call from the host server action, completely bypassing `CodexAgent`'s plugin
 context. The model had never seen the SDK's d.ts.
 
 **Fix.** New `AgentContextService` + `GET /api/projects/:id/agent-context`
@@ -660,7 +659,7 @@ Quick index — every file that participates in the plugin subsystem.
 - `packages/fastify-plugin/src/routes/playground.ts` — calls `RunPluginsLoader`.
 - `packages/fastify-plugin/src/app.ts` — CORS + route registration.
 - `packages/fastify-plugin/src/schemas.ts` — shared Zod DTOs.
-- Host boot code (e.g. OpenCX's `backend/src/catamorphic/boot.ts`) — wires resolver + services from env.
+- Host boot code (e.g. `backend/src/catamorphic/boot.ts`) — wires resolver + services from env.
 
 **Sandbox:**
 - `packages/sandbox/src/run-executor.ts` — `uploadPluginPayloads`, env merge.

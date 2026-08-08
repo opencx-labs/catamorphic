@@ -13,13 +13,13 @@ describe("sanitizeScrollback", () => {
       " ".repeat(112) +
       `\r \r\r${ESC}[0m${ESC}[27m${ESC}[24m${ESC}[J`;
     const buffer =
-      `${dance}tabaza@mac scratch-demo % ${ESC}[K${ESC}[?2004h` +
+      `${dance}user@host scratch-demo % ${ESC}[K${ESC}[?2004h` +
       `e\becho DEBUG-1${ESC}[?2004l\r\r\nDEBUG-1\r\n` +
-      `${dance}tabaza@mac scratch-demo % ${ESC}[K${ESC}[?2004h`;
+      `${dance}user@host scratch-demo % ${ESC}[K${ESC}[?2004h`;
     expect(sanitizeScrollback(buffer)).toEqual([
-      "tabaza@mac scratch-demo % echo DEBUG-1",
+      "user@host scratch-demo % echo DEBUG-1",
       "DEBUG-1",
-      "tabaza@mac scratch-demo %",
+      "user@host scratch-demo %",
     ]);
   });
 

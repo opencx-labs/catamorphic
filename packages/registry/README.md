@@ -57,7 +57,7 @@ packages/registry/
 - **No state**: all data + mutations come from `@catamorphic/react` hooks.
   Items are pure JSX wrappers around those hooks.
 - **No CSS modules / no theme system (yet)**: tailwind classes only,
-  matching the OpenCX look & feel. A theming pass is phase 3.
+  matching the host app's look & feel. A theming pass is phase 3.
 - **Imports**: only `@catamorphic/react`, `@catamorphic/ui`, and
   `lucide-react`. Anything else gets declared in `dependencies` so the
   shadcn CLI can install it for the host.

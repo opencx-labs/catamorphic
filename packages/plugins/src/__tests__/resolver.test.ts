@@ -53,11 +53,11 @@ describe("LocalPluginResolver", () => {
   it("lists packages with a valid catamorphic manifest", async () => {
     rootDir = await setupPlugins([
       {
-        dirName: "workflow-sdk",
+        dirName: "example-sdk",
         packageName: "@acme/example-sdk",
         version: "0.0.1",
         manifest: {
-          displayName: "OpenCX",
+          displayName: "Acme",
           secrets: [{ name: "EXAMPLE_API_KEY", label: "Key", required: true }],
         },
       },
@@ -87,15 +87,15 @@ describe("LocalPluginResolver", () => {
   it("resolves a scoped package by the unscoped directory name", async () => {
     rootDir = await setupPlugins([
       {
-        dirName: "workflow-sdk",
+        dirName: "example-sdk",
         packageName: "@acme/example-sdk",
-        manifest: { displayName: "OpenCX" },
+        manifest: { displayName: "Acme" },
       },
     ]);
     const resolver = new LocalPluginResolver({ rootDir });
     const plugin = await resolver.resolve("@acme/example-sdk");
     expect(plugin.packageName).toBe("@acme/example-sdk");
-    expect(plugin.manifest.displayName).toBe("OpenCX");
+    expect(plugin.manifest.displayName).toBe("Acme");
   });
 
   it("returns an empty list when the root directory does not exist", async () => {
@@ -109,9 +109,9 @@ describe("LocalPluginResolver", () => {
   it("throws PluginResolutionError when resolving an unknown package", async () => {
     rootDir = await setupPlugins([
       {
-        dirName: "workflow-sdk",
+        dirName: "example-sdk",
         packageName: "@acme/example-sdk",
-        manifest: { displayName: "OpenCX" },
+        manifest: { displayName: "Acme" },
       },
     ]);
     const resolver = new LocalPluginResolver({ rootDir });
@@ -123,30 +123,30 @@ describe("LocalPluginResolver", () => {
   it("reads README and types files listed in the manifest", async () => {
     rootDir = await setupPlugins([
       {
-        dirName: "workflow-sdk",
+        dirName: "example-sdk",
         packageName: "@acme/example-sdk",
         manifest: {
-          displayName: "OpenCX",
+          displayName: "Acme",
           docs: { readme: "README.md", types: "dist/index.d.ts" },
         },
         extraFiles: {
-          "README.md": "# OpenCX\n",
+          "README.md": "# Acme\n",
           "dist/index.d.ts": "export const x: number;\n",
         },
       },
     ]);
     const resolver = new LocalPluginResolver({ rootDir });
     const plugin = await resolver.resolve("@acme/example-sdk");
-    expect(await resolver.readReadme(plugin)).toContain("OpenCX");
+    expect(await resolver.readReadme(plugin)).toContain("Acme");
     expect(await resolver.readTypes(plugin)).toContain("number");
   });
 
   it("lists all files except src/ and common tool dirs", async () => {
     rootDir = await setupPlugins([
       {
-        dirName: "workflow-sdk",
+        dirName: "example-sdk",
         packageName: "@acme/example-sdk",
-        manifest: { displayName: "OpenCX" },
+        manifest: { displayName: "Acme" },
         extraFiles: {
           "README.md": "# hi",
           "dist/index.js": "module.exports = {};",

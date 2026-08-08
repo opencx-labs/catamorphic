@@ -581,7 +581,7 @@ export function CommandPalette({
 
   // Focus on open; reset the query after the exit transition so the list
   // doesn't visibly re-expand while the panel is still fading out (the
-  // opencx trick, minus their 500ms — ours matches the 200ms transition).
+  // cmdk trick, minus its 500ms — ours matches the 200ms transition).
   useEffect(() => {
     if (open) {
       // rAF waits out the `inert` removal — focus() no-ops on inert trees.

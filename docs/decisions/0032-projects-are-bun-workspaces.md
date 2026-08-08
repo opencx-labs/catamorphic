@@ -9,9 +9,9 @@
 Embedders can let their users build workflows with AI but not UIs. Apps must be
 part of the same project as the workflows they call: one repo, one commit, so a
 frontend and the backend it depends on can never drift apart. That is the
-property opencx's mini-apps lack — their published bundles compile against a
-backend that keeps moving, and a renamed field breaks a published app at runtime
-with no signal on the app side.
+property the common "mini-app" model lacks — a published bundle compiles against
+a backend that keeps moving, so a renamed field breaks a published app at
+runtime with no signal on the app side.
 
 A flat project (one `package.json`, one `src/`) cannot express this. Frontend
 dependencies would enter the execution sandbox, app sources would be scanned for

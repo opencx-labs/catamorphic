@@ -17,19 +17,19 @@ describe("buildPluginsPreamble", () => {
     const preamble = buildPluginsPreamble([
       {
         packageName: "@acme/example-sdk",
-        displayName: "OpenCX",
-        description: "OpenCX triggers and actions.",
+        displayName: "Acme",
+        description: "Acme triggers and actions.",
         files: {
-          "README.md": "# OpenCX",
+          "README.md": "# Acme",
           "dist/index.d.ts": "export {};",
         },
       },
     ]);
     expect(preamble).toContain("Attached packages");
-    expect(preamble).toContain("@acme/example-sdk (OpenCX)");
-    expect(preamble).toContain("OpenCX triggers and actions.");
-    expect(preamble).toContain("_plugins/opencx__workflow-sdk/README.md");
-    expect(preamble).toContain("_plugins/opencx__workflow-sdk/dist/index.d.ts");
+    expect(preamble).toContain("@acme/example-sdk (Acme)");
+    expect(preamble).toContain("Acme triggers and actions.");
+    expect(preamble).toContain("_plugins/acme__example-sdk/README.md");
+    expect(preamble).toContain("_plugins/acme__example-sdk/dist/index.d.ts");
   });
 });
 
@@ -45,7 +45,7 @@ describe("stagePluginDocs", () => {
     await stagePluginDocs(tmpDir, [
       {
         packageName: "@acme/example-sdk",
-        displayName: "OpenCX",
+        displayName: "Acme",
         description: "",
         files: {
           "README.md": "# Hi",
@@ -54,7 +54,7 @@ describe("stagePluginDocs", () => {
       },
     ]);
     const readme = await fs.readFile(
-      path.join(tmpDir, "_plugins", "opencx__workflow-sdk", "README.md"),
+      path.join(tmpDir, "_plugins", "acme__example-sdk", "README.md"),
       "utf-8",
     );
     expect(readme).toBe("# Hi");
@@ -62,7 +62,7 @@ describe("stagePluginDocs", () => {
       path.join(
         tmpDir,
         "_plugins",
-        "opencx__workflow-sdk",
+        "acme__example-sdk",
         "dist",
         "index.d.ts",
       ),

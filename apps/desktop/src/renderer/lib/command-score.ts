@@ -1,8 +1,11 @@
 /**
- * Superhuman's command-score fuzzy matcher (MIT), the algorithm behind
- * cmdk/opencx palettes. Subsequence matching with weighted scoring:
+ * Ported from Superhuman's command-score fuzzy matcher — the same
+ * algorithm behind cmdk. Subsequence matching with weighted scoring:
  * word-boundary jumps score high, mid-word jumps low, skips and case
  * mismatches apply small compounding penalties. Returns 0..1; 0 = no match.
+ *
+ * Original work Copyright (c) 2016 Superhuman, MIT License.
+ * See the NOTICE file at the repository root for the full text.
  */
 
 const SCORE_CONTINUE_MATCH = 1;

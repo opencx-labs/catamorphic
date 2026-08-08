@@ -41,7 +41,6 @@ a quarter of infrastructure.
 
 - [Workflow authoring](https://raw.githubusercontent.com/opencx-labs/catamorphic/main/README.md): correlation keys, signals, shared rate budgets, batches, retention
 - [Architecture decisions](https://github.com/opencx-labs/catamorphic/tree/main/docs/decisions): ADRs for settled design choices
-- [Direction and positioning](https://raw.githubusercontent.com/opencx-labs/catamorphic/main/docs/STRATEGY.md): what Catamorphic is and is not
 
 ## Optional
 

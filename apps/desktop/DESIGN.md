@@ -579,14 +579,13 @@ memory of *why* the app is the way it is.
   equal to the gap**, or the unmount produces a terminal jump.
 
 ### 2026-08-01 — Catamorphic presents as Chrome, at every layer
-- **There is no way to become a "legitimate browser" in Google's eyes.**
-  No registration, no allowlist, no vendor UA program — the
-  supported-browser gate is pure sniffing. Vivaldi (same engine,
-  millions of users) proved the targeting was by *name*: misspelling
-  their token "Vivaldo" made Google properties work again, so in 2019
-  they shipped a Chrome UA by default. Edge does the same. Since the
-  engine genuinely is Chrome's, presenting as Chrome is the honest,
-  permanent answer — not a stopgap.
+- **A Chromium-engine browser has no way to register as a "legitimate
+  browser"** — the supported-browser gate on many sites is pure UA
+  sniffing with no vendor allowlist to join. Vivaldi (same engine,
+  millions of users) shipped a Chrome UA by default in 2019 for exactly
+  this reason, and Edge does the same. Since the engine genuinely is
+  Chrome's, presenting as Chrome is the honest, permanent answer — the
+  same choice the other Chromium browsers made — not a stopgap.
 - The failure mode is **inconsistency between layers**, so all three
   now agree:
   1. **UA string** — `app.userAgentFallback` strips the Electron and
@@ -606,8 +605,8 @@ memory of *why* the app is the way it is.
   `fullVersionList` reports Google Chrome at the real Chrome version
   (not the `Not;A=Brand` placeholder's 8.0.0.0) — a mismatch there is
   exactly the tell a checker looks for.
-- Verified end to end: accounts.google.com serves the normal sign-in
-  form, and a live request echo shows UA + Sec-CH-UA agreeing.
+- Verified end to end: Google properties serve their normal experience,
+  and a live request echo shows UA + Sec-CH-UA agreeing across layers.
 - Testing note: **webview guests composite separately and do NOT appear
   in a host-page CDP screenshot** — a blank page area in `drive.mjs shot`
   is a capture artifact, not a broken page. Screenshot the guest's own
@@ -693,7 +692,7 @@ memory of *why* the app is the way it is.
 - Plugin-readiness without a plugin system: `ActionDefinition` is an
   open interface with string ids (future plugin actions would be
   namespaced "plugin:action" entries appended at runtime); only
-  `BUILTIN_ACTIONS`-derived types assume the set is closed. opencx's
+  `BUILTIN_ACTIONS`-derived types assume the set is closed. The
   alternative — a live registry populated by hook registration — was
   rejected because main-process consumers (menu accelerators, agent
   docs) can't read a renderer-side registry.
@@ -1090,24 +1089,21 @@ Patterned on what best-in-class palettes converged on (Chrome omnibox
   keyed prompts), so chips/busy/targeting are covered by deterministic
   tests instead of manual runs with a live model.
 
-### 2026-08-07 — Identity: the strategy doc exists; the browser is a feature, not the pitch
-- The project's direction, competitive landscape, and positioning are now
-  documented in [docs/STRATEGY.md](../../docs/STRATEGY.md) (repo root).
-  Summary of what it settles for this app: Catamorphic drifted from
-  "embeddable workflows-as-code for SaaS" into this desktop workspace, and
-  the workspace is the product with momentum. The browser **stays** — as the
-  user's daily surface and the agents' verification surface — but the
-  evidence (Arc post-mortem, Atlas EOL, Chrome share *rising* through the
-  AI-browser wave) says it must never be the public positioning. The
-  candidate story is "agents that work on visible surfaces you can watch and
-  take over, with local-first state" — which is exactly what the
-  WorkspaceBridge + take-over model already implements. Two standing
-  constraints from the doc that bind design work here: (1) agent access to
-  browser surfaces and agent access to the vault must stay architecturally
-  separated (prompt-injection → vault takeover is the category's worst
-  disclosed incident class); (2) the novelty-tax lesson — new concepts need
-  Chrome/VS Code muscle-memory anchors (as Cmd+T, Cmd+L, Ctrl+` already do)
-  rather than new mental models.
+### 2026-08-07 — Identity: the browser is a feature, not the pitch
+- Catamorphic drifted from "embeddable workflows-as-code for SaaS" into
+  this desktop workspace, and the workspace is the product with momentum.
+  The browser **stays** — as the user's daily surface and the agents'
+  verification surface — but the evidence (Arc post-mortem, Atlas EOL,
+  Chrome share *rising* through the AI-browser wave) says it must never be
+  the public positioning. The candidate story is "agents that work on
+  visible surfaces you can watch and take over, with local-first state" —
+  which is exactly what the WorkspaceBridge + take-over model already
+  implements. Two standing constraints that bind design work here:
+  (1) agent access to browser surfaces and agent access to the vault must
+  stay architecturally separated (prompt-injection → vault takeover is the
+  category's worst disclosed incident class); (2) the novelty-tax lesson —
+  new concepts need Chrome/VS Code muscle-memory anchors (as Cmd+T, Cmd+L,
+  Ctrl+` already do) rather than new mental models.
 - `dev:desktop` was fresh only at launch: `@catamorphic/*` dists got
   prebundled into vite's dep cache, so a running app kept serving stale
   package code after a rebuild while apps/desktop source hot-reloaded —
@@ -1241,8 +1237,8 @@ Patterned on what best-in-class palettes converged on (Chrome omnibox
   markers all landed desktop-side only); agent-chat had drifted slightly;
   and the floating chat dock, agent-question-panel (ask_user UI),
   chat-signals, pending-button, and shortcut-hint exist only in the app
-  despite being exactly what a copilot embedder wants. TODO.md tracks the
-  port list and a drift check so this cannot silently regress again.
+  despite being exactly what a copilot embedder wants. The port list and a
+  drift check are tracked so this cannot silently regress again.
 
 ### 2026-08-08 — Media lands however it arrives; terminals obey Cmd+D; tabs explain themselves
 - **Attach flows meet the user wherever they are.** Pasting media only

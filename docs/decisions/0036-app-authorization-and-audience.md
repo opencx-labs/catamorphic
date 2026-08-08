@@ -12,9 +12,10 @@ viewer's browser. Untrusted code, untrusted user, and until now no membership
 model at all: `requireProject` checked only `tenant_id`, so any tenant user
 could invoke any workflow and read any file.
 
-opencx solves this with a three-stage pipeline (static analysis at submit,
-human consent at publish, runtime brokering) but derives the call set with a
-regex they document as leaky in both directions.
+A common approach is a multi-stage pipeline (static analysis at submit,
+human consent at publish, runtime brokering) — but deriving the allowed call
+set with a regex is unsound in both directions (false positives and false
+negatives), so it can't be the authorization boundary on its own.
 
 ## Decision
 

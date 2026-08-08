@@ -31,10 +31,6 @@ Catamorphic is one vision with two surfaces:
    the host's own skills and tools plugged in. See
    [`INTEGRATION.md`](INTEGRATION.md).
 
-Direction, positioning, and the competitive landscape live in
-[`docs/STRATEGY.md`](docs/STRATEGY.md); the strategic task list is
-[`TODO.md`](TODO.md).
-
 **Code is the source of truth.** Workflows, apps, notes: everything is
 stored as plain files (TypeScript, markdown) in a git repository, never a
 proprietary DSL or an opaque store. The parser renders workflow code as an

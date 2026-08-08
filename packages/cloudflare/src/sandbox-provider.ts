@@ -336,7 +336,7 @@ function buildFileRoute(sandboxId: string, absolutePath: string): string {
 }
 
 // The bridge writes each decoded URL path segment to disk verbatim, so
-// `encodeURIComponent("@opencx")` ends up as a `%40opencx` directory and
+// `encodeURIComponent("@acme")` ends up as a `%40acme` directory and
 // breaks module resolution for scoped packages. `@` is a valid pchar per
 // RFC 3986 and doesn't need escaping in paths — decode it back after encoding.
 function encodePathSegment(segment: string): string {

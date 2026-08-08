@@ -18,8 +18,8 @@ tables never define what exists in the repo.
 row is created lazily on first build, and `app_versions` is an append-only build
 history: `kind IN ('preview', 'published')`, `status IN ('building', 'ready',
 'failed')`, at most one `is_active` published version per app (partial unique
-index). Versions are never mutated in place — opencx's draft-overwrite model
-made "did my rebuild land?" unanswerable by version id, and append-only rows
+index). Versions are never mutated in place — a draft-overwrite model
+makes "did my rebuild land?" unanswerable by version id, and append-only rows
 avoid that class of bug outright.
 
 **Builds run in the caller's existing dev sandbox — no new sandbox type.** The

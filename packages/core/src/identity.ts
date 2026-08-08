@@ -1,5 +1,5 @@
 /**
- * Catamorphic is host-agnostic. The host (e.g. OpenCX) owns the real user/org
+ * Catamorphic is host-agnostic. The host (e.g. a SaaS app) owns the real user/org
  * model; catamorphic only cares about two opaque string identifiers:
  *
  * - `tenantId` — the host's org / workspace id. Becomes the UUID stored in

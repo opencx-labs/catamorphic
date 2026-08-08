@@ -9,9 +9,15 @@ dist/
 apps/desktop/out/
 apps/desktop/release/
 
-# Environment
+# Environment & secrets
 .env
-.env.local
+.env.*
+!.env.example
+.dev.vars
+*.pem
+*.key
+*.p12
+*.pfx
 
 # OS files
 .DS_Store
