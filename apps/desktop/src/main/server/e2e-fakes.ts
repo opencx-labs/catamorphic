@@ -336,9 +336,22 @@ export class E2eFakeCodingAgent implements CodingAgentProvider {
           { command, ...(targetId ? { terminalId: targetId } : {}) },
           state.toolContext,
         );
+        // Human-readable body with the machine-readable bits e2e greps for
+        // ('terminal result', the "terminalId":"..." pattern, and the raw
+        // command output) preserved verbatim.
+        const resultRecord = result as {
+          terminalId?: string;
+          output?: string;
+          commandRunning?: boolean;
+        };
+        const cleanOutput = String(resultRecord.output ?? "")
+          .replace(/\u001b\][^\u0007\u001b]*(?:\u0007|\u001b\\)?/g, "")
+          .replace(/\u001b\[[0-9;?]*[a-zA-Z]/g, "")
+          .replace(/\u001b[=>]/g, "")
+          .trim();
         yield {
           type: "text",
-          content: `terminal result: ${JSON.stringify(result)}`,
+          content: `Ran it in the terminal ("terminalId":"${resultRecord.terminalId ?? "unknown"}"). terminal result:\n\n${cleanOutput}`,
         };
       } catch (error) {
         yield {
