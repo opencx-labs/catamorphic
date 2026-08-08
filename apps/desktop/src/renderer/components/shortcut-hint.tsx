@@ -17,6 +17,7 @@ export function ShortcutHint({
   label,
   shortcut,
   side = "bottom",
+  delay = SHOW_DELAY_MS,
   children,
 }: {
   /** Short action name, e.g. "Toggle sidebar". */
@@ -24,6 +25,13 @@ export function ShortcutHint({
   /** Display form of the shortcut, e.g. "⌘B"; omit for a plain tooltip. */
   shortcut?: string;
   side?: "bottom" | "top";
+  /**
+   * Hover delay before the hint shows. The 800ms default fits buttons
+   * (their meaning is usually guessable); identity hints on icon-only
+   * surfaces (chat bubbles) pass a near-zero delay so hovering answers
+   * "which one is this" immediately.
+   */
+  delay?: number;
   children: ReactNode;
 }) {
   const anchorRef = useRef<HTMLSpanElement>(null);
@@ -49,7 +57,7 @@ export function ShortcutHint({
       });
       // Mount hidden, then flip visible next frame so the transition runs.
       requestAnimationFrame(() => setVisible(true));
-    }, SHOW_DELAY_MS);
+    }, delay);
   };
 
   const hide = () => {

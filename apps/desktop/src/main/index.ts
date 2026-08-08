@@ -160,6 +160,12 @@ function createWindow(profileId?: string): BrowserWindow {
       sandbox: false,
       // Browser tabs render as <webview> guests (see main/browser.ts).
       webviewTag: true,
+      // E2e runs drive windows that are usually occluded (test runners
+      // stack several instances behind the terminal), and Chromium
+      // throttles rAF/animation events for occluded windows — exit
+      // animations then never fire animationend and the motion suite
+      // reads phantom zombies. Real usage keeps normal throttling.
+      backgroundThrottling: e2eDataDir === undefined,
     },
   });
   window.once("ready-to-show", () => window.show());
@@ -279,6 +285,9 @@ app.whenReady().then(async () => {
   });
   profileConfig.onSidebarChanged((profileId, config) => {
     sendToProfile(profileId, "catamorphic:sidebar-config-changed", config);
+  });
+  profileConfig.onPrefsChanged((profileId, prefs) => {
+    sendToProfile(profileId, "catamorphic:prefs-changed", prefs);
   });
   app.on("browser-window-focus", applyMenuForFocusedWindow);
 

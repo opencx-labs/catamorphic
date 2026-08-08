@@ -22,6 +22,7 @@ import {
   type AgentHarness,
   type AgentInfo,
   type AgentsData,
+  type AppPrefs,
   desktopApi,
   type ImportableBrowser,
   type OpenRouterCatalog,
@@ -60,6 +61,7 @@ export function SettingsScreen({
 
       <AgentsSection onAddAgent={onAddAgent} />
       <ThemeSection />
+      <NotificationsSection />
       <ShortcutsSection />
       <ImportSection />
       <SidebarSection />
@@ -786,6 +788,77 @@ const TOKEN_LABELS: Record<ThemeToken, string> = {
  * apply immediately — the main process rewrites theme.json, which
  * broadcasts the resolved theme back to every window.
  */
+/**
+ * Notification cues for agent activity: a soft chime when an agent
+ * finishes or asks a question, and an OS notification when the window
+ * isn't focused. Per profile (profiles/<id>/prefs.json), live-applied.
+ */
+function NotificationsSection() {
+  const [prefs, setPrefsState] = useState<AppPrefs | null>(null);
+  useEffect(() => {
+    void desktopApi.getPrefs().then(setPrefsState);
+    return desktopApi.onPrefsChanged(setPrefsState);
+  }, []);
+  if (!prefs) return null;
+
+  const Toggle = ({
+    label,
+    description,
+    checked,
+    onChange,
+  }: {
+    label: string;
+    description: string;
+    checked: boolean;
+    onChange: (value: boolean) => void;
+  }) => (
+    <label className="flex cursor-pointer items-center justify-between gap-4 rounded-lg border border-border bg-bg-raised/40 p-3">
+      <span className="min-w-0">
+        <span className="block text-[13px]">{label}</span>
+        <span className="block text-[11px] leading-4 text-fg-faint">
+          {description}
+        </span>
+      </span>
+      <input
+        type="checkbox"
+        checked={checked}
+        onChange={(event) => onChange(event.target.checked)}
+        className="size-4 shrink-0 accent-(--color-accent)"
+      />
+    </label>
+  );
+
+  return (
+    <section className="mt-8 border-t border-border pt-6">
+      <div className="mb-3 flex items-center justify-between">
+        <h2 className="text-sm font-semibold">Notifications</h2>
+      </div>
+      <div className="flex flex-col gap-2">
+        <Toggle
+          label="Notification sounds"
+          description="A soft chime when an agent finishes working or asks you a question."
+          checked={prefs.notificationSounds}
+          onChange={(value) =>
+            void desktopApi
+              .setPrefs({ notificationSounds: value })
+              .then(setPrefsState)
+          }
+        />
+        <Toggle
+          label="Desktop notifications"
+          description="An OS notification for the same events while the app is in the background."
+          checked={prefs.desktopNotifications}
+          onChange={(value) =>
+            void desktopApi
+              .setPrefs({ desktopNotifications: value })
+              .then(setPrefsState)
+          }
+        />
+      </div>
+    </section>
+  );
+}
+
 function ThemeSection() {
   const theme = useTheme();
   const [presets, setPresets] = useState<ThemePreset[]>([]);

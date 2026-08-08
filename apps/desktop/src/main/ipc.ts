@@ -134,6 +134,30 @@ export function registerIpcHandlers(
     (event) => storesFor(event).keybindings.file,
   );
 
+  // --- per-profile app preferences (notifications) ---
+
+  ipcMain.handle("catamorphic:prefs-get", (event) =>
+    storesFor(event).prefs.load(),
+  );
+
+  // Saving triggers the file watcher, which broadcasts to the profile's
+  // windows (same live-reload contract as keybindings).
+  ipcMain.handle("catamorphic:prefs-set", (event, patch: unknown) =>
+    storesFor(event).prefs.save(
+      typeof patch === "object" && patch !== null ? patch : {},
+    ),
+  );
+
+  // Desktop-notification clicks land here: surface the window so the
+  // renderer can then focus the right chat.
+  ipcMain.handle("catamorphic:window-focus", (event) => {
+    const window = BrowserWindow.fromWebContents(event.sender);
+    if (!window) return;
+    if (window.isMinimized()) window.restore();
+    window.show();
+    window.focus();
+  });
+
   // --- per-profile agents ---
 
   const agentsSnapshot = (store: AgentsStore): AgentsSnapshot => ({

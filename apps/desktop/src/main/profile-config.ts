@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { AgentsStore } from "./agents-store.js";
 import { type Keybindings, KeybindingsStore } from "./keybindings.js";
+import { type AppPrefs, PrefsStore } from "./prefs.js";
 import type { ProfilesStore } from "./profiles.js";
 import type { DataPaths } from "./server/paths.js";
 import { SettingsStore } from "./server/settings.js";
@@ -14,6 +15,7 @@ export interface ProfileStores {
   keybindings: KeybindingsStore;
   sidebar: SidebarConfigStore;
   agents: AgentsStore;
+  prefs: PrefsStore;
 }
 
 /**
@@ -39,6 +41,9 @@ export class ProfileConfigManager {
   >();
   private readonly sidebarListeners = new Set<
     (profileId: string, config: SidebarConfig) => void
+  >();
+  private readonly prefsListeners = new Set<
+    (profileId: string, prefs: AppPrefs) => void
   >();
 
   constructor(
@@ -67,6 +72,7 @@ export class ProfileConfigManager {
       keybindings: new KeybindingsStore(path.join(dir, "keybindings.json")),
       sidebar: new SidebarConfigStore(path.join(dir, "sidebar.js")),
       agents: new AgentsStore(path.join(dir, "agents.json")),
+      prefs: new PrefsStore(path.join(dir, "prefs.json")),
     };
     stores.sidebar.ensureFile();
     stores.theme.watch((theme) => {
@@ -79,6 +85,9 @@ export class ProfileConfigManager {
     });
     stores.sidebar.watch((config) => {
       for (const listener of this.sidebarListeners) listener(profileId, config);
+    });
+    stores.prefs.watch((prefs) => {
+      for (const listener of this.prefsListeners) listener(profileId, prefs);
     });
     this.stores.set(profileId, stores);
     return stores;
@@ -111,11 +120,16 @@ export class ProfileConfigManager {
     this.sidebarListeners.add(listener);
   }
 
+  onPrefsChanged(listener: (profileId: string, prefs: AppPrefs) => void): void {
+    this.prefsListeners.add(listener);
+  }
+
   dispose(): void {
     for (const stores of this.stores.values()) {
       stores.theme.dispose();
       stores.keybindings.dispose();
       stores.sidebar.dispose();
+      stores.prefs.dispose();
     }
     this.stores.clear();
   }

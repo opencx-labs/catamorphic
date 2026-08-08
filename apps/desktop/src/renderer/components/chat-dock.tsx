@@ -6,6 +6,7 @@ import {
   Columns2,
   FileCode,
   FileText,
+  GitFork,
   Globe,
   LoaderCircle,
   Maximize2,
@@ -15,7 +16,6 @@ import {
   X,
 } from "lucide-react";
 import {
-  type ClipboardEvent,
   type FormEvent,
   type KeyboardEvent,
   useEffect,
@@ -29,6 +29,8 @@ import {
   QUESTIONS_DISMISSED_MESSAGE,
   toTimeline,
 } from "./catamorphic/chat-timeline";
+import { ChatGlyph } from "./chat-icon";
+import type { ChatSignals } from "./chat-signals";
 import { ShortcutHint } from "./shortcut-hint";
 
 export type ChatMode = "min" | "partial" | "tab";
@@ -38,9 +40,9 @@ export type ChatMode = "min" | "partial" | "tab";
  * (browser pages it linked, terminals for its project, files it changed).
  */
 export interface ChatSurface {
-  /** Workspace tab key ("browser:<id>" / "terminal:<id>" / "editor:<id>"). */
+  /** Workspace tab key ("browser:<id>" / "terminal:<id>" / "chat:<id>"). */
   key: string;
-  kind: "browser" | "terminal" | "editor";
+  kind: "browser" | "terminal" | "editor" | "chat";
   label: string;
   faviconUrl?: string | null;
   /** The agent is actively working here (spinner on the chip). */
@@ -54,12 +56,14 @@ const SURFACE_GROUP_LABELS = {
   browser: "pages",
   terminal: "terminals",
   editor: "files",
+  chat: "forks",
 } as const;
 
 const SURFACE_ICONS = {
   browser: Globe,
   terminal: SquareTerminal,
   editor: FileCode,
+  chat: GitFork,
 } as const;
 
 /** Short, charismatic empty-state openers; one is picked per chat. */
@@ -120,6 +124,21 @@ async function fileToAttachment(
     mediaType: file.type,
     dataBase64: btoa(binary),
   };
+}
+
+/**
+ * Files from a DataTransfer, robust across sources: `files` covers
+ * screenshots and copied images; the `items` fallback covers sources
+ * that only populate the item list.
+ */
+function filesFrom(data: DataTransfer | null): File[] {
+  if (!data) return [];
+  const files = [...data.files];
+  if (files.length > 0) return files;
+  return [...data.items]
+    .filter((item) => item.kind === "file")
+    .map((item) => item.getAsFile())
+    .filter((file): file is File => file !== null);
 }
 
 /** Stable per-chat pick: hash the id so re-renders don't re-roll. */
@@ -348,6 +367,11 @@ export interface ChatDockEntry {
   localId: string;
   sessionId?: string;
   mode: ChatMode;
+  /**
+   * The chat this one was forked from, when the parent is (or was) open
+   * in this workspace — puts the fork on the parent's surfaces rail.
+   */
+  parentLocalId?: string;
   /** Auto-sent as the first message on mount (palette "Send to agent"). */
   pendingMessage?: string;
   /**
@@ -415,6 +439,10 @@ export interface ChatDockProps {
   ) => void;
   /** Changed-file chip clicked — opens the file in an attached editor. */
   onFileClick?: (path: string) => void;
+  /** Fork the conversation from this assistant message (hover action). */
+  onFork?: (messageId: string) => void;
+  /** Set on forked chats: reveal the parent conversation. */
+  onOpenParent?: () => void;
   onEntryChange: (entry: ChatDockEntry) => void;
   /** Close the chat entirely (dismissing an empty chat removes it). */
   onClose: (localId: string) => void;
@@ -425,8 +453,15 @@ export interface ChatDockProps {
    */
   registerClose?: (close: () => void) => void;
   onSessionCreated: (localId: string, sessionId: string) => void;
-  /** The agent started/stopped working on this chat (drives indicators). */
-  onSendingChange: (localId: string, sending: boolean) => void;
+  /**
+   * The chat's live signals changed: the agent started/stopped working,
+   * the composer gained/lost an unsent draft, or a question is waiting.
+   * Drives every indicator surface (bubbles, tabs, notifications).
+   */
+  onSignalsChange: (
+    localId: string,
+    signals: Required<Pick<ChatSignals, "working" | "draft" | "awaitingInput">>,
+  ) => void;
 }
 
 /**
@@ -452,11 +487,13 @@ export function ChatDock({
   onUnsplit,
   onLinkClick,
   onFileClick,
+  onFork,
+  onOpenParent,
   onEntryChange,
   onClose,
   registerClose,
   onSessionCreated,
-  onSendingChange,
+  onSignalsChange,
 }: ChatDockProps) {
   const chat = useAgentChat(projectId, {
     sessionId: entry.sessionId,
@@ -471,6 +508,67 @@ export function ChatDock({
     chat.isSending,
   );
 
+  // ↑/↓ in the composer recall previously sent messages, shell-history
+  // style: ↑ from an empty (or recalled) draft steps back through what
+  // you sent, ↓ steps forward and finally restores the stashed draft.
+  // Typing anything exits recall mode.
+  const sentHistory = messages
+    .filter(
+      (message) =>
+        message.role === "user" &&
+        message.content !== QUESTIONS_DISMISSED_MESSAGE &&
+        message.content.trim() !== "",
+    )
+    .map((message) => message.content);
+  const [recall, setRecall] = useState<{ index: number; stash: string } | null>(
+    null,
+  );
+  // One-shot recall animation, re-armed per step: drop the class for a
+  // frame, then re-apply so the keyframe replays (same dance as the
+  // pane-motion nudge in app.tsx).
+  const [recallAnimating, setRecallAnimating] = useState(false);
+  const flashRecall = () => {
+    setRecallAnimating(false);
+    requestAnimationFrame(() => setRecallAnimating(true));
+  };
+  const applyRecall = (index: number, stash: string) => {
+    const content = sentHistory[index];
+    if (content === undefined) return;
+    setRecall({ index, stash });
+    setDraft(content);
+    flashRecall();
+    requestAnimationFrame(() => {
+      const input = inputRef.current;
+      input?.setSelectionRange(input.value.length, input.value.length);
+    });
+  };
+  const recallUp = (): boolean => {
+    if (sentHistory.length === 0) return false;
+    if (recall === null) {
+      if (draft.trim() !== "") return false;
+      applyRecall(sentHistory.length - 1, draft);
+      return true;
+    }
+    if (recall.index === 0) return true; // at the oldest — swallow the key
+    applyRecall(recall.index - 1, recall.stash);
+    return true;
+  };
+  const recallDown = (): boolean => {
+    if (recall === null) return false;
+    if (recall.index >= sentHistory.length - 1) {
+      setDraft(recall.stash);
+      setRecall(null);
+      flashRecall();
+      return true;
+    }
+    applyRecall(recall.index + 1, recall.stash);
+    return true;
+  };
+
+  // PageUp jumps the timeline to your previous message (same action as
+  // the timeline's ↑ button); the timeline registers the scroll here.
+  const jumpToPreviousRef = useRef<(() => void) | null>(null);
+
   // The agent roster drives composer capabilities (what media this agent
   // accepts), marker names, and the auth-error re-connect action.
   const [roster, setRoster] = useState<{
@@ -480,6 +578,7 @@ export function ChatDock({
   // Refetched when the session's agent changes: a switch may involve an
   // agent created after this dock mounted (marker names, capabilities).
   const sessionAgentId = chat.session?.agentId;
+  // biome-ignore lint/correctness/useExhaustiveDependencies: sessionAgentId is the refetch trigger, not a body dependency
   useEffect(() => {
     let cancelled = false;
     void desktopApi
@@ -539,13 +638,33 @@ export function ChatDock({
 
   // isWorking, not isSending: it also covers turns this client didn't start
   // (reloads) and can't stick forever — the server settles orphaned turns.
-  // The unmount cleanup matters: closing a chat mid-turn must clear its
-  // activity flag, or the aggregate bubble spins forever for a chat that
-  // no longer exists.
+  // Draft and awaiting-input ride along so every indicator surface shares
+  // one signal set. Reported only when a value actually flips (the host
+  // dedups too), and cleared on true unmount — closing a chat mid-turn
+  // must clear its flags, or the aggregate bubble spins forever for a
+  // chat that no longer exists. The unmount cleanup is a separate effect:
+  // a combined effect's cleanup would fire on every dep change, flapping
+  // working false→true and producing phantom "finished" notifications.
+  const hasDraft = draft.trim().length > 0 || attachments.length > 0;
+  const awaitingInput = Boolean(questions) && !chat.isWorking;
   useEffect(() => {
-    onSendingChange(entry.localId, chat.isWorking);
-    return () => onSendingChange(entry.localId, false);
-  }, [chat.isWorking, entry.localId, onSendingChange]);
+    onSignalsChange(entry.localId, {
+      working: chat.isWorking,
+      draft: hasDraft,
+      awaitingInput,
+    });
+  }, [chat.isWorking, hasDraft, awaitingInput, entry.localId, onSignalsChange]);
+  const onSignalsChangeRef = useRef(onSignalsChange);
+  onSignalsChangeRef.current = onSignalsChange;
+  useEffect(
+    () => () =>
+      onSignalsChangeRef.current(entry.localId, {
+        working: false,
+        draft: false,
+        awaitingInput: false,
+      }),
+    [entry.localId],
+  );
 
   // Fresh values for the window Escape listener without re-subscribing.
   const entryRef = useRef(entry);
@@ -617,6 +736,7 @@ export function ChatDock({
     if (!message && files.length === 0) return null;
     setDraft("");
     setAttachments([]);
+    setRecall(null);
     return { message, files };
   };
 
@@ -635,7 +755,31 @@ export function ChatDock({
   };
 
   const onKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>) => {
-    if (event.key !== "Enter" || event.nativeEvent.isComposing) return;
+    if (event.nativeEvent.isComposing) return;
+    if (event.key === "PageUp") {
+      event.preventDefault();
+      jumpToPreviousRef.current?.();
+      return;
+    }
+    if (
+      event.key === "ArrowUp" &&
+      !event.metaKey &&
+      !event.altKey &&
+      !event.shiftKey
+    ) {
+      if (recallUp()) event.preventDefault();
+      return;
+    }
+    if (
+      event.key === "ArrowDown" &&
+      !event.metaKey &&
+      !event.altKey &&
+      !event.shiftKey
+    ) {
+      if (recallDown()) event.preventDefault();
+      return;
+    }
+    if (event.key !== "Enter") return;
     if (event.metaKey) {
       event.preventDefault();
       submitNow();
@@ -647,10 +791,9 @@ export function ChatDock({
     }
   };
 
-  const onPaste = (event: ClipboardEvent<HTMLTextAreaElement>) => {
-    const files = [...(event.clipboardData?.files ?? [])];
+  /** Convert dropped/pasted files into composer chips (capability-gated). */
+  const addFiles = (files: File[]) => {
     if (files.length === 0) return;
-    event.preventDefault();
     void Promise.all(files.map(fileToAttachment)).then((converted) => {
       const usable = converted.filter(
         (attachment): attachment is ComposerAttachment =>
@@ -661,6 +804,34 @@ export function ChatDock({
       }
     });
   };
+
+  const acceptsMediaRef = useRef(accepts.length > 0);
+  acceptsMediaRef.current = accepts.length > 0;
+  const addFilesRef = useRef(addFiles);
+  addFilesRef.current = addFiles;
+
+  // Paste is handled at the WINDOW while this chat is the front surface:
+  // requiring the caret to be exactly in the textarea made "copy a
+  // screenshot, click the chat, Cmd+V" silently do nothing. Text pastes
+  // stay native — only pastes that carry files are intercepted.
+  const frontSurface = entry.mode === "partial" || (isTab && tabActive);
+  useEffect(() => {
+    if (!frontSurface) return;
+    const onWindowPaste = (event: globalThis.ClipboardEvent) => {
+      if (!acceptsMediaRef.current || event.defaultPrevented) return;
+      const files = filesFrom(event.clipboardData);
+      if (files.length === 0) return;
+      event.preventDefault();
+      addFilesRef.current(files);
+    };
+    window.addEventListener("paste", onWindowPaste);
+    return () => window.removeEventListener("paste", onWindowPaste);
+  }, [frontSurface]);
+
+  // Drag & drop onto the chat surface attaches too (with a drop cue) —
+  // dragging an image in is the first thing many people try.
+  const [dropActive, setDropActive] = useState(false);
+  const dragDepthRef = useRef(0);
 
   // Expanding (bubble click, new chat) should land the user ready to type.
   // rAF waits out the `inert` removal — focus() is a no-op on inert subtrees.
@@ -723,6 +894,28 @@ export function ChatDock({
     >
       <section
         onMouseDownCapture={onFocusRequest}
+        onDragEnter={(event) => {
+          if (!acceptsMediaRef.current) return;
+          if (![...(event.dataTransfer?.types ?? [])].includes("Files")) return;
+          event.preventDefault();
+          dragDepthRef.current += 1;
+          setDropActive(true);
+        }}
+        onDragOver={(event) => {
+          if (!dropActive) return;
+          event.preventDefault();
+        }}
+        onDragLeave={() => {
+          dragDepthRef.current = Math.max(0, dragDepthRef.current - 1);
+          if (dragDepthRef.current === 0) setDropActive(false);
+        }}
+        onDrop={(event) => {
+          if (!dropActive) return;
+          event.preventDefault();
+          dragDepthRef.current = 0;
+          setDropActive(false);
+          addFiles(filesFrom(event.dataTransfer));
+        }}
         data-palette-target={(paletteTargeted && !isTab) || undefined}
         className={`pointer-events-auto relative flex w-full origin-bottom flex-col overflow-hidden backdrop-blur-xl transition-[max-width,height,opacity,translate,scale,background-color,border-radius,border-color] duration-250 ease-[cubic-bezier(0.2,0,0,1)] ${
           isTab
@@ -742,6 +935,14 @@ export function ChatDock({
         <span className="sr-only" aria-live="polite">
           {activity ?? messages.at(-1)?.content}
         </span>
+        {/* Drop cue: an accent dashed veil while files hover the chat. */}
+        {dropActive && (
+          <div className="pointer-events-none absolute inset-2 z-20 grid animate-fade-in place-items-center rounded-xl border-2 border-dashed border-accent/60 bg-accent/5">
+            <span className="rounded-full border border-border bg-bg-raised/95 px-3 py-1.5 text-xs text-fg">
+              Drop to attach
+            </span>
+          </div>
+        )}
         {/* The tab already names the chat — in tab mode the header collapses
             and its controls float over the timeline's top-right corner. */}
         <header
@@ -752,7 +953,11 @@ export function ChatDock({
         >
           <span className="flex min-w-0 items-center gap-2">
             <span className="grid size-6 shrink-0 place-items-center rounded-full border border-border-strong bg-bg-overlay">
-              <Bot className="size-3.5" />
+              {chat.session?.icon ? (
+                <ChatGlyph icon={chat.session.icon} className="size-3.5" />
+              ) : (
+                <Bot className="size-3.5" />
+              )}
             </span>
             <span className="truncate">{title}</span>
           </span>
@@ -760,6 +965,19 @@ export function ChatDock({
         {/* A snug pill behind the controls so they never blend into (or
             hide) timeline content scrolled beneath them. */}
         <span className="absolute right-2 top-2 z-10 flex items-center gap-0.5 rounded-lg border border-border bg-bg-raised/95 p-0.5 backdrop-blur-sm">
+          {onOpenParent && (
+            <ShortcutHint label="Go to the original chat">
+              <button
+                type="button"
+                className="grid size-7 cursor-pointer place-items-center rounded-md text-fg-muted transition-colors duration-150 hover:bg-bg-overlay hover:text-fg"
+                onClick={onOpenParent}
+                aria-label="Go to the original chat"
+                data-testid="chat-open-parent"
+              >
+                <GitFork className="size-3.5" />
+              </button>
+            </ShortcutHint>
+          )}
           {isTab && onUnsplit && (
             <ShortcutHint label="Full width">
               <button
@@ -826,6 +1044,10 @@ export function ChatDock({
             emptyState={emptyStateFor(entry.localId)}
             onLinkClick={onLinkClick}
             onFileClick={onFileClick}
+            onFork={entry.sessionId ? onFork : undefined}
+            registerJumpToPreviousUserMessage={(jump) => {
+              jumpToPreviousRef.current = jump;
+            }}
           />
           {/* Keep the composer clear of the bubble UI: bottom padding for
               the expanded strip, side padding for the corner bubble. */}
@@ -908,11 +1130,21 @@ export function ChatDock({
               <div className="flex items-center gap-2">
                 <textarea
                   ref={inputRef}
-                  className="field-sizing-content max-h-24 min-h-9 min-w-0 flex-1 resize-none bg-transparent px-2.5 py-1.5 text-sm outline-none placeholder:text-fg-faint"
+                  onAnimationEnd={(event) => {
+                    if (event.animationName === "input-recall") {
+                      setRecallAnimating(false);
+                    }
+                  }}
+                  className={`field-sizing-content max-h-24 min-h-9 min-w-0 flex-1 resize-none bg-transparent px-2.5 py-1.5 text-sm outline-none placeholder:text-fg-faint ${
+                    recallAnimating ? "animate-input-recall" : ""
+                  }`}
                   value={draft}
-                  onChange={(event) => setDraft(event.target.value)}
+                  onChange={(event) => {
+                    setDraft(event.target.value);
+                    // Typing exits history-recall mode.
+                    setRecall(null);
+                  }}
                   onKeyDown={onKeyDown}
-                  onPaste={accepts.length > 0 ? onPaste : undefined}
                   placeholder={
                     accepts.length > 0
                       ? placeholder

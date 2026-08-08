@@ -35,7 +35,11 @@ import { DEFAULT_SIDEBAR_FILE } from "./sidebar-config.js";
  *  - unpacked Chrome extensions loaded per profile.
  */
 
-const preparedSessions = new Set<string>();
+// Partition → in-flight/settled prepare. A Promise map (not a Set of
+// done flags): concurrent callers share one prepare and actually await
+// it, and a failed prepare is retried on the next call instead of being
+// permanently marked done while half-applied.
+const preparedSessions = new Map<string, Promise<void>>();
 
 /**
  * Chrome's client-hint brand list, derived from the session UA. Google's
@@ -60,13 +64,24 @@ function extensionsDir(profilesDir: string, profileId: string): string {
   return path.join(profilesDir, profileId, "extensions");
 }
 
-async function prepareProfileSession(
+function prepareProfileSession(
   profilesDir: string,
   profileId: string,
 ): Promise<void> {
   const partition = partitionFor(profileId);
-  if (preparedSessions.has(partition)) return;
-  preparedSessions.add(partition);
+  const existing = preparedSessions.get(partition);
+  if (existing) return existing;
+  const prepare = doPrepareProfileSession(profilesDir, partition, profileId);
+  preparedSessions.set(partition, prepare);
+  prepare.catch(() => preparedSessions.delete(partition));
+  return prepare;
+}
+
+async function doPrepareProfileSession(
+  profilesDir: string,
+  partition: string,
+  profileId: string,
+): Promise<void> {
   const ses = session.fromPartition(partition);
   const { brands, fullVersionList } = chromeBrands(ses.getUserAgent());
 

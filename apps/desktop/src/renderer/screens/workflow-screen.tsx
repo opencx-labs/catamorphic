@@ -15,6 +15,7 @@ import {
 import { useSetAtom } from "jotai";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { MonacoCodeEditor } from "../components/catamorphic/monaco-editor.js";
+import "../lib/monaco-setup.js";
 import { PendingButton } from "../components/pending-button.js";
 import { useTheme } from "../lib/theme.js";
 

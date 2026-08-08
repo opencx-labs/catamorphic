@@ -42,6 +42,10 @@ export interface AgentSession {
   /** Per-session reasoning-effort override; null = the agent's default. */
   modelEffort: AgentEffort | null;
   title: string | null;
+  /** Agent-chosen conversation icon ("<name>:<color>"); null = default. */
+  icon: string | null;
+  /** Session this one was forked from, if any. */
+  parentSessionId: string | null;
   status: "active" | "closed";
   baseCommitSha: string | null;
   createdAt: string;
@@ -486,6 +490,130 @@ export class AgentSessionsService {
         })
         .execute();
     }
+    return mapSession(row);
+  }
+
+  /**
+   * Set the session's conversation icon ("<name>:<color>"; null clears).
+   * Deliberately not part of {@link update}: agents set icons mid-turn
+   * (their own turn), and update() refuses while a turn runs.
+   */
+  async setIcon(
+    identity: Identity,
+    projectId: string,
+    sessionId: string,
+    icon: string | null,
+  ): Promise<AgentSession> {
+    await this.requireSession(identity, projectId, sessionId);
+    const row = await this.db
+      .updateTable("agent_sessions")
+      .set({ icon, updated_at: new Date() })
+      .where("id", "=", sessionId)
+      .returningAll()
+      .executeTakeFirstOrThrow();
+    return mapSession(row);
+  }
+
+  /**
+   * Fork a conversation: a NEW session on the same agent carrying a copy
+   * of the transcript up to (and including) `messageId` — or the whole
+   * settled transcript when omitted. The fork records its parent, opens
+   * with a marker row, and its first turn re-anchors from the copied
+   * history exactly like a host-restart recovery would; the parent stays
+   * untouched.
+   */
+  async fork(
+    identity: Identity,
+    projectId: string,
+    sessionId: string,
+    input: { messageId?: string } = {},
+  ): Promise<AgentSession> {
+    const session = await this.requireSession(identity, projectId, sessionId);
+    const messages = await this.db
+      .selectFrom("agent_messages")
+      .where("session_id", "=", sessionId)
+      .selectAll()
+      .orderBy("seq", "asc")
+      .execute();
+
+    let copied = messages;
+    if (input.messageId) {
+      const cut = messages.findIndex(
+        (message) => message.id === input.messageId,
+      );
+      if (cut === -1) {
+        throw new AgentSessionNotFoundError(input.messageId);
+      }
+      copied = messages.slice(0, cut + 1);
+    }
+    // Only settled content forks: an in-flight or failed tail would give
+    // the new conversation a phantom turn.
+    copied = copied.filter((message) => {
+      const status = (message.metadata as JsonObject | null)?.status;
+      return status !== "in_progress" && status !== "failed";
+    });
+
+    const forkTitle = session.title ? `${session.title} (fork)` : null;
+    // Marker rows never reach the harness (transcriptHistory drops them),
+    // so the fork's self-awareness travels in its system prompt: the
+    // first anchored turn already knows it's on a tangent.
+    const forkNote = `This conversation is a fork of ${
+      session.title
+        ? `the conversation "${session.title}"`
+        : "another conversation"
+    }: it starts from a copy of that transcript up to the fork point. The user is exploring a tangent here — the original conversation continues separately, so don't refer to this one as if it were the original.`;
+    const forkSystemPrompt = [session.system_prompt, forkNote]
+      .filter((part): part is string => Boolean(part))
+      .join("\n\n");
+    const row = await this.db.transaction().execute(async (trx) => {
+      const fork = await trx
+        .insertInto("agent_sessions")
+        .values({
+          project_id: projectId,
+          external_user_id: identity.externalUserId,
+          provider: session.provider,
+          provider_session_id: null,
+          agent_id: session.agent_id,
+          model_effort: session.model_effort,
+          system_prompt: forkSystemPrompt,
+          sandbox_id: null,
+          status: "active",
+          base_commit_sha: session.base_commit_sha,
+          icon: session.icon,
+          parent_session_id: sessionId,
+          title: forkTitle,
+        })
+        .returningAll()
+        .executeTakeFirstOrThrow();
+      for (const message of copied) {
+        await trx
+          .insertInto("agent_messages")
+          .values({
+            session_id: fork.id,
+            role: message.role,
+            content: message.content,
+            commit_sha: message.commit_sha,
+            metadata: message.metadata,
+          })
+          .execute();
+      }
+      // The divider that tells both the user and the agent where this
+      // conversation came from.
+      await trx
+        .insertInto("agent_messages")
+        .values({
+          session_id: fork.id,
+          role: "system",
+          content: session.title
+            ? `Forked from "${session.title}"`
+            : "Forked from another conversation",
+          metadata: {
+            marker: { kind: "fork", parentSessionId: sessionId },
+          },
+        })
+        .execute();
+      return fork;
+    });
     return mapSession(row);
   }
 
@@ -1507,6 +1635,8 @@ function mapSession(row: SessionRow): AgentSession {
     agentId: row.agent_id,
     modelEffort: (row.model_effort as AgentEffort | null) ?? null,
     title: row.title,
+    icon: row.icon,
+    parentSessionId: row.parent_session_id,
     status: row.status as "active" | "closed",
     baseCommitSha: row.base_commit_sha,
     createdAt: row.created_at.toISOString(),

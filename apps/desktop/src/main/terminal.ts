@@ -26,7 +26,14 @@ interface TerminalSession {
   pty: IPty;
   /** User sessions stream to their window; agent sessions broadcast. */
   sender: WebContents | null;
-  buffer: string;
+  /**
+   * Rolling output, kept as chunks: appending must not copy the whole
+   * cap on every PTY data event (a chatty build produces thousands of
+   * chunks per second — `buffer + data` churned hundreds of MB/s).
+   * Reads join lazily via bufferText(), which collapses to one chunk.
+   */
+  chunks: string[];
+  chunksLength: number;
   running: boolean;
   /** The shell binary's name — the idle foreground process. */
   shellName: string;
@@ -69,11 +76,58 @@ export interface AgentTerminals {
   kill(sessionId: string): boolean;
 }
 
+/** Closed-session scrollback kept for Cmd+Shift+T restores. */
+const MORGUE_CAP = 10;
+
 export function registerTerminalSupport(state: ServerState): {
   dispose(): void;
   agentTerminals: AgentTerminals;
 } {
   const sessions = new Map<string, TerminalSession>();
+
+  const appendBuffer = (session: TerminalSession, data: string) => {
+    session.chunks.push(data);
+    session.chunksLength += data.length;
+    // Shed whole head chunks once the cap is comfortably exceeded; a
+    // single oversized chunk is trimmed in place.
+    while (
+      session.chunks.length > 1 &&
+      session.chunksLength - (session.chunks[0]?.length ?? 0) >= BUFFER_CAP
+    ) {
+      const head = session.chunks.shift();
+      session.chunksLength -= head?.length ?? 0;
+    }
+    const only = session.chunks[0];
+    if (session.chunks.length === 1 && only && only.length > BUFFER_CAP) {
+      session.chunks[0] = only.slice(-BUFFER_CAP);
+      session.chunksLength = session.chunks[0].length;
+    }
+  };
+
+  /** Join (and collapse — repeated reads stay cheap) the rolling buffer. */
+  const bufferText = (session: TerminalSession): string => {
+    if (session.chunks.length > 1) {
+      const joined = session.chunks.join("");
+      session.chunks = [joined];
+      session.chunksLength = joined.length;
+    }
+    return session.chunks[0] ?? "";
+  };
+
+  // When a user session ends (shell exit, tab close), its buffer moves
+  // here so a reopened tab can replay the scrollback above its fresh
+  // shell. Insertion-ordered; oldest entries fall off past the cap.
+  const morgue = new Map<string, string>();
+  const bury = (sessionId: string, session: TerminalSession) => {
+    if (session.agent || session.chunksLength === 0) return;
+    morgue.delete(sessionId);
+    morgue.set(sessionId, bufferText(session));
+    while (morgue.size > MORGUE_CAP) {
+      const oldest = morgue.keys().next().value;
+      if (oldest === undefined) break;
+      morgue.delete(oldest);
+    }
+  };
 
   const broadcast = (channel: string, payload: unknown) => {
     for (const window of BrowserWindow.getAllWindows()) {
@@ -135,7 +189,8 @@ export function registerTerminalSupport(state: ServerState): {
     const session: TerminalSession = {
       pty,
       sender: input.sender,
-      buffer: "",
+      chunks: [],
+      chunksLength: 0,
       running: true,
       shellName: path.basename(shell),
       busy: false,
@@ -144,7 +199,7 @@ export function registerTerminalSupport(state: ServerState): {
     sessions.set(sessionId, session);
 
     pty.onData((data) => {
-      session.buffer = (session.buffer + data).slice(-BUFFER_CAP);
+      appendBuffer(session, data);
       emit(session, "catamorphic:terminal-data", { sessionId, data });
     });
     pty.onExit(({ exitCode }) => {
@@ -152,8 +207,12 @@ export function registerTerminalSupport(state: ServerState): {
       if (!sessions.has(sessionId)) return;
       emit(session, "catamorphic:terminal-exit", { sessionId, exitCode });
       // Agent sessions stay readable (buffer) until explicitly killed or
-      // the app quits; user sessions are done once their tab reacts.
-      if (!session.agent) sessions.delete(sessionId);
+      // the app quits; user sessions are done once their tab reacts —
+      // their scrollback moves to the morgue for Cmd+Shift+T.
+      if (!session.agent) {
+        bury(sessionId, session);
+        sessions.delete(sessionId);
+      }
     });
     if (input.sender) {
       // A closed window can't kill its tabs' sessions itself.
@@ -191,15 +250,34 @@ export function registerTerminalSupport(state: ServerState): {
   ipcMain.handle("catamorphic:terminal-kill", (_event, sessionId: string) => {
     const session = sessions.get(sessionId);
     if (!session) return;
+    bury(sessionId, session);
     sessions.delete(sessionId);
     if (session.running) session.pty.kill();
+    // The pty exit callback skips deleted sessions — announce the death
+    // ourselves so a kill triggered by a live tab (Cmd+D) still closes
+    // it. Unmount-triggered kills unsubscribed already; this is a no-op
+    // for them.
+    emit(session, "catamorphic:terminal-exit", { sessionId, exitCode: 0 });
   });
+
+  /**
+   * Scrollback of a CLOSED user session (Cmd+Shift+T): the reopened tab
+   * replays it above the fresh shell. Not one-shot — StrictMode double
+   * mounts would eat a one-shot read; the cap is the cleanup.
+   */
+  ipcMain.handle(
+    "catamorphic:terminal-restore-buffer",
+    (_event, sessionId: string) => {
+      const buffer = morgue.get(sessionId);
+      return buffer !== undefined ? { buffer } : null;
+    },
+  );
 
   /** Replay history when a renderer attaches to a live (agent) session. */
   ipcMain.handle("catamorphic:terminal-buffer", (_event, sessionId: string) => {
     const session = sessions.get(sessionId);
     return session
-      ? { buffer: session.buffer, running: session.running }
+      ? { buffer: bufferText(session), running: session.running }
       : null;
   });
 
@@ -252,16 +330,20 @@ export function registerTerminalSupport(state: ServerState): {
     },
     read: (sessionId, maxChars = 20_000) => {
       const session = sessions.get(sessionId);
-      return session ? session.buffer.slice(-maxChars) : null;
+      return session ? bufferText(session).slice(-maxChars) : null;
     },
-    bufferLength: (sessionId) => sessions.get(sessionId)?.buffer.length ?? null,
+    bufferLength: (sessionId) => {
+      const session = sessions.get(sessionId);
+      return session ? session.chunksLength : null;
+    },
     readFrom: (sessionId, offset, maxChars = 20_000) => {
       const session = sessions.get(sessionId);
       if (!session) return "";
+      const text = bufferText(session);
       // The rolling buffer may have shed its head since the offset was
       // taken; clamp into range, newest content wins.
-      const start = Math.max(0, Math.min(offset, session.buffer.length));
-      return session.buffer.slice(start).slice(-maxChars);
+      const start = Math.max(0, Math.min(offset, text.length));
+      return text.slice(start).slice(-maxChars);
     },
     isRunning: (sessionId) => sessions.get(sessionId)?.running ?? false,
     isBusy: (sessionId) => {

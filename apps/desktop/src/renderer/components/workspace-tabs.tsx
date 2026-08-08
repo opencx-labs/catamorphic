@@ -3,9 +3,9 @@ import {
   ChevronsLeft,
   ChevronsRight,
   FileCode,
+  GitFork,
   Globe,
   LayoutGrid,
-  LoaderCircle,
   MessageSquare,
   Plus,
   Search,
@@ -14,25 +14,104 @@ import {
   Workflow as WorkflowIcon,
   X,
 } from "lucide-react";
-import { Fragment, useRef, useState } from "react";
+import { Fragment, useEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { formatBinding, useKeybindings } from "../lib/keybindings";
 import { AnimatedTitle } from "./animated-title";
+import { ChatGlyph, hasCustomChatIcon } from "./chat-icon";
+import { SignalBadge, SignalGlyph } from "./chat-signals";
 import { ShortcutHint } from "./shortcut-hint";
 
-/** Live activity signals mirrored onto a tab's icon (chat tabs today). */
+/**
+ * Live activity signals mirrored onto a tab's icon — the same vocabulary
+ * as the chat bubbles (chat-signals.tsx): spinner while working, dot for
+ * unread, pencil for a draft (chat composer text, editor unsaved changes),
+ * pulsing "?" for a waiting agent question.
+ */
 interface TabIndicators {
   /** Agent working → the icon cross-fades to a spinner. */
-  sending?: boolean;
+  working?: boolean;
   /** Response landed while the tab was hidden → dot on the icon. */
   unread?: boolean;
+  /** Unsent draft (chat composer, editor changes) → pencil badge. */
+  draft?: boolean;
+  /** The agent asked and is waiting → pulsing "?" badge. */
+  awaitingInput?: boolean;
   /** Chat group this tab belongs to (parent chat or attached surface). */
   groupId?: string;
+  /** Secondary hover-card line: URL, file path, agent name … */
+  detail?: string;
+}
+
+/** The card's status line — most urgent signal first. */
+function tabStatusLine(tab: WorkspaceTab): string | null {
+  if (tab.working) return "Agent is working…";
+  if (tab.awaitingInput) return "The agent is waiting for your answer";
+  if (tab.unread) return "New reply";
+  if (tab.draft) {
+    return tab.kind === "editor" ? "Unsaved changes" : "Unsent draft";
+  }
+  return null;
+}
+
+const HOVER_CARD_DELAY_MS = 500;
+
+/**
+ * Chrome-style tab hover card: the FULL title (the strip truncates at
+ * ~20 chars), a per-kind detail line (page URL, file path, agent), and
+ * the tab's live status. Portal-rendered below the tab; appears after a
+ * short dwell so sweeping across the strip stays quiet.
+ */
+function TabHoverCard({
+  tab,
+  anchor,
+}: {
+  tab: WorkspaceTab;
+  anchor: { x: number; y: number };
+}) {
+  const status = tabStatusLine(tab);
+  const left = Math.max(8, Math.min(anchor.x, window.innerWidth - 296));
+  return createPortal(
+    <div
+      role="tooltip"
+      style={{ left, top: anchor.y }}
+      className="pointer-events-none fixed z-50 w-72 animate-fade-in rounded-lg border border-border bg-bg-overlay p-2.5 shadow-2xl"
+    >
+      <p className="break-words text-[12px] font-medium leading-4 text-fg">
+        {tab.label ?? tab.name}
+      </p>
+      {tab.detail && (
+        <p className="mt-0.5 break-all text-[11px] leading-4 text-fg-muted">
+          {tab.detail}
+        </p>
+      )}
+      {status && (
+        <p className="mt-1 flex items-center gap-1.5 text-[11px] text-fg-muted">
+          <span
+            className={`size-1.5 rounded-full ${
+              tab.working || tab.awaitingInput ? "bg-accent" : "bg-fg-faint"
+            }`}
+          />
+          {status}
+        </p>
+      )}
+    </div>,
+    document.body,
+  );
 }
 
 export type WorkspaceTab = (
   | { kind: "workflow"; name: string; label?: string }
   | { kind: "app"; name: string; label?: string }
-  | { kind: "chat"; name: string; label?: string }
+  | {
+      kind: "chat";
+      name: string;
+      label?: string;
+      /** Agent-chosen conversation icon ("<name>:<color>"). */
+      chatIcon?: string | null;
+      /** The chat is a fork of another conversation. */
+      fork?: boolean;
+    }
   | {
       kind: "browser";
       name: string;
@@ -181,6 +260,28 @@ export function WorkspaceTabBar({
   }
   const [dragKey, setDragKey] = useState<string | null>(null);
   const [dropBeforeKey, setDropBeforeKey] = useState<string | null>(null);
+  // Hover card: armed by dwelling on a tab's body, disarmed by leaving,
+  // clicking, or starting a drag.
+  const [hoverCard, setHoverCard] = useState<{
+    key: string;
+    x: number;
+    y: number;
+  } | null>(null);
+  const hoverTimerRef = useRef<ReturnType<typeof setTimeout> | undefined>(
+    undefined,
+  );
+  useEffect(() => () => clearTimeout(hoverTimerRef.current), []);
+  const armHoverCard = (key: string, element: HTMLElement) => {
+    clearTimeout(hoverTimerRef.current);
+    hoverTimerRef.current = setTimeout(() => {
+      const rect = element.getBoundingClientRect();
+      setHoverCard({ key, x: rect.left, y: rect.bottom + 8 });
+    }, HOVER_CARD_DELAY_MS);
+  };
+  const disarmHoverCard = () => {
+    clearTimeout(hoverTimerRef.current);
+    setHoverCard(null);
+  };
   const groupByParent = new Map(
     groups.map((group) => [group.parentKey, group]),
   );
@@ -249,6 +350,7 @@ export function WorkspaceTabBar({
               onDragStart={(event) => {
                 event.dataTransfer.setData("text/plain", key);
                 event.dataTransfer.effectAllowed = "move";
+                disarmHoverCard();
                 setDragKey(key);
                 onDragStateChange?.(key);
               }}
@@ -305,43 +407,63 @@ export function WorkspaceTabBar({
             >
               <button
                 type="button"
-                onClick={() => onSelect(key)}
+                onClick={() => {
+                  disarmHoverCard();
+                  onSelect(key);
+                }}
+                onMouseEnter={(event) => {
+                  if (!exiting && !dragKey) {
+                    armHoverCard(key, event.currentTarget);
+                  }
+                }}
+                onMouseLeave={disarmHoverCard}
                 className="flex cursor-pointer items-center gap-1.5 px-1.5"
               >
-                {/* Stacked like the chat bubbles: icon cross-fades to a
-                  spinner while the agent works; unread lands as a dot. */}
+                {/* Same signal vocabulary as the chat bubbles: spinner
+                  while working; unread/draft/question land as badges. */}
                 <span className="relative grid size-3.5 shrink-0 place-items-center">
-                  {tab.kind === "browser" && tab.faviconUrl ? (
-                    <img
-                      src={tab.faviconUrl}
-                      alt=""
-                      className={`col-start-1 row-start-1 size-3.5 rounded-[3px] transition-[opacity,scale] duration-200 ease-[cubic-bezier(0.2,0,0,1)] ${
-                        tab.sending
-                          ? "scale-50 opacity-0"
-                          : "scale-100 opacity-100"
-                      }`}
-                    />
-                  ) : (
-                    <Icon
-                      className={`col-start-1 row-start-1 size-3.5 transition-[opacity,scale] duration-200 ease-[cubic-bezier(0.2,0,0,1)] ${
-                        tab.sending
-                          ? "scale-50 opacity-0"
-                          : "scale-100 opacity-100"
-                      }`}
-                    />
+                  <SignalGlyph
+                    working={tab.working ?? false}
+                    className="size-3.5"
+                  >
+                    {tab.kind === "browser" && tab.faviconUrl ? (
+                      <img
+                        src={tab.faviconUrl}
+                        alt=""
+                        className="size-3.5 rounded-[3px]"
+                      />
+                    ) : tab.kind === "chat" ? (
+                      <ChatGlyph
+                        icon={tab.chatIcon}
+                        fork={tab.fork}
+                        className="size-3.5"
+                      />
+                    ) : (
+                      <Icon className="size-3.5" />
+                    )}
+                  </SignalGlyph>
+                  {/* A custom conversation icon still reads as a chat: a
+                      tiny chat marker rides the glyph's corner. */}
+                  {tab.kind === "chat" && hasCustomChatIcon(tab.chatIcon) && (
+                    <span className="absolute -bottom-1 -right-1 grid size-2.5 place-items-center rounded-full bg-bg-raised">
+                      {tab.fork ? (
+                        <GitFork className="size-1.5 text-fg-muted" />
+                      ) : (
+                        <MessageSquare className="size-1.5 text-fg-muted" />
+                      )}
+                    </span>
                   )}
-                  <LoaderCircle
-                    className={`col-start-1 row-start-1 size-3.5 animate-spin text-accent transition-[opacity] duration-200 ${
-                      tab.sending ? "opacity-100" : "opacity-0"
-                    }`}
-                  />
-                  <span
-                    className={`absolute -right-1 -top-1 size-1.5 rounded-full bg-accent transition-[opacity,scale] duration-200 ease-[cubic-bezier(0.2,0,0,1)] ${
-                      tab.unread && !tab.sending
-                        ? "scale-100 opacity-100"
-                        : "scale-0 opacity-0"
-                    }`}
-                  />
+                  <span className="absolute -right-1 -top-1">
+                    <SignalBadge
+                      signals={{
+                        working: tab.working,
+                        unread: tab.unread,
+                        draft: tab.draft,
+                        awaitingInput: tab.awaitingInput,
+                      }}
+                      size="sm"
+                    />
+                  </span>
                 </span>
                 <AnimatedTitle
                   text={tab.label ?? tab.name}
@@ -392,6 +514,16 @@ export function WorkspaceTabBar({
           </Fragment>
         );
       })}
+      {(() => {
+        const hovered = hoverCard
+          ? rendered.find(
+              (entry) => !entry.exiting && tabKey(entry.tab) === hoverCard.key,
+            )
+          : null;
+        return hovered && hoverCard ? (
+          <TabHoverCard tab={hovered.tab} anchor={hoverCard} />
+        ) : null;
+      })()}
       {onNew && (
         // self-stretch + items-center: the + rides mid-row like the
         // sidebar toggle, not glued to the tabs' hanging baseline. The

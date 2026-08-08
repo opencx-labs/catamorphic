@@ -16,6 +16,7 @@ import {
   AgentSessionSchema,
   CreateAgentSessionSchema,
   ErrorSchema,
+  ForkAgentSessionSchema,
   ListSchema,
   OkSchema,
   PaginationQuerySchema,
@@ -262,6 +263,45 @@ export function registerAgentRoutes(app: FastifyInstance, ctx: RouteContext) {
           err instanceof AgentTurnInProgressError
         ) {
           return reply.status(409).send({ error: "Session is busy or closed" });
+        }
+        throw err;
+      }
+    },
+  });
+
+  // Fork the conversation: a new session on the same agent carrying the
+  // transcript up to `messageId` (or all settled turns when omitted).
+  typed.route({
+    method: "POST",
+    url: "/projects/:projectId/agent/sessions/:sessionId/fork",
+    schema: {
+      params: AgentSessionIdParamsSchema,
+      body: ForkAgentSessionSchema,
+      response: {
+        201: AgentSessionSchema,
+        404: ErrorSchema,
+        503: ErrorSchema,
+      },
+    },
+    handler: async (request, reply) => {
+      const agentSessions = ctx.core?.agentSessions;
+      if (!agentSessions)
+        return reply.status(503).send({ error: "Coding agent not configured" });
+      const identity = resolveIdentity(request);
+      try {
+        const session = await agentSessions.fork(
+          identity,
+          request.params.projectId,
+          request.params.sessionId,
+          { messageId: request.body?.messageId },
+        );
+        return reply.status(201).send(session);
+      } catch (err) {
+        if (
+          err instanceof ProjectNotFoundError ||
+          err instanceof AgentSessionNotFoundError
+        ) {
+          return reply.status(404).send({ error: "Session not found" });
         }
         throw err;
       }

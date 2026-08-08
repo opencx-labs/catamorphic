@@ -106,6 +106,8 @@ export function BrowserScreen({
   projectId,
   initialUrl,
   active,
+  visible = active,
+  keepAwake = false,
   onStateChange,
   registerNavigate,
   registerGuest,
@@ -116,6 +118,13 @@ export function BrowserScreen({
   initialUrl: string;
   /** This browser tab is the focused workspace tab. */
   active: boolean;
+  /** On screen at all (focused, or the other pane of a split). */
+  visible?: boolean;
+  /**
+   * Never tell the page it's hidden (agent-driven tabs — the agent works
+   * the page regardless of what the user is looking at).
+   */
+  keepAwake?: boolean;
   onStateChange: (state: BrowserPageState) => void;
   /** Set while this tab sits in a split: return it to a full-width tab. */
   onUnsplit?: () => void;
@@ -133,6 +142,37 @@ export function BrowserScreen({
   const [firstUrl, setFirstUrl] = useState(initialUrl || null);
   const [pageUrl, setPageUrl] = useState(initialUrl);
   const [loading, setLoading] = useState(true);
+  // A main-frame load failed (DNS, connection, TLS…): the pane shows an
+  // error card with a retry instead of sitting silently white forever.
+  const [loadError, setLoadError] = useState<{
+    url: string;
+    description: string;
+  } | null>(null);
+  // Remount nonce for the <webview>: guest attach is flaky under load
+  // (Electron's oldest webview wart) and a crashed/never-attached guest
+  // can only be revived by replacing the element.
+  const [webviewNonce, setWebviewNonce] = useState(0);
+  const pageUrlRef = useRef(pageUrl);
+  pageUrlRef.current = pageUrl;
+  // Navigations issued before the guest can accept them (not yet
+  // attached / dom-ready) wait here and flush on dom-ready — loadURL on
+  // a young webview rejects, and dropping the URL showed the address bar
+  // pointing at a page that was never asked to load.
+  const pendingUrlRef = useRef<string | null>(null);
+  const guestReadyRef = useRef(false);
+  // What the guest should believe about its visibility right now.
+  const hiddenForGuest = !visible && !keepAwake;
+  const hiddenForGuestRef = useRef(hiddenForGuest);
+  hiddenForGuestRef.current = hiddenForGuest;
+  useEffect(() => {
+    const view = webviewRef.current;
+    if (!view || !guestReadyRef.current) return;
+    try {
+      view.send("catamorphic:host-visibility", { hidden: hiddenForGuest });
+    } catch {
+      // Guest not ready; dom-ready sends the current state.
+    }
+  }, [hiddenForGuest]);
   const [canGoBack, setCanGoBack] = useState(false);
   const [canGoForward, setCanGoForward] = useState(false);
   const [editing, setEditing] = useState(false);
@@ -173,35 +213,120 @@ export function BrowserScreen({
 
   useEffect(() => {
     let cancelled = false;
-    void Promise.all([
-      desktopApi.browserPrepareProfile(profileId),
-      desktopApi.webviewPreloadPath(),
-    ]).then(([resolvedPartition, preload]) => {
-      if (cancelled) return;
-      setPartition(resolvedPartition);
-      setPreloadPath(`file://${preload}`);
-    });
+    let retryTimer: number | undefined;
+    const prepare = (attempt: number) => {
+      void Promise.all([
+        desktopApi.browserPrepareProfile(profileId),
+        desktopApi.webviewPreloadPath(),
+      ])
+        .then(([resolvedPartition, preload]) => {
+          if (cancelled) return;
+          setPartition(resolvedPartition);
+          setPreloadPath(`file://${preload}`);
+        })
+        .catch((cause: unknown) => {
+          // A failed prepare used to strand the tab on a silent spinner
+          // forever; main retries the prepare on the next call, so retry.
+          console.warn("[browser] profile prepare failed:", cause);
+          if (!cancelled && attempt < 3) {
+            retryTimer = window.setTimeout(() => prepare(attempt + 1), 800);
+          }
+        });
+    };
+    prepare(0);
     return () => {
       cancelled = true;
+      window.clearTimeout(retryTimer);
     };
   }, [profileId]);
 
   const registerGuestRef = useRef(registerGuest);
   registerGuestRef.current = registerGuest;
 
+  /**
+   * Replace the <webview> element with a fresh one pointed at the latest
+   * known URL. The only cure for a guest that never attached (silent
+   * white tab) or whose renderer died.
+   */
+  const remountWebview = useCallback(() => {
+    guestReadyRef.current = false;
+    const target = pendingUrlRef.current ?? pageUrlRef.current ?? null;
+    pendingUrlRef.current = null;
+    if (target) {
+      setFirstUrl(target);
+      setPageUrl(target);
+    }
+    setWebviewNonce((nonce) => nonce + 1);
+  }, []);
+  const attachWatchdogRef = useRef<number | undefined>(undefined);
+
   const attachWebview = useCallback(
     (node: HTMLElement | null) => {
       const view = node as WebviewElement | null;
       webviewRef.current = view;
       if (!view) {
+        window.clearTimeout(attachWatchdogRef.current);
+        guestReadyRef.current = false;
         registerGuestRef.current?.(null);
         return;
       }
+      // Watchdog: a webview that shows no sign of life (no attach, no
+      // load start) within a beat never will — remount it. This is the
+      // "type a URL, get a white tab, retry until it works" bug: the
+      // failure was silent and unrecoverable in place.
+      let alive = false;
+      const markAlive = () => {
+        alive = true;
+        window.clearTimeout(attachWatchdogRef.current);
+      };
+      view.addEventListener("did-attach", markAlive);
+      view.addEventListener("did-start-loading", markAlive);
+      window.clearTimeout(attachWatchdogRef.current);
+      attachWatchdogRef.current = window.setTimeout(() => {
+        if (!alive) remountWebview();
+      }, 1500);
+      // A dead guest renderer leaves a frozen ghost — replace it.
+      view.addEventListener("render-process-gone", () => remountWebview());
+      view.addEventListener("did-fail-load", ((event: CustomEvent) => {
+        const { errorCode, errorDescription, validatedURL, isMainFrame } =
+          event as unknown as {
+            errorCode: number;
+            errorDescription: string;
+            validatedURL: string;
+            isMainFrame: boolean;
+          };
+        // -3 = ERR_ABORTED: a superseded navigation, not a failure.
+        if (!isMainFrame || errorCode === -3) return;
+        setLoading(false);
+        setLoadError({
+          url: validatedURL || pageUrlRef.current,
+          description: errorDescription || `Error ${errorCode}`,
+        });
+      }) as EventListener);
       view.addEventListener("dom-ready", () => {
+        guestReadyRef.current = true;
         try {
           registerGuestRef.current?.(view.getWebContentsId());
         } catch {
           // Guest detached between events; the next dom-ready re-reports.
+        }
+        // Hidden-tab power hygiene: the page learns its real visibility
+        // (see preload/webview.ts) — parked tabs stop playing video and
+        // polling at full rate, like Chrome background tabs.
+        try {
+          view.send("catamorphic:host-visibility", {
+            hidden: hiddenForGuestRef.current,
+          });
+        } catch {
+          // Guest gone mid-call; the next dom-ready re-sends.
+        }
+        // Navigations that arrived while the guest couldn't take them.
+        const pending = pendingUrlRef.current;
+        if (pending) {
+          pendingUrlRef.current = null;
+          void view.loadURL(pending).catch(() => {
+            pendingUrlRef.current = pending;
+          });
         }
       });
 
@@ -218,7 +343,10 @@ export function BrowserScreen({
         });
       };
 
-      view.addEventListener("did-start-loading", () => setLoading(true));
+      view.addEventListener("did-start-loading", () => {
+        setLoading(true);
+        setLoadError(null);
+      });
       view.addEventListener("did-stop-loading", () => setLoading(false));
       view.addEventListener("did-navigate", ((event: CustomEvent) => {
         const { url } = event as unknown as { url: string };
@@ -289,7 +417,7 @@ export function BrowserScreen({
         }
       }) as EventListener);
     },
-    [profileId],
+    [profileId, remountWebview],
   );
 
   const navigate = useCallback(
@@ -300,12 +428,25 @@ export function BrowserScreen({
       setSuggestions([]);
       setPageUrl(url);
       setInputValue(url);
+      setLoadError(null);
       if (firstUrl === null) {
         setFirstUrl(url);
-      } else {
-        void webviewRef.current?.loadURL(url);
-        webviewRef.current?.focus();
+        return;
       }
+      // A guest that can't take the navigation yet (mount deferred past
+      // the tab animation, attach pending) must not eat it: queue and
+      // flush on dom-ready. loadURL also REJECTS on a young webview —
+      // requeue instead of `void`-swallowing (the old behavior behind
+      // "the address bar says linkedin.com but the page is white").
+      const view = webviewRef.current;
+      if (!view || !guestReadyRef.current) {
+        pendingUrlRef.current = url;
+        return;
+      }
+      void view.loadURL(url).catch(() => {
+        pendingUrlRef.current = url;
+      });
+      view.focus();
     },
     [firstUrl],
   );
@@ -739,6 +880,7 @@ export function BrowserScreen({
       >
         {ready && firstUrl ? (
           <webview
+            key={webviewNonce}
             ref={attachWebview}
             src={firstUrl}
             partition={partition}
@@ -759,6 +901,25 @@ export function BrowserScreen({
         ) : (
           <div className="grid h-full place-items-center">
             <p className="text-sm text-fg-faint">Search or enter an address</p>
+          </div>
+        )}
+        {/* Main-frame load failure: a way out instead of a white pane. */}
+        {loadError && (
+          <div className="absolute inset-0 grid place-items-center bg-bg">
+            <div className="max-w-sm text-center">
+              <p className="text-sm text-fg">This page didn’t load.</p>
+              <p className="mt-1 break-all font-mono text-xs text-fg-muted">
+                {loadError.description}
+              </p>
+              <button
+                type="button"
+                onClick={() => navigate(loadError.url)}
+                className="mt-4 inline-flex h-7 cursor-pointer items-center gap-1.5 rounded-md bg-accent px-3 text-[12px] font-medium text-accent-fg transition-opacity duration-150 hover:opacity-90"
+              >
+                <RotateCw className="size-3" />
+                Try again
+              </button>
+            </div>
           </div>
         )}
       </div>

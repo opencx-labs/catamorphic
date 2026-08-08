@@ -109,16 +109,17 @@ const WORKSPACE_TOOLS_PLAYBOOK = `## The user's workspace
 
 This chat lives inside the user's desktop app, next to their real browser tabs, terminals, editors, and other chats. You can see and drive that workspace:
 
-- Each turn opens with a <workspace_context> snapshot of what the user's window shows. It is background context, not part of the user's request. When they say "this page", "that terminal", or similar, resolve it against the snapshot — the ACTIVE entry is what they're looking at.
-- workspace_overview lists everything open (including background tabs and other chats); read_tab expands any entry — page text, terminal output, chat transcripts, file paths.
+- Each turn opens with a <workspace_context> snapshot of what the user's window shows. It is background context, not part of the user's request. When they say "this page", "that terminal", or similar, resolve it against the snapshot: the ACTIVE entry is what they're looking at.
+- workspace_overview lists everything open (including background tabs and other chats); read_tab expands any entry: page text, terminal output, chat transcripts, file paths.
 - open_browser / browser_snapshot / browser_act give you a real browser tab in the user's own profile (their logins, cookies). Snapshot → act by uid → re-snapshot after navigation. Prefer it over webfetch when a task needs interaction or the user's session.
-- run_terminal / read_terminal / write_terminal run commands in real terminal tabs. run_terminal waits for the command and returns its output; pass terminalId to reuse a terminal (prefer one working terminal for routine sequential commands — don't open a new tab per command). Long-running processes (dev servers, watchers) keep running across turns — check back with read_terminal. If you have no built-in shell tool, run_terminal IS your shell.
-- Surfaces you open appear as chips on this chat, live for the user to watch. While you drive one, the user can only watch — until they hit "Take over", after which your actions on it fail. When that happens, work around it or ask; reclaim with surface_control only if the task truly needs it.
-- Etiquette: release surfaces (surface_control release) the moment you finish driving them so the user can interact; close ones that were pure scaffolding; leave results the user will want open. Don't act on tabs the user is actively working in without saying so.`;
+- run_terminal / read_terminal / write_terminal run commands in real terminal tabs. run_terminal waits for the command and returns its output; pass terminalId to reuse a terminal (prefer one working terminal for routine sequential commands, not a new tab per command). Long-running processes (dev servers, watchers) keep running across turns. Check back with read_terminal. If you have no built-in shell tool, run_terminal IS your shell.
+- Surfaces you open appear as chips on this chat, live for the user to watch. While you drive one, the user can only watch, until they hit "Take over", after which your actions on it fail. When that happens, work around it or ask; reclaim with surface_control only if the task truly needs it.
+- Etiquette: release surfaces (surface_control release) the moment you finish driving them so the user can interact; close ones that were pure scaffolding; leave results the user will want open. Don't act on tabs the user is actively working in without saying so.
+- Identity: when the conversation's topic becomes clear (around when it gets its title), call set_chat_icon once with the icon and color that best capture it. The icon marks this chat in the user's tabs, bubbles, and sidebar. Update it only if the topic changes substantially.`;
 
 const WORKSPACE_CONTEXT_NOTE = `## The user's workspace
 
-This chat lives inside the user's desktop app. Each turn opens with a <workspace_context> snapshot describing what their window currently shows (tabs, terminals, other chats). It is background context, not part of the user's request — use it to resolve references like "this page" or "that terminal".`;
+This chat lives inside the user's desktop app. Each turn opens with a <workspace_context> snapshot describing what their window currently shows (tabs, terminals, other chats). It is background context, not part of the user's request. Use it to resolve references like "this page" or "that terminal".`;
 
 const MAX_TAB_LINES = 24;
 const MAX_SIDEBAR_ITEMS = 12;
@@ -170,14 +171,14 @@ export function formatWorkspaceContext(
   const lines: string[] = [];
   for (const tab of data.tabs.slice(0, MAX_TAB_LINES)) {
     const marks = [
-      tab.active ? "ACTIVE — the user is looking at this" : "",
+      tab.active ? "ACTIVE (the user is looking at this)" : "",
       tab.key && tab.key === ownChatKey ? "this conversation" : "",
       tab.kind === "terminal" && tab.running ? "running" : "",
       tab.agentControlled ? "agent-controlled" : "",
     ].filter(Boolean);
     const label =
       tab.title || tab.filePath || tab.url || tab.name || tab.kind || "tab";
-    const detail = tab.kind === "browser" && tab.url ? ` — ${tab.url}` : "";
+    const detail = tab.kind === "browser" && tab.url ? ` (${tab.url})` : "";
     lines.push(
       `- ${tab.kind ?? "tab"} "${label}"${detail}${
         marks.length > 0 ? ` (${marks.join(", ")})` : ""

@@ -7,6 +7,7 @@ import {
   type ThemeColors,
 } from "../lib/desktop-api.js";
 import { matchesBinding, useKeybindings } from "../lib/keybindings.js";
+import { sanitizeScrollback } from "../lib/scrollback.js";
 import { useTheme } from "../lib/theme.js";
 
 /**
@@ -47,6 +48,12 @@ export interface TerminalScreenProps {
    * and output streams live. The session is NOT killed on unmount.
    */
   attachSessionId?: string;
+  /**
+   * Reopened tab (Cmd+Shift+T): replay the closed session's scrollback,
+   * close it with a divider, and start the fresh shell beneath — the
+   * user may still have wanted to read that output.
+   */
+  restoreSessionId?: string;
   /** Viewing only — keystrokes don't reach the PTY (agent in control). */
   readOnly?: boolean;
   /** Shell title changes (OSC 0/2) — feeds the tab label. */
@@ -65,6 +72,7 @@ export function TerminalScreen({
   projectId,
   active,
   attachSessionId,
+  restoreSessionId,
   readOnly = false,
   onTitle,
   onExit,
@@ -123,9 +131,41 @@ export function TerminalScreen({
         // shortcut dispatcher in app.tsx.
         term.attachCustomKeyEventHandler((event) => {
           const bindings = keybindingsRef.current;
-          return KEYBINDING_ACTIONS.some((action) =>
-            matchesBinding(event, bindings[action]),
-          );
+          if (
+            KEYBINDING_ACTIONS.some((action) =>
+              matchesBinding(event, bindings[action]),
+            )
+          ) {
+            return true;
+          }
+          // Cmd+D closes this terminal: kill the shell — the exit event
+          // closes the tab (and the scrollback is buried for ⌘⇧T). Not
+          // for agent-owned terminals; those close through their chat.
+          if (
+            event.type === "keydown" &&
+            event.metaKey &&
+            !event.ctrlKey &&
+            !event.altKey &&
+            !event.shiftKey &&
+            event.code === "KeyD"
+          ) {
+            if (sessionId && !readOnlyRef.current && !attachSessionId) {
+              void desktopApi.terminalKill(sessionId);
+            }
+            return true;
+          }
+          // Unbound Cmd-combos must never reach the encoder: libghostty's
+          // legacy encoding drops the super modifier and would TYPE the
+          // plain letter into the shell (Cmd+D → "d"). Swallow them like
+          // a real terminal does — except Cmd+C/Cmd+V, which ghostty's
+          // own handler turns into copy/paste.
+          if (
+            event.metaKey &&
+            !(event.code === "KeyC" || event.code === "KeyV")
+          ) {
+            return true;
+          }
+          return false;
         });
         fit = new FitAddon();
         term.loadAddon(fit);
@@ -142,6 +182,22 @@ export function TerminalScreen({
           if (history?.buffer) term.write(history.buffer);
           void desktopApi.terminalResize(attachSessionId, term.cols, term.rows);
         } else {
+          // Reopened tab: the dead session's scrollback prints first —
+          // sanitized to plain text (raw ANSI replay is grid-state
+          // dependent and eats lines) and dimmed as a whole to read as
+          // history — closed by a divider; the fresh shell prompts
+          // beneath it.
+          if (restoreSessionId) {
+            const dead =
+              await desktopApi.terminalRestoreBuffer(restoreSessionId);
+            if (disposed) return;
+            const lines = dead ? sanitizeScrollback(dead.buffer) : [];
+            if (lines.length > 0) {
+              term.write(
+                `\x1b[2m${lines.join("\r\n")}\r\n── session ended · new shell ──\x1b[0m\r\n`,
+              );
+            }
+          }
           const created = await desktopApi.terminalCreate({
             projectId,
             cols: term.cols,
@@ -167,8 +223,11 @@ export function TerminalScreen({
         );
         // Cursor states, native-terminal style: blinking solid block when
         // focused and idle, pinned solid while typing, and a steady hollow
-        // outline while the terminal is unfocused.
+        // outline while the terminal is unfocused. Read-only terminals
+        // (agent-owned, before Take control) stay hollow even when
+        // focused — a blinking cursor promises typing that won't land.
         let focused = true;
+        const canType = () => focused && !readOnlyRef.current;
         // ghostty-web has no hollow mode — shadow the renderer's
         // renderCursor: unfocused, repaint the cell (erasing the previous
         // solid block) and stroke the outline instead.
@@ -190,7 +249,7 @@ export function TerminalScreen({
         if (renderer) {
           const solidRenderCursor = renderer.renderCursor.bind(renderer);
           renderer.renderCursor = (x: number, y: number) => {
-            if (focused) {
+            if (canType()) {
               solidRenderCursor(x, y);
               return;
             }
@@ -229,7 +288,7 @@ export function TerminalScreen({
           term?.renderer?.setCursorBlink(false);
           window.clearTimeout(blinkTimer);
           blinkTimer = window.setTimeout(() => {
-            if (focused) term?.renderer?.setCursorBlink(true);
+            if (canType()) term?.renderer?.setCursorBlink(true);
           }, 600);
         };
         unsubscribes.push(() => window.clearTimeout(blinkTimer));
@@ -240,7 +299,7 @@ export function TerminalScreen({
         {
           const onFocusIn = () => {
             focused = true;
-            term?.renderer?.setCursorBlink(true);
+            term?.renderer?.setCursorBlink(canType());
           };
           const onFocusOut = (event: FocusEvent) => {
             // Focus hopping between the container and its textarea (the
@@ -258,7 +317,7 @@ export function TerminalScreen({
             container.removeEventListener("focusout", onFocusOut);
           });
           focused = container.contains(document.activeElement);
-          if (!focused) term.renderer?.setCursorBlink(false);
+          if (!canType()) term.renderer?.setCursorBlink(false);
         }
         term.onData((data) => {
           if (readOnlyRef.current) return;
@@ -287,7 +346,7 @@ export function TerminalScreen({
       term?.dispose();
       termRef.current = null;
     };
-  }, [projectId, attachSessionId]);
+  }, [projectId, attachSessionId, restoreSessionId]);
 
   // Live theme edits restyle the running terminal.
   useEffect(() => {
@@ -298,6 +357,24 @@ export function TerminalScreen({
   useEffect(() => {
     if (active) termRef.current?.focus();
   }, [active]);
+
+  // Take control (readOnly → false) hands the keyboard over on the spot:
+  // focus the terminal so the cursor goes solid and keys land. Going the
+  // other way (agent reclaims), the cursor drops back to hollow.
+  const wasReadOnlyRef = useRef(readOnly);
+  useEffect(() => {
+    const was = wasReadOnlyRef.current;
+    wasReadOnlyRef.current = readOnly;
+    const term = termRef.current;
+    if (!term) return;
+    if (was && !readOnly && active) {
+      term.focus();
+      // focus() won't refire focusin when already focused — arm the
+      // blink explicitly.
+      term.renderer?.setCursorBlink(true);
+    }
+    if (!was && readOnly) term.renderer?.setCursorBlink(false);
+  }, [readOnly, active]);
 
   return (
     <div

@@ -127,6 +127,19 @@ const api = {
     return () =>
       ipcRenderer.removeListener("catamorphic:keybindings-changed", handler);
   },
+  // --- per-profile app preferences (notifications) ---
+  getPrefs: (): Promise<unknown> => ipcRenderer.invoke("catamorphic:prefs-get"),
+  setPrefs: (patch: unknown): Promise<unknown> =>
+    ipcRenderer.invoke("catamorphic:prefs-set", patch),
+  onPrefsChanged: (listener: (prefs: unknown) => void): (() => void) => {
+    const handler = (_event: unknown, prefs: unknown) => listener(prefs);
+    ipcRenderer.on("catamorphic:prefs-changed", handler);
+    return () =>
+      ipcRenderer.removeListener("catamorphic:prefs-changed", handler);
+  },
+  windowFocus: (): Promise<void> =>
+    ipcRenderer.invoke("catamorphic:window-focus"),
+
   getTheme: (): Promise<unknown> => ipcRenderer.invoke("catamorphic:theme-get"),
   setTheme: (config: unknown): Promise<unknown> =>
     ipcRenderer.invoke("catamorphic:theme-set", config),
@@ -249,6 +262,10 @@ const api = {
     sessionId: string,
   ): Promise<{ buffer: string; running: boolean } | null> =>
     ipcRenderer.invoke("catamorphic:terminal-buffer", sessionId),
+  terminalRestoreBuffer: (
+    sessionId: string,
+  ): Promise<{ buffer: string } | null> =>
+    ipcRenderer.invoke("catamorphic:terminal-restore-buffer", sessionId),
   onTerminalBusy: (
     listener: (payload: { sessionId: string; busy: boolean }) => void,
   ): (() => void) => {

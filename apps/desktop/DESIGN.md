@@ -4,11 +4,24 @@ The desktop app aims for the OpenCode / Obsidian feel: minimal chrome, dark-firs
 terminal-editor calm. Everything visual flows from the tokens in
 [`src/renderer/styles.css`](src/renderer/styles.css).
 
+This file is the **source of truth for the whole Catamorphic design
+language** — the website and any future surface follow it, never the
+reverse. The cross-surface summary lives in
+[`docs/DESIGN-LANGUAGE.md`](../../docs/DESIGN-LANGUAGE.md).
+
 **North star: this is a really high-quality product meant for daily use.
 Every user interaction matters and should be polished.** When in doubt,
 spend the extra effort on the transition, the empty state, the keyboard
 path, the edge case. Test every UI change visually, end to end, before
 calling it done.
+
+**Second founding idea: the desktop is the proving ground, and polish flows
+upstream.** The app exists to feel amazing AND to be the framework's
+reference implementation; any enhancement to a reusable surface (chat,
+timelines, sessions, editors, runs) must be ported back to the installable
+packages/registry so embedders get it too. A desktop-only improvement to a
+shared surface is a process bug, not a win. See the 2026-08-08 design-log
+entry for how this rule was recovered.
 
 ## Principles
 
@@ -137,6 +150,8 @@ the animation is wrong, not the test.
 | `profile-veil-in` / `profile-veil-out` (in-place profile switch) | 200ms | each other (exact mirror) |
 | `question-in` (ask_user panel) | 260ms | — |
 | `pane-in-left` / `pane-in-right` (keyboard tab cycling) | 200ms | — (content-changed signal on a persistent wrapper; no exit to pair) |
+| `bubble-ask` (agent question arrival) | 280ms | — (one-shot nudge on a persistent bubble; no exit to pair) |
+| `input-recall` (composer ↑/↓ history) | 150ms | — (content-changed signal on the persistent textarea) |
 | `title-change` (rename flash) | 1200ms | **sanctioned exception** — the
   one decorative-adjacent signal (see design log 2026-07-31); allowlisted in
   the test's `DURATION_EXCEPTIONS` |
@@ -1100,3 +1115,168 @@ Patterned on what best-in-class palettes converged on (Chrome omnibox
   renderer now excludes workspace packages from optimizeDeps (their
   dists are plain ESM) and un-ignores them in the watcher: rebuilding a
   package HMRs the running app with current code, state intact.
+
+### 2026-08-08 — One signal vocabulary for chats; notifications; desktop feel
+- **Every chat-as-icon surface speaks the same signal language**
+  (`components/chat-signals.tsx`): spinner = working, accent dot = unread,
+  pencil = unsent draft (chat composers AND editor tabs' unsaved changes),
+  pulsing accent "?" = the agent asked and is waiting. Bubbles, workspace
+  tabs, and the collapsed aggregate bubble all render `SignalGlyph` +
+  `SignalBadge`; one badge shows at a time (question > unread > draft, all
+  yield to the spinner). ChatDock reports `{working, draft, awaitingInput}`
+  through one `onSignalsChange`; unread stays host-derived (it needs
+  surface visibility).
+- **A waiting question is the loudest quiet thing on screen.** The asking
+  chat's bubble plays a one-shot `bubble-ask` nudge (scale + radiating
+  accent ring, 280ms) so the user knows WHICH agent asked; the "?" badge
+  pulses while the question waits (sanctioned loop: the turn is suspended
+  — indeterminate until answered).
+- **Notifications are opt-out, per profile** (`profiles/<id>/prefs.json`,
+  Settings → Notifications): a soft synthesized two-tone chime (WebAudio,
+  no assets — "done" falls, "question" rises) when an agent finishes or
+  asks, skipped when the chat is front-and-center in a focused window;
+  plus a silent OS notification when the window is unfocused, whose click
+  focuses the window and reveals the chat.
+- **Bubbles identify themselves instantly**: their ShortcutHint tooltip
+  shows at ~100ms (new `delay` prop) — a bubble is just an icon, so
+  "which chat is this" must not cost the standard 800ms.
+- **Desktop selection feel**: app chrome is `user-select: none` (body
+  default) with content re-enabled (inputs, contenteditable, the chat
+  timeline via `role="log"`); Cmd+A outside an editable field is a no-op
+  instead of selecting every label on screen. Monaco, the terminal, and
+  webviews keep their own selection behavior.
+- **The New Tab page owns focus and teaches shortcuts**: clicking its
+  background refocuses the palette input (mousedown-preventDefault, no
+  blur), returning to the window lands the caret back in the input
+  (guarded so a split neighbor is never robbed), and a faint two-column
+  cheat sheet under the panel lists the button-less workhorse bindings
+  (⌘M, ⌘⇧M, ⌘\, ⌃`, ⌘⇧T, ⌘]) straight from the live keybindings.
+
+### 2026-08-08 — Terminal truths: Cmd leaks, and scrollback that survives
+- **Unbound Cmd-combos never reach the shell.** libghostty's legacy key
+  encoding drops the super modifier and TYPES the plain letter (Cmd+D
+  wrote a "d" into zsh — the report was "Cmd+D didn't close the tab",
+  the truth was the shell never saw EOF). The terminal's key handler now
+  swallows every meta-combo it doesn't recognize, except Cmd+C/Cmd+V
+  (ghostty's own copy/paste). Shell exit (Ctrl+D, `exit`) closing the
+  tab already worked and still does.
+- **Reopening a closed terminal keeps its story.** Closed user sessions'
+  buffers move to a small main-process morgue (10 entries); Cmd+Shift+T
+  prints the dead session's scrollback dim, a "── session ended · new
+  shell ──" divider, then a fresh prompt — the output stays readable
+  without pretending the shell survived. Replay is SANITIZED plain text
+  (`lib/scrollback.ts`, unit-tested): raw ANSI replay is grid-state
+  dependent (zsh's prompt marker erases neighbors when replayed cold);
+  CR-overwrites and backspaces resolve to final text, escapes drop.
+- Terminal buffers are now chunk lists (join-on-read, collapse-on-join)
+  — the old `buffer + data` slice churned up to 200KB of copying per
+  PTY data event during chatty builds.
+
+### 2026-08-08 — Browser tabs: silent failures now have exits
+- The "type a URL, get a stuck white tab, retry until it works" bug was
+  three stacked silences: guest attach can fail with no event (now: a
+  1.5s watchdog remounts a webview that shows no sign of life, and
+  `render-process-gone` remounts crashed guests); `navigate()` silently
+  dropped URLs issued before the guest could take them — `loadURL`
+  REJECTS on a young webview and the address bar updated anyway (now: a
+  pending-URL queue flushes on dom-ready); and a failed profile prepare
+  poisoned its cache entry forever (now: prepare is a shared promise,
+  deleted on failure, retried by the renderer).
+- Main-frame load failures (`did-fail-load`, code ≠ -3) render an
+  in-pane error card with the reason and a "Try again" — never again a
+  silent white pane with a spinner.
+- **Hidden tabs learn they're hidden.** Chromium never tells an
+  offscreen webview guest it's not visible, so parked tabs played video
+  and polled at full rate. The host now reports tab visibility and the
+  guest preload shims `document.visibilityState`/`hidden` (+
+  `visibilitychange`) in the page's main world — Chrome-parity
+  background behavior; agent-driven tabs are exempt.
+- Perf: Monaco moved out of the startup chunk (lazy editor/workflow
+  screens — it was ~half the renderer bundle); chat Messages are
+  memoized on data props with hashed content keys (a streaming turn
+  re-renders the tail, not every message's markdown).
+
+### 2026-08-08 — Chat navigation: jump up, recall, fork, identity
+- **"What did I even ask?" is one press.** A ↑ button (bottom-right of
+  the timeline, PageUp from the composer) scrolls the nearest user
+  message above the view to the top — where its answer starts — and
+  walks further up per press. User messages carry `data-user-message`;
+  the button slides left when the scroll-to-latest button appears.
+- **↑/↓ in the composer recall sent messages** shell-history style: ↑
+  from an empty draft steps back, ↓ steps forward and finally restores
+  the stashed draft; typing exits recall. Each step plays `input-recall`
+  (150ms fade+drop) so the swap reads as an arrival, not a glitch.
+- **Conversations fork.** A hover fork button on any assistant reply
+  copies the transcript up to that point into a NEW session (same
+  agent/effort; `parent_session_id` recorded; marker row + system-prompt
+  note make the fork self-aware). The fork opens tiled beside the
+  current view, chips onto the parent's surfaces rail (kind "chat",
+  GitFork icon), shows the fork glyph wherever chats show icons, and
+  carries a back-to-parent button in its control pill (reopens the
+  parent by session if it was closed). First turn re-anchors from the
+  copied history — the same machinery as host-restart resurrection.
+  Editing a PAST message (with file-state undo/redo) was evaluated and
+  deliberately dropped: host harnesses (Claude Code/Codex) work in the
+  real project folder with no checkpoint substrate we control, and
+  conversation-level branching is exactly what forks give.
+- **Agents name AND mark their chats.** Beside `set_title`, agents get
+  `set_chat_icon` — a workspace ExtraTool (so ai-sdk and Claude Code
+  both have it), writing "<name>:<color>" from a curated set
+  (`shared/chat-icons.ts`: 30 Linear-style lucide glyphs, 8 colors that
+  ride theme tokens where possible) straight through the sessions
+  service. The icon shows on bubbles, tabs, the dock header, and the
+  sidebar; a custom-iconed TAB keeps a tiny chat/fork marker on the
+  glyph's corner so it still reads as a conversation.
+
+### 2026-08-08 — The desktop is the proving ground; enhancements flow upstream
+- Canonized as a founding idea (it was implicit and half-enforced): the
+  desktop app's job is to feel amazing, and every enhancement that lands on
+  a reusable surface gets ported back to the installable components, so
+  people embedding Catamorphic inherit the polish. The existing rule
+  ("never patch installed files under components/catamorphic/; improve
+  upstream in packages/registry") was the maintenance half of this; the
+  missing half was the obligation to upstream desktop-grown work.
+- The audit that prompted this: the installed chat-timeline had drifted
+  714 lines ahead of the registry source (error cards, queueing, media,
+  markers all landed desktop-side only); agent-chat had drifted slightly;
+  and the floating chat dock, agent-question-panel (ask_user UI),
+  chat-signals, pending-button, and shortcut-hint exist only in the app
+  despite being exactly what a copilot embedder wants. TODO.md tracks the
+  port list and a drift check so this cannot silently regress again.
+
+### 2026-08-08 — Media lands however it arrives; terminals obey Cmd+D; tabs explain themselves
+- **Attach flows meet the user wherever they are.** Pasting media only
+  worked with the caret exactly in the composer textarea; now the WINDOW
+  handles paste while a chat is the front surface (text pastes stay
+  native — only pastes carrying files are intercepted), files read from
+  `DataTransfer.files` with an `items` fallback, and **drag & drop onto
+  the chat surface attaches** behind a "Drop to attach" accent cue.
+  Verified end-to-end against a live model (image → chips → send →
+  timeline → the model described the image).
+- **Cmd+D closes the focused terminal.** Revises the previous entry's
+  "swallow it": the user's mental model is kill-the-shell, so honor it —
+  Cmd+D kills the PTY (the exit event closes the tab; scrollback is
+  buried for ⌘⇧T). Main's kill handler now emits the exit event itself:
+  the pty callback skips already-deleted sessions, so a kill from a live
+  tab previously died silently. Agent-owned terminals are exempt.
+- **The take-over pill says who owns the surface and offers both moves**:
+  "Agent owns this terminal/page" + a **Go to chat** button (reveals the
+  owning conversation) + an accent **Take control**. And a read-only
+  terminal's cursor stays **hollow with no blink even when focused** — a
+  blinking block promises typing that can't land; Take control focuses
+  the terminal, goes solid, and keys land immediately (verified live
+  through a real agent-driven sleep).
+- **Tab hover cards** (Chrome's pattern): dwelling ~500ms on a tab shows
+  a portal card with the FULL title, a per-kind detail line (page URL,
+  file path, chat's agent + fork lineage), and the live status line
+  ("Agent is working…", "Waiting for your answer", "Unsent draft",
+  "New reply"). Disarmed by click/leave/drag; the close button keeps its
+  ShortcutHint (cards attach to the tab body only).
+- **E2e windows disable background throttling** (`backgroundThrottling:
+  false` under CATAMORPHIC_E2E_DATA_DIR). Chromium throttles animation
+  events for occluded windows — exactly the veil-fallback lesson — and
+  test-runner windows stack behind the terminal, so exit animations
+  never fired animationend and the motion suite saw phantom zombies.
+  This was the real identity of the "flaky motion trio" AND the
+  "pre-existing" agent-switch failure; the suite is green and ~2× faster
+  with throttling off. App behavior in real use is unchanged.

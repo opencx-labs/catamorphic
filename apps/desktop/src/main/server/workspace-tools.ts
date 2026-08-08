@@ -1,5 +1,9 @@
 import type { ExtraTool } from "@catamorphic/sandbox";
 import { z } from "zod";
+import {
+  CHAT_ICON_COLOR_IDS,
+  CHAT_ICON_NAMES,
+} from "../../shared/chat-icons.js";
 import type { WorkspaceBridge } from "../agent-bridge.js";
 
 /**
@@ -22,10 +26,19 @@ export type ChatTranscriptReader = (
   messages: Array<{ role: string; content: string }>;
 } | null>;
 
+/** Writes a session's icon; wired to the chat store after boot. */
+export type ChatIconSetter = (
+  projectId: string,
+  sessionId: string,
+  icon: string,
+) => Promise<void>;
+
 export interface WorkspaceToolkit {
   tools: ExtraTool[];
   /** Late-bound: the chat store exists only after the server boots. */
   setChatTranscriptReader(reader: ChatTranscriptReader): void;
+  /** Late-bound for the same reason. */
+  setChatIconSetter(setter: ChatIconSetter): void;
 }
 
 const TRANSCRIPT_MESSAGE_CAP = 40;
@@ -35,8 +48,33 @@ export function buildWorkspaceToolkit(
   bridge: WorkspaceBridge,
 ): WorkspaceToolkit {
   let readChatTranscript: ChatTranscriptReader | null = null;
+  let setChatIcon: ChatIconSetter | null = null;
 
   const tools: ExtraTool[] = [
+    {
+      name: "set_chat_icon",
+      description: `Set this conversation's icon, shown on its tab, bubble, and sidebar entry (like picking a team icon in Linear). Choose the icon and color that best capture what the conversation is about; do it once when the topic is clear (around when the conversation gets its title), and again only if the topic changes substantially. Icons: ${CHAT_ICON_NAMES.join(", ")}. Colors: ${CHAT_ICON_COLOR_IDS.join(", ")}.`,
+      parameters: {
+        icon: z
+          .enum(CHAT_ICON_NAMES)
+          .describe("Icon name from the allowed set"),
+        color: z
+          .enum(CHAT_ICON_COLOR_IDS as [string, ...string[]])
+          .describe("Color name from the allowed set"),
+      },
+      execute: async (input, ctx) => {
+        if (!ctx.sessionId) {
+          throw new Error("This turn has no chat session to set an icon on.");
+        }
+        if (!setChatIcon) throw new Error("Chat store not ready yet.");
+        await setChatIcon(
+          ctx.projectId,
+          ctx.sessionId,
+          `${String(input.icon)}:${String(input.color)}`,
+        );
+        return { ok: true, icon: `${input.icon}:${input.color}` };
+      },
+    },
     {
       name: "workspace_overview",
       description:
@@ -47,7 +85,7 @@ export function buildWorkspaceToolkit(
     {
       name: "read_tab",
       description:
-        "Expand one workspace tab by key (from workspace_overview): browser tabs return the page's visible text, terminals their recent output, chats their conversation transcript, editors the open file's path. Use it to look into anything the user can see — or anything running in the background.",
+        "Expand one workspace tab by key (from workspace_overview): browser tabs return the page's visible text, terminals their recent output, chats their conversation transcript, editors the open file's path. Use it to look into anything the user can see, or anything running in the background.",
       parameters: {
         key: z
           .string()
@@ -96,7 +134,7 @@ export function buildWorkspaceToolkit(
     {
       name: "open_browser",
       description:
-        "Open a new browser tab in the user's workspace and take control of it. The tab is visible to the user (marked as agent-driven; they can watch you work live) and appears as a chip on your chat. Returns the tab key — call browser_snapshot next to see the page's interactive elements. Prefer this over web fetching whenever a task needs logins, clicks, forms, or the user's own browser profile.",
+        "Open a new browser tab in the user's workspace and take control of it. The tab is visible to the user (marked as agent-driven; they can watch you work live) and appears as a chip on your chat. Returns the tab key. Call browser_snapshot next to see the page's interactive elements. Prefer this over web fetching whenever a task needs logins, clicks, forms, or the user's own browser profile.",
       parameters: {
         url: z.string().describe("The http(s) URL to open"),
       },
@@ -115,7 +153,7 @@ export function buildWorkspaceToolkit(
     {
       name: "browser_snapshot",
       description:
-        "List a browser tab's interactive elements (links, buttons, inputs …) as numbered uids plus the page url/title. Snapshot before acting, and take a fresh snapshot after anything that changes the page (navigation, submit, dynamic content) — uids go stale.",
+        "List a browser tab's interactive elements (links, buttons, inputs …) as numbered uids plus the page url/title. Snapshot before acting, and take a fresh snapshot after anything that changes the page (navigation, submit, dynamic content): uids go stale.",
       parameters: {
         key: z.string().describe("Browser tab key, e.g. 'browser:<id>'"),
       },
@@ -125,7 +163,7 @@ export function buildWorkspaceToolkit(
     {
       name: "browser_act",
       description:
-        "Act on a browser tab: 'click' or 'fill' an element by uid (from browser_snapshot), 'press' a key (e.g. Enter) on the focused element, 'navigate' to a url, 'scroll' up/down, 'read' the page's visible text, or 'wait_for' text to appear. The user sees each action highlighted live. Fails if the user has taken over the tab — respect that and continue without it, or reclaim with surface_control only if your task requires the tab.",
+        "Act on a browser tab: 'click' or 'fill' an element by uid (from browser_snapshot), 'press' a key (e.g. Enter) on the focused element, 'navigate' to a url, 'scroll' up/down, 'read' the page's visible text, or 'wait_for' text to appear. The user sees each action highlighted live. Fails if the user has taken over the tab. Respect that and continue without it, or reclaim with surface_control only if your task requires the tab.",
       parameters: {
         key: z.string().describe("Browser tab key"),
         action: z.enum([
@@ -160,7 +198,7 @@ export function buildWorkspaceToolkit(
     {
       name: "run_terminal",
       description:
-        "Run a shell command in a real terminal tab in the user's workspace (project directory, user's login shell) — the user watches it live. By default a NEW terminal opens (a chip on your chat); pass terminalId to reuse one — a terminal you opened earlier, or any terminal from workspace_overview (running in the user's own terminal marks it agent-controlled until you release it). Prefer reusing one terminal for routine sequential commands. Waits for the command to finish (up to ~15s) and returns the output it produced; longer commands return early with commandRunning: true — poll read_terminal. Close scaffolding terminals with surface_control.",
+        "Run a shell command in a real terminal tab in the user's workspace (project directory, user's login shell). The user watches it live. By default a NEW terminal opens (a chip on your chat); pass terminalId to reuse one (a terminal you opened earlier, or any terminal from workspace_overview; running in the user's own terminal marks it agent-controlled until you release it). Prefer reusing one terminal for routine sequential commands. Waits for the command to finish (up to ~15s) and returns the output it produced; longer commands return early with commandRunning: true, so poll read_terminal. Close scaffolding terminals with surface_control.",
       parameters: {
         command: z.string().describe("The shell command to run"),
         terminalId: z
@@ -203,7 +241,7 @@ export function buildWorkspaceToolkit(
     {
       name: "write_terminal",
       description:
-        "Send input to a terminal you spawned — answer a prompt, or send control sequences. End a line with \\r to press Enter; '\\u0003' sends Ctrl+C to stop the foreground process. Fails if the user has taken the terminal over.",
+        "Send input to a terminal you spawned: answer a prompt, or send control sequences. End a line with \\r to press Enter; '\\u0003' sends Ctrl+C to stop the foreground process. Fails if the user has taken the terminal over.",
       parameters: {
         terminalId: z.string().describe("Terminal id from run_terminal"),
         data: z
@@ -226,7 +264,7 @@ export function buildWorkspaceToolkit(
     {
       name: "surface_control",
       description:
-        "Manage a browser tab or terminal you control: 'release' hands it to the user once you're done driving it (do this whenever you finish a page or an interactive command — the tab stays open for them); 'reclaim' takes a surface back after the user took over (only when your task still needs it — if they're actively using it, ask first); 'close' closes the tab entirely (terminals also end their process). Close surfaces that were only scaffolding; release ones the user will want.",
+        "Manage a browser tab or terminal you control: 'release' hands it to the user once you're done driving it (do this whenever you finish a page or an interactive command; the tab stays open for them); 'reclaim' takes a surface back after the user took over (only when your task still needs it, and if they're actively using it, ask first); 'close' closes the tab entirely (terminals also end their process). Close surfaces that were only scaffolding; release ones the user will want.",
       parameters: {
         key: z.string().describe("Surface key, e.g. 'browser:<id>'"),
         action: z.enum(["release", "reclaim", "close"]),
@@ -254,6 +292,9 @@ export function buildWorkspaceToolkit(
     tools,
     setChatTranscriptReader(reader) {
       readChatTranscript = reader;
+    },
+    setChatIconSetter(setter) {
+      setChatIcon = setter;
     },
   };
 }

@@ -128,6 +128,20 @@ export async function startEmbeddedServer(
     },
   );
 
+  // The agent's set_chat_icon tool writes straight through the chat store
+  // (works for every harness — ai-sdk mounts it as a tool, Claude Code as
+  // an MCP tool).
+  agentRegistry.workspaceToolkit?.setChatIconSetter(
+    async (projectId, sessionId, icon) => {
+      await catamorphic.core.agentSessions?.setIcon(
+        { tenantId: DESKTOP_TENANT_ID, externalUserId: DESKTOP_USER_ID },
+        projectId,
+        sessionId,
+        icon,
+      );
+    },
+  );
+
   const app: FastifyInstance = Fastify({ logger: { level: "warn" } });
   await app.register(cors, {
     origin: true,

@@ -662,6 +662,8 @@ export const AgentSessionSchema = z.object({
   agentId: z.string().nullable(),
   modelEffort: AgentEffortSchema.nullable(),
   title: z.string().nullable(),
+  icon: z.string().nullable(),
+  parentSessionId: z.string().uuid().nullable(),
   status: z.enum(["active", "closed"]),
   baseCommitSha: z.string().length(40).nullable(),
   createdAt: z.string().datetime(),
@@ -683,6 +685,14 @@ export const UpdateAgentSessionSchema = z.object({
   agentId: z.string().optional(),
   /** `null` clears the override back to the agent's default. */
   effort: AgentEffortSchema.nullable().optional(),
+});
+
+export const ForkAgentSessionSchema = z.object({
+  /**
+   * Fork point: the transcript is copied up to and including this
+   * message. Omitted = the whole settled transcript.
+   */
+  messageId: z.string().uuid().optional(),
 });
 
 export const AgentMessageSchema = z.object({

@@ -1,5 +1,6 @@
 import {
   useAgentSessions,
+  useForkAgentSession,
   useProjects,
   useUpdateAgentSession,
   useWorkflows,
@@ -10,14 +11,17 @@ import {
   Columns2,
   FolderPlus,
   LayoutGrid,
+  MessageSquare,
   PanelLeft,
   Plus,
   Settings as SettingsIcon,
   Workflow as WorkflowIcon,
 } from "lucide-react";
 import {
+  lazy,
   type MouseEvent as ReactMouseEvent,
   type ReactNode,
+  Suspense,
   useCallback,
   useEffect,
   useRef,
@@ -33,6 +37,7 @@ import {
   type ChatDockEntry,
   type ChatSurface,
 } from "./components/chat-dock.js";
+import { ChatGlyph } from "./components/chat-icon.js";
 import { CommandPalette } from "./components/command-palette.js";
 import { DeleteProjectModal } from "./components/delete-project-modal.js";
 import { ProfileBar } from "./components/profile-bar.js";
@@ -48,6 +53,7 @@ import {
 import {
   type AgentEffort,
   type AgentsData,
+  type AppPrefs,
   desktopApi,
   type Profile,
   type ProfilesData,
@@ -60,15 +66,27 @@ import {
   matchesBinding,
   useKeybindings,
 } from "./lib/keybindings.js";
+import { notifyDesktop, playChime } from "./lib/notify.js";
 import { AppScreen, useApps } from "./screens/app-screen.js";
 import {
   type BrowserPageState,
   BrowserScreen,
 } from "./screens/browser-screen.js";
-import { EditorScreen } from "./screens/editor-screen.js";
 import { SettingsScreen } from "./screens/settings-screen.js";
 import { TerminalScreen } from "./screens/terminal-screen.js";
-import { WorkflowScreen } from "./screens/workflow-screen.js";
+
+// Monaco rides in these two screens (~half the renderer bundle); lazy
+// chunks keep it off the startup parse path entirely.
+const EditorScreen = lazy(() =>
+  import("./screens/editor-screen.js").then((module) => ({
+    default: module.EditorScreen,
+  })),
+);
+const WorkflowScreen = lazy(() =>
+  import("./screens/workflow-screen.js").then((module) => ({
+    default: module.WorkflowScreen,
+  })),
+);
 
 interface BrowserEntry {
   localId: string;
@@ -94,6 +112,11 @@ interface TerminalEntry {
   attachSessionId?: string;
   /** PTY session backing this tab (agents read terminals through it). */
   ptySessionId?: string;
+  /**
+   * Reopened tab (Cmd+Shift+T): the closed session whose scrollback
+   * replays above the fresh shell.
+   */
+  restoreSessionId?: string;
   /** A foreground command is running right now (chip spinner). */
   busy?: boolean;
   /** The agent is driving this terminal; input waits on Take over. */
@@ -130,7 +153,12 @@ type ClosedTab = (
       profileId: string;
       chatLocalId?: string;
     }
-  | { kind: "terminal"; chatLocalId?: string }
+  | {
+      kind: "terminal";
+      chatLocalId?: string;
+      /** Dead PTY whose scrollback the reopened tab replays. */
+      ptySessionId?: string;
+    }
   | { kind: "editor"; filePath: string | null; chatLocalId?: string }
   | { kind: "chat"; sessionId?: string }
   | { kind: "screen"; tab: WorkspaceTab }
@@ -141,6 +169,19 @@ type ClosedTab = (
 };
 
 const CLOSED_TABS_KEPT = 10;
+
+/** What a ChatDock reports live; `unread` is derived here in the host. */
+interface ChatLiveSignals {
+  working: boolean;
+  draft: boolean;
+  awaitingInput: boolean;
+}
+
+const NO_CHAT_SIGNALS: ChatLiveSignals = {
+  working: false,
+  draft: false,
+  awaitingInput: false,
+};
 
 interface Workspace {
   tabs: WorkspaceTab[];
@@ -192,6 +233,66 @@ const browserTabKey = (localId: string) => `browser:${localId}`;
 const terminalTabKey = (localId: string) => `terminal:${localId}`;
 const editorTabKey = (localId: string) => `editor:${localId}`;
 
+/** A chat's surface is on screen: the floating dock, or its focused tab. */
+const chatVisible = (ws: Workspace, chat: ChatDockEntry) =>
+  chat.mode === "partial" ||
+  (chat.mode === "tab" && ws.activeTabKey === chatTabKey(chat.localId));
+
+/** Tab keys attached to a chat, in per-kind order. */
+const attachedTabKeys = (ws: Workspace, chatLocalId: string) => [
+  ...ws.browsers
+    .filter((browser) => browser.chatLocalId === chatLocalId)
+    .map((browser) => browserTabKey(browser.localId)),
+  ...ws.terminals
+    .filter((terminal) => terminal.chatLocalId === chatLocalId)
+    .map((terminal) => terminalTabKey(terminal.localId)),
+  ...ws.editors
+    .filter((editor) => editor.chatLocalId === chatLocalId)
+    .map((editor) => editorTabKey(editor.localId)),
+];
+
+/**
+ * Tab-strip order, the single source for the strip AND keyboard cycling:
+ * `tabOrder` (drag-arranged) first, unknown keys appended in per-kind
+ * order — then tabs attached to a tab-mode chat are pulled out and
+ * clustered right after their chat (the group), unless collapsed.
+ */
+const orderedTabKeys = (
+  ws: Workspace,
+  opts?: { includeCollapsed?: boolean },
+): string[] => {
+  const tabChats = ws.chats.filter((chat) => chat.mode === "tab");
+  const tabChatIds = new Set(tabChats.map((chat) => chat.localId));
+  const grouped = new Set(
+    tabChats.flatMap((chat) => attachedTabKeys(ws, chat.localId)),
+  );
+  const natural = [
+    ...ws.tabs.map(tabKey),
+    ...ws.browsers.map((browser) => browserTabKey(browser.localId)),
+    ...ws.terminals.map((terminal) => terminalTabKey(terminal.localId)),
+    ...ws.editors.map((editor) => editorTabKey(editor.localId)),
+    ...tabChats.map((chat) => chatTabKey(chat.localId)),
+  ];
+  const naturalSet = new Set(natural);
+  const order = [
+    ...ws.tabOrder.filter((key) => naturalSet.has(key)),
+    ...natural.filter((key) => !ws.tabOrder.includes(key)),
+  ];
+  const result: string[] = [];
+  for (const key of order) {
+    if (grouped.has(key)) continue; // clustered after its chat below
+    result.push(key);
+    if (!key.startsWith("chat:")) continue;
+    const chatId = key.slice("chat:".length);
+    if (!tabChatIds.has(chatId)) continue;
+    const chat = ws.chats.find((candidate) => candidate.localId === chatId);
+    if (!chat?.surfacesCollapsed || opts?.includeCollapsed) {
+      result.push(...attachedTabKeys(ws, chatId));
+    }
+  }
+  return result;
+};
+
 /** Offered to config-defined items that don't declare their own menu. */
 const DEFAULT_CUSTOM_MENU: SidebarMenuEntry[] = [
   { label: "Open in new tab", action: "open-tab" },
@@ -203,26 +304,50 @@ const truncateLabel = (value: string): string =>
 
 /**
  * Veil over a surface an agent is driving: interaction is blocked (the
- * page stays fully visible — watch the agent work live) until the user
- * takes over. A hairline accent ring marks the surface as agent-held.
+ * surface stays fully visible — watch the agent work live) until the
+ * user takes control. A hairline accent ring marks the surface as
+ * agent-held; the pill names the owner and offers the two moves that
+ * make sense — jump to the owning chat, or take the keys.
  */
-function AgentControlOverlay({ onTakeOver }: { onTakeOver: () => void }) {
+function AgentControlOverlay({
+  kind,
+  onTakeOver,
+  onGoToChat,
+}: {
+  kind: "terminal" | "page";
+  onTakeOver: () => void;
+  /** Reveal the chat driving this surface (absent when unattributed). */
+  onGoToChat?: () => void;
+}) {
   return (
     // Pill at the top: the floating chat dock owns the bottom center.
     <div className="absolute inset-0 z-20 flex items-start justify-center pt-4">
       <div className="pointer-events-none absolute inset-0 animate-fade-in ring-2 ring-inset ring-accent/40" />
       <div className="pointer-events-auto absolute inset-0" aria-hidden />
-      <button
-        type="button"
-        onClick={onTakeOver}
-        className="pointer-events-auto z-10 flex animate-fade-in items-center gap-2 rounded-full border border-border bg-bg-raised/95 py-1.5 pl-3 pr-4 text-xs text-fg shadow-2xl backdrop-blur-xl transition-colors duration-150 hover:border-accent"
-      >
+      <div className="pointer-events-auto z-10 flex animate-fade-in items-center gap-2.5 rounded-full border border-border bg-bg-raised/95 py-1.5 pl-3 pr-1.5 text-xs text-fg shadow-2xl backdrop-blur-xl">
         <span className="relative flex size-2">
           <span className="absolute inline-flex h-full w-full animate-pulse rounded-full bg-accent opacity-75" />
           <span className="relative inline-flex size-2 rounded-full bg-accent" />
         </span>
-        Agent is working — Take over
-      </button>
+        Agent owns this {kind}
+        {onGoToChat && (
+          <button
+            type="button"
+            onClick={onGoToChat}
+            className="flex h-6 cursor-pointer items-center gap-1.5 rounded-full border border-border px-2.5 text-fg-muted transition-colors duration-150 hover:border-border-strong hover:text-fg"
+          >
+            <MessageSquare className="size-3" />
+            Go to chat
+          </button>
+        )}
+        <button
+          type="button"
+          onClick={onTakeOver}
+          className="h-6 cursor-pointer rounded-full bg-accent px-2.5 font-medium text-accent-fg transition-opacity duration-150 hover:opacity-90"
+        >
+          Take control
+        </button>
+      </div>
     </div>
   );
 }
@@ -261,11 +386,23 @@ export function App() {
   );
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [paletteOpen, setPaletteOpen] = useState(false);
-  const [sendingByChat, setSendingByChat] = useState<Record<string, boolean>>(
-    {},
-  );
+  // Live per-chat signals reported by each ChatDock (working / draft /
+  // awaiting-input); unread is host-derived (needs surface visibility).
+  const [signalsByChat, setSignalsByChat] = useState<
+    Record<string, ChatLiveSignals>
+  >({});
   const [unreadByChat, setUnreadByChat] = useState<Record<string, boolean>>({});
   const [bubblesCollapsed, setBubblesCollapsed] = useState(false);
+
+  // Notification preferences (per profile): soft chime + desktop banner
+  // when an agent finishes or asks a question.
+  const [prefs, setPrefs] = useState<AppPrefs | null>(null);
+  useEffect(() => {
+    void desktopApi.getPrefs().then(setPrefs);
+    return desktopApi.onPrefsChanged(setPrefs);
+  }, []);
+  const prefsRef = useRef(prefs);
+  prefsRef.current = prefs;
 
   // Profiles own the whole environment: session partition, projects,
   // theme/keys/sidebar, and the AI agent roster. Each window is born on a
@@ -393,12 +530,14 @@ export function App() {
       // Providers above App (theme, keybindings) refetch on this signal —
       // in-place switches get no main-process broadcast to this window.
       window.dispatchEvent(new Event("catamorphic:profile-refetch"));
-      const [sidebar, agents] = await Promise.all([
+      const [sidebar, agents, nextPrefs] = await Promise.all([
         desktopApi.sidebarConfigGet(),
         desktopApi.agentsList(),
+        desktopApi.getPrefs(),
       ]);
       setSidebarConfig(sidebar);
       setAgentsData(agents);
+      setPrefs(nextPrefs);
       setProfileVeil({ stage: "out" });
     } finally {
       completingSwitchRef.current = false;
@@ -480,7 +619,12 @@ export function App() {
     openTab({ kind: "palette", name: crypto.randomUUID(), label: "New Tab" });
 
   /** Tab bar entries: fixed tabs plus one derived tab per tab-mode chat. */
-  const chatTabs = (ws: Workspace, chatLabels: Record<string, string>) =>
+  const chatTabs = (
+    ws: Workspace,
+    chatLabels: Record<string, string>,
+    icons: Record<string, string | null>,
+    forks: Record<string, boolean>,
+  ) =>
     ws.chats
       .filter((chat) => chat.mode === "tab")
       .map(
@@ -488,10 +632,29 @@ export function App() {
           kind: "chat",
           name: chat.localId,
           label: chatLabels[chat.localId] ?? "Chat",
+          chatIcon: icons[chat.localId] ?? null,
+          fork: forks[chat.localId] ?? false,
+          // Hover card: which agent runs this conversation (+ lineage).
+          detail:
+            [
+              agentsData?.agents.find(
+                (agent) =>
+                  agent.id ===
+                  (sessionsById.get(chat.sessionId ?? "")?.agentId ??
+                    chat.agentId ??
+                    agentsData?.defaultAgentId),
+              )?.name,
+              forks[chat.localId] ? "fork of another chat" : undefined,
+            ]
+              .filter(Boolean)
+              .join(" · ") || undefined,
           // Same signals as the chat's bubble: spinner while the agent
-          // works, dot for a reply that landed while the tab was hidden.
-          sending: sendingByChat[chat.localId] ?? false,
+          // works, dot for a reply that landed while the tab was hidden,
+          // pencil for an unsent draft, "?" for a waiting question.
+          working: signalsByChat[chat.localId]?.working ?? false,
           unread: unreadByChat[chat.localId] ?? false,
+          draft: signalsByChat[chat.localId]?.draft ?? false,
+          awaitingInput: signalsByChat[chat.localId]?.awaitingInput ?? false,
         }),
       );
 
@@ -502,6 +665,8 @@ export function App() {
         name: browser.localId,
         label: browser.title || "New Tab",
         faviconUrl: browser.faviconUrl,
+        // Hover card: the page's address under its full title.
+        detail: browser.url || browser.initialUrl || undefined,
       }),
     );
 
@@ -520,8 +685,10 @@ export function App() {
         kind: "editor",
         name: editor.localId,
         label: editor.filePath?.split("/").at(-1) || "Editor",
-        // Unsaved draft rides the same dot as an unread chat reply.
-        unread: editor.dirty,
+        // Unsaved changes are a draft — same pencil badge as chat drafts.
+        draft: editor.dirty,
+        // Hover card: the project-relative path.
+        detail: editor.filePath ?? undefined,
       }),
     );
 
@@ -786,6 +953,11 @@ export function App() {
               ? {
                   kind: "terminal",
                   chatLocalId: closing.chatLocalId,
+                  // User terminals only: reopening replays the dead
+                  // shell's scrollback (agent sessions aren't buried).
+                  ptySessionId: closing.attachSessionId
+                    ? undefined
+                    : closing.ptySessionId,
                   ...splitContext,
                 }
               : null,
@@ -902,6 +1074,7 @@ export function App() {
             localId: crypto.randomUUID(),
             title: "",
             chatLocalId: record.chatLocalId,
+            restoreSessionId: record.ptySessionId,
           };
           key = terminalTabKey(entry.localId);
           patch = { terminals: [...ws.terminals, entry] };
@@ -1006,6 +1179,33 @@ export function App() {
         }),
       };
     });
+
+  /** Bring a chat's surface on screen (desktop-notification clicks). */
+  const revealChat = (localId: string) =>
+    updateWorkspace((ws) => {
+      const chat = ws.chats.find((candidate) => candidate.localId === localId);
+      if (!chat) return ws;
+      if (chat.mode === "tab") {
+        return {
+          ...ws,
+          activeChatId: localId,
+          activeTabKey: chatTabKey(localId),
+        };
+      }
+      return {
+        ...ws,
+        activeChatId: localId,
+        chats: ws.chats.map((candidate) =>
+          candidate.localId === localId
+            ? { ...candidate, mode: "partial" }
+            : candidate.mode === "partial"
+              ? { ...candidate, mode: "min" }
+              : candidate,
+        ),
+      };
+    });
+  const revealChatRef = useRef(revealChat);
+  revealChatRef.current = revealChat;
 
   const closeChat = (localId: string) => {
     chatClosersRef.current.delete(localId);
@@ -1166,25 +1366,75 @@ export function App() {
   const workspaceRef = useRef(workspace);
   workspaceRef.current = workspace;
 
-  // A chat's surface is on screen: the floating dock, or its focused tab.
-  const chatVisible = (ws: Workspace, chat: ChatDockEntry) =>
-    chat.mode === "partial" ||
-    (chat.mode === "tab" && ws.activeTabKey === chatTabKey(chat.localId));
+  const signalsRef = useRef<Record<string, ChatLiveSignals>>({});
+  /**
+   * A settled agent deserves a cue: soft chime when it finishes or asks
+   * (only when the chat isn't front-and-center — watching it IS the cue),
+   * plus an OS notification when the window itself is unfocused. Both are
+   * per-profile preferences.
+   */
+  const notifySettled = useCallback(
+    (localId: string, kind: "done" | "question") => {
+      const ws = workspaceRef.current;
+      const chat = ws.chats.find((candidate) => candidate.localId === localId);
+      if (!chat) return;
+      const visible = chatVisible(ws, chat);
+      const focused = document.hasFocus();
+      const current = prefsRef.current;
+      const title = chatLabelsRef.current[localId] ?? "Chat";
+      if ((current?.notificationSounds ?? true) && !(visible && focused)) {
+        playChime(kind);
+      }
+      if (current?.desktopNotifications ?? true) {
+        const notification = notifyDesktop(
+          title,
+          kind === "question"
+            ? "The agent has a question for you."
+            : "The agent finished working.",
+        );
+        if (notification) {
+          notification.onclick = () => {
+            void desktopApi.windowFocus();
+            revealChatRef.current(localId);
+          };
+        }
+      }
+    },
+    [],
+  );
 
-  const sendingRef = useRef<Record<string, boolean>>({});
-  const onSendingChange = useCallback((localId: string, sending: boolean) => {
-    const wasSending = sendingRef.current[localId];
-    if (wasSending === sending) return;
-    sendingRef.current = { ...sendingRef.current, [localId]: sending };
-    setSendingByChat(sendingRef.current);
-    // Response landed while the chat was hidden (minimized bubble or a
-    // background tab) → unread dot.
-    const ws = workspaceRef.current;
-    const chat = ws.chats.find((candidate) => candidate.localId === localId);
-    if (!sending && wasSending && chat && !chatVisible(ws, chat)) {
-      setUnreadByChat((unread) => ({ ...unread, [localId]: true }));
-    }
-  }, []);
+  const onSignalsChange = useCallback(
+    (localId: string, next: ChatLiveSignals) => {
+      const previous = signalsRef.current[localId];
+      const had = previous !== undefined;
+      const before = previous ?? NO_CHAT_SIGNALS;
+      if (
+        before.working === next.working &&
+        before.draft === next.draft &&
+        before.awaitingInput === next.awaitingInput
+      ) {
+        return;
+      }
+      signalsRef.current = { ...signalsRef.current, [localId]: next };
+      setSignalsByChat(signalsRef.current);
+      const ws = workspaceRef.current;
+      const chat = ws.chats.find((candidate) => candidate.localId === localId);
+      // Response landed while the chat was hidden (minimized bubble or a
+      // background tab) → unread dot.
+      if (before.working && !next.working && chat && !chatVisible(ws, chat)) {
+        setUnreadByChat((unread) => ({ ...unread, [localId]: true }));
+      }
+      // Notify only on live transitions — the first report for a chat is
+      // its mount snapshot (a reopened session with an old question must
+      // not chime).
+      if (had && before.working && !next.working) {
+        notifySettled(localId, next.awaitingInput ? "question" : "done");
+      } else if (had && !before.awaitingInput && next.awaitingInput) {
+        notifySettled(localId, "question");
+      }
+    },
+    [notifySettled],
+  );
 
   // Bringing a chat's surface on screen marks it read.
   useEffect(() => {
@@ -1236,6 +1486,66 @@ export function App() {
     : undefined;
 
   const updateSession = useUpdateAgentSession(projectId);
+  const forkSession = useForkAgentSession(projectId);
+
+  /**
+   * Fork a chat from one of its assistant messages: the server copies the
+   * transcript into a new session (same agent, parent recorded); the fork
+   * opens tiled beside the current view and chips onto the parent's rail.
+   */
+  const forkChat = (parent: ChatDockEntry, messageId: string) => {
+    if (!parent.sessionId || forkSession.isPending) return;
+    forkSession.mutate(
+      { sessionId: parent.sessionId, messageId },
+      {
+        onSuccess: (session) => {
+          updateWorkspace((ws) => {
+            const entry: ChatDockEntry = {
+              ...newChatEntry("tab"),
+              sessionId: session.id,
+              parentLocalId: parent.localId,
+            };
+            const key = chatTabKey(entry.localId);
+            // Tile the fork beside whatever the user is looking at; with
+            // nothing focused it simply becomes the active tab.
+            const split =
+              ws.activeTabKey && ws.activeTabKey !== key
+                ? { leftKey: ws.activeTabKey, rightKey: key, ratio: 0.5 }
+                : null;
+            return {
+              ...ws,
+              chats: [...ws.chats, entry],
+              activeChatId: entry.localId,
+              activeTabKey: key,
+              split,
+            };
+          });
+        },
+      },
+    );
+  };
+
+  /** Reveal a fork's parent chat — reopening it if it was closed. */
+  const openParentChat = (entry: ChatDockEntry) => {
+    const parentSessionId = entry.sessionId
+      ? sessionsById.get(entry.sessionId)?.parentSessionId
+      : undefined;
+    const ws = workspaceRef.current;
+    const openParent =
+      ws.chats.find(
+        (candidate) =>
+          candidate.localId === entry.parentLocalId ||
+          (parentSessionId && candidate.sessionId === parentSessionId),
+      ) ?? null;
+    if (openParent) {
+      revealChat(openParent.localId);
+      return;
+    }
+    const parentSession = parentSessionId
+      ? sessionsById.get(parentSessionId)
+      : undefined;
+    if (parentSession) openSession(parentSession);
+  };
 
   // The surface a highlighted palette command would act on gets an accent
   // border while the row is selected — the command points at its target.
@@ -1334,61 +1644,6 @@ export function App() {
         setPaneMotion({ direction, nonce });
       }
     });
-  };
-
-  /** Tab keys attached to a chat, in per-kind order. */
-  const attachedTabKeys = (ws: Workspace, chatLocalId: string) => [
-    ...ws.browsers
-      .filter((browser) => browser.chatLocalId === chatLocalId)
-      .map((browser) => browserTabKey(browser.localId)),
-    ...ws.terminals
-      .filter((terminal) => terminal.chatLocalId === chatLocalId)
-      .map((terminal) => terminalTabKey(terminal.localId)),
-    ...ws.editors
-      .filter((editor) => editor.chatLocalId === chatLocalId)
-      .map((editor) => editorTabKey(editor.localId)),
-  ];
-
-  /**
-   * Tab-strip order, the single source for the strip AND keyboard cycling:
-   * `tabOrder` (drag-arranged) first, unknown keys appended in per-kind
-   * order — then tabs attached to a tab-mode chat are pulled out and
-   * clustered right after their chat (the group), unless collapsed.
-   */
-  const orderedTabKeys = (
-    ws: Workspace,
-    opts?: { includeCollapsed?: boolean },
-  ): string[] => {
-    const tabChats = ws.chats.filter((chat) => chat.mode === "tab");
-    const tabChatIds = new Set(tabChats.map((chat) => chat.localId));
-    const grouped = new Set(
-      tabChats.flatMap((chat) => attachedTabKeys(ws, chat.localId)),
-    );
-    const natural = [
-      ...ws.tabs.map(tabKey),
-      ...ws.browsers.map((browser) => browserTabKey(browser.localId)),
-      ...ws.terminals.map((terminal) => terminalTabKey(terminal.localId)),
-      ...ws.editors.map((editor) => editorTabKey(editor.localId)),
-      ...tabChats.map((chat) => chatTabKey(chat.localId)),
-    ];
-    const naturalSet = new Set(natural);
-    const order = [
-      ...ws.tabOrder.filter((key) => naturalSet.has(key)),
-      ...natural.filter((key) => !ws.tabOrder.includes(key)),
-    ];
-    const result: string[] = [];
-    for (const key of order) {
-      if (grouped.has(key)) continue; // clustered after its chat below
-      result.push(key);
-      if (!key.startsWith("chat:")) continue;
-      const chatId = key.slice("chat:".length);
-      if (!tabChatIds.has(chatId)) continue;
-      const chat = ws.chats.find((candidate) => candidate.localId === chatId);
-      if (!chat?.surfacesCollapsed || opts?.includeCollapsed) {
-        result.push(...attachedTabKeys(ws, chatId));
-      }
-    }
-    return result;
   };
 
   const cycleTab = (direction: -1 | 1) => {
@@ -1575,6 +1830,18 @@ export function App() {
    */
   const unsplitTimerRef = useRef<number | undefined>(undefined);
   const openSurface = (key: string, mode: "tab" | "split") => {
+    // Chat surfaces (fork chips) may be minimized bubbles — a chat only
+    // occupies a view slot in tab mode, so promote it first.
+    if (key.startsWith("chat:")) {
+      const localId = key.slice("chat:".length);
+      updateWorkspace((ws) => ({
+        ...ws,
+        activeChatId: localId,
+        chats: ws.chats.map((chat) =>
+          chat.localId === localId ? { ...chat, mode: "tab" } : chat,
+        ),
+      }));
+    }
     const current = workspaceRef.current;
     if (
       mode === "tab" &&
@@ -1732,7 +1999,27 @@ export function App() {
     };
 
     const onKeyDown = (event: globalThis.KeyboardEvent) => {
-      if (dispatchShortcut(event)) event.preventDefault();
+      if (dispatchShortcut(event)) {
+        event.preventDefault();
+        return;
+      }
+      // Desktop feel: Cmd+A means "select all of what I'm editing", never
+      // "select every label on screen". Outside editable fields (inputs,
+      // the terminal's contenteditable, Monaco's textarea) it is a no-op.
+      if (
+        (event.metaKey || event.ctrlKey) &&
+        !event.altKey &&
+        !event.shiftKey &&
+        event.key.toLowerCase() === "a"
+      ) {
+        const active = document.activeElement as HTMLElement | null;
+        const editable =
+          active &&
+          (active.tagName === "INPUT" ||
+            active.tagName === "TEXTAREA" ||
+            active.isContentEditable);
+        if (!editable) event.preventDefault();
+      }
     };
     window.addEventListener("keydown", onKeyDown);
     const unsubscribeGuestKeys = desktopApi.onBrowserGuestKey((key) =>
@@ -1784,8 +2071,6 @@ export function App() {
   // readTab), agent-spawned surfaces (browser tabs, terminals), and the
   // control handoff. Every window answers; the ones without this project
   // reply null and main takes the first real answer.
-  const sendingByChatRef = useRef(sendingByChat);
-  sendingByChatRef.current = sendingByChat;
   const chatLabelsRef = useRef<Record<string, string>>({});
   const projectIdRef = useRef(projectId);
   projectIdRef.current = projectId;
@@ -1804,7 +2089,7 @@ export function App() {
         if (owner) return owner.localId;
       }
       const sending = ws.chats.filter(
-        (chat) => sendingByChatRef.current[chat.localId],
+        (chat) => signalsRef.current[chat.localId]?.working,
       );
       const preferred =
         sending.find((chat) => chat.localId === ws.activeChatId) ??
@@ -1875,7 +2160,7 @@ export function App() {
             key: chatTabKey(chat.localId),
             title: chatLabelsRef.current[chat.localId] ?? "Chat",
             state: chat.mode,
-            working: Boolean(sendingByChatRef.current[chat.localId]),
+            working: Boolean(signalsRef.current[chat.localId]?.working),
             // Lets the context snapshot mark the asking agent's own chat.
             sessionId: chat.sessionId ?? null,
           }));
@@ -2056,6 +2341,23 @@ export function App() {
       ];
     }),
   );
+  // Conversation identity beyond the label: the agent-chosen icon, and
+  // whether the chat is a fork (fork glyph, back-to-parent affordance).
+  const chatIcons: Record<string, string | null> = Object.fromEntries(
+    workspace.chats.map((chat) => [
+      chat.localId,
+      sessionsById.get(chat.sessionId ?? "")?.icon ?? null,
+    ]),
+  );
+  const chatForks: Record<string, boolean> = Object.fromEntries(
+    workspace.chats.map((chat) => [
+      chat.localId,
+      Boolean(
+        chat.parentLocalId ??
+          sessionsById.get(chat.sessionId ?? "")?.parentSessionId,
+      ),
+    ]),
+  );
   // Strip entries in visual order (drag-arranged + group-clustered), with
   // group membership stamped for the grouped styling.
   const tabByKey = new Map<string, WorkspaceTab>(
@@ -2064,7 +2366,7 @@ export function App() {
       ...browserTabs(workspace),
       ...terminalTabs(workspace),
       ...editorTabs(workspace),
-      ...chatTabs(workspace, chatLabels),
+      ...chatTabs(workspace, chatLabels, chatIcons, chatForks),
     ].map((tab) => [tabKey(tab), tab]),
   );
   const groupOfKey = new Map<string, string>();
@@ -2161,6 +2463,15 @@ export function App() {
 
   /** The agent's working tabs for a chat — its surfaces rail. */
   const surfacesFor = (chat: ChatDockEntry): ChatSurface[] => [
+    // Conversations forked from this one ride the rail as chips too.
+    ...workspace.chats
+      .filter((candidate) => candidate.parentLocalId === chat.localId)
+      .map((candidate) => ({
+        key: chatTabKey(candidate.localId),
+        kind: "chat" as const,
+        label: chatLabels[candidate.localId] ?? "Fork",
+        active: Boolean(signalsByChat[candidate.localId]?.working),
+      })),
     ...workspace.browsers
       .filter((browser) => browser.chatLocalId === chat.localId)
       .map((browser) => ({
@@ -2381,10 +2692,12 @@ export function App() {
                         />
                       )}
                       {tab.kind === "workflow" ? (
-                        <WorkflowScreen
-                          projectId={projectId}
-                          workflowName={tab.name}
-                        />
+                        <Suspense fallback={<div className="flex-1 bg-bg" />}>
+                          <WorkflowScreen
+                            projectId={projectId}
+                            workflowName={tab.name}
+                          />
+                        </Suspense>
                       ) : tab.kind === "app" ? (
                         <AppScreen projectId={projectId} appName={tab.name} />
                       ) : tab.kind === "settings" ? (
@@ -2425,6 +2738,10 @@ export function App() {
                       // last known URL, not the tab's original one.
                       initialUrl={browser.url || browser.initialUrl}
                       active={browser.localId === activeBrowserTabId}
+                      visible={Boolean(
+                        viewSlots[browserTabKey(browser.localId)],
+                      )}
+                      keepAwake={Boolean(browser.agentControlled)}
                       onStateChange={(state) =>
                         onBrowserState(browser.localId, state)
                       }
@@ -2454,8 +2771,14 @@ export function App() {
                     />
                     {browser.agentControlled && (
                       <AgentControlOverlay
+                        kind="page"
                         onTakeOver={() =>
                           takeOverSurface(browserTabKey(browser.localId))
+                        }
+                        onGoToChat={
+                          browser.chatLocalId
+                            ? () => revealChat(browser.chatLocalId as string)
+                            : undefined
                         }
                       />
                     )}
@@ -2486,6 +2809,7 @@ export function App() {
                       projectId={projectId}
                       active={terminal.localId === activeTerminalTabId}
                       attachSessionId={terminal.attachSessionId}
+                      restoreSessionId={terminal.restoreSessionId}
                       readOnly={Boolean(terminal.agentControlled)}
                       onTitle={(title) =>
                         onTerminalTitle(terminal.localId, title)
@@ -2519,8 +2843,14 @@ export function App() {
                     />
                     {terminal.agentControlled && (
                       <AgentControlOverlay
+                        kind="terminal"
                         onTakeOver={() =>
                           takeOverSurface(terminalTabKey(terminal.localId))
+                        }
+                        onGoToChat={
+                          terminal.chatLocalId
+                            ? () => revealChat(terminal.chatLocalId as string)
+                            : undefined
                         }
                       />
                     )}
@@ -2542,16 +2872,18 @@ export function App() {
                           }
                         />
                       )}
-                    <EditorScreen
-                      projectId={projectId}
-                      filePath={editor.filePath}
-                      onFileChange={(filePath) =>
-                        onEditorState(editor.localId, { filePath })
-                      }
-                      onDirtyChange={(dirty) =>
-                        onEditorState(editor.localId, { dirty })
-                      }
-                    />
+                    <Suspense fallback={<div className="flex-1 bg-bg" />}>
+                      <EditorScreen
+                        projectId={projectId}
+                        filePath={editor.filePath}
+                        onFileChange={(filePath) =>
+                          onEditorState(editor.localId, { filePath })
+                        }
+                        onDirtyChange={(dirty) =>
+                          onEditorState(editor.localId, { dirty })
+                        }
+                      />
+                    </Suspense>
                   </div>
                 ))}
               </div>
@@ -2661,6 +2993,12 @@ export function App() {
                       chatLocalId: entry.localId,
                     })
                   }
+                  onFork={(messageId) => forkChat(entry, messageId)}
+                  onOpenParent={
+                    chatForks[entry.localId]
+                      ? () => openParentChat(entry)
+                      : undefined
+                  }
                   onFocusRequest={
                     split &&
                     viewSlots[chatTabKey(entry.localId)] &&
@@ -2700,14 +3038,16 @@ export function App() {
                     chatClosersRef.current.set(entry.localId, close)
                   }
                   onSessionCreated={onSessionCreated}
-                  onSendingChange={onSendingChange}
+                  onSignalsChange={onSignalsChange}
                 />
               ))}
 
               <ChatBubbles
                 entries={workspace.chats}
                 labels={chatLabels}
-                sending={sendingByChat}
+                icons={chatIcons}
+                forks={chatForks}
+                signals={signalsByChat}
                 unread={unreadByChat}
                 activeLocalId={workspace.activeChatId}
                 autoCollapse={activeChatTabId !== undefined}
@@ -3131,6 +3471,11 @@ function SessionsNav({
             }`}
             aria-current={session.id === activeSessionId || undefined}
           >
+            <ChatGlyph
+              icon={session.icon}
+              fork={Boolean(session.parentSessionId)}
+              className="size-3.5 shrink-0"
+            />
             <AnimatedTitle text={sessionLabel(session)} />
           </button>
         </li>

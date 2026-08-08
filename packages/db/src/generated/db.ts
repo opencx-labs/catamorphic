@@ -59,8 +59,10 @@ export interface AgentSessions {
   base_commit_sha: string | null;
   created_at: Generated<Timestamp>;
   external_user_id: string;
+  icon: string | null;
   id: Generated<string>;
   model_effort: string | null;
+  parent_session_id: string | null;
   project_id: string;
   provider: string;
   provider_session_id: string | null;

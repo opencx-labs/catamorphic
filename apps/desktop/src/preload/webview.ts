@@ -94,6 +94,53 @@ function alignClientHintBrands(): void {
 }
 alignClientHintBrands();
 
+/**
+ * Background-tab visibility, Chrome-style: hidden tabs stay mounted (so
+ * they keep loading and never reload on switch), but the PAGE must know
+ * it's hidden or it keeps burning CPU — videos play on, feeds poll at
+ * full rate. Chromium won't tell an offscreen webview guest it's hidden
+ * (`document.visibilityState` stays "visible"), so the host reports tab
+ * visibility and we shim the visibility API in the page's main world.
+ * Agent-driven tabs are exempted host-side (they must keep working).
+ */
+function applyHostVisibility(hidden: boolean): void {
+  if (typeof contextBridge.executeInMainWorld !== "function") return;
+  contextBridge.executeInMainWorld({
+    func: (nowHidden: boolean) => {
+      const state = window as Window & { __catHidden?: boolean };
+      if (state.__catHidden === undefined) {
+        // First call: install prototype getters (instance properties
+        // would be shadowed by the real ones).
+        Object.defineProperty(Document.prototype, "visibilityState", {
+          get: () =>
+            (window as Window & { __catHidden?: boolean }).__catHidden
+              ? "hidden"
+              : "visible",
+          configurable: true,
+        });
+        Object.defineProperty(Document.prototype, "hidden", {
+          get: () =>
+            Boolean((window as Window & { __catHidden?: boolean }).__catHidden),
+          configurable: true,
+        });
+        state.__catHidden = false;
+      }
+      if (state.__catHidden !== nowHidden) {
+        state.__catHidden = nowHidden;
+        document.dispatchEvent(new Event("visibilitychange"));
+      }
+    },
+    args: [hidden],
+  });
+}
+
+ipcRenderer.on(
+  "catamorphic:host-visibility",
+  (_event, payload: { hidden: boolean }) => {
+    applyHostVisibility(payload.hidden);
+  },
+);
+
 interface LoginForm {
   form: HTMLFormElement | null;
   username: HTMLInputElement | null;

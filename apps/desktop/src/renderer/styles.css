@@ -99,6 +99,24 @@ body {
   font-family: var(--font-sans);
   font-size: 13px;
   -webkit-font-smoothing: antialiased;
+  /* Desktop feel: app chrome (labels, buttons, palette rows, hints) is
+     furniture — drag-selecting across it must not highlight text, and
+     Cmd+A must not grab the whole screen. CONTENT re-enables selection
+     below: editable fields, the chat timeline, and code. Webviews,
+     Monaco, and the terminal manage their own selection. */
+  user-select: none;
+}
+
+input,
+textarea,
+[contenteditable] {
+  user-select: text;
+}
+
+/* The chat timeline is content, not chrome — copying an agent's answer
+   is a first-class flow. role="log" is the timeline's landmark. */
+[role="log"] {
+  user-select: text;
 }
 
 code,
@@ -325,6 +343,45 @@ kbd {
 
 .animate-question-in {
   animation: question-in 260ms cubic-bezier(0.2, 0, 0, 1);
+}
+
+/* Composer history recall (↑/↓): the recalled text settles in with a
+   quick fade + drop, so the swap reads as an arrival, not a glitch. */
+@keyframes input-recall {
+  from {
+    opacity: 0.25;
+    translate: 0 -3px;
+  }
+  to {
+    opacity: 1;
+    translate: 0 0;
+  }
+}
+
+.animate-input-recall {
+  animation: input-recall 150ms cubic-bezier(0.2, 0, 0, 1);
+}
+
+/* Agent question arrival: the asking chat's bubble nudges — a one-shot
+   scale bump with a soft accent ring that radiates and fades. The
+   persistent "?" badge carries the state afterwards; this is only the
+   "look over here" moment. */
+@keyframes bubble-ask {
+  0% {
+    scale: 1;
+    box-shadow: 0 0 0 0 color-mix(in srgb, var(--color-accent) 45%, transparent);
+  }
+  50% {
+    scale: 1.12;
+  }
+  100% {
+    scale: 1;
+    box-shadow: 0 0 0 12px transparent;
+  }
+}
+
+.animate-bubble-ask {
+  animation: bubble-ask 280ms cubic-bezier(0.2, 0, 0, 1);
 }
 
 /* Workspace tab arrival (new tab opened, incl. chat promoted to a tab) */

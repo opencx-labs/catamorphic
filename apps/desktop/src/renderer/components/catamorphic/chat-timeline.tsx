@@ -3,8 +3,10 @@
 import type { AgentMessage, QueuedAgentMessage } from "@catamorphic/react";
 import {
   ArrowDown,
+  ArrowUp,
   ChevronUp,
   FileText,
+  GitFork,
   KeyRound,
   LoaderCircle,
   Pencil,
@@ -12,7 +14,7 @@ import {
   Trash2,
   Zap,
 } from "lucide-react";
-import { useEffect, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useRef, useState } from "react";
 import Markdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { StickToBottom, useStickToBottomContext } from "use-stick-to-bottom";
@@ -93,6 +95,16 @@ export interface ChatTimelineProps {
     modifiers: { metaKey: boolean; shiftKey: boolean },
   ) => void;
   onFileClick?: (path: string) => void;
+  /**
+   * Fork the conversation from an assistant message (hover action on the
+   * message). The host opens the fork as its own chat surface.
+   */
+  onFork?: (messageId: string) => void;
+  /**
+   * Hands the host the "jump to my previous message" scroll action, so a
+   * composer shortcut (PageUp) triggers the same move as the button.
+   */
+  registerJumpToPreviousUserMessage?: (jump: () => void) => void;
 }
 
 /**
@@ -121,10 +133,17 @@ export function ChatTimeline({
   resolveAgentName,
   onLinkClick,
   onFileClick,
+  onFork,
+  registerJumpToPreviousUserMessage,
 }: ChatTimelineProps) {
   const lastConversationId = [...messages]
     .reverse()
     .find((message) => message.role !== "system")?.id;
+  const hasUserMessages = messages.some(
+    (message) =>
+      message.role === "user" &&
+      message.content !== QUESTIONS_DISMISSED_MESSAGE,
+  );
   return (
     <StickToBottom
       className={`relative overflow-hidden ${className}`}
@@ -140,19 +159,23 @@ export function ChatTimeline({
             {emptyState}
           </div>
         )}
-        {messages.map((message, index) => (
-          <Message
-            key={timelineKey(message, index, messages)}
-            message={message}
-            isLast={message.id === lastConversationId}
-            resolveAgentName={resolveAgentName}
-            onLinkClick={onLinkClick}
-            onFileClick={onFileClick}
-            onRetry={onRetry}
-            onReauth={onReauth}
-            reauthLabel={reauthLabel}
-          />
-        ))}
+        {(() => {
+          const keys = timelineKeys(messages);
+          return messages.map((message, index) => (
+            <Message
+              key={keys[index]}
+              message={message}
+              isLast={message.id === lastConversationId}
+              resolveAgentName={resolveAgentName}
+              onLinkClick={onLinkClick}
+              onFileClick={onFileClick}
+              onRetry={onRetry}
+              onReauth={onReauth}
+              reauthLabel={reauthLabel}
+              onFork={onFork}
+            />
+          ));
+        })()}
         {activity && (
           <div className="flex items-center gap-2 text-xs text-fg-muted">
             <LoaderCircle className="size-4 animate-spin" />
@@ -179,8 +202,70 @@ export function ChatTimeline({
           </div>
         )}
       </StickToBottom.Content>
+      {hasUserMessages && (
+        <JumpToPreviousUserMessage
+          register={registerJumpToPreviousUserMessage}
+        />
+      )}
       <ScrollToLatest />
     </StickToBottom>
+  );
+}
+
+/**
+ * Walks the conversation upward one user message per click: each press
+ * scrolls the nearest user message above the current view to the top —
+ * where its answer starts. The everyday use: "what did I even ask?"
+ * while multitasking. PageUp in the composer triggers the same move.
+ */
+function JumpToPreviousUserMessage({
+  register,
+}: {
+  register?: (jump: () => void) => void;
+}) {
+  const { scrollRef, contentRef, isAtBottom } = useStickToBottomContext();
+  const jump = useCallback(() => {
+    const scroller = scrollRef.current;
+    const content = contentRef.current;
+    if (!scroller || !content) return;
+    const targets = [
+      ...content.querySelectorAll<HTMLElement>("[data-user-message]"),
+    ];
+    if (targets.length === 0) return;
+    const viewTop = scroller.getBoundingClientRect().top;
+    // The nearest user message strictly above the view top; from the
+    // bottom of the chat the first press lands on the newest one.
+    const above = targets.filter(
+      (element) => element.getBoundingClientRect().top < viewTop - 8,
+    );
+    const target = above.at(-1) ?? targets.at(-1);
+    if (!target) return;
+    const offset = target.getBoundingClientRect().top - viewTop;
+    if (above.length === 0 && offset <= 8) return; // already at the oldest
+    scroller.scrollTo({
+      top: scroller.scrollTop + offset - 12,
+      behavior: "smooth",
+    });
+  }, [scrollRef, contentRef]);
+
+  useEffect(() => {
+    register?.(jump);
+  }, [register, jump]);
+
+  return (
+    <ShortcutHint label="Jump to your previous message" shortcut="⇞">
+      <button
+        type="button"
+        className={`absolute bottom-4 grid size-8 place-items-center rounded-full border border-border-strong bg-bg-overlay text-fg shadow-xl transition-[right] duration-200 ease-[cubic-bezier(0.2,0,0,1)] ${
+          isAtBottom ? "right-4" : "right-14"
+        }`}
+        onClick={jump}
+        aria-label="Jump to your previous message"
+        data-testid="chat-jump-previous"
+      >
+        <ArrowUp className="size-4" />
+      </button>
+    </ShortcutHint>
   );
 }
 
@@ -189,23 +274,59 @@ export function ChatTimeline({
  * message is replaced by its persisted twin, the id flips (uuid → db id) but
  * the rendered content is identical. A content-based key keeps the same DOM
  * node, so the settle is invisible instead of a remount (fade-in replay).
+ *
+ * The content is HASHED (cached per message object): using the raw text
+ * as the React key made key comparison itself scale with transcript
+ * bytes, and the old per-message occurrence scan was O(n²).
  */
-function timelineKey(
-  message: ChatTimelineMessage,
-  index: number,
-  messages: ChatTimelineMessage[],
-): string {
-  let occurrence = 0;
-  for (let i = 0; i < index; i += 1) {
-    const other = messages[i];
-    if (other?.role === message.role && other?.content === message.content) {
-      occurrence += 1;
-    }
+const contentHashCache = new WeakMap<object, string>();
+
+function contentHash(message: ChatTimelineMessage): string {
+  const cached = contentHashCache.get(message);
+  if (cached !== undefined) return cached;
+  let hash = 0;
+  const text = message.content;
+  for (let i = 0; i < text.length; i += 1) {
+    hash = (hash * 31 + text.charCodeAt(i)) | 0;
   }
-  return `${message.role}:${occurrence}:${message.content}`;
+  const result = `${text.length.toString(36)}:${(hash >>> 0).toString(36)}`;
+  contentHashCache.set(message, result);
+  return result;
 }
 
-function Message({
+/** One pass over the list; duplicate contents get occurrence suffixes. */
+function timelineKeys(messages: ChatTimelineMessage[]): string[] {
+  const seen = new Map<string, number>();
+  return messages.map((message) => {
+    const base = `${message.role}:${contentHash(message)}`;
+    const occurrence = seen.get(base) ?? 0;
+    seen.set(base, occurrence + 1);
+    return `${base}:${occurrence}`;
+  });
+}
+
+/**
+ * Memoized on data props only: persisted messages never change content
+ * (react-query's structural sharing keeps their object identity stable),
+ * so a 500ms streaming poll re-renders just the tail instead of
+ * re-parsing every message's markdown. Handler props are deliberately
+ * excluded from the comparison — hosts recreate those closures every
+ * render, but their behavior is stable across renders.
+ */
+const Message = memo(
+  MessageImpl,
+  (previous, next) =>
+    // System (marker) rows always re-render: their text derives from
+    // resolveAgentName, whose roster resolves asynchronously — freezing
+    // them shows "Switched to another agent" forever. They're plain
+    // one-line rows; re-rendering them is free.
+    next.message.role !== "system" &&
+    previous.message === next.message &&
+    previous.isLast === next.isLast &&
+    previous.reauthLabel === next.reauthLabel,
+);
+
+function MessageImpl({
   message,
   isLast,
   resolveAgentName,
@@ -214,6 +335,7 @@ function Message({
   onRetry,
   onReauth,
   reauthLabel,
+  onFork,
 }: {
   message: ChatTimelineMessage;
   isLast: boolean;
@@ -223,6 +345,7 @@ function Message({
   onRetry?: () => void;
   onReauth?: () => void;
   reauthLabel?: string;
+  onFork?: (messageId: string) => void;
 }) {
   const files = changedFiles(message);
   const metadata = asRecord(message.metadata);
@@ -300,9 +423,27 @@ function Message({
 
   return (
     <article
-      className={`max-w-[85%] text-sm ${enterClasses} ${message.role === "user" ? "ml-auto rounded-xl rounded-br-sm border border-info/30 bg-info/10 px-3 py-2" : "mr-auto"}`}
+      data-user-message={message.role === "user" || undefined}
+      className={`group/msg relative max-w-[85%] text-sm ${enterClasses} ${message.role === "user" ? "ml-auto rounded-xl rounded-br-sm border border-info/30 bg-info/10 px-3 py-2" : "mr-auto"}`}
     >
       {attachments.length > 0 && <AttachmentStrip attachments={attachments} />}
+      {/* Fork the conversation from this reply: everything up to here is
+          copied into a new chat that goes off on a tangent. */}
+      {message.role === "assistant" && onFork && (
+        <span className="absolute -right-8 bottom-0 opacity-0 transition-opacity duration-150 group-hover/msg:opacity-100">
+          <ShortcutHint label="Fork the chat from here">
+            <button
+              type="button"
+              onClick={() => onFork(message.id)}
+              className="grid size-6 cursor-pointer place-items-center rounded-md border border-border bg-bg-raised text-fg-muted transition-colors duration-100 hover:text-fg"
+              aria-label="Fork the conversation from this message"
+              data-testid="chat-fork"
+            >
+              <GitFork className="size-3" />
+            </button>
+          </ShortcutHint>
+        </span>
+      )}
       {message.role === "user" ? (
         <div className="whitespace-pre-wrap break-words leading-6">
           {message.content}
@@ -668,7 +809,7 @@ function QueuedBubble({
                 <Trash2 className="size-3" />
               </button>
             </ShortcutHint>
-            <ShortcutHint label="Send now — interrupts the agent">
+            <ShortcutHint label="Send now (interrupts the agent)">
               <button
                 type="button"
                 onClick={() => onSendNow?.(queued.id)}

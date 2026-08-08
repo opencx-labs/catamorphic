@@ -73,6 +73,10 @@ export {
   useDetachPlugin,
 } from "./hooks/use-detach-plugin.js";
 export { useEditorKeyboard } from "./hooks/use-editor-keyboard.js";
+export {
+  type ForkAgentSessionInput,
+  useForkAgentSession,
+} from "./hooks/use-fork-agent-session.js";
 // Project hooks
 export {
   type GithubRepoSummary,

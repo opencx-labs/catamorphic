@@ -277,6 +277,47 @@ const isFullModeName = (input: string): boolean => {
   return PALETTE_MODES.some((mode) => modeNames(mode).includes(raw));
 };
 
+/**
+ * The New Tab page's quiet cheat sheet: the workhorse shortcuts that have
+ * no button anywhere in the chrome (Cmd+M, Cmd+\, Ctrl+`, …). Derived from
+ * the live keybindings so a rebind updates the page. Deliberately faint —
+ * furniture, not content.
+ */
+const NEW_TAB_HINT_ACTIONS: KeybindingAction[] = [
+  "toggle-chat-minimized",
+  "chat-to-tab",
+  "split-view",
+  "new-terminal-tab",
+  "reopen-tab",
+  "next-tab",
+];
+
+function NewTabShortcutHints({
+  keybindings,
+}: {
+  keybindings: Record<KeybindingAction, string>;
+}) {
+  return (
+    <div className="mt-10 grid shrink-0 grid-cols-2 gap-x-12 gap-y-2.5">
+      {NEW_TAB_HINT_ACTIONS.map((action) => {
+        const definition = BUILTIN_ACTIONS.find((entry) => entry.id === action);
+        if (!definition) return null;
+        return (
+          <div
+            key={action}
+            className="flex items-center justify-between gap-6 text-[11px] text-fg-faint"
+          >
+            <span>{definition.label}</span>
+            <kbd className="rounded border border-border bg-bg-inset px-1.5 py-0.5 font-sans text-[10px]">
+              {formatBinding(keybindings[action])}
+            </kbd>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
 function FooterHint({ keycap, label }: { keycap: string; label: string }) {
   return (
     <span className="flex items-center gap-1">
@@ -521,6 +562,22 @@ export function CommandPalette({
       cancelled = true;
     };
   }, [profileId, open]);
+
+  // A palette tab is the only thing on its page, so returning to the
+  // window (Cmd+Tab, a click from another app) should land the caret in
+  // the input without an extra click. Guarded on "nothing else grabbed
+  // focus" so a split-pane neighbor's input is never robbed.
+  useEffect(() => {
+    if (variant !== "tab") return;
+    const onWindowFocus = () => {
+      requestAnimationFrame(() => {
+        const active = document.activeElement;
+        if (!active || active === document.body) inputRef.current?.focus();
+      });
+    };
+    window.addEventListener("focus", onWindowFocus);
+    return () => window.removeEventListener("focus", onWindowFocus);
+  }, [variant]);
 
   // Focus on open; reset the query after the exit transition so the list
   // doesn't visibly re-expand while the panel is still fading out (the
@@ -1478,11 +1535,26 @@ export function CommandPalette({
 
   if (variant === "tab") {
     return (
-      // items-start: this is a ROW flex, and its default stretch would
-      // pull the panel to full height — footer floating mid-card above a
-      // giant empty body (invisible in dark themes, glaring in light).
-      <div className="flex min-h-0 flex-1 items-start justify-center overflow-y-auto px-6 pb-6 pt-[12vh]">
+      // items-center (not stretch): stretch would pull the panel to full
+      // height — footer floating mid-card above a giant empty body
+      // (invisible in dark themes, glaring in light).
+      //
+      // The page is the palette: clicking anywhere outside the panel puts
+      // the caret back in the input (mousedown + preventDefault so focus
+      // never leaves in the first place) — there is nothing else on this
+      // page to focus.
+      // biome-ignore lint/a11y/noStaticElementInteractions: background click-to-refocus; the input itself stays keyboard-reachable
+      <div
+        className="flex min-h-0 flex-1 flex-col items-center overflow-y-auto px-6 pb-6 pt-[12vh]"
+        onMouseDown={(event) => {
+          if (event.target === event.currentTarget) {
+            event.preventDefault();
+            inputRef.current?.focus();
+          }
+        }}
+      >
         {panel}
+        <NewTabShortcutHints keybindings={keybindings} />
       </div>
     );
   }

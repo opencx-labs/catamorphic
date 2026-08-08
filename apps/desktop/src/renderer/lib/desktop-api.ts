@@ -226,6 +226,12 @@ export interface ThemeConfig {
   overrides: Partial<ThemeColors>;
 }
 
+/** Per-profile app preferences (profiles/<id>/prefs.json). */
+export interface AppPrefs {
+  notificationSounds: boolean;
+  desktopNotifications: boolean;
+}
+
 export interface ResolvedTheme extends ThemeConfig {
   colors: ThemeColors;
   appearance: "dark" | "light";
@@ -278,6 +284,10 @@ export interface CatamorphicDesktopApi {
     input: BrowserImportRequest,
   ) => Promise<BrowserImportResult>;
   onCloseSurface: (listener: () => void) => () => void;
+  getPrefs: () => Promise<AppPrefs>;
+  setPrefs: (patch: Partial<AppPrefs>) => Promise<AppPrefs>;
+  onPrefsChanged: (listener: (prefs: AppPrefs) => void) => () => void;
+  windowFocus: () => Promise<void>;
   getKeybindings: () => Promise<Record<string, string>>;
   setKeybindings: (
     bindings: Record<string, string>,
@@ -319,6 +329,9 @@ export interface CatamorphicDesktopApi {
   terminalBuffer: (
     sessionId: string,
   ) => Promise<{ buffer: string; running: boolean } | null>;
+  terminalRestoreBuffer: (
+    sessionId: string,
+  ) => Promise<{ buffer: string } | null>;
   onTerminalBusy: (
     listener: (payload: { sessionId: string; busy: boolean }) => void,
   ) => () => void;

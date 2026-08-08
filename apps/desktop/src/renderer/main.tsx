@@ -1,19 +1,9 @@
-import { loader } from "@monaco-editor/react";
-import * as monaco from "monaco-editor";
-import editorWorker from "monaco-editor/esm/vs/editor/editor.worker?worker";
-import tsWorker from "monaco-editor/esm/vs/language/typescript/ts.worker?worker";
 import { StrictMode, useEffect, useState } from "react";
 import { createRoot } from "react-dom/client";
 
-// Self-host Monaco: the packaged app has no network and the CSP blocks the
-// default CDN loader.
-self.MonacoEnvironment = {
-  getWorker: (_workerId: string, label: string) =>
-    label === "typescript" || label === "javascript"
-      ? new tsWorker()
-      : new editorWorker(),
-};
-loader.config({ monaco });
+// Monaco deliberately does NOT load here — lib/monaco-setup.ts runs from
+// the lazy editor/workflow chunks, keeping ~half the bundle off the
+// startup path.
 
 import { App } from "./app.js";
 import { CatamorphicAppProvider } from "./components/catamorphic/catamorphic-provider.js";
