@@ -1471,6 +1471,22 @@ Patterned on what best-in-class palettes converged on (Chrome omnibox
   stays mounted through the tween and unmounts on `animationend`, per the
   motion contract's animate-before-unmount rule — both when the user takes
   control and when the agent releases it.
+- **The app iframe shims `process`.** Vite lib-mode builds keep raw
+  `process.env.NODE_ENV` (lib mode never injects the define), so any
+  agent-authored config missing the explicit define produced a bundle that
+  threw "process is not defined" before mounting — an empty tinted shell,
+  for every app built that way. The guest document now defines
+  `process = {env:{NODE_ENV:"production"}}` before the bundle (existing
+  bundles render, React takes prod paths), and the building-apps skill
+  tells agents the define is mandatory so new builds ship prod React
+  outright.
+- **The app iframe sizes itself.** `reportHeight()` is opt-in and almost no
+  app calls it, so mounts sat at MIN_HEIGHT (240px) with the content cut
+  off — a dark-themed app read as a black tab. The guest document now
+  injects a ResizeObserver that posts the same `resize` message the client
+  library would (`documentElement.scrollHeight`, host-clamped to
+  [240, 2000]); scrollHeight is max(content, viewport), so the loop
+  ratchets to the content height and settles.
 - **Palette agent commands meet the words people type.** "switch" joined
   `default-agent`'s keywords (the scorer needs the query as an in-order
   subsequence, and nothing switch-y existed without a focused chat), and
