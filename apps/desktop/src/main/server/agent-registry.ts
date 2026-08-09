@@ -7,11 +7,15 @@ import type {
   RegisteredCodingAgent,
 } from "@catamorphic/core";
 import type {
+  AgentMcpServerConfig,
+  AgentPluginConfig,
   CodingAgentProvider,
   SandboxProvider,
 } from "@catamorphic/sandbox";
 import type { WorkspaceBridge } from "../agent-bridge.js";
 import type { AgentConfig } from "../agents-store.js";
+import { connectionServerKey, toAgentMcpServer } from "../connections-store.js";
+import type { ConnectorsService } from "../connectors.js";
 import { bestFreeModelId, fetchOpenRouterModels } from "../openrouter.js";
 import type { ProfileConfigManager } from "../profile-config.js";
 import type { ProfilesStore } from "../profiles.js";
@@ -33,8 +37,17 @@ export interface DesktopAgentRegistryDeps {
   agentHomesDir: string;
   /** Agents' window into the user's workspace (tabs, browser, terminals). */
   workspaceBridge?: WorkspaceBridge;
+  /** Installed connector plugins (Claude Code loads them natively). */
+  connectors?: ConnectorsService;
   /** E2E: every configured agent resolves to the scripted fake. */
   e2eFake?: boolean;
+}
+
+/** An agent's resolved MCP surface: servers for every harness, plugin
+ * directories for the harness that can load them natively. */
+interface ResolvedMcp {
+  servers: Record<string, AgentMcpServerConfig>;
+  plugins: AgentPluginConfig[];
 }
 
 /**
@@ -53,6 +66,8 @@ export class DesktopAgentRegistry implements CodingAgentRegistry {
       execution: RegisteredCodingAgent["execution"];
     }
   >();
+  /** Per-agent resource closers (ai-sdk MCP clients), run on eviction. */
+  private readonly closeables = new Map<string, () => Promise<void>>();
   /**
    * OpenRouter's current best free model, warmed from the live catalog —
    * the default for openrouter agents with no model pinned. Nothing is
@@ -83,16 +98,20 @@ export class DesktopAgentRegistry implements CodingAgentRegistry {
   }
 
   get(id: string): RegisteredCodingAgent | undefined {
-    const config = this.findConfig(id);
-    if (!config) {
-      this.cache.delete(id);
+    const found = this.findConfig(id);
+    if (!found) {
+      this.evict(id);
       return undefined;
     }
-    // Providers are cached by credential identity only: model and effort
-    // travel per turn (TurnOptions via fresh defaults below), so switching
-    // them must NOT rebuild the provider — a rebuild would drop the
-    // built-in agent's in-memory sessions mid-conversation.
-    const key = JSON.stringify({ ...config, model: "", effort: "" });
+    const { config, profileId } = found;
+    const mcp = this.resolveMcp(config, profileId);
+    // Providers are cached by credential identity plus their MCP surface:
+    // model and effort travel per turn (TurnOptions via fresh defaults
+    // below), so switching them must NOT rebuild the provider — a rebuild
+    // would drop the built-in agent's in-memory sessions mid-conversation.
+    // Connection/connector edits DO rebuild, so the next turn runs with
+    // the new server set.
+    const key = JSON.stringify({ ...config, model: "", effort: "", mcp });
     const defaults = this.freshDefaults(config);
     const cached = this.cache.get(id);
     if (cached && cached.key === key) {
@@ -104,17 +123,70 @@ export class DesktopAgentRegistry implements CodingAgentRegistry {
       };
     }
 
-    const built = this.build(config);
-    if (!built) {
-      this.cache.delete(id);
-      return undefined;
-    }
+    // Evict BEFORE building: build() registers the fresh provider's
+    // resource closer under this id, which an eviction after it would
+    // immediately tear down.
+    this.evict(id);
+    const built = this.build(config, mcp);
+    if (!built) return undefined;
     this.cache.set(id, {
       key,
       provider: built.provider,
       execution: built.execution,
     });
     return { ...built, defaults };
+  }
+
+  /** Drop a cached provider, closing resources it holds (MCP clients). */
+  private evict(id: string): void {
+    if (!this.cache.has(id)) return;
+    this.cache.delete(id);
+    const close = this.closeables.get(id);
+    this.closeables.delete(id);
+    if (close) {
+      void close().catch(() => {});
+    }
+  }
+
+  /**
+   * The agent's effective MCP surface: the profile's enabled connections
+   * narrowed by the agent's assignment ("all" = every current and future
+   * connection), plus the connector plugins whose connections made the
+   * cut (a plugin with no connections follows the "all" assignment only).
+   */
+  private resolveMcp(config: AgentConfig, profileId: string): ResolvedMcp {
+    const stores = this.deps.profileConfig.forProfile(profileId);
+    const assignment = config.connections ?? { mode: "all" };
+    const picked =
+      assignment.mode === "picked" ? new Set(assignment.connectionIds) : null;
+    const connections = stores.connections
+      .list()
+      .filter((entry) => entry.enabled && (!picked || picked.has(entry.id)));
+
+    const servers: Record<string, AgentMcpServerConfig> = {};
+    const usedKeys = new Set<string>();
+    for (const connection of connections) {
+      const mapped = toAgentMcpServer(connection);
+      if (!mapped) continue;
+      let key = connectionServerKey(connection);
+      while (usedKeys.has(key)) key = `${key}-2`;
+      usedKeys.add(key);
+      servers[key] = mapped;
+    }
+
+    const plugins: AgentPluginConfig[] = [];
+    for (const connector of this.deps.connectors?.listInstalled(profileId) ??
+      []) {
+      const included =
+        !picked ||
+        connector.connectionIds.some((connectionId) =>
+          picked.has(connectionId),
+        );
+      if (included) {
+        plugins.push({ name: connector.name, path: connector.path });
+      }
+    }
+    return { servers, plugins };
   }
 
   private freshDefaults(config: AgentConfig) {
@@ -159,17 +231,22 @@ export class DesktopAgentRegistry implements CodingAgentRegistry {
       : undefined;
   }
 
-  private findConfig(id: string): AgentConfig | undefined {
+  private findConfig(
+    id: string,
+  ): { config: AgentConfig; profileId: string } | undefined {
     for (const profile of this.deps.profiles.list().profiles) {
       const config = this.deps.profileConfig
         .forProfile(profile.id)
         .agents.get(id);
-      if (config) return config;
+      if (config) return { config, profileId: profile.id };
     }
     return undefined;
   }
 
-  private build(config: AgentConfig): RegisteredCodingAgent | undefined {
+  private build(
+    config: AgentConfig,
+    mcp: ResolvedMcp,
+  ): RegisteredCodingAgent | undefined {
     // E2E: same registry mechanics, scripted provider — renderer flows
     // (agent lists, switching, effort) exercise the real plumbing. The
     // error decorator stays on so tests cover the auth-failure surfacing.
@@ -197,7 +274,13 @@ export class DesktopAgentRegistry implements CodingAgentRegistry {
           this.deps.sandboxProvider,
           this.resolvedModel(config) ?? "",
           this.workspaceToolkit?.tools,
+          mcp.servers,
         );
+        if (provider) {
+          // This harness owns real MCP client connections (stdio child
+          // processes); eviction must close them, not leak them.
+          this.closeables.set(config.id, () => provider.closeMcp());
+        }
         if (!provider) {
           // An unresolved OpenRouter default may just not have warmed yet.
           if (config.provider === "openrouter" && !this.openrouterDefault) {
@@ -242,6 +325,10 @@ export class DesktopAgentRegistry implements CodingAgentRegistry {
                 // available, every command goes through tabs the user
                 // can watch and take over — full interception.
                 disableBash: this.workspaceToolkit !== undefined,
+                // The agent's assigned connections, plus native loading
+                // of connector plugins (skills/agents/commands).
+                mcpServers: mcp.servers,
+                plugins: mcp.plugins,
               }),
               { hasTools: true },
             ),
@@ -272,6 +359,9 @@ export class DesktopAgentRegistry implements CodingAgentRegistry {
                 ...(config.auth === "account"
                   ? { env: { CODEX_HOME: this.agentHome(config.id) } }
                   : {}),
+                // Assigned connections ride as mcp_servers.* config
+                // overrides; the CLI owns the client connections.
+                mcpServers: mcp.servers,
               }),
               { hasTools: false },
             ),

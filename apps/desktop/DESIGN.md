@@ -1292,3 +1292,64 @@ Patterned on what best-in-class palettes converged on (Chrome omnibox
   dissolved the wrapper-side session→project maps (workspace context and
   profile stores survive host restarts instead of falling back), and the
   never-called `resumeSession` left the provider contract entirely.
+
+### 2026-08-09 — Background work is visible; subagents are surfaces; connectors are one ecosystem
+- **Background processes are detected at the cleanest seam each harness
+  offers, never papered over.** Claude Code keeps its native background
+  machinery (Bash `run_in_background`, TaskOutput/TaskStop — allowed
+  now) and the host watches it through SDK PostToolUse hooks: the
+  structured tool response's `backgroundTaskId` becomes a `background`
+  event the moment a task starts or is stopped. Where terminals are
+  available Bash stays disabled (previous entry's rule — commands run in
+  watchable tabs), so hooks matter for tool-less installs and for
+  TaskStop. Codex gives the model no background tools at all, so the
+  provider *detects* instead of intercepts: a command item still
+  `in_progress` when the turn ends, or a completed command that
+  demonstrably daemonized something (trailing `&`, nohup/setsid, docker
+  `-d`, pm2, tmux/screen detach), emits `background` with
+  `status: "detected"`. The principle: prefer the harness's own tools
+  and observe them; fall back to detection, and say honestly which one
+  you're doing (`started` is managed, `detected` is best-effort).
+- **Subagents are chat surfaces.** The `AgentEvent` vocabulary gained
+  `subagent` (+ `subagentId` attribution on nested activity events).
+  Claude Code maps them purely from its stream — the Task/Agent
+  tool_use opens one, the answering tool_result closes it, and nested
+  tool calls arrive tagged with `parent_tool_use_id`; subagent *text*
+  is deliberately dropped (it's the subagent's transcript, not this
+  chat's). The rail above the composer shows a chip per subagent
+  (spinner while working), and — honoring "chips must open something
+  real" — clicking opens an upward popover with that subagent's
+  activity feed. Watcher chips (`Radio` icon) work the same and persist
+  across turns until an event ends them.
+- **Connections are profile infrastructure; agents subscribe.** MCP
+  connections live in `profiles/<id>/connections.json` (header/env
+  values safeStorage-encrypted, never across the contextBridge — same
+  standing rule as the vault split). Each agent carries an assignment:
+  `{mode:"all"}` (every current AND future connection — the default) or
+  a picked subset; the wizard offers the choice at creation, Settings
+  edits it later. The registry resolves the assignment on every lookup
+  and the provider cache key includes the resolved MCP surface, so a
+  connection edit rebuilds the provider on the next turn while
+  model/effort switches still don't.
+- **One MCP client, both protocol generations, newest preferred.** The
+  new `@catamorphic/mcp` package rides the official v2 SDK
+  (`@modelcontextprotocol/client`) with `versionNegotiation: "auto"`:
+  it probes `server/discover` and speaks the stateless 2026-07-28
+  revision when the server does, falling back to the legacy
+  `initialize`-handshake era otherwise. Streamable HTTP is preferred,
+  with an SSE-transport fallback for legacy servers. CLI harnesses
+  negotiate for themselves — Claude Code gets native `mcpServers`
+  config, Codex gets `mcp_servers.*` `--config` overrides — and the
+  built-in harness mounts each server's tools as
+  `mcp__<server>__<tool>` dynamic tools.
+- **Connectors ride two open ecosystems instead of inventing one.**
+  Search spans the official MCP Registry (frozen v0.1 API; entries
+  carry enough `server.json` metadata to auto-configure transport, url,
+  args, and required secrets) and Claude Code / Cowork plugin
+  marketplaces (the public `.claude-plugin/marketplace.json` format;
+  Anthropic's official marketplaces are Apache-2.0 and searchable by
+  default). Installing either lands as profile connections that work
+  for EVERY harness; a plugin's MCP servers are lifted out and owned by
+  the host (`skipMcpDiscovery`), while Claude Code agents additionally
+  load the plugin natively for its skills/agents/commands. A connector
+  is never harness-specific in the UI.

@@ -16,6 +16,12 @@ import {
   toPublicAgent,
   type UpdateAgentInput,
 } from "./agents-store.js";
+import {
+  type CreateConnectionInput,
+  toPublicConnection,
+  type UpdateConnectionInput,
+} from "./connections-store.js";
+import type { ConnectorsService } from "./connectors.js";
 import type { WindowProfileRegistry } from "./index.js";
 import { type Keybindings, normalizeKeybindings } from "./keybindings.js";
 import {
@@ -53,6 +59,7 @@ export function registerIpcHandlers(
   state: ServerState,
   windows: WindowProfileRegistry,
   paths: DataPaths,
+  connectors?: ConnectorsService,
 ): void {
   const storesFor = (event: Electron.IpcMainInvokeEvent) =>
     profileConfig.forProfile(windows.profileFor(event.sender));
@@ -219,6 +226,108 @@ export function registerIpcHandlers(
     store.setDefault(id);
     agentsChanged(event, store);
   });
+
+  // --- profile-level MCP connections + connectors ---
+  // Connections are the profile's configured MCP servers; connectors are
+  // the install layer (MCP registry entries and Claude Code / Cowork
+  // plugins). Secret values (headers, env) never cross the contextBridge.
+
+  const connectionsChanged = (event: Electron.IpcMainInvokeEvent) => {
+    const profileId = windows.profileFor(event.sender);
+    const snapshot = storesFor(event)
+      .connections.list()
+      .map(toPublicConnection);
+    for (const window of windows.windowsFor(profileId)) {
+      window.webContents.send("catamorphic:connections-changed", snapshot);
+    }
+  };
+
+  ipcMain.handle("catamorphic:connections-list", (event) =>
+    storesFor(event).connections.list().map(toPublicConnection),
+  );
+
+  ipcMain.handle(
+    "catamorphic:connections-create",
+    (event, input: CreateConnectionInput) => {
+      const connection = storesFor(event).connections.create(input);
+      connectionsChanged(event);
+      return toPublicConnection(connection);
+    },
+  );
+
+  ipcMain.handle(
+    "catamorphic:connections-update",
+    (event, id: string, patch: UpdateConnectionInput) => {
+      const connection = storesFor(event).connections.update(id, patch);
+      connectionsChanged(event);
+      return connection ? toPublicConnection(connection) : null;
+    },
+  );
+
+  ipcMain.handle("catamorphic:connections-remove", (event, id: string) => {
+    const removed = storesFor(event).connections.remove(id);
+    if (removed) connectionsChanged(event);
+    return removed;
+  });
+
+  ipcMain.handle("catamorphic:connections-probe", (event, id: string) =>
+    connectors
+      ? connectors.probeConnection(windows.profileFor(event.sender), id)
+      : { ok: false, error: "Connectors are unavailable" },
+  );
+
+  ipcMain.handle("catamorphic:connectors-search", (event, query: string) =>
+    connectors
+      ? connectors.search(windows.profileFor(event.sender), String(query ?? ""))
+      : { registry: [], plugins: [] },
+  );
+
+  ipcMain.handle("catamorphic:connectors-list", (event) =>
+    connectors
+      ? connectors.listInstalled(windows.profileFor(event.sender))
+      : [],
+  );
+
+  ipcMain.handle(
+    "catamorphic:connectors-install-registry",
+    async (event, registryName: string, secrets: Record<string, string>) => {
+      if (!connectors) throw new Error("Connectors are unavailable");
+      const connection = await connectors.installRegistryServer(
+        windows.profileFor(event.sender),
+        registryName,
+        secrets ?? {},
+      );
+      connectionsChanged(event);
+      return connection;
+    },
+  );
+
+  ipcMain.handle(
+    "catamorphic:connectors-install-plugin",
+    async (event, marketplace: string, pluginName: string) => {
+      if (!connectors) throw new Error("Connectors are unavailable");
+      const installed = await connectors.installPlugin(
+        windows.profileFor(event.sender),
+        marketplace,
+        pluginName,
+      );
+      connectionsChanged(event);
+      return installed;
+    },
+  );
+
+  ipcMain.handle(
+    "catamorphic:connectors-remove",
+    async (event, name: string) => {
+      if (!connectors) return false;
+      const removed = await connectors.removeConnector(
+        windows.profileFor(event.sender),
+        name,
+      );
+      if (removed) connectionsChanged(event);
+      return removed;
+    },
+  );
 
   // OpenRouter's public catalog: feeds the searchable model selector and
   // reports the current best free model (nothing hardcoded app-side).

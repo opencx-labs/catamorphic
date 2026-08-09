@@ -56,6 +56,48 @@ const api = {
       ipcRenderer.removeListener("catamorphic:agent-login-finished", handler);
   },
 
+  // --- profile MCP connections + connectors ---
+  connectionsList: (): Promise<unknown> =>
+    ipcRenderer.invoke("catamorphic:connections-list"),
+  connectionsCreate: (input: unknown): Promise<unknown> =>
+    ipcRenderer.invoke("catamorphic:connections-create", input),
+  connectionsUpdate: (id: string, patch: unknown): Promise<unknown> =>
+    ipcRenderer.invoke("catamorphic:connections-update", id, patch),
+  connectionsRemove: (id: string): Promise<boolean> =>
+    ipcRenderer.invoke("catamorphic:connections-remove", id),
+  connectionsProbe: (id: string): Promise<unknown> =>
+    ipcRenderer.invoke("catamorphic:connections-probe", id),
+  connectorsSearch: (query: string): Promise<unknown> =>
+    ipcRenderer.invoke("catamorphic:connectors-search", query),
+  connectorsList: (): Promise<unknown> =>
+    ipcRenderer.invoke("catamorphic:connectors-list"),
+  connectorsInstallRegistry: (
+    registryName: string,
+    secrets: Record<string, string>,
+  ): Promise<unknown> =>
+    ipcRenderer.invoke(
+      "catamorphic:connectors-install-registry",
+      registryName,
+      secrets,
+    ),
+  connectorsInstallPlugin: (
+    marketplace: string,
+    pluginName: string,
+  ): Promise<unknown> =>
+    ipcRenderer.invoke(
+      "catamorphic:connectors-install-plugin",
+      marketplace,
+      pluginName,
+    ),
+  connectorsRemove: (name: string): Promise<boolean> =>
+    ipcRenderer.invoke("catamorphic:connectors-remove", name),
+  onConnectionsChanged: (listener: (data: unknown) => void): (() => void) => {
+    const handler = (_event: unknown, data: unknown) => listener(data);
+    ipcRenderer.on("catamorphic:connections-changed", handler);
+    return () =>
+      ipcRenderer.removeListener("catamorphic:connections-changed", handler);
+  },
+
   // --- OpenRouter catalog (searchable model selector, best-free default) ---
   openrouterModels: (): Promise<unknown> =>
     ipcRenderer.invoke("catamorphic:openrouter-models"),

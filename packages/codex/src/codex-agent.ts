@@ -1,6 +1,7 @@
 import type {
   AgentEffort,
   AgentEvent,
+  AgentMcpServerConfig,
   CodingAgentProvider,
   ProviderSession,
   StartSessionOpts,
@@ -9,10 +10,13 @@ import type {
 import { buildPluginsPreamble, stagePluginDocs } from "@catamorphic/sandbox";
 import {
   Codex,
+  type CodexOptions,
   type ThreadEvent,
   type ThreadItem,
   type ThreadOptions,
 } from "@openai/codex-sdk";
+
+type CodexConfigObject = NonNullable<CodexOptions["config"]>;
 
 export interface CodexAgentOpts {
   /** API-key auth; omit to use the CODEX_HOME account login (`codex login`). */
@@ -38,6 +42,14 @@ export interface CodexAgentOpts {
   sandboxMode?: "read-only" | "workspace-write" | "danger-full-access";
   /** Allow network access inside the workspace-write sandbox (default true). */
   networkAccessEnabled?: boolean;
+  /**
+   * External MCP servers for this agent. Codex has no programmatic MCP
+   * option, but its CLI accepts arbitrary `--config` overrides — the SDK
+   * flattens these into `mcp_servers.<name>.*` keys, the same shape a
+   * `config.toml` would carry. The CLI owns the connections and speaks
+   * whatever protocol revision each server negotiates.
+   */
+  mcpServers?: Record<string, AgentMcpServerConfig>;
 }
 
 /**
@@ -68,10 +80,12 @@ export class CodexAgent implements CodingAgentProvider {
 
   constructor(opts: CodexAgentOpts = {}) {
     this.opts = opts;
+    const config = mcpServersConfig(opts.mcpServers ?? {});
     this.client = new Codex({
       apiKey: opts.apiKey,
       baseUrl: opts.baseUrl,
       codexPathOverride: opts.codexPathOverride,
+      ...(config ? { config } : {}),
       // The SDK stops inheriting process.env once env is provided — merge
       // ourselves so PATH and friends survive alongside the overrides.
       ...(opts.env ? { env: mergedEnv(opts.env) } : {}),
@@ -125,11 +139,39 @@ export class CodexAgent implements CodingAgentProvider {
       return;
     }
 
+    // Codex gives the model no background-process tools, so watchers are
+    // detected instead of intercepted: commands that daemonize something
+    // (trailing "&", nohup, docker -d, …) and commands still running when
+    // the turn ends both surface as "background" events.
+    const runningCommands = new Map<string, string>();
     try {
       for await (const event of stream) {
         if (event.type === "thread.started" && !session.providerSessionId) {
           this.pendingInstructions.delete(session.sessionId);
           yield { type: "session", providerSessionId: event.thread_id };
+        }
+        if (event.type === "item.started" || event.type === "item.updated") {
+          const item = event.item;
+          if (
+            item.type === "command_execution" &&
+            item.status === "in_progress"
+          ) {
+            runningCommands.set(item.id, item.command);
+          }
+        }
+        if (event.type === "item.completed") {
+          runningCommands.delete(event.item.id);
+        }
+        if (event.type === "turn.completed" || event.type === "turn.failed") {
+          for (const [id, command] of runningCommands) {
+            yield {
+              type: "background",
+              status: "detected",
+              backgroundId: `codex-exec-${id}`,
+              content: command,
+            };
+          }
+          runningCommands.clear();
         }
         yield* mapEvent(event);
       }
@@ -181,6 +223,61 @@ export class CodexAgent implements CodingAgentProvider {
   }
 }
 
+/**
+ * Host-neutral MCP configs → Codex `--config mcp_servers.*` overrides.
+ * Remote servers use the CLI's `url` (+ `http_headers`) form; local ones
+ * its `command`/`args`/`env` form.
+ */
+function mcpServersConfig(
+  servers: Record<string, AgentMcpServerConfig>,
+): CodexOptions["config"] | undefined {
+  const names = Object.keys(servers);
+  if (names.length === 0) return undefined;
+  const mcpServers: Record<string, CodexConfigObject> = {};
+  for (const [name, config] of Object.entries(servers)) {
+    // Codex config keys are TOML bare keys; anything else must be quoted
+    // upstream, so normalize here instead of failing at spawn time.
+    const key = name.replace(/[^A-Za-z0-9_-]/g, "_");
+    mcpServers[key] =
+      config.transport === "stdio"
+        ? {
+            command: config.command,
+            ...(config.args ? { args: config.args } : {}),
+            ...(config.env ? { env: config.env } : {}),
+          }
+        : {
+            url: config.url,
+            ...(config.headers ? { http_headers: config.headers } : {}),
+          };
+  }
+  return { mcp_servers: mcpServers };
+}
+
+/**
+ * Commands that hand a process off to the background: shell job control
+ * (trailing "&"), the classic detachers, and the daemon flags of the
+ * common dev servers. Conservative on purpose — a false "watcher" chip is
+ * noise the user has to dismiss.
+ */
+const DAEMONIZING_COMMAND = new RegExp(
+  [
+    String.raw`(?:^|[;&|]\s*)nohup\s`,
+    String.raw`(?:^|[;&|]\s*)setsid\s`,
+    String.raw`&\s*$`,
+    String.raw`\bdocker\s+(?:container\s+)?run\b[^;|&]*\s(?:-d|--detach)\b`,
+    String.raw`\bdocker\s+compose\b[^;|&]*\bup\b[^;|&]*\s(?:-d|--detach)\b`,
+    String.raw`\bdocker-compose\b[^;|&]*\bup\b[^;|&]*\s(?:-d|--detach)\b`,
+    String.raw`\bpm2\s+start\b`,
+    String.raw`\btmux\s+new(?:-session)?\s[^;|&]*-d\b`,
+    String.raw`\bscreen\s+-dm\b`,
+  ].join("|"),
+);
+
+/** Whether a completed command likely left a process running behind it. */
+export function isDaemonizingCommand(command: string): boolean {
+  return DAEMONIZING_COMMAND.test(command.trim());
+}
+
 function mergedEnv(overrides: Record<string, string>): Record<string, string> {
   const env: Record<string, string> = {};
   for (const [key, value] of Object.entries(process.env)) {
@@ -210,13 +307,25 @@ function mapEvent(event: ThreadEvent): AgentEvent[] {
 
 function mapItemEvent(item: ThreadItem): AgentEvent[] {
   switch (item.type) {
-    case "command_execution":
-      return [
+    case "command_execution": {
+      const events: AgentEvent[] = [
         {
           type: "command",
           content: `${item.command}\n${item.aggregated_output}`,
         },
       ];
+      // A command that succeeded by daemonizing something left a process
+      // running that Codex can no longer see or manage — flag it.
+      if (item.exit_code === 0 && isDaemonizingCommand(item.command)) {
+        events.push({
+          type: "background",
+          status: "detected",
+          backgroundId: `codex-daemon-${item.id}`,
+          content: item.command,
+        });
+      }
+      return events;
+    }
     case "file_change":
       // One event per changed file so host-execution change tracking (which
       // reads file_edit events) sees the whole patch, not just its first file.

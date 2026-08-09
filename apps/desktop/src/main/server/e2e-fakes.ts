@@ -126,6 +126,8 @@ export class E2eLocalSandboxProvider implements SandboxProvider {
  *   final summary (exercises the streamed-preamble message split).
  * - "edit a file" → writes a file in the sandbox (exercises changed-file
  *   sync-back and chips).
+ * - "subagent" → a delegated worker with nested activity (subagent chip).
+ * - "watcher" → a background process event (watcher chip).
  * - "slowly" → a ~4s turn (exercises mid-turn UI: spinners, minimize,
  *   mode flips, kill-and-relaunch recovery).
  * - "auth error" → the turn fails with a provider-style credential
@@ -262,6 +264,52 @@ export class E2eFakeCodingAgent implements CodingAgentProvider {
           },
         ],
       };
+      yield { type: "done" };
+      return;
+    }
+
+    // "subagent" → a delegated worker with nested activity (exercises the
+    // subagent chip, its spinner while working, and the info popover).
+    if (prompt.includes("subagent")) {
+      yield { type: "title", content: "Delegating" };
+      yield { type: "text", content: "I'll hand this to a reviewer." };
+      yield {
+        type: "subagent",
+        status: "started",
+        subagentId: "fake-task-1",
+        subagentType: "code-reviewer",
+        content: "Review the changes",
+      };
+      yield {
+        type: "tool_call",
+        toolName: "Grep",
+        toolInput: { pattern: "TODO" },
+        subagentId: "fake-task-1",
+      };
+      yield {
+        type: "command",
+        content: "bun test",
+        subagentId: "fake-task-1",
+      };
+      await new Promise((resolve) => setTimeout(resolve, 800));
+      yield { type: "subagent", status: "ended", subagentId: "fake-task-1" };
+      yield { type: "text", content: "The reviewer found nothing alarming." };
+      yield { type: "done" };
+      return;
+    }
+
+    // "watcher" → a background process the agent started (exercises the
+    // watcher chip that persists across turns).
+    if (prompt.includes("watcher")) {
+      yield { type: "title", content: "Background work" };
+      yield { type: "text", content: "Starting the dev server for you." };
+      yield {
+        type: "background",
+        status: "started",
+        backgroundId: "fake-bg-1",
+        content: "npm run dev",
+      };
+      yield { type: "text", content: "It's running in the background." };
       yield { type: "done" };
       return;
     }

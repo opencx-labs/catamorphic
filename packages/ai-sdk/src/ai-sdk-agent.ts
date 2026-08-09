@@ -1,7 +1,9 @@
 import path from "node:path";
+import { type ConnectedMcpServer, connectMcpServer } from "@catamorphic/mcp";
 import type {
   AgentEffort,
   AgentEvent,
+  AgentMcpServerConfig,
   AgentQuestion,
   CodingAgentProvider,
   ExtraTool,
@@ -12,7 +14,15 @@ import type {
   TurnOptions,
 } from "@catamorphic/sandbox";
 import { buildPluginsPreamble, stagedPluginFiles } from "@catamorphic/sandbox";
-import { type LanguageModel, type ModelMessage, ToolLoopAgent, tool } from "ai";
+import {
+  dynamicTool,
+  jsonSchema,
+  type LanguageModel,
+  type ModelMessage,
+  type Tool,
+  ToolLoopAgent,
+  tool,
+} from "ai";
 import { z } from "zod";
 
 const DEFAULT_INSTRUCTIONS = `You are working in a Catamorphic project.
@@ -50,6 +60,15 @@ export interface AiSdkCodingAgentOpts {
    * context; a thrown error becomes the tool's error result.
    */
   extraTools?: ExtraTool[];
+  /**
+   * External MCP servers for this agent. This harness has no CLI to hand
+   * them to, so it connects itself (via `@catamorphic/mcp`, stateless
+   * protocol preferred) and mounts each server's tools beside the
+   * built-ins as `mcp__<server>__<tool>`. Connections are shared across
+   * the agent's sessions and a server that fails to connect is skipped —
+   * a broken connector must never break the chat.
+   */
+  mcpServers?: Record<string, AgentMcpServerConfig>;
 }
 
 interface AiSdkSessionState {
@@ -72,8 +91,48 @@ interface AiSdkSessionState {
 export class AiSdkCodingAgent implements CodingAgentProvider {
   readonly name = "ai-sdk";
   private readonly sessions = new Map<string, AiSdkSessionState>();
+  /** Lazily-connected MCP servers, shared by every session of this agent. */
+  private mcpConnections?: Promise<Map<string, ConnectedMcpServer>>;
 
   constructor(private readonly opts: AiSdkCodingAgentOpts) {}
+
+  private connectMcp(): Promise<Map<string, ConnectedMcpServer>> {
+    this.mcpConnections ??= (async () => {
+      const connections = new Map<string, ConnectedMcpServer>();
+      await Promise.all(
+        Object.entries(this.opts.mcpServers ?? {}).map(
+          async ([name, config]) => {
+            try {
+              connections.set(name, await connectMcpServer(config));
+            } catch (cause) {
+              console.warn(
+                `[ai-sdk] MCP server "${name}" failed to connect:`,
+                cause,
+              );
+            }
+          },
+        ),
+      );
+      return connections;
+    })();
+    return this.mcpConnections;
+  }
+
+  /**
+   * Close MCP connections (stdio child processes, HTTP sessions). Called
+   * by hosts when they drop this provider instance for a rebuilt one.
+   */
+  async closeMcp(): Promise<void> {
+    const pending = this.mcpConnections;
+    this.mcpConnections = undefined;
+    if (!pending) return;
+    const connections = await pending.catch(
+      () => new Map<string, ConnectedMcpServer>(),
+    );
+    await Promise.all(
+      [...connections.values()].map((server) => server.close().catch(() => {})),
+    );
+  }
 
   async startSession(opts: StartSessionOpts): Promise<ProviderSession> {
     const pluginFiles = stagedPluginFiles(opts.attachedPlugins);
@@ -95,6 +154,11 @@ export class AiSdkCodingAgent implements CodingAgentProvider {
       .join("\n\n");
     const providerSessionId = crypto.randomUUID();
 
+    const mcpTools =
+      Object.keys(this.opts.mcpServers ?? {}).length > 0
+        ? buildMcpTools(await this.connectMcp())
+        : {};
+
     this.sessions.set(providerSessionId, {
       instructions,
       tools: createTools(
@@ -105,6 +169,7 @@ export class AiSdkCodingAgent implements CodingAgentProvider {
         },
         this.opts.extraTools ?? [],
         { projectId: opts.projectId, sessionId: opts.sessionId },
+        mcpTools,
       ),
       // Resurrected sessions (host restart, provider rebuild after a
       // credential change) start from the host's persisted transcript.
@@ -374,10 +439,38 @@ interface ToolContext {
   workingDirectory: string;
 }
 
+/**
+ * MCP server tools → ai-sdk dynamic tools named `mcp__<server>__<tool>`
+ * (the same namespacing Claude Code uses, so events read alike across
+ * harnesses). Results are flattened text; errors surface as tool errors.
+ */
+function buildMcpTools(
+  connections: Map<string, ConnectedMcpServer>,
+): Record<string, Tool> {
+  const tools: Record<string, Tool> = {};
+  for (const [serverName, server] of connections) {
+    const safeServer = serverName.replace(/[^A-Za-z0-9-]+/g, "_");
+    for (const info of server.tools) {
+      tools[`mcp__${safeServer}__${info.name}`] = dynamicTool({
+        description: info.description,
+        inputSchema: jsonSchema<Record<string, unknown>>(
+          info.inputSchema as Parameters<typeof jsonSchema>[0],
+        ),
+        execute: async (input) =>
+          truncateToolOutput(
+            await server.callTool(info.name, input as Record<string, unknown>),
+          ),
+      });
+    }
+  }
+  return tools;
+}
+
 function createTools(
   context: ToolContext,
   extraTools: ExtraTool[] = [],
   extraContext: ExtraToolContext = { projectId: "" },
+  mcpTools: Record<string, Tool> = {},
 ) {
   let mutationQueue = Promise.resolve();
   const serializeMutation = async <T>(operation: () => Promise<T>) => {
@@ -403,7 +496,9 @@ function createTools(
   };
 
   return {
-    // Spread first: a host tool never shadows a built-in of the same name.
+    // Spread first: a host or MCP tool never shadows a built-in of the
+    // same name.
+    ...mcpTools,
     ...Object.fromEntries(
       extraTools.map((extra) => [
         extra.name,
@@ -633,6 +728,15 @@ function parseAskUserInput(input: unknown): AgentQuestion[] {
 
 function mapToolCall(toolName: string, input: unknown): AgentEvent {
   const values = asRecord(input);
+  // MCP tools surface as "server/tool" — the transport prefix is plumbing.
+  const mcpName = toolName.match(/^mcp__([^_]+(?:_[^_]+)*)__(.+)$/);
+  if (mcpName) {
+    return {
+      type: "tool_call",
+      toolName: `${mcpName[1]}/${mcpName[2]}`,
+      toolInput: input,
+    };
+  }
   if (toolName === "set_title") {
     return {
       type: "title",

@@ -5,6 +5,8 @@ import path from "node:path";
 import {
   type CanUseTool,
   createSdkMcpServer,
+  type HookCallback,
+  type McpServerConfig,
   type Options,
   query,
   type SDKMessage,
@@ -13,6 +15,8 @@ import {
 import type {
   AgentEffort,
   AgentEvent,
+  AgentMcpServerConfig,
+  AgentPluginConfig,
   CodingAgentProvider,
   ExtraTool,
   ExtraToolContext,
@@ -58,9 +62,25 @@ export interface ClaudeCodeAgentOpts {
    * shell runs inside the CLI process where the host can't see or manage
    * it; hosts that provide terminal tools via {@link extraTools} disable
    * Bash so every command runs through terminals the host fully
-   * intercepts (and the user can watch and take over).
+   * intercepts (and the user can watch and take over). Background-task
+   * follow/stop tools (TaskOutput/TaskStop) stay available either way —
+   * with Bash disabled they still manage background subagents.
    */
   disableBash?: boolean;
+  /**
+   * External MCP servers for this agent (the host's resolved connection
+   * set). Passed to the CLI as native `mcpServers` config and allowlisted
+   * server-wide; the CLI negotiates protocol versions with each server
+   * itself.
+   */
+  mcpServers?: Record<string, AgentMcpServerConfig>;
+  /**
+   * Installed connector plugins, loaded natively (commands, agents,
+   * skills, hooks). MCP discovery inside the plugin is disabled — the
+   * host lifts a plugin's MCP servers into {@link mcpServers} so every
+   * harness gets them, not just this one.
+   */
+  plugins?: AgentPluginConfig[];
 }
 
 /**
@@ -79,11 +99,25 @@ const ALLOWED_TOOLS = [
   "WebFetch",
   "TodoWrite",
   "NotebookEdit",
+  // The subagent tool — "Task" in older CLIs, renamed "Agent" in 2.1.x.
   "Task",
+  "Agent",
+  // Background-task management: follow output / stop. Newer CLIs use
+  // TaskOutput/TaskStop; BashOutput/KillShell are the legacy names.
+  "TaskOutput",
+  "TaskStop",
+  "BashOutput",
+  "KillShell",
 ];
 
 /** Tool names whose invocations are surfaced as `file_edit` events. */
 const FILE_EDIT_TOOLS = new Set(["Edit", "Write", "MultiEdit", "NotebookEdit"]);
+
+/** Both generations of the subagent tool's name. */
+const SUBAGENT_TOOLS = new Set(["Task", "Agent"]);
+
+/** Both generations of the stop-background-task tool's name. */
+const TASK_STOP_TOOLS = ["TaskStop", "KillShell"];
 
 /**
  * Permission fallback for tools outside {@link ALLOWED_TOOLS}: deny with a
@@ -192,6 +226,14 @@ export class ClaudeCodeAgent implements CodingAgentProvider {
     this.activeAborts.set(providerSessionId, abort);
 
     let done = false;
+    // Background-process lifecycle arrives through SDK hooks (the CLI's
+    // structured tool responses carry the task ids); hooks fire between
+    // stream messages, so events queue here and drain with the stream.
+    const hookEvents: AgentEvent[] = [];
+    // Subagents this turn spawned, keyed by their Task tool-use id — the
+    // same id nested activity carries as parent_tool_use_id, and the id
+    // the closing tool_result answers.
+    const openSubagents = new Set<string>();
     try {
       // A session we created but never ran creates its transcript now, under
       // the id chosen in startSession; everything else (later turns, sessions
@@ -212,6 +254,7 @@ export class ClaudeCodeAgent implements CodingAgentProvider {
             state?.systemPrompt,
             state?.toolContext,
             opts,
+            (event) => hookEvents.push(event),
           ),
           ...anchor,
           abortController: abort,
@@ -224,11 +267,13 @@ export class ClaudeCodeAgent implements CodingAgentProvider {
         if (state && sdkMessage.type === "system") {
           state.transcriptExists = true;
         }
-        for (const event of mapMessage(sdkMessage)) {
+        yield* hookEvents.splice(0);
+        for (const event of mapMessage(sdkMessage, openSubagents)) {
           if (event.type === "done") done = true;
           yield event;
         }
       }
+      yield* hookEvents.splice(0);
     } catch (error) {
       // Spawn/auth/stream failures surface as events, mirroring CodexAgent —
       // consumers iterate the stream and must never see a mid-iteration throw.
@@ -262,7 +307,8 @@ export class ClaudeCodeAgent implements CodingAgentProvider {
     cwd: string | undefined,
     systemPrompt: string | undefined,
     toolContext: ExtraToolContext | undefined,
-    turn?: TurnOptions,
+    turn: TurnOptions | undefined,
+    emitHookEvent: (event: AgentEvent) => void,
   ): Options {
     // Sessions resumed after a host restart have no stored context to run
     // extra tools with, so they run without the workspace server (the CLI
@@ -309,6 +355,8 @@ export class ClaudeCodeAgent implements CodingAgentProvider {
           })
         : undefined;
 
+    const externalServers = mapMcpServers(this.opts.mcpServers ?? {});
+
     return {
       cwd,
       systemPrompt,
@@ -319,8 +367,24 @@ export class ClaudeCodeAgent implements CodingAgentProvider {
       model: turn?.model ?? this.opts.model,
       effort: turn?.effort ?? this.opts.effort,
       permissionMode: "acceptEdits",
-      ...(workspaceServer
-        ? { mcpServers: { workspace: workspaceServer } }
+      ...(workspaceServer || Object.keys(externalServers).length > 0
+        ? {
+            mcpServers: {
+              ...externalServers,
+              ...(workspaceServer ? { workspace: workspaceServer } : {}),
+            },
+          }
+        : {}),
+      ...(this.opts.plugins && this.opts.plugins.length > 0
+        ? {
+            // MCP discovery off: the host lifts plugin MCP servers into
+            // mcpServers itself so all harnesses share the connections.
+            plugins: this.opts.plugins.map((plugin) => ({
+              type: "local" as const,
+              path: plugin.path,
+              skipMcpDiscovery: true,
+            })),
+          }
         : {}),
       allowedTools: [
         ...ALLOWED_TOOLS.filter(
@@ -329,8 +393,12 @@ export class ClaudeCodeAgent implements CodingAgentProvider {
         ...(workspaceServer
           ? extraTools.map((def) => `mcp__workspace__${def.name}`)
           : []),
+        // Server-wide allow per external connection ("mcp__<name>" covers
+        // every tool the server exposes).
+        ...Object.keys(externalServers).map((name) => `mcp__${name}`),
       ],
       canUseTool: denyUnlistedTools,
+      hooks: backgroundTaskHooks(emitHookEvent),
       // Ignore the user's own ~/.claude and project settings files — the
       // harness is self-contained.
       settingSources: [],
@@ -338,23 +406,155 @@ export class ClaudeCodeAgent implements CodingAgentProvider {
   }
 }
 
+/** Host-neutral MCP configs → the SDK's native `mcpServers` entries. */
+function mapMcpServers(
+  servers: Record<string, AgentMcpServerConfig>,
+): Record<string, McpServerConfig> {
+  const mapped: Record<string, McpServerConfig> = {};
+  for (const [name, config] of Object.entries(servers)) {
+    if (config.transport === "stdio") {
+      mapped[name] = {
+        type: "stdio",
+        command: config.command,
+        ...(config.args ? { args: config.args } : {}),
+        ...(config.env ? { env: config.env } : {}),
+      };
+    } else {
+      mapped[name] = {
+        type: config.transport === "sse" ? "sse" : "http",
+        url: config.url,
+        ...(config.headers ? { headers: config.headers } : {}),
+      };
+    }
+  }
+  return mapped;
+}
+
+/**
+ * Background-process interception. The CLI's own background machinery is
+ * kept — Bash `run_in_background` and TaskOutput/TaskStop behave exactly
+ * as they do in stock Claude Code — but PostToolUse hooks watch the
+ * structured tool responses so the host learns the moment a background
+ * task starts (the response's `backgroundTaskId`) or is stopped.
+ */
+function backgroundTaskHooks(
+  emit: (event: AgentEvent) => void,
+): Options["hooks"] {
+  const onBashDone: HookCallback = async (input) => {
+    const data = input as {
+      tool_input?: { command?: string; run_in_background?: boolean };
+      tool_response?: { backgroundTaskId?: string; timedOutAfterMs?: number };
+    };
+    const backgroundId = data.tool_response?.backgroundTaskId;
+    if (backgroundId) {
+      emit({
+        type: "background",
+        status: "started",
+        backgroundId,
+        content: data.tool_input?.command ?? "",
+      });
+    }
+    return {};
+  };
+  const onTaskStop: HookCallback = async (input) => {
+    const data = input as {
+      tool_input?: { task_id?: string; shell_id?: string };
+    };
+    const backgroundId = data.tool_input?.task_id ?? data.tool_input?.shell_id;
+    if (backgroundId) {
+      emit({ type: "background", status: "ended", backgroundId });
+    }
+    return {};
+  };
+  return {
+    PostToolUse: [
+      { matcher: "Bash", hooks: [onBashDone] },
+      { matcher: TASK_STOP_TOOLS.join("|"), hooks: [onTaskStop] },
+    ],
+  };
+}
+
 /** Minimal structural view of an Anthropic API content block. */
 interface ContentBlockLike {
   type: string;
   text?: string;
+  id?: string;
   name?: string;
   input?: Record<string, unknown>;
+  tool_use_id?: string;
 }
 
-function mapMessage(message: SDKMessage): AgentEvent[] {
+function mapMessage(
+  message: SDKMessage,
+  openSubagents: Set<string>,
+): AgentEvent[] {
   switch (message.type) {
     case "assistant": {
       const blocks =
         (message.message as { content?: ContentBlockLike[] }).content ?? [];
+      const parentToolUseId =
+        (message as { parent_tool_use_id?: string | null })
+          .parent_tool_use_id ?? undefined;
       const events: AgentEvent[] = [];
       for (const block of blocks) {
+        // Text inside a subagent is the subagent's own conversation, not
+        // this chat's transcript — activity (tool use) is what surfaces.
+        if (parentToolUseId && block.type === "text") continue;
+        if (
+          !parentToolUseId &&
+          block.type === "tool_use" &&
+          SUBAGENT_TOOLS.has(block.name ?? "") &&
+          block.id
+        ) {
+          openSubagents.add(block.id);
+          const input = block.input ?? {};
+          events.push({
+            type: "subagent",
+            status: "started",
+            subagentId: block.id,
+            ...(typeof input.subagent_type === "string"
+              ? { subagentType: input.subagent_type }
+              : {}),
+            content:
+              typeof input.description === "string" ? input.description : "",
+          });
+          continue;
+        }
         const mapped = mapContentBlock(block);
-        if (mapped) events.push(mapped);
+        if (mapped) {
+          events.push(
+            parentToolUseId
+              ? { ...mapped, subagentId: parentToolUseId }
+              : mapped,
+          );
+        }
+      }
+      return events;
+    }
+    case "user": {
+      // A top-level tool_result answering a Task tool-use closes that
+      // subagent. Nested results (parent_tool_use_id set) stay internal.
+      if (
+        (message as { parent_tool_use_id?: string | null }).parent_tool_use_id
+      )
+        return [];
+      const blocks =
+        (message.message as { content?: ContentBlockLike[] | string })
+          .content ?? [];
+      if (!Array.isArray(blocks)) return [];
+      const events: AgentEvent[] = [];
+      for (const block of blocks) {
+        if (
+          block.type === "tool_result" &&
+          block.tool_use_id &&
+          openSubagents.delete(block.tool_use_id)
+        ) {
+          events.push({
+            type: "subagent",
+            status: "ended",
+            subagentId: block.tool_use_id,
+          });
+        }
       }
       return events;
     }
@@ -369,7 +569,7 @@ function mapMessage(message: SDKMessage): AgentEvent[] {
       ];
     }
     default:
-      // system/init, user (tool results), and stream events are internal.
+      // system/init and stream events are internal.
       return [];
   }
 }

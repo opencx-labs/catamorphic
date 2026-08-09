@@ -1,7 +1,11 @@
 import { createAnthropic } from "@ai-sdk/anthropic";
 import { createOpenAI } from "@ai-sdk/openai";
 import { AiSdkCodingAgent } from "@catamorphic/ai-sdk";
-import type { ExtraTool, SandboxProvider } from "@catamorphic/sandbox";
+import type {
+  AgentMcpServerConfig,
+  ExtraTool,
+  SandboxProvider,
+} from "@catamorphic/sandbox";
 import type { AgentConfig } from "../agents-store.js";
 
 const INSTRUCTIONS = `You are the Catamorphic assistant, an interactive agent built into the Catamorphic desktop app. You help users with their day-to-day work and with building automations in their project. Use the instructions below and the tools available to you to assist the user.
@@ -47,6 +51,7 @@ export function buildAiSdkAgent(
   sandboxProvider: SandboxProvider,
   modelId: string,
   extraTools?: ExtraTool[],
+  mcpServers?: Record<string, AgentMcpServerConfig>,
 ): AiSdkCodingAgent | undefined {
   if (!config.apiKey || !modelId) return undefined;
   const provider = config.provider ?? "anthropic";
@@ -68,5 +73,6 @@ export function buildAiSdkAgent(
     // Model switches arrive per turn, so live sessions survive them.
     resolveModel,
     extraTools,
+    mcpServers,
   });
 }

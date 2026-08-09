@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { AgentsStore } from "./agents-store.js";
+import { ConnectionsStore } from "./connections-store.js";
 import { type Keybindings, KeybindingsStore } from "./keybindings.js";
 import { type AppPrefs, PrefsStore } from "./prefs.js";
 import type { ProfilesStore } from "./profiles.js";
@@ -16,6 +17,8 @@ export interface ProfileStores {
   sidebar: SidebarConfigStore;
   agents: AgentsStore;
   prefs: PrefsStore;
+  /** Profile-level MCP connections (agents opt in per assignment). */
+  connections: ConnectionsStore;
 }
 
 /**
@@ -73,6 +76,7 @@ export class ProfileConfigManager {
       sidebar: new SidebarConfigStore(path.join(dir, "sidebar.js")),
       agents: new AgentsStore(path.join(dir, "agents.json")),
       prefs: new PrefsStore(path.join(dir, "prefs.json")),
+      connections: new ConnectionsStore(path.join(dir, "connections.json")),
     };
     stores.sidebar.ensureFile();
     stores.theme.watch((theme) => {

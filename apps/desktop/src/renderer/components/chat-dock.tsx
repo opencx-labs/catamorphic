@@ -12,6 +12,7 @@ import {
   Maximize2,
   Minus,
   PictureInPicture2,
+  Radio,
   SquareTerminal,
   X,
 } from "lucide-react";
@@ -19,6 +20,7 @@ import {
   type FormEvent,
   type KeyboardEvent,
   useEffect,
+  useMemo,
   useRef,
   useState,
 } from "react";
@@ -37,16 +39,24 @@ export type ChatMode = "min" | "partial" | "tab";
 
 /**
  * A workspace tab attached to this chat — the agent's working surfaces
- * (browser pages it linked, terminals for its project, files it changed).
+ * (browser pages it linked, terminals for its project, files it changed) —
+ * or a live activity the chat itself tracks (subagents at work, background
+ * processes the agent started or left running).
  */
 export interface ChatSurface {
   /** Workspace tab key ("browser:<id>" / "terminal:<id>" / "chat:<id>"). */
   key: string;
-  kind: "browser" | "terminal" | "editor" | "chat";
+  kind: "browser" | "terminal" | "editor" | "chat" | "subagent" | "watcher";
   label: string;
   faviconUrl?: string | null;
   /** The agent is actively working here (spinner on the chip). */
   active?: boolean;
+  /**
+   * Detail lines opened in an upward popover on click. Chips with `info`
+   * aren't workspace tabs — the popover IS their surface (a subagent's
+   * activity feed, a watcher's command).
+   */
+  info?: string[];
 }
 
 /** Chips group per kind once a chat collects this many surfaces. */
@@ -57,6 +67,8 @@ const SURFACE_GROUP_LABELS = {
   terminal: "terminals",
   editor: "files",
   chat: "forks",
+  subagent: "subagents",
+  watcher: "watchers",
 } as const;
 
 const SURFACE_ICONS = {
@@ -64,6 +76,8 @@ const SURFACE_ICONS = {
   terminal: SquareTerminal,
   editor: FileCode,
   chat: GitFork,
+  subagent: Bot,
+  watcher: Radio,
 } as const;
 
 /** Short, charismatic empty-state openers; one is picked per chat. */
@@ -141,6 +155,116 @@ function filesFrom(data: DataTransfer | null): File[] {
     .filter((file): file is File => file !== null);
 }
 
+/** Structural view of one persisted turn event (metadata.events entries). */
+interface TurnEvent {
+  type?: string;
+  content?: string;
+  status?: string;
+  subagentId?: string;
+  subagentType?: string;
+  backgroundId?: string;
+  toolName?: string;
+  filePath?: string;
+}
+
+const firstLine = (value: string | undefined): string =>
+  (value ?? "").split("\n", 1)[0]?.trim() ?? "";
+
+const activityLine = (event: TurnEvent): string => {
+  if (event.type === "command") return `$ ${firstLine(event.content)}`;
+  if (event.type === "file_edit") return `Edited ${event.filePath ?? "a file"}`;
+  if (event.type === "tool_call") return `Used ${event.toolName ?? "a tool"}`;
+  return firstLine(event.content);
+};
+
+/**
+ * Chips derived from the chat's own turn events (not workspace tabs):
+ * subagents from the latest turn that delegated work — spinning while the
+ * turn runs, inspectable after — and background watchers (processes the
+ * agent started in the background or demonstrably left running), which
+ * persist across turns until an event ends them.
+ */
+function activityChips(
+  messages: Array<{ role: string; metadata?: unknown }>,
+  working: boolean,
+): ChatSurface[] {
+  let lastSubagentEvents: TurnEvent[] | undefined;
+  const watchers = new Map<string, { label: string; ended: boolean }>();
+  for (const message of messages) {
+    if (message.role !== "assistant") continue;
+    const events = (message.metadata as { events?: TurnEvent[] } | null)
+      ?.events;
+    if (!Array.isArray(events)) continue;
+    if (events.some((event) => event.type === "subagent")) {
+      lastSubagentEvents = events;
+    }
+    for (const event of events) {
+      if (event.type !== "background" || !event.backgroundId) continue;
+      if (event.status === "ended") {
+        const watcher = watchers.get(event.backgroundId);
+        if (watcher) watcher.ended = true;
+      } else {
+        watchers.set(event.backgroundId, {
+          label: firstLine(event.content) || "background process",
+          ended: false,
+        });
+      }
+    }
+  }
+
+  const chips: ChatSurface[] = [];
+  if (lastSubagentEvents) {
+    const subagents = new Map<
+      string,
+      { label: string; ended: boolean; info: string[] }
+    >();
+    for (const event of lastSubagentEvents) {
+      if (!event.subagentId) continue;
+      if (event.type === "subagent") {
+        const entry = subagents.get(event.subagentId) ?? {
+          label: "subagent",
+          ended: false,
+          info: [],
+        };
+        if (event.status === "ended") entry.ended = true;
+        else {
+          entry.label =
+            firstLine(event.content) || event.subagentType || "subagent";
+        }
+        subagents.set(event.subagentId, entry);
+      } else {
+        const line = activityLine(event);
+        if (line) subagents.get(event.subagentId)?.info.push(line);
+      }
+    }
+    for (const [id, entry] of subagents) {
+      chips.push({
+        key: `subagent:${id}`,
+        kind: "subagent",
+        label: entry.label,
+        active: !entry.ended && working,
+        info:
+          entry.info.length > 0
+            ? entry.info.slice(-20)
+            : ["No visible activity yet."],
+      });
+    }
+  }
+  for (const [id, watcher] of watchers) {
+    if (watcher.ended) continue;
+    chips.push({
+      key: `watcher:${id}`,
+      kind: "watcher",
+      label: watcher.label,
+      info: [
+        watcher.label,
+        "Running in the background — read the terminals, or ask the agent to stop it.",
+      ],
+    });
+  }
+  return chips;
+}
+
 /** Stable per-chat pick: hash the id so re-renders don't re-roll. */
 const emptyStateFor = (localId: string): string => {
   let hash = 0;
@@ -153,25 +277,34 @@ const emptyStateFor = (localId: string): string => {
   );
 };
 
-/** One surface chip: open on click, tile right on ⌘-click or the button. */
+/**
+ * One surface chip: open on click, tile right on ⌘-click or the button.
+ * Chips carrying `info` (subagents, watchers) open their detail popover
+ * instead — they have no workspace tab behind them.
+ */
 function SurfaceChip({
   surface,
   onOpenSurface,
+  onToggleInfo,
 }: {
   surface: ChatSurface;
   onOpenSurface: (key: string, mode: "tab" | "split") => void;
+  onToggleInfo: (key: string) => void;
 }) {
   const Icon = SURFACE_ICONS[surface.kind];
   return (
     <span
       className="group/chip flex shrink-0 items-center overflow-hidden rounded-md border border-border bg-bg-inset text-[11px] text-fg-muted"
       data-testid="surface-chip"
+      data-kind={surface.kind}
       data-active={surface.active || undefined}
     >
       <button
         type="button"
         onClick={(event) =>
-          onOpenSurface(surface.key, event.metaKey ? "split" : "tab")
+          surface.info
+            ? onToggleInfo(surface.key)
+            : onOpenSurface(surface.key, event.metaKey ? "split" : "tab")
         }
         className="flex min-w-0 cursor-pointer items-center gap-1.5 py-1 pl-2 pr-1.5 transition-colors duration-100 hover:text-fg"
       >
@@ -199,16 +332,18 @@ function SurfaceChip({
         </span>
         <span className="max-w-36 truncate">{surface.label}</span>
       </button>
-      <ShortcutHint label="Open to the right" shortcut="⌘-click">
-        <button
-          type="button"
-          onClick={() => onOpenSurface(surface.key, "split")}
-          className="grid size-6 shrink-0 cursor-pointer place-items-center text-fg-faint opacity-60 transition-[color,opacity] duration-100 hover:text-fg group-hover/chip:opacity-100"
-          aria-label={`Open ${surface.label} to the right`}
-        >
-          <Columns2 className="size-3" />
-        </button>
-      </ShortcutHint>
+      {!surface.info && (
+        <ShortcutHint label="Open to the right" shortcut="⌘-click">
+          <button
+            type="button"
+            onClick={() => onOpenSurface(surface.key, "split")}
+            className="grid size-6 shrink-0 cursor-pointer place-items-center text-fg-faint opacity-60 transition-[color,opacity] duration-100 hover:text-fg group-hover/chip:opacity-100"
+            aria-label={`Open ${surface.label} to the right`}
+          >
+            <Columns2 className="size-3" />
+          </button>
+        </ShortcutHint>
+      )}
     </span>
   );
 }
@@ -227,16 +362,21 @@ function SurfacesRail({
   onOpenSurface: (key: string, mode: "tab" | "split") => void;
 }) {
   const [openGroup, setOpenGroup] = useState<ChatSurface["kind"] | null>(null);
+  const [openInfoKey, setOpenInfoKey] = useState<string | null>(null);
   const railRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
-    if (!openGroup) return;
+    if (!openGroup && !openInfoKey) return;
     const onDocMouseDown = (event: MouseEvent) => {
       if (!railRef.current?.contains(event.target as Node)) {
         setOpenGroup(null);
+        setOpenInfoKey(null);
       }
     };
     const onKeyDown = (event: globalThis.KeyboardEvent) => {
-      if (event.key === "Escape") setOpenGroup(null);
+      if (event.key === "Escape") {
+        setOpenGroup(null);
+        setOpenInfoKey(null);
+      }
     };
     document.addEventListener("mousedown", onDocMouseDown);
     window.addEventListener("keydown", onKeyDown);
@@ -244,15 +384,54 @@ function SurfacesRail({
       document.removeEventListener("mousedown", onDocMouseDown);
       window.removeEventListener("keydown", onKeyDown);
     };
-  }, [openGroup]);
+  }, [openGroup, openInfoKey]);
 
   const byKind = new Map<ChatSurface["kind"], ChatSurface[]>();
   for (const surface of surfaces) {
     byKind.set(surface.kind, [...(byKind.get(surface.kind) ?? []), surface]);
   }
 
+  const toggleInfo = (key: string) => {
+    setOpenGroup(null);
+    setOpenInfoKey((current) => (current === key ? null : key));
+  };
+  const openInfoSurface = openInfoKey
+    ? surfaces.find((surface) => surface.key === openInfoKey)
+    : undefined;
+
   return (
     <div ref={railRef} className="relative mx-3">
+      {/* Detail popover for chips that ARE their surface (subagents,
+          watchers): the chip's activity feed, expanded upward. */}
+      {openInfoSurface?.info && (
+        <div
+          className="absolute bottom-full left-0 z-20 mb-1.5 max-h-64 w-80 overflow-y-auto rounded-lg border border-border bg-bg-raised/95 p-2 shadow-2xl backdrop-blur-xl"
+          data-testid="surface-info-popover"
+        >
+          <div className="flex items-center gap-1.5 px-1 pb-1.5 text-[11px] font-semibold text-fg">
+            {(() => {
+              const Icon = SURFACE_ICONS[openInfoSurface.kind];
+              return openInfoSurface.active ? (
+                <LoaderCircle className="size-3 animate-spin text-accent" />
+              ) : (
+                <Icon className="size-3" />
+              );
+            })()}
+            <span className="truncate">{openInfoSurface.label}</span>
+          </div>
+          <div className="flex flex-col gap-0.5">
+            {openInfoSurface.info.map((line, index) => (
+              <div
+                // biome-ignore lint/suspicious/noArrayIndexKey: static activity lines
+                key={index}
+                className="truncate px-1 font-mono text-[11px] text-fg-muted"
+              >
+                {line}
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
       {openGroup && byKind.get(openGroup) && (
         <div className="absolute bottom-full left-0 z-20 mb-1.5 max-h-64 w-72 overflow-y-auto rounded-lg border border-border bg-bg-raised/95 p-1 shadow-2xl backdrop-blur-xl">
           {(byKind.get(openGroup) ?? []).map((surface) => (
@@ -263,6 +442,10 @@ function SurfacesRail({
               <button
                 type="button"
                 onClick={(event) => {
+                  if (surface.info) {
+                    toggleInfo(surface.key);
+                    return;
+                  }
                   onOpenSurface(surface.key, event.metaKey ? "split" : "tab");
                   setOpenGroup(null);
                 }}
@@ -291,19 +474,21 @@ function SurfacesRail({
                 </span>
                 <span className="truncate">{surface.label}</span>
               </button>
-              <ShortcutHint label="Open to the right" shortcut="⌘-click">
-                <button
-                  type="button"
-                  onClick={() => {
-                    onOpenSurface(surface.key, "split");
-                    setOpenGroup(null);
-                  }}
-                  className="mr-1 grid size-6 shrink-0 cursor-pointer place-items-center rounded text-fg-faint opacity-0 transition-opacity duration-100 hover:text-fg group-hover/chip:opacity-100"
-                  aria-label={`Open ${surface.label} to the right`}
-                >
-                  <Columns2 className="size-3" />
-                </button>
-              </ShortcutHint>
+              {!surface.info && (
+                <ShortcutHint label="Open to the right" shortcut="⌘-click">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      onOpenSurface(surface.key, "split");
+                      setOpenGroup(null);
+                    }}
+                    className="mr-1 grid size-6 shrink-0 cursor-pointer place-items-center rounded text-fg-faint opacity-0 transition-opacity duration-100 hover:text-fg group-hover/chip:opacity-100"
+                    aria-label={`Open ${surface.label} to the right`}
+                  >
+                    <Columns2 className="size-3" />
+                  </button>
+                </ShortcutHint>
+              )}
             </div>
           ))}
         </div>
@@ -354,6 +539,7 @@ function SurfacesRail({
                 key={surface.key}
                 surface={surface}
                 onOpenSurface={onOpenSurface}
+                onToggleInfo={toggleInfo}
               />
             ))
           ),
@@ -506,6 +692,18 @@ export function ChatDock({
     chat.messages,
     chat.optimisticMessages,
     chat.isSending,
+  );
+
+  // Subagent and background-watcher chips come from the chat's own turn
+  // events (every harness reports them through the common event model);
+  // workspace-tab chips arrive via the surfaces prop. One rail, both.
+  const chatActivityChips = useMemo(
+    () => activityChips(chat.messages, chat.isWorking),
+    [chat.messages, chat.isWorking],
+  );
+  const railSurfaces = useMemo(
+    () => [...surfaces, ...chatActivityChips],
+    [surfaces, chatActivityChips],
   );
 
   // ↑/↓ in the composer recall previously sent messages, shell-history
@@ -1069,8 +1267,11 @@ export function ChatDock({
                 the tab; the split button (or Cmd+click) tiles it to the
                 right of the current view. Only real surfaces earn a chip —
                 the new-terminal affordance lives with the header controls. */}
-            {surfaces.length > 0 && onOpenSurface && (
-              <SurfacesRail surfaces={surfaces} onOpenSurface={onOpenSurface} />
+            {railSurfaces.length > 0 && onOpenSurface && (
+              <SurfacesRail
+                surfaces={railSurfaces}
+                onOpenSurface={onOpenSurface}
+              />
             )}
             {questions && !chat.isSending && (
               <AgentQuestionPanel

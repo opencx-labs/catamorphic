@@ -911,7 +911,9 @@ export class AgentSessionsService {
       event.type === "text" ||
       event.type === "tool_call" ||
       event.type === "command" ||
-      event.type === "file_edit";
+      event.type === "file_edit" ||
+      event.type === "subagent" ||
+      event.type === "background";
 
     try {
       const anchor = await this.ensureAnchor(
@@ -1562,6 +1564,18 @@ export function activityLabel(event: AgentEvent): string {
   }
   if (event.type === "tool_call") {
     return event.toolName ? `Using ${event.toolName}` : "Using a tool...";
+  }
+  if (event.type === "subagent") {
+    if (event.status === "ended") return "Subagent finished...";
+    return event.content
+      ? `Delegating: ${event.content}`
+      : "Delegating to a subagent...";
+  }
+  if (event.type === "background") {
+    if (event.status === "ended") return "Stopped a background process...";
+    return event.content
+      ? `Running in background: ${event.content}`
+      : "Started a background process...";
   }
   if (event.type === "question") return "Waiting for your answer...";
   if (event.type === "title") return "Thinking...";

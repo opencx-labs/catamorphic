@@ -36,6 +36,15 @@ export type AgentEffortSetting = "low" | "medium" | "high";
 export type AgentAuthMode = "local" | "account" | "api-key";
 export type AiSdkProvider = "anthropic" | "openai" | "openrouter";
 
+/**
+ * Which of the profile's MCP connections an agent gets. "all" (the
+ * default) includes every current AND future connection; "picked" pins an
+ * explicit subset. Editable per agent after creation.
+ */
+export type AgentConnectionsSetting =
+  | { mode: "all" }
+  | { mode: "picked"; connectionIds: string[] };
+
 export interface AgentConfig {
   id: string;
   name: string;
@@ -48,6 +57,8 @@ export interface AgentConfig {
   auth: AgentAuthMode;
   /** Decrypted in memory; never crosses the contextBridge. */
   apiKey: string | null;
+  /** MCP connection assignment; absent means `{ mode: "all" }`. */
+  connections?: AgentConnectionsSetting;
 }
 
 interface StoredAgent extends Omit<AgentConfig, "apiKey"> {
@@ -76,6 +87,8 @@ export interface PublicAgentConfig {
   apiKeyMasked: string | null;
   /** What media the chat composer may attach for this agent. */
   accepts: AgentAttachmentKind[];
+  /** MCP connection assignment (always materialized; default "all"). */
+  connections: AgentConnectionsSetting;
 }
 
 /**
@@ -114,6 +127,7 @@ export interface CreateAgentInput {
   effort?: AgentEffortSetting;
   auth?: AgentAuthMode;
   apiKey?: string | null;
+  connections?: AgentConnectionsSetting;
 }
 
 export interface UpdateAgentInput {
@@ -124,6 +138,7 @@ export interface UpdateAgentInput {
   auth?: AgentAuthMode;
   /** New key; omit to keep the stored one, null to clear it. */
   apiKey?: string | null;
+  connections?: AgentConnectionsSetting;
 }
 
 export class AgentsStore {
@@ -195,6 +210,7 @@ export class AgentsStore {
             ? "account"
             : "api-key"
           : "local"),
+      ...(input.connections ? { connections: input.connections } : {}),
       ...this.encrypt(input.apiKey ?? null),
     };
     this.data.agents.push(stored);
@@ -214,6 +230,7 @@ export class AgentsStore {
     if (patch.model !== undefined) stored.model = patch.model.trim();
     if (patch.effort !== undefined) stored.effort = patch.effort;
     if (patch.auth !== undefined) stored.auth = patch.auth;
+    if (patch.connections !== undefined) stored.connections = patch.connections;
     if (patch.apiKey !== undefined) {
       const { apiKeyEncrypted, apiKeyPlaintext } = this.encrypt(
         patch.apiKey?.trim() || null,
@@ -277,5 +294,6 @@ export function toPublicAgent(agent: AgentConfig): PublicAgentConfig {
     hasApiKey: apiKey !== null,
     apiKeyMasked: apiKey ? `${apiKey.slice(0, 7)}…${apiKey.slice(-4)}` : null,
     accepts: agentAccepts(agent),
+    connections: agent.connections ?? { mode: "all" },
   };
 }

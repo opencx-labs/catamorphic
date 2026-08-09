@@ -9,6 +9,7 @@ import {
 } from "electron";
 import { registerAgentBridge } from "./agent-bridge.js";
 import { registerBrowserSupport } from "./browser.js";
+import { ConnectorsService } from "./connectors.js";
 import { registerIpcHandlers, type ServerState } from "./ipc.js";
 import { type Keybindings, toAccelerator } from "./keybindings.js";
 import { ProfileConfigManager } from "./profile-config.js";
@@ -291,7 +292,16 @@ app.whenReady().then(async () => {
   });
   app.on("browser-window-focus", applyMenuForFocusedWindow);
 
-  registerIpcHandlers(profileConfig, state, windows, paths);
+  // Connectors: profile-level MCP connections + installed plugin
+  // connectors, shared by the IPC surface and the agent registry.
+  const connectors = new ConnectorsService({
+    connectorsDirFor: (profileId) =>
+      path.join(paths.profilesDir, profileId, "connectors"),
+    connectionsFor: (profileId) =>
+      profileConfig.forProfile(profileId).connections,
+  });
+
+  registerIpcHandlers(profileConfig, state, windows, paths, connectors);
   browserSupport = registerBrowserSupport(
     profilesStore,
     profileConfig,
@@ -310,6 +320,7 @@ app.whenReady().then(async () => {
       profilesStore,
       profileConfig,
       agentBridge?.bridge,
+      connectors,
     );
     state.broadcast("catamorphic:server-changed", {
       url: server.url,

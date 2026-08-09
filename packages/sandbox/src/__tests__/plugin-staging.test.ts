@@ -59,13 +59,7 @@ describe("stagePluginDocs", () => {
     );
     expect(readme).toBe("# Hi");
     const types = await fs.readFile(
-      path.join(
-        tmpDir,
-        "_plugins",
-        "acme__example-sdk",
-        "dist",
-        "index.d.ts",
-      ),
+      path.join(tmpDir, "_plugins", "acme__example-sdk", "dist", "index.d.ts"),
       "utf-8",
     );
     expect(types).toContain("number");

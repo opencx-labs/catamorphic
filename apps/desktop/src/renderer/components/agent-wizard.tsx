@@ -8,7 +8,12 @@ import {
   Sparkles,
 } from "lucide-react";
 import { type FormEvent, useEffect, useRef, useState } from "react";
-import { desktopApi } from "../lib/desktop-api.js";
+import {
+  type AgentConnectionsSetting,
+  type ConnectionInfo,
+  desktopApi,
+} from "../lib/desktop-api.js";
+import { ConnectionsAssignmentField } from "./connections-field.js";
 import { Modal } from "./modal.js";
 import { PendingButton } from "./pending-button.js";
 import { ShortcutHint } from "./shortcut-hint.js";
@@ -84,6 +89,22 @@ export function AgentWizard({
   // resets it on entry via goto).
   const [name, setName] = useState("");
 
+  // Which of the profile's MCP connections the new agent gets: all current
+  // and future ones (default), or a picked subset. Offered on every detail
+  // step once the profile has any connections.
+  const [connections, setConnections] = useState<AgentConnectionsSetting>({
+    mode: "all",
+  });
+  const [profileConnections, setProfileConnections] = useState<
+    ConnectionInfo[]
+  >([]);
+  useEffect(() => {
+    void desktopApi
+      .connectionsList()
+      .then(setProfileConnections)
+      .catch(() => {});
+  }, []);
+
   // Claude Code terminal sign-in.
   const [ccCommand, setCcCommand] = useState<string | null>(null);
   const [ccStarted, setCcStarted] = useState(false);
@@ -143,6 +164,7 @@ export function AgentWizard({
     setBusy(false);
     setBusyFlow(null);
     setName("");
+    setConnections({ mode: "all" });
     setCcCommand(null);
     setCcStarted(false);
     setWaitingFlow(null);
@@ -162,22 +184,26 @@ export function AgentWizard({
             harness: "ai-sdk",
             provider: "openrouter",
             auth: "account",
+            connections,
           })
         : flow === "claude-code-account"
           ? await desktopApi.agentsCreate({
               harness: "claude-code",
               auth: "account",
+              connections,
               ...customName,
             })
           : flow === "codex-account"
             ? await desktopApi.agentsCreate({
                 harness: "codex",
                 auth: "account",
+                connections,
                 ...customName,
               })
             : await desktopApi.agentsCreate({
                 harness: flow,
                 auth: "local",
+                connections,
                 ...customName,
               });
     createdRef.current[flow] = agent.id;
@@ -263,6 +289,7 @@ export function AgentWizard({
         provider,
         auth: "api-key",
         apiKey: apiKey.trim(),
+        connections,
         ...(name.trim() ? { name: name.trim() } : {}),
       });
       onDone();
@@ -292,6 +319,18 @@ export function AgentWizard({
       />
     </label>
   );
+
+  /** Connection assignment, offered once the profile has connections. */
+  const connectionsField =
+    profileConnections.length > 0 ? (
+      <div className="mt-3">
+        <ConnectionsAssignmentField
+          value={connections}
+          onChange={setConnections}
+          available={profileConnections}
+        />
+      </div>
+    ) : null;
 
   /** The terminal sign-in command block (Claude Code flows). */
   const commandBlock = ccCommand && (
@@ -408,6 +447,7 @@ export function AgentWizard({
                   for this agent.
                 </p>
                 <div className="mt-3">{nameField("Claude Code")}</div>
+                {connectionsField}
                 {commandBlock}
                 {ccStarted ? (
                   <button
@@ -455,6 +495,7 @@ export function AgentWizard({
                   good.
                 </p>
                 <div className="mt-3">{nameField("Claude Code")}</div>
+                {connectionsField}
                 {commandBlock}
                 <div className="mt-4 flex items-center gap-2">
                   {ccStarted ? (
@@ -499,6 +540,7 @@ export function AgentWizard({
                   separate for this agent.
                 </p>
                 <div className="mt-3">{nameField("Codex")}</div>
+                {connectionsField}
                 <div className="mt-4 flex items-center gap-2">
                   <PendingButton
                     type="button"
@@ -537,6 +579,7 @@ export function AgentWizard({
                   ChatGPT account in the browser.
                 </p>
                 <div className="mt-3">{nameField("Codex")}</div>
+                {connectionsField}
                 <PendingButton
                   type="button"
                   pending={busy}
@@ -591,6 +634,13 @@ export function AgentWizard({
                   className="field h-8 px-2 font-mono text-[13px] text-fg placeholder:font-sans placeholder:text-fg-faint"
                 />
               </label>
+              {profileConnections.length > 0 && (
+                <ConnectionsAssignmentField
+                  value={connections}
+                  onChange={setConnections}
+                  available={profileConnections}
+                />
+              )}
               <p className="text-xs text-fg-faint">
                 Stored encrypted with your OS keychain. Model defaults are
                 picked automatically; change them later in Settings.

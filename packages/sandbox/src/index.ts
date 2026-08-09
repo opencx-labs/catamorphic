@@ -11,6 +11,8 @@ export {
 export type {
   AgentAttachment,
   AgentEffort,
+  AgentMcpServerConfig,
+  AgentPluginConfig,
   AttachedPluginForAgent,
   CodingAgentProvider,
   ExtraTool,

@@ -317,6 +317,8 @@ export interface AgentEvent {
     | "question"
     | "title"
     | "session"
+    | "subagent"
+    | "background"
     | "error"
     | "done";
   content?: string;
@@ -334,6 +336,27 @@ export interface AgentEvent {
   providerSessionId?: string;
   /** Set on classified "error" events (see {@link AgentErrorKind}). */
   errorKind?: AgentErrorKind;
+  /**
+   * On "subagent" events: the harness's id for the delegated agent (Claude
+   * Code uses the Task tool-use id). Also set on nested activity events
+   * (text/tool_call/command/file_edit) a subagent produced, so the UI can
+   * attribute work to the chip for that subagent.
+   */
+  subagentId?: string;
+  /** On "subagent" events: the harness's agent-type name, when known. */
+  subagentType?: string;
+  /**
+   * On "background" events: stable id for the background process/watcher
+   * (harness task id, or a synthesized id for detected daemonizations).
+   */
+  backgroundId?: string;
+  /**
+   * Lifecycle marker on "subagent"/"background" events. "detected" flags a
+   * background process the harness cannot manage (a command the agent
+   * daemonized out of the harness's sight) — surfaced, but with no live
+   * running state to track.
+   */
+  status?: "started" | "ended" | "detected";
 }
 
 export interface AgentSession {

@@ -2,7 +2,15 @@ import type { SandboxProvider } from "@catamorphic/sandbox";
 import { simulateReadableStream } from "ai";
 import { MockLanguageModelV4 } from "ai/test";
 import { describe, expect, it, vi } from "vitest";
+
+vi.mock("@catamorphic/mcp", () => ({
+  connectMcpServer: vi.fn(),
+}));
+
+import { connectMcpServer } from "@catamorphic/mcp";
 import { AiSdkCodingAgent } from "../ai-sdk-agent.js";
+
+const connectMcpServerMock = vi.mocked(connectMcpServer);
 
 const usage = {
   inputTokens: {
@@ -139,6 +147,79 @@ describe("AiSdkCodingAgent", () => {
       { "_plugins/acme__mail/README.md": "# Mail" },
       "/workspace/project",
     );
+  });
+
+  it("mounts MCP server tools beside the built-ins and maps their calls", async () => {
+    const callTool = vi.fn(async () => "3 open issues");
+    connectMcpServerMock.mockResolvedValueOnce({
+      tools: [
+        {
+          name: "list_issues",
+          description: "List issues",
+          inputSchema: {
+            type: "object",
+            properties: { team: { type: "string" } },
+          },
+        },
+      ],
+      callTool,
+      close: vi.fn(async () => {}),
+    });
+    const provider = createProvider();
+    const model = new MockLanguageModelV4({
+      doStream: [
+        toolCallStream("mcp__linear__list_issues", { team: "core" }),
+        textStream("You have 3 open issues."),
+      ],
+    });
+    const agent = new AiSdkCodingAgent({
+      model,
+      sandboxProvider: provider,
+      mcpServers: {
+        linear: { transport: "http", url: "https://mcp.linear.app/mcp" },
+      },
+    });
+    const session = await start(agent);
+
+    const events = await collect(agent, session, "What's on my plate?");
+
+    expect(connectMcpServerMock).toHaveBeenCalledWith({
+      transport: "http",
+      url: "https://mcp.linear.app/mcp",
+    });
+    expect(callTool).toHaveBeenCalledWith("list_issues", { team: "core" });
+    expect(events).toEqual([
+      {
+        type: "tool_call",
+        toolName: "linear/list_issues",
+        toolInput: { team: "core" },
+      },
+      { type: "text", content: "You have 3 open issues." },
+      { type: "done" },
+    ]);
+  });
+
+  it("skips MCP servers that fail to connect instead of breaking the session", async () => {
+    connectMcpServerMock.mockRejectedValueOnce(new Error("boom"));
+    const provider = createProvider();
+    const model = new MockLanguageModelV4({
+      doStream: textStream("Hello anyway."),
+    });
+    const agent = new AiSdkCodingAgent({
+      model,
+      sandboxProvider: provider,
+      mcpServers: {
+        broken: { transport: "stdio", command: "definitely-not-installed" },
+      },
+    });
+    const session = await start(agent);
+
+    const events = await collect(agent, session, "Hi");
+
+    expect(events).toEqual([
+      { type: "text", content: "Hello anyway." },
+      { type: "done" },
+    ]);
   });
 
   it("executes filesystem tools in the dev sandbox and maps events", async () => {

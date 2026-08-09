@@ -7,6 +7,14 @@ export type AgentHarness = "ai-sdk" | "claude-code" | "codex";
 export type AgentEffort = "low" | "medium" | "high";
 export type AgentAuthMode = "local" | "account" | "api-key";
 
+/**
+ * Which of the profile's MCP connections an agent gets: every current and
+ * future connection, or a pinned subset.
+ */
+export type AgentConnectionsSetting =
+  | { mode: "all" }
+  | { mode: "picked"; connectionIds: string[] };
+
 export interface AgentInfo {
   id: string;
   name: string;
@@ -19,6 +27,7 @@ export interface AgentInfo {
   apiKeyMasked: string | null;
   /** Media kinds this agent's chat composer accepts. */
   accepts: Array<"image" | "document">;
+  connections: AgentConnectionsSetting;
 }
 
 export interface AgentsData {
@@ -34,6 +43,7 @@ export interface CreateAgentInput {
   effort?: AgentEffort;
   auth?: AgentAuthMode;
   apiKey?: string | null;
+  connections?: AgentConnectionsSetting;
 }
 
 export interface UpdateAgentInput {
@@ -44,6 +54,88 @@ export interface UpdateAgentInput {
   auth?: AgentAuthMode;
   /** New key; omit to keep the stored one, null to clear it. */
   apiKey?: string | null;
+  connections?: AgentConnectionsSetting;
+}
+
+/** A profile MCP connection as the renderer sees it (no secret values). */
+export interface ConnectionInfo {
+  id: string;
+  name: string;
+  transport: "http" | "sse" | "stdio";
+  url?: string;
+  command?: string;
+  args?: string[];
+  headerNames: string[];
+  envNames: string[];
+  enabled: boolean;
+  source:
+    | { kind: "manual" }
+    | { kind: "registry"; registryName: string }
+    | { kind: "plugin"; plugin: string };
+}
+
+export interface CreateConnectionInput {
+  name: string;
+  transport: "http" | "sse" | "stdio";
+  url?: string;
+  headers?: Record<string, string>;
+  command?: string;
+  args?: string[];
+  env?: Record<string, string>;
+  enabled?: boolean;
+}
+
+export interface UpdateConnectionInput {
+  name?: string;
+  url?: string;
+  headers?: Record<string, string> | null;
+  command?: string;
+  args?: string[];
+  env?: Record<string, string> | null;
+  enabled?: boolean;
+}
+
+export interface ConnectionProbe {
+  ok: boolean;
+  toolCount?: number;
+  toolNames?: string[];
+  protocolVersion?: string;
+  error?: string;
+}
+
+export interface ConnectorSearchData {
+  registry: Array<{
+    name: string;
+    displayName: string;
+    description: string;
+    version?: string;
+    repositoryUrl?: string;
+    suggested?: {
+      transport: string;
+      inputs: Array<{
+        name: string;
+        kind: "header" | "env";
+        description?: string;
+        required: boolean;
+        secret: boolean;
+      }>;
+    };
+  }>;
+  plugins: Array<{
+    name: string;
+    description: string;
+    version?: string;
+    marketplace: string;
+    installed: boolean;
+  }>;
+}
+
+export interface InstalledConnectorInfo {
+  name: string;
+  description: string;
+  version?: string;
+  marketplace: string;
+  connectionIds: string[];
 }
 
 export interface HarnessModelInfo {
@@ -276,6 +368,29 @@ export interface CatamorphicDesktopApi {
   onAgentsChanged: (listener: (data: AgentsData) => void) => () => void;
   onAgentLoginFinished: (
     listener: (result: { agentId: string; ok: boolean }) => void,
+  ) => () => void;
+
+  connectionsList: () => Promise<ConnectionInfo[]>;
+  connectionsCreate: (input: CreateConnectionInput) => Promise<ConnectionInfo>;
+  connectionsUpdate: (
+    id: string,
+    patch: UpdateConnectionInput,
+  ) => Promise<ConnectionInfo | null>;
+  connectionsRemove: (id: string) => Promise<boolean>;
+  connectionsProbe: (id: string) => Promise<ConnectionProbe>;
+  connectorsSearch: (query: string) => Promise<ConnectorSearchData>;
+  connectorsList: () => Promise<InstalledConnectorInfo[]>;
+  connectorsInstallRegistry: (
+    registryName: string,
+    secrets: Record<string, string>,
+  ) => Promise<ConnectionInfo>;
+  connectorsInstallPlugin: (
+    marketplace: string,
+    pluginName: string,
+  ) => Promise<InstalledConnectorInfo>;
+  connectorsRemove: (name: string) => Promise<boolean>;
+  onConnectionsChanged: (
+    listener: (connections: ConnectionInfo[]) => void,
   ) => () => void;
 
   openrouterModels: () => Promise<OpenRouterCatalog>;

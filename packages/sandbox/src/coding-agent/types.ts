@@ -63,6 +63,39 @@ export interface ProviderSession {
  */
 export type AgentEffort = "low" | "medium" | "high";
 
+/**
+ * A harness-neutral MCP server configuration — the shape profile-level
+ * connections resolve to before each harness maps it onto its native
+ * mechanism (Claude Code `mcpServers`, Codex `mcp_servers` config, the
+ * built-in agent's own MCP client). Streamable HTTP is the preferred
+ * transport; "sse" covers legacy servers, "stdio" locally-run ones.
+ */
+export type AgentMcpServerConfig =
+  | {
+      transport: "http" | "sse";
+      url: string;
+      /** Sent verbatim on every request (auth tokens ride here). */
+      headers?: Record<string, string>;
+    }
+  | {
+      transport: "stdio";
+      command: string;
+      args?: string[];
+      env?: Record<string, string>;
+    };
+
+/**
+ * A Claude Code plugin staged on disk for harnesses that can load it
+ * natively. MCP servers a plugin declares are NOT loaded from the plugin —
+ * the host lifts them into {@link AgentMcpServerConfig}s so every harness
+ * (not just Claude Code) gets them.
+ */
+export interface AgentPluginConfig {
+  name: string;
+  /** Absolute path to the installed plugin directory. */
+  path: string;
+}
+
 /** A media file sent along with a user message. */
 export interface AgentAttachment {
   kind: "image" | "document";

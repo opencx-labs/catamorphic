@@ -1,5 +1,5 @@
 {
-  "name": "@catamorphic/ai-sdk",
+  "name": "@catamorphic/mcp",
   "version": "0.0.1",
   "private": true,
   "type": "module",
@@ -20,9 +20,8 @@
   },
   "dependencies": {
     "@catamorphic/sandbox": "workspace:*",
-    "ai": "^7.0.34",
-    "zod": "^4.1.8",
-    "@catamorphic/mcp": "workspace:*"
+    "@modelcontextprotocol/client": "^2.0.0",
+    "@modelcontextprotocol/sdk": "^1.30.0"
   },
   "devDependencies": {
     "@types/node": "^26.1.1"

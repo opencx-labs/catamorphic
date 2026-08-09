@@ -226,6 +226,178 @@ describe("ClaudeCodeAgent", () => {
     });
   });
 
+  it("maps subagent lifecycle and attributes nested activity", async () => {
+    queryMock.mockReturnValueOnce(
+      scriptedQuery([
+        initMessage("sess-1"),
+        assistantMessage([
+          {
+            type: "tool_use",
+            id: "task_1",
+            name: "Agent",
+            input: {
+              subagent_type: "code-reviewer",
+              description: "Review the diff",
+              prompt: "Review it",
+            },
+          },
+        ]),
+        // Nested activity streams with parent_tool_use_id set; subagent
+        // text must NOT leak into this chat's transcript.
+        {
+          type: "assistant",
+          session_id: "sess-1",
+          parent_tool_use_id: "task_1",
+          message: {
+            content: [
+              { type: "text", text: "internal subagent monologue" },
+              {
+                type: "tool_use",
+                id: "toolu_9",
+                name: "Grep",
+                input: { pattern: "TODO" },
+              },
+            ],
+          },
+        },
+        // The closing tool_result for the Task ends the subagent.
+        {
+          type: "user",
+          session_id: "sess-1",
+          parent_tool_use_id: null,
+          message: {
+            content: [
+              { type: "tool_result", tool_use_id: "task_1", content: "done" },
+            ],
+          },
+        },
+        successResult,
+      ]),
+    );
+    const agent = new ClaudeCodeAgent();
+
+    const events = await collect(agent, "Review my changes");
+
+    expect(events).toEqual([
+      {
+        type: "subagent",
+        status: "started",
+        subagentId: "task_1",
+        subagentType: "code-reviewer",
+        content: "Review the diff",
+      },
+      {
+        type: "tool_call",
+        toolName: "Grep",
+        toolInput: { pattern: "TODO" },
+        subagentId: "task_1",
+      },
+      { type: "subagent", status: "ended", subagentId: "task_1" },
+      { type: "done" },
+    ]);
+  });
+
+  it("emits background events from the PostToolUse hooks", async () => {
+    queryMock.mockReturnValueOnce(scriptedQuery([successResult]));
+    const agent = new ClaudeCodeAgent();
+    await collect(agent, "Start the dev server");
+
+    const hooks = lastQueryOptions().hooks?.PostToolUse ?? [];
+    const bashMatcher = hooks.find((entry) => entry.matcher === "Bash");
+    const stopMatcher = hooks.find(
+      (entry) => entry.matcher === "TaskStop|KillShell",
+    );
+    if (!bashMatcher || !stopMatcher) {
+      throw new Error("background hooks were not registered");
+    }
+
+    // Second turn drains what the hooks captured during the stream.
+    queryMock.mockImplementationOnce((params) => {
+      return (async function* () {
+        const context = {
+          signal: new AbortController().signal,
+        };
+        await params.options?.hooks?.PostToolUse?.[0]?.hooks[0]?.(
+          {
+            hook_event_name: "PostToolUse",
+            session_id: "sess-1",
+            transcript_path: "/tmp/t",
+            cwd: "/workspace/project",
+            tool_name: "Bash",
+            tool_use_id: "toolu_bg",
+            tool_input: { command: "npm run dev", run_in_background: true },
+            tool_response: { backgroundTaskId: "bash_1" },
+          } as never,
+          "toolu_bg",
+          context,
+        );
+        await params.options?.hooks?.PostToolUse?.[1]?.hooks[0]?.(
+          {
+            hook_event_name: "PostToolUse",
+            session_id: "sess-1",
+            transcript_path: "/tmp/t",
+            cwd: "/workspace/project",
+            tool_name: "TaskStop",
+            tool_use_id: "toolu_stop",
+            tool_input: { task_id: "bash_1" },
+            tool_response: {},
+          } as never,
+          "toolu_stop",
+          context,
+        );
+        yield successResult;
+      })() as unknown as ReturnType<typeof query>;
+    });
+    const events = await collect(agent, "and stop it");
+
+    expect(events).toEqual([
+      {
+        type: "background",
+        status: "started",
+        backgroundId: "bash_1",
+        content: "npm run dev",
+      },
+      { type: "background", status: "ended", backgroundId: "bash_1" },
+      { type: "done" },
+    ]);
+  });
+
+  it("passes external MCP servers and plugins through to query()", async () => {
+    queryMock.mockReturnValueOnce(scriptedQuery([successResult]));
+    const agent = new ClaudeCodeAgent({
+      mcpServers: {
+        linear: {
+          transport: "http",
+          url: "https://mcp.linear.app/mcp",
+          headers: { Authorization: "Bearer x" },
+        },
+        files: { transport: "stdio", command: "npx", args: ["-y", "fs-mcp"] },
+      },
+      plugins: [{ name: "acme", path: "/plugins/acme" }],
+    });
+
+    await collect(agent, "List my issues");
+
+    const options = lastQueryOptions();
+    expect(options.mcpServers).toEqual({
+      linear: {
+        type: "http",
+        url: "https://mcp.linear.app/mcp",
+        headers: { Authorization: "Bearer x" },
+      },
+      files: { type: "stdio", command: "npx", args: ["-y", "fs-mcp"] },
+    });
+    expect(options.plugins).toEqual([
+      { type: "local", path: "/plugins/acme", skipMcpDiscovery: true },
+    ]);
+    expect(options.allowedTools).toContain("mcp__linear");
+    expect(options.allowedTools).toContain("mcp__files");
+    // Background management and subagent tools ride the allowlist.
+    expect(options.allowedTools).toEqual(
+      expect.arrayContaining(["Agent", "Task", "TaskOutput", "TaskStop"]),
+    );
+  });
+
   it("starts sessions without a kickoff turn and creates the transcript on the first real message", async () => {
     const agent = new ClaudeCodeAgent();
 

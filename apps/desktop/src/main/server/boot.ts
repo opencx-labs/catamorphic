@@ -14,6 +14,7 @@ import cors from "@fastify/cors";
 import Fastify, { type FastifyInstance } from "fastify";
 import { Kysely, PGliteDialect, WithSchemaPlugin } from "kysely";
 import type { WorkspaceBridge } from "../agent-bridge.js";
+import type { ConnectorsService } from "../connectors.js";
 import type { ProfileConfigManager } from "../profile-config.js";
 import type { ProfilesStore } from "../profiles.js";
 import { DesktopAgentRegistry } from "./agent-registry.js";
@@ -41,6 +42,7 @@ export async function startEmbeddedServer(
   profiles: ProfilesStore,
   profileConfig: ProfileConfigManager,
   workspaceBridge?: WorkspaceBridge,
+  connectors?: ConnectorsService,
 ): Promise<EmbeddedServer> {
   fs.mkdirSync(paths.db, { recursive: true });
 
@@ -67,6 +69,7 @@ export async function startEmbeddedServer(
     agentHomesDir: paths.agentHomesDir,
     e2eFake: e2eFakeAgent,
     workspaceBridge,
+    connectors,
   });
   if (e2eFakeAgent) {
     const agents = profileConfig.forDefaultProfile().agents;

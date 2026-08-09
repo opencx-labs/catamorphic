@@ -687,3 +687,71 @@ describe("tiling and chat surfaces", () => {
     );
   });
 });
+
+describe("subagents and background watchers", () => {
+  it("a delegated subagent gets a chip whose popover lists its activity", async () => {
+    await run(`pressKey('n', { metaKey: true }); return true;`);
+    await runWait(`return !!floatingDock();`, { label: "chat open" });
+    await run(`
+      const ta = floatingDock().querySelector('textarea');
+      setReactValue(ta, 'please use a subagent for this');
+      ta.closest('form').requestSubmit();
+      return true;
+    `);
+    await runWait(
+      `return !!floatingDock()?.querySelector(
+         '[data-testid="surface-chip"][data-kind="subagent"]');`,
+      { timeoutMs: 30_000, label: "subagent chip on the rail" },
+    );
+    // Chip survives the finished turn; clicking opens the activity popover.
+    await runWait(
+      `return timelineMessages().some((m) =>
+         m.text.includes('nothing alarming'));`,
+      { timeoutMs: 30_000, label: "turn finished" },
+    );
+    await run(`
+      floatingDock()
+        .querySelector('[data-testid="surface-chip"][data-kind="subagent"] button')
+        .click();
+      return true;
+    `);
+    await runWait(
+      `const pop = floatingDock()?.querySelector(
+         '[data-testid="surface-info-popover"]');
+       return !!pop && pop.textContent.includes('bun test');`,
+      { label: "subagent activity popover" },
+    );
+  });
+
+  it("a background process gets a persistent watcher chip", async () => {
+    await run(`
+      const ta = floatingDock().querySelector('textarea');
+      setReactValue(ta, 'start a watcher for the dev server');
+      ta.closest('form').requestSubmit();
+      return true;
+    `);
+    await runWait(
+      `const chip = floatingDock()?.querySelector(
+         '[data-testid="surface-chip"][data-kind="watcher"]');
+       return !!chip && chip.textContent.includes('npm run dev');`,
+      { timeoutMs: 30_000, label: "watcher chip on the rail" },
+    );
+    // Another turn later, the watcher is still there — background work
+    // persists across turns until something ends it.
+    await run(`
+      const ta = floatingDock().querySelector('textarea');
+      setReactValue(ta, 'thanks');
+      ta.closest('form').requestSubmit();
+      return true;
+    `);
+    await runWait(
+      `return timelineMessages().some((m) => m.text.includes('You said: thanks'));`,
+      { timeoutMs: 30_000, label: "next turn finished" },
+    );
+    await runWait(
+      `return !!floatingDock()?.querySelector(
+         '[data-testid="surface-chip"][data-kind="watcher"]');`,
+      { label: "watcher chip persists across turns" },
+    );
+  });
+});
