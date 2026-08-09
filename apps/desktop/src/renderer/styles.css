@@ -72,6 +72,8 @@
   --color-danger: var(--color-danger);
   --color-info: var(--color-info);
 
+  /* Mirrored in packages/app/src/theme.ts (APP_BASE_CSS) so mounted apps
+     share the same primitives — change both together. */
   --font-sans: "Inter", system-ui, -apple-system, sans-serif;
   --font-mono: "JetBrains Mono", ui-monospace, "SF Mono", monospace;
 

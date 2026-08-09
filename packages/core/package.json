@@ -19,6 +19,7 @@
     "typecheck": "tsgo --project ./tsconfig.json"
   },
   "dependencies": {
+    "@catamorphic/app": "workspace:*",
     "@catamorphic/db": "workspace:*",
     "@catamorphic/git": "workspace:*",
     "@catamorphic/github": "workspace:*",

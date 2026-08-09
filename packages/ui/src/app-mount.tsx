@@ -1,9 +1,12 @@
 "use client";
 
 import {
+  APP_BASE_CSS,
   APP_PROTOCOL_VERSION,
   type AppCallErrorCode,
   type AppContext,
+  type AppHostTheme,
+  appThemeCss,
   type GuestToHostMessage,
   type HostToGuestMessage,
   isGuestMessage,
@@ -45,6 +48,13 @@ export interface AppMountProps {
    * is developing right now.
    */
   channel?: "published" | "dev";
+  /**
+   * The host's current design tokens. Injected into the guest document as
+   * `--color-*` custom properties (before the app's own CSS) and kept live
+   * over postMessage, so apps styled with the shared vocabulary match the
+   * shell and follow theme switches without a reload.
+   */
+  theme?: AppHostTheme;
   className?: string;
 }
 
@@ -83,6 +93,7 @@ export function AppMount({
   context,
   renderState,
   channel,
+  theme,
   className,
 }: AppMountProps) {
   const { apiClient } = useCatamorphic();
@@ -91,6 +102,21 @@ export function AppMount({
   const [height, setHeight] = useState(MIN_HEIGHT_PX);
   const inFlightCalls = useRef(0);
   const inFlightPolls = useRef(0);
+  // The srcdoc is built once from the mount-time theme (changing it would
+  // reload the guest and lose its state); later switches arrive as messages.
+  const initialTheme = useRef(theme).current;
+
+  useEffect(() => {
+    if (!theme || theme === initialTheme) return;
+    frameRef.current?.contentWindow?.postMessage(
+      {
+        catamorphicApp: APP_PROTOCOL_VERSION,
+        kind: "theme",
+        theme,
+      } satisfies HostToGuestMessage,
+      "*",
+    );
+  }, [theme, initialTheme]);
 
   useEffect(() => {
     let cancelled = false;
@@ -322,7 +348,7 @@ export function AppMount({
       className={className}
       title={`app-${appName}`}
       sandbox="allow-scripts allow-forms allow-downloads"
-      srcDoc={buildGuestDocument(view)}
+      srcDoc={buildGuestDocument(view, initialTheme)}
       onLoad={handleFrameLoad}
       style={{ width: "100%", border: "none", height: `${height}px` }}
     />
@@ -330,11 +356,15 @@ export function AppMount({
 }
 
 /**
- * The guest document: default-deny CSP, the version's CSS, one root node,
- * and the bundle. Everything the app needs is compiled in; the only script
- * source is the inline bundle itself.
+ * The guest document: default-deny CSP, the host theme + shared base layer,
+ * the version's CSS, one root node, a small host runtime, and the bundle.
+ * Everything the app needs is compiled in; the only script sources are the
+ * inline runtime and the bundle itself.
  */
-function buildGuestDocument(view: ViewStateReady): string {
+function buildGuestDocument(
+  view: ViewStateReady,
+  theme?: AppHostTheme,
+): string {
   // Default-deny network; the tenant's app policy may open specific https
   // origins (`tenant_app_policies.allowed_network_origins`) — validated as
   // plain https origins at write time, so they are CSP-safe verbatim.
@@ -349,27 +379,39 @@ function buildGuestDocument(view: ViewStateReady): string {
     "img-src data: blob:",
     connectSrc,
   ].join("; ");
+  // The host runtime, one inline script ahead of the bundle:
+  // - `process` shim: Vite lib-mode builds keep `process.env.NODE_ENV`
+  //   verbatim (lib mode never injects the define) and this iframe has no
+  //   Node globals, so an unshimmed bundle would throw before mounting.
+  // - auto-height: most apps never call reportHeight(); observe the
+  //   document and post the same resize message the client library would.
+  //   scrollHeight is max(content, viewport), so it ratchets up to the
+  //   content height and settles; the host clamps to [MIN, MAX] either way.
+  // - live theme: apply `theme` messages as `--color-*` custom properties,
+  //   the same vars the initial <style> below seeds.
+  const runtime =
+    'var process={env:{NODE_ENV:"production"}};' +
+    "addEventListener('load',()=>{const post=()=>parent.postMessage(" +
+    `{catamorphicApp:${APP_PROTOCOL_VERSION},kind:'resize',height:document.documentElement.scrollHeight},'*');` +
+    "post();const o=new ResizeObserver(post);o.observe(document.documentElement);o.observe(document.body)});" +
+    "addEventListener('message',(e)=>{const d=e.data;" +
+    `if(!d||d.catamorphicApp!==${APP_PROTOCOL_VERSION}||d.kind!=='theme')return;` +
+    "const r=document.documentElement;" +
+    "for(const[k,v]of Object.entries(d.theme.colors))r.style.setProperty('--color-'+k,String(v));" +
+    "r.style.colorScheme=d.theme.appearance});";
   return [
     "<!doctype html>",
     '<html><head><meta charset="utf-8">',
     `<meta http-equiv="Content-Security-Policy" content="${csp}">`,
+    // Theme + shared base first, the app's own CSS last so it can override.
+    ...(theme
+      ? [`<style>${escapeStyleContent(appThemeCss(theme))}</style>`]
+      : []),
+    `<style>${APP_BASE_CSS}</style>`,
     `<style>${escapeStyleContent(view.css)}</style>`,
     "</head><body>",
     '<div id="root"></div>',
-    // Vite lib-mode builds keep `process.env.NODE_ENV` verbatim (lib mode
-    // never injects the define), and this iframe has no Node globals — so a
-    // bundle built without an explicit define would throw "process is not
-    // defined" before mounting anything. Shim it so React and friends take
-    // their production paths instead of crashing the guest.
-    '<script>var process={env:{NODE_ENV:"production"}}</script>',
-    // Auto-height: most apps never call reportHeight(), leaving the iframe
-    // at MIN_HEIGHT with the content cut off. Observe the document and post
-    // the same resize message the client library would. scrollHeight is
-    // max(content, viewport), so the loop ratchets up to the content height
-    // and settles; the host clamps to [MIN, MAX] either way.
-    "<script>addEventListener('load',()=>{const post=()=>parent.postMessage(" +
-      `{catamorphicApp:${APP_PROTOCOL_VERSION},kind:'resize',height:document.documentElement.scrollHeight},'*');` +
-      "post();const o=new ResizeObserver(post);o.observe(document.documentElement);o.observe(document.body)})</script>",
+    `<script>${runtime}</script>`,
     `<script>${escapeScriptContent(view.code)}</script>`,
     "</body></html>",
   ].join("");

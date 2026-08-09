@@ -5,6 +5,8 @@
  * workflow set, so this protocol is a transport, not a trust boundary.
  */
 
+import type { AppHostTheme } from "./theme.js";
+
 export const APP_PROTOCOL_VERSION = 1;
 
 export type GuestToHostMessage =
@@ -48,6 +50,11 @@ export type HostToGuestMessage =
       catamorphicApp: typeof APP_PROTOCOL_VERSION;
       kind: "context";
       context: AppContext;
+    }
+  | {
+      catamorphicApp: typeof APP_PROTOCOL_VERSION;
+      kind: "theme";
+      theme: AppHostTheme;
     };
 
 export type AppCallErrorCode =

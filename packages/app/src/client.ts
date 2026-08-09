@@ -81,6 +81,9 @@ class GuestBridge {
         }
         return;
       }
+      // Theme pushes are consumed by the host-injected runtime in the guest
+      // document; the client has nothing to do with them.
+      if (data.kind === "theme") return;
       const pending = this.pending.get(data.callId);
       if (!pending) return;
       this.pending.delete(data.callId);

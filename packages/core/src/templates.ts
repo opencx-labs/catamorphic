@@ -1,3 +1,4 @@
+import { APP_THEME_COLOR_TOKENS } from "@catamorphic/app";
 import { WORKFLOW_PACKAGE_VERSION } from "@catamorphic/workflow";
 
 export interface ProjectTemplate {
@@ -409,6 +410,35 @@ workflow before acting on input — check ids, clamp numbers, bound arrays.
 Never pass secrets to app code, return one from an app-callable workflow, or
 include one in an output. An app that needs a third-party API calls a
 workflow that holds the credential.
+
+## Design system
+
+Apps render inside the Catamorphic shell and must look and feel like part
+of it. The host injects the user's active theme into every app document
+before the app's own CSS, and updates it live on theme switches — style
+with these variables and both light and dark come free:
+
+- Colors: ${APP_THEME_COLOR_TOKENS.map((token) => `\`--color-${token}\``).join(", ")}.
+- \`--font-sans\` (UI) and \`--font-mono\` (code, numbers that align);
+  \`--radius-sm\` / \`--radius-md\` / \`--radius-lg\`; the one easing
+  \`--ease-standard\`.
+- \`body\` already carries the shell background, text color, and font —
+  do not restyle them.
+
+Rules that keep an app native-feeling:
+
+- **Never hardcode a palette.** Every color goes through a \`--color-*\`
+  var. Never import external fonts or stylesheets — the CSP blocks them.
+- Surfaces are \`var(--color-bg-raised)\` with a 1px
+  \`var(--color-border)\` border and \`var(--radius-lg)\`; inputs and
+  wells use \`--color-bg-inset\`. Secondary text is \`--color-fg-muted\`,
+  hints \`--color-fg-faint\`. The primary action is \`--color-accent\`
+  with \`--color-accent-fg\` text — one per view; everything else is a
+  bordered neutral button.
+- Motion: transitions and animations use \`var(--ease-standard)\` with
+  100–300ms durations (~150ms for hover/color feedback, ~200ms for
+  structural moves). Animate on state changes only; nothing loops except
+  indeterminate progress.
 
 ## Creating an app
 

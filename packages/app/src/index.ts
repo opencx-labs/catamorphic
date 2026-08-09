@@ -25,3 +25,10 @@ export {
   isHostMessage,
   type RunSnapshot,
 } from "./protocol.js";
+export {
+  APP_BASE_CSS,
+  APP_THEME_COLOR_TOKENS,
+  type AppHostTheme,
+  type AppThemeColorToken,
+  appThemeCss,
+} from "./theme.js";

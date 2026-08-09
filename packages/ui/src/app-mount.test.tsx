@@ -91,6 +91,38 @@ async function mountReadyFrame(apiClient: ReturnType<typeof makeApiClient>) {
 }
 
 describe("AppMount", () => {
+  it("seeds the guest document with the host theme and base layer", async () => {
+    const apiClient = makeApiClient();
+    const { container } = render(
+      <CatamorphicProvider apiClient={apiClient as never}>
+        <AppMount
+          projectId={PROJECT_ID}
+          appName="ops-dashboard"
+          context={{ tenantId: "t-1", user: { id: "viewer-1" } }}
+          theme={{
+            appearance: "light",
+            colors: { bg: "#f7f7f5", accent: "#d63c0c" },
+          }}
+        />
+      </CatamorphicProvider>,
+    );
+    await waitFor(() => {
+      if (!container.querySelector("iframe")) throw new Error("no iframe");
+    });
+    const srcdoc =
+      container.querySelector("iframe")?.getAttribute("srcdoc") ?? "";
+    // Theme vars land before the app's own CSS, so the app can override.
+    expect(srcdoc).toContain("--color-bg:#f7f7f5");
+    expect(srcdoc).toContain("--color-accent:#d63c0c");
+    expect(srcdoc).toContain("color-scheme:light");
+    // The shared base layer: shell font stack and the one easing.
+    expect(srcdoc).toContain("--font-sans");
+    expect(srcdoc).toContain("--ease-standard:cubic-bezier(0.2,0,0,1)");
+    expect(srcdoc.indexOf("--color-bg:#f7f7f5")).toBeLessThan(
+      srcdoc.indexOf("<script>"),
+    );
+  });
+
   it("renders non-ready view states as copy, not errors", async () => {
     const apiClient = makeApiClient({ viewState: { state: "not_published" } });
     mount(apiClient);
@@ -240,10 +272,11 @@ describe("AppMount", () => {
     });
     const srcdoc =
       container.querySelector("iframe")?.getAttribute("srcdoc") ?? "";
-    // Only the real closing tags survive (the process shim, the auto-height
-    // reporter, and the bundle script): the bundle's own copies are escaped.
-    expect(srcdoc.match(/<\/script>/g)).toHaveLength(3);
-    expect(srcdoc.match(/<\/style>/g)).toHaveLength(1);
+    // Only the real closing tags survive (the host runtime script and the
+    // bundle script; the base-layer style and the app style): the bundle's
+    // own copies are escaped.
+    expect(srcdoc.match(/<\/script>/g)).toHaveLength(2);
+    expect(srcdoc.match(/<\/style>/g)).toHaveLength(2);
     expect(srcdoc).toContain("<\\/script>");
     // The injected markup stays inside the script text, never parsed as HTML.
     expect(srcdoc).toContain("<\\/script><img src=x onerror=alert(1)>");

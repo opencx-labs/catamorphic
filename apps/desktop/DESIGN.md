@@ -1487,7 +1487,19 @@ Patterned on what best-in-class palettes converged on (Chrome omnibox
   library would (`documentElement.scrollHeight`, host-clamped to
   [240, 2000]); scrollHeight is max(content, viewport), so the loop
   ratchets to the content height and settles.
-- **Palette agent commands meet the words people type.** "switch" joined
+- **Apps inherit the shell's design system.** The token vocabulary lives
+  once in `@catamorphic/app` (`theme.ts`: color token list, `appThemeCss`,
+  the shared base layer with font stacks / radii / the one easing);
+  `AppMount` injects the host's resolved theme as `--color-*` vars before
+  the app's own CSS and pushes changes live over a `theme` message (the
+  srcdoc is never rebuilt — guests keep their state across theme
+  switches). The desktop passes its profile theme from `useTheme`, and the
+  building-apps skill derives its token list from the same constant and
+  tells agents the rules: style through the vars, never hardcode a
+  palette, surfaces = bg-raised + border + radius-lg, motion =
+  ease-standard at 100–300ms. Base body styles are var-driven with dark
+  fallbacks, so an unthemed host still renders sensibly; an app's own CSS
+  loads last and may override anything.
   `default-agent`'s keywords (the scorer needs the query as an in-order
   subsequence, and nothing switch-y existed without a focused chat), and
   with a chat focused the chat-scoped trio (switch-agent, switch-model,

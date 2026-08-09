@@ -150,6 +150,7 @@
       "name": "@catamorphic/core",
       "version": "0.0.1",
       "dependencies": {
+        "@catamorphic/app": "workspace:*",
         "@catamorphic/db": "workspace:*",
         "@catamorphic/git": "workspace:*",
         "@catamorphic/github": "workspace:*",
