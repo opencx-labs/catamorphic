@@ -47,12 +47,15 @@ export function AppScreen({
           user: { id: DESKTOP_USER_ID },
         }}
         className="mx-auto w-full max-w-5xl overflow-hidden rounded-lg border border-border bg-bg-raised"
+        // The desktop is the owner's surface: show the newest ready build
+        // (the version being developed), not just the published one.
+        channel="dev"
         renderState={(state) => (
           <div className="grid h-60 place-items-center text-sm text-fg-muted">
             {state === "loading"
               ? "Loading app…"
               : state === "not_published"
-                ? "This app has no published version yet. Ask the assistant to publish it."
+                ? "This app has no successful build yet. Ask the assistant to build it."
                 : "App not found."}
           </div>
         )}

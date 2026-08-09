@@ -137,6 +137,9 @@ export function registerAppRoutes(app: FastifyInstance, ctx: RouteContext) {
     url: "/projects/:projectId/apps/:appName/view-state",
     schema: {
       params: ProjectAppParamsSchema,
+      querystring: z.object({
+        channel: z.enum(["published", "dev"]).optional(),
+      }),
       response: { 200: AppViewStateSchema, 503: ErrorSchema },
     },
     handler: async (request, reply) => {
@@ -146,6 +149,7 @@ export function registerAppRoutes(app: FastifyInstance, ctx: RouteContext) {
         identity: resolveIdentity(request),
         projectId: request.params.projectId,
         appName: request.params.appName,
+        channel: request.query.channel,
       });
       return reply.send(state);
     },

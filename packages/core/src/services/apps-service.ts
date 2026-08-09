@@ -280,6 +280,15 @@ export class AppsService {
         span.setAttribute("catamorphic.app.version_id", version.id);
 
         try {
+          // Preview builds compile what the caller has right now — including
+          // an agent's in-flight sandbox work that hasn't hit the end-of-turn
+          // sync yet — so pull sandbox changes into the dev tree first.
+          if (args.kind === "preview") {
+            await this.deps.devSandboxes.syncBack({
+              identity: args.identity,
+              projectId: args.projectId,
+            });
+          }
           // One snapshot feeds both the authorization parse and the compile
           // upload, so the frozen set and the bundle come from the same tree
           // — for previews too, where the dev repo can move mid-build.
@@ -352,6 +361,38 @@ export class AppsService {
         }
       },
     );
+  }
+
+  /**
+   * Sync any in-flight sandbox work into the dev tree and commit the whole
+   * tree, returning the commit sha for a published build to pin. Returns the
+   * current HEAD when the tree is already clean.
+   */
+  async commitDevTree(args: {
+    identity: Identity;
+    projectId: string;
+    message: string;
+  }): Promise<string> {
+    await this.requireProject(args.identity, args.projectId);
+    await this.deps.devSandboxes.syncBack({
+      identity: args.identity,
+      projectId: args.projectId,
+    });
+    const repo = await this.deps.projectManager.openDev(
+      args.identity.tenantId,
+      args.projectId,
+      args.identity.externalUserId,
+    );
+    try {
+      const status = await repo.status();
+      if (!status.dirty) return await repo.resolveRef("HEAD");
+      return await repo.commit(args.message, {
+        name: "catamorphic",
+        email: "agent@catamorphic.dev",
+      });
+    } finally {
+      await repo.dispose();
+    }
   }
 
   /** Makes a ready published version the live one, atomically replacing any predecessor. */
@@ -477,6 +518,12 @@ export class AppsService {
     identity: Identity;
     projectId: string;
     appName: string;
+    /**
+     * "published" (default) serves the active published version — what
+     * external viewers see. "dev" serves the newest ready build of any kind,
+     * so the owner can open the version being developed right now.
+     */
+    channel?: "published" | "dev";
   }): Promise<
     | { state: "not_found" }
     | { state: "not_published" }
@@ -503,13 +550,16 @@ export class AppsService {
       .executeTakeFirst();
     if (!app) return { state: "not_found" };
 
-    const version = await this.db
+    let versionQuery = this.db
       .selectFrom("app_versions")
       .where("app_id", "=", app.id)
-      .where("is_active", "=", true)
       .where("status", "=", "ready")
-      .select(["id", "bundle_key", "css_key", "allowed_workflows"])
-      .executeTakeFirst();
+      .select(["id", "bundle_key", "css_key", "allowed_workflows"]);
+    versionQuery =
+      args.channel === "dev"
+        ? versionQuery.orderBy("created_at", "desc").limit(1)
+        : versionQuery.where("is_active", "=", true);
+    const version = await versionQuery.executeTakeFirst();
     if (!version?.bundle_key || !version.css_key) {
       return { state: "not_published" };
     }

@@ -19,6 +19,7 @@ import {
   MessageSquarePlus,
   Minimize2,
   PanelLeft,
+  Plug,
   Search,
   Settings as SettingsIcon,
   SquareTerminal,
@@ -102,6 +103,7 @@ const ACTION_ICONS: Partial<Record<ActionId, LucideIcon>> = {
   "switch-agent": Bot,
   "change-effort": Gauge,
   "switch-model": Cpu,
+  "manage-connectors": Plug,
 };
 
 /**
@@ -610,37 +612,50 @@ export function CommandPalette({
   const actionHandlersRef = useRef(actionHandlers);
   actionHandlersRef.current = actionHandlers;
   const hasFocusedChat = focusedChat !== null;
-  const actionItems = useMemo<PaletteItem[]>(
-    () =>
-      BUILTIN_ACTIONS.filter(
-        (action: ActionDefinition) =>
-          !action.hiddenInPalette &&
-          // Session-scoped: only offered while a chat is focused.
-          (action.id !== "switch-agent" || hasFocusedChat),
-      ).map((action) => {
-        const targetPicker = PICKER_ACTIONS[action.id];
-        return {
-          id: `action:${action.id}`,
-          icon: ACTION_ICONS[action.id] ?? Zap,
-          label: action.label,
-          keywords: [...action.keywords],
-          shortcut:
-            action.id in keybindings
-              ? formatBinding(keybindings[action.id as KeybindingAction])
-              : undefined,
-          kind: "action" as const,
-          // Picker commands swap palette state in place (like mode rows);
-          // everything else runs the shared handler.
-          run: targetPicker
-            ? () => enterPicker(targetPicker)
-            : (mode) =>
-                actionHandlersRef.current[action.id](
-                  mode === "side" ? "side" : undefined,
-                ),
-        };
-      }),
-    [keybindings, hasFocusedChat, enterPicker],
-  );
+  const actionItems = useMemo<PaletteItem[]>(() => {
+    const available = BUILTIN_ACTIONS.filter(
+      (action: ActionDefinition) =>
+        !action.hiddenInPalette &&
+        // Session-scoped: only offered while a chat is focused.
+        (action.id !== "switch-agent" || hasFocusedChat),
+    );
+    // With a chat focused, the commands that act on THAT chat lead the
+    // list — they're what "change the agent/model/effort" almost always
+    // means in the moment, and ties in fuzzy scores resolve by this order.
+    const chatScoped = new Set([
+      "switch-agent",
+      "switch-model",
+      "change-effort",
+    ]);
+    const ordered = hasFocusedChat
+      ? [
+          ...available.filter((action) => chatScoped.has(action.id)),
+          ...available.filter((action) => !chatScoped.has(action.id)),
+        ]
+      : available;
+    return ordered.map((action) => {
+      const targetPicker = PICKER_ACTIONS[action.id];
+      return {
+        id: `action:${action.id}`,
+        icon: ACTION_ICONS[action.id] ?? Zap,
+        label: action.label,
+        keywords: [...action.keywords],
+        shortcut:
+          action.id in keybindings
+            ? formatBinding(keybindings[action.id as KeybindingAction])
+            : undefined,
+        kind: "action" as const,
+        // Picker commands swap palette state in place (like mode rows);
+        // everything else runs the shared handler.
+        run: targetPicker
+          ? () => enterPicker(targetPicker)
+          : (mode) =>
+              actionHandlersRef.current[action.id](
+                mode === "side" ? "side" : undefined,
+              ),
+      };
+    });
+  }, [keybindings, hasFocusedChat, enterPicker]);
 
   const projectItems = useMemo<PaletteItem[]>(
     () =>

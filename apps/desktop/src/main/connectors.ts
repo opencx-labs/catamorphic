@@ -52,6 +52,12 @@ interface ConnectorsFile {
 export interface ConnectorSearchResult {
   registry: Array<
     Omit<McpRegistryEntry, "suggested"> & {
+      /**
+       * Published under a DNS-verified vendor namespace (com.slack/…) rather
+       * than an individual GitHub account (io.github.…) — the registry's
+       * closest signal for "made by the vendor itself".
+       */
+      official: boolean;
       suggested?: {
         transport: string;
         /** Names of secrets/values the user must supply before install. */
@@ -71,6 +77,10 @@ export interface ConnectorSearchResult {
     version?: string;
     marketplace: string;
     installed: boolean;
+    /** From an Anthropic-maintained marketplace. */
+    official: boolean;
+    /** Where to read about the plugin (its repository / subdirectory). */
+    pageUrl?: string;
   }>;
 }
 
@@ -149,6 +159,7 @@ export class ConnectorsService {
     return {
       registry: registry.map((entry) => ({
         ...entry,
+        official: registryOfficial(entry.name),
         suggested: entry.suggested
           ? {
               transport: entry.suggested.config.transport,
@@ -162,6 +173,8 @@ export class ConnectorsService {
         version: entry.version,
         marketplace: entry.marketplace,
         installed: installed.has(entry.name),
+        official: entry.marketplace.startsWith("anthropics/"),
+        pageUrl: pluginPageUrl(entry),
       })),
     };
   }
@@ -330,4 +343,24 @@ function connectionToConfig(
 
 function sanitizeDirName(name: string): string {
   return name.replace(/[^A-Za-z0-9._-]+/g, "-");
+}
+
+/**
+ * Registry names are reverse-DNS namespaced ("com.slack/foo",
+ * "io.github.owner/bar"). A non-GitHub namespace required DNS verification,
+ * so it is the vendor's own publication.
+ */
+function registryOfficial(name: string): boolean {
+  const namespace = name.split("/")[0] ?? "";
+  return namespace.length > 0 && !namespace.startsWith("io.github.");
+}
+
+/** Human-readable home for a plugin: its repo (or subdirectory) on GitHub. */
+function pluginPageUrl(entry: MarketplacePluginEntry): string | undefined {
+  if (entry.source.kind === "url") return entry.source.url;
+  const base = entry.source.url.replace(/\.git$/, "");
+  if (!/^https?:\/\//.test(base)) return undefined;
+  return entry.source.subdir && base.startsWith("https://github.com/")
+    ? `${base}/tree/HEAD/${entry.source.subdir}`
+    : base;
 }

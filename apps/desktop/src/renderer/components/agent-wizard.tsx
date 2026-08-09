@@ -58,8 +58,8 @@ const OPTIONS: Array<{
   },
   {
     id: "free",
-    title: "Continue with free models",
-    description: "Free OpenRouter models. No API key needed.",
+    title: "OpenRouter",
+    description: "Built-in agent, works with free models. No API key needed.",
   },
 ];
 

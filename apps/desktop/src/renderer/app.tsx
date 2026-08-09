@@ -43,6 +43,7 @@ import {
 } from "./components/chat-dock.js";
 import { ChatGlyph } from "./components/chat-icon.js";
 import { CommandPalette } from "./components/command-palette.js";
+import { ConnectorsModal } from "./components/connectors-modal.js";
 import { DeleteProjectModal } from "./components/delete-project-modal.js";
 import {
   ElicitationModal,
@@ -317,23 +318,48 @@ const truncateLabel = (value: string): string =>
  * user takes control. A hairline accent ring marks the surface as
  * agent-held; the pill names the owner and offers the two moves that
  * make sense — jump to the owning chat, or take the keys.
+ *
+ * Stays mounted after `active` flips false to play fade-out (the mirror
+ * of its fade-in enter) before disappearing, per the motion contract.
  */
 function AgentControlOverlay({
   kind,
+  active,
   onTakeOver,
   onGoToChat,
 }: {
   kind: "terminal" | "page";
+  active: boolean;
   onTakeOver: () => void;
   /** Reveal the chat driving this surface (absent when unattributed). */
   onGoToChat?: () => void;
 }) {
+  const [phase, setPhase] = useState<"in" | "out" | "gone">(
+    active ? "in" : "gone",
+  );
+  useEffect(() => {
+    setPhase((prev) => (active ? "in" : prev === "in" ? "out" : prev));
+  }, [active]);
+  if (phase === "gone") return null;
+  const exiting = phase === "out";
+  const anim = exiting ? "animate-fade-out" : "animate-fade-in";
   return (
     // Pill at the top: the floating chat dock owns the bottom center.
-    <div className="absolute inset-0 z-20 flex items-start justify-center pt-4">
-      <div className="pointer-events-none absolute inset-0 animate-fade-in ring-2 ring-inset ring-accent/40" />
-      <div className="pointer-events-auto absolute inset-0" aria-hidden />
-      <div className="pointer-events-auto z-10 flex animate-fade-in items-center gap-2.5 rounded-full border border-border bg-bg-raised/95 py-1.5 pl-3 pr-1.5 text-xs text-fg shadow-2xl backdrop-blur-xl">
+    <div
+      className={`absolute inset-0 z-20 flex items-start justify-center pt-4 ${exiting ? "pointer-events-none" : ""}`}
+      onAnimationEnd={(event) => {
+        if (event.animationName === "fade-out") setPhase("gone");
+      }}
+    >
+      <div
+        className={`pointer-events-none absolute inset-0 ${anim} ring-2 ring-inset ring-accent/40`}
+      />
+      {!exiting && (
+        <div className="pointer-events-auto absolute inset-0" aria-hidden />
+      )}
+      <div
+        className={`${exiting ? "" : "pointer-events-auto"} z-10 flex ${anim} items-center gap-2.5 rounded-full border border-border bg-bg-raised/95 py-1.5 pl-3 pr-1.5 text-xs text-fg shadow-2xl backdrop-blur-xl`}
+      >
         <span className="relative flex size-2">
           <span className="absolute inline-flex h-full w-full animate-pulse rounded-full bg-accent opacity-75" />
           <span className="relative inline-flex size-2 rounded-full bg-accent" />
@@ -445,6 +471,7 @@ export function App() {
   // auto-opened tab on agent-less profiles, the modal that gates starting
   // a chat with no agents, Settings' "Add agent", and the palette command.
   const [wizardModalOpen, setWizardModalOpen] = useState(false);
+  const [connectorsModalOpen, setConnectorsModalOpen] = useState(false);
   // Profiles whose auto-opened setup tab the user closed this session —
   // closing it skips setup (the modal still gates chat attempts).
   const setupDismissedRef = useRef(new Set<string>());
@@ -2009,6 +2036,7 @@ export function App() {
     "switch-agent": () => openPalettePicker("switch-agent"),
     "change-effort": () => openPalettePicker("effort"),
     "switch-model": () => openPalettePicker("model"),
+    "manage-connectors": () => setConnectorsModalOpen(true),
   };
   const actionHandlersRef = useRef(actionHandlers);
   actionHandlersRef.current = actionHandlers;
@@ -2912,6 +2940,9 @@ export function App() {
                         <SettingsScreen
                           onClose={() => closeTab(tabKey(tab))}
                           onAddAgent={() => setWizardModalOpen(true)}
+                          onManageConnectors={() =>
+                            setConnectorsModalOpen(true)
+                          }
                         />
                       ) : tab.kind === "palette" && paletteProps ? (
                         <CommandPalette
@@ -2977,19 +3008,18 @@ export function App() {
                           : undefined
                       }
                     />
-                    {browser.agentControlled && (
-                      <AgentControlOverlay
-                        kind="page"
-                        onTakeOver={() =>
-                          takeOverSurface(browserTabKey(browser.localId))
-                        }
-                        onGoToChat={
-                          browser.chatLocalId
-                            ? () => revealChat(browser.chatLocalId as string)
-                            : undefined
-                        }
-                      />
-                    )}
+                    <AgentControlOverlay
+                      kind="page"
+                      active={Boolean(browser.agentControlled)}
+                      onTakeOver={() =>
+                        takeOverSurface(browserTabKey(browser.localId))
+                      }
+                      onGoToChat={
+                        browser.chatLocalId
+                          ? () => revealChat(browser.chatLocalId as string)
+                          : undefined
+                      }
+                    />
                   </div>
                 ))}
 
@@ -3049,19 +3079,18 @@ export function App() {
                         }
                       }}
                     />
-                    {terminal.agentControlled && (
-                      <AgentControlOverlay
-                        kind="terminal"
-                        onTakeOver={() =>
-                          takeOverSurface(terminalTabKey(terminal.localId))
-                        }
-                        onGoToChat={
-                          terminal.chatLocalId
-                            ? () => revealChat(terminal.chatLocalId as string)
-                            : undefined
-                        }
-                      />
-                    )}
+                    <AgentControlOverlay
+                      kind="terminal"
+                      active={Boolean(terminal.agentControlled)}
+                      onTakeOver={() =>
+                        takeOverSurface(terminalTabKey(terminal.localId))
+                      }
+                      onGoToChat={
+                        terminal.chatLocalId
+                          ? () => revealChat(terminal.chatLocalId as string)
+                          : undefined
+                      }
+                    />
                   </div>
                 ))}
 
@@ -3307,6 +3336,13 @@ export function App() {
         open={wizardModalOpen}
         onClose={() => setWizardModalOpen(false)}
         onDone={() => setWizardModalOpen(false)}
+      />
+
+      {/* Connectors manager: reachable from the palette and Settings. */}
+      <ConnectorsModal
+        open={connectorsModalOpen}
+        onClose={() => setConnectorsModalOpen(false)}
+        onOpenUrl={(url) => openBrowserTab(url)}
       />
 
       {/* Boot veil: covers the workspace until its first real paint is

@@ -146,7 +146,7 @@ the animation is wrong, not the test.
 | `dock-in` (chat dock open) | 250ms | dock collapse transition (250ms) |
 | `bubble-in` / `bubble-out` | 200ms | each other |
 | `tab-in` / `tab-out` | 200ms / 180ms | each other (exit snappier) |
-| `fade-in` (modal section swap) | 200ms | height tween |
+| `fade-in` / `fade-out` (modal section swap; agent-control overlay) | 200ms | each other (exact mirror; `fade-out` holds its final frame for removal on animationend) |
 | `profile-veil-in` / `profile-veil-out` (in-place profile switch) | 200ms | each other (exact mirror) |
 | `question-in` (ask_user panel) | 260ms | — |
 | `pane-in-left` / `pane-in-right` (keyboard tab cycling) | 200ms | — (content-changed signal on a persistent wrapper; no exit to pair) |
@@ -1434,3 +1434,46 @@ Patterned on what best-in-class palettes converged on (Chrome omnibox
   unimplemented — the 2026-07-28 spec deprecated them and says new hosts
   should not add them. Tasks, CIMD/enterprise auth, `subscriptions/listen`,
   and MCP prompts remain future work.
+
+### 2026-08-09 — App builds see the agent's work; app tabs show the dev channel; connectors get a front door
+- **Builds compile what the agent actually has.** `build_app` previously
+  snapshotted the host dev tree, but a sandboxed agent's edits only land
+  there at end-of-turn sync — so mid-turn builds kept failing on files the
+  agent had just written ("app-api.ts is missing", forever). The sync-back
+  is now a shared primitive (`sandbox-sync.ts`, exposed as
+  `DevSandboxService.syncBack`): preview builds pull in-flight sandbox
+  changes into the dev tree first, and publish builds go through
+  `AppsService.commitDevTree` (sync → commit → pinned sha) — which also
+  fixes desktop publishing outright, since the wiring never passed a
+  `commitSha` and every `publish: true` build died on the guard.
+- **The desktop's app tab is the owner's view: it shows the dev channel.**
+  `viewState` gained `channel: "published" | "dev"` — "dev" serves the
+  newest ready build of any kind. External surfaces (the apps MCP server,
+  default mounts) still see only the active published version; the audience
+  gate lets a builder run their own not-yet-active version because they
+  already hold full identity and the headers only narrow. Clicking an app
+  chip now opens the version being developed instead of claiming "no
+  published version" while the agent iterates on previews.
+- **Connectors have one front door.** A `ConnectorsModal` (palette:
+  "Manage connectors…", keyworded `mcp`; Settings: a doorway button)
+  replaces the inline Settings section: installed connections + plugin
+  connectors, and a debounced as-you-type search over both ecosystems.
+  Results rank official publications first — DNS-verified registry
+  namespaces (not `io.github.*`) and Anthropic marketplaces — because the
+  registry API exposes no install counts to sort by; each row links out to
+  its repository page in a browser tab.
+- **Composer media is now a button, not a secret.** Attachments were
+  paste/drag-only, advertised solely by placeholder text; a paperclip in
+  the composer (shown whenever the agent accepts media) opens a file
+  picker filtered to the accepted kinds.
+- **The agent-control pill exits like it enters.** `fade-out` mirrors
+  `fade-in` (200ms, standard easing, holds the last frame); the overlay
+  stays mounted through the tween and unmounts on `animationend`, per the
+  motion contract's animate-before-unmount rule — both when the user takes
+  control and when the agent releases it.
+- **Palette agent commands meet the words people type.** "switch" joined
+  `default-agent`'s keywords (the scorer needs the query as an in-order
+  subsequence, and nothing switch-y existed without a focused chat), and
+  with a chat focused the chat-scoped trio (switch-agent, switch-model,
+  change-effort) leads the action list — score ties resolve by list order,
+  so the per-chat command wins over the profile default.

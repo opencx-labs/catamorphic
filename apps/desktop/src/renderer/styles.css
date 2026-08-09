@@ -295,6 +295,22 @@ kbd {
   animation: fade-in 200ms cubic-bezier(0.2, 0, 0, 1);
 }
 
+/* Mirror of fade-in for surfaces that must tween out before unmounting
+   (e.g. the agent-control overlay). Holds the final frame so the element
+   can be removed on animationend without a flash. */
+@keyframes fade-out {
+  from {
+    opacity: 1;
+  }
+  to {
+    opacity: 0;
+  }
+}
+
+.animate-fade-out {
+  animation: fade-out 200ms cubic-bezier(0.2, 0, 0, 1) forwards;
+}
+
 /* In-place profile switch: a full-window veil fades up over the old
    profile, the workspace swaps underneath, and the veil fades away. The
    pair is an exact mirror; profile-veil-out holds its final frame so the

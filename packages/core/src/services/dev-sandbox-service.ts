@@ -12,6 +12,7 @@ import {
 } from "@catamorphic/sandbox";
 import type { Identity } from "../identity.js";
 import type { DbSandboxStore } from "./db-sandbox-store.js";
+import { type SyncedFileChange, syncSandboxChanges } from "./sandbox-sync.js";
 
 export interface PreparedDevSandbox {
   id: string;
@@ -98,6 +99,38 @@ export class DevSandboxService {
 
   get projectDirectory(): string {
     return `${this.deps.provider.workspaceRoot}/project`;
+  }
+
+  /**
+   * Mirror the caller's dev-sandbox changes into the dev working copy right
+   * now, without waiting for the current agent turn to finish. No-op when
+   * the caller has no dev sandbox (host-execution agents edit the dev tree
+   * directly). Used by builds that must see the agent's in-flight work.
+   */
+  async syncBack(opts: {
+    identity: Identity;
+    projectId: string;
+  }): Promise<SyncedFileChange[]> {
+    const existing = await this.deps.store.findSandbox({
+      projectId: opts.projectId,
+      sandboxType: "dev",
+      userId: opts.identity.externalUserId,
+    });
+    if (!existing) return [];
+    const status = await this.deps.provider.getSandboxStatus(
+      existing.providerId,
+    );
+    if (status === "stopped" || status === "archived") {
+      await this.deps.provider.startSandbox(existing.providerId);
+    }
+    return syncSandboxChanges({
+      provider: this.deps.provider,
+      projectManager: this.deps.projectManager,
+      identity: opts.identity,
+      projectId: opts.projectId,
+      sandboxProviderId: existing.providerId,
+      projectDir: this.projectDirectory,
+    });
   }
 
   private async cloneSourceIfInSync(opts: {

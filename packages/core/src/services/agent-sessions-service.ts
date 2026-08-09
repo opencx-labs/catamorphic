@@ -26,6 +26,7 @@ import type {
 import type { DevSandboxService } from "./dev-sandbox-service.js";
 import type { PluginsService } from "./plugins-service.js";
 import { ProjectNotFoundError } from "./projects-service.js";
+import { type SyncedFileChange, syncSandboxChanges } from "./sandbox-sync.js";
 
 type SessionRow = Selectable<DB["agent_sessions"]>;
 type MessageRow = Selectable<DB["agent_messages"]>;
@@ -100,10 +101,7 @@ export class AgentTurnInProgressError extends Error {
   }
 }
 
-export interface SyncedFileChange {
-  path: string;
-  kind: "modified" | "deleted";
-}
+export { parsePorcelain, type SyncedFileChange } from "./sandbox-sync.js";
 
 const tracer = getTracer("@catamorphic/core");
 
@@ -190,9 +188,6 @@ async function ensureWorkflowSkill({
   );
   return true;
 }
-
-/** Files the agent stages for its own use — never synced back to the repo. */
-const SYNC_IGNORED_PREFIXES = ["_plugins/", "node_modules/", ".git/"];
 
 interface AgentSessionsDeps {
   projectManager: ProjectManager;
@@ -1444,47 +1439,14 @@ export class AgentSessionsService {
     projectId: string,
     sandboxProviderId: string,
   ): Promise<SyncedFileChange[]> {
-    const dir = this.projectDir();
-    const status = await this.sandboxProvider.executeCommand(
-      sandboxProviderId,
-      `cd ${shellQuote(dir)} && git status --porcelain --untracked-files=all`,
-    );
-    if (status.exitCode !== 0) return [];
-
-    const changes = parsePorcelain(status.result).filter(
-      (change) =>
-        !SYNC_IGNORED_PREFIXES.some((prefix) => change.path.startsWith(prefix)),
-    );
-    if (changes.length === 0) return [];
-
-    const repo = await this.projectManager.openDev(
-      identity.tenantId,
+    return syncSandboxChanges({
+      provider: this.sandboxProvider,
+      projectManager: this.projectManager,
+      identity,
       projectId,
-      identity.externalUserId,
-    );
-    try {
-      for (const change of changes) {
-        if (change.kind === "deleted") {
-          await repo.deleteFile(change.path).catch(() => {});
-        } else {
-          const content = await this.sandboxProvider.downloadFile(
-            sandboxProviderId,
-            `${dir}/${change.path}`,
-          );
-          await repo.writeFile(change.path, content);
-        }
-      }
-    } finally {
-      await repo.dispose();
-    }
-
-    // Advance the sandbox baseline so subsequent turns report only new changes.
-    await this.sandboxProvider.executeCommand(
       sandboxProviderId,
-      `cd ${shellQuote(dir)} && git add -A && (git -c user.name=catamorphic -c user.email=agent@catamorphic.dev commit -m sync --quiet || true)`,
-    );
-
-    return changes;
+      projectDir: this.projectDir(),
+    });
   }
 
   // --- Plugin docs for the agent ---
@@ -1608,48 +1570,6 @@ export function hostChangedFiles(
     changes.push({ path, kind: "modified" });
   }
   return changes;
-}
-
-interface PorcelainChange {
-  path: string;
-  kind: "modified" | "deleted";
-}
-
-/**
- * Parse `git status --porcelain` output into changed paths. Renames
- * (`R  old -> new`) count as a delete of `old` + modify of `new`.
- */
-export function parsePorcelain(output: string): PorcelainChange[] {
-  const changes: PorcelainChange[] = [];
-  for (const line of output.split("\n")) {
-    if (line.trim().length === 0) continue;
-    const code = line.slice(0, 2);
-    const rest = line.slice(3);
-    if (code.includes("R")) {
-      const [from, to] = rest.split(" -> ");
-      if (from) changes.push({ path: unquotePath(from), kind: "deleted" });
-      if (to) changes.push({ path: unquotePath(to), kind: "modified" });
-      continue;
-    }
-    const path = unquotePath(rest);
-    if (!path) continue;
-    // Without `--untracked-files=all` git reports untracked directories as a
-    // single `?? dir/` entry — never a real file, so skip defensively.
-    if (path.endsWith("/")) continue;
-    changes.push({
-      path,
-      kind: code.includes("D") ? "deleted" : "modified",
-    });
-  }
-  return changes;
-}
-
-function unquotePath(raw: string): string {
-  const trimmed = raw.trim();
-  if (trimmed.startsWith('"') && trimmed.endsWith('"')) {
-    return trimmed.slice(1, -1);
-  }
-  return trimmed;
 }
 
 function shellQuote(value: string): string {

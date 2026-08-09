@@ -4464,7 +4464,9 @@ export interface paths {
         };
         get: {
             parameters: {
-                query?: never;
+                query?: {
+                    channel?: "published" | "dev";
+                };
                 header?: never;
                 path: {
                     projectId: string;

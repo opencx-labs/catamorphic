@@ -13,6 +13,7 @@ import {
   LoaderCircle,
   Maximize2,
   Minus,
+  Paperclip,
   PictureInPicture2,
   Radio,
   SquareTerminal,
@@ -1147,6 +1148,8 @@ export function ChatDock({
   // Expanding (bubble click, new chat) should land the user ready to type.
   // rAF waits out the `inert` removal — focus() is a no-op on inert subtrees.
   const inputRef = useRef<HTMLTextAreaElement>(null);
+  // The composer's attach button opens this hidden picker.
+  const fileInputRef = useRef<HTMLInputElement>(null);
   useEffect(() => {
     if (!expanded) return;
     const frame = requestAnimationFrame(() => inputRef.current?.focus());
@@ -1443,6 +1446,34 @@ export function ChatDock({
                 </div>
               )}
               <div className="flex items-center gap-2">
+                {accepts.length > 0 && (
+                  <ShortcutHint label="Attach files">
+                    <button
+                      type="button"
+                      onClick={() => fileInputRef.current?.click()}
+                      className="grid size-8 shrink-0 cursor-pointer place-items-center rounded-lg text-fg-muted transition-colors duration-150 hover:bg-bg-overlay hover:text-fg"
+                      aria-label="Attach files"
+                    >
+                      <Paperclip className="size-4" />
+                    </button>
+                  </ShortcutHint>
+                )}
+                <input
+                  ref={fileInputRef}
+                  type="file"
+                  multiple
+                  accept={[
+                    ...(accepts.includes("image") ? ["image/*"] : []),
+                    ...(accepts.includes("document")
+                      ? [...DOCUMENT_TYPES]
+                      : []),
+                  ].join(",")}
+                  className="hidden"
+                  onChange={(event) => {
+                    addFiles([...(event.target.files ?? [])]);
+                    event.target.value = "";
+                  }}
+                />
                 <textarea
                   ref={inputRef}
                   onAnimationEnd={(event) => {

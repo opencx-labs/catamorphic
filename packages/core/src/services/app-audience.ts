@@ -39,7 +39,11 @@ export function assertProjectSurface(identity: Identity): void {
  * identities. For audience identities the referenced version must exist,
  * belong to the claimed app, belong to this project, and be the currently
  * active published version — a stale or forged version id resolves to a
- * denial, never to a wider set.
+ * denial, never to a wider set. The one exception: the user who built a
+ * ready version may run it before it is active (the dev channel — opening
+ * the build they are working on). That never widens access either: the
+ * builder already holds full project identity, and the audience headers
+ * only narrow it to that version's frozen workflow set.
  */
 export async function resolveAppAudience(args: {
   db: Kysely<DB>;
@@ -61,7 +65,16 @@ export async function resolveAppAudience(args: {
     .where("app_versions.app_id", "=", audience.appId)
     .where("apps.project_id", "=", args.projectId)
     .where("projects.tenant_id", "=", args.identity.tenantId)
-    .where("app_versions.is_active", "=", true)
+    .where((eb) =>
+      eb.or([
+        eb("app_versions.is_active", "=", true),
+        eb(
+          "app_versions.built_by_external_user_id",
+          "=",
+          args.identity.externalUserId,
+        ),
+      ]),
+    )
     .where("app_versions.status", "=", "ready")
     .select(["app_versions.id", "app_versions.allowed_workflows"])
     .executeTakeFirst();

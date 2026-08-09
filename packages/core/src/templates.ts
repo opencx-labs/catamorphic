@@ -419,6 +419,12 @@ dependency), \`vite.config.ts\` (IIFE lib mode, entry
 with \`"jsx": "react-jsx"\`, and \`src/main.tsx\` mounting into
 \`#root\`. Copy an existing app's config when one exists.
 
+The vite config MUST include
+\`define: { "process.env.NODE_ENV": JSON.stringify("production") }\` —
+lib mode does not inject it, and a bundle that still references
+\`process.env\` at runtime ships dev-mode React (bigger and slower; the
+host shims \`process\` so it runs, but never rely on that).
+
 - One screen per app; no routing. The host controls where it renders.
 - \`getContext()\` from \`@catamorphic/app\` gives the mount snapshot
   (tenant, user, host extras). Anything richer is one workflow call away.

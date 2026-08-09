@@ -94,7 +94,7 @@ export function buildWorkspaceToolkit(
           note:
             result.status === "published"
               ? `Published. Open it for the user with open_surface target "app:${input.name}".`
-              : "Preview compiled — the published version is unchanged.",
+              : `Preview compiled — the user's app tab shows this build (open_surface target "app:${input.name}"); the published version is unchanged.`,
         };
       },
     },

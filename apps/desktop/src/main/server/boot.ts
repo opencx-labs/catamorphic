@@ -156,11 +156,21 @@ export async function startEmbeddedServer(
         tenantId: DESKTOP_TENANT_ID,
         externalUserId: DESKTOP_USER_ID,
       };
+      // Published builds compile a pinned commit: commit the dev tree
+      // (pulling any in-flight sandbox work back first) and build that sha.
+      const commitSha = publish
+        ? await apps.commitDevTree({
+            identity,
+            projectId,
+            message: `Publish ${appName}`,
+          })
+        : undefined;
       const version = await apps.build({
         identity,
         projectId,
         appName,
         kind: publish ? "published" : "preview",
+        commitSha,
       });
       if (version.status !== "ready") {
         return {

@@ -113,6 +113,8 @@ export interface ConnectorSearchData {
     version?: string;
     repositoryUrl?: string;
     iconUrl?: string;
+    /** Published under a DNS-verified vendor namespace (not io.github.*). */
+    official: boolean;
     suggested?: {
       transport: string;
       inputs: Array<{
@@ -130,6 +132,10 @@ export interface ConnectorSearchData {
     version?: string;
     marketplace: string;
     installed: boolean;
+    /** From an Anthropic-maintained marketplace. */
+    official: boolean;
+    /** Where to read about the plugin (repo / subdirectory). */
+    pageUrl?: string;
   }>;
 }
 

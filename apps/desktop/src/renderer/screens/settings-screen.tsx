@@ -27,11 +27,8 @@ import {
   type AgentsData,
   type AppPrefs,
   type ConnectionInfo,
-  type ConnectionProbe,
-  type ConnectorSearchData,
   desktopApi,
   type ImportableBrowser,
-  type InstalledConnectorInfo,
   type OpenRouterCatalog,
   type ThemePreset,
   type ThemeToken,
@@ -48,9 +45,11 @@ import { useTheme } from "../lib/theme.js";
 export function SettingsScreen({
   onClose,
   onAddAgent,
+  onManageConnectors,
 }: {
   onClose: () => void;
   onAddAgent: () => void;
+  onManageConnectors: () => void;
 }) {
   return (
     <div className="mx-auto w-full max-w-md px-6 py-4">
@@ -67,7 +66,7 @@ export function SettingsScreen({
       </header>
 
       <AgentsSection onAddAgent={onAddAgent} />
-      <ConnectorsSection />
+      <ConnectorsSection onManage={onManageConnectors} />
       <ThemeSection />
       <NotificationsSection />
       <ShortcutsSection />
@@ -592,113 +591,19 @@ function AgentForm({
 }
 
 /**
- * A connector's icon (MCP icons metadata, 2025-11-25): a small square, or
- * a neutral plug glyph when the server exposes none. Only https/data urls
- * reach here (validated server-side per the spec's security rules).
+ * Connectors live in their own manager modal (also reachable from the
+ * palette: "Manage connectors…") — this section is the doorway plus a
+ * quick count of what's installed.
  */
-function ConnectorIcon({ iconUrl, name }: { iconUrl?: string; name: string }) {
-  return (
-    <span className="grid size-6 shrink-0 place-items-center overflow-hidden rounded border border-border bg-bg-inset">
-      {iconUrl ? (
-        <img
-          src={iconUrl}
-          alt=""
-          className="size-full object-contain"
-          onError={(event) => {
-            event.currentTarget.style.display = "none";
-          }}
-        />
-      ) : (
-        <Plug className="size-3 text-fg-faint" aria-label={name} />
-      )}
-    </span>
-  );
-}
-
-/**
- * Connectors: search two open ecosystems (the MCP registry and Claude
- * Code / Cowork plugin marketplaces), install into the profile, and manage
- * the resulting connections. A connector works for every agent harness.
- */
-function ConnectorsSection() {
+function ConnectorsSection({ onManage }: { onManage: () => void }) {
   const [connections, setConnections] = useState<ConnectionInfo[]>([]);
-  const [installed, setInstalled] = useState<InstalledConnectorInfo[]>([]);
-  const [query, setQuery] = useState("");
-  const [results, setResults] = useState<ConnectorSearchData | null>(null);
-  const [searching, setSearching] = useState(false);
-  const [busy, setBusy] = useState<string | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  const [probes, setProbes] = useState<Record<string, ConnectionProbe>>({});
-  // Registry entries that need secrets before install expand a small form.
-  const [secretsFor, setSecretsFor] = useState<string | null>(null);
-  const [secretValues, setSecretValues] = useState<Record<string, string>>({});
-
-  const refresh = () => {
+  useEffect(() => {
     void desktopApi
       .connectionsList()
       .then(setConnections)
       .catch(() => {});
-    void desktopApi
-      .connectorsList()
-      .then(setInstalled)
-      .catch(() => {});
-  };
-  // biome-ignore lint/correctness/useExhaustiveDependencies: refresh is stable per mount
-  useEffect(() => {
-    refresh();
     return desktopApi.onConnectionsChanged(setConnections);
   }, []);
-
-  const search = async (event?: FormEvent) => {
-    event?.preventDefault();
-    setSearching(true);
-    setError(null);
-    try {
-      setResults(await desktopApi.connectorsSearch(query));
-    } catch (cause) {
-      setError(cause instanceof Error ? cause.message : String(cause));
-    } finally {
-      setSearching(false);
-    }
-  };
-
-  const installRegistry = async (
-    name: string,
-    secrets: Record<string, string>,
-  ) => {
-    setBusy(name);
-    setError(null);
-    try {
-      await desktopApi.connectorsInstallRegistry(name, secrets);
-      setSecretsFor(null);
-      setSecretValues({});
-      refresh();
-    } catch (cause) {
-      setError(cause instanceof Error ? cause.message : String(cause));
-    } finally {
-      setBusy(null);
-    }
-  };
-
-  const installPlugin = async (marketplace: string, name: string) => {
-    setBusy(`${marketplace}#${name}`);
-    setError(null);
-    try {
-      await desktopApi.connectorsInstallPlugin(marketplace, name);
-      refresh();
-      void search();
-    } catch (cause) {
-      setError(cause instanceof Error ? cause.message : String(cause));
-    } finally {
-      setBusy(null);
-    }
-  };
-
-  const probe = async (id: string) => {
-    setProbes((current) => ({ ...current, [id]: { ok: false } }));
-    const result = await desktopApi.connectionsProbe(id);
-    setProbes((current) => ({ ...current, [id]: result }));
-  };
 
   return (
     <section className="mt-8 border-t border-border pt-6">
@@ -708,272 +613,22 @@ function ConnectorsSection() {
         Installed connectors work with every agent; assign them per agent when
         editing it.
       </p>
-
-      <form onSubmit={search} className="mb-3 flex items-center gap-2">
-        <input
-          value={query}
-          onChange={(event) => setQuery(event.target.value)}
-          placeholder="Search the MCP registry and plugin marketplaces…"
-          className="field h-8 flex-1 px-2 text-[13px] text-fg placeholder:text-fg-faint"
-          data-testid="connectors-search"
-          spellCheck={false}
-        />
-        <PendingButton
-          type="submit"
-          pending={searching}
-          pendingLabel="Searching…"
-          className="h-8 cursor-pointer rounded-md bg-accent px-3 text-[13px] font-medium text-accent-fg"
+      <div className="flex items-center gap-3">
+        <button
+          type="button"
+          onClick={onManage}
+          className="flex h-8 cursor-pointer items-center gap-1.5 rounded-md border border-border px-3 text-[13px] text-fg hover:bg-bg-overlay"
+          data-testid="manage-connectors"
         >
-          Search
-        </PendingButton>
-      </form>
-
-      {error && <p className="mb-2 text-xs text-danger">{error}</p>}
-
-      {results && (
-        <div className="mb-4 flex flex-col gap-1.5">
-          {results.registry.length === 0 && results.plugins.length === 0 && (
-            <p className="text-xs text-fg-faint">Nothing found.</p>
-          )}
-          {results.registry.map((entry) => (
-            <div
-              key={entry.name}
-              className="rounded-md border border-border bg-bg-raised/40 px-2.5 py-2"
-            >
-              <div className="flex items-center gap-2">
-                <ConnectorIcon
-                  iconUrl={entry.iconUrl}
-                  name={entry.displayName}
-                />
-                <div className="min-w-0 flex-1">
-                  <div className="flex items-baseline gap-2">
-                    <span className="truncate text-[13px] font-medium">
-                      {entry.displayName}
-                    </span>
-                    <span className="shrink-0 text-[11px] text-fg-faint">
-                      MCP · {entry.suggested?.transport ?? "manual"}
-                    </span>
-                  </div>
-                  <p className="truncate text-xs text-fg-muted">
-                    {entry.description}
-                  </p>
-                </div>
-                {entry.suggested && (
-                  <PendingButton
-                    type="button"
-                    pending={busy === entry.name}
-                    pendingLabel="Installing…"
-                    onClick={() => {
-                      const inputs = entry.suggested?.inputs ?? [];
-                      if (inputs.length > 0) {
-                        setSecretsFor(
-                          secretsFor === entry.name ? null : entry.name,
-                        );
-                        setSecretValues({});
-                      } else {
-                        void installRegistry(entry.name, {});
-                      }
-                    }}
-                    className="h-7 shrink-0 cursor-pointer rounded-md border border-border px-2.5 text-xs text-fg hover:bg-bg-overlay"
-                  >
-                    Install
-                  </PendingButton>
-                )}
-              </div>
-              {secretsFor === entry.name && entry.suggested && (
-                <div className="mt-2 flex flex-col gap-1.5 border-t border-border pt-2">
-                  {entry.suggested.inputs.map((input) => (
-                    <label
-                      key={input.name}
-                      className="flex flex-col gap-0.5 text-[11px] text-fg-muted"
-                    >
-                      {input.name}
-                      {input.required ? "" : " (optional)"}
-                      <input
-                        type={input.secret ? "password" : "text"}
-                        value={secretValues[input.name] ?? ""}
-                        onChange={(event) =>
-                          setSecretValues((current) => ({
-                            ...current,
-                            [input.name]: event.target.value,
-                          }))
-                        }
-                        placeholder={input.description}
-                        className="field h-7 px-2 font-mono text-[12px] text-fg placeholder:font-sans placeholder:text-fg-faint"
-                        autoComplete="off"
-                      />
-                    </label>
-                  ))}
-                  <PendingButton
-                    type="button"
-                    pending={busy === entry.name}
-                    pendingLabel="Installing…"
-                    disabled={(entry.suggested.inputs ?? []).some(
-                      (input) =>
-                        input.required && !secretValues[input.name]?.trim(),
-                    )}
-                    onClick={() =>
-                      void installRegistry(entry.name, secretValues)
-                    }
-                    className="h-7 w-fit cursor-pointer rounded-md bg-accent px-3 text-xs font-medium text-accent-fg disabled:cursor-not-allowed disabled:opacity-50"
-                  >
-                    Install with these values
-                  </PendingButton>
-                </div>
-              )}
-            </div>
-          ))}
-          {results.plugins.map((entry) => (
-            <div
-              key={`${entry.marketplace}#${entry.name}`}
-              className="flex items-center gap-2 rounded-md border border-border bg-bg-raised/40 px-2.5 py-2"
-            >
-              <div className="min-w-0 flex-1">
-                <div className="flex items-baseline gap-2">
-                  <span className="truncate text-[13px] font-medium">
-                    {entry.name}
-                  </span>
-                  <span className="shrink-0 text-[11px] text-fg-faint">
-                    Plugin · {entry.marketplace}
-                  </span>
-                </div>
-                <p className="truncate text-xs text-fg-muted">
-                  {entry.description}
-                </p>
-              </div>
-              {entry.installed ? (
-                <span className="shrink-0 text-xs text-fg-faint">
-                  Installed
-                </span>
-              ) : (
-                <PendingButton
-                  type="button"
-                  pending={busy === `${entry.marketplace}#${entry.name}`}
-                  pendingLabel="Installing…"
-                  onClick={() =>
-                    void installPlugin(entry.marketplace, entry.name)
-                  }
-                  className="h-7 shrink-0 cursor-pointer rounded-md border border-border px-2.5 text-xs text-fg hover:bg-bg-overlay"
-                >
-                  Install
-                </PendingButton>
-              )}
-            </div>
-          ))}
-        </div>
-      )}
-
-      {(connections.length > 0 || installed.length > 0) && (
-        <div className="flex flex-col gap-1.5">
-          {connections.map((connection) => {
-            const probeResult = probes[connection.id];
-            return (
-              <div
-                key={connection.id}
-                className="flex items-center gap-2 rounded-md border border-border bg-bg-raised/40 px-2.5 py-1.5"
-                data-testid="connection-row"
-              >
-                <ConnectorIcon
-                  iconUrl={connection.iconUrl}
-                  name={connection.name}
-                />
-                <div className="min-w-0 flex-1">
-                  <div className="flex items-baseline gap-2">
-                    <span className="truncate text-[13px]">
-                      {connection.name}
-                    </span>
-                    <span className="shrink-0 text-[11px] text-fg-faint">
-                      {connection.transport}
-                      {connection.source.kind === "plugin"
-                        ? ` · from ${connection.source.plugin}`
-                        : connection.source.kind === "registry"
-                          ? " · registry"
-                          : ""}
-                    </span>
-                  </div>
-                  {probeResult && (
-                    <p
-                      className={`truncate text-[11px] ${probeResult.ok ? "text-fg-muted" : probeResult.error ? "text-danger" : "text-fg-faint"}`}
-                    >
-                      {probeResult.ok
-                        ? `${probeResult.toolCount} tools${probeResult.protocolVersion ? ` · MCP ${probeResult.protocolVersion}` : ""}`
-                        : (probeResult.error ?? "Checking…")}
-                    </p>
-                  )}
-                </div>
-                <button
-                  type="button"
-                  onClick={() => void probe(connection.id)}
-                  className="shrink-0 cursor-pointer text-xs text-fg-muted hover:text-fg"
-                >
-                  Test
-                </button>
-                <button
-                  type="button"
-                  onClick={() =>
-                    void desktopApi
-                      .connectionsUpdate(connection.id, {
-                        enabled: !connection.enabled,
-                      })
-                      .then(refresh)
-                  }
-                  className={`shrink-0 cursor-pointer text-xs ${connection.enabled ? "text-fg-muted hover:text-fg" : "text-warning"}`}
-                >
-                  {connection.enabled ? "Disable" : "Enable"}
-                </button>
-                {connection.source.kind !== "plugin" && (
-                  <button
-                    type="button"
-                    onClick={() =>
-                      void desktopApi
-                        .connectionsRemove(connection.id)
-                        .then(refresh)
-                    }
-                    className="shrink-0 cursor-pointer text-xs text-fg-muted hover:text-danger"
-                    aria-label={`Remove ${connection.name}`}
-                  >
-                    <Trash2 className="size-3.5" />
-                  </button>
-                )}
-              </div>
-            );
-          })}
-          {installed.map((connector) => (
-            <div
-              key={connector.name}
-              className="flex items-center gap-2 rounded-md border border-border bg-bg-raised/40 px-2.5 py-1.5"
-            >
-              <div className="min-w-0 flex-1">
-                <div className="flex items-baseline gap-2">
-                  <span className="truncate text-[13px]">{connector.name}</span>
-                  <span className="shrink-0 text-[11px] text-fg-faint">
-                    plugin · {connector.marketplace}
-                  </span>
-                </div>
-                <p className="truncate text-xs text-fg-muted">
-                  {connector.description}
-                </p>
-              </div>
-              <button
-                type="button"
-                onClick={() =>
-                  void desktopApi.connectorsRemove(connector.name).then(refresh)
-                }
-                className="shrink-0 cursor-pointer text-xs text-fg-muted hover:text-danger"
-                aria-label={`Remove ${connector.name}`}
-              >
-                <Trash2 className="size-3.5" />
-              </button>
-            </div>
-          ))}
-        </div>
-      )}
-      {!results && connections.length === 0 && installed.length === 0 && (
-        <p className="text-xs text-fg-faint">
-          No connectors yet — search above to add tools from the MCP registry or
-          a plugin marketplace.
-        </p>
-      )}
+          <Plug className="size-3.5" />
+          Manage connectors
+        </button>
+        <span className="text-xs text-fg-faint">
+          {connections.length === 0
+            ? "None installed yet"
+            : `${connections.length} connection${connections.length === 1 ? "" : "s"}`}
+        </span>
+      </div>
     </section>
   );
 }

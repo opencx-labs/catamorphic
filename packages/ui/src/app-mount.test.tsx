@@ -240,8 +240,9 @@ describe("AppMount", () => {
     });
     const srcdoc =
       container.querySelector("iframe")?.getAttribute("srcdoc") ?? "";
-    // Exactly one real closing tag each: the bundle's copies are escaped.
-    expect(srcdoc.match(/<\/script>/g)).toHaveLength(1);
+    // Only the real closing tags survive (the process shim, the auto-height
+    // reporter, and the bundle script): the bundle's own copies are escaped.
+    expect(srcdoc.match(/<\/script>/g)).toHaveLength(3);
     expect(srcdoc.match(/<\/style>/g)).toHaveLength(1);
     expect(srcdoc).toContain("<\\/script>");
     // The injected markup stays inside the script text, never parsed as HTML.

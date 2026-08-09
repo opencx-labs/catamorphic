@@ -39,6 +39,12 @@ export interface AppMountProps {
   renderState?: (
     state: "loading" | "not_found" | "not_published",
   ) => React.ReactNode;
+  /**
+   * Which version to mount: "published" (default) is the active published
+   * version; "dev" is the newest ready build of any kind — what the owner
+   * is developing right now.
+   */
+  channel?: "published" | "dev";
   className?: string;
 }
 
@@ -76,6 +82,7 @@ export function AppMount({
   appName,
   context,
   renderState,
+  channel,
   className,
 }: AppMountProps) {
   const { apiClient } = useCatamorphic();
@@ -90,7 +97,12 @@ export function AppMount({
     (async () => {
       const response = await apiClient.GET(
         "/api/projects/{projectId}/apps/{appName}/view-state",
-        { params: { path: { projectId, appName } } },
+        {
+          params: {
+            path: { projectId, appName },
+            query: channel ? { channel } : undefined,
+          },
+        },
       );
       if (cancelled) return;
       const data = response.data;
@@ -112,7 +124,7 @@ export function AppMount({
     return () => {
       cancelled = true;
     };
-  }, [apiClient, projectId, appName]);
+  }, [apiClient, projectId, appName, channel]);
 
   const audienceHeaders = useMemo(
     () =>
@@ -344,6 +356,20 @@ function buildGuestDocument(view: ViewStateReady): string {
     `<style>${escapeStyleContent(view.css)}</style>`,
     "</head><body>",
     '<div id="root"></div>',
+    // Vite lib-mode builds keep `process.env.NODE_ENV` verbatim (lib mode
+    // never injects the define), and this iframe has no Node globals — so a
+    // bundle built without an explicit define would throw "process is not
+    // defined" before mounting anything. Shim it so React and friends take
+    // their production paths instead of crashing the guest.
+    '<script>var process={env:{NODE_ENV:"production"}}</script>',
+    // Auto-height: most apps never call reportHeight(), leaving the iframe
+    // at MIN_HEIGHT with the content cut off. Observe the document and post
+    // the same resize message the client library would. scrollHeight is
+    // max(content, viewport), so the loop ratchets up to the content height
+    // and settles; the host clamps to [MIN, MAX] either way.
+    "<script>addEventListener('load',()=>{const post=()=>parent.postMessage(" +
+      `{catamorphicApp:${APP_PROTOCOL_VERSION},kind:'resize',height:document.documentElement.scrollHeight},'*');` +
+      "post();const o=new ResizeObserver(post);o.observe(document.documentElement);o.observe(document.body)})</script>",
     `<script>${escapeScriptContent(view.code)}</script>`,
     "</body></html>",
   ].join("");
