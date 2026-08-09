@@ -42,6 +42,8 @@ const successResult = {
 
 const session: ProviderSession = {
   providerSessionId: "sess-1",
+  sessionId: "chat-1",
+  projectId: "project-1",
   sandboxId: "sandbox-1",
   workingDirectory: "/workspace/project",
 };
@@ -224,39 +226,88 @@ describe("ClaudeCodeAgent", () => {
     });
   });
 
-  it("captures the session id from the kickoff turn on startSession", async () => {
-    queryMock.mockReturnValueOnce(
-      scriptedQuery([
-        initMessage("sess-new"),
-        assistantMessage([{ type: "text", text: "OK." }]),
-        { ...successResult, session_id: "sess-new" },
-      ]),
-    );
+  it("starts sessions without a kickoff turn and creates the transcript on the first real message", async () => {
     const agent = new ClaudeCodeAgent();
 
     const started = await agent.startSession({
       projectId: "project-1",
       userId: "user-1",
       sandboxId: "sandbox-1",
+      sessionId: "chat-1",
       workingDirectory: "/workspace/project",
       systemPrompt: "You are the Catamorphic project agent.",
     });
 
-    expect(started.providerSessionId).toBe("sess-new");
-    const options = lastQueryOptions();
-    expect(options.maxTurns).toBe(1);
-    expect(options.systemPrompt).toBe("You are the Catamorphic project agent.");
+    // No query at session start — the transcript must begin with the user's
+    // own first message, not a synthetic prompt the model treats as a
+    // standing instruction.
+    expect(queryMock).not.toHaveBeenCalled();
+    const startedId = started.providerSessionId;
+    if (!startedId) throw new Error("expected a chosen session id");
+    expect(startedId).toMatch(
+      /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/,
+    );
 
-    // The stored system prompt is re-sent on subsequent turns.
-    queryMock.mockReturnValueOnce(scriptedQuery([successResult]));
-    for await (const _event of agent.sendMessage(
-      { ...started, providerSessionId: "sess-new" },
-      "Next step",
-    )) {
+    // First turn: create the session under our chosen id.
+    queryMock.mockReturnValueOnce(
+      scriptedQuery([
+        initMessage(startedId),
+        { ...successResult, session_id: startedId },
+      ]),
+    );
+    for await (const _event of agent.sendMessage(started, "First step")) {
       // drain
     }
-    expect(lastQueryOptions().systemPrompt).toBe(
-      "You are the Catamorphic project agent.",
+    let options = lastQueryOptions();
+    expect(options.sessionId).toBe(startedId);
+    expect(options.resume).toBeUndefined();
+    expect(options.systemPrompt).toBe("You are the Catamorphic project agent.");
+
+    // Later turns resume the transcript the first turn created.
+    queryMock.mockReturnValueOnce(
+      scriptedQuery([{ ...successResult, session_id: startedId }]),
     );
+    for await (const _event of agent.sendMessage(started, "Next step")) {
+      // drain
+    }
+    options = lastQueryOptions();
+    expect(options.resume).toBe(startedId);
+    expect(options.sessionId).toBeUndefined();
+    expect(options.systemPrompt).toBe("You are the Catamorphic project agent.");
+  });
+
+  it("keeps creating (not resuming) when the first turn fails before the CLI boots", async () => {
+    const agent = new ClaudeCodeAgent();
+    const started = await agent.startSession({
+      projectId: "project-1",
+      userId: "user-1",
+      sandboxId: "sandbox-1",
+      sessionId: "chat-1",
+      workingDirectory: "/workspace/project",
+    });
+    const startedId = started.providerSessionId;
+
+    // Spawn failure: no init message, so no transcript was created.
+    async function* failingQuery() {
+      throw new Error("spawn claude ENOENT");
+      yield undefined;
+    }
+    queryMock.mockReturnValueOnce(
+      failingQuery() as unknown as ReturnType<typeof query>,
+    );
+    for await (const _event of agent.sendMessage(started, "First try")) {
+      // drain
+    }
+    expect(lastQueryOptions().sessionId).toBe(startedId);
+
+    // The retry must create again, not resume a transcript that never existed.
+    queryMock.mockReturnValueOnce(
+      scriptedQuery([initMessage(startedId ?? ""), successResult]),
+    );
+    for await (const _event of agent.sendMessage(started, "Second try")) {
+      // drain
+    }
+    expect(lastQueryOptions().sessionId).toBe(startedId);
+    expect(lastQueryOptions().resume).toBeUndefined();
   });
 });

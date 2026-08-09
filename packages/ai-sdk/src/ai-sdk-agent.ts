@@ -118,6 +118,8 @@ export class AiSdkCodingAgent implements CodingAgentProvider {
 
     return {
       providerSessionId,
+      sessionId: opts.sessionId,
+      projectId: opts.projectId,
       sandboxId: opts.sandboxId,
       workingDirectory: opts.workingDirectory,
     };
@@ -127,21 +129,14 @@ export class AiSdkCodingAgent implements CodingAgentProvider {
     return this.sessions.has(providerSessionId);
   }
 
-  async resumeSession(providerSessionId: string): Promise<ProviderSession> {
-    const state = this.sessions.get(providerSessionId);
-    return {
-      providerSessionId,
-      sandboxId: state?.sandboxId ?? "",
-      workingDirectory: state?.workingDirectory ?? "",
-    };
-  }
-
   async *sendMessage(
     session: ProviderSession,
     message: string,
     opts?: TurnOptions,
   ): AsyncIterable<AgentEvent> {
-    const state = this.sessions.get(session.providerSessionId);
+    const state = session.providerSessionId
+      ? this.sessions.get(session.providerSessionId)
+      : undefined;
     if (!state) {
       yield {
         type: "error",
@@ -186,7 +181,9 @@ export class AiSdkCodingAgent implements CodingAgentProvider {
     session: ProviderSession,
     opts?: TurnOptions & { sanitizeReasoning?: boolean },
   ): AsyncIterable<AgentEvent> {
-    const state = this.sessions.get(session.providerSessionId);
+    const state = session.providerSessionId
+      ? this.sessions.get(session.providerSessionId)
+      : undefined;
     if (!state) {
       yield {
         type: "error",
@@ -302,7 +299,9 @@ export class AiSdkCodingAgent implements CodingAgentProvider {
   }
 
   async dispose(session: ProviderSession): Promise<void> {
-    this.sessions.delete(session.providerSessionId);
+    if (session.providerSessionId) {
+      this.sessions.delete(session.providerSessionId);
+    }
   }
 }
 

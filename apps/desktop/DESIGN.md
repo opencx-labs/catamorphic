@@ -1276,3 +1276,19 @@ Patterned on what best-in-class palettes converged on (Chrome omnibox
   This was the real identity of the "flaky motion trio" AND the
   "pre-existing" agent-switch failure; the suite is green and ~2× faster
   with throttling off. App behavior in real use is unchanged.
+- **No harness may burn a model turn to learn its own session id.** The
+  claude-code and codex providers used to anchor new sessions with a
+  kickoff turn ("Reply with exactly: OK.") — a bare standing instruction
+  at the top of every transcript, which the model kept obeying ("How
+  about now?" → "OK."). The contract now says `startSession` must not
+  talk to the model: claude-code chooses its own UUID (the SDK's
+  `options.sessionId`); codex, whose CLI only reveals a thread id once a
+  turn starts, returns `providerSessionId: null` and reports the real id
+  from the first user turn via a new `session` agent event that core
+  persists (never recorded as turn content). Codex's standing
+  instructions now ride the first real message in a labeled
+  `<session_instructions>` block instead of a turn of their own.
+  `ProviderSession` also carries `sessionId`/`projectId` now, which
+  dissolved the wrapper-side session→project maps (workspace context and
+  profile stores survive host restarts instead of falling back), and the
+  never-called `resumeSession` left the provider contract entirely.

@@ -24,10 +24,6 @@ export class WorkspaceContextAgent implements CodingAgentProvider {
   readonly interrupt?: (providerSessionId: string) => void;
   readonly hasSession?: (providerSessionId: string) => boolean;
   readonly retryTurn?: CodingAgentProvider["retryTurn"];
-  private readonly sessions = new Map<
-    string,
-    { projectId: string; sessionId?: string }
-  >();
 
   constructor(
     private readonly inner: CodingAgentProvider,
@@ -59,19 +55,10 @@ export class WorkspaceContextAgent implements CodingAgentProvider {
     const playbook = this.hasTools
       ? WORKSPACE_TOOLS_PLAYBOOK
       : WORKSPACE_CONTEXT_NOTE;
-    const session = await this.inner.startSession({
+    return this.inner.startSession({
       ...opts,
       systemPrompt: [opts.systemPrompt, playbook].filter(Boolean).join("\n\n"),
     });
-    this.sessions.set(session.providerSessionId, {
-      projectId: opts.projectId,
-      sessionId: opts.sessionId,
-    });
-    return session;
-  }
-
-  resumeSession(providerSessionId: string): Promise<ProviderSession> {
-    return this.inner.resumeSession(providerSessionId);
   }
 
   async *sendMessage(
@@ -79,18 +66,15 @@ export class WorkspaceContextAgent implements CodingAgentProvider {
     message: string,
     opts?: TurnOptions,
   ): AsyncIterable<AgentEvent> {
-    const known = this.sessions.get(session.providerSessionId);
     let context = "";
-    if (known) {
-      try {
-        context = formatWorkspaceContext(
-          await this.bridge.overview(known.projectId),
-          known.sessionId,
-        );
-      } catch {
-        // No window has the project open — the turn just runs without a
-        // snapshot. Context must never break a chat.
-      }
+    try {
+      context = formatWorkspaceContext(
+        await this.bridge.overview(session.projectId),
+        session.sessionId,
+      );
+    } catch {
+      // No window has the project open — the turn just runs without a
+      // snapshot. Context must never break a chat.
     }
     yield* this.inner.sendMessage(
       session,
@@ -100,7 +84,6 @@ export class WorkspaceContextAgent implements CodingAgentProvider {
   }
 
   async dispose(session: ProviderSession): Promise<void> {
-    this.sessions.delete(session.providerSessionId);
     await this.inner.dispose(session);
   }
 }

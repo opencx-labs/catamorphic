@@ -99,6 +99,12 @@ interface SessionState {
   workingDirectory: string;
   /** Context handed to extra (workspace) tools at execution time. */
   toolContext?: ExtraToolContext;
+  /**
+   * False until the CLI has confirmed the session exists on disk (its init
+   * message on the first real turn). Until then, queries pass `sessionId`
+   * (create with our chosen UUID); after, they pass `resume`.
+   */
+  transcriptExists: boolean;
 }
 
 /**
@@ -135,53 +141,25 @@ export class ClaudeCodeAgent implements CodingAgentProvider {
       sessionId: opts.sessionId,
     };
 
-    // The SDK only reveals its session id once a query starts (the
-    // system/init message carries it), so run a minimal kickoff turn and
-    // capture the id from the stream.
-    const kickoff = query({
-      prompt: "Reply with exactly: OK.",
-      options: {
-        ...this.buildOptions(opts.workingDirectory, systemPrompt, toolContext),
-        maxTurns: 1,
-      },
-    });
-
-    let sessionId: string | null = null;
-    for await (const message of kickoff) {
-      if (
-        sessionId === null &&
-        "session_id" in message &&
-        typeof message.session_id === "string"
-      ) {
-        sessionId = message.session_id;
-      }
-    }
-    if (!sessionId) {
-      throw new Error("Claude Code did not report a session id on startup");
-    }
+    // No kickoff turn: we choose the session id ourselves and hand it to the
+    // CLI via `options.sessionId` on the first real turn. Anything else would
+    // put a synthetic user message at the top of the transcript, and the
+    // model treats it as a standing instruction.
+    const sessionId = crypto.randomUUID();
 
     this.sessions.set(sessionId, {
       systemPrompt,
       workingDirectory: opts.workingDirectory,
       toolContext,
+      transcriptExists: false,
     });
 
     return {
       providerSessionId: sessionId,
+      sessionId: opts.sessionId,
+      projectId: opts.projectId,
       sandboxId: opts.sandboxId,
       workingDirectory: opts.workingDirectory,
-    };
-  }
-
-  async resumeSession(providerSessionId: string): Promise<ProviderSession> {
-    const existing = this.sessions.get(providerSessionId);
-    // Resume needs no upfront call: the CLI replays its persisted transcript
-    // when the next query passes `resume`. Sessions from before a host
-    // restart therefore work too — they just have no in-memory state.
-    return {
-      providerSessionId,
-      sandboxId: "",
-      workingDirectory: existing?.workingDirectory ?? "",
     };
   }
 
@@ -195,20 +173,38 @@ export class ClaudeCodeAgent implements CodingAgentProvider {
     message: string,
     opts?: TurnOptions,
   ): AsyncIterable<AgentEvent> {
-    const state = this.sessions.get(session.providerSessionId);
+    // This provider chooses its session ids in startSession, so a null id
+    // here is a host bug, not a state this harness can be in.
+    const providerSessionId = session.providerSessionId;
+    if (!providerSessionId) {
+      yield {
+        type: "error",
+        content: "Claude Code session was never given a session id.",
+      };
+      yield { type: "done" };
+      return;
+    }
+    const state = this.sessions.get(providerSessionId);
     const cwd =
       session.workingDirectory || state?.workingDirectory || undefined;
 
     const abort = new AbortController();
-    this.activeAborts.set(session.providerSessionId, abort);
+    this.activeAborts.set(providerSessionId, abort);
 
     let done = false;
     try {
+      // A session we created but never ran creates its transcript now, under
+      // the id chosen in startSession; everything else (later turns, sessions
+      // resurrected after a host restart) resumes the persisted transcript.
+      const anchor =
+        state && !state.transcriptExists
+          ? { sessionId: providerSessionId }
+          : { resume: providerSessionId };
       const turn = query({
         prompt: await withAttachments(
           message,
           opts?.attachments,
-          session.providerSessionId,
+          providerSessionId,
         ),
         options: {
           ...this.buildOptions(
@@ -217,12 +213,17 @@ export class ClaudeCodeAgent implements CodingAgentProvider {
             state?.toolContext,
             opts,
           ),
-          resume: session.providerSessionId,
+          ...anchor,
           abortController: abort,
         },
       });
 
       for await (const sdkMessage of turn) {
+        // The init message means the CLI booted and owns the transcript;
+        // from here on this session must be resumed, never re-created.
+        if (state && sdkMessage.type === "system") {
+          state.transcriptExists = true;
+        }
         for (const event of mapMessage(sdkMessage)) {
           if (event.type === "done") done = true;
           yield event;
@@ -239,11 +240,12 @@ export class ClaudeCodeAgent implements CodingAgentProvider {
         yield { type: "done" };
       }
     } finally {
-      this.activeAborts.delete(session.providerSessionId);
+      this.activeAborts.delete(providerSessionId);
     }
   }
 
   async dispose(session: ProviderSession): Promise<void> {
+    if (!session.providerSessionId) return;
     // interrupt() only exists in streaming-input mode; string prompts are
     // cancelled via the per-send AbortController instead.
     this.activeAborts.get(session.providerSessionId)?.abort();

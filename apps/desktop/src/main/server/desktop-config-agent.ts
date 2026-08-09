@@ -160,12 +160,6 @@ about those, point them to Settings.
  */
 export class DesktopConfigAgent implements CodingAgentProvider {
   readonly name: string;
-  /**
-   * Session → owning project, captured at startSession so later turns can
-   * resolve the right profile's stores. Sessions resumed after a host
-   * restart are absent — those fall back to the default profile's stores.
-   */
-  private readonly sessionProjects = new Map<string, string>();
 
   /** Forwarded only when the harness supports them (feature-detection). */
   readonly interrupt?: (providerSessionId: string) => void;
@@ -204,13 +198,8 @@ export class DesktopConfigAgent implements CodingAgentProvider {
 
   async startSession(opts: StartSessionOpts): Promise<ProviderSession> {
     const session = await this.inner.startSession(opts);
-    this.sessionProjects.set(session.providerSessionId, opts.projectId);
     await this.stage(session);
     return session;
-  }
-
-  resumeSession(providerSessionId: string): Promise<ProviderSession> {
-    return this.inner.resumeSession(providerSessionId);
   }
 
   async *sendMessage(
@@ -230,12 +219,11 @@ export class DesktopConfigAgent implements CodingAgentProvider {
   }
 
   dispose(session: ProviderSession): Promise<void> {
-    this.sessionProjects.delete(session.providerSessionId);
     return this.inner.dispose(session);
   }
 
   private stores(session: ProviderSession): ProfileStores {
-    return this.storesFor(this.sessionProjects.get(session.providerSessionId));
+    return this.storesFor(session.projectId);
   }
 
   private async stage(session: ProviderSession): Promise<void> {

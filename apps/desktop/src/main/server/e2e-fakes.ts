@@ -187,17 +187,10 @@ export class E2eFakeCodingAgent implements CodingAgentProvider {
     });
     return {
       providerSessionId,
+      sessionId: opts.sessionId,
+      projectId: opts.projectId,
       sandboxId: opts.sandboxId,
       workingDirectory: opts.workingDirectory,
-    };
-  }
-
-  async resumeSession(providerSessionId: string): Promise<ProviderSession> {
-    const state = this.sessions.get(providerSessionId);
-    return {
-      providerSessionId,
-      sandboxId: state?.sandboxId ?? "",
-      workingDirectory: state?.workingDirectory ?? "",
     };
   }
 
@@ -206,7 +199,9 @@ export class E2eFakeCodingAgent implements CodingAgentProvider {
     message: string,
     opts?: TurnOptions,
   ): AsyncIterable<AgentEvent> {
-    const state = this.sessions.get(session.providerSessionId);
+    const state = session.providerSessionId
+      ? this.sessions.get(session.providerSessionId)
+      : undefined;
     if (!state) {
       yield { type: "error", content: "Session not found" };
       return;
@@ -408,6 +403,8 @@ export class E2eFakeCodingAgent implements CodingAgentProvider {
   }
 
   async dispose(session: ProviderSession): Promise<void> {
-    this.sessions.delete(session.providerSessionId);
+    if (session.providerSessionId) {
+      this.sessions.delete(session.providerSessionId);
+    }
   }
 }

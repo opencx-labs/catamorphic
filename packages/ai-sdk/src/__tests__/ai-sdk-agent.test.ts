@@ -95,6 +95,7 @@ async function start(agent: AiSdkCodingAgent) {
     projectId: "project-1",
     userId: "user-1",
     sandboxId: "sandbox-1",
+    sessionId: "chat-1",
     workingDirectory: "/workspace/project",
   });
 }
@@ -121,6 +122,7 @@ describe("AiSdkCodingAgent", () => {
       projectId: "project-1",
       userId: "user-1",
       sandboxId: "sandbox-1",
+      sessionId: "chat-1",
       workingDirectory: "/workspace/project",
       attachedPlugins: [
         {

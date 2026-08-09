@@ -316,6 +316,7 @@ export interface AgentEvent {
     | "command"
     | "question"
     | "title"
+    | "session"
     | "error"
     | "done";
   content?: string;
@@ -324,6 +325,13 @@ export interface AgentEvent {
   filePath?: string;
   /** Set on "question" events: the agent is pausing for user input. */
   questions?: AgentQuestion[];
+  /**
+   * Set on "session" events: the harness's native session id, reported by
+   * providers that only learn it once the first turn starts (Codex). The
+   * host persists it and passes it back on later turns; the event is an
+   * anchoring signal, never turn content.
+   */
+  providerSessionId?: string;
   /** Set on classified "error" events (see {@link AgentErrorKind}). */
   errorKind?: AgentErrorKind;
 }

@@ -441,6 +441,8 @@ export class AgentSessionsService {
         await previous?.provider
           .dispose({
             providerSessionId: session.provider_session_id,
+            sessionId: session.id,
+            projectId,
             sandboxId: "",
             workingDirectory: "",
           })
@@ -966,6 +968,21 @@ export class AgentSessionsService {
               turnOptions,
             );
       for await (const event of stream) {
+        // A harness that only learns its native session id once the first
+        // turn starts (Codex) reports it here; persist it so later turns
+        // resume the same thread. Pure anchoring signal — never recorded
+        // as turn content.
+        if (event.type === "session") {
+          if (event.providerSessionId) {
+            anchor.providerSession.providerSessionId = event.providerSessionId;
+            await this.db
+              .updateTable("agent_sessions")
+              .set({ provider_session_id: event.providerSessionId })
+              .where("id", "=", sessionId)
+              .execute();
+          }
+          continue;
+        }
         if (continuesTurn(event)) await flushHeldText();
         events.push(event);
         segmentEvents.push(event);
@@ -1119,6 +1136,8 @@ export class AgentSessionsService {
       await agent?.provider
         .dispose({
           providerSessionId: session.provider_session_id,
+          sessionId: session.id,
+          projectId,
           sandboxId: "",
           workingDirectory: "",
         })
@@ -1175,6 +1194,8 @@ export class AgentSessionsService {
         return {
           providerSession: {
             providerSessionId: session.provider_session_id,
+            sessionId: session.id,
+            projectId,
             sandboxId: "",
             workingDirectory,
           },
@@ -1208,6 +1229,8 @@ export class AgentSessionsService {
       return {
         providerSession: {
           providerSessionId: session.provider_session_id,
+          sessionId: session.id,
+          projectId,
           sandboxId: sandboxProviderId,
           workingDirectory: this.projectDir(),
         },

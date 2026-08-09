@@ -57,6 +57,14 @@ export class CodexAgent implements CodingAgentProvider {
   readonly name = "codex";
   private readonly client: Codex;
   private readonly opts: CodexAgentOpts;
+  /**
+   * Standing instructions for sessions whose thread hasn't started yet,
+   * keyed by host chat session id. The CLI has no system-prompt channel, so
+   * they ride with the first real user message; entries clear once the
+   * thread exists (or on dispose). Recomputed by a fresh startSession when a
+   * host restart drops them before the first turn ran.
+   */
+  private readonly pendingInstructions = new Map<string, string>();
 
   constructor(opts: CodexAgentOpts = {}) {
     this.opts = opts;
@@ -76,39 +84,19 @@ export class CodexAgent implements CodingAgentProvider {
     const instructions = [preamble, opts.systemPrompt ?? ""]
       .filter(Boolean)
       .join("\n\n");
-
-    // The CLI only reveals its thread id once a turn starts, so anchor the
-    // session with a kickoff turn that delivers the session instructions.
-    const thread = this.client.startThread(
-      this.threadOptions(opts.workingDirectory),
-    );
-    const kickoff = instructions
-      ? `${instructions}\n\nThese are your standing instructions for this session. Reply with exactly: OK.`
-      : "Reply with exactly: OK.";
-    const { events } = await thread.runStreamed(kickoff);
-    let threadId: string | null = null;
-    // Drain the stream fully — breaking out early tears down the CLI process
-    // mid-turn and can leave the persisted thread unresumable.
-    for await (const event of events) {
-      if (event.type === "thread.started") threadId = event.thread_id;
-    }
-    if (!threadId) {
-      throw new Error("Codex did not report a thread id for the new session");
+    if (instructions) {
+      this.pendingInstructions.set(opts.sessionId, instructions);
     }
 
+    // The CLI only reveals its thread id once a turn starts, so the id stays
+    // null here and the first real turn reports it via a "session" event —
+    // the transcript begins with the user's own message, nothing synthetic.
     return {
-      providerSessionId: threadId,
+      providerSessionId: null,
+      sessionId: opts.sessionId,
+      projectId: opts.projectId,
       sandboxId: opts.sandboxId,
       workingDirectory: opts.workingDirectory,
-    };
-  }
-
-  async resumeSession(providerSessionId: string): Promise<ProviderSession> {
-    // Threads persist under $CODEX_HOME/sessions; nothing to warm up.
-    return {
-      providerSessionId,
-      sandboxId: "",
-      workingDirectory: "",
     };
   }
 
@@ -117,16 +105,20 @@ export class CodexAgent implements CodingAgentProvider {
     message: string,
     opts?: TurnOptions,
   ): AsyncIterable<AgentEvent> {
-    // Each turn resumes the persisted thread with fresh options, so per-turn
+    // Each turn spawns a fresh CLI run with this turn's options, so per-turn
     // model/effort overrides take effect without any in-memory thread state.
-    const thread = this.client.resumeThread(
-      session.providerSessionId,
-      this.threadOptions(session.workingDirectory, opts),
-    );
+    // The first turn starts the thread; later turns resume it by id.
+    const threadOptions = this.threadOptions(session.workingDirectory, opts);
+    const thread = session.providerSessionId
+      ? this.client.resumeThread(session.providerSessionId, threadOptions)
+      : this.client.startThread(threadOptions);
+    const input = session.providerSessionId
+      ? message
+      : this.withInstructions(session.sessionId, message);
 
     let stream: AsyncIterable<ThreadEvent>;
     try {
-      stream = (await thread.runStreamed(message)).events;
+      stream = (await thread.runStreamed(input)).events;
     } catch (error) {
       yield { type: "error", content: describeError(error) };
       yield { type: "done" };
@@ -135,6 +127,10 @@ export class CodexAgent implements CodingAgentProvider {
 
     try {
       for await (const event of stream) {
+        if (event.type === "thread.started" && !session.providerSessionId) {
+          this.pendingInstructions.delete(session.sessionId);
+          yield { type: "session", providerSessionId: event.thread_id };
+        }
         yield* mapEvent(event);
       }
     } catch (error) {
@@ -143,8 +139,28 @@ export class CodexAgent implements CodingAgentProvider {
     }
   }
 
-  async dispose(_session: ProviderSession): Promise<void> {
-    // Threads live on disk under $CODEX_HOME; nothing to release in-process.
+  async dispose(session: ProviderSession): Promise<void> {
+    // Threads live on disk under $CODEX_HOME; nothing else to release.
+    this.pendingInstructions.delete(session.sessionId);
+  }
+
+  /**
+   * Codex has no system-prompt channel, so standing instructions ride with
+   * the thread's first user message inside a labeled block — attached to a
+   * real turn, never a turn of their own.
+   */
+  private withInstructions(sessionId: string, message: string): string {
+    const instructions = this.pendingInstructions.get(sessionId);
+    if (!instructions) return message;
+    return [
+      "<session_instructions>",
+      "Standing instructions for this session. The user's message follows after the closing tag.",
+      "",
+      instructions,
+      "</session_instructions>",
+      "",
+      message,
+    ].join("\n");
   }
 
   private threadOptions(

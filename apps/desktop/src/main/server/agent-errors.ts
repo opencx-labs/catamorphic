@@ -140,10 +140,6 @@ export class FriendlyAgentErrors implements CodingAgentProvider {
     return this.inner.startSession(opts);
   }
 
-  resumeSession(providerSessionId: string): Promise<ProviderSession> {
-    return this.inner.resumeSession(providerSessionId);
-  }
-
   sendMessage(
     session: ProviderSession,
     message: string,

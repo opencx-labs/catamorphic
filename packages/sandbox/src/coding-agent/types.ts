@@ -27,7 +27,7 @@ export interface StartSessionOpts {
    * they create — e.g. a browser tab opened by an agent attaches to the
    * chat that opened it.
    */
-  sessionId?: string;
+  sessionId: string;
   systemPrompt?: string;
   attachedPlugins?: AttachedPluginForAgent[];
   /**
@@ -40,7 +40,18 @@ export interface StartSessionOpts {
 }
 
 export interface ProviderSession {
-  providerSessionId: string;
+  /**
+   * The harness's native session id, or null when the harness only learns
+   * it once the first turn runs (Codex threads get their id from the CLI).
+   * Such harnesses report the id with a "session" {@link AgentEvent} on the
+   * first turn; the host persists it and passes it back on later turns. No
+   * harness may burn a model turn just to learn its own id.
+   */
+  providerSessionId: string | null;
+  /** Host-side chat session id (see {@link StartSessionOpts.sessionId}). */
+  sessionId: string;
+  /** Project the session belongs to; stable for the session's lifetime. */
+  projectId: string;
   sandboxId: string;
   workingDirectory: string;
 }
@@ -100,9 +111,12 @@ export interface ExtraTool {
 export interface CodingAgentProvider {
   readonly name: string;
 
+  /**
+   * Prepare a session: stage plugin docs, compute instructions, allocate
+   * state. This must NOT talk to the model — the transcript begins with the
+   * user's first real message, sent via {@link sendMessage}.
+   */
   startSession(opts: StartSessionOpts): Promise<ProviderSession>;
-
-  resumeSession(providerSessionId: string): Promise<ProviderSession>;
 
   sendMessage(
     session: ProviderSession,
