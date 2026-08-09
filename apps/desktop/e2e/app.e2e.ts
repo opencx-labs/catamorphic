@@ -688,6 +688,59 @@ describe("tiling and chat surfaces", () => {
   });
 });
 
+describe("agent shows and points", () => {
+  it("open_surface opens a tab behind the chat, which steps down to floating", async () => {
+    await run(`pressKey('n', { metaKey: true }); return true;`);
+    await runWait(`return !!floatingDock();`, { label: "chat open" });
+    // Expand the chat into a full workspace tab, so the step-down is real.
+    await run(`pressKey('m', { metaKey: true, shiftKey: true }); return true;`);
+    await runWait(`return !floatingDock();`, { label: "chat is a tab" });
+    await run(`
+      const ta = visibleDock().querySelector('textarea');
+      setReactValue(ta, 'show: https://example.com/');
+      ta.closest('form').requestSubmit();
+      return true;
+    `);
+    // The browser tab opens AND the chat returns to its floating dock.
+    await runWait(`return !!$('input[aria-label="Address and search bar"]');`, {
+      timeoutMs: 30_000,
+      label: "browser tab opened behind the chat",
+    });
+    await runWait(`return !!floatingDock();`, {
+      timeoutMs: 30_000,
+      label: "chat stepped down to floating",
+    });
+  });
+
+  it("point_at glows the pointed tab until the user clicks it", async () => {
+    // Point at the browser tab the previous test opened.
+    await run(`
+      const el = $('[data-point-key^="browser:"]');
+      if (!el) return false;
+      const key = el.getAttribute('data-point-key');
+      const ta = floatingDock().querySelector('textarea');
+      setReactValue(ta, 'point: ' + key);
+      ta.closest('form').requestSubmit();
+      return true;
+    `);
+    await runWait(
+      `const el = $('[data-point-key^="browser:"]');
+       return !!el && el.classList.contains('agent-pointer') &&
+         el.getAttribute('data-agent-pointer-note') === 'Look here';`,
+      { timeoutMs: 30_000, label: "glow applied with note" },
+    );
+    // Interacting with the element dismisses its pointer.
+    await run(`
+      const el = $('[data-point-key^="browser:"].agent-pointer');
+      el.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true }));
+      return true;
+    `);
+    await runWait(`return !$('[data-point-key^="browser:"].agent-pointer');`, {
+      label: "glow dismissed by interaction",
+    });
+  });
+});
+
 describe("subagents and background watchers", () => {
   it("a delegated subagent gets a chip whose popover lists its activity", async () => {
     await run(`pressKey('n', { metaKey: true }); return true;`);

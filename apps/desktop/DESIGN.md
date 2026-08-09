@@ -1353,3 +1353,50 @@ Patterned on what best-in-class palettes converged on (Chrome omnibox
   the host (`skipMcpDiscovery`), while Claude Code agents additionally
   load the plugin natively for its skills/agents/commands. A connector
   is never harness-specific in the UI.
+
+### 2026-08-09 — MCP Apps both ways; agents that build, show, and point
+- **Our apps and MCP Apps are the same architecture; we bridge dialects,
+  we don't switch sides.** The standard (`io.modelcontextprotocol/ui`,
+  first official MCP extension) is our AppMount design with tools where
+  we have workflows. The rule from the connectors work stands: adopt the
+  standard's vocabulary where it's free, keep our guarantees (frozen
+  workflow set, audience re-authorization, no-network CSP) where the
+  standard leaves them to the host.
+- **Inbound (we render MCP Apps):** a connection tool declaring
+  `_meta.ui.resourceUri` gets an "app view" chip on the chat; clicking
+  opens an `mcpapp` tab rendering the `ui://` template in an
+  AppMount-grade iframe. The host bridge implements the dialect's core
+  (`ui/initialize`, `tools/call`, `ui/open-link`, tool-input/result
+  seeds); view-initiated calls route over the DESKTOP's own client
+  connection, scoped to the view's server — an embedded app can never
+  reach another connection's tools. Tool results now ride events
+  (`toolUseId`/`toolResult`, cumulative per call id) so the view gets
+  the data the model saw.
+- **Outbound (MCP hosts render our apps):**
+  `/api/projects/:id/apps-mcp` is a stateless MCP endpoint exposing one
+  tool per app-callable workflow (executed under the owning app's
+  audience identity — the frozen-set authorization applies to Claude
+  and ChatGPT exactly as to our iframe) plus the app bundle as a
+  standard `ui://` resource. The `@catamorphic/app` guest runtime is
+  dual-dialect: it probes with `ui/initialize` at boot; a Catamorphic
+  host ignores the probe and nothing changes, an MCP Apps host answers
+  and the same bundle speaks `tools/call` — apps run in Claude/ChatGPT
+  unchanged. `allowed_network_origins` finally reaches the iframe CSP
+  (both mounts), closing ADR 0037's gap.
+- **Agents finish apps by SHOWING them.** `build_app` compiles in the
+  dev sandbox and publishes (publish is the default — "built you a
+  dashboard" must end with something the user can open); apps being
+  edited surface as chips on the chat (derived from file_edit paths
+  under `apps/<name>/`).
+- **`open_surface` opens things BEHIND the chat.** Anything tab-shaped
+  (tab keys, `app:<name>`, `file:<path>`, URLs): the tab activates and
+  the agent's chat steps down from full tab to its floating dock — the
+  agent is showing, not replacing the user's view with itself.
+- **`point_at` is the agent's finger.** Any element with
+  `data-point-key` (workspace tabs by key, sidebar items, app rows) can
+  be pointed at: a soft accent ring + scroll-into-view + optional short
+  note. The glow is a WAITING state — the same sanctioned-loop logic as
+  the question badge's pulse: it breathes until the user interacts with
+  the element or the agent points elsewhere (`keep_previous` stacks a
+  tour; `clear_pointers` ends it). Dismissal-by-interaction keeps the
+  user in charge of their own attention.

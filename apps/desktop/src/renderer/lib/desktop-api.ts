@@ -138,6 +138,14 @@ export interface InstalledConnectorInfo {
   connectionIds: string[];
 }
 
+/** An MCP Apps view template, ready to mount in a sandboxed iframe. */
+export interface McpAppViewData {
+  toolKey: string;
+  html: string;
+  csp: { connectDomains: string[]; resourceDomains: string[] };
+  prefersBorder: boolean;
+}
+
 export interface HarnessModelInfo {
   id: string;
   name: string;
@@ -392,6 +400,15 @@ export interface CatamorphicDesktopApi {
   onConnectionsChanged: (
     listener: (connections: ConnectionInfo[]) => void,
   ) => () => void;
+
+  /** "server/tool" → ui:// resource uri, for tools declaring app views. */
+  mcpAppsUiTools: () => Promise<Record<string, string>>;
+  mcpAppsView: (toolKey: string) => Promise<McpAppViewData>;
+  mcpAppsCall: (
+    viewToolKey: string,
+    toolName: string,
+    args: Record<string, unknown>,
+  ) => Promise<Record<string, unknown>>;
 
   openrouterModels: () => Promise<OpenRouterCatalog>;
   browserImportList: () => Promise<ImportableBrowser[]>;

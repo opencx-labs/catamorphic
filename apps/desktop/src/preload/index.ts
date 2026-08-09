@@ -98,6 +98,23 @@ const api = {
       ipcRenderer.removeListener("catamorphic:connections-changed", handler);
   },
 
+  // --- MCP Apps (embedded views for connection tools) ---
+  mcpAppsUiTools: (): Promise<unknown> =>
+    ipcRenderer.invoke("catamorphic:mcp-apps-ui-tools"),
+  mcpAppsView: (toolKey: string): Promise<unknown> =>
+    ipcRenderer.invoke("catamorphic:mcp-apps-view", toolKey),
+  mcpAppsCall: (
+    viewToolKey: string,
+    toolName: string,
+    args: Record<string, unknown>,
+  ): Promise<unknown> =>
+    ipcRenderer.invoke(
+      "catamorphic:mcp-apps-call",
+      viewToolKey,
+      toolName,
+      args,
+    ),
+
   // --- OpenRouter catalog (searchable model selector, best-free default) ---
   openrouterModels: (): Promise<unknown> =>
     ipcRenderer.invoke("catamorphic:openrouter-models"),

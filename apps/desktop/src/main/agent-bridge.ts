@@ -68,6 +68,29 @@ export interface WorkspaceBridge {
     controlled: boolean,
   ): Promise<void>;
   closeSurface(projectId: string, key: string): Promise<void>;
+  /**
+   * Open (or focus) something tab-shaped BEHIND the agent's chat: an
+   * existing tab by key, a project app ("app:<name>"), a file
+   * ("file:<path>"), or a URL. The chat steps down to its floating dock
+   * so the user sees the opened tab.
+   */
+  openTarget(
+    projectId: string,
+    sessionId: string,
+    target: string,
+  ): Promise<{ key: string }>;
+  /**
+   * Point the user's attention at a UI element: a subtle glow plus
+   * scroll-into-view. The glow stays until the user interacts with the
+   * element or the agent points elsewhere / clears.
+   */
+  pointAt(
+    projectId: string,
+    target: string,
+    note: string | undefined,
+    keepPrevious: boolean,
+  ): Promise<{ ok: boolean; error?: string }>;
+  clearPointers(projectId: string): Promise<void>;
 }
 
 const RPC_TIMEOUT_MS = 12_000;
@@ -481,6 +504,35 @@ export function registerAgentBridge(agentTerminals: AgentTerminals): {
       const key = terminalKeys.get(terminalId);
       if (key) guardControl(key);
       return agentTerminals.write(terminalId, data);
+    },
+
+    async openTarget(projectId, sessionId, target) {
+      const result = await rpc<{ key: string } | { error: string }>(
+        "openTarget",
+        { projectId, sessionId, target },
+      );
+      if (!result || "error" in result) {
+        throw new Error(
+          (result as { error?: string } | null)?.error ??
+            "Could not open that target (is the workspace open?)",
+        );
+      }
+      return result;
+    },
+
+    async pointAt(projectId, target, note, keepPrevious) {
+      const result = await rpc<{ ok: boolean; error?: string } | null>(
+        "pointAt",
+        { projectId, target, note, keepPrevious },
+      );
+      if (!result) {
+        return { ok: false, error: "No window has this project open." };
+      }
+      return result;
+    },
+
+    async clearPointers(projectId) {
+      await rpc("clearPointers", { projectId });
     },
 
     async setControl(projectId, key, controlled) {

@@ -128,6 +128,9 @@ export class E2eLocalSandboxProvider implements SandboxProvider {
  *   sync-back and chips).
  * - "subagent" → a delegated worker with nested activity (subagent chip).
  * - "watcher" → a background process event (watcher chip).
+ * - "point: <target>" / "point keep: <target>" / "unpoint" → the real
+ *   point_at / clear_pointers tools (glow + scroll).
+ * - "show: <target>" → the real open_surface tool (tab behind the chat).
  * - "slowly" → a ~4s turn (exercises mid-turn UI: spinners, minimize,
  *   mode flips, kill-and-relaunch recovery).
  * - "auth error" → the turn fails with a provider-style credential
@@ -400,6 +403,79 @@ export class E2eFakeCodingAgent implements CodingAgentProvider {
         yield {
           type: "text",
           content: `terminal error: ${error instanceof Error ? error.message : String(error)}`,
+        };
+      }
+      yield { type: "done" };
+      return;
+    }
+
+    // "point: <target>" / "point keep: <target>" → the REAL point_at
+    // workspace tool (glow + scroll); "unpoint" → clear_pointers.
+    const pointRun = /^point(\s+keep)?:\s*(.+)$/s.exec(message.trim());
+    if (pointRun) {
+      const [, keep, target] = pointRun;
+      const tool = this.workspaceTools.find(
+        (candidate) => candidate.name === "point_at",
+      );
+      if (!tool || !target) {
+        yield { type: "error", content: "point_at unavailable" };
+        yield { type: "done" };
+        return;
+      }
+      try {
+        await tool.execute(
+          {
+            target: target.trim(),
+            note: "Look here",
+            ...(keep ? { keep_previous: true } : {}),
+          },
+          state.toolContext,
+        );
+        yield { type: "text", content: `Pointing at ${target.trim()}.` };
+      } catch (error) {
+        yield {
+          type: "text",
+          content: `point error: ${error instanceof Error ? error.message : String(error)}`,
+        };
+      }
+      yield { type: "done" };
+      return;
+    }
+    if (prompt.trim() === "unpoint") {
+      const tool = this.workspaceTools.find(
+        (candidate) => candidate.name === "clear_pointers",
+      );
+      if (tool) await tool.execute({}, state.toolContext);
+      yield { type: "text", content: "Cleared the pointers." };
+      yield { type: "done" };
+      return;
+    }
+
+    // "show: <target>" → the REAL open_surface tool (tab opens behind the
+    // chat; the chat steps down to its floating dock).
+    const showRun = /^show:\s*(.+)$/s.exec(message.trim());
+    if (showRun) {
+      const target = showRun[1]?.trim() ?? "";
+      const tool = this.workspaceTools.find(
+        (candidate) => candidate.name === "open_surface",
+      );
+      if (!tool) {
+        yield { type: "error", content: "open_surface unavailable" };
+        yield { type: "done" };
+        return;
+      }
+      try {
+        const result = (await tool.execute({ target }, state.toolContext)) as {
+          key?: string;
+        };
+        yield {
+          type: "text",
+          content: `Opened ${target} ("key":"${result.key ?? "unknown"}").`,
+        };
+      } catch (error) {
+        yield {
+          type: "text",
+          content: `open error: ${error instanceof Error ? error.message : String(error)}`,
         };
       }
       yield { type: "done" };

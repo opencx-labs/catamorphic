@@ -24,6 +24,7 @@ import {
 import type { ConnectorsService } from "./connectors.js";
 import type { WindowProfileRegistry } from "./index.js";
 import { type Keybindings, normalizeKeybindings } from "./keybindings.js";
+import type { McpAppsService } from "./mcp-apps.js";
 import {
   bestFreeModelId,
   fetchOpenRouterModels,
@@ -60,6 +61,7 @@ export function registerIpcHandlers(
   windows: WindowProfileRegistry,
   paths: DataPaths,
   connectors?: ConnectorsService,
+  mcpApps?: McpAppsService,
 ): void {
   const storesFor = (event: Electron.IpcMainInvokeEvent) =>
     profileConfig.forProfile(windows.profileFor(event.sender));
@@ -326,6 +328,43 @@ export function registerIpcHandlers(
       );
       if (removed) connectionsChanged(event);
       return removed;
+    },
+  );
+
+  // --- MCP Apps (embedded views for connection tools) ---
+
+  ipcMain.handle("catamorphic:mcp-apps-ui-tools", async (event) => {
+    if (!mcpApps) return {};
+    try {
+      return await mcpApps.uiTools(windows.profileFor(event.sender));
+    } catch {
+      return {};
+    }
+  });
+
+  ipcMain.handle(
+    "catamorphic:mcp-apps-view",
+    async (event, toolKey: string) => {
+      if (!mcpApps) throw new Error("MCP apps are unavailable");
+      return mcpApps.view(windows.profileFor(event.sender), String(toolKey));
+    },
+  );
+
+  ipcMain.handle(
+    "catamorphic:mcp-apps-call",
+    async (
+      event,
+      viewToolKey: string,
+      toolName: string,
+      args: Record<string, unknown>,
+    ) => {
+      if (!mcpApps) throw new Error("MCP apps are unavailable");
+      return mcpApps.callTool(
+        windows.profileFor(event.sender),
+        String(viewToolKey),
+        String(toolName),
+        args ?? {},
+      );
     },
   );
 

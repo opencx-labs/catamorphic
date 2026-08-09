@@ -104,7 +104,10 @@ export function SidebarItemRow({
       : undefined;
 
   return (
-    <div className="group relative flex h-7 items-center rounded-md transition-colors duration-150 hover:bg-bg-overlay/60">
+    <div
+      className="group relative flex h-7 items-center rounded-md transition-colors duration-150 hover:bg-bg-overlay/60"
+      data-point-key={`sidebar:${label}`}
+    >
       {renaming ? (
         <input
           ref={renameRef}

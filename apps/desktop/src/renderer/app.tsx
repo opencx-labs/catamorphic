@@ -28,6 +28,10 @@ import {
   useState,
 } from "react";
 import { type ActionId, KEYBINDING_ACTIONS } from "../shared/actions.js";
+import {
+  type AgentPointer,
+  AgentPointers,
+} from "./components/agent-pointers.js";
 import { AgentWizard } from "./components/agent-wizard.js";
 import { AnimatedTitle } from "./components/animated-title.js";
 import { BookmarksNav } from "./components/bookmarks-nav.js";
@@ -72,6 +76,7 @@ import {
   type BrowserPageState,
   BrowserScreen,
 } from "./screens/browser-screen.js";
+import { McpAppScreen } from "./screens/mcp-app-screen.js";
 import { SettingsScreen } from "./screens/settings-screen.js";
 import { TerminalScreen } from "./screens/terminal-screen.js";
 
@@ -1786,6 +1791,20 @@ export function App() {
     }));
   };
 
+  // Agent pointers: elements the agent is pointing the user at (subtle
+  // glow + scroll). Each lasts until the user interacts with its element
+  // or the agent replaces/clears it.
+  const [agentPointers, setAgentPointers] = useState<AgentPointer[]>([]);
+  const setAgentPointersRef = useRef(setAgentPointers);
+  setAgentPointersRef.current = setAgentPointers;
+  const dismissPointer = useCallback(
+    (target: string) =>
+      setAgentPointers((current) =>
+        current.filter((pointer) => pointer.target !== target),
+      ),
+    [],
+  );
+
   // The tab being dragged from the strip (drop targets render while set).
   const [tabDragKey, setTabDragKey] = useState<string | null>(null);
   const [dropSideHover, setDropSideHover] = useState<"left" | "right" | null>(
@@ -1830,6 +1849,16 @@ export function App() {
    */
   const unsplitTimerRef = useRef<number | undefined>(undefined);
   const openSurface = (key: string, mode: "tab" | "split") => {
+    // App chips point at the app by name — materialize its tab if the
+    // user hasn't opened it yet (the key doubles as the tab key).
+    if (key.startsWith("app:")) {
+      const name = key.slice("app:".length);
+      updateWorkspace((ws) =>
+        ws.tabs.some((tab) => tabKey(tab) === key)
+          ? ws
+          : { ...ws, tabs: [...ws.tabs, { kind: "app", name }] },
+      );
+    }
     // Chat surfaces (fork chips) may be minimized bubbles — a chat only
     // occupies a view slot in tab mode, so promote it first.
     if (key.startsWith("chat:")) {
@@ -2272,6 +2301,126 @@ export function App() {
           }));
           return { key: terminalTabKey(localId) };
         }
+        case "openTarget": {
+          const target = String(params.target ?? "");
+          const sessionId =
+            typeof params.sessionId === "string" ? params.sessionId : undefined;
+          // The chat steps down from full tab to its floating dock so the
+          // opened tab is visible behind it — the agent is SHOWING the
+          // user something, not replacing their view with itself.
+          const stepChatAside = () => {
+            const chatLocalId = resolveWorkingChat(sessionId);
+            if (!chatLocalId) return;
+            updateWorkspace((current) => ({
+              ...current,
+              chats: current.chats.map((chat) =>
+                chat.localId === chatLocalId && chat.mode === "tab"
+                  ? { ...chat, mode: "partial" }
+                  : chat,
+              ),
+            }));
+          };
+          if (target.startsWith("app:")) {
+            const name = target.slice("app:".length);
+            updateWorkspace((current) => {
+              const key = `app:${name}`;
+              const exists = current.tabs.some((tab) => tabKey(tab) === key);
+              return {
+                ...current,
+                tabs: exists
+                  ? current.tabs
+                  : [...current.tabs, { kind: "app", name }],
+                activeTabKey: key,
+                split: null,
+              };
+            });
+            stepChatAside();
+            return { key: `app:${name}` };
+          }
+          if (target.startsWith("file:")) {
+            const filePath = target.slice("file:".length);
+            const localId = crypto.randomUUID();
+            updateWorkspace((current) => ({
+              ...current,
+              editors: [
+                ...current.editors,
+                { localId, filePath, dirty: false },
+              ],
+              activeTabKey: editorTabKey(localId),
+              split: null,
+            }));
+            stepChatAside();
+            return { key: editorTabKey(localId) };
+          }
+          if (/^https?:\/\//.test(target)) {
+            if (!activeProfileRef.current) return { error: "No profile" };
+            const localId = crypto.randomUUID();
+            updateWorkspace((current) => ({
+              ...current,
+              browsers: [
+                ...current.browsers,
+                {
+                  localId,
+                  profileId: activeProfileRef.current?.id ?? "",
+                  initialUrl: target,
+                  url: target,
+                  title: target,
+                  faviconUrl: null,
+                  chatLocalId: resolveWorkingChat(sessionId),
+                },
+              ],
+              activeTabKey: browserTabKey(localId),
+              split: null,
+            }));
+            stepChatAside();
+            return { key: browserTabKey(localId) };
+          }
+          // An existing tab key from workspace_overview: focus it.
+          if (
+            !orderedTabKeys(ws, { includeCollapsed: true }).includes(target)
+          ) {
+            return {
+              error: `No such target: ${target}. Use a tab key from workspace_overview, "app:<name>", "file:<path>", or a URL.`,
+            };
+          }
+          updateWorkspace((current) => ({
+            ...current,
+            activeTabKey: target,
+            split: null,
+            ...(target.startsWith("chat:")
+              ? {
+                  activeChatId: target.slice("chat:".length),
+                  chats: current.chats.map((chat) =>
+                    chat.localId === target.slice("chat:".length)
+                      ? { ...chat, mode: "tab" }
+                      : chat,
+                  ),
+                }
+              : {}),
+          }));
+          if (!target.startsWith("chat:")) stepChatAside();
+          return { key: target };
+        }
+        case "pointAt": {
+          const target = String(params.target ?? "").trim();
+          if (!target) return { ok: false, error: "Empty target" };
+          const note =
+            typeof params.note === "string" && params.note.trim()
+              ? params.note.trim().slice(0, 60)
+              : undefined;
+          const keep = params.keepPrevious === true;
+          setAgentPointersRef.current((current) => {
+            const rest = keep
+              ? current.filter((pointer) => pointer.target !== target)
+              : [];
+            return [...rest, { target, note }];
+          });
+          return { ok: true };
+        }
+        case "clearPointers": {
+          setAgentPointersRef.current([]);
+          return { ok: true };
+        }
         case "surfaceControl": {
           const key = String(params.key);
           const controlled = Boolean(params.controlled);
@@ -2536,6 +2685,14 @@ export function App() {
 
   return (
     <div className="flex h-full">
+      {/* Agent pointers: glow + scroll on data-point-key elements. The
+          workspace object is the re-resolve trigger — a pointed tab may
+          mount after the point_at call. */}
+      <AgentPointers
+        pointers={agentPointers}
+        onDismiss={dismissPointer}
+        revision={workspace}
+      />
       <aside
         className={`flex shrink-0 flex-col overflow-hidden border-r border-border bg-bg-raised transition-[width] duration-200 ease-[cubic-bezier(0.2,0,0,1)] ${
           sidebarOpen ? "w-[260px]" : "w-0 border-r-0"
@@ -2700,6 +2857,13 @@ export function App() {
                         </Suspense>
                       ) : tab.kind === "app" ? (
                         <AppScreen projectId={projectId} appName={tab.name} />
+                      ) : tab.kind === "mcpapp" ? (
+                        <McpAppScreen
+                          toolKey={tab.toolKey}
+                          toolInput={tab.toolInput}
+                          toolResult={tab.toolResult}
+                          onOpenLink={(url) => openBrowserTab(url)}
+                        />
                       ) : tab.kind === "settings" ? (
                         <SettingsScreen
                           onClose={() => closeTab(tabKey(tab))}
@@ -2956,6 +3120,20 @@ export function App() {
                   paletteTargeted={entry.localId === targetedChat?.localId}
                   surfaces={surfacesFor(entry)}
                   onOpenSurface={openSurface}
+                  onOpenMcpApp={(view, mode) => {
+                    const name = view.toolUseId;
+                    openTab(
+                      {
+                        kind: "mcpapp",
+                        name,
+                        label: view.title,
+                        toolKey: view.toolKey,
+                        toolInput: view.toolInput,
+                        toolResult: view.toolResult,
+                      },
+                      mode === "split" ? "side" : undefined,
+                    );
+                  }}
                   onLinkClick={(url, modifiers) => {
                     // The palette's grammar, applied to links: plain =
                     // open (the page takes the view, a fullscreen chat
@@ -3424,7 +3602,7 @@ function AppsNav({
   return (
     <ul className="flex flex-col gap-0.5">
       {apps.map((app) => (
-        <li key={app.name}>
+        <li key={app.name} data-point-key={`app:${app.name}`}>
           <button
             type="button"
             onClick={() => onSelect(app.name)}

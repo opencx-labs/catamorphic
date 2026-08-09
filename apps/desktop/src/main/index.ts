@@ -12,6 +12,7 @@ import { registerBrowserSupport } from "./browser.js";
 import { ConnectorsService } from "./connectors.js";
 import { registerIpcHandlers, type ServerState } from "./ipc.js";
 import { type Keybindings, toAccelerator } from "./keybindings.js";
+import { McpAppsService } from "./mcp-apps.js";
 import { ProfileConfigManager } from "./profile-config.js";
 import { ProfilesStore } from "./profiles.js";
 import { type EmbeddedServer, startEmbeddedServer } from "./server/boot.js";
@@ -300,8 +301,21 @@ app.whenReady().then(async () => {
     connectionsFor: (profileId) =>
       profileConfig.forProfile(profileId).connections,
   });
+  // MCP Apps host: which connection tools carry a ui:// view, their
+  // templates, and the view-initiated tool calls.
+  const mcpApps = new McpAppsService({
+    connectionsFor: (profileId) =>
+      profileConfig.forProfile(profileId).connections,
+  });
 
-  registerIpcHandlers(profileConfig, state, windows, paths, connectors);
+  registerIpcHandlers(
+    profileConfig,
+    state,
+    windows,
+    paths,
+    connectors,
+    mcpApps,
+  );
   browserSupport = registerBrowserSupport(
     profilesStore,
     profileConfig,

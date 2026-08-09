@@ -288,3 +288,22 @@ export function connectionServerKey(connection: McpConnection): string {
     .replace(/^-+|-+$/g, "");
   return base || connection.id.slice(0, 8);
 }
+
+/**
+ * Server key → connection for every ENABLED connection, with duplicate
+ * names deduped deterministically. Computed over the full enabled set so
+ * a key means the same connection everywhere (harness config, event
+ * names, the MCP-apps view resolver) regardless of per-agent narrowing.
+ */
+export function connectionServerKeys(
+  connections: McpConnection[],
+): Map<string, McpConnection> {
+  const keyed = new Map<string, McpConnection>();
+  for (const connection of connections) {
+    if (!connection.enabled) continue;
+    let key = connectionServerKey(connection);
+    while (keyed.has(key)) key = `${key}-2`;
+    keyed.set(key, connection);
+  }
+  return keyed;
+}

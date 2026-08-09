@@ -14,7 +14,10 @@ import type {
 } from "@catamorphic/sandbox";
 import type { WorkspaceBridge } from "../agent-bridge.js";
 import type { AgentConfig } from "../agents-store.js";
-import { connectionServerKey, toAgentMcpServer } from "../connections-store.js";
+import {
+  connectionServerKeys,
+  toAgentMcpServer,
+} from "../connections-store.js";
 import type { ConnectorsService } from "../connectors.js";
 import { bestFreeModelId, fetchOpenRouterModels } from "../openrouter.js";
 import type { ProfileConfigManager } from "../profile-config.js";
@@ -159,19 +162,17 @@ export class DesktopAgentRegistry implements CodingAgentRegistry {
     const assignment = config.connections ?? { mode: "all" };
     const picked =
       assignment.mode === "picked" ? new Set(assignment.connectionIds) : null;
-    const connections = stores.connections
-      .list()
-      .filter((entry) => entry.enabled && (!picked || picked.has(entry.id)));
 
+    // Keys are computed over the FULL enabled set, then narrowed — so the
+    // same key names the same connection for every agent and for the
+    // MCP-apps view resolver, whatever this agent's assignment is.
     const servers: Record<string, AgentMcpServerConfig> = {};
-    const usedKeys = new Set<string>();
-    for (const connection of connections) {
+    for (const [key, connection] of connectionServerKeys(
+      stores.connections.list(),
+    )) {
+      if (picked && !picked.has(connection.id)) continue;
       const mapped = toAgentMcpServer(connection);
-      if (!mapped) continue;
-      let key = connectionServerKey(connection);
-      while (usedKeys.has(key)) key = `${key}-2`;
-      usedKeys.add(key);
-      servers[key] = mapped;
+      if (mapped) servers[key] = mapped;
     }
 
     const plugins: AgentPluginConfig[] = [];

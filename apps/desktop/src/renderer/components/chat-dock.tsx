@@ -1,5 +1,6 @@
 import { type AgentChatAttachment, useAgentChat } from "@catamorphic/react";
 import {
+  AppWindow,
   ArrowUp,
   Bot,
   ChevronUp,
@@ -8,6 +9,7 @@ import {
   FileText,
   GitFork,
   Globe,
+  LayoutGrid,
   LoaderCircle,
   Maximize2,
   Minus,
@@ -46,7 +48,15 @@ export type ChatMode = "min" | "partial" | "tab";
 export interface ChatSurface {
   /** Workspace tab key ("browser:<id>" / "terminal:<id>" / "chat:<id>"). */
   key: string;
-  kind: "browser" | "terminal" | "editor" | "chat" | "subagent" | "watcher";
+  kind:
+    | "browser"
+    | "terminal"
+    | "editor"
+    | "chat"
+    | "subagent"
+    | "watcher"
+    | "app"
+    | "mcpapp";
   label: string;
   faviconUrl?: string | null;
   /** The agent is actively working here (spinner on the chip). */
@@ -57,6 +67,17 @@ export interface ChatSurface {
    * activity feed, a watcher's command).
    */
   info?: string[];
+  /** MCP app chips: the view to open when clicked. */
+  mcpApp?: McpAppRef;
+}
+
+/** An MCP Apps view reachable from a chat's tool call. */
+export interface McpAppRef {
+  toolKey: string;
+  toolUseId: string;
+  title: string;
+  toolInput?: unknown;
+  toolResult?: unknown;
 }
 
 /** Chips group per kind once a chat collects this many surfaces. */
@@ -69,6 +90,8 @@ const SURFACE_GROUP_LABELS = {
   chat: "forks",
   subagent: "subagents",
   watcher: "watchers",
+  app: "apps",
+  mcpapp: "app views",
 } as const;
 
 const SURFACE_ICONS = {
@@ -78,6 +101,8 @@ const SURFACE_ICONS = {
   chat: GitFork,
   subagent: Bot,
   watcher: Radio,
+  app: LayoutGrid,
+  mcpapp: AppWindow,
 } as const;
 
 /** Short, charismatic empty-state openers; one is picked per chat. */
@@ -164,8 +189,15 @@ interface TurnEvent {
   subagentType?: string;
   backgroundId?: string;
   toolName?: string;
+  toolInput?: unknown;
+  toolResult?: unknown;
+  toolUseId?: string;
   filePath?: string;
 }
+
+/** Project-app name from a file path under apps/<name>/, if any. */
+const appNameFromPath = (filePath: string | undefined): string | undefined =>
+  filePath?.match(/(?:^|\/)apps\/([a-z0-9][a-z0-9-]*)\//)?.[1];
 
 const firstLine = (value: string | undefined): string =>
   (value ?? "").split("\n", 1)[0]?.trim() ?? "";
@@ -187,18 +219,53 @@ const activityLine = (event: TurnEvent): string => {
 function activityChips(
   messages: Array<{ role: string; metadata?: unknown }>,
   working: boolean,
+  uiTools: Record<string, string>,
 ): ChatSurface[] {
   let lastSubagentEvents: TurnEvent[] | undefined;
   const watchers = new Map<string, { label: string; ended: boolean }>();
+  // Apps the agent worked on (file edits under apps/<name>/); active while
+  // the CURRENT turn touches them.
+  const apps = new Map<string, { active: boolean }>();
+  // Tool calls whose tool declares an MCP Apps view; later events with the
+  // same toolUseId merge in the result.
+  const mcpApps = new Map<string, McpAppRef>();
   for (const message of messages) {
     if (message.role !== "assistant") continue;
-    const events = (message.metadata as { events?: TurnEvent[] } | null)
-      ?.events;
+    const metadata = message.metadata as {
+      events?: TurnEvent[];
+      status?: string;
+    } | null;
+    const events = metadata?.events;
     if (!Array.isArray(events)) continue;
+    const inProgress = metadata?.status === "in_progress";
     if (events.some((event) => event.type === "subagent")) {
       lastSubagentEvents = events;
     }
     for (const event of events) {
+      if (event.type === "file_edit") {
+        const appName = appNameFromPath(event.filePath);
+        if (appName) apps.set(appName, { active: inProgress && working });
+        continue;
+      }
+      if (
+        event.type === "tool_call" &&
+        event.toolUseId &&
+        event.toolName &&
+        uiTools[event.toolName] !== undefined
+      ) {
+        const existing = mcpApps.get(event.toolUseId);
+        mcpApps.set(event.toolUseId, {
+          toolKey: event.toolName,
+          toolUseId: event.toolUseId,
+          title: event.toolName.split("/").pop() ?? event.toolName,
+          toolInput: event.toolInput ?? existing?.toolInput,
+          toolResult:
+            event.toolResult !== undefined
+              ? event.toolResult
+              : existing?.toolResult,
+        });
+        continue;
+      }
       if (event.type !== "background" || !event.backgroundId) continue;
       if (event.status === "ended") {
         const watcher = watchers.get(event.backgroundId);
@@ -262,6 +329,23 @@ function activityChips(
       ],
     });
   }
+  for (const [name, app] of apps) {
+    chips.push({
+      key: `app:${name}`,
+      kind: "app",
+      label: name,
+      active: app.active,
+    });
+  }
+  // Newest app views first; older ones age off the rail.
+  for (const ref of [...mcpApps.values()].slice(-4)) {
+    chips.push({
+      key: `mcpapp:${ref.toolUseId}`,
+      kind: "mcpapp",
+      label: ref.title,
+      mcpApp: ref,
+    });
+  }
   return chips;
 }
 
@@ -285,10 +369,12 @@ const emptyStateFor = (localId: string): string => {
 function SurfaceChip({
   surface,
   onOpenSurface,
+  onOpenMcpApp,
   onToggleInfo,
 }: {
   surface: ChatSurface;
   onOpenSurface: (key: string, mode: "tab" | "split") => void;
+  onOpenMcpApp?: (view: McpAppRef, mode: "tab" | "split") => void;
   onToggleInfo: (key: string) => void;
 }) {
   const Icon = SURFACE_ICONS[surface.kind];
@@ -302,9 +388,11 @@ function SurfaceChip({
       <button
         type="button"
         onClick={(event) =>
-          surface.info
-            ? onToggleInfo(surface.key)
-            : onOpenSurface(surface.key, event.metaKey ? "split" : "tab")
+          surface.mcpApp
+            ? onOpenMcpApp?.(surface.mcpApp, event.metaKey ? "split" : "tab")
+            : surface.info
+              ? onToggleInfo(surface.key)
+              : onOpenSurface(surface.key, event.metaKey ? "split" : "tab")
         }
         className="flex min-w-0 cursor-pointer items-center gap-1.5 py-1 pl-2 pr-1.5 transition-colors duration-100 hover:text-fg"
       >
@@ -357,9 +445,11 @@ function SurfaceChip({
 function SurfacesRail({
   surfaces,
   onOpenSurface,
+  onOpenMcpApp,
 }: {
   surfaces: ChatSurface[];
   onOpenSurface: (key: string, mode: "tab" | "split") => void;
+  onOpenMcpApp?: (view: McpAppRef, mode: "tab" | "split") => void;
 }) {
   const [openGroup, setOpenGroup] = useState<ChatSurface["kind"] | null>(null);
   const [openInfoKey, setOpenInfoKey] = useState<string | null>(null);
@@ -442,6 +532,14 @@ function SurfacesRail({
               <button
                 type="button"
                 onClick={(event) => {
+                  if (surface.mcpApp) {
+                    onOpenMcpApp?.(
+                      surface.mcpApp,
+                      event.metaKey ? "split" : "tab",
+                    );
+                    setOpenGroup(null);
+                    return;
+                  }
                   if (surface.info) {
                     toggleInfo(surface.key);
                     return;
@@ -539,6 +637,7 @@ function SurfacesRail({
                 key={surface.key}
                 surface={surface}
                 onOpenSurface={onOpenSurface}
+                onOpenMcpApp={onOpenMcpApp}
                 onToggleInfo={toggleInfo}
               />
             ))
@@ -609,6 +708,8 @@ export interface ChatDockProps {
    * tiles it to the right of the current view.
    */
   onOpenSurface?: (key: string, mode: "tab" | "split") => void;
+  /** Open an MCP Apps view (a connection tool's ui:// template) as a tab. */
+  onOpenMcpApp?: (view: McpAppRef, mode: "tab" | "split") => void;
   /** Set while this tab is the unfocused pane of a split: click focuses. */
   onFocusRequest?: () => void;
   /** Set while this tab sits in a split: return it to a full-width tab. */
@@ -669,6 +770,7 @@ export function ChatDock({
   paletteTargeted,
   surfaces = [],
   onOpenSurface,
+  onOpenMcpApp,
   onFocusRequest,
   onUnsplit,
   onLinkClick,
@@ -694,12 +796,23 @@ export function ChatDock({
     chat.isSending,
   );
 
-  // Subagent and background-watcher chips come from the chat's own turn
-  // events (every harness reports them through the common event model);
-  // workspace-tab chips arrive via the surfaces prop. One rail, both.
+  // Which connection tools carry an MCP Apps view — chips for those tool
+  // calls open the embedded app.
+  const [uiTools, setUiTools] = useState<Record<string, string>>({});
+  useEffect(() => {
+    void desktopApi
+      .mcpAppsUiTools()
+      .then(setUiTools)
+      .catch(() => {});
+  }, []);
+
+  // Subagent, watcher, worked-on-app, and MCP-app-view chips come from
+  // the chat's own turn events (every harness reports them through the
+  // common event model); workspace-tab chips arrive via the surfaces
+  // prop. One rail, all of them.
   const chatActivityChips = useMemo(
-    () => activityChips(chat.messages, chat.isWorking),
-    [chat.messages, chat.isWorking],
+    () => activityChips(chat.messages, chat.isWorking, uiTools),
+    [chat.messages, chat.isWorking, uiTools],
   );
   const railSurfaces = useMemo(
     () => [...surfaces, ...chatActivityChips],
@@ -1271,6 +1384,7 @@ export function ChatDock({
               <SurfacesRail
                 surfaces={railSurfaces}
                 onOpenSurface={onOpenSurface}
+                onOpenMcpApp={onOpenMcpApp}
               />
             )}
             {questions && !chat.isSending && (

@@ -33,12 +33,25 @@ export type ChatIconSetter = (
   icon: string,
 ) => Promise<void>;
 
+/** Builds (and optionally publishes) a project app; wired after boot. */
+export type AppBuilder = (
+  projectId: string,
+  appName: string,
+  publish: boolean,
+) => Promise<{
+  status: "published" | "preview_ready" | "failed";
+  versionId?: string;
+  error?: string;
+}>;
+
 export interface WorkspaceToolkit {
   tools: ExtraTool[];
   /** Late-bound: the chat store exists only after the server boots. */
   setChatTranscriptReader(reader: ChatTranscriptReader): void;
   /** Late-bound for the same reason. */
   setChatIconSetter(setter: ChatIconSetter): void;
+  /** Late-bound: the apps service exists only after the server boots. */
+  setAppBuilder(builder: AppBuilder): void;
 }
 
 const TRANSCRIPT_MESSAGE_CAP = 40;
@@ -49,8 +62,98 @@ export function buildWorkspaceToolkit(
 ): WorkspaceToolkit {
   let readChatTranscript: ChatTranscriptReader | null = null;
   let setChatIcon: ChatIconSetter | null = null;
+  let buildApp: AppBuilder | null = null;
 
   const tools: ExtraTool[] = [
+    {
+      name: "build_app",
+      description:
+        "Build a project app (a React frontend under apps/<name>/ that calls workflows through the typed app contract) and publish it so the user can open it. Run this after creating or editing an app's files — publishing is what makes your changes visible. Pass publish: false to only compile a preview (checks for build errors without changing what the user sees). On success, show the result with open_surface target 'app:<name>'.",
+      parameters: {
+        name: z
+          .string()
+          .regex(/^[a-z0-9][a-z0-9-]*$/)
+          .describe("The app's directory name under apps/"),
+        publish: z
+          .boolean()
+          .optional()
+          .describe("Publish after building (default true)"),
+      },
+      execute: async (input, ctx) => {
+        if (!buildApp) throw new Error("App building is not available yet.");
+        const result = await buildApp(
+          ctx.projectId,
+          String(input.name),
+          input.publish !== false,
+        );
+        if (result.status === "failed") {
+          throw new Error(result.error ?? "App build failed");
+        }
+        return {
+          ...result,
+          note:
+            result.status === "published"
+              ? `Published. Open it for the user with open_surface target "app:${input.name}".`
+              : "Preview compiled — the published version is unchanged.",
+        };
+      },
+    },
+    {
+      name: "open_surface",
+      description:
+        "Open (or focus) something tab-shaped in the user's workspace, BEHIND your chat — your chat steps down to its floating dock so the user sees the tab. Targets: an existing tab key from workspace_overview, 'app:<name>' (a published project app), 'file:<path>' (opens the file in an editor tab), or an http(s) URL (browser tab). Use it to show the user something: an app you built, a file you changed, a page.",
+      parameters: {
+        target: z
+          .string()
+          .describe("Tab key, 'app:<name>', 'file:<path>', or an http(s) URL"),
+      },
+      execute: (input, ctx) =>
+        bridge.openTarget(
+          ctx.projectId,
+          ctx.sessionId ?? "",
+          String(input.target),
+        ),
+    },
+    {
+      name: "point_at",
+      description:
+        "Point the user's attention at a UI element with a subtle glow and scroll it into view. The glow stays until the user interacts with that element or you point at something else (pass keep_previous to stack pointers instead of replacing them). Targets: a workspace tab key from workspace_overview (glows that tab), 'app:<name>', or 'sidebar:<item label>' (glows that sidebar entry). Use clear_pointers when nothing should be highlighted anymore.",
+      parameters: {
+        target: z
+          .string()
+          .describe("Tab key, 'app:<name>', or 'sidebar:<item label>'"),
+        note: z
+          .string()
+          .optional()
+          .describe("Short label shown beside the glow (a few words)"),
+        keep_previous: z
+          .boolean()
+          .optional()
+          .describe("Keep earlier pointers glowing too (default false)"),
+      },
+      execute: async (input, ctx) => {
+        const result = await bridge.pointAt(
+          ctx.projectId,
+          String(input.target),
+          typeof input.note === "string" ? input.note : undefined,
+          input.keep_previous === true,
+        );
+        if (!result.ok) {
+          throw new Error(result.error ?? "Could not find that element.");
+        }
+        return { ok: true };
+      },
+    },
+    {
+      name: "clear_pointers",
+      description:
+        "Remove every glow you placed with point_at. Use it when the tour is over or the highlights no longer apply.",
+      parameters: {},
+      execute: async (_input, ctx) => {
+        await bridge.clearPointers(ctx.projectId);
+        return { ok: true };
+      },
+    },
     {
       name: "set_chat_icon",
       description: `Set this conversation's icon, shown on its tab, bubble, and sidebar entry (like picking a team icon in Linear). Choose the icon and color that best capture what the conversation is about; do it once when the topic is clear (around when the conversation gets its title), and again only if the topic changes substantially. Icons: ${CHAT_ICON_NAMES.join(", ")}. Colors: ${CHAT_ICON_COLOR_IDS.join(", ")}.`,
@@ -295,6 +398,9 @@ export function buildWorkspaceToolkit(
     },
     setChatIconSetter(setter) {
       setChatIcon = setter;
+    },
+    setAppBuilder(builder) {
+      buildApp = builder;
     },
   };
 }

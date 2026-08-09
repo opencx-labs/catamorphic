@@ -1,4 +1,5 @@
 import {
+  AppWindow,
   Bot,
   ChevronsLeft,
   ChevronsRight,
@@ -123,6 +124,15 @@ export type WorkspaceTab = (
   | { kind: "agent-setup"; name: string; label?: string }
   | { kind: "terminal"; name: string; label?: string }
   | { kind: "editor"; name: string; label?: string }
+  | {
+      /** An MCP Apps view (a connection tool's ui:// template). */
+      kind: "mcpapp";
+      name: string;
+      label?: string;
+      toolKey: string;
+      toolInput?: unknown;
+      toolResult?: unknown;
+    }
 ) &
   TabIndicators;
 
@@ -138,6 +148,7 @@ const TAB_ICONS = {
   "agent-setup": Bot,
   terminal: SquareTerminal,
   editor: FileCode,
+  mcpapp: AppWindow,
 } as const;
 
 interface RenderedTab {
@@ -346,6 +357,7 @@ export function WorkspaceTabBar({
           <Fragment key={key}>
             <div
               data-palette-target={highlighted || undefined}
+              data-point-key={key}
               draggable={Boolean(onReorder) && !exiting}
               onDragStart={(event) => {
                 event.dataTransfer.setData("text/plain", key);

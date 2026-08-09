@@ -488,3 +488,45 @@ kbd {
 .animate-title-change {
   animation: title-change 1200ms cubic-bezier(0.2, 0, 0, 1);
 }
+
+/* Agent pointer: the agent directing the user's attention at an element
+   (point_at tool). A soft accent ring with a gentle breathing pulse — a
+   waiting state, like the question badge's pulse: it loops only until the
+   user interacts with the element or the agent points elsewhere. */
+.agent-pointer {
+  position: relative;
+  border-radius: 6px;
+  animation: agent-pointer-pulse 2s ease-in-out infinite;
+}
+
+@keyframes agent-pointer-pulse {
+  0%,
+  100% {
+    box-shadow:
+      0 0 0 2px color-mix(in srgb, var(--color-accent) 65%, transparent),
+      0 0 10px color-mix(in srgb, var(--color-accent) 30%, transparent);
+  }
+  50% {
+    box-shadow:
+      0 0 0 2px color-mix(in srgb, var(--color-accent) 35%, transparent),
+      0 0 16px color-mix(in srgb, var(--color-accent) 45%, transparent);
+  }
+}
+
+/* The agent's short note, floated above the pointed element. */
+.agent-pointer[data-agent-pointer-note]::after {
+  content: attr(data-agent-pointer-note);
+  position: absolute;
+  bottom: calc(100% + 6px);
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 60;
+  white-space: nowrap;
+  padding: 2px 8px;
+  border-radius: 6px;
+  border: 1px solid var(--color-border-strong);
+  background: var(--color-bg-overlay);
+  color: var(--color-fg);
+  font-size: 11px;
+  pointer-events: none;
+}

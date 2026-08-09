@@ -145,6 +145,36 @@ export async function startEmbeddedServer(
     },
   );
 
+  // The agent's build_app tool: compile in the dev sandbox and (usually)
+  // publish, so "build me a dashboard" ends with something the user can
+  // open — not an unpublished draft.
+  agentRegistry.workspaceToolkit?.setAppBuilder(
+    async (projectId, appName, publish) => {
+      const apps = catamorphic.core.apps;
+      if (!apps) return { status: "failed", error: "Apps are not configured" };
+      const identity = {
+        tenantId: DESKTOP_TENANT_ID,
+        externalUserId: DESKTOP_USER_ID,
+      };
+      const version = await apps.build({
+        identity,
+        projectId,
+        appName,
+        kind: publish ? "published" : "preview",
+      });
+      if (version.status !== "ready") {
+        return {
+          status: "failed",
+          versionId: version.id,
+          error: version.error ?? "Build failed",
+        };
+      }
+      if (!publish) return { status: "preview_ready", versionId: version.id };
+      await apps.publish({ identity, projectId, versionId: version.id });
+      return { status: "published", versionId: version.id };
+    },
+  );
+
   const app: FastifyInstance = Fastify({ logger: { level: "warn" } });
   await app.register(cors, {
     origin: true,
