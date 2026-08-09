@@ -48,6 +48,8 @@ interface ViewStateReady {
   versionId: string;
   code: string;
   css: string;
+  /** Tenant-policy network origins the iframe CSP may allow. */
+  allowedNetworkOrigins?: string[];
 }
 
 type ViewState =
@@ -321,12 +323,19 @@ export function AppMount({
  * source is the inline bundle itself.
  */
 function buildGuestDocument(view: ViewStateReady): string {
+  // Default-deny network; the tenant's app policy may open specific https
+  // origins (`tenant_app_policies.allowed_network_origins`) — validated as
+  // plain https origins at write time, so they are CSP-safe verbatim.
+  const connectSrc =
+    view.allowedNetworkOrigins && view.allowedNetworkOrigins.length > 0
+      ? `connect-src ${view.allowedNetworkOrigins.join(" ")}`
+      : "connect-src 'none'";
   const csp = [
     "default-src 'none'",
     "script-src 'unsafe-inline'",
     "style-src 'unsafe-inline'",
     "img-src data: blob:",
-    "connect-src 'none'",
+    connectSrc,
   ].join("; ");
   return [
     "<!doctype html>",

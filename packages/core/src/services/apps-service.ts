@@ -487,6 +487,8 @@ export class AppsService {
         code: string;
         css: string;
         allowedWorkflows: string[];
+        /** Origins the mount's iframe CSP may allow (tenant policy). */
+        allowedNetworkOrigins: string[];
       }
   > {
     // Deliberately NOT assertProjectSurface: viewers land here. Tenant scoping
@@ -526,6 +528,7 @@ export class AppsService {
       this.deps.bundleStore.get(version.css_key),
     ]);
     if (!code || !css) return { state: "not_published" };
+    const policy = await this.deps.policies.get(args.identity.tenantId);
     const decoder = new TextDecoder();
     return {
       state: "ready",
@@ -534,6 +537,7 @@ export class AppsService {
       code: decoder.decode(code.data),
       css: decoder.decode(css.data),
       allowedWorkflows: parseAllowedWorkflows(version.allowed_workflows) ?? [],
+      allowedNetworkOrigins: policy.allowedNetworkOrigins,
     };
   }
 

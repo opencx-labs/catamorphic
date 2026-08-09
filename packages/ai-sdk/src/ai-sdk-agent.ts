@@ -1,5 +1,9 @@
 import path from "node:path";
-import { type ConnectedMcpServer, connectMcpServer } from "@catamorphic/mcp";
+import {
+  type ConnectedMcpServer,
+  connectMcpServer,
+  flattenToolResult,
+} from "@catamorphic/mcp";
 import type {
   AgentEffort,
   AgentEvent,
@@ -301,6 +305,9 @@ export class AiSdkCodingAgent implements CodingAgentProvider {
     let text = "";
     let askedToolCallId: string | undefined;
     let askedQuestions: AgentQuestion[] | undefined;
+    // MCP tool calls get a second, cumulative event once their result
+    // lands — the result payload is what an MCP Apps view renders.
+    const pendingMcpCalls = new Map<string, { name: string; input: unknown }>();
 
     try {
       const result = await agent.stream({
@@ -322,7 +329,32 @@ export class AiSdkCodingAgent implements CodingAgentProvider {
             askedQuestions = parseAskUserInput(part.input);
             continue;
           }
+          if (part.toolName.startsWith("mcp__")) {
+            pendingMcpCalls.set(part.toolCallId, {
+              name: part.toolName,
+              input: part.input,
+            });
+            yield {
+              ...mapToolCall(part.toolName, part.input),
+              toolUseId: part.toolCallId,
+            };
+            continue;
+          }
           yield mapToolCall(part.toolName, part.input);
+          continue;
+        }
+        if (part.type === "tool-result") {
+          const pending = pendingMcpCalls.get(part.toolCallId);
+          if (pending) {
+            pendingMcpCalls.delete(part.toolCallId);
+            yield {
+              ...mapToolCall(pending.name, pending.input),
+              toolUseId: part.toolCallId,
+              toolResult:
+                (part as { output?: unknown }).output ??
+                (part as { result?: unknown }).result,
+            };
+          }
           continue;
         }
         if (part.type === "tool-error") {
@@ -456,10 +488,21 @@ function buildMcpTools(
         inputSchema: jsonSchema<Record<string, unknown>>(
           info.inputSchema as Parameters<typeof jsonSchema>[0],
         ),
-        execute: async (input) =>
-          truncateToolOutput(
-            await server.callTool(info.name, input as Record<string, unknown>),
-          ),
+        execute: async (input) => {
+          // Prefer structured content: MCP Apps views render it, and the
+          // model reads JSON fine. Text-only results stay text;
+          // flattenToolResult throws on isError results.
+          const raw = await server.callToolRaw(
+            info.name,
+            input as Record<string, unknown>,
+          );
+          if (raw.structuredContent !== undefined && !raw.isError) {
+            return raw.structuredContent;
+          }
+          return truncateToolOutput(
+            flattenToolResult(raw as Parameters<typeof flattenToolResult>[0]),
+          );
+        },
       });
     }
   }

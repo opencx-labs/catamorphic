@@ -81,6 +81,7 @@ export const AppViewStateSchema = z.discriminatedUnion("state", [
     code: z.string(),
     css: z.string(),
     allowedWorkflows: z.array(z.string()),
+    allowedNetworkOrigins: z.array(z.string()),
   }),
 ]);
 

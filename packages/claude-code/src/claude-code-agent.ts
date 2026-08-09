@@ -466,12 +466,54 @@ function backgroundTaskHooks(
     }
     return {};
   };
+  // External MCP tool results: the assistant block only carries the CALL;
+  // the result payload (what an MCP Apps view renders) arrives here.
+  const onMcpToolDone: HookCallback = async (input) => {
+    const data = input as {
+      tool_name?: string;
+      tool_use_id?: string;
+      tool_input?: Record<string, unknown>;
+      tool_response?: unknown;
+    };
+    const name = data.tool_name?.match(/^mcp__(.+?)__(.+)$/);
+    if (!name || name[1] === "workspace" || !data.tool_use_id) return {};
+    emit({
+      type: "tool_call",
+      toolName: `${name[1]}/${name[2]}`,
+      toolInput: data.tool_input ?? {},
+      toolUseId: data.tool_use_id,
+      toolResult: extractMcpToolResult(data.tool_response),
+    });
+    return {};
+  };
   return {
     PostToolUse: [
       { matcher: "Bash", hooks: [onBashDone] },
       { matcher: TASK_STOP_TOOLS.join("|"), hooks: [onTaskStop] },
+      { matcher: "^mcp__", hooks: [onMcpToolDone] },
     ],
   };
+}
+
+/**
+ * Structured content when the server sent it, else the flattened text —
+ * the SDK's tool_response for MCP tools mirrors the MCP result shape.
+ */
+function extractMcpToolResult(response: unknown): unknown {
+  if (!response || typeof response !== "object") return response ?? null;
+  const record = response as {
+    structuredContent?: unknown;
+    content?: Array<{ type?: string; text?: string }>;
+  };
+  if (record.structuredContent !== undefined) return record.structuredContent;
+  if (Array.isArray(record.content)) {
+    const text = record.content
+      .filter((block) => typeof block.text === "string")
+      .map((block) => block.text)
+      .join("\n");
+    if (text) return text;
+  }
+  return record;
 }
 
 /** Minimal structural view of an Anthropic API content block. */
@@ -630,6 +672,18 @@ function mapContentBlock(block: ContentBlockLike): AgentEvent | null {
           type: "file_edit",
           filePath: typeof filePath === "string" ? filePath : undefined,
           content: name.toLowerCase(),
+        };
+      }
+      // External MCP tools read as "server/tool" (matching the other
+      // harnesses) and keep their tool-use id so the result-carrying
+      // hook event below correlates.
+      const external = name.match(/^mcp__(.+?)__(.+)$/);
+      if (external) {
+        return {
+          type: "tool_call",
+          toolName: `${external[1]}/${external[2]}`,
+          toolInput: input,
+          ...(block.id ? { toolUseId: block.id } : {}),
         };
       }
       return { type: "tool_call", toolName: name, toolInput: input };

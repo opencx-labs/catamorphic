@@ -150,7 +150,10 @@ describe("AiSdkCodingAgent", () => {
   });
 
   it("mounts MCP server tools beside the built-ins and maps their calls", async () => {
-    const callTool = vi.fn(async () => "3 open issues");
+    const callToolRaw = vi.fn(async () => ({
+      content: [{ type: "text", text: "3 open issues" }],
+      structuredContent: { open: 3 },
+    }));
     connectMcpServerMock.mockResolvedValueOnce({
       tools: [
         {
@@ -162,7 +165,9 @@ describe("AiSdkCodingAgent", () => {
           },
         },
       ],
-      callTool,
+      callTool: vi.fn(async () => "unused"),
+      callToolRaw,
+      readResource: vi.fn(),
       close: vi.fn(async () => {}),
     });
     const provider = createProvider();
@@ -187,12 +192,22 @@ describe("AiSdkCodingAgent", () => {
       transport: "http",
       url: "https://mcp.linear.app/mcp",
     });
-    expect(callTool).toHaveBeenCalledWith("list_issues", { team: "core" });
+    expect(callToolRaw).toHaveBeenCalledWith("list_issues", { team: "core" });
+    // Call-time event, then a cumulative event carrying the result the
+    // moment it lands (MCP Apps views render the structured payload).
     expect(events).toEqual([
       {
         type: "tool_call",
         toolName: "linear/list_issues",
         toolInput: { team: "core" },
+        toolUseId: "tool-1",
+      },
+      {
+        type: "tool_call",
+        toolName: "linear/list_issues",
+        toolInput: { team: "core" },
+        toolUseId: "tool-1",
+        toolResult: { open: 3 },
       },
       { type: "text", content: "You have 3 open issues." },
       { type: "done" },

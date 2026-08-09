@@ -324,6 +324,14 @@ export interface AgentEvent {
   content?: string;
   toolName?: string;
   toolInput?: unknown;
+  /**
+   * On "tool_call" events, when the harness surfaces it: the tool's
+   * result payload and the harness's id for the call. MCP tool results
+   * carry the data an MCP Apps view renders; events for the same
+   * toolUseId are cumulative (a later event may add the result).
+   */
+  toolResult?: unknown;
+  toolUseId?: string;
   filePath?: string;
   /** Set on "question" events: the agent is pausing for user input. */
   questions?: AgentQuestion[];

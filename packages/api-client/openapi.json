@@ -9468,6 +9468,12 @@
                           "items": {
                             "type": "string"
                           }
+                        },
+                        "allowedNetworkOrigins": {
+                          "type": "array",
+                          "items": {
+                            "type": "string"
+                          }
                         }
                       },
                       "required": [
@@ -9476,7 +9482,8 @@
                         "versionId",
                         "code",
                         "css",
-                        "allowedWorkflows"
+                        "allowedWorkflows",
+                        "allowedNetworkOrigins"
                       ],
                       "additionalProperties": false
                     }
@@ -9598,6 +9605,25 @@
                 }
               }
             }
+          }
+        }
+      }
+    },
+    "/api/projects/{projectId}/apps-mcp": {
+      "post": {
+        "parameters": [
+          {
+            "schema": {
+              "type": "string"
+            },
+            "in": "path",
+            "name": "projectId",
+            "required": true
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Default Response"
           }
         }
       }

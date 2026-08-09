@@ -336,14 +336,28 @@ function mapItemEvent(item: ThreadItem): AgentEvent[] {
       }));
     case "agent_message":
       return [{ type: "text", content: item.text }];
-    case "mcp_tool_call":
+    case "mcp_tool_call": {
+      // structured_content is what an MCP Apps view renders; fall back to
+      // the result's text content for servers that only send text.
+      const structured = item.result?.structured_content;
+      const text = (item.result?.content ?? [])
+        .map((block) =>
+          "text" in block && typeof block.text === "string" ? block.text : "",
+        )
+        .filter(Boolean)
+        .join("\n");
       return [
         {
           type: "tool_call",
           toolName: `${item.server}/${item.tool}`,
           toolInput: item.arguments,
+          toolUseId: item.id,
+          ...(structured !== undefined || text
+            ? { toolResult: structured ?? text }
+            : {}),
         },
       ];
+    }
     case "web_search":
       return [
         {

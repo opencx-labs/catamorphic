@@ -3,8 +3,10 @@ export {
   connectMcpServer,
   flattenToolResult,
   type McpConnectionProbe,
+  type McpResourceContent,
   type McpToolInfo,
   probeMcpServer,
+  uiResourceUri,
 } from "./client.js";
 export {
   DEFAULT_MARKETPLACES,

@@ -10,6 +10,11 @@ export type {
   WorkflowShape,
 } from "./contract.js";
 export {
+  type McpToolCallResult,
+  POLL_RUN_TOOL,
+  toolResultValue,
+} from "./mcp-host.js";
+export {
   APP_PROTOCOL_VERSION,
   AppCallError,
   type AppCallErrorCode,
