@@ -1,4 +1,5 @@
 import type { AgentMcpServerConfig } from "@catamorphic/sandbox";
+import { pickIcon } from "./client.js";
 
 /**
  * Client for the official MCP Registry (registry.modelcontextprotocol.io,
@@ -48,6 +49,8 @@ export interface RegistryServerJson {
   repository?: { url?: string };
   remotes?: RegistryRemote[];
   packages?: RegistryPackage[];
+  /** Icons metadata (2025-11-25); server.json carries a top-level array. */
+  icons?: unknown;
 }
 
 /** A value the user must supply before the connection can work. */
@@ -75,6 +78,8 @@ export interface McpRegistryEntry {
   version?: string;
   repositoryUrl?: string;
   status?: string;
+  /** Best displayable icon (https/data only), when the entry carries one. */
+  iconUrl?: string;
   suggested?: SuggestedConnection;
 }
 
@@ -118,6 +123,7 @@ export function toEntry(
   server: RegistryServerJson,
   status?: string,
 ): McpRegistryEntry {
+  const iconUrl = pickIcon(server.icons);
   return {
     name: server.name,
     displayName: server.name.split("/").pop() ?? server.name,
@@ -125,6 +131,7 @@ export function toEntry(
     version: server.version,
     repositoryUrl: server.repository?.url,
     status,
+    ...(iconUrl ? { iconUrl } : {}),
     suggested: suggestConnection(server),
   };
 }

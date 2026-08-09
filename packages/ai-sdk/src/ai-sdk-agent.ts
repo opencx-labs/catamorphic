@@ -2,6 +2,7 @@ import path from "node:path";
 import {
   type ConnectedMcpServer,
   connectMcpServer,
+  type ElicitHandler,
   flattenToolResult,
 } from "@catamorphic/mcp";
 import type {
@@ -73,6 +74,12 @@ export interface AiSdkCodingAgentOpts {
    * a broken connector must never break the chat.
    */
   mcpServers?: Record<string, AgentMcpServerConfig>;
+  /**
+   * How to answer MCP `elicitation/create` (form/URL) from those servers —
+   * the host renders it to the user. Also drives MRTR auto-fulfilment on
+   * the stateless era. Omit and servers see no elicitation capability.
+   */
+  onElicit?: ElicitHandler;
 }
 
 interface AiSdkSessionState {
@@ -107,7 +114,15 @@ export class AiSdkCodingAgent implements CodingAgentProvider {
         Object.entries(this.opts.mcpServers ?? {}).map(
           async ([name, config]) => {
             try {
-              connections.set(name, await connectMcpServer(config));
+              connections.set(
+                name,
+                await connectMcpServer(
+                  config,
+                  this.opts.onElicit
+                    ? { onElicit: this.opts.onElicit }
+                    : undefined,
+                ),
+              );
             } catch (cause) {
               console.warn(
                 `[ai-sdk] MCP server "${name}" failed to connect:`,

@@ -188,10 +188,11 @@ describe("AiSdkCodingAgent", () => {
 
     const events = await collect(agent, session, "What's on my plate?");
 
-    expect(connectMcpServerMock).toHaveBeenCalledWith({
-      transport: "http",
-      url: "https://mcp.linear.app/mcp",
-    });
+    expect(connectMcpServerMock).toHaveBeenCalledWith(
+      { transport: "http", url: "https://mcp.linear.app/mcp" },
+      // No onElicit configured on this agent, so the opts arg is undefined.
+      undefined,
+    );
     expect(callToolRaw).toHaveBeenCalledWith("list_issues", { team: "core" });
     // Call-time event, then a cumulative event carrying the result the
     // moment it lands (MCP Apps views render the structured payload).

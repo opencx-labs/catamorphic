@@ -5,6 +5,58 @@ import {
   StreamableHTTPClientTransport,
 } from "@modelcontextprotocol/client";
 import { StdioClientTransport } from "@modelcontextprotocol/client/stdio";
+import {
+  type ElicitHandler,
+  type ElicitResult,
+  parseElicitRequest,
+} from "./elicitation.js";
+
+/** Extra behavior a caller can wire into a connection. */
+export interface ConnectMcpOpts {
+  /**
+   * How to answer `elicitation/create` requests — a form or a URL the
+   * server needs the user to complete (OAuth handoffs, config). Declaring
+   * it advertises the elicitation capability (form + url) and registers
+   * the handler; on the stateless era the SAME handler fulfils MRTR
+   * `input_required` rounds. Omit it and the server sees no elicitation
+   * capability, so it never asks.
+   */
+  onElicit?: ElicitHandler;
+}
+
+/** An icon a server/tool exposes (2025-11-25 icons metadata). */
+export interface McpIcon {
+  src: string;
+  mimeType?: string;
+  sizes?: string;
+  theme?: "light" | "dark";
+}
+
+/**
+ * Best displayable icon from an `icons` array: https/data src only (spec
+ * security rule — never javascript:/file:/etc.), preferring a themeless or
+ * light icon and an SVG/PNG mime type.
+ */
+export function pickIcon(icons: unknown): string | undefined {
+  if (!Array.isArray(icons)) return undefined;
+  const usable = icons
+    .filter(
+      (icon): icon is McpIcon =>
+        typeof icon === "object" &&
+        icon !== null &&
+        typeof (icon as McpIcon).src === "string" &&
+        /^(https:\/\/|data:image\/)/i.test((icon as McpIcon).src),
+    )
+    .sort((a, b) => iconScore(b) - iconScore(a));
+  return usable[0]?.src;
+}
+
+function iconScore(icon: McpIcon): number {
+  let score = 0;
+  if (icon.theme !== "dark") score += 2;
+  if (icon.mimeType === "image/svg+xml") score += 1;
+  return score;
+}
 
 /**
  * MCP client layer built on the official v2 SDK. Connections negotiate
@@ -73,17 +125,42 @@ export function uiResourceUri(tool: McpToolInfo): string | undefined {
 
 const CLIENT_INFO = { name: "catamorphic-desktop", version: "1.0.0" };
 
-function buildClient(): Client {
-  return new Client(CLIENT_INFO, {
+function buildClient(opts?: ConnectMcpOpts): Client {
+  const client = new Client(CLIENT_INFO, {
     // Prefer the stateless 2026-07-28 protocol, probe-first with a
     // conservative fallback to the legacy handshake era.
     versionNegotiation: { mode: "auto" },
+    // Advertise elicitation only when the host can render it; both modes.
+    ...(opts?.onElicit
+      ? { capabilities: { elicitation: { form: {}, url: {} } } }
+      : {}),
   });
+  if (opts?.onElicit) {
+    const handler = opts.onElicit;
+    // Registered before connect: fields both legacy server→client
+    // `elicitation/create` requests AND (auto-fulfilled) MRTR
+    // `input_required` rounds on the stateless era.
+    client.setRequestHandler("elicitation/create", async (request) => {
+      const parsed = parseElicitRequest(
+        (request as { params?: unknown }).params,
+      );
+      const result = parsed
+        ? await handler(parsed)
+        : ({ action: "decline" } as ElicitResult);
+      // The SDK validates/narrows the result against ElicitResultSchema;
+      // our neutral shape is a structural subset, cast at the boundary.
+      return result as never;
+    });
+  }
+  return client;
 }
 
-async function connectTransport(config: AgentMcpServerConfig) {
+async function connectTransport(
+  config: AgentMcpServerConfig,
+  opts?: ConnectMcpOpts,
+) {
   if (config.transport === "stdio") {
-    const client = buildClient();
+    const client = buildClient(opts);
     await client.connect(
       new StdioClientTransport({
         command: config.command,
@@ -98,7 +175,7 @@ async function connectTransport(config: AgentMcpServerConfig) {
   const url = new URL(config.url);
   const requestInit = config.headers ? { headers: config.headers } : undefined;
   if (config.transport === "sse") {
-    const client = buildClient();
+    const client = buildClient(opts);
     await client.connect(new SSEClientTransport(url, { requestInit }));
     return client;
   }
@@ -106,14 +183,14 @@ async function connectTransport(config: AgentMcpServerConfig) {
   // Streamable HTTP first; legacy HTTP+SSE servers answer POSTs with 4xx/405,
   // so a failed connect falls back to the SSE transport before giving up.
   try {
-    const client = buildClient();
+    const client = buildClient(opts);
     await client.connect(
       new StreamableHTTPClientTransport(url, { requestInit }),
     );
     return client;
   } catch (streamableError) {
     try {
-      const client = buildClient();
+      const client = buildClient(opts);
       await client.connect(new SSEClientTransport(url, { requestInit }));
       return client;
     } catch {
@@ -148,8 +225,9 @@ export function flattenToolResult(result: {
 
 export async function connectMcpServer(
   config: AgentMcpServerConfig,
+  opts?: ConnectMcpOpts,
 ): Promise<ConnectedMcpServer> {
-  const client = await connectTransport(config);
+  const client = await connectTransport(config, opts);
   const listed = await client.listTools();
   const tools: McpToolInfo[] = listed.tools.map((tool) => ({
     name: tool.name,
