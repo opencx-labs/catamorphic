@@ -8,7 +8,7 @@ Workflow code must stay simple: easy for AI agents and humans to write and edit,
 
 ### Embeddable framework positioning (READ THIS FIRST)
 
-**Catamorphic ships as libraries a host application mounts in-process.** There is no standalone product and no default identity. The host provides auth, user/org model, database, and the deployment surface. The root `bun run dev` is a dev convenience only: it boots the reference host (`apps/playground`) plus its infra (docker-compose, sandbox bridge); libraries must never depend on the playground or on that script.
+**Catamorphic ships as libraries a host application mounts in-process.** There is no standalone product and no default identity. The host provides auth, user/org model, database, and the deployment surface. The root `bun run dev` is a dev convenience only: it boots the dev infra (docker-compose, sandbox bridge); libraries must never depend on that script. The in-repo reference host is the desktop app (`apps/desktop`, embedded server in `src/main/server/boot.ts`). The old web playground host was removed 2026-08 (severely out of date; will be rewritten from scratch if revisited).
 
 Concrete implications for any change you make:
 
@@ -20,9 +20,9 @@ Concrete implications for any change you make:
 
 ### Infrastructure priorities
 
-- **Cloudflare-first.** Cloudflare Sandbox is the default execution provider. S3-compatible storage (`@catamorphic/s3`, including Cloudflare R2) is the default git code storage until Cloudflare Artifacts access is generally available; Artifacts remains the preferred Cloudflare-native backend in `@catamorphic/cloudflare`. Daytona is the maintained alternate execution provider in `@catamorphic/daytona`. Hosts construct backends explicitly at boot (see ADRs 0008 and 0012 and `apps/playground/src/server/boot.ts`). See `CLOUDFLARE.md`.
+- **Cloudflare-first.** Cloudflare Sandbox is the default execution provider. S3-compatible storage (`@catamorphic/s3`, including Cloudflare R2) is the default git code storage until Cloudflare Artifacts access is generally available; Artifacts remains the preferred Cloudflare-native backend in `@catamorphic/cloudflare`. Daytona is the maintained alternate execution provider in `@catamorphic/daytona`. Hosts construct backends explicitly at boot (see ADRs 0008 and 0012 and `apps/desktop/src/main/server/boot.ts`). See `CLOUDFLARE.md`.
 - **Postgres for everything stateful.** Tables live in a dedicated schema (default `catamorphic`). When you need queues or scheduling, build them on the same Postgres (`SKIP LOCKED`) instead of adding infrastructure.
-- **OpenTelemetry throughout.** Libraries instrument with `@opentelemetry/api` only (via `@catamorphic/otel`); the host owns the SDK/exporters. New service methods on hot paths (runs, deploys, sandbox ops, project mutations) should get spans with `catamorphic.*` attributes. For dev, the repo-root docker-compose ships an OTel collector (:4317/:4318) writing to ClickHouse (:8124 HTTP / :19001 native, db `otel`); the playground registers the host-side SDK in `apps/playground/src/server/otel.ts`.
+- **OpenTelemetry throughout.** Libraries instrument with `@opentelemetry/api` only (via `@catamorphic/otel`); the host owns the SDK/exporters. New service methods on hot paths (runs, deploys, sandbox ops, project mutations) should get spans with `catamorphic.*` attributes. For dev, the repo-root docker-compose ships an OTel collector (:4317/:4318) writing to ClickHouse (:8124 HTTP / :19001 native, db `otel`); hosts register the host-side SDK themselves (see `INTEGRATION.md`).
 - **Bun** for running, bundling, and inside sandboxes.
 
 ## Design Decisions (ADRs)
@@ -53,7 +53,7 @@ Internal packages:
 - `packages/cloudflare` — **`@catamorphic/cloudflare`** backend plugin: `CloudflareSandboxProvider` (Bridge Worker client), `ArtifactsClient` + `ArtifactsRemoteBackend` (Cloudflare Artifacts code storage).
 - `packages/s3` — **`@catamorphic/s3`** backend plugin: `S3RemoteBackend` + `S3ObjectStore` store project origins directly in any S3-compatible bucket (Cloudflare R2, AWS S3, MinIO). Default code storage until Artifacts access lands (ADR 0012).
 - `packages/daytona` — **`@catamorphic/daytona`** backend plugin: `DaytonaSandboxProvider`, experimental Daytona git storage.
-- `packages/ai-sdk` — **`@catamorphic/ai-sdk`** coding-agent plugin: `AiSdkCodingAgent` uses Vercel AI SDK `ToolLoopAgent` in the host process and operates on the dev sandbox remotely. Flagship agent; used by the playground.
+- `packages/ai-sdk` — **`@catamorphic/ai-sdk`** coding-agent plugin: `AiSdkCodingAgent` uses Vercel AI SDK `ToolLoopAgent` in the host process and operates on the dev sandbox remotely. Flagship agent; used by the desktop app's built-in harness.
 - `packages/codex` — **`@catamorphic/codex`** coding-agent plugin: `CodexAgent` (OpenAI Codex SDK).
 - `packages/otel` — OpenTelemetry helpers (`getTracer`, `withSpan`) over `@opentelemetry/api`.
 - `packages/runtime` — workflow execution harness (runs inside the sandbox).
@@ -62,7 +62,7 @@ Internal packages:
 
 Apps:
 
-- `apps/playground` — reference host app (Fastify + Vite/React) on the Cloudflare stack. The repo-root `bun run dev` boots it with its infra (docker-compose + sandbox bridge); catamorphic itself remains embed-only.
+- `apps/desktop` — the Catamorphic desktop app (Electron), the in-repo reference host: it embeds the server in-process (`src/main/server/boot.ts`). Catamorphic itself remains embed-only. (The old `apps/playground` web host was removed 2026-08; it will be rewritten from scratch if revisited.)
 
 ## Skills
 

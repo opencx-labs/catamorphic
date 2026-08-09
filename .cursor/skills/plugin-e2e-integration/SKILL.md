@@ -19,7 +19,7 @@ This guide is intentionally domain-neutral. It applies to any plugin package tha
 2. Ensure plugin package has valid `catamorphic` manifest and built artifacts.
 3. Attach plugin to project.
 4. Save required project secrets.
-5. Run workflow (playground or run API).
+5. Run workflow (host app UI or run API).
 6. Verify plugin files exist in sandbox `node_modules/<packageName>/`.
 7. Verify run result/report is persisted without missing-secret or resolution errors.
 

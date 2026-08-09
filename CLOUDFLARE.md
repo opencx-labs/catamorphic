@@ -6,7 +6,7 @@ Related: [`AGENTS.md`](./AGENTS.md), [`packages/cloudflare/README.md`](packages/
 
 ---
 
-> **Cloudflare-first execution.** Cloudflare Sandbox is the default execution provider and ships in **`@catamorphic/cloudflare`** (see ADRs 0004 and 0008). Until Artifacts is generally available, S3-compatible storage from **`@catamorphic/s3`** (including Cloudflare R2) is the default git origin; `ArtifactsRemoteBackend` remains the preferred Cloudflare-native option. Hosts construct every backend explicitly. `apps/playground/src/server/boot.ts` is the reference wiring.
+> **Cloudflare-first execution.** Cloudflare Sandbox is the default execution provider and ships in **`@catamorphic/cloudflare`** (see ADRs 0004 and 0008). Until Artifacts is generally available, S3-compatible storage from **`@catamorphic/s3`** (including Cloudflare R2) is the default git origin; `ArtifactsRemoteBackend` remains the preferred Cloudflare-native option. Hosts construct every backend explicitly. The desktop app's embedded server (`apps/desktop/src/main/server/boot.ts`) is the in-repo reference wiring.
 
 ---
 
@@ -131,7 +131,7 @@ We use `.env` files (not `.env.local`) in this setup:
 
 > For workflow execution, the Cloudflare sandbox vars must be present in the **host process environment** (catamorphic runs in-process inside the host).
 
-### Runtime (Fastify server + playground)
+### Runtime (host app / Fastify server)
 
 | Variable | Purpose | Scope |
 | --- | --- | --- |
@@ -272,7 +272,7 @@ cp packages/cloudflare-sandbox-bridge/.dev.vars.example packages/cloudflare-sand
 # SANDBOX_API_KEY=local-dev
 ```
 
-### 3. Configure server + playground env vars
+### 3. Configure host env vars
 
 Root `.env` (used by the Fastify server):
 
@@ -284,12 +284,12 @@ CLOUDFLARE_SANDBOX_API_KEY=local-dev
 Set `S3_BUCKET` / `S3_ACCESS_KEY_ID` / `S3_SECRET_ACCESS_KEY` (and the
 provider-specific endpoint/region when needed) to use S3-compatible storage.
 Otherwise add `CLOUDFLARE_ACCOUNT_ID` / `CLOUDFLARE_API_TOKEN` /
-`CLOUDFLARE_ARTIFACTS_NAMESPACE` to use Artifacts. With neither configured, the
-playground uses filesystem remotes.
+`CLOUDFLARE_ARTIFACTS_NAMESPACE` to use Artifacts. With neither configured, hosts
+fall back to filesystem remotes.
 
 ### 4. Run the bridge
 
-The root `bun run dev` starts the bridge together with the playground and the docker-compose infra. To run the bridge on its own (e.g. against a different host app):
+The root `bun run dev` starts the bridge together with the docker-compose infra. To run the bridge on its own (e.g. against a different host app):
 
 ```bash
 cd packages/cloudflare-sandbox-bridge
@@ -307,7 +307,7 @@ curl http://localhost:8787/health
 
 ### 5. Provider construction
 
-Backend selection is host boot code — there is no env-sniffing helper. The playground's `apps/playground/src/server/boot.ts` shows the pattern:
+Backend selection is host boot code — there is no env-sniffing helper. A Cloudflare-stack host boots the pattern like this:
 
 ```ts
 import {
@@ -406,7 +406,7 @@ CLOUDFLARE_SANDBOX_API_KEY=<same-value-as-worker-secret>
 ## TODO
 
 - [ ] **Deploy the Bridge Worker to a real Cloudflare environment.** The package is ready (`packages/cloudflare-sandbox-bridge/`) but has only been exercised locally via `wrangler dev`. First real `wrangler deploy --env <env>` also validates the token's `Workers Scripts: Edit` scope and applies the DO migration.
-- [ ] **Register for the Artifacts private beta and create the `catamorphic-dev` / `catamorphic-prod` namespaces.** `ArtifactsRemoteBackend` is implemented and integration-tested, but until the account is approved all Artifacts REST calls return `HTTP 403` / code `10004` — the tests skip with a warning and the playground falls back to filesystem remotes. Once granted, re-run `packages/cloudflare`'s `artifacts.integration.test.ts` against the real API.
+- [ ] **Register for the Artifacts private beta and create the `catamorphic-dev` / `catamorphic-prod` namespaces.** `ArtifactsRemoteBackend` is implemented and integration-tested, but until the account is approved all Artifacts REST calls return `HTTP 403` / code `10004` — the tests skip with a warning and hosts fall back to filesystem remotes. Once granted, re-run `packages/cloudflare`'s `artifacts.integration.test.ts` against the real API.
 - [ ] **Revisit `instance_type` configurability** once we have a workflow that outgrows the fixed default — either raise the global default or surface per-project defaults with a per-deployment override.
 - [ ] **Revisit multi-VM scaling** when concurrency or blast-radius requirements exceed one VM per deployment. The escalation path is shard pools or per-run sandbox ids with a dispatcher, not more sessions inside one VM.
 

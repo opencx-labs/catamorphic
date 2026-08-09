@@ -116,7 +116,7 @@ Supporting packages (consumed through the surface above, importable directly for
 | `@catamorphic/plugins` | Plugin manifest contract + resolvers for host-provided packages and secrets. |
 | `@catamorphic/cloudflare-sandbox-bridge` | Deployable Cloudflare Worker exposing Cloudflare Sandbox over HTTP. |
 
-A reference host app lives in [`apps/playground`](apps/playground/README.md): Fastify + Vite/React with Cloudflare Sandbox execution and S3-compatible, Artifacts, or filesystem git origins.
+The in-repo reference host is the Catamorphic desktop app ([`apps/desktop`](apps/desktop)): an Electron app that embeds the server in-process (`src/main/server/boot.ts`).
 
 ## Design principles
 
@@ -376,12 +376,12 @@ cd packages/fastify-plugin && bun run generate-spec
 cd ../api-client && bun run generate
 ```
 
-Catamorphic itself is embed-only: in production you run a **host app** that boots it in-process. For local development, the root `bun run dev` boots the reference host (the playground) together with its dev dependencies: it runs `docker compose up -d --wait` (Postgres + OTel collector + ClickHouse), builds the workspace packages the playground consumes, then starts the Cloudflare sandbox bridge (`:8787`) and the playground (API `:8500`, Vite `:5173`) side by side. Which Postgres the playground connects to is controlled by `DATABASE_URL` in `apps/playground/.env`. To iterate on catamorphic alongside your own host instead, link the packages via `file:` (see `.cursor/skills/using-catamorphic/SKILL.md` → "Local dev linking").
+Catamorphic itself is embed-only: in production you run a **host app** that boots it in-process. For local development, the root `bun run dev` boots the dev infra: `docker compose up -d --wait` (Postgres + OTel collector + ClickHouse) plus the Cloudflare sandbox bridge (`:8787`). The desktop app runs with `bun run dev:desktop`. To iterate on catamorphic alongside your own host instead, link the packages via `file:` (see `.cursor/skills/using-catamorphic/SKILL.md` → "Local dev linking").
 
 ## Scripts
 
 ```bash
-bun run dev        # Dev stack: docker compose infra + sandbox bridge + playground
+bun run dev        # Dev infra: docker compose (Postgres, OTel, ClickHouse) + sandbox bridge
 bun run build      # Build all packages
 bun run test       # Run all tests
 bun run typecheck  # Typecheck all packages with tsgo

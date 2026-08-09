@@ -41,7 +41,7 @@ services:
       timeout: 3s
       retries: 20
 
-  # Receives OTLP from the playground (and any other host app) and writes it
+  # Receives OTLP from any host app and writes it
   # to ClickHouse. ClickHouse has no native OTLP endpoint, so the collector
   # sits in front of it.
   otel-collector:
