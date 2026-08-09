@@ -1,6 +1,7 @@
 import {
   type ConnectedMcpServer,
   connectMcpServer,
+  type ElicitHandler,
   uiResourceUri,
 } from "@catamorphic/mcp";
 import type { ConnectionsStore, McpConnection } from "./connections-store.js";
@@ -38,6 +39,8 @@ export class McpAppsService {
   constructor(
     private readonly deps: {
       connectionsFor(profileId: string): ConnectionsStore;
+      /** Answers elicitation from these servers (form/URL, MRTR). */
+      onElicit?: ElicitHandler;
     },
   ) {}
 
@@ -145,7 +148,10 @@ export class McpAppsService {
         new Error(`Connection ${connection.name} is incomplete`),
       );
     }
-    const pending = connectMcpServer(config).catch((error) => {
+    const pending = connectMcpServer(
+      config,
+      this.deps.onElicit ? { onElicit: this.deps.onElicit } : undefined,
+    ).catch((error) => {
       // Failed connects must not poison the pool.
       this.pool.delete(key);
       throw error;

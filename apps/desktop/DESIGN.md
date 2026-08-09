@@ -1400,3 +1400,37 @@ Patterned on what best-in-class palettes converged on (Chrome omnibox
   the element or the agent points elsewhere (`keep_previous` stacks a
   tour; `clear_pointers` ends it). Dismissal-by-interaction keeps the
   user in charge of their own attention.
+
+### 2026-08-09 — Elicitation (with MRTR), and connector icons
+- **Connectors can ask the user, mid-call.** MCP `elicitation/create` —
+  a form, or a URL to open (OAuth and other credential handoffs) — is now
+  rendered by the host. `@catamorphic/mcp` declares the elicitation
+  capability (form + url) only when a handler is provided and registers
+  it via `setRequestHandler`; on the stateless 2026-07-28 era the SAME
+  handler auto-fulfils MRTR `input_required` rounds, so one registration
+  covers both eras (that IS the MRTR implementation — no separate code).
+- **One handler, routed to the front window.** The handler threads from
+  where connections actually connect — the ai-sdk harness (labeled with
+  the agent) and the MCP-apps client pool — down to a new
+  `WorkspaceBridge.elicit`, broadcast over the existing renderer RPC.
+  Only the focused window renders it (others answer null = "not me"), so
+  the user sees exactly one modal; the RPC gets a long timeout (5 min)
+  because a human is filling a form or doing OAuth. No window, or a
+  closed modal, resolves to `decline` — a paused tool call must never
+  hang forever.
+- **Form vs URL, per the spec's security line.** Form mode renders the
+  restricted JSON-Schema fields (string/number/bool/enum, single and
+  multi-select) as a real form and never carries secrets; URL mode shows
+  the full https URL and opens it as a browser tab only on explicit
+  consent (never pre-fetched). The parse from JSON Schema → fields is the
+  risky part and is unit-tested; the wiring is a few typechecked lines.
+- **Connectors wear their icons.** MCP icons metadata (2025-11-25):
+  registry `server.json` icons flow into search results and onto the
+  installed connection; the Settings Connectors list shows each server's
+  icon (a neutral plug glyph otherwise). Only https/data srcs are ever
+  used — validated at the seam per the spec's icon security rules
+  (no javascript:/file:/credentialed fetches).
+- **Scope, deliberately:** roots, sampling, and `logging/setLevel` stay
+  unimplemented — the 2026-07-28 spec deprecated them and says new hosts
+  should not add them. Tasks, CIMD/enterprise auth, `subscriptions/listen`,
+  and MCP prompts remain future work.

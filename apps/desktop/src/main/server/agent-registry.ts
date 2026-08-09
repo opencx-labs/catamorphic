@@ -270,12 +270,16 @@ export class DesktopAgentRegistry implements CodingAgentRegistry {
 
     switch (config.harness) {
       case "ai-sdk": {
+        const bridge = this.deps.workspaceBridge;
         const provider = buildAiSdkAgent(
           config,
           this.deps.sandboxProvider,
           this.resolvedModel(config) ?? "",
           this.workspaceToolkit?.tools,
           mcp.servers,
+          // Elicitation from this agent's connectors → the front window,
+          // labeled with the agent so the user knows who's asking.
+          bridge ? (request) => bridge.elicit(config.name, request) : undefined,
         );
         if (provider) {
           // This harness owns real MCP client connections (stdio child

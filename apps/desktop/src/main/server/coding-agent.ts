@@ -1,6 +1,7 @@
 import { createAnthropic } from "@ai-sdk/anthropic";
 import { createOpenAI } from "@ai-sdk/openai";
 import { AiSdkCodingAgent } from "@catamorphic/ai-sdk";
+import type { ElicitHandler } from "@catamorphic/mcp";
 import type {
   AgentMcpServerConfig,
   ExtraTool,
@@ -52,6 +53,7 @@ export function buildAiSdkAgent(
   modelId: string,
   extraTools?: ExtraTool[],
   mcpServers?: Record<string, AgentMcpServerConfig>,
+  onElicit?: ElicitHandler,
 ): AiSdkCodingAgent | undefined {
   if (!config.apiKey || !modelId) return undefined;
   const provider = config.provider ?? "anthropic";
@@ -74,5 +76,6 @@ export function buildAiSdkAgent(
     resolveModel,
     extraTools,
     mcpServers,
+    ...(onElicit ? { onElicit } : {}),
   });
 }

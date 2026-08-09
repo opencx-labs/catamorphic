@@ -44,6 +44,10 @@ import {
 import { ChatGlyph } from "./components/chat-icon.js";
 import { CommandPalette } from "./components/command-palette.js";
 import { DeleteProjectModal } from "./components/delete-project-modal.js";
+import {
+  ElicitationModal,
+  type PendingElicitation,
+} from "./components/elicitation-modal.js";
 import { ProfileBar } from "./components/profile-bar.js";
 import { ProjectModal } from "./components/project-modal.js";
 import { ProjectSwitcher } from "./components/project-switcher.js";
@@ -1805,6 +1809,14 @@ export function App() {
     [],
   );
 
+  // Pending MCP elicitation (a connector asking the user a form or to open
+  // a URL). One at a time — a modal blocks the surface anyway.
+  const [elicitation, setElicitation] = useState<PendingElicitation | null>(
+    null,
+  );
+  const setElicitationRef = useRef(setElicitation);
+  setElicitationRef.current = setElicitation;
+
   // The tab being dragged from the strip (drop targets render while set).
   const [tabDragKey, setTabDragKey] = useState<string | null>(null);
   const [dropSideHover, setDropSideHover] = useState<"left" | "right" | null>(
@@ -2421,6 +2433,32 @@ export function App() {
           setAgentPointersRef.current([]);
           return { ok: true };
         }
+        case "elicit": {
+          // Broadcast reaches every window; only the focused one renders
+          // it (others return null = "not me"), so the user sees exactly
+          // one modal and it can't be answered by a background window.
+          if (!document.hasFocus()) return null;
+          const request = params.request as
+            | PendingElicitation["request"]
+            | undefined;
+          if (!request || (request.mode !== "form" && request.mode !== "url")) {
+            return { action: "decline" };
+          }
+          const label =
+            typeof params.label === "string" ? params.label : undefined;
+          // Resolve when the modal answers; the bridge awaits this promise.
+          return new Promise<unknown>((resolve) => {
+            setElicitationRef.current({
+              id: crypto.randomUUID(),
+              label,
+              request,
+              resolve: (result) => {
+                setElicitationRef.current(null);
+                resolve(result);
+              },
+            });
+          });
+        }
         case "surfaceControl": {
           const key = String(params.key);
           const controlled = Boolean(params.controlled);
@@ -2692,6 +2730,12 @@ export function App() {
         pointers={agentPointers}
         onDismiss={dismissPointer}
         revision={workspace}
+      />
+      {/* MCP elicitation: a connector asking the user a form or to open a
+          sign-in URL. URL consent opens the page as a browser tab. */}
+      <ElicitationModal
+        pending={elicitation}
+        onOpenUrl={(url) => openBrowserTab(url)}
       />
       <aside
         className={`flex shrink-0 flex-col overflow-hidden border-r border-border bg-bg-raised transition-[width] duration-200 ease-[cubic-bezier(0.2,0,0,1)] ${

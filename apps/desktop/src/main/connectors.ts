@@ -220,6 +220,7 @@ export class ConnectorsService {
       ...(config.transport === "stdio"
         ? { command: config.command, args: config.args, env: config.env }
         : { url: config.url, headers: config.headers }),
+      ...(entry.iconUrl ? { iconUrl: entry.iconUrl } : {}),
       source: { kind: "registry", registryName },
     });
     return toPublicConnection(connection);

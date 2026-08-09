@@ -68,6 +68,8 @@ export interface ConnectionInfo {
   headerNames: string[];
   envNames: string[];
   enabled: boolean;
+  /** Display icon (https/data), e.g. from the registry entry. */
+  iconUrl?: string;
   source:
     | { kind: "manual" }
     | { kind: "registry"; registryName: string }
@@ -110,6 +112,7 @@ export interface ConnectorSearchData {
     description: string;
     version?: string;
     repositoryUrl?: string;
+    iconUrl?: string;
     suggested?: {
       transport: string;
       inputs: Array<{

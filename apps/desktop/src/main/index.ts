@@ -302,10 +302,16 @@ app.whenReady().then(async () => {
       profileConfig.forProfile(profileId).connections,
   });
   // MCP Apps host: which connection tools carry a ui:// view, their
-  // templates, and the view-initiated tool calls.
+  // templates, and the view-initiated tool calls. Elicitation from those
+  // servers routes to the front window (bridge assigned just below; the
+  // closure reads it lazily, long after boot when a connect happens).
   const mcpApps = new McpAppsService({
     connectionsFor: (profileId) =>
       profileConfig.forProfile(profileId).connections,
+    onElicit: (request) =>
+      agentBridge
+        ? agentBridge.bridge.elicit(undefined, request)
+        : Promise.resolve({ action: "decline" }),
   });
 
   registerIpcHandlers(

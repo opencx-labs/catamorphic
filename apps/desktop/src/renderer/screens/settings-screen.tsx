@@ -2,6 +2,7 @@ import {
   Check,
   Copy,
   Pencil,
+  Plug,
   Plus,
   RotateCcw,
   Star,
@@ -591,6 +592,30 @@ function AgentForm({
 }
 
 /**
+ * A connector's icon (MCP icons metadata, 2025-11-25): a small square, or
+ * a neutral plug glyph when the server exposes none. Only https/data urls
+ * reach here (validated server-side per the spec's security rules).
+ */
+function ConnectorIcon({ iconUrl, name }: { iconUrl?: string; name: string }) {
+  return (
+    <span className="grid size-6 shrink-0 place-items-center overflow-hidden rounded border border-border bg-bg-inset">
+      {iconUrl ? (
+        <img
+          src={iconUrl}
+          alt=""
+          className="size-full object-contain"
+          onError={(event) => {
+            event.currentTarget.style.display = "none";
+          }}
+        />
+      ) : (
+        <Plug className="size-3 text-fg-faint" aria-label={name} />
+      )}
+    </span>
+  );
+}
+
+/**
  * Connectors: search two open ecosystems (the MCP registry and Claude
  * Code / Cowork plugin marketplaces), install into the profile, and manage
  * the resulting connections. A connector works for every agent harness.
@@ -716,6 +741,10 @@ function ConnectorsSection() {
               className="rounded-md border border-border bg-bg-raised/40 px-2.5 py-2"
             >
               <div className="flex items-center gap-2">
+                <ConnectorIcon
+                  iconUrl={entry.iconUrl}
+                  name={entry.displayName}
+                />
                 <div className="min-w-0 flex-1">
                   <div className="flex items-baseline gap-2">
                     <span className="truncate text-[13px] font-medium">
@@ -844,6 +873,10 @@ function ConnectorsSection() {
                 className="flex items-center gap-2 rounded-md border border-border bg-bg-raised/40 px-2.5 py-1.5"
                 data-testid="connection-row"
               >
+                <ConnectorIcon
+                  iconUrl={connection.iconUrl}
+                  name={connection.name}
+                />
                 <div className="min-w-0 flex-1">
                   <div className="flex items-baseline gap-2">
                     <span className="truncate text-[13px]">

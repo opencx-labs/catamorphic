@@ -1,3 +1,4 @@
+import type { ElicitRequest, ElicitResult } from "@catamorphic/mcp";
 import { BrowserWindow, ipcMain, webContents } from "electron";
 import type { AgentTerminals } from "./terminal.js";
 
@@ -91,9 +92,21 @@ export interface WorkspaceBridge {
     keepPrevious: boolean,
   ): Promise<{ ok: boolean; error?: string }>;
   clearPointers(projectId: string): Promise<void>;
+  /**
+   * Ask the user an MCP `elicitation/create`: a form to fill, or a URL to
+   * open (OAuth/credential handoffs). Rendered by the front window;
+   * resolves with the user's answer (or a decline if no window can show
+   * it). Long-lived — the user may take minutes.
+   */
+  elicit(
+    label: string | undefined,
+    request: ElicitRequest,
+  ): Promise<ElicitResult>;
 }
 
 const RPC_TIMEOUT_MS = 12_000;
+/** Elicitation waits on a human (form entry, OAuth) — give it real time. */
+const ELICIT_TIMEOUT_MS = 300_000;
 
 const sleep = (ms: number) =>
   new Promise<void>((resolve) => setTimeout(resolve, ms));
@@ -250,7 +263,11 @@ export function registerAgentBridge(agentTerminals: AgentTerminals): {
   );
 
   /** Ask every window; the first renderer with an answer wins. */
-  const rpc = <T>(method: string, params: unknown): Promise<T | null> => {
+  const rpc = <T>(
+    method: string,
+    params: unknown,
+    timeoutMs = RPC_TIMEOUT_MS,
+  ): Promise<T | null> => {
     const windows = BrowserWindow.getAllWindows().filter(
       (window) => !window.isDestroyed(),
     );
@@ -270,7 +287,7 @@ export function registerAgentBridge(agentTerminals: AgentTerminals): {
       }
       setTimeout(() => {
         if (pending.delete(id)) resolve(null);
-      }, RPC_TIMEOUT_MS);
+      }, timeoutMs);
     });
   };
 
@@ -533,6 +550,17 @@ export function registerAgentBridge(agentTerminals: AgentTerminals): {
 
     async clearPointers(projectId) {
       await rpc("clearPointers", { projectId });
+    },
+
+    async elicit(label, request) {
+      const result = await rpc<ElicitResult>(
+        "elicit",
+        { label, request },
+        ELICIT_TIMEOUT_MS,
+      );
+      // No window, or the user closed it without answering → decline; a
+      // pending tool call must never hang forever on a missing UI.
+      return result ?? { action: "decline" };
     },
 
     async setControl(projectId, key, controlled) {

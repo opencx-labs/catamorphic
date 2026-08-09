@@ -35,6 +35,8 @@ export interface McpConnection {
   env?: Record<string, string>;
   enabled: boolean;
   source: ConnectionSource;
+  /** Display icon (https/data url), e.g. from the registry entry. */
+  iconUrl?: string;
 }
 
 interface StoredConnection extends Omit<McpConnection, "headers" | "env"> {
@@ -60,6 +62,7 @@ export interface PublicMcpConnection {
   envNames: string[];
   enabled: boolean;
   source: ConnectionSource;
+  iconUrl?: string;
 }
 
 export interface CreateConnectionInput {
@@ -72,6 +75,7 @@ export interface CreateConnectionInput {
   env?: Record<string, string>;
   enabled?: boolean;
   source?: ConnectionSource;
+  iconUrl?: string;
 }
 
 export interface UpdateConnectionInput {
@@ -134,6 +138,7 @@ export class ConnectionsStore {
       ...(input.url ? { url: input.url } : {}),
       ...(input.command ? { command: input.command } : {}),
       ...(input.args && input.args.length > 0 ? { args: input.args } : {}),
+      ...(input.iconUrl ? { iconUrl: input.iconUrl } : {}),
       enabled: input.enabled ?? true,
       source: input.source ?? { kind: "manual" },
       ...encryptMap("headers", input.headers),
