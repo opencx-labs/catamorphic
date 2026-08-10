@@ -60,6 +60,6 @@
     "electron-vite": "^5.0.0",
     "tailwindcss": "^4.2.2",
     "vite": "^8.1.4",
-    "monaco-editor": "^0.55.1"
+    "monaco-editor": "^0.56.0"
   }
 }
