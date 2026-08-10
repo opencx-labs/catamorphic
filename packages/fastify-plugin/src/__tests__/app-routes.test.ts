@@ -33,6 +33,10 @@ describe("app route contracts", () => {
     },
     {
       method: "GET",
+      url: `/api/projects/${PROJECT_ID}/apps/ops-dashboard/guest`,
+    },
+    {
+      method: "GET",
       url: `/api/projects/${PROJECT_ID}/app-versions/${VERSION_ID}/bundle`,
     },
   ] satisfies readonly {
@@ -105,6 +109,120 @@ describe("app route contracts", () => {
     });
     // Schema rejects before the handler's 503 core check.
     expect(response.statusCode).toBe(400);
+  });
+});
+
+describe("guest document serving", () => {
+  const readyState = {
+    state: "ready",
+    appId: APP_ID,
+    versionId: VERSION_ID,
+    code: "/* bundle */",
+    css: ".a{}",
+    allowedWorkflows: ["listOrders"],
+    allowedNetworkOrigins: ["https://api.example.com"],
+  };
+
+  function appWithViewCore() {
+    const app = createApp({
+      core: { apps: { viewState: async () => readyState } } as never,
+    });
+    apps.push(app);
+    return app;
+  }
+
+  const headers = {
+    "x-catamorphic-tenant-id": "tenant-1",
+    "x-external-user-id": "user-1",
+  };
+
+  it("view-state points the mount at the served guest URL", async () => {
+    const response = await appWithViewCore().inject({
+      method: "GET",
+      url: `/api/projects/${PROJECT_ID}/apps/ops-dashboard/view-state?channel=dev`,
+      headers,
+    });
+    expect(response.statusCode).toBe(200);
+    const body = response.json();
+    // The bundle never rides the JSON view-state: the iframe fetches the
+    // served document instead (its own CSP, not the shell's).
+    expect(body).toEqual({
+      state: "ready",
+      appId: APP_ID,
+      versionId: VERSION_ID,
+      guestUrl: expect.stringMatching(
+        /^http:\/\/.+\/api\/projects\/.+\/apps\/ops-dashboard\/guest\?channel=dev$/,
+      ),
+    });
+  });
+
+  it("serves the guest document with its own CSP header", async () => {
+    const response = await appWithViewCore().inject({
+      method: "GET",
+      url: `/api/projects/${PROJECT_ID}/apps/ops-dashboard/guest?channel=dev`,
+      headers,
+    });
+    expect(response.statusCode).toBe(200);
+    expect(response.headers["content-type"]).toContain("text/html");
+    expect(response.headers["content-security-policy"]).toContain(
+      "default-src 'none'",
+    );
+    expect(response.headers["content-security-policy"]).toContain(
+      "connect-src https://api.example.com",
+    );
+    expect(response.body).toContain("/* bundle */");
+    expect(response.body).toContain('<div id="root">');
+  });
+
+  it("seeds a valid theme and ignores a malformed one", async () => {
+    const theme = encodeURIComponent(
+      JSON.stringify({ appearance: "light", colors: { bg: "#fff" } }),
+    );
+    const themed = await appWithViewCore().inject({
+      method: "GET",
+      url: `/api/projects/${PROJECT_ID}/apps/ops-dashboard/guest?theme=${theme}`,
+      headers,
+    });
+    expect(themed.body).toContain("--color-bg:#fff");
+    expect(themed.body).toContain("color-scheme:light");
+
+    const hostile = encodeURIComponent(
+      JSON.stringify({
+        appearance: "light",
+        colors: { bg: "red}</style><script>" },
+      }),
+    );
+    const unthemed = await appWithViewCore().inject({
+      method: "GET",
+      url: `/api/projects/${PROJECT_ID}/apps/ops-dashboard/guest?theme=${hostile}`,
+      headers,
+    });
+    expect(unthemed.statusCode).toBe(200);
+    expect(unthemed.body).not.toContain("color-scheme:light");
+  });
+
+  it("revalidates the guest document by version", async () => {
+    const response = await appWithViewCore().inject({
+      method: "GET",
+      url: `/api/projects/${PROJECT_ID}/apps/ops-dashboard/guest`,
+      headers: { ...headers, "if-none-match": `"${VERSION_ID}-n"` },
+    });
+    expect(response.statusCode).toBe(304);
+  });
+
+  it("answers 404 for a non-ready app", async () => {
+    const app = createApp({
+      core: {
+        apps: { viewState: async () => ({ state: "not_published" }) },
+      } as never,
+    });
+    apps.push(app);
+    const response = await app.inject({
+      method: "GET",
+      url: `/api/projects/${PROJECT_ID}/apps/ops-dashboard/guest`,
+      headers,
+    });
+    expect(response.statusCode).toBe(404);
   });
 });
 

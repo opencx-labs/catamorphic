@@ -346,7 +346,16 @@ export function registerIpcHandlers(
     "catamorphic:mcp-apps-view",
     async (event, toolKey: string) => {
       if (!mcpApps) throw new Error("MCP apps are unavailable");
-      return mcpApps.view(windows.profileFor(event.sender), String(toolKey));
+      const profileId = windows.profileFor(event.sender);
+      const view = await mcpApps.view(profileId, String(toolKey));
+      // The renderer's iframe navigates to the served document (its own
+      // CSP); the embedded server must therefore be up.
+      const base = state.current?.url;
+      if (!base) throw new Error("The embedded server is not ready");
+      const url = new URL("/desktop/mcp-app-view", base);
+      url.searchParams.set("profileId", profileId);
+      url.searchParams.set("toolKey", view.toolKey);
+      return { ...view, url: url.toString() };
     },
   );
 

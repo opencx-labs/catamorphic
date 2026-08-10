@@ -199,6 +199,7 @@
       "name": "@catamorphic/fastify-plugin",
       "version": "0.0.1",
       "dependencies": {
+        "@catamorphic/app": "workspace:*",
         "@catamorphic/core": "workspace:*",
         "@catamorphic/db": "workspace:*",
         "@catamorphic/git": "workspace:*",

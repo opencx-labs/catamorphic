@@ -4495,10 +4495,7 @@ export interface paths {
                             appId: string;
                             /** Format: uuid */
                             versionId: string;
-                            code: string;
-                            css: string;
-                            allowedWorkflows: string[];
-                            allowedNetworkOrigins: string[];
+                            guestUrl: string;
                         };
                     };
                 };
@@ -4512,6 +4509,45 @@ export interface paths {
                             error: string;
                         };
                     };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/projects/{projectId}/apps/{appName}/guest": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: {
+            parameters: {
+                query?: {
+                    channel?: "published" | "dev";
+                    theme?: string;
+                };
+                header?: never;
+                path: {
+                    projectId: string;
+                    appName: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Default Response */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
                 };
             };
         };

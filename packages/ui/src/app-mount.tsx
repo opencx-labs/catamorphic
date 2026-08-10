@@ -1,12 +1,10 @@
 "use client";
 
 import {
-  APP_BASE_CSS,
   APP_PROTOCOL_VERSION,
   type AppCallErrorCode,
   type AppContext,
   type AppHostTheme,
-  appThemeCss,
   type GuestToHostMessage,
   type HostToGuestMessage,
   isGuestMessage,
@@ -62,10 +60,8 @@ interface ViewStateReady {
   state: "ready";
   appId: string;
   versionId: string;
-  code: string;
-  css: string;
-  /** Tenant-policy network origins the iframe CSP may allow. */
-  allowedNetworkOrigins?: string[];
+  /** Absolute URL of the served guest document for this channel. */
+  guestUrl: string;
 }
 
 type ViewState =
@@ -78,14 +74,16 @@ type ViewState =
  * Mounts a published app in a sandboxed iframe and brokers its workflow
  * calls.
  *
- * Isolation model: the bundle runs in a `srcdoc` iframe with
- * `sandbox="allow-scripts"` and **no** `allow-same-origin` — an opaque origin
- * with no cookies, no storage, and no reach into the host DOM. The guest
- * holds zero credentials; every call arrives here via postMessage and is
- * forwarded with the app-audience headers, so the server re-authorizes each
- * one against the version's frozen workflow set. The iframe cannot navigate
- * the host or open popups; network inside the frame is limited by a
- * default-deny CSP.
+ * Isolation model: the iframe navigates to the API's served guest document
+ * (never `srcdoc` — a local-scheme document inherits the host shell's CSP,
+ * which can block the bundle's inline script outright) with
+ * `sandbox="allow-scripts"` and **no** `allow-same-origin` — an opaque
+ * origin with no cookies, no storage, and no reach into the host DOM or the
+ * API origin. The guest holds zero credentials; every call arrives here via
+ * postMessage and is forwarded with the app-audience headers, so the server
+ * re-authorizes each one against the version's frozen workflow set. The
+ * iframe cannot navigate the host or open popups; network inside the frame
+ * is limited by the served document's default-deny CSP.
  */
 export function AppMount({
   projectId,
@@ -102,8 +100,8 @@ export function AppMount({
   const [height, setHeight] = useState(MIN_HEIGHT_PX);
   const inFlightCalls = useRef(0);
   const inFlightPolls = useRef(0);
-  // The srcdoc is built once from the mount-time theme (changing it would
-  // reload the guest and lose its state); later switches arrive as messages.
+  // The guest URL carries the mount-time theme (changing it would reload
+  // the guest and lose its state); later switches arrive as messages.
   const initialTheme = useRef(theme).current;
 
   useEffect(() => {
@@ -348,7 +346,7 @@ export function AppMount({
       className={className}
       title={`app-${appName}`}
       sandbox="allow-scripts allow-forms allow-downloads"
-      srcDoc={buildGuestDocument(view, initialTheme)}
+      src={guestSrc(view.guestUrl, initialTheme)}
       onLoad={handleFrameLoad}
       style={{ width: "100%", border: "none", height: `${height}px` }}
     />
@@ -356,87 +354,15 @@ export function AppMount({
 }
 
 /**
- * The guest document: default-deny CSP, the host theme + shared base layer,
- * the version's CSS, one root node, a small host runtime, and the bundle.
- * Everything the app needs is compiled in; the only script sources are the
- * inline runtime and the bundle itself.
+ * The served guest document URL, with the mount-time theme riding along as
+ * JSON so the first paint is already in the host's colors. The server
+ * validates the theme and the browser cache key varies with it naturally.
  */
-function buildGuestDocument(
-  view: ViewStateReady,
-  theme?: AppHostTheme,
-): string {
-  // Default-deny network; the tenant's app policy may open specific https
-  // origins (`tenant_app_policies.allowed_network_origins`) — validated as
-  // plain https origins at write time, so they are CSP-safe verbatim.
-  const connectSrc =
-    view.allowedNetworkOrigins && view.allowedNetworkOrigins.length > 0
-      ? `connect-src ${view.allowedNetworkOrigins.join(" ")}`
-      : "connect-src 'none'";
-  const csp = [
-    "default-src 'none'",
-    "script-src 'unsafe-inline'",
-    "style-src 'unsafe-inline'",
-    "img-src data: blob:",
-    connectSrc,
-  ].join("; ");
-  // The host runtime, one inline script ahead of the bundle:
-  // - `process` shim: Vite lib-mode builds keep `process.env.NODE_ENV`
-  //   verbatim (lib mode never injects the define) and this iframe has no
-  //   Node globals, so an unshimmed bundle would throw before mounting.
-  // - auto-height: most apps never call reportHeight(); observe the
-  //   document and post the same resize message the client library would.
-  //   scrollHeight is max(content, viewport), so it ratchets up to the
-  //   content height and settles; the host clamps to [MIN, MAX] either way.
-  // - live theme: apply `theme` messages as `--color-*` custom properties,
-  //   the same vars the initial <style> below seeds.
-  const runtime =
-    'var process={env:{NODE_ENV:"production"}};' +
-    "addEventListener('load',()=>{const post=()=>parent.postMessage(" +
-    `{catamorphicApp:${APP_PROTOCOL_VERSION},kind:'resize',height:document.documentElement.scrollHeight},'*');` +
-    "post();const o=new ResizeObserver(post);o.observe(document.documentElement);o.observe(document.body)});" +
-    "addEventListener('message',(e)=>{const d=e.data;" +
-    `if(!d||d.catamorphicApp!==${APP_PROTOCOL_VERSION}||d.kind!=='theme')return;` +
-    "const r=document.documentElement;" +
-    "for(const[k,v]of Object.entries(d.theme.colors))r.style.setProperty('--color-'+k,String(v));" +
-    "r.style.colorScheme=d.theme.appearance});";
-  return [
-    "<!doctype html>",
-    '<html><head><meta charset="utf-8">',
-    `<meta http-equiv="Content-Security-Policy" content="${csp}">`,
-    // Theme + shared base first, the app's own CSS last so it can override.
-    ...(theme
-      ? [`<style>${escapeStyleContent(appThemeCss(theme))}</style>`]
-      : []),
-    `<style>${APP_BASE_CSS}</style>`,
-    `<style>${escapeStyleContent(view.css)}</style>`,
-    "</head><body>",
-    '<div id="root"></div>',
-    `<script>${runtime}</script>`,
-    `<script>${escapeScriptContent(view.code)}</script>`,
-    "</body></html>",
-  ].join("");
-}
-
-/**
- * A literal `</script` inside the bundle — a string constant is enough —
- * would terminate the inline script early and dump the rest of the bundle
- * into the document as markup. `<\/` is identical to the JS parser (in
- * strings, template literals, and regex alike) but invisible to the HTML
- * tokenizer.
- *
- * `<!--` is deliberately NOT rewritten: it is valid JS outside a string
- * (`a<!--b` parses as `a < !(--b)`, which minifiers emit), and `\x3C` is only
- * an escape *inside* a string literal, so blind replacement turns a working
- * bundle into a SyntaxError. It cannot break out of the script element on its
- * own — only `</script` can.
- */
-function escapeScriptContent(code: string): string {
-  return code.replaceAll(/<\/(script)/gi, "<\\/$1");
-}
-
-/** `</style` in CSS content would end the style block and inject markup. */
-function escapeStyleContent(css: string): string {
-  return css.replaceAll(/<\/(style)/gi, "<\\/$1");
+function guestSrc(guestUrl: string, theme?: AppHostTheme): string {
+  if (!theme) return guestUrl;
+  const url = new URL(guestUrl);
+  url.searchParams.set("theme", JSON.stringify(theme));
+  return url.toString();
 }
 
 function defaultStateText(

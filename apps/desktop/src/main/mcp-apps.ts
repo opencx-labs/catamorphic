@@ -177,3 +177,39 @@ function onlyHttps(domains: string[] | undefined): string[] {
       /^(?:https:\/\/)?[a-z0-9.*-]+(?::\d+)?$/i.test(domain),
   );
 }
+
+/**
+ * The view's CSP, from the resource's declared domain lists. Defaults are
+ * the spec's: no network, inline script/style only, data/blob images.
+ * Declared domains widen exactly the directives the spec maps them to.
+ */
+export function mcpAppViewCsp(view: McpAppView): string {
+  const resource = view.csp.resourceDomains.join(" ");
+  const connect = view.csp.connectDomains.join(" ");
+  return [
+    "default-src 'none'",
+    `script-src 'unsafe-inline' 'unsafe-eval'${resource ? ` ${resource}` : ""}`,
+    `style-src 'unsafe-inline'${resource ? ` ${resource}` : ""}`,
+    `img-src data: blob:${resource ? ` ${resource}` : ""}`,
+    `font-src data:${resource ? ` ${resource}` : ""}`,
+    connect ? `connect-src ${connect}` : "connect-src 'none'",
+  ].join("; ");
+}
+
+/**
+ * The served view document: the template with its CSP embedded as a meta
+ * tag (the serving route repeats it as a response header). Served from a
+ * real URL rather than `srcdoc` because local-scheme documents inherit the
+ * shell's CSP, whose strict `script-src` would block the view's inline
+ * scripts.
+ */
+export function mcpAppViewDocument(view: McpAppView): string {
+  const meta = `<meta http-equiv="Content-Security-Policy" content="${mcpAppViewCsp(view)}">`;
+  const html = view.html;
+  const headMatch = html.match(/<head[^>]*>/i);
+  if (headMatch?.index !== undefined) {
+    const at = headMatch.index + headMatch[0].length;
+    return `${html.slice(0, at)}${meta}${html.slice(at)}`;
+  }
+  return `${meta}${html}`;
+}

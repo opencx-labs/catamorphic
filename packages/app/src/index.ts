@@ -9,6 +9,7 @@ export type {
   TypedRunSnapshot,
   WorkflowShape,
 } from "./contract.js";
+export { appGuestCsp, buildAppGuestDocument } from "./guest-document.js";
 export {
   type McpToolCallResult,
   POLL_RUN_TOOL,

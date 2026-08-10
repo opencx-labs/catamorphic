@@ -15,6 +15,11 @@ import Fastify, { type FastifyInstance } from "fastify";
 import { Kysely, PGliteDialect, WithSchemaPlugin } from "kysely";
 import type { WorkspaceBridge } from "../agent-bridge.js";
 import type { ConnectorsService } from "../connectors.js";
+import {
+  type McpAppsService,
+  mcpAppViewCsp,
+  mcpAppViewDocument,
+} from "../mcp-apps.js";
 import type { ProfileConfigManager } from "../profile-config.js";
 import type { ProfilesStore } from "../profiles.js";
 import { DesktopAgentRegistry } from "./agent-registry.js";
@@ -43,6 +48,7 @@ export async function startEmbeddedServer(
   profileConfig: ProfileConfigManager,
   workspaceBridge?: WorkspaceBridge,
   connectors?: ConnectorsService,
+  mcpApps?: McpAppsService,
 ): Promise<EmbeddedServer> {
   fs.mkdirSync(paths.db, { recursive: true });
 
@@ -198,6 +204,26 @@ export async function startEmbeddedServer(
     core: catamorphic.core,
     prefix: "/api",
   });
+
+  // MCP Apps view documents, served (not srcdoc'd) so each carries its own
+  // CSP instead of inheriting the shell's, which would block inline scripts.
+  if (mcpApps) {
+    app.get("/desktop/mcp-app-view", async (request, reply) => {
+      const { profileId, toolKey } = request.query as {
+        profileId?: string;
+        toolKey?: string;
+      };
+      if (!profileId || !toolKey) {
+        return reply.status(400).send({ error: "Missing profileId/toolKey" });
+      }
+      const view = await mcpApps.view(profileId, toolKey);
+      return reply
+        .header("content-type", "text/html; charset=utf-8")
+        .header("content-security-policy", mcpAppViewCsp(view))
+        .header("cache-control", "no-store")
+        .send(mcpAppViewDocument(view));
+    });
+  }
 
   await app.listen({ port: 0, host: "127.0.0.1" });
   const address = app.server.address();

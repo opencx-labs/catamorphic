@@ -78,10 +78,11 @@ export const AppViewStateSchema = z.discriminatedUnion("state", [
     state: z.literal("ready"),
     appId: z.string().uuid(),
     versionId: z.string().uuid(),
-    code: z.string(),
-    css: z.string(),
-    allowedWorkflows: z.array(z.string()),
-    allowedNetworkOrigins: z.array(z.string()),
+    // Absolute URL of the guest document for this channel. The mount points
+    // its iframe here rather than inlining the bundle: a network-scheme
+    // document carries its own CSP, where a srcdoc one would inherit the
+    // host shell's and could be blocked by it.
+    guestUrl: z.string(),
   }),
 ]);
 

@@ -1,4 +1,9 @@
 import {
+  type AppHostTheme,
+  appGuestCsp,
+  buildAppGuestDocument,
+} from "@catamorphic/app";
+import {
   AppBuildFailedError,
   AppBundleTooLargeError,
   AppNotFoundError,
@@ -151,9 +156,118 @@ export function registerAppRoutes(app: FastifyInstance, ctx: RouteContext) {
         appName: request.params.appName,
         channel: request.query.channel,
       });
-      return reply.send(state);
+      if (state.state !== "ready") return reply.send(state);
+      // The guest URL is origin-absolute (derived from this request) because
+      // the mount's iframe navigates to it directly — a relative path would
+      // resolve against the host shell's origin, not the API's.
+      const guestUrl = new URL(
+        (request.url.split("?")[0] ?? request.url).replace(
+          /\/view-state$/,
+          "/guest",
+        ),
+        `${request.protocol}://${request.host}`,
+      );
+      if (request.query.channel) {
+        guestUrl.searchParams.set("channel", request.query.channel);
+      }
+      return reply.send({
+        state: "ready",
+        appId: state.appId,
+        versionId: state.versionId,
+        guestUrl: guestUrl.toString(),
+      });
     },
   });
+
+  typed.route({
+    method: "GET",
+    url: "/projects/:projectId/apps/:appName/guest",
+    schema: {
+      params: ProjectAppParamsSchema,
+      querystring: z.object({
+        channel: z.enum(["published", "dev"]).optional(),
+        // JSON-encoded AppHostTheme; validated by parseGuestTheme (a zod
+        // transform here would not survive OpenAPI spec generation).
+        theme: z.string().max(8192).optional(),
+      }),
+    },
+    handler: async (request, reply) => {
+      if (!ctx.core?.apps)
+        return reply.status(503).send({ error: "Apps not configured" });
+      const state = await ctx.core.apps.viewState({
+        identity: resolveIdentity(request),
+        projectId: request.params.projectId,
+        appName: request.params.appName,
+        channel: request.query.channel,
+      });
+      if (state.state !== "ready") {
+        return reply.status(404).send({ error: `App is ${state.state}` });
+      }
+      // The document embeds the (channel-resolved) version's bundle, so the
+      // validator is the version id: a republish or a newer dev build changes
+      // it and the revalidation misses; otherwise the browser's copy is good.
+      const etag = `"${state.versionId}-${request.query.theme ? "t" : "n"}"`;
+      if (request.headers["if-none-match"] === etag) {
+        return reply
+          .status(304)
+          .header("etag", etag)
+          .header("cache-control", "private, no-cache")
+          .send();
+      }
+      // The CSP travels as a response header (authoritative before any
+      // parsing) and again as the document's own meta tag via the builder.
+      return reply
+        .header("content-type", "text/html; charset=utf-8")
+        .header(
+          "content-security-policy",
+          appGuestCsp(state.allowedNetworkOrigins),
+        )
+        .header("etag", etag)
+        .header("cache-control", "private, no-cache")
+        .send(
+          buildAppGuestDocument({
+            code: state.code,
+            css: state.css,
+            theme: parseGuestTheme(request.query.theme),
+            allowedNetworkOrigins: state.allowedNetworkOrigins,
+          }),
+        );
+    },
+  });
+
+  const GuestThemeShape = z.object({
+    appearance: z.enum(["dark", "light"]),
+    colors: z.record(
+      z
+        .string()
+        .regex(/^[a-z][a-z0-9-]*$/i)
+        .max(40),
+      // Broad enough for any CSS color syntax; excludes the characters that
+      // could close the style rule or the style element the theme lands in.
+      z
+        .string()
+        .max(200)
+        .regex(/^[^<>{};]*$/),
+    ),
+  });
+
+  /**
+   * The theme rides the guest URL as JSON so the document paints in the
+   * host's colors on first render (no flash, and the browser cache key
+   * naturally varies with it). The URL is caller-controlled, so the shape
+   * and character set are validated here; anything off is simply unthemed.
+   */
+  function parseGuestTheme(raw: string | undefined): AppHostTheme | undefined {
+    if (!raw) return undefined;
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(raw);
+    } catch {
+      return undefined;
+    }
+    const result = GuestThemeShape.safeParse(parsed);
+    return result.success ? result.data : undefined;
+  }
 
   typed.route({
     method: "GET",

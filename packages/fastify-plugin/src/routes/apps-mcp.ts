@@ -1,3 +1,4 @@
+import { buildAppGuestDocument } from "@catamorphic/app";
 import { RunNotFoundError } from "@catamorphic/core";
 import type { FastifyInstance, FastifyReply } from "fastify";
 import type { RouteContext } from "../app.js";
@@ -410,25 +411,14 @@ function toolError(message: string): Record<string, unknown> {
   return { content: [{ type: "text", text: message }], isError: true };
 }
 
-/** The app document: same construction and CSP as the in-product mount. */
+/**
+ * The app document: same construction and CSP as the in-product mount
+ * (including the `process` shim the bundle needs to boot), minus a theme —
+ * an MCP host has no shared token vocabulary to seed, so the base layer's
+ * neutral defaults apply.
+ */
 function buildAppDocument(app: PublishedApp): string {
-  const csp = [
-    "default-src 'none'",
-    "script-src 'unsafe-inline'",
-    "style-src 'unsafe-inline'",
-    "img-src data: blob:",
-    "connect-src 'none'",
-  ].join("; ");
-  return [
-    "<!doctype html>",
-    '<html><head><meta charset="utf-8">',
-    `<meta http-equiv="Content-Security-Policy" content="${csp}">`,
-    `<style>${app.css.replaceAll(/<\/(style)/gi, "<\\/$1")}</style>`,
-    "</head><body>",
-    '<div id="root"></div>',
-    `<script>${app.code.replaceAll(/<\/(script)/gi, "<\\/$1")}</script>`,
-    "</body></html>",
-  ].join("");
+  return buildAppGuestDocument({ code: app.code, css: app.css });
 }
 
 function rpcResult(

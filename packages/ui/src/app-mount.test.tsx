@@ -11,6 +11,7 @@ afterEach(cleanup);
 const PROJECT_ID = "a1b2c3d4-e5f6-4890-abcd-ef1234567890";
 const APP_ID = "b2c3d4e5-f6a7-4890-bcde-a12345678901";
 const VERSION_ID = "c3d4e5f6-a7b8-4890-acde-123456789012";
+const GUEST_URL = `http://127.0.0.1:4100/api/projects/${PROJECT_ID}/apps/ops-dashboard/guest?channel=dev`;
 
 function makeApiClient(overrides?: {
   viewState?: unknown;
@@ -24,9 +25,7 @@ function makeApiClient(overrides?: {
             state: "ready",
             appId: APP_ID,
             versionId: VERSION_ID,
-            code: "/* bundle */",
-            css: "",
-            allowedWorkflows: ["listOrders"],
+            guestUrl: GUEST_URL,
           },
         };
       }
@@ -91,7 +90,7 @@ async function mountReadyFrame(apiClient: ReturnType<typeof makeApiClient>) {
 }
 
 describe("AppMount", () => {
-  it("seeds the guest document with the host theme and base layer", async () => {
+  it("navigates the frame to the guest URL with the theme riding along", async () => {
     const apiClient = makeApiClient();
     const { container } = render(
       <CatamorphicProvider apiClient={apiClient as never}>
@@ -109,18 +108,20 @@ describe("AppMount", () => {
     await waitFor(() => {
       if (!container.querySelector("iframe")) throw new Error("no iframe");
     });
-    const srcdoc =
-      container.querySelector("iframe")?.getAttribute("srcdoc") ?? "";
-    // Theme vars land before the app's own CSS, so the app can override.
-    expect(srcdoc).toContain("--color-bg:#f7f7f5");
-    expect(srcdoc).toContain("--color-accent:#d63c0c");
-    expect(srcdoc).toContain("color-scheme:light");
-    // The shared base layer: shell font stack and the one easing.
-    expect(srcdoc).toContain("--font-sans");
-    expect(srcdoc).toContain("--ease-standard:cubic-bezier(0.2,0,0,1)");
-    expect(srcdoc.indexOf("--color-bg:#f7f7f5")).toBeLessThan(
-      srcdoc.indexOf("<script>"),
-    );
+    const src = container.querySelector("iframe")?.getAttribute("src") ?? "";
+    const url = new URL(src);
+    // The document is served by the API (its own CSP), never srcdoc.
+    expect(
+      `${url.origin}${url.pathname}?channel=${url.searchParams.get("channel")}`,
+    ).toBe(GUEST_URL);
+    expect(
+      container.querySelector("iframe")?.getAttribute("srcdoc"),
+    ).toBeNull();
+    // The mount-time theme rides the URL so the first paint is themed.
+    expect(JSON.parse(url.searchParams.get("theme") ?? "{}")).toEqual({
+      appearance: "light",
+      colors: { bg: "#f7f7f5", accent: "#d63c0c" },
+    });
   });
 
   it("renders non-ready view states as copy, not errors", async () => {
@@ -143,8 +144,7 @@ describe("AppMount", () => {
       expect(frame.getAttribute("sandbox")).not.toContain(
         "allow-top-navigation",
       );
-      expect(frame.getAttribute("srcdoc")).toContain("default-src 'none'");
-      expect(frame.getAttribute("srcdoc")).toContain("/* bundle */");
+      expect(frame.getAttribute("src")).toBe(GUEST_URL);
     });
   });
 
@@ -253,58 +253,9 @@ describe("AppMount", () => {
     expect(posts).toHaveLength(0);
   });
 
-  it("neutralizes a </script> sequence in the bundle", async () => {
-    // A bundle carrying the literal closing tag (a string constant is enough)
-    // would otherwise end the inline script and spill into the document.
-    const apiClient = makeApiClient({
-      viewState: {
-        state: "ready",
-        appId: APP_ID,
-        versionId: VERSION_ID,
-        code: 'const s = "</script><img src=x onerror=alert(1)>";',
-        css: "a{content:'</style><b>'}",
-        allowedWorkflows: [],
-      },
-    });
-    const { container } = mount(apiClient);
-    await waitFor(() => {
-      if (!container.querySelector("iframe")) throw new Error("no iframe");
-    });
-    const srcdoc =
-      container.querySelector("iframe")?.getAttribute("srcdoc") ?? "";
-    // Only the real closing tags survive (the host runtime script and the
-    // bundle script; the base-layer style and the app style): the bundle's
-    // own copies are escaped.
-    expect(srcdoc.match(/<\/script>/g)).toHaveLength(2);
-    expect(srcdoc.match(/<\/style>/g)).toHaveLength(2);
-    expect(srcdoc).toContain("<\\/script>");
-    // The injected markup stays inside the script text, never parsed as HTML.
-    expect(srcdoc).toContain("<\\/script><img src=x onerror=alert(1)>");
-  });
-
-  it("leaves JS that merely looks like an HTML comment intact", async () => {
-    // `a<!--b` is valid JS (a < !(--b)) and minifiers emit it. Rewriting it
-    // to \x3C outside a string literal would be a SyntaxError at load.
-    const code = "let a=5,b=1;const c=a<!--b;";
-    const apiClient = makeApiClient({
-      viewState: {
-        state: "ready",
-        appId: APP_ID,
-        versionId: VERSION_ID,
-        code,
-        css: "",
-        allowedWorkflows: [],
-      },
-    });
-    const { container } = mount(apiClient);
-    await waitFor(() => {
-      if (!container.querySelector("iframe")) throw new Error("no iframe");
-    });
-    const srcdoc =
-      container.querySelector("iframe")?.getAttribute("srcdoc") ?? "";
-    expect(srcdoc).toContain(code);
-    expect(srcdoc).not.toContain("\\x3C");
-  });
+  // Guest-document construction (script/style escaping, CSP, theme seeding)
+  // is covered by @catamorphic/app's guest-document tests — the mount only
+  // points its iframe at the served document.
 
   it("caps concurrent guest calls", async () => {
     let release: (() => void) | undefined;

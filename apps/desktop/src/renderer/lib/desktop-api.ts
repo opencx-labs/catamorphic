@@ -153,6 +153,8 @@ export interface McpAppViewData {
   html: string;
   csp: { connectDomains: string[]; resourceDomains: string[] };
   prefersBorder: boolean;
+  /** Served document URL the view iframe navigates to. */
+  url: string;
 }
 
 export interface HarnessModelInfo {

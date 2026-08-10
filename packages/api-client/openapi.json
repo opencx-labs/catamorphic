@@ -9466,34 +9466,11 @@
                           "format": "uuid",
                           "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
                         },
-                        "code": {
+                        "guestUrl": {
                           "type": "string"
-                        },
-                        "css": {
-                          "type": "string"
-                        },
-                        "allowedWorkflows": {
-                          "type": "array",
-                          "items": {
-                            "type": "string"
-                          }
-                        },
-                        "allowedNetworkOrigins": {
-                          "type": "array",
-                          "items": {
-                            "type": "string"
-                          }
                         }
                       },
-                      "required": [
-                        "state",
-                        "appId",
-                        "versionId",
-                        "code",
-                        "css",
-                        "allowedWorkflows",
-                        "allowedNetworkOrigins"
-                      ],
+                      "required": ["state", "appId", "versionId", "guestUrl"],
                       "additionalProperties": false
                     }
                   ]
@@ -9517,6 +9494,54 @@
                 }
               }
             }
+          }
+        }
+      }
+    },
+    "/api/projects/{projectId}/apps/{appName}/guest": {
+      "get": {
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "enum": ["published", "dev"]
+            },
+            "in": "query",
+            "name": "channel",
+            "required": false
+          },
+          {
+            "schema": {
+              "type": "string",
+              "maxLength": 8192
+            },
+            "in": "query",
+            "name": "theme",
+            "required": false
+          },
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+            },
+            "in": "path",
+            "name": "projectId",
+            "required": true
+          },
+          {
+            "schema": {
+              "type": "string",
+              "pattern": "^[a-z0-9][a-z0-9-]*$"
+            },
+            "in": "path",
+            "name": "appName",
+            "required": true
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Default Response"
           }
         }
       }

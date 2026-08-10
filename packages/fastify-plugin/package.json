@@ -18,10 +18,11 @@
     "generate-spec": "bun run scripts/generate-spec.ts && biome format --write ../api-client/openapi.json"
   },
   "dependencies": {
+    "@catamorphic/app": "workspace:*",
     "@catamorphic/core": "workspace:*",
-    "@catamorphic/github": "workspace:*",
     "@catamorphic/db": "workspace:*",
     "@catamorphic/git": "workspace:*",
+    "@catamorphic/github": "workspace:*",
     "@catamorphic/parser": "workspace:*",
     "@catamorphic/plugins": "workspace:*",
     "@catamorphic/sandbox": "workspace:*",

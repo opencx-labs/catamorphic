@@ -176,37 +176,14 @@ export function McpAppScreen({
         ref={frameRef}
         title={`mcp-app-${toolKey}`}
         sandbox="allow-scripts allow-forms"
-        srcDoc={withCsp(view)}
+        // Served by the embedded server (with the resource's declared CSP
+        // as its own policy) rather than srcdoc, which would inherit the
+        // shell's strict CSP and block the view's inline scripts.
+        src={view.url}
         className={`h-full w-full rounded-lg bg-white ${
           view.prefersBorder ? "border border-border" : ""
         }`}
       />
     </div>
   );
-}
-
-/**
- * The iframe CSP, from the resource's declared domain lists. Defaults are
- * the spec's: no network, inline script/style only, data/blob images.
- * Declared domains widen exactly the directives the spec maps them to.
- */
-function withCsp(view: McpAppViewData): string {
-  const resource = view.csp.resourceDomains.join(" ");
-  const connect = view.csp.connectDomains.join(" ");
-  const csp = [
-    "default-src 'none'",
-    `script-src 'unsafe-inline' 'unsafe-eval'${resource ? ` ${resource}` : ""}`,
-    `style-src 'unsafe-inline'${resource ? ` ${resource}` : ""}`,
-    `img-src data: blob:${resource ? ` ${resource}` : ""}`,
-    `font-src data:${resource ? ` ${resource}` : ""}`,
-    connect ? `connect-src ${connect}` : "connect-src 'none'",
-  ].join("; ");
-  const meta = `<meta http-equiv="Content-Security-Policy" content="${csp}">`;
-  const html = view.html;
-  const headMatch = html.match(/<head[^>]*>/i);
-  if (headMatch?.index !== undefined) {
-    const at = headMatch.index + headMatch[0].length;
-    return `${html.slice(0, at)}${meta}${html.slice(at)}`;
-  }
-  return `${meta}${html}`;
 }

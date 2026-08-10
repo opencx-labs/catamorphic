@@ -341,6 +341,7 @@ app.whenReady().then(async () => {
       profileConfig,
       agentBridge?.bridge,
       connectors,
+      mcpApps,
     );
     state.broadcast("catamorphic:server-changed", {
       url: server.url,
