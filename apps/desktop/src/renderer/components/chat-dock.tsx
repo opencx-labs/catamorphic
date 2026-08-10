@@ -22,6 +22,7 @@ import {
 import {
   type FormEvent,
   type KeyboardEvent,
+  useCallback,
   useEffect,
   useMemo,
   useRef,
@@ -725,8 +726,6 @@ export interface ChatDockProps {
     url: string,
     modifiers: { metaKey: boolean; shiftKey: boolean },
   ) => void;
-  /** Changed-file chip clicked — opens the file in an attached editor. */
-  onFileClick?: (path: string) => void;
   /** Fork the conversation from this assistant message (hover action). */
   onFork?: (messageId: string) => void;
   /** Set on forked chats: reveal the parent conversation. */
@@ -775,7 +774,6 @@ export function ChatDock({
   onFocusRequest,
   onUnsplit,
   onLinkClick,
-  onFileClick,
   onFork,
   onOpenParent,
   onEntryChange,
@@ -806,6 +804,34 @@ export function ChatDock({
       .then(setUiTools)
       .catch(() => {});
   }, []);
+
+  // Connector icons for the turn event log: `server/tool` names resolve
+  // through the connection roster to the connector's icon.
+  const [connectorIcons, setConnectorIcons] = useState<Map<string, string>>(
+    () => new Map(),
+  );
+  useEffect(() => {
+    void desktopApi
+      .connectionsList()
+      .then((connections) => {
+        const icons = new Map<string, string>();
+        for (const connection of connections) {
+          if (connection.iconUrl) {
+            icons.set(connection.serverKey, connection.iconUrl);
+          }
+        }
+        setConnectorIcons(icons);
+      })
+      .catch(() => {});
+  }, []);
+  const resolveToolIcon = useCallback(
+    (toolName: string) => {
+      const slash = toolName.indexOf("/");
+      if (slash <= 0) return undefined;
+      return connectorIcons.get(toolName.slice(0, slash));
+    },
+    [connectorIcons],
+  );
 
   // Subagent, watcher, worked-on-app, and MCP-app-view chips come from
   // the chat's own turn events (every harness reports them through the
@@ -1357,7 +1383,7 @@ export function ChatDock({
             error={chat.error?.message ?? null}
             emptyState={emptyStateFor(entry.localId)}
             onLinkClick={onLinkClick}
-            onFileClick={onFileClick}
+            resolveToolIcon={resolveToolIcon}
             onFork={entry.sessionId ? onFork : undefined}
             registerJumpToPreviousUserMessage={(jump) => {
               jumpToPreviousRef.current = jump;

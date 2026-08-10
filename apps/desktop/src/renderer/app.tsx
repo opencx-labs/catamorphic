@@ -3238,12 +3238,6 @@ export function App() {
                       }));
                     }
                   }}
-                  onFileClick={(path) =>
-                    openEditorTab({
-                      filePath: path,
-                      chatLocalId: entry.localId,
-                    })
-                  }
                   onFork={(messageId) => forkChat(entry, messageId)}
                   onOpenParent={
                     chatForks[entry.localId]

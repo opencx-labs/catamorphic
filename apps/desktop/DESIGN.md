@@ -1505,3 +1505,36 @@ Patterned on what best-in-class palettes converged on (Chrome omnibox
   with a chat focused the chat-scoped trio (switch-agent, switch-model,
   change-effort) leads the action list — score ties resolve by list order,
   so the per-chat command wins over the profile default.
+- **Guest documents are served, never `srcdoc`.** A `srcdoc`/`blob:`/`data:`
+  document inherits the embedding page's Content-Security-Policy, and the
+  shell's strict `script-src` (no `unsafe-inline`) silently blocked every
+  app bundle and MCP view — a permanently blank iframe at MIN_HEIGHT.
+  App mounts now navigate to a guest URL served by the API
+  (`/apps/:name/guest`, builder shared in `@catamorphic/app`), and MCP
+  views to the embedded server's `/desktop/mcp-app-view`; each response
+  carries its own default-deny CSP as a header, so guests keep the exact
+  isolation they had (sandbox without `allow-same-origin` → opaque origin)
+  while the shell's CSP stays strict. The mount-time theme rides the guest
+  URL as validated JSON so the first paint is already in the host's
+  colors; later switches stay postMessage. The shell's CSP gains only
+  `frame-src` for the loopback servers.
+- **The live activity line stays calm; the event log carries the detail.**
+  While the agent works, the chat never shows file paths, raw command
+  lines, or tool names — "Editing files...", a friendly verb for
+  well-known programs (`sleep` → "Waiting...", `find`/`grep` → "Searching
+  files...", package managers → "Running scripts..."), and otherwise just
+  "Working...". The full record moved to an expandable per-reply event
+  log: each assistant message with turn events renders a muted "N steps"
+  toggle (collapsed by default), and each step row — `$ command`,
+  `Edited path`, tool name with the connector's icon for MCP tools —
+  stays collapsed too, expanding to the tool's input/result (capped, in a
+  scrollable pre). Two levels of collapse are deliberate: most readers
+  never look, and tool payloads are long and technical even when the list
+  itself is interesting.
+- **No touched-files chips on replies.** The end-of-turn green file chips
+  duplicated what the app chip and the coming git-changes tree view do
+  better, and most users never clicked them; `metadata.changedFiles` is
+  still persisted per message for that tree view (TODO.md). The
+  jump-to-previous-message arrow also hides until the conversation
+  actually outgrows the viewport — a fully visible chat needs no scroll
+  affordance.

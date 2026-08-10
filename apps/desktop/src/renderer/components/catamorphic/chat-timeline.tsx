@@ -4,14 +4,19 @@ import type { AgentMessage, QueuedAgentMessage } from "@catamorphic/react";
 import {
   ArrowDown,
   ArrowUp,
+  Bot,
+  ChevronRight,
   ChevronUp,
   FileText,
   GitFork,
   KeyRound,
   LoaderCircle,
   Pencil,
+  Radio,
   RotateCcw,
+  SquareTerminal,
   Trash2,
+  Wrench,
   Zap,
 } from "lucide-react";
 import { memo, useCallback, useEffect, useRef, useState } from "react";
@@ -94,7 +99,11 @@ export interface ChatTimelineProps {
     url: string,
     modifiers: { metaKey: boolean; shiftKey: boolean },
   ) => void;
-  onFileClick?: (path: string) => void;
+  /**
+   * Icon URL for a tool name (MCP tools are `server/tool`; the host maps
+   * the server key to its connector icon). Undefined → generic glyph.
+   */
+  resolveToolIcon?: (toolName: string) => string | undefined;
   /**
    * Fork the conversation from an assistant message (hover action on the
    * message). The host opens the fork as its own chat surface.
@@ -132,7 +141,7 @@ export function ChatTimeline({
   contentClassName = "",
   resolveAgentName,
   onLinkClick,
-  onFileClick,
+  resolveToolIcon,
   onFork,
   registerJumpToPreviousUserMessage,
 }: ChatTimelineProps) {
@@ -168,7 +177,7 @@ export function ChatTimeline({
               isLast={message.id === lastConversationId}
               resolveAgentName={resolveAgentName}
               onLinkClick={onLinkClick}
-              onFileClick={onFileClick}
+              resolveToolIcon={resolveToolIcon}
               onRetry={onRetry}
               onReauth={onReauth}
               reauthLabel={reauthLabel}
@@ -224,6 +233,22 @@ function JumpToPreviousUserMessage({
   register?: (jump: () => void) => void;
 }) {
   const { scrollRef, contentRef, isAtBottom } = useStickToBottomContext();
+  // A chat short enough to see whole needs no jump affordance; watch both
+  // the scroller and its content so the button appears the moment the
+  // conversation outgrows the viewport (and goes away if it shrinks).
+  const [scrollable, setScrollable] = useState(false);
+  useEffect(() => {
+    const scroller = scrollRef.current;
+    const content = contentRef.current;
+    if (!scroller || !content) return;
+    const measure = () =>
+      setScrollable(scroller.scrollHeight > scroller.clientHeight + 16);
+    measure();
+    const observer = new ResizeObserver(measure);
+    observer.observe(scroller);
+    observer.observe(content);
+    return () => observer.disconnect();
+  }, [scrollRef, contentRef]);
   const jump = useCallback(() => {
     const scroller = scrollRef.current;
     const content = contentRef.current;
@@ -252,6 +277,7 @@ function JumpToPreviousUserMessage({
     register?.(jump);
   }, [register, jump]);
 
+  if (!scrollable) return null;
   return (
     <ShortcutHint label="Jump to your previous message" shortcut="⇞">
       <button
@@ -331,7 +357,7 @@ function MessageImpl({
   isLast,
   resolveAgentName,
   onLinkClick,
-  onFileClick,
+  resolveToolIcon,
   onRetry,
   onReauth,
   reauthLabel,
@@ -341,13 +367,12 @@ function MessageImpl({
   isLast: boolean;
   resolveAgentName?: (agentId: string) => string | undefined;
   onLinkClick?: ChatTimelineProps["onLinkClick"];
-  onFileClick?: (path: string) => void;
+  resolveToolIcon?: (toolName: string) => string | undefined;
   onRetry?: () => void;
   onReauth?: () => void;
   reauthLabel?: string;
   onFork?: (messageId: string) => void;
 }) {
-  const files = changedFiles(message);
   const metadata = asRecord(message.metadata);
   const [entered, setEntered] = useState(false);
 
@@ -444,6 +469,12 @@ function MessageImpl({
           </ShortcutHint>
         </span>
       )}
+      {message.role === "assistant" && (
+        <TurnSteps
+          steps={turnSteps(message)}
+          resolveToolIcon={resolveToolIcon}
+        />
+      )}
       {message.role === "user" ? (
         <div className="whitespace-pre-wrap break-words leading-6">
           {message.content}
@@ -479,30 +510,187 @@ function MessageImpl({
           </Markdown>
         </div>
       )}
-      {files.length > 0 && (
-        <div className="mt-2 flex flex-wrap gap-1">
-          {files.map((file) =>
-            onFileClick ? (
-              <button
-                key={file}
-                type="button"
-                onClick={() => onFileClick(file)}
-                className="cursor-pointer rounded border border-success/50 bg-success/10 px-1.5 py-0.5 font-mono text-[11px] text-success transition-colors duration-100 hover:bg-success/20"
-              >
-                {file}
-              </button>
-            ) : (
-              <code
-                key={file}
-                className="rounded border border-success/50 bg-success/10 px-1.5 py-0.5 text-[11px] text-success"
-              >
-                {file}
-              </code>
-            ),
-          )}
+    </article>
+  );
+}
+
+/** One row of a turn's expandable event log. */
+interface TurnStep {
+  kind: "command" | "file_edit" | "tool" | "subagent" | "background";
+  /** Row header — the technical detail lives here, not on the live line. */
+  label: string;
+  /** Tool name as the harness reported it (`server/tool` for MCP). */
+  toolName?: string;
+  /** Preformatted expandable body (tool input/result, full command). */
+  detail?: string;
+}
+
+const STEP_ICONS = {
+  command: SquareTerminal,
+  file_edit: Pencil,
+  tool: Wrench,
+  subagent: Bot,
+  background: Radio,
+} as const;
+
+/** Cap for a step's expanded body; full payloads can be megabytes. */
+const STEP_DETAIL_MAX = 6_000;
+
+function stepDetailText(value: unknown): string | undefined {
+  if (value === undefined || value === null) return undefined;
+  const text =
+    typeof value === "string" ? value : JSON.stringify(value, null, 2);
+  if (!text || text === "{}") return undefined;
+  return text.length > STEP_DETAIL_MAX
+    ? `${text.slice(0, STEP_DETAIL_MAX)}\n… truncated`
+    : text;
+}
+
+/**
+ * The turn's steps, from the persisted per-message event log
+ * (`metadata.events`). The chat keeps its prose calm — this is where the
+ * full commands, file paths, and tool payloads live, on demand.
+ */
+function turnSteps(message: ChatTimelineMessage): TurnStep[] {
+  const events = asRecord(message.metadata)?.events;
+  if (!Array.isArray(events)) return [];
+  const steps: TurnStep[] = [];
+  for (const entry of events) {
+    const event = asRecord(entry);
+    if (!event) continue;
+    const content = typeof event.content === "string" ? event.content : "";
+    const firstLine = content.split("\n", 1)[0]?.trim() ?? "";
+    if (event.type === "command") {
+      steps.push({
+        kind: "command",
+        label: `$ ${firstLine || "(command)"}`,
+        detail: stepDetailText(
+          [
+            content.includes("\n") ? content : undefined,
+            stepDetailText(event.toolResult),
+          ]
+            .filter(Boolean)
+            .join("\n\n"),
+        ),
+      });
+    } else if (event.type === "file_edit") {
+      const path = typeof event.filePath === "string" ? event.filePath : "";
+      steps.push({ kind: "file_edit", label: `Edited ${path || "a file"}` });
+    } else if (event.type === "tool_call") {
+      const toolName =
+        typeof event.toolName === "string" ? event.toolName : "tool";
+      const input = stepDetailText(event.toolInput);
+      const result = stepDetailText(event.toolResult);
+      steps.push({
+        kind: "tool",
+        label: toolName,
+        toolName,
+        detail: stepDetailText(
+          [input && `Input:\n${input}`, result && `Result:\n${result}`]
+            .filter(Boolean)
+            .join("\n\n"),
+        ),
+      });
+    } else if (event.type === "subagent" && event.status !== "ended") {
+      steps.push({
+        kind: "subagent",
+        label: `Subagent: ${firstLine || "delegated work"}`,
+      });
+    } else if (event.type === "background" && event.status !== "ended") {
+      steps.push({
+        kind: "background",
+        label: `Background: ${firstLine || "process"}`,
+      });
+    }
+  }
+  return steps;
+}
+
+/**
+ * The expandable event log under an assistant reply: collapsed to a muted
+ * "N steps" line; expanded, each step is a row that itself stays collapsed
+ * (payloads are long and technical) until clicked. MCP tool rows show the
+ * connector's icon when the host can resolve one.
+ */
+function TurnSteps({
+  steps,
+  resolveToolIcon,
+}: {
+  steps: TurnStep[];
+  resolveToolIcon?: (toolName: string) => string | undefined;
+}) {
+  const [expanded, setExpanded] = useState(false);
+  if (steps.length === 0) return null;
+  return (
+    <div className="mb-1.5" data-testid="chat-turn-steps">
+      <button
+        type="button"
+        onClick={() => setExpanded((value) => !value)}
+        className="flex cursor-pointer items-center gap-1 text-[11px] text-fg-faint transition-colors duration-100 hover:text-fg-muted"
+        aria-expanded={expanded}
+        data-testid="chat-turn-steps-toggle"
+      >
+        <ChevronRight
+          className={`size-3 transition-transform duration-150 ${expanded ? "rotate-90" : ""}`}
+        />
+        {steps.length === 1 ? "1 step" : `${steps.length} steps`}
+      </button>
+      {expanded && (
+        <div className="mt-1 flex flex-col gap-0.5 border-l border-border pl-2.5">
+          {steps.map((step, index) => (
+            <StepRow
+              // Steps are append-only within a message; index is stable.
+              // biome-ignore lint/suspicious/noArrayIndexKey: static list
+              key={index}
+              step={step}
+              iconUrl={
+                step.toolName ? resolveToolIcon?.(step.toolName) : undefined
+              }
+            />
+          ))}
         </div>
       )}
-    </article>
+    </div>
+  );
+}
+
+function StepRow({ step, iconUrl }: { step: TurnStep; iconUrl?: string }) {
+  const [open, setOpen] = useState(false);
+  const Icon = STEP_ICONS[step.kind];
+  const expandable = Boolean(step.detail);
+  return (
+    <div data-testid="chat-step">
+      <button
+        type="button"
+        onClick={expandable ? () => setOpen((value) => !value) : undefined}
+        className={`flex w-full items-center gap-1.5 rounded px-1 py-0.5 text-left text-[11px] text-fg-muted ${
+          expandable
+            ? "cursor-pointer transition-colors duration-100 hover:bg-bg-inset hover:text-fg"
+            : "cursor-default"
+        }`}
+        aria-expanded={expandable ? open : undefined}
+      >
+        {iconUrl ? (
+          <img src={iconUrl} alt="" className="size-3.5 shrink-0 rounded-sm" />
+        ) : (
+          <Icon className="size-3.5 shrink-0 text-fg-faint" />
+        )}
+        <span className="min-w-0 flex-1 truncate font-mono">{step.label}</span>
+        {expandable && (
+          <ChevronRight
+            className={`size-3 shrink-0 text-fg-faint transition-transform duration-150 ${open ? "rotate-90" : ""}`}
+          />
+        )}
+      </button>
+      {open && step.detail && (
+        <pre
+          className="mb-1 ml-6 mt-0.5 max-h-56 overflow-auto whitespace-pre-wrap break-all rounded-md border border-border bg-bg-inset p-2 font-mono text-[11px] leading-4 text-fg-muted"
+          data-testid="chat-step-detail"
+        >
+          {step.detail}
+        </pre>
+      )}
+    </div>
   );
 }
 
@@ -923,16 +1111,6 @@ function isConversationMessage(message: ChatTimelineMessage): boolean {
   if (asRecord(message.metadata)?.status === "in_progress") return false;
   // Question-only turns have no prose; the question panel is the content.
   return message.content.trim().length > 0;
-}
-
-function changedFiles(message: ChatTimelineMessage): string[] {
-  const metadata = asRecord(message.metadata);
-  const changes = metadata?.changedFiles;
-  if (!Array.isArray(changes)) return [];
-  return changes.flatMap((change) => {
-    const entry = asRecord(change);
-    return typeof entry?.path === "string" ? [entry.path] : [];
-  });
 }
 
 function attachmentsFromMetadata(

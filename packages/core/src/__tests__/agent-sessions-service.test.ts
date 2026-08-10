@@ -14,17 +14,43 @@ import {
 } from "../templates.js";
 
 describe("activityLabel", () => {
-  it("describes thinking, file edits, commands, and tools", () => {
+  it("keeps the live line calm: no paths, no raw commands, no tool names", () => {
     expect(activityLabel({ type: "done" })).toBe("Thinking...");
+    // File names never surface on the live line — the event log has them.
     expect(
       activityLabel({ type: "file_edit", filePath: "src/workflow.ts" }),
-    ).toBe("Editing src/workflow.ts");
-    expect(activityLabel({ type: "command", content: "bun test" })).toBe(
-      "Running bun test",
-    );
+    ).toBe("Editing files...");
     expect(activityLabel({ type: "tool_call", toolName: "read" })).toBe(
-      "Using read",
+      "Working...",
     );
+  });
+
+  it("pretty-prints well-known commands and hides the rest", () => {
+    expect(activityLabel({ type: "command", content: "sleep 5" })).toBe(
+      "Waiting...",
+    );
+    expect(
+      activityLabel({ type: "command", content: "find . -name '*.ts'" }),
+    ).toBe("Searching files...");
+    expect(activityLabel({ type: "command", content: "bun test" })).toBe(
+      "Running scripts...",
+    );
+    // Wrappers and env assignments don't hide the real program.
+    expect(
+      activityLabel({ type: "command", content: "FOO=1 env git status" }),
+    ).toBe("Working with git...");
+    // Compound commands classify by what runs first.
+    expect(
+      activityLabel({ type: "command", content: "ls -la && ./deploy.sh" }),
+    ).toBe("Looking around...");
+    // Unknown programs stay generic instead of leaking the command line.
+    expect(
+      activityLabel({
+        type: "command",
+        content: "./scripts/migrate.sh --force",
+      }),
+    ).toBe("Working...");
+    expect(activityLabel({ type: "command" })).toBe("Working...");
   });
 });
 

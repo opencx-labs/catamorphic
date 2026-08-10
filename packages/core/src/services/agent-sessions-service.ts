@@ -1519,13 +1519,17 @@ function progressMetadata(events: AgentEvent[]): JsonObject {
 
 export function activityLabel(event: AgentEvent): string {
   if (event.type === "file_edit") {
-    return event.filePath ? `Editing ${event.filePath}` : "Editing files...";
+    // Deliberately no file name: the live line stays calm and human; the
+    // full path is in the turn's event log for anyone who expands it.
+    return "Editing files...";
   }
   if (event.type === "command") {
-    return event.content ? `Running ${event.content}` : "Running a command...";
+    return commandLabel(event.content);
   }
   if (event.type === "tool_call") {
-    return event.toolName ? `Using ${event.toolName}` : "Using a tool...";
+    // Tool names are technical (harness- and MCP-speak); the expanded
+    // event log carries them, the live line stays plain.
+    return "Working...";
   }
   if (event.type === "subagent") {
     if (event.status === "ended") return "Subagent finished...";
@@ -1544,6 +1548,64 @@ export function activityLabel(event: AgentEvent): string {
   if (event.type === "error") return event.content ?? "Agent failed";
   if (event.type === "text") return event.content ?? "Thinking...";
   return "Thinking...";
+}
+
+/**
+ * Human labels for well-known shell commands. The live activity line never
+ * shows a raw command (long, technical, sometimes noisy); a recognized
+ * program gets a friendly verb and everything else is just "Working...".
+ */
+const COMMAND_LABELS: Record<string, string> = {
+  sleep: "Waiting...",
+  find: "Searching files...",
+  grep: "Searching files...",
+  rg: "Searching files...",
+  ag: "Searching files...",
+  ls: "Looking around...",
+  tree: "Looking around...",
+  pwd: "Looking around...",
+  cat: "Reading files...",
+  head: "Reading files...",
+  tail: "Reading files...",
+  wc: "Reading files...",
+  mkdir: "Creating files...",
+  touch: "Creating files...",
+  cp: "Copying files...",
+  mv: "Moving files...",
+  git: "Working with git...",
+  curl: "Fetching a URL...",
+  wget: "Fetching a URL...",
+  make: "Building...",
+  cargo: "Building...",
+  tsc: "Building...",
+  npm: "Running scripts...",
+  npx: "Running scripts...",
+  pnpm: "Running scripts...",
+  yarn: "Running scripts...",
+  bun: "Running scripts...",
+  bunx: "Running scripts...",
+  node: "Running code...",
+  python: "Running code...",
+  python3: "Running code...",
+  vitest: "Running tests...",
+  jest: "Running tests...",
+  pytest: "Running tests...",
+};
+
+function commandLabel(command: string | undefined): string {
+  if (!command) return "Working...";
+  // First program of the first pipeline segment, skipping env assignments
+  // and trivial wrappers; compound commands classify by what runs first.
+  const segment = command.split(/\s*(?:&&|\|\||[;|])\s*/, 1)[0] ?? "";
+  const words = segment.trim().split(/\s+/);
+  let program: string | undefined;
+  for (const word of words) {
+    if (/^[A-Za-z_][A-Za-z0-9_]*=/.test(word)) continue; // env assignment
+    if (word === "env" || word === "sudo" || word === "command") continue;
+    program = word.split("/").pop();
+    break;
+  }
+  return (program && COMMAND_LABELS[program]) ?? "Working...";
 }
 
 /**

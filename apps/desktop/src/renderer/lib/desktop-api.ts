@@ -61,6 +61,8 @@ export interface UpdateAgentInput {
 export interface ConnectionInfo {
   id: string;
   name: string;
+  /** Slug the harnesses use as the tool-name prefix (`<serverKey>/<tool>`). */
+  serverKey: string;
   transport: "http" | "sse" | "stdio";
   url?: string;
   command?: string;

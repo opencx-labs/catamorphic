@@ -278,11 +278,19 @@ describe("chat flows", () => {
         /look at the project|writing some notes|two preambles/.test(text),
       ),
     ).toHaveLength(3);
-    // The file the fake agent wrote synced back as a changed-file chip.
+    // The file the fake agent wrote shows up in the turn's step log
+    // (collapsed by default; expanding reveals the file-edit row).
     await runWait(
-      `return !!byText('[role="log"] button, [role="log"] code', 'NOTES.md');`,
+      `
+      const toggle = $$('[data-testid="chat-turn-steps-toggle"]').at(-1);
+      if (!toggle) return false;
+      if (toggle.getAttribute('aria-expanded') !== 'true') toggle.click();
+      return $$('[data-testid="chat-step"]').some((el) =>
+        el.textContent.includes('NOTES.md'),
+      );
+      `,
       {
-        label: "changed-file chip",
+        label: "turn step log shows NOTES.md",
       },
     );
   });

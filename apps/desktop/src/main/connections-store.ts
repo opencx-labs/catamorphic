@@ -54,6 +54,8 @@ interface ConnectionsFile {
 export interface PublicMcpConnection {
   id: string;
   name: string;
+  /** Slug the harnesses use as the tool-name prefix (`<serverKey>/<tool>`). */
+  serverKey: string;
   transport: "http" | "sse" | "stdio";
   url?: string;
   command?: string;
@@ -258,6 +260,7 @@ export function toPublicConnection(
   const { headers, env, ...rest } = connection;
   return {
     ...rest,
+    serverKey: connectionServerKey(connection),
     headerNames: Object.keys(headers ?? {}),
     envNames: Object.keys(env ?? {}),
   };
