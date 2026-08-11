@@ -10,7 +10,7 @@ import {
 const connectionString = process.env.DATABASE_URL ?? "";
 const describeIf = connectionString ? describe : describe.skip;
 const schema = `catamorphic_evt_${crypto.randomUUID().replaceAll("-", "")}`;
-const db = createDatabase({ connectionString, schema });
+const db = createDatabase({ connectionString, schema, poolSize: 8 });
 const service = new RuntimeEventsService(db);
 
 const tenantId = crypto.randomUUID();

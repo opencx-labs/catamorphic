@@ -19,7 +19,7 @@ import { RunCoordinator } from "../services/run-coordinator.js";
 const connectionString = process.env.DATABASE_URL ?? "";
 const describeIf = connectionString ? describe : describe.skip;
 const schema = `catamorphic_sink_${crypto.randomUUID().replaceAll("-", "")}`;
-const db = createDatabase({ connectionString, schema });
+const db = createDatabase({ connectionString, schema, poolSize: 8 });
 const jobs = new ExecutionJobsService(db);
 const coordinator = new RunCoordinator(db, jobs);
 

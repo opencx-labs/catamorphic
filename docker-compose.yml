@@ -4,6 +4,10 @@ services:
   # point the host app's DATABASE_URL at whichever Postgres you use.
   postgres:
     image: postgres:17
+    # Integration tests run one pool per test file in parallel (capped at
+    # poolSize: 8 in the tests); the stock ceiling of 100 connections made
+    # full-workspace `turbo test` runs flake with pool timeouts.
+    command: ["postgres", "-c", "max_connections=300"]
     ports:
       - "${CATAMORPHIC_POSTGRES_PORT:-5432}:5432"
     environment:

@@ -214,7 +214,7 @@ describeIf("TriggersService end to end", () => {
       new FsBackend(devDir),
       new FsRemoteBackend(originDir),
     );
-    db = createDatabase({ connectionString, schema });
+    db = createDatabase({ connectionString, schema, poolSize: 8 });
     await migrateToLatest({ db, schema });
     core = new CatamorphicCore({
       db,

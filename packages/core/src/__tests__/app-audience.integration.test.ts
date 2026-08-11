@@ -13,7 +13,7 @@ import { AppPoliciesService } from "../services/app-policies-service.js";
 const connectionString = process.env.DATABASE_URL ?? "";
 const describeIf = connectionString ? describe : describe.skip;
 const schema = `catamorphic_audience_${crypto.randomUUID().replaceAll("-", "")}`;
-const db = createDatabase({ connectionString, schema });
+const db = createDatabase({ connectionString, schema, poolSize: 8 });
 
 const tenantId = crypto.randomUUID();
 const otherTenantId = crypto.randomUUID();

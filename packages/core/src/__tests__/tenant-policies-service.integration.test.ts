@@ -12,7 +12,7 @@ const describeIf = connectionString ? describe : describe.skip;
 const schema = `catamorphic_tenant_policies_${crypto
   .randomUUID()
   .replaceAll("-", "")}`;
-const db = createDatabase({ connectionString, schema });
+const db = createDatabase({ connectionString, schema, poolSize: 8 });
 const policies = new TenantPoliciesService(db);
 const tenantId = crypto.randomUUID();
 const projectId = crypto.randomUUID();

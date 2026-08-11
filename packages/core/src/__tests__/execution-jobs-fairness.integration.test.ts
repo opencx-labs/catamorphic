@@ -9,7 +9,7 @@ const describeIf = connectionString ? describe : describe.skip;
 const schema = `catamorphic_queue_fairness_${crypto
   .randomUUID()
   .replaceAll("-", "")}`;
-const db = createDatabase({ connectionString, schema });
+const db = createDatabase({ connectionString, schema, poolSize: 8 });
 const jobs = new ExecutionJobsService(db);
 const policies = new TenantPoliciesService(db);
 

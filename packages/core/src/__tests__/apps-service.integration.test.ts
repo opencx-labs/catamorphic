@@ -16,7 +16,7 @@ import { DevSandboxService } from "../services/dev-sandbox-service.js";
 const connectionString = process.env.DATABASE_URL ?? "";
 const describeIf = connectionString ? describe : describe.skip;
 const schema = `catamorphic_apps_${crypto.randomUUID().replaceAll("-", "")}`;
-const db = createDatabase({ connectionString, schema });
+const db = createDatabase({ connectionString, schema, poolSize: 8 });
 const tenantId = crypto.randomUUID();
 const projectId = crypto.randomUUID();
 const identity: Identity = { tenantId, externalUserId: "apps-test-user" };

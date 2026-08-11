@@ -11,7 +11,7 @@ const describeIf = connectionString ? describe : describe.skip;
 const schema = `catamorphic_rate_reservations_${crypto
   .randomUUID()
   .replaceAll("-", "")}`;
-const db = createDatabase({ connectionString, schema });
+const db = createDatabase({ connectionString, schema, poolSize: 8 });
 const reservations = new RateReservationsService(db);
 const tenantId = crypto.randomUUID();
 const otherTenantId = crypto.randomUUID();
