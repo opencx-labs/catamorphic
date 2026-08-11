@@ -285,6 +285,47 @@ workflow to apps or editing \`workflows/src/app-api.ts\`. Key rules:
 - App-callable workflows receive untrusted input from a viewer's browser.
   Validate ids, clamp numbers, and bound arrays before acting.
 
+## Host triggers
+
+The embedding host can define custom trigger kinds — "Ticket Created",
+"AI Tool Call", "Chat Turn" — and fire them with a payload; every defined
+workflow subscribed to that kind runs with the payload as input.
+
+\`\`\`typescript
+import { defineWorkflow, trigger } from "@catamorphic/workflow";
+
+export const escalateTicket = defineWorkflow(({ defineBoundary }) => ({
+  triggers: [trigger("ticket.created", { onlyPriority: "high" })],
+  steps: [
+    defineBoundary({
+      run: async ({ input }: BoundaryContext<{ ticketId: string }>) => ({
+        escalated: input.ticketId,
+      }),
+    }),
+  ],
+}));
+\`\`\`
+
+Rules:
+
+1. Only \`defineWorkflow\` definitions can declare \`triggers\`; plain
+   \`"use workflow"\` functions cannot.
+2. The kind name must be a string literal and the config an inline constant
+   (object/array/string/number/boolean literals). Hosts introspect the config
+   without running code, so anything computed is a parse error.
+3. Valid kind names, payload types, and config shapes come from the generated
+   \`workflows/src/catamorphic-triggers.d.ts\`. Never edit that file. If
+   \`trigger()\` rejects every kind name, the file is missing or stale — the
+   host syncs it; do not hand-write a replacement.
+4. The trigger payload becomes the first step's input, so the first
+   \`BoundaryContext<Input>\` must accept the kind's payload type. Multiple
+   bindings are allowed; the input must then accept every payload.
+5. Each kind defines what its config means (e.g. an AI tool-call kind requires
+   a \`description\` the model sees). Fill it thoughtfully — hosts read it.
+6. Hosts may fire sync (result awaited inline) or async. A workflow with no
+   pause, retry, rate limit, batch, or child call is guaranteed to complete
+   inline; anything else may detach mid-run, which is fine and expected.
+
 ## Secrets
 
 Declare every API key, token, or credential the project needs with
@@ -650,6 +691,10 @@ Do not recreate the types locally or bypass the missing API with assertions.
   eventually be visualized, but are not separate persisted checkpoints.
 - A returned transition resolves before the next boundary starts. The resolved
   value, not the transition object, is the next boundary's input.
+- \`triggers: [trigger("kind", config)]\` subscribes the definition to a host
+  trigger kind. Kind names and config/payload types come from the generated
+  \`catamorphic-triggers.d.ts\`; config must be an inline constant, and the
+  kind's payload type must satisfy the first boundary's input.
 
 ## Complete pattern
 
@@ -755,6 +800,8 @@ export const approveOrder = defineWorkflow(({ defineBoundary }) => ({
 9. The parser requires an exported direct \`defineWorkflow\` call, an inline
    builder object, an inline \`steps\` array, direct \`defineBoundary\` entries,
    and inline \`run\` callbacks. Keep these structural parts static.
+   The same applies to \`triggers\`: an inline array of direct
+   \`trigger("literal-kind", { constant: "config" })\` calls.
 10. Workflows with persisted scopes and their boundaries use the same JSDoc
     metadata as plain functions and steps. Put \`@displayname\`,
     \`@description\`, \`@icon\`, and
@@ -789,6 +836,14 @@ Catamorphic message first, then inspect its details:
 - If \`input\` is \`unknown\` or inference becomes recursive, add or correct the
   explicit \`BoundaryContext<Input>\` annotation. Do not add generic arguments
   to \`defineWorkflow\` as a workaround.
+- \`Trigger N delivers a payload the first workflow step does not accept\`
+  means the kind's payload type is not assignable to the first boundary's
+  annotated input. Align the input with the payload in
+  \`catamorphic-triggers.d.ts\`; never cast.
+- If \`trigger("...")\` rejects every kind name (\`not assignable to
+  parameter of type 'never'\`), no \`catamorphic-triggers.d.ts\` augmentation
+  is present — the host has not registered trigger kinds or has not synced
+  the generated types. Do not fabricate the file or the interface.
 
 Fix errors from the earliest boundary first because one incorrect return type
 can cascade through every later tuple element. Run the project's TypeScript

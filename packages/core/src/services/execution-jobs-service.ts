@@ -269,6 +269,59 @@ export class ExecutionJobsService {
     );
   }
 
+  /**
+   * Claims one specific pending, currently-available job. Used by sync
+   * trigger firings to drive a run's jobs inline; losing the race to a
+   * polling worker returns null, never an error.
+   */
+  async claimById(args: {
+    jobId: string;
+    workerId: string;
+    leaseSeconds?: number;
+  }): Promise<ExecutionJob | null> {
+    const leaseSeconds = args.leaseSeconds ?? 60;
+    const leaseToken = crypto.randomUUID();
+    const row = await this.db
+      .updateTable("execution_jobs")
+      .set((eb) => ({
+        status: "running",
+        leased_by: args.workerId,
+        lease_token: leaseToken,
+        lease_generation: sql<string>`lease_generation + 1`,
+        heartbeat_at: sql<Date>`clock_timestamp()`,
+        lease_expires_at: sql<Date>`clock_timestamp() + (${leaseSeconds} * interval '1 second')`,
+        attempt: eb("attempt", "+", 1),
+        updated_at: new Date(),
+      }))
+      .where("id", "=", args.jobId)
+      .where("status", "=", "pending")
+      .where("available_at", "<=", sql<Date>`clock_timestamp()`)
+      .returningAll()
+      .executeTakeFirst();
+    return row ? mapExecutionJob(row) : null;
+  }
+
+  /**
+   * The next job a sync driver would run for this run: the oldest
+   * non-terminal job, pending or already claimed by someone else.
+   */
+  async nextForRun(args: {
+    tenantId: string;
+    runId: string;
+  }): Promise<ExecutionJob | null> {
+    const row = await this.db
+      .selectFrom("execution_jobs")
+      .selectAll()
+      .where("tenant_id", "=", args.tenantId)
+      .where("workflow_run_id", "=", args.runId)
+      .where("status", "in", ["pending", "running"])
+      .orderBy("created_at", "asc")
+      .orderBy("id", "asc")
+      .limit(1)
+      .executeTakeFirst();
+    return row ? mapExecutionJob(row) : null;
+  }
+
   async heartbeat(args: {
     jobId: string;
     workerId: string;

@@ -259,10 +259,10 @@ async function stepB({ value }: { value: string }) {
 
     expect(graph.displayName).toBe("My Flow");
     expect(graph.description).toBe("A test flow");
-    expect(graph.trigger.parameters).toHaveLength(1);
-    expect(graph.trigger.parameters[0]?.name).toBe("input");
+    expect(graph.input.parameters).toHaveLength(1);
+    expect(graph.input.parameters[0]?.name).toBe("input");
 
-    const trigger = graph.nodes.find((n) => n.type === "trigger");
+    const trigger = graph.nodes.find((n) => n.type === "input");
     expect(trigger).toBeDefined();
 
     const steps = graph.nodes.filter((n) => n.type === "step");

@@ -335,6 +335,58 @@
                           },
                           "parameterCount": {
                             "type": "number"
+                          },
+                          "triggers": {
+                            "type": "array",
+                            "items": {
+                              "type": "object",
+                              "properties": {
+                                "kind": {
+                                  "type": "string"
+                                },
+                                "config": {},
+                                "sourceRange": {
+                                  "type": "object",
+                                  "properties": {
+                                    "start": {
+                                      "type": "number"
+                                    },
+                                    "end": {
+                                      "type": "number"
+                                    },
+                                    "startLine": {
+                                      "type": "number"
+                                    },
+                                    "startColumn": {
+                                      "type": "number"
+                                    },
+                                    "endLine": {
+                                      "type": "number"
+                                    },
+                                    "endColumn": {
+                                      "type": "number"
+                                    },
+                                    "file": {
+                                      "type": "string"
+                                    }
+                                  },
+                                  "required": [
+                                    "start",
+                                    "end",
+                                    "startLine",
+                                    "startColumn",
+                                    "endLine",
+                                    "endColumn"
+                                  ],
+                                  "additionalProperties": false
+                                }
+                              },
+                              "required": ["kind", "config", "sourceRange"],
+                              "additionalProperties": false
+                            }
+                          },
+                          "canSuspend": {
+                            "type": "boolean"
                           }
                         },
                         "required": [
@@ -343,7 +395,9 @@
                           "displayName",
                           "description",
                           "filePath",
-                          "parameterCount"
+                          "parameterCount",
+                          "triggers",
+                          "canSuspend"
                         ],
                         "additionalProperties": false
                       }
@@ -2194,6 +2248,58 @@
                       },
                       "parameterCount": {
                         "type": "number"
+                      },
+                      "triggers": {
+                        "type": "array",
+                        "items": {
+                          "type": "object",
+                          "properties": {
+                            "kind": {
+                              "type": "string"
+                            },
+                            "config": {},
+                            "sourceRange": {
+                              "type": "object",
+                              "properties": {
+                                "start": {
+                                  "type": "number"
+                                },
+                                "end": {
+                                  "type": "number"
+                                },
+                                "startLine": {
+                                  "type": "number"
+                                },
+                                "startColumn": {
+                                  "type": "number"
+                                },
+                                "endLine": {
+                                  "type": "number"
+                                },
+                                "endColumn": {
+                                  "type": "number"
+                                },
+                                "file": {
+                                  "type": "string"
+                                }
+                              },
+                              "required": [
+                                "start",
+                                "end",
+                                "startLine",
+                                "startColumn",
+                                "endLine",
+                                "endColumn"
+                              ],
+                              "additionalProperties": false
+                            }
+                          },
+                          "required": ["kind", "config", "sourceRange"],
+                          "additionalProperties": false
+                        }
+                      },
+                      "canSuspend": {
+                        "type": "boolean"
                       }
                     },
                     "required": [
@@ -2202,7 +2308,9 @@
                       "displayName",
                       "description",
                       "filePath",
-                      "parameterCount"
+                      "parameterCount",
+                      "triggers",
+                      "canSuspend"
                     ],
                     "additionalProperties": false
                   }
@@ -2328,7 +2436,7 @@
                     "filePath": {
                       "type": "string"
                     },
-                    "trigger": {
+                    "input": {
                       "type": "object",
                       "properties": {
                         "parameters": {
@@ -2363,6 +2471,58 @@
                       "required": ["parameters"],
                       "additionalProperties": false
                     },
+                    "triggers": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "kind": {
+                            "type": "string"
+                          },
+                          "config": {},
+                          "sourceRange": {
+                            "type": "object",
+                            "properties": {
+                              "start": {
+                                "type": "number"
+                              },
+                              "end": {
+                                "type": "number"
+                              },
+                              "startLine": {
+                                "type": "number"
+                              },
+                              "startColumn": {
+                                "type": "number"
+                              },
+                              "endLine": {
+                                "type": "number"
+                              },
+                              "endColumn": {
+                                "type": "number"
+                              },
+                              "file": {
+                                "type": "string"
+                              }
+                            },
+                            "required": [
+                              "start",
+                              "end",
+                              "startLine",
+                              "startColumn",
+                              "endLine",
+                              "endColumn"
+                            ],
+                            "additionalProperties": false
+                          }
+                        },
+                        "required": ["kind", "config", "sourceRange"],
+                        "additionalProperties": false
+                      }
+                    },
+                    "canSuspend": {
+                      "type": "boolean"
+                    },
                     "nodes": {
                       "type": "array",
                       "items": {
@@ -2374,7 +2534,7 @@
                           "type": {
                             "type": "string",
                             "enum": [
-                              "trigger",
+                              "input",
                               "source",
                               "sink",
                               "step",
@@ -2534,6 +2694,35 @@
                           },
                           "parentId": {
                             "type": "string"
+                          },
+                          "triggerBindings": {
+                            "type": "array",
+                            "items": {
+                              "type": "object",
+                              "properties": {
+                                "kind": {
+                                  "type": "string"
+                                },
+                                "config": {},
+                                "display": {
+                                  "type": "object",
+                                  "properties": {
+                                    "label": {
+                                      "type": "string"
+                                    },
+                                    "icon": {
+                                      "type": "string"
+                                    },
+                                    "color": {
+                                      "type": "string"
+                                    }
+                                  },
+                                  "additionalProperties": false
+                                }
+                              },
+                              "required": ["kind", "config"],
+                              "additionalProperties": false
+                            }
                           }
                         },
                         "required": [
@@ -2596,7 +2785,9 @@
                   "required": [
                     "name",
                     "capabilities",
-                    "trigger",
+                    "input",
+                    "triggers",
+                    "canSuspend",
                     "nodes",
                     "edges",
                     "sourceCode",
@@ -4721,6 +4912,504 @@
                   "type": "string",
                   "nullable": true,
                   "enum": [null]
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["error"],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["error"],
+                  "additionalProperties": false
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/trigger-kinds": {
+      "get": {
+        "responses": {
+          "200": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "name": {
+                        "type": "string"
+                      },
+                      "description": {
+                        "type": "string"
+                      },
+                      "display": {
+                        "type": "object",
+                        "properties": {
+                          "label": {
+                            "type": "string"
+                          },
+                          "icon": {
+                            "type": "string"
+                          },
+                          "color": {
+                            "type": "string"
+                          }
+                        },
+                        "additionalProperties": false
+                      },
+                      "modes": {
+                        "type": "array",
+                        "items": {
+                          "type": "string",
+                          "enum": ["sync", "async"]
+                        }
+                      },
+                      "payloadJsonSchema": {},
+                      "configJsonSchema": {}
+                    },
+                    "required": [
+                      "name",
+                      "modes",
+                      "payloadJsonSchema",
+                      "configJsonSchema"
+                    ],
+                    "additionalProperties": false
+                  }
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["error"],
+                  "additionalProperties": false
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/projects/{projectId}/triggers": {
+      "get": {
+        "parameters": [
+          {
+            "schema": {
+              "type": "string"
+            },
+            "in": "query",
+            "name": "kind",
+            "required": false
+          },
+          {
+            "schema": {
+              "type": "string"
+            },
+            "in": "path",
+            "name": "projectId",
+            "required": true
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "workflowName": {
+                        "type": "string"
+                      },
+                      "kind": {
+                        "type": "string"
+                      },
+                      "config": {},
+                      "canSuspend": {
+                        "type": "boolean"
+                      },
+                      "inputParameters": {
+                        "type": "array",
+                        "items": {
+                          "type": "object",
+                          "properties": {
+                            "name": {
+                              "type": "string"
+                            },
+                            "type": {
+                              "type": "string"
+                            },
+                            "optional": {
+                              "type": "boolean"
+                            },
+                            "displayName": {
+                              "type": "string"
+                            },
+                            "description": {
+                              "type": "string"
+                            },
+                            "defaultValue": {
+                              "type": "string"
+                            }
+                          },
+                          "required": ["name", "type", "optional"],
+                          "additionalProperties": false
+                        }
+                      }
+                    },
+                    "required": [
+                      "workflowName",
+                      "kind",
+                      "config",
+                      "canSuspend",
+                      "inputParameters"
+                    ],
+                    "additionalProperties": false
+                  }
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["error"],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["error"],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["error"],
+                  "additionalProperties": false
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/projects/{projectId}/triggers/{kind}/fire": {
+      "post": {
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "payload": {
+                    "$ref": "#/components/schemas/JsonValueInput"
+                  },
+                  "mode": {
+                    "type": "string",
+                    "enum": ["sync", "async"]
+                  },
+                  "workflows": {
+                    "maxItems": 100,
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "minLength": 1
+                    }
+                  },
+                  "correlationKey": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 500
+                  },
+                  "onConflict": {
+                    "type": "string",
+                    "enum": ["ignore", "error", "restart"]
+                  },
+                  "budgetMs": {
+                    "type": "integer",
+                    "minimum": 1000,
+                    "maximum": 300000
+                  }
+                },
+                "required": ["payload"]
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "schema": {
+              "type": "string"
+            },
+            "in": "path",
+            "name": "projectId",
+            "required": true
+          },
+          {
+            "schema": {
+              "type": "string"
+            },
+            "in": "path",
+            "name": "kind",
+            "required": true
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "kind": {
+                      "type": "string"
+                    },
+                    "mode": {
+                      "type": "string",
+                      "enum": ["sync", "async"]
+                    },
+                    "commitSha": {
+                      "nullable": true,
+                      "type": "string"
+                    },
+                    "runs": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "workflowName": {
+                            "type": "string"
+                          },
+                          "runId": {
+                            "type": "string"
+                          },
+                          "status": {
+                            "type": "string",
+                            "enum": [
+                              "started",
+                              "completed",
+                              "failed",
+                              "suspended"
+                            ]
+                          },
+                          "output": {},
+                          "error": {
+                            "type": "string"
+                          },
+                          "suspendedOn": {
+                            "type": "string",
+                            "enum": [
+                              "pause",
+                              "child",
+                              "paused",
+                              "backoff",
+                              "batch",
+                              "budget",
+                              "queue"
+                            ]
+                          }
+                        },
+                        "required": ["workflowName", "runId", "status"],
+                        "additionalProperties": false
+                      }
+                    }
+                  },
+                  "required": ["kind", "mode", "commitSha", "runs"],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["error"],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["error"],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["error"],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["error"],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["error"],
+                  "additionalProperties": false
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/projects/{projectId}/triggers/sync-types": {
+      "post": {
+        "parameters": [
+          {
+            "schema": {
+              "type": "string"
+            },
+            "in": "path",
+            "name": "projectId",
+            "required": true
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "path": {
+                      "type": "string"
+                    },
+                    "updated": {
+                      "type": "boolean"
+                    }
+                  },
+                  "required": ["path", "updated"],
+                  "additionalProperties": false
                 }
               }
             }
@@ -11062,7 +11751,7 @@
                     "filePath": {
                       "type": "string"
                     },
-                    "trigger": {
+                    "input": {
                       "type": "object",
                       "properties": {
                         "parameters": {
@@ -11097,6 +11786,58 @@
                       "required": ["parameters"],
                       "additionalProperties": false
                     },
+                    "triggers": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "kind": {
+                            "type": "string"
+                          },
+                          "config": {},
+                          "sourceRange": {
+                            "type": "object",
+                            "properties": {
+                              "start": {
+                                "type": "number"
+                              },
+                              "end": {
+                                "type": "number"
+                              },
+                              "startLine": {
+                                "type": "number"
+                              },
+                              "startColumn": {
+                                "type": "number"
+                              },
+                              "endLine": {
+                                "type": "number"
+                              },
+                              "endColumn": {
+                                "type": "number"
+                              },
+                              "file": {
+                                "type": "string"
+                              }
+                            },
+                            "required": [
+                              "start",
+                              "end",
+                              "startLine",
+                              "startColumn",
+                              "endLine",
+                              "endColumn"
+                            ],
+                            "additionalProperties": false
+                          }
+                        },
+                        "required": ["kind", "config", "sourceRange"],
+                        "additionalProperties": false
+                      }
+                    },
+                    "canSuspend": {
+                      "type": "boolean"
+                    },
                     "nodes": {
                       "type": "array",
                       "items": {
@@ -11108,7 +11849,7 @@
                           "type": {
                             "type": "string",
                             "enum": [
-                              "trigger",
+                              "input",
                               "source",
                               "sink",
                               "step",
@@ -11268,6 +12009,35 @@
                           },
                           "parentId": {
                             "type": "string"
+                          },
+                          "triggerBindings": {
+                            "type": "array",
+                            "items": {
+                              "type": "object",
+                              "properties": {
+                                "kind": {
+                                  "type": "string"
+                                },
+                                "config": {},
+                                "display": {
+                                  "type": "object",
+                                  "properties": {
+                                    "label": {
+                                      "type": "string"
+                                    },
+                                    "icon": {
+                                      "type": "string"
+                                    },
+                                    "color": {
+                                      "type": "string"
+                                    }
+                                  },
+                                  "additionalProperties": false
+                                }
+                              },
+                              "required": ["kind", "config"],
+                              "additionalProperties": false
+                            }
                           }
                         },
                         "required": [
@@ -11318,7 +12088,9 @@
                   "required": [
                     "name",
                     "capabilities",
-                    "trigger",
+                    "input",
+                    "triggers",
+                    "canSuspend",
                     "nodes",
                     "edges",
                     "sourceCode"

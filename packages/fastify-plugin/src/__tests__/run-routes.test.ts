@@ -123,7 +123,9 @@ describe("run route contracts", () => {
     expect(workflowOperations).toContain('"batch"');
     expect(workflowOperations).toContain('"pause"');
     expect(workflowOperations).toContain('"call-workflow"');
-    expect(workflowOperations).not.toContain('"kind"');
+    // Trigger bindings legitimately expose a `kind` (the trigger kind name);
+    // the internal workflow-kind discriminators must still stay internal.
+    expect(workflowOperations).not.toContain('"durable-workflow"');
     expect(workflowOperations).not.toContain('"execution"');
   });
 

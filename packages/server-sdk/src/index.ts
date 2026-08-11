@@ -90,7 +90,24 @@ export {
 import type { WorkflowSummary as CoreWorkflowSummary } from "@catamorphic/core";
 
 export type WorkflowCapabilities = CoreWorkflowSummary["capabilities"];
-export type { AppBundleStore } from "@catamorphic/core";
+export type {
+  AgentTurnSettledEvent,
+  AppBundleStore,
+  TriggerBindingInfo,
+  TriggerFireOutcome,
+  TriggerFireResult,
+  TriggerKindDisplay,
+  TriggerKindInfo,
+  TriggerKindRuntime,
+  TriggerMode,
+  TriggerSuspensionReason,
+} from "@catamorphic/core";
+export {
+  TriggerBindingsInvalidError,
+  TriggerKindNotRegisteredError,
+  TriggerModeNotAllowedError,
+  TriggerPayloadInvalidError,
+} from "@catamorphic/core";
 export type { DB } from "@catamorphic/db";
 export { createDatabase, migrateToLatest } from "@catamorphic/db";
 export type { ProjectPathResolver } from "@catamorphic/git";
@@ -108,12 +125,16 @@ export type {
   StorageConfig,
 } from "./catamorphic.js";
 export { Catamorphic, createCatamorphic } from "./catamorphic.js";
+export type { TriggerKindDefinition } from "./define-trigger-kind.js";
+export { defineTriggerKind } from "./define-trigger-kind.js";
 export { FsBundleStore } from "./fs-bundle-store.js";
 export type {
   FilesResource,
   GithubResource,
   ProjectsResource,
   RunsResource,
+  TriggerKindRef,
+  TriggersResource,
   WorkflowDetail,
   WorkflowSummary,
   WorkflowsResource,

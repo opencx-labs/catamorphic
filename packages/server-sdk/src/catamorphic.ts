@@ -1,4 +1,5 @@
 import type {
+  AgentTurnSettledEvent,
   AppBundleStore,
   CatamorphicCore,
   CodingAgentRegistry,
@@ -9,6 +10,7 @@ import type {
   ExecutionWorkerOptions,
   GithubServiceConfig,
   RetentionConfig,
+  TriggerKindRuntime,
 } from "@catamorphic/core";
 import {
   createCatamorphicCore,
@@ -125,6 +127,17 @@ export interface CreateCatamorphicConfig {
    * surfaces disabled.
    */
   github?: GithubServiceConfig;
+  /**
+   * The host's custom trigger kinds, built with `defineTriggerKind`.
+   * Workflows subscribe with `triggers: [trigger("kind", config)]`; firing a
+   * kind through `scoped.triggers.fire` runs every subscribed workflow.
+   */
+  triggerKinds?: readonly TriggerKindRuntime[];
+  /**
+   * Fires after a coding-agent chat turn settles — a natural place to fire
+   * a chat trigger kind. Exceptions are swallowed and never delay the turn.
+   */
+  onAgentTurnSettled?: (event: AgentTurnSettledEvent) => void | Promise<void>;
 }
 
 function resolveDatabase(config: DatabaseConfig): {
@@ -199,6 +212,8 @@ export class Catamorphic {
       appBundleStore: config.appBundleStore,
       maxAppBundleBytes: config.maxAppBundleBytes,
       github: config.github,
+      triggerKinds: config.triggerKinds,
+      onAgentTurnSettled: config.onAgentTurnSettled,
     });
   }
 

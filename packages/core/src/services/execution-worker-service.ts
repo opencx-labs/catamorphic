@@ -73,6 +73,14 @@ interface WorkerGroup {
   done: Promise<void>;
 }
 
+/** How {@link ExecutionWorkerService.runClaimedJob} settled the claim. */
+export type ClaimedJobDisposition =
+  | { outcome: "completed" }
+  | { outcome: "lease_lost" }
+  | { outcome: "released" }
+  | { outcome: "deferred"; availableAt: Date }
+  | { outcome: "failed"; error: string; exhausted: boolean };
+
 export class ExecutionWorkerService {
   private readonly handlers = new Map<ExecutionJobKind, ExecutionJobHandler>();
   private readonly workers = new Map<string, WorkerGroup>();
@@ -330,103 +338,120 @@ export class ExecutionWorkerService {
         attributes: executionJobAttributes(args),
       },
       async (span) => {
-        const handler = this.handlers.get(args.job.kind);
-        if (!handler) {
-          const error = `No handler registered for '${args.job.kind}'`;
-          const status = await this.jobs.fail({
-            jobId: args.job.id,
-            workerId: args.workerId,
-            error,
-            leaseToken: requireLeaseToken(args.job),
-            leaseGeneration: args.job.leaseGeneration,
-          });
-          if (status === "failed") {
-            await this.handleExhaustedInline({ job: args.job, error });
-          }
-          return;
-        }
-        const jobController = new AbortController();
-        const abortJob = () => jobController.abort();
-        args.signal.addEventListener("abort", abortJob, { once: true });
-        const heartbeat = setInterval(
-          () => {
-            void this.jobs
-              .heartbeat({
-                jobId: args.job.id,
-                workerId: args.workerId,
-                leaseToken: requireLeaseToken(args.job),
-                leaseGeneration: args.job.leaseGeneration,
-                leaseSeconds: args.leaseSeconds,
-              })
-              .then((owned) => {
-                if (!owned) jobController.abort();
-              })
-              .catch(() => jobController.abort());
-          },
-          Math.max(1_000, Math.floor((args.leaseSeconds * 1_000) / 3)),
-        );
-        try {
-          await handler({ job: args.job, signal: jobController.signal });
-          if (jobController.signal.aborted) {
-            await this.jobs.release({
-              jobId: args.job.id,
-              workerId: args.workerId,
-              leaseToken: requireLeaseToken(args.job),
-              leaseGeneration: args.job.leaseGeneration,
-              availableAt: new Date(),
-            });
-            return;
-          }
-          const completed = await this.jobs.complete({
-            jobId: args.job.id,
-            workerId: args.workerId,
-            leaseToken: requireLeaseToken(args.job),
-            leaseGeneration: args.job.leaseGeneration,
-          });
-          span.setAttribute(
-            "catamorphic.queue.job.outcome",
-            completed ? "completed" : "lease_lost",
-          );
-        } catch (error) {
-          if (jobController.signal.aborted) {
-            await this.jobs.release({
-              jobId: args.job.id,
-              workerId: args.workerId,
-              leaseToken: requireLeaseToken(args.job),
-              leaseGeneration: args.job.leaseGeneration,
-              availableAt: new Date(),
-            });
-            return;
-          }
-          if (error instanceof ExecutionJobDeferredError) {
-            await this.jobs.release({
-              jobId: args.job.id,
-              workerId: args.workerId,
-              leaseToken: requireLeaseToken(args.job),
-              leaseGeneration: args.job.leaseGeneration,
-              availableAt: error.availableAt,
-              parkedForPausedRunId: error.parkedForPausedRunId,
-            });
-            return;
-          }
-          const message =
-            error instanceof Error ? error.message : String(error);
-          const status = await this.jobs.fail({
-            jobId: args.job.id,
-            workerId: args.workerId,
-            leaseToken: requireLeaseToken(args.job),
-            leaseGeneration: args.job.leaseGeneration,
-            error: message,
-          });
-          if (status === "failed") {
-            await this.handleExhaustedInline({ job: args.job, error: message });
-          }
-        } finally {
-          clearInterval(heartbeat);
-          args.signal.removeEventListener("abort", abortJob);
-        }
+        const disposition = await this.runClaimedJob(args);
+        span.setAttribute("catamorphic.queue.job.outcome", disposition.outcome);
       },
     ).catch(() => undefined);
+  }
+
+  /**
+   * Runs a job this caller has already claimed, under the same heartbeat,
+   * deferral, and exhaustion semantics as the poll loop. Public so a sync
+   * trigger firing can drive a run's jobs inline in the caller's request and
+   * detach — by simply not claiming the next job — at the first wait.
+   */
+  async runClaimedJob(args: {
+    job: ExecutionJob;
+    workerId: string;
+    leaseSeconds: number;
+    signal: AbortSignal;
+  }): Promise<ClaimedJobDisposition> {
+    const handler = this.handlers.get(args.job.kind);
+    if (!handler) {
+      const error = `No handler registered for '${args.job.kind}'`;
+      const status = await this.jobs.fail({
+        jobId: args.job.id,
+        workerId: args.workerId,
+        error,
+        leaseToken: requireLeaseToken(args.job),
+        leaseGeneration: args.job.leaseGeneration,
+      });
+      if (status === "failed") {
+        await this.handleExhaustedInline({ job: args.job, error });
+      }
+      return { outcome: "failed", error, exhausted: status === "failed" };
+    }
+    const jobController = new AbortController();
+    const abortJob = () => jobController.abort();
+    args.signal.addEventListener("abort", abortJob, { once: true });
+    const heartbeat = setInterval(
+      () => {
+        void this.jobs
+          .heartbeat({
+            jobId: args.job.id,
+            workerId: args.workerId,
+            leaseToken: requireLeaseToken(args.job),
+            leaseGeneration: args.job.leaseGeneration,
+            leaseSeconds: args.leaseSeconds,
+          })
+          .then((owned) => {
+            if (!owned) jobController.abort();
+          })
+          .catch(() => jobController.abort());
+      },
+      Math.max(1_000, Math.floor((args.leaseSeconds * 1_000) / 3)),
+    );
+    try {
+      await handler({ job: args.job, signal: jobController.signal });
+      if (jobController.signal.aborted) {
+        await this.jobs.release({
+          jobId: args.job.id,
+          workerId: args.workerId,
+          leaseToken: requireLeaseToken(args.job),
+          leaseGeneration: args.job.leaseGeneration,
+          availableAt: new Date(),
+        });
+        return { outcome: "released" };
+      }
+      const completed = await this.jobs.complete({
+        jobId: args.job.id,
+        workerId: args.workerId,
+        leaseToken: requireLeaseToken(args.job),
+        leaseGeneration: args.job.leaseGeneration,
+      });
+      return { outcome: completed ? "completed" : "lease_lost" };
+    } catch (error) {
+      if (jobController.signal.aborted) {
+        await this.jobs.release({
+          jobId: args.job.id,
+          workerId: args.workerId,
+          leaseToken: requireLeaseToken(args.job),
+          leaseGeneration: args.job.leaseGeneration,
+          availableAt: new Date(),
+        });
+        return { outcome: "released" };
+      }
+      if (error instanceof ExecutionJobDeferredError) {
+        await this.jobs.release({
+          jobId: args.job.id,
+          workerId: args.workerId,
+          leaseToken: requireLeaseToken(args.job),
+          leaseGeneration: args.job.leaseGeneration,
+          availableAt: error.availableAt,
+          parkedForPausedRunId: error.parkedForPausedRunId,
+        });
+        return { outcome: "deferred", availableAt: error.availableAt };
+      }
+      const message = error instanceof Error ? error.message : String(error);
+      const status = await this.jobs.fail({
+        jobId: args.job.id,
+        workerId: args.workerId,
+        leaseToken: requireLeaseToken(args.job),
+        leaseGeneration: args.job.leaseGeneration,
+        error: message,
+      });
+      if (status === "failed") {
+        await this.handleExhaustedInline({ job: args.job, error: message });
+      }
+      return {
+        outcome: "failed",
+        error: message,
+        exhausted: status === "failed",
+      };
+    } finally {
+      clearInterval(heartbeat);
+      args.signal.removeEventListener("abort", abortJob);
+    }
   }
 
   private async handleExhausted(args: {

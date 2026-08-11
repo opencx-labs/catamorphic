@@ -24,7 +24,7 @@ function node(
 // an if-block wraps two steps, and a third step sits after the block.
 const trigger = node({
   id: "trigger",
-  type: "trigger",
+  type: "input",
   sourceRange: range({
     start: 0,
     end: 500,

@@ -61,7 +61,7 @@ function stripAppRuntimeDependency(packageJson: string): string {
 }
 
 export type WorkflowNodeType =
-  | "trigger"
+  | "input"
   | "source"
   | "sink"
   | "step"
@@ -111,6 +111,16 @@ export interface StepArgument {
   source?: StepArgumentSource;
 }
 
+/**
+ * How a host wants a trigger kind rendered. Filled in by the serving layer
+ * from the host's registered kinds — the parser only knows kind names.
+ */
+export interface TriggerKindDisplay {
+  label?: string;
+  icon?: string;
+  color?: string;
+}
+
 export interface WorkflowNode {
   id: string;
   type: WorkflowNodeType;
@@ -118,6 +128,13 @@ export interface WorkflowNode {
   description?: string;
   sourceRange: SourceRange;
   metadata: Record<string, string>;
+  /** Present on the entry `input` node when the workflow declares triggers. */
+  triggerBindings?: Array<{
+    kind: string;
+    /** Always a JsonConstant; see {@link WorkflowTriggerBinding.config}. */
+    config: unknown;
+    display?: TriggerKindDisplay;
+  }>;
   parameters?: ParameterInfo[];
   arguments?: StepArgument[];
   condition?: string;
@@ -230,6 +247,28 @@ export interface WorkflowCallTargetDescriptor {
   execution: WorkflowExecutionDescriptor;
 }
 
+/** A JSON value that was written as a constant expression in source. */
+export type JsonConstant =
+  | null
+  | boolean
+  | number
+  | string
+  | JsonConstant[]
+  | { [key: string]: JsonConstant };
+
+/**
+ * A workflow's declared subscription to a host trigger kind, extracted
+ * statically from `defineWorkflow`'s `triggers` list. `config` always holds
+ * a {@link JsonConstant} — the parser rejects computed expressions — so
+ * hosts can introspect bindings without executing project code. Typed
+ * `unknown` so the OpenAPI-derived response types stay assignable.
+ */
+export interface WorkflowTriggerBinding {
+  kind: string;
+  config: unknown;
+  sourceRange: SourceRange;
+}
+
 export interface WorkflowGraph {
   name: string;
   capabilities: WorkflowCapabilities;
@@ -237,7 +276,16 @@ export interface WorkflowGraph {
   displayName?: string;
   description?: string;
   controls?: { cancel?: true };
-  trigger: { parameters: ParameterInfo[] };
+  input: { parameters: ParameterInfo[] };
+  /** Host trigger kinds this workflow subscribes to. Empty for plain workflows. */
+  triggers: WorkflowTriggerBinding[];
+  /**
+   * Whether any execution path can leave the run waiting on the clock or the
+   * queue — a pause, a retry policy, a rate limit, a batch, or a child
+   * workflow call. `false` is a hard guarantee that a sync trigger firing
+   * returns a completed result.
+   */
+  canSuspend: boolean;
   nodes: WorkflowNode[];
   edges: WorkflowEdge[];
   sourceCode: string;

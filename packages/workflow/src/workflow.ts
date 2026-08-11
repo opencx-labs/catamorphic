@@ -3,6 +3,7 @@ import {
   createBatch,
   type DefineBatch,
 } from "./batch.js";
+import type { TriggerBinding } from "./index.js";
 import type {
   AssertJsonCompatible,
   JsonValue,
@@ -128,10 +129,16 @@ class WorkflowDefinitionImpl<Input, Output, Steps extends readonly unknown[]> {
 
   readonly steps: Steps;
   readonly controls?: WorkflowControls;
+  readonly triggers?: readonly TriggerBinding<unknown>[];
 
-  constructor(args: { steps: Steps; controls?: WorkflowControls }) {
+  constructor(args: {
+    steps: Steps;
+    controls?: WorkflowControls;
+    triggers?: readonly TriggerBinding<unknown>[];
+  }) {
     this.steps = args.steps;
     this.controls = args.controls;
+    this.triggers = args.triggers;
     Object.defineProperty(this, "kind", { value: "durable-workflow" });
   }
 }
@@ -329,6 +336,27 @@ type Last<Value extends readonly unknown[]> = Value extends readonly [
   ? Tail
   : never;
 
+type ValidateTriggers<
+  Triggers extends readonly unknown[],
+  Input,
+  Position extends readonly unknown[] = [],
+> = Triggers extends readonly [infer Current, ...infer Rest]
+  ? Current extends TriggerBinding<infer Payload>
+    ? [Payload] extends [Input]
+      ? ValidateTriggers<Rest, Input, readonly [...Position, unknown]>
+      : WorkflowTypeError<
+          `Trigger ${[
+            ...Position,
+            unknown,
+          ]["length"]} delivers a payload the first workflow step does not accept`,
+          { triggerPayload: Payload; stepInput: Input }
+        >
+    : WorkflowTypeError<
+        `Trigger ${[...Position, unknown]["length"]} must be created by trigger()`,
+        Current
+      >
+  : unknown;
+
 function createBoundary<Input, Returned>(
   options: BoundaryOptions<Input, Returned> &
     ValidateBoundary<Input, Awaited<Returned>>,
@@ -391,11 +419,14 @@ const workflowBuilderContext: WorkflowBuilderContext = {
 
 export function defineWorkflow<
   const Steps extends readonly [unknown, ...unknown[]],
+  const Triggers extends readonly TriggerBinding<unknown>[] = readonly [],
 >(
   build: (context: WorkflowBuilderContext) => {
     readonly steps: Steps;
     readonly controls?: WorkflowControls;
-  } & ValidateSteps<Steps>,
+    readonly triggers?: Triggers;
+  } & ValidateSteps<Steps> &
+    ValidateTriggers<Triggers, ExecutionUnitInput<Steps[0]>>,
 ): WorkflowDefinition<
   ExecutionUnitInput<Steps[0]>,
   ExecutionUnitOutput<Last<Steps>>,
@@ -405,5 +436,6 @@ export function defineWorkflow<
   return new WorkflowDefinitionImpl({
     steps: definition.steps,
     controls: definition.controls,
+    triggers: definition.triggers,
   });
 }

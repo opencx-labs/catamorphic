@@ -110,6 +110,70 @@ export const WorkflowCapabilitiesSchema = z.object({
   cancellation: z.boolean(),
 });
 
+const JsonValueSchema = z.json().meta({ id: "JsonValue" });
+// Response-side JSON is untyped, like `Run.input`: the tagged JsonValue
+// component is io-differentiated (input-only) and recursive z.json() emits
+// $refs the spec bundler cannot resolve in responses.
+const JsonOutSchema = z.unknown();
+
+export const SourceRangeSchema = z.object({
+  start: z.number(),
+  end: z.number(),
+  startLine: z.number(),
+  startColumn: z.number(),
+  endLine: z.number(),
+  endColumn: z.number(),
+  file: z.string().optional(),
+});
+
+export const ParameterInfoSchema = z.object({
+  name: z.string(),
+  type: z.string(),
+  optional: z.boolean(),
+  displayName: z.string().optional(),
+  description: z.string().optional(),
+  defaultValue: z.string().optional(),
+});
+
+// --- Triggers ---
+export const TriggerModeSchema = z.enum(["sync", "async"]);
+
+export const TriggerKindDisplaySchema = z.object({
+  label: z.string().optional(),
+  icon: z.string().optional(),
+  color: z.string().optional(),
+});
+
+/** A binding as attached to the graph's entry node, display resolved. */
+export const NodeTriggerBindingSchema = z.object({
+  kind: z.string(),
+  config: JsonOutSchema,
+  display: TriggerKindDisplaySchema.optional(),
+});
+
+export const WorkflowTriggerBindingSchema = z.object({
+  kind: z.string(),
+  config: JsonOutSchema,
+  sourceRange: SourceRangeSchema,
+});
+
+export const TriggerKindInfoSchema = z.object({
+  name: z.string(),
+  description: z.string().optional(),
+  display: TriggerKindDisplaySchema.optional(),
+  modes: z.array(TriggerModeSchema),
+  payloadJsonSchema: JsonOutSchema,
+  configJsonSchema: JsonOutSchema,
+});
+
+export const TriggerBindingInfoSchema = z.object({
+  workflowName: z.string(),
+  kind: z.string(),
+  config: JsonOutSchema,
+  canSuspend: z.boolean(),
+  inputParameters: z.array(ParameterInfoSchema),
+});
+
 export const WorkflowSummarySchema = z.object({
   name: z.string(),
   capabilities: WorkflowCapabilitiesSchema,
@@ -117,6 +181,8 @@ export const WorkflowSummarySchema = z.object({
   description: z.string().nullable(),
   filePath: z.string(),
   parameterCount: z.number(),
+  triggers: z.array(WorkflowTriggerBindingSchema),
+  canSuspend: z.boolean(),
 });
 
 // --- Projects ---
@@ -168,7 +234,7 @@ export const WriteFileSchema = z.object({
 // parser's in-memory types and `layoutGraph` can consume the response
 // directly with no casts.
 export const WorkflowNodeTypeSchema = z.enum([
-  "trigger",
+  "input",
   "source",
   "sink",
   "step",
@@ -193,28 +259,10 @@ export const WorkflowEdgeTypeSchema = z.enum([
   "sequential",
 ]);
 
-// This schema mirrors `@catamorphic/parser`'s `WorkflowGraph` exactly so that
-// the OpenAPI-derived response types align with the parser's in-memory types
-// and `layoutGraph(...)` can consume responses without any adapter.
-export const ParameterInfoSchema = z.object({
-  name: z.string(),
-  type: z.string(),
-  optional: z.boolean(),
-  displayName: z.string().optional(),
-  description: z.string().optional(),
-  defaultValue: z.string().optional(),
-});
-
-export const SourceRangeSchema = z.object({
-  start: z.number(),
-  end: z.number(),
-  startLine: z.number(),
-  startColumn: z.number(),
-  endLine: z.number(),
-  endColumn: z.number(),
-  file: z.string().optional(),
-});
-
+// The graph schemas below mirror `@catamorphic/parser`'s `WorkflowGraph`
+// exactly so that the OpenAPI-derived response types align with the parser's
+// in-memory types and `layoutGraph(...)` can consume responses without any
+// adapter.
 export const StepArgumentSourceSchema = z.object({
   variable: z.string(),
   variableDisplayName: z.string().optional(),
@@ -248,6 +296,7 @@ export const WorkflowNodeSchema = z.object({
   returnExpression: z.string().optional(),
   functionName: z.string().optional(),
   parentId: z.string().optional(),
+  triggerBindings: z.array(NodeTriggerBindingSchema).optional(),
 });
 
 export const WorkflowEdgeSchema = z.object({
@@ -265,7 +314,9 @@ export const WorkflowGraphSchema = z.object({
   description: z.string().optional(),
   controls: z.object({ cancel: z.literal(true).optional() }).optional(),
   filePath: z.string().optional(),
-  trigger: z.object({ parameters: z.array(ParameterInfoSchema) }),
+  input: z.object({ parameters: z.array(ParameterInfoSchema) }),
+  triggers: z.array(WorkflowTriggerBindingSchema),
+  canSuspend: z.boolean(),
   nodes: z.array(WorkflowNodeSchema),
   edges: z.array(WorkflowEdgeSchema),
   sourceCode: z.string(),
@@ -278,8 +329,6 @@ export const WorkflowDetailSchema = WorkflowGraphSchema.extend({
 
 // --- Runs ---
 export const RunModeSchema = z.enum(["test", "production"]);
-
-const JsonValueSchema = z.json().meta({ id: "JsonValue" });
 
 export const RunStatusSchema = z.enum([
   "pending",
@@ -429,6 +478,46 @@ export const TriggerRunSchema = z.object({
 export const TriggerTestRunSchema = z.object({
   input: JsonValueSchema.optional(),
   files: z.record(z.string(), z.string()).optional(),
+});
+
+export const FireTriggerSchema = z.object({
+  payload: JsonValueSchema,
+  mode: TriggerModeSchema.optional(),
+  workflows: z.array(z.string().min(1)).max(100).optional(),
+  correlationKey: CorrelationKeySchema.optional(),
+  onConflict: EnrollmentConflictPolicySchema.optional(),
+  budgetMs: z.number().int().min(1_000).max(300_000).optional(),
+});
+
+export const TriggerSuspensionReasonSchema = z.enum([
+  "pause",
+  "child",
+  "paused",
+  "backoff",
+  "batch",
+  "budget",
+  "queue",
+]);
+
+export const TriggerFireOutcomeSchema = z.object({
+  workflowName: z.string(),
+  runId: z.string(),
+  status: z.enum(["started", "completed", "failed", "suspended"]),
+  output: JsonOutSchema.optional(),
+  error: z.string().optional(),
+  suspendedOn: TriggerSuspensionReasonSchema.optional(),
+});
+
+export const TriggerFireResultSchema = z.object({
+  kind: z.string(),
+  mode: TriggerModeSchema,
+  commitSha: z.string().nullable(),
+  runs: z.array(TriggerFireOutcomeSchema),
+});
+
+export const SyncTriggerTypesResultSchema = z.object({
+  path: z.string(),
+  updated: z.boolean(),
 });
 
 export const RunsQuerySchema = PaginationQuerySchema.extend({

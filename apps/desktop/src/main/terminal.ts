@@ -39,6 +39,8 @@ interface TerminalSession {
   shellName: string;
   /** A foreground command is running (chip spinners, agent waits). */
   busy: boolean;
+  /** The project this terminal belongs to; home terminals have none. */
+  projectId?: string;
   /** Set for agent-owned sessions. */
   agent?: { projectId: string };
 }
@@ -194,6 +196,7 @@ export function registerTerminalSupport(state: ServerState): {
       running: true,
       shellName: path.basename(shell),
       busy: false,
+      projectId: input.projectId ?? input.agent?.projectId,
       agent: input.agent,
     };
     sessions.set(sessionId, session);
@@ -303,6 +306,15 @@ export function registerTerminalSupport(state: ServerState): {
       if (busy !== session.busy) {
         session.busy = busy;
         emit(session, "catamorphic:terminal-busy", { sessionId, busy });
+        // Busy → idle means a foreground command returned to the prompt —
+        // the desktop's terminal trigger kind. Poll-rate quantized: bursts
+        // of sub-500ms commands coalesce into one firing.
+        if (!busy && session.running && session.projectId) {
+          state.current?.triggers.onTerminalIdle(session.projectId, {
+            sessionId,
+            shell: session.shellName,
+          });
+        }
       }
     }
   }, 500);

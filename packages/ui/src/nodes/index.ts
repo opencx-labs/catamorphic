@@ -6,6 +6,7 @@ import { BranchNode } from "./branch-node.js";
 import { CallWorkflowNode } from "./call-workflow-node.js";
 import { DelayNode } from "./delay-node.js";
 import { IfBlockNode } from "./if-block-node.js";
+import { InputNode } from "./input-node.js";
 import { LoopBlockNode } from "./loop-block-node.js";
 import { ParallelBlockNode } from "./parallel-block-node.js";
 import { ParallelNode } from "./parallel-node.js";
@@ -15,10 +16,9 @@ import { ScopeBlockNode } from "./scope-block-node.js";
 import { SinkNode } from "./sink-node.js";
 import { SourceNode } from "./source-node.js";
 import { StepNode } from "./step-node.js";
-import { TriggerNode } from "./trigger-node.js";
 
 export const nodeTypes: Record<string, ComponentType<NodeProps>> = {
-  trigger: TriggerNode,
+  input: InputNode,
   source: SourceNode,
   sink: SinkNode,
   step: StepNode,
@@ -43,6 +43,7 @@ export {
   CallWorkflowNode,
   DelayNode,
   IfBlockNode,
+  InputNode,
   LoopBlockNode,
   ParallelBlockNode,
   ParallelNode,
@@ -52,5 +53,4 @@ export {
   SinkNode,
   SourceNode,
   StepNode,
-  TriggerNode,
 };

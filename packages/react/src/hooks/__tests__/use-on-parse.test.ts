@@ -15,11 +15,13 @@ const SAMPLE_GRAPH = {
   displayName: null,
   description: null,
   filePath: "workflows/demo.ts",
-  trigger: { parameters: [] },
+  input: { parameters: [] },
+  triggers: [],
+  canSuspend: false,
   nodes: [
     {
       id: "trigger",
-      type: "trigger",
+      type: "input",
       label: "start",
       metadata: {},
       sourceRange: {

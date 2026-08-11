@@ -22,6 +22,7 @@ export type {
   BoundaryRetryDescriptor,
   DeclaredSecret,
   DiscoveredWorkflow,
+  JsonConstant,
   ParameterInfo,
   ParseError,
   PhysicalBatchStepDescriptor,
@@ -30,6 +31,7 @@ export type {
   SourceRange,
   StepArgument,
   StepArgumentSource,
+  TriggerKindDisplay,
   WorkflowCallTargetDescriptor,
   WorkflowCapabilities,
   WorkflowEdge,
@@ -39,6 +41,7 @@ export type {
   WorkflowGraph,
   WorkflowNode,
   WorkflowNodeType,
+  WorkflowTriggerBinding,
 } from "./types.js";
 export {
   APP_API_SOURCE_PATH,

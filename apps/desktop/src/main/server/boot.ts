@@ -27,6 +27,7 @@ import { E2eLocalSandboxProvider } from "./e2e-fakes.js";
 import { FileGithubTokenStore, GITHUB_APP } from "./github.js";
 import type { DataPaths } from "./paths.js";
 import { ProjectRootsStore } from "./project-roots.js";
+import { DESKTOP_TRIGGER_KINDS, DesktopTriggers } from "./triggers.js";
 
 /** The desktop app is single-tenant: one fixed identity for the machine. */
 export const DESKTOP_TENANT_ID = "00000000-0000-4000-8000-00000000d001";
@@ -38,6 +39,8 @@ export interface EmbeddedServer {
   projectRoots: ProjectRootsStore;
   /** Dynamic roster of configured agents (per-profile agents.json files). */
   agentRegistry: DesktopAgentRegistry;
+  /** Desktop trigger kinds: firing helpers for chat/terminal event sources. */
+  triggers: DesktopTriggers;
   hasCodingAgent: boolean;
   shutdown: () => Promise<void>;
 }
@@ -110,7 +113,12 @@ export async function startEmbeddedServer(
       app: GITHUB_APP,
       tokenStore: new FileGithubTokenStore(paths.githubFile),
     },
+    triggerKinds: DESKTOP_TRIGGER_KINDS,
+    // `triggers` is assigned right after construction; turns can only
+    // settle later, once a chat message round-trips.
+    onAgentTurnSettled: (event) => triggers.onAgentTurnSettled(event),
   });
+  const triggers = new DesktopTriggers(catamorphic);
 
   const { applied } = await catamorphic.migrate();
   if (applied.length > 0) {
@@ -240,6 +248,11 @@ export async function startEmbeddedServer(
     concurrency: 1,
   });
 
+  // Project workspaces type-check `trigger()` against a generated
+  // catamorphic-triggers.d.ts; refresh it everywhere in the background so
+  // the coding agent always sees the host's current kinds.
+  void triggers.syncAllProjectTypes().catch(() => {});
+
   let shutdownDone: Promise<void> | undefined;
   const shutdown = () => {
     shutdownDone ??= (async () => {
@@ -258,6 +271,7 @@ export async function startEmbeddedServer(
     catamorphic,
     projectRoots,
     agentRegistry,
+    triggers,
     get hasCodingAgent() {
       return agentRegistry.hasAgents();
     },

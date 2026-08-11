@@ -87,7 +87,7 @@ function ArgumentOnlyRow({ arg }: { arg: StepArgument }) {
 }
 
 const NODE_TYPE_LABELS: Record<string, string> = {
-  trigger: "Trigger",
+  input: "Trigger",
   step: "Step",
   branch: "Branch",
   "if-block": "Condition",
@@ -104,7 +104,7 @@ const NODE_TYPE_LABELS: Record<string, string> = {
 };
 
 const NODE_TYPE_COLORS: Record<string, string> = {
-  trigger: "#ca8a04",
+  input: "#ca8a04",
   step: "#2563eb",
   branch: "#a855f7",
   "if-block": "#a855f7",
@@ -349,6 +349,41 @@ function NodeDetailsView({
         <p className="catamorphic-detail-description">{node.description}</p>
       )}
 
+      {node.type === "input" &&
+        node.triggerBindings &&
+        node.triggerBindings.length > 0 && (
+          <div className="catamorphic-detail-section">
+            <span className="catamorphic-detail-section-label">Triggers</span>
+            <div className="catamorphic-detail-params">
+              {node.triggerBindings.map((binding) => (
+                <div
+                  key={`${binding.kind}:${JSON.stringify(binding.config)}`}
+                  className="catamorphic-detail-param"
+                >
+                  <div className="catamorphic-detail-param-header">
+                    <span className="catamorphic-detail-param-name">
+                      {binding.display?.label ?? binding.kind}
+                    </span>
+                    {binding.display?.label && (
+                      <span className="catamorphic-detail-param-type">
+                        {binding.kind}
+                      </span>
+                    )}
+                  </div>
+                  {binding.config != null && (
+                    <code
+                      className="catamorphic-detail-code-inline"
+                      style={{ marginTop: 6 }}
+                    >
+                      {JSON.stringify(binding.config)}
+                    </code>
+                  )}
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
       {(() => {
         const params = node.parameters ?? [];
         const args = node.arguments ?? [];
@@ -485,7 +520,7 @@ function WorkflowOverview() {
   return (
     <div className="catamorphic-detail-content">
       <div className="catamorphic-detail-header-row">
-        <NodeTypeTag type="trigger" />
+        <NodeTypeTag type="input" />
       </div>
       <h3 className="catamorphic-detail-title">
         {graph.displayName ?? graph.name}
@@ -493,13 +528,13 @@ function WorkflowOverview() {
       {graph.description && (
         <p className="catamorphic-detail-description">{graph.description}</p>
       )}
-      {graph.trigger.parameters.length > 0 && (
+      {graph.input.parameters.length > 0 && (
         <div className="catamorphic-detail-section">
           <span className="catamorphic-detail-section-label">
             Trigger Parameters
           </span>
           <div className="catamorphic-detail-params">
-            {graph.trigger.parameters.map((p) => (
+            {graph.input.parameters.map((p) => (
               <ParamRow key={p.name} param={p} />
             ))}
           </div>

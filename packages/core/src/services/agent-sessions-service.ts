@@ -109,7 +109,7 @@ const tracer = getTracer("@catamorphic/core");
 export const INTERRUPTED_TURN_MESSAGE =
   "This response was interrupted before it finished. Send a new message to continue.";
 
-const WORKFLOW_AUTHORING_SYSTEM_PROMPT = `Before editing workflow code, inspect the existing export and preserve its authoring model unless the user explicitly requests a conversion. A plain workflow is an exported async function with a "use workflow" directive. A defined workflow is an exported defineWorkflow(({ defineBoundary, defineBatch }) => ({ steps })) value; production runs execute ordered boundary and batch scopes against an immutable deployment, with continuation state persisted in Postgres. Mutable-source defined test execution is not supported. Cancellation is a host-issued terminal control declared with controls: { cancel: true }, never a BoundaryContext transition. Only exported defineBatchStep calls inside defineBatch.process are physically coalesced. For authoring primitives, use the project's established SaaS wrapper when present; otherwise use @catamorphic/workflow. Never create local copies. Consult .agents/skills/writing-workflows/SKILL.md, .agents/skills/durable-workflows/SKILL.md, and .agents/skills/batch-workflows/SKILL.md, when present, before creating or restructuring workflows.`;
+const WORKFLOW_AUTHORING_SYSTEM_PROMPT = `Before editing workflow code, inspect the existing export and preserve its authoring model unless the user explicitly requests a conversion. A plain workflow is an exported async function with a "use workflow" directive. A defined workflow is an exported defineWorkflow(({ defineBoundary, defineBatch }) => ({ steps })) value; production runs execute ordered boundary and batch scopes against an immutable deployment, with continuation state persisted in Postgres. Mutable-source defined test execution is not supported. Cancellation is a host-issued terminal control declared with controls: { cancel: true }, never a BoundaryContext transition. A defined workflow may subscribe to host-defined trigger kinds with triggers: [trigger("kind", config)] — the kind name must be a string literal, the config a constant expression, both typed by the generated workflows/src/catamorphic-triggers.d.ts; the fired payload becomes the first step's input. Only exported defineBatchStep calls inside defineBatch.process are physically coalesced. For authoring primitives, use the project's established SaaS wrapper when present; otherwise use @catamorphic/workflow. Never create local copies. Consult .agents/skills/writing-workflows/SKILL.md, .agents/skills/durable-workflows/SKILL.md, and .agents/skills/batch-workflows/SKILL.md, when present, before creating or restructuring workflows.`;
 
 export function buildAgentSystemPrompt({
   systemPrompt,
@@ -189,6 +189,16 @@ async function ensureWorkflowSkill({
   return true;
 }
 
+/** A chat turn reaching a settled state, for host hooks (e.g. triggers). */
+export interface AgentTurnSettledEvent {
+  identity: Identity;
+  projectId: string;
+  sessionId: string;
+  messageId: string;
+  status: "completed" | "failed" | "awaiting_input";
+  changedFiles: string[];
+}
+
 interface AgentSessionsDeps {
   projectManager: ProjectManager;
   sandboxProvider: SandboxProvider;
@@ -204,6 +214,11 @@ interface AgentSessionsDeps {
   ) => Promise<string | undefined> | string | undefined;
   plugins?: PluginsService;
   pluginResolver?: PluginResolver;
+  /**
+   * Fires after a turn's settled state is durably recorded. Host-owned:
+   * exceptions are swallowed, and the turn's response never waits on it.
+   */
+  onTurnSettled?: (event: AgentTurnSettledEvent) => void | Promise<void>;
 }
 
 /**
@@ -227,6 +242,7 @@ export class AgentSessionsService {
   private readonly plugins?: PluginsService;
   private readonly pluginResolver?: PluginResolver;
   private readonly devSandboxes: DevSandboxService;
+  private readonly onTurnSettled?: AgentSessionsDeps["onTurnSettled"];
   /**
    * Sessions with a turn currently executing in this process. Turns run
    * inside the send request, so an `in_progress` message whose session is
@@ -253,6 +269,7 @@ export class AgentSessionsService {
     this.devSandboxes = deps.devSandboxes;
     this.plugins = deps.plugins;
     this.pluginResolver = deps.pluginResolver;
+    this.onTurnSettled = deps.onTurnSettled;
   }
 
   async list(
@@ -1066,6 +1083,26 @@ export class AgentSessionsService {
         .where("id", "=", assistantMessageId)
         .returningAll()
         .executeTakeFirstOrThrow();
+
+      if (this.onTurnSettled) {
+        const settled: AgentTurnSettledEvent = {
+          identity,
+          projectId,
+          sessionId,
+          messageId: assistantMessageId,
+          status: metadata.status as AgentTurnSettledEvent["status"],
+          changedFiles: changedFiles.map((change) => change.path),
+        };
+        void Promise.resolve()
+          .then(() => this.onTurnSettled?.(settled))
+          .catch((error) => {
+            console.warn(
+              `[catamorphic] onTurnSettled hook failed: ${
+                error instanceof Error ? error.message : String(error)
+              }`,
+            );
+          });
+      }
 
       // Transient provider failures keep retrying on their own; the user
       // sees the error and the countdown, and can retry now or move on.

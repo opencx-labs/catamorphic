@@ -18,6 +18,7 @@ export {
   AgentSessionNotFoundError,
   AgentSessionsService,
   AgentTurnInProgressError,
+  type AgentTurnSettledEvent,
   type SyncedFileChange,
 } from "./services/agent-sessions-service.js";
 export {
@@ -204,6 +205,30 @@ export {
   type TenantRateLimitOverride,
   type UpsertTenantExecutionPolicyInput,
 } from "./services/tenant-policies-service.js";
+export {
+  renderTriggerTypesModule,
+  TRIGGER_TYPES_SOURCE_PATH,
+} from "./services/trigger-codegen.js";
+export {
+  buildTriggerKindRegistry,
+  type TriggerKindDisplay,
+  type TriggerKindInfo,
+  type TriggerKindRuntime,
+  type TriggerMode,
+  type TriggerValidationResult,
+  triggerKindInfo,
+} from "./services/trigger-kinds.js";
+export {
+  type TriggerBindingInfo,
+  TriggerBindingsInvalidError,
+  type TriggerFireOutcome,
+  type TriggerFireResult,
+  TriggerKindNotRegisteredError,
+  TriggerModeNotAllowedError,
+  TriggerPayloadInvalidError,
+  type TriggerSuspensionReason,
+  TriggersService,
+} from "./services/triggers-service.js";
 export {
   type WorkflowDetail,
   WorkflowNotFoundError,

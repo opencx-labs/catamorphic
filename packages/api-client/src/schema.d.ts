@@ -164,6 +164,20 @@ export interface paths {
                                 description: string | null;
                                 filePath: string;
                                 parameterCount: number;
+                                triggers: {
+                                    kind: string;
+                                    config: unknown;
+                                    sourceRange: {
+                                        start: number;
+                                        end: number;
+                                        startLine: number;
+                                        startColumn: number;
+                                        endLine: number;
+                                        endColumn: number;
+                                        file?: string;
+                                    };
+                                }[];
+                                canSuspend: boolean;
                             }[];
                             files: string[];
                         };
@@ -1403,6 +1417,20 @@ export interface paths {
                             description: string | null;
                             filePath: string;
                             parameterCount: number;
+                            triggers: {
+                                kind: string;
+                                config: unknown;
+                                sourceRange: {
+                                    start: number;
+                                    end: number;
+                                    startLine: number;
+                                    startColumn: number;
+                                    endLine: number;
+                                    endColumn: number;
+                                    file?: string;
+                                };
+                            }[];
+                            canSuspend: boolean;
                         }[];
                     };
                 };
@@ -1479,7 +1507,7 @@ export interface paths {
                                 cancel?: true;
                             };
                             filePath?: string;
-                            trigger: {
+                            input: {
                                 parameters: {
                                     name: string;
                                     type: string;
@@ -1489,10 +1517,24 @@ export interface paths {
                                     defaultValue?: string;
                                 }[];
                             };
+                            triggers: {
+                                kind: string;
+                                config: unknown;
+                                sourceRange: {
+                                    start: number;
+                                    end: number;
+                                    startLine: number;
+                                    startColumn: number;
+                                    endLine: number;
+                                    endColumn: number;
+                                    file?: string;
+                                };
+                            }[];
+                            canSuspend: boolean;
                             nodes: {
                                 id: string;
                                 /** @enum {string} */
-                                type: "trigger" | "source" | "sink" | "step" | "branch" | "if-block" | "loop-block" | "parallel" | "parallel-block" | "scope-block" | "durable-boundary" | "batch" | "pause" | "call-workflow" | "delay" | "return";
+                                type: "input" | "source" | "sink" | "step" | "branch" | "if-block" | "loop-block" | "parallel" | "parallel-block" | "scope-block" | "durable-boundary" | "batch" | "pause" | "call-workflow" | "delay" | "return";
                                 label: string;
                                 description?: string;
                                 sourceRange: {
@@ -1536,6 +1578,15 @@ export interface paths {
                                 returnExpression?: string;
                                 functionName?: string;
                                 parentId?: string;
+                                triggerBindings?: {
+                                    kind: string;
+                                    config: unknown;
+                                    display?: {
+                                        label?: string;
+                                        icon?: string;
+                                        color?: string;
+                                    };
+                                }[];
                             }[];
                             edges: {
                                 id: string;
@@ -2324,6 +2375,331 @@ export interface paths {
                     };
                     content: {
                         "application/json": null;
+                    };
+                };
+                /** @description Default Response */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                503: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                        };
+                    };
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/trigger-kinds": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Default Response */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            name: string;
+                            description?: string;
+                            display?: {
+                                label?: string;
+                                icon?: string;
+                                color?: string;
+                            };
+                            modes: ("sync" | "async")[];
+                            payloadJsonSchema: unknown;
+                            configJsonSchema: unknown;
+                        }[];
+                    };
+                };
+                /** @description Default Response */
+                503: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                        };
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/projects/{projectId}/triggers": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: {
+            parameters: {
+                query?: {
+                    kind?: string;
+                };
+                header?: never;
+                path: {
+                    projectId: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Default Response */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            workflowName: string;
+                            kind: string;
+                            config: unknown;
+                            canSuspend: boolean;
+                            inputParameters: {
+                                name: string;
+                                type: string;
+                                optional: boolean;
+                                displayName?: string;
+                                description?: string;
+                                defaultValue?: string;
+                            }[];
+                        }[];
+                    };
+                };
+                /** @description Default Response */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                422: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                503: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                        };
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/projects/{projectId}/triggers/{kind}/fire": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    projectId: string;
+                    kind: string;
+                };
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": {
+                        payload: components["schemas"]["JsonValueInput"];
+                        /** @enum {string} */
+                        mode?: "sync" | "async";
+                        workflows?: string[];
+                        correlationKey?: string;
+                        /** @enum {string} */
+                        onConflict?: "ignore" | "error" | "restart";
+                        budgetMs?: number;
+                    };
+                };
+            };
+            responses: {
+                /** @description Default Response */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            kind: string;
+                            /** @enum {string} */
+                            mode: "sync" | "async";
+                            commitSha: string | null;
+                            runs: {
+                                workflowName: string;
+                                runId: string;
+                                /** @enum {string} */
+                                status: "started" | "completed" | "failed" | "suspended";
+                                output?: unknown;
+                                error?: string;
+                                /** @enum {string} */
+                                suspendedOn?: "pause" | "child" | "paused" | "backoff" | "batch" | "budget" | "queue";
+                            }[];
+                        };
+                    };
+                };
+                /** @description Default Response */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                409: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                422: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                429: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                503: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                        };
+                    };
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/projects/{projectId}/triggers/sync-types": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    projectId: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Default Response */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            path: string;
+                            updated: boolean;
+                        };
                     };
                 };
                 /** @description Default Response */
@@ -5627,7 +6003,7 @@ export interface paths {
                                 cancel?: true;
                             };
                             filePath?: string;
-                            trigger: {
+                            input: {
                                 parameters: {
                                     name: string;
                                     type: string;
@@ -5637,10 +6013,24 @@ export interface paths {
                                     defaultValue?: string;
                                 }[];
                             };
+                            triggers: {
+                                kind: string;
+                                config: unknown;
+                                sourceRange: {
+                                    start: number;
+                                    end: number;
+                                    startLine: number;
+                                    startColumn: number;
+                                    endLine: number;
+                                    endColumn: number;
+                                    file?: string;
+                                };
+                            }[];
+                            canSuspend: boolean;
                             nodes: {
                                 id: string;
                                 /** @enum {string} */
-                                type: "trigger" | "source" | "sink" | "step" | "branch" | "if-block" | "loop-block" | "parallel" | "parallel-block" | "scope-block" | "durable-boundary" | "batch" | "pause" | "call-workflow" | "delay" | "return";
+                                type: "input" | "source" | "sink" | "step" | "branch" | "if-block" | "loop-block" | "parallel" | "parallel-block" | "scope-block" | "durable-boundary" | "batch" | "pause" | "call-workflow" | "delay" | "return";
                                 label: string;
                                 description?: string;
                                 sourceRange: {
@@ -5684,6 +6074,15 @@ export interface paths {
                                 returnExpression?: string;
                                 functionName?: string;
                                 parentId?: string;
+                                triggerBindings?: {
+                                    kind: string;
+                                    config: unknown;
+                                    display?: {
+                                        label?: string;
+                                        icon?: string;
+                                        color?: string;
+                                    };
+                                }[];
                             }[];
                             edges: {
                                 id: string;

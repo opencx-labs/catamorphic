@@ -30,6 +30,7 @@ import {
   WorkflowNameParamsSchema,
   WorkflowSummarySchema,
 } from "../schemas.js";
+import { attachTriggerKindDisplays } from "./triggers.js";
 
 export function registerWorkflowRoutes(
   app: FastifyInstance,
@@ -94,7 +95,7 @@ export function registerWorkflowRoutes(
           workflowName: name,
           ref,
         });
-        return reply.send(graph);
+        return reply.send(attachTriggerKindDisplays(ctx.core, graph));
       } catch (err) {
         if (err instanceof ProjectNotFoundError) {
           return reply.status(404).send({ error: "Project not found" });

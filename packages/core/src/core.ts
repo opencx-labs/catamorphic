@@ -8,7 +8,10 @@ import type {
 import { instrumentSandboxProvider } from "@catamorphic/sandbox";
 import type { Kysely } from "kysely";
 import { AgentContextService } from "./services/agent-context-service.js";
-import { AgentSessionsService } from "./services/agent-sessions-service.js";
+import {
+  AgentSessionsService,
+  type AgentTurnSettledEvent,
+} from "./services/agent-sessions-service.js";
 import type { AppBundleStore } from "./services/app-bundle-store.js";
 import { AppPoliciesService } from "./services/app-policies-service.js";
 import { AppsService } from "./services/apps-service.js";
@@ -45,6 +48,8 @@ import { RuntimeEventsService } from "./services/runtime-events-service.js";
 import { SecretsService } from "./services/secrets-service.js";
 import { SkillsService } from "./services/skills-service.js";
 import { TenantPoliciesService } from "./services/tenant-policies-service.js";
+import type { TriggerKindRuntime } from "./services/trigger-kinds.js";
+import { TriggersService } from "./services/triggers-service.js";
 import { WorkflowsService } from "./services/workflows-service.js";
 
 export interface CatamorphicCoreConfig {
@@ -107,6 +112,19 @@ export interface CatamorphicCoreConfig {
    * Without it, the GitHub surfaces are unavailable.
    */
   github?: GithubServiceConfig;
+  /**
+   * Host-defined trigger kinds. Workflows subscribe with
+   * `triggers: [trigger("kind", config)]`; the host fires a kind with a
+   * payload and every subscribed workflow runs. Build these with
+   * `defineTriggerKind` from `@catamorphic/server-sdk`.
+   */
+  triggerKinds?: readonly TriggerKindRuntime[];
+  /**
+   * Fires after a coding-agent chat turn settles (completed, failed, or
+   * awaiting input). Host-owned; a natural place to fire a chat trigger
+   * kind. Exceptions are swallowed and never delay the turn.
+   */
+  onAgentTurnSettled?: (event: AgentTurnSettledEvent) => void | Promise<void>;
 }
 
 /**
@@ -126,6 +144,7 @@ export class CatamorphicCore {
   readonly projects: ProjectsService;
   readonly workflows: WorkflowsService;
   readonly runs: RunsService;
+  readonly triggers: TriggersService;
   readonly deployment: DeploymentService;
   readonly deploymentArtifacts: DeploymentArtifactsService;
   readonly deploymentRuntime?: DeploymentRuntimeService;
@@ -257,6 +276,13 @@ export class CatamorphicCore {
       worker: executionWorker,
       invokeRuntime: (args) => this.runs.invokeProductionRuntime(args),
     });
+    this.triggers = new TriggersService(this.db, {
+      kinds: config.triggerKinds ?? [],
+      projectManager: this.projectManager,
+      runs: this.runs,
+      executionJobs,
+      executionWorker,
+    });
 
     this.skills = new SkillsService(this.db, this.projectManager);
 
@@ -272,6 +298,7 @@ export class CatamorphicCore {
         devSandboxes: this.devSandboxes,
         plugins: this.plugins,
         pluginResolver: this.pluginResolver,
+        onTurnSettled: config.onAgentTurnSettled,
       });
     }
   }

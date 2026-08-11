@@ -14,11 +14,11 @@ export async function myWorkflow({ email }: { email: string }) {
     const graph = parseWorkflow(source);
 
     expect(graph.name).toBe("myWorkflow");
-    expect(graph.trigger.parameters).toHaveLength(1);
-    expect(graph.trigger.parameters[0]?.name).toBe("email");
+    expect(graph.input.parameters).toHaveLength(1);
+    expect(graph.input.parameters[0]?.name).toBe("email");
 
     const types = graph.nodes.map((n) => n.type);
-    expect(types).toContain("trigger");
+    expect(types).toContain("input");
     expect(types).toContain("step");
     expect(types).toContain("return");
 

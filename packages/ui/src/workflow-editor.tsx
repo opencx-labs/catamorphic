@@ -187,7 +187,7 @@ export function WorkflowEditorChrome({
     ],
   );
 
-  const params = triggerParameters ?? graph?.trigger.parameters ?? [];
+  const params = triggerParameters ?? graph?.input.parameters ?? [];
 
   return (
     <div className="catamorphic-editor">

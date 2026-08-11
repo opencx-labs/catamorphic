@@ -34,6 +34,8 @@ describe("workflow route contracts", () => {
         description: null,
         filePath: "src/index.ts",
         parameterCount: 0,
+        triggers: [],
+        canSuspend: false,
       },
     ]);
     const core = { workflows: { list } } as unknown as CatamorphicCore;
@@ -67,11 +69,13 @@ describe("workflow route contracts", () => {
         exportTarget: { modulePath: "src/index.ts", exportName: "example" },
         steps: [],
       },
-      trigger: { parameters: [] },
+      input: { parameters: [] },
+      triggers: [],
+      canSuspend: true,
       nodes: [
         {
-          id: "trigger",
-          type: "trigger" as const,
+          id: "input",
+          type: "input" as const,
           label: "Trigger",
           sourceRange: {
             start: 0,
@@ -133,7 +137,9 @@ describe("workflow route contracts", () => {
         exportTarget: { modulePath: "src/index.ts", exportName: "example" },
         steps: [],
       },
-      trigger: { parameters: [] },
+      input: { parameters: [] },
+      triggers: [],
+      canSuspend: false,
       nodes: [],
       edges: [],
       sourceCode: "export const example = true;",

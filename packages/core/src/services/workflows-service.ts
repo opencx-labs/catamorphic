@@ -8,6 +8,7 @@ import {
   type WorkflowCapabilities,
   type WorkflowExecutionDescriptor,
   type WorkflowGraph,
+  type WorkflowTriggerBinding,
 } from "@catamorphic/parser";
 import type { Identity } from "../identity.js";
 import { assertProjectSurface } from "./app-audience.js";
@@ -24,6 +25,8 @@ export interface WorkflowSummary {
   description: string | null;
   filePath: string;
   parameterCount: number;
+  triggers: WorkflowTriggerBinding[];
+  canSuspend: boolean;
 }
 
 export interface WorkflowDetail extends WorkflowGraph {
@@ -69,7 +72,9 @@ export class WorkflowsService {
         displayName: wf.graph.displayName ?? null,
         description: wf.graph.description ?? null,
         filePath: wf.filePath ?? "",
-        parameterCount: wf.graph.trigger.parameters.length,
+        parameterCount: wf.graph.input.parameters.length,
+        triggers: wf.graph.triggers,
+        canSuspend: wf.graph.canSuspend,
       }));
     });
   }

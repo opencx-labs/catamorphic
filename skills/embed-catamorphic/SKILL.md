@@ -109,6 +109,76 @@ const run = await scoped.runs.triggerProduction({
 });
 ```
 
+## Custom trigger kinds (host-defined events that run workflows)
+
+When the host has domain events — "Ticket Created", "AI Tool Call",
+"Order Shipped" — define trigger kinds so user workflows can subscribe to
+them. Workflows declare `triggers: [trigger("ticket.created", config)]` in
+code; the host fires the kind with a typed payload and every subscribed
+workflow at the production commit runs.
+
+```ts
+import { defineTriggerKind } from "@catamorphic/server-sdk";
+import { z } from "zod";
+
+export const ticketCreated = defineTriggerKind({
+  name: "ticket.created",
+  description: "A support ticket was created",
+  display: { label: "Ticket Created", icon: "bell", color: "#ca8a04" },
+  payload: z.object({
+    ticketId: z.string(),
+    subject: z.string(),
+    priority: z.enum(["low", "high"]),
+  }),
+  // Constant per-workflow config the kind demands of subscribers; e.g. an
+  // AI tool-call kind requires the tool description here.
+  config: z.object({ onlyPriority: z.enum(["low", "high"]).optional() }),
+  correlationKey: (p) => p.ticketId, // optional enrollment identity
+});
+
+// Register at boot:
+createCatamorphic({ ..., triggerKinds: [ticketCreated] });
+
+// Fire from the host's domain code (e.g. inside createTicket):
+const result = await scoped.triggers.fire({
+  projectId,
+  kind: ticketCreated,       // pass the definition value → payload is typed
+  payload: { ticketId, subject, priority: "high" },
+  mode: "async",             // or "sync" — see below
+});
+
+// Introspect (e.g. build AI tool definitions from bound workflows):
+const bindings = await scoped.triggers.list({ projectId, kind: ticketCreated });
+// → [{ workflowName, config /* typed from the kind */, canSuspend, inputParameters }]
+```
+
+Semantics that keep this correct:
+
+- **Types by construction.** The zod schemas are the single source of truth:
+  they validate payloads at fire time, configs when a commit is first
+  scanned, and generate `workflows/src/catamorphic-triggers.d.ts` inside each
+  project so `trigger()` type-checks for workflow authors. Call
+  `scoped.triggers.syncTypes({ projectId })` at project provisioning and
+  whenever the kind set changes (the file is committed; a no-op when fresh).
+- **Sync firing runs until the first wait.** `mode: "sync"` executes the
+  run's boundaries inline in your request and returns
+  `{ status: "completed", output }` — unless the workflow pauses, backs off
+  a retry, hits a rate limit, enters a batch, or exhausts the `budgetMs`
+  (default 30s), in which case you get `{ status: "suspended", suspendedOn,
+  runId }` and the run continues on the queue. Always handle both arms.
+  A binding with `canSuspend: false` is guaranteed to settle inline.
+- Bindings are frozen per (project, production commit) in
+  `trigger_bindings` — firing reads a table, never a source parse. A commit
+  whose bindings name unknown kinds or fail config validation fails closed
+  with `TriggerBindingsInvalidError`.
+- Fire is fan-out: every bound workflow runs. Use `workflows: ["name"]` to
+  target a subset (e.g. the one workflow the AI invoked as a tool), and
+  `correlationKey`/`onConflict` for enrollment dedupe, same as
+  `runs.triggerProduction`.
+- HTTP surface: `GET /trigger-kinds`, `GET /projects/:id/triggers`,
+  `POST /projects/:id/triggers/:kind/fire`,
+  `POST /projects/:id/triggers/sync-types`.
+
 ## Step 3: surfaces (only what the host needs)
 
 HTTP for frontends (required for the React UI):
@@ -158,3 +228,7 @@ shadcn-style source-owned components: `@catamorphic/registry`.
 4. Verify end to end: migrate → create a project → write a workflow file →
    trigger a run → read run status via the same scoped client. Only then
    mount HTTP and UI.
+5. If the host registered trigger kinds: sync types into a project, write a
+   workflow with `triggers: [trigger("kind", config)]`, deploy, `fire` the
+   kind, and assert the run enrolled (async) or settled/suspended honestly
+   (sync).

@@ -390,6 +390,7 @@
         "@catamorphic/sandbox": "workspace:*",
         "kysely": "^0.29.3",
         "pg": "^8.22.0",
+        "zod": "^4.4.3",
       },
       "devDependencies": {
         "@types/node": "^26.1.1",

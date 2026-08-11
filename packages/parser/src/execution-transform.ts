@@ -221,7 +221,7 @@ function isOwnedByWorkflow(opts: {
   node: WorkflowNode;
 }): boolean {
   const trigger = opts.graph.nodes.find(
-    (node) => node.type === "trigger" && !node.parentId,
+    (node) => node.type === "input" && !node.parentId,
   );
   if (
     !trigger ||

@@ -14,11 +14,11 @@ export interface EditorPosition {
 /**
  * Container nodes wrap other nodes, so their ranges contain everything
  * inside them. They only win when no leaf node contains the position
- * (e.g. the cursor is on the `if (...)` line itself). The trigger belongs
+ * (e.g. the cursor is on the `if (...)` line itself). The input node belongs
  * here because its range is the entire workflow function.
  */
 const CONTAINER_TYPES: ReadonlySet<WorkflowNodeType> = new Set([
-  "trigger",
+  "input",
   "if-block",
   "loop-block",
   "parallel-block",

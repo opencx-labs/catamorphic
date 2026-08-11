@@ -878,9 +878,43 @@
   color: var(--color-fg-muted, #a3a3a3);
 }
 
-.catamorphic-trigger-node {
+.catamorphic-input-node {
   border-color: #ca8a04;
   background: linear-gradient(135deg, #1c1a0f, #171717);
+}
+
+.catamorphic-node-triggers {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-top: 4px;
+}
+
+.catamorphic-trigger-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 10px;
+  padding: 2px 6px;
+  background: var(--color-border, #262626);
+  border-left: 2px solid var(--catamorphic-trigger-accent, transparent);
+  border-radius: 4px;
+  color: var(--color-fg-muted, #a3a3a3);
+  white-space: nowrap;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.catamorphic-trigger-badge-icon {
+  display: inline-flex;
+  flex-shrink: 0;
+  color: var(--catamorphic-trigger-accent, var(--color-fg-faint, #525252));
+}
+
+.catamorphic-trigger-badge-icon svg {
+  width: 11px;
+  height: 11px;
 }
 
 .catamorphic-source-node {

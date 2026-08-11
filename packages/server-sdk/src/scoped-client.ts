@@ -5,6 +5,7 @@ import type {
   WorkflowDetail as CoreWorkflowDetail,
   WorkflowSummary as CoreWorkflowSummary,
   CreateProjectInput,
+  EnrollmentConflictPolicy,
   GetRunInput,
   GithubConnectionStatus,
   Identity,
@@ -23,6 +24,10 @@ import type {
   ResumeRunPauseInput,
   Run,
   RunDetail,
+  TriggerBindingInfo,
+  TriggerFireResult,
+  TriggerKindInfo,
+  TriggerMode,
   TriggerProductionRunInput,
   TriggerTestRunInput,
   UpdateProjectInput,
@@ -30,6 +35,7 @@ import type {
 } from "@catamorphic/core";
 import type { Json } from "@catamorphic/db";
 import type { GithubRepo, GithubTokenSet } from "@catamorphic/github";
+import type { TriggerKindDefinition } from "./define-trigger-kind.js";
 
 export type WorkflowSummary = Omit<CoreWorkflowSummary, "execution">;
 type PublicWorkflowNode = Omit<
@@ -118,6 +124,81 @@ export interface RunsResource {
   listItemSteps(
     args: Omit<ListBatchItemStepsInput, "identity">,
   ): Promise<BatchItemStep[]>;
+}
+
+/** A trigger kind reference: the typed definition value, or its bare name. */
+export type TriggerKindRef<Payload = Json, Config = Json> =
+  | TriggerKindDefinition<Payload, Config>
+  | string;
+
+/**
+ * Custom trigger surface. Fire a host-defined kind with a payload and every
+ * workflow bound to it at the production commit runs; pass the
+ * `defineTriggerKind` value as `kind` and the payload/config types flow
+ * through. Sync firings return settled outcomes, detaching to the queue —
+ * with an honest `suspended` outcome — at the first durable wait; check
+ * `canSuspend` on a binding for the workflows where that can happen.
+ */
+export interface TriggersResource {
+  /** The host's registered kinds, as static metadata. */
+  kinds(): TriggerKindInfo[];
+  list<Config = Json>(args: {
+    projectId: string;
+    kind?: TriggerKindRef<Json, Config>;
+  }): Promise<Array<Omit<TriggerBindingInfo, "config"> & { config: Config }>>;
+  fire<Payload = Json>(args: {
+    projectId: string;
+    kind: TriggerKindRef<Payload, Json>;
+    payload: Payload;
+    /** Defaults to async. */
+    mode?: TriggerMode;
+    /** Restrict to these bound workflows (e.g. the one tool the AI called). */
+    workflows?: readonly string[];
+    correlationKey?: string;
+    onConflict?: EnrollmentConflictPolicy;
+    /** Sync only: wall-clock budget before detaching. Defaults to 30s. */
+    budgetMs?: number;
+  }): Promise<TriggerFireResult>;
+  /**
+   * Writes the generated `catamorphic-triggers.d.ts` into the project's dev
+   * tree when drifted from the registered kinds.
+   */
+  syncTypes(args: {
+    projectId: string;
+  }): Promise<{ path: string; updated: boolean }>;
+}
+
+function kindName(kind: TriggerKindRef<unknown, unknown>): string {
+  return typeof kind === "string" ? kind : kind.name;
+}
+
+function buildTriggers(
+  core: CatamorphicCore,
+  identity: Identity,
+): TriggersResource {
+  return {
+    kinds: () => core.triggers.listKinds(),
+    list: async (args) =>
+      (await core.triggers.list({
+        identity,
+        projectId: args.projectId,
+        kind: args.kind === undefined ? undefined : kindName(args.kind),
+      })) as never,
+    fire: (args) =>
+      core.triggers.fire({
+        identity,
+        projectId: args.projectId,
+        kind: kindName(args.kind),
+        payload: args.payload as Json,
+        mode: args.mode,
+        workflows: args.workflows,
+        correlationKey: args.correlationKey,
+        onConflict: args.onConflict,
+        budgetMs: args.budgetMs,
+      }),
+    syncTypes: (args) =>
+      core.triggers.syncTypes({ identity, projectId: args.projectId }),
+  };
 }
 
 function buildProjects(
@@ -226,6 +307,7 @@ export class ScopedClient {
   readonly workflows: WorkflowsResource;
   readonly files: FilesResource;
   readonly runs: RunsResource;
+  readonly triggers: TriggersResource;
   readonly github: GithubResource;
 
   constructor(
@@ -236,6 +318,7 @@ export class ScopedClient {
     this.workflows = buildWorkflows(core, identity);
     this.files = buildFiles(core, identity);
     this.runs = buildRuns(core, identity);
+    this.triggers = buildTriggers(core, identity);
     this.github = buildGithub(core, identity);
   }
 

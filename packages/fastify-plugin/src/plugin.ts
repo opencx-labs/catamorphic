@@ -15,6 +15,7 @@ import { registerPluginRoutes } from "./routes/plugins.js";
 import { registerProjectRoutes } from "./routes/projects.js";
 import { registerRunRoutes } from "./routes/runs.js";
 import { registerTemplateRoutes } from "./routes/templates.js";
+import { registerTriggerRoutes } from "./routes/triggers.js";
 import { registerWorkflowRoutes } from "./routes/workflows.js";
 
 export interface CatamorphicPluginOptions {
@@ -70,6 +71,7 @@ export const catamorphicPlugin: FastifyPluginAsync<
 
   registerProjectRoutes(app, ctx);
   registerWorkflowRoutes(app, ctx);
+  registerTriggerRoutes(app, ctx);
   registerRunRoutes(app, ctx);
   registerAgentRoutes(app, ctx);
   registerAppRoutes(app, ctx);

@@ -6,10 +6,11 @@ import {
   PlaygroundParseRequestSchema,
   PlaygroundParseResponseSchema,
 } from "../schemas.js";
+import { attachTriggerKindDisplays } from "./triggers.js";
 
 export function registerPlaygroundRoutes(
   app: FastifyInstance,
-  _ctx: RouteContext,
+  ctx: RouteContext,
 ) {
   const typed = app.withTypeProvider<ZodTypeProvider>();
 
@@ -27,7 +28,7 @@ export function registerPlaygroundRoutes(
       });
       if (!graph) return reply.send(null);
       layoutGraph({ nodes: graph.nodes, edges: graph.edges });
-      return reply.send(graph);
+      return reply.send(attachTriggerKindDisplays(ctx.core, graph));
     },
   });
 }

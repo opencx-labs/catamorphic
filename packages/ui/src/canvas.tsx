@@ -69,7 +69,7 @@ function computeTranslateExtent(
 }
 
 const MINIMAP_NODE_COLORS: Record<string, string> = {
-  trigger: "#ca8a04",
+  input: "#ca8a04",
   source: "#0891b2",
   sink: "#16a34a",
   step: "#2563eb",

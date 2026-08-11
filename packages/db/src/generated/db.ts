@@ -355,6 +355,24 @@ export interface Tenants {
   name: string;
 }
 
+export interface TriggerBindings {
+  can_suspend: boolean;
+  commit_sha: string;
+  config: Json;
+  created_at: Generated<Timestamp>;
+  id: Generated<string>;
+  input_parameters: Json;
+  project_id: string;
+  trigger_kind: string;
+  workflow_name: string;
+}
+
+export interface TriggerBindingScans {
+  commit_sha: string;
+  project_id: string;
+  scanned_at: Generated<Timestamp>;
+}
+
 export interface WorkflowPauses {
   created_at: Generated<Timestamp>;
   id: Generated<string>;
@@ -478,6 +496,8 @@ export interface DB {
   tenant_app_policies: TenantAppPolicies;
   tenant_execution_policies: TenantExecutionPolicies;
   tenants: Tenants;
+  trigger_binding_scans: TriggerBindingScans;
+  trigger_bindings: TriggerBindings;
   workflow_pauses: WorkflowPauses;
   workflow_run_events: WorkflowRunEvents;
   workflow_run_states: WorkflowRunStates;

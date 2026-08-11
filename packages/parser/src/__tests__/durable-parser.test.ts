@@ -96,7 +96,7 @@ describe("durable workflow parsing", () => {
 
   it("renders boundaries, ordinary steps, pause, and child workflow calls", () => {
     const graph = parseWorkflow(DURABLE_SOURCE);
-    const trigger = graph.nodes.find((node) => node.type === "trigger");
+    const trigger = graph.nodes.find((node) => node.type === "input");
     const boundaries = graph.nodes.filter(
       (node) => node.type === "durable-boundary" && !node.parentId,
     );
@@ -114,7 +114,7 @@ describe("durable workflow parsing", () => {
       batchProcessing: false,
       cancellation: true,
     });
-    expect(graph.trigger.parameters).toMatchObject([
+    expect(graph.input.parameters).toMatchObject([
       {
         name: "orderId",
         type: "string",

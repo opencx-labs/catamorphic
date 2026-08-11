@@ -111,6 +111,16 @@ input submission, and item inspection. Capabilities on a Workflow or Run decide
 which controls apply; there is no separate batch or persisted-continuation Run
 resource.
 
+`scoped.triggers` is the custom-trigger surface: hosts register domain trigger
+kinds at boot (`defineTriggerKind` + `createCatamorphic({ triggerKinds })`),
+workflows subscribe in code with `triggers: [trigger("kind", config)]`, and
+the host fires a kind with a typed payload (`fire`, sync or async — sync runs
+inline until the workflow's first durable wait, then detaches with an honest
+`suspended` outcome), lists subscribed workflows with their constant configs
+(`list`), and projects the generated `catamorphic-triggers.d.ts` into a
+workspace (`syncTypes`). A trigger firing starts ordinary Runs — no new run
+family. See `docs/decisions/0039-custom-trigger-kinds.md`.
+
 ### Observability
 
 Catamorphic instruments itself with `@opentelemetry/api` only. Register your OpenTelemetry SDK (NodeSDK, exporters, sampling) in the host as usual and catamorphic's spans (`workflow.run`, `workflow.execute`, `project.create`, `project.deploy`, `sandbox.*`) appear in your traces automatically, correlated with your HTTP spans. Without an SDK they are no-ops. For dev, the repo-root `docker-compose.yml` ships an OTel collector → ClickHouse stack to point your exporter at.

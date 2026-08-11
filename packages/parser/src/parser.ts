@@ -27,6 +27,7 @@ import type {
   BoundaryRateLimitDescriptor,
   DeclaredSecret,
   DiscoveredWorkflow,
+  JsonConstant,
   ParameterInfo,
   ParseError,
   PhysicalBatchStepPolicyDescriptor,
@@ -38,6 +39,7 @@ import type {
   WorkflowEdge,
   WorkflowGraph,
   WorkflowNode,
+  WorkflowTriggerBinding,
 } from "./types.js";
 import {
   APP_API_SOURCE_PATH,
@@ -1522,30 +1524,30 @@ function buildWorkflowGraph(
 
   currentWorkflowFile = ctx.workflowFile;
 
-  const triggerParams = extractParameterInfo(workflowFn, jsdoc.paramMetadata);
-  const triggerLabel = jsdoc.displayName ?? workflowFn.getName() ?? "Trigger";
+  const inputParams = extractParameterInfo(workflowFn, jsdoc.paramMetadata);
+  const inputLabel = jsdoc.displayName ?? workflowFn.getName() ?? "Trigger";
 
-  const triggerId = nextId();
+  const inputId = nextId();
   ctx.nodes.push({
-    id: triggerId,
-    type: "trigger",
-    label: triggerLabel,
+    id: inputId,
+    type: "input",
+    label: inputLabel,
     description: jsdoc.description,
     sourceRange: getSourceRange(workflowFn),
     metadata: jsdoc.tags,
-    parameters: triggerParams,
+    parameters: inputParams,
   });
 
-  for (const param of triggerParams) {
+  for (const param of inputParams) {
     ctx.variables.set(param.name, {
-      sourceNodeId: triggerId,
-      sourceStepLabel: triggerLabel,
+      sourceNodeId: inputId,
+      sourceStepLabel: inputLabel,
     });
   }
 
   const body = workflowFn.getBody();
   if (body && Node.isBlock(body)) {
-    parseStatements(ctx, body.getStatements(), [triggerId]);
+    parseStatements(ctx, body.getStatements(), [inputId]);
   }
 
   return {
@@ -1566,7 +1568,9 @@ function buildWorkflowGraph(
     },
     displayName: jsdoc.displayName,
     description: jsdoc.description,
-    trigger: { parameters: triggerParams },
+    input: { parameters: inputParams },
+    triggers: [],
+    canSuspend: false,
     nodes: ctx.nodes,
     edges: ctx.edges,
     sourceCode: opts?.sourceCode ?? workflowFn.getSourceFile().getFullText(),
@@ -1709,6 +1713,146 @@ function requireBatchCallback(opts: {
     );
   }
   return callback;
+}
+
+/**
+ * Evaluates an expression that must be a JSON constant. Trigger configs are
+ * introspected by hosts without running project code, so anything computed —
+ * identifiers, calls, spreads, template substitutions — is rejected.
+ */
+function evaluateConstantExpression(
+  node: Node,
+  path: string,
+): { ok: true; value: JsonConstant } | { ok: false; reason: string } {
+  const expression = unwrapExpression(node);
+  if (Node.isStringLiteral(expression)) {
+    return { ok: true, value: expression.getLiteralValue() };
+  }
+  if (Node.isNoSubstitutionTemplateLiteral(expression)) {
+    return { ok: true, value: expression.getLiteralValue() };
+  }
+  if (Node.isNumericLiteral(expression)) {
+    return { ok: true, value: expression.getLiteralValue() };
+  }
+  if (Node.isPrefixUnaryExpression(expression)) {
+    const operand = expression.getOperand();
+    if (
+      expression.getOperatorToken() === SyntaxKind.MinusToken &&
+      Node.isNumericLiteral(operand)
+    ) {
+      return { ok: true, value: -operand.getLiteralValue() };
+    }
+    return { ok: false, reason: `${path} must be a constant expression` };
+  }
+  if (expression.getKind() === SyntaxKind.TrueKeyword) {
+    return { ok: true, value: true };
+  }
+  if (expression.getKind() === SyntaxKind.FalseKeyword) {
+    return { ok: true, value: false };
+  }
+  if (expression.getKind() === SyntaxKind.NullKeyword) {
+    return { ok: true, value: null };
+  }
+  if (Node.isArrayLiteralExpression(expression)) {
+    const values: JsonConstant[] = [];
+    for (const [index, element] of expression.getElements().entries()) {
+      const result = evaluateConstantExpression(element, `${path}[${index}]`);
+      if (!result.ok) return result;
+      values.push(result.value);
+    }
+    return { ok: true, value: values };
+  }
+  if (Node.isObjectLiteralExpression(expression)) {
+    const value: { [key: string]: JsonConstant } = {};
+    for (const property of expression.getProperties()) {
+      if (!Node.isPropertyAssignment(property)) {
+        return {
+          ok: false,
+          reason: `${path} must use plain 'key: value' properties`,
+        };
+      }
+      const nameNode = property.getNameNode();
+      const key = Node.isStringLiteral(nameNode)
+        ? nameNode.getLiteralValue()
+        : Node.isIdentifier(nameNode)
+          ? nameNode.getText()
+          : undefined;
+      if (key === undefined) {
+        return {
+          ok: false,
+          reason: `${path} must use identifier or string-literal keys`,
+        };
+      }
+      const initializer = property.getInitializer();
+      if (!initializer) {
+        return { ok: false, reason: `${path}.${key} must have a value` };
+      }
+      const result = evaluateConstantExpression(initializer, `${path}.${key}`);
+      if (!result.ok) return result;
+      value[key] = result.value;
+    }
+    return { ok: true, value };
+  }
+  return { ok: false, reason: `${path} must be a constant expression` };
+}
+
+function parseTriggerBindings(opts: {
+  config: ObjectLiteralExpression;
+  workflowName: string;
+}): WorkflowTriggerBinding[] {
+  const triggersProperty = opts.config.getProperty("triggers");
+  if (!triggersProperty) return [];
+  if (!Node.isPropertyAssignment(triggersProperty)) {
+    throw new Error(
+      `Workflow '${opts.workflowName}' must define 'triggers' as a property assignment`,
+    );
+  }
+  const initializer = unwrapExpression(
+    triggersProperty.getInitializerOrThrow(),
+  );
+  if (!Node.isArrayLiteralExpression(initializer)) {
+    throw new Error(
+      `Workflow '${opts.workflowName}' must define 'triggers' as an inline array of trigger(...) calls`,
+    );
+  }
+  const bindings: WorkflowTriggerBinding[] = [];
+  for (const [index, element] of initializer.getElements().entries()) {
+    const call = unwrapExpression(element);
+    if (!Node.isCallExpression(call) || getCallName(call) !== "trigger") {
+      throw new Error(
+        `Workflow '${opts.workflowName}' trigger ${index + 1} must be a direct trigger(...) call`,
+      );
+    }
+    const kindArgument = call.getArguments()[0]
+      ? unwrapExpression(call.getArguments()[0]!)
+      : undefined;
+    if (
+      !kindArgument ||
+      (!Node.isStringLiteral(kindArgument) &&
+        !Node.isNoSubstitutionTemplateLiteral(kindArgument))
+    ) {
+      throw new Error(
+        `Workflow '${opts.workflowName}' trigger ${index + 1} must name its kind as a string literal`,
+      );
+    }
+    const kind = kindArgument.getLiteralValue();
+    const configArgument = call.getArguments()[1];
+    let config: JsonConstant = {};
+    if (configArgument) {
+      const result = evaluateConstantExpression(
+        configArgument,
+        `trigger('${kind}') config`,
+      );
+      if (!result.ok) {
+        throw new Error(
+          `Workflow '${opts.workflowName}' trigger ${index + 1}: ${result.reason}. Trigger config is introspected by the host, so it must be written as a constant.`,
+        );
+      }
+      config = result.value;
+    }
+    bindings.push({ kind, config, sourceRange: getSourceRange(call) });
+  }
+  return bindings;
 }
 
 function parseDurableDefinition(
@@ -2368,12 +2512,16 @@ function buildDefinedWorkflowGraph(
     ? extractJsDocMetadata(metadataSource)
     : { tags: {}, paramMetadata: new Map<string, never>() };
   const firstStep = definition.steps[0];
-  const triggerParameters =
+  const inputParameters =
     firstStep?.type === "boundary"
       ? extractDurableInputParameters(firstStep.run, jsdoc.paramMetadata)
       : firstStep?.type === "batch"
         ? extractCallbackParameters(firstStep.source)
         : [];
+  const triggerBindings = parseTriggerBindings({
+    config: definition.config,
+    workflowName: workflow.name,
+  });
   const controlsProperty = definition.config.getProperty("controls");
   const controlsObject =
     controlsProperty && Node.isPropertyAssignment(controlsProperty)
@@ -2398,31 +2546,48 @@ function buildDefinedWorkflowGraph(
   };
   currentWorkflowFile = ctx.workflowFile;
 
-  const triggerId = nextId();
-  const triggerLabel = jsdoc.displayName ?? workflow.name;
+  const inputId = nextId();
+  const inputLabel = jsdoc.displayName ?? workflow.name;
   ctx.nodes.push({
-    id: triggerId,
-    type: "trigger",
-    label: triggerLabel,
+    id: inputId,
+    type: "input",
+    label: inputLabel,
     description: jsdoc.description,
     sourceRange: getSourceRange(workflow.declaration),
     metadata: jsdoc.tags,
-    parameters: triggerParameters,
+    parameters: inputParameters,
+    ...(triggerBindings.length > 0 ? { triggerBindings } : {}),
   });
-  for (const parameter of triggerParameters) {
+  for (const parameter of inputParameters) {
     ctx.variables.set(parameter.name, {
-      sourceNodeId: triggerId,
-      sourceStepLabel: triggerLabel,
+      sourceNodeId: inputId,
+      sourceStepLabel: inputLabel,
     });
   }
 
   const parsedSteps = parseWorkflowSteps({
     ctx,
     definitions: definition.steps,
-    previousIds: [triggerId],
+    previousIds: [inputId],
   });
   const hasBatch = definition.steps.some((step) => step.type === "batch");
   const cancellation = cancelControl === "true";
+  // Conservative over-approximation of every durable-wait source. `false`
+  // guarantees a sync trigger firing completes inline.
+  const canSuspend =
+    hasBatch ||
+    definition.steps.some(
+      (step) =>
+        step.type === "boundary" &&
+        (step.config.getProperty("retry") !== undefined ||
+          step.config.getProperty("rateLimits") !== undefined),
+    ) ||
+    ctx.nodes.some(
+      (node) =>
+        node.type === "pause" ||
+        node.type === "call-workflow" ||
+        node.type === "delay",
+    );
 
   return {
     name: workflow.name,
@@ -2443,7 +2608,9 @@ function buildDefinedWorkflowGraph(
     displayName: jsdoc.displayName,
     description: jsdoc.description,
     controls: cancellation ? { cancel: true } : undefined,
-    trigger: { parameters: triggerParameters },
+    input: { parameters: inputParameters },
+    triggers: triggerBindings,
+    canSuspend,
     nodes: ctx.nodes,
     edges: ctx.edges,
     sourceCode: opts?.sourceCode ?? sourceFile.getFullText(),

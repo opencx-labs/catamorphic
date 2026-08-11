@@ -1538,3 +1538,22 @@ Patterned on what best-in-class palettes converged on (Chrome omnibox
   jump-to-previous-message arrow also hides until the conversation
   actually outgrows the viewport — a fully visible chat needs no scroll
   affordance.
+
+### 2026-08-11 — Desktop trigger kinds: chat and terminal as workflow events
+- The desktop is now a real embedder of the new custom-trigger system: it
+  registers `chat.turn-completed` (fired when an agent turn settles, with
+  per-workflow `statuses` config deciding which settled states matter) and
+  `terminal.idle` (fired when a project terminal returns to its prompt).
+  Any project workflow can subscribe with
+  `triggers: [trigger("chat.turn-completed", { statuses: ["completed"] })]`.
+- Firing is always fire-and-forget from the event source: a trigger failure
+  logs a warning and never breaks a chat turn or the terminal poll loop.
+  Both kinds fire async — desktop workflows run on the embedded worker; no
+  user-visible latency is added to chat or terminal interactions.
+- The generated `catamorphic-triggers.d.ts` is synced into every project at
+  boot and refreshed after each agent turn, so the coding agent always sees
+  the desktop's kinds as real types. The workflow graph's entry node shows
+  a badge per subscription (kind label, icon, accent color from the kind's
+  display metadata), and the detail panel lists each binding with its
+  config — subscriptions are visible where the workflow is read, not
+  hidden in host state.
