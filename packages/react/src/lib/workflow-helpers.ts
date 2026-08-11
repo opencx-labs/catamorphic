@@ -1,12 +1,21 @@
-const WORKFLOW_STARTER_TEMPLATE = `/**
+const WORKFLOW_STARTER_TEMPLATE = `import {
+  type BoundaryContext,
+  defineWorkflow,
+} from "@catamorphic/workflow";
+
+/**
  * @displayname __DISPLAY_NAME__
  * @description A new workflow
  */
-export async function __WORKFLOW_NAME__() {
-  "use workflow";
-
-  return { success: true };
-}
+export const __WORKFLOW_NAME__ = defineWorkflow(({ defineBoundary }) => ({
+  steps: [
+    defineBoundary({
+      run: async (_context: BoundaryContext<Record<string, never>>) => {
+        return { success: true };
+      },
+    }),
+  ],
+}));
 `;
 
 export function workflowFilePathFromName(workflowName: string): string {
@@ -51,20 +60,21 @@ function escapeRegExp(value: string): string {
 }
 
 /**
- * Ensures the primary `export async function` matches the project workflow
- * identifier so routing and the sandbox harness resolve the entry point.
+ * Ensures the primary exported `defineWorkflow` declaration matches the
+ * project workflow identifier so routing and the sandbox harness resolve the
+ * entry point.
  */
 export function ensurePrimaryWorkflowExportName(
   source: string,
   workflowName: string,
 ): string {
   const expected = new RegExp(
-    `export\\s+async\\s+function\\s+${escapeRegExp(workflowName)}\\s*\\(`,
+    `export\\s+const\\s+${escapeRegExp(workflowName)}\\s*=\\s*defineWorkflow\\s*\\(`,
   );
   if (expected.test(source)) return source;
   return source.replace(
-    /export\s+async\s+function\s+\w+\s*\(/,
-    `export async function ${workflowName}(`,
+    /export\s+const\s+\w+\s*=\s*defineWorkflow\s*\(/,
+    `export const ${workflowName} = defineWorkflow(`,
   );
 }
 
@@ -73,10 +83,10 @@ export function readWorkflowDisplayName(
   workflowName: string,
 ): string | null {
   const escapedName = escapeRegExp(workflowName);
-  const docAndFnPattern = new RegExp(
-    `\\/\\*\\*[\\s\\S]*?\\*\\/\\s*export\\s+async\\s+function\\s+${escapedName}\\s*\\(`,
+  const docAndDeclarationPattern = new RegExp(
+    `\\/\\*\\*[\\s\\S]*?\\*\\/\\s*export\\s+const\\s+${escapedName}\\s*=\\s*defineWorkflow\\s*\\(`,
   );
-  const match = source.match(docAndFnPattern);
+  const match = source.match(docAndDeclarationPattern);
   if (!match) return null;
 
   const displayMatch = match[0].match(/@displayname\s+([^\n\r*]+)/);
@@ -90,14 +100,14 @@ export function upsertWorkflowDisplayName(
   displayName: string,
 ): string {
   const escapedName = escapeRegExp(workflowName);
-  const fnPattern = new RegExp(
-    `(\\/\\*\\*[\\s\\S]*?\\*\\/\\s*)?(export\\s+async\\s+function\\s+${escapedName}\\s*\\()`,
+  const declarationPattern = new RegExp(
+    `(\\/\\*\\*[\\s\\S]*?\\*\\/\\s*)?(export\\s+const\\s+${escapedName}\\s*=\\s*defineWorkflow\\s*\\()`,
   );
-  const match = source.match(fnPattern);
+  const match = source.match(declarationPattern);
   if (!match) return source;
 
   const existingDoc = match[1];
-  const fnSignature = match[2];
+  const declaration = match[2];
   let nextDoc: string;
 
   if (existingDoc) {
@@ -114,5 +124,5 @@ export function upsertWorkflowDisplayName(
     nextDoc = `/**\n * @displayname ${displayName}\n */\n`;
   }
 
-  return source.replace(fnPattern, `${nextDoc}${fnSignature}`);
+  return source.replace(declarationPattern, `${nextDoc}${declaration}`);
 }

@@ -11,19 +11,19 @@ const identity: Identity = {
 
 const currentFiles = {
   "src/workflows.ts": `
-    export async function currentWorkflow() {
-      "use workflow";
-      return "current";
-    }
+    import { defineWorkflow } from "@catamorphic/workflow";
+    export const currentWorkflow = defineWorkflow(({ defineBoundary }) => ({
+      steps: [defineBoundary({ run: () => "current" })],
+    }));
   `,
 };
 
 const referencedFiles = {
   "src/workflows.ts": `
-    export async function referencedWorkflow() {
-      "use workflow";
-      return "referenced";
-    }
+    import { defineWorkflow } from "@catamorphic/workflow";
+    export const referencedWorkflow = defineWorkflow(({ defineBoundary }) => ({
+      steps: [defineBoundary({ run: () => "referenced" })],
+    }));
   `,
 };
 

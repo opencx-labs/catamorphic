@@ -60,7 +60,9 @@ Fastify entirely (ADR 0002). Two primitives:
   version must be the currently *active, ready, published* version of the
   claimed app in the claimed project and tenant — a retired version id is a
   denial, never its old (possibly wider) set. Audience identities may trigger
-  production runs only; test runs execute the builder's mutable dev tree.
+  runs *(wording updated by [0040](0040-one-workflow-model.md): test runs are
+  removed, so the original production-only clause covers every run — all runs
+  execute a deployed commit)*.
 
 Every denial is one uniform `AppAccessDeniedError` (HTTP 403). The caller is
 an untrusted bundle; detailed denials would enumerate the project for it.

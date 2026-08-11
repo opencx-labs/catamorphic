@@ -43,11 +43,17 @@ describe("runtime protocol JSON", () => {
 
   it("validates indexed defined-workflow targets", () => {
     const request = invocation({});
-    expect(RUNTIME_PROTOCOL_VERSION).toBe(7);
+    expect(RUNTIME_PROTOCOL_VERSION).toBe(8);
     expect(() =>
       parseRuntimeInvocationRequest({
         ...request,
-        kind: "durable-boundary",
+        kind: "workflow",
+      }),
+    ).toThrow("Invocation kind is invalid");
+    expect(() =>
+      parseRuntimeInvocationRequest({
+        ...request,
+        target: { modulePath: "workflow.ts", exportName: "run" },
       }),
     ).toThrow("requires stepIndex");
     expect(() =>
@@ -422,7 +428,11 @@ describe("runtime invocation dispatcher", () => {
     expect(() =>
       dispatcher.invoke(
         invocation({
-          target: { modulePath: "../escape.ts", exportName: "run" },
+          target: {
+            modulePath: "../escape.ts",
+            exportName: "run",
+            stepIndex: 0,
+          },
         }),
       ),
     ).toThrow("inside artifactRoot");
@@ -591,7 +601,9 @@ function createWorkerFactory(args: {
 }
 
 function invocation(
-  overrides: Partial<Extract<RuntimeInvocationRequest, { kind: "workflow" }>>,
+  overrides: Partial<
+    Extract<RuntimeInvocationRequest, { kind: "durable-boundary" }>
+  >,
 ): RuntimeInvocationRequest {
   return {
     protocolVersion: RUNTIME_PROTOCOL_VERSION,
@@ -600,8 +612,8 @@ function invocation(
     artifactDigest: "digest-1",
     transformVersion: "transform-1",
     runtimeVersion: "runtime-1",
-    kind: "workflow",
-    target: { modulePath: "workflow.ts", exportName: "run" },
+    kind: "durable-boundary",
+    target: { modulePath: "workflow.ts", exportName: "run", stepIndex: 0 },
     input: { value: 2 },
     attempt: 1,
     deadlineAt: new Date(Date.now() + 60_000).toISOString(),

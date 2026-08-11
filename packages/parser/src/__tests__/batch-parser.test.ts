@@ -44,50 +44,21 @@ export const analyzeFeedback = defineWorkflow(({ defineBoundary, defineBatch }) 
 `;
 
 describe("batch scope parsing", () => {
-  it("discovers exported plain and defined workflows without kind fields", () => {
+  it("discovers exported defined workflows without kind fields", () => {
     const result = parseProject({
       "src/analyze-feedback.ts": MIXED_SOURCE,
-      "src/plain.ts": `
-export async function plain() {
-  "use workflow";
-  await publish({ value: "ok" });
-}
-async function privateFlow() {
-  "use workflow";
-}
-export function notAsync() {
-  "use workflow";
-}
-export async function singleQuoted() {
-  'use workflow';
-}
-export async function misleadingDirective() {
-  "use workflow later";
-}
-`,
     });
 
     expect(result.errors).toEqual([]);
     expect(result.workflows.map((workflow) => workflow.functionName)).toEqual([
       "analyzeFeedback",
-      "plain",
-      "singleQuoted",
     ]);
     expect(result.workflows[0]).not.toHaveProperty("kind");
     expect(result.workflows[0]?.graph).not.toHaveProperty("kind");
     expect(result.workflows[0]?.capabilities).toEqual({
-      persistedContinuations: true,
       batchProcessing: true,
       cancellation: true,
     });
-    expect(result.workflows[1]?.capabilities).toEqual({
-      persistedContinuations: false,
-      batchProcessing: false,
-      cancellation: false,
-    });
-    expect(result.workflows[2]?.capabilities).toEqual(
-      result.workflows[1]?.capabilities,
-    );
   });
 
   it("renders an ordered batch container with source, process, and sink", () => {

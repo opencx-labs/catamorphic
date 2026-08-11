@@ -16,8 +16,10 @@ collection processing.
 ## Decision
 
 There is one public Workflow and one public Run model. Plain exported
-`"use workflow"` functions are workflows without persisted continuation
-capabilities. `defineWorkflow` creates a Workflow with persisted continuation
+`"use workflow"` functions were workflows without persisted continuation
+capabilities *(wording updated by [0040](0040-one-workflow-model.md): plain
+functions are removed; every workflow is a `defineWorkflow` definition)*.
+`defineWorkflow` creates a Workflow with persisted continuation
 whose ordered `steps`
 may contain builder-scoped `defineBoundary` retry scopes and `defineBatch`
 collection scopes. Package-level `defineBatchStep` remains the optional physical

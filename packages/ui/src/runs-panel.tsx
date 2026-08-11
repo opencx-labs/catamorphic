@@ -564,7 +564,6 @@ export function RunsPanel({
           >
             <span>
               <StatusBadge run={run} />
-              <small>{run.mode === "test" ? "Test Run" : "Production"}</small>
             </span>
             <span>
               {new Date(run.createdAt).toLocaleString([], {

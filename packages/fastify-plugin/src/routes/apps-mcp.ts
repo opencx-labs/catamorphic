@@ -56,6 +56,10 @@ interface PublishedApp {
   code: string;
   css: string;
   allowedWorkflows: string[];
+  workflowShapes: Record<
+    string,
+    { inputSchema: unknown; outputSchema: unknown }
+  >;
 }
 
 export function registerAppsMcpRoutes(app: FastifyInstance, ctx: RouteContext) {
@@ -218,6 +222,7 @@ async function loadPublishedApps(
       code: view.code,
       css: view.css,
       allowedWorkflows: view.allowedWorkflows,
+      workflowShapes: view.workflowShapes,
     });
   }
   return published;
@@ -237,9 +242,16 @@ function buildTools(apps: PublishedApp[]) {
       inputSchema: {
         type: "object",
         properties: {
-          input: { description: "The workflow's input (JSON)" },
+          input: {
+            description: "The workflow's input (JSON)",
+            // The workflow's real input schema, frozen at app build from
+            // the extracted TS types.
+            ...((owner.workflowShapes?.[workflowName]?.inputSchema ??
+              {}) as object),
+          },
           mode: { type: "string", enum: ["invoke", "start"] },
         },
+        required: ["input"],
       },
       _meta: {
         ui: {

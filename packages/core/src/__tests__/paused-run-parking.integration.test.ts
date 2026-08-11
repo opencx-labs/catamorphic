@@ -20,7 +20,6 @@ async function createRun(status: string): Promise<string> {
       id: runId,
       project_id: projectId,
       workflow_name: "parked",
-      mode: "test",
       provenance: sql`'{}'::jsonb`,
       status,
     })

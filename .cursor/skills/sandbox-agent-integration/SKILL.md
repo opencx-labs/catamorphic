@@ -29,8 +29,9 @@ Each project uses two distinct sandbox types:
 
 - **Production deployment runtime** — Immutable code pinned to deployed
   `origin/main`; a warm supervisor accepts queued invocations for the artifact.
-- **Dev sandbox** — Per-user, mutable code for coding agents and isolated test
-  run directories. Keyed by `(project_id, user_id)`.
+- **Dev sandbox** — Per-user, mutable code for coding agents. Keyed by
+  `(project_id, user_id)`. Runs never execute dev files; every run executes a
+  deployed commit.
 
 ## Package Structure
 
@@ -63,7 +64,6 @@ packages/daytona/src/               -- @catamorphic/daytona plugin
 packages/cloudflare-sandbox-bridge/  -- deployable Worker the Cloudflare provider talks to
 
 packages/runtime/src/
-  harness.ts               -- Plain workflow test harness
   supervisor-protocol.ts   -- Deployment invocation and event protocol
   supervisor-http.ts       -- Warm runtime HTTP supervisor
   supervisor-worker.ts     -- Per-invocation Bun Worker execution
@@ -140,8 +140,7 @@ host `external_user_id`; there is no Catamorphic users table.
 
 ## API Routes
 
-- `POST /api/projects/:projectId/workflows/:name/runs` — Trigger a production run
-- `POST /api/projects/:projectId/workflows/:name/test-runs` — Trigger a test run with optional file overlays
+- `POST /api/projects/:projectId/workflows/:name/runs` — Trigger a run (every run executes the deployed commit)
 - `GET /api/projects/:projectId/workflows/:name/runs` — List runs for a Workflow
 - `GET /api/runs/:runId` — Fetch run + steps
 - `/api/runs/:runId/*` — Capability-driven cancel, processing pause/resume,

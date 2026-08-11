@@ -17,6 +17,20 @@ describe("orders dashboard template", () => {
     expect(
       parsed.appApi?.entries.map((entry) => entry.workflowName).sort(),
     ).toEqual(["listOpenOrders", "markOrderShipped"]);
+    // Workflows are defineWorkflow definitions; the contract is Workflow<T>
+    // and the app invokes through the client's .call() method.
+    expect(template.files["workflows/src/orders.ts"]).toContain(
+      "defineWorkflow",
+    );
+    expect(template.files["workflows/src/orders.ts"]).not.toContain(
+      '"use workflow"',
+    );
+    expect(template.files["contracts/src/index.ts"]).toContain(
+      "Workflow<ListOpenOrders>",
+    );
+    expect(template.files["apps/dashboard/src/app.tsx"]).toContain(
+      ".call({ limit: 20 })",
+    );
     // App sources are present in the template but excluded from parsing.
     expect(template.files["apps/dashboard/src/app.tsx"]).toBeDefined();
     expect(

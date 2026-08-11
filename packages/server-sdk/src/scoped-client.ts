@@ -29,7 +29,6 @@ import type {
   TriggerKindInfo,
   TriggerMode,
   TriggerProductionRunInput,
-  TriggerTestRunInput,
   UpdateProjectInput,
   WriteFileInput,
 } from "@catamorphic/core";
@@ -95,7 +94,6 @@ export interface RunsResource {
   triggerProduction(
     args: Omit<TriggerProductionRunInput, "identity">,
   ): Promise<Run>;
-  triggerTest(args: Omit<TriggerTestRunInput, "identity">): Promise<Run>;
   list(args: Omit<ListRunsInput, "identity">): Promise<ListRunsResult>;
   get(args: Omit<GetRunInput, "identity">): Promise<RunDetail>;
   cancel(args: Omit<CancelRunInput, "identity">): Promise<Run>;
@@ -165,7 +163,7 @@ export interface TriggersResource {
    */
   syncTypes(args: {
     projectId: string;
-  }): Promise<{ path: string; updated: boolean }>;
+  }): Promise<{ paths: string[]; updated: boolean }>;
 }
 
 function kindName(kind: TriggerKindRef<unknown, unknown>): string {
@@ -282,7 +280,6 @@ function buildRuns(core: CatamorphicCore, identity: Identity): RunsResource {
   return {
     triggerProduction: (args) =>
       core.runs.triggerProduction({ ...args, identity }),
-    triggerTest: (args) => core.runs.triggerTest({ ...args, identity }),
     list: (args) => core.runs.list({ ...args, identity }),
     get: (args) => core.runs.get({ ...args, identity }),
     cancel: (args) => core.runs.cancel({ ...args, identity }),

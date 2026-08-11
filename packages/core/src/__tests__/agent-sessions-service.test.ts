@@ -97,7 +97,7 @@ describe("parsePorcelain", () => {
 });
 
 describe("template skill seeding", () => {
-  it("every template teaches both workflow authoring models", () => {
+  it("every template teaches the defineWorkflow authoring model", () => {
     for (const template of TEMPLATES) {
       const skill = template.files[".agents/skills/writing-workflows/SKILL.md"];
       const batchSkill = template.files[BATCH_WORKFLOW_SKILL_PATH];
@@ -105,10 +105,12 @@ describe("template skill seeding", () => {
       expect(skill, `template ${template.id}`).toBeDefined();
       expect(batchSkill, `template ${template.id}`).toBeDefined();
       expect(skill).toContain("name: writing-workflows");
-      expect(skill).toContain('"use workflow"');
+      expect(skill).toContain("defineWorkflow");
+      expect(skill).toContain('"use step"');
       expect(skill).toContain("defineBatch");
       expect(skill).toContain("defineBoundary");
-      expect(skill).toContain("preserve its authoring model");
+      // Plain "use workflow" functions are gone; the skill must not teach them.
+      expect(skill).not.toContain('"use workflow"');
       expect(batchSkill).toContain("name: batch-workflows");
       expect(batchSkill).toContain("defineBatchStep");
       expect(batchSkill).toContain("acknowledgedKeys");
@@ -123,18 +125,19 @@ describe("template skill seeding", () => {
 });
 
 describe("buildAgentSystemPrompt", () => {
-  it("always distinguishes authoring models and preserves host instructions", () => {
+  it("teaches the defineWorkflow model and preserves host instructions", () => {
     const prompt = buildAgentSystemPrompt({
       systemPrompt: "Use the host's billing plugin.",
     });
 
-    expect(prompt).toContain('"use workflow"');
+    expect(prompt).toContain("exported defineWorkflow");
+    expect(prompt).toContain('There is no "use workflow" directive');
+    expect(prompt).toContain('"use step"');
     expect(prompt).toContain("defineBatch");
     expect(prompt).toContain("defineBoundary");
     expect(prompt).toContain("execute ordered boundary and batch scopes");
     expect(prompt).toContain("continuation state persisted in Postgres");
     expect(prompt).toContain("controls: { cancel: true }");
-    expect(prompt).toContain("preserve its authoring model");
     expect(prompt).toContain("@catamorphic/workflow");
     expect(prompt).toContain("Never create local copies");
     expect(prompt).toContain("Use the host's billing plugin.");

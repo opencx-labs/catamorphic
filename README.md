@@ -78,9 +78,9 @@ Also worth knowing, because it's easy to miss from the package list:
   the moment they need it. The public
   [`skills/embed-catamorphic`](skills/embed-catamorphic/SKILL.md) skill
   extends the same idea to integrating Catamorphic itself.
-- **One Run model.** Plain functions, persisted-continuation scopes, and
-  batches all share the same Runs API, hooks, and UI: capabilities, not
-  categories.
+- **One Run model.** Boundary and batch workflows all share the same Runs
+  API, hooks, and UI: capabilities, not categories. Every run executes a
+  deployed commit.
 - **Observability is free for hosts.** Everything instruments against
   `@opentelemetry/api`; register your SDK and Catamorphic's spans appear in
   your traces.
@@ -174,50 +174,52 @@ And on the frontend, wrap your tree with `CatamorphicProvider` from `@catamorphi
 
 ## Workflow code format
 
-There is one public Workflow model and one public Run model. Authoring syntax
-selects capabilities; it does not create user-facing execution categories.
+There is one public Workflow model and one public Run model: every workflow is
+an exported `defineWorkflow(({ defineBoundary, defineBatch }) => ({ steps:
+[...] }))` value from `@catamorphic/workflow`, and every run executes a
+deployed commit.
 
-### Plain workflow functions
+### Boundaries and steps
 
-A plain workflow is an exported async function whose body contains the exact
-`"use workflow"` directive. Steps use the exact `"use step"` directive. Plain
-functions run as normal code, but operations do not have persisted continuation
-between them. All functions take one destructured object parameter and carry
-JSDoc display metadata.
+A boundary is one atomic retry scope: if its callback fails, all operations in
+that callback retry together. Orchestration code lives in boundary `run`
+bodies; IO and business operations live in `"use step"` functions — plain
+async functions with the exact `"use step"` directive, called from boundary
+bodies. All functions take one destructured object parameter and carry JSDoc
+display metadata.
 
 ```typescript
+import { type BoundaryContext, defineWorkflow } from "@catamorphic/workflow";
+
 /**
  * @displayname Welcome New User
  * @description Onboard a new user
  */
-export async function welcomeUser({
-  email,
-  name,
-}: {
-  email: string;
-  name: string;
-}) {
-  "use workflow";
+export const welcomeUser = defineWorkflow(({ defineBoundary }) => ({
+  steps: [
+    defineBoundary({
+      run: async ({
+        input,
+      }: BoundaryContext<{ email: string; name: string }>) => {
+        const user = await createUser({ email: input.email, name: input.name });
+        await sendWelcomeEmail({ to: user.email, name: user.name });
 
-  const user = await createUser({ email, name });
-  await sendWelcomeEmail({ to: user.email, name: user.name });
+        if (user.plan === "premium") {
+          await assignPremiumBenefits({ userId: user.id });
+        }
 
-  if (user.plan === "premium") {
-    await assignPremiumBenefits({ userId: user.id });
-  }
+        await sendFollowUpEmail({ to: user.email });
 
-  await sendFollowUpEmail({ to: user.email });
-
-  return { status: "complete", userId: user.id };
-}
+        return { status: "complete", userId: user.id };
+      },
+    }),
+  ],
+}));
 ```
 
-### Persisted workflow scopes
+### Batch scopes
 
-Use `defineWorkflow(({ defineBoundary, defineBatch }) => ({ steps: [...] }))`
-when a Workflow needs persisted continuation. A boundary is one atomic retry
-scope: if its callback fails, all operations in that callback retry together. A
-batch scope is paged per-item processing with an optional sink. `defineBatchStep` is a
+A batch scope is paged per-item processing with an optional sink. `defineBatchStep` is a
 physical coalescing primitive for compatible calls inside `defineBatch.process`;
 it does not define a Workflow or a separate logical step scope.
 
@@ -245,9 +247,12 @@ export const processAccount = defineWorkflow(
 );
 ```
 
-The parser and UI expose capabilities such as persisted continuation, batch
-processing, and cancellation. There is no public stage concept, category
-switch, or separate Run family for these capabilities.
+The parser and UI expose capabilities such as batch processing and
+cancellation. There is no public stage concept, category switch, or separate
+Run family for these capabilities. A workflow with no pause, retry backoff,
+rate limit, batch, or child call settles inline when triggered synchronously —
+inline request-response is a property of execution, not a separate authoring
+form.
 
 ### Long-lived journeys: correlation keys, signals, shared rate budgets
 

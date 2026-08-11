@@ -137,37 +137,30 @@ operations such as deploy/pull/diff remain available through
 
 ### 4) Triggering runs
 
-Use the one `scoped.runs` resource with an explicit Run mode:
+Use the one `scoped.runs` resource:
 
 - `scoped.runs.triggerProduction({ projectId, workflowName, input? })` resolves
   the deployed `origin/main` artifact, enqueues the Run, and records its SHA.
-- `scoped.runs.triggerTest({ projectId, workflowName, input?, files? })`
-  executes the caller's current dev files plus
-  optional file overlays in a disposable directory inside their dev sandbox.
-  Test runs intentionally retain no SHA and are not reproducible.
 
-Both methods return a canonical Run. Production execution continues through the
-explicit host worker; test execution uses the shared runtime harness. Workflows
-with persisted scopes require production deployment and reject mutable-source
-test triggering.
+It returns a canonical Run. Every run executes a deployed commit — there is no
+mutable-source or test mode. Execution continues through the explicit host
+worker; the synchronous trigger-firing path runs a workflow inline until its
+first durable wait, so a workflow that cannot suspend settles in the request.
 
 It requires `sandboxProvider` at boot — without it the method throws `SandboxProviderNotConfiguredError`. Other typed errors: `ProjectNotFoundError`, `WorkflowNotFoundError` (pre-flight check on files), `PluginSecretsMissingError` (when attached plugins declare required secrets the project hasn't set).
 
-Over HTTP, production uses
-`POST /api/projects/:projectId/workflows/:name/runs`; test uses
-`POST /api/projects/:projectId/workflows/:name/test-runs` and may include
-`files`. These are two triggers in the same route and hook family. React exposes
-`useTriggerRun` and `useTriggerTestRun`; list, detail, controls, and item
+Over HTTP, triggering uses
+`POST /api/projects/:projectId/workflows/:name/runs`. React exposes
+`useTriggerRun`; list, detail, controls, and item
 inspection use `useRuns`, `useRun`, and the other `useRun*` hooks.
 
 ### 5) Workflow authoring model
 
 There is one Workflow model and one Run model:
 
-- An exported async function with the exact `"use workflow"` directive has no
-  persisted continuation between operations.
-- `defineWorkflow(({ defineBoundary, defineBatch }) => ({ steps: [...] }))`
-  enables persisted scopes without creating another public category.
+- Every workflow is an exported
+  `defineWorkflow(({ defineBoundary, defineBatch }) => ({ steps: [...] }))`
+  value; IO lives in `"use step"` functions called from boundary run bodies.
 - `defineBoundary` is one atomic retry scope; all callback operations retry
   together after failure.
 - `defineBatch` is a finite paged per-item processing scope with an optional sink.
@@ -286,7 +279,6 @@ import {
   useRuns,
   useRun,
   useTriggerRun,
-  useTriggerTestRun,
   useCancelRun,
   usePauseRunProcessing,
   useResumeRunProcessing,
@@ -579,7 +571,7 @@ Frontend (HTTP path):
 - **Double `QueryClientProvider`.** `CatamorphicProvider` mounts its own if you don't pass `queryClient`. In hosts that already have one, pass it explicitly so queries share a cache.
 - **Migrations.** `catamorphic.migrate()` / `catamorphic-db migrate` are idempotent and schema-scoped; prefer running them in CI/deploy.
 - **No execution worker.** Production triggers enqueue Runs; a host process must explicitly start `catamorphic.startExecutionWorker(...)` and stop its handle during shutdown.
-- **Mutable-source test of persisted scopes.** Test mode supports plain `"use workflow"` functions. A Workflow using `defineWorkflow` must be deployed and triggered in production mode.
+- **Triggering before deploying.** Every run executes a deployed commit; there is no mutable-source test mode. Deploy the project, then trigger.
 - **Schema scoping with shared pools.** `createDatabase({ connectionString, schema })` sets `search_path` on connections it creates — don't hand that pool to host code expecting `public`. Host-owned pools passed as `{ pool }` are safe: catamorphic schema-qualifies its queries via Kysely's `WithSchemaPlugin` and leaves the pool's `search_path` alone.
 - **Calling hooks outside the provider.** `useCatamorphic must be used within a <CatamorphicProvider>` means the tree is missing the provider (or there are two React copies; check peer dep resolution).
 - **Branching on `error.message`.** All hooks reject with `CatamorphicError`; switch on `err.code` (use `isCatamorphicError(err)` first). `message` is for humans; `details` carries the typed payload (e.g. conflict files).

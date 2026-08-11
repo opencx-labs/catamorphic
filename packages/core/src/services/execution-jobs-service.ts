@@ -3,7 +3,6 @@ import { getTracer, withSpan } from "@catamorphic/otel";
 import { type Kysely, type Selectable, sql, type Transaction } from "kysely";
 
 export type ExecutionJobKind =
-  | "workflow_run"
   | "durable_boundary"
   | "durable_pause_timeout"
   | "batch_source"
@@ -1021,7 +1020,6 @@ function mapExecutionJob(row: ExecutionJobRow): ExecutionJob {
 
 function parseExecutionJobKind(value: string): ExecutionJobKind {
   if (
-    value === "workflow_run" ||
     value === "durable_boundary" ||
     value === "durable_pause_timeout" ||
     value === "batch_source" ||

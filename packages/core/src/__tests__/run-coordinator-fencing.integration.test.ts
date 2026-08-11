@@ -39,7 +39,6 @@ describeIf("execution job lease fencing", () => {
         id: runId,
         project_id: projectId,
         workflow_name: "fenced",
-        mode: "test",
         provenance: sql`'{}'::jsonb`,
         status: "running",
       })

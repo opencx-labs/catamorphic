@@ -4,11 +4,13 @@ Typed, dependency-light primitives for authoring Catamorphic workflows.
 
 ## Unified Workflows
 
-`defineWorkflow` creates a Workflow with persisted continuation. Its `steps`
+`defineWorkflow` creates a Workflow with persisted continuation — and every
+Catamorphic workflow is an exported `defineWorkflow` value. Its `steps`
 tuple may mix atomic retry boundaries and paged per-item batches. The output of
 each entry becomes the input of the next entry, and every value crossing an
-entry boundary must be JSON-compatible. This is the same public Workflow model
-as an exact `"use workflow"` function; capabilities differ, not kind.
+entry boundary must be JSON-compatible. IO and business operations live in
+`"use step"` functions called from boundary run bodies and batch process
+callbacks.
 
 ```typescript
 import {
@@ -84,16 +86,11 @@ boundary are not independent durability units.
 
 Each boundary receives `{ input, pause, callWorkflow }`. `pause` and
 `callWorkflow` return opaque `WorkflowTransition` values that must be returned
-directly. `callWorkflow` accepts either another `WorkflowDefinition` or an async
-plain workflow function with exactly one keyed, JSON-compatible input object;
-the target's input and resolved output remain type-safe:
+directly. `callWorkflow` accepts another `WorkflowDefinition` with exactly one
+keyed, JSON-compatible input object; the target's input and resolved output
+remain type-safe:
 
 ```typescript
-async function refreshAccount({ accountId }: { accountId: string }) {
-  "use workflow";
-  return { accountId, refreshed: true };
-}
-
 defineBoundary({
   run: ({ callWorkflow }: BoundaryContext<PreparedInput>) =>
     callWorkflow(refreshAccount, { input: { accountId: "account-1" } }),

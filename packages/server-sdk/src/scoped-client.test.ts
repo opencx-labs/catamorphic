@@ -26,7 +26,6 @@ function createCoreMock() {
   };
   const runs = {
     triggerProduction: vi.fn(),
-    triggerTest: vi.fn(),
     list: vi.fn(),
     get: vi.fn(),
     cancel: vi.fn(),
@@ -171,103 +170,6 @@ describe("ScopedClient", () => {
     expect(summaries[0]).not.toHaveProperty("execution");
     expect(detail).not.toHaveProperty("execution");
     expect(detail.nodes[0]).not.toHaveProperty("workflowTarget");
-  });
-
-  it("binds identity to every unified runs method", () => {
-    const { core, runs } = createCoreMock();
-    const scoped = new ScopedClient(core, identity);
-
-    void scoped.runs.triggerProduction({
-      projectId: "project-1",
-      workflowName: "sendEmail",
-      input: { email: "ada@example.com" },
-    });
-    void scoped.runs.triggerTest({
-      projectId: "project-1",
-      workflowName: "sendEmail",
-      input: { email: "ada@example.com" },
-      files: { "src/index.ts": "export {};" },
-    });
-    void scoped.runs.list({
-      projectId: "project-1",
-      workflowName: "sendEmail",
-      mode: "production",
-      limit: 10,
-      offset: 20,
-    });
-    void scoped.runs.get({ runId: "run-1" });
-    void scoped.runs.cancel({ runId: "run-1", reason: "Host shutdown" });
-    void scoped.runs.pauseProcessing({ runId: "run-1" });
-    void scoped.runs.resumeProcessing({ runId: "run-1" });
-    void scoped.runs.submitInput({
-      runId: "run-1",
-      pauseId: "pause-1",
-      idempotencyKey: "input-1",
-      value: { approved: true },
-    });
-    void scoped.runs.listItems({
-      runId: "run-1",
-      workflowStepAttemptId: "attempt-1",
-      status: "failed",
-      limit: 10,
-      offset: 20,
-    });
-    void scoped.runs.listItemSteps({
-      runId: "run-1",
-      workflowStepAttemptId: "attempt-1",
-      itemId: "item-1",
-    });
-
-    expect(runs.triggerProduction).toHaveBeenCalledWith({
-      identity,
-      projectId: "project-1",
-      workflowName: "sendEmail",
-      input: { email: "ada@example.com" },
-    });
-    expect(runs.triggerTest).toHaveBeenCalledWith({
-      identity,
-      projectId: "project-1",
-      workflowName: "sendEmail",
-      input: { email: "ada@example.com" },
-      files: { "src/index.ts": "export {};" },
-    });
-    expect(runs.list).toHaveBeenCalledWith({
-      identity,
-      projectId: "project-1",
-      workflowName: "sendEmail",
-      mode: "production",
-      limit: 10,
-      offset: 20,
-    });
-    expect(runs.get).toHaveBeenCalledWith({ identity, runId: "run-1" });
-    expect(runs.cancel).toHaveBeenCalledWith({
-      identity,
-      runId: "run-1",
-      reason: "Host shutdown",
-    });
-    expect(runs.pause).toHaveBeenCalledWith({ identity, runId: "run-1" });
-    expect(runs.resume).toHaveBeenCalledWith({ identity, runId: "run-1" });
-    expect(runs.resumePause).toHaveBeenCalledWith({
-      identity,
-      runId: "run-1",
-      pauseId: "pause-1",
-      idempotencyKey: "input-1",
-      value: { approved: true },
-    });
-    expect(runs.listItems).toHaveBeenCalledWith({
-      identity,
-      runId: "run-1",
-      workflowStepAttemptId: "attempt-1",
-      status: "failed",
-      limit: 10,
-      offset: 20,
-    });
-    expect(runs.listItemSteps).toHaveBeenCalledWith({
-      identity,
-      runId: "run-1",
-      workflowStepAttemptId: "attempt-1",
-      itemId: "item-1",
-    });
   });
 });
 

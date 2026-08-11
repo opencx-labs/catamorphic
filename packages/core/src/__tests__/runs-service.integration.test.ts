@@ -19,7 +19,6 @@ import { ExecutionJobsService } from "../services/execution-jobs-service.js";
 import { RateReservationsService } from "../services/rate-reservations-service.js";
 import { RunCoordinator } from "../services/run-coordinator.js";
 import {
-  RunCapabilityError,
   RunEnrollmentConflictError,
   RunSignalNotFoundError,
 } from "../services/runs-service.js";
@@ -45,8 +44,8 @@ let physicalBatches: string[][] = [];
 let sinkChunks: string[][] = [];
 let releaseCanceledBoundary: (() => void) | undefined;
 let markCanceledBoundaryStarted: (() => void) | undefined;
-let releaseCanceledPlainChild: (() => void) | undefined;
-let markCanceledPlainChildStarted: (() => void) | undefined;
+let releaseCanceledChild: (() => void) | undefined;
+let markCanceledChildStarted: (() => void) | undefined;
 let releaseCanceledBatchItems: (() => void) | undefined;
 let canceledBatchItemsStarted: Promise<void> | undefined;
 let canceledBatchItemsGate: Promise<void> = Promise.resolve();
@@ -117,8 +116,8 @@ describeIf("unified RunsService integration", () => {
     sinkChunks = [];
     releaseCanceledBoundary = undefined;
     markCanceledBoundaryStarted = undefined;
-    releaseCanceledPlainChild = undefined;
-    markCanceledPlainChildStarted = undefined;
+    releaseCanceledChild = undefined;
+    markCanceledChildStarted = undefined;
     releaseCanceledBatchItems = undefined;
     canceledBatchItemCount = 0;
     canceledBatchItemsStarted = new Promise<void>((resolve) => {
@@ -133,57 +132,6 @@ describeIf("unified RunsService integration", () => {
     providerTwo.canceledInvocationIds.length = 0;
     providerOne.resetInvocations();
     providerTwo.resetInvocations();
-  });
-
-  it("executes plain production and test runs through one public model", async () => {
-    const worker = core.runs.startWorker({
-      name: "plain-production",
-      kinds: ["workflow_run"],
-      pollIntervalMs: 5,
-      leaseSeconds: 5,
-    });
-    const production = await core.runs.triggerProduction({
-      identity,
-      projectId,
-      workflowName: "plainWorkflow",
-      input: { value: 2 },
-    });
-    await waitForStatus({ runId: production.id, status: "completed" });
-    await worker.stop();
-    const completed = await core.runs.get({ identity, runId: production.id });
-    expect(completed).toMatchObject({
-      capabilities: {
-        cancel: false,
-        pauseProcessing: false,
-        resumeProcessing: false,
-        submitInput: false,
-        inspectItems: false,
-      },
-      phase: "execute",
-      result: { plain: true },
-      provenance: { commitSha: commitSha.value },
-    });
-
-    const test = await core.runs.triggerTest({
-      identity,
-      projectId,
-      workflowName: "plainWorkflow",
-      input: { value: 3 },
-    });
-    expect(test).toMatchObject({
-      mode: "test",
-      status: "completed",
-      result: { test: true },
-      provenance: { mutableSource: true },
-    });
-    await expect(
-      core.runs.triggerTest({
-        identity,
-        projectId,
-        workflowName: "approvalWorkflow",
-        input: { orderId: "test-defined" },
-      }),
-    ).rejects.toBeInstanceOf(RunCapabilityError);
   });
 
   it("parses a pinned commit once across repeated invocations", async () => {
@@ -734,10 +682,9 @@ describeIf("unified RunsService integration", () => {
     providerOne.failAfterExecutionOnce(
       "durable-boundary:transportBoundaryWorkflow",
     );
-    providerOne.failAfterExecutionOnce("workflow:plainWorkflow");
     const worker = core.runs.startWorker({
       name: "transport-retries",
-      kinds: ["durable_boundary", "workflow_run"],
+      kinds: ["durable_boundary"],
       concurrency: 2,
       pollIntervalMs: 5,
       leaseSeconds: 5,
@@ -748,23 +695,11 @@ describeIf("unified RunsService integration", () => {
       workflowName: "transportBoundaryWorkflow",
       input: { transport: true },
     });
-    const plain = await core.runs.triggerProduction({
-      identity,
-      projectId,
-      workflowName: "plainWorkflow",
-      input: { value: 7 },
-    });
-    await Promise.all([
-      waitForStatus({ runId: boundary.id, status: "completed" }),
-      waitForStatus({ runId: plain.id, status: "completed" }),
-    ]);
+    await waitForStatus({ runId: boundary.id, status: "completed" });
     await worker.stop();
 
     const boundaryIds = providerOne.invocationIds.filter((id) =>
       id.startsWith(`${boundary.id}:`),
-    );
-    const plainIds = providerOne.invocationIds.filter((id) =>
-      id.startsWith(`${plain.id}:`),
     );
     expect(boundaryIds).toEqual([
       `${boundary.id}:step:0:attempt:1`,
@@ -773,10 +708,6 @@ describeIf("unified RunsService integration", () => {
     expect(
       providerOne.executionIds.filter((id) => id === boundaryIds[0]),
     ).toHaveLength(1);
-    expect(plainIds).toEqual([`${plain.id}:1`, `${plain.id}:2`]);
-    expect(
-      providerOne.executionIds.filter((id) => id.startsWith(`${plain.id}:`)),
-    ).toHaveLength(2);
     expect(
       (await core.runs.get({ identity, runId: boundary.id }))
         .workflowStepAttempts,
@@ -868,10 +799,14 @@ describeIf("unified RunsService integration", () => {
     const parent = await core.runs.triggerProduction({
       identity,
       projectId,
-      workflowName: "parentPlainWorkflow",
+      workflowName: "parentWaitingChildWorkflow",
       input: { parent: true },
     });
     await waitForStatus({ runId: parent.id, status: "waiting" });
+    // Let the child's own boundary reach its pause before stopping the worker,
+    // so the second worker has nothing to claim but the redelivered parent job.
+    const waitingChild = await waitForChildRun({ parentRunId: parent.id });
+    await waitForStatus({ runId: waitingChild.id, status: "waiting" });
     await first.stop();
     const parentJob = await db
       .selectFrom("execution_jobs")
@@ -907,68 +842,22 @@ describeIf("unified RunsService integration", () => {
     });
   });
 
-  it("reconciles a terminal plain child after a finalization crash window", async () => {
-    const boundaryWorker = core.runs.startWorker({
-      name: "plain-child-crash-boundary",
-      kinds: ["durable_boundary"],
-      pollIntervalMs: 5,
-      leaseSeconds: 5,
-    });
-    const parent = await core.runs.triggerProduction({
-      identity,
-      projectId,
-      workflowName: "parentPlainWorkflow",
-      input: { parent: true },
-    });
-    await waitForStatus({ runId: parent.id, status: "waiting" });
-    await boundaryWorker.stop();
-    const child = await db
-      .selectFrom("workflow_runs")
-      .where("parent_run_id", "=", parent.id)
-      .select("id")
-      .executeTakeFirstOrThrow();
-    const now = new Date();
-    await db
-      .updateTable("workflow_runs")
-      .set({
-        status: "completed",
-        result: { child: "reconciled" },
-        completed_at: now,
-        updated_at: now,
-      })
-      .where("id", "=", child.id)
-      .execute();
-
-    const childWorker = secondCore.runs.startWorker({
-      name: "plain-child-crash-reconcile",
-      kinds: ["workflow_run"],
-      pollIntervalMs: 5,
-      leaseSeconds: 5,
-    });
-    await waitForStatus({ runId: parent.id, status: "completed" });
-    await childWorker.stop();
-    expect(
-      (await core.runs.get({ identity, runId: parent.id })).result,
-    ).toEqual({ child: "reconciled" });
-    expect(providerTwo.invocationCount).toBe(0);
-  });
-
   it("rejects stale leases and durably fails an exhausted expired job", async () => {
     const run = await core.runs.triggerProduction({
       identity,
       projectId,
-      workflowName: "plainWorkflow",
-      input: { value: 5 },
+      workflowName: "transportBoundaryWorkflow",
+      input: { transport: true },
     });
     const jobs = new ExecutionJobsService(db);
     const [claimed] = await jobs.claim({
       workerId: "stale-lease-test",
-      kinds: ["workflow_run"],
+      kinds: ["durable_boundary"],
       limit: 1,
       leaseSeconds: 60,
     });
     if (!claimed || claimed.workflowRunId !== run.id) {
-      throw new Error("Expected to claim the plain workflow job");
+      throw new Error("Expected to claim the boundary job");
     }
     const staleGeneration = String(Number(claimed.leaseGeneration) - 1);
     const leaseToken = claimed.leaseToken;
@@ -1036,7 +925,7 @@ describeIf("unified RunsService integration", () => {
 
     const worker = core.runs.startWorker({
       name: "expired-exhaustion",
-      kinds: ["workflow_run"],
+      kinds: ["durable_boundary"],
       pollIntervalMs: 5,
       leaseSeconds: 5,
     });
@@ -1155,10 +1044,10 @@ describeIf("unified RunsService integration", () => {
     ).toEqual({ status: "failed" });
   });
 
-  it("propagates plain child success and failure to parent boundaries", async () => {
+  it("propagates child success and failure to parent boundaries", async () => {
     const worker = core.runs.startWorker({
-      name: "plain-children",
-      kinds: ["durable_boundary", "workflow_run"],
+      name: "child-outcomes",
+      kinds: ["durable_boundary"],
       concurrency: 3,
       pollIntervalMs: 5,
       leaseSeconds: 5,
@@ -1166,13 +1055,13 @@ describeIf("unified RunsService integration", () => {
     const successful = await core.runs.triggerProduction({
       identity,
       projectId,
-      workflowName: "parentPlainWorkflow",
+      workflowName: "parentCompletingChildWorkflow",
       input: { parent: true },
     });
     const failing = await core.runs.triggerProduction({
       identity,
       projectId,
-      workflowName: "parentFailingPlainWorkflow",
+      workflowName: "parentFailingChildWorkflow",
       input: { parent: true },
     });
     await Promise.all([
@@ -1183,7 +1072,7 @@ describeIf("unified RunsService integration", () => {
 
     expect(
       (await core.runs.get({ identity, runId: successful.id })).result,
-    ).toEqual({ child: "plain-completed" });
+    ).toEqual({ child: "child-completed" });
     const children = await db
       .selectFrom("workflow_runs")
       .where("parent_run_id", "in", [successful.id, failing.id])
@@ -1194,32 +1083,17 @@ describeIf("unified RunsService integration", () => {
       "completed",
       "failed",
     ]);
-    const plainChildIds = await db
-      .selectFrom("workflow_runs")
-      .where("parent_run_id", "in", [successful.id, failing.id])
-      .select("id")
-      .execute();
-    const plainStates = await db
-      .selectFrom("workflow_run_states")
-      .where(
-        "run_id",
-        "in",
-        plainChildIds.map((child) => child.id),
-      )
-      .select("run_id")
-      .execute();
-    expect(plainStates).toEqual([]);
   });
 
-  it("recursively cancels and fences a running plain child", async () => {
+  it("recursively cancels and fences a running child", async () => {
     let startedResolve = (): void => {};
     const started = new Promise<void>((resolve) => {
       startedResolve = resolve;
     });
-    markCanceledPlainChildStarted = startedResolve;
+    markCanceledChildStarted = startedResolve;
     const worker = core.runs.startWorker({
-      name: "cancel-plain-child",
-      kinds: ["durable_boundary", "workflow_run"],
+      name: "cancel-child",
+      kinds: ["durable_boundary"],
       concurrency: 2,
       pollIntervalMs: 5,
       leaseSeconds: 5,
@@ -1227,16 +1101,16 @@ describeIf("unified RunsService integration", () => {
     const run = await core.runs.triggerProduction({
       identity,
       projectId,
-      workflowName: "parentCancelablePlainWorkflow",
+      workflowName: "parentCancelableChildWorkflow",
       input: { parent: true },
     });
     await started;
     await core.runs.cancel({
       identity,
       runId: run.id,
-      reason: "cancel plain hierarchy",
+      reason: "cancel child hierarchy",
     });
-    releaseCanceledPlainChild?.();
+    releaseCanceledChild?.();
     await new Promise((resolve) => setTimeout(resolve, 25));
     await worker.stop();
     const hierarchy = await db
@@ -2079,26 +1953,6 @@ async function waitForBlockedOnPid(args: {
 async function invokeRuntime(
   invocation: RuntimeInvocation,
 ): Promise<RuntimeInvocationReceipt> {
-  if (invocation.kind === "workflow") {
-    if (invocation.target.exportName === "failingPlainChildWorkflow") {
-      return receipt(invocation, failed("plain child failed"));
-    }
-    if (invocation.target.exportName === "cancelablePlainChildWorkflow") {
-      markCanceledPlainChildStarted?.();
-      await new Promise<void>((resolve) => {
-        releaseCanceledPlainChild = resolve;
-      });
-      return receipt(invocation, completed({ tooLate: true }));
-    }
-    return receipt(
-      invocation,
-      completed(
-        invocation.target.exportName === "plainChildWorkflow"
-          ? { child: "plain-completed" }
-          : { plain: true },
-      ),
-    );
-  }
   if (invocation.kind === "durable-boundary") {
     const stepIndex = invocation.target.stepIndex;
     const input = record(invocation.input).value;
@@ -2186,17 +2040,14 @@ async function invokeRuntime(
         }),
       );
     }
-    if (
-      invocation.target.exportName === "parentPlainWorkflow" ||
-      invocation.target.exportName === "parentFailingPlainWorkflow" ||
-      invocation.target.exportName === "parentCancelablePlainWorkflow"
-    ) {
-      const exportName =
-        invocation.target.exportName === "parentPlainWorkflow"
-          ? "plainChildWorkflow"
-          : invocation.target.exportName === "parentFailingPlainWorkflow"
-            ? "failingPlainChildWorkflow"
-            : "cancelablePlainChildWorkflow";
+    const childByParent: Record<string, string> = {
+      parentCompletingChildWorkflow: "completingChildWorkflow",
+      parentFailingChildWorkflow: "failingChildWorkflow",
+      parentCancelableChildWorkflow: "cancelableChildWorkflow",
+      parentWaitingChildWorkflow: "waitingChildWorkflow",
+    };
+    const childExportName = childByParent[invocation.target.exportName];
+    if (childExportName) {
       return receipt(
         invocation,
         completed({
@@ -2204,7 +2055,40 @@ async function invokeRuntime(
           transition: {
             __catamorphicDurableTransition: "child_workflow",
             input: { child: true },
-            workflow: { exportName },
+            workflow: { exportName: childExportName },
+          },
+        }),
+      );
+    }
+    if (invocation.target.exportName === "completingChildWorkflow") {
+      return receipt(
+        invocation,
+        completed({ type: "completed", output: { child: "child-completed" } }),
+      );
+    }
+    if (invocation.target.exportName === "failingChildWorkflow") {
+      return receipt(invocation, failed("child failed"));
+    }
+    if (invocation.target.exportName === "cancelableChildWorkflow") {
+      markCanceledChildStarted?.();
+      await new Promise<void>((resolve) => {
+        releaseCanceledChild = resolve;
+      });
+      return receipt(
+        invocation,
+        completed({ type: "completed", output: { tooLate: true } }),
+      );
+    }
+    if (invocation.target.exportName === "waitingChildWorkflow") {
+      return receipt(
+        invocation,
+        completed({
+          type: "pause",
+          transition: {
+            __catamorphicDurableTransition: "pause",
+            signal: "release",
+            statePresent: true,
+            state: { child: true },
           },
         }),
       );
@@ -2556,7 +2440,7 @@ class FakeSandboxProvider implements SandboxProvider {
     getHealth: async ({ runtimeId }) => ({
       runtimeId,
       runtimeStatus: "healthy",
-      protocolVersion: 7,
+      protocolVersion: 8,
       status: "healthy",
       activeInvocations: 0,
       queuedInvocations: 0,
@@ -2640,25 +2524,25 @@ function projectFiles(): Record<string, string> {
   defineWorkflow,
 } from "@catamorphic/workflow";
 
-export async function plainWorkflow({ value }: { value: number }) {
-  "use workflow";
-  return { value };
-}
+export const completingChildWorkflow = defineWorkflow(({ defineBoundary }) => ({
+  steps: [defineBoundary({ run: ({ input }: BoundaryContext<{ child: boolean }>) => ({ child: input.child }) })],
+}));
 
-export async function plainChildWorkflow({ child }: { child: boolean }) {
-  "use workflow";
-  return { child };
-}
+export const failingChildWorkflow = defineWorkflow(({ defineBoundary }) => ({
+  steps: [defineBoundary({ retry: { maxAttempts: 1 }, run: ({ input }: BoundaryContext<{ child: boolean }>) => input })],
+}));
 
-export async function failingPlainChildWorkflow({ child }: { child: boolean }) {
-  "use workflow";
-  throw new Error(String(child));
-}
+export const cancelableChildWorkflow = defineWorkflow(({ defineBoundary }) => ({
+  steps: [defineBoundary({ run: ({ input }: BoundaryContext<{ child: boolean }>) => input })],
+}));
 
-export async function cancelablePlainChildWorkflow({ child }: { child: boolean }) {
-  "use workflow";
-  return { child };
-}
+export const waitingChildWorkflow = defineWorkflow(({ defineBoundary }) => ({
+  steps: [
+    defineBoundary({ run: ({ input, pause }: BoundaryContext<{ child: boolean }>) =>
+      pause<{ released: boolean }, { child: boolean }>({ signal: "release", state: { child: input.child } }) }),
+    defineBoundary({ run: ({ input }: BoundaryContext<{ reason: "resumed"; value: { released: boolean }; state: { child: boolean } }>) => input.value }),
+  ],
+}));
 
 export const approvalWorkflow = defineWorkflow(({ defineBoundary }) => ({
   steps: [
@@ -2707,17 +2591,22 @@ export const parentWorkflow = defineWorkflow(({ defineBoundary }) => ({
   steps: [defineBoundary({ run: ({ input, callWorkflow }: BoundaryContext<{ parent: boolean }>) => callWorkflow(childWorkflow, { input: { child: input.parent } }) })],
 }));
 
-export const parentPlainWorkflow = defineWorkflow(({ defineBoundary }) => ({
-  steps: [defineBoundary({ run: ({ input, callWorkflow }: BoundaryContext<{ parent: boolean }>) => callWorkflow(plainChildWorkflow, { input: { child: input.parent } }) })],
+export const parentCompletingChildWorkflow = defineWorkflow(({ defineBoundary }) => ({
+  steps: [defineBoundary({ run: ({ input, callWorkflow }: BoundaryContext<{ parent: boolean }>) => callWorkflow(completingChildWorkflow, { input: { child: input.parent } }) })],
 }));
 
-export const parentFailingPlainWorkflow = defineWorkflow(({ defineBoundary }) => ({
-  steps: [defineBoundary({ run: ({ input, callWorkflow }: BoundaryContext<{ parent: boolean }>) => callWorkflow(failingPlainChildWorkflow, { input: { child: input.parent } }) })],
+export const parentFailingChildWorkflow = defineWorkflow(({ defineBoundary }) => ({
+  steps: [defineBoundary({ run: ({ input, callWorkflow }: BoundaryContext<{ parent: boolean }>) => callWorkflow(failingChildWorkflow, { input: { child: input.parent } }) })],
 }));
 
-export const parentCancelablePlainWorkflow = defineWorkflow(({ defineBoundary }) => ({
+export const parentCancelableChildWorkflow = defineWorkflow(({ defineBoundary }) => ({
   controls: { cancel: true },
-  steps: [defineBoundary({ run: ({ input, callWorkflow }: BoundaryContext<{ parent: boolean }>) => callWorkflow(cancelablePlainChildWorkflow, { input: { child: input.parent } }) })],
+  steps: [defineBoundary({ run: ({ input, callWorkflow }: BoundaryContext<{ parent: boolean }>) => callWorkflow(cancelableChildWorkflow, { input: { child: input.parent } }) })],
+}));
+
+export const parentWaitingChildWorkflow = defineWorkflow(({ defineBoundary }) => ({
+  controls: { cancel: true },
+  steps: [defineBoundary({ run: ({ input, callWorkflow }: BoundaryContext<{ parent: boolean }>) => callWorkflow(waitingChildWorkflow, { input: { child: input.parent } }) })],
 }));
 
 export const cancelWorkflow = defineWorkflow(({ defineBoundary }) => ({

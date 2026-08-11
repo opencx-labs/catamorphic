@@ -22,15 +22,11 @@ export type {
   TurnOptions,
 } from "./coding-agent/types.js";
 export { CommandDeploymentRuntimeProvider } from "./command-deployment-runtime.js";
-export type { DeploymentRuntimeExecutorOptions } from "./deployment-runtime-executor.js";
-export { DeploymentRuntimeExecutorAdapter } from "./deployment-runtime-executor.js";
 export { instrumentSandboxProvider } from "./instrumented-provider.js";
 export {
-  type ExecuteRunOpts,
   type PluginPayload,
-  RunExecutorImpl,
   uploadPluginPayloads,
-} from "./run-executor.js";
+} from "./plugin-upload.js";
 export type { SandboxStore } from "./sandbox-manager.js";
 export { SandboxManagerImpl } from "./sandbox-manager.js";
 export type {
@@ -51,7 +47,6 @@ export type {
   ExecResult,
   GetRuntimeHealthArgs,
   GitCloneOpts,
-  RunExecutor,
   RunPluginPayload,
   RunResult,
   RuntimeArtifactIdentity,

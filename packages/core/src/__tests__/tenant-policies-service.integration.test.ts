@@ -138,7 +138,6 @@ describeIf("TenantPoliciesService integration", () => {
         id: crypto.randomUUID(),
         project_id: projectId,
         workflow_name: "campaign",
-        mode: "production",
         provenance: sql`${JSON.stringify({ commitSha: "a".repeat(40) })}::jsonb`,
         deployment_artifact_id: artifactId,
         status: "running",

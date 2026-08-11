@@ -97,6 +97,7 @@ export interface AppVersions {
   published_at: Timestamp | null;
   ready_at: Timestamp | null;
   status: Generated<string>;
+  workflow_shapes: Json | null;
 }
 
 export interface BatchExecutionStates {
@@ -362,6 +363,8 @@ export interface TriggerBindings {
   created_at: Generated<Timestamp>;
   id: Generated<string>;
   input_parameters: Json;
+  input_schema: Generated<Json>;
+  output_schema: Generated<Json>;
   project_id: string;
   trigger_kind: string;
   workflow_name: string;
@@ -412,7 +415,6 @@ export interface WorkflowRuns {
   external_user_id: string | null;
   id: Generated<string>;
   input: Json | null;
-  mode: string;
   parent_run_id: string | null;
   parent_workflow_step_attempt_id: string | null;
   phase: Generated<string>;

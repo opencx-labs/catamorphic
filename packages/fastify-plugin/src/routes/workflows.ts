@@ -1,10 +1,10 @@
 import {
-  InvalidRunOverlayError,
   PluginSecretsMissingError,
   ProductionDeploymentNotFoundError,
   ProjectNotFoundError,
   RunCapabilityError,
   RunEnrollmentConflictError,
+  RunInputInvalidError,
   RunResumeConflictError,
   RunSignalNotFoundError,
   SandboxProviderNotConfiguredError,
@@ -25,7 +25,6 @@ import {
   RunsQuerySchema,
   SignalRunSchema,
   TriggerRunSchema,
-  TriggerTestRunSchema,
   WorkflowDetailSchema,
   WorkflowNameParamsSchema,
   WorkflowSummarySchema,
@@ -163,63 +162,13 @@ export function registerWorkflowRoutes(
         if (err instanceof PluginSecretsMissingError) {
           return reply.status(400).send({ error: err.message });
         }
+        if (err instanceof RunInputInvalidError) {
+          return reply.status(400).send({ error: err.message });
+        }
         if (err instanceof SandboxProviderNotConfiguredError) {
           return reply.status(503).send({
             error:
               "Sandbox provider not configured. Set CLOUDFLARE_SANDBOX_API_URL and CLOUDFLARE_SANDBOX_API_KEY (recommended) or DAYTONA_API_KEY to enable workflow execution.",
-          });
-        }
-        throw err;
-      }
-    },
-  });
-
-  typed.route({
-    method: "POST",
-    url: "/projects/:projectId/workflows/:name/test-runs",
-    schema: {
-      params: WorkflowNameParamsSchema,
-      body: TriggerTestRunSchema,
-      response: {
-        201: RunSchema,
-        400: ErrorSchema,
-        404: ErrorSchema,
-        409: ErrorSchema,
-        503: ErrorSchema,
-      },
-    },
-    handler: async (request, reply) => {
-      if (!ctx.core)
-        return reply.status(503).send({ error: "Service not configured" });
-      const identity = resolveIdentity(request);
-      try {
-        const run = await ctx.core.runs.triggerTest({
-          identity,
-          projectId: request.params.projectId,
-          workflowName: request.params.name,
-          input: request.body.input,
-          files: request.body.files,
-        });
-        return reply.status(201).send(run);
-      } catch (err) {
-        if (err instanceof ProjectNotFoundError) {
-          return reply.status(404).send({ error: "Project not found" });
-        }
-        if (err instanceof WorkflowNotFoundError) {
-          return reply.status(404).send({ error: "Workflow not found" });
-        }
-        if (
-          err instanceof PluginSecretsMissingError ||
-          err instanceof InvalidRunOverlayError
-        ) {
-          return reply.status(400).send({ error: err.message });
-        }
-        if (err instanceof RunCapabilityError) {
-          return reply.status(409).send({ error: err.message });
-        }
-        if (err instanceof SandboxProviderNotConfiguredError) {
-          return reply.status(503).send({
-            error: "Sandbox provider not configured",
           });
         }
         throw err;
@@ -251,7 +200,6 @@ export function registerWorkflowRoutes(
           workflowName: name,
           limit: request.query.limit,
           offset: request.query.offset,
-          mode: request.query.mode,
           ...(request.query.correlationKey === undefined
             ? {}
             : { correlationKey: request.query.correlationKey }),

@@ -52,6 +52,7 @@ function fakeCore() {
         versionId: VERSION_ID,
         code: "console.log('app');",
         css: "body{color:red}",
+        workflowShapes: {},
         allowedWorkflows: ["listOrders", "reconcile"],
       })),
     },

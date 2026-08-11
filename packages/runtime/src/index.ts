@@ -1,6 +1,5 @@
 export type { BunWorkerFactoryOptions } from "./bun-worker.js";
 export { BunWorkerFactory } from "./bun-worker.js";
-export { RUNTIME_HARNESS_SOURCE } from "./harness.js";
 export type {
   ResolvedRuntimeInvocation,
   RuntimeInvocationDispatcherOptions,
@@ -38,7 +37,6 @@ export type {
   RuntimeInvocationRequest,
   RuntimeInvocationResponse,
   RuntimeInvocationTarget,
-  RuntimePlainWorkflowTarget,
   RuntimeProtocolErrorBody,
   RuntimeStepEntry,
   RuntimeSupervisorHealth,

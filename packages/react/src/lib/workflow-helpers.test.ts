@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   buildUntitledWorkflowName,
   displayNameFromWorkflowName,
+  ensurePrimaryWorkflowExportName,
   readWorkflowDisplayName,
   starterCodeForWorkflow,
   upsertWorkflowDisplayName,
@@ -39,15 +40,27 @@ describe("workflow helper utilities", () => {
     );
   });
 
-  it("generates starter workflow code without required inputs", () => {
+  it("generates a defineWorkflow starter without required inputs", () => {
     const code = starterCodeForWorkflow(
       "untitledWorkflow",
       "Untitled Workflow",
     );
-    expect(code).toContain("export async function untitledWorkflow()");
+    expect(code).toContain(
+      "export const untitledWorkflow = defineWorkflow(({ defineBoundary }) => ({",
+    );
     expect(code).toContain("@displayname Untitled Workflow");
+    expect(code).toContain("BoundaryContext<Record<string, never>>");
     expect(code).toContain("return { success: true };");
-    expect(code).not.toContain("{ input }");
+    expect(code).toContain('from "@catamorphic/workflow"');
+  });
+
+  it("renames the primary defineWorkflow export", () => {
+    const code = starterCodeForWorkflow("oldName", "Old Name");
+    const renamed = ensurePrimaryWorkflowExportName(code, "newName");
+    expect(renamed).toContain("export const newName = defineWorkflow(");
+    expect(renamed).not.toContain("export const oldName");
+    // Already-correct sources come back untouched.
+    expect(ensurePrimaryWorkflowExportName(renamed, "newName")).toBe(renamed);
   });
 
   it("reads workflow display name from jsdoc", () => {
@@ -78,8 +91,11 @@ describe("workflow helper utilities", () => {
     expect(updated).not.toContain("@displayname Untitled Workflow");
   });
 
-  it("inserts jsdoc when missing before workflow function", () => {
-    const source = `export async function untitledWorkflow() {\n  "use workflow";\n  return { success: true };\n}\n`;
+  it("inserts jsdoc when missing before workflow declaration", () => {
+    const source = `export const untitledWorkflow = defineWorkflow(({ defineBoundary }) => ({
+  steps: [defineBoundary({ run: () => ({ success: true }) })],
+}));
+`;
     const updated = upsertWorkflowDisplayName(
       source,
       "untitledWorkflow",

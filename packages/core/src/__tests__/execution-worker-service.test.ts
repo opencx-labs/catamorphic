@@ -12,7 +12,7 @@ function job(id: string): ExecutionJob {
     tenantId: "tenant",
     workflowRunId: "run",
     workflowStepAttemptId: null,
-    kind: "workflow_run",
+    kind: "durable_boundary",
     payload: {},
     status: "running",
     priority: 0,
@@ -105,7 +105,7 @@ describe("execution worker resilience", () => {
 
     const service = new ExecutionWorkerService(jobs);
     service.registerHandler({
-      kind: "workflow_run",
+      kind: "durable_boundary",
       handler: async ({ job: claimed }) => {
         processed.push(claimed.id);
       },

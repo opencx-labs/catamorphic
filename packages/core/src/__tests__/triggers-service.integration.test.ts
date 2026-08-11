@@ -162,7 +162,7 @@ class FakeSandboxProvider implements SandboxProvider {
     getHealth: async ({ runtimeId }) => ({
       runtimeId,
       runtimeStatus: "healthy",
-      protocolVersion: 7,
+      protocolVersion: 8,
       status: "healthy",
       activeInvocations: 0,
       queuedInvocations: 0,

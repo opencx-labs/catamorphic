@@ -7,8 +7,8 @@ import type { RunSnapshot } from "./protocol.js";
  * export interface ListOrders { input: { status: "open" | "all" }; output: Order[] }
  *
  * export interface AppContract {
- *   listOrders: PlainWorkflow<ListOrders>;
- *   reconcileLedger: DurableWorkflow<ReconcileLedger>;
+ *   listOrders: Workflow<ListOrders>;
+ *   reconcileLedger: Workflow<ReconcileLedger>;
  * }
  * ```
  *
@@ -46,26 +46,17 @@ export interface WorkflowShape {
   output: unknown;
 }
 
-declare const plainBrand: unique symbol;
-declare const durableBrand: unique symbol;
+declare const workflowBrand: unique symbol;
 
 /**
- * A workflow without persisted continuation: calling it resolves inline with
- * the terminal output.
+ * An app-callable workflow. Every workflow is a `defineWorkflow` definition;
+ * the client exposes both shapes of invocation — `call` waits for the
+ * terminal output, `start` returns a pollable handle. Prefer `call` for
+ * request-response reads (a workflow that cannot suspend settles inline) and
+ * `start` for anything long-running.
  */
-export interface PlainWorkflow<T extends WorkflowShape> {
-  readonly [plainBrand]: "plain";
-  readonly input: JsonSafe<T["input"]>;
-  readonly output: JsonSafe<T["output"]>;
-}
-
-/**
- * A workflow with persisted continuation (`defineWorkflow`, including batch
- * scopes): starting it returns a handle the app polls for completion and
- * progress.
- */
-export interface DurableWorkflow<T extends WorkflowShape> {
-  readonly [durableBrand]: "durable";
+export interface Workflow<T extends WorkflowShape> {
+  readonly [workflowBrand]: "workflow";
   readonly input: JsonSafe<T["input"]>;
   readonly output: JsonSafe<T["output"]>;
 }
@@ -84,15 +75,16 @@ export type TypedRunSnapshot<Output> = Omit<RunSnapshot, "output"> & {
 
 /** The callable the client exposes for each contract entry. */
 export type ClientMethod<T> =
-  T extends PlainWorkflow<infer S>
-    ? (input: JsonSafe<S["input"]>) => Promise<JsonSafe<S["output"]>>
-    : T extends DurableWorkflow<infer S>
-      ? {
-          start(
-            input: JsonSafe<S["input"]>,
-          ): Promise<RunHandle<JsonSafe<S["output"]>>>;
-        }
-      : never;
+  T extends Workflow<infer S>
+    ? {
+        /** Runs the workflow and waits for its terminal output. */
+        call(input: JsonSafe<S["input"]>): Promise<JsonSafe<S["output"]>>;
+        /** Starts the workflow and returns a pollable run handle. */
+        start(
+          input: JsonSafe<S["input"]>,
+        ): Promise<RunHandle<JsonSafe<S["output"]>>>;
+      }
+    : never;
 
 export type AppClient<Contract> = {
   readonly [K in keyof Contract]: ClientMethod<Contract[K]>;

@@ -14,7 +14,6 @@ const WORKFLOW_NAME = "sample";
 const workflow = {
   name: WORKFLOW_NAME,
   capabilities: {
-    persistedContinuations: false,
     batchProcessing: false,
     cancellation: false,
   },

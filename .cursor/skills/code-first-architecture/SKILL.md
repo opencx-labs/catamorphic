@@ -14,13 +14,11 @@ TypeScript code is the single source of truth for workflow definitions. There is
 
 ## Workflow Authoring
 
-- An exported async function whose body contains exact `"use workflow"` is a
-  Workflow without persisted continuation between operations.
-- `"use step"` marks a visual step function called by a plain workflow or from
-  inside a persisted scope.
-- `defineWorkflow(({ defineBoundary, defineBatch }) => ({ steps: [...] }))`
-  defines a Workflow with persisted continuation capabilities. It does not
-  create another public category.
+- Every Workflow is an exported
+  `defineWorkflow(({ defineBoundary, defineBatch }) => ({ steps: [...] }))`
+  value with persisted continuation.
+- `"use step"` marks a visual step function holding IO, called from boundary
+  run bodies and batch process callbacks.
 - `defineBoundary` is an atomic retry scope whose callback operations retry
   together.
 - `defineBatch` is finite paged per-item processing with an optional sink.
@@ -34,7 +32,7 @@ and the parser never executes author code.
 
 | TypeScript Construct | Graph Node |
 |---------------------|------------|
-| Function with `"use workflow"` | Trigger node |
+| `defineWorkflow` export's input parameters | Input node |
 | `await fn(args)` | Step node |
 | `if (cond) { ... } else { ... }` | Condition node + branches |
 | `for`/`for...of`/`while` | Loop node |

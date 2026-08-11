@@ -32,7 +32,6 @@ describe("durable order approval template", () => {
     )?.graph;
     expect(graph).toMatchObject({
       capabilities: {
-        persistedContinuations: true,
         batchProcessing: false,
         cancellation: true,
       },

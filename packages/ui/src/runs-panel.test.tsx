@@ -20,6 +20,7 @@ const detail: RunDetail = {
   id: "00000000-0000-0000-0000-000000000001",
   projectId: "00000000-0000-0000-0000-000000000002",
   workflowName: "processOrders",
+  correlationKey: null,
   capabilities: {
     cancel: true,
     pauseProcessing: false,
@@ -71,7 +72,6 @@ const detail: RunDetail = {
     },
   ],
   provenance: { commitSha: "a".repeat(40) },
-  mode: "production",
   initiatedBy: "user-1",
   input: { accountId: "account-1" },
   result: null,

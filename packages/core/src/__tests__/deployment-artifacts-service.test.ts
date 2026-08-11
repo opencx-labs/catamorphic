@@ -25,16 +25,17 @@ export const definedChild = defineWorkflow(({ defineBoundary, defineBatch }) => 
       process: async ({ item }) => processItem({ item }),
     }),
     defineBoundary({
-      run: ({ input, callWorkflow }) => callWorkflow(plainChild, { input }),
+      run: ({ input, callWorkflow }) => callWorkflow(leafChild, { input }),
     }),
   ],
 }));
 `,
-      "src/plain-child.ts": `
-export async function plainChild({ value }: { value: string }) {
-  "use workflow";
-  return finish({ value });
-}
+      "src/leaf-child.ts": `
+export const leafChild = defineWorkflow(({ defineBoundary }) => ({
+  steps: [defineBoundary({
+    run: ({ input }) => finish({ input }),
+  })],
+}));
 `,
     };
     const parent = prepareWorkflowExecution({ files, workflowName: "parent" });
@@ -42,11 +43,11 @@ export async function plainChild({ value }: { value: string }) {
       files,
       workflowName: "definedChild",
     });
-    const plainChild = prepareWorkflowExecution({
+    const leafChild = prepareWorkflowExecution({
       files,
-      workflowName: "plainChild",
+      workflowName: "leafChild",
     });
-    if (!parent || !definedChild || !plainChild) {
+    if (!parent || !definedChild || !leafChild) {
       throw new Error("Expected workflows to be prepared");
     }
 
@@ -58,19 +59,21 @@ export async function plainChild({ value }: { value: string }) {
       commitSha: "a".repeat(40),
       files: definedChild.files,
     });
-    const plainChildIdentity = await createDeploymentArtifactIdentity({
+    const leafChildIdentity = await createDeploymentArtifactIdentity({
       commitSha: "a".repeat(40),
-      files: plainChild.files,
+      files: leafChild.files,
     });
 
     expect(parent.files).toEqual(definedChild.files);
-    expect(parent.files).toEqual(plainChild.files);
+    expect(parent.files).toEqual(leafChild.files);
     expect(parentIdentity).toEqual(definedChildIdentity);
-    expect(parentIdentity).toEqual(plainChildIdentity);
+    expect(parentIdentity).toEqual(leafChildIdentity);
     expect(parent.files["src/defined-child.ts"]).toContain(
       "__catamorphicRunStep",
     );
-    expect(parent.files["src/plain-child.ts"]).toContain(
+    // Only batch-process step calls are wrapped; a boundary body's step
+    // calls run inline within the boundary invocation.
+    expect(parent.files["src/leaf-child.ts"]).not.toContain(
       "__catamorphicRunStep",
     );
     expect(parentIdentity).toMatchObject({
@@ -82,11 +85,12 @@ export async function plainChild({ value }: { value: string }) {
 
   it("is unchanged by frontend app sources", async () => {
     const workflowFiles = {
-      "workflows/src/plain.ts": `
-export async function plain({ value }: { value: string }) {
-  "use workflow";
-  return finish({ value });
-}
+      "workflows/src/deployed.ts": `
+export const deployed = defineWorkflow(({ defineBoundary }) => ({
+  steps: [defineBoundary({
+    run: ({ input }) => finish({ input }),
+  })],
+}));
 `,
     };
     const withApp = {

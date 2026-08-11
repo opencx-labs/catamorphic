@@ -183,7 +183,6 @@ export class TenantPoliciesService {
       .selectFrom("workflow_runs")
       .innerJoin("projects", "projects.id", "workflow_runs.project_id")
       .where("projects.tenant_id", "=", args.tenantId)
-      .where("workflow_runs.mode", "=", "production")
       .where("workflow_runs.parent_run_id", "is", null)
       .where("workflow_runs.status", "not in", [
         "completed",

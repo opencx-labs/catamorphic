@@ -20,11 +20,6 @@ describe("run route contracts", () => {
       payload: { input: { key: "value" } },
     },
     {
-      method: "POST",
-      url: `/api/projects/${PROJECT_ID}/workflows/example/test-runs`,
-      payload: { input: { key: "value" }, files: {} },
-    },
-    {
       method: "GET",
       url: `/api/projects/${PROJECT_ID}/workflows/example/runs`,
     },
@@ -59,6 +54,7 @@ describe("run route contracts", () => {
   it.each([
     ["POST", `/api/projects/${PROJECT_ID}/workflows/example/batch-runs`],
     ["POST", `/api/projects/${PROJECT_ID}/workflows/example/durable-runs`],
+    ["POST", `/api/projects/${PROJECT_ID}/workflows/example/test-runs`],
     ["GET", `/api/batch-runs/${RUN_ID}`],
     ["GET", `/api/durable-runs/${RUN_ID}`],
     ["POST", `/api/runs/${RUN_ID}/report`],
@@ -78,9 +74,6 @@ describe("run route contracts", () => {
 
     expect(
       paths["/api/projects/{projectId}/workflows/{name}/runs"]?.post,
-    ).toBeDefined();
-    expect(
-      paths["/api/projects/{projectId}/workflows/{name}/test-runs"]?.post,
     ).toBeDefined();
     expect(paths["/api/runs/{runId}"]?.get).toBeDefined();
     expect(paths["/api/runs/{runId}/cancel"]?.post).toBeDefined();
@@ -118,7 +111,6 @@ describe("run route contracts", () => {
     ]);
 
     expect(workflowOperations).toContain('"capabilities"');
-    expect(workflowOperations).toContain('"persistedContinuations"');
     expect(workflowOperations).toContain('"durable-boundary"');
     expect(workflowOperations).toContain('"batch"');
     expect(workflowOperations).toContain('"pause"');

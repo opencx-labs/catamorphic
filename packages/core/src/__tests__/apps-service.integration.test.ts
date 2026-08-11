@@ -139,10 +139,11 @@ describeIf("AppsService integration", () => {
       externalUserId: identity.externalUserId,
       initialFiles: {
         "workflows/src/orders.ts": [
-          "export async function listOrders() {",
-          '  "use workflow";',
-          "  return [];",
-          "}",
+          'import { defineWorkflow } from "@catamorphic/workflow";',
+          "",
+          "export const listOrders = defineWorkflow(({ defineBoundary }) => ({",
+          "  steps: [defineBoundary({ run: () => [] })],",
+          "}));",
           "",
         ].join("\n"),
         "workflows/src/app-api.ts": [

@@ -25,12 +25,18 @@ type WorkflowGraphResponse =
   paths["/api/projects/{projectId}/workflows/{name}"]["get"]["responses"][200]["content"]["application/json"];
 
 /**
- * Browser-facing graph shape. Execution descriptors stay parser-internal and
- * are intentionally omitted from HTTP graph responses.
+ * Browser-facing graph shape. Execution descriptors and derived JSON schemas
+ * stay parser-internal and are intentionally omitted from HTTP graph
+ * responses.
  */
 export type WorkflowGraph = Omit<
   ParserWorkflowGraph,
-  "capabilities" | "edges" | "execution" | "nodes"
+  | "capabilities"
+  | "edges"
+  | "execution"
+  | "inputSchema"
+  | "nodes"
+  | "outputSchema"
 > &
   Pick<WorkflowGraphResponse, "capabilities" | "edges" | "nodes"> & {
     allFiles?: Record<string, string>;

@@ -111,25 +111,32 @@ describe("CommandDeploymentRuntimeProvider integration", () => {
       "local",
       {
         "workflow.ts": `import { writeFile } from "node:fs/promises";
-export async function greet(input: { name: string }) {
-  return globalThis.__catamorphicRunStep(
-    "greet-node",
-    "Greet",
-    async () => {
-      await writeFile("relative-output.json", JSON.stringify(input));
-      return {
-        message: \`hello \${input.name}\`,
-        invocation: process.env.CATAMORPHIC_INVOCATION_ID,
-        cwd: process.cwd(),
-      };
+export const greeter = {
+  steps: [
+    {
+      run: async ({ input }: { input: { name: string } }) =>
+        globalThis.__catamorphicRunStep(
+          "greet-node",
+          "Greet",
+          async () => {
+            await writeFile("relative-output.json", JSON.stringify(input));
+            return {
+              message: \`hello \${input.name}\`,
+              invocation: process.env.CATAMORPHIC_INVOCATION_ID,
+              cwd: process.cwd(),
+            };
+          },
+          input,
+        ),
     },
-    input,
-  );
-}
-export async function waitForCancellation() {
-  await new Promise((resolve) => setTimeout(resolve, 10_000));
-  return "finished";
-}`,
+    {
+      run: async () => {
+        await new Promise((resolve) => setTimeout(resolve, 10_000));
+        return "finished";
+      },
+    },
+  ],
+};`,
         "defined-workflow.mjs": `const classify = Object.assign(
   async () => { throw new Error("batch step requires orchestration"); },
   {
@@ -245,12 +252,13 @@ export const analyze = { steps: [checkpoint, batch] };`,
       artifactDigest: "digest-1",
       transformVersion: "transform-1",
       runtimeVersion: "runtime-1",
-      kind: "workflow",
+      kind: "durable-boundary",
       target: {
         modulePath: "workflow.ts",
-        exportName: "greet",
+        exportName: "greeter",
+        stepIndex: 0,
       },
-      input: { name: "Ada" },
+      input: { value: { name: "Ada" } },
       attempt: 1,
       deadlineAt: new Date(Date.now() + 3_000).toISOString(),
       eventSink: {
@@ -267,12 +275,13 @@ export const analyze = { steps: [checkpoint, batch] };`,
       artifactDigest: "digest-1",
       transformVersion: "transform-1",
       runtimeVersion: "runtime-1",
-      kind: "workflow",
+      kind: "durable-boundary",
       target: {
         modulePath: "workflow.ts",
-        exportName: "greet",
+        exportName: "greeter",
+        stepIndex: 0,
       },
-      input: { name: "Grace" },
+      input: { value: { name: "Grace" } },
       attempt: 1,
       deadlineAt: new Date(Date.now() + 3_000).toISOString(),
     });
@@ -286,9 +295,12 @@ export const analyze = { steps: [checkpoint, batch] };`,
     expect(first.terminal).toMatchObject({
       status: "completed",
       result: {
-        message: "hello Ada",
-        invocation: "invocation-1",
-        cwd: firstDirectory,
+        type: "completed",
+        output: {
+          message: "hello Ada",
+          invocation: "invocation-1",
+          cwd: firstDirectory,
+        },
       },
     });
     expect(reportedEvents.map((event) => event.sequence)).toEqual([
@@ -304,9 +316,12 @@ export const analyze = { steps: [checkpoint, batch] };`,
     expect(second.terminal).toMatchObject({
       status: "completed",
       result: {
-        message: "hello Grace",
-        invocation: "invocation-2",
-        cwd: secondDirectory,
+        type: "completed",
+        output: {
+          message: "hello Grace",
+          invocation: "invocation-2",
+          cwd: secondDirectory,
+        },
       },
     });
     await expect(
@@ -341,12 +356,13 @@ export const analyze = { steps: [checkpoint, batch] };`,
       artifactDigest: "digest-1",
       transformVersion: "transform-1",
       runtimeVersion: "runtime-1",
-      kind: "workflow",
+      kind: "durable-boundary",
       target: {
         modulePath: "workflow.ts",
-        exportName: "waitForCancellation",
+        exportName: "greeter",
+        stepIndex: 1,
       },
-      input: {},
+      input: { value: {} },
       attempt: 1,
       deadlineAt: new Date(Date.now() + 5_000).toISOString(),
       signal: controller.signal,
@@ -602,12 +618,13 @@ export const analyze = { steps: [checkpoint, batch] };`,
         artifactDigest: "digest-1",
         transformVersion: "transform-1",
         runtimeVersion: "runtime-1",
-        kind: "workflow",
+        kind: "durable-boundary",
         target: {
           modulePath: "workflow.ts",
-          exportName: "greet",
+          exportName: "greeter",
+          stepIndex: 0,
         },
-        input: { name: "Lin" },
+        input: { value: { name: "Lin" } },
         attempt: 1,
         deadlineAt: new Date(Date.now() + 3_000).toISOString(),
         eventSink: {

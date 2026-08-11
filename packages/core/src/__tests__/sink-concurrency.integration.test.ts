@@ -135,7 +135,6 @@ async function seedSinkReadyRun(args: { items: number }): Promise<{
       id: runId,
       project_id: projectId,
       workflow_name: "sinky",
-      mode: "production",
       provenance: sql`jsonb_build_object('commitSha', ${"a".repeat(40)}::text)`,
       deployment_artifact_id: artifactId,
       external_user_id: "user-1",

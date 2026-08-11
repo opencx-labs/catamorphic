@@ -23,14 +23,11 @@ import type {
   RunItemStatus,
   RunItemStep,
   RunItemsList,
-  RunMode,
   RunsList,
   SignalRunInput,
   SubmitRunInput,
   TriggeredRun,
-  TriggeredTestRun,
   TriggerRunInput,
-  TriggerTestRunInput,
 } from "../types.js";
 
 const DEFAULT_POLL_INTERVAL = 2_000;
@@ -41,7 +38,6 @@ export const runKeys = {
   list: (args: {
     projectId: string | undefined;
     workflowName: string | undefined;
-    mode: RunMode | undefined;
     limit: number | undefined;
     offset: number | undefined;
   }) => [...runKeys.lists(), args] as const,
@@ -179,7 +175,6 @@ export function useRun({
 export interface UseRunsOptions extends PollingOptions {
   projectId: string | undefined;
   workflowName?: string;
-  mode?: RunMode;
   limit?: number;
   offset?: number;
 }
@@ -187,7 +182,6 @@ export interface UseRunsOptions extends PollingOptions {
 export function useRuns({
   projectId,
   workflowName,
-  mode,
   limit,
   offset,
   pollInterval = DEFAULT_POLL_INTERVAL,
@@ -197,7 +191,6 @@ export function useRuns({
     queryKey: runKeys.list({
       projectId,
       workflowName,
-      mode,
       limit,
       offset,
     }),
@@ -216,7 +209,7 @@ export function useRuns({
             {
               params: {
                 path: { projectId, name: workflowName },
-                query: { limit, offset, mode },
+                query: { limit, offset },
               },
             },
           ),
@@ -265,52 +258,6 @@ export function useTriggerRun({
             response,
             body,
             fallbackMessage: "Trigger run failed",
-          });
-        }
-        return response.json();
-      }),
-    onSuccess: async () => {
-      await queryClient.invalidateQueries({ queryKey: runKeys.lists() });
-    },
-  });
-}
-
-export interface UseTriggerTestRunOptions {
-  projectId: string;
-  workflowName: string;
-}
-
-export function useTriggerTestRun({
-  projectId,
-  workflowName,
-}: UseTriggerTestRunOptions): UseMutationResult<
-  TriggeredTestRun,
-  CatamorphicError,
-  TriggerTestRunInput | undefined
-> {
-  const { apiClient } = useCatamorphic();
-  const queryClient = useQueryClient();
-  return useMutation<
-    TriggeredTestRun,
-    CatamorphicError,
-    TriggerTestRunInput | undefined
-  >({
-    mutationFn: (input) =>
-      runWithCatamorphicError(async () => {
-        const url = `${apiClient.baseUrl}/api/projects/${encodeURIComponent(projectId)}/workflows/${encodeURIComponent(workflowName)}/test-runs`;
-        const response = await apiClient.fetch(url, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(input ?? {}),
-        });
-        if (!response.ok) {
-          const body = await response
-            .json()
-            .catch(() => response.text().catch(() => ""));
-          throw toCatamorphicError({
-            response,
-            body,
-            fallbackMessage: "Trigger test run failed",
           });
         }
         return response.json();

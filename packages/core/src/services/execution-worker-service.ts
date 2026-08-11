@@ -31,7 +31,6 @@ export interface ExecutionWorkerHandle {
 }
 
 const ALL_JOB_KINDS: readonly ExecutionJobKind[] = [
-  "workflow_run",
   "durable_boundary",
   "durable_pause_timeout",
   "batch_source",

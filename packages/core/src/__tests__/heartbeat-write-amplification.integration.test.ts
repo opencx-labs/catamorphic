@@ -37,7 +37,6 @@ describeIf("heartbeat write amplification", () => {
         id: runId,
         project_id: projectId,
         workflow_name: "w",
-        mode: "test",
         provenance: sql`'{}'::jsonb`,
         status: "running",
       })

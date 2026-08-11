@@ -1,16 +1,25 @@
 # Workflow Code Conventions
 
-## Workflow Functions
+## Workflow Definitions
+
+Every workflow is an exported `defineWorkflow` value.
 
 ```typescript
+import { type BoundaryContext, defineWorkflow } from "@catamorphic/workflow";
+
 /**
  * @displayname Human-Readable Name
  * @description What this workflow does
  */
-export async function workflowName({ param1, param2 }: { param1: Type1; param2: Type2 }) {
-  "use workflow";
-  // workflow body
-}
+export const workflowName = defineWorkflow(({ defineBoundary }) => ({
+  steps: [
+    defineBoundary({
+      run: async ({ input }: BoundaryContext<{ param1: Type1 }>) => {
+        // orchestration body: awaited step calls, if/else, loops
+      },
+    }),
+  ],
+}));
 ```
 
 ## Step Functions
@@ -29,9 +38,10 @@ async function stepName({ propName }: { propName: Type }) {
 }
 ```
 
-Plain functions execute normally but do not persist continuation between
-operations. Use `defineWorkflow` when a Workflow needs retry, pause, child-call,
-or paged collection scopes.
+Steps are the home of IO and business operations, called from boundary run
+bodies and batch process callbacks. Boundaries persist continuation; add more
+boundaries for explicit retry, pause, or child-call scopes and `defineBatch`
+for paged collections.
 
 ## Persisted Workflow Scopes
 
@@ -113,15 +123,14 @@ state, and cancellation between invocations.
 - `if (condition) { ... } else { ... }` — conditional branching
 - `for (const x of items) { ... }` — loop iteration
 - `Promise.all([fn1(), fn2()])` — parallel execution
-- `sleep("7 days")` — visual delay in a plain workflow; a persisted boundary
-  returns `pause(...)`
+- durable waits — a boundary returns `pause(...)`
 - `return { ... }` — workflow output
 
 ## Rules
 
 - Use one public Workflow model; never add a kind field or a public stage.
-- Plain function files use one exact `"use workflow"` directive.
-- `defineWorkflow` exports do not use `"use workflow"`.
+- Every workflow is an exported `defineWorkflow` value; there is no
+  `"use workflow"` directive.
 - Steps must have `"use step"` directive
 - All function parameters must be destructured objects
 - Use JSDoc for all UI-facing metadata

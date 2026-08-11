@@ -185,14 +185,17 @@ describe("ClaudeCodeAgent", () => {
     ["low", "low"],
     ["medium", "medium"],
     ["high", "high"],
-  ] as const)("maps %s effort to the SDK effort level", async (effort, expected) => {
-    queryMock.mockReturnValueOnce(scriptedQuery([successResult]));
-    const agent = new ClaudeCodeAgent();
+  ] as const)(
+    "maps %s effort to the SDK effort level",
+    async (effort, expected) => {
+      queryMock.mockReturnValueOnce(scriptedQuery([successResult]));
+      const agent = new ClaudeCodeAgent();
 
-    await collect(agent, "Think about it", { effort });
+      await collect(agent, "Think about it", { effort });
 
-    expect(lastQueryOptions().effort).toBe(expected);
-  });
+      expect(lastQueryOptions().effort).toBe(expected);
+    },
+  );
 
   it("leaves effort unset when neither defaults nor the turn set one", async () => {
     queryMock.mockReturnValueOnce(scriptedQuery([successResult]));

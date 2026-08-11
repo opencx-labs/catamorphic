@@ -172,53 +172,10 @@ export interface Pause {
   }): WorkflowTransition<ResumedPauseResult<Value, State>>;
 }
 
-type PlainWorkflowInput<Target extends (input: never) => unknown> =
-  Parameters<Target> extends [infer Input] ? Input : never;
-
-type PlainWorkflowOutput<Target extends (input: never) => unknown> = Awaited<
-  ReturnType<Target>
->;
-
-type ValidatePlainWorkflowTarget<Target extends (input: never) => unknown> =
-  Parameters<Target> extends [infer Input]
-    ? Input extends readonly unknown[]
-      ? WorkflowTypeError<
-          "A plain workflow must accept one keyed input object",
-          Input
-        >
-      : Input extends object
-        ? ReturnType<Target> extends Promise<infer Output>
-          ? AssertJsonCompatible<
-              Input,
-              "A plain workflow input must be JSON-compatible"
-            > &
-              AssertJsonCompatible<
-                Output,
-                "A plain workflow output must be JSON-compatible"
-              >
-          : WorkflowTypeError<
-              "A plain workflow target must be async",
-              ReturnType<Target>
-            >
-        : WorkflowTypeError<
-            "A plain workflow must accept one keyed input object",
-            Input
-          >
-    : WorkflowTypeError<
-        "A plain workflow must accept exactly one keyed input object",
-        Parameters<Target>
-      >;
-
-export interface CallWorkflow {
-  <Input, Output>(
-    workflow: WorkflowDefinition<Input, Output>,
-    options: { input: Input },
-  ): WorkflowTransition<Output>;
-  <Target extends (input: never) => unknown>(
-    workflow: Target & ValidatePlainWorkflowTarget<Target>,
-    options: { input: PlainWorkflowInput<Target> },
-  ): WorkflowTransition<PlainWorkflowOutput<Target>>;
-}
+export type CallWorkflow = <Input, Output>(
+  workflow: WorkflowDefinition<Input, Output>,
+  options: { input: Input },
+) => WorkflowTransition<Output>;
 
 export interface BoundaryContext<Input> {
   readonly input: Input;

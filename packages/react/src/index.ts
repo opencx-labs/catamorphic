@@ -141,7 +141,6 @@ export {
   type UseRunsOptions,
   type UseSubmitRunInputOptions,
   type UseTriggerRunOptions,
-  type UseTriggerTestRunOptions,
   useCancelRun,
   useCancelRunByKey,
   usePauseRunProcessing,
@@ -153,7 +152,6 @@ export {
   useSignalRun,
   useSubmitRunInput,
   useTriggerRun,
-  useTriggerTestRun,
 } from "./hooks/use-runs.js";
 export { useSelectedNode } from "./hooks/use-selected-node.js";
 export {
@@ -255,7 +253,6 @@ export type {
   RunItemStatus,
   RunItemStep,
   RunItemsList,
-  RunMode,
   RunPause,
   RunPhase,
   RunStatus,
@@ -267,9 +264,7 @@ export type {
   SignalRunInput,
   SubmitRunInput,
   TriggeredRun,
-  TriggeredTestRun,
   TriggerRunInput,
-  TriggerTestRunInput,
   WorkflowCapabilities,
   WorkflowStepAttempt,
 } from "./types.js";

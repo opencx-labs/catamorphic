@@ -1,6 +1,7 @@
 # 0013 — Test and production run modes
 
-- **Status:** Accepted (fresh production sandbox clause updated by [0014](0014-deployment-scoped-execution-runtimes.md))
+- **Status:** Superseded by [0040](0040-one-workflow-model.md) — test runs and the mode split are removed; every run executes a deployed commit.
+- Previously: Accepted (fresh production sandbox clause updated by [0014](0014-deployment-scoped-execution-runtimes.md))
 - **Date:** 2026-07-12
 - **Updated by:** 0014 (deployment runtimes), 0026 (one Run API/model)
 

@@ -187,7 +187,9 @@ process.on("message", (message) => {
 });
 
 function resolvedInvocation(
-  overrides: Partial<Extract<ResolvedRuntimeInvocation, { kind: "workflow" }>>,
+  overrides: Partial<
+    Extract<ResolvedRuntimeInvocation, { kind: "durable-boundary" }>
+  >,
 ): ResolvedRuntimeInvocation {
   return {
     protocolVersion: RUNTIME_PROTOCOL_VERSION,
@@ -196,8 +198,8 @@ function resolvedInvocation(
     artifactDigest: "digest-1",
     transformVersion: "transform-1",
     runtimeVersion: "runtime-1",
-    kind: "workflow",
-    target: { modulePath: "workflow.mjs", exportName: "run" },
+    kind: "durable-boundary",
+    target: { modulePath: "workflow.mjs", exportName: "run", stepIndex: 0 },
     input: { value: 2 },
     attempt: 1,
     deadlineAt: new Date(Date.now() + 60_000).toISOString(),

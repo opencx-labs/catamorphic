@@ -51,7 +51,6 @@ async function createRun(args: {
       id: runId,
       project_id: projectId,
       workflow_name: "retained",
-      mode: "test",
       provenance: sql`'{}'::jsonb`,
       status: args.status,
       ...(args.parentRunId && parentAttemptId
@@ -128,7 +127,7 @@ describeIf("run retention", () => {
     await jobs.enqueue({
       tenantId,
       workflowRunId: runId,
-      kind: "workflow_run",
+      kind: "durable_boundary",
       payload: {},
     });
     await sql`

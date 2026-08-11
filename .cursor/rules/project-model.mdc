@@ -26,11 +26,10 @@ The hierarchy is: **tenant → project → workflow**.
 Every project **is** a git repository. Version control is not bolted on — it is the storage model:
 
 - `ProjectManager.create` writes `package.json` + `tsconfig.json` (ES2022, strict) and makes an **initial commit** authored as the system user.
-- Every subsequent edit that should be versioned produces a commit. Test Runs
-  execute mutable dev files plus overlays without creating hidden commits.
-- **Production Runs retain immutable provenance.** Their provenance contains the
-  deployed commit SHA and deployment artifact. Test Runs intentionally retain
-  `{ mutableSource: true }` and no SHA.
+- Every subsequent edit that should be versioned produces a commit.
+- **Runs retain immutable provenance.** Every Run executes a deployed commit;
+  its provenance contains the deployed commit SHA and deployment artifact.
+  There is no mutable-source or test mode.
 - `isomorphic-git` is used for all git operations — portable, no native CLI dependency, works inside sandboxes.
 - Default branch is **`main`**.
 
@@ -66,12 +65,11 @@ The host frontend (via `@catamorphic/react` + `@catamorphic/api-client`) must ta
 
 ## Project Discovery
 
-Workflows are discovered at parse time by `packages/parser`. A plain Workflow is
-an exported async function with the exact `"use workflow"` directive. A Workflow
-with persisted scopes is an exported static
+Workflows are discovered at parse time by `packages/parser`. Every Workflow
+is an exported static
 `defineWorkflow(({ defineBoundary, defineBatch }) => ({ steps: [...] }))`
-definition. There is no kind field, registry file, or manifest; TypeScript
-source is the registry.
+definition; IO lives in `"use step"` functions. There is no kind field,
+registry file, or manifest; TypeScript source is the registry.
 
 ## Database Type Conventions
 
@@ -88,8 +86,7 @@ state) type as:
 - **Kysely side**: `Json` / `JsonValue` (from `@catamorphic/db`)
 - **Zod schema side**: `z.unknown().nullable()` — not `z.record(z.string(), z.unknown())`, since JSONB can hold any JSON value (arrays, primitives, etc.), not just objects
 
-## Run modes
+## Run provenance
 
-`workflow_runs.mode` is `test` or `production`. Production rows require the
-deployed commit SHA. Test rows require a null SHA and initiating external user;
-historical test runs intentionally do not retain source.
+Runs have no mode column (dropped in migration 041). Every `workflow_runs`
+row records the deployed commit SHA and artifact it executed.

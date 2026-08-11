@@ -64,13 +64,14 @@ The host app boots catamorphic in-process via one of two paths:
 
 ## Workflow and Run model
 
-All exports are Workflows and every invocation is a Run. Exact `"use workflow"`
-functions lack persisted continuation. Workflows needing continuation use
-`defineWorkflow(({ defineBoundary, defineBatch }) => ({ steps: [...] }))`:
+All exports are Workflows and every invocation is a Run. Every workflow is an
+exported `defineWorkflow(({ defineBoundary, defineBatch }) => ({ steps: [...] }))`
+value, and every run executes a deployed commit:
 
 - `defineBoundary` is one atomic retry scope whose callback operations retry together.
 - `defineBatch` is a finite paged per-item processing scope with an optional sink.
 - `defineBatchStep` physically coalesces compatible calls only inside `defineBatch.process`.
+- `"use step"` functions hold IO, called from boundary run bodies.
 
 The HTTP API, `scoped.runs`, React `useRun*` hooks, history, and Runs panel are
 shared. Capabilities determine available controls; there is no public stage or

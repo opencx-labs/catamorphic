@@ -23,8 +23,7 @@ The plugin is fully encapsulated:
 
 There is one Runs route family for every Workflow:
 
-- `POST /api/projects/:projectId/workflows/:name/runs` triggers production.
-- `POST /api/projects/:projectId/workflows/:name/test-runs` triggers mutable-source test mode for plain Workflow functions.
+- `POST /api/projects/:projectId/workflows/:name/runs` triggers a Run of the deployed commit.
 - `GET /api/projects/:projectId/workflows/:name/runs` lists Runs.
 - `GET /api/runs/:runId` and `/api/runs/:runId/*` expose detail and capability-driven controls.
 

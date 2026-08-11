@@ -265,19 +265,6 @@ export interface RunPluginPayload {
   files: Record<string, string>;
 }
 
-export interface RunExecutor {
-  executeRun(opts: {
-    sandboxId: string;
-    workingDirectory: string;
-    workflowFile: string;
-    workflowName: string;
-    triggerData: unknown;
-    runId: string;
-    plugins?: RunPluginPayload[];
-    secrets?: Record<string, string>;
-  }): Promise<RunResult>;
-}
-
 export interface AgentQuestionOption {
   /** Concise display label (1-5 words). */
   label: string;

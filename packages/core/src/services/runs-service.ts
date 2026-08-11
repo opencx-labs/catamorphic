@@ -14,9 +14,7 @@ import {
   type WorkflowGraph,
 } from "@catamorphic/parser";
 import {
-  DeploymentRuntimeExecutorAdapter,
   RUNTIME_PROTOCOL_VERSION,
-  RunExecutorImpl,
   type RunPluginPayload,
   type RunResult,
   RuntimeInfrastructureError,
@@ -50,6 +48,7 @@ import type {
   ExecutionWorkerOptions,
   ExecutionWorkerService,
 } from "./execution-worker-service.js";
+import { validateAgainstSchema } from "./json-schema-validate.js";
 import { uploadWorkspace } from "./playground/workspace-upload.js";
 import { ProjectNotFoundError } from "./projects-service.js";
 import type { RunCoordinator } from "./run-coordinator.js";
@@ -62,7 +61,6 @@ import { WorkflowNotFoundError } from "./workflows-service.js";
 type RunRow = Selectable<DB["workflow_runs"]>;
 type StepRow = Selectable<DB["workflow_run_steps"]>;
 
-export type RunMode = "test" | "production";
 export type RunStatus =
   | "pending"
   | "running"
@@ -89,7 +87,6 @@ export type StepStatus =
 
 export interface RunProvenance {
   commitSha?: string;
-  mutableSource?: true;
 }
 
 export interface RunArtifact {
@@ -142,7 +139,6 @@ export interface Run {
   batchScopes: BatchProgress[];
   provenance: RunProvenance;
   artifact?: RunArtifact;
-  mode: RunMode;
   initiatedBy: string | null;
   input: unknown;
   result: unknown;
@@ -257,7 +253,6 @@ export interface ListRunsInput {
   identity: Identity;
   projectId: string;
   workflowName?: string;
-  mode?: RunMode;
   /** Filters to one subject's journey — every run for a contact or account. */
   correlationKey?: string;
   limit?: number;
@@ -288,10 +283,6 @@ export interface TriggerProductionRunInput {
   correlationKey?: string;
   /** Defaults to `ignore`. */
   onConflict?: EnrollmentConflictPolicy;
-}
-
-export interface TriggerTestRunInput extends TriggerProductionRunInput {
-  files?: Record<string, string>;
 }
 
 export interface CancelRunInput extends GetRunInput {
@@ -390,10 +381,15 @@ export class ProductionDeploymentNotFoundError extends Error {
   }
 }
 
-export class InvalidRunOverlayError extends Error {
-  constructor(readonly filePath: string) {
-    super(`Invalid test run overlay path '${filePath}'`);
-    this.name = "InvalidRunOverlayError";
+export class RunInputInvalidError extends Error {
+  constructor(
+    readonly workflowName: string,
+    readonly errors: string[],
+  ) {
+    super(
+      `Input for workflow '${workflowName}' is invalid: ${errors.join("; ")}`,
+    );
+    this.name = "RunInputInvalidError";
   }
 }
 
@@ -450,21 +446,12 @@ interface PreparedSource {
 const tracer = getTracer("@catamorphic/core");
 
 export class RunsService {
-  private readonly executor?: RunExecutorImpl;
   private readonly preparedSources = new Map<string, Promise<PreparedSource>>();
 
   constructor(
     private readonly db: Kysely<DB>,
     private readonly deps: RunsServiceDeps,
-  ) {
-    this.executor = deps.sandboxProvider
-      ? new RunExecutorImpl({ provider: deps.sandboxProvider })
-      : undefined;
-    deps.executionWorker.registerHandler({
-      kind: "workflow_run",
-      handler: ({ job, signal }) => this.executeProductionJob({ job, signal }),
-    });
-  }
+  ) {}
 
   startWorker(args: ExecutionWorkerOptions = {}): ExecutionWorkerHandle {
     return this.deps.executionWorker.start(args);
@@ -511,10 +498,7 @@ export class RunsService {
         projectId: row.project_id,
         policies: this.deps.appPolicies,
       });
-      if (
-        row.mode !== "production" ||
-        !context?.allowedWorkflows.has(row.workflow_name)
-      ) {
+      if (!context?.allowedWorkflows.has(row.workflow_name)) {
         throw new AppAccessDeniedError();
       }
     }
@@ -692,27 +676,19 @@ export class RunsService {
       // Audience identities see only production runs of their frozen set —
       // the read-side mirror of the trigger gate (ADR 0036).
       if (
-        args.mode === "test" ||
-        (args.workflowName && !audience.allowedWorkflows.has(args.workflowName))
+        args.workflowName &&
+        !audience.allowedWorkflows.has(args.workflowName)
       ) {
         throw new AppAccessDeniedError();
       }
       const frozen = [...audience.allowedWorkflows];
       if (frozen.length === 0) return { items: [], total: 0 };
-      query = query
-        .where("workflow_name", "in", frozen)
-        .where("mode", "=", "production");
-      countQuery = countQuery
-        .where("workflow_name", "in", frozen)
-        .where("mode", "=", "production");
+      query = query.where("workflow_name", "in", frozen);
+      countQuery = countQuery.where("workflow_name", "in", frozen);
     }
     if (args.workflowName) {
       query = query.where("workflow_name", "=", args.workflowName);
       countQuery = countQuery.where("workflow_name", "=", args.workflowName);
-    }
-    if (args.mode) {
-      query = query.where("mode", "=", args.mode);
-      countQuery = countQuery.where("mode", "=", args.mode);
     }
     if (args.correlationKey) {
       query = query.where("correlation_key", "=", args.correlationKey);
@@ -787,17 +763,7 @@ export class RunsService {
   }
 
   async triggerProduction(args: TriggerProductionRunInput): Promise<Run> {
-    return this.trigger({ ...args, mode: "production" });
-  }
-
-  async triggerTest(args: {
-    identity: Identity;
-    projectId: string;
-    workflowName: string;
-    input?: Json;
-    files?: Record<string, string>;
-  }): Promise<Run> {
-    return this.trigger({ ...args, mode: "test" });
+    return this.trigger(args);
   }
 
   async cancel(args: CancelRunInput): Promise<Run> {
@@ -995,11 +961,7 @@ export class RunsService {
     const source = await this.prepareProductionSource(args);
     if (!source.commitSha)
       throw new ProductionDeploymentNotFoundError(args.projectId);
-    const plugins = await this.loadPlugins(
-      args.identity,
-      args.projectId,
-      "production",
-    );
+    const plugins = await this.loadPlugins(args.identity, args.projectId);
     return this.deps.deploymentArtifacts.ensure({
       tenantId: args.identity.tenantId,
       projectId: args.projectId,
@@ -1039,7 +1001,7 @@ export class RunsService {
     if (!deploymentRuntime) throw new SandboxProviderNotConfiguredError();
     const [source, plugins, artifact] = await Promise.all([
       this.prepareProductionSource(args),
-      this.loadPlugins(args.identity, args.projectId, "production"),
+      this.loadPlugins(args.identity, args.projectId),
       this.deps.deploymentArtifacts.get({ artifactId: args.artifactId }),
     ]);
     if (!artifact) {
@@ -1099,7 +1061,7 @@ export class RunsService {
     }
     const [source, plugins, artifact] = await Promise.all([
       this.prepareProductionSource(args),
-      this.loadPlugins(args.identity, args.projectId, "production"),
+      this.loadPlugins(args.identity, args.projectId),
       this.deps.deploymentArtifacts.get({ artifactId: args.artifactId }),
     ]);
     const runtimePackagesForArtifact = runtimePackages({
@@ -1148,15 +1110,6 @@ export class RunsService {
       modulePath: args.modulePath ?? source.workflowFile,
       exportName: args.exportName ?? args.workflowName,
     };
-    if (args.kind === "workflow") {
-      const receipt = await provider.deploymentRuntime.invoke({
-        ...base,
-        kind: args.kind,
-        target: targetBase,
-      });
-      args.signal?.throwIfAborted();
-      return receipt;
-    }
     if (args.kind === "durable-boundary") {
       const receipt = await provider.deploymentRuntime.invoke({
         ...base,
@@ -1234,8 +1187,8 @@ export class RunsService {
     projectId: string;
     workflowName: string;
     input?: Json;
-    files?: Record<string, string>;
-    mode: RunMode;
+    correlationKey?: string;
+    onConflict?: EnrollmentConflictPolicy;
   }): Promise<Run> {
     return withSpan(
       {
@@ -1245,14 +1198,11 @@ export class RunsService {
           "catamorphic.project.id": args.projectId,
           "catamorphic.workflow.name": args.workflowName,
           "catamorphic.tenant.id": args.identity.tenantId,
-          "catamorphic.run.mode": args.mode,
         },
       },
       async (span) => {
         if (args.identity.appAudience) {
-          // App viewers reach exactly the frozen workflow set, and only in
-          // production: test runs execute the builder's mutable dev tree.
-          if (args.mode !== "production") throw new AppAccessDeniedError();
+          // App viewers reach exactly the frozen workflow set.
           await assertWorkflowAllowed({
             db: this.db,
             identity: args.identity,
@@ -1274,21 +1224,15 @@ export class RunsService {
     projectId: string;
     workflowName: string;
     input?: Json;
-    files?: Record<string, string>;
-    mode: RunMode;
     correlationKey?: string;
     onConflict?: EnrollmentConflictPolicy;
   }): Promise<Run> {
     const provider = this.deps.sandboxProvider;
-    const executor = this.executor;
-    if (!provider || !executor) throw new SandboxProviderNotConfiguredError();
+    if (!provider) throw new SandboxProviderNotConfiguredError();
     await this.requireProject(args.identity, args.projectId);
     const correlationKey = args.correlationKey
       ? requireCorrelationKey(args.correlationKey)
       : undefined;
-    if (correlationKey && args.mode === "test") {
-      throw new RunCapabilityError("persistedContinuations", "triggerTest");
-    }
     const onConflict = args.onConflict ?? "ignore";
     let supersededRunId: string | null = null;
     if (correlationKey) {
@@ -1302,26 +1246,21 @@ export class RunsService {
       if (decision.kind === "existing") return decision.run;
       if (decision.kind === "restart") supersededRunId = decision.runId;
     }
-    const source =
-      args.mode === "test"
-        ? await this.prepareTestSource(args)
-        : await this.prepareProductionSource(args);
-    if (args.mode === "test" && source.graph.execution.steps.length > 0) {
-      throw new RunCapabilityError("persistedContinuations", "triggerTest");
-    }
-    const plugins = await this.loadPlugins(
-      args.identity,
-      args.projectId,
-      args.mode,
-    );
+    const source = await this.prepareProductionSource(args);
+    const plugins = await this.loadPlugins(args.identity, args.projectId);
     const input = args.input ?? null;
+    // The graph's input schema is a projection of the workflow's TS input
+    // type; rejecting here fails at the door with a path-level error instead
+    // of deep inside a sandbox invocation.
+    const inputErrors = validateAgainstSchema(input, source.graph.inputSchema);
+    if (inputErrors.length > 0) {
+      throw new RunInputInvalidError(args.workflowName, inputErrors);
+    }
     const runId = crypto.randomUUID();
-    const provenance: RunProvenance = source.commitSha
-      ? { commitSha: source.commitSha }
-      : { mutableSource: true };
-    if (args.mode === "production") {
-      if (!source.commitSha)
-        throw new ProductionDeploymentNotFoundError(args.projectId);
+    if (!source.commitSha)
+      throw new ProductionDeploymentNotFoundError(args.projectId);
+    const provenance: RunProvenance = { commitSha: source.commitSha };
+    {
       const artifact = await this.deps.deploymentArtifacts.ensure({
         tenantId: args.identity.tenantId,
         projectId: args.projectId,
@@ -1360,7 +1299,6 @@ export class RunsService {
               project_id: args.projectId,
               workflow_name: args.workflowName,
               correlation_key: correlationKey ?? null,
-              mode: "production",
               provenance: toJson({
                 ...provenance,
                 capabilities: source.graph.capabilities,
@@ -1371,31 +1309,17 @@ export class RunsService {
               phase:
                 source.graph.execution.steps[0]?.type === "batch"
                   ? "source"
-                  : source.graph.execution.steps.length > 0
-                    ? "boundary"
-                    : "execute",
+                  : "boundary",
               input: jsonColumn(input),
             })
             .execute();
-          if (source.graph.execution.steps.length === 0) {
-            await this.deps.executionJobs.enqueue({
-              trx,
-              tenantId: args.identity.tenantId,
-              workflowRunId: runId,
-              kind: "workflow_run",
-              payload: {},
-              priority: 100,
-              dedupeKey: `run:${runId}:execute`,
-            });
-          } else {
-            await this.deps.coordinator.initialize({
-              trx,
-              tenantId: args.identity.tenantId,
-              runId,
-              execution: source.graph.execution,
-              input,
-            });
-          }
+          await this.deps.coordinator.initialize({
+            trx,
+            tenantId: args.identity.tenantId,
+            runId,
+            execution: source.graph.execution,
+            input,
+          });
         });
       } catch (error) {
         if (correlationKey && isCorrelationKeyConflict(error)) {
@@ -1410,375 +1334,6 @@ export class RunsService {
         throw error;
       }
       return this.get({ identity: args.identity, runId });
-    }
-
-    const now = new Date();
-    await this.db
-      .insertInto("workflow_runs")
-      .values({
-        id: runId,
-        project_id: args.projectId,
-        workflow_name: args.workflowName,
-        mode: "test",
-        provenance: toJson({
-          ...provenance,
-          capabilities: source.graph.capabilities,
-        }),
-        external_user_id: args.identity.externalUserId,
-        status: "running",
-        phase: "execute",
-        input: jsonColumn(input),
-        started_at: now,
-      })
-      .execute();
-    const result = await this.executePlain({
-      identity: args.identity,
-      projectId: args.projectId,
-      workflowName: args.workflowName,
-      mode: "test",
-      runId,
-      source,
-      input,
-      plugins,
-      provider,
-      executor,
-    });
-    await this.finalizePlainRun({ runId, result });
-    return this.get({ identity: args.identity, runId });
-  }
-
-  private async executeProductionJob(args: {
-    job: ExecutionJob;
-    signal: AbortSignal;
-  }): Promise<void> {
-    const row = await this.db
-      .selectFrom("workflow_runs")
-      .innerJoin("projects", "projects.id", "workflow_runs.project_id")
-      .where("workflow_runs.id", "=", args.job.workflowRunId)
-      .where("projects.tenant_id", "=", args.job.tenantId)
-      .selectAll("workflow_runs")
-      .select("projects.tenant_id")
-      .executeTakeFirst();
-    if (!row) throw new RunNotFoundError(args.job.workflowRunId);
-    if (!(await this.deps.coordinator.beginPlainRun({ job: args.job }))) return;
-    const provenance = jsonRecord(row.provenance);
-    const commitSha =
-      typeof provenance.commitSha === "string"
-        ? provenance.commitSha
-        : undefined;
-    if (!commitSha || !row.external_user_id || !row.deployment_artifact_id) {
-      throw new Error(`Production run '${row.id}' has incomplete provenance`);
-    }
-    if (args.signal.aborted)
-      throw new Error("Execution worker stopped before invocation");
-    const identity: Identity = {
-      tenantId: row.tenant_id,
-      externalUserId: row.external_user_id,
-    };
-    const provider = this.deps.sandboxProvider;
-    const executor = this.executor;
-    if (!provider || !executor) throw new SandboxProviderNotConfiguredError();
-    const source = await this.prepareProductionSource({
-      identity,
-      projectId: row.project_id,
-      workflowName: row.workflow_name,
-      commitSha,
-    });
-    if (source.graph.execution.steps.length !== 0) {
-      throw new Error("Defined workflow was dispatched as a plain workflow");
-    }
-    const [plugins, artifact] = await Promise.all([
-      this.loadPlugins(identity, row.project_id, "production"),
-      this.deps.deploymentArtifacts.get({
-        artifactId: row.deployment_artifact_id,
-      }),
-    ]);
-    if (
-      !artifact ||
-      !(await this.deps.deploymentArtifacts.verify({
-        artifact,
-        projectId: row.project_id,
-        commitSha,
-        files: source.files,
-        plugins: runtimePackages({
-          plugins: plugins?.plugins,
-          workflowPackage: source.workflowPackage,
-        }),
-      }))
-    )
-      throw new Error(`Production run '${row.id}' has no artifact`);
-    const invocationId = `${row.id}:${args.job.attempt}`;
-    const result = await this.deps.coordinator.invokeRuntime({
-      job: args.job,
-      invocationId,
-      invoke: () =>
-        this.executePlain({
-          identity,
-          projectId: row.project_id,
-          workflowName: row.workflow_name,
-          mode: "production",
-          runId: row.id,
-          source,
-          input: row.input,
-          plugins,
-          provider,
-          executor,
-          artifact,
-          invocationId,
-          invocationAttempt: args.job.attempt,
-          signal: args.signal,
-        }),
-    });
-    await this.deps.coordinator.finalizePlainRun({
-      job: args.job,
-      result,
-    });
-  }
-
-  private async executePlain(args: {
-    identity: Identity;
-    projectId: string;
-    workflowName: string;
-    mode: RunMode;
-    runId: string;
-    source: PreparedSource;
-    input: Json;
-    plugins?: Awaited<ReturnType<RunPluginsLoader["load"]>>;
-    provider: SandboxProvider;
-    executor: RunExecutorImpl;
-    artifact?: DeploymentArtifact;
-    invocationId?: string;
-    invocationAttempt?: number;
-    signal?: AbortSignal;
-  }): Promise<RunResult> {
-    let sandboxId: string | undefined;
-    let workingDirectory: string | undefined;
-    let destroySandbox = false;
-    try {
-      args.signal?.throwIfAborted();
-      if (
-        args.mode === "production" &&
-        args.artifact &&
-        this.deps.deploymentRuntime &&
-        args.provider.deploymentRuntime
-      ) {
-        const runtime = await this.deps.deploymentRuntime.ensure({
-          projectId: args.projectId,
-          artifact: args.artifact,
-          files: args.source.files,
-          originalFiles: args.source.originalFiles,
-          cloneSource: args.source.cloneSource,
-          plugins: runtimePackages({
-            plugins: args.plugins?.plugins,
-            workflowPackage: args.source.workflowPackage,
-          }),
-        });
-        const runtimeExecutor = new DeploymentRuntimeExecutorAdapter({
-          provider: args.provider,
-          runtime,
-          invocationId: args.invocationId,
-          invocationAttempt: args.invocationAttempt,
-          replay: await this.deps.runtimeEvents.replay({
-            tenantId: args.identity.tenantId,
-            runId: args.runId,
-          }),
-          eventSink: this.deps.runtimeEvents.sink({
-            tenantId: args.identity.tenantId,
-            runId: args.runId,
-          }),
-        });
-        const result = await runtimeExecutor.executeRun({
-          sandboxId: runtime.sandboxId,
-          workingDirectory: `${args.provider.workspaceRoot}/deployments/${args.artifact.id}/project`,
-          workflowFile: args.source.workflowFile,
-          workflowName: args.workflowName,
-          triggerData: args.input,
-          runId: args.runId,
-          plugins: runtimePackages({
-            plugins: args.plugins?.plugins,
-            workflowPackage: args.source.workflowPackage,
-          }),
-          secrets: args.plugins?.secrets,
-        });
-        args.signal?.throwIfAborted();
-        return result;
-      }
-      if (args.mode === "test") {
-        const dev = await this.requireDevSandboxes().ensure({
-          identity: args.identity,
-          projectId: args.projectId,
-          refresh: false,
-        });
-        sandboxId = dev.providerId;
-        workingDirectory = `${args.provider.workspaceRoot}/runs/${args.runId}`;
-        await args.provider.executeCommand(
-          sandboxId,
-          `rm -rf ${shellQuote(workingDirectory)} && mkdir -p ${shellQuote(workingDirectory)}`,
-        );
-        await uploadWorkspace({
-          provider: args.provider,
-          sandboxId,
-          projectDir: workingDirectory,
-          files: args.source.files,
-        });
-      } else {
-        const handle = await args.provider.createSandbox({
-          language: "typescript",
-          autoStopInterval: 5,
-          labels: {
-            purpose: "execution",
-            projectId: args.projectId,
-            commitSha: args.source.commitSha ?? "",
-          },
-        });
-        sandboxId = handle.providerId;
-        destroySandbox = true;
-        workingDirectory = `${args.provider.workspaceRoot}/project`;
-        if (args.source.cloneSource) {
-          await args.provider.gitClone(
-            sandboxId,
-            args.source.cloneSource.url,
-            workingDirectory,
-            {
-              branch: args.source.cloneSource.branch,
-              commitId: args.source.commitSha ?? undefined,
-              username: args.source.cloneSource.username,
-              password: args.source.cloneSource.password,
-            },
-          );
-          const transformed = changedFiles({
-            before: args.source.originalFiles,
-            after: args.source.files,
-          });
-          if (Object.keys(transformed).length > 0) {
-            await uploadWorkspace({
-              provider: args.provider,
-              sandboxId,
-              projectDir: workingDirectory,
-              files: transformed,
-            });
-          }
-        } else {
-          await uploadWorkspace({
-            provider: args.provider,
-            sandboxId,
-            projectDir: workingDirectory,
-            files: args.source.files,
-          });
-        }
-      }
-      const result = await args.executor.executeRun({
-        sandboxId,
-        workingDirectory,
-        workflowFile: args.source.workflowFile,
-        workflowName: args.workflowName,
-        triggerData: args.input,
-        runId: args.runId,
-        plugins: runtimePackages({
-          plugins: args.plugins?.plugins,
-          workflowPackage: args.source.workflowPackage,
-        }),
-        secrets: args.plugins?.secrets,
-      });
-      args.signal?.throwIfAborted();
-      return result;
-    } catch (error) {
-      if (args.signal?.aborted) throw error;
-      if (args.mode === "production") {
-        if (error instanceof RuntimeInfrastructureError) throw error;
-        throw new RuntimeInfrastructureError({
-          operation: `production run '${args.runId}' execution`,
-          cause: error,
-        });
-      }
-      return {
-        status: "failed",
-        error: error instanceof Error ? error.message : String(error),
-        steps: [],
-      };
-    } finally {
-      if (sandboxId && workingDirectory && args.mode === "test") {
-        await args.provider
-          .executeCommand(sandboxId, `rm -rf ${shellQuote(workingDirectory)}`)
-          .catch(() => {});
-      }
-      if (sandboxId && destroySandbox) {
-        await args.provider.destroySandbox(sandboxId).catch(() => {});
-      }
-    }
-  }
-
-  private async finalizePlainRun(args: {
-    runId: string;
-    result: RunResult;
-  }): Promise<boolean> {
-    const now = new Date();
-    return this.db.transaction().execute(async (trx) => {
-      const updated = await trx
-        .updateTable("workflow_runs")
-        .set({
-          status: args.result.status,
-          result: jsonColumn(toJson(args.result.result)),
-          error: args.result.error ?? null,
-          completed_at: now,
-          updated_at: now,
-        })
-        .where("id", "=", args.runId)
-        .where("status", "in", ["pending", "running"])
-        .returning("id")
-        .executeTakeFirst();
-      if (!updated) return false;
-      if (args.result.steps.length === 0) return true;
-      await trx
-        .insertInto("workflow_run_steps")
-        .values(
-          args.result.steps.map((step) => ({
-            id: crypto.randomUUID(),
-            run_id: args.runId,
-            node_id: step.nodeId,
-            occurrence: step.occurrence ?? 0,
-            name: step.name,
-            status: step.status,
-            attempt: step.attempt ?? 1,
-            input: jsonColumn(toJson(step.input)),
-            output: jsonColumn(toJson(step.output)),
-            error: step.error ?? null,
-            started_at: new Date(step.startedAt),
-            completed_at: new Date(step.completedAt),
-          })),
-        )
-        .onConflict((conflict) =>
-          conflict.columns(["run_id", "node_id", "occurrence"]).doNothing(),
-        )
-        .execute();
-      return true;
-    });
-  }
-
-  private async prepareTestSource(args: {
-    identity: Identity;
-    projectId: string;
-    workflowName: string;
-    files?: Record<string, string>;
-  }): Promise<PreparedSource> {
-    const repo = await this.deps.projectManager.openDev(
-      args.identity.tenantId,
-      args.projectId,
-      args.identity.externalUserId,
-    );
-    try {
-      const originalFiles = await repo.readAllFiles();
-      const overlays = args.files ?? {};
-      assertOverlayPaths(overlays);
-      return prepareSource({
-        projectId: args.projectId,
-        workflowName: args.workflowName,
-        files: { ...originalFiles, ...overlays },
-        originalFiles,
-        commitSha: null,
-      });
-    } finally {
-      await repo.dispose();
     }
   }
 
@@ -1900,16 +1455,12 @@ export class RunsService {
     return hit;
   }
 
-  private async loadPlugins(
-    identity: Identity,
-    projectId: string,
-    mode: RunMode,
-  ) {
+  private async loadPlugins(identity: Identity, projectId: string) {
     if (!this.deps.runPluginsLoader) return undefined;
     const plugins = await this.deps.runPluginsLoader.load({
       identity,
       projectId,
-      environment: mode,
+      environment: "production",
     });
     if (plugins.missingRequiredSecrets.length > 0) {
       throw new PluginSecretsMissingError(plugins.missingRequiredSecrets);
@@ -2073,14 +1624,10 @@ function mapRun(args: {
       ...(typeof provenance.commitSha === "string"
         ? { commitSha: provenance.commitSha }
         : {}),
-      ...(provenance.mutableSource === true
-        ? { mutableSource: true as const }
-        : {}),
     },
     ...(args.row.deployment_artifact_id
       ? { artifact: { deploymentArtifactId: args.row.deployment_artifact_id } }
       : {}),
-    mode: args.row.mode === "test" ? "test" : "production",
     initiatedBy: args.row.external_user_id,
     input: args.row.input,
     result: args.row.result,
@@ -2225,17 +1772,4 @@ function changedFiles(args: {
 
 function shellQuote(value: string): string {
   return `'${value.replace(/'/g, `'\\''`)}'`;
-}
-
-function assertOverlayPaths(files: Record<string, string>): void {
-  for (const filePath of Object.keys(files)) {
-    const parts = filePath.split("/");
-    if (
-      filePath.startsWith("/") ||
-      filePath.includes("\0") ||
-      parts.some((part) => part === "" || part === "." || part === "..")
-    ) {
-      throw new InvalidRunOverlayError(filePath);
-    }
-  }
 }

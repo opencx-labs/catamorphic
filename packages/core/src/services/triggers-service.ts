@@ -4,6 +4,7 @@ import { getTracer, withSpan } from "@catamorphic/otel";
 import { type ParameterInfo, parseProject } from "@catamorphic/parser";
 import type { Kysely } from "kysely";
 import { type Identity, SYSTEM_AUTHOR } from "../identity.js";
+import { appApiTypesPath, renderAppApiTypesModule } from "./app-codegen.js";
 import type { ExecutionJobsService } from "./execution-jobs-service.js";
 import type { ExecutionWorkerService } from "./execution-worker-service.js";
 import type { EnrollmentConflictPolicy, RunsService } from "./runs-service.js";
@@ -32,6 +33,10 @@ export interface TriggerBindingInfo {
    */
   canSuspend: boolean;
   inputParameters: ParameterInfo[];
+  /** JSON Schema of the workflow input — tool-definition-ready. */
+  inputSchema: Json;
+  /** JSON Schema of the workflow's resolved output. */
+  outputSchema: Json;
 }
 
 export type TriggerSuspensionReason =
@@ -171,15 +176,17 @@ export class TriggersService {
   }
 
   /**
-   * Writes the generated trigger types into the project's dev tree and
-   * commits when drifted, so `trigger()` type-checks against the host's
-   * actual kinds — for the coding agent and any human editor alike.
+   * Writes every generated type projection into the project's dev tree and
+   * commits when drifted: the trigger-kinds augmentation
+   * (`workflows/src/catamorphic-triggers.d.ts`) and, per app workspace, the
+   * typed app-api client (`apps/<name>/src/catamorphic-app-api.d.ts`).
+   * Generated files are projections of code the host or project owns —
+   * regenerated on change, never hand-edited.
    */
   async syncTypes(args: {
     identity: Identity;
     projectId: string;
-  }): Promise<{ path: string; updated: boolean }> {
-    const content = this.typesModuleContent();
+  }): Promise<{ paths: string[]; updated: boolean }> {
     const repo = await this.deps.projectManager.openDev(
       args.identity.tenantId,
       args.projectId,
@@ -187,12 +194,25 @@ export class TriggersService {
     );
     try {
       const files = await repo.readAllFiles();
-      if (files[TRIGGER_TYPES_SOURCE_PATH] === content) {
-        return { path: TRIGGER_TYPES_SOURCE_PATH, updated: false };
+      const changes = new Map<string, string>();
+      const triggerContent = this.typesModuleContent();
+      if (files[TRIGGER_TYPES_SOURCE_PATH] !== triggerContent) {
+        changes.set(TRIGGER_TYPES_SOURCE_PATH, triggerContent);
       }
-      await repo.writeFile(TRIGGER_TYPES_SOURCE_PATH, content);
-      await repo.commit("Sync catamorphic trigger types", SYSTEM_AUTHOR);
-      return { path: TRIGGER_TYPES_SOURCE_PATH, updated: true };
+      const parsed = parseProject(files);
+      if (parsed.appApi && parsed.errors.length === 0) {
+        const content = renderAppApiTypesModule(parsed.appApi.entries);
+        for (const appName of appWorkspaceNames(files)) {
+          const path = appApiTypesPath(appName);
+          if (files[path] !== content) changes.set(path, content);
+        }
+      }
+      if (changes.size === 0) return { paths: [], updated: false };
+      for (const [path, content] of changes) {
+        await repo.writeFile(path, content);
+      }
+      await repo.commit("Sync catamorphic generated types", SYSTEM_AUTHOR);
+      return { paths: [...changes.keys()], updated: true };
     } finally {
       await repo.dispose();
     }
@@ -545,6 +565,8 @@ export class TriggersService {
       canSuspend: row.can_suspend,
       inputParameters: (row.input_parameters ??
         []) as unknown as ParameterInfo[],
+      inputSchema: (row.input_schema ?? {}) as Json,
+      outputSchema: (row.output_schema ?? {}) as Json,
     }));
   }
 
@@ -585,6 +607,8 @@ export class TriggersService {
           config: binding.config as Json,
           canSuspend: workflow.graph.canSuspend,
           inputParameters: workflow.graph.input.parameters,
+          inputSchema: (workflow.graph.inputSchema ?? {}) as Json,
+          outputSchema: (workflow.graph.outputSchema ?? {}) as Json,
         });
       }
     }
@@ -617,6 +641,8 @@ export class TriggersService {
               config: JSON.stringify(binding.config),
               can_suspend: binding.canSuspend,
               input_parameters: JSON.stringify(binding.inputParameters),
+              input_schema: JSON.stringify(binding.inputSchema),
+              output_schema: JSON.stringify(binding.outputSchema),
             })),
           )
           .onConflict((oc) =>
@@ -634,6 +660,15 @@ export class TriggersService {
     });
     return bindings;
   }
+}
+
+function appWorkspaceNames(files: Record<string, string>): string[] {
+  const names = new Set<string>();
+  for (const filePath of Object.keys(files)) {
+    const match = /^apps\/([^/]+)\/package\.json$/.exec(filePath);
+    if (match?.[1]) names.add(match[1]);
+  }
+  return [...names].sort();
 }
 
 function delay(milliseconds: number): Promise<void> {

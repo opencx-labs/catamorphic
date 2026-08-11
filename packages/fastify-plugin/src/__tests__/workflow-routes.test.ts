@@ -70,6 +70,8 @@ describe("workflow route contracts", () => {
         steps: [],
       },
       input: { parameters: [] },
+      inputSchema: {},
+      outputSchema: {},
       triggers: [],
       canSuspend: true,
       nodes: [
@@ -138,6 +140,8 @@ describe("workflow route contracts", () => {
         steps: [],
       },
       input: { parameters: [] },
+      inputSchema: {},
+      outputSchema: {},
       triggers: [],
       canSuspend: false,
       nodes: [],

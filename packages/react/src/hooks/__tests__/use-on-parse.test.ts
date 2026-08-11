@@ -8,7 +8,6 @@ import { useOnParse } from "../use-on-parse.js";
 const SAMPLE_GRAPH = {
   name: "demo",
   capabilities: {
-    persistedContinuations: true,
     batchProcessing: true,
     cancellation: true,
   },

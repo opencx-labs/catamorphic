@@ -45,7 +45,6 @@ async function createRun(tenantId: string): Promise<string> {
       id: runId,
       project_id: projectIds.get(tenantId) ?? "",
       workflow_name: "queueFixture",
-      mode: "test",
       provenance: sql`'{}'::jsonb`,
       status: "pending",
     })
@@ -63,7 +62,7 @@ async function enqueue(args: {
     await jobs.enqueue({
       tenantId: args.tenantId,
       workflowRunId: runId,
-      kind: "workflow_run",
+      kind: "durable_boundary",
       payload: {},
       ...(args.priority === undefined ? {} : { priority: args.priority }),
     });
@@ -102,7 +101,7 @@ describeIf("execution queue fairness", () => {
 
     const claimed = await jobs.claim({
       workerId: "worker-1",
-      kinds: ["workflow_run"],
+      kinds: ["durable_boundary"],
       limit: 20,
     });
 
@@ -120,7 +119,7 @@ describeIf("execution queue fairness", () => {
 
     const claimed = await jobs.claim({
       workerId: "worker-1",
-      kinds: ["workflow_run"],
+      kinds: ["durable_boundary"],
       limit: 10,
     });
 
@@ -139,7 +138,7 @@ describeIf("execution queue fairness", () => {
 
     const first = await jobs.claim({
       workerId: "worker-1",
-      kinds: ["workflow_run"],
+      kinds: ["durable_boundary"],
       limit: 20,
     });
     expect(first).toHaveLength(3);
@@ -147,7 +146,7 @@ describeIf("execution queue fairness", () => {
     // Already-leased jobs count toward the ceiling, so a second worker gets none.
     const second = await jobs.claim({
       workerId: "worker-2",
-      kinds: ["workflow_run"],
+      kinds: ["durable_boundary"],
       limit: 20,
     });
     expect(second).toHaveLength(0);
@@ -161,7 +160,7 @@ describeIf("execution queue fairness", () => {
 
     const third = await jobs.claim({
       workerId: "worker-2",
-      kinds: ["workflow_run"],
+      kinds: ["durable_boundary"],
       limit: 20,
     });
     expect(third).toHaveLength(1);
@@ -174,7 +173,7 @@ describeIf("execution queue fairness", () => {
 
     const claimed = await jobs.claim({
       workerId: "worker-1",
-      kinds: ["workflow_run"],
+      kinds: ["durable_boundary"],
       limit: 10,
     });
 
@@ -190,7 +189,7 @@ describeIf("execution queue fairness", () => {
 
     const claimed = await jobs.claim({
       workerId: "worker-1",
-      kinds: ["workflow_run"],
+      kinds: ["durable_boundary"],
       limit: 2,
     });
 
@@ -203,7 +202,7 @@ describeIf("execution queue fairness", () => {
       await sql`
         INSERT INTO execution_jobs
           (tenant_id, workflow_run_id, kind, payload, status, available_at)
-        SELECT ${busyTenant}::uuid, ${runId}::uuid, 'workflow_run', '{}'::jsonb,
+        SELECT ${busyTenant}::uuid, ${runId}::uuid, 'durable_boundary', '{}'::jsonb,
                'pending', clock_timestamp()
         FROM generate_series(1::bigint, ${count}::bigint)
       `.execute(db);
@@ -225,7 +224,7 @@ describeIf("execution queue fairness", () => {
         const claimStartedAt = performance.now();
         const claimed = await jobs.claim({
           workerId: `probe-${index}`,
-          kinds: ["workflow_run"],
+          kinds: ["durable_boundary"],
           limit: 20,
         });
         expect(claimed).toHaveLength(20);

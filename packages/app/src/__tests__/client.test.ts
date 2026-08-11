@@ -3,11 +3,11 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { APP_PROTOCOL_VERSION, type GuestToHostMessage } from "../protocol.js";
 
 interface TestContract {
-  listOrders: import("../contract.js").PlainWorkflow<{
+  listOrders: import("../contract.js").Workflow<{
     input: { status: "open" | "all" };
     output: { id: string }[];
   }>;
-  reconcile: import("../contract.js").DurableWorkflow<{
+  reconcile: import("../contract.js").Workflow<{
     input: { month: string };
     output: { matched: number };
   }>;
@@ -52,7 +52,7 @@ describe("createClient", () => {
     const { createClient } = await import("../client.js");
     const workflows = createClient<TestContract>();
 
-    const pending = workflows.listOrders({ status: "open" });
+    const pending = workflows.listOrders.call({ status: "open" });
     const message = sent.at(-1);
     if (message?.kind !== "call") throw new Error("no call sent");
     expect(message.workflowName).toBe("listOrders");
@@ -105,7 +105,7 @@ describe("createClient", () => {
     const { createClient } = await import("../client.js");
     const workflows = createClient<TestContract>();
 
-    const pending = workflows.listOrders({ status: "open" });
+    const pending = workflows.listOrders.call({ status: "open" });
     const message = sent.at(-1);
     if (message?.kind !== "call") throw new Error("no call sent");
     hostReply(message, undefined, false);
@@ -120,7 +120,7 @@ describe("createClient", () => {
   it("ignores messages that are not host protocol messages", async () => {
     const { createClient } = await import("../client.js");
     const workflows = createClient<TestContract>();
-    const pending = workflows.listOrders({ status: "all" });
+    const pending = workflows.listOrders.call({ status: "all" });
 
     window.dispatchEvent(
       new MessageEvent("message", { data: { random: "noise" } }),
@@ -182,7 +182,7 @@ describe("createClient in an MCP Apps host", () => {
 
     // Call made while the bridge still assumes a Catamorphic host — the
     // MCP host ignored the native-dialect frame.
-    const pending = workflows.listOrders({ status: "open" });
+    const pending = workflows.listOrders.call({ status: "open" });
 
     // The host answers the initialize probe: mode flips, call re-sends.
     rpcReply(0, { hostContext: { theme: "dark" } });
@@ -234,7 +234,7 @@ describe("createClient in an MCP Apps host", () => {
     const workflows = createClient<TestContract>();
     rpcReply(0, {});
 
-    const pending = workflows.listOrders({ status: "all" });
+    const pending = workflows.listOrders.call({ status: "all" });
     const call = rpcFrames().at(-1);
     if (!call?.id) throw new Error("no call");
     rpcReply(call.id, {

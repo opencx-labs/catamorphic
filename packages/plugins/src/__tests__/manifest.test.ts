@@ -36,7 +36,9 @@ describe("PluginManifestSchema", () => {
     expect(parsed.catamorphic.displayName).toBe("Acme");
     expect(parsed.catamorphic.secrets).toHaveLength(2);
     expect(parsed.catamorphic.secrets[0]?.required).toBe(true);
-    expect(parsed.catamorphic.secrets[1]?.default).toBe("https://api.example.com");
+    expect(parsed.catamorphic.secrets[1]?.default).toBe(
+      "https://api.example.com",
+    );
   });
 
   it("fills defaults for optional docs fields", () => {

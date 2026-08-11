@@ -54,18 +54,22 @@
  * @displayname Welcome New User
  * @description Onboard a new user
  */</span>
-<span class="tk-kw">export async function</span> <span class="tk-fn">welcomeUser</span><span class="tk-pn">({</span> email, name <span class="tk-pn">}:</span> <span class="tk-pr">NewUserInput</span><span class="tk-pn">)</span> <span class="tk-pn">{</span>
-  <span class="tk-dir">"use workflow"</span><span class="tk-pn">;</span>
+<span class="tk-kw">export const</span> <span class="tk-fn">welcomeUser</span> <span class="tk-pn">=</span> <span class="tk-fn">defineWorkflow</span><span class="tk-pn">(({</span> defineBoundary <span class="tk-pn">})</span> <span class="tk-pn">=&gt;</span> <span class="tk-pn">({</span>
+  steps<span class="tk-pn">:</span> <span class="tk-pn">[</span>
+    <span class="tk-fn">defineBoundary</span><span class="tk-pn">({</span>
+      run<span class="tk-pn">:</span> <span class="tk-kw">async</span> <span class="tk-pn">({</span> input <span class="tk-pn">}:</span> <span class="tk-pr">BoundaryContext</span><span class="tk-pn">&lt;</span><span class="tk-pr">NewUserInput</span><span class="tk-pn">&gt;)</span> <span class="tk-pn">=&gt;</span> <span class="tk-pn">{</span>
+        <span class="tk-kw">const</span> user <span class="tk-pn">=</span> <span class="tk-kw">await</span> <span class="tk-fn">createUser</span><span class="tk-pn">({</span> ...input <span class="tk-pn">});</span>
+        <span class="tk-kw">await</span> <span class="tk-fn">sendWelcomeEmail</span><span class="tk-pn">({</span> to<span class="tk-pn">:</span> user.email <span class="tk-pn">});</span>
 
-  <span class="tk-kw">const</span> user <span class="tk-pn">=</span> <span class="tk-kw">await</span> <span class="tk-fn">createUser</span><span class="tk-pn">({</span> email, name <span class="tk-pn">});</span>
-  <span class="tk-kw">await</span> <span class="tk-fn">sendWelcomeEmail</span><span class="tk-pn">({</span> to<span class="tk-pn">:</span> user.email <span class="tk-pn">});</span>
+        <span class="tk-kw">if</span> <span class="tk-pn">(</span>user.plan <span class="tk-pn">===</span> <span class="tk-str">"premium"</span><span class="tk-pn">)</span> <span class="tk-pn">{</span>
+          <span class="tk-kw">await</span> <span class="tk-fn">assignPremiumBenefits</span><span class="tk-pn">({</span> userId<span class="tk-pn">:</span> user.id <span class="tk-pn">});</span>
+        <span class="tk-pn">}</span>
 
-  <span class="tk-kw">if</span> <span class="tk-pn">(</span>user.plan <span class="tk-pn">===</span> <span class="tk-str">"premium"</span><span class="tk-pn">)</span> <span class="tk-pn">{</span>
-    <span class="tk-kw">await</span> <span class="tk-fn">assignPremiumBenefits</span><span class="tk-pn">({</span> userId<span class="tk-pn">:</span> user.id <span class="tk-pn">});</span>
-  <span class="tk-pn">}</span>
-
-  <span class="tk-kw">return</span> <span class="tk-pn">{</span> status<span class="tk-pn">:</span> <span class="tk-str">"complete"</span>, userId<span class="tk-pn">:</span> user.id <span class="tk-pn">};</span>
-<span class="tk-pn">}</span></code></pre>
+        <span class="tk-kw">return</span> <span class="tk-pn">{</span> status<span class="tk-pn">:</span> <span class="tk-str">"complete"</span>, userId<span class="tk-pn">:</span> user.id <span class="tk-pn">};</span>
+      <span class="tk-pn">},</span>
+    <span class="tk-pn">}),</span>
+  <span class="tk-pn">],</span>
+<span class="tk-pn">}));</span></code></pre>
       </div>
 
       <div class="duo-link" aria-hidden="true">

@@ -44,7 +44,6 @@ const stepB = makeNode("step-b", "step", {
 const graph: WorkflowGraph = {
   name: "wf",
   capabilities: {
-    persistedContinuations: false,
     batchProcessing: false,
     cancellation: false,
   },

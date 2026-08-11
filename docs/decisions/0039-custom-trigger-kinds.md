@@ -31,8 +31,9 @@ kinds with payloads; bindings are introspectable, statically and typed.**
   `triggers: [trigger("kind", config)]`. The kind name must be a string
   literal and the config a constant expression — the parser rejects anything
   computed, which is what makes host introspection possible without
-  executing project code. Plain `"use workflow"` functions cannot subscribe;
-  one authoring surface, one extraction path.
+  executing project code. One authoring surface, one extraction path
+  *(wording updated by [0040](0040-one-workflow-model.md): the plain
+  `"use workflow"` functions this originally excluded no longer exist)*.
 - **Types cross the host→project boundary via codegen.** The registered
   kinds generate `workflows/src/catamorphic-triggers.d.ts`, a module
   augmentation of `@catamorphic/workflow`'s `TriggerKinds` interface

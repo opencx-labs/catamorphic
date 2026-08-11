@@ -30,6 +30,10 @@ export {
 export type { AppBundleStore } from "./services/app-bundle-store.js";
 export { appBundleKey, appVersionPrefix } from "./services/app-bundle-store.js";
 export {
+  appApiTypesPath,
+  renderAppApiTypesModule,
+} from "./services/app-codegen.js";
+export {
   AppLimitExceededError,
   AppPoliciesService,
   AppsDisabledError,
@@ -105,6 +109,7 @@ export {
   type ImportGithubRepoInput,
   ProjectNotLinkedToGithubError,
 } from "./services/github-service.js";
+export { validateAgainstSchema } from "./services/json-schema-validate.js";
 export {
   type AttachedPluginInfo,
   type PluginInfo,
@@ -154,7 +159,6 @@ export {
   type CancelRunInput,
   type EnrollmentConflictPolicy,
   type GetRunInput,
-  InvalidRunOverlayError,
   type ListBatchItemStepsInput,
   type ListBatchItemsInput,
   type ListBatchItemsResult,
@@ -172,7 +176,7 @@ export {
   RunCapabilityError,
   type RunDetail,
   RunEnrollmentConflictError,
-  type RunMode,
+  RunInputInvalidError,
   RunNotFoundError,
   type RunPause,
   type RunPhase,
@@ -184,7 +188,6 @@ export {
   SandboxProviderNotConfiguredError,
   type StepStatus,
   type TriggerProductionRunInput,
-  type TriggerTestRunInput,
   type WorkflowStepAttempt,
   type WorkflowStepAttemptStatus,
 } from "./services/runs-service.js";

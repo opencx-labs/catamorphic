@@ -24,10 +24,13 @@ describe("migrateWorkflowToProject", () => {
 
   it("creates a project with the workflow code in src/", async () => {
     const code = `
-export async function welcomeUser({ email }: { email: string }) {
-  "use workflow";
-  await sendEmail({ to: email });
-}
+import { defineWorkflow } from "@catamorphic/workflow";
+
+export const welcomeUser = defineWorkflow(({ defineBoundary }) => ({
+  steps: [defineBoundary({
+    run: ({ input }: { input: { email: string } }) => sendEmail({ to: input.email }),
+  })],
+}));
 `;
 
     const result = await migrateWorkflowToProject({
@@ -46,7 +49,7 @@ export async function welcomeUser({ email }: { email: string }) {
     expect(files.some((f) => f.includes("welcome-user.ts"))).toBe(true);
 
     const content = await repo.readFile("src/welcome-user.ts");
-    expect(content).toContain("use workflow");
+    expect(content).toContain("defineWorkflow");
 
     await repo.dispose();
   });
@@ -57,7 +60,7 @@ export async function welcomeUser({ email }: { email: string }) {
       tenantId: TENANT,
       projectId: PROJECT,
       workflowName: "My Special Workflow!",
-      workflowCode: 'export async function f() { "use workflow"; }',
+      workflowCode: "export const f = defineWorkflow(() => ({ steps: [] }));",
     });
 
     expect(result.commitSha).toMatch(/^[0-9a-f]{40}$/);

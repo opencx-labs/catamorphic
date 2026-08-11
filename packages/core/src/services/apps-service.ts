@@ -293,7 +293,8 @@ export class AppsService {
           // upload, so the frozen set and the bundle come from the same tree
           // — for previews too, where the dev repo can move mid-build.
           const files = await this.projectSnapshot(args);
-          const allowedWorkflows = this.resolveAllowedWorkflows(files);
+          const { allowedWorkflows, workflowShapes } =
+            this.resolveAppContract(files);
           const bundle = await (args.kind === "preview"
             ? this.withBuildLock(
                 `${args.projectId}:${args.identity.externalUserId}`,
@@ -332,6 +333,9 @@ export class AppsService {
               css_key: cssKey,
               bundle_bytes: bundleBytes,
               allowed_workflows: JSON.stringify(allowedWorkflows),
+              // Frozen IO shapes for the callable set, so the MCP tool
+              // surface serves real input schemas without a parse.
+              workflow_shapes: JSON.stringify(workflowShapes),
               ready_at: new Date(),
             })
             .where("id", "=", version.id)
@@ -534,6 +538,8 @@ export class AppsService {
         code: string;
         css: string;
         allowedWorkflows: string[];
+        /** Frozen per-workflow IO schemas, keyed by workflow name. */
+        workflowShapes: Record<string, AppWorkflowShape>;
         /** Origins the mount's iframe CSP may allow (tenant policy). */
         allowedNetworkOrigins: string[];
       }
@@ -554,7 +560,13 @@ export class AppsService {
       .selectFrom("app_versions")
       .where("app_id", "=", app.id)
       .where("status", "=", "ready")
-      .select(["id", "bundle_key", "css_key", "allowed_workflows"]);
+      .select([
+        "id",
+        "bundle_key",
+        "css_key",
+        "allowed_workflows",
+        "workflow_shapes",
+      ]);
     versionQuery =
       args.channel === "dev"
         ? versionQuery.orderBy("created_at", "desc").limit(1)
@@ -587,6 +599,7 @@ export class AppsService {
       code: decoder.decode(code.data),
       css: decoder.decode(css.data),
       allowedWorkflows: parseAllowedWorkflows(version.allowed_workflows) ?? [],
+      workflowShapes: parseWorkflowShapes(version.workflow_shapes),
       allowedNetworkOrigins: policy.allowedNetworkOrigins,
     };
   }
@@ -743,7 +756,13 @@ export class AppsService {
    * surface fails the build: a version with no frozen set would either be
    * uncallable or unbounded, and both are worse than an error.
    */
-  private resolveAllowedWorkflows(files: Record<string, string>): string[] {
+  private resolveAppContract(files: Record<string, string>): {
+    allowedWorkflows: string[];
+    workflowShapes: Record<
+      string,
+      { inputSchema: unknown; outputSchema: unknown }
+    >;
+  } {
     const parsed = parseProject(files);
     const surface: AppApiSurface | null = parsed.appApi;
     const contractErrors = parsed.errors.filter((error) =>
@@ -759,7 +778,22 @@ export class AppsService {
         "workflows/src/app-api.ts is missing. Export the contract object listing the workflows apps may call.",
       );
     }
-    return surface.entries.map((entry) => entry.workflowName).sort();
+    const workflowShapes: Record<
+      string,
+      { inputSchema: unknown; outputSchema: unknown }
+    > = {};
+    for (const entry of surface.entries) {
+      workflowShapes[entry.workflowName] = {
+        inputSchema: entry.inputSchema ?? {},
+        outputSchema: entry.outputSchema ?? {},
+      };
+    }
+    return {
+      allowedWorkflows: surface.entries
+        .map((entry) => entry.workflowName)
+        .sort(),
+      workflowShapes,
+    };
   }
 
   /** Manifests under the build root that declare @catamorphic/app. */
@@ -887,6 +921,34 @@ function mapVersion(
     readyAt: row.ready_at?.toISOString() ?? null,
     publishedAt: row.published_at?.toISOString() ?? null,
   };
+}
+
+export interface AppWorkflowShape {
+  inputSchema: unknown;
+  outputSchema: unknown;
+}
+
+function parseWorkflowShapes(value: unknown): Record<string, AppWorkflowShape> {
+  if (value == null) return {};
+  let parsed: unknown;
+  try {
+    parsed = typeof value === "string" ? JSON.parse(value) : value;
+  } catch {
+    return {};
+  }
+  if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+    return {};
+  }
+  const shapes: Record<string, AppWorkflowShape> = {};
+  for (const [name, shape] of Object.entries(parsed)) {
+    if (typeof shape !== "object" || shape === null) continue;
+    const record = shape as Record<string, unknown>;
+    shapes[name] = {
+      inputSchema: record.inputSchema ?? {},
+      outputSchema: record.outputSchema ?? {},
+    };
+  }
+  return shapes;
 }
 
 function parseAllowedWorkflows(value: unknown): string[] | null {

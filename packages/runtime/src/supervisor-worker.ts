@@ -18,8 +18,6 @@ type WorkerRunStep = (
   functionName?: string,
 ) => Promise<unknown>;
 
-type InvocationTargetFunction = (input: unknown) => unknown;
-
 const invocationAbortController = new AbortController();
 let initialized = false;
 
@@ -290,8 +288,9 @@ async function executeInvocationTarget(args: {
     ]);
   }
 
-  const target = resolvePlainWorkflowTarget({ exported });
-  return Reflect.apply(target, undefined, [args.invocation.input]);
+  throw new Error(
+    `Invocation kind '${String(args.invocation.kind)}' is not supported`,
+  );
 }
 
 function requireWorkflowStep(args: {
@@ -573,16 +572,6 @@ function readReplay(
       : undefined);
   if (!isRecord(replay)) return new Map();
   return new Map(Object.entries(replay));
-}
-
-function resolvePlainWorkflowTarget(args: {
-  exported: unknown;
-}): InvocationTargetFunction {
-  const target = args.exported;
-  if (typeof target !== "function") {
-    throw new Error("Invocation target is not exported as a function");
-  }
-  return (input) => Reflect.apply(target, undefined, [input]);
 }
 
 function parseResolvedInvocation(value: unknown): ResolvedRuntimeInvocation {

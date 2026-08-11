@@ -522,16 +522,17 @@ const { getRecordDetails } = await import("@acme/example-sdk");
 const contact = await getRecordDetails({ contactId });
 ```
 
-Hit **Run**. Expected test-mode path within the canonical Runs API:
+Deploy the project, then hit **Run**. Expected path within the canonical Runs
+API (every run executes the deployed commit):
 
 ```
-POST /api/projects/:id/workflows/:name/test-runs
-  (RunPluginsLoader builds test payloads + env)
+POST /api/projects/:id/workflows/:name/runs
+  (RunPluginsLoader builds payloads + env)
   ↓
-Cloudflare sandbox
+Cloudflare sandbox (deployment runtime for the deployed artifact)
   /workspace/project/node_modules/@acme/example-sdk/dist/index.mjs
   /workspace/project/src/untitled-workflow.ts
-  bun run harness.ts   EXAMPLE_API_KEY=… EXAMPLE_API_URL=…
+  supervisor invocation   EXAMPLE_API_KEY=… EXAMPLE_API_URL=…
     → fetch(`${EXAMPLE_API_URL}/records/<uuid>`, { headers: { authorization } })
 ```
 

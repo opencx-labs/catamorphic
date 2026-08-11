@@ -142,27 +142,31 @@ Settled decisions — do not deviate without explicit user approval. ADRs in `do
 
 ### Workflow Code Format
 
-There is one Workflow model. A plain workflow is an exported async function
-whose function body contains the exact `"use workflow"` directive. It executes
-normally but has no persisted continuation between operations. Steps use the
-exact `"use step"` directive.
+There is one Workflow model. Every workflow is an exported
+`defineWorkflow(({ defineBoundary, defineBatch }) => ({ steps: [...] }))`
+value from `@catamorphic/workflow`, and every run executes a deployed commit.
+`defineBoundary` creates one atomic retry scope: when its callback fails,
+every operation in that callback retries together. `defineBatch` creates a
+paged per-item processing scope with an optional sink. Package-level
+`defineBatchStep` may physically coalesce compatible calls only inside
+`defineBatch.process`. These are Workflow capabilities, not separate public
+categories, and `stage` is not a public authoring concept. IO lives in
+`"use step"` functions called from boundary run bodies.
 
 ```typescript
-export async function myWorkflow({ input }: { input: string }) {
- "use workflow";
- const result = await myStep({ data: input });
- return { result };
-}
-```
+import { type BoundaryContext, defineWorkflow } from "@catamorphic/workflow";
 
-Workflows that need persisted continuation use the typed
-`defineWorkflow(({ defineBoundary, defineBatch }) => ({ steps: [...] }))`
-contract from `@catamorphic/workflow`. `defineBoundary` creates one atomic
-retry scope: when its callback fails, every operation in that callback retries
-together. `defineBatch` creates a paged per-item processing scope with an optional sink.
-Package-level `defineBatchStep` may physically coalesce compatible calls only
-inside `defineBatch.process`. These are Workflow capabilities, not separate
-public categories, and `stage` is not a public authoring concept.
+export const myWorkflow = defineWorkflow(({ defineBoundary }) => ({
+  steps: [
+    defineBoundary({
+      run: async ({ input }: BoundaryContext<{ data: string }>) => {
+        const result = await myStep({ data: input.data });
+        return { result };
+      },
+    }),
+  ],
+}));
+```
 
 ### Step Functions
 

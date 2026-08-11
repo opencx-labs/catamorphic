@@ -2,6 +2,7 @@ import {
   ProductionDeploymentNotFoundError,
   ProjectNotFoundError,
   RunEnrollmentConflictError,
+  RunInputInvalidError,
   TenantActiveRunLimitError,
   TriggerBindingsInvalidError,
   TriggerKindNotRegisteredError,
@@ -192,6 +193,7 @@ function handleTriggerError(
     return reply.status(404).send({ error: err.message });
   }
   if (
+    err instanceof RunInputInvalidError ||
     err instanceof TriggerKindNotRegisteredError ||
     err instanceof TriggerModeNotAllowedError ||
     err instanceof TriggerPayloadInvalidError ||

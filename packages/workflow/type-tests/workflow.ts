@@ -13,33 +13,6 @@ type Approval = { approved: boolean };
 type ApprovalState = { orderId: string; requestId: string };
 type CompletedOrder = { orderId: string; completed: true };
 
-async function plainWorkflow({ value }: { value: number }) {
-  return { doubled: value * 2 };
-}
-
-function synchronousWorkflow({ value }: { value: number }) {
-  return { doubled: value * 2 };
-}
-
-async function positionalWorkflow(value: number) {
-  return { doubled: value * 2 };
-}
-
-async function twoParameterWorkflow(
-  { value }: { value: number },
-  options: { offset: number },
-) {
-  return { doubled: value * 2 + options.offset };
-}
-
-async function nonJsonInputWorkflow({ createdAt }: { createdAt: Date }) {
-  return { createdAt: createdAt.toISOString() };
-}
-
-async function nonJsonOutputWorkflow({ value }: { value: number }) {
-  return { createdAt: new Date(value) };
-}
-
 const failurePolicy: BatchFailurePolicy = {
   mode: "continue",
   maxFailures: 10,
@@ -140,26 +113,6 @@ const validWorkflow = defineWorkflow(({ defineBoundary }) => ({
 const validAssignment: WorkflowDefinition<OrderInput, CompletedOrder> =
   validWorkflow;
 void validAssignment;
-
-const plainChildWorkflow = defineWorkflow(({ defineBoundary }) => ({
-  steps: [
-    defineBoundary({
-      run: ({ input, callWorkflow }: BoundaryContext<{ value: number }>) =>
-        callWorkflow(plainWorkflow, { input }),
-    }),
-    defineBoundary({
-      run: ({ input }: BoundaryContext<{ doubled: number }>) => ({
-        result: input.doubled,
-      }),
-    }),
-  ],
-}));
-
-const plainChildAssignment: WorkflowDefinition<
-  { value: number },
-  { result: number }
-> = plainChildWorkflow;
-void plainChildAssignment;
 
 const doubleItems = defineBatchStep({
   batch: { maxItems: 10, maxWaitMs: 100 },
@@ -336,28 +289,6 @@ defineWorkflow(({ defineBoundary }) => ({
 
 defineWorkflow(({ defineBoundary }) => ({
   steps: [
-    defineBoundary({
-      run: ({ callWorkflow }: BoundaryContext<OrderInput>) =>
-        // @ts-expect-error Plain workflow inputs must be JSON-compatible.
-        callWorkflow(nonJsonInputWorkflow, {
-          input: { createdAt: new Date() },
-        }),
-    }),
-  ],
-}));
-
-defineWorkflow(({ defineBoundary }) => ({
-  steps: [
-    defineBoundary({
-      run: ({ callWorkflow }: BoundaryContext<OrderInput>) =>
-        // @ts-expect-error Plain workflow outputs must be JSON-compatible.
-        callWorkflow(nonJsonOutputWorkflow, { input: { value: 1 } }),
-    }),
-  ],
-}));
-
-defineWorkflow(({ defineBoundary }) => ({
-  steps: [
     // @ts-expect-error Date values are not JSON-compatible boundary inputs.
     defineBoundary({
       run: ({ input }: BoundaryContext<{ createdAt: Date }>) => ({
@@ -383,52 +314,10 @@ defineWorkflow(({ defineBoundary }) => ({
   steps: [
     defineBoundary({
       run: ({ callWorkflow }: BoundaryContext<OrderInput>) =>
-        // @ts-expect-error Child workflow input is checked at the call site.
         callWorkflow(childWorkflow, {
+          // @ts-expect-error Child workflow input is checked at the call site.
           input: { orderId: "order-1" },
         }),
-    }),
-  ],
-}));
-
-defineWorkflow(({ defineBoundary }) => ({
-  steps: [
-    defineBoundary({
-      run: ({ callWorkflow }: BoundaryContext<OrderInput>) =>
-        callWorkflow(plainWorkflow, {
-          // @ts-expect-error Plain workflow input is checked at the call site.
-          input: { value: "one" },
-        }),
-    }),
-  ],
-}));
-
-defineWorkflow(({ defineBoundary }) => ({
-  steps: [
-    defineBoundary({
-      run: ({ callWorkflow }: BoundaryContext<OrderInput>) =>
-        // @ts-expect-error A plain workflow target must be async.
-        callWorkflow(synchronousWorkflow, { input: { value: 1 } }),
-    }),
-  ],
-}));
-
-defineWorkflow(({ defineBoundary }) => ({
-  steps: [
-    defineBoundary({
-      run: ({ callWorkflow }: BoundaryContext<OrderInput>) =>
-        // @ts-expect-error A plain workflow must accept a keyed input object.
-        callWorkflow(positionalWorkflow, { input: 1 }),
-    }),
-  ],
-}));
-
-defineWorkflow(({ defineBoundary }) => ({
-  steps: [
-    defineBoundary({
-      run: ({ callWorkflow }: BoundaryContext<OrderInput>) =>
-        // @ts-expect-error A plain workflow must accept exactly one parameter.
-        callWorkflow(twoParameterWorkflow, { input: { value: 1 } }),
     }),
   ],
 }));

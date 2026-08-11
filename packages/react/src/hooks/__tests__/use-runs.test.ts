@@ -15,7 +15,6 @@ import {
   useRuns,
   useSubmitRunInput,
   useTriggerRun,
-  useTriggerTestRun,
 } from "../use-runs.js";
 
 const RUN_ID = "00000000-0000-0000-0000-000000000001";
@@ -29,6 +28,7 @@ function makeRun(overrides: Partial<Run> = {}): Run {
     id: RUN_ID,
     projectId: PROJECT_ID,
     workflowName: "sample",
+    correlationKey: null,
     capabilities: {
       cancel: true,
       pauseProcessing: true,
@@ -59,7 +59,6 @@ function makeRun(overrides: Partial<Run> = {}): Run {
     ],
     provenance: { commitSha: "a".repeat(40) },
     artifact: { deploymentArtifactId: ATTEMPT_ID },
-    mode: "production",
     initiatedBy: "user-1",
     input: { value: 1 },
     result: null,
@@ -135,7 +134,6 @@ describe("unified run queries", () => {
         apiUrl(`/api/projects/${PROJECT_ID}/workflows/sample/runs`),
         ({ request }) => {
           const url = new URL(request.url);
-          expect(url.searchParams.get("mode")).toBe("test");
           expect(url.searchParams.get("limit")).toBe("10");
           expect(url.searchParams.get("offset")).toBe("20");
           return HttpResponse.json({ items: [makeRun()], total: 1 });
@@ -146,7 +144,6 @@ describe("unified run queries", () => {
     const options = {
       projectId: PROJECT_ID,
       workflowName: "sample",
-      mode: "test" as const,
       limit: 10,
       offset: 20,
       pollInterval: false as const,
@@ -162,7 +159,6 @@ describe("unified run queries", () => {
         runKeys.list({
           projectId: options.projectId,
           workflowName: options.workflowName,
-          mode: options.mode,
           limit: options.limit,
           offset: options.offset,
         }),
@@ -355,7 +351,7 @@ describe("unified run queries", () => {
 });
 
 describe("unified run mutations", () => {
-  it("triggers production and test runs through canonical paths", async () => {
+  it("triggers runs through the canonical path", async () => {
     const bodies: unknown[] = [];
     server.use(
       http.post(
@@ -367,38 +363,17 @@ describe("unified run mutations", () => {
           });
         },
       ),
-      http.post(
-        apiUrl(`/api/projects/${PROJECT_ID}/workflows/sample/test-runs`),
-        async ({ request }) => {
-          bodies.push(await request.json());
-          return HttpResponse.json(
-            makeRun({ mode: "test", provenance: { mutableSource: true } }),
-            { status: 201 },
-          );
-        },
-      ),
     );
 
-    const production = renderHookWithProviders(() =>
+    const trigger = renderHookWithProviders(() =>
       useTriggerRun({ projectId: PROJECT_ID, workflowName: "sample" }),
     );
-    const test = renderHookWithProviders(() =>
-      useTriggerTestRun({ projectId: PROJECT_ID, workflowName: "sample" }),
-    );
 
-    await production.result.current.mutateAsync({ input: { value: 1 } });
-    const testRun = await test.result.current.mutateAsync({
-      input: { value: 2 },
-      files: { "workflows/sample.ts": "export {}" },
+    const run = await trigger.result.current.mutateAsync({
+      input: { value: 1 },
     });
-    expect(testRun.mode).toBe("test");
-    expect(bodies).toEqual([
-      { input: { value: 1 } },
-      {
-        input: { value: 2 },
-        files: { "workflows/sample.ts": "export {}" },
-      },
-    ]);
+    expect(run.status).toBe("pending");
+    expect(bodies).toEqual([{ input: { value: 1 } }]);
   });
 
   it("updates detail and list caches and invalidates run item hierarchies", async () => {
@@ -414,7 +389,6 @@ describe("unified run mutations", () => {
     const listKey = runKeys.list({
       projectId: PROJECT_ID,
       workflowName: "sample",
-      mode: undefined,
       limit: undefined,
       offset: undefined,
     });

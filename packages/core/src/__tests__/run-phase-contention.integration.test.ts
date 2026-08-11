@@ -23,7 +23,6 @@ async function seedRun(args: { status?: string }): Promise<{
       id: runId,
       project_id: projectId,
       workflow_name: "batch",
-      mode: "test",
       provenance: sql`'{}'::jsonb`,
       status: args.status ?? "running",
       phase: "execute",

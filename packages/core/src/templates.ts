@@ -191,48 +191,60 @@ export const DURABLE_WORKFLOW_SKILL_PATH =
 export const SEED_SKILLS: Record<string, string> = {
   ".agents/skills/writing-workflows/SKILL.md": `---
 name: writing-workflows
-description: Writes and edits Catamorphic Workflows using plain functions or persisted boundary and batch scopes. Use when creating workflows, adding steps, changing workflow logic, or choosing capabilities.
+description: Writes and edits Catamorphic Workflows as exported defineWorkflow definitions with boundary and batch scopes. Use when creating workflows, adding steps, changing workflow logic, or choosing capabilities.
 ---
 
 # Writing Workflows
 
-## Choose the workflow capabilities
+## The one authoring model
 
-Inspect the existing export before editing it and preserve its authoring model
-unless the user explicitly requests a conversion.
+Every workflow is an exported \`defineWorkflow(...)\` value whose ordered
+\`steps\` use the builder-scoped \`defineBoundary\` and \`defineBatch\`:
 
-- **Plain workflow function:** an exported async function containing
-  \`"use workflow"\`. Use for one request, event, entity, or orchestration run.
-- **Defined workflow:** an exported \`defineWorkflow(...)\` whose ordered steps
-  use builder-scoped \`defineBoundary\` and \`defineBatch\`. Use boundaries for
-  explicit retries, pauses, or child workflows. Use batches for persisted paged
-  collections, bounded concurrency, physical batching, progress, or resumable
-  output.
+- **Boundaries** hold orchestration code. A single boundary is enough for most
+  workflows; add more boundaries for explicit retry policies, pauses, or child
+  workflow calls.
+- **Batches** handle persisted paged collections, bounded concurrency, physical
+  batching, progress, or resumable output.
+- **\`"use step"\` functions** hold IO and business operations. They are plain
+  async functions called from boundary run bodies and batch process callbacks.
 
-Do not add \`"use workflow"\` to a \`defineWorkflow\` definition. Do not add a
-batch scope merely to process an array supplied in one request.
+Do not add a batch scope merely to process an array supplied in one request.
 
 ## Shared rules
 
-1. Every workflow and step takes one destructured object parameter.
+1. Every workflow boundary and step takes one destructured object parameter.
 2. Every UI-facing workflow, step, and parameter has JSDoc metadata with
    \`@displayname\`; steps may also use \`@icon\`.
 3. Keep orchestration code simple: awaited calls, \`if\`/\`else\`, loops, and
-   \`Promise.all\`. The visual graph is derived from this structure.
-4. Put IO and business operations in steps. Keep workflow bodies declarative.
+   \`Promise.all\` inside boundary run bodies. The visual graph is derived from
+   this structure.
+4. Put IO and business operations in \`"use step"\` functions. Keep boundary
+   run bodies declarative.
 
-## Plain workflow functions
+## A minimal workflow
 
 \`\`\`typescript
+import {
+  type BoundaryContext,
+  defineWorkflow,
+} from "@catamorphic/workflow";
+
 /**
  * @displayname Greet User
  * @description Send a greeting to a user
+ * @param email - @displayname Email Address | @description Who to greet
  */
-export async function greetUser({ email }: { email: string }) {
-  "use workflow";
-  await sendGreeting({ to: email });
-  return { status: "sent" };
-}
+export const greetUser = defineWorkflow(({ defineBoundary }) => ({
+  steps: [
+    defineBoundary({
+      run: async ({ input }: BoundaryContext<{ email: string }>) => {
+        await sendGreeting({ to: input.email });
+        return { status: "sent" };
+      },
+    }),
+  ],
+}));
 
 /**
  * @displayname Send Greeting
@@ -268,7 +280,7 @@ Key rules:
 ## Boundary and pause scopes
 
 Read [the boundary scope skill](../durable-workflows/SKILL.md) before creating
-or substantially editing boundaries, pauses, or child calls. Defined Workflows
+or substantially editing boundaries, pauses, or child calls. Workflows
 execute in production with persisted continuation state.
 
 ## App-callable workflows
@@ -278,8 +290,10 @@ workflow to apps or editing \`workflows/src/app-api.ts\`. Key rules:
 
 - A workflow is app-callable only when exported from \`app-api.ts\`; keep
   that surface minimal and deliberate.
-- Prefer plain \`"use workflow"\` functions for app-facing reads — they
-  resolve inline. Persisted definitions surface to apps as pollable handles.
+- App-facing reads should be workflows that cannot suspend — no pause,
+  retry, rate limit, or batch scope — so the client's \`.call()\` settles
+  them inline. Long-running workflows are started with \`.start()\` and
+  polled through the returned handle.
 - Inputs and outputs must survive JSON: no dates, maps, sets, functions, or
   \`undefined\`. Send ISO strings and plain objects.
 - App-callable workflows receive untrusted input from a viewer's browser.
@@ -288,7 +302,7 @@ workflow to apps or editing \`workflows/src/app-api.ts\`. Key rules:
 ## Host triggers
 
 The embedding host can define custom trigger kinds — "Ticket Created",
-"AI Tool Call", "Chat Turn" — and fire them with a payload; every defined
+"AI Tool Call", "Chat Turn" — and fire them with a payload; every
 workflow subscribed to that kind runs with the payload as input.
 
 \`\`\`typescript
@@ -308,8 +322,8 @@ export const escalateTicket = defineWorkflow(({ defineBoundary }) => ({
 
 Rules:
 
-1. Only \`defineWorkflow\` definitions can declare \`triggers\`; plain
-   \`"use workflow"\` functions cannot.
+1. Triggers are declared in the definition's inline \`triggers\` array,
+   alongside \`steps\`.
 2. The kind name must be a string literal and the config an inline constant
    (object/array/string/number/boolean literals). Hosts introspect the config
    without running code, so anything computed is a parse error.
@@ -387,7 +401,7 @@ too: anything an app imports ships to every viewer's browser.
 1. Declare the shape in \`contracts/src/index.ts\`:
 
 \`\`\`typescript
-import type { DurableWorkflow, PlainWorkflow } from "@catamorphic/app";
+import type { Workflow } from "@catamorphic/app";
 
 export interface Order { id: string; total: number; placedAt: string }
 
@@ -397,8 +411,8 @@ export interface ListOrders {
 }
 
 export interface AppContract {
-  listOrders: PlainWorkflow<ListOrders>;
-  reconcileLedger: DurableWorkflow<ReconcileLedger>;
+  listOrders: Workflow<ListOrders>;
+  reconcileLedger: Workflow<ReconcileLedger>;
 }
 \`\`\`
 
@@ -419,11 +433,23 @@ import type { AppContract } from "@project/contracts";
 import { createClient } from "@catamorphic/app";
 
 const workflows = createClient<AppContract>();
-const orders = await workflows.listOrders({ status: "open" });
+const orders = await workflows.listOrders.call({ status: "open" });
 
 const run = await workflows.reconcileLedger.start({ month: "2026-07" });
 const outcome = await run.result(); // or run.poll() for progress
 \`\`\`
+
+When a generated \`src/catamorphic-app-api.d.ts\` exists in the app
+workspace, prefer its \`ProjectAppApi\` over a hand-written contract — it is
+projected from \`app-api.ts\` and the workflows' actual input/output types,
+so it cannot drift:
+
+\`\`\`typescript
+import type { ProjectAppApi } from "./catamorphic-app-api.js";
+const workflows = createClient<ProjectAppApi>();
+\`\`\`
+
+Never edit that file; it is regenerated by the host.
 
 Rules that keep this sound:
 
@@ -432,10 +458,12 @@ Rules that keep this sound:
   published version at build time. Entries must be plain identifier
   references to workflow functions (imports and renames are fine; computed
   or namespace access is a build error).
-- Use \`PlainWorkflow\` for plain \`"use workflow"\` functions (they
-  resolve inline — prefer these for reads) and \`DurableWorkflow\` for
-  \`defineWorkflow\` definitions (they return a pollable handle; batch
-  progress arrives through \`poll()\`).
+- Every contract entry is \`Workflow<T>\`. Each client method exposes
+  \`.call(input)\` (runs the workflow and waits for its terminal output)
+  and \`.start(input)\` (returns a pollable run handle; batch progress
+  arrives through \`poll()\`). Reads should be workflows that cannot
+  suspend — no pause, retry, rate limit, or batch — so \`.call()\` settles
+  them inline; use \`.start()\` for anything long-running.
 - **Contracts must survive JSON.** No \`Date\`, \`Map\`, \`Set\`,
   functions, or \`undefined\` in inputs or outputs — the types reject them
   with a \`__catamorphicAppTypeError\` naming the field. Send ISO strings
@@ -802,8 +830,8 @@ export const approveOrder = defineWorkflow(({ defineBoundary }) => ({
    and inline \`run\` callbacks. Keep these structural parts static.
    The same applies to \`triggers\`: an inline array of direct
    \`trigger("literal-kind", { constant: "config" })\` calls.
-10. Workflows with persisted scopes and their boundaries use the same JSDoc
-    metadata as plain functions and steps. Put \`@displayname\`,
+10. Workflow definitions and their boundaries use the same JSDoc metadata
+    as \`"use step"\` functions. Put \`@displayname\`,
     \`@description\`, \`@icon\`, and
     \`@param name - @displayname ... | @description ...\` immediately above the
     exported workflow definition or \`defineBoundary(...)\` array element.
@@ -858,10 +886,15 @@ export const TEMPLATES: ProjectTemplate[] = [
     description: "An app showing open orders, backed by workflows",
     defaultWorkflow: "listOpenOrders",
     files: {
-      ...workspaceFiles({ name: "orders-dashboard" }),
+      ...workspaceFiles({
+        name: "orders-dashboard",
+        dependencies: {
+          "@catamorphic/workflow": WORKFLOW_PACKAGE_VERSION,
+        },
+      }),
       ...SEED_SKILLS,
       ...appScaffold({ name: "dashboard" }),
-      "contracts/src/index.ts": `import type { PlainWorkflow } from "@catamorphic/app";
+      "contracts/src/index.ts": `import type { Workflow } from "@catamorphic/app";
 
 export interface Order {
   id: string;
@@ -882,8 +915,8 @@ export interface MarkOrderShipped {
 
 /** Everything apps may call. Implemented by workflows/src/app-api.ts. */
 export interface AppContract {
-  listOpenOrders: PlainWorkflow<ListOpenOrders>;
-  markOrderShipped: PlainWorkflow<MarkOrderShipped>;
+  listOpenOrders: Workflow<ListOpenOrders>;
+  markOrderShipped: Workflow<MarkOrderShipped>;
 }
 `,
       "contracts/package.json": JSON.stringify(
@@ -899,31 +932,49 @@ export interface AppContract {
         null,
         2,
       ),
-      "workflows/src/orders.ts": `import type { Order } from "@project/contracts";
+      "workflows/src/orders.ts": `import {
+  type BoundaryContext,
+  defineWorkflow,
+} from "@catamorphic/workflow";
+import type { Order } from "@project/contracts";
 
 /**
  * @displayname List Open Orders
  * @description Fetch open orders for the dashboard
+ * @param limit - @displayname Max Orders | @description Maximum number to return
  */
-export async function listOpenOrders({ limit }: { limit?: number }) {
-  "use workflow";
-  const orders = await fetchOpenOrders({ limit: clampLimit({ limit }) });
-  return { orders };
-}
+export const listOpenOrders = defineWorkflow(({ defineBoundary }) => ({
+  steps: [
+    defineBoundary({
+      run: async ({ input }: BoundaryContext<{ limit?: number }>) => {
+        const orders = await fetchOpenOrders({
+          limit: clampLimit({ limit: input.limit }),
+        });
+        return { orders };
+      },
+    }),
+  ],
+}));
 
 /**
  * @displayname Mark Order Shipped
  * @description Mark one order as shipped
+ * @param orderId - @displayname Order ID | @description The order to ship
  */
-export async function markOrderShipped({ orderId }: { orderId: string }) {
-  "use workflow";
-  // App-callable workflows receive untrusted input: validate before acting.
-  if (!/^ord_[a-z0-9]+$/.test(orderId)) {
-    throw new Error("Invalid order id");
-  }
-  await shipOrder({ orderId });
-  return { shipped: true };
-}
+export const markOrderShipped = defineWorkflow(({ defineBoundary }) => ({
+  steps: [
+    defineBoundary({
+      run: async ({ input }: BoundaryContext<{ orderId: string }>) => {
+        // App-callable workflows receive untrusted input: validate before acting.
+        if (!/^ord_[a-z0-9]+$/.test(input.orderId)) {
+          throw new Error("Invalid order id");
+        }
+        await shipOrder({ orderId: input.orderId });
+        return { shipped: true };
+      },
+    }),
+  ],
+}));
 
 function clampLimit({ limit }: { limit?: number }) {
   if (typeof limit !== "number" || !Number.isFinite(limit)) return 20;
@@ -974,8 +1025,8 @@ export function App() {
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    workflows
-      .listOpenOrders({ limit: 20 })
+    workflows.listOpenOrders
+      .call({ limit: 20 })
       .then((result) => setOrders(result.orders))
       .catch((cause: Error) => setError(cause.message));
   }, []);
@@ -1003,8 +1054,8 @@ export function App() {
               <button
                 type="button"
                 onClick={() => {
-                  void workflows
-                    .markOrderShipped({ orderId: order.id })
+                  void workflows.markOrderShipped
+                    .call({ orderId: order.id })
                     .then(() =>
                       setOrders(
                         (current) =>
@@ -1038,33 +1089,48 @@ if (root) createRoot(root).render(<App />);
     description: "Onboard a new user with welcome email and follow-up",
     defaultWorkflow: "welcomeUser",
     files: {
-      ...workspaceFiles({ name: "welcome-user" }),
+      ...workspaceFiles({
+        name: "welcome-user",
+        dependencies: {
+          "@catamorphic/workflow": WORKFLOW_PACKAGE_VERSION,
+        },
+      }),
       ...SEED_SKILLS,
-      "workflows/src/welcome.ts": `/**
+      "workflows/src/welcome.ts": `import {
+  type BoundaryContext,
+  defineWorkflow,
+} from "@catamorphic/workflow";
+
+/**
  * @displayname Welcome New User
  * @description Onboard a new user with welcome email and follow-up
+ * @param email - @displayname Email Address | @description The user's primary email
+ * @param name - @displayname Full Name | @description The user's display name
  */
-export async function welcomeUser({
-  email,
-  name,
-}: {
-  email: string;
-  name: string;
-}) {
-  "use workflow";
+export const welcomeUser = defineWorkflow(({ defineBoundary }) => ({
+  steps: [
+    defineBoundary({
+      run: async ({
+        input,
+      }: BoundaryContext<{ email: string; name: string }>) => {
+        const user = await createUser({
+          email: input.email,
+          name: input.name,
+        });
+        await sendWelcomeEmail({ to: user.email, name: user.name });
 
-  const user = await createUser({ email, name });
-  await sendWelcomeEmail({ to: user.email, name: user.name });
+        if (user.plan === "premium") {
+          await assignPremiumBenefits({ userId: user.id });
+        }
 
-  if (user.plan === "premium") {
-    await assignPremiumBenefits({ userId: user.id });
-  }
+        await sleep("7 days");
+        await sendFollowUpEmail({ to: user.email });
 
-  await sleep("7 days");
-  await sendFollowUpEmail({ to: user.email });
-
-  return { status: "complete", userId: user.id };
-}
+        return { status: "complete", userId: user.id };
+      },
+    }),
+  ],
+}));
 
 /**
  * @displayname Create User
@@ -1112,53 +1178,69 @@ function sleep(_duration: string) {}
       "Process an e-commerce order with parallel fulfillment and notifications",
     defaultWorkflow: "processOrder",
     files: {
-      ...workspaceFiles({ name: "order-processing" }),
+      ...workspaceFiles({
+        name: "order-processing",
+        dependencies: {
+          "@catamorphic/workflow": WORKFLOW_PACKAGE_VERSION,
+        },
+      }),
       ...SEED_SKILLS,
-      "workflows/src/process-order.ts": `/**
+      "workflows/src/process-order.ts": `import {
+  type BoundaryContext,
+  defineWorkflow,
+} from "@catamorphic/workflow";
+
+/**
  * @displayname Process Order
  * @description Process an e-commerce order end-to-end
+ * @param orderId - @displayname Order ID | @description The order to process
+ * @param items - @displayname Items | @description Item ids in the order
+ * @param customerId - @displayname Customer ID | @description The ordering customer
  */
-export async function processOrder({
-  orderId,
-  items,
-  customerId,
-}: {
-  orderId: string;
-  items: string[];
-  customerId: string;
-}) {
-  "use workflow";
+export const processOrder = defineWorkflow(({ defineBoundary }) => ({
+  steps: [
+    defineBoundary({
+      run: async ({
+        input,
+      }: BoundaryContext<{
+        orderId: string;
+        items: string[];
+        customerId: string;
+      }>) => {
+        const { orderId, items, customerId } = input;
+        const order = await validateOrder({ orderId, items });
 
-  const order = await validateOrder({ orderId, items });
+        if (order.total > 500) {
+          await flagForReview({ orderId, reason: "High value order" });
+          await sleep("30 minutes");
+        }
 
-  if (order.total > 500) {
-    await flagForReview({ orderId, reason: "High value order" });
-    await sleep("30 minutes");
-  }
+        const payment = await chargePayment({ orderId, amount: order.total });
 
-  const payment = await chargePayment({ orderId, amount: order.total });
+        if (payment.status === "failed") {
+          await notifyCustomer({ customerId, message: "Payment failed" });
+          return { status: "payment_failed", orderId };
+        }
 
-  if (payment.status === "failed") {
-    await notifyCustomer({ customerId, message: "Payment failed" });
-    return { status: "payment_failed", orderId };
-  }
+        const [shipment] = await Promise.all([
+          (async () => {
+            const shipResult = await createShipment({ orderId, items });
+            await notifyWarehouse({ shipmentId: shipResult.trackingId });
+            return shipResult;
+          })(),
+          generateInvoice({ orderId, amount: order.total }),
+        ]);
 
-  const [shipment] = await Promise.all([
-    (async () => {
-      const shipResult = await createShipment({ orderId, items });
-      await notifyWarehouse({ shipmentId: shipResult.trackingId });
-      return shipResult;
-    })(),
-    generateInvoice({ orderId, amount: order.total }),
-  ]);
+        for (const item of items) {
+          await updateInventory({ itemId: item, delta: -1 });
+        }
 
-  for (const item of items) {
-    await updateInventory({ itemId: item, delta: -1 });
-  }
-
-  await notifyCustomer({ customerId, message: "Order shipped!" });
-  return { status: "complete", orderId, trackingId: shipment.trackingId };
-}
+        await notifyCustomer({ customerId, message: "Order shipped!" });
+        return { status: "complete", orderId, trackingId: shipment.trackingId };
+      },
+    }),
+  ],
+}));
 
 /** @displayname Validate Order @icon shield */
 async function validateOrder({ orderId, items }: { orderId: string; items: string[] }) {
@@ -1215,9 +1297,18 @@ function sleep(_duration: string) {}
       "ETL pipeline with parallel extraction, transformation, and loading",
     defaultWorkflow: "dataSyncPipeline",
     files: {
-      ...workspaceFiles({ name: "data-pipeline" }),
+      ...workspaceFiles({
+        name: "data-pipeline",
+        dependencies: {
+          "@catamorphic/workflow": WORKFLOW_PACKAGE_VERSION,
+        },
+      }),
       ...SEED_SKILLS,
-      "workflows/src/pipeline.ts": `import { extractFromSource } from "./steps/extract";
+      "workflows/src/pipeline.ts": `import {
+  type BoundaryContext,
+  defineWorkflow,
+} from "@catamorphic/workflow";
+import { extractFromSource } from "./steps/extract";
 import { validateSchema, transformData } from "./steps/transform";
 import { loadToDatabase, verifySync } from "./steps/load";
 import { acquireLock, releaseLock, sendAlert } from "./steps/infra";
@@ -1225,44 +1316,50 @@ import { acquireLock, releaseLock, sendAlert } from "./steps/infra";
 /**
  * @displayname Data Sync Pipeline
  * @description Extract, transform, and load data from multiple sources in parallel
+ * @param sources - @displayname Sources | @description Source names to validate
+ * @param targetDb - @displayname Target Database | @description Database to sync into
  */
-export async function dataSyncPipeline({
-  sources,
-  targetDb,
-}: {
-  sources: string[];
-  targetDb: string;
-}) {
-  "use workflow";
+export const dataSyncPipeline = defineWorkflow(({ defineBoundary }) => ({
+  steps: [
+    defineBoundary({
+      run: async ({
+        input,
+      }: BoundaryContext<{ sources: string[]; targetDb: string }>) => {
+        const { sources, targetDb } = input;
+        await acquireLock({ resource: targetDb });
 
-  await acquireLock({ resource: targetDb });
+        const [usersData, ordersData, productsData] = await Promise.all([
+          extractFromSource({ source: "users-api", format: "json" }),
+          extractFromSource({ source: "orders-db", format: "csv" }),
+          extractFromSource({ source: "products-s3", format: "parquet" }),
+        ]);
 
-  const [usersData, ordersData, productsData] = await Promise.all([
-    extractFromSource({ source: "users-api", format: "json" }),
-    extractFromSource({ source: "orders-db", format: "csv" }),
-    extractFromSource({ source: "products-s3", format: "parquet" }),
-  ]);
+        for (const source of sources) {
+          await validateSchema({ source, strict: true });
+        }
 
-  for (const source of sources) {
-    await validateSchema({ source, strict: true });
-  }
+        const transformed = await transformData({
+          datasets: ["users", "orders", "products"],
+          rules: "deduplicate,normalize,enrich",
+        });
 
-  const transformed = await transformData({
-    datasets: ["users", "orders", "products"],
-    rules: "deduplicate,normalize,enrich",
-  });
+        if (transformed.errors > 0) {
+          await sendAlert({
+            channel: "slack",
+            message: "Transform errors detected",
+          });
+        }
 
-  if (transformed.errors > 0) {
-    await sendAlert({ channel: "slack", message: "Transform errors detected" });
-  }
+        await loadToDatabase({ targetDb, batchSize: 1000 });
+        await sleep("5 minutes");
+        await verifySync({ targetDb, expectedCount: transformed.rowCount });
+        await releaseLock({ resource: targetDb });
 
-  await loadToDatabase({ targetDb, batchSize: 1000 });
-  await sleep("5 minutes");
-  await verifySync({ targetDb, expectedCount: transformed.rowCount });
-  await releaseLock({ resource: targetDb });
-
-  return { status: "synced", rows: transformed.rowCount };
-}
+        return { status: "synced", rows: transformed.rowCount };
+      },
+    }),
+  ],
+}));
 
 function sleep(_duration: string) {}
 `,
@@ -1341,43 +1438,64 @@ export async function sendAlert({ channel, message }: { channel: string; message
       "Route incoming support tickets based on priority with nested branching",
     defaultWorkflow: "routeSupportTicket",
     files: {
-      ...workspaceFiles({ name: "support-routing" }),
+      ...workspaceFiles({
+        name: "support-routing",
+        dependencies: {
+          "@catamorphic/workflow": WORKFLOW_PACKAGE_VERSION,
+        },
+      }),
       ...SEED_SKILLS,
-      "workflows/src/route-ticket.ts": `/**
+      "workflows/src/route-ticket.ts": `import {
+  type BoundaryContext,
+  defineWorkflow,
+} from "@catamorphic/workflow";
+
+/**
  * @displayname Route Support Ticket
  * @description Route incoming support tickets to the right team based on priority level
+ * @param ticketId - @displayname Ticket ID | @description The ticket to route
+ * @param priority - @displayname Priority | @description Reported priority level
+ * @param customerEmail - @displayname Customer Email | @description Where to send the acknowledgment
  */
-export async function routeSupportTicket({
-  ticketId,
-  priority,
-  customerEmail,
-}: {
-  ticketId: string;
-  priority: string;
-  customerEmail: string;
-}) {
-  "use workflow";
+export const routeSupportTicket = defineWorkflow(({ defineBoundary }) => ({
+  steps: [
+    defineBoundary({
+      run: async ({
+        input,
+      }: BoundaryContext<{
+        ticketId: string;
+        priority: string;
+        customerEmail: string;
+      }>) => {
+        const ticket = await lookupTicket({ ticketId: input.ticketId });
 
-  const ticket = await lookupTicket({ ticketId });
+        if (ticket.priority === "critical") {
+          await escalateToManager({
+            ticketId: ticket.id,
+            reason: "Critical priority",
+          });
 
-  if (ticket.priority === "critical") {
-    await escalateToManager({ ticketId: ticket.id, reason: "Critical priority" });
+          if (ticket.isVIP) {
+            await assignDedicatedAgent({ ticketId: ticket.id });
+            await notifyAccountManager({ ticketId: ticket.id });
+          } else {
+            await addToEscalationQueue({ ticketId: ticket.id });
+          }
+        } else if (ticket.priority === "high") {
+          await assignToSenior({ ticketId: ticket.id });
+        } else {
+          await addToQueue({ ticketId: ticket.id, queue: "general" });
+        }
 
-    if (ticket.isVIP) {
-      await assignDedicatedAgent({ ticketId: ticket.id });
-      await notifyAccountManager({ ticketId: ticket.id });
-    } else {
-      await addToEscalationQueue({ ticketId: ticket.id });
-    }
-  } else if (ticket.priority === "high") {
-    await assignToSenior({ ticketId: ticket.id });
-  } else {
-    await addToQueue({ ticketId: ticket.id, queue: "general" });
-  }
-
-  await sendAcknowledgment({ to: customerEmail, ticketId: ticket.id });
-  return { status: "routed", ticketId: ticket.id };
-}
+        await sendAcknowledgment({
+          to: input.customerEmail,
+          ticketId: ticket.id,
+        });
+        return { status: "routed", ticketId: ticket.id };
+      },
+    }),
+  ],
+}));
 
 /** @displayname Look Up Ticket @icon search */
 async function lookupTicket({ ticketId }: { ticketId: string }) {

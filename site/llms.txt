@@ -30,7 +30,7 @@ a quarter of infrastructure.
 
 - [Embedding skill](https://raw.githubusercontent.com/opencx-labs/catamorphic/main/skills/embed-catamorphic/SKILL.md): drop into .claude/skills/embed-catamorphic/SKILL.md (dependency checklist, surface decision tree, quickstart, correctness rules)
 - [Integration guide](https://raw.githubusercontent.com/opencx-labs/catamorphic/main/INTEGRATION.md): the canonical end-to-end wiring reference: server-sdk boot, identity mapping, Fastify plugin, React hooks, UI components, plugins, operational notes
-- [README](https://raw.githubusercontent.com/opencx-labs/catamorphic/main/README.md): vision, package map, workflow code format (plain "use workflow" functions and defineWorkflow persisted scopes), local development
+- [README](https://raw.githubusercontent.com/opencx-labs/catamorphic/main/README.md): vision, package map, workflow code format (exported defineWorkflow values with boundary/batch scopes and "use step" IO functions), local development
 
 ## Source (open: read it when docs run out)
 

@@ -95,6 +95,8 @@ export interface ParameterInfo {
   displayName?: string;
   description?: string;
   defaultValue?: string;
+  /** JSON Schema of this parameter's type, when statically derivable. */
+  schema?: unknown;
 }
 
 export interface StepArgumentSource {
@@ -159,7 +161,6 @@ export interface WorkflowEdge {
 }
 
 export interface WorkflowCapabilities {
-  persistedContinuations: boolean;
   batchProcessing: boolean;
   cancellation: boolean;
 }
@@ -277,7 +278,14 @@ export interface WorkflowGraph {
   description?: string;
   controls?: { cancel?: true };
   input: { parameters: ParameterInfo[] };
-  /** Host trigger kinds this workflow subscribes to. Empty for plain workflows. */
+  /**
+   * JSON Schema of the workflow input (the first step's input type). `{}`
+   * when the type could not be derived — permissive, never rejecting.
+   */
+  inputSchema: unknown;
+  /** JSON Schema of the last step's resolved output. `{}` when unknown. */
+  outputSchema: unknown;
+  /** Host trigger kinds this workflow subscribes to. */
   triggers: WorkflowTriggerBinding[];
   /**
    * Whether any execution path can leave the run waiting on the clock or the
@@ -331,6 +339,10 @@ export interface AppApiEntry {
   /** The workflow function it resolves to. */
   workflowName: string;
   capabilities: WorkflowCapabilities;
+  /** JSON Schema of the workflow's input, joined from its parsed graph. */
+  inputSchema?: unknown;
+  /** JSON Schema of the workflow's resolved output. */
+  outputSchema?: unknown;
 }
 
 /** A secret declared in project code via `defineSecrets({ ... })`. */

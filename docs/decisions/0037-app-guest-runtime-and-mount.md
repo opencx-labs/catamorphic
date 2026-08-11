@@ -16,16 +16,19 @@ a component that renders the bundle without extending trust to it.
 a postMessage transport plus contract-shaping types; it holds no credentials
 and never sees a URL, header, or token.
 
-- `PlainWorkflow<T>` / `DurableWorkflow<T>` shape entries in the project's
-  `contracts/` package. Their `input`/`output` pass through `JsonSafe<T>`,
+- `Workflow<T>` shapes entries in the project's `contracts/` package
+  *(wording updated by [0040](0040-one-workflow-model.md): the original
+  `PlainWorkflow<T>` / `DurableWorkflow<T>` pair collapsed into this one
+  type)*. Their `input`/`output` pass through `JsonSafe<T>`,
   which resolves non-serializable members (`Date`, `Map`, `Set`, functions,
   `undefined`) to a branded error type naming the offense — every call crosses
   postMessage and JSON over HTTP, and a `Date` that types as `Date` but
   arrives as a string is the exact bug this kills at compile time.
-- `createClient<AppContract>()` exposes plain workflows as
-  `(input) => Promise<Output>` and durable ones as `{ start } → RunHandle`
-  with `poll()` and `result()`. Capability, not kind — consistent with ADR
-  0026.
+- `createClient<AppContract>()` exposes both invocation shapes on every
+  workflow: `.call(input)` waits for the terminal output and `.start(input)`
+  returns a `RunHandle` with `poll()` and `result()` *(wording updated by
+  [0040](0040-one-workflow-model.md))*. Capability, not kind — consistent
+  with ADR 0026.
 - The protocol is versioned (`catamorphicApp: 1`) and shape-checked on both
   sides; it is a transport, not a trust boundary.
 

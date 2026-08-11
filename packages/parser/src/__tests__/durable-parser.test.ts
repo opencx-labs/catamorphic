@@ -82,7 +82,6 @@ describe("durable workflow parsing", () => {
     ).toMatchObject({
       functionName: "approveOrder",
       capabilities: {
-        persistedContinuations: true,
         batchProcessing: false,
         cancellation: true,
       },
@@ -110,7 +109,6 @@ describe("durable workflow parsing", () => {
     );
 
     expect(graph.capabilities).toEqual({
-      persistedContinuations: true,
       batchProcessing: false,
       cancellation: true,
     });
@@ -258,7 +256,6 @@ export const child = defineWorkflow(({ defineBoundary, defineBatch }) => ({
       workflowTarget: {
         exportTarget: { modulePath: "src/child.ts", exportName: "child" },
         capabilities: {
-          persistedContinuations: true,
           batchProcessing: true,
           cancellation: false,
         },
@@ -278,69 +275,7 @@ export const child = defineWorkflow(({ defineBoundary, defineBatch }) => ({
     expect(call).not.toHaveProperty("kind");
   });
 
-  it("resolves exported plain child workflow metadata and execution", () => {
-    const result = parseProject({
-      "src/parent.ts": `
-export const parent = defineWorkflow(({ defineBoundary }) => ({
-  steps: [
-    defineBoundary({
-      run: ({ input, callWorkflow }) => callWorkflow(plainChild, { input }),
-    }),
-  ],
-}));
-`,
-      "src/plain-child.ts": `
-/**
- * @displayname Plain Child
- * @description Runs without persisted continuation
- */
-export async function plainChild({ value }: { value: string }) {
-  "use workflow";
-  return finish({ value });
-}
-`,
-    });
-    expect(result.errors).toEqual([]);
-    const parent = result.workflows.find(
-      (workflow) => workflow.functionName === "parent",
-    )?.graph;
-    const call = parent?.nodes.find((node) => node.type === "call-workflow");
-
-    expect(call).toMatchObject({
-      label: "Call Plain Child",
-      description: "Runs without persisted continuation",
-      metadata: {
-        childModulePath: "src/plain-child.ts",
-        childExportName: "plainChild",
-      },
-      workflowTarget: {
-        exportTarget: {
-          modulePath: "src/plain-child.ts",
-          exportName: "plainChild",
-        },
-        capabilities: {
-          persistedContinuations: false,
-          batchProcessing: false,
-          cancellation: false,
-        },
-        execution: {
-          exportTarget: {
-            modulePath: "src/plain-child.ts",
-            exportName: "plainChild",
-          },
-          steps: [],
-        },
-      },
-    });
-    expect(
-      parent?.nodes.find(
-        (node) => node.functionName === "finish" && node.parentId === call?.id,
-      ),
-    ).toBeDefined();
-    expect(call).not.toHaveProperty("kind");
-  });
-
-  it("does not resolve non-exported or inexact plain child workflows", () => {
+  it("does not resolve non-exported child workflows", () => {
     const result = parseProject({
       "src/parent.ts": `
 export const parent = defineWorkflow(({ defineBoundary }) => ({
@@ -352,12 +287,10 @@ export const parent = defineWorkflow(({ defineBoundary }) => ({
 }));
 `,
       "src/private-child.ts": `
-async function privateChild() {
-  "use workflow";
-}
-export async function inexactChild() {
-  "use workflow later";
-}
+const privateChild = defineWorkflow(({ defineBoundary }) => ({
+  steps: [defineBoundary({ run: ({ input }) => input })],
+}));
+export {};
 `,
     });
     const call = result.workflows[0]?.graph.nodes.find(

@@ -115,8 +115,7 @@ scoped.files.readAll({ projectId })
 scoped.files.write({ projectId, path, content, commitMessage? })
 
 scoped.runs.triggerProduction({ projectId, workflowName, input? })
-scoped.runs.triggerTest({ projectId, workflowName, input?, files? })
-scoped.runs.list({ projectId, workflowName?, mode?, limit?, offset? })
+scoped.runs.list({ projectId, workflowName?, limit?, offset? })
 scoped.runs.get({ runId })
 scoped.runs.cancel({ runId, reason? })
 scoped.runs.pauseProcessing({ runId })
@@ -141,11 +140,10 @@ corresponding capability is not currently available. Repeating pause while the
 Run is already operator-paused, or resume while that Batch scope is already
 running, is idempotent.
 
-Production and test are Run modes within this resource. Exact `"use workflow"`
-functions may run against mutable test files. Workflows using
-`defineWorkflow(({ defineBoundary, defineBatch }) => ({ steps: [...] }))` have
-persisted continuation and currently require an immutable production
-deployment.
+Every workflow is an exported
+`defineWorkflow(({ defineBoundary, defineBatch }) => ({ steps: [...] }))`
+value, and every Run executes an immutable production deployment; there is no
+mutable-source or test mode.
 
 Plugins, secrets, and git ops (deploy/pull/diff) remain available through `catamorphic.core` or the HTTP surface. Runs are identity-bound on `scoped.runs`; hosts do not pass tenant or user ids into individual calls.
 

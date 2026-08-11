@@ -2,11 +2,10 @@ export { createClient, getContext, reportHeight } from "./client.js";
 export type {
   AppClient,
   ClientMethod,
-  DurableWorkflow,
   JsonSafe,
-  PlainWorkflow,
   RunHandle,
   TypedRunSnapshot,
+  Workflow,
   WorkflowShape,
 } from "./contract.js";
 export { appGuestCsp, buildAppGuestDocument } from "./guest-document.js";

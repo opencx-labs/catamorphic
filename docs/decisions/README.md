@@ -25,7 +25,7 @@ Settled design decisions live here as short Architecture Decision Records. They 
 | [0010](0010-skills-in-project-repo.md) | Per-project agent skills live in the project repo (`.agents/skills/`) | Accepted |
 | [0011](0011-registry-distributed-monaco-editor.md) | Code editor ships as a registry item; linking state lives in React hooks | Accepted |
 | [0012](0012-s3-compatible-origin-backend.md) | S3-compatible object storage as a git origin backend (`@catamorphic/s3`) | Accepted |
-| [0013](0013-test-and-production-run-modes.md) | Explicit test and production workflow run modes | Accepted (updated by 0014, 0026) |
+| [0013](0013-test-and-production-run-modes.md) | Explicit test and production workflow run modes | Superseded by 0040 |
 | [0014](0014-deployment-scoped-execution-runtimes.md) | Deployment-scoped execution runtimes | Accepted (updated by 0026) |
 | [0015](0015-first-class-batch-workflows.md) | First-class batch workflows | Superseded by 0026 |
 | [0016](0016-durable-runtime-event-reporting.md) | Persisted runtime event reporting | Accepted (updated by 0024, 0026) |
@@ -51,3 +51,6 @@ Settled design decisions live here as short Architecture Decision Records. They 
 | [0036](0036-app-authorization-and-audience.md) | App authorization: contract surface, frozen sets, audience identities | Accepted |
 | [0037](0037-app-guest-runtime-and-mount.md) | App guest runtime (`@catamorphic/app`) and host mount | Accepted |
 | [0038](0038-coding-agent-registry-and-host-execution.md) | Coding-agent registry: per-session agents, host execution, effort | Accepted |
+| [0039](0039-custom-trigger-kinds.md) | Custom trigger kinds: host-defined events, typed bindings, sync firing | Accepted |
+| [0040](0040-one-workflow-model.md) | One workflow model: every workflow is `defineWorkflow`, every run a deployed commit | Accepted |
+| [0041](0041-generated-projections.md) | Generated projections: schemas and types derived from code | Accepted |

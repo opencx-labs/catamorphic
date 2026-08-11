@@ -27,7 +27,6 @@ describe("customer feedback batch template", () => {
     expect(parsed.workflows[0]).toMatchObject({
       functionName: "analyzeCustomerFeedback",
       capabilities: {
-        persistedContinuations: true,
         batchProcessing: true,
       },
     });

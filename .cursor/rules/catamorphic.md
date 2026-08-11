@@ -11,11 +11,12 @@ globs: ["**/*.ts", "**/*.tsx"]
 - **Instrument with OpenTelemetry.** Use `@catamorphic/otel` (`getTracer` + `withSpan`, `catamorphic.*` attributes) for hot paths; the host owns the OTel SDK.
 - **Record settled design decisions as ADRs** in `docs/decisions/` (see `AGENTS.md` → Design Decisions).
 - All step functions take a single destructured object parameter.
-- There is one Workflow and one Run model. Plain exact `"use workflow"`
-  functions lack persisted continuation. `defineWorkflow` composes builder-scoped
-  `defineBoundary` and `defineBatch`; `defineBatchStep` only physically coalesces
-  compatible calls inside `defineBatch.process`. Never add a public stage or
-  capability-specific Run family.
+- There is one Workflow and one Run model. Every workflow is an exported
+  `defineWorkflow` value composing builder-scoped `defineBoundary` and
+  `defineBatch`; IO lives in `"use step"` functions called from boundary
+  bodies; every run executes a deployed commit. `defineBatchStep` only
+  physically coalesces compatible calls inside `defineBatch.process`. Never
+  add a public stage or capability-specific Run family.
 - Use JSDoc tags (@displayname, @icon, @description, @param) for UI metadata.
 - Zod schemas are the single source of truth for API types.
 - After adding API routes, regenerate: `cd packages/fastify-plugin && bun run generate-spec && cd ../api-client && bun run generate`

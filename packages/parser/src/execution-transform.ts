@@ -7,7 +7,7 @@ import type {
   WorkflowNode,
 } from "./types.js";
 
-export const EXECUTION_TRANSFORM_VERSION = "execution-transform-v3";
+export const EXECUTION_TRANSFORM_VERSION = "execution-transform-v4";
 
 export interface PreparedProjectExecution {
   files: Record<string, string>;
@@ -104,12 +104,11 @@ function collectWorkflowEdits(opts: {
       !isOwnedByWorkflow({ graph: opts.graph, node }) ||
       node.type !== "step" ||
       !node.functionName ||
-      (opts.graph.capabilities.persistedContinuations &&
-        !hasAncestorOfType({
-          graph: opts.graph,
-          nodeId: node.id,
-          type: "batch",
-        }))
+      !hasAncestorOfType({
+        graph: opts.graph,
+        nodeId: node.id,
+        type: "batch",
+      })
     ) {
       continue;
     }

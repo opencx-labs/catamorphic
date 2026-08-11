@@ -6,10 +6,15 @@ describe("parseProject", () => {
   it("discovers a single workflow from a single file", () => {
     const files = {
       "src/welcome.ts": `
-export async function welcomeUser({ email }: { email: string }) {
-  "use workflow";
-  await sendEmail({ to: email });
-}
+export const welcomeUser = defineWorkflow(({ defineBoundary }) => ({
+  steps: [
+    defineBoundary({
+      run: async ({ input }: BoundaryContext<{ email: string }>) => {
+        await sendEmail({ to: input.email });
+      },
+    }),
+  ],
+}));
 
 async function sendEmail({ to }: { to: string }) {
   "use step";
@@ -30,10 +35,15 @@ async function sendEmail({ to }: { to: string }) {
   it("ignores frontend app sources when discovering workflows and steps", () => {
     const files = {
       "workflows/src/welcome.ts": `
-export async function welcomeUser({ email }: { email: string }) {
-  "use workflow";
-  await sendEmail({ to: email });
-}
+export const welcomeUser = defineWorkflow(({ defineBoundary }) => ({
+  steps: [
+    defineBoundary({
+      run: async ({ input }: BoundaryContext<{ email: string }>) => {
+        await sendEmail({ to: input.email });
+      },
+    }),
+  ],
+}));
 
 /**
  * @displayname Send Email
@@ -43,15 +53,15 @@ async function sendEmail({ to }: { to: string }) {
 }
 `,
       // Same step name in app code must not override the workflow's step, and
-      // an app-side workflow directive must not be discovered.
+      // an app-side workflow definition must not be discovered.
       "apps/dashboard/src/main.tsx": `
 async function sendEmail({ to }: { to: string }) {
   "use step";
 }
 
-export async function appSideWorkflow() {
-  "use workflow";
-}
+export const appSideWorkflow = defineWorkflow(({ defineBoundary }) => ({
+  steps: [defineBoundary({ run: async ({ input }) => input })],
+}));
 `,
     };
 
@@ -70,20 +80,30 @@ export async function appSideWorkflow() {
   it("discovers multiple workflows across multiple files", () => {
     const files = {
       "src/welcome.ts": `
-export async function welcomeUser({ email }: { email: string }) {
-  "use workflow";
-  await greet({ name: email });
-}
+export const welcomeUser = defineWorkflow(({ defineBoundary }) => ({
+  steps: [
+    defineBoundary({
+      run: async ({ input }: BoundaryContext<{ email: string }>) => {
+        await greet({ name: input.email });
+      },
+    }),
+  ],
+}));
 
 async function greet({ name }: { name: string }) {
   "use step";
 }
 `,
       "src/order.ts": `
-export async function processOrder({ orderId }: { orderId: string }) {
-  "use workflow";
-  await validateOrder({ orderId });
-}
+export const processOrder = defineWorkflow(({ defineBoundary }) => ({
+  steps: [
+    defineBoundary({
+      run: async ({ input }: BoundaryContext<{ orderId: string }>) => {
+        await validateOrder({ orderId: input.orderId });
+      },
+    }),
+  ],
+}));
 
 async function validateOrder({ orderId }: { orderId: string }) {
   "use step";
@@ -103,10 +123,15 @@ async function validateOrder({ orderId }: { orderId: string }) {
   it("discovers step functions from other files", () => {
     const files = {
       "src/workflow.ts": `
-export async function myWorkflow({ email }: { email: string }) {
-  "use workflow";
-  await sendEmail({ to: email });
-}
+export const myWorkflow = defineWorkflow(({ defineBoundary }) => ({
+  steps: [
+    defineBoundary({
+      run: async ({ input }: BoundaryContext<{ email: string }>) => {
+        await sendEmail({ to: input.email });
+      },
+    }),
+  ],
+}));
 `,
       "src/steps/email.ts": `
 /**
@@ -134,10 +159,15 @@ async function sendEmail({ to }: { to: string }) {
       "package.json": '{ "name": "test" }',
       "README.md": "# Test",
       "src/workflow.ts": `
-export async function myWorkflow() {
-  "use workflow";
-  await doThing();
-}
+export const myWorkflow = defineWorkflow(({ defineBoundary }) => ({
+  steps: [
+    defineBoundary({
+      run: async () => {
+        await doThing();
+      },
+    }),
+  ],
+}));
 `,
     };
 
@@ -147,13 +177,18 @@ export async function myWorkflow() {
     expect(result.workflows).toHaveLength(1);
   });
 
-  it("ignores files without workflow directives", () => {
+  it("ignores files without workflow definitions", () => {
     const files = {
       "src/workflow.ts": `
-export async function myWorkflow() {
-  "use workflow";
-  await doThing();
-}
+export const myWorkflow = defineWorkflow(({ defineBoundary }) => ({
+  steps: [
+    defineBoundary({
+      run: async () => {
+        await doThing();
+      },
+    }),
+  ],
+}));
 `,
       "src/utils.ts": `
 export function helper() {
@@ -186,16 +221,14 @@ export function helper() {
   it("populates filePath on each discovered workflow", () => {
     const files = {
       "src/a.ts": `
-export async function workflowA() {
-  "use workflow";
-  await doA();
-}
+export const workflowA = defineWorkflow(({ defineBoundary }) => ({
+  steps: [defineBoundary({ run: async () => doA() })],
+}));
 `,
       "src/b.ts": `
-export async function workflowB() {
-  "use workflow";
-  await doB();
-}
+export const workflowB = defineWorkflow(({ defineBoundary }) => ({
+  steps: [defineBoundary({ run: async () => doB() })],
+}));
 `,
     };
 
@@ -214,10 +247,9 @@ export async function workflowB() {
   it("sets projectFiles on each graph to all input file keys", () => {
     const files = {
       "src/workflow.ts": `
-export async function myWorkflow() {
-  "use workflow";
-  await doThing();
-}
+export const myWorkflow = defineWorkflow(({ defineBoundary }) => ({
+  steps: [defineBoundary({ run: async () => doThing() })],
+}));
 `,
       "src/helpers.ts": `
 export function helper() { return 1; }
@@ -238,12 +270,17 @@ export function helper() { return 1; }
  * @displayname My Flow
  * @description A test flow
  */
-export async function myFlow({ input }: { input: string }) {
-  "use workflow";
-  const result = await stepA({ data: input });
-  await stepB({ value: result });
-  return { done: true };
-}
+export const myFlow = defineWorkflow(({ defineBoundary }) => ({
+  steps: [
+    defineBoundary({
+      run: async ({ input }: BoundaryContext<{ input: string }>) => {
+        const result = await stepA({ data: input.input });
+        await stepB({ value: result });
+        return { done: true };
+      },
+    }),
+  ],
+}));
 
 async function stepA({ data }: { data: string }) {
   "use step";
@@ -270,10 +307,11 @@ async function stepB({ value }: { value: string }) {
     expect(steps[0]?.functionName).toBe("stepA");
     expect(steps[1]?.functionName).toBe("stepB");
 
-    const ret = graph.nodes.find((n) => n.type === "return");
-    expect(ret).toBeDefined();
-
-    expect(graph.edges.length).toBeGreaterThanOrEqual(3);
+    expect(graph.edges).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ source: steps[0]?.id, target: steps[1]?.id }),
+      ]),
+    );
   });
 });
 
@@ -281,17 +319,15 @@ describe("parseWorkflowFromProject", () => {
   it("returns the graph for a named workflow", () => {
     const files = {
       "src/a.ts": `
-export async function workflowA() {
-  "use workflow";
-  await stepOne();
-}
+export const workflowA = defineWorkflow(({ defineBoundary }) => ({
+  steps: [defineBoundary({ run: async () => stepOne() })],
+}));
 async function stepOne() { "use step"; }
 `,
       "src/b.ts": `
-export async function workflowB() {
-  "use workflow";
-  await stepTwo();
-}
+export const workflowB = defineWorkflow(({ defineBoundary }) => ({
+  steps: [defineBoundary({ run: async () => stepTwo() })],
+}));
 async function stepTwo() { "use step"; }
 `,
     };
@@ -308,16 +344,14 @@ async function stepTwo() { "use step"; }
   it("returns null for a non-existent workflow name", () => {
     const files = {
       "src/a.ts": `
-export async function workflowA() {
-  "use workflow";
-  await doThing();
-}
+export const workflowA = defineWorkflow(({ defineBoundary }) => ({
+  steps: [defineBoundary({ run: async () => doThing() })],
+}));
 `,
       "src/b.ts": `
-export async function workflowB() {
-  "use workflow";
-  await other();
-}
+export const workflowB = defineWorkflow(({ defineBoundary }) => ({
+  steps: [defineBoundary({ run: async () => other() })],
+}));
 `,
     };
 
@@ -328,10 +362,15 @@ export async function workflowB() {
   it("can resolve step functions from other files", () => {
     const files = {
       "src/main.ts": `
-export async function myWorkflow({ email }: { email: string }) {
-  "use workflow";
-  await sendNotification({ to: email });
-}
+export const myWorkflow = defineWorkflow(({ defineBoundary }) => ({
+  steps: [
+    defineBoundary({
+      run: async ({ input }: BoundaryContext<{ email: string }>) => {
+        await sendNotification({ to: input.email });
+      },
+    }),
+  ],
+}));
 `,
       "src/steps.ts": `
 /**
@@ -353,17 +392,22 @@ async function sendNotification({ to }: { to: string }) {
     expect(step?.label).toBe("Send Notification");
   });
 
-  it("resolves by workflow file path when the exported function was renamed", () => {
+  it("resolves by workflow file path when the exported workflow was renamed", () => {
     const files = {
       "workflows/src/untitled-workflow2.ts": `
 /**
  * @displayname Hello
  */
-export async function helloWorldWorkflow() {
-  "use workflow";
-  await printHelloWorld();
-  return { success: true };
-}
+export const helloWorldWorkflow = defineWorkflow(({ defineBoundary }) => ({
+  steps: [
+    defineBoundary({
+      run: async () => {
+        await printHelloWorld();
+        return { success: true };
+      },
+    }),
+  ],
+}));
 async function printHelloWorld() {
   "use step";
 }
@@ -433,15 +477,23 @@ export const secrets = defineSecrets(declarations);
 
 describe("app-api contract surface", () => {
   const ordersFile = `
-export async function listOrders({ status }: { status: string }) {
-  "use workflow";
-  return [];
-}
+export const listOrders = defineWorkflow(({ defineBoundary }) => ({
+  steps: [
+    defineBoundary({
+      run: async ({ input }: BoundaryContext<{ status: string }>) => [],
+    }),
+  ],
+}));
 
-export async function refundOrder({ id }: { id: string }) {
-  "use workflow";
-  return { refunded: true };
-}
+export const refundOrder = defineWorkflow(({ defineBoundary }) => ({
+  steps: [
+    defineBoundary({
+      run: async ({ input }: BoundaryContext<{ id: string }>) => ({
+        refunded: true,
+      }),
+    }),
+  ],
+}));
 `;
 
   it("resolves exported entries to workflows via bindings", () => {
@@ -457,20 +509,16 @@ export const appApi = { listOrders, refundOrders: refund };
     const result = parseProject(files);
 
     expect(result.errors).toEqual([]);
-    expect(result.appApi?.entries).toEqual([
+    expect(result.appApi?.entries).toMatchObject([
       {
         exposedName: "listOrders",
         workflowName: "listOrders",
-        capabilities: expect.objectContaining({
-          persistedContinuations: false,
-        }),
+        capabilities: { batchProcessing: false, cancellation: false },
       },
       {
         exposedName: "refundOrders",
         workflowName: "refundOrder",
-        capabilities: expect.objectContaining({
-          persistedContinuations: false,
-        }),
+        capabilities: { batchProcessing: false, cancellation: false },
       },
     ]);
   });

@@ -159,7 +159,17 @@ Semantics that keep this correct:
   scanned, and generate `workflows/src/catamorphic-triggers.d.ts` inside each
   project so `trigger()` type-checks for workflow authors. Call
   `scoped.triggers.syncTypes({ projectId })` at project provisioning and
-  whenever the kind set changes (the file is committed; a no-op when fresh).
+  whenever the kind set changes — it writes every generated projection in
+  one drift-checked commit (trigger kinds, plus a typed
+  `apps/<name>/src/catamorphic-app-api.d.ts` client interface per app
+  workspace) and returns `{ paths, updated }`; a no-op when fresh.
+- **Workflow IO schemas ride along.** Each binding from
+  `scoped.triggers.list` carries `inputSchema`/`outputSchema` — real JSON
+  Schemas projected from the workflow's TS types — so AI-tool-call
+  embedders hand them straight to an agent harness (description from
+  config, schema from code). Run input is validated against the same
+  schema at trigger time (`RunInputInvalidError`), and the MCP workflow
+  tools serve them as `inputSchema`.
 - **Sync firing runs until the first wait.** `mode: "sync"` executes the
   run's boundaries inline in your request and returns
   `{ status: "completed", output }` — unless the workflow pauses, backs off
@@ -202,11 +212,12 @@ shadcn-style source-owned components: `@catamorphic/registry`.
 - Tenant = host org id, upserted on first use. Never pre-register. External
   user id is never persisted; it scopes git working copies and commit
   authorship.
-- All exports are Workflows; every invocation is a Run. Plain
-  `"use workflow"` functions have no persisted continuation; use
-  `defineWorkflow(({ defineBoundary, defineBatch }) => …)` for retry scopes,
-  pauses/signals, and batches. Never invent a separate "batch run" concept:
-  capabilities live on the one Run model.
+- All exports are Workflows; every invocation is a Run. Every workflow is an
+  exported `defineWorkflow(({ defineBoundary, defineBatch }) => …)` value —
+  boundaries for retry scopes, pauses/signals; batches for collections; IO in
+  `"use step"` functions called from boundary bodies. Every run executes a
+  deployed commit. Never invent a separate "batch run" concept: capabilities
+  live on the one Run model.
 - Migrations (`catamorphic.migrate()` / `npx catamorphic-db migrate`) are
   idempotent, schema-scoped, and run statement-by-statement so
   single-connection dialects (pglite) work.
@@ -226,8 +237,9 @@ shadcn-style source-owned components: `@catamorphic/registry`.
 3. Wire identity from the host's real auth middleware (or fixed ids in
    single-user hosts), not placeholders.
 4. Verify end to end: migrate → create a project → write a workflow file →
-   trigger a run → read run status via the same scoped client. Only then
-   mount HTTP and UI.
+   deploy → trigger a run → read run status via the same scoped client (runs
+   execute deployed commits, so deploy before triggering). Only then mount
+   HTTP and UI.
 5. If the host registered trigger kinds: sync types into a project, write a
    workflow with `triggers: [trigger("kind", config)]`, deploy, `fire` the
    kind, and assert the run enrolled (async) or settled/suspended honestly

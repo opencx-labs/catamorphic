@@ -14,17 +14,23 @@ async function stringify({ value }: { value: number }) {
 `;
 
 describe("prepareWorkflowExecution", () => {
-  it("wraps step call sites with graph node ids", () => {
+  it("wraps batch process step call sites with graph node ids", () => {
     const prepared = prepareWorkflowExecution({
       workflowName: "example",
       files: {
         "src/workflow.ts": `${STEPS}
-export async function example({ value }: { value: number }) {
-  "use workflow";
-  const doubled = await double({ value });
-  const output = await stringify({ value: doubled });
-  return output;
-}
+export const example = defineWorkflow(({ defineBatch }) => ({
+  steps: [
+    defineBatch({
+      source: ({ input }) => loadItems({ cursor: input.cursor }),
+      process: async ({ item }) => {
+        const doubled = await double({ value: item.value });
+        const output = await stringify({ value: doubled });
+        return output;
+      },
+    }),
+  ],
+}));
 `,
       },
     });
@@ -47,14 +53,20 @@ export async function example({ value }: { value: number }) {
       workflowName: "example",
       files: {
         "src/workflow.ts": `${STEPS}
-export async function example({ value }: { value: number }) {
-  "use workflow";
-  const [left, right] = await Promise.all([
-    double({ value }),
-    double({ value: value + 1 }),
-  ]);
-  return { left, right };
-}
+export const example = defineWorkflow(({ defineBatch }) => ({
+  steps: [
+    defineBatch({
+      source: ({ input }) => loadItems({ cursor: input.cursor }),
+      process: async ({ item }) => {
+        const [left, right] = await Promise.all([
+          double({ value: item.value }),
+          double({ value: item.value + 1 }),
+        ]);
+        return { left, right };
+      },
+    }),
+  ],
+}));
 `,
       },
     });
@@ -72,10 +84,16 @@ export async function example({ value }: { value: number }) {
       workflowName: "example",
       files: {
         "src/workflow.ts": `${STEPS}
-export async function example({ value }: { value: number }) {
-  "use workflow";
-  return double({ value });
-}
+export const example = defineWorkflow(({ defineBatch }) => ({
+  steps: [
+    defineBatch({
+      source: ({ input }) => loadItems({ cursor: input.cursor }),
+      process: async ({ item }) => {
+        return double({ value: item.value });
+      },
+    }),
+  ],
+}));
 `,
       },
     });
@@ -121,7 +139,6 @@ export const exampleBatch = defineWorkflow(({ defineBoundary, defineBatch }) => 
     });
 
     expect(first?.graph.capabilities).toMatchObject({
-      persistedContinuations: true,
       batchProcessing: true,
     });
     const firstSteps =
@@ -180,7 +197,10 @@ ${STEPS}
       files,
     });
 
-    expect(prepared?.graph.capabilities.persistedContinuations).toBe(true);
+    expect(prepared?.graph.capabilities).toEqual({
+      batchProcessing: false,
+      cancellation: false,
+    });
     expect(prepared?.files).toEqual(files);
     expect(prepared?.files["src/durable.ts"]).not.toContain(
       "__catamorphicRunStep",
@@ -239,10 +259,13 @@ export const parent = defineWorkflow(({ defineBoundary }) => ({
 }));
 `,
         "src/child.ts": `
-export async function child({ value }: { value: string }) {
-  "use workflow";
-  return finish({ value });
-}
+export const child = defineWorkflow(({ defineBoundary }) => ({
+  steps: [
+    defineBoundary({
+      run: ({ input }) => finish({ value: input.value }),
+    }),
+  ],
+}));
 `,
       },
     });
@@ -251,10 +274,10 @@ export async function child({ value }: { value: string }) {
     expect(transformed).toContain('"modulePath":"src/child.ts"');
     expect(transformed).toContain('"exportName":"child"');
     expect(transformed).toContain(
-      '"capabilities":{"persistedContinuations":false,"batchProcessing":false,"cancellation":false}',
+      '"capabilities":{"batchProcessing":false,"cancellation":false}',
     );
     expect(transformed).toContain(
-      '"execution":{"exportTarget":{"modulePath":"src/child.ts","exportName":"child"},"steps":[]}',
+      '"execution":{"exportTarget":{"modulePath":"src/child.ts","exportName":"child"},"steps":[{"type":"boundary"',
     );
   });
 
@@ -272,7 +295,7 @@ export const parent = defineWorkflow(({ defineBoundary }) => ({
 }));
 `,
       "src/defined-child.ts": `
-import { plainChild } from "./plain-child.js";
+import { leafChild } from "./leaf-child.js";
 
 export const definedChild = defineWorkflow(({ defineBoundary, defineBatch }) => ({
   steps: [
@@ -281,16 +304,20 @@ export const definedChild = defineWorkflow(({ defineBoundary, defineBatch }) => 
       process: async ({ item }) => processItem({ item }),
     }),
     defineBoundary({
-      run: ({ input, callWorkflow }) => callWorkflow(plainChild, { input }),
+      run: ({ input, callWorkflow }) => callWorkflow(leafChild, { input }),
     }),
   ],
 }));
 `,
-      "src/plain-child.ts": `
-export async function plainChild({ value }: { value: string }) {
-  "use workflow";
-  return finish({ value });
-}
+      "src/leaf-child.ts": `
+export const leafChild = defineWorkflow(({ defineBatch }) => ({
+  steps: [
+    defineBatch({
+      source: ({ input }) => loadLeaves({ input }),
+      process: async ({ item }) => finish({ value: item.value }),
+    }),
+  ],
+}));
 `,
     };
 
@@ -299,33 +326,33 @@ export async function plainChild({ value }: { value: string }) {
       files,
       workflowName: "definedChild",
     });
-    const plainChild = prepareWorkflowExecution({
+    const leafChild = prepareWorkflowExecution({
       files,
-      workflowName: "plainChild",
+      workflowName: "leafChild",
     });
 
     expect(parent?.files).toEqual(definedChild?.files);
-    expect(parent?.files).toEqual(plainChild?.files);
+    expect(parent?.files).toEqual(leafChild?.files);
     expect(parent?.graph.name).toBe("parent");
     expect(definedChild?.graph.name).toBe("definedChild");
-    expect(plainChild?.graph.name).toBe("plainChild");
+    expect(leafChild?.graph.name).toBe("leafChild");
     expect(parent?.files["src/parent.ts"]).toContain(
       '"modulePath":"src/defined-child.ts"',
     );
     expect(parent?.files["src/defined-child.ts"]).toContain(
-      '"modulePath":"src/plain-child.ts"',
+      '"modulePath":"src/leaf-child.ts"',
     );
     const batchStep = definedChild?.graph.nodes.find(
       (node) => node.type === "step" && node.functionName === "processItem",
     );
-    const plainStep = plainChild?.graph.nodes.find(
+    const leafStep = leafChild?.graph.nodes.find(
       (node) => node.type === "step" && node.functionName === "finish",
     );
     expect(parent?.files["src/defined-child.ts"]).toContain(
       `__catamorphicRunStep("${batchStep?.id}"`,
     );
-    expect(parent?.files["src/plain-child.ts"]).toContain(
-      `__catamorphicRunStep("${plainStep?.id}"`,
+    expect(parent?.files["src/leaf-child.ts"]).toContain(
+      `__catamorphicRunStep("${leafStep?.id}"`,
     );
   });
 });

@@ -30,7 +30,6 @@ const versionId = crypto.randomUUID();
 
 const allowedRunId = crypto.randomUUID();
 const forbiddenRunId = crypto.randomUUID();
-const testModeRunId = crypto.randomUUID();
 const otherProjectRunId = crypto.randomUUID();
 
 const commitSha = "a".repeat(40);
@@ -39,7 +38,6 @@ const otherArtifactId = crypto.randomUUID();
 
 /** Production runs must reference a ready artifact and a 40-char sha. */
 const productionRun = {
-  mode: "production",
   status: "completed",
   provenance: JSON.stringify({ commitSha }),
   completed_at: new Date(),
@@ -144,17 +142,6 @@ describeIf("app audience run reads", () => {
           ...productionRun,
         },
         {
-          // Allowed workflow name, but a test run of the builder's dev tree.
-          id: testModeRunId,
-          project_id: projectId,
-          workflow_name: "listOrders",
-          mode: "test",
-          status: "completed",
-          provenance: JSON.stringify({}),
-          completed_at: new Date(),
-          result: JSON.stringify({ orders: [] }),
-        },
-        {
           // Allowed workflow name, wrong project — same tenant.
           id: otherProjectRunId,
           project_id: otherProjectId,
@@ -186,12 +173,6 @@ describeIf("app audience run reads", () => {
     ).rejects.toThrow(AppAccessDeniedError);
   });
 
-  it("denies reading a test run even for an allowed workflow", async () => {
-    await expect(
-      core.runs.get({ identity: viewer, runId: testModeRunId }),
-    ).rejects.toThrow(AppAccessDeniedError);
-  });
-
   it("denies reading a run in another project of the same tenant", async () => {
     await expect(
       core.runs.get({ identity: viewer, runId: otherProjectRunId }),
@@ -212,32 +193,29 @@ describeIf("app audience run reads", () => {
   });
 
   it("full identities read every run untouched", async () => {
-    for (const runId of [allowedRunId, forbiddenRunId, testModeRunId]) {
+    for (const runId of [allowedRunId, forbiddenRunId]) {
       const run = await core.runs.get({ identity: builder, runId });
       expect(run.id).toBe(runId);
     }
   });
 
-  it("list returns only production runs of the frozen set", async () => {
+  it("list returns only runs of the frozen set", async () => {
     const listed = await core.runs.list({ identity: viewer, projectId });
     expect(listed.items.map((run) => run.id)).toEqual([allowedRunId]);
     expect(listed.total).toBe(1);
 
     // The builder sees everything in the project.
     const all = await core.runs.list({ identity: builder, projectId });
-    expect(all.items.length).toBe(3);
+    expect(all.items.length).toBe(2);
   });
 
-  it("list denies an explicit out-of-set or test-mode filter", async () => {
+  it("list denies an explicit out-of-set filter", async () => {
     await expect(
       core.runs.list({
         identity: viewer,
         projectId,
         workflowName: "exportAllCustomerData",
       }),
-    ).rejects.toThrow(AppAccessDeniedError);
-    await expect(
-      core.runs.list({ identity: viewer, projectId, mode: "test" }),
     ).rejects.toThrow(AppAccessDeniedError);
   });
 

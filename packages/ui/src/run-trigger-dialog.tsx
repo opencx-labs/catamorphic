@@ -4,7 +4,6 @@ import { friendlyParamName, friendlyType } from "./display-utils.js";
 
 export interface RunTriggerDialogProps {
   parameters: ParameterInfo[];
-  mode: "test" | "production";
   isRunning: boolean;
   initialValues?: Record<string, unknown>;
   onRun: (triggerData: Record<string, unknown>) => Promise<void>;
@@ -24,6 +23,24 @@ function defaultForType(type: string, defaultValue?: string): unknown {
   return "";
 }
 
+function enumOptionsFor(
+  param: ParameterInfo,
+): Array<string | number | boolean> | null {
+  const schema = param.schema;
+  if (typeof schema !== "object" || schema === null || Array.isArray(schema)) {
+    return null;
+  }
+  const candidates = (schema as { enum?: unknown }).enum;
+  if (!Array.isArray(candidates) || candidates.length === 0) return null;
+  const primitives = candidates.filter(
+    (candidate): candidate is string | number | boolean =>
+      typeof candidate === "string" ||
+      typeof candidate === "number" ||
+      typeof candidate === "boolean",
+  );
+  return primitives.length === candidates.length ? primitives : null;
+}
+
 function ParameterField({
   param,
   value,
@@ -35,6 +52,45 @@ function ParameterField({
 }) {
   const label = param.displayName ?? friendlyParamName(param.name);
   const typeLabel = friendlyType(param.type);
+
+  // A parameter whose extracted schema is a literal enum renders as a
+  // select — the schema is a projection of the TS union type.
+  const enumValues = enumOptionsFor(param);
+  if (enumValues) {
+    return (
+      <label className="catamorphic-run-field">
+        <div className="catamorphic-run-field-header">
+          <span className="catamorphic-run-field-label">{label}</span>
+          <span className="catamorphic-run-field-type">{typeLabel}</span>
+          {param.optional && (
+            <span className="catamorphic-run-field-optional">optional</span>
+          )}
+        </div>
+        <select
+          value={String(value ?? "")}
+          onChange={(e) => {
+            const match = enumValues.find(
+              (candidate) => String(candidate) === e.target.value,
+            );
+            onChange(match ?? e.target.value);
+          }}
+          className="catamorphic-run-input"
+        >
+          {param.optional && <option value="" />}
+          {enumValues.map((candidate) => (
+            <option key={String(candidate)} value={String(candidate)}>
+              {String(candidate)}
+            </option>
+          ))}
+        </select>
+        {param.description && (
+          <span className="catamorphic-run-field-desc">
+            {param.description}
+          </span>
+        )}
+      </label>
+    );
+  }
 
   if (param.type === "boolean") {
     return (
@@ -151,7 +207,6 @@ function ParameterField({
 
 export function RunTriggerDialog({
   parameters,
-  mode,
   isRunning,
   initialValues,
   onRun,
@@ -216,14 +271,12 @@ export function RunTriggerDialog({
         className="catamorphic-run-dialog"
         role="dialog"
         aria-modal="true"
-        aria-label={mode === "test" ? "Test Workflow" : "Run Workflow"}
+        aria-label="Run Workflow"
         onClick={(e) => e.stopPropagation()}
         onKeyDown={(e) => e.stopPropagation()}
       >
         <div className="catamorphic-run-dialog-header">
-          <h3 className="catamorphic-run-dialog-title">
-            {mode === "test" ? "Test Workflow" : "Run Workflow"}
-          </h3>
+          <h3 className="catamorphic-run-dialog-title">Run Workflow</h3>
           <button
             type="button"
             className="catamorphic-detail-close"
@@ -301,11 +354,7 @@ export function RunTriggerDialog({
             onClick={() => void handleSubmit()}
             disabled={isRunning}
           >
-            {isRunning
-              ? "Starting..."
-              : mode === "test"
-                ? "Start Test Run"
-                : "Start Run"}
+            {isRunning ? "Starting..." : "Start Run"}
           </button>
         </div>
       </div>

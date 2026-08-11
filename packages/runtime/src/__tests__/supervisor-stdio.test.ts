@@ -33,7 +33,9 @@ function workerFactory(args: {
 }
 
 function invocation(
-  overrides?: Partial<Extract<RuntimeInvocationRequest, { kind: "workflow" }>>,
+  overrides?: Partial<
+    Extract<RuntimeInvocationRequest, { kind: "durable-boundary" }>
+  >,
 ): RuntimeInvocationRequest {
   return {
     protocolVersion: RUNTIME_PROTOCOL_VERSION,
@@ -42,8 +44,8 @@ function invocation(
     artifactDigest: "digest-1",
     transformVersion: "transform-1",
     runtimeVersion: "runtime-1",
-    kind: "workflow",
-    target: { modulePath: "workflow.ts", exportName: "run" },
+    kind: "durable-boundary",
+    target: { modulePath: "workflow.ts", exportName: "run", stepIndex: 0 },
     input: { value: 2 },
     attempt: 1,
     deadlineAt: new Date(Date.now() + 60_000).toISOString(),

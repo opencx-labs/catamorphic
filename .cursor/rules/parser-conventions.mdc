@@ -83,9 +83,10 @@ Containers use `parentId` to express nesting. All children of a container have `
   expansion at the recursive call.
 - `controls: { cancel: true }` is graph metadata for a host-issued terminal Run
   control. Cancellation is not a source node or boundary continuation.
-- Graphs and discovery results expose `capabilities` (`persistedContinuations`,
-  `batchProcessing`, `cancellation`) and never a category discriminator. `stage`
-  is not a public graph node or authoring concept.
+- Graphs and discovery results expose `capabilities` (`batchProcessing`,
+  `cancellation`) and never a category discriminator. Persisted continuation
+  is universal, not a capability. `stage` is not a public graph node or
+  authoring concept.
 
 ## Edge Types
 

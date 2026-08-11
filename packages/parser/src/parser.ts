@@ -19,6 +19,11 @@ import {
   type WhileStatement,
 } from "ts-morph";
 import { extractJsDocMetadata, extractParameterInfo } from "./jsdoc.js";
+import {
+  jsonSchemaFromBoundaryReturn,
+  jsonSchemaFromType,
+  WORKFLOW_STUB_DTS,
+} from "./schema-extract.js";
 import type {
   AppApiEntry,
   AppApiSurface,
@@ -44,6 +49,7 @@ import type {
 import {
   APP_API_SOURCE_PATH,
   APP_SOURCE_ROOT,
+  CONTRACTS_SOURCE_ROOT,
   WORKFLOW_SOURCE_ROOT,
 } from "./types.js";
 
@@ -84,34 +90,6 @@ function getSourceRange(node: Node): SourceRange {
     endColumn: endPos.column,
     file,
   };
-}
-
-function findWorkflowFunction(
-  sourceFile: SourceFile,
-): FunctionDeclaration | undefined {
-  for (const fn of sourceFile.getFunctions()) {
-    if (!fn.isExported() || !fn.isAsync()) continue;
-    const body = fn.getBody();
-    if (!body || !Node.isBlock(body)) continue;
-
-    const statements = body.getStatements();
-    if (statements.length === 0) continue;
-
-    const first = statements[0];
-    if (first && isWorkflowDirectiveStatement(first)) {
-      return fn;
-    }
-  }
-  return undefined;
-}
-
-function isWorkflowDirectiveStatement(statement: Statement): boolean {
-  if (!Node.isExpressionStatement(statement)) return false;
-  const expression = statement.getExpression();
-  return (
-    Node.isStringLiteral(expression) &&
-    expression.getLiteralValue() === "use workflow"
-  );
 }
 
 function getCallName(node: CallExpression): string {
@@ -174,7 +152,7 @@ interface ParseContext {
   variables: Map<string, VariableInfo>;
   workflowFile?: string;
   returnLabel?: string;
-  statementMode?: "regular" | "boundary" | "batch-process";
+  statementMode?: "boundary" | "batch-process";
   workflowStack?: Set<string>;
 }
 
@@ -534,13 +512,6 @@ function parseStatements(
   let currentIds = [...previousIds];
 
   for (const stmt of statements) {
-    if (
-      Node.isExpressionStatement(stmt) &&
-      stmt.getText().includes('"use workflow"')
-    ) {
-      continue;
-    }
-
     if (Node.isIfStatement(stmt)) {
       currentIds = parseIfStatement(ctx, stmt, currentIds, parentId);
       continue;
@@ -765,7 +736,7 @@ function workflowCallLabel(ctx: ParseContext, workflowName: string): string {
 function findWorkflowCallTarget(
   ctx: ParseContext,
   workflowName: string,
-): FoundPlainWorkflow | FoundDefinedWorkflow | undefined {
+): FoundDefinedWorkflow | undefined {
   for (const sourceFile of ctx.sourceFile.getProject().getSourceFiles()) {
     for (const statement of sourceFile.getVariableStatements()) {
       if (!statement.isExported()) continue;
@@ -788,39 +759,18 @@ function findWorkflowCallTarget(
         };
       }
     }
-    for (const fn of sourceFile.getFunctions()) {
-      if (fn.getName() !== workflowName || !fn.isExported() || !fn.isAsync()) {
-        continue;
-      }
-      const body = fn.getBody();
-      if (!body || !Node.isBlock(body)) continue;
-      const first = body.getStatements()[0];
-      if (!first || !isWorkflowDirectiveStatement(first)) continue;
-      return {
-        type: "plain",
-        fn,
-        sourceFile,
-        filePath: normalizePath(sourceFile.getFilePath()),
-      };
-    }
   }
   return undefined;
 }
 
 function workflowTargetMetadataSource(
-  workflow: FoundPlainWorkflow | FoundDefinedWorkflow,
-): FunctionDeclaration | VariableStatement | undefined {
-  return workflow.type === "plain"
-    ? workflow.fn
-    : workflow.declaration.getVariableStatement();
+  workflow: FoundDefinedWorkflow,
+): VariableStatement | undefined {
+  return workflow.declaration.getVariableStatement();
 }
 
-function workflowTargetName(
-  workflow: FoundPlainWorkflow | FoundDefinedWorkflow,
-): string {
-  return workflow.type === "plain"
-    ? (workflow.fn.getName() ?? "unnamed")
-    : workflow.name;
+function workflowTargetName(workflow: FoundDefinedWorkflow): string {
+  return workflow.name;
 }
 
 function definedWorkflowCancellation(
@@ -840,7 +790,7 @@ function definedWorkflowCancellation(
 
 function parseWorkflowCallTarget(opts: {
   ctx: ParseContext;
-  workflow: FoundPlainWorkflow | FoundDefinedWorkflow;
+  workflow: FoundDefinedWorkflow;
   parentId: string;
 }): WorkflowCallTargetDescriptor {
   const exportName = workflowTargetName(opts.workflow);
@@ -848,25 +798,6 @@ function parseWorkflowCallTarget(opts: {
     modulePath: opts.workflow.filePath,
     exportName,
   };
-  if (opts.workflow.type === "plain") {
-    const body = opts.workflow.fn.getBody();
-    const previousMode = opts.ctx.statementMode;
-    opts.ctx.statementMode = "regular";
-    if (body && Node.isBlock(body)) {
-      parseStatements(opts.ctx, body.getStatements(), [], opts.parentId);
-    }
-    opts.ctx.statementMode = previousMode;
-    return {
-      exportTarget,
-      capabilities: {
-        persistedContinuations: false,
-        batchProcessing: false,
-        cancellation: false,
-      },
-      execution: { exportTarget, steps: [] },
-    };
-  }
-
   const definition = parseDurableDefinition(opts.workflow);
   const parsed = parseWorkflowSteps({
     ctx: opts.ctx,
@@ -875,7 +806,6 @@ function parseWorkflowCallTarget(opts: {
     previousIds: [],
   });
   const capabilities = {
-    persistedContinuations: true,
     batchProcessing: definition.steps.some((step) => step.type === "batch"),
     cancellation: definedWorkflowCancellation(definition),
   };
@@ -1349,13 +1279,6 @@ function readBatchStepMetadata(args: {
   };
 }
 
-interface FoundPlainWorkflow {
-  type: "plain";
-  fn: FunctionDeclaration;
-  sourceFile: SourceFile;
-  filePath: string;
-}
-
 interface FoundDefinedWorkflow {
   type: "defined";
   declaration: VariableDeclaration;
@@ -1371,10 +1294,7 @@ interface FoundObsoleteBatchWorkflow {
   name: string;
 }
 
-type FoundWorkflow =
-  | FoundPlainWorkflow
-  | FoundDefinedWorkflow
-  | FoundObsoleteBatchWorkflow;
+type FoundWorkflow = FoundDefinedWorkflow | FoundObsoleteBatchWorkflow;
 
 /** Matches project convention: `workflows/src/<kebab>.ts` for a workflow identifier. */
 export function defaultWorkflowSourcePath(workflowName: string): string {
@@ -1404,9 +1324,9 @@ function projectPathsEqual(a: string, b: string): boolean {
 }
 
 /**
- * When the workflow function was renamed in source but the route still uses the
- * original identifier, resolve the graph from the expected workflow file (single
- * `"use workflow"` in that file).
+ * When the workflow was renamed in source but the route still uses the
+ * original identifier, resolve the graph from the expected workflow file
+ * (single workflow definition in that file).
  */
 function resolveWorkflowByFilePathHint(
   workflows: FoundWorkflow[],
@@ -1441,23 +1361,6 @@ function resolveWorkflowByFilePathHint(
 function findAllWorkflows(sourceFiles: readonly SourceFile[]): FoundWorkflow[] {
   const results: FoundWorkflow[] = [];
   for (const sf of sourceFiles) {
-    for (const fn of sf.getFunctions()) {
-      if (!fn.isExported() || !fn.isAsync()) continue;
-      const body = fn.getBody();
-      if (!body || !Node.isBlock(body)) continue;
-      const statements = body.getStatements();
-      if (statements.length === 0) continue;
-      const first = statements[0];
-      if (first && isWorkflowDirectiveStatement(first)) {
-        results.push({
-          type: "plain",
-          fn,
-          sourceFile: sf,
-          filePath: normalizePath(sf.getFilePath()),
-        });
-      }
-    }
-
     for (const statement of sf.getVariableStatements()) {
       if (!statement.isExported()) continue;
 
@@ -1502,81 +1405,6 @@ function findAllWorkflows(sourceFiles: readonly SourceFile[]): FoundWorkflow[] {
     }
   }
   return results;
-}
-
-function buildWorkflowGraph(
-  workflowFn: FunctionDeclaration,
-  stepFunctions: Map<string, StepDefinition>,
-  opts?: { filePath?: string; projectFiles?: string[]; sourceCode?: string },
-): WorkflowGraph {
-  const jsdoc = extractJsDocMetadata(workflowFn);
-  const sourceFile = workflowFn.getSourceFile();
-
-  const ctx: ParseContext = {
-    nodes: [],
-    edges: [],
-    returnNodeIds: [],
-    sourceFile,
-    stepFunctions,
-    variables: new Map(),
-    workflowFile: normalizePath(sourceFile.getFilePath()),
-  };
-
-  currentWorkflowFile = ctx.workflowFile;
-
-  const inputParams = extractParameterInfo(workflowFn, jsdoc.paramMetadata);
-  const inputLabel = jsdoc.displayName ?? workflowFn.getName() ?? "Trigger";
-
-  const inputId = nextId();
-  ctx.nodes.push({
-    id: inputId,
-    type: "input",
-    label: inputLabel,
-    description: jsdoc.description,
-    sourceRange: getSourceRange(workflowFn),
-    metadata: jsdoc.tags,
-    parameters: inputParams,
-  });
-
-  for (const param of inputParams) {
-    ctx.variables.set(param.name, {
-      sourceNodeId: inputId,
-      sourceStepLabel: inputLabel,
-    });
-  }
-
-  const body = workflowFn.getBody();
-  if (body && Node.isBlock(body)) {
-    parseStatements(ctx, body.getStatements(), [inputId]);
-  }
-
-  return {
-    name: workflowFn.getName() ?? "unnamed",
-    capabilities: {
-      persistedContinuations: false,
-      batchProcessing: false,
-      cancellation: false,
-    },
-    execution: {
-      exportTarget: {
-        modulePath: opts?.filePath
-          ? normalizePath(opts.filePath)
-          : normalizePath(sourceFile.getFilePath()),
-        exportName: workflowFn.getName() ?? "unnamed",
-      },
-      steps: [],
-    },
-    displayName: jsdoc.displayName,
-    description: jsdoc.description,
-    input: { parameters: inputParams },
-    triggers: [],
-    canSuspend: false,
-    nodes: ctx.nodes,
-    edges: ctx.edges,
-    sourceCode: opts?.sourceCode ?? workflowFn.getSourceFile().getFullText(),
-    filePath: opts?.filePath ? normalizePath(opts.filePath) : undefined,
-    projectFiles: opts?.projectFiles?.map(normalizePath),
-  };
 }
 
 type BatchCallback = ArrowFunction | FunctionExpression | MethodDeclaration;
@@ -1995,6 +1823,14 @@ function extractDurableInputParameters(
       optional: property.isOptional(),
       displayName: metadata?.displayName,
       description: metadata?.description,
+      ...(declaration
+        ? {
+            schema: jsonSchemaFromType(
+              property.getTypeAtLocation(declaration),
+              declaration,
+            ),
+          }
+        : {}),
     };
   });
 }
@@ -2522,6 +2358,7 @@ function buildDefinedWorkflowGraph(
     config: definition.config,
     workflowName: workflow.name,
   });
+  const { inputSchema, outputSchema } = extractIoSchemas(definition);
   const controlsProperty = definition.config.getProperty("controls");
   const controlsObject =
     controlsProperty && Node.isPropertyAssignment(controlsProperty)
@@ -2592,7 +2429,6 @@ function buildDefinedWorkflowGraph(
   return {
     name: workflow.name,
     capabilities: {
-      persistedContinuations: true,
       batchProcessing: hasBatch,
       cancellation,
     },
@@ -2609,6 +2445,8 @@ function buildDefinedWorkflowGraph(
     description: jsdoc.description,
     controls: cancellation ? { cancel: true } : undefined,
     input: { parameters: inputParameters },
+    inputSchema,
+    outputSchema,
     triggers: triggerBindings,
     canSuspend,
     nodes: ctx.nodes,
@@ -2619,28 +2457,95 @@ function buildDefinedWorkflowGraph(
   };
 }
 
+/**
+ * JSON Schemas for a workflow's input (what a trigger/run delivers) and
+ * output (what the last step resolves to). Batch inputs come from the
+ * source callback's input parameter; batch outputs are summaries whose
+ * shape the runtime owns, so they stay permissive.
+ */
+function extractIoSchemas(definition: DurableWorkflowDefinition): {
+  inputSchema: unknown;
+  outputSchema: unknown;
+} {
+  const permissive: { inputSchema: unknown; outputSchema: unknown } = {
+    inputSchema: {},
+    outputSchema: {},
+  };
+  const firstStep = definition.steps[0];
+  const lastStep = definition.steps[definition.steps.length - 1];
+  if (!firstStep || !lastStep) return permissive;
+
+  let inputSchema: unknown = {};
+  if (firstStep.type === "boundary") {
+    const parameter = firstStep.run.getParameters()[0];
+    const typeNode = parameter?.getTypeNode();
+    if (
+      parameter &&
+      typeNode &&
+      Node.isTypeReference(typeNode) &&
+      typeNode.getTypeName().getText() === "BoundaryContext"
+    ) {
+      const inputTypeNode = typeNode.getTypeArguments()[0];
+      if (inputTypeNode) {
+        inputSchema = jsonSchemaFromType(
+          inputTypeNode.getType(),
+          inputTypeNode,
+        );
+      }
+    }
+  } else if (firstStep.type === "batch") {
+    const parameter = firstStep.source.getParameters()[0];
+    const typeNode = parameter?.getTypeNode();
+    if (parameter && typeNode) {
+      const inputProperty = typeNode
+        .getType()
+        .getProperties()
+        .find((property) => property.getName() === "input");
+      const declaration = inputProperty?.getDeclarations()[0];
+      if (inputProperty && declaration) {
+        inputSchema = jsonSchemaFromType(
+          inputProperty.getTypeAtLocation(declaration),
+          declaration,
+        );
+      }
+    }
+  }
+
+  let outputSchema: unknown = {};
+  if (lastStep.type === "boundary") {
+    const run = lastStep.run;
+    outputSchema = jsonSchemaFromBoundaryReturn(run.getReturnType(), run);
+  }
+  return { inputSchema, outputSchema };
+}
+
+/** In-memory home of the injected `@catamorphic/workflow` type surface. */
+const WORKFLOW_STUB_PATH = "/node_modules/@catamorphic/workflow/index.d.ts";
+
 function createMultiFileProject(files: Record<string, string>): Project {
   const project = new Project({
     useInMemoryFileSystem: true,
     compilerOptions: {
       strict: true,
-      target: 99, // ESNext
-      module: 199, // ESNext
-      moduleResolution: 100, // Bundler
+      target: 99, // ts.ScriptTarget.ESNext
+      module: 99, // ts.ModuleKind.ESNext
+      moduleResolution: 100, // ts.ModuleResolutionKind.Bundler
       esModuleInterop: true,
       skipLibCheck: true,
+      baseUrl: "/",
+      // Resolve the two cross-package imports workflow files use, so
+      // BoundaryContext type arguments and contracts types feed the type
+      // checker instead of degrading to `any`.
+      paths: {
+        "@catamorphic/workflow": [WORKFLOW_STUB_PATH],
+        "@project/contracts": [`/${CONTRACTS_SOURCE_ROOT}/src/index.ts`],
+      },
     },
   });
 
-  project.createSourceFile(
-    "tsconfig.json",
-    JSON.stringify({
-      compilerOptions: {
-        strict: true,
-        moduleResolution: "bundler",
-      },
-    }),
-  );
+  project.createSourceFile(WORKFLOW_STUB_PATH, WORKFLOW_STUB_DTS, {
+    overwrite: true,
+  });
 
   // Callers occasionally pass both "src/a.ts" and "/src/a.ts" (e.g. after
   // legacy drafts). ts-morph normalizes these to the same absolute path and
@@ -2661,9 +2566,7 @@ function createMultiFileProject(files: Record<string, string>): Project {
 }
 
 function getWorkflowName(workflow: FoundWorkflow): string {
-  return workflow.type === "plain"
-    ? (workflow.fn.getName() ?? "unnamed")
-    : workflow.name;
+  return workflow.name;
 }
 
 function buildFoundWorkflowGraph(opts: {
@@ -2677,12 +2580,6 @@ function buildFoundWorkflowGraph(opts: {
     sourceCode: opts.workflow.sourceFile.getFullText(),
   };
   switch (opts.workflow.type) {
-    case "plain":
-      return buildWorkflowGraph(
-        opts.workflow.fn,
-        opts.stepFunctions,
-        graphOptions,
-      );
     case "defined":
       return buildDefinedWorkflowGraph(
         opts.workflow,
@@ -2741,6 +2638,20 @@ export function parseProject(
     workflows: discovered,
     errors,
   });
+  if (appApi) {
+    // Join each contract entry with its workflow's IO schemas so consumers
+    // (typed app clients, MCP tools) never re-derive them.
+    const byName = new Map(
+      discovered.map((workflow) => [workflow.functionName, workflow.graph]),
+    );
+    for (const entry of appApi.entries) {
+      const graph = byName.get(entry.workflowName);
+      if (graph) {
+        entry.inputSchema = graph.inputSchema;
+        entry.outputSchema = graph.outputSchema;
+      }
+    }
+  }
 
   return { workflows: discovered, secrets, appApi, errors };
 }
@@ -3032,17 +2943,7 @@ export function parseWorkflow(source: string): WorkflowGraph {
   });
   const sourceFile = project.createSourceFile("workflow.ts", source);
 
-  const workflowFn = findWorkflowFunction(sourceFile);
-  if (workflowFn) {
-    const stepFunctions = collectStepFunctions([sourceFile]);
-    return buildWorkflowGraph(workflowFn, stepFunctions, {
-      sourceCode: source,
-    });
-  }
-
-  const definitionWorkflow = findAllWorkflows([sourceFile]).find(
-    (workflow) => workflow.type !== "plain",
-  );
+  const definitionWorkflow = findAllWorkflows([sourceFile])[0];
   if (!definitionWorkflow) {
     throw new Error("No workflow definition found");
   }

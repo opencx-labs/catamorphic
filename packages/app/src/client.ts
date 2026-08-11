@@ -183,8 +183,8 @@ class GuestBridge {
     if (message.kind === "poll-run") {
       return this.callTool(POLL_RUN_TOOL, { runId: message.runId });
     }
-    // The typed client knows the workflow's kind (invoke = plain, start =
-    // durable), the server only knows names — so the mode rides along.
+    // The typed client chooses how to wait (invoke = resolve with the
+    // terminal output, start = return the run id); the mode rides along.
     // Model-initiated calls omit it and the server defaults to invoke.
     return this.callTool(message.workflowName, {
       input: message.input ?? null,
@@ -244,11 +244,11 @@ function getBridge(): GuestBridge {
  * ```typescript
  * import type { AppContract } from "@project/contracts";
  * const workflows = createClient<AppContract>();
- * const orders = await workflows.listOrders({ status: "open" });
+ * const orders = await workflows.listOrders.call({ status: "open" });
  * const run = await workflows.reconcileLedger.start({ month: "2026-07" });
  * ```
  *
- * Plain workflows resolve inline; durable ones return a {@link RunHandle}.
+ * `call` waits for the terminal output; `start` returns a {@link RunHandle}.
  * The proxy sends whatever name is accessed — the server enforces the frozen
  * set, so an out-of-contract name fails with `denied` at runtime and a type
  * error at compile time.
@@ -258,14 +258,14 @@ export function createClient<Contract>(): AppClient<Contract> {
   return new Proxy({} as AppClient<Contract>, {
     get(_target, property) {
       if (typeof property !== "string") return undefined;
-      const invoke = (input: unknown) =>
-        transport.send({
-          kind: "call",
-          workflowName: property,
-          mode: "invoke",
-          input,
-        });
-      const callable = Object.assign(invoke, {
+      return {
+        call: (input: unknown) =>
+          transport.send({
+            kind: "call",
+            workflowName: property,
+            mode: "invoke",
+            input,
+          }),
         start: async (input: unknown) => {
           const value = await transport.send({
             kind: "call",
@@ -276,8 +276,7 @@ export function createClient<Contract>(): AppClient<Contract> {
           const { runId } = value as { runId: string };
           return makeRunHandle(transport, runId);
         },
-      });
-      return callable;
+      };
     },
   });
 }

@@ -105,7 +105,6 @@ export const TemplateSchema = z.object({
 
 // --- Workflows (discovered, not stored) ---
 export const WorkflowCapabilitiesSchema = z.object({
-  persistedContinuations: z.boolean(),
   batchProcessing: z.boolean(),
   cancellation: z.boolean(),
 });
@@ -133,6 +132,7 @@ export const ParameterInfoSchema = z.object({
   displayName: z.string().optional(),
   description: z.string().optional(),
   defaultValue: z.string().optional(),
+  schema: JsonOutSchema.optional(),
 });
 
 // --- Triggers ---
@@ -172,6 +172,8 @@ export const TriggerBindingInfoSchema = z.object({
   config: JsonOutSchema,
   canSuspend: z.boolean(),
   inputParameters: z.array(ParameterInfoSchema),
+  inputSchema: JsonOutSchema,
+  outputSchema: JsonOutSchema,
 });
 
 export const WorkflowSummarySchema = z.object({
@@ -315,6 +317,8 @@ export const WorkflowGraphSchema = z.object({
   controls: z.object({ cancel: z.literal(true).optional() }).optional(),
   filePath: z.string().optional(),
   input: z.object({ parameters: z.array(ParameterInfoSchema) }),
+  inputSchema: JsonOutSchema,
+  outputSchema: JsonOutSchema,
   triggers: z.array(WorkflowTriggerBindingSchema),
   canSuspend: z.boolean(),
   nodes: z.array(WorkflowNodeSchema),
@@ -328,8 +332,6 @@ export const WorkflowDetailSchema = WorkflowGraphSchema.extend({
 });
 
 // --- Runs ---
-export const RunModeSchema = z.enum(["test", "production"]);
-
 export const RunStatusSchema = z.enum([
   "pending",
   "running",
@@ -404,10 +406,8 @@ export const RunSchema = z.object({
   batchScopes: z.array(BatchProgressSchema),
   provenance: z.object({
     commitSha: z.string().optional(),
-    mutableSource: z.literal(true).optional(),
   }),
   artifact: z.object({ deploymentArtifactId: z.string().uuid() }).optional(),
-  mode: RunModeSchema,
   initiatedBy: z.string().nullable(),
   input: z.unknown().nullable(),
   result: z.unknown().nullable(),
@@ -475,11 +475,6 @@ export const TriggerRunSchema = z.object({
   onConflict: EnrollmentConflictPolicySchema.optional(),
 });
 
-export const TriggerTestRunSchema = z.object({
-  input: JsonValueSchema.optional(),
-  files: z.record(z.string(), z.string()).optional(),
-});
-
 export const FireTriggerSchema = z.object({
   payload: JsonValueSchema,
   mode: TriggerModeSchema.optional(),
@@ -516,12 +511,11 @@ export const TriggerFireResultSchema = z.object({
 });
 
 export const SyncTriggerTypesResultSchema = z.object({
-  path: z.string(),
+  paths: z.array(z.string()),
   updated: z.boolean(),
 });
 
 export const RunsQuerySchema = PaginationQuerySchema.extend({
-  mode: RunModeSchema.optional(),
   correlationKey: CorrelationKeySchema.optional(),
 });
 
@@ -893,7 +887,7 @@ export const SecretNameParamsSchema = ProjectIdParamsSchema.extend({
 });
 
 export const SecretEnvironmentQuerySchema = z.object({
-  environment: RunModeSchema.default("production"),
+  environment: z.enum(["test", "production"]).default("production"),
 });
 
 // --- GitHub ---

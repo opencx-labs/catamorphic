@@ -105,8 +105,8 @@ object parameter, for example `scoped.projects.get({ projectId })`,
 individual calls. Plugin, secret, and git operations remain available through
 `catamorphic.core.*` and the HTTP surface.
 
-`scoped.runs` is the one SDK family for all Workflows. It includes production
-and test triggers, list/detail, cancellation, operator processing pause/resume,
+`scoped.runs` is the one SDK family for all Workflows. It includes run
+triggering, list/detail, cancellation, operator processing pause/resume,
 input submission, and item inspection. Capabilities on a Workflow or Run decide
 which controls apply; there is no separate batch or persisted-continuation Run
 resource.
@@ -174,14 +174,14 @@ The generated HTTP client lives in `@catamorphic/api-client`; construct it with 
 
 All execution uses one Runs route family:
 
-- `POST /api/projects/:projectId/workflows/:name/runs` triggers a production Run.
-- `POST /api/projects/:projectId/workflows/:name/test-runs` triggers a mutable-source test Run for a plain `"use workflow"` function.
+- `POST /api/projects/:projectId/workflows/:name/runs` triggers a Run.
 - `GET /api/projects/:projectId/workflows/:name/runs` lists Runs.
 - `GET /api/runs/:runId` and `/api/runs/:runId/*` expose detail and capability-specific controls.
 
-The test/production distinction is a Run mode and provenance choice, not a
-type split. Workflows with persisted scopes currently require an immutable
-production deployment; test triggering returns a capability error.
+Every Run executes an immutable deployed commit and retains that provenance;
+there is no mutable-source or test mode. The synchronous trigger-firing path
+runs any workflow inline until its first durable wait, so a workflow that
+cannot suspend settles in the request.
 
 ## React bindings: `@catamorphic/react`
 
@@ -234,7 +234,7 @@ function ProjectList() {
 Hooks shipped:
 
 - **Projects + workflows + files**: `useTemplates`, `useProjects`, `useProject`, `useCreateProject`, `useUpdateProject`, `useDeleteProject`, `useProjectFiles`, `useProjectFile`, `useWriteProjectFile`, `useWorkflows`, `useWorkflow`.
-- **Runs**: `useRuns`, `useRun`, `useTriggerRun`, `useTriggerTestRun`, `useCancelRun`, `usePauseRunProcessing`, `useResumeRunProcessing`, `useSubmitRunInput`, `useRunItems`, `useRunItemSteps`.
+- **Runs**: `useRuns`, `useRun`, `useTriggerRun`, `useCancelRun`, `usePauseRunProcessing`, `useResumeRunProcessing`, `useSubmitRunInput`, `useRunItems`, `useRunItemSteps`.
 - **Git**: `useProjectGit`, `useProjectBranches`, `useProjectCommits`, `useProjectConflicts`, `useCreateBranch`, `useCheckoutBranch`, `useCommitChanges`, `useDeployProject`, plus the composite `useProjectGitState({ projectId, baselineFiles })` for multi-branch draft persistence.
 - **Plugins + secrets**: `usePluginCatalog`, `useProjectPlugins`, `useAttachPlugin`, `useDetachPlugin`, `useProjectSecrets`, `useUpsertProjectSecret`, `useDeleteProjectSecret`.
 - **Agent (coding sessions)**: `useAgentSessions`, `useAgentSession`, `useCreateAgentSession`, `useSendAgentMessage`.
@@ -274,19 +274,23 @@ For full details (manifest contract, REST API, service internals, runtime flow, 
 
 ## Workflow authoring model
 
-All exports are Workflows and every invocation is a Run. An exported async
-function with the exact `"use workflow"` directive has no persisted continuation
-between operations. A Workflow that needs continuation uses
-`defineWorkflow(({ defineBoundary, defineBatch }) => ({ steps: [...] }))` from
-`@catamorphic/workflow` (or a host wrapper):
+All exports are Workflows and every invocation is a Run. Every workflow is an
+exported `defineWorkflow(({ defineBoundary, defineBatch }) => ({ steps: [...] }))`
+value from `@catamorphic/workflow` (or a host wrapper):
 
 - `defineBoundary` is an atomic retry scope whose callback operations retry together.
 - `defineBatch` is a finite paged per-item processing scope with an optional sink.
 - `defineBatchStep` physically coalesces compatible calls made inside `defineBatch.process`.
+- `"use step"` functions hold IO and business operations, called from boundary
+  run bodies and batch process callbacks.
 
 These capabilities share workflow discovery, graph APIs, Runs routes, SDK
 resources, React hooks, and UI. Do not introduce a public stage, category
-selector, or capability-specific Run family.
+selector, or capability-specific Run family. Apps consume workflows through a
+single `Workflow<T>` contract from `@catamorphic/app`: the client exposes
+`.call(input)` (waits for the terminal output; a workflow with no pause,
+retry, rate limit, batch, or child call settles inline) and `.start(input)`
+(returns a pollable run handle).
 
 ## Operational Notes
 

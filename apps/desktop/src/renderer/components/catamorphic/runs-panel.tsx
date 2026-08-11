@@ -10,7 +10,6 @@ import {
   useRuns,
   useSubmitRunInput,
   useTriggerRun,
-  useTriggerTestRun,
 } from "@catamorphic/react";
 import type {
   BatchProgress,
@@ -25,12 +24,6 @@ export interface RunsPanelProps {
   limit?: number;
   input?: Record<string, unknown>;
   onSelectRun?: (run: Run) => void;
-  /**
-   * Which kind of run the Run button starts. Production runs require a
-   * deployed workflow; hosts without a deploy step (dev-sandbox-only
-   * surfaces) should pass `test`.
-   */
-  runMode?: "production" | "test";
 }
 
 const ITEM_STATUSES = [
@@ -339,12 +332,9 @@ export function RunsPanel({
   limit = 25,
   input,
   onSelectRun,
-  runMode = "production",
 }: RunsPanelProps) {
   const runs = useRuns({ projectId, workflowName, limit });
-  const triggerProduction = useTriggerRun({ projectId, workflowName });
-  const triggerTest = useTriggerTestRun({ projectId, workflowName });
-  const trigger = runMode === "test" ? triggerTest : triggerProduction;
+  const trigger = useTriggerRun({ projectId, workflowName });
   const [selectedRunId, setSelectedRunId] = useState<string>();
   const selectedId = selectedRunId ?? runs.data?.items[0]?.id;
   const [inputDraft, setInputDraft] = useState(() =>

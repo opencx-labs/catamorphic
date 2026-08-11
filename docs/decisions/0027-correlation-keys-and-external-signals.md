@@ -32,6 +32,6 @@ Also rejected: a first-class `Campaign`/`Sequence` concept. The framework knows 
 
 Long-lived per-entity journeys become expressible without host-side bookkeeping, and the same primitives serve approvals, dunning, onboarding, and payment confirmation. `signalByKey` deliberately fails loudly (`RunSignalNotFoundError`) rather than guessing a pause when the name does not match.
 
-The uniqueness index means concurrent enrollment for one key serialises on that key — correct, but hosts driving very high enrollment rates for a single key will see contention. Correlation keys are opt-in and production-only; test runs reject them, since a test run has no durable journey to address.
+The uniqueness index means concurrent enrollment for one key serialises on that key — correct, but hosts driving very high enrollment rates for a single key will see contention. Correlation keys are opt-in *(wording updated by [0040](0040-one-workflow-model.md): test runs no longer exist, so the original production-only restriction is now vacuous — every run executes a deployed commit and may carry a key)*.
 
 Follow-up: trigger configuration (cron/webhook, still unbuilt per 0006) should declare how to derive the correlation key from a payload plus its conflict policy, so enrollment dedupe is not reimplemented per host.

@@ -2,7 +2,9 @@
 // Light DOM on purpose: the global styles.css classes apply untouched and
 // crawlers see real links. One source of truth so pages can never drift.
 
-const LOGO = (size) => `<svg width="${size}" height="${size}" viewBox="0 0 64 64" fill="none" aria-hidden="true">
+const LOGO = (
+  size,
+) => `<svg width="${size}" height="${size}" viewBox="0 0 64 64" fill="none" aria-hidden="true">
   <path d="M46 15.5 C42 12.6 37.2 11 32 11 C20.4 11 11 20.4 11 32 C11 43.6 20.4 53 32 53 C37.2 53 42 51.4 46 48.5" stroke="#f95225" stroke-width="6.5" stroke-linecap="round"/>
   <line x1="24" y1="14.5" x2="24" y2="49.5" stroke="#f95225" stroke-width="6.5" stroke-linecap="round"/>
 </svg>`;

@@ -469,13 +469,15 @@ export class RunCoordinator {
       const now = await databaseNow(trx);
       const childRunId = crypto.randomUUID();
       const firstStep = args.child.execution.steps[0];
+      if (!firstStep) {
+        throw new Error("A child workflow requires at least one step");
+      }
       await trx
         .insertInto("workflow_runs")
         .values({
           id: childRunId,
           project_id: parent.project_id,
           workflow_name: args.child.workflowName,
-          mode: "production",
           provenance: jsonColumn(
             toJson({
               ...jsonRecord(parent.provenance),
@@ -485,7 +487,7 @@ export class RunCoordinator {
           deployment_artifact_id: parent.deployment_artifact_id,
           external_user_id: parent.external_user_id,
           status: "pending",
-          phase: firstStep ? phaseFor(firstStep) : "execute",
+          phase: phaseFor(firstStep),
           input: jsonColumn(args.child.input),
           parent_run_id: parent.id,
           parent_workflow_step_attempt_id: context.attempt.id,
@@ -502,121 +504,14 @@ export class RunCoordinator {
         .where("id", "=", parent.id)
         .where("status", "in", [...ACTIVE_RUN_STATUSES])
         .execute();
-      if (firstStep) {
-        await this.initialize({
-          trx,
-          tenantId: context.tenantId,
-          runId: childRunId,
-          execution: args.child.execution,
-          input: args.child.input,
-        });
-      } else {
-        await this.jobs.enqueue({
-          trx,
-          tenantId: context.tenantId,
-          workflowRunId: childRunId,
-          kind: "workflow_run",
-          payload: {},
-          priority: 100,
-          dedupeKey: `run:${childRunId}:execute`,
-        });
-      }
-      return childRunId;
-    });
-  }
-
-  async beginPlainRun(args: { job: ExecutionJob }): Promise<boolean> {
-    return this.db.transaction().execute(async (trx) => {
-      const run = await lockRun({ trx, runId: args.job.workflowRunId });
-      if (!run || !(await ownsJob({ trx, job: args.job }))) return false;
-      if (isTerminalRunStatus(run.status)) {
-        await this.reconcileParentFromTerminalChild({
-          trx,
-          childRunId: run.id,
-        });
-        return false;
-      }
-      if (!isActiveRunStatus(run.status)) return false;
-      const now = await databaseNow(trx);
-      const updated = await trx
-        .updateTable("workflow_runs")
-        .set({
-          status: "running",
-          phase: "execute",
-          started_at: run.started_at ?? now,
-          attempt: args.job.attempt,
-          updated_at: now,
-        })
-        .where("id", "=", run.id)
-        .where("status", "in", [...ACTIVE_RUN_STATUSES])
-        .returning("id")
-        .executeTakeFirst();
-      return updated !== undefined;
-    });
-  }
-
-  async finalizePlainRun(args: {
-    job: ExecutionJob;
-    result: RunResult;
-  }): Promise<boolean> {
-    return this.db.transaction().execute(async (trx) => {
-      const run = await lockRun({ trx, runId: args.job.workflowRunId });
-      if (!run || !(await ownsJob({ trx, job: args.job }))) return false;
-      if (isTerminalRunStatus(run.status)) {
-        await this.reconcileParentFromTerminalChild({
-          trx,
-          childRunId: run.id,
-        });
-        return false;
-      }
-      if (!isActiveRunStatus(run.status)) return false;
-      const now = await databaseNow(trx);
-      const updated = await trx
-        .updateTable("workflow_runs")
-        .set({
-          status: args.result.status,
-          result: jsonColumn(toJson(args.result.result)),
-          error: args.result.error ?? null,
-          completed_at: now,
-          updated_at: now,
-        })
-        .where("id", "=", run.id)
-        .where("status", "in", [...ACTIVE_RUN_STATUSES])
-        .returning("id")
-        .executeTakeFirst();
-      if (!updated) return false;
-      if (args.result.steps.length > 0) {
-        await trx
-          .insertInto("workflow_run_steps")
-          .values(
-            args.result.steps.map((step) => ({
-              id: crypto.randomUUID(),
-              run_id: run.id,
-              node_id: step.nodeId,
-              occurrence: step.occurrence ?? 0,
-              name: step.name,
-              status: step.status,
-              attempt: step.attempt ?? 1,
-              input: jsonColumn(toJson(step.input)),
-              output: jsonColumn(toJson(step.output)),
-              error: step.error ?? null,
-              started_at: new Date(step.startedAt),
-              completed_at: new Date(step.completedAt),
-            })),
-          )
-          .onConflict((conflict) =>
-            conflict.columns(["run_id", "node_id", "occurrence"]).doNothing(),
-          )
-          .execute();
-      }
-      await this.finishParent({
+      await this.initialize({
         trx,
-        childRunId: run.id,
-        ...(args.result.status === "completed"
-          ? { output: toJson(args.result.result) }
-          : { error: args.result.error ?? "Plain child workflow failed" }),
+        tenantId: context.tenantId,
+        runId: childRunId,
+        execution: args.child.execution,
+        input: args.child.input,
       });
-      return true;
+      return childRunId;
     });
   }
 

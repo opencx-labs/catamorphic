@@ -1,36 +1,19 @@
-import type { WorkflowGraph } from "@catamorphic/react";
 import type { Run } from "@catamorphic/react/types";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import { WorkflowEditor } from "./workflow-editor.js";
 
-function makeGraph({
-  persistedContinuations,
-}: {
-  persistedContinuations: boolean;
-}): WorkflowGraph {
-  return {
-    name: "sample",
-    capabilities: {
-      persistedContinuations,
-      batchProcessing: persistedContinuations,
-      cancellation: persistedContinuations,
-    },
-    filePath: "workflows/sample.ts",
-    input: { parameters: [] },
-    triggers: [],
-    canSuspend: false,
-    nodes: [],
-    edges: [],
-    sourceCode: "",
-  };
-}
+const SAMPLE_CODE = `export const sample = defineWorkflow(({ defineBoundary }) => ({
+  steps: [defineBoundary({ run: () => ({ success: true }) })],
+}));
+`;
 
 function makeRun(): Run {
   return {
     id: "00000000-0000-0000-0000-000000000001",
     projectId: "00000000-0000-0000-0000-000000000002",
     workflowName: "sample",
+    correlationKey: null,
     capabilities: {
       cancel: true,
       pauseProcessing: false,
@@ -43,8 +26,7 @@ function makeRun(): Run {
     currentStepIndex: null,
     activePause: null,
     batchScopes: [],
-    provenance: { mutableSource: true },
-    mode: "test",
+    provenance: { commitSha: "a".repeat(40) },
     initiatedBy: "user-1",
     input: {},
     result: null,
@@ -58,29 +40,19 @@ function makeRun(): Run {
 }
 
 describe("WorkflowEditor runs", () => {
-  it("uses live graph capabilities for the Test action", async () => {
-    const onTestRun = vi.fn().mockResolvedValue(makeRun());
-    const graph = makeGraph({ persistedContinuations: false });
+  it("shows a single Run action that starts a production Run", () => {
     render(
       <WorkflowEditor
-        code={'export async function sample() { "use workflow"; }'}
+        code={SAMPLE_CODE}
         onCodeChange={() => {}}
-        workflowCapabilities={
-          makeGraph({ persistedContinuations: true }).capabilities
-        }
-        onParse={async () => ({
-          graph,
-          layoutedNodes: [],
-          layoutedEdges: [],
-        })}
         onRun={async () => makeRun()}
-        onTestRun={onTestRun}
       />,
     );
 
-    const testButton = screen.getByRole("button", { name: "Test" });
-    expect(testButton).toBeDisabled();
-    await waitFor(() => expect(testButton).toBeEnabled());
+    expect(screen.getByRole("button", { name: "Run" })).toBeEnabled();
+    expect(
+      screen.queryByRole("button", { name: "Test" }),
+    ).not.toBeInTheDocument();
   });
 
   it("hands the canonical submitted Run to the unified Runs pane", async () => {
@@ -88,7 +60,7 @@ describe("WorkflowEditor runs", () => {
     const onRun = vi.fn().mockResolvedValue(run);
     render(
       <WorkflowEditor
-        code={'export async function sample() { "use workflow"; }'}
+        code={SAMPLE_CODE}
         onCodeChange={() => {}}
         onRun={onRun}
         renderRunsPanel={({ activeRun }) => (

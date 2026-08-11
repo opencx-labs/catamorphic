@@ -1,16 +1,41 @@
 import { describe, expect, it } from "vitest";
 import { parseWorkflow } from "../parser.js";
 
+/** Wraps boundary-body statements in a single-boundary defineWorkflow fixture. */
+function workflowSource(opts: {
+  name?: string;
+  input?: string;
+  body: string;
+  prelude?: string;
+  jsdoc?: string;
+}): string {
+  const name = opts.name ?? "myWorkflow";
+  const input = opts.input ?? "Record<string, never>";
+  return `
+${opts.prelude ?? ""}
+${opts.jsdoc ?? ""}
+export const ${name} = defineWorkflow(({ defineBoundary }) => ({
+  steps: [
+    defineBoundary({
+      run: async ({ input }: BoundaryContext<${input}>) => {
+${opts.body}
+      },
+    }),
+  ],
+}));
+`;
+}
+
 describe("parseWorkflow", () => {
   it("parses a simple workflow with steps", () => {
-    const source = `
-export async function myWorkflow({ email }: { email: string }) {
-  "use workflow";
-  const user = await createUser({ email });
-  await sendEmail({ to: user.email });
-  return { status: "done" };
-}
-`;
+    const source = workflowSource({
+      input: "{ email: string }",
+      body: `
+        const user = await createUser({ email: input.email });
+        await sendEmail({ to: user.email });
+        return { status: "done" };
+      `,
+    });
     const graph = parseWorkflow(source);
 
     expect(graph.name).toBe("myWorkflow");
@@ -20,7 +45,6 @@ export async function myWorkflow({ email }: { email: string }) {
     const types = graph.nodes.map((n) => n.type);
     expect(types).toContain("input");
     expect(types).toContain("step");
-    expect(types).toContain("return");
 
     const steps = graph.nodes.filter((n) => n.type === "step");
     expect(steps).toHaveLength(2);
@@ -29,16 +53,17 @@ export async function myWorkflow({ email }: { email: string }) {
   });
 
   it("parses if/else into branch containers", () => {
-    const source = `
-export async function myWorkflow({ x }: { x: number }) {
-  "use workflow";
-  if (x > 10) {
-    await handleBig({ x });
-  } else {
-    await handleSmall({ x });
-  }
-}
-`;
+    const source = workflowSource({
+      input: "{ x: number }",
+      body: `
+        const x = input.x;
+        if (x > 10) {
+          await handleBig({ x });
+        } else {
+          await handleSmall({ x });
+        }
+      `,
+    });
     const graph = parseWorkflow(source);
 
     const ifBlock = graph.nodes.find((n) => n.type === "if-block");
@@ -61,18 +86,19 @@ export async function myWorkflow({ x }: { x: number }) {
   });
 
   it("parses if/else-if/else into branch containers", () => {
-    const source = `
-export async function myWorkflow({ x }: { x: number }) {
-  "use workflow";
-  if (x > 100) {
-    await handleHuge({ x });
-  } else if (x > 10) {
-    await handleBig({ x });
-  } else {
-    await handleSmall({ x });
-  }
-}
-`;
+    const source = workflowSource({
+      input: "{ x: number }",
+      body: `
+        const x = input.x;
+        if (x > 100) {
+          await handleHuge({ x });
+        } else if (x > 10) {
+          await handleBig({ x });
+        } else {
+          await handleSmall({ x });
+        }
+      `,
+    });
     const graph = parseWorkflow(source);
 
     const branches = graph.nodes.filter((n) => n.type === "branch");
@@ -83,14 +109,13 @@ export async function myWorkflow({ x }: { x: number }) {
   });
 
   it("parses sleep calls as delay nodes", () => {
-    const source = `
-export async function myWorkflow() {
-  "use workflow";
-  await doSomething();
-  await sleep("7 days");
-  await doSomethingElse();
-}
-`;
+    const source = workflowSource({
+      body: `
+        await doSomething();
+        await sleep("7 days");
+        await doSomethingElse();
+      `,
+    });
     const graph = parseWorkflow(source);
 
     const delayNode = graph.nodes.find((n) => n.type === "delay");
@@ -99,15 +124,14 @@ export async function myWorkflow() {
   });
 
   it("parses Promise.all as parallel nodes", () => {
-    const source = `
-export async function myWorkflow() {
-  "use workflow";
-  await Promise.all([
-    sendEmail({ to: "a@b.com" }),
-    sendSlack({ channel: "#general" }),
-  ]);
-}
-`;
+    const source = workflowSource({
+      body: `
+        await Promise.all([
+          sendEmail({ to: "a@b.com" }),
+          sendSlack({ channel: "#general" }),
+        ]);
+      `,
+    });
     const graph = parseWorkflow(source);
 
     const parallelBlocks = graph.nodes.filter(
@@ -121,17 +145,19 @@ export async function myWorkflow() {
     expect(childSteps.length).toBeGreaterThanOrEqual(2);
   });
 
-  it("extracts JSDoc metadata from workflow function", () => {
-    const source = `
+  it("extracts JSDoc metadata from the workflow definition", () => {
+    const source = workflowSource({
+      name: "welcomeUser",
+      input: "{ email: string }",
+      jsdoc: `
 /**
  * @displayname Welcome Flow
  * @description Welcomes a new user
- */
-export async function welcomeUser({ email }: { email: string }) {
-  "use workflow";
-  await sendWelcome({ email });
-}
-`;
+ */`,
+      body: `
+        await sendWelcome({ email: input.email });
+      `,
+    });
     const graph = parseWorkflow(source);
 
     expect(graph.displayName).toBe("Welcome Flow");
@@ -139,19 +165,20 @@ export async function welcomeUser({ email }: { email: string }) {
   });
 
   it("extracts step function display names from JSDoc", () => {
-    const source = `
+    const source = workflowSource({
+      input: "{ email: string }",
+      prelude: `
 /**
  * @displayname Send Welcome Email
  */
 async function sendWelcome({ email }: { email: string }) {
   "use step";
 }
-
-export async function myWorkflow({ email }: { email: string }) {
-  "use workflow";
-  await sendWelcome({ email });
-}
-`;
+`,
+      body: `
+        await sendWelcome({ email: input.email });
+      `,
+    });
     const graph = parseWorkflow(source);
 
     const stepNode = graph.nodes.find((n) => n.type === "step");
@@ -160,14 +187,15 @@ export async function myWorkflow({ email }: { email: string }) {
   });
 
   it("parses for-of loops as loop-block containers", () => {
-    const source = `
-export async function myWorkflow({ items }: { items: string[] }) {
-  "use workflow";
-  for (const item of items) {
-    await processItem({ item });
-  }
-}
-`;
+    const source = workflowSource({
+      input: "{ items: string[] }",
+      body: `
+        const items = input.items;
+        for (const item of items) {
+          await processItem({ item });
+        }
+      `,
+    });
     const graph = parseWorkflow(source);
 
     const loopBlock = graph.nodes.find((n) => n.type === "loop-block");
@@ -180,24 +208,21 @@ export async function myWorkflow({ items }: { items: string[] }) {
     );
     expect(processItem).toBeDefined();
     expect(processItem?.parentId).toBe(loopBlock?.id);
-
-    const loopEdge = graph.edges.find((e) => e.target === loopBlock?.id);
-    expect(loopEdge).toBeDefined();
   });
 
   it("handles nested blocks", () => {
-    const source = `
-export async function myWorkflow({ items }: { items: string[] }) {
-  "use workflow";
-  for (const item of items) {
-    if (item === "special") {
-      await handleSpecial({ item });
-    } else {
-      await handleNormal({ item });
-    }
-  }
-}
-`;
+    const source = workflowSource({
+      input: "{ items: string[] }",
+      body: `
+        for (const item of input.items) {
+          if (item === "special") {
+            await handleSpecial({ item });
+          } else {
+            await handleNormal({ item });
+          }
+        }
+      `,
+    });
     const graph = parseWorkflow(source);
 
     const loopBlock = graph.nodes.find((n) => n.type === "loop-block");
@@ -213,7 +238,10 @@ export async function myWorkflow({ items }: { items: string[] }) {
   });
 
   it("extracts step arguments with source tracking", () => {
-    const source = `
+    const source = workflowSource({
+      name: "welcomeUser",
+      input: "{ email: string; name: string }",
+      prelude: `
 /**
  * @displayname Create User
  */
@@ -228,13 +256,12 @@ async function createUser({ email, name }: { email: string; name: string }) {
 async function sendWelcomeEmail({ to, name }: { to: string; name: string }) {
   "use step";
 }
-
-export async function welcomeUser({ email, name }: { email: string; name: string }) {
-  "use workflow";
-  const user = await createUser({ email, name });
-  await sendWelcomeEmail({ to: user.email, name: user.name });
-}
-`;
+`,
+      body: `
+        const user = await createUser({ email: input.email, name: input.name });
+        await sendWelcomeEmail({ to: user.email, name: user.name });
+      `,
+    });
     const graph = parseWorkflow(source);
 
     const createUserNode = graph.nodes.find(
@@ -243,10 +270,8 @@ export async function welcomeUser({ email, name }: { email: string; name: string
     expect(createUserNode?.arguments).toBeDefined();
     expect(createUserNode?.arguments).toHaveLength(2);
     expect(createUserNode?.arguments?.[0]?.name).toBe("email");
-    expect(createUserNode?.arguments?.[0]?.value).toBe("email");
-    expect(createUserNode?.arguments?.[0]?.source?.stepLabel).toBe(
-      "welcomeUser",
-    );
+    expect(createUserNode?.arguments?.[0]?.value).toBe("input.email");
+    expect(createUserNode?.arguments?.[0]?.source?.variable).toBe("input");
 
     const sendEmailNode = graph.nodes.find(
       (n) => n.functionName === "sendWelcomeEmail",
@@ -262,7 +287,9 @@ export async function welcomeUser({ email, name }: { email: string; name: string
   });
 
   it("supports @displayname on variable declarations", () => {
-    const source = `
+    const source = workflowSource({
+      input: "{ email: string }",
+      prelude: `
 async function createUser({ email }: { email: string }) {
   "use step";
   return { id: "usr_1", email };
@@ -271,14 +298,13 @@ async function createUser({ email }: { email: string }) {
 async function sendEmail({ to }: { to: string }) {
   "use step";
 }
-
-export async function myWorkflow({ email }: { email: string }) {
-  "use workflow";
-  /** @displayname User Profile */
-  const user = await createUser({ email });
-  await sendEmail({ to: user.email });
-}
-`;
+`,
+      body: `
+        /** @displayname User Profile */
+        const user = await createUser({ email: input.email });
+        await sendEmail({ to: user.email });
+      `,
+    });
     const graph = parseWorkflow(source);
 
     const sendNode = graph.nodes.find((n) => n.functionName === "sendEmail");
@@ -289,16 +315,16 @@ export async function myWorkflow({ email }: { email: string }) {
   });
 
   it("tracks literal arguments without source", () => {
-    const source = `
+    const source = workflowSource({
+      prelude: `
 async function notify({ message }: { message: string }) {
   "use step";
 }
-
-export async function myWorkflow() {
-  "use workflow";
-  await notify({ message: "Hello world" });
-}
-`;
+`,
+      body: `
+        await notify({ message: "Hello world" });
+      `,
+    });
     const graph = parseWorkflow(source);
 
     const notifyNode = graph.nodes.find((n) => n.functionName === "notify");
@@ -308,7 +334,7 @@ export async function myWorkflow() {
     expect(notifyNode?.arguments?.[0]?.source).toBeUndefined();
   });
 
-  it("throws when no workflow function found", () => {
+  it("throws when no workflow definition found", () => {
     const source = `export function notAWorkflow() { return 42; }`;
 
     expect(() => parseWorkflow(source)).toThrow("No workflow definition found");

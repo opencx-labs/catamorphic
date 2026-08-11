@@ -1,7 +1,7 @@
 import { readFile } from "node:fs/promises";
 import { createRequire } from "node:module";
 import path from "node:path";
-import type { PluginPayload } from "./run-executor.js";
+import type { PluginPayload } from "./plugin-upload.js";
 
 export const WORKFLOW_PACKAGE_NAME = "@catamorphic/workflow";
 export const APP_PACKAGE_NAME = "@catamorphic/app";

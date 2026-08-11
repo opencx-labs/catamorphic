@@ -28,7 +28,9 @@ export const analyzeFeedback = defineBatchWorkflow({
 ```
 
 The export name remains workflow identity; TypeScript remains the only source
-of truth. Regular `"use workflow"` functions keep their existing semantics.
+of truth. Regular `"use workflow"` functions kept their then-existing
+semantics *(wording updated by [0040](0040-one-workflow-model.md): plain
+functions were later removed entirely)*.
 
 - A batch launch traverses one finite, resumable source. Stable item keys,
   persisted snapshots/cursors, deduplication, bounded pages, and backpressure

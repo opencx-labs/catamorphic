@@ -58,8 +58,6 @@ export type RunPause = NonNullable<Run["activePause"]>;
 
 export type BatchProgress = Run["batchScopes"][number];
 
-export type RunMode = Run["mode"];
-
 export type RunStatus = Run["status"];
 
 export type RunPhase = Run["phase"];
@@ -71,12 +69,6 @@ export type TriggerRunInput =
 
 export type TriggeredRun =
   paths["/api/projects/{projectId}/workflows/{name}/runs"]["post"]["responses"][201]["content"]["application/json"];
-
-export type TriggerTestRunInput =
-  paths["/api/projects/{projectId}/workflows/{name}/test-runs"]["post"]["requestBody"]["content"]["application/json"];
-
-export type TriggeredTestRun =
-  paths["/api/projects/{projectId}/workflows/{name}/test-runs"]["post"]["responses"][201]["content"]["application/json"];
 
 export type CancelRunInput =
   paths["/api/runs/{runId}/cancel"]["post"]["requestBody"]["content"]["application/json"];

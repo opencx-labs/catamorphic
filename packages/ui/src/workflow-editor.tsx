@@ -12,7 +12,7 @@ import {
   useEditorKeyboard,
   useWorkflowGraph,
 } from "@catamorphic/react";
-import type { Run, WorkflowCapabilities } from "@catamorphic/react/types";
+import type { Run } from "@catamorphic/react/types";
 import type { NodeTypes } from "@xyflow/react";
 import { useAtom, useAtomValue, useSetAtom } from "jotai";
 import type { ReactNode } from "react";
@@ -47,12 +47,8 @@ export interface WorkflowEditorProps {
   executionState?: Record<string, string>;
   showCodeEditor?: boolean;
   showMinimap?: boolean;
-  /** Canonical capabilities from the loaded Workflow. */
-  workflowCapabilities?: WorkflowCapabilities;
-  /** Starts a production Run. Available for every Workflow. */
+  /** Starts a Run. Available for every Workflow. */
   onRun?: (input: Record<string, unknown>) => Promise<Run>;
-  /** Starts a test Run. Shown only when the Workflow can run without continuations. */
-  onTestRun?: (input: Record<string, unknown>) => Promise<Run>;
   triggerParameters?: ParameterInfo[];
   onExpandEditor?: () => void;
   renderRunsPanel?: (props: { activeRun?: Run }) => ReactNode;
@@ -80,9 +76,7 @@ export function WorkflowEditorChrome({
   executionState,
   showCodeEditor = true,
   showMinimap = true,
-  workflowCapabilities,
   onRun,
-  onTestRun,
   triggerParameters,
   aiEnabled = false,
   onAIPrompt,
@@ -101,7 +95,6 @@ export function WorkflowEditorChrome({
   const lastTriggerData = useAtomValue(lastTriggerDataAtom);
   const setLastTriggerData = useSetAtom(lastTriggerDataAtom);
   const setReadOnly = useSetAtom(codeEditorReadOnlyAtom);
-  const [runMode, setRunMode] = useState<"test" | "production">("production");
   const [isRunning, setIsRunning] = useState(false);
   const [activeRun, setActiveRun] = useState<Run>();
 
@@ -147,26 +140,16 @@ export function WorkflowEditorChrome({
 
   const handleRunClick = useCallback(() => {
     if (!onRun) return;
-    setRunMode("production");
     setShowDialog(true);
   }, [onRun, setShowDialog]);
 
-  const currentCapabilities = graph?.capabilities ?? workflowCapabilities;
-  const canTestRun = currentCapabilities?.persistedContinuations === false;
-  const handleTestRunClick = useCallback(() => {
-    if (!onTestRun || !canTestRun) return;
-    setRunMode("test");
-    setShowDialog(true);
-  }, [canTestRun, onTestRun, setShowDialog]);
-
   const submitRun = useCallback(
     async (input: Record<string, unknown>) => {
-      const trigger = runMode === "test" ? onTestRun : onRun;
-      if (!trigger) return;
+      if (!onRun) return;
       setLastTriggerData(input);
       setIsRunning(true);
       try {
-        const run = await trigger(input);
+        const run = await onRun(input);
         setActiveRun(run);
         setShowDialog(false);
         setPanelVisibility((current) => ({
@@ -177,14 +160,7 @@ export function WorkflowEditorChrome({
         setIsRunning(false);
       }
     },
-    [
-      onRun,
-      onTestRun,
-      runMode,
-      setLastTriggerData,
-      setPanelVisibility,
-      setShowDialog,
-    ],
+    [onRun, setLastTriggerData, setPanelVisibility, setShowDialog],
   );
 
   const params = triggerParameters ?? graph?.input.parameters ?? [];
@@ -193,8 +169,6 @@ export function WorkflowEditorChrome({
     <div className="catamorphic-editor">
       <Toolbar
         onRun={onRun ? handleRunClick : undefined}
-        onTestRun={onTestRun ? handleTestRunClick : undefined}
-        testRunEnabled={canTestRun}
         isRunning={isRunning}
         centerSlot={renderToolbarCenter?.()}
       />
@@ -229,7 +203,6 @@ export function WorkflowEditorChrome({
       {showDialog && (
         <RunTriggerDialog
           parameters={params}
-          mode={runMode}
           isRunning={isRunning}
           initialValues={lastTriggerData}
           onRun={submitRun}

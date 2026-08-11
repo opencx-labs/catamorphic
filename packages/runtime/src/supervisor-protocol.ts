@@ -1,6 +1,6 @@
 import type { BatchStepRateLimit, JsonValue } from "@catamorphic/workflow";
 
-export const RUNTIME_PROTOCOL_VERSION = 7;
+export const RUNTIME_PROTOCOL_VERSION = 8;
 export const DEPLOYMENT_RUNTIME_VERSION = `runtime-protocol-v${RUNTIME_PROTOCOL_VERSION}`;
 
 export interface RuntimeArtifactIdentity {
@@ -11,7 +11,6 @@ export interface RuntimeArtifactIdentity {
 }
 
 export type RuntimeWorkKind =
-  | "workflow"
   | "durable-boundary"
   | "batch-source"
   | "batch-step"
@@ -20,12 +19,6 @@ export type RuntimeWorkKind =
 interface RuntimeInvocationTargetBase {
   modulePath: string;
   exportName: string;
-}
-
-export interface RuntimePlainWorkflowTarget
-  extends RuntimeInvocationTargetBase {
-  stepIndex?: never;
-  operation?: never;
 }
 
 export interface RuntimeBoundaryTarget extends RuntimeInvocationTargetBase {
@@ -54,7 +47,6 @@ export interface RuntimeBatchSinkTarget extends RuntimeInvocationTargetBase {
 }
 
 export type RuntimeInvocationTarget =
-  | RuntimePlainWorkflowTarget
   | RuntimeBoundaryTarget
   | RuntimeBatchSourceTarget
   | RuntimeBatchProcessTarget
@@ -77,10 +69,6 @@ interface RuntimeInvocationRequestBase extends RuntimeArtifactIdentity {
 }
 
 export type RuntimeInvocationRequest =
-  | (RuntimeInvocationRequestBase & {
-      kind: "workflow";
-      target: RuntimePlainWorkflowTarget;
-    })
   | (RuntimeInvocationRequestBase & {
       kind: "durable-boundary";
       target: RuntimeBoundaryTarget;
@@ -305,13 +293,6 @@ export function parseRuntimeInvocationRequest(
     env,
     traceContext,
   };
-  if (value.kind === "workflow") {
-    return {
-      ...request,
-      kind: value.kind,
-      target: parseTarget({ value: value.target, kind: value.kind }),
-    };
-  }
   if (value.kind === "durable-boundary") {
     return {
       ...request,
@@ -352,10 +333,6 @@ export function toProtocolJson(value: unknown): JsonValue {
   return toProtocolJsonValue({ value, seen: new WeakSet<object>() });
 }
 
-function parseTarget(args: {
-  value: unknown;
-  kind: "workflow";
-}): RuntimePlainWorkflowTarget;
 function parseTarget(args: {
   value: unknown;
   kind: "durable-boundary";
@@ -400,11 +377,6 @@ function parseTarget(args: {
   const stepIndex = parseStepIndex(args.value.stepIndex);
   const base = { modulePath, exportName };
 
-  if (args.kind === "workflow") {
-    requireNoStepIndex({ stepIndex, kind: args.kind });
-    requireOperation({ operation, expected: undefined, kind: args.kind });
-    return base;
-  }
   if (args.kind === "durable-boundary") {
     requireOperation({ operation, expected: undefined, kind: args.kind });
     return {
@@ -526,7 +498,6 @@ function requireNonEmptyString(args: {
 
 function isRuntimeWorkKind(value: unknown): value is RuntimeWorkKind {
   return (
-    value === "workflow" ||
     value === "durable-boundary" ||
     value === "batch-source" ||
     value === "batch-step" ||
