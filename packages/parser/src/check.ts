@@ -3,6 +3,7 @@ import {
   appWorkspaceNames,
   renderAppApiTypesModule,
 } from "./app-codegen.js";
+import { holeSchemaErrors } from "./holes.js";
 import { validateAgainstSchema } from "./json-schema-validate.js";
 import { parseProject } from "./parser.js";
 
@@ -32,6 +33,8 @@ export interface CheckFinding {
 export interface CheckTriggerKind {
   name: string;
   configJsonSchema?: unknown;
+  /** Enables hole validation (ADR 0042) when present. */
+  payloadJsonSchema?: unknown;
 }
 
 export interface CheckResult {
@@ -74,6 +77,15 @@ export function checkProject(
           kind.configJsonSchema ?? {},
           "config",
         );
+        // Holes in the kind's payload template must freeze to concrete
+        // schemas derived from this workflow's input — the same fail-closed
+        // rule the host applies at scan time.
+        for (const holeError of holeSchemaErrors({
+          payloadSchema: kind.payloadJsonSchema ?? {},
+          inputSchema: workflow.graph.inputSchema ?? {},
+        })) {
+          errors.push(holeError);
+        }
         for (const error of errors) {
           findings.push({
             level: "error",

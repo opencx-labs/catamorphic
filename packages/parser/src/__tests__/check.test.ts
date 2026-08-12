@@ -126,6 +126,45 @@ export const bad = defineWorkflow(({ defineBoundary }) => ({
     expect(badConfig.findings[0]?.message).toContain("onlyPriority");
   });
 
+  it("validates template holes against the derived input schema", () => {
+    const toolKind = {
+      name: "ai.tool-call",
+      configJsonSchema: {
+        type: "object",
+        properties: { description: { type: "string" } },
+        required: ["description"],
+      },
+      payloadJsonSchema: { "x-catamorphic-hole": "Args" },
+    };
+    const files = (input: string) => ({
+      "workflows/src/tool.ts": `
+import { type BoundaryContext, defineWorkflow, trigger } from "@catamorphic/workflow";
+
+export const searchTool = defineWorkflow(({ defineBoundary }) => ({
+  triggers: [trigger("ai.tool-call", { description: "search" })],
+  steps: [
+    defineBoundary({
+      run: async ({ input }: BoundaryContext<${input}>) => ({ ok: true }),
+    }),
+  ],
+}));
+`,
+    });
+
+    const healthy = checkProject(files("{ query: string }"), {
+      triggerKinds: [toolKind],
+    });
+    expect(healthy.findings).toEqual([]);
+
+    // `any` input degrades to a permissive schema: the hole would freeze
+    // to nothing, so checking fails closed like the host's scan.
+    const permissive = checkProject(files("any"), {
+      triggerKinds: [toolKind],
+    });
+    expect(permissive.ok).toBe(false);
+    expect(permissive.findings[0]?.message).toContain("hole 'Args'");
+  });
+
   it("renders deterministic app-api types", () => {
     const parsedTwice = [
       checkProject(projectFiles()),

@@ -1557,3 +1557,26 @@ Patterned on what best-in-class palettes converged on (Chrome omnibox
   display metadata), and the detail panel lists each binding with its
   config — subscriptions are visible where the workflow is read, not
   hidden in host state.
+
+### 2026-08-12 — Workflows as AI tools: `ai.tool-call` and the per-project MCP server
+- The desktop registers `ai.tool-call` (ADR 0042), the first parameterized
+  kind: its payload is one typed hole, so a workflow's own input type IS
+  the tool's argument schema. Opting a workflow into tool-hood is one line
+  of workflow code — `triggers: [trigger("ai.tool-call", { description })]`
+  — with the schema derived from code and frozen at deploy, never written
+  by hand. A hole that would freeze to `any` fails the deploy, not the
+  model's tool call.
+- Every chat session now mounts its project's workflow-tools MCP endpoint
+  (`/api/projects/<id>/mcp`) as the `catamorphic` server, via the new
+  session-scoped `mcpServersForSession` hook on the Claude Code and ai-sdk
+  harnesses. Agents see `mcp__catamorphic__<tool>` beside their connector
+  tools — same namespacing, same event pipeline, no special-casing in chat.
+  Claude Code re-resolves the server every turn, the built-in agent
+  connects fresh per session (never caching a failed connect) — so a tool
+  workflow the agent just wrote is callable on the next turn or next chat,
+  and a transient endpoint hiccup never poisons future sessions.
+- Tool calls run sync-until-first-wait: settled output returns inline;
+  a workflow that needs to wait detaches and hands back a run id for the
+  shared `catamorphic_poll_run` tool. `canSuspend: false` bindings are
+  guaranteed inline answers — the tool contract mirrors the run model
+  instead of pretending every tool is instantaneous.

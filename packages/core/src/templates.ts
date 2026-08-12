@@ -431,9 +431,15 @@ Rules:
 4. The trigger payload becomes the first step's input, so the first
    \`BoundaryContext<Input>\` must accept the kind's payload type. Multiple
    bindings are allowed; the input must then accept every payload.
-5. Each kind defines what its config means (e.g. an AI tool-call kind requires
+5. Some kinds are parameterized: their payload (or parts of it) shows as
+   \`Hole<"Name">\` in the generated types. A hole means "this workflow's
+   own input type defines the shape here" — so give the input a concrete,
+   descriptive type; \`any\` or \`unknown\` at a hole fails the deploy. For
+   an AI tool-call kind, that input type IS the tool's argument schema the
+   model sees.
+6. Each kind defines what its config means (e.g. an AI tool-call kind requires
    a \`description\` the model sees). Fill it thoughtfully — hosts read it.
-6. Hosts may fire sync (result awaited inline) or async. A workflow with no
+7. Hosts may fire sync (result awaited inline) or async. A workflow with no
    pause, retry, rate limit, batch, or child call is guaranteed to complete
    inline; anything else may detach mid-run, which is fine and expected.
 

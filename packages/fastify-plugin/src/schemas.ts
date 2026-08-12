@@ -164,6 +164,7 @@ export const TriggerKindInfoSchema = z.object({
   modes: z.array(TriggerModeSchema),
   payloadJsonSchema: JsonOutSchema,
   configJsonSchema: JsonOutSchema,
+  outputJsonSchema: JsonOutSchema.optional(),
 });
 
 export const TriggerBindingInfoSchema = z.object({

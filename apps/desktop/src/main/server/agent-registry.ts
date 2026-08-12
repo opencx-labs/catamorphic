@@ -10,6 +10,7 @@ import type {
   AgentMcpServerConfig,
   AgentPluginConfig,
   CodingAgentProvider,
+  ExtraToolContext,
   SandboxProvider,
 } from "@catamorphic/sandbox";
 import type { WorkspaceBridge } from "../agent-bridge.js";
@@ -42,6 +43,12 @@ export interface DesktopAgentRegistryDeps {
   workspaceBridge?: WorkspaceBridge;
   /** Installed connector plugins (Claude Code loads them natively). */
   connectors?: ConnectorsService;
+  /**
+   * The project's workflow-tools MCP endpoint (`/api/projects/:id/mcp`),
+   * mounted per chat session so agents can call the project's ai.tool-call
+   * workflows. Undefined while the embedded server is still booting.
+   */
+  projectMcpUrl?: (projectId: string) => string | undefined;
   /** E2E: every configured agent resolves to the scripted fake. */
   e2eFake?: boolean;
 }
@@ -190,6 +197,18 @@ export class DesktopAgentRegistry implements CodingAgentRegistry {
     return { servers, plugins };
   }
 
+  /**
+   * Session-scoped MCP servers: the session's project decides the server
+   * set, so this resolves per session start/turn — one "catamorphic"
+   * entry pointing at the project's workflow-tools endpoint.
+   */
+  private sessionMcpServers(
+    context: ExtraToolContext,
+  ): Record<string, AgentMcpServerConfig> {
+    const url = this.deps.projectMcpUrl?.(context.projectId);
+    return url ? { catamorphic: { transport: "http", url } } : {};
+  }
+
   private freshDefaults(config: AgentConfig) {
     const model = this.resolvedModel(config);
     return { effort: config.effort, ...(model ? { model } : {}) };
@@ -280,6 +299,7 @@ export class DesktopAgentRegistry implements CodingAgentRegistry {
           // Elicitation from this agent's connectors → the front window,
           // labeled with the agent so the user knows who's asking.
           bridge ? (request) => bridge.elicit(config.name, request) : undefined,
+          (context) => this.sessionMcpServers(context),
         );
         if (provider) {
           // This harness owns real MCP client connections (stdio child
@@ -333,6 +353,8 @@ export class DesktopAgentRegistry implements CodingAgentRegistry {
                 // The agent's assigned connections, plus native loading
                 // of connector plugins (skills/agents/commands).
                 mcpServers: mcp.servers,
+                mcpServersForSession: (context) =>
+                  this.sessionMcpServers(context),
                 plugins: mcp.plugins,
               }),
               { hasTools: true },

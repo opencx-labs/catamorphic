@@ -75,6 +75,17 @@ export interface AiSdkCodingAgentOpts {
    */
   mcpServers?: Record<string, AgentMcpServerConfig>;
   /**
+   * Session-scoped MCP servers, resolved from the session's project —
+   * how a host mounts per-project surfaces (e.g. Catamorphic's workflow
+   * tools endpoint) beside the agent-wide {@link mcpServers}. Connected
+   * fresh per session (so a new chat sees the project's current tool
+   * roster, and a transient failure never poisons later sessions) and
+   * closed when the session is disposed.
+   */
+  mcpServersForSession?: (
+    context: ExtraToolContext,
+  ) => Record<string, AgentMcpServerConfig>;
+  /**
    * How to answer MCP `elicitation/create` (form/URL) from those servers —
    * the host renders it to the user. Also drives MRTR auto-fulfilment on
    * the stateless era. Omit and servers see no elicitation capability.
@@ -89,6 +100,8 @@ interface AiSdkSessionState {
   sandboxId: string;
   workingDirectory: string;
   running: boolean;
+  /** Session-scoped MCP connections, closed when the session is disposed. */
+  scopedMcp: ConnectedMcpServer[];
   /** Aborts the in-flight turn (interrupt()); cleared when the turn ends. */
   abort?: AbortController;
   /** Set when the turn ended on an ask_user call awaiting the user's answer. */
@@ -138,12 +151,43 @@ export class AiSdkCodingAgent implements CodingAgentProvider {
   }
 
   /**
+   * Connect one session-scoped server. Failures are skipped with a warning
+   * and NOT cached, mirroring the agent-wide set's tolerance while letting
+   * the next session retry — a broken per-project endpoint must never
+   * break the chat, and a transient one must not stay broken.
+   */
+  private async connectScopedServer(
+    name: string,
+    config: AgentMcpServerConfig,
+  ): Promise<ConnectedMcpServer | undefined> {
+    try {
+      return await connectMcpServer(
+        config,
+        this.opts.onElicit ? { onElicit: this.opts.onElicit } : undefined,
+      );
+    } catch (cause) {
+      console.warn(
+        `[ai-sdk] session MCP server "${name}" failed to connect:`,
+        cause,
+      );
+      return undefined;
+    }
+  }
+
+  /**
    * Close MCP connections (stdio child processes, HTTP sessions). Called
    * by hosts when they drop this provider instance for a rebuilt one.
    */
   async closeMcp(): Promise<void> {
     const pending = this.mcpConnections;
     this.mcpConnections = undefined;
+    // Session-scoped connections of sessions the host never disposed.
+    const scoped = [...this.sessions.values()].flatMap((state) => {
+      const servers = state.scopedMcp;
+      state.scopedMcp = [];
+      return servers;
+    });
+    await Promise.all(scoped.map((server) => server.close().catch(() => {})));
     if (!pending) return;
     const connections = await pending.catch(
       () => new Map<string, ConnectedMcpServer>(),
@@ -178,6 +222,28 @@ export class AiSdkCodingAgent implements CodingAgentProvider {
         ? buildMcpTools(await this.connectMcp())
         : {};
 
+    // Session-scoped servers (per-project surfaces) connect fresh per
+    // session and mount beside the agent-wide set; on a name clash the
+    // session-scoped server wins. Closed when the session is disposed.
+    const scopedConfigs = this.opts.mcpServersForSession?.({
+      projectId: opts.projectId,
+      sessionId: opts.sessionId,
+    });
+    const scopedMcp: ConnectedMcpServer[] = [];
+    if (scopedConfigs) {
+      const scoped = new Map<string, ConnectedMcpServer>();
+      await Promise.all(
+        Object.entries(scopedConfigs).map(async ([name, config]) => {
+          const server = await this.connectScopedServer(name, config);
+          if (server) {
+            scoped.set(name, server);
+            scopedMcp.push(server);
+          }
+        }),
+      );
+      Object.assign(mcpTools, buildMcpTools(scoped));
+    }
+
     this.sessions.set(providerSessionId, {
       instructions,
       tools: createTools(
@@ -198,6 +264,7 @@ export class AiSdkCodingAgent implements CodingAgentProvider {
       sandboxId: opts.sandboxId,
       workingDirectory: opts.workingDirectory,
       running: false,
+      scopedMcp,
     });
 
     return {
@@ -411,8 +478,14 @@ export class AiSdkCodingAgent implements CodingAgentProvider {
   }
 
   async dispose(session: ProviderSession): Promise<void> {
-    if (session.providerSessionId) {
-      this.sessions.delete(session.providerSessionId);
+    if (!session.providerSessionId) return;
+    const state = this.sessions.get(session.providerSessionId);
+    this.sessions.delete(session.providerSessionId);
+    if (state) {
+      await Promise.all(
+        state.scopedMcp.map((server) => server.close().catch(() => {})),
+      );
+      state.scopedMcp = [];
     }
   }
 }

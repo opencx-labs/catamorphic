@@ -4,6 +4,7 @@ import { getTracer, withSpan } from "@catamorphic/otel";
 import {
   appApiTypesPath,
   appWorkspaceNames,
+  holeSchemaErrors,
   type ParameterInfo,
   parseProject,
   renderAppApiTypesModule,
@@ -23,6 +24,8 @@ import {
 } from "./trigger-codegen.js";
 import {
   buildTriggerKindRegistry,
+  MCP_POLL_RUN_TOOL,
+  type McpToolKindSpec,
   type TriggerKindInfo,
   type TriggerKindRuntime,
   type TriggerMode,
@@ -134,6 +137,8 @@ interface ScanResult {
 
 interface TriggersServiceDeps {
   kinds: readonly TriggerKindRuntime[];
+  /** Tool-kind declarations; scan validates effective tool-name uniqueness. */
+  mcpToolKinds?: readonly McpToolKindSpec[];
   projectManager: ProjectManager;
   runs: RunsService;
   executionJobs: ExecutionJobsService;
@@ -615,6 +620,24 @@ export class TriggersService {
           );
           continue;
         }
+        // Holes in the kind's template freeze to this workflow's derived
+        // input schema (ADR 0042). A hole that would freeze to nothing —
+        // undeclared or permissive — fails the commit closed: shipping a
+        // tool/endpoint with an unknowable argument shape is an authoring
+        // error better caught at deploy than at call time.
+        const holeErrors = holeSchemaErrors({
+          payloadSchema: kind.payloadJsonSchema,
+          inputSchema: workflow.graph.inputSchema ?? {},
+        });
+        if (holeErrors.length > 0) {
+          errors.push(
+            ...holeErrors.map(
+              (error) =>
+                `Workflow '${workflow.functionName}' trigger '${binding.kind}': ${error}`,
+            ),
+          );
+          continue;
+        }
         bindings.push({
           workflowName: workflow.functionName,
           kind: binding.kind,
@@ -625,6 +648,33 @@ export class TriggersService {
           outputSchema: (workflow.graph.outputSchema ?? {}) as Json,
         });
       }
+    }
+    // Effective MCP tool names must be unique per project and may not claim
+    // the shared poll tool. Serve time keeps a backstop, but the primary
+    // enforcement is here: a name collision should stop the deploy, not
+    // brick the project's tool roster for an agent mid-session.
+    const toolSpecs = new Map(
+      (this.deps.mcpToolKinds ?? []).map((spec) => [spec.kind, spec]),
+    );
+    const toolNames = new Map<string, string>();
+    for (const binding of bindings) {
+      const spec = toolSpecs.get(binding.kind);
+      if (!spec) continue;
+      const name = spec.tool(binding.config).name ?? binding.workflowName;
+      if (name === MCP_POLL_RUN_TOOL) {
+        errors.push(
+          `Workflow '${binding.workflowName}' trigger '${binding.kind}': tool name '${name}' is reserved`,
+        );
+        continue;
+      }
+      const owner = toolNames.get(name);
+      if (owner) {
+        errors.push(
+          `Workflows '${owner}' and '${binding.workflowName}' both resolve to MCP tool name '${name}'; rename one via its trigger config`,
+        );
+        continue;
+      }
+      toolNames.set(name, binding.workflowName);
     }
     if (errors.length > 0) {
       throw new TriggerBindingsInvalidError(

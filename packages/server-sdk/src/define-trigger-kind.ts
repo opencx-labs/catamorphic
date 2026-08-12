@@ -1,8 +1,11 @@
-import type {
-  TriggerKindDisplay,
-  TriggerKindRuntime,
-  TriggerMode,
-  TriggerValidationResult,
+import {
+  HOLE_SCHEMA_KEY,
+  type McpToolKindSpec,
+  type McpToolMetadata,
+  type TriggerKindDisplay,
+  type TriggerKindRuntime,
+  type TriggerMode,
+  type TriggerValidationResult,
 } from "@catamorphic/core";
 import type { Json } from "@catamorphic/db";
 import { z } from "zod";
@@ -37,10 +40,20 @@ export function defineTriggerKind<
   display?: TriggerKindDisplay;
   /** Fire modes the host allows. Defaults to both sync and async. */
   modes?: readonly TriggerMode[];
-  /** What the host fires with — delivered verbatim as the workflow input. */
+  /**
+   * What the host fires with — delivered verbatim as the workflow input.
+   * May contain `hole(...)` positions: the kind then leaves those open and
+   * each bound workflow's own input type fills them in (ADR 0042).
+   */
   payload: PayloadSchema;
   /** Per-workflow constant config the kind demands of subscribers. */
   config?: ConfigSchema;
+  /**
+   * Output template the kind demands of subscribed workflows — e.g. an
+   * HTTP response envelope. May contain `hole(...)` positions. Enforced at
+   * authoring time through the generated trigger types.
+   */
+  output?: z.ZodType;
   /** Derives an enrollment correlation key from a validated payload. */
   correlationKey?: (payload: z.output<PayloadSchema>) => string | undefined;
 }): TriggerKindDefinition<z.output<PayloadSchema>, z.output<ConfigSchema>> {
@@ -54,11 +67,40 @@ export function defineTriggerKind<
     modes: args.modes,
     payloadJsonSchema: toJsonSchema(args.payload),
     configJsonSchema: toJsonSchema(configSchema),
+    ...(args.output ? { outputJsonSchema: toJsonSchema(args.output) } : {}),
     validatePayload: (value) => validate(args.payload, value),
     validateConfig: (value) => validate(configSchema, value),
     correlationKey: args.correlationKey
       ? (payload) => args.correlationKey?.(payload as z.output<PayloadSchema>)
       : undefined,
+  };
+}
+
+/**
+ * A named open position in a kind's payload or output template (ADR 0042).
+ * The kind doesn't fix the type here — each bound workflow's own input (or
+ * output) type instantiates it, and the derived per-binding JSON Schema is
+ * frozen as the hole's concrete, tool-definition-ready schema at scan time.
+ * Validation-wise a hole accepts anything: the per-run input validation
+ * enforces the workflow's own schema at that position.
+ */
+export function hole<Name extends string>(name: Name): z.ZodType<unknown> {
+  return z.unknown().meta({ [HOLE_SCHEMA_KEY]: name });
+}
+
+/**
+ * Declares a kind's bindings as AI-callable tools for the per-project MCP
+ * endpoint. Takes the kind definition (not its name) so `tool` is typed
+ * against the kind's config by construction. Register the result under
+ * `createCatamorphic({ mcpToolKinds })`.
+ */
+export function mcpToolKind<Config>(
+  kind: TriggerKindDefinition<unknown, Config>,
+  tool: (config: Config) => McpToolMetadata,
+): McpToolKindSpec {
+  return {
+    kind: kind.name,
+    tool: (config) => tool(config as Config),
   };
 }
 

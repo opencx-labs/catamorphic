@@ -4,6 +4,8 @@
  * are all emitted through this.
  */
 
+import { HOLE_SCHEMA_KEY } from "./holes.js";
+
 type Json = null | boolean | number | string | Json[] | { [key: string]: Json };
 
 /**
@@ -17,6 +19,13 @@ export function typeFromJsonSchema(schema: unknown, indent: number): string {
     return JSON_VALUE;
   }
   const node = schema as Record<string, Json>;
+
+  // A trigger-kind template hole (ADR 0042): rendered as the branded
+  // `Hole<Name>` from @catamorphic/workflow, which the trigger validation
+  // types recognize as "filled by the bound workflow's own input".
+  if (typeof node[HOLE_SCHEMA_KEY] === "string") {
+    return `Hole<${JSON.stringify(node[HOLE_SCHEMA_KEY])}>`;
+  }
 
   if (node.const !== undefined) return literal(node.const);
   if (Array.isArray(node.enum)) {

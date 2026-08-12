@@ -3,6 +3,10 @@ import {
   createBatch,
   type DefineBatch,
 } from "./batch.js";
+import type {
+  OutputTemplateMatches,
+  PayloadTemplateMatches,
+} from "./holes.js";
 import type { TriggerBinding } from "./index.js";
 import type {
   AssertJsonCompatible,
@@ -296,11 +300,20 @@ type Last<Value extends readonly unknown[]> = Value extends readonly [
 type ValidateTriggers<
   Triggers extends readonly unknown[],
   Input,
+  Output,
   Position extends readonly unknown[] = [],
 > = Triggers extends readonly [infer Current, ...infer Rest]
-  ? Current extends TriggerBinding<infer Payload>
-    ? [Payload] extends [Input]
-      ? ValidateTriggers<Rest, Input, readonly [...Position, unknown]>
+  ? Current extends TriggerBinding<infer Payload, infer OutputTemplate>
+    ? PayloadTemplateMatches<Payload, Input> extends true
+      ? OutputTemplateMatches<OutputTemplate, Output> extends true
+        ? ValidateTriggers<Rest, Input, Output, readonly [...Position, unknown]>
+        : WorkflowTypeError<
+            `Trigger ${[
+              ...Position,
+              unknown,
+            ]["length"]} demands an output the workflow's final step does not produce`,
+            { triggerOutput: OutputTemplate; stepOutput: Output }
+          >
       : WorkflowTypeError<
           `Trigger ${[
             ...Position,
@@ -383,7 +396,11 @@ export function defineWorkflow<
     readonly controls?: WorkflowControls;
     readonly triggers?: Triggers;
   } & ValidateSteps<Steps> &
-    ValidateTriggers<Triggers, ExecutionUnitInput<Steps[0]>>,
+    ValidateTriggers<
+      Triggers,
+      ExecutionUnitInput<Steps[0]>,
+      ExecutionUnitOutput<Last<Steps>>
+    >,
 ): WorkflowDefinition<
   ExecutionUnitInput<Steps[0]>,
   ExecutionUnitOutput<Last<Steps>>,

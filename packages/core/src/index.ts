@@ -1,6 +1,7 @@
 export {
   appApiTypesPath,
   checkProject,
+  HOLE_SCHEMA_KEY,
   renderAppApiTypesModule,
   validateAgainstSchema,
 } from "@catamorphic/parser";
@@ -215,6 +216,9 @@ export {
 } from "./services/trigger-codegen.js";
 export {
   buildTriggerKindRegistry,
+  MCP_POLL_RUN_TOOL,
+  type McpToolKindSpec,
+  type McpToolMetadata,
   type TriggerKindDisplay,
   type TriggerKindInfo,
   type TriggerKindRuntime,

@@ -1,4 +1,5 @@
 import type { Json } from "@catamorphic/db";
+import { unsupportedHoleErrors } from "@catamorphic/parser";
 
 /** How a host wants a trigger kind rendered in workflow graphs. */
 export interface TriggerKindDisplay {
@@ -31,8 +32,20 @@ export interface TriggerKindRuntime {
   display?: TriggerKindDisplay;
   /** Fire modes the host allows for this kind. Defaults to both. */
   modes?: readonly TriggerMode[];
+  /**
+   * May contain `x-catamorphic-hole` positions (ADR 0042): a parameterized
+   * kind leaves those open and each bound workflow's input type fills them.
+   * The matching validator accepts anything at a hole — the per-run input
+   * validation enforces the workflow's own derived schema there.
+   */
   payloadJsonSchema: Json;
   configJsonSchema: Json;
+  /**
+   * Output template the kind demands of subscribed workflows (may contain
+   * holes). Enforced at authoring time by the generated types; surfaced
+   * here for introspection and codegen.
+   */
+  outputJsonSchema?: Json;
   validatePayload(value: Json): TriggerValidationResult;
   validateConfig(value: Json): TriggerValidationResult;
   /** Derives an enrollment correlation key from the payload (ADR 0027). */
@@ -47,6 +60,7 @@ export interface TriggerKindInfo {
   modes: readonly TriggerMode[];
   payloadJsonSchema: Json;
   configJsonSchema: Json;
+  outputJsonSchema?: Json;
 }
 
 export function triggerKindInfo(kind: TriggerKindRuntime): TriggerKindInfo {
@@ -57,7 +71,39 @@ export function triggerKindInfo(kind: TriggerKindRuntime): TriggerKindInfo {
     modes: kind.modes ?? ["sync", "async"],
     payloadJsonSchema: kind.payloadJsonSchema,
     configJsonSchema: kind.configJsonSchema,
+    ...(kind.outputJsonSchema !== undefined
+      ? { outputJsonSchema: kind.outputJsonSchema }
+      : {}),
   };
+}
+
+/**
+ * The shared poll tool every Catamorphic MCP surface serves beside its real
+ * tools. Reserved: a binding's effective tool name may not claim it (the
+ * scan rejects the commit). Duplicated by hand in `@catamorphic/app`'s
+ * guest adapter, which cannot depend on core.
+ */
+export const MCP_POLL_RUN_TOOL = "catamorphic_poll_run";
+
+/** Tool metadata an MCP surface derives from a binding's constant config. */
+export interface McpToolMetadata {
+  /** Tool name; defaults to the bound workflow's name. */
+  name?: string;
+  /** The description the model reads. */
+  description: string;
+  /** MCP tool annotations (readOnlyHint, destructiveHint, …). */
+  annotations?: Record<string, Json>;
+}
+
+/**
+ * Declares that bindings of a trigger kind are AI-callable tools, and how
+ * to read tool metadata out of each binding's config. Hosts register these
+ * beside their kinds; the per-project MCP endpoint serves one tool per
+ * binding of every registered tool kind.
+ */
+export interface McpToolKindSpec {
+  kind: string;
+  tool(config: Json): McpToolMetadata;
 }
 
 export function buildTriggerKindRegistry(
@@ -72,6 +118,17 @@ export function buildTriggerKindRegistry(
     }
     if (registry.has(kind.name)) {
       throw new Error(`Trigger kind '${kind.name}' is registered twice`);
+    }
+    // Fail at registration, not per binding: a hole the scan could never
+    // resolve (union arm, additionalProperties, …) is a kind-authoring
+    // error, and the generated types would still render it as Hole<>.
+    for (const error of [
+      ...unsupportedHoleErrors(kind.payloadJsonSchema),
+      ...(kind.outputJsonSchema !== undefined
+        ? unsupportedHoleErrors(kind.outputJsonSchema)
+        : []),
+    ]) {
+      throw new Error(`Trigger kind '${kind.name}': ${error}`);
     }
     registry.set(kind.name, kind);
   }

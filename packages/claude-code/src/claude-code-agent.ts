@@ -75,6 +75,16 @@ export interface ClaudeCodeAgentOpts {
    */
   mcpServers?: Record<string, AgentMcpServerConfig>;
   /**
+   * Session-scoped MCP servers, resolved from the session's project —
+   * how a host mounts per-project surfaces (e.g. Catamorphic's workflow
+   * tools endpoint) beside the agent-wide {@link mcpServers}. Resolved on
+   * every turn; sessions resurrected without host context (after a host
+   * restart) run without them, like {@link extraTools}.
+   */
+  mcpServersForSession?: (
+    context: ExtraToolContext,
+  ) => Record<string, AgentMcpServerConfig>;
+  /**
    * Installed connector plugins, loaded natively (commands, agents,
    * skills, hooks). MCP discovery inside the plugin is disabled — the
    * host lifts a plugin's MCP servers into {@link mcpServers} so every
@@ -355,7 +365,15 @@ export class ClaudeCodeAgent implements CodingAgentProvider {
           })
         : undefined;
 
-    const externalServers = mapMcpServers(this.opts.mcpServers ?? {});
+    // Session-scoped servers win a name clash with the agent-wide set:
+    // the host owns both maps and picks the session keys, so a collision
+    // means it chose to shadow (e.g. a per-project "catamorphic" server).
+    const externalServers = mapMcpServers({
+      ...this.opts.mcpServers,
+      ...(toolContext
+        ? this.opts.mcpServersForSession?.(toolContext)
+        : undefined),
+    });
 
     return {
       cwd,

@@ -27,7 +27,11 @@ import { E2eLocalSandboxProvider } from "./e2e-fakes.js";
 import { FileGithubTokenStore, GITHUB_APP } from "./github.js";
 import type { DataPaths } from "./paths.js";
 import { ProjectRootsStore } from "./project-roots.js";
-import { DESKTOP_TRIGGER_KINDS, DesktopTriggers } from "./triggers.js";
+import {
+  DESKTOP_MCP_TOOL_KINDS,
+  DESKTOP_TRIGGER_KINDS,
+  DesktopTriggers,
+} from "./triggers.js";
 
 /** The desktop app is single-tenant: one fixed identity for the machine. */
 export const DESKTOP_TENANT_ID = "00000000-0000-4000-8000-00000000d001";
@@ -71,6 +75,9 @@ export async function startEmbeddedServer(
   // adding or editing an agent in Settings needs no server restart. In e2e
   // mode the default profile is seeded with two fake-backed agents so the
   // renderer's agent flows (lists, switching, effort) run for real.
+  // Known only after listen(); the resolver reads it lazily, and sessions
+  // can only start once the server is up.
+  let apiBaseUrl: string | undefined;
   const agentRegistry = new DesktopAgentRegistry({
     profiles,
     profileConfig,
@@ -79,6 +86,12 @@ export async function startEmbeddedServer(
     e2eFake: e2eFakeAgent,
     workspaceBridge,
     connectors,
+    // Each chat session gets its project's workflow-tools MCP server, so
+    // agents can call ai.tool-call workflows like any other MCP tool. The
+    // embedded server defaults desktop identity headers, so no auth rides
+    // the URL.
+    projectMcpUrl: (projectId) =>
+      apiBaseUrl ? `${apiBaseUrl}/api/projects/${projectId}/mcp` : undefined,
   });
   if (e2eFakeAgent) {
     const agents = profileConfig.forDefaultProfile().agents;
@@ -114,6 +127,7 @@ export async function startEmbeddedServer(
       tokenStore: new FileGithubTokenStore(paths.githubFile),
     },
     triggerKinds: DESKTOP_TRIGGER_KINDS,
+    mcpToolKinds: DESKTOP_MCP_TOOL_KINDS,
     // `triggers` is assigned right after construction; turns can only
     // settle later, once a chat message round-trips.
     onAgentTurnSettled: (event) => triggers.onAgentTurnSettled(event),
@@ -239,6 +253,7 @@ export async function startEmbeddedServer(
     throw new Error("Embedded server bound to an unexpected address");
   }
   const url = `http://127.0.0.1:${address.port}`;
+  apiBaseUrl = url;
   console.log(`[desktop] API ready on ${url}/api`);
 
   // PGlite is a single serialized connection; more worker concurrency would

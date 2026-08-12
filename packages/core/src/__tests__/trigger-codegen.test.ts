@@ -62,6 +62,52 @@ describe("trigger types codegen", () => {
     expect(content).toContain("null | boolean | number | string");
   });
 
+  it("renders holes as Hole<Name> and imports the brand only when used", () => {
+    const content = renderTriggerTypesModule([
+      kind({
+        name: "ai.tool-call",
+        payloadJsonSchema: { "x-catamorphic-hole": "Args" },
+        configJsonSchema: {
+          type: "object",
+          properties: { description: { type: "string" } },
+          required: ["description"],
+        },
+      }),
+      kind({
+        name: "http.request",
+        payloadJsonSchema: {
+          type: "object",
+          properties: {
+            method: { type: "string" },
+            body: { "x-catamorphic-hole": "Body" },
+          },
+          required: ["method", "body"],
+        },
+        outputJsonSchema: {
+          type: "object",
+          properties: {
+            status: { type: "number" },
+            body: { "x-catamorphic-hole": "Response" },
+          },
+          required: ["status", "body"],
+        },
+      }),
+    ]);
+    expect(content).toContain(
+      'import type { Hole } from "@catamorphic/workflow";',
+    );
+    expect(content).toContain('payload: Hole<"Args">;');
+    expect(content).toContain('body: Hole<"Body">;');
+    expect(content).toContain("output: {");
+    expect(content).toContain('body: Hole<"Response">;');
+  });
+
+  it("omits the Hole import and output member for plain kinds", () => {
+    const content = renderTriggerTypesModule([kind({ name: "plain.kind" })]);
+    expect(content).not.toContain("import type { Hole }");
+    expect(content).not.toContain("output:");
+  });
+
   it("quotes non-identifier property keys", () => {
     const content = renderTriggerTypesModule([
       kind({

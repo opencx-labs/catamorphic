@@ -123,7 +123,11 @@ export type {
 } from "./catamorphic.js";
 export { Catamorphic, createCatamorphic } from "./catamorphic.js";
 export type { TriggerKindDefinition } from "./define-trigger-kind.js";
-export { defineTriggerKind } from "./define-trigger-kind.js";
+export {
+  defineTriggerKind,
+  hole,
+  mcpToolKind,
+} from "./define-trigger-kind.js";
 export { FsBundleStore } from "./fs-bundle-store.js";
 export type {
   FilesResource,

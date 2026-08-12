@@ -113,6 +113,9 @@ export declare function defineWorkflow<const Steps extends readonly [unknown, ..
   },
 ): WorkflowDefinition<ExecutionUnitInput<Steps[0]>, ExecutionUnitOutput<Last<Steps>>, Steps>;
 
+declare const holeName: unique symbol;
+export interface Hole<Name extends string = string> { readonly [holeName]: Name }
+
 export interface TriggerKinds {}
 export declare function trigger(kind: string, config?: unknown): unknown;
 export declare function defineSecrets(declarations: any): any;

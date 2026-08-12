@@ -1,8 +1,18 @@
 import { buildAppGuestDocument } from "@catamorphic/app";
-import { RunNotFoundError } from "@catamorphic/core";
-import type { FastifyInstance, FastifyReply } from "fastify";
+import type { FastifyInstance } from "fastify";
 import type { RouteContext } from "../app.js";
 import { resolveIdentity } from "../http-identity.js";
+import {
+  callPollRunTool,
+  fetchRunSnapshot,
+  handleMcpPost,
+  McpRequestError,
+  negotiateProtocolVersion,
+  POLL_RUN_TOOL,
+  POLL_RUN_TOOL_DEFINITION,
+  toolError,
+  toolValue,
+} from "../mcp-shared.js";
 
 /**
  * MCP server for a project's published apps — the outbound half of MCP
@@ -27,27 +37,9 @@ import { resolveIdentity } from "../http-identity.js";
  * client also defaults to it). Requests are independent; no sessions.
  */
 
-/** Shared contract with `@catamorphic/app`'s MCP-host guest adapter. */
-const POLL_RUN_TOOL = "catamorphic_poll_run";
-
-const SUPPORTED_PROTOCOL_VERSIONS = new Set([
-  "2024-11-05",
-  "2025-03-26",
-  "2025-06-18",
-  "2025-11-25",
-]);
-const DEFAULT_PROTOCOL_VERSION = "2025-06-18";
-
 const RUN_POLL_INTERVAL_MS = 500;
 const RUN_POLL_TIMEOUT_MS = 120_000;
 const TERMINAL_RUN_STATUSES = new Set(["completed", "failed", "canceled"]);
-
-interface JsonRpcMessage {
-  jsonrpc?: string;
-  id?: number | string | null;
-  method?: string;
-  params?: Record<string, unknown>;
-}
 
 interface PublishedApp {
   name: string;
@@ -69,65 +61,40 @@ export function registerAppsMcpRoutes(app: FastifyInstance, ctx: RouteContext) {
       return reply.status(503).send({ error: "Apps not configured" });
     }
     const { projectId } = request.params as { projectId: string };
-    const message = request.body as JsonRpcMessage | null;
-    if (!message || typeof message !== "object" || Array.isArray(message)) {
-      return rpcError(
-        reply,
-        null,
-        -32600,
-        "Expected a single JSON-RPC message",
-      );
-    }
-    // Notifications (initialized, cancelled, …) need no body in return.
-    if (message.id === undefined || message.id === null) {
-      return reply.status(202).send();
-    }
-    if (typeof message.method !== "string") {
-      return rpcError(reply, message.id, -32600, "Missing method");
-    }
 
-    const identity = resolveIdentity(request);
-    const params = message.params ?? {};
-
-    try {
-      switch (message.method) {
-        case "initialize": {
-          const requested = params.protocolVersion;
-          const protocolVersion =
-            typeof requested === "string" &&
-            SUPPORTED_PROTOCOL_VERSIONS.has(requested)
-              ? requested
-              : DEFAULT_PROTOCOL_VERSION;
-          return rpcResult(reply, message.id, {
-            protocolVersion,
+    return handleMcpPost(reply, request.body, async (method, params) => {
+      const identity = resolveIdentity(request);
+      switch (method) {
+        case "initialize":
+          return {
+            protocolVersion: negotiateProtocolVersion(params.protocolVersion),
             capabilities: { tools: { listChanged: false }, resources: {} },
             serverInfo: {
               name: "catamorphic-apps",
               title: "Catamorphic apps",
               version: "1.0.0",
             },
-          });
-        }
+          };
         case "ping":
-          return rpcResult(reply, message.id, {});
+          return {};
         case "tools/list": {
           const apps = await loadPublishedApps(core, identity, projectId);
-          return rpcResult(reply, message.id, { tools: buildTools(apps) });
+          return { tools: buildTools(apps) };
         }
         case "resources/list": {
           const apps = await loadPublishedApps(core, identity, projectId);
-          return rpcResult(reply, message.id, {
+          return {
             resources: apps.map((published) => ({
               uri: appResourceUri(published.name),
               name: `${published.name} app`,
               mimeType: MCP_APP_MIME_TYPE,
             })),
-          });
+          };
         }
         case "resources/templates/list":
-          return rpcResult(reply, message.id, { resourceTemplates: [] });
+          return { resourceTemplates: [] };
         case "prompts/list":
-          return rpcResult(reply, message.id, { prompts: [] });
+          return { prompts: [] };
         case "resources/read": {
           const uri = typeof params.uri === "string" ? params.uri : "";
           const apps = await loadPublishedApps(core, identity, projectId);
@@ -135,14 +102,9 @@ export function registerAppsMcpRoutes(app: FastifyInstance, ctx: RouteContext) {
             (candidate) => appResourceUri(candidate.name) === uri,
           );
           if (!published) {
-            return rpcError(
-              reply,
-              message.id,
-              -32602,
-              `Unknown resource ${uri}`,
-            );
+            throw new McpRequestError(-32602, `Unknown resource ${uri}`);
           }
-          return rpcResult(reply, message.id, {
+          return {
             contents: [
               {
                 uri,
@@ -158,7 +120,7 @@ export function registerAppsMcpRoutes(app: FastifyInstance, ctx: RouteContext) {
                 },
               },
             ],
-          });
+          };
         }
         case "tools/call": {
           const name = typeof params.name === "string" ? params.name : "";
@@ -166,28 +128,12 @@ export function registerAppsMcpRoutes(app: FastifyInstance, ctx: RouteContext) {
             typeof params.arguments === "object" && params.arguments !== null
               ? (params.arguments as Record<string, unknown>)
               : {};
-          return rpcResult(
-            reply,
-            message.id,
-            await callTool(core, identity, projectId, name, args),
-          );
+          return callTool(core, identity, projectId, name, args);
         }
         default:
-          return rpcError(
-            reply,
-            message.id,
-            -32601,
-            `Method not found: ${message.method}`,
-          );
+          throw new McpRequestError(-32601, `Method not found: ${method}`);
       }
-    } catch (error) {
-      return rpcError(
-        reply,
-        message.id,
-        -32603,
-        error instanceof Error ? error.message : "Internal error",
-      );
-    }
+    });
   });
 }
 
@@ -261,17 +207,7 @@ function buildTools(apps: PublishedApp[]) {
       },
     });
   }
-  tools.push({
-    name: POLL_RUN_TOOL,
-    description:
-      "Poll a workflow run started with mode 'start'. Returns the run's " +
-      "status, output (once completed), and batch progress.",
-    inputSchema: {
-      type: "object",
-      properties: { runId: { type: "string" } },
-      required: ["runId"],
-    },
-  });
+  tools.push(POLL_RUN_TOOL_DEFINITION);
   return tools;
 }
 
@@ -294,16 +230,7 @@ async function callTool(
   args: Record<string, unknown>,
 ): Promise<Record<string, unknown>> {
   if (name === POLL_RUN_TOOL) {
-    const runId = typeof args.runId === "string" ? args.runId : "";
-    try {
-      const snapshot = await fetchRunSnapshot(core, identity, runId);
-      return toolValue(snapshot);
-    } catch (error) {
-      if (error instanceof RunNotFoundError) {
-        return toolError("Run not found");
-      }
-      throw error;
-    }
+    return callPollRunTool(core, identity, args);
   }
 
   const apps = await loadPublishedApps(core, identity, projectId);
@@ -356,73 +283,6 @@ async function callTool(
   }
 }
 
-interface RunSnapshotShape {
-  runId: string;
-  status: string;
-  output: unknown;
-  error: string | null;
-  progress?: {
-    discovered: number;
-    succeeded: number;
-    failed: number;
-    skipped: number;
-  };
-}
-
-/** Mirrors the in-product broker's run snapshot (AppMount's shape). */
-async function fetchRunSnapshot(
-  core: Core,
-  identity: Identity,
-  runId: string,
-): Promise<RunSnapshotShape> {
-  const run = await core.runs.get({ identity, runId });
-  const batch = (
-    run as {
-      batchScopes?: Array<{
-        discovered: number;
-        succeeded: number;
-        failed: number;
-        skipped: number;
-      }>;
-    }
-  ).batchScopes?.[0];
-  return {
-    runId: run.id,
-    status: run.status,
-    output: (run as { result?: unknown }).result ?? null,
-    error: (run as { error?: string | null }).error ?? null,
-    ...(batch
-      ? {
-          progress: {
-            discovered: batch.discovered,
-            succeeded: batch.succeeded,
-            failed: batch.failed,
-            skipped: batch.skipped,
-          },
-        }
-      : {}),
-  };
-}
-
-/**
- * Tool result: JSON text for model readability plus `structuredContent`
- * for the guest adapter. Structured content stays object/array-shaped for
- * 2025-era clients (SEP-2106's any-JSON loosening is newer); primitives
- * ride the text channel, which the adapter JSON-parses.
- */
-function toolValue(value: unknown): Record<string, unknown> {
-  return {
-    content: [{ type: "text", text: JSON.stringify(value) ?? "null" }],
-    ...(typeof value === "object" && value !== null
-      ? { structuredContent: value }
-      : {}),
-  };
-}
-
-function toolError(message: string): Record<string, unknown> {
-  return { content: [{ type: "text", text: message }], isError: true };
-}
-
 /**
  * The app document: same construction and CSP as the in-product mount
  * (including the `process` shim the bundle needs to boot), minus a theme —
@@ -431,27 +291,6 @@ function toolError(message: string): Record<string, unknown> {
  */
 function buildAppDocument(app: PublishedApp): string {
   return buildAppGuestDocument({ code: app.code, css: app.css });
-}
-
-function rpcResult(
-  reply: FastifyReply,
-  id: number | string,
-  result: unknown,
-): FastifyReply {
-  return reply
-    .header("content-type", "application/json")
-    .send({ jsonrpc: "2.0", id, result });
-}
-
-function rpcError(
-  reply: FastifyReply,
-  id: number | string | null,
-  code: number,
-  message: string,
-): FastifyReply {
-  return reply
-    .header("content-type", "application/json")
-    .send({ jsonrpc: "2.0", id, error: { code, message } });
 }
 
 function sleep(ms: number): Promise<void> {

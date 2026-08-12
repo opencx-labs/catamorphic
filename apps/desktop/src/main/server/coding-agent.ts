@@ -5,6 +5,7 @@ import type { ElicitHandler } from "@catamorphic/mcp";
 import type {
   AgentMcpServerConfig,
   ExtraTool,
+  ExtraToolContext,
   SandboxProvider,
 } from "@catamorphic/sandbox";
 import type { AgentConfig } from "../agents-store.js";
@@ -54,6 +55,9 @@ export function buildAiSdkAgent(
   extraTools?: ExtraTool[],
   mcpServers?: Record<string, AgentMcpServerConfig>,
   onElicit?: ElicitHandler,
+  mcpServersForSession?: (
+    context: ExtraToolContext,
+  ) => Record<string, AgentMcpServerConfig>,
 ): AiSdkCodingAgent | undefined {
   if (!config.apiKey || !modelId) return undefined;
   const provider = config.provider ?? "anthropic";
@@ -76,6 +80,7 @@ export function buildAiSdkAgent(
     resolveModel,
     extraTools,
     mcpServers,
+    mcpServersForSession,
     ...(onElicit ? { onElicit } : {}),
   });
 }

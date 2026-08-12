@@ -54,3 +54,4 @@ Settled design decisions live here as short Architecture Decision Records. They 
 | [0039](0039-custom-trigger-kinds.md) | Custom trigger kinds: host-defined events, typed bindings, sync firing | Accepted |
 | [0040](0040-one-workflow-model.md) | One workflow model: every workflow is `defineWorkflow`, every run a deployed commit | Accepted |
 | [0041](0041-generated-projections.md) | Generated projections: schemas and types derived from code | Accepted |
+| [0042](0042-parameterized-trigger-kinds-and-workflow-tools-mcp.md) | Parameterized trigger kinds (holes) and workflow tools over MCP | Accepted |

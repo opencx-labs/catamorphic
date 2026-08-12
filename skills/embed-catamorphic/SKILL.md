@@ -189,6 +189,40 @@ Semantics that keep this correct:
   `POST /projects/:id/triggers/:kind/fire`,
   `POST /projects/:id/triggers/sync-types`.
 
+### Parameterized kinds (holes) and workflows as MCP tools (ADR 0042)
+
+A kind whose payload shape varies per workflow — an AI tool call, an HTTP
+body — leaves those positions open with `hole("Name")`. Each bound
+workflow's own input type instantiates the hole; the derived per-binding
+`inputSchema` is the hole's frozen schema, and a hole that would freeze to
+`any` fails the deploy closed. `output:` declares a template the workflow's
+final step must satisfy (holes allowed), enforced by the generated types.
+
+```ts
+import { defineTriggerKind, hole, mcpToolKind } from "@catamorphic/server-sdk";
+
+export const aiToolCall = defineTriggerKind({
+  name: "ai.tool-call",
+  payload: hole("Args"), // the workflow's input IS the tool's argument schema
+  config: z.strictObject({ description: z.string().min(1), name: z.string().optional() }),
+});
+
+createCatamorphic({
+  ...,
+  triggerKinds: [aiToolCall],
+  // Declare which kinds are AI-callable tools and how a binding's config
+  // projects to MCP tool metadata:
+  mcpToolKinds: [mcpToolKind(aiToolCall, (c) => ({ description: c.description, name: c.name }))],
+});
+```
+
+With `mcpToolKinds` registered, `POST /api/projects/:id/mcp` is a stateless
+MCP server: one tool per binding (schema from code, description from
+config), `tools/call` fires sync-until-first-wait and returns the output
+inline or `{runId}` for the `catamorphic_poll_run` tool. Point any MCP
+client at it with the host's identity headers; coding-agent harnesses
+accept it per session via `mcpServersForSession`.
+
 ## Validating projects outside the agent (local editors, CI)
 
 Every project is seeded with `scripts/check.ts` — a thin, project-owned

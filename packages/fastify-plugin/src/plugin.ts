@@ -12,6 +12,7 @@ import { registerAppsMcpRoutes } from "./routes/apps-mcp.js";
 import { registerGithubRoutes } from "./routes/github.js";
 import { registerPlaygroundRoutes } from "./routes/playground.js";
 import { registerPluginRoutes } from "./routes/plugins.js";
+import { registerProjectMcpRoutes } from "./routes/project-mcp.js";
 import { registerProjectRoutes } from "./routes/projects.js";
 import { registerRunRoutes } from "./routes/runs.js";
 import { registerTemplateRoutes } from "./routes/templates.js";
@@ -76,6 +77,7 @@ export const catamorphicPlugin: FastifyPluginAsync<
   registerAgentRoutes(app, ctx);
   registerAppRoutes(app, ctx);
   registerAppsMcpRoutes(app, ctx);
+  registerProjectMcpRoutes(app, ctx);
   registerTemplateRoutes(app);
   registerGithubRoutes(app, ctx);
   registerPluginRoutes(app, ctx);

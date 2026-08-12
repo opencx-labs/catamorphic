@@ -16,6 +16,15 @@ export {
   prepareProjectExecution,
   prepareWorkflowExecution,
 } from "./execution-transform.js";
+export {
+  HOLE_SCHEMA_KEY,
+  holeSchemaErrors,
+  isPermissiveSchema,
+  resolveSchemaPath,
+  type SchemaHole,
+  schemaHoles,
+  unsupportedHoleErrors,
+} from "./holes.js";
 export { validateAgainstSchema } from "./json-schema-validate.js";
 export type { LayoutedGraph, LayoutedNode } from "./layout.js";
 export { layoutGraph } from "./layout.js";

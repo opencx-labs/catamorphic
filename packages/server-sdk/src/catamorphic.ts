@@ -9,6 +9,7 @@ import type {
   ExecutionWorkerHandle,
   ExecutionWorkerOptions,
   GithubServiceConfig,
+  McpToolKindSpec,
   RetentionConfig,
   TriggerKindRuntime,
 } from "@catamorphic/core";
@@ -134,6 +135,12 @@ export interface CreateCatamorphicConfig {
    */
   triggerKinds?: readonly TriggerKindRuntime[];
   /**
+   * Which trigger kinds are AI-callable tools, built with `mcpToolKind`.
+   * Powers the per-project MCP endpoint: one tool per binding of each
+   * named kind. Every named kind must also appear in `triggerKinds`.
+   */
+  mcpToolKinds?: readonly McpToolKindSpec[];
+  /**
    * Fires after a coding-agent chat turn settles — a natural place to fire
    * a chat trigger kind. Exceptions are swallowed and never delay the turn.
    */
@@ -213,6 +220,7 @@ export class Catamorphic {
       maxAppBundleBytes: config.maxAppBundleBytes,
       github: config.github,
       triggerKinds: config.triggerKinds,
+      mcpToolKinds: config.mcpToolKinds,
       onAgentTurnSettled: config.onAgentTurnSettled,
     });
   }

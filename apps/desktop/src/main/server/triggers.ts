@@ -3,7 +3,7 @@ import type {
   Catamorphic,
   ScopedClient,
 } from "@catamorphic/server-sdk";
-import { defineTriggerKind } from "@catamorphic/server-sdk";
+import { defineTriggerKind, hole, mcpToolKind } from "@catamorphic/server-sdk";
 import { z } from "zod";
 import { DESKTOP_TENANT_ID, DESKTOP_USER_ID } from "./boot.js";
 
@@ -43,7 +43,42 @@ export const terminalIdle = defineTriggerKind({
   }),
 });
 
-export const DESKTOP_TRIGGER_KINDS = [chatTurnCompleted, terminalIdle];
+/**
+ * Workflows as AI tools (ADR 0042): the whole payload is one hole, so each
+ * bound workflow's own input type is the tool's argument schema — frozen
+ * per binding at scan time, tool-definition-ready. Served to agents by the
+ * per-project MCP endpoint (see {@link DESKTOP_MCP_TOOL_KINDS}).
+ */
+export const aiToolCall = defineTriggerKind({
+  name: "ai.tool-call",
+  description:
+    "An AI agent calls this workflow as a tool; the workflow input is the tool's argument schema",
+  display: { label: "AI Tool", icon: "wrench", color: "#b45309" },
+  payload: hole("Args"),
+  config: z.strictObject({
+    /** The description the model reads when deciding to call the tool. */
+    description: z.string().min(1),
+    /** Tool name override; defaults to the workflow name. */
+    name: z
+      .string()
+      .regex(/^[A-Za-z0-9_-]{1,64}$/)
+      .optional(),
+  }),
+});
+
+export const DESKTOP_TRIGGER_KINDS = [
+  chatTurnCompleted,
+  terminalIdle,
+  aiToolCall,
+];
+
+/** Tool-kind roster behind the desktop's per-project MCP endpoint. */
+export const DESKTOP_MCP_TOOL_KINDS = [
+  mcpToolKind(aiToolCall, (config) => ({
+    description: config.description,
+    ...(config.name ? { name: config.name } : {}),
+  })),
+];
 
 /**
  * Firing helpers bound to the desktop identity. Every entry point is

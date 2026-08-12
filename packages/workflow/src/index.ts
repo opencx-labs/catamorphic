@@ -35,6 +35,7 @@ export {
   skipBatchItem,
   validateKeyedBatchOutcomes,
 } from "./batch.js";
+export type { Hole } from "./holes.js";
 export type {
   SecretDeclaration,
   SecretDeclarations,
@@ -81,9 +82,21 @@ export interface TriggerKinds {}
 
 export type TriggerKindName = keyof TriggerKinds & string;
 
-/** The payload the host fires with — delivered verbatim as the workflow input. */
+/**
+ * The payload the host fires with — delivered verbatim as the workflow
+ * input. May contain `Hole<Name>` positions: a parameterized kind leaves
+ * those open, and each bound workflow's own input type fills them in.
+ */
 export type TriggerPayload<Kind extends TriggerKindName> =
   TriggerKinds[Kind] extends { payload: infer Payload } ? Payload : never;
+
+/**
+ * The output template the kind demands of subscribed workflows (e.g. an
+ * HTTP response envelope), or `unknown` when the kind declares none. Like
+ * payloads, templates may contain `Hole` positions the workflow fills.
+ */
+export type TriggerOutput<Kind extends TriggerKindName> =
+  TriggerKinds[Kind] extends { output: infer Output } ? Output : unknown;
 
 /**
  * The per-workflow configuration the kind demands, e.g. a tool description
@@ -94,8 +107,9 @@ export type TriggerPayload<Kind extends TriggerKindName> =
 export type TriggerConfig<Kind extends TriggerKindName> =
   TriggerKinds[Kind] extends { config: infer Config } ? Config : never;
 
-class TriggerBindingImpl<Payload> {
+class TriggerBindingImpl<Payload, Output = unknown> {
   private declare readonly payload: Payload;
+  private declare readonly output: Output;
 
   readonly kind: string;
   readonly config: unknown;
@@ -108,7 +122,10 @@ class TriggerBindingImpl<Payload> {
 }
 
 /** A workflow's declared subscription to a host trigger kind. */
-export type TriggerBinding<Payload> = TriggerBindingImpl<Payload>;
+export type TriggerBinding<Payload, Output = unknown> = TriggerBindingImpl<
+  Payload,
+  Output
+>;
 
 type ConfigArg<Kind extends TriggerKindName> =
   Record<string, never> extends TriggerConfig<Kind>
@@ -123,7 +140,7 @@ type ConfigArg<Kind extends TriggerKindName> =
 export function trigger<Kind extends TriggerKindName>(
   kind: Kind,
   ...args: ConfigArg<Kind>
-): TriggerBinding<TriggerPayload<Kind>> {
+): TriggerBinding<TriggerPayload<Kind>, TriggerOutput<Kind>> {
   return new TriggerBindingImpl({ kind, config: args[0] ?? {} });
 }
 

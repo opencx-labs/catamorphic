@@ -2259,6 +2259,7 @@ export interface paths {
                             modes: ("sync" | "async")[];
                             payloadJsonSchema: unknown;
                             configJsonSchema: unknown;
+                            outputJsonSchema?: unknown;
                         }[];
                     };
                 };
@@ -4811,6 +4812,41 @@ export interface paths {
         trace?: never;
     };
     "/api/projects/{projectId}/apps-mcp": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    projectId: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Default Response */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/projects/{projectId}/mcp": {
         parameters: {
             query?: never;
             header?: never;

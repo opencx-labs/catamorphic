@@ -48,7 +48,10 @@ import { RuntimeEventsService } from "./services/runtime-events-service.js";
 import { SecretsService } from "./services/secrets-service.js";
 import { SkillsService } from "./services/skills-service.js";
 import { TenantPoliciesService } from "./services/tenant-policies-service.js";
-import type { TriggerKindRuntime } from "./services/trigger-kinds.js";
+import type {
+  McpToolKindSpec,
+  TriggerKindRuntime,
+} from "./services/trigger-kinds.js";
 import { TriggersService } from "./services/triggers-service.js";
 import { WorkflowsService } from "./services/workflows-service.js";
 
@@ -120,6 +123,13 @@ export interface CatamorphicCoreConfig {
    */
   triggerKinds?: readonly TriggerKindRuntime[];
   /**
+   * Which trigger kinds are AI-callable tools, and how to project a
+   * binding's config into MCP tool metadata. Powers the per-project MCP
+   * endpoint (`POST /projects/:id/mcp`): one tool per binding of every
+   * kind named here. Every named kind must appear in `triggerKinds`.
+   */
+  mcpToolKinds?: readonly McpToolKindSpec[];
+  /**
    * Fires after a coding-agent chat turn settles (completed, failed, or
    * awaiting input). Host-owned; a natural place to fire a chat trigger
    * kind. Exceptions are swallowed and never delay the turn.
@@ -160,6 +170,8 @@ export class CatamorphicCore {
   readonly apps?: AppsService;
   readonly appPolicies: AppPoliciesService;
   readonly github?: GithubService;
+  /** Tool-kind declarations behind the per-project MCP endpoint. */
+  readonly mcpToolKinds: readonly McpToolKindSpec[];
 
   constructor(config: CatamorphicCoreConfig) {
     this.db = config.db;
@@ -276,8 +288,20 @@ export class CatamorphicCore {
       worker: executionWorker,
       invokeRuntime: (args) => this.runs.invokeProductionRuntime(args),
     });
+    this.mcpToolKinds = config.mcpToolKinds ?? [];
+    const registeredKinds = new Set(
+      (config.triggerKinds ?? []).map((kind) => kind.name),
+    );
+    for (const spec of this.mcpToolKinds) {
+      if (!registeredKinds.has(spec.kind)) {
+        throw new Error(
+          `mcpToolKinds names trigger kind '${spec.kind}', which is not in triggerKinds`,
+        );
+      }
+    }
     this.triggers = new TriggersService(this.db, {
       kinds: config.triggerKinds ?? [],
+      mcpToolKinds: this.mcpToolKinds,
       projectManager: this.projectManager,
       runs: this.runs,
       executionJobs,

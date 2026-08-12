@@ -4508,7 +4508,8 @@
                         }
                       },
                       "payloadJsonSchema": {},
-                      "configJsonSchema": {}
+                      "configJsonSchema": {},
+                      "outputJsonSchema": {}
                     },
                     "required": [
                       "name",
@@ -9810,6 +9811,25 @@
       }
     },
     "/api/projects/{projectId}/apps-mcp": {
+      "post": {
+        "parameters": [
+          {
+            "schema": {
+              "type": "string"
+            },
+            "in": "path",
+            "name": "projectId",
+            "required": true
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Default Response"
+          }
+        }
+      }
+    },
+    "/api/projects/{projectId}/mcp": {
       "post": {
         "parameters": [
           {
