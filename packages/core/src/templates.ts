@@ -1,4 +1,5 @@
 import { APP_THEME_COLOR_TOKENS } from "@catamorphic/app";
+import { PARSER_PACKAGE_VERSION } from "@catamorphic/parser";
 import { WORKFLOW_PACKAGE_VERSION } from "@catamorphic/workflow";
 
 export interface ProjectTemplate {
@@ -66,10 +67,15 @@ const workspaceFiles = ({
       version: "1.0.0",
       private: true,
       workspaces: ["contracts", "workflows", "apps/*"],
+      scripts: { check: "bun scripts/check.ts" },
+      // Dev-only tooling for the seeded check script; stripped from every
+      // sandbox install.
+      devDependencies: { "@catamorphic/parser": PARSER_PACKAGE_VERSION },
     },
     null,
     2,
   ),
+  [PROJECT_CHECK_SCRIPT_PATH]: PROJECT_CHECK_SCRIPT,
   "contracts/package.json": JSON.stringify(
     {
       name: "@project/contracts",
@@ -176,6 +182,93 @@ if (root) createRoot(root).render(<App />);
 
 export const APP_PACKAGE_VERSION = "0.0.1";
 
+/** Where the seeded project check script lives; owned by the project. */
+export const PROJECT_CHECK_SCRIPT_PATH = "scripts/check.ts";
+
+/**
+ * The seeded check script. Thin by design: everything it calls ships in
+ * `@catamorphic/parser`, so projects can rewrite the script without losing
+ * validation, and the script works anywhere bun runs — a laptop, CI — with
+ * no Catamorphic host.
+ */
+export const PROJECT_CHECK_SCRIPT = `/**
+ * Project check — parses this workspace, validates workflows and trigger
+ * bindings, and verifies the generated app-api types are fresh.
+ *
+ * Seeded by Catamorphic, owned by this project: edit it freely. The heavy
+ * lifting lives in the \`@catamorphic/parser\` devDependency; this script is
+ * just the how-to-run-it. (Missing the dependency? \`bun install\` at the
+ * workspace root, or \`bun add -d @catamorphic/parser\`.)
+ *
+ * Usage:
+ *   bun run check                # validate (exit 1 on errors) — CI-friendly
+ *   bun run check -- --write     # also (re)write generated app-api types
+ *   bun run check -- --host URL  # validate trigger bindings against a
+ *                                # running Catamorphic host (GET /api/trigger-kinds)
+ */
+import { mkdir, readdir, readFile, writeFile } from "node:fs/promises";
+import path from "node:path";
+import { checkProject, type CheckTriggerKind } from "@catamorphic/parser";
+
+const IGNORED_DIRECTORIES = new Set([".git", "node_modules", "dist"]);
+
+async function collectFiles(root: string): Promise<Record<string, string>> {
+  const files: Record<string, string> = {};
+  async function walk(directory: string): Promise<void> {
+    for (const entry of await readdir(directory, { withFileTypes: true })) {
+      const full = path.join(directory, entry.name);
+      if (entry.isDirectory()) {
+        if (!IGNORED_DIRECTORIES.has(entry.name)) await walk(full);
+        continue;
+      }
+      const relative = path.relative(root, full).split(path.sep).join("/");
+      files[relative] = await readFile(full, "utf8").catch(() => "");
+    }
+  }
+  await walk(root);
+  return files;
+}
+
+const write = process.argv.includes("--write");
+const hostFlagIndex = process.argv.indexOf("--host");
+const host = hostFlagIndex >= 0 ? process.argv[hostFlagIndex + 1] : undefined;
+
+let triggerKinds: CheckTriggerKind[] | undefined;
+if (host) {
+  const response = await fetch(new URL("/api/trigger-kinds", host));
+  if (!response.ok) {
+    console.error(\`Could not fetch trigger kinds from \${host}: \${response.status}\`);
+    process.exit(1);
+  }
+  triggerKinds = (await response.json()) as CheckTriggerKind[];
+}
+
+const files = await collectFiles(process.cwd());
+const result = checkProject(files, { triggerKinds });
+
+const written = new Set<string>();
+if (write) {
+  for (const [relative, content] of Object.entries(result.generated)) {
+    if (files[relative] !== content) {
+      await mkdir(path.dirname(relative), { recursive: true });
+      await writeFile(relative, content);
+      written.add(relative);
+      console.log(\`wrote \${relative}\`);
+    }
+  }
+}
+
+let failed = false;
+for (const finding of result.findings) {
+  if (finding.file && written.has(finding.file)) continue; // fixed by --write
+  if (finding.level === "error") failed = true;
+  const prefix = finding.level === "error" ? "error" : "warn ";
+  console.log(\`\${prefix} \${finding.file ? \`\${finding.file}: \` : ""}\${finding.message}\`);
+}
+console.log(failed ? "check failed" : "check passed");
+process.exit(failed ? 1 : 0);
+`;
+
 export const BATCH_WORKFLOW_SKILL_PATH =
   ".agents/skills/batch-workflows/SKILL.md";
 export const DURABLE_WORKFLOW_SKILL_PATH =
@@ -221,6 +314,10 @@ Do not add a batch scope merely to process an array supplied in one request.
    this structure.
 4. Put IO and business operations in \`"use step"\` functions. Keep boundary
    run bodies declarative.
+5. After structural edits (new workflows, changed inputs/outputs, app-api
+   changes), run \`bun run check\` at the workspace root. It validates the
+   parse, trigger bindings, and generated types; \`--write\` refreshes the
+   generated app-api types.
 
 ## A minimal workflow
 

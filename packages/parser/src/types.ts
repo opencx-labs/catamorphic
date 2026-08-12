@@ -11,6 +11,20 @@ export const APP_SOURCE_ROOT = "apps";
 export const APP_RUNTIME_PACKAGE = "@catamorphic/app";
 
 /**
+ * The project's dev-time tooling package (the seeded `scripts/check.ts`
+ * imports it). Dev-only: stripped from every sandbox install alongside the
+ * app runtime, so `bun install` inside execution and build sandboxes never
+ * tries to resolve it.
+ */
+export const PROJECT_TOOLING_PACKAGE = "@catamorphic/parser";
+
+/** Packages stripped from manifests before any sandbox `bun install`. */
+export const SANDBOX_STRIPPED_PACKAGES: readonly string[] = [
+  APP_RUNTIME_PACKAGE,
+  PROJECT_TOOLING_PACKAGE,
+];
+
+/**
  * Drops frontend app sources from a project file set, and strips the
  * frontend-only `@catamorphic/app` dependency from remaining manifests
  * (contracts declares it for types). Apps never execute in a workflow
@@ -31,14 +45,16 @@ export function executionFiles(
       .map(([filePath, content]) => [
         filePath,
         filePath.endsWith("package.json")
-          ? stripAppRuntimeDependency(content)
+          ? stripSandboxUnresolvableDependencies(content)
           : content,
       ]),
   );
 }
 
-function stripAppRuntimeDependency(packageJson: string): string {
-  if (!packageJson.includes(APP_RUNTIME_PACKAGE)) return packageJson;
+function stripSandboxUnresolvableDependencies(packageJson: string): string {
+  if (!SANDBOX_STRIPPED_PACKAGES.some((name) => packageJson.includes(name))) {
+    return packageJson;
+  }
   let parsed: unknown;
   try {
     parsed = JSON.parse(packageJson);
@@ -54,7 +70,9 @@ function stripAppRuntimeDependency(packageJson: string): string {
   ]) {
     const deps = manifest[section];
     if (typeof deps === "object" && deps !== null) {
-      delete (deps as Record<string, unknown>)[APP_RUNTIME_PACKAGE];
+      for (const name of SANDBOX_STRIPPED_PACKAGES) {
+        delete (deps as Record<string, unknown>)[name];
+      }
     }
   }
   return JSON.stringify(manifest, null, 2);

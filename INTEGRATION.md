@@ -272,6 +272,15 @@ Runtime summary:
 
 For full details (manifest contract, REST API, service internals, runtime flow, troubleshooting, and resolver roadmap), use [`packages/plugins/README.md`](packages/plugins/README.md) as the canonical source.
 
+## Validating projects in CI or a local editor
+
+Each project seeds `scripts/check.ts` (project-owned; the logic lives in the
+`@catamorphic/parser` devDependency). `bun run check` parses the workspace,
+validates trigger bindings (add `--host <url>` to check against a live
+host's kind catalog), and fails on stale generated types; `--write`
+regenerates the app-api types. Sandbox installs strip the tooling
+dependency automatically, so it never reaches execution or app builds.
+
 ## Workflow authoring model
 
 All exports are Workflows and every invocation is a Run. Every workflow is an

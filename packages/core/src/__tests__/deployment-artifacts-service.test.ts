@@ -8,6 +8,7 @@ import { describe, expect, it } from "vitest";
 import { createDeploymentArtifactIdentity } from "../services/deployment-artifacts-service.js";
 
 describe("deployment artifact identity", () => {
+  // Three whole-project ts-morph parses; generous timeout for parallel CI load.
   it("identifies complete transformed project bytes independently of the selected workflow", async () => {
     const files = {
       "src/parent.ts": `
@@ -81,7 +82,7 @@ export const leafChild = defineWorkflow(({ defineBoundary }) => ({
       runtimeVersion: DEPLOYMENT_RUNTIME_VERSION,
     });
     expect(parentIdentity.artifactDigest).toMatch(/^[0-9a-f]{64}$/);
-  });
+  }, 30_000);
 
   it("is unchanged by frontend app sources", async () => {
     const workflowFiles = {

@@ -1,4 +1,11 @@
-import type { Json } from "@catamorphic/db";
+type Json =
+  | null
+  | boolean
+  | number
+  | string
+  | Json[]
+  | { readonly [key: string]: Json }
+  | readonly Json[];
 
 /**
  * Validates a JSON value against the schema subset the parser's extractor
@@ -8,7 +15,7 @@ import type { Json } from "@catamorphic/db";
  * this stays hand-rolled instead of pulling in a full validator.
  */
 export function validateAgainstSchema(
-  value: Json,
+  value: unknown,
   schema: unknown,
   path = "input",
 ): string[] {

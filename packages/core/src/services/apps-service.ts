@@ -5,6 +5,7 @@ import {
   APP_SOURCE_ROOT,
   type AppApiSurface,
   parseProject,
+  SANDBOX_STRIPPED_PACKAGES,
 } from "@catamorphic/parser";
 import type { SandboxProvider } from "@catamorphic/sandbox";
 import {
@@ -658,7 +659,7 @@ export class AppsService {
           path,
           removePackageDependencies({
             packageJson: content,
-            packageNames: [APP_PACKAGE_NAME],
+            packageNames: SANDBOX_STRIPPED_PACKAGES,
           }),
         ]),
       );
@@ -813,7 +814,10 @@ export class AppsService {
         const content = await this.deps.provider
           .downloadFile(args.sandboxId, `${args.buildRoot}/${relative}`)
           .catch(() => undefined);
-        if (content?.includes(APP_PACKAGE_NAME)) {
+        if (
+          content &&
+          SANDBOX_STRIPPED_PACKAGES.some((name) => content.includes(name))
+        ) {
           manifests[relative] = content;
         }
       }),

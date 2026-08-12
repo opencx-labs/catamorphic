@@ -1,10 +1,19 @@
 import type { DB, Json } from "@catamorphic/db";
 import { fetchRemote, type ProjectManager } from "@catamorphic/git";
 import { getTracer, withSpan } from "@catamorphic/otel";
-import { type ParameterInfo, parseProject } from "@catamorphic/parser";
+import {
+  appApiTypesPath,
+  appWorkspaceNames,
+  type ParameterInfo,
+  parseProject,
+  renderAppApiTypesModule,
+} from "@catamorphic/parser";
 import type { Kysely } from "kysely";
 import { type Identity, SYSTEM_AUTHOR } from "../identity.js";
-import { appApiTypesPath, renderAppApiTypesModule } from "./app-codegen.js";
+import {
+  PROJECT_CHECK_SCRIPT,
+  PROJECT_CHECK_SCRIPT_PATH,
+} from "../templates.js";
 import type { ExecutionJobsService } from "./execution-jobs-service.js";
 import type { ExecutionWorkerService } from "./execution-worker-service.js";
 import type { EnrollmentConflictPolicy, RunsService } from "./runs-service.js";
@@ -206,6 +215,11 @@ export class TriggersService {
           const path = appApiTypesPath(appName);
           if (files[path] !== content) changes.set(path, content);
         }
+      }
+      // Seed the project-owned check script once; it is the project's to
+      // edit afterwards, so an existing file is never overwritten.
+      if (files[PROJECT_CHECK_SCRIPT_PATH] === undefined) {
+        changes.set(PROJECT_CHECK_SCRIPT_PATH, PROJECT_CHECK_SCRIPT);
       }
       if (changes.size === 0) return { paths: [], updated: false };
       for (const [path, content] of changes) {
@@ -660,15 +674,6 @@ export class TriggersService {
     });
     return bindings;
   }
-}
-
-function appWorkspaceNames(files: Record<string, string>): string[] {
-  const names = new Set<string>();
-  for (const filePath of Object.keys(files)) {
-    const match = /^apps\/([^/]+)\/package\.json$/.exec(filePath);
-    if (match?.[1]) names.add(match[1]);
-  }
-  return [...names].sort();
 }
 
 function delay(milliseconds: number): Promise<void> {

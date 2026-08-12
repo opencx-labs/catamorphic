@@ -67,3 +67,18 @@ graph schemas drift from the parser types.
 - Generated files live inside workspaces' `src` so no tsconfig changes are
   needed, and app-scoped files never perturb the execution artifact digest
   (`executionFiles` strips `apps/**`).
+
+## Addendum: host-independent validation (seeded `scripts/check.ts`)
+
+Projects validate outside any host — a contributor's editor, their CI —
+through a seeded, project-owned `scripts/check.ts` (`bun run check`). The
+script is deliberately thin: parsing, binding validation, and
+generated-type drift detection live in `checkProject` from
+`@catamorphic/parser`, declared as a root devDependency of every project
+workspace. Sandbox installs strip that dependency (alongside
+`@catamorphic/app`) via `SANDBOX_STRIPPED_PACKAGES`, so execution and app
+builds never try to resolve it. `--write` regenerates the app-api types;
+`--host <url>` additionally validates trigger bindings against a live
+host's kind catalog (`GET /trigger-kinds`). The script is seeded once (new
+projects via templates, existing ones by `syncTypes`) and never
+overwritten — it belongs to the project.

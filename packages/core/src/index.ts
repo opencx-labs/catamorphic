@@ -1,3 +1,9 @@
+export {
+  appApiTypesPath,
+  checkProject,
+  renderAppApiTypesModule,
+  validateAgainstSchema,
+} from "@catamorphic/parser";
 export type { CatamorphicCoreConfig } from "./core.js";
 export { CatamorphicCore, createCatamorphicCore } from "./core.js";
 export {
@@ -29,10 +35,6 @@ export {
 } from "./services/app-audience.js";
 export type { AppBundleStore } from "./services/app-bundle-store.js";
 export { appBundleKey, appVersionPrefix } from "./services/app-bundle-store.js";
-export {
-  appApiTypesPath,
-  renderAppApiTypesModule,
-} from "./services/app-codegen.js";
 export {
   AppLimitExceededError,
   AppPoliciesService,
@@ -109,7 +111,6 @@ export {
   type ImportGithubRepoInput,
   ProjectNotLinkedToGithubError,
 } from "./services/github-service.js";
-export { validateAgainstSchema } from "./services/json-schema-validate.js";
 export {
   type AttachedPluginInfo,
   type PluginInfo,
@@ -240,6 +241,8 @@ export {
 } from "./services/workflows-service.js";
 export {
   findTemplate,
+  PROJECT_CHECK_SCRIPT,
+  PROJECT_CHECK_SCRIPT_PATH,
   type ProjectTemplate,
   TEMPLATES,
 } from "./templates.js";

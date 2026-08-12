@@ -30,5 +30,9 @@ export default defineConfig({
     env: loadDotEnv(),
     pool: "threads",
     fileParallelism: true,
+    // Whole-project ts-morph parses dominate these suites and slow an order
+    // of magnitude when every package's tests run in parallel under turbo;
+    // the 5s default reads as flakes under that contention.
+    testTimeout: 30_000,
   },
 });

@@ -8,6 +8,7 @@ import { getTracer, withSpan } from "@catamorphic/otel";
 import {
   executionFiles,
   prepareWorkflowExecution,
+  validateAgainstSchema,
   WORKFLOW_SOURCE_ROOT,
   type WorkflowCapabilities,
   type WorkflowExecutionDescriptor,
@@ -48,7 +49,6 @@ import type {
   ExecutionWorkerOptions,
   ExecutionWorkerService,
 } from "./execution-worker-service.js";
-import { validateAgainstSchema } from "./json-schema-validate.js";
 import { uploadWorkspace } from "./playground/workspace-upload.js";
 import { ProjectNotFoundError } from "./projects-service.js";
 import type { RunCoordinator } from "./run-coordinator.js";

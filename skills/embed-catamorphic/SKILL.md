@@ -189,6 +189,23 @@ Semantics that keep this correct:
   `POST /projects/:id/triggers/:kind/fire`,
   `POST /projects/:id/triggers/sync-types`.
 
+## Validating projects outside the agent (local editors, CI)
+
+Every project is seeded with `scripts/check.ts` — a thin, project-owned
+script (edit it freely; the logic lives in the `@catamorphic/parser`
+devDependency, which sandbox installs strip automatically):
+
+```bash
+bun run check                # parse + validate + generated-type drift; exit 1 on errors
+bun run check -- --write     # regenerate apps/<name>/src/catamorphic-app-api.d.ts
+bun run check -- --host URL  # also validate trigger bindings against a live host
+```
+
+Point CI at `bun install && bun run check` plus `tsc` over `workflows/` and
+`apps/` and a human editing the project in their own editor gets the same
+guarantees the agent does: stale generated types fail the build instead of
+silently type-checking app code against the wrong contract.
+
 ## Step 3: surfaces (only what the host needs)
 
 HTTP for frontends (required for the React UI):

@@ -1,5 +1,5 @@
-import type { AppApiEntry } from "@catamorphic/parser";
-import { typeFromJsonSchema } from "./trigger-codegen.js";
+import { typeFromJsonSchema } from "./type-render.js";
+import type { AppApiEntry } from "./types.js";
 
 /**
  * Generated typed app-api client interface, projected into each app
@@ -47,6 +47,16 @@ export function renderAppApiTypesModule(
     "}",
     "",
   ].join("\n");
+}
+
+/** Workspace names under `apps/` that hold a package manifest. */
+export function appWorkspaceNames(files: Record<string, string>): string[] {
+  const names = new Set<string>();
+  for (const filePath of Object.keys(files)) {
+    const match = /^apps\/([^/]+)\/package\.json$/.exec(filePath);
+    if (match?.[1]) names.add(match[1]);
+  }
+  return [...names].sort();
 }
 
 function propertyKey(key: string): string {
