@@ -348,7 +348,10 @@ export class DesktopAgentRegistry implements CodingAgentRegistry {
                 // Claude Code's own Bash runs inside the CLI where we
                 // can't see or manage it. With workspace terminals
                 // available, every command goes through tabs the user
-                // can watch and take over — full interception.
+                // can watch and take over — full interception. Per-turn:
+                // the harness restores Bash on turns where the workspace
+                // server isn't mounted (resurrected sessions), so the
+                // agent is never left without a shell.
                 disableBash: this.workspaceToolkit !== undefined,
                 // The agent's assigned connections, plus native loading
                 // of connector plugins (skills/agents/commands).

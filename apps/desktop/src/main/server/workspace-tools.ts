@@ -301,7 +301,7 @@ export function buildWorkspaceToolkit(
     {
       name: "run_terminal",
       description:
-        "Run a shell command in a real terminal tab in the user's workspace (project directory, user's login shell). The user watches it live. By default a NEW terminal opens (a chip on your chat); pass terminalId to reuse one (a terminal you opened earlier, or any terminal from workspace_overview; running in the user's own terminal marks it agent-controlled until you release it). Prefer reusing one terminal for routine sequential commands. Waits for the command to finish (up to ~15s) and returns the output it produced; longer commands return early with commandRunning: true, so poll read_terminal. Close scaffolding terminals with surface_control.",
+        "Run a shell command in a real terminal tab in the user's workspace (project directory, user's login shell). The user watches it live. By default a NEW terminal opens (a chip on your chat); pass terminalId to reuse one (a terminal you opened earlier, or any terminal from workspace_overview; running in the user's own terminal marks it agent-controlled until you release it). Prefer reusing one terminal for routine sequential commands — shell state (cwd, env vars) persists there. Multi-line commands are safe (sent as one block). Waits for the command to finish (default 2 minutes; set timeoutMs up to 600000 for longer builds) and returns its output plus exitCode (0 = success) when available. Commands that outlast the wait return commandRunning: true — follow them with read_terminal (waitForIdleMs + sinceOffset with the returned offset), don't re-run them. Close scaffolding terminals with surface_control.",
       parameters: {
         command: z.string().describe("The shell command to run"),
         terminalId: z
@@ -309,6 +309,14 @@ export function buildWorkspaceToolkit(
           .optional()
           .describe(
             "Existing terminal to run in (from workspace_overview or a previous run_terminal); omit for a new terminal",
+          ),
+        timeoutMs: z
+          .number()
+          .int()
+          .positive()
+          .optional()
+          .describe(
+            "How long to wait for the command to finish, in ms (default 120000, max 600000)",
           ),
       },
       execute: (input, ctx) =>
@@ -319,19 +327,44 @@ export function buildWorkspaceToolkit(
           typeof input.terminalId === "string" && input.terminalId
             ? input.terminalId
             : undefined,
+          typeof input.timeoutMs === "number" ? input.timeoutMs : undefined,
         ),
     },
     {
       name: "read_terminal",
       description:
-        "Read a terminal's recent output, whether its shell is alive (running), and whether a command is executing right now (busy). Works on any terminal from workspace_overview. Poll it to follow long-running commands.",
+        "Read a terminal's output, whether its shell is alive (running), and whether a command is executing right now (busy). Works on any terminal from workspace_overview. To follow a long-running command, pass waitForIdleMs (blocks until the command finishes or the deadline, up to 600000) and sinceOffset (the offset a previous run_terminal/read_terminal returned) to get only the new output — that's one call, not a poll loop. lastExitCode is the most recently finished command's exit code when known.",
       parameters: {
         terminalId: z.string().describe("Terminal id from run_terminal"),
+        sinceOffset: z
+          .number()
+          .int()
+          .nonnegative()
+          .optional()
+          .describe(
+            "Return only output after this buffer offset (from a previous call's `offset`)",
+          ),
+        waitForIdleMs: z
+          .number()
+          .int()
+          .positive()
+          .optional()
+          .describe(
+            "Block until the foreground command finishes, up to this many ms",
+          ),
       },
       execute: async (input, ctx) => {
         const state = await bridge.readTerminal(
           ctx.projectId,
           String(input.terminalId),
+          {
+            ...(typeof input.sinceOffset === "number"
+              ? { sinceOffset: input.sinceOffset }
+              : {}),
+            ...(typeof input.waitForIdleMs === "number"
+              ? { waitForIdleMs: input.waitForIdleMs }
+              : {}),
+          },
         );
         if (!state) {
           throw new Error(
@@ -344,15 +377,16 @@ export function buildWorkspaceToolkit(
     {
       name: "write_terminal",
       description:
-        "Send input to a terminal you spawned: answer a prompt, or send control sequences. End a line with \\r to press Enter; '\\u0003' sends Ctrl+C to stop the foreground process. Fails if the user has taken the terminal over.",
+        "Send raw input to a terminal you control: answer a prompt, drive an interactive command (REPLs, installers), or send control sequences. End a line with \\r to press Enter; '\\u0003' sends Ctrl+C to stop the foreground process. Targeting the user's own terminal takes it over first (they see the handoff). Fails if the user has taken the terminal over.",
       parameters: {
         terminalId: z.string().describe("Terminal id from run_terminal"),
         data: z
           .string()
           .describe("Raw input, e.g. 'y\\r' or '\\u0003' for Ctrl+C"),
       },
-      execute: async (input) => {
+      execute: async (input, ctx) => {
         const accepted = await bridge.writeTerminal(
+          ctx.projectId,
           String(input.terminalId),
           String(input.data),
         );

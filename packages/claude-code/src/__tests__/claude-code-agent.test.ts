@@ -3,6 +3,11 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("@anthropic-ai/claude-agent-sdk", () => ({
   query: vi.fn(),
+  createSdkMcpServer: vi.fn((config: { name: string }) => ({
+    type: "sdk",
+    name: config.name,
+  })),
+  tool: vi.fn((name: string) => ({ name })),
 }));
 
 import { query } from "@anthropic-ai/claude-agent-sdk";
@@ -227,6 +232,81 @@ describe("ClaudeCodeAgent", () => {
       behavior: "deny",
       message: "This tool is not available in the Catamorphic desktop harness.",
     });
+  });
+
+  it("redirects denied shell tools to the workspace terminals", async () => {
+    queryMock.mockReturnValueOnce(scriptedQuery([successResult]));
+    const agent = new ClaudeCodeAgent();
+    await collect(agent, "Hello");
+
+    const canUseTool = lastQueryOptions().canUseTool;
+    if (!canUseTool) throw new Error("canUseTool was not passed to query");
+    const decision = await canUseTool(
+      "Bash",
+      { command: "ls" },
+      {
+        signal: new AbortController().signal,
+        toolUseID: "toolu_bash",
+        requestId: "req_1",
+      },
+    );
+
+    if (!decision) throw new Error("expected a permission decision");
+    expect(decision.behavior).toBe("deny");
+    expect("message" in decision ? decision.message : "").toContain(
+      "run_terminal",
+    );
+  });
+
+  it("swaps built-in shell tools for workspace terminals per-turn", async () => {
+    const agent = new ClaudeCodeAgent({
+      disableBash: true,
+      extraTools: [
+        {
+          name: "run_terminal",
+          description: "Run a command in a workspace terminal",
+          parameters: {},
+          execute: async () => "ok",
+        },
+      ],
+    });
+
+    // A session started with host context mounts the workspace server, so
+    // the built-in shell tools are removed from the model's context.
+    const started = await agent.startSession({
+      projectId: "project-1",
+      userId: "user-1",
+      sandboxId: "sandbox-1",
+      sessionId: "chat-1",
+      workingDirectory: "/workspace/project",
+    });
+    const startedId = started.providerSessionId;
+    if (!startedId) throw new Error("expected a chosen session id");
+    queryMock.mockReturnValueOnce(
+      scriptedQuery([
+        initMessage(startedId),
+        { ...successResult, session_id: startedId },
+      ]),
+    );
+    for await (const _event of agent.sendMessage(started, "First step")) {
+      // drain
+    }
+    let options = lastQueryOptions();
+    expect(options.allowedTools).toContain("mcp__workspace__run_terminal");
+    expect(options.allowedTools).not.toContain("Bash");
+    expect(options.disallowedTools).toEqual(
+      expect.arrayContaining(["Bash", "PowerShell", "Monitor"]),
+    );
+
+    // A session resurrected after a host restart (no stored context) runs
+    // without the workspace server — the built-ins come back so the agent
+    // still has a shell.
+    queryMock.mockReturnValueOnce(scriptedQuery([successResult]));
+    await collect(agent, "Continue");
+    options = lastQueryOptions();
+    expect(options.allowedTools).toContain("Bash");
+    expect(options.allowedTools).not.toContain("mcp__workspace__run_terminal");
+    expect(options.disallowedTools).toBeUndefined();
   });
 
   it("maps subagent lifecycle and attributes nested activity", async () => {

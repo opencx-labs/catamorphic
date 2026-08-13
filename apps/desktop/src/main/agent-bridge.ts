@@ -1,6 +1,7 @@
 import type { ElicitRequest, ElicitResult } from "@catamorphic/mcp";
 import { BrowserWindow, ipcMain, webContents } from "electron";
 import type { AgentTerminals } from "./terminal.js";
+import { capOutput, sanitizeTerminalOutput } from "./terminal-text.js";
 
 /**
  * The workspace bridge: how chat agents see and drive the app itself.
@@ -43,25 +44,53 @@ export interface WorkspaceBridge {
   /**
    * Run a command in a terminal: a fresh agent terminal by default, or —
    * with `targetTerminalId` — an existing one (agent-owned or the user's;
-   * the latter flips to agent-controlled first). Waits for the command to
-   * finish (bounded) and returns only the output it produced.
+   * the latter flips to agent-controlled first). Waits up to `timeoutMs`
+   * (default 2 minutes, like a stock coding-agent shell) and returns the
+   * output the command produced, sanitized for model reading. `exitCode`
+   * is present when shell integration saw the command complete; `offset`
+   * is the buffer position to pass to readTerminal for output-since-here.
    */
   runTerminal(
     projectId: string,
     sessionId: string,
     command: string,
     targetTerminalId?: string,
+    timeoutMs?: number,
   ): Promise<{
     key: string;
     terminalId: string;
     output: string;
     commandRunning: boolean;
+    exitCode?: number;
+    offset: number;
   }>;
+  /**
+   * Read a terminal's output — the recent tail, or everything since
+   * `sinceOffset` (from an earlier read/run). `waitForIdleMs` blocks
+   * until the foreground command finishes (or the deadline), so callers
+   * following a long command wait server-side instead of polling.
+   */
   readTerminal(
     projectId: string,
     terminalId: string,
-  ): Promise<{ output: string; running: boolean; busy: boolean } | null>;
-  writeTerminal(terminalId: string, data: string): Promise<boolean>;
+    opts?: { sinceOffset?: number; waitForIdleMs?: number },
+  ): Promise<{
+    output: string;
+    running: boolean;
+    busy: boolean;
+    offset: number;
+    lastExitCode?: number;
+  } | null>;
+  /**
+   * Send raw input. Works on agent terminals and on user terminals the
+   * agent has taken over (an untouched user terminal is taken over
+   * first, so the handoff is always visible).
+   */
+  writeTerminal(
+    projectId: string,
+    terminalId: string,
+    data: string,
+  ): Promise<boolean>;
   /** Hand a surface back to the user (agent done) or reclaim it. */
   setControl(
     projectId: string,
@@ -108,8 +137,36 @@ const RPC_TIMEOUT_MS = 12_000;
 /** Elicitation waits on a human (form entry, OAuth) — give it real time. */
 const ELICIT_TIMEOUT_MS = 300_000;
 
+/**
+ * Terminal waits mirror a stock coding-agent shell: 2 minutes by default,
+ * 10 at most — a build that takes 90s should come back in one tool call,
+ * not a poll loop that burns a model turn every 15 seconds.
+ */
+const RUN_DEFAULT_WAIT_MS = 120_000;
+const RUN_MAX_WAIT_MS = 600_000;
+/** Model-facing output cap (matches stock Bash's ~30k inline window). */
+const OUTPUT_CAP = 30_000;
+/** Raw chars sliced before sanitizing (redraw noise shrinks a lot). */
+const RAW_READ_CAP = 150_000;
+
 const sleep = (ms: number) =>
   new Promise<void>((resolve) => setTimeout(resolve, ms));
+
+/** Raw PTY buffer → what the model reads: sanitized, tail-capped. */
+const modelOutput = (raw: string): string =>
+  capOutput(sanitizeTerminalOutput(raw), OUTPUT_CAP);
+
+/**
+ * Multi-line commands ride bracketed paste so the shell takes the whole
+ * block as one unit — fed plainly, every embedded newline would submit a
+ * partial command (heredocs and quoted blocks arrive line-diced).
+ */
+const encodeCommand = (command: string): string => {
+  const trimmed = command.replace(/[\r\n]+$/, "");
+  return trimmed.includes("\n")
+    ? `\x1b[200~${trimmed}\x1b[201~\r`
+    : `${trimmed}\r`;
+};
 
 /** Guest-side script: index interactive elements, act, and visualize. */
 const GUEST_HELPERS = `
@@ -358,7 +415,9 @@ export function registerAgentBridge(agentTerminals: AgentTerminals): {
         if (info?.terminalId) {
           return {
             kind: "terminal",
-            output: agentTerminals.read(info.terminalId) ?? "",
+            output: modelOutput(
+              agentTerminals.read(info.terminalId, RAW_READ_CAP) ?? "",
+            ),
             running: agentTerminals.isRunning(info.terminalId),
           };
         }
@@ -435,7 +494,16 @@ export function registerAgentBridge(agentTerminals: AgentTerminals): {
       }
     },
 
-    async runTerminal(projectId, sessionId, command, targetTerminalId) {
+    async runTerminal(
+      projectId,
+      sessionId,
+      command,
+      targetTerminalId,
+      timeoutMs,
+    ) {
+      if (!command.trim()) {
+        throw new Error("Empty command.");
+      }
       let terminalId: string;
       let key: string;
       if (targetTerminalId) {
@@ -483,44 +551,117 @@ export function registerAgentBridge(agentTerminals: AgentTerminals): {
       }
 
       const baseline = agentTerminals.bufferLength(terminalId) ?? 0;
-      agentTerminals.writeAny(terminalId, `${command}\r`);
+      const trackingBefore = agentTerminals.commandTracking(terminalId);
+      const completionsBefore = trackingBefore?.completions ?? 0;
+      const promptsBefore = trackingBefore?.prompts ?? 0;
+      agentTerminals.writeAny(terminalId, encodeCommand(command));
 
       // Wait for the command to finish — most are quick, and complete
-      // output beats a partial snapshot. Long runs return early with
-      // commandRunning: true; the caller polls read_terminal.
+      // output beats a partial snapshot. Runs that outlast the wait
+      // return with commandRunning: true; the caller follows up with
+      // read_terminal (which can block on idle server-side).
+      const waitMs = Math.min(
+        Math.max(timeoutMs ?? RUN_DEFAULT_WAIT_MS, 1_000),
+        RUN_MAX_WAIT_MS,
+      );
+      const finishDeadline = Date.now() + waitMs;
+      // With shell integration, the completion counter is authoritative —
+      // it can't miss a fast command or mistake a slow shell startup for
+      // "already finished". Without markers, fall back to the busy flag
+      // after a short grace for the command to register as busy at all.
       const graceDeadline = Date.now() + 1_200;
-      while (Date.now() < graceDeadline && !agentTerminals.isBusy(terminalId)) {
-        await sleep(100);
-      }
-      const finishDeadline = Date.now() + 15_000;
-      while (Date.now() < finishDeadline && agentTerminals.isBusy(terminalId)) {
-        await sleep(200);
+      const commandFinished = () => {
+        if (!agentTerminals.isRunning(terminalId)) return true;
+        const tracking = agentTerminals.commandTracking(terminalId);
+        // A new prompt means the shell consumed the submitted line and
+        // came back — even for lines that run nothing (comment-only),
+        // which produce a prompt but no completion.
+        if (tracking?.seen) return tracking.prompts > promptsBefore;
+        return Date.now() > graceDeadline && !agentTerminals.isBusy(terminalId);
+      };
+      while (Date.now() < finishDeadline && !commandFinished()) {
+        await sleep(150);
       }
       // One beat for the tail of the output to flush through the pty.
       await sleep(150);
 
+      const commandRunning = agentTerminals.isBusy(terminalId);
+      // Exit code only when shell integration watched THIS command end —
+      // a completion count that didn't move means the marker (and code)
+      // belongs to some earlier command.
+      const tracking = agentTerminals.commandTracking(terminalId);
+      const exitCode =
+        !commandRunning &&
+        tracking?.seen &&
+        tracking.completions > completionsBefore
+          ? tracking.lastExitCode
+          : null;
       return {
         key,
         terminalId,
-        output: agentTerminals.readFrom(terminalId, baseline),
-        commandRunning: agentTerminals.isBusy(terminalId),
+        output: modelOutput(
+          agentTerminals.readFrom(terminalId, baseline, RAW_READ_CAP),
+        ),
+        commandRunning,
+        ...(exitCode !== null ? { exitCode } : {}),
+        offset: agentTerminals.bufferLength(terminalId) ?? 0,
       };
     },
 
-    async readTerminal(_projectId, terminalId) {
-      const output = agentTerminals.read(terminalId);
-      if (output === null) return null;
+    async readTerminal(_projectId, terminalId, opts) {
+      if (agentTerminals.read(terminalId, 1) === null) return null;
+      const idleDeadline =
+        Date.now() +
+        Math.min(Math.max(opts?.waitForIdleMs ?? 0, 0), RUN_MAX_WAIT_MS);
+      while (Date.now() < idleDeadline && agentTerminals.isBusy(terminalId)) {
+        await sleep(200);
+      }
+      const raw =
+        opts?.sinceOffset !== undefined
+          ? agentTerminals.readFrom(terminalId, opts.sinceOffset, RAW_READ_CAP)
+          : (agentTerminals.read(terminalId, RAW_READ_CAP) ?? "");
+      const busy = agentTerminals.isBusy(terminalId);
+      const tracking = agentTerminals.commandTracking(terminalId);
       return {
-        output,
+        output: modelOutput(raw),
         running: agentTerminals.isRunning(terminalId),
-        busy: agentTerminals.isBusy(terminalId),
+        busy,
+        offset: agentTerminals.bufferLength(terminalId) ?? 0,
+        // The latest completed command's exit code — meaningful to a
+        // caller who just watched their command finish.
+        ...(!busy && tracking?.seen && tracking.lastExitCode !== null
+          ? { lastExitCode: tracking.lastExitCode }
+          : {}),
       };
     },
 
-    async writeTerminal(terminalId, data) {
-      const key = terminalKeys.get(terminalId);
-      if (key) guardControl(key);
-      return agentTerminals.write(terminalId, data);
+    async writeTerminal(projectId, terminalId, data) {
+      const key =
+        terminalKeys.get(terminalId) ??
+        (
+          await rpc<{ key: string } | null>("terminalKey", {
+            projectId,
+            terminalId,
+          })
+        )?.key;
+      if (key) {
+        guardControl(key);
+        // Writing into the user's own terminal is a take-over, exactly
+        // like running a command there — mark it so the handoff (and
+        // the Take over button) is visible.
+        if (
+          !agentTerminals.isAgentOwned(terminalId) &&
+          !terminalKeys.has(terminalId)
+        ) {
+          await rpc("surfaceControl", { projectId, key, controlled: true });
+        }
+        terminalKeys.set(terminalId, key);
+      } else if (!agentTerminals.isAgentOwned(terminalId)) {
+        // A user terminal we can't even resolve a tab for: never write
+        // into it invisibly.
+        return false;
+      }
+      return agentTerminals.writeAny(terminalId, data);
     },
 
     async openTarget(projectId, sessionId, target) {

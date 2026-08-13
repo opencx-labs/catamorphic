@@ -58,11 +58,17 @@ export interface ClaudeCodeAgentOpts {
    */
   extraTools?: ExtraTool[];
   /**
-   * Remove the built-in Bash tool from the allowlist. Claude Code's own
-   * shell runs inside the CLI process where the host can't see or manage
-   * it; hosts that provide terminal tools via {@link extraTools} disable
-   * Bash so every command runs through terminals the host fully
-   * intercepts (and the user can watch and take over). Background-task
+   * Swap the built-in shell-execution tools (Bash, and its siblings
+   * PowerShell and Monitor) for the host's terminal tools. Claude Code's
+   * own shell runs inside the CLI process where the host can't see or
+   * manage it; hosts that provide terminal tools via {@link extraTools}
+   * disable the built-ins so every command runs through terminals the
+   * host fully intercepts (and the user can watch and take over).
+   *
+   * Per-turn, not absolute: on turns where the workspace server is not
+   * mounted (sessions resurrected after a host restart run without host
+   * context), the built-in shell tools come back — an agent must never
+   * be left with no way to run commands at all. Background-task
    * follow/stop tools (TaskOutput/TaskStop) stay available either way —
    * with Bash disabled they still manage background subagents.
    */
@@ -100,6 +106,12 @@ export interface ClaudeCodeAgentOpts {
  */
 const ALLOWED_TOOLS = [
   "Bash",
+  // Bash's shell-execution siblings: PowerShell (native on Windows,
+  // opt-in elsewhere) and Monitor (watch a command/WebSocket and feed
+  // lines back as events). They ride the same interception switch as
+  // Bash — see SHELL_EXECUTION_TOOLS.
+  "PowerShell",
+  "Monitor",
   "Read",
   "Glob",
   "Grep",
@@ -109,6 +121,10 @@ const ALLOWED_TOOLS = [
   "WebFetch",
   "TodoWrite",
   "NotebookEdit",
+  // Plugins ship skills and slash commands; the tools that invoke them
+  // must be callable or the plugin content is unreachable.
+  "Skill",
+  "SlashCommand",
   // The subagent tool — "Task" in older CLIs, renamed "Agent" in 2.1.x.
   "Task",
   "Agent",
@@ -119,6 +135,16 @@ const ALLOWED_TOOLS = [
   "BashOutput",
   "KillShell",
 ];
+
+/**
+ * Tools that execute commands inside the CLI process, invisible to the
+ * host. When the host mounts its own terminal tools ({@link
+ * ClaudeCodeAgentOpts.disableBash}), these are removed from the model's
+ * context entirely (`disallowedTools`, not just a call-time deny) so the
+ * model reaches for the workspace terminals instead of a tool it can see
+ * but never use.
+ */
+const SHELL_EXECUTION_TOOLS = new Set(["Bash", "PowerShell", "Monitor"]);
 
 /** Tool names whose invocations are surfaced as `file_edit` events. */
 const FILE_EDIT_TOOLS = new Set(["Edit", "Write", "MultiEdit", "NotebookEdit"]);
@@ -132,10 +158,18 @@ const TASK_STOP_TOOLS = ["TaskStop", "KillShell"];
 /**
  * Permission fallback for tools outside {@link ALLOWED_TOOLS}: deny with a
  * reason the model can read, instead of hanging on a prompt nobody will see.
+ * Shell-execution tools get a redirect, not a dead end — a model that
+ * reaches for Bash (an old transcript, a subagent) should land on the
+ * workspace terminals, not conclude it cannot run commands.
  */
-const denyUnlistedTools: CanUseTool = async () => ({
+const denyUnlistedTools: CanUseTool = async (toolName) => ({
   behavior: "deny",
-  message: "This tool is not available in the Catamorphic desktop harness.",
+  message: SHELL_EXECUTION_TOOLS.has(toolName)
+    ? "Built-in shell tools are disabled here. Run commands with the " +
+      "workspace terminal tools instead: run_terminal executes a command " +
+      "in a visible terminal tab (read_terminal follows it, write_terminal " +
+      "answers prompts)."
+    : "This tool is not available in the Catamorphic desktop harness.",
 });
 
 interface SessionState {
@@ -365,6 +399,13 @@ export class ClaudeCodeAgent implements CodingAgentProvider {
           })
         : undefined;
 
+    // Shell interception is per-turn: only swap the built-in shell tools
+    // out when the workspace terminals are actually mounted to replace
+    // them. A session resurrected without host context keeps Bash — an
+    // agent with no way to run commands at all is broken, not safe.
+    const shellToolsDisabled =
+      Boolean(this.opts.disableBash) && workspaceServer !== undefined;
+
     // Session-scoped servers win a name clash with the agent-wide set:
     // the host owns both maps and picks the session keys, so a collision
     // means it chose to shadow (e.g. a per-project "catamorphic" server).
@@ -406,7 +447,7 @@ export class ClaudeCodeAgent implements CodingAgentProvider {
         : {}),
       allowedTools: [
         ...ALLOWED_TOOLS.filter(
-          (name) => !(this.opts.disableBash && name === "Bash"),
+          (name) => !(shellToolsDisabled && SHELL_EXECUTION_TOOLS.has(name)),
         ),
         ...(workspaceServer
           ? extraTools.map((def) => `mcp__workspace__${def.name}`)
@@ -415,6 +456,12 @@ export class ClaudeCodeAgent implements CodingAgentProvider {
         // every tool the server exposes).
         ...Object.keys(externalServers).map((name) => `mcp__${name}`),
       ],
+      // Removing (not merely denying) the built-in shell tools takes them
+      // out of the model's context — otherwise the CLI's own system prompt
+      // keeps steering the model toward a Bash it can see but never use.
+      ...(shellToolsDisabled
+        ? { disallowedTools: [...SHELL_EXECUTION_TOOLS] }
+        : {}),
       canUseTool: denyUnlistedTools,
       hooks: backgroundTaskHooks(emitHookEvent),
       // Ignore the user's own ~/.claude and project settings files — the

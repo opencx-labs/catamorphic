@@ -1580,3 +1580,48 @@ Patterned on what best-in-class palettes converged on (Chrome omnibox
   shared `catamorphic_poll_run` tool. `canSuspend: false` bindings are
   guaranteed inline answers — the tool contract mirrors the run model
   instead of pretending every tool is instantaneous.
+
+### 2026-08-12 — Agent terminals at full Bash parity (OSC 133, sanitized reads, real waits)
+- The workspace terminal tools now match everything Claude Code's built-in
+  Bash offers, so proxying commands through visible tabs costs the agent
+  nothing. The audit that drove this compared run_terminal against the
+  stock 2026 Bash surface: missing exit codes, raw ANSI noise, a fixed
+  15s wait, no incremental reads, and line-diced multi-line commands.
+- **Exit codes and exact busy come from OSC 133 shell integration.**
+  Agent-created terminals spawn with a ZDOTDIR shim (`shell-integration.ts`,
+  the VS Code/iTerm2 technique): it sources the user's real zsh config,
+  restores ZDOTDIR so subshells behave, then adds preexec/precmd hooks
+  emitting `133;C` and `133;D;<exit>`. Main-side parsing (`terminal-text.ts`
+  scanOsc133, chunk-split-safe) tracks per-session command boundaries; a
+  completion counter tells run_terminal "YOUR command finished, exit N".
+  The foreground-process heuristic stays as fallback (user terminals, fish,
+  Windows) — the user's own terminals are never shimmed; their dotfiles are
+  theirs. Known limit: `exec <shell>` inside an integrated terminal orphans
+  the markers; the terminal reads busy until closed.
+- **Models read a sanitized projection, never the raw PTY stream.** The
+  renderer keeps raw bytes (it is a terminal); model-facing reads strip
+  OSC/CSI/escapes and replay \r, \b, and erase-line overwrites so a
+  progress bar collapses to its final frame (verified against a real zsh
+  capture, prompt theme and all). Output caps at 30k chars (stock Bash's
+  window) with an explicit "N chars omitted" head marker — never silent.
+- **Waits match how models were trained.** run_terminal waits 2 minutes by
+  default, timeoutMs up to 10 — a 90s build is one tool call, not a poll
+  loop. read_terminal gained waitForIdleMs (server-side block until the
+  command ends) and sinceOffset (only new output since the offset every
+  terminal result now returns) — following a dev server is one cheap call
+  per check, not a 20k-char re-read.
+- **Multi-line commands ride bracketed paste** (`ESC[200~…201~` + \r), so a
+  heredoc executes as one command with one exit code — verified live: one
+  preexec, one completion. Fed plainly, each newline submitted a fragment.
+- **Two holes closed in the control model.** write_terminal now works on
+  user terminals the same way run_terminal does — resolving the tab,
+  guarding take-over, marking the surface agent-controlled first (it used
+  to hard-fail on any terminal the agent didn't spawn, even mid-command
+  ones it had started there). And the Claude Code harness disables Bash
+  per-turn instead of per-agent: a session resurrected after a restart
+  (no workspace tools mounted) gets Bash back rather than having no shell
+  at all. When workspace terminals ARE mounted, Bash/PowerShell/Monitor
+  are `disallowedTools` (removed from context), not merely denied — and
+  the deny fallback for stragglers names run_terminal as the substitute.
+  Skill and SlashCommand joined the allowlist; plugins ship both, and a
+  tool the model can't call makes their content unreachable.

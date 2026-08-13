@@ -4,6 +4,8 @@ import path from "node:path";
 import { type IPty, spawn as spawnPty } from "@lydell/node-pty";
 import { BrowserWindow, ipcMain, type WebContents } from "electron";
 import type { ServerState } from "./ipc.js";
+import { shellIntegrationEnv } from "./shell-integration.js";
+import { scanOsc133 } from "./terminal-text.js";
 
 /**
  * PTY sessions for terminal tabs. The renderer runs the emulator
@@ -43,6 +45,37 @@ interface TerminalSession {
   projectId?: string;
   /** Set for agent-owned sessions. */
   agent?: { projectId: string };
+  /**
+   * OSC 133 semantic-prompt state (agent sessions spawn with shell
+   * integration; see shell-integration.ts). Once markers are `seen`,
+   * busy/exit tracking switches from the foreground-process heuristic
+   * to exact command boundaries.
+   */
+  integration: {
+    seen: boolean;
+    /** A command is running: `133;C` seen without its closing `133;D`. */
+    active: boolean;
+    /** Exit code of the most recently completed command. */
+    lastExit: number | null;
+    /** Completed-command count — lets callers detect "my command ended". */
+    completions: number;
+    /**
+     * Every `133;D` (prompt shown), including ones with no preceding C —
+     * a submitted line the shell consumed without running anything
+     * (blank, comment-only) still comes back to a prompt.
+     */
+    prompts: number;
+    /** Trailing fragment of a marker split across PTY data chunks. */
+    carry: string;
+  };
+}
+
+/** Exposed integration snapshot for the agent bridge. */
+export interface CommandTracking {
+  seen: boolean;
+  completions: number;
+  prompts: number;
+  lastExitCode: number | null;
 }
 
 /** The user's login shell — terminals should feel like Terminal.app. */
@@ -73,6 +106,11 @@ export interface AgentTerminals {
   isRunning(sessionId: string): boolean;
   /** A foreground command is running (vs. the shell idling). */
   isBusy(sessionId: string): boolean;
+  /**
+   * Shell-integration snapshot: whether OSC 133 markers are live for the
+   * session, how many commands have completed, and the last exit code.
+   */
+  commandTracking(sessionId: string): CommandTracking | null;
   /** Whether the session is agent-owned (vs. a user's terminal tab). */
   isAgentOwned(sessionId: string): boolean;
   kill(sessionId: string): boolean;
@@ -170,6 +208,13 @@ export function registerTerminalSupport(state: ServerState): {
       : null;
     const cwd = rootPath ?? os.homedir();
     const shell = defaultShell();
+    // Agent terminals spawn with OSC 133 shell integration for exact
+    // busy/exit tracking; user terminals stay exactly as the user's
+    // dotfiles configure them (their sessions fall back to the
+    // foreground-process heuristic when an agent borrows one).
+    const integrationEnv = input.agent
+      ? await shellIntegrationEnv(shell)
+      : null;
     const pty = spawnPty(
       shell,
       // A login shell, like Terminal.app — the user's PATH and prompt
@@ -184,6 +229,7 @@ export function registerTerminalSupport(state: ServerState): {
           ...process.env,
           TERM: "xterm-256color",
           COLORTERM: "truecolor",
+          ...integrationEnv,
         },
       },
     );
@@ -198,11 +244,39 @@ export function registerTerminalSupport(state: ServerState): {
       busy: false,
       projectId: input.projectId ?? input.agent?.projectId,
       agent: input.agent,
+      integration: {
+        seen: false,
+        active: false,
+        lastExit: null,
+        completions: 0,
+        prompts: 0,
+        carry: "",
+      },
     };
     sessions.set(sessionId, session);
 
     pty.onData((data) => {
       appendBuffer(session, data);
+      // Track OSC 133 markers on every session — agent terminals emit
+      // them via the integration shim, and a user's own dotfiles may
+      // emit them too (iTerm2/VS Code shell integration).
+      const tracking = session.integration;
+      tracking.carry = scanOsc133(tracking.carry + data, (marker) => {
+        if (marker.kind === "C") {
+          tracking.seen = true;
+          tracking.active = true;
+        } else if (marker.kind === "D") {
+          tracking.seen = true;
+          tracking.prompts += 1;
+          // A D with no preceding C is a prompt with nothing run behind
+          // it (startup, blank or comment-only line) — not a completion.
+          if (tracking.active) {
+            tracking.active = false;
+            tracking.completions += 1;
+            tracking.lastExit = marker.exitCode ?? null;
+          }
+        }
+      });
       emit(session, "catamorphic:terminal-data", { sessionId, data });
     });
     pty.onExit(({ exitCode }) => {
@@ -293,6 +367,10 @@ export function registerTerminalSupport(state: ServerState): {
    */
   const computeBusy = (session: TerminalSession): boolean => {
     if (!session.running) return false;
+    // Shell-integration markers are exact — they catch pure-shell work
+    // (builtins, functions, loops) that never changes the tty's
+    // foreground process, which the heuristic below misses entirely.
+    if (session.integration.seen) return session.integration.active;
     try {
       const foreground = path.basename(session.pty.process || "");
       return foreground !== "" && foreground !== session.shellName;
@@ -364,6 +442,16 @@ export function registerTerminalSupport(state: ServerState): {
       // Compute live (not the cached poll value): agents polling for
       // completion deserve sub-interval accuracy.
       return computeBusy(session);
+    },
+    commandTracking: (sessionId) => {
+      const session = sessions.get(sessionId);
+      if (!session) return null;
+      return {
+        seen: session.integration.seen,
+        completions: session.integration.completions,
+        prompts: session.integration.prompts,
+        lastExitCode: session.integration.lastExit,
+      };
     },
     isAgentOwned: (sessionId) => Boolean(sessions.get(sessionId)?.agent),
     kill: (sessionId) => {
