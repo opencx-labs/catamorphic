@@ -319,6 +319,176 @@ export function TerminalScreen({
           focused = container.contains(document.activeElement);
           if (!canType()) term.renderer?.setCursorBlink(false);
         }
+        // Double/triple-click selection must anchor on the PRESS, not the
+        // release (the xterm behavior): the word/line highlights on the
+        // second/third mousedown and DRAGGING extends the selection by
+        // word/line granularity. ghostty-web only selects inside its
+        // `click` handler (which fires at mouseup), so double-click-drag
+        // and triple-click-drag were impossible. Implemented against the
+        // library's SelectionManager the same way the hollow cursor
+        // shadows the renderer: feature-checked internals, and a changed
+        // library silently degrades to stock behavior.
+        interface SelectionPoint {
+          col: number;
+          absoluteRow: number;
+        }
+        interface SelectionManagerInternals {
+          selectionStart: SelectionPoint | null;
+          selectionEnd: SelectionPoint | null;
+          isSelecting: boolean;
+          pixelToCell(x: number, y: number): { col: number; row: number };
+          viewportRowToAbsolute(row: number): number;
+          getWordAtCell(
+            col: number,
+            row: number,
+          ): { startCol: number; endCol: number } | null;
+          markCurrentSelectionDirty(): void;
+          requestRender(): void;
+          selectionChangedEmitter?: { fire(): void };
+        }
+        const selection = (
+          term as unknown as { selectionManager?: SelectionManagerInternals }
+        ).selectionManager;
+        const wasmTerm = (
+          term as unknown as {
+            wasmTerm?: { hasMouseTracking?: () => boolean };
+          }
+        ).wasmTerm;
+        const canvas = container.querySelector("canvas");
+        if (
+          selection &&
+          canvas &&
+          typeof selection.pixelToCell === "function" &&
+          typeof selection.viewportRowToAbsolute === "function" &&
+          typeof selection.getWordAtCell === "function" &&
+          typeof selection.markCurrentSelectionDirty === "function" &&
+          typeof selection.requestRender === "function"
+        ) {
+          type Granularity = "word" | "line";
+          let drag: {
+            granularity: Granularity;
+            anchorStart: SelectionPoint;
+            anchorEnd: SelectionPoint;
+          } | null = null;
+
+          const cellAt = (clientX: number, clientY: number) => {
+            const rect = canvas.getBoundingClientRect();
+            const x = Math.max(rect.left, Math.min(clientX, rect.right));
+            const y = Math.max(rect.top, Math.min(clientY, rect.bottom));
+            return selection.pixelToCell(x - rect.left, y - rect.top);
+          };
+          /** The word/line bounds around a cell, in absolute-row space. */
+          const unitAt = (
+            granularity: Granularity,
+            cell: { col: number; row: number },
+          ): { start: SelectionPoint; end: SelectionPoint } => {
+            const absoluteRow = selection.viewportRowToAbsolute(cell.row);
+            if (granularity === "line") {
+              return {
+                start: { col: 0, absoluteRow },
+                // Full width; getSelection trims trailing blanks per row.
+                end: { col: Math.max(0, (term?.cols ?? 1) - 1), absoluteRow },
+              };
+            }
+            const word = selection.getWordAtCell(cell.col, cell.row);
+            return {
+              start: { col: word?.startCol ?? cell.col, absoluteRow },
+              end: { col: word?.endCol ?? cell.col, absoluteRow },
+            };
+          };
+          const applySelection = (
+            start: SelectionPoint,
+            end: SelectionPoint,
+          ) => {
+            selection.markCurrentSelectionDirty();
+            selection.selectionStart = start;
+            selection.selectionEnd = end;
+            // Our drag, not the library's — keep its machinery parked.
+            selection.isSelecting = false;
+            selection.requestRender();
+          };
+          const isBefore = (a: SelectionPoint, b: SelectionPoint) =>
+            a.absoluteRow < b.absoluteRow ||
+            (a.absoluteRow === b.absoluteRow && a.col < b.col);
+
+          const onDragMove = (event: MouseEvent) => {
+            if (!drag) return;
+            const unit = unitAt(
+              drag.granularity,
+              cellAt(event.clientX, event.clientY),
+            );
+            // Extend past the anchor unit in either direction; inside it,
+            // the selection stays the anchor word/line.
+            if (isBefore(unit.start, drag.anchorStart)) {
+              applySelection(unit.start, drag.anchorEnd);
+            } else if (isBefore(drag.anchorEnd, unit.end)) {
+              applySelection(drag.anchorStart, unit.end);
+            } else {
+              applySelection(drag.anchorStart, drag.anchorEnd);
+            }
+          };
+          const onDragEnd = () => {
+            if (!drag) return;
+            drag = null;
+            document.removeEventListener("mousemove", onDragMove);
+            document.removeEventListener("mouseup", onDragEnd);
+            // Copy-on-select, matching the library's own mouse selection.
+            if (term?.hasSelection()) {
+              term.copySelection();
+              selection.selectionChangedEmitter?.fire();
+            }
+          };
+          const onMultiPress = (event: MouseEvent) => {
+            if (event.button !== 0 || event.detail < 2) return;
+            // TUI apps that asked for mouse reporting get the raw
+            // clicks; selection hijacking would break them.
+            try {
+              if (wasmTerm?.hasMouseTracking?.()) return;
+            } catch {
+              /* no tracking probe — treat as a plain shell */
+            }
+            // Capture phase on the container: this runs before the
+            // library's canvas mousedown, which would otherwise reset
+            // the selection to a single cell.
+            event.preventDefault();
+            event.stopPropagation();
+            const granularity: Granularity =
+              event.detail === 2 ? "word" : "line";
+            const unit = unitAt(
+              granularity,
+              cellAt(event.clientX, event.clientY),
+            );
+            drag = {
+              granularity,
+              anchorStart: unit.start,
+              anchorEnd: unit.end,
+            };
+            applySelection(unit.start, unit.end);
+            term?.focus();
+            document.addEventListener("mousemove", onDragMove);
+            document.addEventListener("mouseup", onDragEnd);
+          };
+          // The library's own detail>=2 `click` handler fires at RELEASE
+          // and would overwrite the drag-extended range with the word
+          // under the release point — swallow multi-clicks outright.
+          const onMultiClick = (event: MouseEvent) => {
+            if (event.detail >= 2) event.stopPropagation();
+          };
+          container.addEventListener("mousedown", onMultiPress, {
+            capture: true,
+          });
+          container.addEventListener("click", onMultiClick, { capture: true });
+          unsubscribes.push(() => {
+            container.removeEventListener("mousedown", onMultiPress, {
+              capture: true,
+            });
+            container.removeEventListener("click", onMultiClick, {
+              capture: true,
+            });
+            document.removeEventListener("mousemove", onDragMove);
+            document.removeEventListener("mouseup", onDragEnd);
+          });
+        }
         term.onData((data) => {
           if (readOnlyRef.current) return;
           pinCursorWhileTyping();
@@ -381,9 +551,11 @@ export function TerminalScreen({
       className="min-h-0 flex-1 overflow-hidden px-2 pt-2"
       style={{ backgroundColor: theme?.colors["bg-inset"] }}
     >
-      {/* ghostty-web owns everything inside; the wrapper just gives the
-          FitAddon a measurable box. */}
-      <div ref={containerRef} className="h-full w-full" />
+      {/* ghostty-web owns everything inside; the wrapper gives the
+          FitAddon a measurable box and clips any canvas overshoot while
+          a refit is pending (the container is contenteditable — without
+          the clip, caret-into-view scrolling can shove ancestors). */}
+      <div ref={containerRef} className="h-full w-full overflow-hidden" />
     </div>
   );
 }

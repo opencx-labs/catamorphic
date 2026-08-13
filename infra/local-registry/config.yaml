@@ -1,0 +1,14 @@
+# Local npm registry for Catamorphic development (see infra/local-registry/README.md).
+# Serves @catamorphic/* from local publishes; everything else proxies npmjs.
+storage: ./storage
+uplinks:
+  npmjs:
+    url: https://registry.npmjs.org/
+packages:
+  '@catamorphic/*':
+    access: $all
+    publish: $all
+  '**':
+    access: $all
+    proxy: npmjs
+log: { type: stdout, format: pretty, level: warn }

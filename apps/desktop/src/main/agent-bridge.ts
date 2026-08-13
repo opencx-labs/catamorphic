@@ -1,7 +1,12 @@
 import type { ElicitRequest, ElicitResult } from "@catamorphic/mcp";
 import { BrowserWindow, ipcMain, webContents } from "electron";
 import type { AgentTerminals } from "./terminal.js";
-import { capOutput, sanitizeTerminalOutput } from "./terminal-text.js";
+import {
+  capOutput,
+  encodeCommand,
+  sanitizeTerminalOutput,
+  waitForShellReady,
+} from "./terminal-text.js";
 
 /**
  * The workspace bridge: how chat agents see and drive the app itself.
@@ -155,18 +160,6 @@ const sleep = (ms: number) =>
 /** Raw PTY buffer → what the model reads: sanitized, tail-capped. */
 const modelOutput = (raw: string): string =>
   capOutput(sanitizeTerminalOutput(raw), OUTPUT_CAP);
-
-/**
- * Multi-line commands ride bracketed paste so the shell takes the whole
- * block as one unit — fed plainly, every embedded newline would submit a
- * partial command (heredocs and quoted blocks arrive line-diced).
- */
-const encodeCommand = (command: string): string => {
-  const trimmed = command.replace(/[\r\n]+$/, "");
-  return trimmed.includes("\n")
-    ? `\x1b[200~${trimmed}\x1b[201~\r`
-    : `${trimmed}\r`;
-};
 
 /** Guest-side script: index interactive elements, act, and visualize. */
 const GUEST_HELPERS = `
@@ -548,6 +541,18 @@ export function registerAgentBridge(agentTerminals: AgentTerminals): {
         );
         key = attached?.key ?? `terminal:${terminalId}`;
         terminalKeys.set(terminalId, key);
+        // Never write into a shell that hasn't shown its first prompt:
+        // bytes queued during startup are echoed by the tty AND again by
+        // the line editor, so the transcript showed the command twice
+        // (see waitForShellReady). Waiting also pins the prompt baseline,
+        // so the completion wait below can't mistake the STARTUP prompt
+        // for "the shell consumed my command".
+        await waitForShellReady({
+          running: () => agentTerminals.isRunning(terminalId),
+          prompts: () =>
+            agentTerminals.commandTracking(terminalId)?.prompts ?? 0,
+          bufferLength: () => agentTerminals.bufferLength(terminalId) ?? 0,
+        });
       }
 
       const baseline = agentTerminals.bufferLength(terminalId) ?? 0;

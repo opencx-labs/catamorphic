@@ -122,6 +122,8 @@ interface OverviewTab {
   name?: string;
   running?: boolean;
   agentControlled?: boolean;
+  /** Chip-only agent terminal: no workspace tab until shown/clicked. */
+  background?: boolean;
 }
 
 interface OverviewChat {
@@ -163,6 +165,9 @@ export function formatWorkspaceContext(
       tab.key && tab.key === ownChatKey ? "this conversation" : "",
       tab.kind === "terminal" && tab.running ? "running" : "",
       tab.agentControlled ? "agent-controlled" : "",
+      // A chip-only terminal: the user is NOT looking at it; open_surface
+      // with its key is how the agent puts it in front of them.
+      tab.background ? "background — not open as a tab" : "",
     ].filter(Boolean);
     const label =
       tab.title || tab.filePath || tab.url || tab.name || tab.kind || "tab";

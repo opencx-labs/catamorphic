@@ -1,5 +1,16 @@
 # TODO
 
+- **Full-stack Claude Code e2e via a fake CLI.** The ask_user flow now has
+  three pins: harness unit tests (mocked query), the harness↔core seam
+  integration test (`packages/claude-code/src/__tests__/
+  ask-user-core.integration.test.ts` — real AgentSessionsService + real
+  Postgres, DATABASE_URL-gated), and the renderer panel via the fake-agent
+  e2e. The one uncovered layer is the SDK↔CLI boundary itself: a fixture
+  "fake claude" executable speaking the SDK's stdio protocol (pointed at
+  via `pathToClaudeCodeExecutable` under an e2e env flag) would let the
+  desktop e2e drive a REAL Claude Code harness end to end — questions,
+  permission round-trips, background tasks — without model calls. Worth
+  building once; every harness regression class lands in it.
 - **Dev-shell follow-ups (ADR 0045).** PR review depth on the CodeHost
   seam: inline comments, approvals, merge-from-app; a worktree
   create/remove surface (today worktrees are made by agents/terminals and

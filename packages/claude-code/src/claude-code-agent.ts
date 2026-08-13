@@ -8,6 +8,7 @@ import {
   type HookCallback,
   type McpServerConfig,
   type Options,
+  type PermissionResult,
   query,
   type SDKMessage,
   tool as sdkTool,
@@ -17,6 +18,7 @@ import type {
   AgentEvent,
   AgentMcpServerConfig,
   AgentPluginConfig,
+  AgentQuestion,
   CodingAgentProvider,
   ExtraTool,
   ExtraToolContext,
@@ -134,6 +136,10 @@ const ALLOWED_TOOLS = [
   "TaskStop",
   "BashOutput",
   "KillShell",
+  // AskUserQuestion is deliberately NOT listed: its permission check must
+  // reach canUseTool, where the harness parks the call and surfaces the
+  // questions to the user (see buildOptions). Allowlisting it would let
+  // the tool run with no answers at all.
 ];
 
 /**
@@ -186,6 +192,58 @@ interface SessionState {
 }
 
 /**
+ * One CLI query's live stream and the per-query state that must survive an
+ * AskUserQuestion pause. The CLI's native ask-the-user tool routes through
+ * `canUseTool`; the harness parks that promise, ends the current turn with
+ * a `question` event (core persists it as `awaiting_input`, the host shows
+ * its question panel), and keeps the stream here. The user's next message
+ * resolves the parked promise with their answers — the tool RETURNS them —
+ * and the same stream keeps flowing in the answer turn.
+ */
+interface LiveTurn {
+  /** The query's message stream; never closed while an ask is parked. */
+  iterator?: AsyncIterator<SDKMessage>;
+  /**
+   * In-flight `next()` carried across the ask boundary: the promise raced
+   * against the ask signal is still pending when the turn parks, and the
+   * answer turn must keep waiting on it, not queue a second read.
+   */
+  nextPending?: Promise<IteratorResult<SDKMessage>>;
+  /** Events from SDK hooks, drained between stream messages. */
+  hookEvents: AgentEvent[];
+  /** Subagents this query spawned, keyed by their Task tool-use id. */
+  openSubagents: Set<string>;
+  abort: AbortController;
+  state?: SessionState;
+  /** The parked AskUserQuestion call: its input and its answer resolver. */
+  ask?: {
+    input: Record<string, unknown>;
+    resolve: (result: PermissionResult) => void;
+  };
+  /** Settles when an AskUserQuestion call parks; re-armed per ask. */
+  askRaised: Promise<void>;
+  raiseAsk: () => void;
+}
+
+function createLiveTurn(state: SessionState | undefined): LiveTurn {
+  const live: Partial<LiveTurn> = {
+    hookEvents: [],
+    openSubagents: new Set<string>(),
+    abort: new AbortController(),
+    state,
+  };
+  armAskSignal(live as LiveTurn);
+  return live as LiveTurn;
+}
+
+/** Fresh one-shot signal for the next AskUserQuestion park. */
+function armAskSignal(live: LiveTurn): void {
+  live.askRaised = new Promise<void>((resolve) => {
+    live.raiseAsk = resolve;
+  });
+}
+
+/**
  * Coding agent backed by the official Claude Agent SDK. The Claude Code CLI
  * runs on the **host machine** and operates on a local working directory —
  * use it when the project checkout the agent should edit lives on the same
@@ -202,6 +260,12 @@ export class ClaudeCodeAgent implements CodingAgentProvider {
   private readonly opts: ClaudeCodeAgentOpts;
   private readonly sessions = new Map<string, SessionState>();
   private readonly activeAborts = new Map<string, AbortController>();
+  /**
+   * Sessions whose last turn parked on an AskUserQuestion call: the query
+   * is still alive, blocked on the parked `canUseTool` promise, and the
+   * next sendMessage resumes it with the user's answers.
+   */
+  private readonly awaitingAnswers = new Map<string, LiveTurn>();
 
   constructor(opts?: ClaudeCodeAgentOpts) {
     this.opts = opts ?? {};
@@ -262,22 +326,29 @@ export class ClaudeCodeAgent implements CodingAgentProvider {
       yield { type: "done" };
       return;
     }
+    // An answer to a parked AskUserQuestion resumes the live query: the
+    // parked canUseTool promise resolves with the user's answers, the tool
+    // returns them, and the model continues on the SAME stream — this
+    // (answer) turn simply keeps draining it.
+    const awaiting = this.awaitingAnswers.get(providerSessionId);
+    if (awaiting) {
+      this.awaitingAnswers.delete(providerSessionId);
+      const ask = awaiting.ask;
+      awaiting.ask = undefined;
+      armAskSignal(awaiting);
+      ask?.resolve({
+        behavior: "allow",
+        updatedInput: askUserAnswerInput(ask.input, message),
+      });
+      yield* this.pumpTurn(providerSessionId, awaiting);
+      return;
+    }
+
     const state = this.sessions.get(providerSessionId);
     const cwd =
       session.workingDirectory || state?.workingDirectory || undefined;
 
-    const abort = new AbortController();
-    this.activeAborts.set(providerSessionId, abort);
-
-    let done = false;
-    // Background-process lifecycle arrives through SDK hooks (the CLI's
-    // structured tool responses carry the task ids); hooks fire between
-    // stream messages, so events queue here and drain with the stream.
-    const hookEvents: AgentEvent[] = [];
-    // Subagents this turn spawned, keyed by their Task tool-use id — the
-    // same id nested activity carries as parent_tool_use_id, and the id
-    // the closing tool_result answers.
-    const openSubagents = new Set<string>();
+    const live = createLiveTurn(state);
     try {
       // A session we created but never ran creates its transcript now, under
       // the id chosen in startSession; everything else (later turns, sessions
@@ -298,26 +369,72 @@ export class ClaudeCodeAgent implements CodingAgentProvider {
             state?.systemPrompt,
             state?.toolContext,
             opts,
-            (event) => hookEvents.push(event),
+            live,
           ),
           ...anchor,
-          abortController: abort,
+          abortController: live.abort,
         },
       });
+      live.iterator = turn[Symbol.asyncIterator]();
+    } catch (error) {
+      yield {
+        type: "error",
+        content: error instanceof Error ? error.message : String(error),
+      };
+      yield { type: "done" };
+      return;
+    }
+    yield* this.pumpTurn(providerSessionId, live);
+  }
 
-      for await (const sdkMessage of turn) {
+  /**
+   * Drain the query's stream into agent events. When an AskUserQuestion
+   * call parks (the CLI is blocked on its permission promise, so no more
+   * messages can arrive), the turn settles as a question: `question` +
+   * `done`, and the still-open stream is stashed for the answer turn. The
+   * iterator is deliberately never closed on that early return — a
+   * `for await` exit would call `return()` and kill the mid-turn CLI.
+   */
+  private async *pumpTurn(
+    providerSessionId: string,
+    live: LiveTurn,
+  ): AsyncIterable<AgentEvent> {
+    this.activeAborts.set(providerSessionId, live.abort);
+    let done = false;
+    try {
+      while (live.iterator) {
+        live.nextPending ??= live.iterator.next();
+        const winner = await Promise.race([
+          live.nextPending.then(() => "message" as const),
+          live.askRaised.then(() => "ask" as const),
+        ]);
+        if (winner === "ask") {
+          yield* live.hookEvents.splice(0);
+          yield {
+            type: "question",
+            questions: parseAskUserQuestions(live.ask?.input),
+          };
+          yield { type: "done" };
+          done = true;
+          this.awaitingAnswers.set(providerSessionId, live);
+          return;
+        }
+        const next = await live.nextPending;
+        live.nextPending = undefined;
+        if (next.done) break;
+        const sdkMessage = next.value;
         // The init message means the CLI booted and owns the transcript;
         // from here on this session must be resumed, never re-created.
-        if (state && sdkMessage.type === "system") {
-          state.transcriptExists = true;
+        if (live.state && sdkMessage.type === "system") {
+          live.state.transcriptExists = true;
         }
-        yield* hookEvents.splice(0);
-        for (const event of mapMessage(sdkMessage, openSubagents)) {
+        yield* live.hookEvents.splice(0);
+        for (const event of mapMessage(sdkMessage, live.openSubagents)) {
           if (event.type === "done") done = true;
           yield event;
         }
       }
-      yield* hookEvents.splice(0);
+      yield* live.hookEvents.splice(0);
     } catch (error) {
       // Spawn/auth/stream failures surface as events, mirroring CodexAgent —
       // consumers iterate the stream and must never see a mid-iteration throw.
@@ -339,6 +456,19 @@ export class ClaudeCodeAgent implements CodingAgentProvider {
     // cancelled via the per-send AbortController instead.
     this.activeAborts.get(session.providerSessionId)?.abort();
     this.activeAborts.delete(session.providerSessionId);
+    // A query parked on an unanswered question must not outlive the
+    // session: unblock the CLI (deny) and abort the stream.
+    const awaiting = this.awaitingAnswers.get(session.providerSessionId);
+    if (awaiting) {
+      this.awaitingAnswers.delete(session.providerSessionId);
+      awaiting.ask?.resolve({
+        behavior: "deny",
+        message: "The session was closed before the user answered.",
+        interrupt: true,
+      });
+      awaiting.ask = undefined;
+      awaiting.abort.abort();
+    }
     this.sessions.delete(session.providerSessionId);
   }
 
@@ -352,7 +482,7 @@ export class ClaudeCodeAgent implements CodingAgentProvider {
     systemPrompt: string | undefined,
     toolContext: ExtraToolContext | undefined,
     turn: TurnOptions | undefined,
-    emitHookEvent: (event: AgentEvent) => void,
+    live: LiveTurn,
   ): Options {
     // Sessions resumed after a host restart have no stored context to run
     // extra tools with, so they run without the workspace server (the CLI
@@ -470,8 +600,23 @@ export class ClaudeCodeAgent implements CodingAgentProvider {
       ...(shellToolsDisabled
         ? { disallowedTools: [...SHELL_EXECUTION_TOOLS] }
         : {}),
-      canUseTool: denyUnlistedTools,
-      hooks: backgroundTaskHooks(emitHookEvent),
+      // AskUserQuestion is the CLI's native ask_user: the tool's own
+      // permission check always routes through here, and the permission
+      // result's updatedInput is how the answers reach it (the tool reads
+      // `answers`/`response` from its input and returns them). Park the
+      // promise; pumpTurn turns the park into a question turn and the
+      // user's next message resolves it. Everything else outside the
+      // allowlist stays denied.
+      canUseTool: async (toolName, input, options) => {
+        if (toolName === "AskUserQuestion") {
+          return await new Promise<PermissionResult>((resolve) => {
+            live.ask = { input, resolve };
+            live.raiseAsk();
+          });
+        }
+        return denyUnlistedTools(toolName, input, options);
+      },
+      hooks: backgroundTaskHooks((event) => live.hookEvents.push(event)),
       // Recognize everything real Claude Code recognizes: the repo's
       // CLAUDE.md / .claude (skills, agents, commands, settings) plus the
       // agent's own home ("user" resolves inside this agent's private
@@ -721,6 +866,95 @@ async function withAttachments(
   return `${message}\n\n[The user attached ${attachments.length === 1 ? "a file" : "files"} with this message — use the Read tool to view:\n${lines.join("\n")}]`;
 }
 
+/**
+ * The SDK's AskUserQuestion input → the host-neutral question shape the
+ * `question` AgentEvent carries (mirrors the ai-sdk harness's parsing, so
+ * both harnesses feed the same question panel).
+ */
+function parseAskUserQuestions(input: unknown): AgentQuestion[] {
+  const record = asRecord(input);
+  const rawQuestions = Array.isArray(record?.questions) ? record.questions : [];
+  return rawQuestions.flatMap((raw): AgentQuestion[] => {
+    const question = asRecord(raw);
+    if (typeof question?.question !== "string") return [];
+    const options = Array.isArray(question.options)
+      ? question.options.flatMap((option): AgentQuestion["options"] => {
+          const entry = asRecord(option);
+          return typeof entry?.label === "string"
+            ? [
+                {
+                  label: entry.label,
+                  description:
+                    typeof entry.description === "string"
+                      ? entry.description
+                      : "",
+                },
+              ]
+            : [];
+        })
+      : [];
+    return [
+      {
+        question: question.question,
+        header:
+          typeof question.header === "string" && question.header.length > 0
+            ? question.header
+            : "Question",
+        multiSelect: question.multiSelect === true,
+        options,
+      },
+    ];
+  });
+}
+
+/**
+ * The user's answer message → the parked call's `updatedInput`. The CLI's
+ * AskUserQuestion tool reads `answers` (question text → answer string;
+ * multi-select comma-separated) and `response` (freeform) from its input
+ * and returns them to the model. The desktop question panel formats
+ * multi-question answers as "<question>\n→ <answer>" blocks separated by
+ * blank lines and sends a single question's answer bare; anything that
+ * doesn't parse (a typed reply, a dismissal note) rides as freeform
+ * `response` so the user's words always reach the model.
+ */
+function askUserAnswerInput(
+  input: Record<string, unknown>,
+  message: string,
+): Record<string, unknown> {
+  const questions = Array.isArray(input.questions) ? input.questions : [];
+  const texts = questions.flatMap((entry) => {
+    const question = asRecord(entry)?.question;
+    return typeof question === "string" ? [question] : [];
+  });
+  const answers: Record<string, string> = {};
+  for (const text of texts) {
+    const marker = `${text}\n→ `;
+    const index = message.indexOf(marker);
+    if (index === -1) continue;
+    const start = index + marker.length;
+    const end = message.indexOf("\n\n", start);
+    answers[text] = (
+      end === -1 ? message.slice(start) : message.slice(start, end)
+    ).trim();
+  }
+  const first = texts[0];
+  if (Object.keys(answers).length === 0 && texts.length === 1 && first) {
+    answers[first] = message.trim();
+  }
+  const unmatched = Object.keys(answers).length < texts.length;
+  return {
+    ...input,
+    answers,
+    ...(unmatched ? { response: message.trim() } : {}),
+  };
+}
+
+function asRecord(value: unknown): Record<string, unknown> | undefined {
+  return typeof value === "object" && value !== null
+    ? (value as Record<string, unknown>)
+    : undefined;
+}
+
 /** MCP tool results are text; non-string tool returns ship as JSON. */
 function stringifyToolResult(result: unknown): string {
   if (typeof result === "string") return result;
@@ -739,6 +973,10 @@ function mapContentBlock(block: ContentBlockLike): AgentEvent | null {
       // should read.
       const name = (block.name ?? "").replace(/^mcp__workspace__/, "");
       const input = block.input ?? {};
+      // The question panel is this call's surface (the canUseTool park
+      // turns it into a `question` event); a tool_call step row for it
+      // would be noise — matching the ai-sdk harness's ask_user.
+      if (name === "AskUserQuestion") return null;
       if (name === "Bash") {
         return { type: "command", content: String(input.command ?? "") };
       }

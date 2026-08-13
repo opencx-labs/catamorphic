@@ -93,6 +93,14 @@ body,
 #root {
   height: 100%;
   margin: 0;
+  /* App shell, not a document: the window itself must never scroll or
+     rubber-band — every surface that scrolls (terminal scrollback, chat
+     timeline, sidebar, palette lists) owns its scrolling internally.
+     Without this, any stray overflow (a canvas mid-refit during a
+     fullscreen transition, a portal near the bottom edge) makes the
+     whole page scrollable behind a terminal tab. */
+  overflow: hidden;
+  overscroll-behavior: none;
 }
 
 body {

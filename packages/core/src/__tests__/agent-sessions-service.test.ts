@@ -23,6 +23,14 @@ describe("activityLabel", () => {
     expect(activityLabel({ type: "tool_call", toolName: "read" })).toBe(
       "Working...",
     );
+    // Preamble text never rides the live line — it lands as the message
+    // itself when the segment flushes; showing it here would duplicate it.
+    expect(
+      activityLabel({
+        type: "text",
+        content: "I'll start by reviewing the schema.",
+      }),
+    ).toBe("Writing...");
   });
 
   it("pretty-prints well-known commands and hides the rest", () => {
@@ -144,12 +152,28 @@ describe("buildAgentSystemPrompt", () => {
   });
 });
 
+/**
+ * The ensure* probes run two `test -f` checks: the workflows workspace
+ * gate (ADR 0043) and then the skill file itself. This fake answers each
+ * by path, so tests state the project's shape declaratively.
+ */
+const fakeSandbox = ({ workspace, skill }: { workspace: boolean; skill: boolean }) => ({
+  executeCommand: vi.fn(async (_id: string, command: string) => ({
+    exitCode: command.includes("workflows/package.json")
+      ? workspace
+        ? 0
+        : 1
+      : skill
+        ? 0
+        : 1,
+    result: "",
+  })),
+  uploadFiles: vi.fn().mockResolvedValue(undefined),
+});
+
 describe("ensureDurableWorkflowSkill", () => {
-  it("stages the skill for an existing project that does not have it", async () => {
-    const sandboxProvider = {
-      executeCommand: vi.fn().mockResolvedValue({ exitCode: 1, result: "" }),
-      uploadFiles: vi.fn().mockResolvedValue(undefined),
-    };
+  it("stages the skill for a workflow project that does not have it", async () => {
+    const sandboxProvider = fakeSandbox({ workspace: true, skill: false });
 
     const staged = await ensureDurableWorkflowSkill({
       sandboxProvider,
@@ -166,14 +190,24 @@ describe("ensureDurableWorkflowSkill", () => {
       "/workspace/project",
     );
   });
+
+  it("never resurrects the skill in a project without a workflows workspace (ADR 0043)", async () => {
+    const sandboxProvider = fakeSandbox({ workspace: false, skill: false });
+
+    const staged = await ensureDurableWorkflowSkill({
+      sandboxProvider,
+      sandboxProviderId: "sandbox-1",
+      projectDir: "/workspace/project",
+    });
+
+    expect(staged).toBe(false);
+    expect(sandboxProvider.uploadFiles).not.toHaveBeenCalled();
+  });
 });
 
 describe("ensureBatchWorkflowSkill", () => {
-  it("stages the skill for an existing project that does not have it", async () => {
-    const sandboxProvider = {
-      executeCommand: vi.fn().mockResolvedValue({ exitCode: 1, result: "" }),
-      uploadFiles: vi.fn().mockResolvedValue(undefined),
-    };
+  it("stages the skill for a workflow project that does not have it", async () => {
+    const sandboxProvider = fakeSandbox({ workspace: true, skill: false });
 
     const staged = await ensureBatchWorkflowSkill({
       sandboxProvider,

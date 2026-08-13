@@ -1,7 +1,16 @@
 "use client";
 
 import type { AgentMessage } from "@catamorphic/react";
-import { ArrowDown, LoaderCircle } from "lucide-react";
+import {
+  ArrowDown,
+  Bot,
+  ChevronRight,
+  LoaderCircle,
+  Pencil,
+  Radio,
+  SquareTerminal,
+  Wrench,
+} from "lucide-react";
 import { useEffect, useState } from "react";
 import Markdown from "react-markdown";
 import remarkGfm from "remark-gfm";
@@ -58,6 +67,11 @@ export interface ChatTimelineProps {
    * editor surface). Without it the chips stay inert.
    */
   onFileClick?: (path: string) => void;
+  /**
+   * Icon URL for a tool name (MCP tools are `server/tool`; the host maps
+   * the server key to its connector icon). Undefined → generic glyph.
+   */
+  resolveToolIcon?: (toolName: string) => string | undefined;
 }
 
 /**
@@ -76,6 +90,7 @@ export function ChatTimeline({
   contentClassName = "",
   onLinkClick,
   onFileClick,
+  resolveToolIcon,
 }: ChatTimelineProps) {
   return (
     <StickToBottom
@@ -98,6 +113,7 @@ export function ChatTimeline({
             message={message}
             onLinkClick={onLinkClick}
             onFileClick={onFileClick}
+            resolveToolIcon={resolveToolIcon}
           />
         ))}
         {activity && (
@@ -147,6 +163,7 @@ function Message({
   message,
   onLinkClick,
   onFileClick,
+  resolveToolIcon,
 }: {
   message: ChatTimelineMessage;
   onLinkClick?: (
@@ -154,6 +171,7 @@ function Message({
     modifiers: { metaKey: boolean; shiftKey: boolean },
   ) => void;
   onFileClick?: (path: string) => void;
+  resolveToolIcon?: (toolName: string) => string | undefined;
 }) {
   const files = changedFiles(message);
   const [entered, setEntered] = useState(false);
@@ -170,6 +188,12 @@ function Message({
       <div className="mb-1 text-[10px] font-semibold uppercase tracking-wider text-fg-faint">
         {message.role === "user" ? "You" : "Agent"}
       </div>
+      {message.role === "assistant" && (
+        <TurnSteps
+          steps={turnSteps(message)}
+          resolveToolIcon={resolveToolIcon}
+        />
+      )}
       {message.role === "user" ? (
         <div className="whitespace-pre-wrap break-words leading-6">
           {message.content}
@@ -232,6 +256,287 @@ function Message({
   );
 }
 
+/** One row of a turn's expandable event log. */
+interface TurnStep {
+  kind: "command" | "file_edit" | "tool" | "subagent" | "background";
+  /** Row header — the technical detail lives here, not on the live line. */
+  label: string;
+  /** Monospace label (commands, paths, unrecognized tool names). */
+  mono?: boolean;
+  /** Tool name as the harness reported it (`server/tool` for MCP). */
+  toolName?: string;
+  /** Preformatted expandable body (tool input/result, full command). */
+  detail?: string;
+}
+
+const STEP_ICONS = {
+  command: SquareTerminal,
+  file_edit: Pencil,
+  tool: Wrench,
+  subagent: Bot,
+  background: Radio,
+} as const;
+
+/**
+ * Friendly step labels for well-known tools, harness-neutral: Claude
+ * Code's built-ins (Read, WebSearch, …), the built-in agent's lowercase
+ * kin (read, websearch, …), and the desktop's workspace tools (identical
+ * names on every harness). MCP tools arrive as "server/tool" and render
+ * as "tool (server)"; anything else falls back to its raw name in mono.
+ */
+const TOOL_STEP_LABELS: Record<string, string> = {
+  // Questions and plans.
+  AskUserQuestion: "Asked you a question",
+  ask_user: "Asked you a question",
+  TodoWrite: "Updated the plan",
+  // Reading and searching the project.
+  Read: "Read files",
+  read: "Read files",
+  Glob: "Searched files",
+  Grep: "Searched files",
+  // The web.
+  WebSearch: "Searched the web",
+  websearch: "Searched the web",
+  WebFetch: "Fetched a page",
+  webfetch: "Fetched a page",
+  // Delegation, skills, and background work.
+  Task: "Ran a subagent",
+  Agent: "Ran a subagent",
+  Skill: "Used a skill",
+  SlashCommand: "Ran a slash command",
+  TaskOutput: "Checked a background task",
+  BashOutput: "Checked a background task",
+  TaskStop: "Stopped a background task",
+  KillShell: "Stopped a background task",
+  // Workspace tools (the host bridge; same names on every harness).
+  run_terminal: "Ran a command",
+  read_terminal: "Read the terminal",
+  write_terminal: "Typed into the terminal",
+  workspace_overview: "Looked at the workspace",
+  read_tab: "Read a tab",
+  open_browser: "Opened a page",
+  browser_snapshot: "Looked at the page",
+  browser_act: "Acted on the page",
+  surface_control: "Managed a surface",
+  open_surface: "Showed you something",
+  point_at: "Pointed at something",
+  clear_pointers: "Stopped pointing",
+  build_app: "Built an app",
+  sync_project: "Synced the project",
+  create_pull_request: "Opened a pull request",
+};
+
+/**
+ * Bookkeeping calls, not work the reader cares about — the title/icon
+ * change is already visible on the chat itself.
+ */
+const HIDDEN_STEP_TOOLS = new Set(["set_title", "set_chat_icon"]);
+
+/** Human header for a tool step; mono marks an unrecognized raw name. */
+function toolStepLabel(toolName: string): { label: string; mono: boolean } {
+  const known = TOOL_STEP_LABELS[toolName];
+  if (known) return { label: known, mono: false };
+  const slash = toolName.indexOf("/");
+  if (slash > 0) {
+    return {
+      label: `${toolName.slice(slash + 1)} (${toolName.slice(0, slash)})`,
+      mono: false,
+    };
+  }
+  return { label: toolName, mono: true };
+}
+
+/** Cap for a step's expanded body; full payloads can be megabytes. */
+const STEP_DETAIL_MAX = 6_000;
+
+function stepDetailText(value: unknown): string | undefined {
+  if (value === undefined || value === null) return undefined;
+  const text =
+    typeof value === "string" ? value : JSON.stringify(value, null, 2);
+  if (!text || text === "{}") return undefined;
+  return text.length > STEP_DETAIL_MAX
+    ? `${text.slice(0, STEP_DETAIL_MAX)}\n… truncated`
+    : text;
+}
+
+/**
+ * The turn's steps, from the persisted per-message event log
+ * (`metadata.events`). The chat keeps its prose calm — this is where the
+ * full commands, file paths, and tool payloads live, on demand.
+ */
+function turnSteps(message: ChatTimelineMessage): TurnStep[] {
+  const events = asRecord(message.metadata)?.events;
+  if (!Array.isArray(events)) return [];
+  const steps: TurnStep[] = [];
+  for (const entry of events) {
+    const event = asRecord(entry);
+    if (!event) continue;
+    const content = typeof event.content === "string" ? event.content : "";
+    const firstLine = content.split("\n", 1)[0]?.trim() ?? "";
+    if (event.type === "command") {
+      steps.push({
+        kind: "command",
+        label: `$ ${firstLine || "(command)"}`,
+        mono: true,
+        detail: stepDetailText(
+          [
+            content.includes("\n") ? content : undefined,
+            stepDetailText(event.toolResult),
+          ]
+            .filter(Boolean)
+            .join("\n\n"),
+        ),
+      });
+    } else if (event.type === "file_edit") {
+      const path = typeof event.filePath === "string" ? event.filePath : "";
+      steps.push({
+        kind: "file_edit",
+        label: `Edited ${path || "a file"}`,
+        mono: true,
+      });
+    } else if (event.type === "tool_call") {
+      const toolName =
+        typeof event.toolName === "string" ? event.toolName : "tool";
+      if (HIDDEN_STEP_TOOLS.has(toolName)) continue;
+      const pretty = toolStepLabel(toolName);
+      const input = stepDetailText(event.toolInput);
+      const result = stepDetailText(event.toolResult);
+      steps.push({
+        kind: "tool",
+        label: pretty.label,
+        mono: pretty.mono,
+        toolName,
+        detail: stepDetailText(
+          [input && `Input:\n${input}`, result && `Result:\n${result}`]
+            .filter(Boolean)
+            .join("\n\n"),
+        ),
+      });
+    } else if (event.type === "subagent" && event.status !== "ended") {
+      steps.push({
+        kind: "subagent",
+        label: `Subagent: ${firstLine || "delegated work"}`,
+      });
+    } else if (event.type === "background" && event.status !== "ended") {
+      steps.push({
+        kind: "background",
+        label: `Background: ${firstLine || "process"}`,
+      });
+    }
+  }
+  return steps;
+}
+
+/**
+ * The expandable event log under an assistant reply: collapsed to a muted
+ * "N steps" line; expanded, each step is a row that itself stays collapsed
+ * (payloads are long and technical) until clicked. MCP tool rows show the
+ * connector's icon when the host can resolve one.
+ */
+function TurnSteps({
+  steps,
+  resolveToolIcon,
+}: {
+  steps: TurnStep[];
+  resolveToolIcon?: (toolName: string) => string | undefined;
+}) {
+  const [expanded, setExpanded] = useState(false);
+  if (steps.length === 0) return null;
+  return (
+    <div className="mb-1.5" data-testid="chat-turn-steps">
+      <button
+        type="button"
+        onClick={() => setExpanded((value) => !value)}
+        className="flex cursor-pointer items-center gap-1 text-[11px] text-fg-faint transition-colors duration-100 hover:text-fg-muted"
+        aria-expanded={expanded}
+        data-testid="chat-turn-steps-toggle"
+      >
+        <ChevronRight
+          className={`size-3 transition-transform duration-150 ${expanded ? "rotate-90" : ""}`}
+        />
+        {steps.length === 1 ? "1 step" : `${steps.length} steps`}
+      </button>
+      {/* Grid-rows tween: the list stays mounted, so the collapse mirrors
+          the expansion exactly. */}
+      <div
+        className={`grid transition-[grid-template-rows] duration-200 ease-[cubic-bezier(0.2,0,0,1)] ${
+          expanded ? "grid-rows-[1fr]" : "grid-rows-[0fr]"
+        }`}
+      >
+        <div className="overflow-hidden">
+          <div className="mt-1 flex flex-col gap-0.5 border-l border-border pl-2.5">
+            {steps.map((step, index) => (
+              <StepRow
+                // Steps are append-only within a message; index is stable.
+                // biome-ignore lint/suspicious/noArrayIndexKey: static list
+                key={index}
+                step={step}
+                iconUrl={
+                  step.toolName ? resolveToolIcon?.(step.toolName) : undefined
+                }
+              />
+            ))}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function StepRow({ step, iconUrl }: { step: TurnStep; iconUrl?: string }) {
+  const [open, setOpen] = useState(false);
+  const Icon = STEP_ICONS[step.kind];
+  const expandable = Boolean(step.detail);
+  return (
+    <div data-testid="chat-step">
+      <button
+        type="button"
+        onClick={expandable ? () => setOpen((value) => !value) : undefined}
+        className={`flex w-full items-center gap-1.5 rounded px-1 py-0.5 text-left text-[11px] text-fg-muted ${
+          expandable
+            ? "cursor-pointer transition-colors duration-100 hover:bg-bg-inset hover:text-fg"
+            : "cursor-default"
+        }`}
+        aria-expanded={expandable ? open : undefined}
+      >
+        {iconUrl ? (
+          <img src={iconUrl} alt="" className="size-3.5 shrink-0 rounded-sm" />
+        ) : (
+          <Icon className="size-3.5 shrink-0 text-fg-faint" />
+        )}
+        <span
+          className={`min-w-0 flex-1 truncate ${step.mono ? "font-mono" : ""}`}
+        >
+          {step.label}
+        </span>
+        {expandable && (
+          <ChevronRight
+            className={`size-3 shrink-0 text-fg-faint transition-transform duration-150 ${open ? "rotate-90" : ""}`}
+          />
+        )}
+      </button>
+      {/* Same grid-rows tween as the step list: payloads animate open and
+          closed instead of popping in and out. */}
+      {step.detail && (
+        <div
+          className={`grid transition-[grid-template-rows] duration-200 ease-[cubic-bezier(0.2,0,0,1)] ${
+            open ? "grid-rows-[1fr]" : "grid-rows-[0fr]"
+          }`}
+        >
+          <div className="overflow-hidden">
+            <pre
+              className="mb-1 ml-6 mt-0.5 max-h-56 overflow-auto whitespace-pre-wrap break-all rounded-md border border-border bg-bg-inset p-2 font-mono text-[11px] leading-4 text-fg-muted"
+              data-testid="chat-step-detail"
+            >
+              {step.detail}
+            </pre>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 /**
  * Derive the visible timeline from raw agent-session messages: hides
  * in-progress assistant placeholders and surfaces them as an activity line.
@@ -251,11 +556,25 @@ export function toTimeline(
   const pending = latestPendingAssistant(persisted);
   const activity =
     pending !== undefined
-      ? (pending.content ?? "Thinking...")
+      ? calmActivity(pending.content)
       : isSending && optimistic.length > 0
         ? "Thinking..."
         : undefined;
   return { messages, activity, questions: pendingQuestions(persisted) };
+}
+
+/**
+ * The live activity line shows only calm verbs ("Working...", "Editing
+ * files..."). If a host streams the upcoming message's body into the
+ * in-progress row, echoing it here would show the same words twice — once
+ * faded beside the spinner, then again as the message itself — so
+ * message-shaped content falls back to a generic verb.
+ */
+function calmActivity(content: string | null | undefined): string {
+  const text = (content ?? "").trim();
+  if (!text) return "Thinking...";
+  if (text.includes("\n") || text.length > 80) return "Working...";
+  return text;
 }
 
 /**

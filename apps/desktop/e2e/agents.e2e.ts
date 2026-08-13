@@ -851,6 +851,19 @@ describe("agents and profiles", () => {
       { timeoutMs: 15_000, label: "chip idle once the command finished" },
     );
 
+    // The agent's terminal is BACKGROUND: a chip on the rail, but no
+    // workspace tab (strip tabs carry their key as data-point-key) —
+    // run_terminal must not move the user's view.
+    await run(`
+      const keys = $$('[data-point-key]')
+        .map((el) => el.getAttribute('data-point-key') ?? '')
+        .filter((key) => key.startsWith('terminal:'));
+      if (keys.length > 0) {
+        throw new Error('run_terminal opened a workspace tab: ' + keys.join(' | '));
+      }
+      return true;
+    `);
+
     // Open the chip as a tab, close the tab — later chats must still get
     // their chips (regression: this used to strand future attachments).
     await run(`
@@ -867,6 +880,14 @@ describe("agents and profiles", () => {
         /Close .*[Tt]erminal/.test(el.getAttribute('aria-label') ?? '')).click();
       return true;
     `);
+    // Closing an agent-controlled terminal's tab backgrounds it: the tab
+    // is gone, but the chip (and the shell behind it) survives.
+    await runWait(
+      `return !$$('[data-point-key]').some((el) =>
+        (el.getAttribute('data-point-key') ?? '').startsWith('terminal:')) &&
+        !!$('[data-testid="surface-chip"]');`,
+      { label: "closed agent terminal returns to a chip" },
+    );
     await run(`pressKey('n', { metaKey: true }); return true;`);
     await runWait(`return !!visibleDock();`, { label: "fresh chat open" });
     await run(`

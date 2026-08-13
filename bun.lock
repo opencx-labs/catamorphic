@@ -108,7 +108,11 @@
         "zod": "^4.1.8",
       },
       "devDependencies": {
+        "@catamorphic/core": "workspace:*",
+        "@catamorphic/db": "workspace:*",
+        "@catamorphic/git": "workspace:*",
         "@types/node": "^26.1.1",
+        "kysely": "^0.29.5",
       },
     },
     "packages/cloudflare": {

@@ -543,6 +543,260 @@ describe("ClaudeCodeAgent", () => {
     });
   });
 
+  it("parks AskUserQuestion as a question turn and resumes the same stream with the answers", async () => {
+    const askInput = {
+      questions: [
+        {
+          question: "Which database should we use?",
+          header: "Database",
+          multiSelect: false,
+          options: [
+            { label: "PostgreSQL", description: "Relational, battle-tested" },
+            { label: "SQLite", description: "Embedded, zero-ops" },
+          ],
+        },
+        {
+          question: "Which auth flow do you prefer?",
+          header: "Auth",
+          multiSelect: false,
+          options: [
+            { label: "Magic links", description: "Passwordless email" },
+            { label: "OAuth", description: "Sign in with a provider" },
+          ],
+        },
+      ],
+    };
+    let decision: unknown;
+    queryMock.mockImplementationOnce((params) => {
+      return (async function* () {
+        yield initMessage("sess-1");
+        yield assistantMessage([
+          { type: "text", text: "A couple of questions first." },
+          {
+            type: "tool_use",
+            id: "ask_1",
+            name: "AskUserQuestion",
+            input: askInput,
+          },
+        ]);
+        // The CLI blocks on the permission round-trip; the stream only
+        // continues once the host resolves it with the user's answers.
+        decision = await params.options?.canUseTool?.("AskUserQuestion", askInput, {
+          signal: new AbortController().signal,
+          toolUseID: "ask_1",
+          requestId: "req_ask",
+        } as never);
+        yield assistantMessage([
+          { type: "text", text: "Great choices — setting that up." },
+        ]);
+        yield successResult;
+      })() as unknown as ReturnType<typeof query>;
+    });
+    const agent = new ClaudeCodeAgent();
+
+    // Turn 1 settles as a question turn: the questions surface as a
+    // `question` event (no raw tool_call step for AskUserQuestion), and
+    // the turn ends so core can persist awaiting_input.
+    const first = await collect(agent, "Build me an app");
+    expect(first).toEqual([
+      { type: "text", content: "A couple of questions first." },
+      {
+        type: "question",
+        questions: [
+          {
+            question: "Which database should we use?",
+            header: "Database",
+            multiSelect: false,
+            options: [
+              {
+                label: "PostgreSQL",
+                description: "Relational, battle-tested",
+              },
+              { label: "SQLite", description: "Embedded, zero-ops" },
+            ],
+          },
+          {
+            question: "Which auth flow do you prefer?",
+            header: "Auth",
+            multiSelect: false,
+            options: [
+              { label: "Magic links", description: "Passwordless email" },
+              { label: "OAuth", description: "Sign in with a provider" },
+            ],
+          },
+        ],
+      },
+      { type: "done" },
+    ]);
+    expect(decision).toBeUndefined();
+
+    // Turn 2 (the panel's formatted answers) resolves the parked call —
+    // the tool RETURNS the answers via updatedInput — and keeps draining
+    // the SAME query: no second query() spawn.
+    const second = await collect(
+      agent,
+      "Which database should we use?\n→ PostgreSQL\n\nWhich auth flow do you prefer?\n→ Magic links",
+    );
+    expect(second).toEqual([
+      { type: "text", content: "Great choices — setting that up." },
+      { type: "done" },
+    ]);
+    expect(queryMock).toHaveBeenCalledTimes(1);
+    expect(decision).toEqual({
+      behavior: "allow",
+      updatedInput: {
+        ...askInput,
+        answers: {
+          "Which database should we use?": "PostgreSQL",
+          "Which auth flow do you prefer?": "Magic links",
+        },
+      },
+    });
+  });
+
+  it("maps a bare reply onto a single parked question and freeform text to response", async () => {
+    const askInput = {
+      questions: [
+        {
+          question: "What should the app be called?",
+          header: "Name",
+          multiSelect: false,
+          options: [
+            { label: "Tracker", description: "Plain and clear" },
+            { label: "Pulse", description: "Snappier" },
+          ],
+        },
+      ],
+    };
+    const decisions: unknown[] = [];
+    queryMock.mockImplementationOnce((params) => {
+      return (async function* () {
+        yield initMessage("sess-1");
+        yield assistantMessage([
+          {
+            type: "tool_use",
+            id: "ask_1",
+            name: "AskUserQuestion",
+            input: askInput,
+          },
+        ]);
+        decisions.push(
+          await params.options?.canUseTool?.("AskUserQuestion", askInput, {
+            signal: new AbortController().signal,
+            toolUseID: "ask_1",
+            requestId: "req_ask_1",
+          } as never),
+        );
+        // A follow-up ask on the same stream re-parks the fresh signal.
+        yield assistantMessage([
+          {
+            type: "tool_use",
+            id: "ask_2",
+            name: "AskUserQuestion",
+            input: askInput,
+          },
+        ]);
+        decisions.push(
+          await params.options?.canUseTool?.("AskUserQuestion", askInput, {
+            signal: new AbortController().signal,
+            toolUseID: "ask_2",
+            requestId: "req_ask_2",
+          } as never),
+        );
+        yield successResult;
+      })() as unknown as ReturnType<typeof query>;
+    });
+    const agent = new ClaudeCodeAgent();
+
+    const first = await collect(agent, "Name my app");
+    expect(first.map((event) => event.type)).toEqual(["question", "done"]);
+
+    // A single question's panel answer arrives bare — it becomes that
+    // question's answer, with no freeform response.
+    const second = await collect(agent, "Pulse");
+    expect(second.map((event) => event.type)).toEqual(["question", "done"]);
+    expect(decisions[0]).toEqual({
+      behavior: "allow",
+      updatedInput: {
+        ...askInput,
+        answers: { "What should the app be called?": "Pulse" },
+      },
+    });
+
+    // The second ask parked again; a dismissal-style typed reply still
+    // reaches the model (answers + freeform response ride together).
+    const third = await collect(
+      agent,
+      "Actually you decide, I trust your judgment.",
+    );
+    expect(third).toEqual([{ type: "done" }]);
+    expect(decisions[1]).toEqual({
+      behavior: "allow",
+      updatedInput: {
+        ...askInput,
+        answers: {
+          "What should the app be called?":
+            "Actually you decide, I trust your judgment.",
+        },
+      },
+    });
+    expect(queryMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("unblocks a parked question when the session is disposed", async () => {
+    const askInput = {
+      questions: [
+        {
+          question: "Proceed?",
+          header: "Confirm",
+          multiSelect: false,
+          options: [
+            { label: "Yes", description: "" },
+            { label: "No", description: "" },
+          ],
+        },
+      ],
+    };
+    let decision: unknown;
+    queryMock.mockImplementationOnce((params) => {
+      return (async function* () {
+        yield initMessage("sess-1");
+        yield assistantMessage([
+          {
+            type: "tool_use",
+            id: "ask_1",
+            name: "AskUserQuestion",
+            input: askInput,
+          },
+        ]);
+        decision = await params.options?.canUseTool?.(
+          "AskUserQuestion",
+          askInput,
+          {
+            signal: new AbortController().signal,
+            toolUseID: "ask_1",
+            requestId: "req_ask",
+          } as never,
+        );
+        yield successResult;
+      })() as unknown as ReturnType<typeof query>;
+    });
+    const agent = new ClaudeCodeAgent();
+
+    await collect(agent, "Do the thing");
+    expect(decision).toBeUndefined();
+
+    await agent.dispose(session);
+    // The parked promise resolved (deny) so the CLI is never left hanging.
+    await vi.waitFor(() => {
+      expect(decision).toEqual({
+        behavior: "deny",
+        message: "The session was closed before the user answered.",
+        interrupt: true,
+      });
+    });
+  });
+
   it("keeps creating (not resuming) when the first turn fails before the CLI boots", async () => {
     const agent = new ClaudeCodeAgent();
     const started = await agent.startSession({

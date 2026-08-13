@@ -1657,7 +1657,11 @@ export function activityLabel(event: AgentEvent): string {
   if (event.type === "question") return "Waiting for your answer...";
   if (event.type === "title") return "Thinking...";
   if (event.type === "error") return event.content ?? "Agent failed";
-  if (event.type === "text") return event.content ?? "Thinking...";
+  // Never the text itself: a preamble held on the in-progress row would
+  // show on the live activity line and then land again as the flushed
+  // message — the same words twice. The prose belongs to the message; the
+  // live line stays a calm verb.
+  if (event.type === "text") return "Writing...";
   return "Thinking...";
 }
 

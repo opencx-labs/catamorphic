@@ -1779,3 +1779,90 @@ Patterned on what best-in-class palettes converged on (Chrome omnibox
   import-a-folder (originals byte-identical, "Import project" commit,
   no scaffold). The native folder picker gets a double-gated e2e seam
   (`CATAMORPHIC_E2E_PICK_FOLDER`).
+
+### 2026-08-14 — Claude Code asks through the panel; step rows read human; the live line never leaks prose
+- **AskUserQuestion is Claude Code's ask_user, wired through `canUseTool`.**
+  The CLI's native question tool was outside the allowlist, so the harness
+  DENIED it — the call showed in the step log but no panel ever appeared.
+  Now the harness parks the tool's permission promise (the VSCode-extension
+  pattern: the permission result's `updatedInput.answers`/`response` is how
+  the tool RETURNS the user's answers), maps the questions into the shared
+  `question` AgentEvent, and **settles the turn** (`question` + `done`) so
+  core persists `awaiting_input` exactly as it does for the built-in agent —
+  same panel, same refresh-safe metadata, one turn at a time. The query's
+  stream is deliberately NOT closed: the next user message resolves the
+  parked promise with the panel's answers and the SAME stream keeps flowing
+  as the answer turn. Ending the turn (rather than holding it open mid-ask)
+  is what keeps core's one-turn-at-a-time model intact; the only tradeoff
+  is that a host restart while a question waits falls back to transcript
+  resume, where the answer arrives as a plain user message — the CLI's own
+  dangling-tool-call handling covers it.
+- **Step rows say what happened, not which symbol did it.** The per-reply
+  event log's tool rows translate every well-known tool into a friendly
+  verb phrase ("Asked you a question", "Updated the plan", "Searched the
+  web", "Ran a command", "Opened a pull request", …) across all harness
+  vocabularies (Claude Code built-ins, the ai-sdk agent's lowercase kin,
+  the workspace tools); MCP tools render "tool (server)" beside their
+  connector icon. Only commands, paths, and unrecognized tool names stay
+  mono — mono now MEANS "raw technical identifier". `set_title` /
+  `set_chat_icon` rows are hidden: the rename/icon is its own visible
+  signal. Both the "N steps" list and each row's payload expand with the
+  SidebarSection grid-rows tween (200ms, `--ease-standard`, content stays
+  mounted so exit mirrors enter).
+- **The live activity line never shows message text.** Core's
+  `activityLabel` was echoing `text` events verbatim, so a preamble showed
+  faded beside the spinner and then landed again as the flushed message —
+  read as a glitch. Text events now label as "Writing..."; and `toTimeline`
+  (both timeline copies) guards the other direction — message-shaped
+  in-progress content (multiline or >80 chars) falls back to "Working..."
+  so no embedder can reintroduce the duplicate.
+- All three landed in BOTH chat-timeline copies (packages/registry source
+  and the installed desktop copy) — the registry copy also gained the
+  step-log surface itself, which had been desktop-only drift.
+
+### 2026-08-14 — Agent terminals are chips first; terminal-experience fixes
+- **run_terminal no longer moves the user's view.** An agent-created
+  terminal starts BACKGROUND: the PTY runs and the chip rides the chat's
+  surfaces rail, but no workspace tab appears and focus stays put. It
+  becomes a tab only when the user clicks its chip or the agent shows it
+  (open_surface). `TerminalEntry.background` gates every tab derivation
+  (`tabbedTerminals`); the entry itself stays mounted, so the stream,
+  title, and busy spinner keep working. Cmd+W/✕ on a tab whose terminal
+  the agent still controls returns it to the background — the shell
+  keeps running, the chip stays; only user-controlled terminals (their
+  own, or after Take control) actually die on close. The agent's own
+  surface_control close forces a real close (main killed the PTY first).
+  workspace_overview still lists background terminals ("background — not
+  open as a tab") so read_tab/terminalId targeting keep working; only a
+  terminal that can't be attributed to a chat opens as a tab (a chip
+  nobody can see would be an invisible terminal).
+- **The window never scrolls.** html/body/#root get `overflow: hidden` +
+  `overscroll-behavior: none` (an app shell, not a document — every
+  scrolling surface owns its scrolling), and the content column + the
+  ghostty container clip overflow so a canvas overshooting mid-refit
+  (fullscreen transitions) can't push the page scrollable.
+- **Read-only terminals scroll.** The take-over overlay's blocking layer
+  re-dispatches wheel events onto the terminal canvas beneath it —
+  view-only scrollback is renderer-side and touches nothing the agent
+  sees. Keys, clicks, and paste stay blocked until Take control (in
+  alternate screen, ghostty's synthesized arrow keys die at the readOnly
+  onData guard).
+- **Double/triple-click selection anchors on the PRESS** (the xterm
+  behavior): word/line highlights on the second/third mousedown and
+  dragging extends by word/line granularity. ghostty-web only selects in
+  its mouseup-time `click` handler, so multi-click-drag was impossible;
+  the wrapper now drives the library's SelectionManager directly
+  (feature-checked internals, capture-phase interception, same pattern
+  as the hollow-cursor shadow — a changed library degrades to stock
+  behavior). Mouse-reporting TUIs keep their raw clicks. Known limit: no
+  edge auto-scroll during a multi-click drag (plain drags still have it).
+- **Agent transcripts start clean.** run_terminal wrote the command into
+  a freshly spawned shell before zsh reached its first prompt; the tty
+  echoed the queued bytes once in canonical mode and ZLE echoed them
+  again — every transcript opened with the command duplicated
+  (reproduced against a real PTY). `waitForShellReady` blocks the write
+  until the first OSC 133 `D` marker (or, shim-less, output settling),
+  which also pins the prompt baseline so the startup prompt can't be
+  mistaken for the command completing. Pinned by real-zsh-PTY tests
+  (terminal-text.pty.test.ts): single echo, one C/D pair per command,
+  bracketed-paste heredocs as one completion, exit codes intact.

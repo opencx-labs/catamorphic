@@ -142,6 +142,14 @@ interface TerminalEntry {
   agentControlled?: boolean;
   /** Agent terminals: process still running (activity indicator). */
   running?: boolean;
+  /**
+   * Agent terminal without a workspace tab: the PTY runs and the chip
+   * rides the chat's surfaces rail, but no tab appears and focus stays
+   * put. Cleared when the user clicks the chip or the agent shows the
+   * terminal via open_surface; closing an agent-controlled terminal tab
+   * sets it back instead of killing the shell.
+   */
+  background?: boolean;
 }
 
 interface EditorEntry {
@@ -252,6 +260,15 @@ const browserTabKey = (localId: string) => `browser:${localId}`;
 const terminalTabKey = (localId: string) => `terminal:${localId}`;
 const editorTabKey = (localId: string) => `editor:${localId}`;
 
+/**
+ * Terminal entries that own a workspace tab. Background agent terminals
+ * (chip-only) are excluded from every tab derivation — the strip, cycling,
+ * splits, next-active — while their entry keeps the PTY mounted and the
+ * chip alive.
+ */
+const tabbedTerminals = (ws: Workspace) =>
+  ws.terminals.filter((terminal) => !terminal.background);
+
 /** A chat's surface is on screen: the floating dock, or its focused tab. */
 const chatVisible = (ws: Workspace, chat: ChatDockEntry) =>
   chat.mode === "partial" ||
@@ -262,7 +279,7 @@ const attachedTabKeys = (ws: Workspace, chatLocalId: string) => [
   ...ws.browsers
     .filter((browser) => browser.chatLocalId === chatLocalId)
     .map((browser) => browserTabKey(browser.localId)),
-  ...ws.terminals
+  ...tabbedTerminals(ws)
     .filter((terminal) => terminal.chatLocalId === chatLocalId)
     .map((terminal) => terminalTabKey(terminal.localId)),
   ...ws.editors
@@ -288,7 +305,7 @@ const orderedTabKeys = (
   const natural = [
     ...ws.tabs.map(tabKey),
     ...ws.browsers.map((browser) => browserTabKey(browser.localId)),
-    ...ws.terminals.map((terminal) => terminalTabKey(terminal.localId)),
+    ...tabbedTerminals(ws).map((terminal) => terminalTabKey(terminal.localId)),
     ...ws.editors.map((editor) => editorTabKey(editor.localId)),
     ...tabChats.map((chat) => chatTabKey(chat.localId)),
   ];
@@ -364,7 +381,24 @@ function AgentControlOverlay({
         className={`pointer-events-none absolute inset-0 ${anim} ring-2 ring-inset ring-accent/40`}
       />
       {!exiting && (
-        <div className="pointer-events-auto absolute inset-0" aria-hidden />
+        /* The blocking layer keeps keys, clicks, and paste away from an
+           agent-driven surface — but view-only SCROLLBACK is harmless
+           and genuinely useful while watching, so wheel events are
+           re-dispatched onto the terminal canvas underneath (ghostty's
+           own wheel handler scrolls the viewport; in alternate-screen
+           mode its synthesized arrow keys die at the readOnly onData
+           guard, so nothing reaches the agent's PTY). Browser panes have
+           no canvas here and stay fully blocked. */
+        <div
+          className="pointer-events-auto absolute inset-0"
+          aria-hidden
+          onWheel={(event) => {
+            const canvas = event.currentTarget
+              .closest("[data-surface-pane]")
+              ?.querySelector("canvas");
+            canvas?.dispatchEvent(new WheelEvent("wheel", event.nativeEvent));
+          }}
+        />
       )}
       <div
         className={`${exiting ? "" : "pointer-events-auto"} z-10 flex ${anim} items-center gap-2.5 rounded-full border border-border bg-bg-raised/95 py-1.5 pl-3 pr-1.5 text-xs text-fg shadow-2xl backdrop-blur-xl`}
@@ -734,7 +768,7 @@ export function App() {
     );
 
   const terminalTabs = (ws: Workspace) =>
-    ws.terminals.map(
+    tabbedTerminals(ws).map(
       (terminal): WorkspaceTab => ({
         kind: "terminal",
         name: terminal.localId,
@@ -952,7 +986,7 @@ export function App() {
     openBrowserTab(url, mode === "side" ? { side: true } : undefined);
   };
 
-  const closeTab = (key: string) =>
+  const closeTab = (key: string, opts?: { force?: boolean }) =>
     updateWorkspace((ws) => {
       // Snapshot enough to bring the tab back with Cmd+Shift+T — plus its
       // split context so a reopened pane re-tiles with its partner.
@@ -1005,6 +1039,27 @@ export function App() {
         const closing = ws.terminals.find(
           (terminal) => terminal.localId === localId,
         );
+        // A terminal the AGENT still controls returns to the background
+        // instead of dying: the tab disappears, the PTY keeps running,
+        // and the chip stays on the chat's rail. Only a terminal the
+        // user controls (their own, or after Take control) actually
+        // closes — and the agent's own surface_control close (`force`)
+        // still removes the entry after main killed the PTY.
+        if (closing?.agentControlled && !opts?.force) {
+          const terminals = ws.terminals.map((terminal) =>
+            terminal.localId === localId
+              ? { ...terminal, background: true }
+              : terminal,
+          );
+          return {
+            ...ws,
+            terminals,
+            activeTabKey:
+              ws.activeTabKey === key
+                ? nextActiveTabKey({ ...ws, terminals }, key, ws.chats)
+                : ws.activeTabKey,
+          };
+        }
         const terminals = ws.terminals.filter(
           (terminal) => terminal.localId !== localId,
         );
@@ -1198,7 +1253,9 @@ export function App() {
     const keys = [
       ...ws.tabs.map(tabKey),
       ...ws.browsers.map((browser) => browserTabKey(browser.localId)),
-      ...ws.terminals.map((terminal) => terminalTabKey(terminal.localId)),
+      ...tabbedTerminals(ws).map((terminal) =>
+        terminalTabKey(terminal.localId),
+      ),
       ...ws.editors.map((editor) => editorTabKey(editor.localId)),
       ...chats
         .filter((chat) => chat.mode === "tab")
@@ -1925,6 +1982,19 @@ export function App() {
           : { ...ws, tabs: [...ws.tabs, { kind: "app", name }] },
       );
     }
+    // A background agent terminal materializes as a tab the moment the
+    // user asks for it (chip click) or the agent shows it (open_surface).
+    if (key.startsWith("terminal:")) {
+      const localId = key.slice("terminal:".length);
+      updateWorkspace((ws) => ({
+        ...ws,
+        terminals: ws.terminals.map((terminal) =>
+          terminal.localId === localId && terminal.background
+            ? { ...terminal, background: false }
+            : terminal,
+        ),
+      }));
+    }
     // Chat surfaces (fork chips) may be minimized bubbles — a chat only
     // occupies a view slot in tab mode, so promote it first.
     if (key.startsWith("chat:")) {
@@ -2205,7 +2275,7 @@ export function App() {
       switch (method) {
         case "overview": {
           const keys = orderedTabKeys(ws, { includeCollapsed: true });
-          const tabs = keys.map((key) => {
+          const tabs: Record<string, unknown>[] = keys.map((key) => {
             const base: Record<string, unknown> = {
               key,
               active: key === ws.activeTabKey,
@@ -2261,6 +2331,23 @@ export function App() {
             const [kind, name] = key.split(":", 2);
             return { ...base, kind, name };
           });
+          // Background agent terminals own no tab, but the agent must
+          // still see them (read_tab, run_terminal terminalId targeting)
+          // — they live on as chips, so list them after the real tabs.
+          for (const entry of ws.terminals) {
+            if (!entry.background) continue;
+            tabs.push({
+              key: terminalTabKey(entry.localId),
+              active: false,
+              kind: "terminal",
+              title: entry.title || "Terminal",
+              running: entry.running ?? true,
+              terminalId: entry.attachSessionId ?? entry.ptySessionId,
+              busy: entry.busy ?? false,
+              agentControlled: entry.agentControlled ?? false,
+              background: true,
+            });
+          }
           const chats = ws.chats.map((chat) => ({
             key: chatTabKey(chat.localId),
             title: chatLabelsRef.current[chat.localId] ?? "Chat",
@@ -2362,17 +2449,21 @@ export function App() {
         }
         case "attachAgentTerminal": {
           const localId = crypto.randomUUID();
+          const chatLocalId = resolveWorkingChat(
+            typeof params.sessionId === "string" ? params.sessionId : undefined,
+          );
           const entry: TerminalEntry = {
             localId,
             title: "Agent terminal",
-            chatLocalId: resolveWorkingChat(
-              typeof params.sessionId === "string"
-                ? params.sessionId
-                : undefined,
-            ),
+            chatLocalId,
             attachSessionId: String(params.terminalId),
             agentControlled: true,
             running: true,
+            // Agent terminals start as chips, not tabs — the user's view
+            // doesn't move because an agent ran a command. Without a chat
+            // to carry the chip there'd be no way to see it at all, so
+            // only then does it open as a (non-focused) tab.
+            background: chatLocalId !== undefined,
           };
           updateWorkspace((current) => ({
             ...current,
@@ -2453,6 +2544,23 @@ export function App() {
             }));
             stepChatAside();
             return { key: browserTabKey(localId) };
+          }
+          // A background agent terminal: open_surface is the agent
+          // explicitly SHOWING it — materialize the tab and focus it.
+          if (target.startsWith("terminal:")) {
+            const localId = target.slice("terminal:".length);
+            if (ws.terminals.some((t) => t.localId === localId)) {
+              updateWorkspace((current) => ({
+                ...current,
+                terminals: current.terminals.map((t) =>
+                  t.localId === localId ? { ...t, background: false } : t,
+                ),
+                activeTabKey: target,
+                split: null,
+              }));
+              stepChatAside();
+              return { key: target };
+            }
           }
           // An existing tab key from workspace_overview: focus it.
           if (
@@ -2545,7 +2653,9 @@ export function App() {
           return { ok: true };
         }
         case "closeSurface": {
-          closeTabRef.current(String(params.key));
+          // The agent's close is final (main already killed an agent
+          // terminal's PTY) — never soft-close back to a background chip.
+          closeTabRef.current(String(params.key), { force: true });
           return { ok: true };
         }
         default:
@@ -2898,7 +3008,10 @@ export function App() {
         </div>
       </aside>
 
-      <main className="relative flex min-w-0 flex-1 flex-col">
+      {/* min-h-0/overflow-hidden: the content column must clip its panes
+          (terminal canvases refit asynchronously and may overshoot for a
+          frame) rather than push the document taller than the window. */}
+      <main className="relative flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
         {/* One chrome row: drag region + sidebar toggle + tabs. */}
         <div className="app-drag flex h-10 shrink-0 items-center gap-1 border-b border-border pl-2 pr-3">
           <span
@@ -3094,6 +3207,7 @@ export function App() {
                 {workspace.terminals.map((terminal) => (
                   <div
                     key={terminal.localId}
+                    data-surface-pane
                     className={paneClass(terminalTabKey(terminal.localId))}
                     style={paneStyle(terminalTabKey(terminal.localId))}
                     {...paneFocusProps(terminalTabKey(terminal.localId))}

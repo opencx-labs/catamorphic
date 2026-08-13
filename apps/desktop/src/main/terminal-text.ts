@@ -134,3 +134,64 @@ export function capOutput(text: string, maxChars: number): string {
   const omitted = text.length - kept.length;
   return `[…${omitted} earlier characters omitted…]\n${kept}`;
 }
+
+/**
+ * Encode a run_terminal command for the PTY. Multi-line commands ride
+ * bracketed paste so the shell takes the whole block as one unit — fed
+ * plainly, every embedded newline would submit a partial command
+ * (heredocs and quoted blocks arrive line-diced).
+ */
+export function encodeCommand(command: string): string {
+  const trimmed = command.replace(/[\r\n]+$/, "");
+  return trimmed.includes("\n")
+    ? `\x1b[200~${trimmed}\x1b[201~\r`
+    : `${trimmed}\r`;
+}
+
+/** How run_terminal observes a freshly spawned shell (see below). */
+export interface ShellReadyProbe {
+  /** The PTY process is still alive. */
+  running(): boolean;
+  /** OSC 133 `D` markers seen so far (each one is a prompt shown). */
+  prompts(): number;
+  /** Total output buffered so far. */
+  bufferLength(): number;
+}
+
+/**
+ * Wait until a freshly spawned shell is ready to READ input before
+ * writing a command into it. Bytes written earlier sit in the tty's
+ * input queue where the kernel echoes them once in canonical mode
+ * (startup), and the line editor echoes them AGAIN when it takes over —
+ * the transcript showed every command twice: a bare command line, then
+ * the prompt+command redraw (reproduced against a real zsh PTY).
+ *
+ * Ready means: the first OSC 133 prompt marker arrived (shim shells,
+ * exact), or — for shells without markers — output has flowed and then
+ * stayed quiet for `idleMs` (the prompt is out, nothing more is coming).
+ * The timeout keeps a pathological shell from stalling run_terminal;
+ * writing late is merely cosmetic, so give up gracefully.
+ */
+export async function waitForShellReady(
+  probe: ShellReadyProbe,
+  opts?: { timeoutMs?: number; idleMs?: number; pollMs?: number },
+): Promise<void> {
+  const timeoutMs = opts?.timeoutMs ?? 10_000;
+  const idleMs = opts?.idleMs ?? 250;
+  const pollMs = opts?.pollMs ?? 25;
+  const deadline = Date.now() + timeoutMs;
+  let lastLength = probe.bufferLength();
+  let lastChange = Date.now();
+  while (Date.now() < deadline) {
+    if (!probe.running()) return;
+    if (probe.prompts() >= 1) return;
+    const length = probe.bufferLength();
+    if (length !== lastLength) {
+      lastLength = length;
+      lastChange = Date.now();
+    } else if (length > 0 && Date.now() - lastChange >= idleMs) {
+      return;
+    }
+    await new Promise<void>((resolve) => setTimeout(resolve, pollMs));
+  }
+}
