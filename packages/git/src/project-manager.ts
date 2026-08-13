@@ -11,71 +11,13 @@ import type {
 } from "./types.js";
 
 /**
- * Blank-project scaffold. A project is a bun workspace so one repo can hold
- * backend workflows and frontend apps: `contracts` carries only types and is
- * the sole package both sides depend on, which is what keeps workflow code
- * (and anything it imports) out of a browser bundle.
+ * Where the project manifest lives. `.catamorphic/` is the project-owned
+ * metadata directory (ADR 0043): the manifest marks a folder as a
+ * Catamorphic project and is the future home of project-scoped config.
+ * Deliberately NOT written when cloning a network remote — imported history
+ * stays pristine until project-scoped config is actually needed.
  */
-const DEFAULT_ROOT_PKG = (name: string) =>
-  JSON.stringify(
-    {
-      name,
-      version: "0.1.0",
-      private: true,
-      workspaces: ["contracts", "workflows", "apps/*"],
-    },
-    null,
-    2,
-  );
-
-const DEFAULT_CONTRACTS_PKG = JSON.stringify(
-  {
-    name: "@project/contracts",
-    version: "0.1.0",
-    private: true,
-    type: "module",
-    types: "./src/index.ts",
-    exports: { ".": { types: "./src/index.ts" } },
-  },
-  null,
-  2,
-);
-
-const DEFAULT_WORKFLOWS_PKG = JSON.stringify(
-  {
-    name: "@project/workflows",
-    version: "0.1.0",
-    private: true,
-    type: "module",
-    dependencies: { "@project/contracts": "workspace:*" },
-  },
-  null,
-  2,
-);
-
-const DEFAULT_TSCONFIG = JSON.stringify(
-  {
-    compilerOptions: {
-      target: "ES2022",
-      module: "ESNext",
-      moduleResolution: "bundler",
-      strict: true,
-      esModuleInterop: true,
-      skipLibCheck: true,
-    },
-    include: ["src"],
-  },
-  null,
-  2,
-);
-
-const DEFAULT_CONTRACTS_INDEX = `/**
- * Shared types between workflows and apps. This package must never contain
- * runtime code: apps bundle what they import, and a types-only package has no
- * JavaScript to pull into the browser.
- */
-export {};
-`;
+export const PROJECT_MANIFEST_PATH = ".catamorphic/project.json";
 
 const SYSTEM_AUTHOR = {
   name: "Catamorphic",
@@ -203,36 +145,19 @@ export class ProjectManager {
       return repo;
     }
 
-    if (!opts?.importExisting) {
+    // No eager workspace scaffold (ADR 0043): a blank project is a git repo,
+    // a manifest, and whatever `initialFiles` (seed skills or a template's
+    // file map) provide. The workflow workspace arrives on demand.
+    const manifestPath = path.join(repoPath, PROJECT_MANIFEST_PATH);
+    const manifestExists = await fs.access(manifestPath).then(
+      () => true,
+      () => false,
+    );
+    if (!manifestExists) {
+      await fs.mkdir(path.dirname(manifestPath), { recursive: true });
       await fs.writeFile(
-        path.join(repoPath, "package.json"),
-        DEFAULT_ROOT_PKG(projectName),
-      );
-      await fs.mkdir(path.join(repoPath, "contracts", "src"), {
-        recursive: true,
-      });
-      await fs.writeFile(
-        path.join(repoPath, "contracts", "package.json"),
-        DEFAULT_CONTRACTS_PKG,
-      );
-      await fs.writeFile(
-        path.join(repoPath, "contracts", "tsconfig.json"),
-        DEFAULT_TSCONFIG,
-      );
-      await fs.writeFile(
-        path.join(repoPath, "contracts", "src", "index.ts"),
-        DEFAULT_CONTRACTS_INDEX,
-      );
-      await fs.mkdir(path.join(repoPath, "workflows", "src"), {
-        recursive: true,
-      });
-      await fs.writeFile(
-        path.join(repoPath, "workflows", "package.json"),
-        DEFAULT_WORKFLOWS_PKG,
-      );
-      await fs.writeFile(
-        path.join(repoPath, "workflows", "tsconfig.json"),
-        DEFAULT_TSCONFIG,
+        manifestPath,
+        `${JSON.stringify({ name: projectName }, null, 2)}\n`,
       );
     }
 

@@ -14,7 +14,13 @@ export {
   pushToRemote,
 } from "./network.js";
 export {
+  type NetworkSyncResult,
+  type NetworkSyncStatus,
+  syncWithNetworkRemote,
+} from "./network-sync.js";
+export {
   generateWorkBranchName,
+  PROJECT_MANIFEST_PATH,
   ProjectManager,
   WORK_BRANCH_PREFIX,
 } from "./project-manager.js";

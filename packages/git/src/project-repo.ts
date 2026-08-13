@@ -16,10 +16,12 @@ const IGNORED_DIRS = new Set(["node_modules", ".git", "dist", ".turbo"]);
 
 /**
  * Dot-directories that are project content despite the hidden-file skip
- * below. `.agents/` holds per-project agent skills (`.agents/skills/…`) that
- * must be committed, uploaded to sandboxes, and listed like any other file.
+ * below. `.agents/` holds per-project agent skills (`.agents/skills/…`) and
+ * `.catamorphic/` holds the project manifest and project-scoped config
+ * (ADR 0043); both must be committed, uploaded to sandboxes, and listed
+ * like any other file.
  */
-const ALLOWED_DOT_DIRS = new Set([".agents"]);
+const ALLOWED_DOT_DIRS = new Set([".agents", ".catamorphic"]);
 
 function assertSafePath(filePath: string): void {
   const normalized = path.normalize(filePath);

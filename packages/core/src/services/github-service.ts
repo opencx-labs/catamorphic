@@ -12,11 +12,14 @@ import {
   exchangeCode,
   GithubApi,
   gitCredentialsFor,
+  isGithubRemoteUrl,
   isTokenStale,
   refreshAccessToken,
+  repoFullNameFromUrl,
 } from "@catamorphic/github";
 import type { Kysely } from "kysely";
 import type { Identity } from "../identity.js";
+import type { CodeHost } from "./code-host.js";
 import type { ProjectsService } from "./projects-service.js";
 
 export interface GithubServiceConfig {
@@ -93,6 +96,61 @@ export class GithubService {
     );
     if (!connection) return { connected: false };
     return { connected: true, login: connection.githubLogin };
+  }
+
+  /**
+   * GitHub as a {@link CodeHost} (ADR 0044) — the shape generic machinery
+   * (remote sync, PR creation) consumes without knowing it is GitHub.
+   */
+  get codeHost(): CodeHost {
+    return {
+      id: "github",
+      handles: (remoteUrl) => isGithubRemoteUrl(remoteUrl),
+      credentials: async (identity) => {
+        try {
+          return gitCredentialsFor(await this.freshToken(identity));
+        } catch {
+          // Not connected / expired: sync proceeds unauthenticated; the
+          // failure surfaces on the operation that actually needed auth.
+          return undefined;
+        }
+      },
+      createPullRequest: async (identity, input) => {
+        const fullName = repoFullNameFromUrl(input.remoteUrl);
+        if (!fullName) {
+          throw new Error(`Not a GitHub remote: ${input.remoteUrl}`);
+        }
+        const api = new GithubApi(await this.freshToken(identity), {
+          fetch: this.fetch,
+        });
+        return api.createPullRequest(fullName, {
+          title: input.title,
+          head: input.head,
+          base: input.base,
+          body: input.body,
+        });
+      },
+      listPullRequests: async (identity, input) => {
+        const fullName = repoFullNameFromUrl(input.remoteUrl);
+        if (!fullName) {
+          throw new Error(`Not a GitHub remote: ${input.remoteUrl}`);
+        }
+        const api = new GithubApi(await this.freshToken(identity), {
+          fetch: this.fetch,
+        });
+        return api.listPullRequests(fullName);
+      },
+      pullRequestFiles: async (identity, input) => {
+        const fullName = repoFullNameFromUrl(input.remoteUrl);
+        if (!fullName) {
+          throw new Error(`Not a GitHub remote: ${input.remoteUrl}`);
+        }
+        const api = new GithubApi(await this.freshToken(identity), {
+          fetch: this.fetch,
+        });
+        return api.pullRequestFiles(fullName, input.number);
+      },
+    };
   }
 
   /**

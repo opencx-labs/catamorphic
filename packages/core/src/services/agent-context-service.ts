@@ -45,7 +45,7 @@ export class AgentContextService {
 
     return [
       "<attached_packages>",
-      "The following NPM packages are attached to this project and installed at runtime. They are available to import from workflows and steps. Use their exported functions and types; do NOT invent new names.",
+      "The following NPM packages are attached to this project and installed at runtime. They are available to import from the project's code (workflows, steps, scripts). Use their exported functions and types; do NOT invent new names.",
       "",
       sections.join("\n\n---\n\n"),
       "</attached_packages>",

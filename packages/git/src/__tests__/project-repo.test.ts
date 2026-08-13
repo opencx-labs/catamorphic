@@ -51,7 +51,7 @@ describe("ProjectRepo", () => {
       const files = await repo.listFiles();
       expect(files).toContain("src/a.ts");
       expect(files).toContain("src/b.ts");
-      expect(files).toContain("package.json");
+      expect(files).toContain(".catamorphic/project.json");
       expect(files.some((f) => f.startsWith(".git"))).toBe(false);
     });
 
@@ -60,7 +60,7 @@ describe("ProjectRepo", () => {
 
       const allFiles = await repo.readAllFiles();
       expect(allFiles["src/x.ts"]).toBe("x-content");
-      expect(allFiles["package.json"]).toBeDefined();
+      expect(allFiles[".catamorphic/project.json"]).toBeDefined();
     });
 
     it("rejects paths with ..", async () => {

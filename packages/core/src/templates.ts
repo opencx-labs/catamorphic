@@ -49,19 +49,8 @@ const CONTRACTS_INDEX = `/**
 export {};
 `;
 
-/**
- * Workspace scaffolding shared by every template. A project is a bun workspace
- * so one repo holds backend workflows and frontend apps, with `contracts` as
- * the only package both sides depend on.
- */
-const workspaceFiles = ({
-  name,
-  dependencies,
-}: {
-  name: string;
-  dependencies?: Record<string, string>;
-}): Record<string, string> => ({
-  "package.json": JSON.stringify(
+const rootWorkspacePkg = (name: string) =>
+  JSON.stringify(
     {
       name,
       version: "1.0.0",
@@ -74,29 +63,51 @@ const workspaceFiles = ({
     },
     null,
     2,
-  ),
-  [PROJECT_CHECK_SCRIPT_PATH]: PROJECT_CHECK_SCRIPT,
-  "contracts/package.json": JSON.stringify(
-    {
-      name: "@project/contracts",
-      version: "1.0.0",
-      private: true,
-      type: "module",
-      types: "./src/index.ts",
-      exports: { ".": { types: "./src/index.ts" } },
-    },
-    null,
-    2,
-  ),
-  "contracts/tsconfig.json": SHARED_TSCONFIG,
-  "contracts/src/index.ts": CONTRACTS_INDEX,
-  "workflows/package.json": pkg({
+  );
+
+const contractsPkg = JSON.stringify(
+  {
+    name: "@project/contracts",
+    version: "1.0.0",
+    private: true,
+    type: "module",
+    types: "./src/index.ts",
+    exports: { ".": { types: "./src/index.ts" } },
+  },
+  null,
+  2,
+);
+
+const workflowsPkg = (dependencies?: Record<string, string>) =>
+  pkg({
     name: "@project/workflows",
     dependencies: {
       "@project/contracts": "workspace:*",
       ...dependencies,
     },
-  }),
+  });
+
+/**
+ * Workspace scaffolding shared by every template. A project is a bun workspace
+ * so one repo holds backend workflows and frontend apps, with `contracts` as
+ * the only package both sides depend on. This is the ONE canonical scaffold:
+ * blank projects don't get it at creation (ADR 0043 — the workspace appears
+ * on demand, installed by templates or by agents via the `catamorphic-projects`
+ * seed skill, whose support files are generated from these same constants).
+ */
+export const workspaceFiles = ({
+  name,
+  dependencies,
+}: {
+  name: string;
+  dependencies?: Record<string, string>;
+}): Record<string, string> => ({
+  "package.json": rootWorkspacePkg(name),
+  [PROJECT_CHECK_SCRIPT_PATH]: PROJECT_CHECK_SCRIPT,
+  "contracts/package.json": contractsPkg,
+  "contracts/tsconfig.json": SHARED_TSCONFIG,
+  "contracts/src/index.ts": CONTRACTS_INDEX,
+  "workflows/package.json": workflowsPkg(dependencies),
   "workflows/tsconfig.json": SHARED_TSCONFIG,
 });
 
@@ -274,14 +285,68 @@ export const BATCH_WORKFLOW_SKILL_PATH =
 export const DURABLE_WORKFLOW_SKILL_PATH =
   ".agents/skills/durable-workflows/SKILL.md";
 
+const SCAFFOLD_SKILL_DIR = ".agents/skills/catamorphic-projects";
+
+/**
+ * The workspace scaffold shipped as support files of the
+ * `catamorphic-projects` seed skill, so an agent can install the workspace
+ * into a project that has none by copying files instead of reconstructing
+ * them from memory. Generated from the same constants as the template
+ * scaffold (`workspaceFiles`) — the two cannot drift.
+ */
+const scaffoldSupportFiles = (): Record<string, string> => ({
+  [`${SCAFFOLD_SKILL_DIR}/files/package.json`]: rootWorkspacePkg("my-project"),
+  [`${SCAFFOLD_SKILL_DIR}/files/check.ts`]: PROJECT_CHECK_SCRIPT,
+  [`${SCAFFOLD_SKILL_DIR}/files/contracts.package.json`]: contractsPkg,
+  [`${SCAFFOLD_SKILL_DIR}/files/tsconfig.json`]: SHARED_TSCONFIG,
+  [`${SCAFFOLD_SKILL_DIR}/files/contracts.index.ts`]: CONTRACTS_INDEX,
+  [`${SCAFFOLD_SKILL_DIR}/files/workflows.package.json`]: workflowsPkg({
+    "@catamorphic/workflow": WORKFLOW_PACKAGE_VERSION,
+  }),
+});
+
 /**
  * Per-project agent skills seeded into every project (templates and blank
  * ones alike). Skills live in the project repo under
  * `.agents/skills/<name>/SKILL.md` (Agent Skills spec) so they are versioned
  * with the code, scoped per project, and read by coding agents from the dev
- * sandbox checkout.
+ * sandbox checkout. The workflow skills are reference material — consulted
+ * only when workflow work happens; seeding them does not make a project a
+ * workflow codebase (ADR 0043).
  */
 export const SEED_SKILLS: Record<string, string> = {
+  [`${SCAFFOLD_SKILL_DIR}/SKILL.md`]: `---
+name: catamorphic-projects
+description: What a Catamorphic project can hold, and how to add the automations/apps workspace to a project that has none. Use when the user asks for their first workflow, automation, or app in this project, or asks what this project is.
+---
+
+# Catamorphic projects
+
+A Catamorphic project is a folder that can hold any kind of work — documents, notes, data, plans, code, automations (workflows), and user-facing apps, in any mix. Never assume the project is about code or automations: read what is actually there first.
+
+Hidden metadata lives in \`.catamorphic/\` (the project manifest and project-scoped config) and \`.agents/\` (these skills). Everything visible in the tree is the user's own work — keep it that way.
+
+## Adding automations or apps to a project that has none
+
+Workflows and apps live in a bun workspace: a root \`package.json\` with \`"workspaces": ["contracts", "workflows", "apps/*"]\`. If \`workflows/package.json\` does not exist yet, install the workspace BEFORE writing the first workflow, by copying this skill's support files (in \`files/\` next to this document) into place:
+
+| Copy | To |
+|---|---|
+| \`files/package.json\` | \`package.json\` (project root) |
+| \`files/check.ts\` | \`scripts/check.ts\` |
+| \`files/contracts.package.json\` | \`contracts/package.json\` |
+| \`files/tsconfig.json\` | \`contracts/tsconfig.json\` AND \`workflows/tsconfig.json\` |
+| \`files/contracts.index.ts\` | \`contracts/src/index.ts\` |
+| \`files/workflows.package.json\` | \`workflows/package.json\` |
+
+Then:
+
+1. Set the root \`package.json\` \`"name"\` to the project's name. If a root \`package.json\` already exists (imported code projects), merge instead of replacing: keep every existing field and add \`workspaces\`, \`scripts.check\`, and the \`@catamorphic/parser\` devDependency.
+2. Run \`bun install\` at the project root.
+3. Consult \`.agents/skills/writing-workflows/SKILL.md\` before writing workflow code, and \`.agents/skills/building-apps/SKILL.md\` before creating an app under \`apps/<name>/\`.
+
+Do NOT install the workspace preemptively — only when automations or apps are actually wanted.
+`,
   ".agents/skills/writing-workflows/SKILL.md": `---
 name: writing-workflows
 description: Writes and edits Catamorphic Workflows as exported defineWorkflow definitions with boundary and batch scopes. Use when creating workflows, adding steps, changing workflow logic, or choosing capabilities.
@@ -980,6 +1045,7 @@ Fix errors from the earliest boundary first because one incorrect return type
 can cascade through every later tuple element. Run the project's TypeScript
 check after each fix and remove temporary error suppressions.
 `,
+  ...scaffoldSupportFiles(),
 };
 
 export const TEMPLATES: ProjectTemplate[] = [

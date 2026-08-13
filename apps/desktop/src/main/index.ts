@@ -285,8 +285,10 @@ app.whenReady().then(async () => {
       window.webContents.send("catamorphic:theme-changed", theme);
     }
   });
-  profileConfig.onSidebarChanged((profileId, config) => {
-    sendToProfile(profileId, "catamorphic:sidebar-config-changed", config);
+  profileConfig.onSidebarChanged((profileId) => {
+    // No payload: the resolved config depends on each window's active
+    // project (layered resolution), so the renderer refetches instead.
+    sendToProfile(profileId, "catamorphic:sidebar-config-changed", null);
   });
   profileConfig.onPrefsChanged((profileId, prefs) => {
     sendToProfile(profileId, "catamorphic:prefs-changed", prefs);
@@ -326,6 +328,8 @@ app.whenReady().then(async () => {
     profilesStore,
     profileConfig,
     windows,
+    async (projectId) =>
+      (await state.current?.projectRoots.get(projectId)) ?? null,
   );
   terminalSupport = registerTerminalSupport(state);
   agentBridge = registerAgentBridge(terminalSupport.agentTerminals);

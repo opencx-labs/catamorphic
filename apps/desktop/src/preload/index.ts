@@ -483,19 +483,40 @@ const api = {
       ipcRenderer.removeListener("catamorphic:bookmarks-changed", handler);
   },
 
+  // --- git + pull requests (dev surfaces) ---
+  gitOverview: (projectId: string): Promise<unknown> =>
+    ipcRenderer.invoke("catamorphic:git-overview", projectId),
+  gitFileDiff: (
+    projectId: string,
+    worktreePath: string,
+    filePath: string,
+    mode: "uncommitted" | "vs-main",
+  ): Promise<unknown> =>
+    ipcRenderer.invoke(
+      "catamorphic:git-file-diff",
+      projectId,
+      worktreePath,
+      filePath,
+      mode,
+    ),
+  prList: (projectId: string): Promise<unknown> =>
+    ipcRenderer.invoke("catamorphic:pr-list", projectId),
+  prFiles: (projectId: string, number: number): Promise<unknown> =>
+    ipcRenderer.invoke("catamorphic:pr-files", projectId, number),
+
   // --- sidebar config ---
-  sidebarConfigGet: (): Promise<unknown> =>
-    ipcRenderer.invoke("catamorphic:sidebar-config-get"),
+  sidebarConfigGet: (projectId?: string): Promise<unknown> =>
+    ipcRenderer.invoke("catamorphic:sidebar-config-get", projectId),
   sidebarConfigFile: (): Promise<string> =>
     ipcRenderer.invoke("catamorphic:sidebar-config-file"),
   sidebarConfigSource: (): Promise<string> =>
     ipcRenderer.invoke("catamorphic:sidebar-config-source"),
   sidebarConfigReset: (): Promise<void> =>
     ipcRenderer.invoke("catamorphic:sidebar-config-reset"),
-  onSidebarConfigChanged: (
-    listener: (config: unknown) => void,
-  ): (() => void) => {
-    const handler = (_event: unknown, config: unknown) => listener(config);
+  // The changed event carries no config: the resolved layers depend on the
+  // renderer's active project, so the renderer refetches on the signal.
+  onSidebarConfigChanged: (listener: () => void): (() => void) => {
+    const handler = () => listener();
     ipcRenderer.on("catamorphic:sidebar-config-changed", handler);
     return () =>
       ipcRenderer.removeListener("catamorphic:sidebar-config-changed", handler);

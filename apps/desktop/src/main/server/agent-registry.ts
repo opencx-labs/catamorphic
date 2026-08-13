@@ -457,6 +457,7 @@ export class DesktopAgentRegistry implements CodingAgentRegistry {
         projectId
           ? this.deps.profileConfig.forProject(projectId)
           : this.deps.profileConfig.forDefaultProfile(),
+      (projectId) => this.deps.profileConfig.projectSidebarStore(projectId),
     );
   }
 }

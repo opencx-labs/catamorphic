@@ -13,6 +13,7 @@ import {
   normalizeKeybindings,
 } from "../keybindings.js";
 import type { ProfileStores } from "../profile-config.js";
+import type { SidebarConfigStore } from "../sidebar-config.js";
 import { normalizeTheme, THEME_PRESETS, THEME_TOKENS } from "../theme.js";
 
 export const DESKTOP_CONFIG_SKILL_PATH =
@@ -20,6 +21,8 @@ export const DESKTOP_CONFIG_SKILL_PATH =
 export const DESKTOP_KEYBINDINGS_WORKSPACE_PATH =
   ".catamorphic/desktop/keybindings.json";
 export const DESKTOP_SIDEBAR_WORKSPACE_PATH = ".catamorphic/desktop/sidebar.js";
+export const DESKTOP_SIDEBAR_LOCAL_WORKSPACE_PATH =
+  ".catamorphic/desktop/sidebar.local.js";
 export const DESKTOP_THEME_WORKSPACE_PATH = ".catamorphic/desktop/theme.json";
 
 /** Every mirror file staged into (and read back from) the sandbox. */
@@ -27,6 +30,7 @@ const MIRROR_PATHS = [
   DESKTOP_CONFIG_SKILL_PATH,
   DESKTOP_KEYBINDINGS_WORKSPACE_PATH,
   DESKTOP_SIDEBAR_WORKSPACE_PATH,
+  DESKTOP_SIDEBAR_LOCAL_WORKSPACE_PATH,
   DESKTOP_THEME_WORKSPACE_PATH,
 ];
 
@@ -72,12 +76,33 @@ app shortcut (Cmd+Q, Cmd+C/V/X/A/Z, Cmd+N).
 
 ## Left sidebar
 
-The sidebar is fully user-defined: \`${DESKTOP_SIDEBAR_WORKSPACE_PATH}\`
-(also refreshed every turn). It is a real JS file exporting an ordered
-list of sections: the list IS the sidebar. Edit it to reorder, retitle,
-**hide** (delete the entry), or invent sections.
+The sidebar is fully user-defined by a JS config file exporting an
+ordered list of sections: the list IS the sidebar. Edit it to reorder,
+retitle, **hide** (delete the entry), or invent sections.
 
-Built-in section types: \`workflows\`, \`apps\`, \`chats\`, \`bookmarks\`.
+The config is LAYERED — the app uses the first of these that exists, so
+pick the layer that matches what the user asked for:
+
+1. \`${DESKTOP_SIDEBAR_LOCAL_WORKSPACE_PATH}\` — this user's view of THIS
+   project only (mirror file, refreshed every turn; empty means no
+   override exists yet — write a full config to create one).
+2. \`.catamorphic/sidebar.js\` — the project's shared default. This is a
+   NORMAL project file: edit it directly with your file tools, and it
+   commits and syncs to the user's collaborators like any other file. It
+   is never created automatically — a project that wants a shared layout
+   opts in by creating it.
+3. \`${DESKTOP_SIDEBAR_WORKSPACE_PATH}\` — this user's global fallback,
+   used in any project without a more specific layer (mirror file,
+   refreshed every turn).
+
+"My sidebar", with no other context, usually means the most specific
+layer that is in effect. A change meant for teammates too belongs in the
+shared \`.catamorphic/sidebar.js\`; "just for me" / "just in this
+project" belongs in \`sidebar.local.js\`.
+
+Built-in section types: \`workflows\`, \`apps\`, \`chats\`, \`bookmarks\`,
+\`git\` (uncommitted changes per git worktree; clicking a file opens its
+diff), \`prs\` (the project's open pull requests).
 Bookmarks are real browser bookmarks: the user creates them with the
 star in the address bar; you never hand-write bookmark data here, you
 only control how the section is presented.
@@ -171,6 +196,10 @@ export class DesktopConfigAgent implements CodingAgentProvider {
     private readonly sandboxProvider: SandboxProvider,
     /** Config is per profile; the session's project names the profile. */
     private readonly storesFor: (projectId?: string) => ProfileStores,
+    /** This user's project-local sidebar override (sidebar.local.js). */
+    private readonly projectSidebarFor: (
+      projectId: string,
+    ) => SidebarConfigStore,
   ) {
     this.name = inner.name;
     if (inner.interrupt) {
@@ -241,6 +270,10 @@ export class DesktopConfigAgent implements CodingAgentProvider {
             2,
           )}\n`,
           [DESKTOP_SIDEBAR_WORKSPACE_PATH]: stores.sidebar.read(),
+          // Empty when the project has no local override (or the session
+          // has no project): the mirror must not fake one into existence.
+          [DESKTOP_SIDEBAR_LOCAL_WORKSPACE_PATH]:
+            this.localSidebarSource(session),
           [DESKTOP_THEME_WORKSPACE_PATH]: `${JSON.stringify(
             stores.theme.load(),
             null,
@@ -263,6 +296,7 @@ export class DesktopConfigAgent implements CodingAgentProvider {
     // swallow a valid keybindings edit made in the same turn.
     await this.applyKeybindings(session);
     await this.applySidebar(session);
+    await this.applySidebarLocal(session);
     await this.applyTheme(session);
     try {
       // Commit even when unchanged: an agent edit that normalizes to the
@@ -309,6 +343,38 @@ export class DesktopConfigAgent implements CodingAgentProvider {
       store.write(source);
     } catch (cause) {
       console.warn("[desktop] Failed to apply sidebar edits:", cause);
+    }
+  }
+
+  /** The staged content of the project-local override mirror. */
+  private localSidebarSource(session: ProviderSession): string {
+    if (!session.projectId) return "";
+    const store = this.projectSidebarFor(session.projectId);
+    return store.exists() ? store.read() : "";
+  }
+
+  private async applySidebarLocal(session: ProviderSession): Promise<void> {
+    if (!session.projectId) return;
+    try {
+      const source = await this.sandboxProvider.downloadFile(
+        session.sandboxId,
+        `${session.workingDirectory}/${DESKTOP_SIDEBAR_LOCAL_WORKSPACE_PATH}`,
+      );
+      const store = this.projectSidebarFor(session.projectId);
+      const current = store.exists() ? store.read() : "";
+      // Empty is the staged "no override" state, never a deletion request.
+      if (source.trim() === "" || source === current) return;
+      // Same guard as the global mirror: a config that doesn't evaluate to
+      // sections would silently collapse the sidebar to the defaults.
+      if (!store.isValidSource(source)) {
+        console.warn("[desktop] Ignoring invalid sidebar.local.js from agent");
+        return;
+      }
+      // The layer watchers (registered when this project's config was
+      // first resolved) pick the write up and broadcast the change.
+      store.write(source);
+    } catch (cause) {
+      console.warn("[desktop] Failed to apply project sidebar edits:", cause);
     }
   }
 

@@ -44,7 +44,7 @@ export interface SidebarItem {
 }
 
 export interface SidebarSectionConfig {
-  type: "workflows" | "apps" | "chats" | "bookmarks" | "custom";
+  type: "workflows" | "apps" | "chats" | "bookmarks" | "git" | "prs" | "custom";
   /** Override the section heading. */
   title?: string;
   /** Start collapsed (default open). */
@@ -91,6 +91,8 @@ export const DEFAULT_SIDEBAR_CONFIG: SidebarConfig = {
     { type: "apps" },
     { type: "chats" },
     { type: "bookmarks" },
+    { type: "git", title: "Changes" },
+    { type: "prs", title: "Pull Requests", collapsed: true },
   ],
 };
 
@@ -108,6 +110,9 @@ export const DEFAULT_SIDEBAR_FILE = `// Catamorphic sidebar configuration.
 //   { type: "chats" }       built-in: this project's chats
 //   { type: "bookmarks" }   built-in: browser bookmarks (the address-bar
 //                           star writes these; stored in bookmarks.json)
+//   { type: "git" }         built-in: uncommitted changes per git worktree
+//                           (click a file to open its diff)
+//   { type: "prs" }         built-in: the project's open pull requests
 //   { type: "custom", title: "…", items: [ … ] }   your own list
 //
 // COMMON ATTRIBUTES
@@ -134,6 +139,8 @@ module.exports = {
     { type: "apps" },
     { type: "chats" },
     { type: "bookmarks" },
+    { type: "git", title: "Changes" },
+    { type: "prs", title: "Pull Requests", collapsed: true },
 
     // Example — uncomment to add your own section:
     // {
@@ -159,6 +166,8 @@ const VALID_TYPES = new Set([
   "apps",
   "chats",
   "bookmarks",
+  "git",
+  "prs",
   "custom",
 ]);
 
@@ -247,6 +256,174 @@ function sanitize(raw: unknown): SidebarConfig {
   return sections.length > 0 ? { sections } : DEFAULT_SIDEBAR_CONFIG;
 }
 
+/** Evaluate a sidebar.js source in the isolated vm context. Throws. */
+function evaluateSidebarModule(source: string, filename: string): unknown {
+  const module = { exports: {} as unknown };
+  const context = vm.createContext({ module, exports: module.exports });
+  vm.runInContext(source, context, { filename, timeout: 250 });
+  return module.exports;
+}
+
+/**
+ * Load + sanitize a sidebar config from an arbitrary file. A file that
+ * fails to evaluate falls back to the built-in defaults (with the parse
+ * error logged) — the same behavior as the profile store, so every layer
+ * of the ADR-0043 resolution treats a broken file identically.
+ */
+export function loadSidebarConfigFile(file: string): SidebarConfig {
+  let source: string;
+  try {
+    source = fs.readFileSync(file, "utf-8");
+  } catch {
+    return DEFAULT_SIDEBAR_CONFIG;
+  }
+  try {
+    return sanitize(evaluateSidebarModule(source, file));
+  } catch (cause) {
+    console.warn(`[desktop] ${file} failed to evaluate:`, cause);
+    return DEFAULT_SIDEBAR_CONFIG;
+  }
+}
+
+/** Which layer of the ADR-0043 resolution produced the config. */
+export type SidebarLayer = "project-local" | "project" | "profile" | "default";
+
+export interface ResolvedSidebarConfig {
+  config: SidebarConfig;
+  layer: SidebarLayer;
+  /** The winning layer's file (absent for the built-in default). */
+  file?: string;
+}
+
+/** This user's local override for one project (layer 1). */
+export function projectLocalSidebarFile(
+  profileDir: string,
+  projectId: string,
+): string {
+  return path.join(profileDir, "sidebar-projects", `${projectId}.js`);
+}
+
+/** The project's shared, git-tracked sidebar (layer 2). */
+export function projectSidebarFile(projectRoot: string): string {
+  return path.join(projectRoot, ".catamorphic", "sidebar.js");
+}
+
+/** The candidate files for a resolution, most specific first. */
+export function sidebarLayerFiles(opts: {
+  profileDir: string;
+  projectId?: string;
+  projectRoot?: string | null;
+}): Array<{ layer: SidebarLayer; file: string }> {
+  const layers: Array<{ layer: SidebarLayer; file: string }> = [];
+  if (opts.projectId) {
+    layers.push({
+      layer: "project-local",
+      file: projectLocalSidebarFile(opts.profileDir, opts.projectId),
+    });
+  }
+  if (opts.projectRoot) {
+    layers.push({
+      layer: "project",
+      file: projectSidebarFile(opts.projectRoot),
+    });
+  }
+  layers.push({
+    layer: "profile",
+    file: path.join(opts.profileDir, "sidebar.js"),
+  });
+  return layers;
+}
+
+/**
+ * Layered sidebar resolution (ADR 0043 era): the FIRST existing file wins —
+ * this user's per-project override, then the project's shared
+ * `.catamorphic/sidebar.js`, then the profile-global `sidebar.js`, then the
+ * built-in default. A file that exists but fails to evaluate does NOT slide
+ * to the next layer (that would silently reroute a typo); it falls back to
+ * the defaults like a broken profile file always has. `layer` names the
+ * file that won even in that case.
+ */
+export function resolveSidebarConfig(opts: {
+  profileDir: string;
+  projectId?: string;
+  projectRoot?: string | null;
+}): ResolvedSidebarConfig {
+  for (const { layer, file } of sidebarLayerFiles(opts)) {
+    if (!fs.existsSync(file)) continue;
+    return { config: loadSidebarConfigFile(file), layer, file };
+  }
+  return { config: DEFAULT_SIDEBAR_CONFIG, layer: "default" };
+}
+
+/**
+ * Watch one config-layer file for changes, tolerating the file — and its
+ * containing directory — not existing yet (`.catamorphic/` is opt-in, and
+ * a profile's `sidebar-projects/` appears on first override). Watches the
+ * file's directory when it exists, and the parent otherwise so we notice
+ * the directory being created. Returns a disposer.
+ */
+export function watchSidebarLayerFile(
+  file: string,
+  onChange: () => void,
+): () => void {
+  const dir = path.dirname(file);
+  const name = path.basename(file);
+  const parent = path.dirname(dir);
+  const dirName = path.basename(dir);
+  let dirWatcher: fs.FSWatcher | undefined;
+  let parentWatcher: fs.FSWatcher | undefined;
+  let debounce: ReturnType<typeof setTimeout> | undefined;
+  let disposed = false;
+
+  const fire = () => {
+    clearTimeout(debounce);
+    debounce = setTimeout(onChange, 100);
+  };
+
+  const watchDir = (): boolean => {
+    if (disposed || dirWatcher) return dirWatcher !== undefined;
+    try {
+      const watcher = fs.watch(dir, (_event, changed) => {
+        if (changed === name) fire();
+      });
+      // The directory can vanish (project deleted, .catamorphic removed);
+      // drop the watcher and let the parent watch re-establish it.
+      watcher.on("error", () => {
+        watcher.close();
+        if (dirWatcher === watcher) dirWatcher = undefined;
+      });
+      dirWatcher = watcher;
+      return true;
+    } catch {
+      return false; // Directory doesn't exist yet; parent watch retries.
+    }
+  };
+
+  watchDir();
+  try {
+    parentWatcher = fs.watch(parent, (_event, changed) => {
+      if (changed !== dirName) return;
+      // The directory was created, removed, or swapped wholesale: rebuild
+      // the inner watch and refresh — resolution may have changed either
+      // way (the file can appear or disappear with its directory).
+      dirWatcher?.close();
+      dirWatcher = undefined;
+      watchDir();
+      fire();
+    });
+    parentWatcher.on("error", () => parentWatcher?.close());
+  } catch {
+    // No parent directory either: nothing to watch until it exists.
+  }
+
+  return () => {
+    disposed = true;
+    clearTimeout(debounce);
+    dirWatcher?.close();
+    parentWatcher?.close();
+  };
+}
+
 export class SidebarConfigStore {
   private watcher: fs.FSWatcher | undefined;
   private debounce: ReturnType<typeof setTimeout> | undefined;
@@ -259,6 +436,10 @@ export class SidebarConfigStore {
       fs.mkdirSync(path.dirname(this.file), { recursive: true });
       fs.writeFileSync(this.file, DEFAULT_SIDEBAR_FILE);
     }
+  }
+
+  exists(): boolean {
+    return fs.existsSync(this.file);
   }
 
   read(): string {
@@ -281,13 +462,11 @@ export class SidebarConfigStore {
    */
   isValidSource(source: string): boolean {
     try {
-      const module = { exports: {} as unknown };
-      const context = vm.createContext({ module, exports: module.exports });
-      vm.runInContext(source, context, { filename: this.file, timeout: 250 });
-      const exported = module.exports as { sections?: unknown };
+      const evaluated = evaluateSidebarModule(source, this.file);
+      const exported = evaluated as { sections?: unknown };
       return (
         Array.isArray(exported?.sections) &&
-        sanitize(module.exports).sections.length > 0 &&
+        sanitize(evaluated).sections.length > 0 &&
         exported.sections.length > 0
       );
     } catch {
@@ -297,13 +476,7 @@ export class SidebarConfigStore {
 
   load(): SidebarConfig {
     try {
-      const module = { exports: {} as unknown };
-      const context = vm.createContext({ module, exports: module.exports });
-      vm.runInContext(this.read(), context, {
-        filename: this.file,
-        timeout: 250,
-      });
-      return sanitize(module.exports);
+      return sanitize(evaluateSidebarModule(this.read(), this.file));
     } catch (cause) {
       console.warn("[desktop] sidebar.js failed to evaluate:", cause);
       return DEFAULT_SIDEBAR_CONFIG;

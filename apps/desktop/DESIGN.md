@@ -1625,3 +1625,157 @@ Patterned on what best-in-class palettes converged on (Chrome omnibox
   the deny fallback for stragglers names run_terminal as the substitute.
   Skill and SlashCommand joined the allowlist; plugins ship both, and a
   tool the model can't call makes their content unreachable.
+
+### 2026-08-13 — Projects hold work, not just workflows (agent-prompt pass)
+- **Principle: Catamorphic Desktop is a place to do work in general.** A
+  project is a folder that can hold any kind of work — documents, notes,
+  data, plans, code, automations, apps, in any mix. Workflows and apps are
+  capabilities a project *may* use, not what a project *is*. Agents must
+  read what's actually in a project before deciding what it's about.
+- Swept every prompt surface handed to agents and reframed the ones that
+  assumed every project is a workflow codebase: the desktop persona
+  (`coding-agent.ts` — "your job is to turn outcomes into workflows" →
+  produce the outcome, whatever its shape), the core workflow-authoring
+  system prompt (`agent-sessions-service.ts` — now opens with the
+  any-kind-of-work framing and scopes the DSL doctrine to "only when you
+  create or edit workflows"; for Claude Code sessions this paragraph is
+  effectively the whole system prompt, so the first sentence matters
+  most), the workspace playbook's Apps bullet ("some projects contain
+  apps"), the ai-sdk baseline (AGENTS.md/skills consulted "when they
+  exist" — no AGENTS.md is ever seeded, so the old wording always
+  dangled), and the attached-packages preambles ("available for the
+  project's code to import", not "for workflows").
+- **Still open:** the claude-code harness passes a raw-string
+  `systemPrompt` (replacing the SDK preset), so those sessions get no
+  desktop persona at all — persona parity across harnesses.
+
+### 2026-08-13 — General-purpose projects: lazy scaffold + `.catamorphic/` (ADR 0043)
+- A blank project is now a git repo + `.catamorphic/project.json` + the
+  hidden seed skills — no visible workspace files. The bun workspace
+  (contracts/workflows/apps) appears on demand: templates carry it, and
+  agents install it via the new `catamorphic-projects` seed skill, whose
+  support files ARE the canonical scaffold (generated from the same
+  constants as the template scaffold — `ProjectManager`'s drifted
+  duplicate blank scaffold is deleted).
+- `.catamorphic/` is the project-owned metadata dir (walker-allowlisted
+  like `.agents/`, which also fixes a latent permanently-dirty-tree
+  asymmetry: `status()` saw dotfiles the commit walker skipped). Cloned
+  imports stay pristine — no manifest is written on `cloneFrom`.
+- Two resurrection bugs closed for non-workflow projects: the per-turn
+  batch/durable skill restore and `syncTypes` (which wrote
+  `workflows/src/catamorphic-triggers.d.ts` + `scripts/check.ts` into ANY
+  project after every settled turn) are both gated on
+  `workflows/package.json` existing.
+
+### 2026-08-13 — Checkpoint commits, remote sync, agent git verbs (ADR 0044)
+- **Every turn that changed files ends in a checkpoint commit** at the
+  point where both harness families converge (sandbox sync-back done /
+  host edits already in the tree), authored "Catamorphic Agent", subject
+  from the user's request, sha stamped on the assistant message
+  (`agent_messages.commit_sha`, previously never written). Sweeps the
+  whole dirty tree — host harnesses under-report changed files, and a
+  checkpoint is "the project as this turn left it", not authorship. A
+  "draft" is now local-commits-not-yet-pushed; deploy already handled
+  clean-but-ahead trees. Considered and rejected: worktree-per-session
+  (every desktop surface points at ONE folder; live visibility is the
+  product — worktrees stay reserved for a future explicit
+  parallel-session feature).
+- **Linked projects sync automatically**: after each settled turn, at
+  boot, and every 10 minutes, `RemoteSyncService` converges local `main`
+  with the remote — push/ff-pull when one side is ahead, clean 3-way
+  merge when diverged, **rescue branch** (`catamorphic/diverged-…`) on
+  merge conflict so no work is ever stranded, and a hard rule that a
+  background sync never touches a dirty tree and never leaves conflict
+  markers.
+- **Not GitHub-tied**: the engine (`syncWithNetworkRemote` in
+  `@catamorphic/git`) knows only URL + credentials; provider specifics
+  live behind core's `CodeHost` seam (credentials + optional
+  capabilities like `createPullRequest`). GitHub is the first
+  implementation; GitLab/Cloudflare/S3-backed git are new
+  implementations, not rewrites.
+- **Agents get git verbs, not raw git**: `sync_project` and
+  `create_pull_request` workspace tools (PR = commit pending work → push
+  fresh branch → open PR via the host), plus a playbook Git bullet:
+  checkpoints are automatic, never commit to save work, prefer a PR when
+  the change is risky / collaborators are active / the user asks for
+  review, and report outcomes in plain language, never git vocabulary.
+- Deliberately deferred to the collaboration slice: PR-first "review
+  mode" (sync holding back `main` while a PR is open) — direct-push is
+  the honest model while desktop projects are single-user.
+
+### 2026-08-13 — Layered sidebar config (project-local → project → profile)
+- Revises 2026-08-01 "Customizable sidebar": with `.catamorphic/` as the
+  project-owned metadata dir (ADR 0043), the sidebar resolves the FIRST
+  existing layer — `profiles/<id>/sidebar-projects/<projectId>.js` (this
+  user's override for one project), `<root>/.catamorphic/sidebar.js`
+  (the project's shared default; a normal git-tracked file that travels
+  with the repo), `profiles/<id>/sidebar.js` (profile-global), built-in
+  default. One format, one eval+sanitize path for every layer
+  (`resolveSidebarConfig` in sidebar-config.ts).
+- **A broken file does not slide to the next layer** — it falls back to
+  the defaults with the parse error logged, exactly like the profile
+  file always has. Silently rerouting to a lower layer on a typo would
+  show a *plausible* sidebar with no hint the override was ignored.
+  `sidebar-config-get` reports which layer won so UI can surface it.
+- **The changed broadcast is a signal, not a payload**: the resolved
+  config now depends on each window's active project, so main can't know
+  what any renderer should show. The renderer refetches, keyed on the
+  active project. Non-profile layer files are watched lazily — first
+  request for a project's config registers watchers that tolerate the
+  file *and* its directory not existing yet (`.catamorphic/` is opt-in).
+- **Agent editability follows the layering**: the shared
+  `.catamorphic/sidebar.js` is edited as a NORMAL project file (file
+  tools, syncs to collaborators — deliberately not a mirror), while two
+  sandbox mirrors cover the personal layers:
+  `.catamorphic/desktop/sidebar.local.js` ↔ this user's view of THIS
+  project (staged empty when no override exists; empty is never a
+  deletion) and `.catamorphic/desktop/sidebar.js` ↔ the global
+  fallback. Both mirrors keep the ≥1-section validity guard and apply
+  independently.
+- Nothing is seeded into projects: a project that wants a shared layout
+  opts in by creating `.catamorphic/sidebar.js`.
+
+### 2026-08-13 — The desktop is a dev shell (ADR 0045)
+- **Engineers are first-class users.** Import a real monorepo and the app
+  behaves like home: the claude-code harness now rides the SDK's
+  `claude_code` preset prompt with host paragraphs APPENDED (a raw string
+  used to replace it — sessions lost Claude Code's own doctrine), and
+  loads `settingSources: ["user","project","local"]`, so a repo's
+  CLAUDE.md, `.claude/` skills/agents/commands/settings work exactly as
+  in the CLI ("user" resolves in the agent's private CLAUDE_CONFIG_DIR —
+  per-agent isolation unchanged). The workspace playbook opens with
+  calibration: users range from non-programmers to engineers; match THIS
+  user; never simplify away technical substance for an engineer.
+- **Worktrees are first-class, not automatic.** 0044's no-worktree-per-
+  session stands (every surface points at ONE folder; live visibility is
+  the product), but deliberately created worktrees are recognized
+  everywhere: discovered, listed with their branch, diffable per
+  worktree. Prompts teach the sharp edge — gitignored files (.env, local
+  config) don't follow a new worktree; agents copy what's needed from
+  the main folder and say so.
+- **Git read surfaces shell out to system git** (`git-view.ts`):
+  worktree list, `-z` status, three-dot name-status — exactly the
+  territory where reimplementation lies. Write paths (checkpoints, sync)
+  stay isomorphic-git. No git binary → `available: false` → one quiet
+  sidebar line.
+- **A new `diff` tab kind**: read-only Monaco DiffEditor (side-by-side,
+  language inferred per side, theme-following) for local diffs; PR files
+  render their unified patch as tinted lines (12% color-mix success/
+  danger). Screen-class tab — remounts cheaply, no keep-mounted.
+- **Sidebar grows "Changes" and "Pull Requests"** built-in sections
+  (PRs collapsed by default): per-worktree changed files with A/M/D/R
+  badges → diff tabs; open PRs (via the CodeHost seam — GitHub first,
+  provider-neutral shapes) expanding to changed-file trees → patch tabs,
+  "Open on GitHub" in the row's ⋯ menu. Non-technical users see quiet
+  empty states and can delete the sections from sidebar config.
+- **Right-click = the ⋯ menu.** Any sidebar row with menu entries opens
+  the same data-driven MenuPortal at the cursor — no second menu system.
+- **"Customize sidebar"** (footer, ShortcutHint-wrapped wand) opens a
+  normal floating chat pre-seeded with the request — pure discovery;
+  agents could always edit the config.
+- **Onboarding is e2e-covered** (`e2e/onboarding.e2e.ts`): blank-project
+  lazy scaffold (manifest + skills committed, no workspace files),
+  the per-turn checkpoint commit loop against real git history, and
+  import-a-folder (originals byte-identical, "Import project" commit,
+  no scaffold). The native folder picker gets a double-gated e2e seam
+  (`CATAMORPHIC_E2E_PICK_FOLDER`).

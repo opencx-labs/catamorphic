@@ -39,6 +39,8 @@ export interface AppHandle {
 export interface LaunchOpts {
   /** Reuse an existing userData dir (relaunch scenarios). */
   userDataDir?: string;
+  /** Extra environment variables for the app process (e2e seams). */
+  env?: Record<string, string>;
 }
 
 export async function launchApp(opts: LaunchOpts = {}): Promise<AppHandle> {
@@ -65,6 +67,7 @@ export async function launchApp(opts: LaunchOpts = {}): Promise<AppHandle> {
         ELECTRON_RUN_AS_NODE: undefined,
         CATAMORPHIC_E2E_DATA_DIR: userDataDir,
         CATAMORPHIC_E2E_FAKE_AGENT: "1",
+        ...opts.env,
       },
       stdio: ["ignore", "pipe", "pipe"],
     },

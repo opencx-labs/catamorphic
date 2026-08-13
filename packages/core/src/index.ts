@@ -57,6 +57,11 @@ export {
   AppVersionNotFoundError,
   type AppVersionStatus,
 } from "./services/apps-service.js";
+export type {
+  CodeHost,
+  PullRequestFile,
+  PullRequestSummary,
+} from "./services/code-host.js";
 export {
   type AgentExecutionMode,
   type CodingAgentRegistry,
@@ -139,6 +144,12 @@ export {
   type RateReservationResult,
   RateReservationsService,
 } from "./services/rate-reservations-service.js";
+export {
+  ProjectHasNoRemoteError,
+  PullRequestsUnsupportedError,
+  type RemoteSyncOutcome,
+  RemoteSyncService,
+} from "./services/remote-sync-service.js";
 export {
   DEFAULT_RUN_RETENTION_DAYS,
   type PurgeResult,

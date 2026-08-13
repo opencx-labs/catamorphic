@@ -44,6 +44,15 @@ export type AppBuilder = (
   error?: string;
 }>;
 
+/** Remote-sync + pull-request operations; wired to core after boot (ADR 0044). */
+export interface GitBridge {
+  sync(projectId: string): Promise<{ status: string; rescueBranch?: string }>;
+  createPullRequest(
+    projectId: string,
+    input: { title: string; body?: string },
+  ): Promise<{ url: string; number: number; branch: string }>;
+}
+
 export interface WorkspaceToolkit {
   tools: ExtraTool[];
   /** Late-bound: the chat store exists only after the server boots. */
@@ -52,6 +61,8 @@ export interface WorkspaceToolkit {
   setChatIconSetter(setter: ChatIconSetter): void;
   /** Late-bound: the apps service exists only after the server boots. */
   setAppBuilder(builder: AppBuilder): void;
+  /** Late-bound: remote sync lives in core, which exists only after boot. */
+  setGitBridge(git: GitBridge): void;
 }
 
 const TRANSCRIPT_MESSAGE_CAP = 40;
@@ -63,6 +74,7 @@ export function buildWorkspaceToolkit(
   let readChatTranscript: ChatTranscriptReader | null = null;
   let setChatIcon: ChatIconSetter | null = null;
   let buildApp: AppBuilder | null = null;
+  let gitBridge: GitBridge | null = null;
 
   const tools: ExtraTool[] = [
     {
@@ -399,6 +411,41 @@ export function buildWorkspaceToolkit(
       },
     },
     {
+      name: "sync_project",
+      description:
+        "Sync this project with its linked remote repository (e.g. GitHub) now: pull new remote commits, push local checkpoints. Sync also runs automatically after your turns — call this when the user asks to sync/push/pull/share changes, or when you need the freshest remote state before working. Never run raw git push/pull in a terminal for a linked project; this tool applies the safe policy. Outcomes: up-to-date, pushed, pulled, merged (histories combined cleanly), deferred (unsaved edits in the tree; retried automatically), diverged (automatic merge conflicted — local work was pushed to a rescue branch on the remote; tell the user and offer a pull request from it), no-remote (project isn't linked to a remote).",
+      parameters: {},
+      execute: async (_input, ctx) => {
+        if (!gitBridge) throw new Error("Remote sync is not available yet.");
+        return gitBridge.sync(ctx.projectId);
+      },
+    },
+    {
+      name: "create_pull_request",
+      description:
+        "Propose the project's current changes for review: commits any pending edits, pushes them to a new branch on the linked remote (e.g. GitHub), and opens a pull request. Use this instead of syncing straight to the main branch when the change is risky, collaborators are active on this project, or the user asks for review. Returns the PR URL — share it with the user (open_surface can open it).",
+      parameters: {
+        title: z
+          .string()
+          .min(1)
+          .max(120)
+          .describe("PR title: a concise, imperative summary of the change"),
+        body: z
+          .string()
+          .optional()
+          .describe("PR description (markdown): what changed and why"),
+      },
+      execute: async (input, ctx) => {
+        if (!gitBridge) {
+          throw new Error("Pull requests are not available yet.");
+        }
+        return gitBridge.createPullRequest(ctx.projectId, {
+          title: String(input.title),
+          ...(typeof input.body === "string" ? { body: input.body } : {}),
+        });
+      },
+    },
+    {
       name: "surface_control",
       description:
         "Manage a browser tab or terminal you control: 'release' hands it to the user once you're done driving it (do this whenever you finish a page or an interactive command; the tab stays open for them); 'reclaim' takes a surface back after the user took over (only when your task still needs it, and if they're actively using it, ask first); 'close' closes the tab entirely (terminals also end their process). Close surfaces that were only scaffolding; release ones the user will want.",
@@ -435,6 +482,9 @@ export function buildWorkspaceToolkit(
     },
     setAppBuilder(builder) {
       buildApp = builder;
+    },
+    setGitBridge(git) {
+      gitBridge = git;
     },
   };
 }

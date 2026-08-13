@@ -179,7 +179,9 @@ describe("ClaudeCodeAgent", () => {
     expect(options.model).toBe("claude-opus-4-6");
     expect(options.effort).toBe("medium");
     expect(options.permissionMode).toBe("acceptEdits");
-    expect(options.settingSources).toEqual([]);
+    // A real Claude Code shell: repo CLAUDE.md/.claude and the agent-home's
+    // user settings are recognized, exactly like the CLI.
+    expect(options.settingSources).toEqual(["user", "project", "local"]);
     expect(options.allowedTools).toContain("Bash");
     // Custom env is merged over process.env, not a replacement.
     expect(options.env?.CLAUDE_CONFIG_DIR).toBe("/accounts/a1");
@@ -516,7 +518,12 @@ describe("ClaudeCodeAgent", () => {
     let options = lastQueryOptions();
     expect(options.sessionId).toBe(startedId);
     expect(options.resume).toBeUndefined();
-    expect(options.systemPrompt).toBe("You are the Catamorphic project agent.");
+    // Host instructions APPEND to the claude_code preset, never replace it.
+    expect(options.systemPrompt).toEqual({
+      type: "preset",
+      preset: "claude_code",
+      append: "You are the Catamorphic project agent.",
+    });
 
     // Later turns resume the transcript the first turn created.
     queryMock.mockReturnValueOnce(
@@ -528,7 +535,12 @@ describe("ClaudeCodeAgent", () => {
     options = lastQueryOptions();
     expect(options.resume).toBe(startedId);
     expect(options.sessionId).toBeUndefined();
-    expect(options.systemPrompt).toBe("You are the Catamorphic project agent.");
+    // Host instructions APPEND to the claude_code preset, never replace it.
+    expect(options.systemPrompt).toEqual({
+      type: "preset",
+      preset: "claude_code",
+      append: "You are the Catamorphic project agent.",
+    });
   });
 
   it("keeps creating (not resuming) when the first turn fails before the CLI boots", async () => {

@@ -22,6 +22,7 @@ import {
   type UpdateConnectionInput,
 } from "./connections-store.js";
 import type { ConnectorsService } from "./connectors.js";
+import { type GitDiffMode, gitFileDiff, gitOverview } from "./git-view.js";
 import type { WindowProfileRegistry } from "./index.js";
 import { type Keybindings, normalizeKeybindings } from "./keybindings.js";
 import type { McpAppsService } from "./mcp-apps.js";
@@ -669,6 +670,14 @@ export function registerIpcHandlers(
       event,
       opts?: { title?: string; defaultPath?: string },
     ): Promise<string | null> => {
+      // E2E: CDP cannot drive the native folder dialog — a seeded path
+      // stands in for the user's pick so import flows run end to end.
+      if (
+        process.env.CATAMORPHIC_E2E_DATA_DIR &&
+        process.env.CATAMORPHIC_E2E_PICK_FOLDER
+      ) {
+        return process.env.CATAMORPHIC_E2E_PICK_FOLDER;
+      }
       const window = BrowserWindow.fromWebContents(event.sender);
       if (!window) return null;
       const result = await dialog.showOpenDialog(window, {
@@ -683,6 +692,64 @@ export function registerIpcHandlers(
   ipcMain.handle("catamorphic:reveal-folder", (_event, folderPath: string) => {
     if (path.isAbsolute(folderPath)) shell.openPath(folderPath);
   });
+
+  // --- git + pull requests (the dev-grade surfaces: Changes, PRs, diffs) ---
+
+  ipcMain.handle(
+    "catamorphic:git-overview",
+    async (_event, projectId: string) => {
+      const rootPath = await state.current?.projectRoots.get(projectId);
+      if (!rootPath) return { available: false, worktrees: [] };
+      return gitOverview(rootPath);
+    },
+  );
+
+  ipcMain.handle(
+    "catamorphic:git-file-diff",
+    async (
+      _event,
+      projectId: string,
+      worktreePath: string,
+      filePath: string,
+      mode: GitDiffMode,
+    ) => {
+      if (mode !== "uncommitted" && mode !== "vs-main") {
+        throw new Error(`Unknown diff mode: ${String(mode)}`);
+      }
+      const rootPath = await state.current?.projectRoots.get(projectId);
+      if (!rootPath) throw new Error("Unknown project");
+      // Only diff inside the project's own worktrees. Worktrees may live
+      // OUTSIDE the project root, so this is an allowlist from `git
+      // worktree list`, not a path-prefix check.
+      const overview = await gitOverview(rootPath);
+      if (!overview.worktrees.some((tree) => tree.path === worktreePath)) {
+        throw new Error("Not a worktree of this project");
+      }
+      return gitFileDiff(worktreePath, filePath, mode);
+    },
+  );
+
+  ipcMain.handle("catamorphic:pr-list", (_event, projectId: string) => {
+    const server = state.current;
+    if (!server) return [];
+    return server.catamorphic.core.remoteSync.listPullRequests(
+      identity,
+      projectId,
+    );
+  });
+
+  ipcMain.handle(
+    "catamorphic:pr-files",
+    (_event, projectId: string, number: number) => {
+      const server = state.current;
+      if (!server) throw new Error("Server not running");
+      return server.catamorphic.core.remoteSync.pullRequestFiles(
+        identity,
+        projectId,
+        Number(number),
+      );
+    },
+  );
 
   // --- GitHub device flow ---
   // The flow lives in the main process: it opens the system browser and

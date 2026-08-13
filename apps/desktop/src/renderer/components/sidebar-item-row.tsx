@@ -104,9 +104,21 @@ export function SidebarItemRow({
       : undefined;
 
   return (
+    // biome-ignore lint/a11y/noStaticElementInteractions: right-click mirrors the row's ⋯ button, which stays keyboard-reachable
     <div
       className="group relative flex h-7 items-center rounded-md transition-colors duration-150 hover:bg-bg-overlay/60"
       data-point-key={`sidebar:${label}`}
+      // Right-click = the ⋯ menu, at the cursor. Same entries, same
+      // portal — two paths into one menu, never two menus.
+      onContextMenu={
+        menu && menu.length > 0 && !renaming
+          ? (event) => {
+              event.preventDefault();
+              setPosition({ x: event.clientX, y: event.clientY });
+              setOpen(true);
+            }
+          : undefined
+      }
     >
       {renaming ? (
         <input
@@ -181,8 +193,9 @@ export function SidebarItemRow({
 /**
  * Portal-rendered so the sidebar's scroll container can't clip it — the
  * same lesson ShortcutHint learned (DOM checks pass while pixels clip).
+ * Shared with other sidebar rows (PRs) that need the same ⋯ menu.
  */
-function MenuPortal({
+export function MenuPortal({
   position,
   entries,
   onPick,

@@ -270,6 +270,61 @@ export interface BookmarksChange {
   pinned: Bookmark[];
 }
 
+/** Mirror of main/git-view.ts shapes (the renderer never imports main). */
+export interface GitChangedFile {
+  path: string;
+  kind: "added" | "modified" | "deleted" | "renamed";
+  /** Set when kind is "renamed". */
+  previousPath?: string;
+}
+
+export interface GitWorktree {
+  path: string;
+  branch: string | null;
+  isMain: boolean;
+  /** Uncommitted changes in this worktree (staged + unstaged + untracked). */
+  changes: GitChangedFile[];
+  /** For non-main worktrees: files changed on this branch vs main (3-dot). */
+  vsMain?: GitChangedFile[];
+}
+
+export interface GitOverview {
+  available: boolean;
+  worktrees: GitWorktree[];
+}
+
+export type GitDiffMode = "uncommitted" | "vs-main";
+
+export interface GitFileDiff {
+  path: string;
+  before: string;
+  after: string;
+  binary: boolean;
+}
+
+/** Mirror of core's host-neutral PR shapes. */
+export interface PullRequestSummary {
+  number: number;
+  title: string;
+  url: string;
+  author: string;
+  head: string;
+  base: string;
+  draft: boolean;
+  updatedAt: string;
+}
+
+export interface PullRequestFile {
+  path: string;
+  /** added | modified | removed | renamed | … */
+  status: string;
+  additions: number;
+  deletions: number;
+  /** Unified-diff hunk text; null for binary or oversized files. */
+  patch: string | null;
+  previousPath?: string;
+}
+
 export type SidebarAction =
   | "open"
   | "open-tab"
@@ -295,7 +350,7 @@ export interface SidebarItem {
 }
 
 export interface SidebarSectionConfig {
-  type: "workflows" | "apps" | "chats" | "bookmarks" | "custom";
+  type: "workflows" | "apps" | "chats" | "bookmarks" | "git" | "prs" | "custom";
   title?: string;
   collapsed?: boolean;
   items?: SidebarItem[];
@@ -305,6 +360,18 @@ export interface SidebarSectionConfig {
 
 export interface SidebarConfig {
   sections: SidebarSectionConfig[];
+}
+
+/**
+ * Which layer of the layered resolution produced the config: this user's
+ * per-project override, the project's shared `.catamorphic/sidebar.js`,
+ * the profile-global `sidebar.js`, or the built-in default.
+ */
+export type SidebarLayer = "project-local" | "project" | "profile" | "default";
+
+export interface ResolvedSidebarConfig {
+  config: SidebarConfig;
+  layer: SidebarLayer;
 }
 
 export type ThemeToken =
@@ -620,13 +687,22 @@ export interface CatamorphicDesktopApi {
   themeFile: () => Promise<string>;
   onThemeChanged: (listener: (theme: ResolvedTheme) => void) => () => void;
 
-  sidebarConfigGet: () => Promise<SidebarConfig>;
+  gitOverview: (projectId: string) => Promise<GitOverview>;
+  gitFileDiff: (
+    projectId: string,
+    worktreePath: string,
+    filePath: string,
+    mode: GitDiffMode,
+  ) => Promise<GitFileDiff>;
+  prList: (projectId: string) => Promise<PullRequestSummary[]>;
+  prFiles: (projectId: string, number: number) => Promise<PullRequestFile[]>;
+
+  sidebarConfigGet: (projectId?: string) => Promise<ResolvedSidebarConfig>;
   sidebarConfigFile: () => Promise<string>;
   sidebarConfigSource: () => Promise<string>;
   sidebarConfigReset: () => Promise<void>;
-  onSidebarConfigChanged: (
-    listener: (config: SidebarConfig) => void,
-  ) => () => void;
+  /** Change signal only — refetch with the active project to resolve. */
+  onSidebarConfigChanged: (listener: () => void) => () => void;
 }
 
 declare global {

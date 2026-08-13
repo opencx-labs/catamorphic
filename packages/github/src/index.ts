@@ -1,4 +1,10 @@
-export { GithubApi, type GithubApiOptions, gitCredentialsFor } from "./api.js";
+export {
+  GithubApi,
+  type GithubApiOptions,
+  gitCredentialsFor,
+  isGithubRemoteUrl,
+  repoFullNameFromUrl,
+} from "./api.js";
 export {
   buildAuthorizeUrl,
   buildInstallationUrl,
@@ -14,6 +20,8 @@ export {
   GithubApiError,
   type GithubAppConfig,
   GithubAuthError,
+  type GithubPullRequest,
+  type GithubPullRequestFile,
   type GithubRepo,
   type GithubTokenSet,
   type GithubTokenStore,

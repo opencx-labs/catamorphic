@@ -61,6 +61,31 @@ export interface GithubRepo {
   pushedAt: string | null;
 }
 
+export interface GithubPullRequest {
+  number: number;
+  title: string;
+  url: string;
+  author: string;
+  /** Head branch name. */
+  head: string;
+  /** Base branch name. */
+  base: string;
+  draft: boolean;
+  updatedAt: string;
+}
+
+export interface GithubPullRequestFile {
+  path: string;
+  /** added | modified | removed | renamed | … (GitHub's status values). */
+  status: string;
+  additions: number;
+  deletions: number;
+  /** Unified-diff hunk text; null for binary or oversized files. */
+  patch: string | null;
+  /** Set when status is "renamed". */
+  previousPath?: string;
+}
+
 /**
  * A stored connection: the token set plus the GitHub identity it belongs to.
  * The login is denormalized so hosts can render "connected as X" without an

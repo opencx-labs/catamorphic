@@ -109,7 +109,24 @@ const tracer = getTracer("@catamorphic/core");
 export const INTERRUPTED_TURN_MESSAGE =
   "This response was interrupted before it finished. Send a new message to continue.";
 
-const WORKFLOW_AUTHORING_SYSTEM_PROMPT = `Every workflow is an exported defineWorkflow(({ defineBoundary, defineBatch }) => ({ steps })) value; runs execute ordered boundary and batch scopes against an immutable deployment, with continuation state persisted in Postgres. There is no "use workflow" directive — IO and business operations live in "use step" functions called from boundary run bodies. Cancellation is a host-issued terminal control declared with controls: { cancel: true }, never a BoundaryContext transition. A workflow may subscribe to host-defined trigger kinds with triggers: [trigger("kind", config)] — the kind name must be a string literal, the config a constant expression, both typed by the generated workflows/src/catamorphic-triggers.d.ts; the fired payload becomes the first step's input. Only exported defineBatchStep calls inside defineBatch.process are physically coalesced. For authoring primitives, use the project's established SaaS wrapper when present; otherwise use @catamorphic/workflow. Never create local copies. Consult .agents/skills/writing-workflows/SKILL.md, .agents/skills/durable-workflows/SKILL.md, and .agents/skills/batch-workflows/SKILL.md, when present, before creating or restructuring workflows.`;
+/**
+ * Author on turn-checkpoint commits — distinct from human commits and from
+ * the system author used for generated-file syncs, so history reads honestly.
+ */
+const CHECKPOINT_AUTHOR = {
+  name: "Catamorphic Agent",
+  email: "agent@catamorphic.dev",
+};
+
+/** First line of the user's request, trimmed into a commit subject. */
+function checkpointMessage(userMessage: string): string {
+  const firstLine = userMessage.split("\n", 1)[0]?.trim() ?? "";
+  const subject =
+    firstLine.length > 68 ? `${firstLine.slice(0, 67).trimEnd()}…` : firstLine;
+  return subject ? `Agent: ${subject}` : "Agent checkpoint";
+}
+
+const WORKFLOW_AUTHORING_SYSTEM_PROMPT = `A Catamorphic project is a folder that can hold any kind of work — documents, notes, data, code, automations (workflows), and apps, in any mix. Read what is actually in the project before assuming what it is about; many projects contain no workflows at all. The rules below apply only when you create or edit workflows: Every workflow is an exported defineWorkflow(({ defineBoundary, defineBatch }) => ({ steps })) value; runs execute ordered boundary and batch scopes against an immutable deployment, with continuation state persisted in Postgres. There is no "use workflow" directive — IO and business operations live in "use step" functions called from boundary run bodies. Cancellation is a host-issued terminal control declared with controls: { cancel: true }, never a BoundaryContext transition. A workflow may subscribe to host-defined trigger kinds with triggers: [trigger("kind", config)] — the kind name must be a string literal, the config a constant expression, both typed by the generated workflows/src/catamorphic-triggers.d.ts; the fired payload becomes the first step's input. Only exported defineBatchStep calls inside defineBatch.process are physically coalesced. For authoring primitives, use the project's established SaaS wrapper when present; otherwise use @catamorphic/workflow. Never create local copies. Consult .agents/skills/writing-workflows/SKILL.md, .agents/skills/durable-workflows/SKILL.md, and .agents/skills/batch-workflows/SKILL.md, when present, before creating or restructuring workflows.`;
 
 export function buildAgentSystemPrompt({
   systemPrompt,
@@ -170,6 +187,14 @@ async function ensureWorkflowSkill({
   if (!content) {
     throw new Error(`Built-in workflow skill '${skillPath}' is not configured`);
   }
+
+  // Only projects with a workflows workspace get the skill restored — a
+  // docs-only project that deleted it must not have it resurrect (ADR 0043).
+  const workspace = await sandboxProvider.executeCommand(
+    sandboxProviderId,
+    `test -f ${shellQuote(`${projectDir}/workflows/package.json`)}`,
+  );
+  if (workspace.exitCode !== 0) return false;
 
   const absoluteSkillPath = `${projectDir}/${skillPath}`;
   const exists = await sandboxProvider.executeCommand(
@@ -1023,6 +1048,15 @@ export class AgentSessionsService {
           )
         : hostChangedFiles(events, anchor.providerSession.workingDirectory);
 
+      // Checkpoint commit (ADR 0044): both harness families converge here —
+      // sandbox edits just synced back, host edits are already in the tree.
+      // Sweeps ALL dirty state (host harnesses under-report changed files);
+      // failures log and never break the turn.
+      const commitSha =
+        changedFiles.length > 0
+          ? await this.checkpointTurn(identity, projectId, message)
+          : null;
+
       const questionEvent = [...events]
         .reverse()
         .find((event) => event.type === "question");
@@ -1079,7 +1113,11 @@ export class AgentSessionsService {
 
       const row = await this.db
         .updateTable("agent_messages")
-        .set({ ...(content === undefined ? {} : { content }), metadata })
+        .set({
+          ...(content === undefined ? {} : { content }),
+          ...(commitSha ? { commit_sha: commitSha } : {}),
+          metadata,
+        })
         .where("id", "=", assistantMessageId)
         .returningAll()
         .executeTakeFirstOrThrow();
@@ -1484,6 +1522,42 @@ export class AgentSessionsService {
       sandboxProviderId,
       projectDir: this.projectDir(),
     });
+  }
+
+  /**
+   * Commit the dev tree as this turn's checkpoint (ADR 0044). Returns the
+   * commit sha (stamped on the assistant message), null when the tree was
+   * clean or the commit failed — a checkpoint must never break a turn.
+   */
+  private async checkpointTurn(
+    identity: Identity,
+    projectId: string,
+    userMessage: string,
+  ): Promise<string | null> {
+    try {
+      const repo = await this.projectManager.openDev(
+        identity.tenantId,
+        projectId,
+        identity.externalUserId,
+      );
+      try {
+        const status = await repo.status();
+        if (!status.dirty) return null;
+        return await repo.commit(
+          checkpointMessage(userMessage),
+          CHECKPOINT_AUTHOR,
+        );
+      } finally {
+        await repo.dispose();
+      }
+    } catch (error) {
+      console.warn(
+        `[catamorphic] turn checkpoint commit failed: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      );
+      return null;
+    }
   }
 
   // --- Plugin docs for the agent ---

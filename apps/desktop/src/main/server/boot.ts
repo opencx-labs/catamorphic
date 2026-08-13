@@ -130,7 +130,15 @@ export async function startEmbeddedServer(
     mcpToolKinds: DESKTOP_MCP_TOOL_KINDS,
     // `triggers` is assigned right after construction; turns can only
     // settle later, once a chat message round-trips.
-    onAgentTurnSettled: (event) => triggers.onAgentTurnSettled(event),
+    onAgentTurnSettled: (event) => {
+      triggers.onAgentTurnSettled(event);
+      // Linked projects converge with their remote after every settled
+      // turn (ADR 0044); no-remote projects no-op on one row read.
+      catamorphic.core.remoteSync.syncInBackground(
+        { tenantId: DESKTOP_TENANT_ID, externalUserId: DESKTOP_USER_ID },
+        event.projectId,
+      );
+    },
   });
   const triggers = new DesktopTriggers(catamorphic);
 
@@ -213,6 +221,29 @@ export async function startEmbeddedServer(
     },
   );
 
+  // The agent's git tools (ADR 0044): explicit sync and PR creation on the
+  // project's linked remote, through the provider-agnostic core service.
+  agentRegistry.workspaceToolkit?.setGitBridge({
+    sync: async (projectId) => {
+      const outcome = await catamorphic.core.remoteSync.sync(
+        { tenantId: DESKTOP_TENANT_ID, externalUserId: DESKTOP_USER_ID },
+        projectId,
+      );
+      return {
+        status: outcome.status,
+        ...("rescueBranch" in outcome && outcome.rescueBranch
+          ? { rescueBranch: outcome.rescueBranch }
+          : {}),
+      };
+    },
+    createPullRequest: (projectId, input) =>
+      catamorphic.core.remoteSync.createPullRequest(
+        { tenantId: DESKTOP_TENANT_ID, externalUserId: DESKTOP_USER_ID },
+        projectId,
+        input,
+      ),
+  });
+
   const app: FastifyInstance = Fastify({ logger: { level: "warn" } });
   await app.register(cors, {
     origin: true,
@@ -268,9 +299,31 @@ export async function startEmbeddedServer(
   // the coding agent always sees the host's current kinds.
   void triggers.syncAllProjectTypes().catch(() => {});
 
+  // Remote sync sweep (ADR 0044): converge every linked project at boot and
+  // on an interval. Sync also fires after each settled turn; the service
+  // coalesces overlapping calls per project.
+  const identity = {
+    tenantId: DESKTOP_TENANT_ID,
+    externalUserId: DESKTOP_USER_ID,
+  };
+  const syncAllRemotes = async () => {
+    const { items } = await catamorphic.core.projects.list(identity, {
+      limit: 100,
+    });
+    for (const project of items) {
+      catamorphic.core.remoteSync.syncInBackground(identity, project.id);
+    }
+  };
+  void syncAllRemotes().catch(() => {});
+  const remoteSyncTimer = setInterval(
+    () => void syncAllRemotes().catch(() => {}),
+    10 * 60 * 1000,
+  );
+
   let shutdownDone: Promise<void> | undefined;
   const shutdown = () => {
     shutdownDone ??= (async () => {
+      clearInterval(remoteSyncTimer);
       await worker.stop().catch(() => {});
       await app.close().catch(() => {});
       await catamorphic.close().catch(() => {});

@@ -30,9 +30,9 @@ import {
 } from "ai";
 import { z } from "zod";
 
-const DEFAULT_INSTRUCTIONS = `You are working in a Catamorphic project.
+const DEFAULT_INSTRUCTIONS = `You are working in a Catamorphic project — a folder that can hold any kind of work: documents, notes, data, code, automations, apps.
 Use the provided tools to inspect and edit the project in your working directory.
-Read AGENTS.md and relevant .agents/skills/*/SKILL.md files before making substantial changes.
+Read AGENTS.md and relevant .agents/skills/*/SKILL.md files, when they exist, before making substantial changes.
 Keep changes focused, run relevant checks, and do not commit changes.
 At the start of a new conversation, once the topic is clear from the first user message, call set_title with a concise conversation title; update it whenever the current title no longer fits the conversation, but not for minor detours.`;
 const MAX_TOOL_OUTPUT_LENGTH = 100_000;
@@ -739,7 +739,7 @@ function createTools(
     }),
     set_title: tool({
       description:
-        "Set the title of this conversation as shown in the user's chat list and tabs. Call it once near the start of a new conversation with a concise, specific title (2-5 words, sentence case, no trailing punctuation) describing what the conversation is about. Call it again whenever the current title no longer describes the conversation — the topic moved on, the scope changed, or the original title turned out to be wrong. Don't re-title for minor detours. Examples: 'Daily sales report workflow', 'Fixing checkout bug', 'Getting to know you'.",
+        "Set the title of this conversation as shown in the user's chat list and tabs. Call it once near the start of a new conversation with a concise, specific title (2-5 words, sentence case, no trailing punctuation) describing what the conversation is about. Call it again whenever the current title no longer describes the conversation — the topic moved on, the scope changed, or the original title turned out to be wrong. Don't re-title for minor detours. Examples: 'Daily sales report workflow', 'Drafting onboarding doc', 'Fixing checkout bug', 'Getting to know you'.",
       inputSchema: z.object({
         title: z
           .string()

@@ -418,7 +418,15 @@ export class ClaudeCodeAgent implements CodingAgentProvider {
 
     return {
       cwd,
-      systemPrompt,
+      // Ride the claude_code preset and APPEND the host's instructions: the
+      // harness is a real Claude Code shell, so sessions keep the CLI's own
+      // system prompt (tone, tool doctrine, dev conventions) instead of
+      // replacing it with only the host paragraphs.
+      systemPrompt: {
+        type: "preset",
+        preset: "claude_code",
+        ...(systemPrompt ? { append: systemPrompt } : {}),
+      },
       env: { ...process.env, ...this.opts.env },
       executable: this.opts.executable,
       executableArgs: this.opts.executableArgs,
@@ -464,9 +472,12 @@ export class ClaudeCodeAgent implements CodingAgentProvider {
         : {}),
       canUseTool: denyUnlistedTools,
       hooks: backgroundTaskHooks(emitHookEvent),
-      // Ignore the user's own ~/.claude and project settings files — the
-      // harness is self-contained.
-      settingSources: [],
+      // Recognize everything real Claude Code recognizes: the repo's
+      // CLAUDE.md / .claude (skills, agents, commands, settings) plus the
+      // agent's own home ("user" resolves inside this agent's private
+      // CLAUDE_CONFIG_DIR, so credentials/config stay isolated per agent).
+      // Imported dev repos must feel identical to the CLI.
+      settingSources: ["user", "project", "local"],
     };
   }
 }

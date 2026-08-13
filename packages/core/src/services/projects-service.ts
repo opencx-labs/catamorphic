@@ -156,9 +156,10 @@ export class ProjectsService {
       .execute();
 
     try {
-      // Blank projects still get the seed skills so the coding agent knows the
-      // workflow conventions from its first session (templates already include
-      // them in their file maps).
+      // Blank projects get the seed skills (hidden reference material — the
+      // agent knows the conventions from its first session) but NO visible
+      // workspace scaffold; the workspace arrives on demand via templates or
+      // the catamorphic-projects skill (ADR 0043).
       await this.projectManager.create(tenantId, projectId, {
         name: input.name,
         initialFiles: template?.files ?? SEED_SKILLS,

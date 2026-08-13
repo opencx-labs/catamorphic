@@ -208,6 +208,12 @@ export class TriggersService {
     );
     try {
       const files = await repo.readAllFiles();
+      // Generated types and the check script exist to serve the workflow
+      // workspace. A project without one (docs-only, imported plain repo)
+      // must not have a workflows/ directory conjured into it (ADR 0043).
+      if (files["workflows/package.json"] === undefined) {
+        return { paths: [], updated: false };
+      }
       const changes = new Map<string, string>();
       const triggerContent = this.typesModuleContent();
       if (files[TRIGGER_TYPES_SOURCE_PATH] !== triggerContent) {

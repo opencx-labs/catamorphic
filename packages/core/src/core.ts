@@ -37,6 +37,7 @@ import {
 import { PluginsService } from "./services/plugins-service.js";
 import { ProjectsService } from "./services/projects-service.js";
 import { RateReservationsService } from "./services/rate-reservations-service.js";
+import { RemoteSyncService } from "./services/remote-sync-service.js";
 import {
   type RetentionConfig,
   RetentionService,
@@ -170,6 +171,7 @@ export class CatamorphicCore {
   readonly apps?: AppsService;
   readonly appPolicies: AppPoliciesService;
   readonly github?: GithubService;
+  readonly remoteSync: RemoteSyncService;
   /** Tool-kind declarations behind the per-project MCP endpoint. */
   readonly mcpToolKinds: readonly McpToolKindSpec[];
 
@@ -210,6 +212,13 @@ export class CatamorphicCore {
           config.github,
         )
       : undefined;
+    // Provider-agnostic remote sync (ADR 0044); code hosts contribute
+    // credentials/capabilities through the CodeHost seam.
+    this.remoteSync = new RemoteSyncService(
+      this.db,
+      this.projectManager,
+      this.github ? [this.github.codeHost] : [],
+    );
     this.workflows = new WorkflowsService(this.projectManager, this.projects);
     this.deployment = new DeploymentService(this.projectManager);
     this.deploymentArtifacts = new DeploymentArtifactsService(this.db);

@@ -63,7 +63,7 @@ export function buildPluginsPreamble(
     return `- ${plugin.packageName} (${plugin.displayName})${description}. Docs: ${paths}`;
   });
   return [
-    "Attached packages (available for workflows to import):",
+    "Attached packages (available for the project's code to import):",
     ...lines,
     "Read the listed doc files before using a package.",
   ].join("\n");

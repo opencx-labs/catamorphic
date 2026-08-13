@@ -146,6 +146,8 @@ export function registerBrowserSupport(
   /** Shared with the config agent so chat edits and IPC hit one store set. */
   profileConfig: ProfileConfigManager,
   windows: WindowProfileRegistry,
+  /** Project root lookup for layered sidebar resolution (embedded server). */
+  projectRootFor: (projectId: string) => Promise<string | null>,
 ): BrowserSupport {
   const userData = app.getPath("userData");
   const profilesDir = path.join(userData, "profiles");
@@ -432,8 +434,21 @@ export function registerBrowserSupport(
   const sidebarFor = (event: Electron.IpcMainInvokeEvent) =>
     profileConfig.forProfile(windows.profileFor(event.sender)).sidebar;
 
-  ipcMain.handle("catamorphic:sidebar-config-get", (event) =>
-    sidebarFor(event).load(),
+  // Layered per project (ADR 0043): project-local override → project
+  // `.catamorphic/sidebar.js` → profile `sidebar.js` → built-in default.
+  // Without a projectId only the profile layer applies (boot, settings).
+  // The `-file`/`-source`/`-reset` handlers below stay profile-scoped:
+  // they back the Settings "edit sidebar.js" surface.
+  ipcMain.handle(
+    "catamorphic:sidebar-config-get",
+    async (event, projectId?: string) => {
+      const profileId = windows.profileFor(event.sender);
+      if (!projectId) return profileConfig.resolveSidebar(profileId);
+      return profileConfig.resolveSidebar(profileId, {
+        id: projectId,
+        rootPath: await projectRootFor(projectId),
+      });
+    },
   );
   ipcMain.handle(
     "catamorphic:sidebar-config-file",

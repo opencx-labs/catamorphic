@@ -1,6 +1,8 @@
 import {
   type FetchLike,
   GithubApiError,
+  type GithubPullRequest,
+  type GithubPullRequestFile,
   type GithubRepo,
   type GithubUser,
 } from "./types.js";
@@ -37,13 +39,21 @@ export class GithubApi {
     this.baseUrl = opts?.baseUrl ?? API_BASE;
   }
 
-  private async request<T>(path: string): Promise<T> {
+  private async request<T>(
+    path: string,
+    init?: { method?: string; body?: unknown },
+  ): Promise<T> {
     const response = await this.fetch(`${this.baseUrl}${path}`, {
+      method: init?.method ?? "GET",
       headers: {
         Accept: "application/vnd.github+json",
         Authorization: `Bearer ${this.accessToken}`,
         "X-GitHub-Api-Version": "2022-11-28",
+        ...(init?.body !== undefined
+          ? { "Content-Type": "application/json" }
+          : {}),
       },
+      ...(init?.body !== undefined ? { body: JSON.stringify(init.body) } : {}),
     });
     if (!response.ok) {
       const body = (await response.json().catch(() => ({}))) as {
@@ -77,6 +87,92 @@ export class GithubApi {
       throw new GithubApiError(400, `Invalid repository name: ${fullName}`);
     }
     return mapRepo(await this.request<RawRepo>(`/repos/${fullName}`));
+  }
+
+  /**
+   * Open a pull request. `head` and `base` are branch names in the same
+   * repository (cross-fork PRs are out of scope for now).
+   */
+  async createPullRequest(
+    fullName: string,
+    input: { title: string; head: string; base: string; body?: string },
+  ): Promise<{ url: string; number: number }> {
+    if (!/^[\w.-]+\/[\w.-]+$/.test(fullName)) {
+      throw new GithubApiError(400, `Invalid repository name: ${fullName}`);
+    }
+    const raw = await this.request<{ html_url: string; number: number }>(
+      `/repos/${fullName}/pulls`,
+      {
+        method: "POST",
+        body: {
+          title: input.title,
+          head: input.head,
+          base: input.base,
+          ...(input.body !== undefined ? { body: input.body } : {}),
+        },
+      },
+    );
+    return { url: raw.html_url, number: raw.number };
+  }
+
+  /** Open pull requests, most recently updated first. */
+  async listPullRequests(fullName: string): Promise<GithubPullRequest[]> {
+    if (!/^[\w.-]+\/[\w.-]+$/.test(fullName)) {
+      throw new GithubApiError(400, `Invalid repository name: ${fullName}`);
+    }
+    const raw = await this.request<
+      Array<{
+        number: number;
+        title: string;
+        html_url: string;
+        user: { login: string } | null;
+        head: { ref: string };
+        base: { ref: string };
+        draft: boolean;
+        updated_at: string;
+      }>
+    >(`/repos/${fullName}/pulls?state=open&sort=updated&direction=desc&per_page=50`);
+    return raw.map((pr) => ({
+      number: pr.number,
+      title: pr.title,
+      url: pr.html_url,
+      author: pr.user?.login ?? "unknown",
+      head: pr.head.ref,
+      base: pr.base.ref,
+      draft: pr.draft,
+      updatedAt: pr.updated_at,
+    }));
+  }
+
+  /** Changed files of a pull request, with unified-diff patches. */
+  async pullRequestFiles(
+    fullName: string,
+    number: number,
+  ): Promise<GithubPullRequestFile[]> {
+    if (!/^[\w.-]+\/[\w.-]+$/.test(fullName)) {
+      throw new GithubApiError(400, `Invalid repository name: ${fullName}`);
+    }
+    const raw = await this.request<
+      Array<{
+        filename: string;
+        status: string;
+        additions: number;
+        deletions: number;
+        patch?: string;
+        previous_filename?: string;
+      }>
+    >(`/repos/${fullName}/pulls/${number}/files?per_page=100`);
+    return raw.map((file) => ({
+      path: file.filename,
+      status: file.status,
+      additions: file.additions,
+      deletions: file.deletions,
+      // Absent for binary/huge files — the viewer shows a placeholder.
+      patch: file.patch ?? null,
+      ...(file.previous_filename
+        ? { previousPath: file.previous_filename }
+        : {}),
+    }));
   }
 
   /**
@@ -134,4 +230,22 @@ export function gitCredentialsFor(accessToken: string): {
   password: string;
 } {
   return { username: "x-access-token", password: accessToken };
+}
+
+/** True when the remote URL points at github.com (https or ssh form). */
+export function isGithubRemoteUrl(url: string): boolean {
+  return repoFullNameFromUrl(url) !== null;
+}
+
+/**
+ * Extract `owner/repo` from a github.com clone URL
+ * (`https://github.com/owner/repo.git`, `git@github.com:owner/repo.git`).
+ * Returns null for anything that is not a github.com remote.
+ */
+export function repoFullNameFromUrl(url: string): string | null {
+  const match =
+    /^(?:https?:\/\/(?:[^@/]+@)?github\.com\/|git@github\.com:)([\w.-]+\/[\w.-]+?)(?:\.git)?\/?$/.exec(
+      url.trim(),
+    );
+  return match?.[1] ?? null;
 }

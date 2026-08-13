@@ -15,6 +15,7 @@ import {
   PanelLeft,
   Plus,
   Settings as SettingsIcon,
+  Wand2,
   Workflow as WorkflowIcon,
 } from "lucide-react";
 import {
@@ -49,9 +50,11 @@ import {
   ElicitationModal,
   type PendingElicitation,
 } from "./components/elicitation-modal.js";
+import { GitNav } from "./components/git-nav.js";
 import { ProfileBar } from "./components/profile-bar.js";
 import { ProjectModal } from "./components/project-modal.js";
 import { ProjectSwitcher } from "./components/project-switcher.js";
+import { PrsNav } from "./components/prs-nav.js";
 import { ShortcutHint } from "./components/shortcut-hint.js";
 import { SidebarItemRow } from "./components/sidebar-item-row.js";
 import {
@@ -95,6 +98,12 @@ const EditorScreen = lazy(() =>
 const WorkflowScreen = lazy(() =>
   import("./screens/workflow-screen.js").then((module) => ({
     default: module.WorkflowScreen,
+  })),
+);
+// Diff tabs ride the same Monaco chunk; lazy for the same reason.
+const DiffScreen = lazy(() =>
+  import("./screens/diff-screen.js").then((module) => ({
+    default: module.DiffScreen,
   })),
 );
 
@@ -490,14 +499,14 @@ export function App() {
     target?: Profile;
   } | null>(null);
 
-  // User-customizable sidebar layout (sidebar.js, file-watched).
+  // User-customizable sidebar layout (sidebar.js, file-watched). Resolved
+  // per project (project-local override → project .catamorphic/sidebar.js
+  // → profile sidebar.js), so the fetch is keyed on the active project —
+  // see the effect below projectId — and the changed event is a refetch
+  // signal, not a payload.
   const [sidebarConfig, setSidebarConfig] = useState<SidebarConfig | null>(
     null,
   );
-  useEffect(() => {
-    void desktopApi.sidebarConfigGet().then(setSidebarConfig);
-    return desktopApi.onSidebarConfigChanged(setSidebarConfig);
-  }, []);
 
   const allProjects = projectsQuery.data?.items ?? [];
   // Projects created before profiles existed have no owner; the default
@@ -522,6 +531,24 @@ export function App() {
     ) ??
     projects[0];
   const projectId = activeProject?.id;
+
+  // Layered sidebar fetch: runs at boot with no project yet (profile layer
+  // keeps the boot gate working), again when the active project lands or
+  // changes, and on every main-process change signal.
+  useEffect(() => {
+    let stale = false;
+    const refetch = () => {
+      void desktopApi.sidebarConfigGet(projectId).then((resolved) => {
+        if (!stale) setSidebarConfig(resolved.config);
+      });
+    };
+    refetch();
+    const unsubscribe = desktopApi.onSidebarConfigChanged(refetch);
+    return () => {
+      stale = true;
+      unsubscribe();
+    };
+  }, [projectId]);
 
   /**
    * Switching profile follows the workspace's occupancy: an empty
@@ -571,7 +598,7 @@ export function App() {
         desktopApi.agentsList(),
         desktopApi.getPrefs(),
       ]);
-      setSidebarConfig(sidebar);
+      setSidebarConfig(sidebar.config);
       setAgentsData(agents);
       setPrefs(nextPrefs);
       setProfileVeil({ stage: "out" });
@@ -2222,6 +2249,15 @@ export function App() {
                 title: chatLabelsRef.current[id] ?? "Chat",
               };
             }
+            if (key.startsWith("diff:")) {
+              const entry = ws.tabs.find((t) => tabKey(t) === key);
+              return {
+                ...base,
+                kind: "diff",
+                filePath:
+                  entry?.kind === "diff" ? entry.source.filePath : undefined,
+              };
+            }
             const [kind, name] = key.split(":", 2);
             return { ...base, kind, name };
           });
@@ -2289,7 +2325,10 @@ export function App() {
               : null;
           }
           const tab = ws.tabs.find((t) => tabKey(t) === key);
-          return tab ? { kind: tab.kind, name: tab.name } : null;
+          if (!tab) return null;
+          return tab.kind === "diff"
+            ? { kind: "diff", name: tab.name, filePath: tab.source.filePath }
+            : { kind: tab.kind, name: tab.name };
         }
         case "openAgentBrowser": {
           if (!activeProfileRef.current) return { error: "No profile" };
@@ -2818,24 +2857,43 @@ export function App() {
                 onSwitch={switchProfile}
               />
             )}
-            <button
-              type="button"
-              onClick={() =>
-                openTab({
-                  kind: "settings",
-                  name: "settings",
-                  label: "Settings",
-                })
-              }
-              className={`flex h-7 w-full cursor-pointer items-center gap-2 rounded-md px-2 text-[13px] transition-colors duration-150 ${
-                activeTab?.kind === "settings"
-                  ? "bg-bg-overlay text-fg"
-                  : "text-fg-muted hover:bg-bg-overlay hover:text-fg"
-              }`}
-            >
-              <SettingsIcon className="size-3.5" />
-              Settings
-            </button>
+            <div className="flex items-center gap-1">
+              <button
+                type="button"
+                onClick={() =>
+                  openTab({
+                    kind: "settings",
+                    name: "settings",
+                    label: "Settings",
+                  })
+                }
+                className={`flex h-7 min-w-0 flex-1 cursor-pointer items-center gap-2 rounded-md px-2 text-[13px] transition-colors duration-150 ${
+                  activeTab?.kind === "settings"
+                    ? "bg-bg-overlay text-fg"
+                    : "text-fg-muted hover:bg-bg-overlay hover:text-fg"
+                }`}
+              >
+                <SettingsIcon className="size-3.5" />
+                Settings
+              </button>
+              {/* The sidebar is agent-authored (sidebar.js) — this hands
+                  the request to the agent instead of a settings form. */}
+              <ShortcutHint label="Customize sidebar">
+                <button
+                  type="button"
+                  onClick={() =>
+                    sendToAgent(
+                      "I want to customize my sidebar. Can you walk me through what's possible and make the changes I ask for?",
+                      "float",
+                    )
+                  }
+                  className="grid size-7 shrink-0 cursor-pointer place-items-center rounded-md text-fg-muted transition-colors duration-150 hover:bg-bg-overlay hover:text-fg"
+                  aria-label="Customize sidebar"
+                >
+                  <Wand2 className="size-3.5" />
+                </button>
+              </ShortcutHint>
+            </div>
           </footer>
         </div>
       </aside>
@@ -2957,6 +3015,13 @@ export function App() {
                           onClose={() => closeTab(tabKey(tab))}
                           onDone={() => closeTab(tabKey(tab))}
                         />
+                      ) : tab.kind === "diff" ? (
+                        <Suspense fallback={<div className="flex-1 bg-bg" />}>
+                          <DiffScreen
+                            projectId={tab.projectId}
+                            source={tab.source}
+                          />
+                        </Suspense>
                       ) : null}
                     </div>
                   ))}
@@ -3490,6 +3555,28 @@ function ConfiguredSection({
             onOpen={(url, mode) =>
               onOpenUrl(url, mode ?? section.open ?? "replace")
             }
+          />
+        </SidebarSection>
+      );
+    case "git":
+      return (
+        <SidebarSection
+          title={section.title ?? "Changes"}
+          defaultOpen={defaultOpen}
+        >
+          <GitNav projectId={projectId} onOpenDiff={onOpenTab} />
+        </SidebarSection>
+      );
+    case "prs":
+      return (
+        <SidebarSection
+          title={section.title ?? "Pull Requests"}
+          defaultOpen={defaultOpen}
+        >
+          <PrsNav
+            projectId={projectId}
+            onOpenDiff={onOpenTab}
+            onOpenUrl={onOpenUrl}
           />
         </SidebarSection>
       );

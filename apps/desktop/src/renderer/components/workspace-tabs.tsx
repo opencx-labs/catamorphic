@@ -4,6 +4,7 @@ import {
   ChevronsLeft,
   ChevronsRight,
   FileCode,
+  FileDiff,
   GitFork,
   Globe,
   LayoutGrid,
@@ -101,6 +102,23 @@ function TabHoverCard({
   );
 }
 
+/** What a diff tab shows: a local working-tree diff, or a PR file patch. */
+export type DiffSource =
+  | {
+      type: "local";
+      worktreePath: string;
+      filePath: string;
+      mode: "uncommitted" | "vs-main";
+    }
+  | {
+      type: "pr";
+      prNumber: number;
+      filePath: string;
+      /** Unified-diff hunk text; null for binary or oversized files. */
+      patch: string | null;
+      status: string;
+    };
+
 export type WorkspaceTab = (
   | { kind: "workflow"; name: string; label?: string }
   | { kind: "app"; name: string; label?: string }
@@ -125,6 +143,14 @@ export type WorkspaceTab = (
   | { kind: "terminal"; name: string; label?: string }
   | { kind: "editor"; name: string; label?: string }
   | {
+      /** A read-only file diff (sidebar Changes / Pull Requests rows). */
+      kind: "diff";
+      name: string;
+      label?: string;
+      projectId: string;
+      source: DiffSource;
+    }
+  | {
       /** An MCP Apps view (a connection tool's ui:// template). */
       kind: "mcpapp";
       name: string;
@@ -148,6 +174,7 @@ const TAB_ICONS = {
   "agent-setup": Bot,
   terminal: SquareTerminal,
   editor: FileCode,
+  diff: FileDiff,
   mcpapp: AppWindow,
 } as const;
 
