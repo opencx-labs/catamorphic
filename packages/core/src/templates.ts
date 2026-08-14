@@ -191,7 +191,7 @@ if (root) createRoot(root).render(<App />);
 `,
 });
 
-export const APP_PACKAGE_VERSION = "0.0.1";
+export const APP_PACKAGE_VERSION = "0.0.2";
 
 /** Where the seeded project check script lives; owned by the project. */
 export const PROJECT_CHECK_SCRIPT_PATH = "scripts/check.ts";
@@ -648,34 +648,117 @@ Never pass secrets to app code, return one from an app-callable workflow, or
 include one in an output. An app that needs a third-party API calls a
 workflow that holds the credential.
 
-## Design system
+## Design system: the app UI kit
 
 Apps render inside the Catamorphic shell and must look and feel like part
-of it. The host injects the user's active theme into every app document
-before the app's own CSS, and updates it live on theme switches — style
-with these variables and both light and dark come free:
+of it. **Build the UI from \`@catamorphic/app/ui\`** — polished React
+components pre-styled to the shell's design system. The host injects the
+kit stylesheet and the user's active theme into every app document (and
+updates the theme live), so components need no CSS imports and no theme
+plumbing; light, dark, and fully custom user themes all come free:
 
-- Colors: ${APP_THEME_COLOR_TOKENS.map((token) => `\`--color-${token}\``).join(", ")}.
-- \`--font-sans\` (UI) and \`--font-mono\` (code, numbers that align);
-  \`--radius-sm\` / \`--radius-md\` / \`--radius-lg\`; the one easing
-  \`--ease-standard\`.
-- \`body\` already carries the shell background, text color, and font —
-  do not restyle them.
+\`\`\`typescript
+import { Button, Card, DataTable, useAsync } from "@catamorphic/app/ui";
+\`\`\`
 
-Rules that keep an app native-feeling:
+### Component inventory
 
-- **Never hardcode a palette.** Every color goes through a \`--color-*\`
-  var. Never import external fonts or stylesheets — the CSP blocks them.
-- Surfaces are \`var(--color-bg-raised)\` with a 1px
-  \`var(--color-border)\` border and \`var(--radius-lg)\`; inputs and
-  wells use \`--color-bg-inset\`. Secondary text is \`--color-fg-muted\`,
-  hints \`--color-fg-faint\`. The primary action is \`--color-accent\`
-  with \`--color-accent-fg\` text — one per view; everything else is a
-  bordered neutral button.
-- Motion: transitions and animations use \`var(--ease-standard)\` with
-  100–300ms durations (~150ms for hover/color feedback, ~200ms for
-  structural moves). Animate on state changes only; nothing loops except
-  indeterminate progress.
+| Component | Props (essentials) | Use |
+|---|---|---|
+| \`Button\` | \`variant\` primary/ghost/danger/subtle, \`size\` sm/md, \`loading\`, \`loadingLabel\` | Actions. \`loading\` shows a spinner and disables WITHOUT changing width — use it for every workflow call a button starts. |
+| \`Field\` | \`label\`, \`hint\`, \`error\` | Wrap one control; ids and aria wiring are automatic. \`error\` replaces the hint and turns the control invalid. |
+| \`Input\` / \`Textarea\` | \`invalid\` + native props | Text entry on the inset surface. |
+| \`Select\` | \`invalid\` + native props; \`<option>\` children | Styled native select — free keyboard/screen-reader behavior. |
+| \`Checkbox\` | native props | Styled native checkbox. |
+| \`Switch\` | \`checked\`, \`onCheckedChange\` | On/off toggle (\`role=switch\`). |
+| \`Card\` | \`title\`, \`description\`, \`footer\` | THE surface unit — compose screens from Cards on the app background. |
+| \`Tabs\`+\`TabList\`+\`Tab\`+\`TabPanel\` | \`value\`, \`onValueChange\`; \`value\` per tab/panel | Underline tabs with roving keyboard focus. |
+| \`Badge\` | \`variant\` neutral/success/warning/danger/info | 11px low-chroma status label. |
+| \`Spinner\` | \`size\`, \`label\` | Indeterminate progress. |
+| \`Skeleton\` | \`width\`, \`height\` | Loading placeholder with shimmer. |
+| \`EmptyState\` | \`message\`, \`action\` | The quiet empty state: one muted sentence + one action, max. |
+| \`ErrorState\` | \`code\`, \`message\`, \`onRetry\` | Failure state; \`code\` maps via the exported \`ERROR_STATE_COPY\` (extend it for project codes). |
+| \`KeyValueRow\` / \`KeyValueList\` | \`label\`, children | Label/value lines that truncate correctly in narrow columns. |
+| \`Dialog\` | \`open\`, \`onClose\`, \`title\`, \`description\`, \`footer\`, \`closeOnOverlayClick\` | Modal with focus trap/restore, Esc, and the shell's enter/exit motion. |
+| \`Tooltip\` | \`label\`, \`delay\` | Hover/focus hint (~500ms delay — never instant). |
+| \`DataTable\` | \`columns\` (\`key\`/\`header\`/\`align\`/\`width\`/\`sortable\`/\`render\`), \`rows\`, \`rowKey\`, \`loading\`, \`empty\`, \`truncated\`, \`maxHeight\` | The table: sticky header, client-side sorting, 28px rows, skeleton/empty/truncated states built in. Plain \`Table\`/\`TableRow\`/… also exported for hand-rolled cases. |
+| \`DatePicker\` / \`DateRangePicker\` | \`value\` (ISO \`YYYY-MM-DD\` / \`{from,to}\`), \`onChange\`, \`placeholder\` | Date entry — popover calendar, keyboard-navigable, date-only local strings (JSON-safe). |
+| \`Calendar\` | \`mode\`, \`value\`, \`onSelect\` | The bare month grid when you need it inline. |
+| \`ScrollHint\` | \`fadeColor\` (match the surface behind) | Scroll container that fades edges with more content. |
+| \`useAsync(load, deps)\` | returns \`{status:"loading"} \\| {status:"error",error,retry} \\| {status:"ok",value}\` | Load workflow data into the three states below. |
+
+### The three data states
+
+Every screen that loads data has exactly three states, and the kit covers
+all of them: \`Skeleton\` (or \`DataTable loading\`) while loading,
+\`ErrorState\` with retry on failure, \`EmptyState\` when the result is
+empty. Wire them with \`useAsync\`:
+
+\`\`\`typescript
+import { DataTable, ErrorState, useAsync } from "@catamorphic/app/ui";
+
+function Orders() {
+  const orders = useAsync(
+    () => workflows.listOpenOrders.call({ limit: 50 }),
+    [],
+  );
+  if (orders.status === "error") return <ErrorState onRetry={orders.retry} />;
+  return (
+    <DataTable
+      columns={[
+        { key: "customer", header: "Customer", sortable: true },
+        { key: "total", header: "Total", align: "right", sortable: true },
+      ]}
+      rows={orders.status === "ok" ? orders.value.orders : []}
+      rowKey={(order) => order.id}
+      loading={orders.status === "loading"}
+      empty="No open orders."
+    />
+  );
+}
+\`\`\`
+
+### Layout doctrine
+
+- Space on a **4px grid** (4/8/12/16). Base type is 13px and already set on
+  \`body\` along with the background, text color, and font — do not restyle
+  them.
+- \`Card\` is the surface unit. Bare custom surfaces, when needed, are
+  \`var(--color-bg-raised)\` + 1px \`var(--color-border)\` +
+  \`var(--radius-lg)\`; inputs and wells use \`--color-bg-inset\`.
+- Colors ONLY through the theme tokens: ${APP_THEME_COLOR_TOKENS.map((token) => `\`--color-${token}\``).join(", ")}.
+  Fonts \`--font-sans\`/\`--font-mono\`; radii \`--radius-sm/md/lg\`; the
+  one easing \`--ease-standard\`.
+- Secondary text is \`--color-fg-muted\`, hints \`--color-fg-faint\`.
+- **One primary action per view** (\`Button variant="primary"\`);
+  everything else is ghost or subtle.
+
+### Motion doctrine
+
+The kit animates itself — dialogs, popovers, tooltips, spinners already
+follow the shell's motion contract. Apps add NO animation beyond color
+transitions on their own hover states (~150ms \`var(--ease-standard)\`).
+Nothing loops, nothing bounces, nothing animates on load.
+
+### Forms
+
+A native \`<form>\` submit REALLY NAVIGATES the sandboxed app frame: the
+sandbox allows forms, and the CSP's \`form-action\` does not inherit from
+\`default-src\`, so nothing blocks it — the app reloads from scratch and
+loses all state (verified; Enter in any input triggers it via implicit
+submission). **Always \`event.preventDefault()\` in \`onSubmit\`** and call
+workflows through the client instead. Do still use \`<form>\` +
+\`onSubmit\` — Enter-to-submit accessibility is worth keeping.
+
+### Do-nots
+
+- No CSS frameworks or component libraries — the kit plus small custom CSS
+  is the whole styling story (the CSP blocks external scripts/styles/fonts
+  anyway).
+- Never hardcode a palette: no hex/rgb literals, every color through a
+  \`--color-*\` var.
+- No decorative motion; don't re-animate what the kit animates.
+- Don't hide scrollbars — visible scrollbars are part of the desktop feel.
 
 ## Creating an app
 
@@ -1194,62 +1277,72 @@ export const appApi = { listOpenOrders, markOrderShipped } satisfies AppContract
 `,
       "apps/dashboard/src/app.tsx": `import type { AppContract, Order } from "@project/contracts";
 import { createClient } from "@catamorphic/app";
-import { useEffect, useState } from "react";
+import {
+  Button,
+  Card,
+  DataTable,
+  ErrorState,
+  useAsync,
+} from "@catamorphic/app/ui";
+import { useState } from "react";
 
 const workflows = createClient<AppContract>();
 
 export function App() {
-  const [orders, setOrders] = useState<readonly Order[] | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  const [reloadKey, setReloadKey] = useState(0);
+  const [shipping, setShipping] = useState<string | null>(null);
+  const orders = useAsync(
+    () => workflows.listOpenOrders.call({ limit: 20 }),
+    [reloadKey],
+  );
 
-  useEffect(() => {
-    workflows.listOpenOrders
-      .call({ limit: 20 })
-      .then((result) => setOrders(result.orders))
-      .catch((cause: Error) => setError(cause.message));
-  }, []);
+  if (orders.status === "error") return <ErrorState onRetry={orders.retry} />;
 
-  if (error) return <p>Could not load orders: {error}</p>;
-  if (!orders) return <p>Loading orders…</p>;
+  const ship = async (orderId: string) => {
+    setShipping(orderId);
+    try {
+      await workflows.markOrderShipped.call({ orderId });
+      setReloadKey((key) => key + 1);
+    } finally {
+      setShipping(null);
+    }
+  };
 
   return (
-    <table>
-      <thead>
-        <tr>
-          <th>Order</th>
-          <th>Customer</th>
-          <th>Total</th>
-          <th />
-        </tr>
-      </thead>
-      <tbody>
-        {orders.map((order) => (
-          <tr key={order.id}>
-            <td>{order.id}</td>
-            <td>{order.customer}</td>
-            <td>\${order.total}</td>
-            <td>
-              <button
-                type="button"
-                onClick={() => {
-                  void workflows.markOrderShipped
-                    .call({ orderId: order.id })
-                    .then(() =>
-                      setOrders(
-                        (current) =>
-                          current?.filter((entry) => entry.id !== order.id) ??
-                          null,
-                      ),
-                    );
-                }}
+    <Card title="Open orders" description="Orders waiting to ship">
+      <DataTable<Order>
+        columns={[
+          { key: "id", header: "Order" },
+          { key: "customer", header: "Customer", sortable: true },
+          {
+            key: "total",
+            header: "Total",
+            align: "right",
+            sortable: true,
+            render: (order) => \`$\${order.total}\`,
+          },
+          {
+            key: "actions",
+            header: "",
+            align: "right",
+            render: (order) => (
+              <Button
+                size="sm"
+                loading={shipping === order.id}
+                loadingLabel="Shipping…"
+                onClick={() => void ship(order.id)}
               >
                 Ship
-              </button>
-            </td>
-          </tr>
-        ))}
-      </tbody>
-    </table>
+              </Button>
+            ),
+          },
+        ]}
+        rows={orders.status === "ok" ? orders.value.orders : []}
+        rowKey={(order) => order.id}
+        loading={orders.status === "loading"}
+        empty="No open orders."
+      />
+    </Card>
   );
 }
 `,

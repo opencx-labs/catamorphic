@@ -1980,3 +1980,33 @@ Patterned on what best-in-class palettes converged on (Chrome omnibox
   sandbox: host-seeded item renders, write-through snapshot arrives.
   Pinned by guest-doc/service/route unit tests and a reload-survival
   assertion in the agent-build eval.
+
+### 2026-08-14 — The app UI kit: shell-grade polish for agent-built apps
+- **`@catamorphic/app/ui`** (app package 0.0.2): ~15 dependency-free React
+  components styled by `cat-*` classes shipped in the guest document's
+  base layer — an agent imports components and writes zero CSS, zero
+  config. Tokens only (`--color-*`, radii, the one easing); 13px/4px-grid
+  density; the shell's motion contract verbatim (150ms hover, 220/180ms
+  mirrored dialog that animates before unmount, nothing loops but
+  spinner/shimmer) with `prefers-reduced-motion` collapsing all of it.
+- The pieces apps actually need, done right: Button with a REAL
+  fixed-width loading state (the PendingButton rule); Field wiring
+  ids/aria automatically with ONE invalid contract; DataTable with
+  sticky header, aria-sort cycling, and built-in loading/empty/truncated
+  states; a hand-rolled DatePicker/DateRangePicker whose calendar moves
+  real focus with the keyboard, rounds range edges at week boundaries
+  via data attributes, and gets the range first-click right (start
+  pending, never a phantom 1-day range); ScrollHint edge fades;
+  EmptyState/ErrorState with an exported code→copy map; `useAsync` with
+  the stale-resolution guard for the three data states.
+- Doctrine encoded in the building-apps skill: inventory + usage,
+  loading/error/empty as the default shape of any workflow-backed view,
+  apps add no motion beyond transition-colors, no raw colors, never hide
+  scrollbars — and **always `e.preventDefault()` in onSubmit**: verified
+  empirically that with `sandbox` allow-forms and no `form-action` in
+  the guest CSP, a native submit really navigates the frame (form-action
+  does not fall back to default-src). Enter-to-submit stays, navigation
+  doesn't.
+- Verified: 32 kit unit tests (calendar keyboard traversal, dialog trap,
+  width-stable buttons, sort cycle), kitchen-sink demo screenshotted in
+  both themes inside the real sandbox, desktop e2e 75/75.

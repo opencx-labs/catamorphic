@@ -1,0 +1,80 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`Button loading (PendingButton rule) > renders idle and pending labels stacked so width never changes > idle 1`] = `
+<span
+  class="cat-btn-stack"
+>
+  <span>
+    Save changes
+  </span>
+  <span
+    aria-hidden="true"
+    data-hidden="true"
+  >
+    <svg
+      aria-hidden="true"
+      class="cat-spinner"
+      fill="none"
+      height="12"
+      viewBox="0 0 16 16"
+      width="12"
+    >
+      <circle
+        cx="8"
+        cy="8"
+        r="6.5"
+        stroke="currentColor"
+        stroke-opacity="0.25"
+        stroke-width="1.5"
+      />
+      <path
+        d="M14.5 8a6.5 6.5 0 0 0-6.5-6.5"
+        stroke="currentColor"
+        stroke-linecap="round"
+        stroke-width="1.5"
+      />
+    </svg>
+    Save changes
+  </span>
+</span>
+`;
+
+exports[`Button loading (PendingButton rule) > renders idle and pending labels stacked so width never changes > loading 1`] = `
+<span
+  class="cat-btn-stack"
+>
+  <span
+    data-hidden="true"
+  >
+    Save changes
+  </span>
+  <span
+    aria-hidden="false"
+  >
+    <svg
+      aria-hidden="true"
+      class="cat-spinner"
+      fill="none"
+      height="12"
+      viewBox="0 0 16 16"
+      width="12"
+    >
+      <circle
+        cx="8"
+        cy="8"
+        r="6.5"
+        stroke="currentColor"
+        stroke-opacity="0.25"
+        stroke-width="1.5"
+      />
+      <path
+        d="M14.5 8a6.5 6.5 0 0 0-6.5-6.5"
+        stroke="currentColor"
+        stroke-linecap="round"
+        stroke-width="1.5"
+      />
+    </svg>
+    Saving…
+  </span>
+</span>
+`;

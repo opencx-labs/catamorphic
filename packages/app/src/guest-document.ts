@@ -1,3 +1,4 @@
+import { APP_KIT_CSS } from "./kit-css.js";
 import { APP_PROTOCOL_VERSION } from "./protocol.js";
 import { APP_BASE_CSS, type AppHostTheme, appThemeCss } from "./theme.js";
 
@@ -76,11 +77,13 @@ export function buildAppGuestDocument(args: {
     "<!doctype html>",
     '<html><head><meta charset="utf-8">',
     `<meta http-equiv="Content-Security-Policy" content="${csp}">`,
-    // Theme + shared base first, the app's own CSS last so it can override.
+    // Theme + shared base first, then the UI-kit classes, the app's own
+    // CSS last so it can override anything.
     ...(args.theme
       ? [`<style>${escapeStyleContent(appThemeCss(args.theme))}</style>`]
       : []),
     `<style>${APP_BASE_CSS}</style>`,
+    `<style>${APP_KIT_CSS}</style>`,
     `<style>${escapeStyleContent(args.css)}</style>`,
     "</head><body>",
     '<div id="root"></div>',

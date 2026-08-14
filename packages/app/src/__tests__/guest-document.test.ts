@@ -23,6 +23,23 @@ describe("buildAppGuestDocument", () => {
     );
   });
 
+  it("injects the UI-kit stylesheet after the base layer, before app CSS", () => {
+    const doc = buildAppGuestDocument({
+      code: "/* bundle */",
+      css: ".mine{color:var(--color-fg)}",
+      theme: { appearance: "dark", colors: {} },
+    });
+    // Kit classes are present without the app importing any CSS…
+    expect(doc).toContain(".cat-btn");
+    expect(doc).toContain(".cat-dialog-panel");
+    // …AFTER the base layer (tokens the kit consumes)…
+    expect(doc.indexOf("--ease-standard:cubic-bezier")).toBeLessThan(
+      doc.indexOf(".cat-btn"),
+    );
+    // …and BEFORE the app's own CSS, so apps can override the kit.
+    expect(doc.indexOf(".cat-btn")).toBeLessThan(doc.indexOf(".mine{"));
+  });
+
   it("defaults to a no-network CSP and widens only declared origins", () => {
     expect(buildAppGuestDocument({ code: "", css: "" })).toContain(
       "connect-src 'none'",
@@ -45,10 +62,10 @@ describe("buildAppGuestDocument", () => {
       theme: { appearance: "dark", colors: {} },
     });
     // Only the real closing tags survive (the host runtime script and the
-    // bundle script; the theme style, base-layer style and the app style):
-    // the bundle's own copies are escaped.
+    // bundle script; the theme, base-layer, UI-kit and app styles): the
+    // bundle's own copies are escaped.
     expect(doc.match(/<\/script>/g)).toHaveLength(2);
-    expect(doc.match(/<\/style>/g)).toHaveLength(3);
+    expect(doc.match(/<\/style>/g)).toHaveLength(4);
     expect(doc).toContain("<\\/script>");
     // The injected markup stays inside the script text, never parsed as HTML.
     expect(doc).toContain("<\\/script><img src=x onerror=alert(1)>");
