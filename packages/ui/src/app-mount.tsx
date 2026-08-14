@@ -47,10 +47,12 @@ export interface AppMountProps {
    */
   channel?: "published" | "dev";
   /**
-   * The host's current design tokens. Injected into the guest document as
-   * `--color-*` custom properties (before the app's own CSS) and kept live
-   * over postMessage, so apps styled with the shared vocabulary match the
-   * shell and follow theme switches without a reload.
+   * The host's current design tokens — colors AND feel (fonts, radii,
+   * easing, base size, row height, motion durations). Injected into the
+   * guest document as CSS custom properties (before the app's own CSS) and
+   * kept live over postMessage, so apps styled with the shared vocabulary
+   * match the embedding host and follow theme switches without a reload.
+   * Omitted tokens fall back to the kit's neutral defaults.
    */
   theme?: AppHostTheme;
   className?: string;

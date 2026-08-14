@@ -282,27 +282,44 @@ export function registerAppRoutes(app: FastifyInstance, ctx: RouteContext) {
     },
   });
 
-  const GuestThemeShape = z.object({
-    appearance: z.enum(["dark", "light"]),
-    colors: z.record(
-      z
-        .string()
-        .regex(/^[a-z][a-z0-9-]*$/i)
-        .max(40),
-      // Broad enough for any CSS color syntax; excludes the characters that
-      // could close the style rule or the style element the theme lands in.
-      z
-        .string()
-        .max(200)
-        .regex(/^[^<>{};]*$/),
-    ),
-  });
+  // Broad enough for any CSS value syntax (color functions, font stacks,
+  // cubic-bezier curves); excludes the characters that could close the style
+  // rule or the style element the theme lands in. Fonts get stack-length
+  // headroom; single values (radii, sizes, durations, easing) stay short.
+  const safeCssValue = (max: number) =>
+    z
+      .string()
+      .max(max)
+      .regex(/^[^<>{};]*$/);
+  // `.catch(undefined)` drops an invalid leaf while keeping its siblings.
+  const cssLeaf = (max: number) =>
+    safeCssValue(max).optional().catch(undefined);
+  const ColorTokenShape = z
+    .string()
+    .regex(/^[a-z][a-z0-9-]*$/i)
+    .max(40);
+  const ColorValueShape = safeCssValue(200);
+
+  const GuestFeelShapes = {
+    fonts: z.object({ sans: cssLeaf(200), mono: cssLeaf(200) }),
+    radii: z.object({ sm: cssLeaf(64), md: cssLeaf(64), lg: cssLeaf(64) }),
+    easing: safeCssValue(64),
+    baseFontSize: safeCssValue(64),
+    rowHeight: safeCssValue(64),
+    motion: z.object({
+      fast: cssLeaf(64),
+      base: cssLeaf(64),
+      slow: cssLeaf(64),
+    }),
+  } as const;
 
   /**
    * The theme rides the guest URL as JSON so the document paints in the
-   * host's colors on first render (no flash, and the browser cache key
+   * host's look on first render (no flash, and the browser cache key
    * naturally varies with it). The URL is caller-controlled, so the shape
-   * and character set are validated here; anything off is simply unthemed.
+   * and character set are validated here — per field: an unknown or invalid
+   * field (or color entry) is dropped, never the whole theme. Only a theme
+   * without a valid appearance is unusable and yields an unthemed document.
    */
   function parseGuestTheme(raw: string | undefined): AppHostTheme | undefined {
     if (!raw) return undefined;
@@ -312,8 +329,39 @@ export function registerAppRoutes(app: FastifyInstance, ctx: RouteContext) {
     } catch {
       return undefined;
     }
-    const result = GuestThemeShape.safeParse(parsed);
-    return result.success ? result.data : undefined;
+    if (parsed === null || typeof parsed !== "object") return undefined;
+    const candidate = parsed as Record<string, unknown>;
+    const appearance = z
+      .enum(["dark", "light"])
+      .safeParse(candidate.appearance);
+    if (!appearance.success) return undefined;
+    const theme: AppHostTheme = { appearance: appearance.data, colors: {} };
+    // Colors survive entry-by-entry: one hostile value drops that entry.
+    if (candidate.colors !== null && typeof candidate.colors === "object") {
+      for (const [token, value] of Object.entries(
+        candidate.colors as Record<string, unknown>,
+      )) {
+        if (
+          ColorTokenShape.safeParse(token).success &&
+          ColorValueShape.safeParse(value).success
+        ) {
+          (theme.colors as Record<string, string>)[token] = value as string;
+        }
+      }
+    }
+    for (const key of [
+      "fonts",
+      "radii",
+      "easing",
+      "baseFontSize",
+      "rowHeight",
+      "motion",
+    ] as const) {
+      if (candidate[key] === undefined) continue;
+      const field = GuestFeelShapes[key].safeParse(candidate[key]);
+      if (field.success) theme[key] = field.data as never;
+    }
+    return theme;
   }
 
   typed.route({

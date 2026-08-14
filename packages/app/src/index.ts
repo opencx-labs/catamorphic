@@ -32,4 +32,5 @@ export {
   type AppHostTheme,
   type AppThemeColorToken,
   appThemeCss,
+  appThemeVars,
 } from "./theme.js";

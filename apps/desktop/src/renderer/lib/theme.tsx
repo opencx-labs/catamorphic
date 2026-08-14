@@ -1,3 +1,4 @@
+import type { AppMountProps } from "@catamorphic/ui";
 import {
   createContext,
   type ReactNode,
@@ -6,6 +7,41 @@ import {
   useState,
 } from "react";
 import { desktopApi, type ResolvedTheme } from "./desktop-api.js";
+
+type AppHostTheme = NonNullable<AppMountProps["theme"]>;
+
+/**
+ * The desktop shell's FEEL, stated once. The app kit ships neutral defaults
+ * (ADR 0048: an app's feel is entirely the embedder's); the desktop is just
+ * one embedder and passes its own values explicitly. These mirror the
+ * primitives in styles.css (`--font-sans`/`--font-mono`/`--radius-*`/
+ * `--ease-standard`, 13px body, 28px rows) and DESIGN.md's motion contract
+ * (hover feedback 150ms, structural enters 220ms, large surfaces 250ms).
+ */
+const DESKTOP_FEEL: Omit<AppHostTheme, "appearance" | "colors"> = {
+  fonts: {
+    sans: '"Inter", system-ui, -apple-system, sans-serif',
+    mono: '"JetBrains Mono", ui-monospace, "SF Mono", monospace',
+  },
+  radii: { sm: "4px", md: "6px", lg: "10px" },
+  easing: "cubic-bezier(0.2, 0, 0, 1)",
+  baseFontSize: "13px",
+  rowHeight: "28px",
+  motion: { fast: "150ms", base: "220ms", slow: "250ms" },
+};
+
+/**
+ * The full theme snapshot a mounted app receives from this shell: the
+ * profile's resolved colors plus the desktop's feel tokens. The ONE place
+ * the desktop's mount theme is assembled.
+ */
+export function appHostTheme(theme: ResolvedTheme): AppHostTheme {
+  return {
+    appearance: theme.appearance,
+    colors: theme.colors,
+    ...DESKTOP_FEEL,
+  };
+}
 
 /**
  * Applies the resolved theme by writing every color token as an inline CSS

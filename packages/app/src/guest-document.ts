@@ -17,6 +17,17 @@ export function buildAppGuestDocument(args: {
   code: string;
   css: string;
   theme?: AppHostTheme;
+  /**
+   * An embedder stylesheet, injected AFTER the kit CSS and BEFORE the app's
+   * own CSS: the host can restyle or extend the `cat-*` classes wholesale
+   * (and the app can still override anything). Escaped like the app CSS.
+   */
+  hostCss?: string;
+  /**
+   * `false` omits the kit stylesheet entirely, for embedders that want the
+   * kit's structure and behavior with none of its styling. Default: injected.
+   */
+  kit?: boolean;
   /** Tenant-policy network origins the guest CSP may allow. */
   allowedNetworkOrigins?: string[];
   /**
@@ -45,8 +56,9 @@ export function buildAppGuestDocument(args: {
   //   document and post the same resize message the client library would.
   //   scrollHeight is max(content, viewport), so it ratchets up to the
   //   content height and settles; the host clamps either way.
-  // - live theme: apply `theme` messages as `--color-*` custom properties,
-  //   the same vars the initial <style> below seeds.
+  // - live theme: apply `theme` messages as custom properties — colors AND
+  //   the feel tokens (fonts, radii, easing, sizes, motion) — the same vars
+  //   the initial <style> below seeds.
   const runtime =
     'var process={env:{NODE_ENV:"production"}};' +
     `(()=>{const seed=${safeJsonForScript(args.storageSeed ?? {})};` +
@@ -70,20 +82,35 @@ export function buildAppGuestDocument(args: {
     "post();const o=new ResizeObserver(post);o.observe(document.documentElement);o.observe(document.body)});" +
     "addEventListener('message',(e)=>{const d=e.data;" +
     `if(!d||d.catamorphicApp!==${APP_PROTOCOL_VERSION}||d.kind!=='theme')return;` +
-    "const r=document.documentElement;" +
-    "for(const[k,v]of Object.entries(d.theme.colors))r.style.setProperty('--color-'+k,String(v));" +
-    "r.style.colorScheme=d.theme.appearance});";
+    "const t=d.theme,r=document.documentElement;" +
+    "for(const[k,v]of Object.entries(t.colors))r.style.setProperty('--color-'+k,String(v));" +
+    // Feel tokens, mirroring appThemeVars: [property, group key, leaf key]
+    // (a null group reads the leaf off the theme itself).
+    "const F=[['--font-sans','fonts','sans'],['--font-mono','fonts','mono']," +
+    "['--radius-sm','radii','sm'],['--radius-md','radii','md'],['--radius-lg','radii','lg']," +
+    "['--ease-standard',null,'easing'],['--cat-font-size',null,'baseFontSize']," +
+    "['--cat-row-h',null,'rowHeight'],['--cat-motion-fast','motion','fast']," +
+    "['--cat-motion-base','motion','base'],['--cat-motion-slow','motion','slow']];" +
+    "for(const[p,g,k]of F){const o=g?t[g]:t;const v=o&&typeof o==='object'?o[k]:undefined;" +
+    "if(typeof v==='string')r.style.setProperty(p,v)}" +
+    "r.style.colorScheme=t.appearance});";
   return [
     "<!doctype html>",
     '<html><head><meta charset="utf-8">',
     `<meta http-equiv="Content-Security-Policy" content="${csp}">`,
-    // Theme + shared base first, then the UI-kit classes, the app's own
-    // CSS last so it can override anything.
+    // Style order is the override order: neutral base defaults, then the
+    // host theme (which overrides any base token), then the UI-kit classes
+    // (consuming the tokens; omitted when the embedder opts out), then the
+    // embedder's own stylesheet, the app's CSS last so it can override
+    // anything.
+    `<style>${APP_BASE_CSS}</style>`,
     ...(args.theme
       ? [`<style>${escapeStyleContent(appThemeCss(args.theme))}</style>`]
       : []),
-    `<style>${APP_BASE_CSS}</style>`,
-    `<style>${APP_KIT_CSS}</style>`,
+    ...(args.kit === false ? [] : [`<style>${APP_KIT_CSS}</style>`]),
+    ...(args.hostCss !== undefined
+      ? [`<style>${escapeStyleContent(args.hostCss)}</style>`]
+      : []),
     `<style>${escapeStyleContent(args.css)}</style>`,
     "</head><body>",
     '<div id="root"></div>',

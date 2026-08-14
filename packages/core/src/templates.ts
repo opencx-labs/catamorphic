@@ -191,7 +191,7 @@ if (root) createRoot(root).render(<App />);
 `,
 });
 
-export const APP_PACKAGE_VERSION = "0.0.2";
+export const APP_PACKAGE_VERSION = "0.0.3";
 
 /** Where the seeded project check script lives; owned by the project. */
 export const PROJECT_CHECK_SCRIPT_PATH = "scripts/check.ts";
@@ -650,9 +650,10 @@ workflow that holds the credential.
 
 ## Design system: the app UI kit
 
-Apps render inside the Catamorphic shell and must look and feel like part
+Apps render inside a host application and must look and feel like part
 of it. **Build the UI from \`@catamorphic/app/ui\`** — polished React
-components pre-styled to the shell's design system. The host injects the
+components pre-styled to the host application's theme: the kit adapts to
+whatever host mounts the app. The host injects the
 kit stylesheet and the user's active theme into every app document (and
 updates the theme live), so components need no CSS imports and no theme
 plumbing; light, dark, and fully custom user themes all come free:
@@ -679,9 +680,9 @@ import { Button, Card, DataTable, useAsync } from "@catamorphic/app/ui";
 | \`EmptyState\` | \`message\`, \`action\` | The quiet empty state: one muted sentence + one action, max. |
 | \`ErrorState\` | \`code\`, \`message\`, \`onRetry\` | Failure state; \`code\` maps via the exported \`ERROR_STATE_COPY\` (extend it for project codes). |
 | \`KeyValueRow\` / \`KeyValueList\` | \`label\`, children | Label/value lines that truncate correctly in narrow columns. |
-| \`Dialog\` | \`open\`, \`onClose\`, \`title\`, \`description\`, \`footer\`, \`closeOnOverlayClick\` | Modal with focus trap/restore, Esc, and the shell's enter/exit motion. |
+| \`Dialog\` | \`open\`, \`onClose\`, \`title\`, \`description\`, \`footer\`, \`closeOnOverlayClick\` | Modal with focus trap/restore, Esc, and the host's enter/exit motion. |
 | \`Tooltip\` | \`label\`, \`delay\` | Hover/focus hint (~500ms delay — never instant). |
-| \`DataTable\` | \`columns\` (\`key\`/\`header\`/\`align\`/\`width\`/\`sortable\`/\`render\`), \`rows\`, \`rowKey\`, \`loading\`, \`empty\`, \`truncated\`, \`maxHeight\` | The table: sticky header, client-side sorting, 28px rows, skeleton/empty/truncated states built in. Plain \`Table\`/\`TableRow\`/… also exported for hand-rolled cases. |
+| \`DataTable\` | \`columns\` (\`key\`/\`header\`/\`align\`/\`width\`/\`sortable\`/\`render\`), \`rows\`, \`rowKey\`, \`loading\`, \`empty\`, \`truncated\`, \`maxHeight\` | The table: sticky header, client-side sorting, host-density rows, skeleton/empty/truncated states built in. Plain \`Table\`/\`TableRow\`/… also exported for hand-rolled cases. |
 | \`DatePicker\` / \`DateRangePicker\` | \`value\` (ISO \`YYYY-MM-DD\` / \`{from,to}\`), \`onChange\`, \`placeholder\` | Date entry — popover calendar, keyboard-navigable, date-only local strings (JSON-safe). |
 | \`Calendar\` | \`mode\`, \`value\`, \`onSelect\` | The bare month grid when you need it inline. |
 | \`ScrollHint\` | \`fadeColor\` (match the surface behind) | Scroll container that fades edges with more content. |
@@ -720,15 +721,18 @@ function Orders() {
 
 ### Layout doctrine
 
-- Space on a **4px grid** (4/8/12/16). Base type is 13px and already set on
-  \`body\` along with the background, text color, and font — do not restyle
-  them.
+- Space on a **4px grid** (4/8/12/16). Base type is the host's base size,
+  already set on \`body\` along with the background, text color, and font —
+  do not restyle them.
 - \`Card\` is the surface unit. Bare custom surfaces, when needed, are
   \`var(--color-bg-raised)\` + 1px \`var(--color-border)\` +
   \`var(--radius-lg)\`; inputs and wells use \`--color-bg-inset\`.
 - Colors ONLY through the theme tokens: ${APP_THEME_COLOR_TOKENS.map((token) => `\`--color-${token}\``).join(", ")}.
   Fonts \`--font-sans\`/\`--font-mono\`; radii \`--radius-sm/md/lg\`; the
-  one easing \`--ease-standard\`.
+  one easing \`--ease-standard\`; type size \`--cat-font-size\` (small
+  labels \`--cat-font-size-sm\`); row density \`--cat-row-h\`; motion
+  durations \`--cat-motion-fast/base/slow\`. All are set by the host —
+  never hardcode a value one of them covers.
 - Secondary text is \`--color-fg-muted\`, hints \`--color-fg-faint\`.
 - **One primary action per view** (\`Button variant="primary"\`);
   everything else is ghost or subtle.
@@ -736,8 +740,9 @@ function Orders() {
 ### Motion doctrine
 
 The kit animates itself — dialogs, popovers, tooltips, spinners already
-follow the shell's motion contract. Apps add NO animation beyond color
-transitions on their own hover states (~150ms \`var(--ease-standard)\`).
+follow the host's motion contract. Apps add NO animation beyond color
+transitions on their own hover states
+(\`var(--cat-motion-fast) var(--ease-standard)\`).
 Nothing loops, nothing bounces, nothing animates on load.
 
 ### Forms
@@ -758,7 +763,7 @@ workflows through the client instead. Do still use \`<form>\` +
 - Never hardcode a palette: no hex/rgb literals, every color through a
   \`--color-*\` var.
 - No decorative motion; don't re-animate what the kit animates.
-- Don't hide scrollbars — visible scrollbars are part of the desktop feel.
+- Don't hide scrollbars — visible scrollbars are part of the host's feel.
 
 ## Creating an app
 

@@ -15,12 +15,81 @@ describe("buildAppGuestDocument", () => {
     expect(doc).toContain("--color-bg:#f7f7f5");
     expect(doc).toContain("--color-accent:#d63c0c");
     expect(doc).toContain("color-scheme:light");
-    // The shared base layer: shell font stack and the one easing.
+    // The shared base layer: neutral font stack and easing defaults.
     expect(doc).toContain("--font-sans");
     expect(doc).toContain("--ease-standard:cubic-bezier(0.2,0,0,1)");
     expect(doc.indexOf("--color-bg:#f7f7f5")).toBeLessThan(
       doc.indexOf("<script>"),
     );
+    // The theme rule comes AFTER the base layer, so a host-supplied feel
+    // token overrides the neutral default.
+    expect(doc.indexOf("--font-sans:system-ui")).toBeLessThan(
+      doc.indexOf("--color-bg:#f7f7f5"),
+    );
+  });
+
+  it("carries host feel tokens into the document and the live-theme handler", () => {
+    const doc = buildAppGuestDocument({
+      code: "/* bundle */",
+      css: "",
+      theme: {
+        appearance: "dark",
+        colors: {},
+        fonts: { sans: "Georgia,serif" },
+        radii: { sm: "2px" },
+        easing: "ease-out",
+        baseFontSize: "15px",
+        rowHeight: "36px",
+        motion: { fast: "80ms" },
+      },
+    });
+    // The initial <style> seeds every provided feel var…
+    expect(doc).toContain("--font-sans:Georgia,serif;");
+    expect(doc).toContain("--radius-sm:2px;");
+    expect(doc).toContain("--ease-standard:ease-out;");
+    expect(doc).toContain("--cat-font-size:15px;");
+    expect(doc).toContain("--cat-row-h:36px;");
+    expect(doc).toContain("--cat-motion-fast:80ms;");
+    // …and the runtime's live-theme handler knows how to re-apply them.
+    for (const varName of [
+      "'--font-mono'",
+      "'--radius-lg'",
+      "'--cat-font-size'",
+      "'--cat-row-h'",
+      "'--cat-motion-slow'",
+    ]) {
+      expect(doc).toContain(varName);
+    }
+  });
+
+  it("injects the embedder stylesheet after the kit, before the app CSS", () => {
+    const doc = buildAppGuestDocument({
+      code: "/* bundle */",
+      css: ".mine{color:var(--color-fg)}",
+      hostCss: ".cat-btn{text-transform:uppercase}</style><b>",
+    });
+    // Host CSS can restyle cat-* wholesale: it lands AFTER the kit sheet…
+    expect(doc.indexOf(".cat-btn{appearance:none")).toBeLessThan(
+      doc.indexOf(".cat-btn{text-transform:uppercase"),
+    );
+    // …and BEFORE the app's own CSS, which still overrides everything.
+    expect(doc.indexOf(".cat-btn{text-transform:uppercase")).toBeLessThan(
+      doc.indexOf(".mine{"),
+    );
+    // Escaped like the app CSS: it cannot break out of its style element.
+    expect(doc).toContain("<\\/style><b>");
+  });
+
+  it("omits the kit stylesheet when the embedder opts out", () => {
+    const doc = buildAppGuestDocument({
+      code: "/* bundle */",
+      css: ".mine{color:var(--color-fg)}",
+      kit: false,
+    });
+    expect(doc).not.toContain(".cat-btn");
+    // The base token layer and the app CSS still ship.
+    expect(doc).toContain("--cat-font-size:13px");
+    expect(doc).toContain(".mine{");
   });
 
   it("injects the UI-kit stylesheet after the base layer, before app CSS", () => {

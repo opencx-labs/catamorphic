@@ -198,16 +198,67 @@ describe("guest document serving", () => {
     const hostile = encodeURIComponent(
       JSON.stringify({
         appearance: "light",
-        colors: { bg: "red}</style><script>" },
+        colors: { bg: "red}</style><script>", fg: "#111" },
       }),
     );
-    const unthemed = await appWithViewCore().inject({
+    // A hostile value drops that entry, never the whole theme: the clean
+    // color and the appearance still apply.
+    const partial = await appWithViewCore().inject({
       method: "GET",
       url: `/api/projects/${PROJECT_ID}/apps/ops-dashboard/guest?theme=${hostile}`,
       headers,
     });
+    expect(partial.statusCode).toBe(200);
+    expect(partial.body).not.toContain("red}");
+    expect(partial.body).toContain("--color-fg:#111");
+    expect(partial.body).toContain("color-scheme:light");
+
+    // Without a valid appearance the theme is unusable → unthemed document.
+    const noAppearance = encodeURIComponent(
+      JSON.stringify({ appearance: "sparkly", colors: { bg: "#fff" } }),
+    );
+    const unthemed = await appWithViewCore().inject({
+      method: "GET",
+      url: `/api/projects/${PROJECT_ID}/apps/ops-dashboard/guest?theme=${noAppearance}`,
+      headers,
+    });
     expect(unthemed.statusCode).toBe(200);
     expect(unthemed.body).not.toContain("color-scheme:light");
+    expect(unthemed.body).not.toContain("--color-bg:#fff");
+  });
+
+  it("threads feel tokens through, dropping only invalid fields", async () => {
+    const theme = encodeURIComponent(
+      JSON.stringify({
+        appearance: "dark",
+        colors: { bg: "#000" },
+        fonts: { sans: "Georgia, serif", mono: "x}</style>" },
+        radii: { sm: "2px" },
+        easing: "cubic-bezier(0.4, 0, 0.2, 1)",
+        baseFontSize: "15px",
+        rowHeight: "36px",
+        motion: { fast: "80ms", base: "not{valid" },
+        unknownField: "ignored",
+      }),
+    );
+    const response = await appWithViewCore().inject({
+      method: "GET",
+      url: `/api/projects/${PROJECT_ID}/apps/ops-dashboard/guest?theme=${theme}`,
+      headers,
+    });
+    expect(response.statusCode).toBe(200);
+    expect(response.body).toContain("--font-sans:Georgia, serif;");
+    expect(response.body).toContain("--radius-sm:2px;");
+    expect(response.body).toContain(
+      "--ease-standard:cubic-bezier(0.4, 0, 0.2, 1);",
+    );
+    expect(response.body).toContain("--cat-font-size:15px;");
+    expect(response.body).toContain("--cat-row-h:36px;");
+    expect(response.body).toContain("--cat-motion-fast:80ms;");
+    // The hostile leaves are dropped; their valid siblings survive.
+    expect(response.body).not.toContain("--font-mono:x");
+    expect(response.body).not.toContain("not{valid");
+    expect(response.body).toContain("color-scheme:dark");
   });
 
   it("revalidates the guest document by version + storage revision", async () => {

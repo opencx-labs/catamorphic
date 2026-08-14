@@ -2010,3 +2010,24 @@ Patterned on what best-in-class palettes converged on (Chrome omnibox
 - Verified: 32 kit unit tests (calendar keyboard traversal, dialog trap,
   width-stable buttons, sort cycle), kitchen-sink demo screenshotted in
   both themes inside the real sandbox, desktop e2e 75/75.
+
+### 2026-08-14 — An app's feel is the embedder's (ADR 0048)
+- **The app kit no longer carries this shell's aesthetics.** The kit ships
+  structure and behavior (focus traps, aria, data-state patterns, calendar
+  logic); every aesthetic decision — colors, fonts, base size, row density,
+  radii, easing, motion durations — flows from host-supplied theme tokens
+  with neutral defaults (`system-ui`, 13px/28px, 4/6/10 radii,
+  150/220/250ms). `AppHostTheme` grew the feel fields; the guest route
+  validates them per-field; live theme messages re-apply them without a
+  reload; `buildAppGuestDocument` takes `hostCss` (embedder restyling of
+  `cat-*` after the kit, before app CSS) and `kit: false`.
+- **The desktop is just one embedder now.** It passes its exact feel —
+  Inter/JetBrains stacks, 13px base, 28px rows, radii 4/6/10,
+  `cubic-bezier(0.2,0,0,1)`, motion 150/220/250ms — from ONE mapping
+  (`appHostTheme` in `renderer/lib/theme.tsx`) beside the resolved colors.
+  Mounted apps render pixel-identically to before; the coupling moved from
+  the kit's stylesheet into the desktop's own theme assembly, where it
+  belongs. Proof both ways: the kitchen-sink demo under the desktop's
+  tokens matches the previous screenshot; under a deliberately alien theme
+  (serif, 15px, 2px radii, 36px rows, 80ms motion) it visibly becomes a
+  different product.

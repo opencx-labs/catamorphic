@@ -1,7 +1,7 @@
 import { useCatamorphic } from "@catamorphic/react";
 import { AppMount } from "@catamorphic/ui";
 import { useQuery } from "@tanstack/react-query";
-import { useTheme } from "../lib/theme.js";
+import { appHostTheme, useTheme } from "../lib/theme.js";
 
 // Must match DESKTOP_TENANT_ID / DESKTOP_USER_ID injected by the embedded
 // server (src/main/server/boot.ts) for the single-tenant desktop identity.
@@ -48,14 +48,11 @@ export function AppScreen({
           tenantId: DESKTOP_TENANT_ID,
           user: { id: DESKTOP_USER_ID },
         }}
-        // Apps live inside the shell: hand them the profile's resolved
-        // design tokens so shared-vocabulary styling matches it exactly,
-        // and keep them current across theme switches.
-        theme={
-          theme
-            ? { appearance: theme.appearance, colors: theme.colors }
-            : undefined
-        }
+        // Apps live inside the shell: hand them the full theme — the
+        // profile's resolved colors plus the desktop's feel tokens — so
+        // shared-vocabulary styling matches it exactly, and keep them
+        // current across theme switches.
+        theme={theme ? appHostTheme(theme) : undefined}
         className="mx-auto w-full max-w-5xl overflow-hidden rounded-lg border border-border bg-bg-raised"
         // The desktop is the owner's surface: show the newest ready build
         // (the version being developed), not just the published one.

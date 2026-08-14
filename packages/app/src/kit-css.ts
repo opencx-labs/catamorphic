@@ -2,19 +2,24 @@
  * The stylesheet for `@catamorphic/app/ui` — every `cat-*` class the kit's
  * components render. Hosts inject it into each app guest document AFTER
  * {@link APP_BASE_CSS} (so the token vocabulary exists) and BEFORE the app's
- * own CSS (so an app can still override anything). App authors never import
- * CSS: using the components is enough.
+ * own CSS (so an app can still override anything).
  *
- * Rules this sheet lives by (see the desktop shell's DESIGN.md — the kit IS
- * that design system, for apps):
- * - Colors only through `var(--color-*)` tokens; radii through `--radius-*`;
- *   the one easing `--ease-standard`; fonts through `--font-sans/--font-mono`.
- *   No raw palette values, so every theme — light, dark, user-customized —
- *   comes free.
- * - Desktop density: 13px base, 4px spacing grid, 28px rows, 1px hairlines.
- * - Motion is a state-change signal on the one easing, 100–300ms; nothing
- *   loops except indeterminate progress (spinner, skeleton shimmer); exits
- *   mirror enters and play before unmount.
+ * Rules this sheet lives by:
+ * - The kit ships STRUCTURE and BEHAVIOR; the FEEL is the embedder's. Every
+ *   aesthetic value flows through the theme vars: colors via `var(--color-*)`,
+ *   radii via `--radius-*`, the one easing `--ease-standard`, fonts through
+ *   `--font-sans/--font-mono`, type sizes derived from `--cat-font-size` /
+ *   `--cat-font-size-sm`, row density from `--cat-row-h`, and motion
+ *   durations from `--cat-motion-fast/base/slow`. No raw palette, size, or
+ *   duration values — whatever host mounts the app, its theme comes free.
+ * - The remaining px literals are structural: 1px hairlines, focus-ring and
+ *   check-glyph geometry, spacing on the 4px grid, and fixed component
+ *   geometry (calendar cell width, dialog/tooltip max widths).
+ * - Motion is a state-change signal on the one easing: hover/color feedback
+ *   on `--cat-motion-fast`, structural enters on `--cat-motion-base`, exits
+ *   mirroring enters slightly quicker; nothing loops except indeterminate
+ *   progress (spinner, skeleton shimmer), whose loop rates signal "activity"
+ *   and deliberately do NOT scale with the host's transition pacing.
  * - `prefers-reduced-motion: reduce` collapses all of it to opacity-only
  *   fades of at most 50ms.
  */
@@ -33,16 +38,20 @@ export const APP_KIT_CSS = `
   gap:6px;border:1px solid transparent;border-radius:var(--radius-md);
   font:inherit;font-weight:500;white-space:nowrap;cursor:pointer;
   user-select:none;background:transparent;color:var(--color-fg);
-  transition:background-color 150ms var(--ease-standard),
-    border-color 150ms var(--ease-standard),color 150ms var(--ease-standard),
-    opacity 150ms var(--ease-standard);
+  transition:background-color var(--cat-motion-fast) var(--ease-standard),
+    border-color var(--cat-motion-fast) var(--ease-standard),
+    color var(--cat-motion-fast) var(--ease-standard),
+    opacity var(--cat-motion-fast) var(--ease-standard);
 }
 .cat-btn:disabled{cursor:default;opacity:.55}
 /* Pending is not disabled-gray: the spinner carries the "working" signal,
    the button keeps its full color. */
 .cat-btn[aria-busy="true"]:disabled{opacity:1}
-.cat-btn--md{height:28px;padding:0 12px;font-size:13px}
-.cat-btn--sm{height:24px;padding:0 8px;font-size:12px}
+.cat-btn--md{height:var(--cat-row-h);padding:0 12px;font-size:var(--cat-font-size)}
+.cat-btn--sm{
+  height:calc(var(--cat-row-h) - 4px);padding:0 8px;
+  font-size:calc(var(--cat-font-size) - 1px);
+}
 .cat-btn--primary{background:var(--color-accent);color:var(--color-accent-fg)}
 .cat-btn--primary:hover:not(:disabled){
   background:color-mix(in srgb,var(--color-accent) 88%,var(--color-fg));
@@ -86,20 +95,26 @@ export const APP_KIT_CSS = `
 
 /* ---------------------------------------------------------------- field */
 .cat-field{display:flex;flex-direction:column;gap:4px;min-width:0}
-.cat-field-label{font-size:12px;font-weight:500;color:var(--color-fg-muted)}
-.cat-field-hint{font-size:11px;color:var(--color-fg-faint);margin:0}
-.cat-field-error{font-size:11px;color:var(--color-danger);margin:0}
+.cat-field-label{
+  font-size:calc(var(--cat-font-size) - 1px);font-weight:500;
+  color:var(--color-fg-muted);
+}
+.cat-field-hint{font-size:var(--cat-font-size-sm);color:var(--color-fg-faint);margin:0}
+.cat-field-error{font-size:var(--cat-font-size-sm);color:var(--color-danger);margin:0}
 
 /* --------------------------------------------------------------- inputs */
 .cat-input,.cat-textarea,.cat-select select,.cat-datepicker-trigger{
-  appearance:none;font:inherit;font-size:13px;width:100%;
+  appearance:none;font:inherit;font-size:var(--cat-font-size);width:100%;
   color:var(--color-fg);background:var(--color-bg-inset);
   border:1px solid var(--color-border);border-radius:var(--radius-sm);
-  transition:border-color 150ms var(--ease-standard),
-    box-shadow 150ms var(--ease-standard);
+  transition:border-color var(--cat-motion-fast) var(--ease-standard),
+    box-shadow var(--cat-motion-fast) var(--ease-standard);
 }
-.cat-input,.cat-select select{height:28px;padding:0 8px}
-.cat-textarea{min-height:56px;padding:6px 8px;resize:vertical;line-height:1.45}
+.cat-input,.cat-select select{height:var(--cat-row-h);padding:0 8px}
+.cat-textarea{
+  min-height:calc(var(--cat-row-h)*2);padding:6px 8px;resize:vertical;
+  line-height:1.45;
+}
 .cat-input::placeholder,.cat-textarea::placeholder{color:var(--color-fg-faint)}
 .cat-input:focus,.cat-textarea:focus,.cat-select select:focus{
   outline:none;border-color:var(--color-accent);
@@ -129,8 +144,8 @@ export const APP_KIT_CSS = `
   appearance:none;flex:none;width:14px;height:14px;margin:0;cursor:pointer;
   border:1px solid var(--color-border-strong);border-radius:var(--radius-sm);
   background:var(--color-bg-inset);position:relative;vertical-align:-2px;
-  transition:background-color 150ms var(--ease-standard),
-    border-color 150ms var(--ease-standard);
+  transition:background-color var(--cat-motion-fast) var(--ease-standard),
+    border-color var(--cat-motion-fast) var(--ease-standard);
 }
 .cat-checkbox:checked{background:var(--color-accent);border-color:var(--color-accent)}
 .cat-checkbox:checked::after{
@@ -141,16 +156,16 @@ export const APP_KIT_CSS = `
 .cat-checkbox:disabled{opacity:.55;cursor:default}
 .cat-switch{
   appearance:none;position:relative;flex:none;width:28px;height:16px;
-  padding:0;border-radius:8px;cursor:pointer;
+  padding:0;border-radius:999px;cursor:pointer;
   border:1px solid var(--color-border-strong);background:var(--color-bg-inset);
-  transition:background-color 150ms var(--ease-standard),
-    border-color 150ms var(--ease-standard);
+  transition:background-color var(--cat-motion-fast) var(--ease-standard),
+    border-color var(--cat-motion-fast) var(--ease-standard);
 }
 .cat-switch::after{
   content:"";position:absolute;top:2px;left:2px;width:10px;height:10px;
-  border-radius:5px;background:var(--color-fg-muted);
-  transition:translate 150ms var(--ease-standard),
-    background-color 150ms var(--ease-standard);
+  border-radius:999px;background:var(--color-fg-muted);
+  transition:translate var(--cat-motion-fast) var(--ease-standard),
+    background-color var(--cat-motion-fast) var(--ease-standard);
 }
 .cat-switch[aria-checked="true"]{
   background:var(--color-accent);border-color:var(--color-accent);
@@ -166,8 +181,14 @@ export const APP_KIT_CSS = `
   border-radius:var(--radius-lg);padding:16px;min-width:0;
 }
 .cat-card-header{margin-bottom:12px}
-.cat-card-title{margin:0;font-size:14px;font-weight:600;color:var(--color-fg)}
-.cat-card-desc{margin:2px 0 0;font-size:12px;color:var(--color-fg-muted)}
+.cat-card-title{
+  margin:0;font-size:calc(var(--cat-font-size) + 1px);font-weight:600;
+  color:var(--color-fg);
+}
+.cat-card-desc{
+  margin:2px 0 0;font-size:calc(var(--cat-font-size) - 1px);
+  color:var(--color-fg-muted);
+}
 .cat-card-footer{
   margin-top:12px;padding-top:12px;border-top:1px solid var(--color-border);
   display:flex;justify-content:flex-end;gap:8px;
@@ -179,8 +200,9 @@ export const APP_KIT_CSS = `
 }
 .cat-tab{
   appearance:none;position:relative;background:none;border:none;padding:6px 0 7px;
-  font:inherit;font-size:13px;color:var(--color-fg-muted);cursor:pointer;
-  transition:color 150ms var(--ease-standard);
+  font:inherit;font-size:var(--cat-font-size);color:var(--color-fg-muted);
+  cursor:pointer;
+  transition:color var(--cat-motion-fast) var(--ease-standard);
 }
 .cat-tab:hover{color:var(--color-fg)}
 .cat-tab[aria-selected="true"]{color:var(--color-fg)}
@@ -194,8 +216,8 @@ export const APP_KIT_CSS = `
 /* ---------------------------------------------------------------- badge */
 .cat-badge{
   display:inline-flex;align-items:center;gap:4px;flex:none;
-  font-size:11px;font-weight:500;line-height:1;padding:3px 6px;
-  border-radius:var(--radius-sm);
+  font-size:var(--cat-font-size-sm);font-weight:500;line-height:1;
+  padding:3px 6px;border-radius:var(--radius-sm);
 }
 .cat-badge--neutral{
   background:color-mix(in srgb,var(--color-fg) 8%,transparent);
@@ -223,13 +245,13 @@ export const APP_KIT_CSS = `
   display:flex;flex-direction:column;align-items:center;justify-content:center;
   gap:10px;padding:24px 16px;text-align:center;
 }
-.cat-empty-message{margin:0;font-size:13px;color:var(--color-fg-muted)}
+.cat-empty-message{margin:0;font-size:var(--cat-font-size);color:var(--color-fg-muted)}
 
 /* ------------------------------------------------------ key/value rows */
 .cat-kv-list{display:flex;flex-direction:column;min-width:0}
 .cat-kv-row{
   display:flex;align-items:center;justify-content:space-between;gap:12px;
-  min-height:28px;font-size:13px;min-width:0;
+  min-height:var(--cat-row-h);font-size:var(--cat-font-size);min-width:0;
 }
 .cat-kv-list>.cat-kv-row+.cat-kv-row{border-top:1px solid var(--color-border)}
 .cat-kv-label{flex-shrink:0;color:var(--color-fg-muted)}
@@ -242,7 +264,7 @@ export const APP_KIT_CSS = `
 .cat-dialog-overlay{
   position:fixed;inset:0;z-index:100;
   background:color-mix(in srgb,var(--color-bg) 55%,transparent);
-  animation:cat-fade-in 220ms var(--ease-standard);
+  animation:cat-fade-in var(--cat-motion-base) var(--ease-standard);
 }
 .cat-dialog{
   position:fixed;inset:0;z-index:101;display:grid;place-items:center;
@@ -253,16 +275,23 @@ export const APP_KIT_CSS = `
   border-radius:var(--radius-lg);padding:16px;width:100%;max-width:420px;
   /* Shadows are reserved for true overlays; the scrim color is theme-neutral. */
   box-shadow:0 16px 48px -12px rgb(0 0 0 / .5);
-  animation:cat-dialog-in 220ms var(--ease-standard);
+  animation:cat-dialog-in var(--cat-motion-base) var(--ease-standard);
 }
+/* Exits mirror enters, slightly quicker (~80% of the enter duration). */
 .cat-dialog-root[data-state="closing"] .cat-dialog-overlay{
-  animation:cat-fade-out 180ms var(--ease-standard) forwards;
+  animation:cat-fade-out calc(var(--cat-motion-base)*.82) var(--ease-standard) forwards;
 }
 .cat-dialog-root[data-state="closing"] .cat-dialog-panel{
-  animation:cat-dialog-out 180ms var(--ease-standard) forwards;
+  animation:cat-dialog-out calc(var(--cat-motion-base)*.82) var(--ease-standard) forwards;
 }
-.cat-dialog-title{margin:0 0 4px;font-size:16px;font-weight:600;color:var(--color-fg)}
-.cat-dialog-desc{margin:0 0 12px;font-size:12px;color:var(--color-fg-muted)}
+.cat-dialog-title{
+  margin:0 0 4px;font-size:calc(var(--cat-font-size) + 3px);font-weight:600;
+  color:var(--color-fg);
+}
+.cat-dialog-desc{
+  margin:0 0 12px;font-size:calc(var(--cat-font-size) - 1px);
+  color:var(--color-fg-muted);
+}
 .cat-dialog-footer{display:flex;justify-content:flex-end;gap:8px;margin-top:16px}
 @keyframes cat-fade-in{from{opacity:0}to{opacity:1}}
 @keyframes cat-fade-out{from{opacity:1}to{opacity:0}}
@@ -278,7 +307,7 @@ export const APP_KIT_CSS = `
   position:fixed;z-index:120;pointer-events:none;max-width:280px;
   background:var(--color-bg-overlay);border:1px solid var(--color-border);
   border-radius:var(--radius-sm);padding:4px 8px;
-  font-size:11px;color:var(--color-fg);
+  font-size:var(--cat-font-size-sm);color:var(--color-fg);
   box-shadow:0 4px 16px -8px rgb(0 0 0 / .5);
 }
 .cat-popover{
@@ -288,18 +317,18 @@ export const APP_KIT_CSS = `
   box-shadow:0 8px 32px -12px rgb(0 0 0 / .5);
 }
 .cat-tooltip[data-side="top"],.cat-popover[data-side="top"]{
-  animation:cat-pop-in-top 150ms var(--ease-standard);
+  animation:cat-pop-in-top var(--cat-motion-fast) var(--ease-standard);
 }
 .cat-tooltip[data-side="bottom"],.cat-popover[data-side="bottom"]{
-  animation:cat-pop-in-bottom 150ms var(--ease-standard);
+  animation:cat-pop-in-bottom var(--cat-motion-fast) var(--ease-standard);
 }
 .cat-tooltip[data-state="closing"][data-side="top"],
 .cat-popover[data-state="closing"][data-side="top"]{
-  animation:cat-pop-out-top 150ms var(--ease-standard) forwards;
+  animation:cat-pop-out-top var(--cat-motion-fast) var(--ease-standard) forwards;
 }
 .cat-tooltip[data-state="closing"][data-side="bottom"],
 .cat-popover[data-state="closing"][data-side="bottom"]{
-  animation:cat-pop-out-bottom 150ms var(--ease-standard) forwards;
+  animation:cat-pop-out-bottom var(--cat-motion-fast) var(--ease-standard) forwards;
 }
 @keyframes cat-pop-in-top{from{opacity:0;translate:0 2px}to{opacity:1;translate:0 0}}
 @keyframes cat-pop-out-top{from{opacity:1;translate:0 0}to{opacity:0;translate:0 2px}}
@@ -312,20 +341,21 @@ export const APP_KIT_CSS = `
   border-radius:var(--radius-md);background:var(--color-bg-raised);
 }
 .cat-table{
-  width:100%;border-collapse:separate;border-spacing:0;font-size:13px;
+  width:100%;border-collapse:separate;border-spacing:0;
+  font-size:var(--cat-font-size);
 }
 .cat-table th{
-  position:sticky;top:0;z-index:1;height:28px;padding:0 10px;
+  position:sticky;top:0;z-index:1;height:var(--cat-row-h);padding:0 10px;
   background:var(--color-bg-raised);text-align:left;white-space:nowrap;
-  font-size:11px;font-weight:500;color:var(--color-fg-muted);
+  font-size:var(--cat-font-size-sm);font-weight:500;color:var(--color-fg-muted);
   box-shadow:inset 0 -1px 0 var(--color-border);
 }
 .cat-table td{
-  height:28px;padding:0 10px;color:var(--color-fg);white-space:nowrap;
+  height:var(--cat-row-h);padding:0 10px;color:var(--color-fg);white-space:nowrap;
   overflow:hidden;text-overflow:ellipsis;max-width:0;
 }
 .cat-table tbody tr+tr td{border-top:1px solid var(--color-border)}
-.cat-table tbody tr{transition:background-color 150ms var(--ease-standard)}
+.cat-table tbody tr{transition:background-color var(--cat-motion-fast) var(--ease-standard)}
 .cat-table tbody tr:hover{
   background:color-mix(in srgb,var(--color-fg) 3%,transparent);
 }
@@ -340,14 +370,14 @@ export const APP_KIT_CSS = `
   font:inherit;color:inherit;border-radius:var(--radius-sm);
 }
 .cat-table-sort .cat-table-arrow{
-  opacity:0;transition:opacity 150ms var(--ease-standard);
-  font-size:9px;line-height:1;
+  opacity:0;transition:opacity var(--cat-motion-fast) var(--ease-standard);
+  font-size:calc(var(--cat-font-size-sm) - 2px);line-height:1;
 }
 .cat-table th:hover .cat-table-arrow{opacity:.6}
 .cat-table th[aria-sort] .cat-table-arrow{opacity:1;color:var(--color-accent)}
 .cat-table-foot td{
-  height:24px;font-size:11px;color:var(--color-fg-faint);
-  border-top:1px solid var(--color-border);
+  height:calc(var(--cat-row-h) - 4px);font-size:var(--cat-font-size-sm);
+  color:var(--color-fg-faint);border-top:1px solid var(--color-border);
 }
 .cat-table td .cat-skeleton{display:block}
 
@@ -357,28 +387,31 @@ export const APP_KIT_CSS = `
   display:flex;align-items:center;gap:4px;margin-bottom:8px;
 }
 .cat-cal-title{
-  flex:1;text-align:center;font-size:12px;font-weight:600;color:var(--color-fg);
+  flex:1;text-align:center;font-size:calc(var(--cat-font-size) - 1px);
+  font-weight:600;color:var(--color-fg);
 }
 .cat-cal-nav{
-  appearance:none;display:grid;place-items:center;width:24px;height:24px;
+  appearance:none;display:grid;place-items:center;
+  width:calc(var(--cat-row-h) - 4px);height:calc(var(--cat-row-h) - 4px);
   background:none;border:none;padding:0;border-radius:var(--radius-sm);
   color:var(--color-fg-muted);cursor:pointer;
-  transition:background-color 150ms var(--ease-standard),
-    color 150ms var(--ease-standard);
+  transition:background-color var(--cat-motion-fast) var(--ease-standard),
+    color var(--cat-motion-fast) var(--ease-standard);
 }
 .cat-cal-nav:hover{background:var(--color-bg-overlay);color:var(--color-fg)}
 .cat-cal-dowrow,.cat-cal-grid{display:grid;grid-template-columns:repeat(7,36px)}
 .cat-cal-week{display:contents}
 .cat-cal-dow{
-  height:20px;display:grid;place-items:center;font-size:10px;
+  height:20px;display:grid;place-items:center;
+  font-size:calc(var(--cat-font-size-sm) - 1px);
   text-transform:uppercase;letter-spacing:.04em;color:var(--color-fg-faint);
 }
 .cat-cal-day{
-  appearance:none;position:relative;width:36px;height:28px;
+  appearance:none;position:relative;width:36px;height:var(--cat-row-h);
   display:grid;place-items:center;background:none;border:none;padding:0;
-  font:inherit;font-size:12px;color:var(--color-fg);
+  font:inherit;font-size:calc(var(--cat-font-size) - 1px);color:var(--color-fg);
   border-radius:var(--radius-md);cursor:pointer;
-  transition:background-color 100ms var(--ease-standard);
+  transition:background-color var(--cat-motion-fast) var(--ease-standard);
 }
 .cat-cal-day:hover{background:var(--color-bg-overlay)}
 .cat-cal-day[data-outside="true"]{color:var(--color-fg-faint)}
@@ -424,8 +457,8 @@ export const APP_KIT_CSS = `
 /* ---------------------------------------------------------- date picker */
 .cat-datepicker{position:relative;display:block;width:100%}
 .cat-datepicker-trigger{
-  display:inline-flex;align-items:center;gap:8px;height:28px;padding:0 8px;
-  text-align:left;cursor:pointer;
+  display:inline-flex;align-items:center;gap:8px;height:var(--cat-row-h);
+  padding:0 8px;text-align:left;cursor:pointer;
 }
 .cat-datepicker-trigger>svg{flex:none;color:var(--color-fg-muted)}
 .cat-datepicker-trigger>span{
@@ -438,8 +471,8 @@ export const APP_KIT_CSS = `
   display:grid;place-items:center;width:20px;height:20px;
   background:none;border:none;padding:0;border-radius:var(--radius-sm);
   color:var(--color-fg-faint);cursor:pointer;
-  transition:color 150ms var(--ease-standard),
-    background-color 150ms var(--ease-standard);
+  transition:color var(--cat-motion-fast) var(--ease-standard),
+    background-color var(--cat-motion-fast) var(--ease-standard);
 }
 .cat-datepicker-clear:hover{background:var(--color-bg-overlay);color:var(--color-fg)}
 
@@ -448,7 +481,7 @@ export const APP_KIT_CSS = `
 .cat-scrollhint-viewport{overflow:auto;max-height:inherit;min-width:0}
 .cat-scrollhint-fade{
   position:absolute;z-index:2;pointer-events:none;opacity:0;
-  transition:opacity 200ms var(--ease-standard);
+  transition:opacity var(--cat-motion-base) var(--ease-standard);
 }
 .cat-scrollhint-fade[data-visible="true"]{opacity:1}
 .cat-scrollhint-fade[data-edge="top"]{
