@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Catamorphic Desktop: all your work, one place</title>
-<meta name="description" content="A local-first desktop workspace that puts everything you need to get real work done in one place: web tabs with your logins, terminals, editors, notes, and agents that help on the same surfaces. Polished for daily driving, in files you own.">
+<meta name="description" content="A local-first desktop workspace that puts everything you need to get real work done in one place: projects that hold documents, data, code, automations, and apps; web tabs with your logins; terminals; editors; and agents that help on the same surfaces. Git-native tracking you never have to see, a real dev shell when you want one, polished for daily driving.">
 <meta property="og:title" content="Catamorphic Desktop">
 <meta property="og:description" content="All your work, one place. Browser, terminals, editors, and agents that help, in a workspace polished for daily use.">
 <meta property="og:type" content="website">
@@ -32,7 +32,7 @@
   <div class="container hero-inner">
     <span class="hero-badge"><span class="dot"></span>In active development · macOS first · built in the open</span>
     <h1>All your work, <span class="accent">one place</span></h1>
-    <p class="lede">Catamorphic Desktop puts everything you need to get real work done in one local-first workspace: browser, terminals, editors, notes, and agents that help on the same surfaces. Delegate the routine, steer when you care. Built to daily-driver polish: every animation, keyboard path, and empty state is deliberate.</p>
+    <p class="lede">Catamorphic Desktop puts everything you need to get real work done in one local-first workspace. Projects hold your documents, data, code, automations, and apps together; browser, terminals, and editors sit beside the chats; agents help on the same surfaces you use. Delegate the routine, steer when you care. Built to daily-driver polish: every animation, keyboard path, and empty state is deliberate.</p>
     <div class="hero-actions">
       <a class="btn btn-primary" href="https://github.com/opencx-labs/catamorphic">Follow on GitHub</a>
       <a class="btn btn-ghost" href="/workflows/">The engine underneath</a>
@@ -50,6 +50,11 @@
     </div>
     <div class="grid">
       <div class="card reveal">
+        <span class="icon"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8Z"/><path d="M14 2v6h6"/></svg></span>
+        <h3>Projects hold any kind of work</h3>
+        <p>A project is a folder you can see in Finder: documents, notes, data, plans, code, automations, and apps, in any mix. Import an existing folder or clone a repo and its contents are adopted as-is. The automation workspace appears the first time you ask for one, not before.</p>
+      </div>
+      <div class="card reveal">
         <span class="icon"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="3" width="20" height="14" rx="2"/><path d="M8 21h8m-4-4v4"/></svg></span>
         <h3>Real work surfaces</h3>
         <p>Web tabs with your logins and profiles, real terminals (Ghostty's engine), an editor, and chats: all first-class tabs in one workspace, tileable side by side. Agents and you share the same surfaces.</p>
@@ -61,23 +66,45 @@
       </div>
       <div class="card reveal">
         <span class="icon"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7Z"/><circle cx="12" cy="12" r="3"/></svg></span>
-        <h3>Watchable, interruptible agents</h3>
-        <p>Agent-driven tabs and terminals stay visible with a quiet accent ring, and every page action flashes on the element it touches. One click takes the surface over; the agent notices and adapts instead of fighting you.</p>
-      </div>
-      <div class="card reveal">
-        <span class="icon"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m9 11 3 3L22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg></span>
-        <h3>Review what matters, code or prose</h3>
-        <p>Nothing an agent does is hidden: pull up diffs for code or track-changes for writing whenever a change deserves scrutiny. Skim the routine, dig into the critical, redirect the agent from the diff. Built for writers and researchers as much as developers. <em>In progress.</em></p>
-      </div>
-      <div class="card reveal">
-        <span class="icon"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8Z"/><path d="M14 2v6h6"/></svg></span>
-        <h3>Notes and projects are files</h3>
-        <p>A project is a folder you can see in Finder. Notes are markdown inside it. Config is JSON you can edit by hand, or ask an agent to. Nothing hides in an opaque store; leave any time with everything. <em>Notes in progress.</em></p>
+        <h3>Agents that show their work</h3>
+        <p>Agent-driven tabs and terminals stay visible with a quiet accent ring, and every page action flashes on the element it touches. Agents can open a page behind your chat to show you something, and point at the exact element they mean. One click takes any surface over; the agent notices and adapts.</p>
       </div>
       <div class="card reveal">
         <span class="icon"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="5" cy="6" r="3"/><circle cx="19" cy="18" r="3"/><path d="M5 9v3a3 3 0 0 0 3 3h8"/></svg></span>
-        <h3>Sync on git, cloud of your own</h3>
-        <p>Connect your GitHub and your projects, notes, and settings sync between devices; it's all files in git underneath. Connect your Cloudflare account for a private cloud we host nothing of. <em>On the roadmap.</em></p>
+        <h3>Tracked like code, without the ceremony</h3>
+        <p>Every project is a git repository underneath. Agent turns that change files land as checkpoints, linked projects sync with GitHub in the background, and agents can push a branch and open a pull request when a change deserves review. Agents report in plain language; you never have to see git.</p>
+      </div>
+      <div class="card reveal">
+        <span class="icon"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m9 11 3 3L22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg></span>
+        <h3>Review what matters</h3>
+        <p>Nothing an agent does is hidden: pull up a diff whenever a change deserves scrutiny, per worktree or per pull-request file. Skim the routine, dig into the critical, redirect the agent from the diff. Track-changes for prose, so writers get the same, is in progress.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section id="depth">
+  <div class="container">
+    <div class="section-header reveal">
+      <p class="eyebrow">// also in the box</p>
+      <h2>Deep where your work is deep</h2>
+      <p>The same app serves a writer and a working engineer. Dev surfaces degrade quietly when a project has no code; nothing hides behind a mode switch.</p>
+    </div>
+    <div class="grid">
+      <div class="card reveal">
+        <span class="icon"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="16 18 22 12 16 6"/><polyline points="8 6 2 12 8 18"/></svg></span>
+        <h3>A real dev shell</h3>
+        <p>Claude Code behaves exactly as it does in the CLI: your repo's CLAUDE.md, <code>.claude</code> skills, commands, and settings all load. Worktrees are listed and diffable, the sidebar shows open pull requests with per-file patches, and terminals and the embedded browser round out the loop.</p>
+      </div>
+      <div class="card reveal">
+        <span class="icon"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg></span>
+        <h3>Agents your project defines</h3>
+        <p>A project can commit its own agents as files: a definition plus a persona document, authored and reviewed like any other work product. Before a project agent spends your personal credentials, you approve it explicitly, and any change to what you approved asks again.</p>
+      </div>
+      <div class="card reveal">
+        <span class="icon"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 1 1-9-9"/><path d="M21 3v6h-6"/></svg></span>
+        <h3>Automations and apps, on demand</h3>
+        <p>Ask for an automation and you get a durable workflow: it can run on triggers, like a chat finishing or a terminal going idle, and any workflow can become a tool your agents call. Ask for a dashboard and an agent builds a sandboxed app on top, with a polished UI kit and storage of its own.</p>
       </div>
     </div>
   </div>
@@ -117,7 +144,7 @@
           <span class="step-num">4</span>
           <div>
             <h3>Judge, then land it</h3>
-            <p>Skim what the session produced, dig into the changes that matter (code and prose alike), and commit when you're satisfied. Scrutiny where you choose, not a toll gate on every line.</p>
+            <p>Skim what the session produced and dig into the changes that matter. Every turn is already checkpointed and synced in the background; ask for a pull request when a change deserves review. Scrutiny where you choose, not a toll gate on every line.</p>
           </div>
         </div>
       </div>
@@ -158,7 +185,7 @@
           <rect x="24" y="322" width="392" height="40" rx="8" fill="#16161a" stroke="#33333b"/>
           <text x="40" y="346" fill="#e6e6e9" font-family="JetBrains Mono, monospace" font-size="11">Review 6 changes</text>
           <rect x="300" y="332" width="100" height="20" rx="6" fill="#f95225"/>
-          <text x="318" y="346" fill="#0a0a0b" font-family="JetBrains Mono, monospace" font-size="10">Commit ↵</text>
+          <text x="318" y="346" fill="#0a0a0b" font-family="JetBrains Mono, monospace" font-size="10">Open PR ↵</text>
         </svg>
       </div>
     </div>
@@ -182,6 +209,28 @@
         <span class="k">03 / honest boundaries</span>
         <h3>Contained, not omnipotent</h3>
         <p>Agents run under real trust boundaries: sandboxed execution, permission scopes, and credentials that are never silently agent-reachable. Control you can see, limits you can set.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section id="roadmap">
+  <div class="container">
+    <div class="section-header reveal">
+      <p class="eyebrow">// where it's going</p>
+      <h2>Direction, stated plainly</h2>
+      <p>Two things the current design points at but does not ship yet. Neither exists today; both are why the seams are shaped the way they are.</p>
+    </div>
+    <div class="grid grid-2">
+      <div class="card reveal">
+        <span class="icon"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="2" width="20" height="8" rx="2"/><rect x="2" y="14" width="20" height="8" rx="2"/><path d="M6 6h.01M6 18h.01"/></svg></span>
+        <h3>A self-hostable server</h3>
+        <p>A stock Catamorphic server you run on your own infrastructure: the desktop connects to it, remote agents speak the Agent Client Protocol, and teams share projects with real roles. <em>Roadmap, not shipped.</em></p>
+      </div>
+      <div class="card reveal">
+        <span class="icon"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m9 11 3 3L22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg></span>
+        <h3>Review-mode collaboration</h3>
+        <p>Shared projects where work flows through branches and pull requests instead of pushing straight to main, with review rendered natively in the app. <em>Roadmap, not shipped.</em></p>
       </div>
     </div>
   </div>

@@ -2,9 +2,27 @@
 
 ## Project Overview
 
-Catamorphic is a framework for building workflow automations and apps, embedded by SaaS products so their users can build automations and dashboards with AI. Workflows and apps are TypeScript code — **the code is strictly the source of truth**; we never invent DSLs or JSON formats for workflow logic. A *project* is a git repo of TypeScript that exports workflows (and, in the future, apps). The parser converts the TypeScript AST into a visual graph rendered by React Flow so non-technical users can understand and (via AI agents) build workflows, while technical users edit the code directly.
+Catamorphic is an open-source, local-first framework for **agentic work
+environments**, plus a desktop app (`apps/desktop`) that is both the
+framework's reference implementation and a polished daily-use product. A
+*project* is a git repo that can hold any kind of work — docs, notes, data,
+code, automations (workflows), and apps (ADR 0043). The framework's
+co-equal capabilities: general-purpose projects, git-native work tracking
+(per-turn checkpoint commits, remote sync, the CodeHost seam — ADR 0044),
+multi-harness coding agents (ADR 0038, 0050), durable workflows, sandboxed
+user-built apps (ADRs 0035–0037), and embedder sovereignty over feel and
+doctrine (ADRs 0048, 0049). Never present Catamorphic as "a workflow
+automation framework" — workflows are one capability among equals.
 
-Workflow code must stay simple: easy for AI agents and humans to write and edit, and intuitive to render for non-technical users. User workflows run like **regular apps** — full IO, real npm dependencies, no restricted JS runtime. Execution happens in sandboxes using **Bun**.
+Where workflows and apps exist, they are TypeScript code — **the code is
+strictly the source of truth**; we never invent DSLs or JSON formats for
+workflow logic. The parser converts the TypeScript AST into a visual graph
+rendered by React Flow so non-technical users can understand and (via AI
+agents) build workflows, while technical users edit the code directly.
+Workflow code must stay simple: easy for AI agents and humans to write and
+edit, and intuitive to render. User workflows run like **regular apps** —
+full IO, real npm dependencies, no restricted JS runtime — executed in
+sandboxes (or local processes, ADR 0047) using **Bun**.
 
 ### Embeddable framework positioning (READ THIS FIRST)
 
@@ -12,15 +30,16 @@ Workflow code must stay simple: easy for AI agents and humans to write and edit,
 
 Concrete implications for any change you make:
 
-- Prefer designs that are **host-injectable**: DB connections/schemas, auth context, storage, sandbox credentials, LLM credentials, and telemetry must be configurable/injectable — never hard-coded.
+- Prefer designs that are **host-injectable**: DB connections/schemas, auth context, storage, sandbox credentials, LLM credentials, telemetry, trigger kinds, seeds/templates/doctrine — all configurable/injectable, never hard-coded.
 - Avoid assumptions that only hold in a single-process demo (a single global DB, a single user, a specific env layout, port, or filesystem path).
 - When adding migrations, API routes, or packages, think first about how a host consumes them (library import, mountable Fastify plugin, schema-scoped migrations, generated client types). See `INTEGRATION.md`.
 - Do not re-introduce a standalone boot, a default tenant, or a default user. Every request carries identity from the host's auth context.
 - When a tradeoff exists between "nice for a demo" vs. "nice for embedding", embedding wins unless the user explicitly says otherwise.
+- Mechanics vs. doctrine (ADR 0049): framework contracts belong in code and the `building-apps`-style mechanics seeds; anything about how work should *look* in a given host must stay replaceable via `projectSeeds` / `projectTemplates` / `standingAgentPrompt`.
 
 ### Infrastructure priorities
 
-- **Cloudflare-first.** Cloudflare Sandbox is the default execution provider. S3-compatible storage (`@catamorphic/s3`, including Cloudflare R2) is the default git code storage until Cloudflare Artifacts access is generally available; Artifacts remains the preferred Cloudflare-native backend in `@catamorphic/cloudflare`. Daytona is the maintained alternate execution provider in `@catamorphic/daytona`. Hosts construct backends explicitly at boot (see ADRs 0008 and 0012 and `apps/desktop/src/main/server/boot.ts`). See `CLOUDFLARE.md`.
+- **Every dependency is an axis.** Postgres or pglite; cloud sandboxes (`@catamorphic/cloudflare` default cloud provider, `@catamorphic/daytona` alternate), local sandboxes (`@catamorphic/microsandbox`), or plain subprocesses (`@catamorphic/local-process`, trusted single-tenant only — ADR 0047); S3-compatible or filesystem code storage. Hosts construct backends explicitly at boot (ADRs 0008, 0012, 0047; see `apps/desktop/src/main/server/boot.ts` and `CLOUDFLARE.md`).
 - **Postgres for everything stateful.** Tables live in a dedicated schema (default `catamorphic`). When you need queues or scheduling, build them on the same Postgres (`SKIP LOCKED`) instead of adding infrastructure.
 - **OpenTelemetry throughout.** Libraries instrument with `@opentelemetry/api` only (via `@catamorphic/otel`); the host owns the SDK/exporters. New service methods on hot paths (runs, deploys, sandbox ops, project mutations) should get spans with `catamorphic.*` attributes. For dev, the repo-root docker-compose ships an OTel collector (:4317/:4318) writing to ClickHouse (:8124 HTTP / :19001 native, db `otel`); hosts register the host-side SDK themselves (see `INTEGRATION.md`).
 - **Bun** for running, bundling, and inside sandboxes.
@@ -31,30 +50,39 @@ Settled decisions live in `docs/decisions/` as short ADRs, indexed in `docs/deci
 
 **When you and the user settle a non-trivial design decision (architecture, package boundaries, storage, execution, naming, dependencies), record it as a new ADR in the same change.** Copy `docs/decisions/0000-template.md`, number it sequentially, keep it under a page, and update the index. When a decision supersedes an old one, mark the old ADR as superseded rather than deleting it. Do not deviate from accepted ADRs without explicit user approval.
 
+Big desktop design/philosophy choices are additionally logged in
+`apps/desktop/DESIGN.md` (the design log).
+
 ## Monorepo Structure
 
 Public developer surface:
 
-- `packages/server-sdk` — **`@catamorphic/server-sdk`**: core backend SDK. `createCatamorphic({ database, storage, sandboxProvider?, pluginResolver? })` accepts a `pg.Pool` or connection string, manages schema-scoped tables (`catamorphic.migrate()`), and exposes tenant/user-scoped clients.
-- `packages/fastify-plugin` — **`@catamorphic/fastify-plugin`**: mountable Fastify plugin (`catamorphicPlugin`) + standalone `createApp` factory with Zod schemas and OpenAPI spec.
+- `packages/server-sdk` — **`@catamorphic/server-sdk`**: core backend SDK. `createCatamorphic({ database, storage, sandboxProvider?, github?, triggerKinds?, mcpToolKinds?, plugins?, projectSeeds?, projectTemplates?, standingAgentPrompt?, ... })`; identity binds per request via `forTenant({ tenantId }).forUser({ externalUserId })`.
+- `packages/fastify-plugin` — **`@catamorphic/fastify-plugin`**: mountable Fastify plugin (`catamorphicPlugin`) + standalone `createApp` factory with Zod schemas and OpenAPI spec. Also serves the per-project MCP endpoints (`/projects/:id/mcp` workflow tools, `/projects/:id/apps-mcp` MCP Apps) and app guest documents.
 - `packages/react` — headless React bindings (provider, TanStack Query hooks, jotai atoms).
-- `packages/ui` — React Flow editor components (canvas, panels, AI bar); all opt-in/composable.
-- `packages/registry` — shadcn-style copy-paste component registry.
+- `packages/ui` — React Flow editor components (canvas, panels, AI bar) + `AppMount` (sandboxed app iframe host); all opt-in/composable.
+- `packages/registry` — shadcn-style copy-paste component registry (projects list, git panel, runs panel, agent chat, Monaco editor, …).
 - `packages/api-client` — generated OpenAPI types + openapi-fetch client.
-- `packages/workflow` — **`@catamorphic/workflow`**: dependency-light `defineWorkflow`, boundary, batch-scope, pause, child-workflow, and physical batch-step authoring primitives; hosts may wrap and selectively re-export this surface.
+- `packages/workflow` — **`@catamorphic/workflow`**: dependency-light `defineWorkflow`, boundary, batch-scope, pause, child-workflow, trigger-subscription, and physical batch-step authoring primitives; hosts may wrap and selectively re-export this surface.
+- `packages/app` — **`@catamorphic/app`**: the guest runtime bundled into every user-built app (typed workflow client, persistent app-local storage shim, dual-dialect MCP Apps probe, `buildAppGuestDocument`) plus the **`@catamorphic/app/ui`** component kit, styled entirely by host theme tokens (ADR 0048).
 
 Internal packages:
 
-- `packages/core` — framework-agnostic service layer (the kernel behind server-sdk and fastify-plugin).
+- `packages/core` — framework-agnostic service layer (the kernel behind server-sdk and fastify-plugin). Services include projects, workflows, runs, deployments, triggers (+ codegen), apps, app policies, **app storage**, plugins, secrets, agent sessions, agent context, **agent definitions** (ADR 0050), the coding-agent registry, **remote sync**, the **CodeHost seam** + `GithubService`, skills/seeds, and tenant policies. Seeds/templates/doctrine hooks resolve once in the core constructor (ADR 0049).
 - `packages/db` — Kysely instance, schema-scoped raw SQL migrations, programmatic `migrateToLatest`, codegen types.
-- `packages/git` — vendor-neutral git-backed project storage (isomorphic-git): `StorageBackend`/`RemoteBackend` contracts, `ProjectManager`, git-sync, filesystem backends.
-- `packages/parser` — ts-morph AST-to-WorkflowGraph parser.
-- `packages/sandbox` — vendor-neutral sandbox + coding-agent contracts (`SandboxProvider`, `SandboxManager`, `RunExecutor`, `CodingAgentProvider`), `instrumentSandboxProvider`, plugin-doc staging helpers. No vendor SDKs here.
-- `packages/cloudflare` — **`@catamorphic/cloudflare`** backend plugin: `CloudflareSandboxProvider` (Bridge Worker client), `ArtifactsClient` + `ArtifactsRemoteBackend` (Cloudflare Artifacts code storage).
-- `packages/s3` — **`@catamorphic/s3`** backend plugin: `S3RemoteBackend` + `S3ObjectStore` store project origins directly in any S3-compatible bucket (Cloudflare R2, AWS S3, MinIO). Default code storage until Artifacts access lands (ADR 0012).
+- `packages/git` — vendor-neutral git-backed project storage (isomorphic-git): `StorageBackend`/`RemoteBackend` contracts, `ProjectManager`, the remote sync engine (`syncWithNetworkRemote` — fetch/merge/push/rescue branches, ADR 0044), filesystem backends.
+- `packages/github` — **`@catamorphic/github`**: GitHub OAuth + device-flow helpers, REST API client, token stores. Consumed by core's `GithubService` (which implements `CodeHost`).
+- `packages/parser` — ts-morph AST-to-WorkflowGraph parser; also the engine behind each project's seeded `scripts/check.ts`.
+- `packages/sandbox` — vendor-neutral sandbox + coding-agent contracts (`SandboxProvider`, `SandboxManager`, `RunExecutor`, `CodingAgentProvider`), the stdio supervisor transport, `instrumentSandboxProvider`, plugin-doc staging helpers. No vendor SDKs here.
+- `packages/microsandbox` — **`@catamorphic/microsandbox`**: local sandbox provider (the desktop's default execution).
+- `packages/local-process` — **`@catamorphic/local-process`**: sandboxless subprocess execution with an explicit env; trusted single-tenant hosts only (ADR 0047).
+- `packages/cloudflare` — **`@catamorphic/cloudflare`** backend plugin: `CloudflareSandboxProvider` (Bridge Worker client), `ArtifactsClient` + `ArtifactsRemoteBackend`.
+- `packages/s3` — **`@catamorphic/s3`** backend plugin: `S3RemoteBackend` + `S3ObjectStore` store project origins in any S3-compatible bucket (ADR 0012).
 - `packages/daytona` — **`@catamorphic/daytona`** backend plugin: `DaytonaSandboxProvider`, experimental Daytona git storage.
-- `packages/ai-sdk` — **`@catamorphic/ai-sdk`** coding-agent plugin: `AiSdkCodingAgent` uses Vercel AI SDK `ToolLoopAgent` in the host process and operates on the dev sandbox remotely. Flagship agent; used by the desktop app's built-in harness.
-- `packages/codex` — **`@catamorphic/codex`** coding-agent plugin: `CodexAgent` (OpenAI Codex SDK).
+- `packages/ai-sdk` — **`@catamorphic/ai-sdk`** coding-agent harness: `AiSdkCodingAgent` (Vercel AI SDK tool loop, any API model) running in the host process; the desktop's built-in harness.
+- `packages/claude-code` — **`@catamorphic/claude-code`** coding-agent harness backed by the Claude Agent SDK / Claude Code CLI: preset system prompt + settings-source fidelity (ADR 0045), `ask_user`, background-task events, per-session MCP servers (`mcpServersForSession`).
+- `packages/codex` — **`@catamorphic/codex`** coding-agent harness (OpenAI Codex SDK).
+- `packages/mcp` — **`@catamorphic/mcp`**: MCP client infrastructure — both protocol generations with auto-negotiation, elicitation (form + URL), official MCP registry search, plugin-marketplace fetch/install.
 - `packages/otel` — OpenTelemetry helpers (`getTracer`, `withSpan`) over `@opentelemetry/api`.
 - `packages/runtime` — workflow execution harness (runs inside the sandbox).
 - `packages/plugins` — plugin manifest contract + resolvers (see [packages/plugins/README.md](packages/plugins/README.md)).
@@ -62,13 +90,19 @@ Internal packages:
 
 Apps:
 
-- `apps/desktop` — the Catamorphic desktop app (Electron), the in-repo reference host: it embeds the server in-process (`src/main/server/boot.ts`). Catamorphic itself remains embed-only. (The old `apps/playground` web host was removed 2026-08; it will be rewritten from scratch if revisited.)
+- `apps/desktop` — the Catamorphic desktop app (Electron), the in-repo reference host: it embeds the server in-process (`src/main/server/boot.ts`) and consumes the same hooks as any embedder. It is also a **dev shell** (ADR 0045): Claude Code fidelity (CLAUDE.md/`.claude` honored), worktrees, Monaco diff tabs, sidebar Changes/PRs, ghostty/PTY terminals with OSC 133, embedded browser, command palette. See `apps/desktop/AGENTS.md` and `apps/desktop/DESIGN.md`. Catamorphic itself remains embed-only.
 
 ## Skills
 
-- `.cursor/skills/plugin-e2e-integration/SKILL.md` — Business-agnostic end-to-end plugin integration flow
-- `.cursor/skills/using-catamorphic/SKILL.md` — Embedding catamorphic in a host app
+- `skills/embed-catamorphic/SKILL.md` — the public skill for embedding Catamorphic in a host product
+- `.cursor/skills/plugin-e2e-integration/SKILL.md` — business-agnostic end-to-end plugin integration flow
+- `.cursor/skills/using-catamorphic/SKILL.md` — embedding catamorphic in a host app (local dev linking)
 - `.cursor/skills/embedding-guide/SKILL.md`, `.cursor/skills/api-type-safety/SKILL.md`, `.cursor/skills/code-first-architecture/SKILL.md`, `.cursor/skills/database-conventions/SKILL.md`, `.cursor/skills/sandbox-agent-integration/SKILL.md`, `.cursor/skills/workflow-code-conventions/SKILL.md`
+
+Per-project seed skills that ship to every user project live in
+`packages/core/src/templates.ts` (`SEED_SKILLS`): `catamorphic-projects`,
+`writing-workflows`, `batch-workflows`, `durable-workflows`,
+`building-apps` (mechanics), `designing-apps` (replaceable doctrine).
 
 ## Verification Checklist
 
@@ -97,17 +131,21 @@ Every `.ts`/`.tsx` change must pass with zero errors.
 bun run build # all packages from root via Turbo
 ```
 
+Packages resolve each other via `dist/`: rebuild changed packages before a
+desktop build or e2e run, or your changes silently don't ship.
+
 ### 4. Tests
 
 ```bash
 bun run test # all packages from root via Turbo
 ```
 
-All existing tests must pass.
+All existing tests must pass. Desktop changes additionally require the
+desktop checklist (`apps/desktop/AGENTS.md`), including `bun run test:e2e`.
 
 ### 5. Browser verification (after UI/integration changes)
 
-Catamorphic has no standalone UI. Rebuild the affected packages, refresh the `file:` links in the host app, and verify in the **host's** browser. Check: workflows render, zero browser console errors, zero dev overlay issues, no hydration mismatches.
+Catamorphic has no standalone UI. Rebuild the affected packages, refresh the `file:` links in the host app, and verify in the **host's** browser (for desktop changes: launch the app, see `apps/desktop/AGENTS.md`). Check: surfaces render, zero console errors, no hydration mismatches.
 
 ### 6. Migration sync
 
@@ -137,6 +175,10 @@ Settled decisions — do not deviate without explicit user approval. ADRs in `do
 - **Parser node types, containers, source ranges, provenance** → `parser-conventions.mdc`
 - **Detail panel, code editor, bidirectional linking** → `panel-editor.mdc`
 - **Test structure, parallelism, isolation, skip patterns** → `testing-conventions.mdc`
+
+Voice and visual language for anything user-facing (site, README, app
+strings, skills): `docs/DESIGN-LANGUAGE.md`. No em-dashes or en-dashes in
+user-facing strings.
 
 ## Code Conventions
 
@@ -188,7 +230,7 @@ Display name guidelines: step names are short action phrases ("Send Email"); par
 
 ### TypeScript Style
 
-See `typescript-style.mdc`. Key points: object params over positional, no `any`, no `as` casts, minimize `let`.
+See `typescript-style.mdc`. Key points: object params over positional, no `any`, no `as` casts, minimize `let`. Every public service/SDK method takes one keyed object parameter.
 
 ### API Routes
 
@@ -220,9 +262,18 @@ otel → sandbox → core
 otel → core
 git → core
 git → s3
+github → core
 parser → core
 parser → ui
+app → sandbox
+app → core
+app → fastify-plugin
+app → ui
 workflow → runtime → sandbox → core
+runtime → microsandbox
+runtime → local-process
+mcp → ai-sdk
+core → claude-code
 core → server-sdk
 api-client → react → ui → registry
 ```

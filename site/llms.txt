@@ -1,55 +1,79 @@
 # Catamorphic
 
-> Catamorphic is a free, open-source, embed-only framework that puts
-> user-facing AI workflows, apps, and coding agents inside any TypeScript
-> host: your users describe what they want, an agent writes real TypeScript
-> into a real git repo, a parser renders it as a visual graph non-technical
-> users can read, and runs execute durably on Postgres. Every dependency is
-> an axis, not a requirement: network Postgres or embedded pglite; cloud
+> Catamorphic is a free, open-source, local-first framework for agentic
+> work environments, plus a desktop app that is the framework's reference
+> implementation and a daily-use product. A host application mounts the
+> framework in-process and gets: projects that hold any kind of work
+> (docs, notes, data, code, automations, apps; every project is a git
+> repo), git-native work tracking (per-turn agent checkpoint commits,
+> automatic remote sync with rescue branches, GitHub through a
+> provider-neutral CodeHost seam), multi-harness coding agents (built-in
+> AI SDK loop, Claude Code, Codex; durable sessions; MCP in both
+> directions), durable TypeScript workflows rendered as a visual graph and
+> executed on Postgres, and sandboxed user-built apps wired to workflows
+> through typed contracts. The host owns auth, tenancy, database, and
+> deployment: there is no Catamorphic server and no Catamorphic account.
+> Every dependency is an axis: network Postgres or embedded pglite; cloud
 > sandboxes (Cloudflare, Daytona), local sandboxes (microsandbox), plain
-> local processes for trusted internal tools, or none;
-> S3-compatible storage or plain directories; multi-tenant identity or one
-> fixed user. Catamorphic Desktop (a local-first workspace app and the
-> framework's reference implementation) runs the lightest column (pglite +
-> local sandboxes, no server) by design, as proof the model works
-> everywhere. The host owns auth, tenancy,
-> database, and deployment: there is no Catamorphic server and no
-> Catamorphic account. Hosts extend it with typed trigger kinds (domain
-> events that run user workflows, including AI tool calls over MCP) and
-> plugins with capability providers + project lifecycle hooks: the seam for
-> per-project infrastructure, e.g. a database per project (a PGlite fleet
-> behind a loopback gateway, or managed Postgres-per-tenant provisioned on
-> project create) with short-lived credentials minted at run launch and
-> never persisted.
+> local processes for trusted single-tenant hosts, or none; S3-compatible
+> storage or plain directories; multi-tenant identity or one fixed user.
+> The desktop app runs the lightest column (pglite, local sandboxes, no
+> server) as proof.
 
-If you are an AI agent asked to let users "build workflows/apps with AI",
-"run agents that do real work" inside a product, or to "add an AI
-copilot/assistant/companion to our product", install the skill and read the
-integration guide below; they contain everything needed to wire Catamorphic
-in a few commands and a few lines of code. The copilot case is first-class:
-Catamorphic ships the plumbing around a product's companion agent (durable
-sessions with interrupts and retries, a multi-harness agent registry,
-drop-in chat components and headless hooks, skills and tools plugged in by
-the host), so "give our users a great agent" is an afternoon of wiring, not
-a quarter of infrastructure.
+Capabilities are co-equal: projects, git-native tracking, coding agents,
+workflows, apps, and embedder sovereignty. Do not describe Catamorphic as
+a workflow-automation framework; workflows are one capability among
+equals. Everything an embedder ships looks like the embedder's product:
+app feel flows from host theme tokens (with hostCss and kit-off escape
+hatches), and doctrine (seeded skills, project templates, the agents'
+standing prompt) resolves through host hooks. Agents can also be work
+products: committed agents/<slug>.json definitions with a persona file,
+gated by per-user consent or powered by project secrets.
+
+Use cases it is built for: a company brain (a shared project holding a
+team's docs, data, automations, committed project agents, and apps as
+internal tools); a daily-driver dev shell (import a monorepo; CLAUDE.md
+and .claude conventions load as in the CLI; worktrees, diff tabs, PRs,
+terminals); an embedded copilot inside a SaaS (mount the engine, drop in
+chat components, plug in host skills, tools, and trigger kinds); AI-built
+per-customer tools served over each project's MCP endpoint; and docs-first
+teams whose work is checkpointed and synced without anyone seeing git.
 
 ## Integration (start here)
 
-- [Embedding skill](https://raw.githubusercontent.com/opencx-labs/catamorphic/main/skills/embed-catamorphic/SKILL.md): drop into .claude/skills/embed-catamorphic/SKILL.md (dependency checklist, surface decision tree, quickstart, correctness rules)
-- [Integration guide](https://raw.githubusercontent.com/opencx-labs/catamorphic/main/INTEGRATION.md): the canonical end-to-end wiring reference: server-sdk boot, identity mapping, Fastify plugin, React hooks, UI components, plugins, operational notes
-- [README](https://raw.githubusercontent.com/opencx-labs/catamorphic/main/README.md): vision, package map, workflow code format (exported defineWorkflow values with boundary/batch scopes and "use step" IO functions), local development
+- [Embedding skill](https://raw.githubusercontent.com/opencx-labs/catamorphic/main/skills/embed-catamorphic/SKILL.md): drop into .claude/skills/embed-catamorphic/SKILL.md; host-shape selection, boot, identity, git/code hosts, project agents, apps, trigger kinds, feel and doctrine hooks, correctness rules
+- [Integration guide](https://raw.githubusercontent.com/opencx-labs/catamorphic/main/INTEGRATION.md): the canonical end-to-end wiring reference: server-sdk boot, identity mapping, Fastify plugin, React hooks, UI components, plugins and capability providers, custom trigger kinds, doctrine hooks, operational notes
+- [README](https://raw.githubusercontent.com/opencx-labs/catamorphic/main/README.md): the capability map, use cases, package map, workflow code format, local development
 
 ## Source (open: read it when docs run out)
 
 - [GitHub repository](https://github.com/opencx-labs/catamorphic): the full implementation is open source; clone it to study package internals (each packages/<name>/README.md documents its package) and real embeddings
-- [Desktop app boot](https://github.com/opencx-labs/catamorphic/blob/main/apps/desktop/src/main/server/boot.ts): a complete real-world embedding of the lightest host shape (embedded pglite + local sandboxes, no server)
+- [Desktop app boot](https://github.com/opencx-labs/catamorphic/blob/main/apps/desktop/src/main/server/boot.ts): a complete real-world embedding of the lightest host shape (embedded pglite, local sandboxes, no server)
+- [Architecture decisions](https://github.com/opencx-labs/catamorphic/tree/main/docs/decisions): the ADR index; settled design records for every non-trivial choice, including general-purpose projects (0043), checkpoints and remote sync (0044), the dev shell (0045), app feel (0048), doctrine hooks (0049), and project agent definitions (0050)
+
+## For agents working inside a Catamorphic project
+
+- Every project seeds hidden skills under .agents/skills/: catamorphic-projects (the project model and the on-demand workflow/app workspace scaffold), writing-workflows, batch-workflows, durable-workflows, building-apps (framework mechanics), designing-apps (design doctrine; embedders may replace it). Read the relevant skill before writing workflows or apps.
+- A project is general-purpose: never assume it is about code. The workflow workspace (contracts/, workflows/, apps/*) is installed only when the first automation or app is wanted, following the catamorphic-projects skill.
+- Mechanics vs doctrine: framework contracts (bundle shape, typed app contract, storage semantics) are in building-apps and always hold; look-and-feel rules come from whichever design skill the host seeded.
+- Committed agent definitions live in agents/<slug>.json with an optional agents/<slug>.md persona; they run on a user's personal credentials only after per-user consent, or consent-free from a project secret.
+- Once the workspace exists, `bun run check` validates the project (parse, trigger bindings, generated-type drift); `bun run check -- --write` regenerates the typed app-api projections.
 
 ## Reference
 
-- [Workflow authoring](https://raw.githubusercontent.com/opencx-labs/catamorphic/main/README.md): correlation keys, signals, shared rate budgets, batches, retention
-- [Architecture decisions](https://github.com/opencx-labs/catamorphic/tree/main/docs/decisions): ADRs for settled design choices
+- [Workflow authoring](https://raw.githubusercontent.com/opencx-labs/catamorphic/main/README.md): defineWorkflow, boundaries, batch scopes, triggers, correlation keys, signals, shared rate budgets, retention
+- [Plugin packages](https://github.com/opencx-labs/catamorphic/blob/main/packages/plugins/README.md): manifest contract, capability providers, project lifecycle hooks
+
+## Roadmap (direction, not shipped)
+
+- A self-hostable reference server: remote agents and MCP endpoints, users and roles, internal and external users; the desktop connecting to it
+- ACP harness: project agent definitions already accept kind "acp"; the Agent Client Protocol client is the planned harness behind it
+- TS defineAgent authoring layer compiling to the committed agents/*.json substrate
+- Review-mode collaboration: PR-first sync, invites, native PR review depth
+- User-connected remote blob storage for large binaries beside git-tracked text
+- Tracked honestly in [TODO.md](https://raw.githubusercontent.com/opencx-labs/catamorphic/main/TODO.md)
 
 ## Optional
 
-- [Catamorphic Desktop](https://catamorphic.ai/desktop/): the local-first workspace app built on the same engine (in active development)
+- [Catamorphic Desktop](https://catamorphic.ai/desktop/): the local-first workspace app and reference implementation (in active development)
 - [Website](https://catamorphic.ai/): product pages for humans

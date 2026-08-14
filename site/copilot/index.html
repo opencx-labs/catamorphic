@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Catamorphic Copilot: give your product a real agent</title>
-<meta name="description" content="Everything around the model call, already built: durable agent sessions, interrupts and retries, drop-in chat components, skills, tools, and sandboxed execution. Mount Catamorphic on your backend, plug in your agent, and your users have a copilot that does real work.">
+<meta name="description" content="Everything around the model call, already built: durable agent sessions, interrupts and retries, drop-in chat components, skills, tools, and sandboxed execution. Your theme, your doctrine, your plugins. Mount Catamorphic on your backend, plug in your agent, and your users have a copilot that does real work.">
 <meta property="og:title" content="Catamorphic Copilot">
 <meta property="og:description" content="The plumbing around your product's agent, already built: durable sessions, chat components, skills, tools, sandboxed execution.">
 <meta property="og:type" content="website">
@@ -61,7 +61,7 @@
       <div class="card reveal">
         <span class="icon"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2a4 4 0 0 1 4 4v1h1a3 3 0 0 1 3 3v8a3 3 0 0 1-3 3H7a3 3 0 0 1-3-3v-8a3 3 0 0 1 3-3h1V6a4 4 0 0 1 4-4Z"/><circle cx="9" cy="14" r="1"/><circle cx="15" cy="14" r="1"/></svg></span>
         <h3>Any harness, swappable per turn</h3>
-        <p>A registry of named agents over pluggable harnesses: the AI SDK loop on any model, Claude Code, or Codex. Adding or switching an agent needs no server restart and no rewrite of your chat surface.</p>
+        <p>A registry of named agents over pluggable harnesses: the AI SDK loop on any model, Claude Code, or Codex. Projects can commit their own agent definitions as reviewable files, consent-gated before one spends a user's credentials. Switching agents needs no server restart and no rewrite of your chat surface.</p>
       </div>
       <div class="card reveal">
         <span class="icon"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M13 2 3 14h9l-1 8 10-12h-9l1-8Z"/></svg></span>
@@ -77,6 +77,33 @@
         <span class="icon"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg></span>
         <h3>Humans stay in the loop</h3>
         <p>Structured questions when the agent is genuinely blocked, message queueing mid-turn, interrupts that actually cancel, and per-tenant identity on every request. The conversation behaves like a product, not a demo.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section id="control">
+  <div class="container">
+    <div class="section-header reveal">
+      <p class="eyebrow">// your product, your rules</p>
+      <h2>The embedder decides how it looks, sounds, and builds</h2>
+      <p>Catamorphic ships mechanism plus good defaults; every default resolves through your config. The desktop app consumes the same hooks as any other embedder.</p>
+    </div>
+    <div class="grid">
+      <div class="card reveal">
+        <span class="icon"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 3a9 9 0 0 0 0 18c1.1 0 2-.9 2-2v-1a2 2 0 0 1 2-2h3"/><circle cx="8" cy="10" r="1"/><circle cx="12" cy="7" r="1"/><circle cx="16" cy="10" r="1"/></svg></span>
+        <h3>Your feel</h3>
+        <p>Everything user-built apps render flows from your theme tokens: fonts, colors, radii, motion timing, density. Pass nothing and you get neutral defaults; pass your own stylesheet and restyle the kit wholesale. A user's app looks native in your product, not in ours.</p>
+      </div>
+      <div class="card reveal">
+        <span class="icon"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2Z"/></svg></span>
+        <h3>Your doctrine</h3>
+        <p>The skills that teach agents how to build, the project templates, and the standing prompt are all replaceable through config hooks. Keep our defaults, extend them, or swap in your own house style; agents in your product build to your standards, not ours.</p>
+      </div>
+      <div class="card reveal">
+        <span class="icon"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22v-5"/><path d="M9 8V2h6v6"/><path d="M5 8h14v5a7 7 0 0 1-14 0Z"/></svg></span>
+        <h3>Your plugins</h3>
+        <p>One plugin can bundle capability providers, project lifecycle hooks, trigger kinds, and tool kinds. Users attach plugins to projects; only your engineers register code into the host process at deploy time. The trust boundary is structural, not a convention.</p>
       </div>
     </div>
   </div>

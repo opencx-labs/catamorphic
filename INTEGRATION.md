@@ -1,9 +1,11 @@
 # Catamorphic Integration Guide
 
-Catamorphic is an **embeddable framework**. A host application runs catamorphic services in-process against its own Postgres instance: all catamorphic tables live in one schema (default: `catamorphic`). Three integration surfaces are available, in increasing order of coupling:
+Catamorphic is an **embeddable framework for agentic work environments**. A host mounts it in-process and gets the whole environment: general-purpose projects (git repos that hold docs, data, code, automations, and apps — ADR 0043), git-native work tracking (per-turn checkpoint commits, remote sync, the CodeHost seam — ADR 0044), multi-harness coding agents with durable sessions (ADR 0038), durable TypeScript workflows, sandboxed user-built apps (ADRs 0035–0037), and hooks that make the result look and behave like the *host's* product (ADRs 0048–0049). Workflows are one capability among these, not the frame.
+
+A host application runs catamorphic services in-process against its own Postgres instance: all catamorphic tables live in one schema (default: `catamorphic`). Three integration surfaces are available, in increasing order of coupling:
 
 1. **`@catamorphic/db` only**: run the migrations, let the host join against `catamorphic.projects` / `catamorphic.workflow_runs`. Read-only relationship. Useful for reporting / BI.
-2. **`@catamorphic/server-sdk` (library-direct, recommended)**: host imports `createCatamorphic(...)` and calls resources in-process. Identity is bound per request via `cat.forTenant(orgId).forUser(userId)`. No sidecar process.
+2. **`@catamorphic/server-sdk` (library-direct, recommended)**: host imports `createCatamorphic(...)` and calls resources in-process. Identity is bound per request via `cat.forTenant({ tenantId }).forUser({ externalUserId })`. No sidecar process.
 3. **`@catamorphic/fastify-plugin` + `@catamorphic/api-client`**: host registers the Fastify plugin on its own server (or runs `createApp` as a sidecar) and frontends talk to it over HTTP. Same backing services; required for the React UI, and useful when the host is non-Node or wants a network boundary.
 
 Most hosts use 2 + 3 together: the server-sdk boots the core once, the fastify plugin exposes it to the frontend.
@@ -21,7 +23,7 @@ and local sandboxes, no server, no network Postgres, by design.
 | Database | Network Postgres (`{ pool }` / `{ connectionString }`) | **Embedded pglite**: build a Kysely instance on `PGliteDialect` and pass `database: { db }`. Migrations run statement-by-statement specifically so single-connection dialects work. |
 | Execution | Cloud sandboxes (`@catamorphic/cloudflare`, `@catamorphic/daytona`) | **Local sandboxes** (`@catamorphic/microsandbox`), **plain local processes** (`@catamorphic/local-process`, trusted single-tenant hosts only — ADR 0047), or omit `sandboxProvider` entirely for read-only embeds |
 | Code storage | S3-compatible bucket (`@catamorphic/s3`: R2, S3, MinIO) or Cloudflare Artifacts | Two writable directories (`projectsPath`, `remotesPath`) |
-| Identity | Host org/user per request (`forTenant(orgId).forUser(userId)`) | A single fixed tenant/user for single-user apps |
+| Identity | Host org/user per request (`forTenant({ tenantId }).forUser({ externalUserId })`) | A single fixed tenant/user for single-user apps |
 | Surface | HTTP API + React UI | In-process SDK calls only, or migrations-only (`@catamorphic/db`) |
 
 Common host shapes, composed from those axes:
@@ -78,7 +80,9 @@ await catamorphic.migrate();
 const executionWorker = catamorphic.startExecutionWorker({ concurrency: 4 });
 
 // Per request
-const scoped = catamorphic.forTenant(req.org.id).forUser(req.user.id);
+const scoped = catamorphic
+  .forTenant({ tenantId: req.org.id })
+  .forUser({ externalUserId: req.user.id });
 const project = await scoped.projects.create({ name: "onboarding" });
 await scoped.files.write({
   projectId: project.id,
@@ -104,13 +108,18 @@ Advanced hosts can inject their own wiring instead: `database: { db }` with a pr
 
 ### Scoped-client surface
 
-The scoped client exposes project CRUD, workflow listing/fetching, file I/O, and
-the complete identity-bound Runs resource. Every public method takes one keyed
-object parameter, for example `scoped.projects.get({ projectId })`,
+The scoped client exposes project CRUD, workflow listing/fetching, file I/O,
+the complete identity-bound Runs resource, the Triggers resource, and — when
+`github` is configured on `createCatamorphic` — a `scoped.github` resource
+(connection status, repo listing, repo import; token acquisition uses the
+OAuth/device-flow helpers exported from `@catamorphic/github`). Every public
+method takes one keyed object parameter, for example
+`scoped.projects.get({ projectId })`,
 `scoped.workflows.get({ projectId, workflowName })`, and
 `scoped.runs.get({ runId })`. Hosts do not pass tenant or user IDs into
-individual calls. Plugin, secret, and git operations remain available through
-`catamorphic.core.*` and the HTTP surface.
+individual calls. Plugin, secret, git, agent-session, and remote-sync
+operations remain available through `catamorphic.core.*` and the HTTP
+surface.
 
 `scoped.runs` is the one SDK family for all Workflows. It includes run
 triggering, list/detail, cancellation, operator processing pause/resume,

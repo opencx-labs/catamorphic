@@ -1,8 +1,33 @@
 # Desktop App — Agent Instructions
 
-The Catamorphic desktop app (Electron + React). Root `AGENTS.md` applies;
-this file adds desktop-specific checks. Design system and interaction
-principles live in `DESIGN.md` — read it before UI work.
+The Catamorphic desktop app (Electron + React): the framework's reference
+implementation and a daily-use product. Root `AGENTS.md` applies; this file
+adds desktop-specific context and checks. Design system, interaction
+principles, and the running design log live in `DESIGN.md` — read it before
+UI work. Every interaction matters; this is a polished product, not a demo.
+
+## What this app is
+
+- A local-first workspace: projects are user-visible folders holding any
+  kind of work (ADR 0043); browser tabs, terminals, editors, notes, chats,
+  and apps are workspace tabs; the command palette (Cmd+P / Cmd+T) is the
+  front door.
+- A **dev shell** (ADR 0045): Claude Code runs at full fidelity (preset
+  system prompt, CLAUDE.md/`.claude` settings sources), worktrees are
+  discovered and diffable, Monaco diff tabs, sidebar Changes/PRs sections,
+  ghostty/PTY terminals with OSC 133 shell integration.
+- An embedder like any other: it boots the server in-process
+  (`src/main/server/boot.ts`) on pglite + microsandbox + filesystem
+  storage, and passes none of the doctrine hooks (ADR 0049).
+
+Main-process map (`src/main/`): `server/` embeds core (boot, agent
+registry, project agents ADR 0050, workspace tools, triggers, e2e fakes);
+`agent-bridge.ts` connects agent sessions to renderer surfaces;
+`terminal.ts` + `terminal-text.ts` + `shell-integration.ts` are the PTY
+stack; `git-view.ts` is the system-git read surface (worktrees, status,
+diffs); `browser*.ts`, `profiles.ts`, `connections-store.ts`,
+`mcp-apps.ts`, `sidebar-config.ts` cover browser, profiles, connectors,
+MCP apps, and sidebar layers.
 
 ## Verification Checklist
 
@@ -36,10 +61,15 @@ first launch → project creation → palette New Tab, browser tabs
 (open/navigate/close), chat create + send + reply, Cmd+N idempotency,
 streamed preamble messages, and the ask_user question panel.
 
-- Suites: `e2e/app.e2e.ts` (user flows) and `e2e/motion.e2e.ts` (the motion
+- Suites: `e2e/app.e2e.ts` (user flows), `e2e/motion.e2e.ts` (the motion
   contract from `DESIGN.md` — easing/duration bounds, enter/exit pairing,
-  animate-before-unmount). Harness: `e2e/harness.ts`, config:
-  `vitest.e2e.config.ts`.
+  animate-before-unmount), `e2e/onboarding.e2e.ts`, `e2e/agents.e2e.ts`,
+  `e2e/project-agents.e2e.ts` (committed agent definitions + consent),
+  `e2e/recovery.e2e.ts`, and `e2e/legacy-seed.e2e.ts`. Harness:
+  `e2e/harness.ts`, config: `vitest.e2e.config.ts`. A separate
+  model-in-the-loop eval (`bun run test:eval`, `e2e/agent-build.eval.ts`)
+  exercises real agent app-building and is not part of the required
+  checklist.
 - If a motion test fails after a UI change, the animation is presumed wrong,
   not the test — read the "Motion contract" section of `DESIGN.md` before
   touching the test constants.
@@ -76,3 +106,11 @@ node scripts/drive.mjs shot /tmp/app.png
 
 `ELECTRON_RUN_AS_NODE` must be unset (IDE extension hosts export it);
 main-process changes need a full relaunch, renderer changes hot-reload.
+Maximize the window before screenshots. Rebuild changed workspace packages
+first — the desktop resolves them via `dist/`.
+
+## Design log
+
+When you and the user settle a significant desktop design or philosophy
+choice, record it as a dated entry in `DESIGN.md` → "Design log" in the
+same change (the desktop counterpart of the ADR rule).

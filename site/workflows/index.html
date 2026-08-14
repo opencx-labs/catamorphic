@@ -32,7 +32,7 @@
   <div class="container hero-inner">
     <span class="hero-badge"><span class="dot"></span>Free &amp; open source · TypeScript-native · Composable</span>
     <h1>Let your users automate <span class="accent">your product</span> with AI</h1>
-    <p class="lede">Catamorphic Workflows is a framework you embed inside your SaaS so your users can build their own automations, with an AI agent doing the heavy lifting and real code underneath. Pair it with <a href="/apps/">Apps</a> to give those automations a frontend. It's the same engine that powers <a href="/desktop/">Catamorphic Desktop</a>, the framework's reference implementation.</p>
+    <p class="lede">Catamorphic Workflows is a framework you embed inside your SaaS so your users can build their own automations, with an AI agent doing the heavy lifting and real code underneath. Pair it with <a href="/apps/">Apps</a> to give those automations a frontend, and the <a href="/copilot/">Copilot</a> to put an agent in front of both. It's the same engine that powers <a href="/desktop/">Catamorphic Desktop</a>, the framework's reference implementation.</p>
     <div class="hero-actions">
       <a class="btn btn-primary" href="https://github.com/opencx-labs/catamorphic">Get started</a>
       <a class="btn btn-ghost" href="#how">See how it works</a>
@@ -100,13 +100,8 @@
     <div class="grid">
       <div class="card reveal">
         <span class="icon"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="16 18 22 12 16 6"/><polyline points="8 6 2 12 8 18"/></svg></span>
-        <h3>Real TypeScript, real npm</h3>
-        <p>User workflows run like normal programs: full IO, real dependencies, no crippled JS runtime. Executed with Bun inside an isolated sandbox.</p>
-      </div>
-      <div class="card reveal">
-        <span class="icon"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="5" cy="6" r="3"/><circle cx="19" cy="18" r="3"/><path d="M5 9v3a3 3 0 0 0 3 3h8"/></svg></span>
-        <h3>Git-backed projects</h3>
-        <p>A project is just a git repo of TypeScript. Branches, history, and review come for free, for humans and agents alike.</p>
+        <h3>Real TypeScript, in a real repo</h3>
+        <p>User workflows run like normal programs: full IO, real npm dependencies, executed with Bun in an isolated sandbox. They live as code in the project's git repo, beside whatever else the project holds: docs, data, apps. Branches, history, and review come for free.</p>
       </div>
       <div class="card reveal">
         <span class="icon"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/></svg></span>
@@ -116,12 +111,17 @@
       <div class="card reveal">
         <span class="icon"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2a4 4 0 0 1 4 4v1h1a3 3 0 0 1 3 3v8a3 3 0 0 1-3 3H7a3 3 0 0 1-3-3v-8a3 3 0 0 1 3-3h1V6a4 4 0 0 1 4-4Z"/><circle cx="9" cy="14" r="1"/><circle cx="15" cy="14" r="1"/></svg></span>
         <h3>AI agents built in</h3>
-        <p>Coding agents write and edit workflows from natural language, driving a dev sandbox remotely. Ships with Vercel AI SDK and Codex plugins.</p>
+        <p>Coding agents write and edit workflows from natural language, driving a dev sandbox remotely. Ships with AI SDK, Claude Code, and Codex harnesses.</p>
       </div>
       <div class="card reveal">
         <span class="icon"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 1 1-9-9"/><path d="M21 3v6h-6"/></svg></span>
         <h3>Durable by default</h3>
         <p>Persisted continuation, retries, pauses, signals, rate budgets, and batch processing, all backed by Postgres with <code>SKIP LOCKED</code>. No extra infrastructure.</p>
+      </div>
+      <div class="card reveal">
+        <span class="icon"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M13 2 3 14h9l-1 8 10-12h-9l1-8Z"/></svg></span>
+        <h3>Triggered by events, callable as tools</h3>
+        <p>Your product defines trigger kinds and workflows subscribe to them, so real events start real runs. Any workflow can also opt in as an MCP tool: its input type becomes the tool's schema, and an agent can call a workflow it wrote on the very next turn.</p>
       </div>
       <div class="card reveal">
         <span class="icon"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 7h-9m9 10h-9M4 7h1m-1 10h1"/><circle cx="8" cy="7" r="2.5"/><circle cx="8" cy="17" r="2.5"/></svg></span>

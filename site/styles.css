@@ -1,4 +1,4 @@
-/* Catamorphic site — one design language across app + site, pinned in
+/* Catamorphic site: one design language across app + site, pinned in
    docs/DESIGN-LANGUAGE.md. Tokens mirror apps/desktop (the source of truth);
    never invent site-only tokens. Dark-first. */
 :root {
@@ -569,6 +569,13 @@ section {
   align-items: center;
 }
 
+/* Grid items must be allowed to shrink below their content's min width,
+   or a wide <pre> forces the whole page to scroll sideways on mobile. */
+.split > *,
+.grid > * {
+  min-width: 0;
+}
+
 .steps {
   display: flex;
   flex-direction: column;
@@ -759,7 +766,8 @@ footer {
 
 .footer-links {
   display: flex;
-  gap: 20px;
+  gap: 12px 20px;
+  flex-wrap: wrap;
 }
 
 .footer-links a {
