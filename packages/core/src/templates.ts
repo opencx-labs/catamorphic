@@ -313,6 +313,17 @@ const scaffoldSupportFiles = (): Record<string, string> => ({
  * sandbox checkout. The workflow skills are reference material — consulted
  * only when workflow work happens; seeding them does not make a project a
  * workflow codebase (ADR 0043).
+ *
+ * These are the framework DEFAULTS: an embedder replaces, extends, or removes
+ * them through `CatamorphicCoreConfig.projectSeeds` (ADR 0049). Templates do
+ * not bake them in — `ProjectsService` composes the resolved seed set with a
+ * template's own files at create time (`{...seeds, ...template.files}`, the
+ * template winning collisions).
+ *
+ * The split matters: `building-apps` is MECHANICS (framework contracts every
+ * embedder needs); `designing-apps` is DOCTRINE (how apps should look and
+ * feel in the workspace) — the seed an embedder most legitimately swaps for
+ * its own.
  */
 export const SEED_SKILLS: Record<string, string> = {
   [`${SCAFFOLD_SKILL_DIR}/SKILL.md`]: `---
@@ -546,7 +557,7 @@ Rules:
 `,
   ".agents/skills/building-apps/SKILL.md": `---
 name: building-apps
-description: Builds and edits frontend apps that call this project's workflows. Use when creating an app, adding UI, wiring UI to workflows, exposing a workflow to apps, or changing the app contract.
+description: The mechanics of building frontend apps that call this project's workflows — workspace shape, bundle contract, the typed app contract and client, storage, sandbox constraints, and the build/verify flow. Use when creating an app, wiring UI to workflows, exposing a workflow to apps, or changing the app contract.
 ---
 
 # Building Apps
@@ -648,7 +659,59 @@ Never pass secrets to app code, return one from an app-callable workflow, or
 include one in an output. An app that needs a third-party API calls a
 workflow that holds the credential.
 
-## Design system: the app UI kit
+## Forms
+
+A native \`<form>\` submit REALLY NAVIGATES the sandboxed app frame: the
+sandbox allows forms, and the CSP's \`form-action\` does not inherit from
+\`default-src\`, so nothing blocks it — the app reloads from scratch and
+loses all state (verified; Enter in any input triggers it via implicit
+submission). **Always \`event.preventDefault()\` in \`onSubmit\`** and call
+workflows through the client instead. Do still use \`<form>\` +
+\`onSubmit\` — Enter-to-submit accessibility is worth keeping.
+
+## Creating an app
+
+Scaffold \`apps/<name>/\` (kebab-case name) with \`package.json\`
+(react, vite, \`@catamorphic/app\`; \`@project/contracts\` as a dev
+dependency), \`vite.config.ts\` (IIFE lib mode, entry
+\`src/main.tsx\`, output \`app.js\`/\`app.css\`), \`tsconfig.json\`
+with \`"jsx": "react-jsx"\`, and \`src/main.tsx\` mounting into
+\`#root\`. Copy an existing app's config when one exists.
+
+The vite config MUST include
+\`define: { "process.env.NODE_ENV": JSON.stringify("production") }\` —
+lib mode does not inject it, and a bundle that still references
+\`process.env\` at runtime ships dev-mode React (bigger and slower; the
+host shims \`process\` so it runs, but never rely on that).
+
+Apps run in a sandboxed iframe with an opaque origin under a strict CSP:
+external scripts, styles, and fonts are blocked, so everything the app
+uses must be bundled or written in the app itself. The host shims
+web storage: \`localStorage\` works and PERSISTS — it is saved per
+(app, user) by the host and survives reloads and reopens, within a small
+quota (512 keys / 256KB; writes beyond it are dropped). Use it freely for
+app-local state: this user's items, drafts, view preferences.
+\`sessionStorage\` is memory-only, gone when the app closes. State that
+other users, agents, or workflows must see does NOT belong in storage —
+define a workflow and call it through the app contract.
+
+- One screen per app; no routing. The host controls where it renders.
+- \`getContext()\` from \`@catamorphic/app\` gives the mount snapshot
+  (tenant, user, host extras). Anything richer is one workflow call away.
+- Verify with \`bun run build\` in the app directory: it must produce
+  \`dist/app.js\` and typecheck clean. Fix contract errors at the source —
+  never with \`any\` or \`@ts-ignore\`.
+- You build and preview; a human publishes.
+
+Before writing app UI, consult the designing-apps skill for this
+workspace's UI standards, when present.
+`,
+  ".agents/skills/designing-apps/SKILL.md": `---
+name: designing-apps
+description: How apps should look and feel in this workspace — the @catamorphic/app/ui component kit, host theme tokens, the three data states, and the layout and motion doctrine. Use when building or styling app UI.
+---
+
+# Designing Apps
 
 Apps render inside a host application and must look and feel like part
 of it. **Build the UI from \`@catamorphic/app/ui\`** — polished React
@@ -662,7 +725,7 @@ plumbing; light, dark, and fully custom user themes all come free:
 import { Button, Card, DataTable, useAsync } from "@catamorphic/app/ui";
 \`\`\`
 
-### Component inventory
+## Component inventory
 
 | Component | Props (essentials) | Use |
 |---|---|---|
@@ -688,7 +751,7 @@ import { Button, Card, DataTable, useAsync } from "@catamorphic/app/ui";
 | \`ScrollHint\` | \`fadeColor\` (match the surface behind) | Scroll container that fades edges with more content. |
 | \`useAsync(load, deps)\` | returns \`{status:"loading"} \\| {status:"error",error,retry} \\| {status:"ok",value}\` | Load workflow data into the three states below. |
 
-### The three data states
+## The three data states
 
 Every screen that loads data has exactly three states, and the kit covers
 all of them: \`Skeleton\` (or \`DataTable loading\`) while loading,
@@ -719,7 +782,7 @@ function Orders() {
 }
 \`\`\`
 
-### Layout doctrine
+## Layout doctrine
 
 - Space on a **4px grid** (4/8/12/16). Base type is the host's base size,
   already set on \`body\` along with the background, text color, and font —
@@ -737,7 +800,7 @@ function Orders() {
 - **One primary action per view** (\`Button variant="primary"\`);
   everything else is ghost or subtle.
 
-### Motion doctrine
+## Motion doctrine
 
 The kit animates itself — dialogs, popovers, tooltips, spinners already
 follow the host's motion contract. Apps add NO animation beyond color
@@ -745,57 +808,15 @@ transitions on their own hover states
 (\`var(--cat-motion-fast) var(--ease-standard)\`).
 Nothing loops, nothing bounces, nothing animates on load.
 
-### Forms
-
-A native \`<form>\` submit REALLY NAVIGATES the sandboxed app frame: the
-sandbox allows forms, and the CSP's \`form-action\` does not inherit from
-\`default-src\`, so nothing blocks it — the app reloads from scratch and
-loses all state (verified; Enter in any input triggers it via implicit
-submission). **Always \`event.preventDefault()\` in \`onSubmit\`** and call
-workflows through the client instead. Do still use \`<form>\` +
-\`onSubmit\` — Enter-to-submit accessibility is worth keeping.
-
-### Do-nots
+## Do-nots
 
 - No CSS frameworks or component libraries — the kit plus small custom CSS
-  is the whole styling story (the CSP blocks external scripts/styles/fonts
-  anyway).
+  is the whole styling story (the sandbox CSP blocks external
+  scripts/styles/fonts anyway).
 - Never hardcode a palette: no hex/rgb literals, every color through a
   \`--color-*\` var.
 - No decorative motion; don't re-animate what the kit animates.
 - Don't hide scrollbars — visible scrollbars are part of the host's feel.
-
-## Creating an app
-
-Scaffold \`apps/<name>/\` (kebab-case name) with \`package.json\`
-(react, vite, \`@catamorphic/app\`; \`@project/contracts\` as a dev
-dependency), \`vite.config.ts\` (IIFE lib mode, entry
-\`src/main.tsx\`, output \`app.js\`/\`app.css\`), \`tsconfig.json\`
-with \`"jsx": "react-jsx"\`, and \`src/main.tsx\` mounting into
-\`#root\`. Copy an existing app's config when one exists.
-
-The vite config MUST include
-\`define: { "process.env.NODE_ENV": JSON.stringify("production") }\` —
-lib mode does not inject it, and a bundle that still references
-\`process.env\` at runtime ships dev-mode React (bigger and slower; the
-host shims \`process\` so it runs, but never rely on that).
-
-Apps run in a sandboxed iframe with an opaque origin, and the host shims
-web storage: \`localStorage\` works and PERSISTS — it is saved per
-(app, user) by the host and survives reloads and reopens, within a small
-quota (512 keys / 256KB; writes beyond it are dropped). Use it freely for
-app-local state: this user's items, drafts, view preferences.
-\`sessionStorage\` is memory-only, gone when the app closes. State that
-other users, agents, or workflows must see does NOT belong in storage —
-define a workflow and call it through the app contract.
-
-- One screen per app; no routing. The host controls where it renders.
-- \`getContext()\` from \`@catamorphic/app\` gives the mount snapshot
-  (tenant, user, host extras). Anything richer is one workflow call away.
-- Verify with \`bun run build\` in the app directory: it must produce
-  \`dist/app.js\` and typecheck clean. Fix contract errors at the source —
-  never with \`any\` or \`@ts-ignore\`.
-- You build and preview; a human publishes.
 `,
   [BATCH_WORKFLOW_SKILL_PATH]: `---
 name: batch-workflows
@@ -1158,7 +1179,6 @@ export const TEMPLATES: ProjectTemplate[] = [
           "@catamorphic/workflow": WORKFLOW_PACKAGE_VERSION,
         },
       }),
-      ...SEED_SKILLS,
       ...appScaffold({ name: "dashboard" }),
       "contracts/src/index.ts": `import type { Workflow } from "@catamorphic/app";
 
@@ -1371,7 +1391,6 @@ if (root) createRoot(root).render(<App />);
           "@catamorphic/workflow": WORKFLOW_PACKAGE_VERSION,
         },
       }),
-      ...SEED_SKILLS,
       "workflows/src/welcome.ts": `import {
   type BoundaryContext,
   defineWorkflow,
@@ -1460,7 +1479,6 @@ function sleep(_duration: string) {}
           "@catamorphic/workflow": WORKFLOW_PACKAGE_VERSION,
         },
       }),
-      ...SEED_SKILLS,
       "workflows/src/process-order.ts": `import {
   type BoundaryContext,
   defineWorkflow,
@@ -1579,7 +1597,6 @@ function sleep(_duration: string) {}
           "@catamorphic/workflow": WORKFLOW_PACKAGE_VERSION,
         },
       }),
-      ...SEED_SKILLS,
       "workflows/src/pipeline.ts": `import {
   type BoundaryContext,
   defineWorkflow,
@@ -1720,7 +1737,6 @@ export async function sendAlert({ channel, message }: { channel: string; message
           "@catamorphic/workflow": WORKFLOW_PACKAGE_VERSION,
         },
       }),
-      ...SEED_SKILLS,
       "workflows/src/route-ticket.ts": `import {
   type BoundaryContext,
   defineWorkflow,
@@ -1829,7 +1845,6 @@ async function sendAcknowledgment({ to, ticketId }: { to: string; ticketId: stri
           "@catamorphic/workflow": WORKFLOW_PACKAGE_VERSION,
         },
       }),
-      ...SEED_SKILLS,
       "workflows/src/approve-order.ts": `import {
   type BoundaryContext,
   defineWorkflow,
@@ -1962,7 +1977,6 @@ async function markOrderApproved({ orderId }: { orderId: string }) {
           "@catamorphic/workflow": WORKFLOW_PACKAGE_VERSION,
         },
       }),
-      ...SEED_SKILLS,
       "workflows/src/customer-feedback.ts": `import {
   type BatchConsistency,
   defineBatchStep,
@@ -2217,6 +2231,11 @@ async function normalizeFeedback({
   },
 ];
 
+/**
+ * Look up a FRAMEWORK-DEFAULT template. Host-resolved lookups (after the
+ * `projectTemplates` hook, ADR 0049) go through
+ * `ProjectsService.findTemplate` instead.
+ */
 export function findTemplate(id: string): ProjectTemplate | undefined {
   return TEMPLATES.find((t) => t.id === id);
 }

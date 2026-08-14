@@ -271,9 +271,12 @@ export {
   WorkflowsService,
 } from "./services/workflows-service.js";
 export {
+  appScaffold,
   findTemplate,
   PROJECT_CHECK_SCRIPT,
   PROJECT_CHECK_SCRIPT_PATH,
   type ProjectTemplate,
+  SEED_SKILLS,
   TEMPLATES,
+  workspaceFiles,
 } from "./templates.js";

@@ -25,6 +25,7 @@ export type {
   PauseRunInput,
   Project,
   ProjectFileEntry,
+  ProjectTemplate,
   RedriveRunJobInput,
   ResumeRunInput,
   ResumeRunPauseInput,
@@ -48,6 +49,7 @@ export type {
   WriteFileInput,
 } from "@catamorphic/core";
 export {
+  appScaffold,
   createCatamorphicCore,
   GithubNotConnectedError,
   GithubTokenExpiredError,
@@ -61,8 +63,10 @@ export {
   RunNotFoundError,
   RunSignalNotFoundError,
   SandboxProviderNotConfiguredError,
+  SEED_SKILLS,
   TenantActiveRunLimitError,
   WorkflowNotFoundError,
+  workspaceFiles,
 } from "@catamorphic/core";
 export type {
   DeviceCodeGrant,

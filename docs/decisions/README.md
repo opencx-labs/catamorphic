@@ -61,3 +61,4 @@ Settled design decisions live here as short Architecture Decision Records. They 
 | [0046](0046-plugin-activation-planes.md) | Plugin activation planes: capability providers and project lifecycle hooks | Accepted |
 | [0047](0047-local-process-execution.md) | Sandboxless execution is a provider: `@catamorphic/local-process` | Accepted |
 | [0048](0048-app-feel-is-the-embedders.md) | An app's feel is entirely the embedder's: neutral kit defaults, host feel tokens | Accepted |
+| [0049](0049-doctrine-is-the-embedders.md) | Doctrine is the embedder's: seed/template/standing-prompt hooks, mechanics split from design doctrine | Accepted |

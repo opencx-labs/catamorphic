@@ -1,6 +1,6 @@
 import { parseProject } from "@catamorphic/parser";
 import { describe, expect, it } from "vitest";
-import { findTemplate } from "../templates.js";
+import { findTemplate, SEED_SKILLS } from "../templates.js";
 
 describe("orders dashboard template", () => {
   it("parses workflows and resolves the app contract surface", () => {
@@ -48,7 +48,10 @@ describe("orders dashboard template", () => {
     expect(root.workspaces).toEqual(["contracts", "workflows", "apps/*"]);
     expect(template.files["apps/dashboard/vite.config.ts"]).toContain("iife");
     expect(template.files["apps/dashboard/package.json"]).toBeDefined();
-    expect(template.files[".agents/skills/building-apps/SKILL.md"]).toContain(
+    // Seed skills are composed in by ProjectsService at create time
+    // (ADR 0049), not baked into the template; the mechanics skill still
+    // teaches the contract surface.
+    expect(SEED_SKILLS[".agents/skills/building-apps/SKILL.md"]).toContain(
       "app-api.ts",
     );
     // The app must not depend on the workflows package.

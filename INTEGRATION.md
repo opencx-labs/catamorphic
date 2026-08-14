@@ -362,6 +362,55 @@ Both tiers are Postgres and both arrive as "a URL in env," so promoting a
 project from the PGlite fleet to a managed database is a data migration,
 not an app change.
 
+## Bring your own doctrine (ADR 0049)
+
+The framework ships mechanism plus good defaults; what work should *look
+like* in your product is yours. Three `createCatamorphic` hooks receive the
+framework defaults and return the host-final set — replacing or removing
+entries is legitimate:
+
+- `projectSeeds` — the per-project seed files (`.agents/skills/…`). The
+  seeded `building-apps` skill is mechanics (framework contracts — keep it);
+  `designing-apps` is design doctrine, the seed you most likely swap for
+  your own. A seed you remove also never resurrects via the per-turn
+  workflow-skill restore.
+- `projectTemplates` — the template picker's set. Build file maps with the
+  exported `workspaceFiles` / `appScaffold` helpers. Creates compose
+  `{...seeds, ...template.files}` (template wins collisions), so every
+  template picks up your seed set.
+- `standingAgentPrompt` — the standing system prompt for coding-agent
+  sessions: omit for the workflow-authoring default, a string to replace,
+  `false` for none.
+
+```ts
+export const catamorphic = createCatamorphic({
+  database: { pool: hostPgPool },
+  storage: { projectsPath, remotesPath },
+  projectSeeds: (defaults) => {
+    const seeds = { ...defaults };
+    delete seeds[".agents/skills/designing-apps/SKILL.md"];
+    seeds[".agents/skills/acme-design/SKILL.md"] = ACME_DESIGN_SKILL;
+    return seeds;
+  },
+  projectTemplates: (defaults) => [
+    {
+      id: "acme-crm",
+      name: "Acme CRM",
+      description: "A CRM sync starter",
+      defaultWorkflow: "syncContacts",
+      files: {
+        ...workspaceFiles({ name: "acme-crm" }),
+        "workflows/src/crm.ts": CRM_WORKFLOW,
+      },
+    },
+    ...defaults,
+  ],
+});
+```
+
+Everything resolves once at boot; the desktop app passes none of these and
+runs on the defaults.
+
 ## Validating projects in CI or a local editor
 
 Each project seeds `scripts/check.ts` (project-owned; the logic lives in the

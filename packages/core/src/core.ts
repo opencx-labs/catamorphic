@@ -63,6 +63,7 @@ import type {
 } from "./services/trigger-kinds.js";
 import { TriggersService } from "./services/triggers-service.js";
 import { WorkflowsService } from "./services/workflows-service.js";
+import { type ProjectTemplate, SEED_SKILLS, TEMPLATES } from "./templates.js";
 
 export interface CatamorphicCoreConfig {
   db: Kysely<DB>;
@@ -157,6 +158,30 @@ export interface CatamorphicCoreConfig {
    * delete. Hooks must be idempotent.
    */
   projectHooks?: readonly ProjectLifecycleHooks[];
+  /**
+   * Transform the default per-project seed files (skills). Receives the
+   * framework defaults; return the final map. Replacing or removing entries
+   * is legitimate — an embedder's own app-design doctrine belongs here
+   * (ADR 0049). A seed removed from the returned map is also never restored
+   * by the per-turn workflow-skill staging.
+   */
+  projectSeeds?: (defaults: Record<string, string>) => Record<string, string>;
+  /**
+   * Transform the default project templates. Receives the framework
+   * defaults; return the final list — reorder, remove, or add the
+   * embedder's own (`workspaceFiles` / `appScaffold` are exported helpers
+   * for building template file maps). Template creates compose
+   * `{...seeds, ...template.files}`, the template winning collisions
+   * (ADR 0049).
+   */
+  projectTemplates?: (defaults: ProjectTemplate[]) => ProjectTemplate[];
+  /**
+   * The standing system prompt prepended to every coding-agent session.
+   * `undefined` keeps the framework default (the workflow-authoring
+   * primer), a string replaces it, `false` removes it entirely
+   * (ADR 0049).
+   */
+  standingAgentPrompt?: string | false;
 }
 
 /**
@@ -198,10 +223,20 @@ export class CatamorphicCore {
   readonly mcpToolKinds: readonly McpToolKindSpec[];
   /** The host's registered capability providers (ADR 0046). */
   readonly capabilities: CapabilityRegistry;
+  /** The resolved per-project seed files, after the host's hook (ADR 0049). */
+  readonly seedFiles: Record<string, string>;
+  /** The resolved project templates, after the host's hook (ADR 0049). */
+  readonly projectTemplates: readonly ProjectTemplate[];
 
   constructor(config: CatamorphicCoreConfig) {
     this.db = config.db;
     this.projectManager = config.projectManager;
+    // Doctrine resolves ONCE, at boot: every consumer below (project
+    // creation, template listing, skill restore) sees the same host-final
+    // set (ADR 0049).
+    this.seedFiles = config.projectSeeds?.({ ...SEED_SKILLS }) ?? SEED_SKILLS;
+    this.projectTemplates =
+      config.projectTemplates?.([...TEMPLATES]) ?? TEMPLATES;
     this.sandboxProvider = config.sandboxProvider
       ? instrumentSandboxProvider(config.sandboxProvider)
       : undefined;
@@ -232,6 +267,7 @@ export class CatamorphicCore {
       this.db,
       this.projectManager,
       config.projectHooks,
+      { seedFiles: this.seedFiles, templates: this.projectTemplates },
     );
     this.appStorage = new AppStorageService(this.db);
     this.github = config.github
@@ -367,6 +403,8 @@ export class CatamorphicCore {
         plugins: this.plugins,
         pluginResolver: this.pluginResolver,
         onTurnSettled: config.onAgentTurnSettled,
+        seedFiles: this.seedFiles,
+        standingAgentPrompt: config.standingAgentPrompt,
       });
     }
   }

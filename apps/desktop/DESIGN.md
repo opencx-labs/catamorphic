@@ -2031,3 +2031,22 @@ Patterned on what best-in-class palettes converged on (Chrome omnibox
   tokens matches the previous screenshot; under a deliberately alien theme
   (serif, 15px, 2px radii, 36px rows, 80ms motion) it visibly becomes a
   different product.
+
+### 2026-08-14 — Doctrine is the embedder's (ADR 0049)
+- **The framework's words follow its pixels.** 0048 made app feel
+  host-owned; now the doctrine text is too. The seeded building-apps
+  skill split in two: `building-apps` keeps only mechanics (bundle
+  contract, vite define, typed app contract, storage, sandbox/CSP,
+  preventDefault-on-submit, "a human publishes"), `designing-apps`
+  carries the look-and-feel doctrine (kit inventory, token rules, three
+  data states, layout/motion, do-nots) — the seed an embedder
+  legitimately swaps for its own. Mechanics point at doctrine by role
+  ("the designing-apps skill …, when present"), never by baked content.
+- Three host hooks, resolved once at boot: `projectSeeds` (transform the
+  seed-file map; removed seeds never resurrect through the per-turn
+  restore), `projectTemplates` (templates stopped baking seeds in;
+  creates compose `{...seeds, ...template.files}`, template wins
+  collisions), `standingAgentPrompt` (string replaces the workflow
+  primer, `false` drops it).
+- **The desktop passes none of them.** It consumes the same defaults any
+  embedder would get — verified by the full e2e suite running unchanged.

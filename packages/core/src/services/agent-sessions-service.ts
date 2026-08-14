@@ -126,15 +126,30 @@ function checkpointMessage(userMessage: string): string {
   return subject ? `Agent: ${subject}` : "Agent checkpoint";
 }
 
+/**
+ * The framework's default standing prompt for coding-agent sessions. Hosts
+ * replace it (or drop it) with `CatamorphicCoreConfig.standingAgentPrompt`
+ * (ADR 0049).
+ */
 const WORKFLOW_AUTHORING_SYSTEM_PROMPT = `A Catamorphic project is a folder that can hold any kind of work — documents, notes, data, code, automations (workflows), and apps, in any mix. Read what is actually in the project before assuming what it is about; many projects contain no workflows at all. The rules below apply only when you create or edit workflows: Every workflow is an exported defineWorkflow(({ defineBoundary, defineBatch }) => ({ steps })) value; runs execute ordered boundary and batch scopes against an immutable deployment, with continuation state persisted in Postgres. There is no "use workflow" directive — IO and business operations live in "use step" functions called from boundary run bodies. Cancellation is a host-issued terminal control declared with controls: { cancel: true }, never a BoundaryContext transition. A workflow may subscribe to host-defined trigger kinds with triggers: [trigger("kind", config)] — the kind name must be a string literal, the config a constant expression, both typed by the generated workflows/src/catamorphic-triggers.d.ts; the fired payload becomes the first step's input. Only exported defineBatchStep calls inside defineBatch.process are physically coalesced. For authoring primitives, use the project's established SaaS wrapper when present; otherwise use @catamorphic/workflow. Never create local copies. Consult .agents/skills/writing-workflows/SKILL.md, .agents/skills/durable-workflows/SKILL.md, and .agents/skills/batch-workflows/SKILL.md, when present, before creating or restructuring workflows.`;
 
 export function buildAgentSystemPrompt({
   systemPrompt,
+  standingPrompt,
 }: {
   systemPrompt?: string;
+  /**
+   * The host-resolved standing prompt: `undefined` = the framework default,
+   * a string = the host's replacement, `false` = none (ADR 0049).
+   */
+  standingPrompt?: string | false;
 }): string {
-  return [WORKFLOW_AUTHORING_SYSTEM_PROMPT, systemPrompt]
-    .filter((part): part is string => Boolean(part))
+  const standing =
+    standingPrompt === undefined
+      ? WORKFLOW_AUTHORING_SYSTEM_PROMPT
+      : standingPrompt;
+  return [standing, systemPrompt]
+    .filter((part): part is string => typeof part === "string" && part !== "")
     .join("\n\n");
 }
 
@@ -142,15 +157,19 @@ export async function ensureBatchWorkflowSkill({
   sandboxProvider,
   sandboxProviderId,
   projectDir,
+  seedFiles,
 }: {
   sandboxProvider: Pick<SandboxProvider, "executeCommand" | "uploadFiles">;
   sandboxProviderId: string;
   projectDir: string;
+  /** The host-resolved seed set (ADR 0049); defaults to `SEED_SKILLS`. */
+  seedFiles?: Record<string, string>;
 }): Promise<boolean> {
   return ensureWorkflowSkill({
     sandboxProvider,
     sandboxProviderId,
     projectDir,
+    seedFiles,
     skillPath: BATCH_WORKFLOW_SKILL_PATH,
   });
 }
@@ -159,15 +178,19 @@ export async function ensureDurableWorkflowSkill({
   sandboxProvider,
   sandboxProviderId,
   projectDir,
+  seedFiles,
 }: {
   sandboxProvider: Pick<SandboxProvider, "executeCommand" | "uploadFiles">;
   sandboxProviderId: string;
   projectDir: string;
+  /** The host-resolved seed set (ADR 0049); defaults to `SEED_SKILLS`. */
+  seedFiles?: Record<string, string>;
 }): Promise<boolean> {
   return ensureWorkflowSkill({
     sandboxProvider,
     sandboxProviderId,
     projectDir,
+    seedFiles,
     skillPath: DURABLE_WORKFLOW_SKILL_PATH,
   });
 }
@@ -177,16 +200,19 @@ async function ensureWorkflowSkill({
   sandboxProviderId,
   projectDir,
   skillPath,
+  seedFiles,
 }: {
   sandboxProvider: Pick<SandboxProvider, "executeCommand" | "uploadFiles">;
   sandboxProviderId: string;
   projectDir: string;
   skillPath: string;
+  seedFiles?: Record<string, string>;
 }): Promise<boolean> {
-  const content = SEED_SKILLS[skillPath];
-  if (!content) {
-    throw new Error(`Built-in workflow skill '${skillPath}' is not configured`);
-  }
+  // Restore from the HOST-RESOLVED seed set, never the hardcoded defaults:
+  // an embedder that removed a workflow skill from its seeds must not have
+  // it resurrect in projects (ADR 0049).
+  const content = (seedFiles ?? SEED_SKILLS)[skillPath];
+  if (content === undefined) return false;
 
   // Only projects with a workflows workspace get the skill restored — a
   // docs-only project that deleted it must not have it resurrect (ADR 0043).
@@ -244,6 +270,17 @@ interface AgentSessionsDeps {
    * exceptions are swallowed, and the turn's response never waits on it.
    */
   onTurnSettled?: (event: AgentTurnSettledEvent) => void | Promise<void>;
+  /**
+   * The host-resolved per-project seed files (ADR 0049); the workflow-skill
+   * restore reads from this set, so a seed the host removed never
+   * resurrects. Defaults to the framework's `SEED_SKILLS`.
+   */
+  seedFiles?: Record<string, string>;
+  /**
+   * The host's standing agent prompt: `undefined` = framework default,
+   * string = replacement, `false` = none (ADR 0049).
+   */
+  standingAgentPrompt?: string | false;
 }
 
 /**
@@ -268,6 +305,8 @@ export class AgentSessionsService {
   private readonly pluginResolver?: PluginResolver;
   private readonly devSandboxes: DevSandboxService;
   private readonly onTurnSettled?: AgentSessionsDeps["onTurnSettled"];
+  private readonly seedFiles?: Record<string, string>;
+  private readonly standingAgentPrompt?: string | false;
   /**
    * Sessions with a turn currently executing in this process. Turns run
    * inside the send request, so an `in_progress` message whose session is
@@ -295,6 +334,8 @@ export class AgentSessionsService {
     this.plugins = deps.plugins;
     this.pluginResolver = deps.pluginResolver;
     this.onTurnSettled = deps.onTurnSettled;
+    this.seedFiles = deps.seedFiles;
+    this.standingAgentPrompt = deps.standingAgentPrompt;
   }
 
   async list(
@@ -973,11 +1014,13 @@ export class AgentSessionsService {
           sandboxProvider: this.sandboxProvider,
           sandboxProviderId: anchor.sandboxProviderId,
           projectDir: workingDirectory,
+          seedFiles: this.seedFiles,
         });
         const durableSkillStaged = await ensureDurableWorkflowSkill({
           sandboxProvider: this.sandboxProvider,
           sandboxProviderId: anchor.sandboxProviderId,
           projectDir: workingDirectory,
+          seedFiles: this.seedFiles,
         });
         const stagedSkillPaths = [
           ...(batchSkillStaged ? [BATCH_WORKFLOW_SKILL_PATH] : []),
@@ -1304,6 +1347,7 @@ export class AgentSessionsService {
         sessionId: session.id,
         systemPrompt: buildAgentSystemPrompt({
           systemPrompt: session.system_prompt ?? undefined,
+          standingPrompt: this.standingAgentPrompt,
         }),
         attachedPlugins: await this.loadAttachedPlugins(projectId),
         history: await this.transcriptHistory(session.id),
@@ -1346,6 +1390,7 @@ export class AgentSessionsService {
       sessionId: session.id,
       systemPrompt: buildAgentSystemPrompt({
         systemPrompt: session.system_prompt ?? undefined,
+        standingPrompt: this.standingAgentPrompt,
       }),
       attachedPlugins: await this.loadAttachedPlugins(projectId),
       history: await this.transcriptHistory(session.id),
@@ -1456,11 +1501,13 @@ export class AgentSessionsService {
       sandboxProvider: this.sandboxProvider,
       sandboxProviderId: prepared.providerId,
       projectDir: this.projectDir(),
+      seedFiles: this.seedFiles,
     });
     await ensureDurableWorkflowSkill({
       sandboxProvider: this.sandboxProvider,
       sandboxProviderId: prepared.providerId,
       projectDir: this.projectDir(),
+      seedFiles: this.seedFiles,
     });
     await this.ensureGitBaseline(prepared.providerId);
     return {

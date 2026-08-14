@@ -78,7 +78,7 @@ export const catamorphicPlugin: FastifyPluginAsync<
   registerAppRoutes(app, ctx);
   registerAppsMcpRoutes(app, ctx);
   registerProjectMcpRoutes(app, ctx);
-  registerTemplateRoutes(app);
+  registerTemplateRoutes(app, ctx);
   registerGithubRoutes(app, ctx);
   registerPluginRoutes(app, ctx);
   registerPlaygroundRoutes(app, ctx);

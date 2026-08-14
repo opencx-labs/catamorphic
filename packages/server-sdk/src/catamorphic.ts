@@ -12,6 +12,7 @@ import type {
   GithubServiceConfig,
   McpToolKindSpec,
   ProjectLifecycleHooks,
+  ProjectTemplate,
   RetentionConfig,
   TriggerKindRuntime,
 } from "@catamorphic/core";
@@ -173,6 +174,26 @@ export interface CreateCatamorphicConfig {
    * on delete (a throw aborts the delete). Hooks must be idempotent.
    */
   projectHooks?: readonly ProjectLifecycleHooks[];
+  /**
+   * Transform the default per-project seed files (skills). Receives the
+   * framework defaults; return the final map. Replacing or removing entries
+   * is legitimate — an embedder's own app-design doctrine belongs here, and
+   * a removed seed never resurrects (ADR 0049).
+   */
+  projectSeeds?: (defaults: Record<string, string>) => Record<string, string>;
+  /**
+   * Transform the default project templates: reorder, remove, or add your
+   * own (build file maps with the exported `workspaceFiles` / `appScaffold`
+   * helpers). Template creates compose `{...seeds, ...template.files}`,
+   * the template winning collisions (ADR 0049).
+   */
+  projectTemplates?: (defaults: ProjectTemplate[]) => ProjectTemplate[];
+  /**
+   * The standing system prompt for coding-agent sessions: omit for the
+   * framework's workflow-authoring default, pass a string to replace it,
+   * or `false` for none (ADR 0049).
+   */
+  standingAgentPrompt?: string | false;
 }
 
 function resolveDatabase(config: DatabaseConfig): {
@@ -259,6 +280,9 @@ export class Catamorphic {
       onAgentTurnSettled: config.onAgentTurnSettled,
       capabilityProviders: contributions.capabilityProviders,
       projectHooks: contributions.projectHooks,
+      projectSeeds: config.projectSeeds,
+      projectTemplates: config.projectTemplates,
+      standingAgentPrompt: config.standingAgentPrompt,
     });
   }
 

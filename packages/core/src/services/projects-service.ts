@@ -7,11 +7,7 @@ import type {
 import { getTracer, withSpan } from "@catamorphic/otel";
 import type { Kysely, Selectable } from "kysely";
 import { authorFor, type Identity } from "../identity.js";
-import {
-  findTemplate,
-  type ProjectTemplate,
-  SEED_SKILLS,
-} from "../templates.js";
+import { type ProjectTemplate, SEED_SKILLS, TEMPLATES } from "../templates.js";
 import { assertProjectSurface } from "./app-audience.js";
 
 const tracer = getTracer("@catamorphic/core");
@@ -145,17 +141,57 @@ export class ProjectFileNotFoundError extends Error {
 }
 
 /**
+ * A create's initial files: the host-resolved seed set, with a template's
+ * own files layered on top — the template wins path collisions, and every
+ * template picks up the resolved seeds instead of a baked-in copy
+ * (ADR 0049).
+ */
+export function composeInitialFiles(
+  seedFiles: Record<string, string>,
+  template?: ProjectTemplate,
+): Record<string, string> {
+  return template ? { ...seedFiles, ...template.files } : seedFiles;
+}
+
+/**
  * CRUD + file I/O for catamorphic projects. Each mutating method upserts
  * `tenants(tenant_id)` on first use so embedders don't have to pre-register
  * their orgs with catamorphic — the tenant row materializes the moment a
  * project is created under it.
  */
 export class ProjectsService {
+  private readonly seedFiles: Record<string, string>;
+  private readonly templates: readonly ProjectTemplate[];
+
   constructor(
     private readonly db: Kysely<DB>,
     private readonly projectManager: ProjectManager,
     private readonly hooks: readonly ProjectLifecycleHooks[] = [],
-  ) {}
+    doctrine: {
+      /**
+       * The host-resolved per-project seed files (ADR 0049). Defaults to the
+       * framework's `SEED_SKILLS`.
+       */
+      seedFiles?: Record<string, string>;
+      /**
+       * The host-resolved project templates (ADR 0049). Defaults to the
+       * framework's `TEMPLATES`.
+       */
+      templates?: readonly ProjectTemplate[];
+    } = {},
+  ) {
+    this.seedFiles = doctrine.seedFiles ?? SEED_SKILLS;
+    this.templates = doctrine.templates ?? TEMPLATES;
+  }
+
+  /** The host-resolved template set, as served to template pickers. */
+  listTemplates(): readonly ProjectTemplate[] {
+    return this.templates;
+  }
+
+  findTemplate(id: string): ProjectTemplate | undefined {
+    return this.templates.find((template) => template.id === id);
+  }
 
   async create(
     identity: Identity,
@@ -181,7 +217,7 @@ export class ProjectsService {
   ): Promise<Project> {
     const { tenantId } = identity;
     const template = input.templateId
-      ? findTemplate(input.templateId)
+      ? this.findTemplate(input.templateId)
       : undefined;
     if (input.templateId && !template) {
       throw new Error(`Template '${input.templateId}' not found`);
@@ -206,13 +242,16 @@ export class ProjectsService {
       .execute();
 
     try {
-      // Blank projects get the seed skills (hidden reference material — the
-      // agent knows the conventions from its first session) but NO visible
-      // workspace scaffold; the workspace arrives on demand via templates or
-      // the catamorphic-projects skill (ADR 0043).
+      // Blank projects get the resolved seed skills (hidden reference
+      // material — the agent knows the conventions from its first session)
+      // but NO visible workspace scaffold; the workspace arrives on demand
+      // via templates or the catamorphic-projects skill (ADR 0043).
+      // Template creates compose seeds under the template's own files, so a
+      // template file wins any path collision and every template picks up
+      // the host-resolved seed set instead of a baked-in copy (ADR 0049).
       await this.projectManager.create(tenantId, projectId, {
         name: input.name,
-        initialFiles: template?.files ?? SEED_SKILLS,
+        initialFiles: composeInitialFiles(this.seedFiles, template),
         rootPath: input.rootPath,
         importExisting: input.importExisting,
         cloneFrom: input.cloneFrom,
