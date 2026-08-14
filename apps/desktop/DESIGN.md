@@ -2186,3 +2186,24 @@ Patterned on what best-in-class palettes converged on (Chrome omnibox
   (border-danger/40 + bg-danger/10 + text-danger) — the old solid
   low-chroma fill with hardcoded white text read as washed out in both
   themes.
+
+### 2026-08-14 — Durable execution is laptop-grade: sleep and power loss are not failures
+
+- Lease expiry is attempt-neutral. On a laptop the common way a lease dies
+  is the lid closing or the battery dying mid-step — not the step's code
+  failing. The expiry sweep now refunds the attempt the claim consumed and
+  counts the expiry against its own generous cap (`MAX_LEASE_EXPIRIES`,
+  20), so repeated sleeps during one long agent boundary can never exhaust
+  a run, while a handler that reliably kills its process still terminates.
+- The app doesn't hold leases through OS sleep: `powerMonitor` suspend
+  stops the execution worker (releasing in-flight jobs cleanly, attempt
+  refunded), resume restarts it — work re-runs within a poll interval of
+  waking instead of waiting out a dead lease.
+- Both halves are tested for real: a Postgres integration test drives a
+  job through more expiries than `max_attempts`, and a PGlite crash test
+  SIGKILLs a child process mid-write and asserts the reopened data dir
+  recovers every committed write and requeues the dead process's job.
+- Found by the crash test: the polling worker's claim query (raw SQL,
+  bypasses `WithSchemaPlugin`) resolved tables via `search_path`, which
+  desktop's PGlite session never set — async job claiming was silently
+  broken on desktop. boot.ts now sets `search_path` once at open.

@@ -88,9 +88,7 @@ export async function startEmbeddedServer(
   // configures per-connection on server deployments. PGlite is one session
   // for the process's lifetime, so set it once here — without this the
   // polling worker can never claim a job.
-  await sql
-    .raw(`SET search_path TO "${DEFAULT_SCHEMA}", public`)
-    .execute(db);
+  await sql.raw(`SET search_path TO "${DEFAULT_SCHEMA}", public`).execute(db);
 
   // E2E runs swap the real sandbox + agents for deterministic local fakes.
   const e2eFakeAgent = process.env.CATAMORPHIC_E2E_FAKE_AGENT === "1";
