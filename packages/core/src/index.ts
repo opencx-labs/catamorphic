@@ -57,6 +57,10 @@ export {
   AppVersionNotFoundError,
   type AppVersionStatus,
 } from "./services/apps-service.js";
+export {
+  AppStorageService,
+  AppStorageSnapshotTooLargeError,
+} from "./services/app-storage-service.js";
 export type {
   CodeHost,
   PullRequestFile,

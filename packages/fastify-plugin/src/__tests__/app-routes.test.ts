@@ -123,9 +123,18 @@ describe("guest document serving", () => {
     allowedNetworkOrigins: ["https://api.example.com"],
   };
 
-  function appWithViewCore() {
+  function appWithViewCore(storage?: {
+    get?: () => Promise<{ data: Record<string, string>; revision: string }>;
+    put?: (...args: unknown[]) => Promise<void>;
+  }) {
     const app = createApp({
-      core: { apps: { viewState: async () => readyState } } as never,
+      core: {
+        apps: { viewState: async () => readyState },
+        appStorage: {
+          get: storage?.get ?? (async () => ({ data: {}, revision: "0" })),
+          put: storage?.put ?? (async () => {}),
+        },
+      } as never,
     });
     apps.push(app);
     return app;
@@ -201,13 +210,24 @@ describe("guest document serving", () => {
     expect(unthemed.body).not.toContain("color-scheme:light");
   });
 
-  it("revalidates the guest document by version", async () => {
+  it("revalidates the guest document by version + storage revision", async () => {
     const response = await appWithViewCore().inject({
       method: "GET",
       url: `/api/projects/${PROJECT_ID}/apps/ops-dashboard/guest`,
-      headers: { ...headers, "if-none-match": `"${VERSION_ID}-n"` },
+      headers: { ...headers, "if-none-match": `"${VERSION_ID}-n-0"` },
     });
     expect(response.statusCode).toBe(304);
+
+    // A storage write moves the revision, so a stale copy must miss —
+    // otherwise the browser resurrects old app-local data.
+    const moved = await appWithViewCore({
+      get: async () => ({ data: { k: "v" }, revision: "r2" }),
+    }).inject({
+      method: "GET",
+      url: `/api/projects/${PROJECT_ID}/apps/ops-dashboard/guest`,
+      headers: { ...headers, "if-none-match": `"${VERSION_ID}-n-0"` },
+    });
+    expect(moved.statusCode).toBe(200);
   });
 
   it("answers 404 for a non-ready app", async () => {
@@ -307,5 +327,73 @@ describe("bundle route caching", () => {
       headers: { ...headers, "if-none-match": `"${VERSION_ID}"` },
     });
     expect(response.statusCode).toBe(404);
+  });
+});
+
+describe("app storage", () => {
+  const readyState = {
+    state: "ready",
+    appId: APP_ID,
+    versionId: VERSION_ID,
+    code: "/* bundle */",
+    css: "",
+    allowedWorkflows: [],
+    allowedNetworkOrigins: [],
+  };
+  const headers = {
+    "x-catamorphic-tenant-id": "tenant-1",
+    "x-external-user-id": "user-1",
+  };
+
+  it("PUT persists the snapshot through the service", async () => {
+    const puts: unknown[] = [];
+    const app = createApp({
+      core: {
+        apps: { viewState: async () => readyState },
+        appStorage: {
+          get: async () => ({ data: {}, revision: "0" }),
+          put: async (...args: unknown[]) => {
+            puts.push(args);
+          },
+        },
+      } as never,
+    });
+    apps.push(app);
+    const response = await app.inject({
+      method: "PUT",
+      url: `/api/projects/${PROJECT_ID}/apps/ops-dashboard/storage`,
+      payload: { data: { todos: '["milk"]' } },
+      headers,
+    });
+    expect(response.statusCode).toBe(204);
+    expect(puts).toHaveLength(1);
+    expect((puts[0] as unknown[])[3]).toEqual({ todos: '["milk"]' });
+  });
+
+  it("guest document bakes the caller's seed in, HTML-inert", async () => {
+    const app = createApp({
+      core: {
+        apps: { viewState: async () => readyState },
+        appStorage: {
+          get: async () => ({
+            // A hostile value must never reach the HTML tokenizer intact.
+            data: { note: "</script><img src=x onerror=alert(1)>" },
+            revision: "r7",
+          }),
+          put: async () => {},
+        },
+      } as never,
+    });
+    apps.push(app);
+    const response = await app.inject({
+      method: "GET",
+      url: `/api/projects/${PROJECT_ID}/apps/ops-dashboard/guest`,
+      headers,
+    });
+    expect(response.statusCode).toBe(200);
+    expect(response.body).toContain("\\u003c/script\\u003e");
+    expect(response.body).not.toContain("</script><img");
+    // Storage writes must invalidate the browser's cached document.
+    expect(response.headers.etag).toContain("r7");
   });
 });

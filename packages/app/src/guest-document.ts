@@ -18,6 +18,12 @@ export function buildAppGuestDocument(args: {
   theme?: AppHostTheme;
   /** Tenant-policy network origins the guest CSP may allow. */
   allowedNetworkOrigins?: string[];
+  /**
+   * The caller's persisted localStorage snapshot, baked into the shim so
+   * synchronous reads work from the first line of app code. Flat string
+   * map; anything else is ignored by the runtime.
+   */
+  storageSeed?: Record<string, string>;
 }): string {
   const csp = appGuestCsp(args.allowedNetworkOrigins);
   // The host runtime, one inline script ahead of the bundle:
@@ -28,10 +34,12 @@ export function buildAppGuestDocument(args: {
   //   has an opaque origin and merely READING `window.localStorage` throws a
   //   SecurityError. Agent-built apps reach for localStorage constantly, and
   //   one uncaught access (a save effect, say) tears the whole React tree
-  //   down to a blank page. Shadow local/sessionStorage with an in-memory
-  //   Storage so apps run correctly; contents last for the document's
-  //   lifetime only (the building-apps skill tells agents durable state
-  //   belongs in workflows).
+  //   down to a blank page. Shadow both storages with in-memory Storage
+  //   stand-ins — and make localStorage DURABLE: it hydrates from the
+  //   caller's persisted snapshot (baked in at serve time, so synchronous
+  //   reads work immediately) and mutations post a debounced full-snapshot
+  //   `storage` message the mount persists per (app, user). sessionStorage
+  //   stays memory-only, matching its name.
   // - auto-height: most apps never call reportHeight(); observe the
   //   document and post the same resize message the client library would.
   //   scrollHeight is max(content, viewport), so it ratchets up to the
@@ -40,16 +48,22 @@ export function buildAppGuestDocument(args: {
   //   the same vars the initial <style> below seeds.
   const runtime =
     'var process={env:{NODE_ENV:"production"}};' +
-    "(()=>{const mem=()=>{const m=new Map();return{" +
-    "getItem:(k)=>m.has(String(k))?m.get(String(k)):null," +
-    "setItem:(k,v)=>{m.set(String(k),String(v))}," +
-    "removeItem:(k)=>{m.delete(String(k))}," +
-    "clear:()=>{m.clear()}," +
+    `(()=>{const seed=${safeJsonForScript(args.storageSeed ?? {})};` +
+    "const store=(init,persist)=>{" +
+    "const m=new Map();for(const[k,v]of Object.entries(init))if(typeof v==='string')m.set(k,v);" +
+    "let t;const flush=()=>{t=undefined;const data={};for(const[k,v]of m)data[k]=v;" +
+    `parent.postMessage({catamorphicApp:${APP_PROTOCOL_VERSION},kind:'storage',data},'*')};` +
+    "const queue=persist?()=>{clearTimeout(t);t=setTimeout(flush,250)}:()=>{};" +
+    "if(persist)addEventListener('pagehide',()=>{if(t!==undefined){clearTimeout(t);flush()}});" +
+    "return{getItem:(k)=>m.has(String(k))?m.get(String(k)):null," +
+    "setItem:(k,v)=>{m.set(String(k),String(v));queue()}," +
+    "removeItem:(k)=>{m.delete(String(k));queue()}," +
+    "clear:()=>{m.clear();queue()}," +
     "key:(i)=>[...m.keys()][i]??null," +
     "get length(){return m.size}}};" +
-    "for(const name of['localStorage','sessionStorage']){" +
+    "for(const[name,persist]of[['localStorage',true],['sessionStorage',false]]){" +
     "try{void window[name]}catch{" +
-    "Object.defineProperty(window,name,{value:mem(),configurable:true})}}})();" +
+    "Object.defineProperty(window,name,{value:store(persist?seed:{},persist),configurable:true})}}})();" +
     "addEventListener('load',()=>{const post=()=>parent.postMessage(" +
     `{catamorphicApp:${APP_PROTOCOL_VERSION},kind:'resize',height:document.documentElement.scrollHeight},'*');` +
     "post();const o=new ResizeObserver(post);o.observe(document.documentElement);o.observe(document.body)});" +
@@ -117,4 +131,19 @@ function escapeScriptContent(code: string): string {
 /** `</style` in CSS content would end the style block and inject markup. */
 function escapeStyleContent(css: string): string {
   return css.replaceAll(/<\/(style)/gi, "<\\/$1");
+}
+
+/**
+ * JSON destined for an inline <script>. The seed holds user data, so a
+ * value containing `</script` (or an HTML comment opener) must not reach
+ * the HTML tokenizer, and U+2028/9 are line terminators to JS but not to
+ * JSON — all four get unicode-escaped, which JSON.parse-compatible JS
+ * string semantics read back identically.
+ */
+function safeJsonForScript(value: unknown): string {
+  return JSON.stringify(value)
+    .replaceAll("<", "\\u003c")
+    .replaceAll(">", "\\u003e")
+    .replaceAll("\u2028", "\\u2028")
+    .replaceAll("\u2029", "\\u2029");
 }

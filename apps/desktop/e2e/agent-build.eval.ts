@@ -346,6 +346,29 @@ describeIf("agent build eval (real model)", () => {
           return entries.join(' | ') || '(empty)';
         })()`);
       console.log(`[eval] guest localStorage after add: ${storageSnapshot}`);
+
+      // Durable-storage pin: the shim's debounced write-through persists
+      // the snapshot host-side, and a fresh document hydrates from it —
+      // the added item must survive a full guest reload.
+      await new Promise((resolve) => setTimeout(resolve, 1500));
+      frame.close();
+      await app.eval(`(() => {
+          const f = [...document.querySelectorAll('iframe')]
+            .find((el) => el.src.includes('/apps/${APP_NAME}/guest'));
+          if (!f) throw new Error('app iframe gone before reload');
+          const src = f.src;
+          f.src = 'about:blank';
+          requestAnimationFrame(() => { f.src = src; });
+          return true;
+        })()`);
+      // The finally below closes whatever `frame` points at.
+      frame = await app.connectToFrame(`/apps/${APP_NAME}/guest`, {
+        timeoutMs: 30_000,
+      });
+      await frame.waitFor(
+        `document.body && document.body.innerText.includes(${JSON.stringify(ITEM_TEXT)})`,
+        { timeoutMs: 30_000, label: "added item survived a guest reload" },
+      );
     } catch (error) {
       fs.mkdirSync(ARTIFACTS_DIR, { recursive: true });
       const shot = path.join(

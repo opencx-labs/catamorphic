@@ -8,6 +8,7 @@ import {
   AppBundleTooLargeError,
   AppNotFoundError,
   AppPublishStateError,
+  AppStorageSnapshotTooLargeError,
   AppVersionNotFoundError,
 } from "@catamorphic/core";
 import type { FastifyInstance } from "fastify";
@@ -180,6 +181,43 @@ export function registerAppRoutes(app: FastifyInstance, ctx: RouteContext) {
   });
 
   typed.route({
+    method: "PUT",
+    url: "/projects/:projectId/apps/:appName/storage",
+    schema: {
+      params: ProjectAppParamsSchema,
+      body: z.object({
+        /** Full localStorage snapshot from the guest's persistent shim. */
+        data: z.record(z.string().max(4096), z.string()),
+      }),
+      response: {
+        204: z.null(),
+        404: ErrorSchema,
+        413: ErrorSchema,
+        503: ErrorSchema,
+      },
+    },
+    handler: async (request, reply) => {
+      if (!ctx.core?.apps)
+        return reply.status(503).send({ error: "Apps not configured" });
+      try {
+        await ctx.core.appStorage.put(
+          resolveIdentity(request),
+          request.params.projectId,
+          request.params.appName,
+          request.body.data,
+        );
+      } catch (err) {
+        if (err instanceof AppNotFoundError)
+          return reply.status(404).send({ error: err.message });
+        if (err instanceof AppStorageSnapshotTooLargeError)
+          return reply.status(413).send({ error: err.message });
+        throw err;
+      }
+      return reply.status(204).send(null);
+    },
+  });
+
+  typed.route({
     method: "GET",
     url: "/projects/:projectId/apps/:appName/guest",
     schema: {
@@ -203,10 +241,18 @@ export function registerAppRoutes(app: FastifyInstance, ctx: RouteContext) {
       if (state.state !== "ready") {
         return reply.status(404).send({ error: `App is ${state.state}` });
       }
-      // The document embeds the (channel-resolved) version's bundle, so the
-      // validator is the version id: a republish or a newer dev build changes
-      // it and the revalidation misses; otherwise the browser's copy is good.
-      const etag = `"${state.versionId}-${request.query.theme ? "t" : "n"}"`;
+      // The caller's persisted app-local storage is baked into the shim so
+      // the app's synchronous reads work from its first line.
+      const storage = await ctx.core.appStorage.get(
+        resolveIdentity(request),
+        request.params.projectId,
+        request.params.appName,
+      );
+      // The document embeds the (channel-resolved) version's bundle AND the
+      // storage seed, so the validator carries both: a republish, a newer
+      // dev build, or a storage write changes it and the revalidation
+      // misses; otherwise the browser's copy is good.
+      const etag = `"${state.versionId}-${request.query.theme ? "t" : "n"}-${storage.revision}"`;
       if (request.headers["if-none-match"] === etag) {
         return reply
           .status(304)
@@ -230,6 +276,7 @@ export function registerAppRoutes(app: FastifyInstance, ctx: RouteContext) {
             css: state.css,
             theme: parseGuestTheme(request.query.theme),
             allowedNetworkOrigins: state.allowedNetworkOrigins,
+            storageSeed: storage.data,
           }),
         );
     },

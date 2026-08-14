@@ -100,6 +100,8 @@ export function AppMount({
   const [height, setHeight] = useState(MIN_HEIGHT_PX);
   const inFlightCalls = useRef(0);
   const inFlightPolls = useRef(0);
+  const storageInFlight = useRef(false);
+  const pendingStorage = useRef<Record<string, string> | null>(null);
   // The guest URL carries the mount-time theme (changing it would reload
   // the guest and lose its state); later switches arrive as messages.
   const initialTheme = useRef(theme).current;
@@ -178,6 +180,36 @@ export function AppMount({
         setHeight(
           Math.min(MAX_HEIGHT_PX, Math.max(MIN_HEIGHT_PX, message.height)),
         );
+        return;
+      }
+
+      if (message.kind === "storage") {
+        // Persist the guest's localStorage snapshot. Last write wins;
+        // while one PUT is in flight the latest snapshot waits its turn
+        // (the guest already debounces, this only guards reordering).
+        // Failures are logged, never surfaced into the app — storage is
+        // best-effort by contract.
+        pendingStorage.current = sanitizeStorageSnapshot(message.data);
+        if (storageInFlight.current) return;
+        storageInFlight.current = true;
+        try {
+          while (pendingStorage.current) {
+            const data = pendingStorage.current;
+            pendingStorage.current = null;
+            await apiClient.PUT(
+              "/api/projects/{projectId}/apps/{appName}/storage",
+              {
+                params: { path: { projectId, appName } },
+                headers,
+                body: { data },
+              },
+            );
+          }
+        } catch (cause) {
+          console.warn("[app-mount] storage persist failed:", cause);
+        } finally {
+          storageInFlight.current = false;
+        }
         return;
       }
 
@@ -306,7 +338,7 @@ export function AppMount({
         }
       }
     },
-    [apiClient, audienceHeaders, projectId, view.state],
+    [apiClient, audienceHeaders, projectId, appName, view.state],
   );
 
   useEffect(() => {
@@ -358,6 +390,16 @@ export function AppMount({
  * JSON so the first paint is already in the host's colors. The server
  * validates the theme and the browser cache key varies with it naturally.
  */
+/** Only flat string entries cross to the server; the guest is untrusted. */
+function sanitizeStorageSnapshot(raw: unknown): Record<string, string> {
+  if (raw === null || typeof raw !== "object" || Array.isArray(raw)) return {};
+  const out: Record<string, string> = {};
+  for (const [key, value] of Object.entries(raw)) {
+    if (typeof value === "string") out[key] = value;
+  }
+  return out;
+}
+
 function guestSrc(guestUrl: string, theme?: AppHostTheme): string {
   if (!theme) return guestUrl;
   const url = new URL(guestUrl);

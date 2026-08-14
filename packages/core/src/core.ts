@@ -8,6 +8,7 @@ import type {
 import { instrumentSandboxProvider } from "@catamorphic/sandbox";
 import type { Kysely } from "kysely";
 import { AgentContextService } from "./services/agent-context-service.js";
+import { AppStorageService } from "./services/app-storage-service.js";
 import {
   AgentSessionsService,
   type AgentTurnSettledEvent,
@@ -172,6 +173,7 @@ export class CatamorphicCore {
   readonly appPolicies: AppPoliciesService;
   readonly github?: GithubService;
   readonly remoteSync: RemoteSyncService;
+  readonly appStorage: AppStorageService;
   /** Tool-kind declarations behind the per-project MCP endpoint. */
   readonly mcpToolKinds: readonly McpToolKindSpec[];
 
@@ -204,6 +206,7 @@ export class CatamorphicCore {
         : undefined;
 
     this.projects = new ProjectsService(this.db, this.projectManager);
+    this.appStorage = new AppStorageService(this.db);
     this.github = config.github
       ? new GithubService(
           this.db,

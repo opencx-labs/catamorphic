@@ -1951,3 +1951,32 @@ Patterned on what best-in-class palettes converged on (Chrome omnibox
   the other message affordances, and its reveal no longer blinks when
   the pointer crosses the gap to reach it (the wrapper bridges the gap
   so group-hover never drops).
+
+### 2026-08-14 — App-local storage is durable (persistent localStorage)
+- **Apps get real, persistent localStorage** — without giving up the
+  opaque-origin sandbox. The distinction that earns its keep: app-local
+  state (this user's todos, drafts, view preferences) belongs in storage;
+  state other users/agents/workflows must see belongs behind workflows.
+  Forcing the first class through the second meant "stand up a backend
+  for a todo list" — wrong, and agents write localStorage code anyway.
+- Mechanics: the guest runtime's storage shim hydrates from a snapshot
+  baked into the served document (synchronous reads work from the app's
+  first line), mutations post a debounced (250ms, flushed on pagehide)
+  full-snapshot `storage` message, AppMount forwards it with the
+  app-audience headers to `PUT /projects/:id/apps/:name/storage`, and
+  `AppStorageService` upserts one row per (app, user) — 512 keys / 256KB
+  quota, 413 beyond it. The guest-doc etag carries the storage revision
+  so a cached document can never resurrect stale data. sessionStorage
+  stays memory-only, matching its name.
+- Isolation is structural: rows key on the caller's own externalUserId
+  through their tenant+project, apps never share an origin (each guest
+  stays opaque), and hostile seed values are unicode-escaped before the
+  HTML tokenizer sees them (safeJsonForScript).
+- MCP Apps posture: the spec (2026-01-26) defers view-state persistence
+  entirely, so this is a host capability on our own mounts; outbound
+  mounts in other hosts degrade to the in-memory shim. Candidate for an
+  upstream proposal once proven.
+- Verified live against the real published todo bundle in the exact
+  sandbox: host-seeded item renders, write-through snapshot arrives.
+  Pinned by guest-doc/service/route unit tests and a reload-survival
+  assertion in the agent-build eval.

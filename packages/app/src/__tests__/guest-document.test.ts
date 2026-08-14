@@ -63,6 +63,22 @@ describe("buildAppGuestDocument", () => {
     expect(doc).not.toContain("\\x3C");
   });
 
+  it("hydrates localStorage from the seed and writes back, HTML-inert", () => {
+    const doc = buildAppGuestDocument({
+      code: "APP()",
+      css: "",
+      storageSeed: { note: "</script><img src=x>", plain: "ok" },
+    });
+    // The hostile value is unicode-escaped before the HTML tokenizer sees
+    // it; JS string semantics read it back identically.
+    expect(doc).toContain("\\u003c/script\\u003e");
+    expect(doc).not.toContain("</script><img");
+    expect(doc).toContain('"plain":"ok"');
+    // Mutations post the persistence message (debounced write-through).
+    expect(doc).toContain("kind:'storage'");
+    expect(doc).toContain("setTimeout(flush,250)");
+  });
+
   it("shims local/sessionStorage ahead of the bundle", () => {
     // Opaque-origin guests throw on merely READING window.localStorage;
     // one uncaught access (a save effect) blanks the whole app. The

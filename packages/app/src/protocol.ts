@@ -29,6 +29,15 @@ export type GuestToHostMessage =
       catamorphicApp: typeof APP_PROTOCOL_VERSION;
       kind: "resize";
       height: number;
+    }
+  | {
+      catamorphicApp: typeof APP_PROTOCOL_VERSION;
+      /**
+       * Full localStorage snapshot from the guest runtime's persistent shim
+       * (debounced; last write wins). The mount persists it per (app, user).
+       */
+      kind: "storage";
+      data: Record<string, string>;
     };
 
 export type HostToGuestMessage =

@@ -81,6 +81,13 @@ export interface Apps {
   updated_at: Generated<Timestamp>;
 }
 
+export interface AppStorage {
+  app_id: string;
+  data: Generated<Json>;
+  external_user_id: string;
+  updated_at: Generated<Timestamp>;
+}
+
 export interface AppVersions {
   allowed_workflows: Json | null;
   app_id: string;
@@ -479,6 +486,7 @@ export interface DB {
   active_run_invocations: ActiveRunInvocations;
   agent_messages: AgentMessages;
   agent_sessions: AgentSessions;
+  app_storage: AppStorage;
   app_versions: AppVersions;
   apps: Apps;
   batch_execution_states: BatchExecutionStates;
