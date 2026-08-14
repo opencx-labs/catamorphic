@@ -85,6 +85,55 @@ export class ProjectNotFoundError extends Error {
   }
 }
 
+/**
+ * Host-side project lifecycle hooks (ADR 0046), registered at boot
+ * (`createCatamorphic({ projectHooks })` or a plugin's host half). Hooks are
+ * awaited on the mutation path and must be idempotent: a rolled-back create
+ * may re-run `onProjectCreated` for the same project id on retry.
+ */
+export interface ProjectLifecycleHooks {
+  /**
+   * Runs after the project row and repo exist. A throw fails the create and
+   * rolls both back — a project whose provisioning failed never half-exists.
+   */
+  onProjectCreated?(args: {
+    project: Project;
+    identity: Identity;
+  }): void | Promise<void>;
+  /**
+   * Runs before anything is deleted. A throw aborts the delete, so failed
+   * deprovisioning is retryable instead of leaking orphaned infrastructure.
+   */
+  onProjectDeleted?(args: {
+    project: Project;
+    identity: Identity;
+  }): void | Promise<void>;
+}
+
+export class ProjectProvisioningError extends Error {
+  constructor(args: { projectId: string; cause: unknown }) {
+    super(
+      `Project '${args.projectId}' provisioning hook failed; the create was rolled back: ${
+        args.cause instanceof Error ? args.cause.message : String(args.cause)
+      }`,
+      { cause: args.cause },
+    );
+    this.name = "ProjectProvisioningError";
+  }
+}
+
+export class ProjectDeprovisioningError extends Error {
+  constructor(args: { projectId: string; cause: unknown }) {
+    super(
+      `Project '${args.projectId}' deprovisioning hook failed; the delete was aborted and can be retried: ${
+        args.cause instanceof Error ? args.cause.message : String(args.cause)
+      }`,
+      { cause: args.cause },
+    );
+    this.name = "ProjectDeprovisioningError";
+  }
+}
+
 export class ProjectFileNotFoundError extends Error {
   constructor(
     readonly projectId: string,
@@ -105,6 +154,7 @@ export class ProjectsService {
   constructor(
     private readonly db: Kysely<DB>,
     private readonly projectManager: ProjectManager,
+    private readonly hooks: readonly ProjectLifecycleHooks[] = [],
   ) {}
 
   async create(
@@ -182,7 +232,28 @@ export class ProjectsService {
       .selectAll()
       .executeTakeFirstOrThrow();
 
-    return mapProject(row);
+    const project = mapProject(row);
+
+    // Provisioning hooks run only once row + repo exist, and a failure
+    // rolls both back: the host must never observe a project whose
+    // infrastructure was not provisioned (ADR 0046). Hooks are idempotent
+    // by contract, so a retried create may safely re-run them.
+    for (const hook of this.hooks) {
+      if (!hook.onProjectCreated) continue;
+      try {
+        await hook.onProjectCreated({ project, identity });
+      } catch (cause) {
+        await this.db
+          .deleteFrom("projects")
+          .where("id", "=", projectId)
+          .execute()
+          .catch(() => {});
+        await this.projectManager.delete(tenantId, projectId).catch(() => {});
+        throw new ProjectProvisioningError({ projectId, cause });
+      }
+    }
+
+    return project;
   }
 
   async list(
@@ -240,7 +311,20 @@ export class ProjectsService {
   }
 
   async delete(identity: Identity, projectId: string): Promise<void> {
-    await this.requireExists(identity, projectId);
+    const row = await this.getRow(identity, projectId);
+    const project = mapProject(row);
+
+    // Deprovisioning hooks run before anything is deleted: a throw aborts
+    // the delete so the host can retry, instead of leaking infrastructure
+    // for a project that no longer exists (ADR 0046).
+    for (const hook of this.hooks) {
+      if (!hook.onProjectDeleted) continue;
+      try {
+        await hook.onProjectDeleted({ project, identity });
+      } catch (cause) {
+        throw new ProjectDeprovisioningError({ projectId, cause });
+      }
+    }
 
     await this.db
       .deleteFrom("projects")

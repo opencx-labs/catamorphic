@@ -9,7 +9,7 @@ import type {
   SandboxStatus,
 } from "@catamorphic/sandbox";
 import { Sandbox } from "microsandbox";
-import { StdioDeploymentRuntimeProvider } from "./stdio-runtime-provider.js";
+import { msbStdioRuntimeProvider } from "./stdio-runtime-provider.js";
 
 const DEFAULT_IMAGE = "oven/bun";
 const DEFAULT_MEMORY_MIB = 1024;
@@ -65,7 +65,7 @@ export class MicrosandboxSandboxProvider implements SandboxProvider {
       namePrefix: config?.namePrefix ?? "cata",
       setupCommand: config?.setupCommand ?? DEFAULT_SETUP_COMMAND,
     };
-    this.deploymentRuntime = new StdioDeploymentRuntimeProvider({
+    this.deploymentRuntime = msbStdioRuntimeProvider({
       connect: (sandboxId) => this.connect(sandboxId),
       uploadFiles: (sandboxId, files, basePath) =>
         this.uploadFiles(sandboxId, files, basePath),

@@ -1,5 +1,6 @@
 import type { DB } from "@catamorphic/db";
 import type {
+  CapabilityRequirement,
   PluginManifest,
   PluginResolver,
   PluginSecret,
@@ -7,6 +8,7 @@ import type {
 } from "@catamorphic/plugins";
 import { PluginResolutionError } from "@catamorphic/plugins";
 import type { Kysely } from "kysely";
+import { UnfulfilledCapabilityError } from "./capability-providers.js";
 
 /**
  * Public shape used by API responses. Wraps {@link PluginManifest} with the
@@ -24,6 +26,13 @@ export interface PluginInfo {
     description: string;
     required: boolean;
     default: string | null;
+  }>;
+  requires: Array<{
+    name: string;
+    description: string;
+    optional: boolean;
+    /** Whether the host registered a provider for this capability. */
+    fulfilled: boolean;
   }>;
 }
 
@@ -63,6 +72,11 @@ export class PluginsService {
   constructor(
     private readonly db: Kysely<DB>,
     private readonly resolver: PluginResolver,
+    /**
+     * Names of the host's registered capability providers (ADR 0046).
+     * Attach validates plugin `requires` against this set, fail-closed.
+     */
+    private readonly registeredCapabilities: ReadonlySet<string> = new Set(),
   ) {}
 
   async listCatalog(): Promise<PluginInfo[]> {
@@ -99,6 +113,16 @@ export class PluginsService {
     packageName: string,
   ): Promise<AttachedPluginInfo> {
     const resolved = await this.resolver.resolve(packageName);
+
+    // Fail closed at attach time: a plugin whose non-optional capability has
+    // no registered provider would only fail later, at run launch, with a
+    // far less actionable error.
+    const unfulfilled = resolved.manifest.requires
+      .filter((r) => !r.optional && !this.registeredCapabilities.has(r.name))
+      .map((r) => r.name);
+    if (unfulfilled.length > 0) {
+      throw new UnfulfilledCapabilityError(resolved.packageName, unfulfilled);
+    }
 
     await this.db
       .insertInto("project_plugins")
@@ -167,6 +191,27 @@ export class PluginsService {
     return declared;
   }
 
+  /**
+   * Union of every attached plugin's capability requirements (ADR 0046).
+   * A requirement is non-optional if any attached plugin requires it
+   * non-optionally.
+   */
+  async getRequiredCapabilities(
+    projectId: string,
+  ): Promise<Map<string, CapabilityRequirement>> {
+    const plugins = await this.loadAttachedResolved(projectId);
+    const required = new Map<string, CapabilityRequirement>();
+    for (const plugin of plugins) {
+      for (const requirement of plugin.manifest.requires) {
+        const existing = required.get(requirement.name);
+        if (!existing || (existing.optional && !requirement.optional)) {
+          required.set(requirement.name, requirement);
+        }
+      }
+    }
+    return required;
+  }
+
   private async safeResolve(
     packageName: string,
   ): Promise<ResolvedPlugin | null> {
@@ -186,6 +231,12 @@ export class PluginsService {
       displayName: plugin.manifest.displayName,
       description: plugin.manifest.description,
       secrets: plugin.manifest.secrets.map(toSecretDto),
+      requires: plugin.manifest.requires.map((r) => ({
+        name: r.name,
+        description: r.description,
+        optional: r.optional,
+        fulfilled: this.registeredCapabilities.has(r.name),
+      })),
     };
   }
 

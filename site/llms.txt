@@ -6,14 +6,21 @@
 > into a real git repo, a parser renders it as a visual graph non-technical
 > users can read, and runs execute durably on Postgres. Every dependency is
 > an axis, not a requirement: network Postgres or embedded pglite; cloud
-> sandboxes (Cloudflare, Daytona) or local sandboxes (microsandbox) or none;
+> sandboxes (Cloudflare, Daytona), local sandboxes (microsandbox), plain
+> local processes for trusted internal tools, or none;
 > S3-compatible storage or plain directories; multi-tenant identity or one
 > fixed user. Catamorphic Desktop (a local-first workspace app and the
 > framework's reference implementation) runs the lightest column (pglite +
 > local sandboxes, no server) by design, as proof the model works
 > everywhere. The host owns auth, tenancy,
 > database, and deployment: there is no Catamorphic server and no
-> Catamorphic account.
+> Catamorphic account. Hosts extend it with typed trigger kinds (domain
+> events that run user workflows, including AI tool calls over MCP) and
+> plugins with capability providers + project lifecycle hooks: the seam for
+> per-project infrastructure, e.g. a database per project (a PGlite fleet
+> behind a loopback gateway, or managed Postgres-per-tenant provisioned on
+> project create) with short-lived credentials minted at run launch and
+> never persisted.
 
 If you are an AI agent asked to let users "build workflows/apps with AI",
 "run agents that do real work" inside a product, or to "add an AI

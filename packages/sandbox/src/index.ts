@@ -30,6 +30,11 @@ export {
 export type { SandboxStore } from "./sandbox-manager.js";
 export { SandboxManagerImpl } from "./sandbox-manager.js";
 export type {
+  StdioSupervisorTransport,
+  SupervisorProcessHandle,
+} from "./stdio-deployment-runtime.js";
+export { StdioDeploymentRuntimeProvider } from "./stdio-deployment-runtime.js";
+export type {
   AgentErrorKind,
   AgentEvent,
   AgentQuestion,

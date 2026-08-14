@@ -138,4 +138,30 @@ describe("PluginManifestSchema", () => {
       }),
     ).toThrow();
   });
+
+  it("parses capability requirements with defaults", () => {
+    const manifest = PluginManifestSchema.parse({
+      displayName: "Acme DB",
+      requires: [{ name: "acme.database" }],
+    });
+    expect(manifest.requires).toEqual([
+      { name: "acme.database", description: "", optional: false },
+    ]);
+  });
+
+  it("defaults requires to an empty list", () => {
+    const manifest = PluginManifestSchema.parse({ displayName: "Plain" });
+    expect(manifest.requires).toEqual([]);
+  });
+
+  it("rejects capability names that are not dot-namespaced lowercase", () => {
+    for (const name of ["Database", "acme", "acme.", "acme.DB", "a b.c"]) {
+      expect(() =>
+        PluginManifestSchema.parse({
+          displayName: "Bad",
+          requires: [{ name }],
+        }),
+      ).toThrow(/dot-namespaced/);
+    }
+  });
 });

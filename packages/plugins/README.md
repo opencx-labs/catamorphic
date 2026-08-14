@@ -8,6 +8,15 @@ Plugin SDKs may depend on `@catamorphic/workflow` and re-export only the
 authoring primitives their host wants projects to use. Projects importing that
 wrapper do not need a direct `@catamorphic/workflow` dependency.
 
+A plugin package can ship **two halves** (ADR 0046): the *sandbox half*
+documented here (manifest + files, attached per project through the
+catalog), and an optional *host half* — capability providers, project
+lifecycle hooks, trigger kinds — exported from the same package and
+activated only by boot registration
+(`createCatamorphic({ plugins: [myPlugin(cfg)] })`, see `definePlugin` in
+`@catamorphic/server-sdk`). Attach never executes plugin code in the host
+process.
+
 This README is the authoritative reference for the whole plugin subsystem —
 manifest format, DB schema, runtime plumbing, agent context injection, and the
 troubleshooting scars we've collected so far. Update this file when anything
@@ -132,6 +141,12 @@ README scraping, no convention sniffing.
         "default": "https://api.example.com"
       }
     ],
+    "requires": [
+      {
+        "name": "acme.database",
+        "description": "Per-project database credentials, minted by the host."
+      }
+    ],
     "docs": {
       "readme": "README.md",
       "types": "dist/index.d.ts"
@@ -155,6 +170,16 @@ shared by the server (route validation) and resolver (manifest parsing).
     `false`.
   - A run is blocked with `400 Missing required plugin secrets: …` if any
     `required: true` secret has no stored value.
+- `requires[]` — capability requirements the **host** fulfills at run time
+  (ADR 0046). Names are dot-namespaced lowercase (`acme.database`). The host
+  registers a matching provider at boot (`defineCapability` +
+  `createCatamorphic({ capabilityProviders })` or a `definePlugin` host
+  half); the provider's env values are injected per run, never persisted,
+  and **override stored secrets** on name collision (chain: provider →
+  stored value → default). Attaching a plugin whose non-optional
+  requirement has no registered provider fails with
+  `400 UnfulfilledCapabilityError`; `optional: true` requirements skip that
+  check and the plugin code must degrade when the env is absent.
 - `docs.readme` / `docs.types` — paths **inside the package** that the coding
   agent stages into `_plugins/<pkg>/` in the dev sandbox and that
   `AgentContextService` inlines into the workflow-builder system prompt.

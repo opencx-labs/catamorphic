@@ -93,11 +93,25 @@
     },
     "packages/app": {
       "name": "@catamorphic/app",
-      "version": "0.0.1",
+      "version": "0.0.2",
       "devDependencies": {
+        "@testing-library/jest-dom": "^6.9.1",
+        "@testing-library/react": "^16.3.2",
         "@types/node": "^26.1.1",
+        "@types/react": "^19.2.17",
+        "@types/react-dom": "^19.2.3",
         "jsdom": "^29.1.1",
+        "react": "^19.2.7",
+        "react-dom": "^19.2.7",
       },
+      "peerDependencies": {
+        "react": "^19",
+        "react-dom": "^19",
+      },
+      "optionalPeers": [
+        "react",
+        "react-dom",
+      ],
     },
     "packages/claude-code": {
       "name": "@catamorphic/claude-code",
@@ -233,6 +247,17 @@
     "packages/github": {
       "name": "@catamorphic/github",
       "version": "0.0.1",
+      "devDependencies": {
+        "@types/node": "^26.1.1",
+      },
+    },
+    "packages/local-process": {
+      "name": "@catamorphic/local-process",
+      "version": "0.0.1",
+      "dependencies": {
+        "@catamorphic/runtime": "workspace:*",
+        "@catamorphic/sandbox": "workspace:*",
+      },
       "devDependencies": {
         "@types/node": "^26.1.1",
       },
@@ -608,6 +633,8 @@
     "@catamorphic/git": ["@catamorphic/git@workspace:packages/git"],
 
     "@catamorphic/github": ["@catamorphic/github@workspace:packages/github"],
+
+    "@catamorphic/local-process": ["@catamorphic/local-process@workspace:packages/local-process"],
 
     "@catamorphic/mcp": ["@catamorphic/mcp@workspace:packages/mcp"],
 

@@ -44,6 +44,10 @@ export {
   type UpsertTenantAppPolicyInput,
 } from "./services/app-policies-service.js";
 export {
+  AppStorageService,
+  AppStorageSnapshotTooLargeError,
+} from "./services/app-storage-service.js";
+export {
   AppBuildFailedError,
   type AppBundle,
   AppBundleTooLargeError,
@@ -58,9 +62,14 @@ export {
   type AppVersionStatus,
 } from "./services/apps-service.js";
 export {
-  AppStorageService,
-  AppStorageSnapshotTooLargeError,
-} from "./services/app-storage-service.js";
+  type CapabilityContext,
+  type CapabilityProviderRuntime,
+  CapabilityRegistry,
+  CapabilityResolutionError,
+  DuplicateCapabilityProviderError,
+  ReservedCapabilityEnvError,
+  UnfulfilledCapabilityError,
+} from "./services/capability-providers.js";
 export type {
   CodeHost,
   PullRequestFile,
@@ -133,9 +142,12 @@ export {
   type ListProjectsInput,
   type ListProjectsResult,
   type Project,
+  ProjectDeprovisioningError,
   type ProjectFileEntry,
   ProjectFileNotFoundError,
+  type ProjectLifecycleHooks,
   ProjectNotFoundError,
+  ProjectProvisioningError,
   ProjectsService,
   type UpdateProjectInput,
   type WriteFileInput,

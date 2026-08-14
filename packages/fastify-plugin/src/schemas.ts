@@ -838,6 +838,13 @@ export const PluginSecretSchema = z.object({
   default: z.string().nullable(),
 });
 
+export const PluginCapabilityRequirementSchema = z.object({
+  name: z.string(),
+  description: z.string(),
+  optional: z.boolean(),
+  fulfilled: z.boolean(),
+});
+
 export const PluginManifestSchema = z.object({
   packageName: z.string(),
   version: z.string().nullable(),
@@ -845,6 +852,7 @@ export const PluginManifestSchema = z.object({
   displayName: z.string(),
   description: z.string(),
   secrets: z.array(PluginSecretSchema),
+  requires: z.array(PluginCapabilityRequirementSchema),
 });
 
 export const CatalogPluginSchema = PluginManifestSchema;

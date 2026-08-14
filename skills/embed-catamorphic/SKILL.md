@@ -59,7 +59,7 @@ so "I don't run Postgres" is never a blocker.
 | Axis | Options |
 | --- | --- |
 | Database | Network Postgres (`{ pool }` / `{ connectionString }`) **or** embedded pglite (Kysely on `PGliteDialect`, passed as `database: { db }`) |
-| Execution | Cloud sandboxes (`@catamorphic/cloudflare` or `@catamorphic/daytona`) **or** local sandboxes (`@catamorphic/microsandbox`) **or** none (read-only embed) |
+| Execution | Cloud sandboxes (`@catamorphic/cloudflare` or `@catamorphic/daytona`) **or** local sandboxes (`@catamorphic/microsandbox`) **or** plain local processes (`@catamorphic/local-process` — trusted single-tenant hosts ONLY: internal tools, desktop; workflows reach localhost, zero cloud deps) **or** none (read-only embed) |
 | Code storage | Writable directories (`projectsPath` + `remotesPath`) **or** S3-compatible bucket via `@catamorphic/s3` (R2, S3, MinIO) |
 | Identity | Host org/user per request **or** one fixed tenant/user for single-user apps |
 | Surface | SDK-only in-process, +HTTP (`@catamorphic/fastify-plugin`), +React UI (`@catamorphic/react`, `@catamorphic/ui`), or migrations-only (`@catamorphic/db`) |
@@ -108,6 +108,62 @@ const run = await scoped.runs.triggerProduction({
   input: { email: "ada@example.com" },
 });
 ```
+
+## Capabilities and lifecycle hooks: per-project infrastructure (ADR 0046)
+
+When the host must supply run-time values — per-project database
+credentials being the canonical case — do NOT put long-lived secrets in the
+user-facing secrets store. Register a **capability provider**: host code
+that mints env values at run launch, never persisted. Pair it with
+**project lifecycle hooks** to provision/deprovision infrastructure with
+the project itself.
+
+```ts
+import { createCatamorphic, defineCapability, definePlugin } from "@catamorphic/server-sdk";
+
+const acmeDb = (cfg: { apiKey: string }) =>
+  definePlugin({
+    name: "@acme/catamorphic-db", // same npm package ships the sandbox-half SDK
+    capabilities: [
+      defineCapability({
+        name: "acme.database", // matches the plugin manifest's `requires`
+        resolve: async ({ tenantId, projectId, environment }) => ({
+          DATABASE_URL: await mintShortLivedUrl(cfg.apiKey, projectId, environment),
+        }),
+      }),
+    ],
+    projectHooks: {
+      // throw ⇒ create rolls back: no project without its database
+      onProjectCreated: ({ project }) => provisionDb(cfg.apiKey, project.id),
+      // runs BEFORE delete; throw ⇒ delete aborts (retryable, no leaks)
+      onProjectDeleted: ({ project }) => dropDb(cfg.apiKey, project.id),
+    },
+  });
+
+createCatamorphic({ ..., plugins: [acmeDb({ apiKey: env.ACME_KEY! })] });
+// Loose forms also work: capabilityProviders: [...], projectHooks: [...]
+```
+
+The model (two activation planes, one bindings chain):
+
+- **Attach never runs host code.** A plugin's *sandbox half* (client lib,
+  manifest with `secrets` + `requires`, docs) is attached per project via
+  UI; its *host half* (providers, hooks, trigger kinds) activates only by
+  boot registration. Attaching a plugin whose non-optional `requires` has
+  no registered provider fails closed with 400 at attach time.
+- **Env resolves provider → stored secret → manifest default.** Provider
+  values win and are never written to the database; workflow code just
+  reads `process.env`. Providers may not return `CATAMORPHIC_*` names.
+- **Hooks must be idempotent** (a rolled-back create may re-run them).
+
+**Database-per-project reference architecture** (what this seam is for):
+internal-tools hosts run a PGlite fleet (one datadir per project) behind a
+loopback Postgres wire gateway and resolve `postgres://…@127.0.0.1` URLs —
+with `@catamorphic/local-process` execution there is no ingress or tunnel
+at all. SaaS embedders provision a managed Postgres per project (e.g.
+database-per-tenant services with scale-to-zero) in `onProjectCreated` and
+mint short-lived pooled URLs in the provider. Both tiers are Postgres and
+both arrive as env, so projects promote between them without app changes.
 
 ## Custom trigger kinds (host-defined events that run workflows)
 
@@ -276,6 +332,15 @@ shadcn-style source-owned components: `@catamorphic/registry`.
   `close()` only closes what it created. Stop worker handles on shutdown.
 - Observability is `@opentelemetry/api` only: if the host registers an OTel
   SDK, spans (`workflow.run`, `sandbox.*`, …) appear automatically.
+- Host-supplied credentials go through capability providers (resolved at
+  run launch, never persisted), not the user-facing secrets store.
+  Provision/deprovision per-project infrastructure in project lifecycle
+  hooks, never by wrapping `projects.create` (HTTP- and agent-created
+  projects would bypass the wrapper).
+- `@catamorphic/local-process` is for trusted single-tenant hosts only.
+  Its isolation is a subprocess with an explicit env — defensible because
+  every production run executes a reviewed, immutable deployed commit —
+  and it must never serve multi-tenant traffic.
 
 ## How to run this integration as an agent
 
@@ -295,3 +360,9 @@ shadcn-style source-owned components: `@catamorphic/registry`.
    workflow with `triggers: [trigger("kind", config)]`, deploy, `fire` the
    kind, and assert the run enrolled (async) or settled/suspended honestly
    (sync).
+6. If the host needs per-project infrastructure (databases, queues, vendor
+   accounts): register capability providers + project lifecycle hooks at
+   boot, declare `requires` in the plugin manifest, then verify the chain —
+   create a project (hook provisioned), attach the plugin (fails closed if
+   the provider is missing), run a workflow and assert the provider-minted
+   env arrived, delete the project (hook deprovisioned).

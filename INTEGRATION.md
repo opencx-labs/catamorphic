@@ -19,7 +19,7 @@ and local sandboxes, no server, no network Postgres, by design.
 | Axis | Heavy end | Light end |
 | --- | --- | --- |
 | Database | Network Postgres (`{ pool }` / `{ connectionString }`) | **Embedded pglite**: build a Kysely instance on `PGliteDialect` and pass `database: { db }`. Migrations run statement-by-statement specifically so single-connection dialects work. |
-| Execution | Cloud sandboxes (`@catamorphic/cloudflare`, `@catamorphic/daytona`) | **Local sandboxes** (`@catamorphic/microsandbox`), or omit `sandboxProvider` entirely for read-only embeds |
+| Execution | Cloud sandboxes (`@catamorphic/cloudflare`, `@catamorphic/daytona`) | **Local sandboxes** (`@catamorphic/microsandbox`), **plain local processes** (`@catamorphic/local-process`, trusted single-tenant hosts only — ADR 0047), or omit `sandboxProvider` entirely for read-only embeds |
 | Code storage | S3-compatible bucket (`@catamorphic/s3`: R2, S3, MinIO) or Cloudflare Artifacts | Two writable directories (`projectsPath`, `remotesPath`) |
 | Identity | Host org/user per request (`forTenant(orgId).forUser(userId)`) | A single fixed tenant/user for single-user apps |
 | Surface | HTTP API + React UI | In-process SDK calls only, or migrations-only (`@catamorphic/db`) |
@@ -32,8 +32,15 @@ Common host shapes, composed from those axes:
 - **Desktop / local-first app**: pglite, local sandboxes, filesystem
   storage, fixed identity. Reference implementation:
   [`apps/desktop/src/main/server/boot.ts`](apps/desktop/src/main/server/boot.ts).
-- **Single-tenant internal tool**: network Postgres the team already has,
-  filesystem storage, one tenant, often no HTTP surface.
+- **Single-tenant internal tool**: network Postgres the team already has
+  (or pglite), **`@catamorphic/local-process` execution** — plain
+  subprocesses, no cloud sandbox account, and workflows reach host-local
+  services (internal APIs, a loopback database gateway) with no tunnels.
+  Sound because every production run executes an immutable deployed commit
+  (ADR 0040): the trust statement attaches to a reviewed deploy, not to
+  whatever an agent typed five minutes ago. Never use this provider for
+  multi-tenant hosts — the only isolation is a process boundary and an
+  explicit env.
 - **Read-only embed / reporting**: `@catamorphic/db` migrations plus SQL
   joins, or the SDK without a sandbox provider.
 
@@ -271,6 +278,89 @@ Runtime summary:
 4. Agent and workflow-builder context include plugin README + d.ts.
 
 For full details (manifest contract, REST API, service internals, runtime flow, troubleshooting, and resolver roadmap), use [`packages/plugins/README.md`](packages/plugins/README.md) as the canonical source.
+
+## Capabilities, lifecycle hooks, and plugin host halves (ADR 0046)
+
+A plugin has **two activation planes**. Its *sandbox half* (client library,
+manifest, docs) is attached per project through the catalog — a UI action.
+Its *host half* (code that runs in the host process) activates **only by
+boot registration** in `createCatamorphic`. A UI click can never execute
+code in the host process.
+
+Run-time env resolves through one bindings chain:
+**capability provider → stored secret → manifest default.**
+
+- A plugin manifest declares `requires: [{ "name": "acme.database" }]`.
+- The host registers a **capability provider** for that name. At run
+  launch, `resolve(...)` returns env values that are merged into the run's
+  environment and never persisted — mint short-lived, per-project
+  credentials here.
+- Attaching a plugin whose non-optional requirement has no registered
+  provider fails closed with a 400 at attach time.
+- **Project lifecycle hooks** provision per-project infrastructure:
+  `onProjectCreated` failures roll the create back; `onProjectDeleted` runs
+  before deletion and a failure aborts it (retryable, nothing leaks). Hooks
+  must be idempotent.
+
+```ts
+import {
+  createCatamorphic,
+  defineCapability,
+  definePlugin,
+} from "@catamorphic/server-sdk";
+
+// Ships in the same npm package as the plugin's sandbox half.
+const acmeDbPlugin = (cfg: { apiKey: string }) =>
+  definePlugin({
+    name: "@acme/catamorphic-db",
+    capabilities: [
+      defineCapability({
+        name: "acme.database",
+        resolve: async ({ projectId, environment }) => ({
+          DATABASE_URL: await mintScopedUrl(cfg.apiKey, projectId, environment),
+        }),
+      }),
+    ],
+    projectHooks: {
+      onProjectCreated: ({ project }) => provisionDb(cfg.apiKey, project.id),
+      onProjectDeleted: ({ project }) => dropDb(cfg.apiKey, project.id),
+    },
+  });
+
+export const catamorphic = createCatamorphic({
+  database: { pool: hostPgPool },
+  storage: { projectsPath, remotesPath },
+  plugins: [acmeDbPlugin({ apiKey: process.env.ACME_KEY! })],
+  // Loose providers/hooks can also be passed directly:
+  // capabilityProviders: [...], projectHooks: [...],
+});
+```
+
+Workflow code stays vendor-blind — it imports the plugin's client and reads
+`process.env.DATABASE_URL`. Providers must not return `CATAMORPHIC_`-prefixed
+names, and duplicate capability or trigger-kind names across plugins fail at
+boot.
+
+### Reference architecture: a database per project
+
+The capability seam is how embedders give every project real database
+storage without Catamorphic knowing any vendor:
+
+- **Internal tools / single server**: run a fleet of server-side PGlite
+  instances (one datadir per project, hibernated when idle) behind a
+  Postgres wire-protocol gateway such as `pg-gateway` on loopback. The
+  provider resolves to `postgres://…@127.0.0.1` with per-project
+  credentials; with `@catamorphic/local-process` execution, workflows reach
+  it with no ingress or tunnels. Snapshot datadirs to S3 for backup.
+- **Embedded SaaS at scale**: provision a managed Postgres per project
+  (Neon-style database-per-tenant with scale-to-zero, or an equivalent
+  service) from `onProjectCreated`, deprovision in `onProjectDeleted`, and
+  mint short-lived pooled connection URLs in the provider. No long-lived
+  credential is ever at rest in Catamorphic.
+
+Both tiers are Postgres and both arrive as "a URL in env," so promoting a
+project from the PGlite fleet to a managed database is a data migration,
+not an app change.
 
 ## Validating projects in CI or a local editor
 

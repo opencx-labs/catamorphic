@@ -10521,6 +10521,33 @@
                           ],
                           "additionalProperties": false
                         }
+                      },
+                      "requires": {
+                        "type": "array",
+                        "items": {
+                          "type": "object",
+                          "properties": {
+                            "name": {
+                              "type": "string"
+                            },
+                            "description": {
+                              "type": "string"
+                            },
+                            "optional": {
+                              "type": "boolean"
+                            },
+                            "fulfilled": {
+                              "type": "boolean"
+                            }
+                          },
+                          "required": [
+                            "name",
+                            "description",
+                            "optional",
+                            "fulfilled"
+                          ],
+                          "additionalProperties": false
+                        }
                       }
                     },
                     "required": [
@@ -10529,7 +10556,8 @@
                       "source",
                       "displayName",
                       "description",
-                      "secrets"
+                      "secrets",
+                      "requires"
                     ],
                     "additionalProperties": false
                   }
@@ -10630,6 +10658,33 @@
                           "additionalProperties": false
                         }
                       },
+                      "requires": {
+                        "type": "array",
+                        "items": {
+                          "type": "object",
+                          "properties": {
+                            "name": {
+                              "type": "string"
+                            },
+                            "description": {
+                              "type": "string"
+                            },
+                            "optional": {
+                              "type": "boolean"
+                            },
+                            "fulfilled": {
+                              "type": "boolean"
+                            }
+                          },
+                          "required": [
+                            "name",
+                            "description",
+                            "optional",
+                            "fulfilled"
+                          ],
+                          "additionalProperties": false
+                        }
+                      },
                       "attachedAt": {
                         "type": "string",
                         "format": "date-time",
@@ -10662,6 +10717,7 @@
                       "displayName",
                       "description",
                       "secrets",
+                      "requires",
                       "attachedAt",
                       "secretStatus"
                     ],
@@ -10777,6 +10833,33 @@
                         "additionalProperties": false
                       }
                     },
+                    "requires": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "name": {
+                            "type": "string"
+                          },
+                          "description": {
+                            "type": "string"
+                          },
+                          "optional": {
+                            "type": "boolean"
+                          },
+                          "fulfilled": {
+                            "type": "boolean"
+                          }
+                        },
+                        "required": [
+                          "name",
+                          "description",
+                          "optional",
+                          "fulfilled"
+                        ],
+                        "additionalProperties": false
+                      }
+                    },
                     "attachedAt": {
                       "type": "string",
                       "format": "date-time",
@@ -10809,9 +10892,27 @@
                     "displayName",
                     "description",
                     "secrets",
+                    "requires",
                     "attachedAt",
                     "secretStatus"
                   ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["error"],
                   "additionalProperties": false
                 }
               }

@@ -3,6 +3,6 @@ export {
   MicrosandboxSandboxProvider,
 } from "./sandbox-provider.js";
 export {
-  StdioDeploymentRuntimeProvider,
-  type StdioDeploymentRuntimeProviderOptions,
+  type MsbStdioTransportOptions,
+  msbStdioRuntimeProvider,
 } from "./stdio-runtime-provider.js";

@@ -70,6 +70,31 @@ export type PluginBatchCapabilities = z.infer<
 >;
 
 /**
+ * A capability the plugin's sandbox code needs the host to fulfill at run
+ * time (ADR 0046). Names are dot-namespaced like trigger kinds
+ * ("acme.database"). The host registers a matching capability provider at
+ * boot; attaching a plugin whose non-optional requirement has no registered
+ * provider fails closed.
+ */
+export const CapabilityRequirementSchema = z.object({
+  name: z
+    .string()
+    .min(1)
+    .regex(
+      /^[a-z][a-z0-9_]*(\.[a-z][a-z0-9_]*)+$/,
+      "Capability names must be dot-namespaced lowercase, e.g. 'acme.database'.",
+    ),
+  description: z.string().default(""),
+  /**
+   * Optional requirements don't block attach when unregistered; the plugin's
+   * code must degrade gracefully when the capability's env is absent.
+   */
+  optional: z.boolean().default(false),
+});
+
+export type CapabilityRequirement = z.infer<typeof CapabilityRequirementSchema>;
+
+/**
  * Schema for the `catamorphic` field on a plugin's `package.json`. This is the
  * only contract a plugin package has to honor to be usable inside Catamorphic.
  */
@@ -77,6 +102,7 @@ export const PluginManifestSchema = z.object({
   displayName: z.string().min(1),
   description: z.string().default(""),
   secrets: z.array(PluginSecretSchema).default([]),
+  requires: z.array(CapabilityRequirementSchema).default([]),
   batch: PluginBatchCapabilitiesSchema.optional(),
   docs: PluginDocsSchema.default({
     readme: "README.md",

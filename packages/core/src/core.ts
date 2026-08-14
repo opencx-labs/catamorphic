@@ -8,16 +8,20 @@ import type {
 import { instrumentSandboxProvider } from "@catamorphic/sandbox";
 import type { Kysely } from "kysely";
 import { AgentContextService } from "./services/agent-context-service.js";
-import { AppStorageService } from "./services/app-storage-service.js";
 import {
   AgentSessionsService,
   type AgentTurnSettledEvent,
 } from "./services/agent-sessions-service.js";
 import type { AppBundleStore } from "./services/app-bundle-store.js";
 import { AppPoliciesService } from "./services/app-policies-service.js";
+import { AppStorageService } from "./services/app-storage-service.js";
 import { AppsService } from "./services/apps-service.js";
 import { BatchExecutionHandler } from "./services/batch-execution-handler.js";
 import { BoundaryExecutionHandler } from "./services/boundary-execution-handler.js";
+import {
+  type CapabilityProviderRuntime,
+  CapabilityRegistry,
+} from "./services/capability-providers.js";
 import {
   type CodingAgentRegistry,
   isCodingAgentRegistry,
@@ -36,7 +40,10 @@ import {
   type GithubServiceConfig,
 } from "./services/github-service.js";
 import { PluginsService } from "./services/plugins-service.js";
-import { ProjectsService } from "./services/projects-service.js";
+import {
+  type ProjectLifecycleHooks,
+  ProjectsService,
+} from "./services/projects-service.js";
 import { RateReservationsService } from "./services/rate-reservations-service.js";
 import { RemoteSyncService } from "./services/remote-sync-service.js";
 import {
@@ -137,6 +144,19 @@ export interface CatamorphicCoreConfig {
    * kind. Exceptions are swallowed and never delay the turn.
    */
   onAgentTurnSettled?: (event: AgentTurnSettledEvent) => void | Promise<void>;
+  /**
+   * Host-side capability providers (ADR 0046): named fulfillers for plugin
+   * `requires` declarations, resolved at run launch into env values that
+   * are never persisted. Build these with `defineCapability` from
+   * `@catamorphic/server-sdk`. Duplicate names fail at boot.
+   */
+  capabilityProviders?: readonly CapabilityProviderRuntime[];
+  /**
+   * Host-side project lifecycle hooks (ADR 0046). `onProjectCreated`
+   * failures roll the create back; `onProjectDeleted` failures abort the
+   * delete. Hooks must be idempotent.
+   */
+  projectHooks?: readonly ProjectLifecycleHooks[];
 }
 
 /**
@@ -176,6 +196,8 @@ export class CatamorphicCore {
   readonly appStorage: AppStorageService;
   /** Tool-kind declarations behind the per-project MCP endpoint. */
   readonly mcpToolKinds: readonly McpToolKindSpec[];
+  /** The host's registered capability providers (ADR 0046). */
+  readonly capabilities: CapabilityRegistry;
 
   constructor(config: CatamorphicCoreConfig) {
     this.db = config.db;
@@ -205,7 +227,12 @@ export class CatamorphicCore {
           })
         : undefined;
 
-    this.projects = new ProjectsService(this.db, this.projectManager);
+    this.capabilities = new CapabilityRegistry(config.capabilityProviders);
+    this.projects = new ProjectsService(
+      this.db,
+      this.projectManager,
+      config.projectHooks,
+    );
     this.appStorage = new AppStorageService(this.db);
     this.github = config.github
       ? new GithubService(
@@ -248,7 +275,11 @@ export class CatamorphicCore {
     this.tenantPolicies = new TenantPoliciesService(this.db);
 
     if (this.pluginResolver) {
-      this.plugins = new PluginsService(this.db, this.pluginResolver);
+      this.plugins = new PluginsService(
+        this.db,
+        this.pluginResolver,
+        this.capabilities.names,
+      );
     }
     // Secrets exist independently of plugins: a project declares its own with
     // `defineSecrets` in code, and plugins may declare additional ones.
@@ -260,6 +291,7 @@ export class CatamorphicCore {
         this.plugins,
         this.secrets,
         this.pluginResolver,
+        this.capabilities,
       );
       this.agentContext = new AgentContextService(
         this.plugins,

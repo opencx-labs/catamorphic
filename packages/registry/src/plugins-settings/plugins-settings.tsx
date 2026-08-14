@@ -204,6 +204,32 @@ function AttachedPluginCard({
         </button>
       </header>
 
+      {plugin.requires.length > 0 ? (
+        <ul className="mb-3 grid gap-1">
+          {plugin.requires.map((requirement) => (
+            <li
+              key={requirement.name}
+              className="flex items-center gap-2 text-xs"
+            >
+              <span
+                aria-hidden
+                className={`inline-block size-1.5 rounded-full ${
+                  requirement.fulfilled ? "bg-success" : "bg-danger"
+                }`}
+              />
+              <span className="font-mono">{requirement.name}</span>
+              <span className="text-fg-muted">
+                {requirement.fulfilled
+                  ? "supplied by your platform"
+                  : requirement.optional
+                    ? "not available on this host"
+                    : "no provider registered"}
+              </span>
+            </li>
+          ))}
+        </ul>
+      ) : null}
+
       {plugin.secrets.length === 0 ? (
         <p className="text-xs text-fg-muted">
           This plugin doesn&apos;t require any secrets.

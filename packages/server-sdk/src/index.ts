@@ -90,6 +90,9 @@ export type WorkflowCapabilities = CoreWorkflowSummary["capabilities"];
 export type {
   AgentTurnSettledEvent,
   AppBundleStore,
+  CapabilityContext,
+  CapabilityProviderRuntime,
+  ProjectLifecycleHooks,
   TriggerBindingInfo,
   TriggerFireOutcome,
   TriggerFireResult,
@@ -100,10 +103,16 @@ export type {
   TriggerSuspensionReason,
 } from "@catamorphic/core";
 export {
+  CapabilityResolutionError,
+  DuplicateCapabilityProviderError,
+  ProjectDeprovisioningError,
+  ProjectProvisioningError,
+  ReservedCapabilityEnvError,
   TriggerBindingsInvalidError,
   TriggerKindNotRegisteredError,
   TriggerModeNotAllowedError,
   TriggerPayloadInvalidError,
+  UnfulfilledCapabilityError,
 } from "@catamorphic/core";
 export type { DB } from "@catamorphic/db";
 export { createDatabase, migrateToLatest } from "@catamorphic/db";
@@ -122,6 +131,12 @@ export type {
   StorageConfig,
 } from "./catamorphic.js";
 export { Catamorphic, createCatamorphic } from "./catamorphic.js";
+export type { HostPluginDefinition } from "./define-plugin.js";
+export {
+  DuplicatePluginContributionError,
+  defineCapability,
+  definePlugin,
+} from "./define-plugin.js";
 export type { TriggerKindDefinition } from "./define-trigger-kind.js";
 export {
   defineTriggerKind,

@@ -1,6 +1,7 @@
 import type {
   AgentTurnSettledEvent,
   AppBundleStore,
+  CapabilityProviderRuntime,
   CatamorphicCore,
   CodingAgentRegistry,
   DeploymentRuntimeCleanupResult,
@@ -10,6 +11,7 @@ import type {
   ExecutionWorkerOptions,
   GithubServiceConfig,
   McpToolKindSpec,
+  ProjectLifecycleHooks,
   RetentionConfig,
   TriggerKindRuntime,
 } from "@catamorphic/core";
@@ -32,6 +34,10 @@ import type {
 } from "@catamorphic/sandbox";
 import type { Kysely } from "kysely";
 import type pg from "pg";
+import {
+  type HostPluginDefinition,
+  mergeHostPlugins,
+} from "./define-plugin.js";
 import { TenantScopedClient } from "./scoped-client.js";
 
 export type DatabaseConfig =
@@ -145,6 +151,28 @@ export interface CreateCatamorphicConfig {
    * a chat trigger kind. Exceptions are swallowed and never delay the turn.
    */
   onAgentTurnSettled?: (event: AgentTurnSettledEvent) => void | Promise<void>;
+  /**
+   * Boot-registered plugin host halves (ADR 0046), built with
+   * `definePlugin`. Each contributes capability providers, project
+   * lifecycle hooks, trigger kinds, and MCP tool kinds; contributions merge
+   * with the top-level arrays and name collisions fail at boot. The same
+   * package's sandbox half is attached per project through the plugin
+   * catalog — registration is the only way code enters the host process.
+   */
+  plugins?: readonly HostPluginDefinition[];
+  /**
+   * Host capability providers (ADR 0046), built with `defineCapability`:
+   * named fulfillers for plugin manifest `requires` declarations. Resolved
+   * at run launch into env values that are never persisted — mint
+   * short-lived per-project credentials here.
+   */
+  capabilityProviders?: readonly CapabilityProviderRuntime[];
+  /**
+   * Project lifecycle hooks (ADR 0046): provision per-project
+   * infrastructure on create (a throw rolls the create back), deprovision
+   * on delete (a throw aborts the delete). Hooks must be idempotent.
+   */
+  projectHooks?: readonly ProjectLifecycleHooks[];
 }
 
 function resolveDatabase(config: DatabaseConfig): {
@@ -203,6 +231,13 @@ export class Catamorphic {
     const { db, schema, ownsDb } = resolveDatabase(config.database);
     this.schema = schema;
     this.ownsDb = ownsDb;
+    const contributions = mergeHostPlugins({
+      plugins: config.plugins ?? [],
+      capabilityProviders: config.capabilityProviders ?? [],
+      projectHooks: config.projectHooks ?? [],
+      triggerKinds: config.triggerKinds ?? [],
+      mcpToolKinds: config.mcpToolKinds ?? [],
+    });
     this.core = createCatamorphicCore({
       db,
       projectManager: resolveStorage(config.storage),
@@ -219,9 +254,11 @@ export class Catamorphic {
       appBundleStore: config.appBundleStore,
       maxAppBundleBytes: config.maxAppBundleBytes,
       github: config.github,
-      triggerKinds: config.triggerKinds,
-      mcpToolKinds: config.mcpToolKinds,
+      triggerKinds: contributions.triggerKinds,
+      mcpToolKinds: contributions.mcpToolKinds,
       onAgentTurnSettled: config.onAgentTurnSettled,
+      capabilityProviders: contributions.capabilityProviders,
+      projectHooks: contributions.projectHooks,
     });
   }
 

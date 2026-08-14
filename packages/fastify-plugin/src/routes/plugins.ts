@@ -1,6 +1,7 @@
 import {
   PluginNotAttachedError,
   UndeclaredSecretError,
+  UnfulfilledCapabilityError,
 } from "@catamorphic/core";
 import { PluginResolutionError } from "@catamorphic/plugins";
 import type { FastifyInstance } from "fastify";
@@ -69,6 +70,7 @@ export function registerPluginRoutes(app: FastifyInstance, ctx: RouteContext) {
       body: AttachPluginSchema,
       response: {
         201: AttachedPluginSchema,
+        400: ErrorSchema,
         404: ErrorSchema,
         503: ErrorSchema,
       },
@@ -85,6 +87,11 @@ export function registerPluginRoutes(app: FastifyInstance, ctx: RouteContext) {
       } catch (err) {
         if (err instanceof PluginResolutionError) {
           return reply.status(404).send({ error: err.message });
+        }
+        // Fail-closed attach (ADR 0046): a required capability with no
+        // registered provider is a host configuration problem, not a 500.
+        if (err instanceof UnfulfilledCapabilityError) {
+          return reply.status(400).send({ error: err.message });
         }
         throw err;
       }

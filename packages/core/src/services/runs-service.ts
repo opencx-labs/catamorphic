@@ -961,7 +961,7 @@ export class RunsService {
     const source = await this.prepareProductionSource(args);
     if (!source.commitSha)
       throw new ProductionDeploymentNotFoundError(args.projectId);
-    const plugins = await this.loadPlugins(args.identity, args.projectId);
+    const plugins = await this.loadPlugins(args.identity, args.projectId, args.workflowName);
     return this.deps.deploymentArtifacts.ensure({
       tenantId: args.identity.tenantId,
       projectId: args.projectId,
@@ -1001,7 +1001,7 @@ export class RunsService {
     if (!deploymentRuntime) throw new SandboxProviderNotConfiguredError();
     const [source, plugins, artifact] = await Promise.all([
       this.prepareProductionSource(args),
-      this.loadPlugins(args.identity, args.projectId),
+      this.loadPlugins(args.identity, args.projectId, args.workflowName),
       this.deps.deploymentArtifacts.get({ artifactId: args.artifactId }),
     ]);
     if (!artifact) {
@@ -1061,7 +1061,7 @@ export class RunsService {
     }
     const [source, plugins, artifact] = await Promise.all([
       this.prepareProductionSource(args),
-      this.loadPlugins(args.identity, args.projectId),
+      this.loadPlugins(args.identity, args.projectId, args.workflowName),
       this.deps.deploymentArtifacts.get({ artifactId: args.artifactId }),
     ]);
     const runtimePackagesForArtifact = runtimePackages({
@@ -1247,7 +1247,7 @@ export class RunsService {
       if (decision.kind === "restart") supersededRunId = decision.runId;
     }
     const source = await this.prepareProductionSource(args);
-    const plugins = await this.loadPlugins(args.identity, args.projectId);
+    const plugins = await this.loadPlugins(args.identity, args.projectId, args.workflowName);
     const input = args.input ?? null;
     // The graph's input schema is a projection of the workflow's TS input
     // type; rejecting here fails at the door with a path-level error instead
@@ -1455,12 +1455,17 @@ export class RunsService {
     return hit;
   }
 
-  private async loadPlugins(identity: Identity, projectId: string) {
+  private async loadPlugins(
+    identity: Identity,
+    projectId: string,
+    workflowName?: string,
+  ) {
     if (!this.deps.runPluginsLoader) return undefined;
     const plugins = await this.deps.runPluginsLoader.load({
       identity,
       projectId,
       environment: "production",
+      workflowName,
     });
     if (plugins.missingRequiredSecrets.length > 0) {
       throw new PluginSecretsMissingError(plugins.missingRequiredSecrets);

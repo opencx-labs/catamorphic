@@ -1,4 +1,5 @@
 export type {
+  CapabilityRequirement,
   PluginBatchCapabilities,
   PluginBatchSink,
   PluginBatchSource,
@@ -8,6 +9,7 @@ export type {
   PluginSecret,
 } from "./manifest.js";
 export {
+  CapabilityRequirementSchema,
   PluginBatchCapabilitiesSchema,
   PluginBatchSinkSchema,
   PluginBatchSourceSchema,

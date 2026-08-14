@@ -5422,6 +5422,12 @@ export interface paths {
                                 required: boolean;
                                 default: string | null;
                             }[];
+                            requires: {
+                                name: string;
+                                description: string;
+                                optional: boolean;
+                                fulfilled: boolean;
+                            }[];
                         }[];
                     };
                 };
@@ -5484,6 +5490,12 @@ export interface paths {
                                 required: boolean;
                                 default: string | null;
                             }[];
+                            requires: {
+                                name: string;
+                                description: string;
+                                optional: boolean;
+                                fulfilled: boolean;
+                            }[];
                             /** Format: date-time */
                             attachedAt: string;
                             secretStatus: {
@@ -5545,6 +5557,12 @@ export interface paths {
                                 required: boolean;
                                 default: string | null;
                             }[];
+                            requires: {
+                                name: string;
+                                description: string;
+                                optional: boolean;
+                                fulfilled: boolean;
+                            }[];
                             /** Format: date-time */
                             attachedAt: string;
                             secretStatus: {
@@ -5552,6 +5570,17 @@ export interface paths {
                                 hasValue: boolean;
                                 required: boolean;
                             }[];
+                        };
+                    };
+                };
+                /** @description Default Response */
+                400: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
                         };
                     };
                 };
