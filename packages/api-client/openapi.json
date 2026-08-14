@@ -52,9 +52,6 @@
                   "name": {
                     "type": "string",
                     "minLength": 1
-                  },
-                  "templateId": {
-                    "type": "string"
                   }
                 },
                 "required": ["name"]
@@ -10099,50 +10096,6 @@
         "responses": {
           "200": {
             "description": "Default Response"
-          }
-        }
-      }
-    },
-    "/api/templates": {
-      "get": {
-        "responses": {
-          "200": {
-            "description": "Default Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "array",
-                  "items": {
-                    "type": "object",
-                    "properties": {
-                      "id": {
-                        "type": "string"
-                      },
-                      "name": {
-                        "type": "string"
-                      },
-                      "description": {
-                        "type": "string"
-                      },
-                      "defaultWorkflow": {
-                        "type": "string"
-                      },
-                      "fileCount": {
-                        "type": "number"
-                      }
-                    },
-                    "required": [
-                      "id",
-                      "name",
-                      "description",
-                      "defaultWorkflow",
-                      "fileCount"
-                    ],
-                    "additionalProperties": false
-                  }
-                }
-              }
-            }
           }
         }
       }

@@ -2,7 +2,6 @@ import {
   type GithubRepoSummary,
   useGithubRepos,
   useGithubStatus,
-  useTemplates,
 } from "@catamorphic/react";
 import { useQueryClient } from "@tanstack/react-query";
 import {
@@ -58,7 +57,6 @@ export function ProjectModal({
 }) {
   const [mode, setMode] = useState<Mode>("create");
   const [name, setName] = useState("");
-  const [templateId, setTemplateId] = useState<string>();
   const [parentDir, setParentDir] = useState("");
   const [importDir, setImportDir] = useState<string | null>(null);
   const [selectedRepo, setSelectedRepo] = useState<GithubRepoSummary | null>(
@@ -66,14 +64,12 @@ export function ProjectModal({
   );
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const templatesQuery = useTemplates();
   const queryClient = useQueryClient();
 
   useEffect(() => {
     if (!open) return;
     setMode("create");
     setName("");
-    setTemplateId(undefined);
     setImportDir(null);
     setSelectedRepo(null);
     setPending(false);
@@ -131,9 +127,7 @@ export function ProjectModal({
           : await desktopApi.createProject({
               name: name.trim(),
               rootPath: targetPath,
-              ...(mode === "create"
-                ? { templateId }
-                : { importExisting: true }),
+              ...(mode === "import" ? { importExisting: true } : {}),
             });
       await queryClient.invalidateQueries({ queryKey: ["cat", "projects"] });
       onCreated(project);
@@ -249,30 +243,6 @@ export function ProjectModal({
                   </button>
                 </div>
               </label>
-            )}
-
-            {mode === "create" && (
-              <>
-                {templatesQuery.data && templatesQuery.data.length > 0 && (
-                  <label className="flex flex-col gap-1.5 text-xs text-fg-muted">
-                    Template
-                    <select
-                      value={templateId ?? ""}
-                      onChange={(event) =>
-                        setTemplateId(event.target.value || undefined)
-                      }
-                      className="field h-8 px-2 text-[13px] text-fg"
-                    >
-                      <option value="">Empty project</option>
-                      {templatesQuery.data.map((template) => (
-                        <option key={template.id} value={template.id}>
-                          {template.name}
-                        </option>
-                      ))}
-                    </select>
-                  </label>
-                )}
-              </>
             )}
 
             {targetPath && (

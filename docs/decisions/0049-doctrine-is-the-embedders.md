@@ -1,6 +1,7 @@
 # 0049 — Doctrine is the embedder's
 
-- **Status:** Accepted
+- **Status:** Accepted (the `projectTemplates` hook and template
+  composition are superseded by 0051 — templates are removed)
 - **Date:** 2026-08-14
 - **Builds on:** 0010 (skills in the project repo), 0043 (general-purpose
   projects), 0048 (app feel is the embedder's)

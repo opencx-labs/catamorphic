@@ -2085,3 +2085,23 @@ Patterned on what best-in-class palettes converged on (Chrome omnibox
   API key if the roster has one, else the machine's CLI login); wiring
   the full agent-setup wizard into the dialog is deliberately deferred —
   the dialog notes credentials are configurable in Settings.
+
+### 2026-08-14 — No project templates: agents build from skills (ADR 0051)
+
+- The create dialog loses its template picker; a new project is a name
+  and a location, nothing else. Templates were stale snapshots of what
+  an agent would write anyway, and they forced the "what will this
+  project become?" decision into the create moment — exactly what
+  ADR 0043's lazy-workspace model exists to avoid.
+- The investment moves into the seed skills. `building-apps` now ships
+  the per-app scaffold (`package.json`, `tsconfig.json`,
+  `vite.config.ts`, `main.tsx`) as copyable support files, generated
+  from the same constants as the canonical `appScaffold` — the same
+  copy-don't-reconstruct pattern `catamorphic-projects` already uses for
+  the workspace. If agents scaffold poorly, the fix is a better skill,
+  never a new template.
+- Removed end to end: `TEMPLATES`/`ProjectTemplate`/`findTemplate`, the
+  `projectTemplates` embedder hook, the `/templates` route,
+  `useTemplates`, and `templateId` across HTTP, SDK, IPC, and preload.
+  `packages/core/src/templates.ts` is renamed `seeds.ts` — what remains
+  is what was always the real mechanism.

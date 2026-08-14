@@ -249,7 +249,7 @@ function ProjectList() {
 
 Hooks shipped:
 
-- **Projects + workflows + files**: `useTemplates`, `useProjects`, `useProject`, `useCreateProject`, `useUpdateProject`, `useDeleteProject`, `useProjectFiles`, `useProjectFile`, `useWriteProjectFile`, `useWorkflows`, `useWorkflow`.
+- **Projects + workflows + files**: `useProjects`, `useProject`, `useCreateProject`, `useUpdateProject`, `useDeleteProject`, `useProjectFiles`, `useProjectFile`, `useWriteProjectFile`, `useWorkflows`, `useWorkflow`.
 - **Runs**: `useRuns`, `useRun`, `useTriggerRun`, `useCancelRun`, `usePauseRunProcessing`, `useResumeRunProcessing`, `useSubmitRunInput`, `useRunItems`, `useRunItemSteps`.
 - **Git**: `useProjectGit`, `useProjectBranches`, `useProjectCommits`, `useProjectConflicts`, `useCreateBranch`, `useCheckoutBranch`, `useCommitChanges`, `useDeployProject`, plus the composite `useProjectGitState({ projectId, baselineFiles })` for multi-branch draft persistence.
 - **Plugins + secrets**: `usePluginCatalog`, `useProjectPlugins`, `useAttachPlugin`, `useDetachPlugin`, `useProjectSecrets`, `useUpsertProjectSecret`, `useDeleteProjectSecret`.
@@ -374,7 +374,7 @@ not an app change.
 ## Bring your own doctrine (ADR 0049)
 
 The framework ships mechanism plus good defaults; what work should *look
-like* in your product is yours. Three `createCatamorphic` hooks receive the
+like* in your product is yours. Two `createCatamorphic` hooks receive the
 framework defaults and return the host-final set — replacing or removing
 entries is legitimate:
 
@@ -383,10 +383,6 @@ entries is legitimate:
   `designing-apps` is design doctrine, the seed you most likely swap for
   your own. A seed you remove also never resurrects via the per-turn
   workflow-skill restore.
-- `projectTemplates` — the template picker's set. Build file maps with the
-  exported `workspaceFiles` / `appScaffold` helpers. Creates compose
-  `{...seeds, ...template.files}` (template wins collisions), so every
-  template picks up your seed set.
 - `standingAgentPrompt` — the standing system prompt for coding-agent
   sessions: omit for the workflow-authoring default, a string to replace,
   `false` for none.
@@ -401,19 +397,6 @@ export const catamorphic = createCatamorphic({
     seeds[".agents/skills/acme-design/SKILL.md"] = ACME_DESIGN_SKILL;
     return seeds;
   },
-  projectTemplates: (defaults) => [
-    {
-      id: "acme-crm",
-      name: "Acme CRM",
-      description: "A CRM sync starter",
-      defaultWorkflow: "syncContacts",
-      files: {
-        ...workspaceFiles({ name: "acme-crm" }),
-        "workflows/src/crm.ts": CRM_WORKFLOW,
-      },
-    },
-    ...defaults,
-  ],
 });
 ```
 

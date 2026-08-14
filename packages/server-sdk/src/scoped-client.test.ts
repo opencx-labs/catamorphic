@@ -58,7 +58,7 @@ describe("ScopedClient", () => {
     });
     const scoped = new ScopedClient(core, identity);
 
-    void scoped.projects.create({ name: "Project", templateId: "blank" });
+    void scoped.projects.create({ name: "Project" });
     void scoped.projects.list({ limit: 10, offset: 20 });
     void scoped.projects.get({ projectId: "project-1" });
     void scoped.projects.update({ projectId: "project-1", name: "Renamed" });
@@ -84,7 +84,6 @@ describe("ScopedClient", () => {
 
     expect(projects.create).toHaveBeenCalledWith(identity, {
       name: "Project",
-      templateId: "blank",
     });
     expect(projects.list).toHaveBeenCalledWith(identity, {
       limit: 10,

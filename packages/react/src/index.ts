@@ -159,7 +159,6 @@ export {
   type SendAgentMessageInput,
   useSendAgentMessage,
 } from "./hooks/use-send-agent-message.js";
-export { useTemplates } from "./hooks/use-templates.js";
 export {
   type UpdateAgentSessionInput,
   useUpdateAgentSession,

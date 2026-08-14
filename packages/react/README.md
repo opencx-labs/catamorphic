@@ -42,9 +42,8 @@ If you omit `queryClient`, the provider creates one internally so standalone app
 
 ## Hooks
 
-### Projects + templates
+### Projects
 
-- `useTemplates()`
 - `useProjects({ limit?, offset? })`
 - `useProject(projectId)`
 - `useCreateProject()`

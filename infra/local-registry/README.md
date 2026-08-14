@@ -2,7 +2,7 @@
 
 User projects depend on published `@catamorphic/*` packages (`@catamorphic/app`,
 `@catamorphic/parser`, `@catamorphic/workflow` — pinned by the constants in
-`packages/core/src/templates.ts` and each package's `*_PACKAGE_VERSION`). Until
+`packages/core/src/seeds.ts` and each package's `*_PACKAGE_VERSION`). Until
 those are on npm, local testing needs a local registry.
 
 - `./publish.sh` starts verdaccio on `http://localhost:4873` (config.yaml:

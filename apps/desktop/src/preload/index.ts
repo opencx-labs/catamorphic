@@ -144,7 +144,6 @@ const api = {
   createProject: (input: {
     name: string;
     rootPath: string;
-    templateId?: string;
     importExisting?: boolean;
   }): Promise<{ id: string; name: string }> =>
     ipcRenderer.invoke("catamorphic:project-create", input),

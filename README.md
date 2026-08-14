@@ -141,12 +141,12 @@ it degrades quietly for non-technical users.
 Apps and agents inside an embedder's product are unmistakably the
 embedder's. **Feel**: the app kit ships structure and behavior only; every
 aesthetic decision flows from host theme tokens with neutral defaults,
-plus `hostCss` and `kit: false` for total control. **Doctrine**: three
-`createCatamorphic` hooks (`projectSeeds`, `projectTemplates`,
-`standingAgentPrompt`) receive the framework defaults and return the
-host-final set, so seeded skills, templates, and the agents' standing
-prompt are all replaceable. The desktop consumes the same hooks and passes
-nothing: the proof the defaults are real defaults.
+plus `hostCss` and `kit: false` for total control. **Doctrine**: two
+`createCatamorphic` hooks (`projectSeeds`, `standingAgentPrompt`) receive
+the framework defaults and return the host-final set, so seeded skills
+and the agents' standing prompt are both replaceable. The desktop
+consumes the same hooks and passes nothing: the proof the defaults are
+real defaults.
 (ADRs [0048](docs/decisions/0048-app-feel-is-the-embedders.md),
 [0049](docs/decisions/0049-doctrine-is-the-embedders.md))
 
@@ -262,7 +262,7 @@ The in-repo reference host is the Catamorphic desktop app ([`apps/desktop`](apps
 
 - **Workflows are regular code.** User-defined workflows run like normal apps: full IO, real npm dependencies, no crippled JS runtime. Execution happens inside a sandbox (or a local process, where the host shape allows it) using **Bun** to run and bundle.
 - **Code stays simple.** Both AI agents and humans must be able to write, edit, and understand workflows, and the parser must render them intuitively for non-technical users. See the code format below.
-- **Host-injectable everything.** Database connections, storage backends, sandbox credentials, LLM credentials, telemetry, trigger kinds, seeds, templates, and doctrine are all injected by the host: nothing is hard-coded.
+- **Host-injectable everything.** Database connections, storage backends, sandbox credentials, LLM credentials, telemetry, trigger kinds, seeds, and doctrine are all injected by the host: nothing is hard-coded.
 - **Postgres is authoritative** for runs, retries, pauses, batch-item state, queues, and scheduling via `SKIP LOCKED`. Cloudflare Sandbox is the default cloud execution provider; backends ship as vendor plugin packages so hosts install only what they use.
 - **OpenTelemetry throughout.** Libraries instrument against `@opentelemetry/api` only; the host registers the SDK and exporters and gets full traces for free.
 

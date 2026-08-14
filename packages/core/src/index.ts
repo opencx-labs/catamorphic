@@ -15,6 +15,13 @@ export {
   SYSTEM_AUTHOR,
   type TenantId,
 } from "./identity.js";
+export {
+  appScaffold,
+  PROJECT_CHECK_SCRIPT,
+  PROJECT_CHECK_SCRIPT_PATH,
+  SEED_SKILLS,
+  workspaceFiles,
+} from "./seeds.js";
 export { AgentContextService } from "./services/agent-context-service.js";
 export {
   AGENT_DEFINITION_KINDS,
@@ -284,13 +291,3 @@ export {
   type WorkflowSummary,
   WorkflowsService,
 } from "./services/workflows-service.js";
-export {
-  appScaffold,
-  findTemplate,
-  PROJECT_CHECK_SCRIPT,
-  PROJECT_CHECK_SCRIPT_PATH,
-  type ProjectTemplate,
-  SEED_SKILLS,
-  TEMPLATES,
-  workspaceFiles,
-} from "./templates.js";

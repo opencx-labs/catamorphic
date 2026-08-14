@@ -12,7 +12,6 @@ import type {
   GithubServiceConfig,
   McpToolKindSpec,
   ProjectLifecycleHooks,
-  ProjectTemplate,
   RetentionConfig,
   TriggerKindRuntime,
 } from "@catamorphic/core";
@@ -182,13 +181,6 @@ export interface CreateCatamorphicConfig {
    */
   projectSeeds?: (defaults: Record<string, string>) => Record<string, string>;
   /**
-   * Transform the default project templates: reorder, remove, or add your
-   * own (build file maps with the exported `workspaceFiles` / `appScaffold`
-   * helpers). Template creates compose `{...seeds, ...template.files}`,
-   * the template winning collisions (ADR 0049).
-   */
-  projectTemplates?: (defaults: ProjectTemplate[]) => ProjectTemplate[];
-  /**
    * The standing system prompt for coding-agent sessions: omit for the
    * framework's workflow-authoring default, pass a string to replace it,
    * or `false` for none (ADR 0049).
@@ -281,7 +273,6 @@ export class Catamorphic {
       capabilityProviders: contributions.capabilityProviders,
       projectHooks: contributions.projectHooks,
       projectSeeds: config.projectSeeds,
-      projectTemplates: config.projectTemplates,
       standingAgentPrompt: config.standingAgentPrompt,
     });
   }

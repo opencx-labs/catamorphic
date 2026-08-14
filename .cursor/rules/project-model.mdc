@@ -1,5 +1,5 @@
 ---
-description: Project model, git versioning, multi-tenancy, and templates
+description: Project model, git versioning, and multi-tenancy
 globs: "packages/git/**/*.ts,packages/fastify-plugin/src/routes/projects.ts,packages/db/migrations/*.sql"
 alwaysApply: false
 ---
@@ -48,12 +48,13 @@ Path safety rules are enforced by working-copy backends: no absolute paths, no
 `..`, and no `.git` access through file APIs. Remote backends enforce
 tenant/project key isolation and compare-and-swap ref updates.
 
-## Templates
+## Project Creation
 
-Templates are pre-defined project skeletons (not in-memory state). When a user creates a project from a template:
+There are no project templates (ADR 0051) — agents build everything from
+the seed skills. When a user creates a project:
 
 1. A real project is created (DB row + git repo).
-2. Template files are written.
+2. The host-resolved seed files (`.agents/skills/…`, ADR 0049) are written.
 3. An **initial commit** is made — the project has at least one commit before any run.
 
 This ensures production provenance is always available and avoids

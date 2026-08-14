@@ -20,7 +20,6 @@ export type {
   Project,
   ProjectFilesList,
   ProjectsList,
-  Template,
   UpdatedProject,
   WorkflowGraph,
   WorkflowList,

@@ -15,9 +15,6 @@ export type ProjectsList =
 export type Project =
   paths["/api/projects/{projectId}"]["get"]["responses"][200]["content"]["application/json"];
 
-export type Template =
-  paths["/api/templates"]["get"]["responses"][200]["content"]["application/json"][number];
-
 export type WorkflowList =
   paths["/api/projects/{projectId}/workflows"]["get"]["responses"][200]["content"]["application/json"];
 

@@ -11,10 +11,7 @@ import {
 } from "@catamorphic/parser";
 import type { Kysely } from "kysely";
 import { type Identity, SYSTEM_AUTHOR } from "../identity.js";
-import {
-  PROJECT_CHECK_SCRIPT,
-  PROJECT_CHECK_SCRIPT_PATH,
-} from "../templates.js";
+import { PROJECT_CHECK_SCRIPT, PROJECT_CHECK_SCRIPT_PATH } from "../seeds.js";
 import type { ExecutionJobsService } from "./execution-jobs-service.js";
 import type { ExecutionWorkerService } from "./execution-worker-service.js";
 import type { EnrollmentConflictPolicy, RunsService } from "./runs-service.js";

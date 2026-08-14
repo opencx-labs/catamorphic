@@ -30,12 +30,12 @@ sandboxes (or local processes, ADR 0047) using **Bun**.
 
 Concrete implications for any change you make:
 
-- Prefer designs that are **host-injectable**: DB connections/schemas, auth context, storage, sandbox credentials, LLM credentials, telemetry, trigger kinds, seeds/templates/doctrine — all configurable/injectable, never hard-coded.
+- Prefer designs that are **host-injectable**: DB connections/schemas, auth context, storage, sandbox credentials, LLM credentials, telemetry, trigger kinds, seeds/doctrine — all configurable/injectable, never hard-coded.
 - Avoid assumptions that only hold in a single-process demo (a single global DB, a single user, a specific env layout, port, or filesystem path).
 - When adding migrations, API routes, or packages, think first about how a host consumes them (library import, mountable Fastify plugin, schema-scoped migrations, generated client types). See `INTEGRATION.md`.
 - Do not re-introduce a standalone boot, a default tenant, or a default user. Every request carries identity from the host's auth context.
 - When a tradeoff exists between "nice for a demo" vs. "nice for embedding", embedding wins unless the user explicitly says otherwise.
-- Mechanics vs. doctrine (ADR 0049): framework contracts belong in code and the `building-apps`-style mechanics seeds; anything about how work should *look* in a given host must stay replaceable via `projectSeeds` / `projectTemplates` / `standingAgentPrompt`.
+- Mechanics vs. doctrine (ADR 0049): framework contracts belong in code and the `building-apps`-style mechanics seeds; anything about how work should *look* in a given host must stay replaceable via `projectSeeds` / `standingAgentPrompt`.
 
 ### Infrastructure priorities
 
@@ -57,7 +57,7 @@ Big desktop design/philosophy choices are additionally logged in
 
 Public developer surface:
 
-- `packages/server-sdk` — **`@catamorphic/server-sdk`**: core backend SDK. `createCatamorphic({ database, storage, sandboxProvider?, github?, triggerKinds?, mcpToolKinds?, plugins?, projectSeeds?, projectTemplates?, standingAgentPrompt?, ... })`; identity binds per request via `forTenant({ tenantId }).forUser({ externalUserId })`.
+- `packages/server-sdk` — **`@catamorphic/server-sdk`**: core backend SDK. `createCatamorphic({ database, storage, sandboxProvider?, github?, triggerKinds?, mcpToolKinds?, plugins?, projectSeeds?, standingAgentPrompt?, ... })`; identity binds per request via `forTenant({ tenantId }).forUser({ externalUserId })`.
 - `packages/fastify-plugin` — **`@catamorphic/fastify-plugin`**: mountable Fastify plugin (`catamorphicPlugin`) + standalone `createApp` factory with Zod schemas and OpenAPI spec. Also serves the per-project MCP endpoints (`/projects/:id/mcp` workflow tools, `/projects/:id/apps-mcp` MCP Apps) and app guest documents.
 - `packages/react` — headless React bindings (provider, TanStack Query hooks, jotai atoms).
 - `packages/ui` — React Flow editor components (canvas, panels, AI bar) + `AppMount` (sandboxed app iframe host); all opt-in/composable.
@@ -68,7 +68,7 @@ Public developer surface:
 
 Internal packages:
 
-- `packages/core` — framework-agnostic service layer (the kernel behind server-sdk and fastify-plugin). Services include projects, workflows, runs, deployments, triggers (+ codegen), apps, app policies, **app storage**, plugins, secrets, agent sessions, agent context, **agent definitions** (ADR 0050), the coding-agent registry, **remote sync**, the **CodeHost seam** + `GithubService`, skills/seeds, and tenant policies. Seeds/templates/doctrine hooks resolve once in the core constructor (ADR 0049).
+- `packages/core` — framework-agnostic service layer (the kernel behind server-sdk and fastify-plugin). Services include projects, workflows, runs, deployments, triggers (+ codegen), apps, app policies, **app storage**, plugins, secrets, agent sessions, agent context, **agent definitions** (ADR 0050), the coding-agent registry, **remote sync**, the **CodeHost seam** + `GithubService`, skills/seeds, and tenant policies. Seeds/doctrine hooks resolve once in the core constructor (ADR 0049).
 - `packages/db` — Kysely instance, schema-scoped raw SQL migrations, programmatic `migrateToLatest`, codegen types.
 - `packages/git` — vendor-neutral git-backed project storage (isomorphic-git): `StorageBackend`/`RemoteBackend` contracts, `ProjectManager`, the remote sync engine (`syncWithNetworkRemote` — fetch/merge/push/rescue branches, ADR 0044), filesystem backends.
 - `packages/github` — **`@catamorphic/github`**: GitHub OAuth + device-flow helpers, REST API client, token stores. Consumed by core's `GithubService` (which implements `CodeHost`).
@@ -100,7 +100,7 @@ Apps:
 - `.cursor/skills/embedding-guide/SKILL.md`, `.cursor/skills/api-type-safety/SKILL.md`, `.cursor/skills/code-first-architecture/SKILL.md`, `.cursor/skills/database-conventions/SKILL.md`, `.cursor/skills/sandbox-agent-integration/SKILL.md`, `.cursor/skills/workflow-code-conventions/SKILL.md`
 
 Per-project seed skills that ship to every user project live in
-`packages/core/src/templates.ts` (`SEED_SKILLS`): `catamorphic-projects`,
+`packages/core/src/seeds.ts` (`SEED_SKILLS`): `catamorphic-projects`,
 `writing-workflows`, `batch-workflows`, `durable-workflows`,
 `building-apps` (mechanics), `designing-apps` (replaceable doctrine).
 
@@ -168,7 +168,7 @@ Do not run `git add`, `git commit`, or `git push` unless the user explicitly ask
 
 Settled decisions — do not deviate without explicit user approval. ADRs in `docs/decisions/`; operational detail in `.cursor/rules/`:
 
-- **Project model, git versioning, templates, DB types** → `project-model.mdc`
+- **Project model, git versioning, DB types** → `project-model.mdc`
 - **Sandbox execution, providers, run lifecycle, instrumentation** → `sandbox-execution.mdc`
 - **Editor UI: history sidebar, run panel, state management** → `playground-ui.mdc`
 - **Canvas layout, nodes, edges, read-only behavior** → `graph-design.mdc`

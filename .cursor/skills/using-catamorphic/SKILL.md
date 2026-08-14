@@ -270,7 +270,6 @@ import {
   useProjectFile,
   useProjectFiles,
   useProjects,
-  useTemplates,
   useUpdateProject,
   useWorkflow,
   useWorkflows,
@@ -493,7 +492,7 @@ The registry is **served by the host**, not by catamorphic. The built JSON manif
 Items currently shipped:
 
 - `catamorphic-provider` — `<CatamorphicAppProvider baseUrl getTenantId getExternalUserId>` that wires `CatamorphicProvider` + `QueryClientProvider`. Always install this first.
-- `projects-list` — table + create-project dialog (`useProjects` + `useCreateProject` + `useTemplates`).
+- `projects-list` — table + create-project dialog (`useProjects` + `useCreateProject`).
 - `project-editor` — three-pane scaffold with `renderEditor` (plug in monaco/codemirror), `renderSidebar`, and `renderGitPanel` slots.
 - `file-explorer` — pure file tree.
 - `git-panel` — branch / dirty / commits / deploy panel (`useProjectGit` + `useProjectCommits` + `useDeployProject`).

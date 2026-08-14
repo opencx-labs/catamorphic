@@ -193,7 +193,7 @@ host can restyle the `cat-*` components wholesale) and `kit: false` to
 omit the kit stylesheet entirely. Apps built with the `@catamorphic/app/ui`
 kit therefore look native to whatever product mounts them.
 
-**Doctrine (ADR 0049).** Three `createCatamorphic` hooks receive the
+**Doctrine (ADR 0049).** Two `createCatamorphic` hooks receive the
 framework defaults and return the host-final set; replacing or removing
 entries is legitimate:
 
@@ -201,9 +201,6 @@ entries is legitimate:
   mechanics seeds (`building-apps` teaches framework contracts); swap
   `designing-apps` for the host's own design doctrine. Removed seeds never
   resurrect.
-- `projectTemplates`: the template picker's set. Build file maps with the
-  exported `workspaceFiles` / `appScaffold` helpers; creates compose
-  `{...seeds, ...template.files}` with the template winning collisions.
 - `standingAgentPrompt`: the standing system prompt for coding-agent
   sessions. Omit for the default, a string to replace it, `false` for
   none.
@@ -516,6 +513,6 @@ components: `@catamorphic/registry`.
    the provider is missing), run a workflow and assert the provider-minted
    env arrived, delete the project (hook deprovisioned).
 7. If the host has its own design system or work conventions: pass
-   `projectSeeds` / `projectTemplates` / `standingAgentPrompt`, and supply
+   `projectSeeds` / `standingAgentPrompt`, and supply
    `AppHostTheme` feel tokens (plus `hostCss` if needed) wherever apps
    mount, so everything users see reads as the host's product.

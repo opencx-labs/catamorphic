@@ -15,7 +15,6 @@ import { useCatamorphic } from "../provider.js";
 
 export interface CreateProjectInput {
   name: string;
-  templateId?: string;
 }
 
 export function useCreateProject(): UseMutationResult<

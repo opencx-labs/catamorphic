@@ -779,7 +779,6 @@ export function registerIpcHandlers(
       input: {
         name: string;
         rootPath: string;
-        templateId?: string;
         importExisting?: boolean;
       },
     ) => {
@@ -790,7 +789,6 @@ export function registerIpcHandlers(
       }
       const project = await server.catamorphic.core.projects.create(identity, {
         name: input.name,
-        templateId: input.templateId,
         rootPath: input.rootPath,
         importExisting: input.importExisting,
       });

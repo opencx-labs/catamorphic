@@ -17,7 +17,7 @@ import {
   BATCH_WORKFLOW_SKILL_PATH,
   DURABLE_WORKFLOW_SKILL_PATH,
   SEED_SKILLS,
-} from "../templates.js";
+} from "../seeds.js";
 import { assertProjectSurface } from "./app-audience.js";
 import type {
   CodingAgentRegistry,

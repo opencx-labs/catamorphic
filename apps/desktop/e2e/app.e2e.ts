@@ -198,7 +198,7 @@ describe("editor tabs", () => {
     await runWait(`return !!$('input[placeholder*="Open a file"]');`, {
       label: "editor quick-open",
     });
-    // The project template seeds files; pick the root package.json.
+    // Project creation seeds skill files; pick a seeded package.json.
     await runWait(
       `const row = byText('button', 'package.json');
        if (!row) return false; row.click(); return true;`,

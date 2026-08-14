@@ -1,17 +1,16 @@
 import { describe, expect, it, vi } from "vitest";
 import {
+  BATCH_WORKFLOW_SKILL_PATH,
+  DURABLE_WORKFLOW_SKILL_PATH,
+  SEED_SKILLS,
+} from "../seeds.js";
+import {
   activityLabel,
   buildAgentSystemPrompt,
   ensureBatchWorkflowSkill,
   ensureDurableWorkflowSkill,
   parsePorcelain,
 } from "../services/agent-sessions-service.js";
-import {
-  BATCH_WORKFLOW_SKILL_PATH,
-  DURABLE_WORKFLOW_SKILL_PATH,
-  SEED_SKILLS,
-  TEMPLATES,
-} from "../templates.js";
 
 describe("activityLabel", () => {
   it("keeps the live line calm: no paths, no raw commands, no tool names", () => {
@@ -105,9 +104,8 @@ describe("parsePorcelain", () => {
 });
 
 describe("seed skill set", () => {
-  // Templates no longer bake the seed skills into their file maps —
-  // ProjectsService composes `{...seeds, ...template.files}` at create time
-  // (ADR 0049) — so the authoring-model guarantees live on SEED_SKILLS.
+  // The seed skills are the only scaffolding a project gets (ADR 0051), so
+  // the authoring-model guarantees live on SEED_SKILLS.
   it("teaches the defineWorkflow authoring model", () => {
     const skill = SEED_SKILLS[".agents/skills/writing-workflows/SKILL.md"];
     const batchSkill = SEED_SKILLS[BATCH_WORKFLOW_SKILL_PATH];
@@ -130,17 +128,6 @@ describe("seed skill set", () => {
     expect(durableSkill).toContain("Return callWorkflow");
     expect(durableSkill).toContain("controls: { cancel: true }");
     expect(durableSkill).toContain("visualization");
-  });
-
-  it("keeps templates free of baked-in seed copies", () => {
-    for (const template of TEMPLATES) {
-      for (const path of Object.keys(SEED_SKILLS)) {
-        expect(
-          template.files[path],
-          `template ${template.id} bakes in ${path}`,
-        ).toBeUndefined();
-      }
-    }
   });
 
   it("splits app mechanics from app doctrine (ADR 0049)", () => {

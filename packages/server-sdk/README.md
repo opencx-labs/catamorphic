@@ -100,7 +100,7 @@ resource for all Workflows; capabilities determine which controls and item views
 apply.
 
 ```ts
-scoped.projects.create({ name, templateId? })
+scoped.projects.create({ name })
 scoped.projects.list({ limit?, offset? })
 scoped.projects.get({ projectId })
 scoped.projects.update({ projectId, name? })

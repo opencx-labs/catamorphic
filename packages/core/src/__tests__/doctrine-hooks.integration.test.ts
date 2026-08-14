@@ -11,7 +11,7 @@ import {
   BATCH_WORKFLOW_SKILL_PATH,
   DURABLE_WORKFLOW_SKILL_PATH,
   SEED_SKILLS,
-} from "../templates.js";
+} from "../seeds.js";
 
 const connectionString = process.env.DATABASE_URL ?? "";
 const describeIf = connectionString ? describe : describe.skip;
@@ -40,9 +40,9 @@ let core: CatamorphicCore;
 
 /**
  * An alien embedder (ADR 0049): keeps the framework's mechanics, replaces
- * the designing-apps doctrine with its own, removes the batch/durable
- * workflow skills, and ships one custom template. Projects created under
- * this core must carry EXACTLY the embedder's seed set on disk.
+ * the designing-apps doctrine with its own, and removes the batch/durable
+ * workflow skills. Projects created under this core must carry EXACTLY the
+ * embedder's seed set on disk.
  */
 describeIf("doctrine hooks integration", () => {
   beforeAll(async () => {
@@ -65,20 +65,6 @@ describeIf("doctrine hooks integration", () => {
         seeds[ACME_DESIGN_SKILL_PATH] = ACME_DESIGN_SKILL;
         return seeds;
       },
-      projectTemplates: (defaults) => [
-        {
-          id: "acme-crm",
-          name: "Acme CRM",
-          description: "Acme's starter",
-          defaultWorkflow: "syncContacts",
-          files: {
-            "workflows/src/crm.ts": "export {};\n",
-            // Collides with a seed path: the template must win.
-            [MECHANICS_SKILL_PATH]: "# Acme CRM build notes\n",
-          },
-        },
-        ...defaults.filter((template) => template.id === "welcome-user"),
-      ],
     });
   });
 
@@ -104,39 +90,5 @@ describeIf("doctrine hooks integration", () => {
     expect(files[DURABLE_WORKFLOW_SKILL_PATH]).toBeUndefined();
     expect(files[MECHANICS_SKILL_PATH]).toBe(SEED_SKILLS[MECHANICS_SKILL_PATH]);
     expect(skillPaths).toEqual(Object.keys(core.seedFiles).sort());
-  });
-
-  it("template projects compose the embedder's seeds under the template, template winning collisions", async () => {
-    const project = await core.projects.create(identity, {
-      name: "CRM under Acme",
-      templateId: "acme-crm",
-    });
-    const files = await core.projects.readAllFiles(identity, project.id);
-
-    expect(files["workflows/src/crm.ts"]).toBe("export {};\n");
-    expect(files[MECHANICS_SKILL_PATH]).toBe("# Acme CRM build notes\n");
-    expect(files[ACME_DESIGN_SKILL_PATH]).toBe(ACME_DESIGN_SKILL);
-    expect(files[DESIGN_SKILL_PATH]).toBeUndefined();
-    expect(files[BATCH_WORKFLOW_SKILL_PATH]).toBeUndefined();
-    expect(files[DURABLE_WORKFLOW_SKILL_PATH]).toBeUndefined();
-  });
-
-  it("removed framework templates are not creatable; kept ones are", async () => {
-    await expect(
-      core.projects.create(identity, {
-        name: "No dashboard",
-        templateId: "orders-dashboard",
-      }),
-    ).rejects.toThrow("Template 'orders-dashboard' not found");
-
-    const project = await core.projects.create(identity, {
-      name: "Welcome under Acme",
-      templateId: "welcome-user",
-    });
-    const files = await core.projects.readAllFiles(identity, project.id);
-    expect(files["workflows/src/welcome.ts"]).toContain("welcomeUser");
-    // The kept framework template also picks up the embedder's seed set.
-    expect(files[ACME_DESIGN_SKILL_PATH]).toBe(ACME_DESIGN_SKILL);
-    expect(files[BATCH_WORKFLOW_SKILL_PATH]).toBeUndefined();
   });
 });

@@ -1,6 +1,6 @@
 # @catamorphic/fastify-plugin
 
-Mountable Fastify plugin exposing the catamorphic HTTP API (projects, workflows, runs, git ops, plugins, secrets, playground, templates) with Zod-validated routes and a generated OpenAPI spec consumed by `@catamorphic/api-client`.
+Mountable Fastify plugin exposing the catamorphic HTTP API (projects, workflows, runs, git ops, plugins, secrets, playground) with Zod-validated routes and a generated OpenAPI spec consumed by `@catamorphic/api-client`.
 
 ## Mount on the host's Fastify server
 

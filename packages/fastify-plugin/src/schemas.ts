@@ -94,15 +94,6 @@ export const BuildAppSchema = z.object({
     .optional(),
 });
 
-// --- Templates ---
-export const TemplateSchema = z.object({
-  id: z.string(),
-  name: z.string(),
-  description: z.string(),
-  defaultWorkflow: z.string(),
-  fileCount: z.number(),
-});
-
 // --- Workflows (discovered, not stored) ---
 export const WorkflowCapabilitiesSchema = z.object({
   batchProcessing: z.boolean(),
@@ -204,7 +195,6 @@ export const ProjectSchema = z.object({
 // remote HTTP client may choose.
 export const CreateProjectSchema = z.object({
   name: z.string().min(1),
-  templateId: z.string().optional(),
 });
 
 export const UpdateProjectSchema = z.object({

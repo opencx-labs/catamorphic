@@ -25,7 +25,6 @@ export type {
   PauseRunInput,
   Project,
   ProjectFileEntry,
-  ProjectTemplate,
   RedriveRunJobInput,
   ResumeRunInput,
   ResumeRunPauseInput,

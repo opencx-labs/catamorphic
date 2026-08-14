@@ -2,14 +2,6 @@ import { APP_THEME_COLOR_TOKENS } from "@catamorphic/app";
 import { PARSER_PACKAGE_VERSION } from "@catamorphic/parser";
 import { WORKFLOW_PACKAGE_VERSION } from "@catamorphic/workflow";
 
-export interface ProjectTemplate {
-  id: string;
-  name: string;
-  description: string;
-  defaultWorkflow: string;
-  files: Record<string, string>;
-}
-
 const SHARED_TSCONFIG = `{
   "compilerOptions": {
     "target": "ES2022",
@@ -88,12 +80,12 @@ const workflowsPkg = (dependencies?: Record<string, string>) =>
   });
 
 /**
- * Workspace scaffolding shared by every template. A project is a bun workspace
- * so one repo holds backend workflows and frontend apps, with `contracts` as
- * the only package both sides depend on. This is the ONE canonical scaffold:
- * blank projects don't get it at creation (ADR 0043 — the workspace appears
- * on demand, installed by templates or by agents via the `catamorphic-projects`
- * seed skill, whose support files are generated from these same constants).
+ * The canonical workspace scaffold. A project is a bun workspace so one repo
+ * holds backend workflows and frontend apps, with `contracts` as the only
+ * package both sides depend on. Projects don't get it at creation (ADR 0043 —
+ * the workspace appears on demand, installed by agents via the
+ * `catamorphic-projects` seed skill, whose support files are generated from
+ * these same constants).
  */
 export const workspaceFiles = ({
   name,
@@ -111,18 +103,8 @@ export const workspaceFiles = ({
   "workflows/tsconfig.json": SHARED_TSCONFIG,
 });
 
-/**
- * Scaffold for one app under `apps/<name>/`. Vite builds in IIFE lib mode to
- * exactly one `dist/app.js` + one `dist/app.css`; everything imported (react
- * included) is bundled in, which is what lets the host render the bundle in a
- * credential-less sandboxed iframe.
- */
-export const appScaffold = ({
-  name,
-}: {
-  name: string;
-}): Record<string, string> => ({
-  [`apps/${name}/package.json`]: JSON.stringify(
+const appPkg = (name: string) =>
+  JSON.stringify(
     {
       name,
       version: "1.0.0",
@@ -145,8 +127,9 @@ export const appScaffold = ({
     },
     null,
     2,
-  ),
-  [`apps/${name}/tsconfig.json`]: `{
+  );
+
+const APP_TSCONFIG = `{
   "compilerOptions": {
     "target": "ES2022",
     "module": "ESNext",
@@ -157,8 +140,9 @@ export const appScaffold = ({
     "noEmit": true
   },
   "include": ["src"]
-}`,
-  [`apps/${name}/vite.config.ts`]: `import react from "@vitejs/plugin-react";
+}`;
+
+const APP_VITE_CONFIG = `import react from "@vitejs/plugin-react";
 import { defineConfig } from "vite";
 
 // One self-executing JS file + one CSS file: the { code, css } pair the host
@@ -182,13 +166,30 @@ export default defineConfig({
     outDir: "dist",
   },
 });
-`,
-  [`apps/${name}/src/main.tsx`]: `import { createRoot } from "react-dom/client";
+`;
+
+const APP_MAIN_TSX = `import { createRoot } from "react-dom/client";
 import { App } from "./app.js";
 
 const root = document.getElementById("root");
 if (root) createRoot(root).render(<App />);
-`,
+`;
+
+/**
+ * Scaffold for one app under `apps/<name>/`. Vite builds in IIFE lib mode to
+ * exactly one `dist/app.js` + one `dist/app.css`; everything imported (react
+ * included) is bundled in, which is what lets the host render the bundle in a
+ * credential-less sandboxed iframe.
+ */
+export const appScaffold = ({
+  name,
+}: {
+  name: string;
+}): Record<string, string> => ({
+  [`apps/${name}/package.json`]: appPkg(name),
+  [`apps/${name}/tsconfig.json`]: APP_TSCONFIG,
+  [`apps/${name}/vite.config.ts`]: APP_VITE_CONFIG,
+  [`apps/${name}/src/main.tsx`]: APP_MAIN_TSX,
 });
 
 export const APP_PACKAGE_VERSION = "0.0.3";
@@ -286,13 +287,14 @@ export const DURABLE_WORKFLOW_SKILL_PATH =
   ".agents/skills/durable-workflows/SKILL.md";
 
 const SCAFFOLD_SKILL_DIR = ".agents/skills/catamorphic-projects";
+const APPS_SKILL_DIR = ".agents/skills/building-apps";
 
 /**
  * The workspace scaffold shipped as support files of the
  * `catamorphic-projects` seed skill, so an agent can install the workspace
  * into a project that has none by copying files instead of reconstructing
- * them from memory. Generated from the same constants as the template
- * scaffold (`workspaceFiles`) — the two cannot drift.
+ * them from memory. Generated from the same constants as `workspaceFiles` —
+ * the two cannot drift.
  */
 const scaffoldSupportFiles = (): Record<string, string> => ({
   [`${SCAFFOLD_SKILL_DIR}/files/package.json`]: rootWorkspacePkg("my-project"),
@@ -306,19 +308,31 @@ const scaffoldSupportFiles = (): Record<string, string> => ({
 });
 
 /**
- * Per-project agent skills seeded into every project (templates and blank
- * ones alike). Skills live in the project repo under
- * `.agents/skills/<name>/SKILL.md` (Agent Skills spec) so they are versioned
- * with the code, scoped per project, and read by coding agents from the dev
- * sandbox checkout. The workflow skills are reference material — consulted
- * only when workflow work happens; seeding them does not make a project a
- * workflow codebase (ADR 0043).
+ * The per-app scaffold shipped as support files of the `building-apps` seed
+ * skill, so an agent creates `apps/<name>/` by copying files instead of
+ * reconstructing the vite/tsconfig contract from memory. Generated from the
+ * same constants as `appScaffold` — the two cannot drift.
+ */
+const appSupportFiles = (): Record<string, string> => ({
+  [`${APPS_SKILL_DIR}/files/package.json`]: appPkg("my-app"),
+  [`${APPS_SKILL_DIR}/files/tsconfig.json`]: APP_TSCONFIG,
+  [`${APPS_SKILL_DIR}/files/vite.config.ts`]: APP_VITE_CONFIG,
+  [`${APPS_SKILL_DIR}/files/main.tsx`]: APP_MAIN_TSX,
+});
+
+/**
+ * Per-project agent skills seeded into every project. Skills live in the
+ * project repo under `.agents/skills/<name>/SKILL.md` (Agent Skills spec) so
+ * they are versioned with the code, scoped per project, and read by coding
+ * agents from the dev sandbox checkout. The workflow skills are reference
+ * material — consulted only when workflow work happens; seeding them does
+ * not make a project a workflow codebase (ADR 0043).
  *
  * These are the framework DEFAULTS: an embedder replaces, extends, or removes
- * them through `CatamorphicCoreConfig.projectSeeds` (ADR 0049). Templates do
- * not bake them in — `ProjectsService` composes the resolved seed set with a
- * template's own files at create time (`{...seeds, ...template.files}`, the
- * template winning collisions).
+ * them through `CatamorphicCoreConfig.projectSeeds` (ADR 0049).
+ *
+ * There are no project templates: these skills (and their copyable support
+ * files) are how agents build anything from a blank project (ADR 0051).
  *
  * The split matters: `building-apps` is MECHANICS (framework contracts every
  * embedder needs); `designing-apps` is DOCTRINE (how apps should look and
@@ -671,12 +685,20 @@ workflows through the client instead. Do still use \`<form>\` +
 
 ## Creating an app
 
-Scaffold \`apps/<name>/\` (kebab-case name) with \`package.json\`
-(react, vite, \`@catamorphic/app\`; \`@project/contracts\` as a dev
-dependency), \`vite.config.ts\` (IIFE lib mode, entry
-\`src/main.tsx\`, output \`app.js\`/\`app.css\`), \`tsconfig.json\`
-with \`"jsx": "react-jsx"\`, and \`src/main.tsx\` mounting into
-\`#root\`. Copy an existing app's config when one exists.
+Scaffold \`apps/<name>/\` (kebab-case name) by copying this skill's
+support files (in \`files/\` next to this document) into place:
+
+| Copy | To |
+|---|---|
+| \`files/package.json\` | \`apps/<name>/package.json\` (set \`"name"\` to \`<name>\`) |
+| \`files/tsconfig.json\` | \`apps/<name>/tsconfig.json\` |
+| \`files/vite.config.ts\` | \`apps/<name>/vite.config.ts\` |
+| \`files/main.tsx\` | \`apps/<name>/src/main.tsx\` |
+
+Then write \`src/app.tsx\` exporting the \`App\` component \`main.tsx\`
+mounts, and run \`bun install\` at the workspace root. When another app
+already exists in the workspace, prefer copying its config so
+project-local changes carry over.
 
 The vite config MUST include
 \`define: { "process.env.NODE_ENV": JSON.stringify("production") }\` —
@@ -991,7 +1013,7 @@ primitives; otherwise import from \`@catamorphic/workflow\`. Never copy the
 helpers into the project.
 
 When an existing direct dependency does not export \`defineWorkflow\`, update
-it to the exact workflow package version used by the host or current template.
+it to the exact workflow package version used by the host.
 Do not recreate the types locally or bypass the missing API with assertions.
 
 ## Capability model
@@ -1164,1078 +1186,5 @@ can cascade through every later tuple element. Run the project's TypeScript
 check after each fix and remove temporary error suppressions.
 `,
   ...scaffoldSupportFiles(),
+  ...appSupportFiles(),
 };
-
-export const TEMPLATES: ProjectTemplate[] = [
-  {
-    id: "orders-dashboard",
-    name: "Orders Dashboard",
-    description: "An app showing open orders, backed by workflows",
-    defaultWorkflow: "listOpenOrders",
-    files: {
-      ...workspaceFiles({
-        name: "orders-dashboard",
-        dependencies: {
-          "@catamorphic/workflow": WORKFLOW_PACKAGE_VERSION,
-        },
-      }),
-      ...appScaffold({ name: "dashboard" }),
-      "contracts/src/index.ts": `import type { Workflow } from "@catamorphic/app";
-
-export interface Order {
-  id: string;
-  customer: string;
-  total: number;
-  placedAt: string;
-}
-
-export interface ListOpenOrders {
-  input: { limit?: number };
-  output: { orders: Order[] };
-}
-
-export interface MarkOrderShipped {
-  input: { orderId: string };
-  output: { shipped: boolean };
-}
-
-/** Everything apps may call. Implemented by workflows/src/app-api.ts. */
-export interface AppContract {
-  listOpenOrders: Workflow<ListOpenOrders>;
-  markOrderShipped: Workflow<MarkOrderShipped>;
-}
-`,
-      "contracts/package.json": JSON.stringify(
-        {
-          name: "@project/contracts",
-          version: "1.0.0",
-          private: true,
-          type: "module",
-          types: "./src/index.ts",
-          exports: { ".": { types: "./src/index.ts" } },
-          devDependencies: { "@catamorphic/app": APP_PACKAGE_VERSION },
-        },
-        null,
-        2,
-      ),
-      "workflows/src/orders.ts": `import {
-  type BoundaryContext,
-  defineWorkflow,
-} from "@catamorphic/workflow";
-import type { Order } from "@project/contracts";
-
-/**
- * @displayname List Open Orders
- * @description Fetch open orders for the dashboard
- * @param limit - @displayname Max Orders | @description Maximum number to return
- */
-export const listOpenOrders = defineWorkflow(({ defineBoundary }) => ({
-  steps: [
-    defineBoundary({
-      run: async ({ input }: BoundaryContext<{ limit?: number }>) => {
-        const orders = await fetchOpenOrders({
-          limit: clampLimit({ limit: input.limit }),
-        });
-        return { orders };
-      },
-    }),
-  ],
-}));
-
-/**
- * @displayname Mark Order Shipped
- * @description Mark one order as shipped
- * @param orderId - @displayname Order ID | @description The order to ship
- */
-export const markOrderShipped = defineWorkflow(({ defineBoundary }) => ({
-  steps: [
-    defineBoundary({
-      run: async ({ input }: BoundaryContext<{ orderId: string }>) => {
-        // App-callable workflows receive untrusted input: validate before acting.
-        if (!/^ord_[a-z0-9]+$/.test(input.orderId)) {
-          throw new Error("Invalid order id");
-        }
-        await shipOrder({ orderId: input.orderId });
-        return { shipped: true };
-      },
-    }),
-  ],
-}));
-
-function clampLimit({ limit }: { limit?: number }) {
-  if (typeof limit !== "number" || !Number.isFinite(limit)) return 20;
-  return Math.max(1, Math.min(Math.floor(limit), 100));
-}
-
-/**
- * @displayname Fetch Open Orders
- * @icon package
- * @param limit - @displayname Max Orders | @description Maximum number to return
- */
-async function fetchOpenOrders({ limit }: { limit: number }): Promise<Order[]> {
-  "use step";
-  return Array.from({ length: Math.min(limit, 3) }, (_, index) => ({
-    id: \`ord_\${index + 1}\`,
-    customer: \`Customer \${index + 1}\`,
-    total: (index + 1) * 42,
-    placedAt: new Date(2026, 0, index + 1).toISOString(),
-  }));
-}
-
-/**
- * @displayname Ship Order
- * @icon truck
- * @param orderId - @displayname Order ID | @description The order to ship
- */
-async function shipOrder({ orderId }: { orderId: string }) {
-  "use step";
-}
-`,
-      "workflows/src/app-api.ts": `import type { AppContract } from "@project/contracts";
-import { listOpenOrders, markOrderShipped } from "./orders.js";
-
-/**
- * The app-facing contract surface. Only workflows exported here are callable
- * from apps; the set is frozen into each published app version at build time.
- */
-export const appApi = { listOpenOrders, markOrderShipped } satisfies AppContract;
-`,
-      "apps/dashboard/src/app.tsx": `import type { AppContract, Order } from "@project/contracts";
-import { createClient } from "@catamorphic/app";
-import {
-  Button,
-  Card,
-  DataTable,
-  ErrorState,
-  useAsync,
-} from "@catamorphic/app/ui";
-import { useState } from "react";
-
-const workflows = createClient<AppContract>();
-
-export function App() {
-  const [reloadKey, setReloadKey] = useState(0);
-  const [shipping, setShipping] = useState<string | null>(null);
-  const orders = useAsync(
-    () => workflows.listOpenOrders.call({ limit: 20 }),
-    [reloadKey],
-  );
-
-  if (orders.status === "error") return <ErrorState onRetry={orders.retry} />;
-
-  const ship = async (orderId: string) => {
-    setShipping(orderId);
-    try {
-      await workflows.markOrderShipped.call({ orderId });
-      setReloadKey((key) => key + 1);
-    } finally {
-      setShipping(null);
-    }
-  };
-
-  return (
-    <Card title="Open orders" description="Orders waiting to ship">
-      <DataTable<Order>
-        columns={[
-          { key: "id", header: "Order" },
-          { key: "customer", header: "Customer", sortable: true },
-          {
-            key: "total",
-            header: "Total",
-            align: "right",
-            sortable: true,
-            render: (order) => \`$\${order.total}\`,
-          },
-          {
-            key: "actions",
-            header: "",
-            align: "right",
-            render: (order) => (
-              <Button
-                size="sm"
-                loading={shipping === order.id}
-                loadingLabel="Shipping…"
-                onClick={() => void ship(order.id)}
-              >
-                Ship
-              </Button>
-            ),
-          },
-        ]}
-        rows={orders.status === "ok" ? orders.value.orders : []}
-        rowKey={(order) => order.id}
-        loading={orders.status === "loading"}
-        empty="No open orders."
-      />
-    </Card>
-  );
-}
-`,
-      "apps/dashboard/src/main.tsx": `import { createRoot } from "react-dom/client";
-import { App } from "./app.js";
-
-const root = document.getElementById("root");
-if (root) createRoot(root).render(<App />);
-`,
-    },
-  },
-  {
-    id: "welcome-user",
-    name: "Welcome New User",
-    description: "Onboard a new user with welcome email and follow-up",
-    defaultWorkflow: "welcomeUser",
-    files: {
-      ...workspaceFiles({
-        name: "welcome-user",
-        dependencies: {
-          "@catamorphic/workflow": WORKFLOW_PACKAGE_VERSION,
-        },
-      }),
-      "workflows/src/welcome.ts": `import {
-  type BoundaryContext,
-  defineWorkflow,
-} from "@catamorphic/workflow";
-
-/**
- * @displayname Welcome New User
- * @description Onboard a new user with welcome email and follow-up
- * @param email - @displayname Email Address | @description The user's primary email
- * @param name - @displayname Full Name | @description The user's display name
- */
-export const welcomeUser = defineWorkflow(({ defineBoundary }) => ({
-  steps: [
-    defineBoundary({
-      run: async ({
-        input,
-      }: BoundaryContext<{ email: string; name: string }>) => {
-        const user = await createUser({
-          email: input.email,
-          name: input.name,
-        });
-        await sendWelcomeEmail({ to: user.email, name: user.name });
-
-        if (user.plan === "premium") {
-          await assignPremiumBenefits({ userId: user.id });
-        }
-
-        await sleep("7 days");
-        await sendFollowUpEmail({ to: user.email });
-
-        return { status: "complete", userId: user.id };
-      },
-    }),
-  ],
-}));
-
-/**
- * @displayname Create User
- * @icon user-plus
- * @param email - @displayname Email Address | @description The user's primary email
- * @param name - @displayname Full Name | @description The user's display name
- */
-async function createUser({ email, name }: { email: string; name: string }) {
-  "use step";
-  return { id: "usr_1", email, name, plan: "premium" };
-}
-
-/**
- * @displayname Send Welcome Email
- * @icon mail
- */
-async function sendWelcomeEmail({ to, name }: { to: string; name: string }) {
-  "use step";
-}
-
-/**
- * @displayname Assign Premium Benefits
- * @icon crown
- */
-async function assignPremiumBenefits({ userId }: { userId: string }) {
-  "use step";
-}
-
-/**
- * @displayname Send Follow-up Email
- * @icon mail
- */
-async function sendFollowUpEmail({ to }: { to: string }) {
-  "use step";
-}
-
-function sleep(_duration: string) {}
-`,
-    },
-  },
-  {
-    id: "order-processing",
-    name: "Order Processing",
-    description:
-      "Process an e-commerce order with parallel fulfillment and notifications",
-    defaultWorkflow: "processOrder",
-    files: {
-      ...workspaceFiles({
-        name: "order-processing",
-        dependencies: {
-          "@catamorphic/workflow": WORKFLOW_PACKAGE_VERSION,
-        },
-      }),
-      "workflows/src/process-order.ts": `import {
-  type BoundaryContext,
-  defineWorkflow,
-} from "@catamorphic/workflow";
-
-/**
- * @displayname Process Order
- * @description Process an e-commerce order end-to-end
- * @param orderId - @displayname Order ID | @description The order to process
- * @param items - @displayname Items | @description Item ids in the order
- * @param customerId - @displayname Customer ID | @description The ordering customer
- */
-export const processOrder = defineWorkflow(({ defineBoundary }) => ({
-  steps: [
-    defineBoundary({
-      run: async ({
-        input,
-      }: BoundaryContext<{
-        orderId: string;
-        items: string[];
-        customerId: string;
-      }>) => {
-        const { orderId, items, customerId } = input;
-        const order = await validateOrder({ orderId, items });
-
-        if (order.total > 500) {
-          await flagForReview({ orderId, reason: "High value order" });
-          await sleep("30 minutes");
-        }
-
-        const payment = await chargePayment({ orderId, amount: order.total });
-
-        if (payment.status === "failed") {
-          await notifyCustomer({ customerId, message: "Payment failed" });
-          return { status: "payment_failed", orderId };
-        }
-
-        const [shipment] = await Promise.all([
-          (async () => {
-            const shipResult = await createShipment({ orderId, items });
-            await notifyWarehouse({ shipmentId: shipResult.trackingId });
-            return shipResult;
-          })(),
-          generateInvoice({ orderId, amount: order.total }),
-        ]);
-
-        for (const item of items) {
-          await updateInventory({ itemId: item, delta: -1 });
-        }
-
-        await notifyCustomer({ customerId, message: "Order shipped!" });
-        return { status: "complete", orderId, trackingId: shipment.trackingId };
-      },
-    }),
-  ],
-}));
-
-/** @displayname Validate Order @icon shield */
-async function validateOrder({ orderId, items }: { orderId: string; items: string[] }) {
-  "use step";
-  return { orderId, items, total: 750, valid: true };
-}
-
-/** @displayname Flag for Review @icon search */
-async function flagForReview({ orderId, reason }: { orderId: string; reason: string }) {
-  "use step";
-}
-
-/** @displayname Charge Payment @icon zap */
-async function chargePayment({ orderId, amount }: { orderId: string; amount: number }) {
-  "use step";
-  return { status: "success", transactionId: "txn_123" };
-}
-
-/** @displayname Create Shipment @icon globe */
-async function createShipment({ orderId, items }: { orderId: string; items: string[] }) {
-  "use step";
-  return { trackingId: "TRACK_123" };
-}
-
-/** @displayname Notify Warehouse @icon truck */
-async function notifyWarehouse({ shipmentId }: { shipmentId: string }) {
-  "use step";
-}
-
-/** @displayname Generate Invoice @icon file */
-async function generateInvoice({ orderId, amount }: { orderId: string; amount: number }) {
-  "use step";
-  return { invoiceUrl: "https://example.com/invoice/123" };
-}
-
-/** @displayname Update Inventory @icon database */
-async function updateInventory({ itemId, delta }: { itemId: string; delta: number }) {
-  "use step";
-}
-
-/** @displayname Notify Customer @icon bell */
-async function notifyCustomer({ customerId, message }: { customerId: string; message: string }) {
-  "use step";
-}
-
-function sleep(_duration: string) {}
-`,
-    },
-  },
-  {
-    id: "data-pipeline",
-    name: "Data Sync Pipeline",
-    description:
-      "ETL pipeline with parallel extraction, transformation, and loading",
-    defaultWorkflow: "dataSyncPipeline",
-    files: {
-      ...workspaceFiles({
-        name: "data-pipeline",
-        dependencies: {
-          "@catamorphic/workflow": WORKFLOW_PACKAGE_VERSION,
-        },
-      }),
-      "workflows/src/pipeline.ts": `import {
-  type BoundaryContext,
-  defineWorkflow,
-} from "@catamorphic/workflow";
-import { extractFromSource } from "./steps/extract";
-import { validateSchema, transformData } from "./steps/transform";
-import { loadToDatabase, verifySync } from "./steps/load";
-import { acquireLock, releaseLock, sendAlert } from "./steps/infra";
-
-/**
- * @displayname Data Sync Pipeline
- * @description Extract, transform, and load data from multiple sources in parallel
- * @param sources - @displayname Sources | @description Source names to validate
- * @param targetDb - @displayname Target Database | @description Database to sync into
- */
-export const dataSyncPipeline = defineWorkflow(({ defineBoundary }) => ({
-  steps: [
-    defineBoundary({
-      run: async ({
-        input,
-      }: BoundaryContext<{ sources: string[]; targetDb: string }>) => {
-        const { sources, targetDb } = input;
-        await acquireLock({ resource: targetDb });
-
-        const [usersData, ordersData, productsData] = await Promise.all([
-          extractFromSource({ source: "users-api", format: "json" }),
-          extractFromSource({ source: "orders-db", format: "csv" }),
-          extractFromSource({ source: "products-s3", format: "parquet" }),
-        ]);
-
-        for (const source of sources) {
-          await validateSchema({ source, strict: true });
-        }
-
-        const transformed = await transformData({
-          datasets: ["users", "orders", "products"],
-          rules: "deduplicate,normalize,enrich",
-        });
-
-        if (transformed.errors > 0) {
-          await sendAlert({
-            channel: "slack",
-            message: "Transform errors detected",
-          });
-        }
-
-        await loadToDatabase({ targetDb, batchSize: 1000 });
-        await sleep("5 minutes");
-        await verifySync({ targetDb, expectedCount: transformed.rowCount });
-        await releaseLock({ resource: targetDb });
-
-        return { status: "synced", rows: transformed.rowCount };
-      },
-    }),
-  ],
-}));
-
-function sleep(_duration: string) {}
-`,
-      "workflows/src/steps/extract.ts": `/**
- * @displayname Extract from Source
- * @icon database
- */
-export async function extractFromSource({ source, format }: { source: string; format: string }) {
-  "use step";
-  return { rows: 10000, source };
-}
-`,
-      "workflows/src/steps/transform.ts": `/**
- * @displayname Validate Schema
- * @icon shield
- */
-export async function validateSchema({ source, strict }: { source: string; strict: boolean }) {
-  "use step";
-}
-
-/**
- * @displayname Transform Data
- * @icon code
- */
-export async function transformData({ datasets, rules }: { datasets: string[]; rules: string }) {
-  "use step";
-  return { rowCount: 25000, errors: 0 };
-}
-`,
-      "workflows/src/steps/load.ts": `/**
- * @displayname Load to Database
- * @icon database
- */
-export async function loadToDatabase({ targetDb, batchSize }: { targetDb: string; batchSize: number }) {
-  "use step";
-}
-
-/**
- * @displayname Verify Sync
- * @icon shield
- */
-export async function verifySync({ targetDb, expectedCount }: { targetDb: string; expectedCount: number }) {
-  "use step";
-}
-`,
-      "workflows/src/steps/infra.ts": `/**
- * @displayname Acquire Lock
- * @icon settings
- */
-export async function acquireLock({ resource }: { resource: string }) {
-  "use step";
-}
-
-/**
- * @displayname Release Lock
- * @icon settings
- */
-export async function releaseLock({ resource }: { resource: string }) {
-  "use step";
-}
-
-/**
- * @displayname Send Alert
- * @icon bell
- */
-export async function sendAlert({ channel, message }: { channel: string; message: string }) {
-  "use step";
-}
-`,
-    },
-  },
-  {
-    id: "support-routing",
-    name: "Support Ticket Routing",
-    description:
-      "Route incoming support tickets based on priority with nested branching",
-    defaultWorkflow: "routeSupportTicket",
-    files: {
-      ...workspaceFiles({
-        name: "support-routing",
-        dependencies: {
-          "@catamorphic/workflow": WORKFLOW_PACKAGE_VERSION,
-        },
-      }),
-      "workflows/src/route-ticket.ts": `import {
-  type BoundaryContext,
-  defineWorkflow,
-} from "@catamorphic/workflow";
-
-/**
- * @displayname Route Support Ticket
- * @description Route incoming support tickets to the right team based on priority level
- * @param ticketId - @displayname Ticket ID | @description The ticket to route
- * @param priority - @displayname Priority | @description Reported priority level
- * @param customerEmail - @displayname Customer Email | @description Where to send the acknowledgment
- */
-export const routeSupportTicket = defineWorkflow(({ defineBoundary }) => ({
-  steps: [
-    defineBoundary({
-      run: async ({
-        input,
-      }: BoundaryContext<{
-        ticketId: string;
-        priority: string;
-        customerEmail: string;
-      }>) => {
-        const ticket = await lookupTicket({ ticketId: input.ticketId });
-
-        if (ticket.priority === "critical") {
-          await escalateToManager({
-            ticketId: ticket.id,
-            reason: "Critical priority",
-          });
-
-          if (ticket.isVIP) {
-            await assignDedicatedAgent({ ticketId: ticket.id });
-            await notifyAccountManager({ ticketId: ticket.id });
-          } else {
-            await addToEscalationQueue({ ticketId: ticket.id });
-          }
-        } else if (ticket.priority === "high") {
-          await assignToSenior({ ticketId: ticket.id });
-        } else {
-          await addToQueue({ ticketId: ticket.id, queue: "general" });
-        }
-
-        await sendAcknowledgment({
-          to: input.customerEmail,
-          ticketId: ticket.id,
-        });
-        return { status: "routed", ticketId: ticket.id };
-      },
-    }),
-  ],
-}));
-
-/** @displayname Look Up Ticket @icon search */
-async function lookupTicket({ ticketId }: { ticketId: string }) {
-  "use step";
-  return { id: ticketId, priority: "critical", subject: "Server down", isVIP: true, customerId: "cust_1" };
-}
-
-/** @displayname Escalate to Manager @icon alert-triangle */
-async function escalateToManager({ ticketId, reason }: { ticketId: string; reason: string }) {
-  "use step";
-}
-
-/** @displayname Assign Dedicated Agent @icon star */
-async function assignDedicatedAgent({ ticketId }: { ticketId: string }) {
-  "use step";
-}
-
-/** @displayname Notify Account Manager @icon bell */
-async function notifyAccountManager({ ticketId }: { ticketId: string }) {
-  "use step";
-}
-
-/** @displayname Add to Escalation Queue @icon alert-circle */
-async function addToEscalationQueue({ ticketId }: { ticketId: string }) {
-  "use step";
-}
-
-/** @displayname Assign to Senior @icon user-check */
-async function assignToSenior({ ticketId }: { ticketId: string }) {
-  "use step";
-}
-
-/** @displayname Add to Queue @icon inbox */
-async function addToQueue({ ticketId, queue }: { ticketId: string; queue: string }) {
-  "use step";
-}
-
-/** @displayname Send Acknowledgment @icon mail */
-async function sendAcknowledgment({ to, ticketId }: { to: string; ticketId: string }) {
-  "use step";
-}
-`,
-    },
-  },
-  {
-    id: "durable-order-approval",
-    name: "Order Approval with Retries",
-    description:
-      "Visualize retry boundaries, resumable approval, child workflows, and cancellation",
-    defaultWorkflow: "approveOrder",
-    files: {
-      ...workspaceFiles({
-        name: "durable-order-approval",
-        dependencies: {
-          "@catamorphic/workflow": WORKFLOW_PACKAGE_VERSION,
-        },
-      }),
-      "workflows/src/approve-order.ts": `import {
-  type BoundaryContext,
-  defineWorkflow,
-} from "@catamorphic/workflow";
-import { finishOrder } from "./finish-order";
-
-interface OrderInput {
-  orderId: string;
-  requestedBy: string;
-}
-
-interface PreparedOrder {
-  orderId: string;
-  requestId: string;
-}
-
-interface Approval {
-  approved: boolean;
-  reviewerId: string;
-}
-
-/**
- * @displayname Approve Order
- * @description Request a resumable approval before finishing an order
- * @param orderId - @displayname Order ID | @description Order waiting for approval
- * @param requestedBy - @displayname Requested By | @description User requesting approval
- */
-export const approveOrder = defineWorkflow(({ defineBoundary }) => ({
-  controls: { cancel: true },
-  steps: [
-    /**
-     * @displayname Request Approval
-     * @description Create and wait for an approval request
-     * @icon badge-check
-     * @param orderId - @displayname Order ID | @description Order waiting for approval
-     * @param requestedBy - @displayname Requested By | @description User requesting approval
-     */
-    defineBoundary({
-      retry: {
-        maxAttempts: 3,
-        backoff: { initial: "1s", maximum: "30s", multiplier: 2 },
-      },
-      run: async ({ input, pause }: BoundaryContext<OrderInput>) => {
-        const prepared = await createApprovalRequest({
-          orderId: input.orderId,
-          requestedBy: input.requestedBy,
-        });
-        return pause<Approval, PreparedOrder>({
-          timeout: "24h",
-          state: prepared,
-        });
-      },
-    }),
-    /**
-     * @displayname Finish Approved Order
-     * @description Continue into the child workflow after approval or timeout
-     * @icon workflow
-     */
-    defineBoundary({
-      run: ({ input, callWorkflow }: BoundaryContext<
-        | { reason: "resumed"; value: Approval; state: PreparedOrder }
-        | { reason: "timed_out"; state: PreparedOrder }
-      >) => callWorkflow(finishOrder, { input: input.state }),
-    }),
-  ],
-}));
-
-/**
- * @displayname Create Approval Request
- * @icon badge-check
- */
-async function createApprovalRequest({
-  orderId,
-  requestedBy,
-}: {
-  orderId: string;
-  requestedBy: string;
-}): Promise<PreparedOrder> {
-  "use step";
-  return { orderId, requestId: \`approval-\${requestedBy}\` };
-}
-`,
-      "workflows/src/finish-order.ts": `import {
-  type BoundaryContext,
-  defineWorkflow,
-} from "@catamorphic/workflow";
-
-interface PreparedOrder {
-  orderId: string;
-  requestId: string;
-}
-
-/** @displayname Finish Order */
-export const finishOrder = defineWorkflow(({ defineBoundary }) => ({
-  controls: { cancel: true },
-  steps: [
-    /**
-     * @displayname Finalize Order
-     * @description Mark the approved order complete
-     * @icon badge-check
-     * @param orderId - @displayname Order ID | @description Approved order to finish
-     * @param requestId - @displayname Request ID | @description Completed approval request
-     */
-    defineBoundary({
-      run: async ({ input }: BoundaryContext<PreparedOrder>) => {
-        await markOrderApproved({ orderId: input.orderId });
-        return { orderId: input.orderId, completed: true };
-      },
-    }),
-  ],
-}));
-
-/** @displayname Mark Order Approved @icon badge-check */
-async function markOrderApproved({ orderId }: { orderId: string }) {
-  "use step";
-}
-`,
-    },
-  },
-  {
-    id: "customer-feedback-analysis",
-    name: "Customer Feedback Analysis",
-    description:
-      "Analyze seeded customer feedback in a paged batch scope and produce a summary artifact",
-    defaultWorkflow: "analyzeCustomerFeedback",
-    files: {
-      ...workspaceFiles({
-        name: "customer-feedback-analysis",
-        dependencies: {
-          "@catamorphic/workflow": WORKFLOW_PACKAGE_VERSION,
-        },
-      }),
-      "workflows/src/customer-feedback.ts": `import {
-  type BatchConsistency,
-  defineBatchStep,
-  defineWorkflow,
-  skipBatchItem,
-} from "@catamorphic/workflow";
-
-interface Feedback {
-  id: string;
-  rating: number;
-  comment: string;
-}
-
-interface NormalizedFeedback extends Feedback {
-  normalizedComment: string;
-}
-
-interface FeedbackAnalysis {
-  sentiment: "positive" | "neutral" | "negative";
-  topic: "product" | "support" | "pricing";
-}
-
-const COMMENTS: readonly string[] = [
-  "The product is fast and delightful.",
-  "Support took too long to reply.",
-  "Great value for the price.",
-  "The product works as expected.",
-  "Pricing is confusing and expensive.",
-  "Support solved my issue immediately.",
-];
-
-const FEEDBACK_SOURCE_CONSISTENCY: BatchConsistency = "snapshot";
-
-const SEEDED_FEEDBACK: readonly Feedback[] = Array.from(
-  { length: 320 },
-  (_, index) => ({
-    id: \`fb-\${String(index + 1).padStart(3, "0")}\`,
-    rating: (index % 5) + 1,
-    comment: index > 0 && index % 79 === 0 ? "" : COMMENTS[index % COMMENTS.length] ?? "",
-  }),
-);
-
-const feedbackSource = {
-  consistency: FEEDBACK_SOURCE_CONSISTENCY,
-  async initialize({
-    config,
-  }: {
-    config: { minimumRating: number };
-  }) {
-    const matching = SEEDED_FEEDBACK.filter(
-      (feedback) => feedback.rating >= config.minimumRating,
-    );
-    return {
-      snapshot: { highWaterMark: matching.length },
-      cursor: 0,
-      estimatedCount: matching.length,
-    };
-  },
-  async readPage({
-    config,
-    snapshot,
-    cursor = 0,
-    limit,
-  }: {
-    config: { minimumRating: number };
-    snapshot: { highWaterMark: number };
-    cursor?: number;
-    limit: number;
-  }) {
-    const matching = SEEDED_FEEDBACK.filter(
-      (feedback) => feedback.rating >= config.minimumRating,
-    ).slice(0, snapshot.highWaterMark);
-    const page = matching.slice(cursor, cursor + limit);
-    const nextCursor = cursor + page.length;
-    return {
-      items: page.map((feedback) => ({
-        key: feedback.id,
-        value: feedback,
-      })),
-      nextCursor,
-      done: nextCursor >= matching.length,
-    };
-  },
-};
-
-/**
- * @displayname Classify Feedback
- * @icon messages-square
- */
-export const classifyFeedback = defineBatchStep<
-  { feedback: NormalizedFeedback },
-  FeedbackAnalysis
->({
-  batch: { maxItems: 32, maxWaitMs: 250, maxBytes: 64_000 },
-  async run({ items }) {
-    return items.map(({ key, value, attempt }) => {
-      if (key === "fb-042" && attempt === 1) {
-        return {
-          key,
-          status: "failed",
-          error: {
-            message: "Seeded transient classifier failure",
-            retryable: true,
-          },
-        };
-      }
-      const text = value.feedback.normalizedComment;
-      const sentiment =
-        value.feedback.rating >= 4
-          ? "positive"
-          : value.feedback.rating <= 2
-            ? "negative"
-            : "neutral";
-      const topic = text.includes("support")
-        ? "support"
-        : text.includes("price") || text.includes("pricing")
-          ? "pricing"
-          : "product";
-      return { key, status: "succeeded", result: { sentiment, topic } };
-    });
-  },
-});
-
-const summarySink = {
-  async initialize() {
-    const results: { key: string; sentiment: string; topic: string }[] = [];
-    return { results };
-  },
-  async writeBatch({
-    records,
-    state = { results: [] },
-  }: {
-    records: readonly {
-      key: string;
-      outcome: {
-        status: string;
-        result?: FeedbackAnalysis;
-      };
-    }[];
-    state?: {
-      results: { key: string; sentiment: string; topic: string }[];
-    };
-  }) {
-    const written = records.flatMap((record) =>
-      record.outcome.status === "succeeded" && record.outcome.result
-        ? [{ key: record.key, ...record.outcome.result }]
-        : [],
-    );
-    const retained = state.results.filter(
-      (result) => !written.some((candidate) => candidate.key === result.key),
-    );
-    return {
-      state: { results: [...retained, ...written] },
-      acknowledgedKeys: records.map((record) => record.key),
-    };
-  },
-  async finalize({
-    state = { results: [] },
-    summary,
-  }: {
-    state?: {
-      results: { key: string; sentiment: string; topic: string }[];
-    };
-    summary: {
-      total: number;
-      succeeded: number;
-      failed: number;
-      skipped: number;
-    };
-  }) {
-    const rows = state.results.map(
-      (result) =>
-        \`\${result.key},\${result.sentiment},\${result.topic}\`,
-    );
-    return {
-      fileName: "customer-feedback-analysis.csv",
-      contentType: "text/csv",
-      content: ["key,sentiment,topic", ...rows].join("\\n"),
-      summary,
-    };
-  },
-};
-
-/**
- * @displayname Analyze Customer Feedback
- * @description Classify seeded customer feedback in efficient physical batches
- */
-export const analyzeCustomerFeedback = defineWorkflow(({ defineBatch }) => ({
-  steps: [
-    defineBatch({
-      source: ({
-        input,
-      }: {
-        input: { minimumRating?: number };
-      }) => ({
-        source: feedbackSource,
-        config: { minimumRating: input.minimumRating ?? 1 },
-      }),
-      process: async ({
-        item,
-      }: {
-        key: string;
-        item: Feedback;
-      }) => {
-        const validation = await validateFeedback({ feedback: item });
-        if (!validation.valid) {
-          skipBatchItem({ reason: validation.reason });
-        }
-        const normalized = await normalizeFeedback({ feedback: item });
-        return classifyFeedback({ feedback: normalized });
-      },
-      sink: summarySink,
-    }),
-  ],
-}));
-
-/**
- * @displayname Validate Feedback
- * @icon badge-check
- * @param feedback - @displayname Customer Feedback | @description Seeded feedback to validate
- */
-async function validateFeedback({
-  feedback,
-}: {
-  feedback: Feedback;
-}): Promise<{ valid: true } | { valid: false; reason: string }> {
-  "use step";
-  if (feedback.comment.trim() === "") {
-    return { valid: false, reason: "Feedback comment is empty" };
-  }
-  return { valid: true };
-}
-
-/**
- * @displayname Normalize Feedback
- * @icon wand-sparkles
- * @param feedback - @displayname Customer Feedback | @description Raw seeded feedback record
- */
-async function normalizeFeedback({
-  feedback,
-}: {
-  feedback: Feedback;
-}): Promise<NormalizedFeedback> {
-  "use step";
-  return {
-    ...feedback,
-    normalizedComment: feedback.comment.trim().toLowerCase(),
-  };
-}
-`,
-    },
-  },
-];
-
-/**
- * Look up a FRAMEWORK-DEFAULT template. Host-resolved lookups (after the
- * `projectTemplates` hook, ADR 0049) go through
- * `ProjectsService.findTemplate` instead.
- */
-export function findTemplate(id: string): ProjectTemplate | undefined {
-  return TEMPLATES.find((t) => t.id === id);
-}
