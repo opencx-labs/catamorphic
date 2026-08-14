@@ -11,8 +11,9 @@ import {
 import { PGlite } from "@electric-sql/pglite";
 import { pgcrypto } from "@electric-sql/pglite/contrib/pgcrypto";
 import cors from "@fastify/cors";
+import { BrowserWindow } from "electron";
 import Fastify, { type FastifyInstance } from "fastify";
-import { Kysely, PGliteDialect, WithSchemaPlugin } from "kysely";
+import { Kysely, PGliteDialect, sql, WithSchemaPlugin } from "kysely";
 import type { WorkspaceBridge } from "../agent-bridge.js";
 import type { ConnectorsService } from "../connectors.js";
 import {
@@ -36,6 +37,7 @@ import {
   DESKTOP_TRIGGER_KINDS,
   DesktopTriggers,
 } from "./triggers.js";
+import { WorkspaceStateStore } from "./workspace-state.js";
 
 /** The desktop app is single-tenant: one fixed identity for the machine. */
 export const DESKTOP_TENANT_ID = "00000000-0000-4000-8000-00000000d001";
@@ -45,11 +47,24 @@ export interface EmbeddedServer {
   url: string;
   catamorphic: Catamorphic;
   projectRoots: ProjectRootsStore;
+  /** Per-project open-workspace snapshots (tabs, chats, ordering). */
+  workspaceStates: WorkspaceStateStore;
   /** Dynamic roster of configured agents (per-profile agents.json files). */
   agentRegistry: DesktopAgentRegistry;
   /** Desktop trigger kinds: firing helpers for chat/terminal event sources. */
   triggers: DesktopTriggers;
   hasCodingAgent: boolean;
+  /**
+   * Stop the execution worker and release in-flight job leases.
+   *
+   * Called on OS sleep: a lease held through sleep expires on the wall clock
+   * while the process is frozen, discarding the step's work. Releasing before
+   * the freeze parks the job as `pending` with its attempt refunded, so it is
+   * reclaimed within a poll interval of waking.
+   */
+  suspendExecution: () => Promise<void>;
+  /** Restart the execution worker after OS resume. No-op while running. */
+  resumeExecution: () => void;
   shutdown: () => Promise<void>;
 }
 
@@ -68,6 +83,14 @@ export async function startEmbeddedServer(
     dialect: new PGliteDialect({ pglite }),
     plugins: [new WithSchemaPlugin(DEFAULT_SCHEMA)],
   });
+  // WithSchemaPlugin only rewrites built queries; core's raw-SQL paths (the
+  // worker's claim CTE) resolve tables via search_path, which createDatabase
+  // configures per-connection on server deployments. PGlite is one session
+  // for the process's lifetime, so set it once here — without this the
+  // polling worker can never claim a job.
+  await sql
+    .raw(`SET search_path TO "${DEFAULT_SCHEMA}", public`)
+    .execute(db);
 
   // E2E runs swap the real sandbox + agents for deterministic local fakes.
   const e2eFakeAgent = process.env.CATAMORPHIC_E2E_FAKE_AGENT === "1";
@@ -80,6 +103,8 @@ export async function startEmbeddedServer(
   // the shared catamorphic schema never learns about filesystem paths.
   const projectRoots = new ProjectRootsStore(pglite);
   await projectRoots.init();
+  const workspaceStates = new WorkspaceStateStore(pglite);
+  await workspaceStates.init();
 
   // Agents resolve dynamically from the per-profile agents.json files, so
   // adding or editing an agent in Settings needs no server restart. In e2e
@@ -157,6 +182,15 @@ export async function startEmbeddedServer(
         { tenantId: DESKTOP_TENANT_ID, externalUserId: DESKTOP_USER_ID },
         event.projectId,
       );
+      // The turn checkpoint just moved git state; a sidebar waiting on
+      // its 15s poll would show stale rows (and stale rows diff against
+      // a HEAD that already contains them — two identical panes).
+      for (const window of BrowserWindow.getAllWindows()) {
+        if (window.isDestroyed()) continue;
+        window.webContents.send("catamorphic:git-changed", {
+          projectId: event.projectId,
+        });
+      }
     },
   });
   const triggers = new DesktopTriggers(catamorphic);
@@ -359,12 +393,22 @@ export async function startEmbeddedServer(
   apiBaseUrl = url;
   console.log(`[desktop] API ready on ${url}/api`);
 
+  let shutdownDone: Promise<void> | undefined;
+
   // PGlite is a single serialized connection; more worker concurrency would
   // only queue on the connection mutex.
-  const worker = catamorphic.startExecutionWorker({
-    name: "desktop",
-    concurrency: 1,
-  });
+  const startWorker = () =>
+    catamorphic.startExecutionWorker({ name: "desktop", concurrency: 1 });
+  let worker: ReturnType<typeof startWorker> | null = startWorker();
+  const suspendExecution = async () => {
+    const current = worker;
+    worker = null;
+    await current?.stop().catch(() => {});
+  };
+  const resumeExecution = () => {
+    if (shutdownDone || worker) return;
+    worker = startWorker();
+  };
 
   // Project workspaces type-check `trigger()` against a generated
   // catamorphic-triggers.d.ts; refresh it everywhere in the background so
@@ -392,11 +436,10 @@ export async function startEmbeddedServer(
     10 * 60 * 1000,
   );
 
-  let shutdownDone: Promise<void> | undefined;
   const shutdown = () => {
     shutdownDone ??= (async () => {
       clearInterval(remoteSyncTimer);
-      await worker.stop().catch(() => {});
+      await suspendExecution();
       await app.close().catch(() => {});
       await catamorphic.close().catch(() => {});
       // catamorphic.close() leaves the host-owned Kysely alone; destroying it
@@ -410,11 +453,14 @@ export async function startEmbeddedServer(
     url,
     catamorphic,
     projectRoots,
+    workspaceStates,
     agentRegistry,
     triggers,
     get hasCodingAgent() {
       return agentRegistry.hasAgents();
     },
+    suspendExecution,
+    resumeExecution,
     shutdown,
   };
 }

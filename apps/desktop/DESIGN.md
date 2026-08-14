@@ -2130,3 +2130,59 @@ Patterned on what best-in-class palettes converged on (Chrome omnibox
   real install queues a continuation message — it dispatches after the
   turn settles, when the provider cache (keyed on the MCP surface) has
   already rebuilt the harness. The turn seam is the restart story.
+
+### 2026-08-14 — Skills wear their pretty name
+
+- SKILL.md frontmatter gains `title:` — the human-facing name every
+  non-technical surface fronts (palette rows, the composer `/` menu);
+  skills without one get the humanized slug ("team-notes" → "Team
+  notes"), sentence case because a slug carries no capitalization
+  knowledge. The kebab name stays the invocation id, a mono `/slug` hint
+  in the menu, and a search keyword — technical users typing the exact
+  name still hit.
+
+### 2026-08-14 — Git surfaces stop lying: gitignore from birth, fresh changes, tree view
+
+- Every new project's repo is seeded with a `.gitignore` (node_modules/,
+  dist/, .turbo/, .DS_Store) — the checkpoint walker already skipped
+  those, so status and history finally agree; the changes UI also
+  hard-filters the same noise for projects born before the seed.
+- The Changes sidebar became a collapsible directory tree (single-child
+  chains collapse into one "a/b/c" row), refreshed by a push signal
+  after every turn checkpoint instead of only the 15s poll — stale "A"
+  rows were opening diffs against a HEAD that already contained the
+  file: two identical panes, zero highlights, reads as broken.
+- Diff tabs: bordered editor surface with a file-path footer (short
+  diffs end in chrome, not a void), an honest empty-diff notice, the
+  Monaco chunk warmed while idle after boot, and the per-open worktree
+  allowlist now costs one `git worktree list` instead of a full status
+  sweep.
+
+### 2026-08-14 — The workspace survives a relaunch
+
+- Per-project workspace snapshots (tabs, chats, browsers on their last
+  URL, editors by path, order, split, the reopen stack) persist in the
+  desktop PGlite schema, debounced 500ms; restore fills a project's slot
+  only if the user hasn't touched it, and saves are gated on the restore
+  attempt settling so boot can never clobber the saved state. Dropped on
+  principle: terminals (the PTY dies with the app), sessionless chats,
+  unsent composer drafts, mcpapp tool results.
+- Per-profile prefs grow `sidebarOpen` and `lastProjectId` — a relaunch
+  lands in the last project with the sidebar as you left it.
+- Cmd+Shift+T now restores chats closed from ANY path: the dock's own X,
+  a bubble's X, and Cmd+W-on-floating all feed the reopen stack (only
+  sessionless chats are skipped — reopening one would make an empty
+  chat). Previously only the tab strip's X recorded.
+
+### 2026-08-14 — Sidebar sections can hide when empty; danger buttons are tinted
+
+- `hideEmpty` on every sidebar section: the whole section (header
+  included) drops while it has nothing to list. Defaults true for
+  Workflows and Apps — a new project isn't about either until an agent
+  makes it so — false elsewhere; sidebar.js overrides per section.
+  The nav stays mounted while hidden; its data arriving is what reveals
+  the section.
+- The delete-project confirm joins the app's tinted-danger idiom
+  (border-danger/40 + bg-danger/10 + text-danger) — the old solid
+  low-chroma fill with hardcoded white text read as washed out in both
+  themes.

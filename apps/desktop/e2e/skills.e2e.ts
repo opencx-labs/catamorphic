@@ -134,16 +134,18 @@ describe("skills as commands", () => {
   it("lists both tiers in the palette's > command view", async () => {
     await ensurePalette();
     await paletteType(">publishing");
+    // Rows front the pretty title (frontmatter `title`), not the slug.
     await runWait(
-      `const row = paletteRows().find((el) => el.textContent.includes('publishing-to-github'));
-       return !!row && row.textContent.includes('App skill');`,
-      { timeoutMs: 15_000, label: "host skill row with App skill detail" },
+      `const row = paletteRows().find((el) => el.textContent.includes('Publish to GitHub'));
+       return !!row && row.textContent.includes('App skill') &&
+              !row.textContent.includes('publishing-to-github');`,
+      { timeoutMs: 15_000, label: "host skill row with pretty title" },
     );
     await paletteType(">team-notes");
     await runWait(
-      `const row = paletteRows().find((el) => el.textContent.includes('team-notes'));
+      `const row = paletteRows().find((el) => el.textContent.includes('Team notes'));
        return !!row && row.textContent.includes('Skill');`,
-      { label: "project skill row" },
+      { label: "project skill row with humanized title" },
     );
     await run(`pressKey('Escape'); return true;`);
   });
@@ -152,7 +154,7 @@ describe("skills as commands", () => {
     await ensurePalette();
     await paletteType(">publishing-to-github");
     await runWait(
-      `const row = paletteRows().find((el) => el.textContent.includes('publishing-to-github'));
+      `const row = paletteRows().find((el) => el.textContent.includes('Publish to GitHub'));
        if (!row) return false;
        row.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true }));
        return true;`,
@@ -192,7 +194,7 @@ describe("skills as commands", () => {
     await ensurePalette();
     await paletteType(">checklist");
     await runWait(
-      `const row = paletteRows().find((el) => el.textContent.includes('checklist'));
+      `const row = paletteRows().find((el) => el.textContent.includes('Checklist'));
        return !!row && !!$('[data-palette-target]');`,
       { timeoutMs: 15_000, label: "skill row highlights the focused chat" },
     );

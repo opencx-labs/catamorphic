@@ -49,6 +49,12 @@ export interface SidebarSectionConfig {
   title?: string;
   /** Start collapsed (default open). */
   collapsed?: boolean;
+  /**
+   * Hide the whole section (header included) while it has nothing to
+   * list. Defaults to true for `workflows` and `apps` — a new project
+   * isn't about either until an agent makes it so — and false elsewhere.
+   */
+  hideEmpty?: boolean;
   /** For type "custom": the entries to render. */
   items?: SidebarItem[];
   /** Default click behavior for this section's items. */
@@ -118,6 +124,8 @@ export const DEFAULT_SIDEBAR_FILE = `// Catamorphic sidebar configuration.
 // COMMON ATTRIBUTES
 //   title:     override the heading
 //   collapsed: start collapsed
+//   hideEmpty: hide the whole section while it has nothing to list
+//              (default: true for workflows and apps, false elsewhere)
 //   open:      "tab"     — always open in a new browser tab
 //              "replace" — reuse the focused browser tab (falls back to a
 //                          new tab when the focused tab isn't a browser)
@@ -246,6 +254,10 @@ function sanitize(raw: unknown): SidebarConfig {
       type: section.type as SidebarSectionConfig["type"],
       title: typeof section.title === "string" ? section.title : undefined,
       collapsed: section.collapsed === true,
+      // Tri-state: absent means "per-type default" (true for workflows
+      // and apps), so only pass booleans through.
+      hideEmpty:
+        typeof section.hideEmpty === "boolean" ? section.hideEmpty : undefined,
       items: sanitizeItems(section.items),
       open: asOpenMode(section.open),
       menu: sanitizeMenu(section.menu),

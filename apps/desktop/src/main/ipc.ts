@@ -24,7 +24,12 @@ import {
   type UpdateConnectionInput,
 } from "./connections-store.js";
 import type { ConnectorsService } from "./connectors.js";
-import { type GitDiffMode, gitFileDiff, gitOverview } from "./git-view.js";
+import {
+  type GitDiffMode,
+  gitFileDiff,
+  gitOverview,
+  listWorktreePaths,
+} from "./git-view.js";
 import type { WindowProfileRegistry } from "./index.js";
 import { type Keybindings, normalizeKeybindings } from "./keybindings.js";
 import type { McpAppsService } from "./mcp-apps.js";
@@ -810,6 +815,7 @@ export function registerIpcHandlers(
       }
       await server.catamorphic.core.projects.delete(identity, input.projectId);
       await server.projectRoots.delete(input.projectId);
+      await server.workspaceStates.delete(input.projectId);
     },
   );
 
@@ -854,6 +860,22 @@ export function registerIpcHandlers(
   // --- git + pull requests (the dev-grade surfaces: Changes, PRs, diffs) ---
 
   ipcMain.handle(
+    "catamorphic:workspace-state-get",
+    async (_event, projectId: string) => {
+      if (typeof projectId !== "string") return null;
+      return (await state.current?.workspaceStates.get(projectId)) ?? null;
+    },
+  );
+
+  ipcMain.handle(
+    "catamorphic:workspace-state-set",
+    async (_event, projectId: string, snapshot: unknown) => {
+      if (typeof projectId !== "string") return;
+      await state.current?.workspaceStates.set(projectId, snapshot);
+    },
+  );
+
+  ipcMain.handle(
     "catamorphic:git-overview",
     async (_event, projectId: string) => {
       const rootPath = await state.current?.projectRoots.get(projectId);
@@ -878,9 +900,10 @@ export function registerIpcHandlers(
       if (!rootPath) throw new Error("Unknown project");
       // Only diff inside the project's own worktrees. Worktrees may live
       // OUTSIDE the project root, so this is an allowlist from `git
-      // worktree list`, not a path-prefix check.
-      const overview = await gitOverview(rootPath);
-      if (!overview.worktrees.some((tree) => tree.path === worktreePath)) {
+      // worktree list` (one subprocess — not a full status sweep), not a
+      // path-prefix check.
+      const worktrees = await listWorktreePaths(rootPath);
+      if (!worktrees.includes(worktreePath)) {
         throw new Error("Not a worktree of this project");
       }
       return gitFileDiff(worktreePath, filePath, mode);

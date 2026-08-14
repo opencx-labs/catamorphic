@@ -8,6 +8,7 @@
  * else — no CSS imports, no theme plumbing. Every color flows through the
  * host theme's `--color-*` tokens; light, dark, and user themes come free.
  */
+export { AnimatedList } from "./animated-list.js";
 export { Badge } from "./badge.js";
 export { Button } from "./button.js";
 export { Calendar, type CalendarProps } from "./calendar.js";

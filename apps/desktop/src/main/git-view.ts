@@ -94,6 +94,22 @@ export async function gitOverview(rootPath: string): Promise<GitOverview> {
   return { available: true, worktrees: result };
 }
 
+/**
+ * Just the worktree paths — the cheap allowlist for diff requests (one
+ * subprocess), where gitOverview would run status across every worktree.
+ */
+export async function listWorktreePaths(rootPath: string): Promise<string[]> {
+  if (!(await gitAvailable())) return [];
+  try {
+    const trees = parseWorktreeList(
+      await git(rootPath, ["worktree", "list", "--porcelain"]),
+    );
+    return trees.map((tree) => tree.path);
+  } catch {
+    return [];
+  }
+}
+
 export async function gitFileDiff(
   worktreePath: string,
   filePath: string,
@@ -141,6 +157,19 @@ function parseWorktreeList(
   return trees;
 }
 
+/**
+ * Paths the changes UI never surfaces, mirroring the checkpoint walker's
+ * IGNORED_DIRS (packages/git walkDirectory): what a turn checkpoint will
+ * never commit shouldn't flood the sidebar either. Repos with a proper
+ * .gitignore (seeded on create) exclude these at the git level already;
+ * this guards projects created before the seed or with the file removed.
+ */
+const NOISE_SEGMENTS = new Set(["node_modules", ".git", "dist", ".turbo"]);
+const isNoisePath = (filePath: string): boolean =>
+  filePath
+    .split("/")
+    .some((segment) => NOISE_SEGMENTS.has(segment) || segment === ".DS_Store");
+
 /** `git status --porcelain=v1 -z`: robust against spaces/renames. */
 async function uncommittedChanges(cwd: string): Promise<GitChangedFile[]> {
   const out = await git(cwd, [
@@ -156,6 +185,11 @@ async function uncommittedChanges(cwd: string): Promise<GitChangedFile[]> {
     if (!entry || entry.length < 4) continue;
     const xy = entry.slice(0, 2);
     const filePath = entry.slice(3);
+    if (isNoisePath(filePath)) {
+      // Renames still consume their companion record.
+      if (xy.includes("R") || xy.includes("C")) i++;
+      continue;
+    }
     if (xy.includes("R") || xy.includes("C")) {
       // Rename/copy: the NEXT -z record is the original path.
       const previousPath = parts[++i];

@@ -8,6 +8,8 @@ import { useEffect, useState } from "react";
  */
 export interface SkillInfo {
   name: string;
+  /** Human-facing name (frontmatter `title`, else the humanized slug). */
+  title: string;
   description: string;
   path: string;
   source: "project" | "host";

@@ -52,7 +52,12 @@ describe("ProjectRepo", () => {
       expect(files).toContain("src/a.ts");
       expect(files).toContain("src/b.ts");
       expect(files).toContain(".catamorphic/project.json");
-      expect(files.some((f) => f.startsWith(".git"))).toBe(false);
+      // The seeded ignore rules are project content…
+      expect(files).toContain(".gitignore");
+      // …but the .git directory itself never lists.
+      expect(files.some((f) => f === ".git" || f.startsWith(".git/"))).toBe(
+        false,
+      );
     });
 
     it("readAllFiles returns a map of path -> content", async () => {

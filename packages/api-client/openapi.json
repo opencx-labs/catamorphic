@@ -8934,6 +8934,9 @@
                       "name": {
                         "type": "string"
                       },
+                      "title": {
+                        "type": "string"
+                      },
                       "description": {
                         "type": "string"
                       },
@@ -8945,7 +8948,13 @@
                         "enum": ["project", "host"]
                       }
                     },
-                    "required": ["name", "description", "path", "source"],
+                    "required": [
+                      "name",
+                      "title",
+                      "description",
+                      "path",
+                      "source"
+                    ],
                     "additionalProperties": false
                   }
                 }

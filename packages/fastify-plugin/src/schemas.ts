@@ -804,6 +804,8 @@ export const AgentSessionDetailSchema = AgentSessionSchema.extend({
 // --- Skills ---
 export const SkillSchema = z.object({
   name: z.string(),
+  /** Human-facing name (frontmatter `title`, else the humanized slug). */
+  title: z.string(),
   description: z.string(),
   path: z.string(),
   source: z.enum(["project", "host"]),

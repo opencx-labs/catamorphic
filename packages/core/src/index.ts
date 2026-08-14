@@ -248,6 +248,7 @@ export {
   SecretsService,
 } from "./services/secrets-service.js";
 export {
+  humanizeSkillName,
   parseSkillFrontmatter,
   type ProjectSkill,
   SKILLS_DIR,

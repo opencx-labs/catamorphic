@@ -39,16 +39,27 @@ export function BookmarksNav({
   projectId,
   profileId,
   menuOverride,
+  onEmptyChange,
   onOpen,
 }: {
   projectId: string;
   profileId: string;
   /** `menu` from sidebar.js for this section, if the user set one. */
   menuOverride?: SidebarMenuEntry[];
+  /** Reports emptiness up so hide-when-empty sections can drop entirely. */
+  onEmptyChange?: (empty: boolean) => void;
   onOpen: (url: string, mode?: "tab" | "replace") => void;
 }) {
   const [data, setData] = useState<BookmarksData | null>(null);
   const [renamingId, setRenamingId] = useState<string | null>(null);
+  const isEmpty =
+    !data ||
+    (data.pinned.length === 0 &&
+      data.project.bookmarks.length === 0 &&
+      data.project.folders.length === 0);
+  useEffect(() => {
+    onEmptyChange?.(isEmpty);
+  }, [isEmpty, onEmptyChange]);
 
   useEffect(() => {
     let cancelled = false;

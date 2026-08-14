@@ -124,6 +124,9 @@ Your own section:
   browser tab, falling back to a new tab). Set per section or per item.
 - \`icon\`: any lucide-react icon name, e.g. \`"Globe"\`, \`"FileText"\`.
 - \`collapsed: true\` starts a section collapsed.
+- \`hideEmpty\`: hide the whole section (header included) while it has
+  nothing to list. Defaults to true for \`workflows\` and \`apps\`, false
+  for every other section; set it explicitly to override either way.
 
 Hover menu (the ⋯ button on an item): set on a section (applies to all
 its items) or on a single item:

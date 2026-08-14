@@ -771,6 +771,7 @@ import { Button, Card, DataTable, useAsync } from "@catamorphic/app/ui";
 | \`DatePicker\` / \`DateRangePicker\` | \`value\` (ISO \`YYYY-MM-DD\` / \`{from,to}\`), \`onChange\`, \`placeholder\` | Date entry — popover calendar, keyboard-navigable, date-only local strings (JSON-safe). |
 | \`Calendar\` | \`mode\`, \`value\`, \`onSelect\` | The bare month grid when you need it inline. |
 | \`ScrollHint\` | \`fadeColor\` (match the surface behind) | Scroll container that fades edges with more content. |
+| \`AnimatedList\` | \`items\`, \`getKey\`, \`renderItem\`, \`itemClassName\` | Keyed list whose rows animate in when added and collapse out BEFORE removal — use it for any list that gains/loses items. |
 | \`useAsync(load, deps)\` | returns \`{status:"loading"} \\| {status:"error",error,retry} \\| {status:"ok",value}\` | Load workflow data into the three states below. |
 
 ## The three data states
@@ -825,10 +826,25 @@ function Orders() {
 ## Motion doctrine
 
 The kit animates itself — dialogs, popovers, tooltips, spinners already
-follow the host's motion contract. Apps add NO animation beyond color
-transitions on their own hover states
-(\`var(--cat-motion-fast) var(--ease-standard)\`).
-Nothing loops, nothing bounces, nothing animates on load.
+follow the host's motion contract — and hands apps the same contract for
+their own structure:
+
+- List content that gains/loses items renders through \`AnimatedList\`:
+  added rows animate in, removed rows animate OUT before unmount, on the
+  host's pacing. Never splice a visible list without it.
+- Other structural appear/disappear takes the kit's utility classes:
+  \`cat-anim-enter\`/\`cat-anim-exit\` (fade + slight rise and its mirror),
+  or \`cat-row-enter\`/\`cat-row-exit\` on hand-rolled one-line rows (adds
+  the height collapse so neighbors slide into place). The exit classes hold
+  their final frame (\`forwards\`) — remove the element on \`animationend\`,
+  never before.
+- Hover feedback is a color transition on
+  \`var(--cat-motion-fast) var(--ease-standard)\`.
+
+Everything rides the host's tokens — \`--cat-motion-fast/base/slow\` and
+the one easing \`--ease-standard\`; never hardcode a duration or curve.
+Exits mirror enters, slightly quicker. Nothing loops, nothing bounces,
+nothing animates on load.
 
 ## Do-nots
 
@@ -1204,6 +1220,7 @@ check after each fix and remove temporary error suppressions.
 export const HOST_SKILLS: Record<string, string> = {
   "publishing-to-github/SKILL.md": `---
 name: publishing-to-github
+title: Publish to GitHub
 description: Publish a project to GitHub — log the user into GitHub if needed, then push to a new repository or an existing empty one. Use when the user wants a project on GitHub, or wants to push, publish, or share a project that has no GitHub remote yet.
 ---
 

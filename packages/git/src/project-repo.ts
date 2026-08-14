@@ -23,6 +23,13 @@ const IGNORED_DIRS = new Set(["node_modules", ".git", "dist", ".turbo"]);
  */
 const ALLOWED_DOT_DIRS = new Set([".agents", ".catamorphic"]);
 
+/**
+ * Dot-FILES that are project content: the seeded ignore rules must be
+ * committed (an untracked .gitignore reads as a permanently dirty tree,
+ * which would defer every remote sync).
+ */
+const ALLOWED_DOT_FILES = new Set([".gitignore"]);
+
 function assertSafePath(filePath: string): void {
   const normalized = path.normalize(filePath);
   if (path.isAbsolute(normalized)) {
@@ -42,7 +49,11 @@ async function walkDirectory(dir: string, base: string): Promise<string[]> {
 
   for (const entry of entries) {
     if (IGNORED_DIRS.has(entry.name)) continue;
-    if (entry.name.startsWith(".") && !ALLOWED_DOT_DIRS.has(entry.name))
+    if (
+      entry.name.startsWith(".") &&
+      !ALLOWED_DOT_DIRS.has(entry.name) &&
+      !ALLOWED_DOT_FILES.has(entry.name)
+    )
       continue;
 
     const fullPath = path.join(dir, entry.name);

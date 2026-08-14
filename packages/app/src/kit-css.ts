@@ -1,6 +1,8 @@
 /**
  * The stylesheet for `@catamorphic/app/ui` — every `cat-*` class the kit's
- * components render. Hosts inject it into each app guest document AFTER
+ * components render, plus the app-facing motion utilities
+ * (`cat-anim-enter/exit`, `cat-row-enter/exit`) apps put on their own
+ * structure. Hosts inject it into each app guest document AFTER
  * {@link APP_BASE_CSS} (so the token vocabulary exists) and BEFORE the app's
  * own CSS (so an app can still override anything).
  *
@@ -501,16 +503,63 @@ export const APP_KIT_CSS = `
   background:linear-gradient(to left,var(--cat-fade-color),transparent);
 }
 
+/* ------------------------------------------------------ motion utilities */
+/* Enter/exit for app-authored structure, on the same contract the kit's own
+   surfaces follow: enters fade + rise 4px on --cat-motion-base, exits the
+   ~80% mirror with \`forwards\` so the element holds its final frame — the
+   app removes it on \`animationend\` (AnimatedList in \`@catamorphic/app/ui\`
+   does exactly that for keyed lists). */
+.cat-anim-enter{animation:cat-anim-in var(--cat-motion-base) var(--ease-standard)}
+.cat-anim-exit{
+  animation:cat-anim-out calc(var(--cat-motion-base)*.82) var(--ease-standard) forwards;
+}
+@keyframes cat-anim-in{from{opacity:0;translate:0 4px}to{opacity:1;translate:0 0}}
+@keyframes cat-anim-out{from{opacity:1;translate:0 0}to{opacity:0;translate:0 4px}}
+/* List-row variants: the same fade + 4px rise plus a max-height reveal (and
+   collapse, margins and paddings included) so neighbors slide — not snap —
+   into place. The height cap derives from the host's row density and suits
+   one-line rows (~30-50px); taller blocks use cat-anim-enter/exit instead.
+   \`overflow:hidden\` lives in the keyframes so rows clip only WHILE
+   animating and never truncate a focus ring at rest. */
+/* AnimatedList's \`<ul>\` — bare: the UA list chrome removed, nothing else. */
+.cat-anim-list{list-style:none;margin:0;padding:0}
+.cat-row-enter{animation:cat-row-in var(--cat-motion-base) var(--ease-standard)}
+.cat-row-exit{
+  animation:cat-row-out calc(var(--cat-motion-base)*.82) var(--ease-standard) forwards;
+}
+@keyframes cat-row-in{
+  from{
+    opacity:0;translate:0 4px;max-height:0;
+    margin-block:0;padding-block:0;overflow:hidden;
+  }
+  to{
+    opacity:1;translate:0 0;max-height:calc(var(--cat-row-h) + 24px);
+    overflow:hidden;
+  }
+}
+@keyframes cat-row-out{
+  from{
+    opacity:1;translate:0 0;max-height:calc(var(--cat-row-h) + 24px);
+    overflow:hidden;
+  }
+  to{
+    opacity:0;translate:0 4px;max-height:0;
+    margin-block:0;padding-block:0;overflow:hidden;
+  }
+}
+
 /* ------------------------------------------------------- reduced motion */
 @media (prefers-reduced-motion:reduce){
   .cat-dialog-overlay,.cat-dialog-panel,
-  .cat-tooltip[data-side],.cat-popover[data-side]{
+  .cat-tooltip[data-side],.cat-popover[data-side],
+  .cat-anim-enter,.cat-row-enter{
     animation:cat-fade-in 50ms var(--ease-standard);
   }
   .cat-dialog-root[data-state="closing"] .cat-dialog-overlay,
   .cat-dialog-root[data-state="closing"] .cat-dialog-panel,
   .cat-tooltip[data-state="closing"][data-side],
-  .cat-popover[data-state="closing"][data-side]{
+  .cat-popover[data-state="closing"][data-side],
+  .cat-anim-exit,.cat-row-exit{
     animation:cat-fade-out 50ms var(--ease-standard) forwards;
   }
   .cat-skeleton::after{animation:none}

@@ -5,6 +5,7 @@ import {
   dialog,
   ipcMain,
   Menu,
+  powerMonitor,
   type WebContents,
 } from "electron";
 import { registerAgentBridge } from "./agent-bridge.js";
@@ -351,6 +352,12 @@ app.whenReady().then(async () => {
       url: server.url,
       hasCodingAgent: server.hasCodingAgent,
     });
+    // Don't hold job leases through OS sleep. A lease held by a frozen
+    // process expires on the wall clock, so the step's work is discarded on
+    // wake; releasing before the freeze parks the job cleanly and resume
+    // picks it back up within a poll interval.
+    powerMonitor.on("suspend", () => void server?.suspendExecution());
+    powerMonitor.on("resume", () => server?.resumeExecution());
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     dialog.showErrorBox(

@@ -264,6 +264,99 @@ const terminalTabKey = (localId: string) => `terminal:${localId}`;
 const editorTabKey = (localId: string) => `editor:${localId}`;
 
 /**
+ * The restart-surviving projection of a workspace, persisted per project
+ * (desktop.workspace_states) so a relaunch lands where the user left off.
+ * Dropped because they cannot survive: terminals (the PTY dies with the
+ * app), sessionless chats (nothing to reopen), unsent composer state,
+ * agent-setup tabs (they re-open themselves), and mcpapp tabs (their tool
+ * results are runtime data). Editor tabs lose unsaved buffers; browser
+ * tabs reopen on their last URL.
+ */
+const serializeWorkspace = (ws: Workspace): Workspace => {
+  const chats = ws.chats
+    .filter((chat) => chat.sessionId)
+    .map(({ pendingMessage: _pending, ...chat }) => chat);
+  const chatIds = new Set(chats.map((chat) => chat.localId));
+  const chatRef = (id: string | undefined) =>
+    id && chatIds.has(id) ? { chatLocalId: id } : {};
+  const browsers = ws.browsers.map((browser) => ({
+    localId: browser.localId,
+    profileId: browser.profileId,
+    initialUrl: browser.url || browser.initialUrl,
+    url: browser.url,
+    title: browser.title,
+    faviconUrl: browser.faviconUrl,
+    ...chatRef(browser.chatLocalId),
+  }));
+  const editors = ws.editors.map((editor) => ({
+    localId: editor.localId,
+    filePath: editor.filePath,
+    dirty: false,
+    ...chatRef(editor.chatLocalId),
+  }));
+  const tabs = ws.tabs.filter(
+    (tab) => tab.kind !== "agent-setup" && tab.kind !== "mcpapp",
+  );
+  const keys = new Set([
+    ...tabs.map(tabKey),
+    ...chats
+      .filter((chat) => chat.mode === "tab")
+      .map((chat) => chatTabKey(chat.localId)),
+    ...browsers.map((browser) => browserTabKey(browser.localId)),
+    ...editors.map((editor) => editorTabKey(editor.localId)),
+  ]);
+  return {
+    tabs,
+    ...(ws.activeTabKey && keys.has(ws.activeTabKey)
+      ? { activeTabKey: ws.activeTabKey }
+      : {}),
+    chats,
+    ...(ws.activeChatId && chatIds.has(ws.activeChatId)
+      ? { activeChatId: ws.activeChatId }
+      : {}),
+    browsers,
+    terminals: [],
+    editors,
+    split:
+      ws.split && keys.has(ws.split.leftKey) && keys.has(ws.split.rightKey)
+        ? ws.split
+        : null,
+    tabOrder: ws.tabOrder.filter((key) => keys.has(key)),
+    closedTabs: ws.closedTabs.filter((record) => record.kind !== "terminal"),
+  };
+};
+
+/** Rebuild a Workspace from a persisted snapshot; null = start fresh. */
+const hydrateWorkspace = (raw: unknown): Workspace | null => {
+  if (typeof raw !== "object" || raw === null) return null;
+  const snapshot = raw as Partial<Workspace>;
+  const ws: Workspace = {
+    tabs: Array.isArray(snapshot.tabs) ? snapshot.tabs : [],
+    chats: Array.isArray(snapshot.chats) ? snapshot.chats : [],
+    browsers: Array.isArray(snapshot.browsers) ? snapshot.browsers : [],
+    terminals: [],
+    editors: Array.isArray(snapshot.editors) ? snapshot.editors : [],
+    split: snapshot.split ?? null,
+    tabOrder: Array.isArray(snapshot.tabOrder) ? snapshot.tabOrder : [],
+    closedTabs: Array.isArray(snapshot.closedTabs) ? snapshot.closedTabs : [],
+    ...(typeof snapshot.activeTabKey === "string"
+      ? { activeTabKey: snapshot.activeTabKey }
+      : {}),
+    ...(typeof snapshot.activeChatId === "string"
+      ? { activeChatId: snapshot.activeChatId }
+      : {}),
+  };
+  const anything =
+    ws.tabs.length > 0 ||
+    ws.chats.length > 0 ||
+    ws.browsers.length > 0 ||
+    ws.editors.length > 0;
+  if (!anything) return null;
+  if (!ws.activeTabKey && ws.tabs[0]) ws.activeTabKey = tabKey(ws.tabs[0]);
+  return ws;
+};
+
+/**
  * Terminal entries that own a workspace tab. Background agent terminals
  * (chip-only) are excluded from every tab derivation — the strip, cycling,
  * splits, next-active — while their entry keeps the PTY mounted and the
@@ -488,10 +581,14 @@ export function App() {
   const [bubblesCollapsed, setBubblesCollapsed] = useState(false);
 
   // Notification preferences (per profile): soft chime + desktop banner
-  // when an agent finishes or asks a question.
+  // when an agent finishes or asks a question. Also carries relaunch
+  // state: sidebar visibility and the last active project.
   const [prefs, setPrefs] = useState<AppPrefs | null>(null);
   useEffect(() => {
-    void desktopApi.getPrefs().then(setPrefs);
+    void desktopApi.getPrefs().then((loaded) => {
+      setPrefs(loaded);
+      setSidebarOpen(loaded.sidebarOpen);
+    });
     return desktopApi.onPrefsChanged(setPrefs);
   }, []);
   const prefsRef = useRef(prefs);
@@ -578,6 +675,9 @@ export function App() {
     : allProjects;
   const activeProject =
     projects.find((project) => project.id === activeProjectId) ??
+    // A relaunch lands in the profile's last active project, then the
+    // profile default, then whatever exists.
+    projects.find((project) => project.id === prefs?.lastProjectId) ??
     projects.find(
       (project) => project.id === activeProfile?.defaultProjectId,
     ) ??
@@ -712,6 +812,45 @@ export function App() {
     },
     [projectId, defaultWorkspaceFor],
   );
+
+  // --- workspace persistence --------------------------------------------
+  // Each project's open workspace survives a relaunch. Restore runs once
+  // per project (only filling a slot the user hasn't touched yet); saves
+  // are debounced and gated until that restore attempt settles, so the
+  // boot-time empty workspace can never clobber the saved one.
+  const workspaceRestoreRef = useRef(new Set<string>());
+  const workspacePersistReadyRef = useRef(new Set<string>());
+  useEffect(() => {
+    if (!projectId || workspaceRestoreRef.current.has(projectId)) return;
+    workspaceRestoreRef.current.add(projectId);
+    void desktopApi
+      .workspaceStateGet(projectId)
+      .then((raw) => {
+        const restored = hydrateWorkspace(raw);
+        if (restored) {
+          setWorkspaces((current) =>
+            current[projectId]
+              ? current
+              : { ...current, [projectId]: restored },
+          );
+        }
+      })
+      .catch(() => {})
+      .finally(() => {
+        workspacePersistReadyRef.current.add(projectId);
+      });
+  }, [projectId]);
+  useEffect(() => {
+    if (!projectId || !workspacePersistReadyRef.current.has(projectId)) return;
+    const snapshot = workspaces[projectId];
+    if (!snapshot) return;
+    const timer = window.setTimeout(() => {
+      void desktopApi
+        .workspaceStateSet(projectId, serializeWorkspace(snapshot))
+        .catch(() => {});
+    }, 500);
+    return () => window.clearTimeout(timer);
+  }, [workspaces, projectId]);
 
   const openTab = (tab: WorkspaceTab, mode?: "side") =>
     updateWorkspace((ws) => {
@@ -1359,10 +1498,21 @@ export function App() {
     chatClosersRef.current.delete(localId);
     chatMinimizersRef.current.delete(localId);
     updateWorkspace((ws) => {
+      const closing = ws.chats.find((chat) => chat.localId === localId);
       const chats = ws.chats.filter((chat) => chat.localId !== localId);
       return {
         ...ws,
         chats,
+        // Every close path feeds Cmd+Shift+T, not just the tab strip's —
+        // the dock's own X, a bubble's X, and Cmd+W-on-floating all land
+        // here. Sessionless chats are skipped: reopening one would just
+        // make a new empty chat.
+        closedTabs: closing?.sessionId
+          ? [
+              ...ws.closedTabs,
+              { kind: "chat" as const, sessionId: closing.sessionId },
+            ].slice(-CLOSED_TABS_KEPT)
+          : ws.closedTabs,
         activeChatId: ws.activeChatId === localId ? undefined : ws.activeChatId,
         activeTabKey:
           ws.activeTabKey === chatTabKey(localId)
@@ -2260,7 +2410,11 @@ export function App() {
       openTerminalTab(mode === "side" ? { side: true } : undefined),
     "new-editor-tab": (mode) =>
       openEditorTab(mode === "side" ? { side: true } : undefined),
-    "toggle-sidebar": () => setSidebarOpen((value) => !value),
+    "toggle-sidebar": () =>
+      setSidebarOpen((value) => {
+        void desktopApi.setPrefs({ sidebarOpen: !value });
+        return !value;
+      }),
     "close-tab": closeActiveSurface,
     "setup-agent": () => setWizardModalOpen(true),
     "default-agent": () => openPalettePicker("default-agent"),
@@ -2339,6 +2493,8 @@ export function App() {
 
   const selectProject = (id: string) => {
     setActiveProjectId(id);
+    // Remembered per profile: a relaunch lands in the last project.
+    void desktopApi.setPrefs({ lastProjectId: id });
   };
 
   const onProjectDeleted = (deletedId: string) => {
@@ -2365,6 +2521,18 @@ export function App() {
     const timer = window.setTimeout(() => setBootRevealed(true), 8000);
     return () => window.clearTimeout(timer);
   }, [bootReady, bootRevealed]);
+
+  // Warm the Monaco chunk (half the renderer bundle) while idle after
+  // boot — the FIRST diff or editor open should not pay a multi-hundred-
+  // millisecond parse in front of the user.
+  useEffect(() => {
+    if (!bootReady) return;
+    const timer = window.setTimeout(() => {
+      void import("./screens/diff-screen.js");
+      void import("./screens/editor-screen.js");
+    }, 1_500);
+    return () => window.clearTimeout(timer);
+  }, [bootReady]);
 
   // --- agent workspace bridge -------------------------------------------
   // Agents' workspace tools land here from main: discovery (overview /
@@ -3340,7 +3508,12 @@ export function App() {
             >
               <button
                 type="button"
-                onClick={() => setSidebarOpen((value) => !value)}
+                onClick={() =>
+                  setSidebarOpen((value) => {
+                    void desktopApi.setPrefs({ sidebarOpen: !value });
+                    return !value;
+                  })
+                }
                 className="grid size-7 shrink-0 cursor-pointer place-items-center rounded-md text-fg-muted transition-colors duration-150 hover:bg-bg-overlay hover:text-fg"
                 aria-label={sidebarOpen ? "Collapse sidebar" : "Expand sidebar"}
                 aria-expanded={sidebarOpen}
@@ -3931,115 +4104,144 @@ function ConfiguredSection({
   onOpenUrl: (url: string, mode: "tab" | "replace") => void;
 }) {
   const defaultOpen = !section.collapsed;
-  switch (section.type) {
-    case "workflows":
-      return (
-        <SidebarSection
-          title={section.title ?? "Workflows"}
-          defaultOpen={defaultOpen}
-        >
-          <WorkflowsNav
-            projectId={projectId}
-            active={activeTab?.kind === "workflow" ? activeTab.name : undefined}
-            onSelect={(workflow) =>
-              onOpenTab({
-                kind: "workflow",
-                name: workflow.name,
-                label: workflow.displayName ?? workflow.name,
-              })
+  // Hide-when-empty: a section with nothing to list can drop its header
+  // entirely. Workflows and Apps default to hidden-until-non-empty (a new
+  // project isn't about either until an agent makes it so); any section
+  // opts in or out with `hideEmpty` in sidebar.js. The nav stays mounted
+  // (hidden, not unmounted) so its data fetch is what reveals the section.
+  const hideEmpty =
+    section.hideEmpty ??
+    (section.type === "workflows" || section.type === "apps");
+  const [empty, setEmpty] = useState(true);
+  const body = (() => {
+    switch (section.type) {
+      case "workflows":
+        return (
+          <SidebarSection
+            title={section.title ?? "Workflows"}
+            defaultOpen={defaultOpen}
+          >
+            <WorkflowsNav
+              projectId={projectId}
+              active={
+                activeTab?.kind === "workflow" ? activeTab.name : undefined
+              }
+              onEmptyChange={setEmpty}
+              onSelect={(workflow) =>
+                onOpenTab({
+                  kind: "workflow",
+                  name: workflow.name,
+                  label: workflow.displayName ?? workflow.name,
+                })
+              }
+            />
+          </SidebarSection>
+        );
+      case "apps":
+        return (
+          <SidebarSection
+            title={section.title ?? "Apps"}
+            defaultOpen={defaultOpen}
+          >
+            <AppsNav
+              projectId={projectId}
+              active={activeTab?.kind === "app" ? activeTab.name : undefined}
+              onEmptyChange={setEmpty}
+              onSelect={(appName) => onOpenTab({ kind: "app", name: appName })}
+            />
+          </SidebarSection>
+        );
+      case "chats":
+        return (
+          <SidebarSection
+            title={section.title ?? "Chats"}
+            defaultOpen={defaultOpen}
+            action={
+              <ShortcutHint label="New chat" shortcut={keybindingLabel}>
+                <button
+                  type="button"
+                  onClick={onNewChat}
+                  className="grid size-6 cursor-pointer place-items-center rounded text-fg-muted transition-colors duration-150 hover:bg-bg-overlay hover:text-fg"
+                  aria-label="New chat"
+                >
+                  <Plus className="size-3.5" />
+                </button>
+              </ShortcutHint>
             }
-          />
-        </SidebarSection>
-      );
-    case "apps":
-      return (
-        <SidebarSection
-          title={section.title ?? "Apps"}
-          defaultOpen={defaultOpen}
-        >
-          <AppsNav
-            projectId={projectId}
-            active={activeTab?.kind === "app" ? activeTab.name : undefined}
-            onSelect={(appName) => onOpenTab({ kind: "app", name: appName })}
-          />
-        </SidebarSection>
-      );
-    case "chats":
-      return (
-        <SidebarSection
-          title={section.title ?? "Chats"}
-          defaultOpen={defaultOpen}
-          action={
-            <ShortcutHint label="New chat" shortcut={keybindingLabel}>
-              <button
-                type="button"
-                onClick={onNewChat}
-                className="grid size-6 cursor-pointer place-items-center rounded text-fg-muted transition-colors duration-150 hover:bg-bg-overlay hover:text-fg"
-                aria-label="New chat"
-              >
-                <Plus className="size-3.5" />
-              </button>
-            </ShortcutHint>
-          }
-        >
-          <SessionsNav
-            projectId={projectId}
-            activeSessionId={activeChatSessionId}
-            onSelect={onOpenSession}
-          />
-        </SidebarSection>
-      );
-    case "bookmarks":
-      if (!profileId) return null;
-      return (
-        <SidebarSection
-          title={section.title ?? "Bookmarks"}
-          defaultOpen={defaultOpen}
-        >
-          <BookmarksNav
-            projectId={projectId}
-            profileId={profileId}
-            menuOverride={section.menu}
-            onOpen={(url, mode) =>
-              onOpenUrl(url, mode ?? section.open ?? "replace")
-            }
-          />
-        </SidebarSection>
-      );
-    case "git":
-      return (
-        <SidebarSection
-          title={section.title ?? "Changes"}
-          defaultOpen={defaultOpen}
-        >
-          <GitNav projectId={projectId} onOpenDiff={onOpenTab} />
-        </SidebarSection>
-      );
-    case "prs":
-      return (
-        <SidebarSection
-          title={section.title ?? "Pull Requests"}
-          defaultOpen={defaultOpen}
-        >
-          <PrsNav
-            projectId={projectId}
-            onOpenDiff={onOpenTab}
-            onOpenUrl={onOpenUrl}
-          />
-        </SidebarSection>
-      );
-    case "custom":
-      return (
-        <SidebarSection
-          title={section.title ?? "Links"}
-          defaultOpen={defaultOpen}
-        >
-          <CustomItems section={section} onOpenUrl={onOpenUrl} />
-        </SidebarSection>
-      );
-    default:
-      return null;
-  }
+          >
+            <SessionsNav
+              projectId={projectId}
+              activeSessionId={activeChatSessionId}
+              onEmptyChange={setEmpty}
+              onSelect={onOpenSession}
+            />
+          </SidebarSection>
+        );
+      case "bookmarks":
+        if (!profileId) return null;
+        return (
+          <SidebarSection
+            title={section.title ?? "Bookmarks"}
+            defaultOpen={defaultOpen}
+          >
+            <BookmarksNav
+              projectId={projectId}
+              profileId={profileId}
+              menuOverride={section.menu}
+              onEmptyChange={setEmpty}
+              onOpen={(url, mode) =>
+                onOpenUrl(url, mode ?? section.open ?? "replace")
+              }
+            />
+          </SidebarSection>
+        );
+      case "git":
+        return (
+          <SidebarSection
+            title={section.title ?? "Changes"}
+            defaultOpen={defaultOpen}
+          >
+            <GitNav
+              projectId={projectId}
+              onOpenDiff={onOpenTab}
+              onEmptyChange={setEmpty}
+            />
+          </SidebarSection>
+        );
+      case "prs":
+        return (
+          <SidebarSection
+            title={section.title ?? "Pull Requests"}
+            defaultOpen={defaultOpen}
+          >
+            <PrsNav
+              projectId={projectId}
+              onOpenDiff={onOpenTab}
+              onOpenUrl={onOpenUrl}
+              onEmptyChange={setEmpty}
+            />
+          </SidebarSection>
+        );
+      case "custom":
+        return (
+          <SidebarSection
+            title={section.title ?? "Links"}
+            defaultOpen={defaultOpen}
+          >
+            <CustomItems
+              section={section}
+              onOpenUrl={onOpenUrl}
+              onEmptyChange={setEmpty}
+            />
+          </SidebarSection>
+        );
+      default:
+        return null;
+    }
+  })();
+  if (!body) return null;
+  if (!hideEmpty) return body;
+  return <div className={empty ? "hidden" : undefined}>{body}</div>;
 }
 
 /**
@@ -4050,11 +4252,17 @@ function ConfiguredSection({
 function CustomItems({
   section,
   onOpenUrl,
+  onEmptyChange,
 }: {
   section: SidebarSectionConfig;
   onOpenUrl: (url: string, mode: "tab" | "replace") => void;
+  onEmptyChange?: (empty: boolean) => void;
 }) {
   const items = section.items ?? [];
+  const isEmpty = items.length === 0;
+  useEffect(() => {
+    onEmptyChange?.(isEmpty);
+  }, [isEmpty, onEmptyChange]);
   if (items.length === 0) {
     return (
       <p className="px-2 py-1 text-xs text-fg-faint">
@@ -4146,14 +4354,21 @@ function SidebarSection({
 function WorkflowsNav({
   projectId,
   active,
+  onEmptyChange,
   onSelect,
 }: {
   projectId: string;
   active?: string;
+  /** Reports emptiness up so hide-when-empty sections can drop entirely. */
+  onEmptyChange?: (empty: boolean) => void;
   onSelect: (workflow: { name: string; displayName?: string }) => void;
 }) {
   const workflowsQuery = useWorkflows(projectId);
   const workflows = workflowsQuery.data ?? [];
+  const isEmpty = workflows.length === 0;
+  useEffect(() => {
+    onEmptyChange?.(isEmpty);
+  }, [isEmpty, onEmptyChange]);
   if (workflows.length === 0) {
     return (
       <p className="px-2 py-1 text-xs text-fg-faint">
@@ -4193,14 +4408,20 @@ function WorkflowsNav({
 function AppsNav({
   projectId,
   active,
+  onEmptyChange,
   onSelect,
 }: {
   projectId: string;
   active?: string;
+  onEmptyChange?: (empty: boolean) => void;
   onSelect: (appName: string) => void;
 }) {
   const appsQuery = useApps(projectId);
   const apps = appsQuery.data ?? [];
+  const isEmpty = apps.length === 0;
+  useEffect(() => {
+    onEmptyChange?.(isEmpty);
+  }, [isEmpty, onEmptyChange]);
   if (apps.length === 0) {
     return (
       <p className="px-2 py-1 text-xs text-fg-faint">
@@ -4233,14 +4454,20 @@ function AppsNav({
 function SessionsNav({
   projectId,
   activeSessionId,
+  onEmptyChange,
   onSelect,
 }: {
   projectId: string;
   activeSessionId?: string;
+  onEmptyChange?: (empty: boolean) => void;
   onSelect: (session: AgentSession) => void;
 }) {
   const sessionsQuery = useAgentSessions(projectId);
   const sessions = sessionsQuery.data?.items ?? [];
+  const isEmpty = sessions.length === 0;
+  useEffect(() => {
+    onEmptyChange?.(isEmpty);
+  }, [isEmpty, onEmptyChange]);
   if (sessions.length === 0) {
     return <p className="px-2 py-1 text-xs text-fg-faint">No chats yet.</p>;
   }

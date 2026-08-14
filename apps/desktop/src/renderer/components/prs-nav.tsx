@@ -36,12 +36,19 @@ export function PrsNav({
   projectId,
   onOpenDiff,
   onOpenUrl,
+  onEmptyChange,
 }: {
   projectId: string;
   onOpenDiff: (tab: WorkspaceTab) => void;
   onOpenUrl: (url: string, mode: "tab" | "replace") => void;
+  /** Reports emptiness up so hide-when-empty sections can drop entirely. */
+  onEmptyChange?: (empty: boolean) => void;
 }) {
   const [prs, setPrs] = useState<PullRequestSummary[] | null>(null);
+  const isEmpty = !prs || prs.length === 0;
+  useEffect(() => {
+    onEmptyChange?.(isEmpty);
+  }, [isEmpty, onEmptyChange]);
 
   useEffect(() => {
     let cancelled = false;

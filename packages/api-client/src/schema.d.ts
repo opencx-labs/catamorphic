@@ -4278,6 +4278,7 @@ export interface paths {
                     content: {
                         "application/json": {
                             name: string;
+                            title: string;
                             description: string;
                             path: string;
                             /** @enum {string} */

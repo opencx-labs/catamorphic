@@ -13,11 +13,16 @@ export interface AppPrefs {
   notificationSounds: boolean;
   /** OS notification for the same events while the app is unfocused. */
   desktopNotifications: boolean;
+  /** Whether the left sidebar is shown. */
+  sidebarOpen: boolean;
+  /** The project the profile last worked in — where a relaunch lands. */
+  lastProjectId?: string;
 }
 
 export const DEFAULT_PREFS: AppPrefs = {
   notificationSounds: true,
   desktopNotifications: true,
+  sidebarOpen: true,
 };
 
 export function normalizePrefs(raw: unknown): AppPrefs {
@@ -34,6 +39,13 @@ export function normalizePrefs(raw: unknown): AppPrefs {
       typeof record.desktopNotifications === "boolean"
         ? record.desktopNotifications
         : DEFAULT_PREFS.desktopNotifications,
+    sidebarOpen:
+      typeof record.sidebarOpen === "boolean"
+        ? record.sidebarOpen
+        : DEFAULT_PREFS.sidebarOpen,
+    ...(typeof record.lastProjectId === "string"
+      ? { lastProjectId: record.lastProjectId }
+      : {}),
   };
 }
 

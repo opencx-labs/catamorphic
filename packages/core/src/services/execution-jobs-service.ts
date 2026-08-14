@@ -37,6 +37,7 @@ export interface ExecutionJob {
   leaseExpiresAt: string | null;
   dedupeKey: string | null;
   lastError: string | null;
+  leaseExpiries: number;
   createdAt: string;
   updatedAt: string;
   completedAt: string | null;
@@ -61,6 +62,7 @@ function reviveTerminalJob(eb: {
   return {
     status: sql<string>`CASE WHEN ${isTerminal} THEN 'pending' ELSE ${status} END`,
     attempt: sql<number>`CASE WHEN ${isTerminal} THEN 0 ELSE ${eb.ref("execution_jobs.attempt")} END`,
+    lease_expiries: sql<number>`CASE WHEN ${isTerminal} THEN 0 ELSE ${eb.ref("execution_jobs.lease_expiries")} END`,
     available_at: sql<Date>`CASE WHEN ${isTerminal} THEN excluded.available_at ELSE ${eb.ref("execution_jobs.available_at")} END`,
     payload: sql<Json>`CASE WHEN ${isTerminal} THEN excluded.payload ELSE ${eb.ref("execution_jobs.payload")} END`,
     completed_at: sql<Date | null>`CASE WHEN ${isTerminal} THEN NULL ELSE ${eb.ref("execution_jobs.completed_at")} END`,
@@ -82,6 +84,18 @@ function reviveTerminalJob(eb: {
  * terminal failure by minutes, not forever.
  */
 const EXHAUSTION_CLAIM_MS = 10 * 60 * 1_000;
+
+/**
+ * How many times a job's lease may expire before the job is failed outright.
+ *
+ * A lease expiry is not a code failure: on a laptop it usually means the
+ * machine slept or powered off mid-step, so expiries refund the attempt they
+ * consumed rather than counting against `max_attempts`. This cap is the
+ * backstop that keeps a handler which reliably kills its own process (OOM,
+ * native crash) from requeueing forever. It is deliberately generous —
+ * hitting it means the job died twenty times without once failing in code.
+ */
+export const MAX_LEASE_EXPIRIES = 20;
 
 export class ExecutionJobsService {
   constructor(private readonly db: Kysely<DB>) {}
@@ -634,6 +648,7 @@ export class ExecutionJobsService {
       .set({
         status: "pending",
         attempt: 0,
+        lease_expiries: 0,
         available_at: args.availableAt ?? sql<Date>`clock_timestamp()`,
         leased_by: null,
         lease_token: null,
@@ -665,11 +680,15 @@ export class ExecutionJobsService {
         .limit(Math.max(1, Math.min(args.limit ?? 100, 1_000)))
         .execute();
       if (expired.length === 0) return 0;
+      // An expiry refunds the attempt its claim consumed: the code never got
+      // to fail, the process died (or the laptop slept) under it. Expiries
+      // count against their own cap instead, so a job whose handler reliably
+      // kills the process still terminates.
       const retryableIds = expired
-        .filter((row) => row.attempt < row.max_attempts)
+        .filter((row) => row.lease_expiries + 1 < MAX_LEASE_EXPIRIES)
         .map((row) => row.id);
       const exhaustedIds = expired
-        .filter((row) => row.attempt >= row.max_attempts)
+        .filter((row) => row.lease_expiries + 1 >= MAX_LEASE_EXPIRIES)
         .map((row) => row.id);
       const now = await databaseNow(trx);
       const retryError = "Execution job lease expired before completion";
@@ -677,16 +696,18 @@ export class ExecutionJobsService {
       if (retryableIds.length > 0) {
         const result = await trx
           .updateTable("execution_jobs")
-          .set({
+          .set((eb) => ({
             status: "pending",
             leased_by: null,
             lease_token: null,
             heartbeat_at: null,
             lease_expires_at: null,
             available_at: now,
+            attempt: sql<number>`greatest(${eb.ref("attempt")} - 1, 0)`,
+            lease_expiries: eb("lease_expiries", "+", 1),
             last_error: retryError,
             updated_at: now,
-          })
+          }))
           .where("id", "in", retryableIds)
           .where("status", "=", "running")
           .where("lease_expires_at", "<=", now)
@@ -702,16 +723,17 @@ export class ExecutionJobsService {
           ? []
           : await trx
               .updateTable("execution_jobs")
-              .set({
+              .set((eb) => ({
                 status: "failed",
                 leased_by: null,
                 lease_token: null,
                 heartbeat_at: null,
                 lease_expires_at: null,
-                last_error: retryError,
+                lease_expiries: eb("lease_expiries", "+", 1),
+                last_error: `Execution job lease expired ${MAX_LEASE_EXPIRIES} times without completing`,
                 completed_at: now,
                 updated_at: now,
-              })
+              }))
               .where("id", "in", exhaustedIds)
               .where("status", "=", "running")
               .where("lease_expires_at", "<=", now)
@@ -1011,6 +1033,7 @@ function mapExecutionJob(row: ExecutionJobRow): ExecutionJob {
     leaseExpiresAt: row.lease_expires_at?.toISOString() ?? null,
     dedupeKey: row.dedupe_key,
     lastError: row.last_error,
+    leaseExpiries: row.lease_expiries,
     createdAt: row.created_at.toISOString(),
     updatedAt: row.updated_at.toISOString(),
     completedAt: row.completed_at?.toISOString() ?? null,

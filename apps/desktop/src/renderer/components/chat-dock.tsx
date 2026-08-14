@@ -1661,6 +1661,9 @@ export function ChatDock({
                       }`}
                     >
                       <span className="shrink-0 font-medium">
+                        {skill.title}
+                      </span>
+                      <span className="shrink-0 font-mono text-[11px] text-fg-faint">
                         /{skill.name}
                       </span>
                       {skill.description && (

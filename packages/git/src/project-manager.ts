@@ -19,6 +19,17 @@ import type {
  */
 export const PROJECT_MANIFEST_PATH = ".catamorphic/project.json";
 
+/**
+ * Seeded into every new project (unless one exists): mirrors the
+ * checkpoint walker's IGNORED_DIRS so git status and the walker agree on
+ * what a project's history never contains.
+ */
+export const PROJECT_GITIGNORE = `node_modules/
+dist/
+.turbo/
+.DS_Store
+`;
+
 const SYSTEM_AUTHOR = {
   name: "Catamorphic",
   email: "system@catamorphic.dev",
@@ -159,6 +170,18 @@ export class ProjectManager {
         manifestPath,
         `${JSON.stringify({ name: projectName }, null, 2)}\n`,
       );
+    }
+
+    // Every project gets ignore rules from birth: without them the first
+    // `bun install` floods git status (and every changes UI) with the
+    // whole node_modules tree. Never overwrite one the user already has.
+    const gitignorePath = path.join(repoPath, ".gitignore");
+    const gitignoreExists = await fs.access(gitignorePath).then(
+      () => true,
+      () => false,
+    );
+    if (!gitignoreExists) {
+      await fs.writeFile(gitignorePath, PROJECT_GITIGNORE);
     }
 
     if (opts?.initialFiles) {

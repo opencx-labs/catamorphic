@@ -100,7 +100,7 @@ export function DeleteProjectModal({
           pending={pending}
           pendingLabel="Deleting…"
           data-testid="delete-confirm"
-          className="h-8 cursor-pointer rounded-md bg-danger px-3 text-[13px] font-medium text-white transition-opacity duration-150 hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
+          className="h-8 cursor-pointer rounded-md border border-danger/40 bg-danger/10 px-3 text-[13px] font-medium text-danger transition-colors duration-150 hover:bg-danger/20 disabled:cursor-not-allowed disabled:opacity-50"
         >
           {alsoTrash ? "Delete and trash folder" : "Delete project"}
         </PendingButton>

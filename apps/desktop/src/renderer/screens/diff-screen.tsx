@@ -65,30 +65,51 @@ function LocalDiff({
   if (failed) return <Note>Couldn't load the diff for {source.filePath}</Note>;
   if (!diff) return <Note>Loading…</Note>;
   if (diff.binary) return <Note>Binary file</Note>;
+  if (diff.before === diff.after) {
+    // Two identical panes with no highlights read as a bug; say what
+    // actually happened (usually: the change is already checkpointed).
+    return (
+      <Note>
+        No differences — this change is already in the project's history.
+      </Note>
+    );
+  }
 
   return (
-    <div className="min-h-0 flex-1">
-      <DiffEditor
-        height="100%"
-        // Distinct model paths per side so Monaco infers the language
-        // from the file extension (the same mechanism as editor tabs).
-        originalModelPath={`file:///diff-original/${source.mode}/${source.filePath}`}
-        modifiedModelPath={`file:///diff-modified/${source.mode}/${source.filePath}`}
-        original={diff.before}
-        modified={diff.after}
-        theme={theme?.appearance === "light" ? "light" : "vs-dark"}
-        options={{
-          readOnly: true,
-          renderSideBySide: true,
-          lineNumbers: "on",
-          minimap: { enabled: false },
-          fontSize: 13,
-          scrollBeyondLastLine: false,
-          automaticLayout: true,
-          padding: { top: 12 },
-          fixedOverflowWidgets: true,
-        }}
-      />
+    <div className="flex min-h-0 flex-1 flex-col p-3">
+      {/* The editor sits in its own bordered surface so a short diff ends
+          in chrome, not in a void of unbounded background. */}
+      <div className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-lg border border-border">
+        <div className="min-h-0 flex-1">
+          <DiffEditor
+            height="100%"
+            // Distinct model paths per side so Monaco infers the language
+            // from the file extension (the same mechanism as editor tabs).
+            originalModelPath={`file:///diff-original/${source.mode}/${source.filePath}`}
+            modifiedModelPath={`file:///diff-modified/${source.mode}/${source.filePath}`}
+            original={diff.before}
+            modified={diff.after}
+            theme={theme?.appearance === "light" ? "light" : "vs-dark"}
+            options={{
+              readOnly: true,
+              renderSideBySide: true,
+              lineNumbers: "on",
+              minimap: { enabled: false },
+              fontSize: 13,
+              scrollBeyondLastLine: false,
+              automaticLayout: true,
+              padding: { top: 12 },
+              fixedOverflowWidgets: true,
+            }}
+          />
+        </div>
+        <div className="flex h-7 shrink-0 items-center gap-2 border-t border-border bg-bg-raised/60 px-3 font-mono text-[11px] text-fg-faint">
+          <span className="truncate">{source.filePath}</span>
+          <span className="ml-auto shrink-0">
+            {source.mode === "uncommitted" ? "uncommitted" : "vs main"}
+          </span>
+        </div>
+      </div>
     </div>
   );
 }

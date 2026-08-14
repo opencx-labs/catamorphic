@@ -407,6 +407,11 @@ export interface SidebarSectionConfig {
   type: "workflows" | "apps" | "chats" | "bookmarks" | "git" | "prs" | "custom";
   title?: string;
   collapsed?: boolean;
+  /**
+   * Hide the whole section while it has nothing to list. Absent = the
+   * per-type default (true for workflows and apps, false elsewhere).
+   */
+  hideEmpty?: boolean;
   items?: SidebarItem[];
   open?: "tab" | "replace";
   menu?: SidebarMenuEntry[];
@@ -464,6 +469,8 @@ export interface ThemeConfig {
 export interface AppPrefs {
   notificationSounds: boolean;
   desktopNotifications: boolean;
+  sidebarOpen: boolean;
+  lastProjectId?: string;
 }
 
 export interface ResolvedTheme extends ThemeConfig {
@@ -539,6 +546,16 @@ export interface CatamorphicDesktopApi {
   onConnectionsChanged: (
     listener: (connections: ConnectionInfo[]) => void,
   ) => () => void;
+  /** Fired after a turn checkpoint moves a project's git state. */
+  onGitChanged: (
+    listener: (change: { projectId: string }) => void,
+  ) => () => void;
+  /**
+   * Per-project open-workspace snapshot (tabs, chats, ordering) — the
+   * renderer owns the shape; main stores opaque JSON.
+   */
+  workspaceStateGet: (projectId: string) => Promise<unknown>;
+  workspaceStateSet: (projectId: string, snapshot: unknown) => Promise<void>;
 
   /** "server/tool" → ui:// resource uri, for tools declaring app views. */
   mcpAppsUiTools: () => Promise<Record<string, string>>;

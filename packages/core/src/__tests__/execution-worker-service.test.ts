@@ -25,6 +25,7 @@ function job(id: string): ExecutionJob {
     leaseExpiresAt: new Date().toISOString(),
     dedupeKey: null,
     lastError: null,
+    leaseExpiries: 0,
     createdAt: new Date().toISOString(),
     updatedAt: new Date().toISOString(),
     completedAt: null,

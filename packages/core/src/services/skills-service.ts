@@ -24,6 +24,12 @@ export const SKILLS_DIR = ".agents/skills";
 export interface ProjectSkill {
   /** Directory name == declared skill name. */
   name: string;
+  /**
+   * Human-facing name: the frontmatter `title` when declared, else the
+   * kebab name humanized ("team-notes" → "Team notes"). What non-technical
+   * surfaces (palette rows, menus) should show instead of the slug.
+   */
+  title: string;
   description: string;
   /**
    * For project skills, the SKILL.md path relative to the project root; for
@@ -107,8 +113,10 @@ export class SkillsService {
           SKILLS_DIR.length + 1,
           file.length - "/SKILL.md".length,
         );
+        const name = frontmatter.name ?? dirName;
         return {
-          name: frontmatter.name ?? dirName,
+          name,
+          title: frontmatter.title ?? humanizeSkillName(name),
           description: frontmatter.description ?? "",
           path: file,
           source: "project" as const,
@@ -125,8 +133,10 @@ export class SkillsService {
       .map(([path, content]) => {
         const frontmatter = parseSkillFrontmatter(content);
         const dirName = path.slice(0, path.length - "/SKILL.md".length);
+        const name = frontmatter.name ?? dirName;
         return {
-          name: frontmatter.name ?? dirName,
+          name,
+          title: frontmatter.title ?? humanizeSkillName(name),
           description: frontmatter.description ?? "",
           path,
           source: "host" as const,
@@ -173,11 +183,12 @@ export class SkillsService {
  */
 export function parseSkillFrontmatter(source: string): {
   name?: string;
+  title?: string;
   description?: string;
 } {
   const match = source.match(/^---\r?\n([\s\S]*?)\r?\n---/);
   if (!match?.[1]) return {};
-  const result: { name?: string; description?: string } = {};
+  const result: { name?: string; title?: string; description?: string } = {};
   for (const line of match[1].split("\n")) {
     const colon = line.indexOf(":");
     if (colon === -1) continue;
@@ -187,7 +198,18 @@ export function parseSkillFrontmatter(source: string): {
       .trim()
       .replace(/^["']|["']$/g, "");
     if (key === "name") result.name = value;
+    if (key === "title") result.title = value;
     if (key === "description") result.description = value;
   }
   return result;
+}
+
+/**
+ * Fallback human-facing name for a skill with no `title` frontmatter:
+ * "team-notes" → "Team notes". Sentence case, not title case — the slug
+ * carries no capitalization knowledge ("github") worth faking.
+ */
+export function humanizeSkillName(name: string): string {
+  const words = name.replace(/[-_]+/g, " ").trim();
+  return words ? words[0]?.toUpperCase() + words.slice(1) : name;
 }

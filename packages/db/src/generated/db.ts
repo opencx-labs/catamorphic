@@ -268,6 +268,7 @@ export interface ExecutionJobs {
   kind: string;
   last_error: string | null;
   lease_expires_at: Timestamp | null;
+  lease_expiries: Generated<number>;
   lease_generation: Generated<Int8>;
   lease_token: string | null;
   leased_by: string | null;

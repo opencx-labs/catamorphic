@@ -104,6 +104,15 @@ const api = {
     return () =>
       ipcRenderer.removeListener("catamorphic:connections-changed", handler);
   },
+  workspaceStateGet: (projectId: string): Promise<unknown> =>
+    ipcRenderer.invoke("catamorphic:workspace-state-get", projectId),
+  workspaceStateSet: (projectId: string, snapshot: unknown): Promise<void> =>
+    ipcRenderer.invoke("catamorphic:workspace-state-set", projectId, snapshot),
+  onGitChanged: (listener: (data: unknown) => void): (() => void) => {
+    const handler = (_event: unknown, data: unknown) => listener(data);
+    ipcRenderer.on("catamorphic:git-changed", handler);
+    return () => ipcRenderer.removeListener("catamorphic:git-changed", handler);
+  },
 
   // --- MCP Apps (embedded views for connection tools) ---
   mcpAppsUiTools: (): Promise<unknown> =>

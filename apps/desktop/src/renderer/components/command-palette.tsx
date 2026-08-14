@@ -771,10 +771,13 @@ export function CommandPalette({
       skills.map((skill) => ({
         id: `skill:${skill.name}`,
         icon: Sparkles,
-        label: skill.name,
+        // The pretty title fronts the row; the slug stays a keyword so
+        // technical users typing the exact name still hit it.
+        label: skill.title,
         detail: skill.source === "host" ? "App skill" : "Skill",
         keywords: [
           skill.name,
+          skill.title,
           "skill",
           "use",
           ...skill.description.split(/\s+/).slice(0, 12),

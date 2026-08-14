@@ -15,7 +15,10 @@ import { sql } from "kysely";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { CatamorphicCore } from "../core.js";
 import type { Identity } from "../identity.js";
-import { ExecutionJobsService } from "../services/execution-jobs-service.js";
+import {
+  ExecutionJobsService,
+  MAX_LEASE_EXPIRIES,
+} from "../services/execution-jobs-service.js";
 import { RateReservationsService } from "../services/rate-reservations-service.js";
 import { RunCoordinator } from "../services/run-coordinator.js";
 import {
@@ -892,6 +895,9 @@ describeIf("unified RunsService integration", () => {
       .updateTable("execution_jobs")
       .set({
         attempt: claimed.maxAttempts,
+        // Expiries are attempt-neutral; only the expiry cap makes an
+        // expired lease terminal, so park this job one expiry short of it.
+        lease_expiries: MAX_LEASE_EXPIRIES - 1,
         lease_expires_at: new Date(Date.now() - 1_000),
       })
       .where("id", "=", claimed.id)
@@ -982,6 +988,9 @@ describeIf("unified RunsService integration", () => {
         status: "running",
         attempt: 1,
         max_attempts: 1,
+        // One expiry short of the cap: the sweep's next requeue pass must
+        // durably fail this job rather than refund-and-requeue it.
+        lease_expiries: MAX_LEASE_EXPIRIES - 1,
         leased_by: "crashed-worker",
         lease_token: crypto.randomUUID(),
         lease_generation: "1",
