@@ -93,7 +93,7 @@
     },
     "packages/app": {
       "name": "@catamorphic/app",
-      "version": "0.0.2",
+      "version": "0.0.3",
       "devDependencies": {
         "@testing-library/jest-dom": "^6.9.1",
         "@testing-library/react": "^16.3.2",
@@ -178,6 +178,7 @@
         "@catamorphic/sandbox": "workspace:*",
         "@catamorphic/workflow": "workspace:*",
         "kysely": "^0.29.3",
+        "zod": "^4.4.3",
       },
       "devDependencies": {
         "@catamorphic/cloudflare": "workspace:*",

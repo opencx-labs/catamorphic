@@ -8988,6 +8988,152 @@
         }
       }
     },
+    "/api/projects/{projectId}/agents": {
+      "get": {
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+            },
+            "in": "path",
+            "name": "projectId",
+            "required": true
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "slug": {
+                        "type": "string"
+                      },
+                      "definition": {
+                        "type": "object",
+                        "properties": {
+                          "version": {
+                            "type": "number"
+                          },
+                          "name": {
+                            "type": "string"
+                          },
+                          "kind": {
+                            "type": "string"
+                          },
+                          "model": {
+                            "type": "string"
+                          },
+                          "effort": {
+                            "type": "string",
+                            "enum": ["low", "medium", "high"]
+                          },
+                          "description": {
+                            "type": "string"
+                          },
+                          "credentials": {
+                            "type": "object",
+                            "properties": {
+                              "source": {
+                                "type": "string",
+                                "enum": ["profile", "secret", "local"]
+                              },
+                              "secret": {
+                                "type": "string"
+                              }
+                            },
+                            "required": ["source"],
+                            "additionalProperties": false
+                          },
+                          "connections": {
+                            "type": "array",
+                            "items": {
+                              "type": "string"
+                            }
+                          },
+                          "acp": {
+                            "type": "object",
+                            "properties": {
+                              "endpoint": {
+                                "type": "string"
+                              },
+                              "command": {
+                                "type": "array",
+                                "items": {
+                                  "type": "string"
+                                }
+                              }
+                            },
+                            "additionalProperties": false
+                          }
+                        },
+                        "required": ["version", "name", "kind"],
+                        "additionalProperties": false
+                      },
+                      "promptFile": {
+                        "type": "string"
+                      },
+                      "invalid": {
+                        "type": "object",
+                        "properties": {
+                          "error": {
+                            "type": "string"
+                          }
+                        },
+                        "required": ["error"],
+                        "additionalProperties": false
+                      }
+                    },
+                    "required": ["slug"],
+                    "additionalProperties": false
+                  }
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["error"],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["error"],
+                  "additionalProperties": false
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/projects/{projectId}/apps": {
       "get": {
         "parameters": [

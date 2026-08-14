@@ -17,6 +17,20 @@ export {
 } from "./identity.js";
 export { AgentContextService } from "./services/agent-context-service.js";
 export {
+  AGENT_DEFINITION_KINDS,
+  AGENT_DEFINITIONS_DIR,
+  type AgentDefinition,
+  type AgentDefinitionCredentials,
+  AgentDefinitionCredentialsSchema,
+  type AgentDefinitionKind,
+  AgentDefinitionSchema,
+  AgentDefinitionsService,
+  agentDefinitionSchema,
+  definitionHash,
+  type ProjectAgentEntry,
+  validateAgentDefinition,
+} from "./services/agent-definitions-service.js";
+export {
   type AgentMessage,
   AgentNotConfiguredError,
   type AgentSession,

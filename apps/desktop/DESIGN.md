@@ -2050,3 +2050,38 @@ Patterned on what best-in-class palettes converged on (Chrome omnibox
   primer, `false` drops it).
 - **The desktop passes none of them.** It consumes the same defaults any
   embedder would get — verified by the full e2e suite running unchanged.
+
+### 2026-08-14 — Project agents: committed definitions, consent before credentials (ADR 0050)
+- **An agent can be a work product.** Beside the profile's personal
+  roster, a project now carries agents as committed files —
+  `agents/<slug>.json` plus an optional `agents/<slug>.md` persona that
+  becomes the system prompt. They version with the project, travel
+  through clones, and appear in the agent pickers for every collaborator
+  under a "Project agents" scope label (invalid files stay visible but
+  disabled, with the parse/validation error where the description goes —
+  diagnosable from the picker, never a vanished agent).
+- **Consent is the feature, not a dialog in front of it.** A committed
+  definition is collaborator-authored code, so it never runs on YOUR
+  credentials until you approve it — and approval is bound to a hash of
+  what you approved (harness kind, model, credential mode, persona
+  content). Any change to those makes consent stale: the next pick shows
+  the review dialog again, framed as "this changed since you approved
+  it". Renames and description edits don't invalidate — re-consent noise
+  would teach users to click through. `credentials.source: "secret"`
+  definitions skip consent entirely: the key is a project secret
+  (ADR 0033), nothing personal is spent, and that's the mode that works
+  on shared/remote servers.
+- **Blocked agents fail fast, in the chat.** Unapproved, changed,
+  invalid, secret-missing, or not-yet-supported (`acp`) agents all
+  resolve to a provider whose first turn errors with one actionable
+  sentence ("needs your approval — open the agent picker…"). No hangs,
+  no opaque "not configured".
+- **One registry, one id space.** Sessions store `project:<id>:<slug>`
+  like any agent id; the desktop registry parses the scope back out,
+  reads the definition live per turn (edits apply next turn, like
+  profile agents), and builds through the same harness paths — friendly
+  errors, workspace context, per-project MCP tools all included.
+- The approval binds the profile's matching existing auth (same-harness
+  API key if the roster has one, else the machine's CLI login); wiring
+  the full agent-setup wizard into the dialog is deliberately deferred —
+  the dialog notes credentials are configurable in Settings.

@@ -20,6 +20,7 @@ import {
   ListSchema,
   OkSchema,
   PaginationQuerySchema,
+  ProjectAgentEntrySchema,
   ProjectIdParamsSchema,
   SendMessageSchema,
   SkillSchema,
@@ -396,6 +397,38 @@ export function registerAgentRoutes(app: FastifyInstance, ctx: RouteContext) {
           request.params.projectId,
         );
         return reply.send(skills);
+      } catch (err) {
+        if (err instanceof ProjectNotFoundError) {
+          return reply.status(404).send({ error: "Project not found" });
+        }
+        throw err;
+      }
+    },
+  });
+
+  // Committed project agent definitions (`agents/*.json`, ADR 0050) —
+  // parsed and validated; unusable files are reported per entry.
+  typed.route({
+    method: "GET",
+    url: "/projects/:projectId/agents",
+    schema: {
+      params: ProjectIdParamsSchema,
+      response: {
+        200: ProjectAgentEntrySchema.array(),
+        404: ErrorSchema,
+        503: ErrorSchema,
+      },
+    },
+    handler: async (request, reply) => {
+      if (!ctx.core)
+        return reply.status(503).send({ error: "Service not configured" });
+      const identity = resolveIdentity(request);
+      try {
+        const agents = await ctx.core.agentDefinitions.list(
+          identity,
+          request.params.projectId,
+        );
+        return reply.send(agents);
       } catch (err) {
         if (err instanceof ProjectNotFoundError) {
           return reply.status(404).send({ error: "Project not found" });

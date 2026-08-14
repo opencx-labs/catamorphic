@@ -3,9 +3,11 @@ import path from "node:path";
 import { ClaudeCodeAgent } from "@catamorphic/claude-code";
 import { CodexAgent } from "@catamorphic/codex";
 import type {
+  AgentDefinition,
   CodingAgentRegistry,
   RegisteredCodingAgent,
 } from "@catamorphic/core";
+import { definitionHash, validateAgentDefinition } from "@catamorphic/core";
 import type {
   AgentMcpServerConfig,
   AgentPluginConfig,
@@ -27,6 +29,12 @@ import { FriendlyAgentErrors } from "./agent-errors.js";
 import { buildAiSdkAgent } from "./coding-agent.js";
 import { DesktopConfigAgent } from "./desktop-config-agent.js";
 import { E2eFakeCodingAgent } from "./e2e-fakes.js";
+import {
+  AsyncInitCodingAgent,
+  FailFastCodingAgent,
+  PersonaCodingAgent,
+  parseProjectAgentId,
+} from "./project-agents.js";
 import { WorkspaceContextAgent } from "./workspace-context-agent.js";
 import {
   buildWorkspaceToolkit,
@@ -49,6 +57,21 @@ export interface DesktopAgentRegistryDeps {
    * workflows. Undefined while the embedded server is still booting.
    */
   projectMcpUrl?: (projectId: string) => string | undefined;
+  /**
+   * Project folder lookup for PROJECT agents (`project:<id>:<slug>`), whose
+   * committed `agents/<slug>.json` definitions are read from disk here —
+   * synchronously, because the registry contract is synchronous.
+   */
+  projectRootPath?: (projectId: string) => string | undefined;
+  /**
+   * Resolve a project secret's value (ADR 0033) for project agents with
+   * `credentials.source: "secret"` — core's SecretsService under the
+   * desktop identity, wired in after the server boots.
+   */
+  projectSecret?: (
+    projectId: string,
+    name: string,
+  ) => Promise<string | undefined>;
   /** E2E: every configured agent resolves to the scripted fake. */
   e2eFake?: boolean;
 }
@@ -108,6 +131,10 @@ export class DesktopAgentRegistry implements CodingAgentRegistry {
   }
 
   get(id: string): RegisteredCodingAgent | undefined {
+    const projectRef = parseProjectAgentId(id);
+    if (projectRef) {
+      return this.getProjectAgent(id, projectRef.projectId, projectRef.slug);
+    }
     const found = this.findConfig(id);
     if (!found) {
       this.evict(id);
@@ -249,6 +276,226 @@ export class DesktopAgentRegistry implements CodingAgentRegistry {
     return config.provider === "openrouter"
       ? this.openrouterDefault
       : undefined;
+  }
+
+  /**
+   * Resolve a PROJECT agent (`project:<projectId>:<slug>`, ADR 0050): read
+   * the committed definition from the project folder, enforce the owning
+   * profile's consent binding, and build the harness through the same
+   * construction paths profile agents use. Every blocked state (invalid
+   * file, missing/stale consent, unsupported kind, missing secret) comes
+   * back as a registered agent whose provider fails fast with an
+   * actionable error — a turn on it errors clearly instead of hanging or
+   * disappearing into AgentNotConfiguredError.
+   */
+  private getProjectAgent(
+    id: string,
+    projectId: string,
+    slug: string,
+  ): RegisteredCodingAgent | undefined {
+    const rootPath = this.deps.projectRootPath?.(projectId);
+    if (!rootPath) {
+      this.evict(id);
+      return undefined;
+    }
+    const agentsDir = path.join(rootPath, "agents");
+    let rawText: string;
+    try {
+      rawText = fs.readFileSync(path.join(agentsDir, `${slug}.json`), "utf-8");
+    } catch {
+      // No definition file → the agent does not exist.
+      this.evict(id);
+      return undefined;
+    }
+    let persona: string | undefined;
+    try {
+      persona = fs.readFileSync(path.join(agentsDir, `${slug}.md`), "utf-8");
+    } catch {
+      persona = undefined;
+    }
+
+    let raw: unknown;
+    try {
+      raw = JSON.parse(rawText);
+    } catch {
+      return this.failFast(
+        id,
+        `The project agent file agents/${slug}.json is not valid JSON — fix the file and try again.`,
+      );
+    }
+    const validated = validateAgentDefinition(raw, {
+      allowE2eFake: this.deps.e2eFake,
+    });
+    if ("error" in validated) {
+      return this.failFast(
+        id,
+        `The project agent definition agents/${slug}.json is invalid (${validated.error}) — fix the file and try again.`,
+      );
+    }
+    const def = validated.definition;
+
+    if (def.kind === "acp") {
+      return this.failFast(
+        id,
+        `"${def.name}" is an ACP agent — ACP harness support isn't built yet. Pick another agent for now.`,
+      );
+    }
+
+    // The security core: a committed definition is collaborator-authored
+    // code. Before it runs on THIS user's own credentials, the owning
+    // profile must hold a consent binding whose hash matches the
+    // definition's current sensitive state (kind, model, credentials,
+    // persona). "secret" definitions skip this — the project secret is
+    // the authorization and nothing personal is used. The e2e fake kind
+    // auto-consents under the e2e flag (it never touches credentials).
+    const source = def.credentials?.source ?? "profile";
+    const hash = definitionHash(def, persona);
+    const stores = this.deps.profileConfig.forProject(projectId);
+    let bindingAuth:
+      | { mode: "local" }
+      | { mode: "api-key"; apiKey: string | null }
+      | undefined;
+    if (def.kind !== "e2e-fake" && source !== "secret") {
+      const binding = stores.agentBindings.get(projectId, slug);
+      if (!binding) {
+        return this.failFast(
+          id,
+          `The project agent "${def.name}" needs your approval before it can use your credentials — open the agent picker to review and approve it.`,
+        );
+      }
+      if (binding.consentHash !== hash) {
+        return this.failFast(
+          id,
+          `The definition of the project agent "${def.name}" changed since you approved it — open the agent picker to review and re-approve it.`,
+        );
+      }
+      bindingAuth = binding.auth ?? { mode: "local" };
+    }
+
+    const config: AgentConfig = {
+      id,
+      name: def.name,
+      harness:
+        def.kind === "claude-code"
+          ? "claude-code"
+          : def.kind === "codex"
+            ? "codex"
+            : "ai-sdk",
+      ...(def.kind === "builtin" || def.kind === "e2e-fake"
+        ? { provider: "anthropic" as const }
+        : {}),
+      model: def.model ?? "",
+      effort: def.effort ?? "medium",
+      auth:
+        source === "secret" || bindingAuth?.mode === "api-key"
+          ? "api-key"
+          : "local",
+      apiKey: bindingAuth?.mode === "api-key" ? bindingAuth.apiKey : null,
+    };
+    // Informational v1: the definition's `connections` are shown in the
+    // UI; the agent gets the owning profile's full connection surface
+    // (assignment "all"), like a profile agent without a pinned subset.
+    const profileId = this.deps.profiles.profileForProject(projectId).id;
+    const mcp = this.resolveMcp(config, profileId);
+
+    const defaults = {
+      effort: def.effort ?? ("medium" as const),
+      ...(def.model ? { model: def.model } : {}),
+    };
+    const key = JSON.stringify({
+      projectAgent: true,
+      hash,
+      auth: config.auth,
+      apiKey: config.apiKey,
+      source,
+      rootPath,
+      mcp,
+    });
+    const cached = this.cache.get(id);
+    if (cached && cached.key === key) {
+      return {
+        id,
+        provider: cached.provider,
+        execution: cached.execution,
+        defaults,
+      };
+    }
+
+    this.evict(id);
+    const registered =
+      source === "secret" && !this.deps.e2eFake
+        ? this.buildSecretProjectAgent(id, def, config, mcp, projectId)
+        : this.build(config, mcp);
+    if (!registered) {
+      return this.failFast(
+        id,
+        `The project agent "${def.name}" has no usable credentials or model — approve it again from the agent picker, or check its definition.`,
+      );
+    }
+    const provider = persona
+      ? new PersonaCodingAgent(registered.provider, persona)
+      : registered.provider;
+    this.cache.set(id, { key, provider, execution: registered.execution });
+    return { id, provider, execution: registered.execution, defaults };
+  }
+
+  /**
+   * A secret-credentialed project agent: the harness is constructed
+   * lazily, once core's SecretsService has produced the key — the
+   * registry contract is synchronous, secrets are not. A missing secret
+   * fails the turn with an error naming it, and is re-checked next turn.
+   */
+  private buildSecretProjectAgent(
+    id: string,
+    def: AgentDefinition,
+    config: AgentConfig,
+    mcp: ResolvedMcp,
+    projectId: string,
+  ): RegisteredCodingAgent | undefined {
+    const secretName = def.credentials?.secret;
+    if (!secretName) return undefined;
+    const factory = async (): Promise<CodingAgentProvider> => {
+      const value = await this.deps.projectSecret?.(projectId, secretName);
+      if (!value) {
+        return new FailFastCodingAgent(
+          `The project agent "${def.name}" authenticates with the project secret "${secretName}", which has no value — add it under the project's secrets and send your message again.`,
+        );
+      }
+      const built = this.build({ ...config, apiKey: value }, mcp);
+      if (!built) {
+        return new FailFastCodingAgent(
+          `The project agent "${def.name}" could not be constructed — check its model configuration in agents/ and try again.`,
+        );
+      }
+      return built.provider;
+    };
+    // Optional methods come from the harness KIND, statically known —
+    // feature-detection must not see methods the harness lacks.
+    const provider = new AsyncInitCodingAgent(
+      config.harness,
+      factory,
+      def.kind === "builtin"
+        ? { interrupt: true, hasSession: true, retryTurn: true }
+        : def.kind === "claude-code"
+          ? { interrupt: true }
+          : {},
+    );
+    return {
+      id,
+      provider,
+      execution: def.kind === "builtin" ? "sandbox" : "host",
+    };
+  }
+
+  /** A registered-but-blocked agent: errors actionably, never hangs. */
+  private failFast(id: string, message: string): RegisteredCodingAgent {
+    this.evict(id);
+    return {
+      id,
+      provider: new FailFastCodingAgent(message),
+      execution: "host",
+      defaults: {},
+    };
   }
 
   private findConfig(

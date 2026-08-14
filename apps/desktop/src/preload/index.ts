@@ -30,6 +30,13 @@ const api = {
     ipcRenderer.invoke("catamorphic:agents-set-default", id),
   agentModels: (id: string): Promise<unknown> =>
     ipcRenderer.invoke("catamorphic:agent-models", id),
+  projectAgentsList: (projectId: string): Promise<unknown> =>
+    ipcRenderer.invoke("catamorphic:project-agents-list", projectId),
+  projectAgentApprove: (
+    projectId: string,
+    slug: string,
+  ): Promise<{ ok: boolean; error?: string }> =>
+    ipcRenderer.invoke("catamorphic:project-agent-approve", projectId, slug),
   agentSetupStatus: (): Promise<{ claudeCode: boolean; codex: boolean }> =>
     ipcRenderer.invoke("catamorphic:agent-setup-status"),
   agentLogin: (

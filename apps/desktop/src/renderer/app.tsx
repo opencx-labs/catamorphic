@@ -52,6 +52,7 @@ import {
 } from "./components/elicitation-modal.js";
 import { GitNav } from "./components/git-nav.js";
 import { ProfileBar } from "./components/profile-bar.js";
+import { ProjectAgentConsentDialog } from "./components/project-agent-consent.js";
 import { ProjectModal } from "./components/project-modal.js";
 import { ProjectSwitcher } from "./components/project-switcher.js";
 import { PrsNav } from "./components/prs-nav.js";
@@ -69,6 +70,7 @@ import {
   desktopApi,
   type Profile,
   type ProfilesData,
+  type ProjectAgentInfo,
   type SidebarConfig,
   type SidebarMenuEntry,
   type SidebarSectionConfig,
@@ -521,6 +523,7 @@ export function App() {
     void desktopApi.agentsList().then(setAgentsData);
     return desktopApi.onAgentsChanged(setAgentsData);
   }, []);
+
 
   // The agent setup wizard: one experience behind every entry point — the
   // auto-opened tab on agent-less profiles, the modal that gates starting
@@ -1744,6 +1747,33 @@ export function App() {
   /** Change the model on the focused chat's agent (or the default one). */
   const pickModel = (agentId: string, model: string) => {
     void desktopApi.agentsUpdate(agentId, { model });
+  };
+
+  // Project agents (ADR 0050): picking one that isn't approved (or whose
+  // approval went stale after a definition change) routes through the
+  // consent dialog first; secret-credentialed and already-approved ones
+  // switch immediately, exactly like profile agents.
+  const [consentRequest, setConsentRequest] = useState<{
+    agent: ProjectAgentInfo;
+    target: "default" | "session";
+  } | null>(null);
+  const applyProjectAgent = (
+    agent: ProjectAgentInfo,
+    target: "default" | "session",
+  ) => {
+    if (target === "default") pickDefaultAgent(agent.id);
+    else pickSessionAgent(agent.id);
+  };
+  const pickProjectAgent = (
+    agent: ProjectAgentInfo,
+    target: "default" | "session",
+  ) => {
+    if (agent.invalid) return;
+    if (agent.consent === "ok" || agent.consent === "not-required") {
+      applyProjectAgent(agent, target);
+      return;
+    }
+    setConsentRequest({ agent, target });
   };
 
   const pickEffort = (effort: AgentEffort) => {
@@ -3081,6 +3111,7 @@ export function App() {
           : null,
         onPickDefaultAgent: pickDefaultAgent,
         onPickSessionAgent: pickSessionAgent,
+        onPickProjectAgent: pickProjectAgent,
         onPickEffort: pickEffort,
         onPickModel: pickModel,
         onHighlightTarget: setPaletteTarget,
@@ -3102,6 +3133,17 @@ export function App() {
       <ElicitationModal
         pending={elicitation}
         onOpenUrl={(url) => openBrowserTab(url)}
+      />
+      {/* Project-agent consent (ADR 0050): approve, then complete the
+          original pick and refresh the roster's consent state. */}
+      <ProjectAgentConsentDialog
+        request={consentRequest}
+        onClose={() => setConsentRequest(null)}
+        onApproved={(agent) => {
+          const target = consentRequest?.target ?? "session";
+          setConsentRequest(null);
+          applyProjectAgent(agent, target);
+        }}
       />
       <aside
         className={`flex shrink-0 flex-col overflow-hidden border-r border-border bg-bg-raised transition-[width] duration-200 ease-[cubic-bezier(0.2,0,0,1)] ${

@@ -62,3 +62,4 @@ Settled design decisions live here as short Architecture Decision Records. They 
 | [0047](0047-local-process-execution.md) | Sandboxless execution is a provider: `@catamorphic/local-process` | Accepted |
 | [0048](0048-app-feel-is-the-embedders.md) | An app's feel is entirely the embedder's: neutral kit defaults, host feel tokens | Accepted |
 | [0049](0049-doctrine-is-the-embedders.md) | Doctrine is the embedder's: seed/template/standing-prompt hooks, mechanics split from design doctrine | Accepted |
+| [0050](0050-project-agent-definitions.md) | Project agent definitions: committed `agents/*.json`, consent-bound credentials | Accepted |

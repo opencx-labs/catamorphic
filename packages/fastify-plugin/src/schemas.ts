@@ -818,6 +818,40 @@ export const SkillSchema = z.object({
   path: z.string(),
 });
 
+// --- Project agent definitions (ADR 0050) ---
+// Committed `agents/<slug>.json` files, parsed and validated by core's
+// AgentDefinitionsService. Broken files come back as invalid entries with
+// the error — never a failed request.
+export const ProjectAgentDefinitionSchema = z.object({
+  version: z.number(),
+  name: z.string(),
+  kind: z.string(),
+  model: z.string().optional(),
+  effort: z.enum(["low", "medium", "high"]).optional(),
+  description: z.string().optional(),
+  credentials: z
+    .object({
+      source: z.enum(["profile", "secret", "local"]),
+      secret: z.string().optional(),
+    })
+    .optional(),
+  connections: z.array(z.string()).optional(),
+  acp: z
+    .object({
+      endpoint: z.string().optional(),
+      command: z.array(z.string()).optional(),
+    })
+    .optional(),
+});
+
+export const ProjectAgentEntrySchema = z.object({
+  slug: z.string(),
+  definition: ProjectAgentDefinitionSchema.optional(),
+  /** Content of the sibling `agents/<slug>.md` persona file. */
+  promptFile: z.string().optional(),
+  invalid: z.object({ error: z.string() }).optional(),
+});
+
 // --- Playground Parse ---
 // Pure AST parse of in-flight draft files → WorkflowGraph. Browser clients
 // can't run `@catamorphic/parser` (ts-morph → node:fs) so the server does it.

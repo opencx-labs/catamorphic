@@ -177,7 +177,11 @@ export class AgentsStore {
   defaultAgentId(): string | undefined {
     if (
       this.data.defaultAgentId &&
-      this.data.agents.some((agent) => agent.id === this.data.defaultAgentId)
+      // Project agents (`project:<projectId>:<slug>`, ADR 0050) live in the
+      // project repo, not this roster — a default pointing at one is taken
+      // at face value; the registry validates it live per turn.
+      (this.data.defaultAgentId.startsWith("project:") ||
+        this.data.agents.some((agent) => agent.id === this.data.defaultAgentId))
     ) {
       return this.data.defaultAgentId;
     }
@@ -185,7 +189,10 @@ export class AgentsStore {
   }
 
   setDefault(id: string): void {
-    if (this.data.agents.some((agent) => agent.id === id)) {
+    if (
+      id.startsWith("project:") ||
+      this.data.agents.some((agent) => agent.id === id)
+    ) {
       this.data.defaultAgentId = id;
       this.save();
     }

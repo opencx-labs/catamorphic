@@ -71,6 +71,12 @@ export async function startEmbeddedServer(
     ? new E2eLocalSandboxProvider()
     : new MicrosandboxSandboxProvider();
 
+  // Desktop projects live in user-visible folders; the mapping is desktop
+  // state (its own PGlite schema), injected into storage as a resolver so
+  // the shared catamorphic schema never learns about filesystem paths.
+  const projectRoots = new ProjectRootsStore(pglite);
+  await projectRoots.init();
+
   // Agents resolve dynamically from the per-profile agents.json files, so
   // adding or editing an agent in Settings needs no server restart. In e2e
   // mode the default profile is seeded with two fake-backed agents so the
@@ -78,6 +84,12 @@ export async function startEmbeddedServer(
   // Known only after listen(); the resolver reads it lazily, and sessions
   // can only start once the server is up.
   let apiBaseUrl: string | undefined;
+  // Core's SecretsService only exists once createCatamorphic returns; the
+  // registry reads it through this late-bound seam (same pattern as
+  // apiBaseUrl above) for secret-credentialed project agents (ADR 0050).
+  let projectSecretResolver:
+    | ((projectId: string, name: string) => Promise<string | undefined>)
+    | undefined;
   const agentRegistry = new DesktopAgentRegistry({
     profiles,
     profileConfig,
@@ -92,6 +104,11 @@ export async function startEmbeddedServer(
     // the URL.
     projectMcpUrl: (projectId) =>
       apiBaseUrl ? `${apiBaseUrl}/api/projects/${projectId}/mcp` : undefined,
+    // Project agents (`project:<id>:<slug>`, ADR 0050): definitions are
+    // read from the project's folder; secrets resolve through core.
+    projectRootPath: (projectId) => projectRoots.getSync(projectId),
+    projectSecret: (projectId, name) =>
+      projectSecretResolver?.(projectId, name) ?? Promise.resolve(undefined),
   });
   if (e2eFakeAgent) {
     const agents = profileConfig.forDefaultProfile().agents;
@@ -100,12 +117,6 @@ export async function startEmbeddedServer(
       agents.create({ name: "Other Fake", harness: "ai-sdk" });
     }
   }
-
-  // Desktop projects live in user-visible folders; the mapping is desktop
-  // state (its own PGlite schema), injected into storage as a resolver so
-  // the shared catamorphic schema never learns about filesystem paths.
-  const projectRoots = new ProjectRootsStore(pglite);
-  await projectRoots.init();
 
   const catamorphic = createCatamorphic({
     database: { db },
@@ -141,6 +152,29 @@ export async function startEmbeddedServer(
     },
   });
   const triggers = new DesktopTriggers(catamorphic);
+
+  // Secret-credentialed project agents (credentials.source: "secret") read
+  // their key from the project's secrets — production value first, test
+  // value as the fallback for projects only configured for test runs.
+  projectSecretResolver = async (projectId, name) => {
+    const secrets = catamorphic.core.secrets;
+    if (!secrets) return undefined;
+    const identity = {
+      tenantId: DESKTOP_TENANT_ID,
+      externalUserId: DESKTOP_USER_ID,
+    };
+    for (const environment of ["production", "test"] as const) {
+      const { values } = await secrets.loadForRun({
+        identity,
+        projectId,
+        environment,
+      });
+      if (values[name] !== undefined && values[name] !== "") {
+        return values[name];
+      }
+    }
+    return undefined;
+  };
 
   const { applied } = await catamorphic.migrate();
   if (applied.length > 0) {

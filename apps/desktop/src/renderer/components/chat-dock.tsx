@@ -28,7 +28,11 @@ import {
   useRef,
   useState,
 } from "react";
-import { type AgentInfo, desktopApi } from "../lib/desktop-api";
+import {
+  type AgentInfo,
+  desktopApi,
+  projectAgentAsInfo,
+} from "../lib/desktop-api";
 import { AgentQuestionPanel } from "./agent-question-panel";
 import {
   ChatTimeline,
@@ -971,16 +975,25 @@ export function ChatDock({
   // biome-ignore lint/correctness/useExhaustiveDependencies: sessionAgentId is the refetch trigger, not a body dependency
   useEffect(() => {
     let cancelled = false;
-    void desktopApi
-      .agentsList()
-      .then((data) => {
-        if (!cancelled) setRoster(data);
+    // Profile roster + the project's committed agents (ADR 0050), merged:
+    // a session on a `project:<id>:<slug>` agent shows the definition's
+    // name and capabilities wherever profile agents show theirs.
+    void Promise.all([
+      desktopApi.agentsList(),
+      desktopApi.projectAgentsList(projectId).catch(() => ({ agents: [] })),
+    ])
+      .then(([data, project]) => {
+        if (cancelled) return;
+        setRoster({
+          agents: [...data.agents, ...project.agents.map(projectAgentAsInfo)],
+          defaultAgentId: data.defaultAgentId,
+        });
       })
       .catch(() => {});
     return () => {
       cancelled = true;
     };
-  }, [sessionAgentId]);
+  }, [sessionAgentId, projectId]);
   const activeAgent = roster.agents.find(
     (agent) =>
       agent.id ===

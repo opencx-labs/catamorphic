@@ -31,6 +31,7 @@ import {
   Zap,
 } from "lucide-react";
 import {
+  Fragment,
   type KeyboardEvent,
   useCallback,
   useEffect,
@@ -54,6 +55,7 @@ import {
   type HarnessModelInfo,
   type OpenRouterCatalog,
   type Profile,
+  type ProjectAgentInfo,
   type SidebarConfig,
 } from "../lib/desktop-api.js";
 import { formatBinding, useKeybindings } from "../lib/keybindings.js";
@@ -176,6 +178,30 @@ function agentSourceLabel(agent: AgentInfo): string {
   return HARNESS_LABELS[agent.harness];
 }
 
+/** Kind labels for PROJECT agents (committed definitions, ADR 0050). */
+const PROJECT_KIND_LABELS: Record<string, string> = {
+  "claude-code": "Claude Code",
+  codex: "Codex",
+  builtin: "Built-in",
+  acp: "ACP",
+  "e2e-fake": "Fake harness",
+};
+
+/** Faded detail for a project-agent row: kind + consent state (or error). */
+function projectAgentDetail(agent: ProjectAgentInfo): string {
+  if (agent.invalid) return agent.invalid;
+  const kind = PROJECT_KIND_LABELS[agent.kind] ?? agent.kind;
+  const state =
+    agent.consent === "none"
+      ? "needs approval"
+      : agent.consent === "stale"
+        ? "changed — approve again"
+        : agent.credentialsSource === "secret"
+          ? "project secret"
+          : "approved";
+  return `${kind} · ${state}`;
+}
+
 /** How it authenticates, in the user's terms. */
 function agentAuthLabel(agent: AgentInfo): string {
   if (agent.auth === "api-key") return "API key";
@@ -210,6 +236,13 @@ interface PaletteItem {
    * unfiltered picker list pins it first (normal ranking while searching).
    */
   current?: boolean;
+  /**
+   * Scope label rendered above this row when the previous row carries a
+   * different group (e.g. "Project agents" in the agent pickers).
+   */
+  group?: string;
+  /** Unusable rows (invalid project agents): visible, never committable. */
+  disabled?: boolean;
   /** Navigate items load something tab-shaped and honor the commit mode. */
   kind: "action" | "navigate";
   run: (mode: CommitMode) => void;
@@ -389,6 +422,7 @@ export function CommandPalette({
   focusedChat,
   onPickDefaultAgent,
   onPickSessionAgent,
+  onPickProjectAgent,
   onPickEffort,
   onPickModel,
   onHighlightTarget,
@@ -427,6 +461,15 @@ export function CommandPalette({
   } | null;
   onPickDefaultAgent: (agentId: string) => void;
   onPickSessionAgent: (agentId: string) => void;
+  /**
+   * A project agent was picked. The app runs the consent flow first when
+   * the definition isn't approved (or approval went stale), then applies
+   * the same default/session switch the profile-agent handlers do.
+   */
+  onPickProjectAgent: (
+    agent: ProjectAgentInfo,
+    target: "default" | "session",
+  ) => void;
   onPickEffort: (effort: AgentEffort) => void;
   /** Change the target agent's model ("" = the automatic default). */
   onPickModel: (agentId: string, model: string) => void;
@@ -495,6 +538,27 @@ export function CommandPalette({
       return null;
     });
   }, []);
+
+  // The ACTIVE project's committed agent definitions (ADR 0050), fetched
+  // fresh on every entry into an agent picker — definitions are files a
+  // collaborator (or an agent) may have just written, and consent state
+  // changes with approvals; a stale snapshot would show the wrong rows.
+  const [projectAgents, setProjectAgents] = useState<ProjectAgentInfo[]>([]);
+  useEffect(() => {
+    if (picker !== "default-agent" && picker !== "switch-agent") return;
+    let cancelled = false;
+    void desktopApi
+      .projectAgentsList(projectId)
+      .then((data) => {
+        if (!cancelled) setProjectAgents(data.agents);
+      })
+      .catch(() => {
+        if (!cancelled) setProjectAgents([]);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [picker, projectId]);
 
   // The model picker's target: the focused chat's agent, else the default.
   const targetAgent = agents.find(
@@ -1016,31 +1080,62 @@ export function CommandPalette({
                 run: () => onPickEffort(level.id),
               };
             })
-          : agents.map((agent) => {
-              const isCurrent =
-                picker === "default-agent"
-                  ? agent.id === defaultAgentId
-                  : agent.id ===
-                    ((focusedChat?.agentId ?? defaultAgentId) || "");
-              return {
-                id: `pick:agent:${agent.id}`,
-                icon: Bot,
-                label: agent.name,
-                detail: `${agentSourceLabel(agent)} · ${agentAuthLabel(agent)}`,
-                keywords: [
-                  agent.name,
-                  agent.harness,
-                  agent.provider ?? "",
-                  agent.model,
-                ],
-                kind: "action" as const,
-                ...(isCurrent ? { current: true } : {}),
-                run: () =>
+          : [
+              ...agents.map((agent) => {
+                const isCurrent =
                   picker === "default-agent"
-                    ? onPickDefaultAgent(agent.id)
-                    : onPickSessionAgent(agent.id),
-              };
-            });
+                    ? agent.id === defaultAgentId
+                    : agent.id ===
+                      ((focusedChat?.agentId ?? defaultAgentId) || "");
+                return {
+                  id: `pick:agent:${agent.id}`,
+                  icon: Bot,
+                  label: agent.name,
+                  detail: `${agentSourceLabel(agent)} · ${agentAuthLabel(agent)}`,
+                  keywords: [
+                    agent.name,
+                    agent.harness,
+                    agent.provider ?? "",
+                    agent.model,
+                  ],
+                  kind: "action" as const,
+                  ...(isCurrent ? { current: true } : {}),
+                  run: () =>
+                    picker === "default-agent"
+                      ? onPickDefaultAgent(agent.id)
+                      : onPickSessionAgent(agent.id),
+                };
+              }),
+              // The active project's committed agents (ADR 0050), under
+              // their own scope label. Invalid definitions stay visible —
+              // disabled, with the error where the description goes — so
+              // a typo'd file is diagnosable from the picker itself.
+              ...projectAgents.map((agent) => {
+                const isCurrent =
+                  picker === "default-agent"
+                    ? agent.id === defaultAgentId
+                    : agent.id ===
+                      ((focusedChat?.agentId ?? defaultAgentId) || "");
+                return {
+                  id: `pick:agent:${agent.id}`,
+                  icon: Bot,
+                  label: agent.name,
+                  detail: projectAgentDetail(agent),
+                  keywords: [agent.name, agent.slug, "project", agent.kind],
+                  kind: "action" as const,
+                  group: "Project agents",
+                  ...(isCurrent ? { current: true } : {}),
+                  ...(agent.invalid ? { disabled: true } : {}),
+                  run: () => {
+                    if (agent.invalid) return;
+                    onPickProjectAgent(
+                      agent,
+                      picker === "default-agent" ? "default" : "session",
+                    );
+                  },
+                };
+              }),
+            ];
       if (rows.length === 0) {
         return [
           {
@@ -1216,6 +1311,7 @@ export function CommandPalette({
     mode,
     picker,
     agents,
+    projectAgents,
     defaultAgentId,
     focusedChat,
     enterMode,
@@ -1229,6 +1325,7 @@ export function CommandPalette({
     onOpenTab,
     onPickDefaultAgent,
     onPickSessionAgent,
+    onPickProjectAgent,
     onPickEffort,
     onPickModel,
     targetAgent,
@@ -1354,6 +1451,8 @@ export function CommandPalette({
   }, [highlightTarget]);
 
   const commit = (item: PaletteItem, withCmd: boolean, withShift = false) => {
+    // Disabled rows (invalid project agents) are informational only.
+    if (item.disabled) return;
     // Entering a chip mode swaps palette state — the palette stays open.
     if (item.id.startsWith("mode-row:")) {
       item.run("replace");
@@ -1537,45 +1636,61 @@ export function CommandPalette({
           {results.map((item, index) => {
             const Icon = item.icon;
             const isSelected = index === selected;
+            // Scope labels ("Project agents") render above the first row
+            // of a group. Plain divs without data-item-id, so the FLIP
+            // machinery ignores them.
+            const groupLabel =
+              item.group && item.group !== results[index - 1]?.group
+                ? item.group
+                : null;
             return (
-              <button
-                key={item.id}
-                data-item-id={item.id}
-                type="button"
-                role="option"
-                aria-selected={isSelected}
-                // mousedown so the textarea's focus never flickers away.
-                onMouseDown={(event) => {
-                  event.preventDefault();
-                  commit(item, event.metaKey, event.shiftKey);
-                }}
-                onMouseEnter={() => setSelectedIndex(index)}
-                className={`flex h-9 w-full cursor-pointer items-center gap-2.5 rounded-lg px-2.5 text-left text-[13px] transition-colors duration-100 ${
-                  isSelected ? "bg-bg-overlay text-fg" : "text-fg-muted"
-                }`}
-              >
-                <Icon className="size-4 shrink-0 text-fg-faint" />
-                <span className="truncate">{item.label}</span>
-                {item.detail && (
-                  <span className="min-w-0 truncate text-[12px] text-fg-faint">
-                    {item.detail}
-                  </span>
+              <Fragment key={item.id}>
+                {groupLabel && (
+                  <div className="px-2.5 pt-2 pb-1 text-[11px] font-medium text-fg-faint">
+                    {groupLabel}
+                  </div>
                 )}
-                {item.current && (
-                  <span
-                    className="ml-auto flex shrink-0 items-center gap-1 text-[11px] text-fg-faint"
-                    data-testid="palette-current"
-                  >
-                    <Check className="size-3.5" />
-                    current
-                  </span>
-                )}
-                {item.shortcut && (
-                  <kbd className="ml-auto shrink-0 rounded border border-border bg-bg-inset px-1.5 py-0.5 text-[11px] text-fg-faint">
-                    {item.shortcut}
-                  </kbd>
-                )}
-              </button>
+                <button
+                  data-item-id={item.id}
+                  type="button"
+                  role="option"
+                  aria-selected={isSelected}
+                  aria-disabled={item.disabled || undefined}
+                  // mousedown so the textarea's focus never flickers away.
+                  onMouseDown={(event) => {
+                    event.preventDefault();
+                    commit(item, event.metaKey, event.shiftKey);
+                  }}
+                  onMouseEnter={() => setSelectedIndex(index)}
+                  className={`flex h-9 w-full items-center gap-2.5 rounded-lg px-2.5 text-left text-[13px] transition-colors duration-100 ${
+                    item.disabled
+                      ? "cursor-default opacity-50"
+                      : "cursor-pointer"
+                  } ${isSelected ? "bg-bg-overlay text-fg" : "text-fg-muted"}`}
+                >
+                  <Icon className="size-4 shrink-0 text-fg-faint" />
+                  <span className="truncate">{item.label}</span>
+                  {item.detail && (
+                    <span className="min-w-0 truncate text-[12px] text-fg-faint">
+                      {item.detail}
+                    </span>
+                  )}
+                  {item.current && (
+                    <span
+                      className="ml-auto flex shrink-0 items-center gap-1 text-[11px] text-fg-faint"
+                      data-testid="palette-current"
+                    >
+                      <Check className="size-3.5" />
+                      current
+                    </span>
+                  )}
+                  {item.shortcut && (
+                    <kbd className="ml-auto shrink-0 rounded border border-border bg-bg-inset px-1.5 py-0.5 text-[11px] text-fg-faint">
+                      {item.shortcut}
+                    </kbd>
+                  )}
+                </button>
+              </Fragment>
             );
           })}
           {results.length === 0 && (

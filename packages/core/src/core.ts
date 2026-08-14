@@ -8,6 +8,7 @@ import type {
 import { instrumentSandboxProvider } from "@catamorphic/sandbox";
 import type { Kysely } from "kysely";
 import { AgentContextService } from "./services/agent-context-service.js";
+import { AgentDefinitionsService } from "./services/agent-definitions-service.js";
 import {
   AgentSessionsService,
   type AgentTurnSettledEvent,
@@ -206,6 +207,7 @@ export class CatamorphicCore {
   readonly deploymentArtifacts: DeploymentArtifactsService;
   readonly deploymentRuntime?: DeploymentRuntimeService;
   readonly skills: SkillsService;
+  readonly agentDefinitions: AgentDefinitionsService;
   readonly tenantPolicies: TenantPoliciesService;
   readonly retention: RetentionService;
   readonly plugins?: PluginsService;
@@ -389,6 +391,14 @@ export class CatamorphicCore {
     });
 
     this.skills = new SkillsService(this.db, this.projectManager);
+    // Committed project agent definitions (ADR 0050). The "e2e-fake" kind
+    // is a desktop test seam, accepted only under the e2e flag — mirroring
+    // how the desktop swaps in its fake harness and pick-folder stub.
+    this.agentDefinitions = new AgentDefinitionsService(
+      this.db,
+      this.projectManager,
+      { allowE2eFake: process.env.CATAMORPHIC_E2E_FAKE_AGENT === "1" },
+    );
 
     if (config.codingAgent && this.sandboxProvider && this.devSandboxes) {
       const codingAgents = isCodingAgentRegistry(config.codingAgent)

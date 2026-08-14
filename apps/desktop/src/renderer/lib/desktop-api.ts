@@ -35,6 +35,60 @@ export interface AgentsData {
   defaultAgentId: string | null;
 }
 
+/**
+ * A PROJECT agent: a committed `agents/<slug>.json` definition (ADR 0050),
+ * listed for the active project. `consent` gates running it on the user's
+ * own credentials; `invalid` marks unusable definitions (shown disabled).
+ */
+export interface ProjectAgentInfo {
+  /** Registry id: `project:<projectId>:<slug>`. */
+  id: string;
+  projectId: string;
+  slug: string;
+  name: string;
+  kind: string;
+  description: string | null;
+  model: string | null;
+  effort: AgentEffort | null;
+  credentialsSource: "profile" | "secret" | "local";
+  secretName: string | null;
+  connections: string[];
+  promptPreview: string | null;
+  consent: "not-required" | "none" | "stale" | "ok";
+  invalid: string | null;
+}
+
+export interface ProjectAgentsData {
+  agents: ProjectAgentInfo[];
+}
+
+/**
+ * A project agent shaped like a roster {@link AgentInfo}, for surfaces
+ * that resolve an id to a display name and capabilities (chat identity,
+ * switch markers, composer attachment gating).
+ */
+export function projectAgentAsInfo(agent: ProjectAgentInfo): AgentInfo {
+  const harness: AgentHarness =
+    agent.kind === "claude-code"
+      ? "claude-code"
+      : agent.kind === "codex"
+        ? "codex"
+        : "ai-sdk";
+  return {
+    id: agent.id,
+    name: agent.name,
+    harness,
+    ...(harness === "ai-sdk" ? { provider: "anthropic" as const } : {}),
+    model: agent.model ?? "",
+    effort: agent.effort ?? "medium",
+    auth: agent.credentialsSource === "secret" ? "api-key" : "local",
+    hasApiKey: false,
+    apiKeyMasked: null,
+    accepts: harness === "codex" ? [] : ["image", "document"],
+    connections: { mode: "all" },
+  };
+}
+
 export interface CreateAgentInput {
   name?: string;
   harness: AgentHarness;
@@ -448,6 +502,11 @@ export interface CatamorphicDesktopApi {
   agentsRemove: (id: string) => Promise<boolean>;
   agentsSetDefault: (id: string) => Promise<void>;
   agentModels: (id: string) => Promise<{ models: HarnessModelInfo[] }>;
+  projectAgentsList: (projectId: string) => Promise<ProjectAgentsData>;
+  projectAgentApprove: (
+    projectId: string,
+    slug: string,
+  ) => Promise<{ ok: boolean; error?: string }>;
   agentSetupStatus: () => Promise<{ claudeCode: boolean; codex: boolean }>;
   agentLogin: (
     id: string,

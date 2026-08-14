@@ -59,6 +59,25 @@
   configured store. Needs: a pointer format in-repo (git-lfs-like or our
   own manifest), per-project storage config, agent awareness of what's a
   blob vs. text. Parked until project structure + local/remote sync land.
+- **ACP harness.** Project agent definitions (ADR 0050) accept
+  `kind: "acp"` today but resolve it to a fail-fast "not built yet"
+  entry. Build the real ACP client harness: a `CodingAgentProvider`
+  speaking the Agent Client Protocol over both transports — a local
+  command (`acp.command`, stdio) and a remote endpoint (`acp.endpoint`).
+  The remote-Catamorphic-server agent story rides the endpoint transport:
+  a stock server exposes its agents over ACP and a project definition
+  points at it, with `credentials.source: "secret"` carrying the token so
+  no personal consent is involved. Map ACP's session/turn/interrupt
+  semantics onto the provider contract; per-agent home-dir isolation for
+  the command transport.
+- **TS `defineAgent` layer over project agent JSON.** The committed
+  `agents/<slug>.json` files are the substrate (ADR 0050); add the
+  authoring layer: `defineAgent({...})` in project code, discovered by
+  `@catamorphic/parser` like `defineSecrets`, compiled/projected into the
+  JSON files (generated-projections style, ADR 0041) so the registry,
+  consent hashing, and HTTP surface stay unchanged. Gives authors types,
+  autocomplete, and refactors; the check script should flag drift between
+  source and generated JSON.
 - **Long term: a default self-hostable Catamorphic server + remote MCP.**
   Today the workflow-tools MCP endpoint (ADR 0042) is local and
   host-proxied. The direction: a stock Catamorphic server people run on

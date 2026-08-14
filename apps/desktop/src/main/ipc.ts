@@ -2,6 +2,7 @@ import { spawn } from "node:child_process";
 import fs from "node:fs";
 import { createRequire } from "node:module";
 import path from "node:path";
+import { definitionHash, type ProjectAgentEntry } from "@catamorphic/core";
 import {
   buildInstallationUrl,
   GithubAuthError,
@@ -9,6 +10,7 @@ import {
   requestDeviceCode,
 } from "@catamorphic/github";
 import { app, BrowserWindow, dialog, ipcMain, shell } from "electron";
+import type { BindingAuth } from "./agent-bindings-store.js";
 import {
   type AgentsStore,
   type CreateAgentInput,
@@ -54,6 +56,37 @@ export interface ServerState {
 export interface AgentsSnapshot {
   agents: PublicAgentConfig[];
   defaultAgentId: string | null;
+}
+
+/** A project agent as the renderer sees it (definition + consent state). */
+export interface ProjectAgentInfo {
+  /** Registry id: `project:<projectId>:<slug>`. */
+  id: string;
+  projectId: string;
+  slug: string;
+  name: string;
+  kind: string;
+  description: string | null;
+  model: string | null;
+  effort: "low" | "medium" | "high" | null;
+  credentialsSource: "profile" | "secret" | "local";
+  secretName: string | null;
+  /** Declared connector needs — informational in v1. */
+  connections: string[];
+  /** First lines of the persona file, for the consent dialog. */
+  promptPreview: string | null;
+  /**
+   * Consent state for THIS profile: `not-required` (secret-credentialed),
+   * `none` (never approved), `stale` (definition changed since approval),
+   * or `ok`.
+   */
+  consent: "not-required" | "none" | "stale" | "ok";
+  /** Set when the definition file is unusable; the agent can't run. */
+  invalid: string | null;
+}
+
+export interface ProjectAgentsData {
+  agents: ProjectAgentInfo[];
 }
 
 export function registerIpcHandlers(
@@ -229,6 +262,130 @@ export function registerIpcHandlers(
     store.setDefault(id);
     agentsChanged(event, store);
   });
+
+  // --- project agents (committed agents/<slug>.json definitions, ADR 0050) ---
+
+  const kindHarness = (kind: string): "ai-sdk" | "claude-code" | "codex" =>
+    kind === "claude-code"
+      ? "claude-code"
+      : kind === "codex"
+        ? "codex"
+        : "ai-sdk";
+
+  const projectAgentInfo = (
+    projectId: string,
+    entry: ProjectAgentEntry,
+  ): ProjectAgentInfo => {
+    const owning = profileConfig.forProject(projectId);
+    const definition = entry.definition;
+    const source = definition?.credentials?.source ?? "profile";
+    let consent: ProjectAgentInfo["consent"] = "not-required";
+    if (definition && definition.kind !== "e2e-fake" && source !== "secret") {
+      const binding = owning.agentBindings.get(projectId, entry.slug);
+      const hash = definitionHash(definition, entry.promptFile);
+      consent = !binding
+        ? "none"
+        : binding.consentHash === hash
+          ? "ok"
+          : "stale";
+    }
+    const promptPreview = entry.promptFile
+      ? entry.promptFile.split("\n").slice(0, 6).join("\n").slice(0, 320)
+      : null;
+    return {
+      id: `project:${projectId}:${entry.slug}`,
+      projectId,
+      slug: entry.slug,
+      name: definition?.name ?? entry.slug,
+      kind: definition?.kind ?? "unknown",
+      description: definition?.description ?? null,
+      model: definition?.model ?? null,
+      effort: definition?.effort ?? null,
+      credentialsSource: source,
+      secretName: definition?.credentials?.secret ?? null,
+      connections: definition?.connections ?? [],
+      promptPreview,
+      consent,
+      invalid: entry.invalid?.error ?? null,
+    };
+  };
+
+  ipcMain.handle(
+    "catamorphic:project-agents-list",
+    async (_event, projectId: string): Promise<ProjectAgentsData> => {
+      const server = state.current;
+      if (!server) return { agents: [] };
+      try {
+        const entries = await server.catamorphic.core.agentDefinitions.list(
+          { tenantId: DESKTOP_TENANT_ID, externalUserId: DESKTOP_USER_ID },
+          projectId,
+        );
+        return {
+          agents: entries.map((entry) => projectAgentInfo(projectId, entry)),
+        };
+      } catch {
+        // Unknown/deleted project: no agents rather than a broken palette.
+        return { agents: [] };
+      }
+    },
+  );
+
+  // Approve = record consent for the definition's CURRENT hash, binding it
+  // to the profile's matching existing auth: the roster's same-harness
+  // agent's API key when it has one, else the machine's own CLI login for
+  // the CLI kinds. The built-in kind needs a real key, so with none on the
+  // roster the approval is refused with a pointer at Settings.
+  ipcMain.handle(
+    "catamorphic:project-agent-approve",
+    async (
+      _event,
+      projectId: string,
+      slug: string,
+    ): Promise<{ ok: boolean; error?: string }> => {
+      const server = state.current;
+      if (!server) return { ok: false, error: "Server not running" };
+      const entries = await server.catamorphic.core.agentDefinitions.list(
+        { tenantId: DESKTOP_TENANT_ID, externalUserId: DESKTOP_USER_ID },
+        projectId,
+      );
+      const entry = entries.find((candidate) => candidate.slug === slug);
+      if (!entry?.definition) {
+        return { ok: false, error: entry?.invalid?.error ?? "Agent not found" };
+      }
+      const definition = entry.definition;
+      const source = definition.credentials?.source ?? "profile";
+      if (source === "secret") {
+        // Nothing personal to consent to; the secret is the authorization.
+        return { ok: true };
+      }
+      const owning = profileConfig.forProject(projectId);
+      const harness = kindHarness(definition.kind);
+      const match = owning.agents
+        .list()
+        .find((agent) => agent.harness === harness);
+      let auth: BindingAuth;
+      if (definition.kind === "e2e-fake") {
+        auth = { mode: "local" };
+      } else if (match?.auth === "api-key" && match.apiKey) {
+        auth = { mode: "api-key", apiKey: match.apiKey };
+      } else if (harness === "ai-sdk") {
+        // The built-in harness only speaks API keys; without one on the
+        // roster there is nothing safe to bind.
+        return {
+          ok: false,
+          error:
+            "This agent uses the built-in harness, which needs an API key. Add one in Settings → Agents, then approve again.",
+        };
+      } else {
+        auth = { mode: "local" };
+      }
+      owning.agentBindings.bind(projectId, slug, {
+        consentHash: definitionHash(definition, entry.promptFile),
+        auth,
+      });
+      return { ok: true };
+    },
+  );
 
   // --- profile-level MCP connections + connectors ---
   // Connections are the profile's configured MCP servers; connectors are

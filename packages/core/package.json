@@ -28,7 +28,8 @@
     "@catamorphic/plugins": "workspace:*",
     "@catamorphic/sandbox": "workspace:*",
     "@catamorphic/workflow": "workspace:*",
-    "kysely": "^0.29.3"
+    "kysely": "^0.29.3",
+    "zod": "^4.4.3"
   },
   "devDependencies": {
     "@catamorphic/cloudflare": "workspace:*",
