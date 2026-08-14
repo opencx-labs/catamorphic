@@ -29,6 +29,7 @@ import { FriendlyAgentErrors } from "./agent-errors.js";
 import { buildAiSdkAgent } from "./coding-agent.js";
 import { DesktopConfigAgent } from "./desktop-config-agent.js";
 import { E2eFakeCodingAgent } from "./e2e-fakes.js";
+import type { HostSkillsRuntime } from "./host-skills.js";
 import {
   AsyncInitCodingAgent,
   FailFastCodingAgent,
@@ -72,6 +73,14 @@ export interface DesktopAgentRegistryDeps {
     projectId: string,
     name: string,
   ) => Promise<string | undefined>;
+  /**
+   * Host-tier skills (ADR 0049), late-bound: materialized from core's
+   * resolved set after the server boots. The plugin rides the MCP surface
+   * (so claude-code loads the skills natively and the provider cache key
+   * covers it); the note reaches every harness through the workspace
+   * decorator's system prompt.
+   */
+  hostSkills?: () => HostSkillsRuntime | undefined;
   /** E2E: every configured agent resolves to the scripted fake. */
   e2eFake?: boolean;
 }
@@ -221,6 +230,10 @@ export class DesktopAgentRegistry implements CodingAgentRegistry {
         plugins.push({ name: connector.name, path: connector.path });
       }
     }
+    // Host-tier skills ride as a plugin regardless of connection
+    // assignment — they are app doctrine, not a connector.
+    const hostSkillsPlugin = this.deps.hostSkills?.()?.plugin;
+    if (hostSkillsPlugin) plugins.push(hostSkillsPlugin);
     return { servers, plugins };
   }
 
@@ -684,10 +697,9 @@ export class DesktopAgentRegistry implements CodingAgentRegistry {
   ): CodingAgentProvider {
     const bridge = this.deps.workspaceBridge;
     if (!bridge) return provider;
-    return new WorkspaceContextAgent(
-      provider,
-      bridge,
-      opts.hasTools && this.workspaceToolkit !== undefined,
+    const hasTools = opts.hasTools && this.workspaceToolkit !== undefined;
+    return new WorkspaceContextAgent(provider, bridge, hasTools, () =>
+      this.deps.hostSkills?.()?.note(hasTools),
     );
   }
 

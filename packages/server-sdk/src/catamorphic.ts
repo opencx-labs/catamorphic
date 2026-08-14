@@ -181,6 +181,13 @@ export interface CreateCatamorphicConfig {
    */
   projectSeeds?: (defaults: Record<string, string>) => Record<string, string>;
   /**
+   * Transform the default host-tier skills: playbooks the host ships,
+   * listed alongside a project's own `.agents/skills/` without being
+   * written into the project repo. Same contract as `projectSeeds`
+   * (ADR 0049); a project skill with the same name shadows a host skill.
+   */
+  hostSkills?: (defaults: Record<string, string>) => Record<string, string>;
+  /**
    * The standing system prompt for coding-agent sessions: omit for the
    * framework's workflow-authoring default, pass a string to replace it,
    * or `false` for none (ADR 0049).
@@ -273,6 +280,7 @@ export class Catamorphic {
       capabilityProviders: contributions.capabilityProviders,
       projectHooks: contributions.projectHooks,
       projectSeeds: config.projectSeeds,
+      hostSkills: config.hostSkills,
       standingAgentPrompt: config.standingAgentPrompt,
     });
   }

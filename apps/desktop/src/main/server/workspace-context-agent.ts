@@ -30,6 +30,12 @@ export class WorkspaceContextAgent implements CodingAgentProvider {
     private readonly bridge: WorkspaceBridge,
     /** Whether this harness also carries the workspace toolset. */
     private readonly hasTools: boolean,
+    /**
+     * The host-skills section for this harness (ADR 0049), resolved lazily
+     * so sessions started before the server finishes booting still pick it
+     * up. Undefined = no section.
+     */
+    private readonly skillsNote?: () => string | undefined,
   ) {
     this.name = inner.name;
     if (inner.interrupt) {
@@ -57,7 +63,9 @@ export class WorkspaceContextAgent implements CodingAgentProvider {
       : WORKSPACE_CONTEXT_NOTE;
     return this.inner.startSession({
       ...opts,
-      systemPrompt: [opts.systemPrompt, playbook].filter(Boolean).join("\n\n"),
+      systemPrompt: [opts.systemPrompt, playbook, this.skillsNote?.()]
+        .filter(Boolean)
+        .join("\n\n"),
     });
   }
 

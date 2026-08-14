@@ -23,6 +23,7 @@ import {
   Plug,
   Search,
   Settings as SettingsIcon,
+  Sparkles,
   SquareTerminal,
   Star,
   UserRound,
@@ -59,6 +60,7 @@ import {
   type SidebarConfig,
 } from "../lib/desktop-api.js";
 import { formatBinding, useKeybindings } from "../lib/keybindings.js";
+import { useProjectSkills } from "../lib/skills.js";
 import { useApps } from "../screens/app-screen.js";
 import { resolveInput } from "../screens/browser-screen.js";
 import type { WorkspaceTab } from "./workspace-tabs.js";
@@ -416,6 +418,7 @@ export function CommandPalette({
   onSelectProject,
   onSwitchProfile,
   onSendToAgent,
+  onRunSkill,
   actionHandlers,
   agents,
   defaultAgentId,
@@ -449,6 +452,11 @@ export function CommandPalette({
   onSelectProject: (id: string) => void;
   onSwitchProfile: (profile: Profile) => void;
   onSendToAgent: (message: string, mode: "float" | "tab") => void;
+  /**
+   * A skill row was committed: send its invocation message to an agent —
+   * into the focused chat when one exists, else a new chat in `mode`.
+   */
+  onRunSkill: (name: string, mode: "float" | "tab") => void;
   /** One handler per registry action — the same map the shortcuts use. */
   actionHandlers: Record<ActionId, (mode?: "side") => void>;
   /** The profile's configured agents (for the agent/effort pickers). */
@@ -601,6 +609,22 @@ export function CommandPalette({
   const workflows = useWorkflows(projectId).data ?? [];
   const apps = useApps(projectId).data ?? [];
   const sessions = useAgentSessions(projectId).data?.items ?? [];
+  // Fresh on every open, like history below: skills are files an agent or
+  // collaborator may have just written. The tab variant is always "open",
+  // so a new query session (empty → typing) is its refresh moment.
+  const [skillsRefresh, setSkillsRefresh] = useState(0);
+  const hasQuery = query.trim() !== "";
+  useEffect(() => {
+    if (open) setSkillsRefresh((count) => count + 1);
+  }, [open]);
+  useEffect(() => {
+    if (hasQuery) setSkillsRefresh((count) => count + 1);
+  }, [hasQuery]);
+  const skills = useProjectSkills(
+    projectId,
+    variant === "tab" || open,
+    skillsRefresh,
+  );
 
   const [bookmarks, setBookmarks] = useState<Bookmark[]>([]);
   useEffect(() => {
@@ -738,6 +762,28 @@ export function CommandPalette({
       };
     });
   }, [keybindings, hasFocusedChat, enterPicker]);
+
+  // Skills as commands (ADR 0052): a row is just a message send — into the
+  // focused chat when one exists (an action, chat highlighted like other
+  // scoped commands), else a new chat that honors the commit mode.
+  const skillItems = useMemo<PaletteItem[]>(
+    () =>
+      skills.map((skill) => ({
+        id: `skill:${skill.name}`,
+        icon: Sparkles,
+        label: skill.name,
+        detail: skill.source === "host" ? "App skill" : "Skill",
+        keywords: [
+          skill.name,
+          "skill",
+          "use",
+          ...skill.description.split(/\s+/).slice(0, 12),
+        ],
+        kind: hasFocusedChat ? ("action" as const) : ("navigate" as const),
+        run: (mode) => onRunSkill(skill.name, mode === "tab" ? "tab" : "float"),
+      })),
+    [skills, hasFocusedChat, onRunSkill],
+  );
 
   const projectItems = useMemo<PaletteItem[]>(
     () =>
@@ -1232,7 +1278,12 @@ export function CommandPalette({
     // ">" filters to command rows only (VS Code quick-open convention).
     if (trimmed.startsWith(">")) {
       const commandQuery = trimmed.slice(1).trim();
-      const commands = [...actionItems, ...projectItems, ...profileItems];
+      const commands = [
+        ...actionItems,
+        ...skillItems,
+        ...projectItems,
+        ...profileItems,
+      ];
       if (!commandQuery) return commands;
       return commands
         .map((item) => ({
@@ -1247,6 +1298,7 @@ export function CommandPalette({
     if (!trimmed) {
       return [
         ...actionItems,
+        ...skillItems,
         ...projectItems,
         ...profileItems,
         ...sidebarItems,
@@ -1256,6 +1308,7 @@ export function CommandPalette({
 
     const scored = [
       ...actionItems,
+      ...skillItems,
       ...projectItems,
       ...profileItems,
       ...sidebarItems,
@@ -1316,6 +1369,7 @@ export function CommandPalette({
     focusedChat,
     enterMode,
     actionItems,
+    skillItems,
     projectItems,
     profileItems,
     sidebarItems,
@@ -1436,7 +1490,8 @@ export function CommandPalette({
           : selectedId === "action:switch-agent"
             ? "chat"
             : selectedId === "action:change-effort" ||
-                selectedId === "action:switch-model"
+                selectedId === "action:switch-model" ||
+                selectedId?.startsWith("skill:")
               ? focusedChat
                 ? "chat"
                 : null

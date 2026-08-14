@@ -28,11 +28,17 @@ import {
   useRef,
   useState,
 } from "react";
+import { commandScore } from "../lib/command-score";
 import {
   type AgentInfo,
   desktopApi,
   projectAgentAsInfo,
 } from "../lib/desktop-api";
+import {
+  type SkillInfo,
+  skillInvocation,
+  useProjectSkills,
+} from "../lib/skills";
 import { AgentQuestionPanel } from "./agent-question-panel";
 import {
   ChatTimeline,
@@ -778,6 +784,12 @@ export interface ChatDockProps {
    * dock's own dash control.
    */
   registerMinimize?: (minimize: () => void) => void;
+  /**
+   * Hands the host this chat's live sender (palette skill rows, post-auth
+   * continuations). Sends queue behind an in-flight turn like composer
+   * sends do.
+   */
+  registerSend?: (send: (message: string) => void) => void;
   onSessionCreated: (localId: string, sessionId: string) => void;
   /**
    * The chat's live signals changed: the agent started/stopped working,
@@ -819,6 +831,7 @@ export function ChatDock({
   onClose,
   registerClose,
   registerMinimize,
+  registerSend,
   onSessionCreated,
   onSignalsChange,
 }: ChatDockProps) {
@@ -829,6 +842,53 @@ export function ChatDock({
   });
   const [draft, setDraft] = useState("");
   const [attachments, setAttachments] = useState<ComposerAttachment[]>([]);
+
+  // Slash commands (ADR 0052): "/" at the start of the composer lists the
+  // project's skills (both tiers, fetched fresh while relevant); a
+  // committed command sends the skill's invocation message. The menu shows
+  // only while the command token is being typed — a space (arguments)
+  // closes it, and submit still resolves `/name args` to the invocation.
+  const slashing = draft.startsWith("/");
+  const skills = useProjectSkills(projectId, slashing);
+  const slashToken = /^\/([^\s/]*)$/.exec(draft)?.[1];
+  const [slashDismissed, setSlashDismissed] = useState(false);
+  const [slashIndex, setSlashIndex] = useState(0);
+  const slashMatches = useMemo(() => {
+    if (slashToken === undefined) return [];
+    if (!slashToken) return skills;
+    return skills
+      .map((skill) => ({
+        skill,
+        score: commandScore(skill.name, slashToken, [skill.description]),
+      }))
+      .filter((entry) => entry.score > 0)
+      .sort((a, b) => b.score - a.score)
+      .map((entry) => entry.skill);
+  }, [slashToken, skills]);
+  const slashMenuOpen =
+    slashToken !== undefined && !slashDismissed && slashMatches.length > 0;
+  const slashSelected = Math.min(slashIndex, slashMatches.length - 1);
+  // biome-ignore lint/correctness/useExhaustiveDependencies: the token is the trigger — each command keystroke resets the selection
+  useEffect(() => {
+    setSlashIndex(0);
+  }, [slashToken]);
+
+  /** Commit a slash-menu row: send the invocation (attachments ride along). */
+  const runSlash = (skill: SkillInfo) => {
+    const files = attachments.map(({ id: _id, ...attachment }) => attachment);
+    setDraft("");
+    setAttachments([]);
+    setRecall(null);
+    void chat.send(skillInvocation(skill.name), files);
+  };
+
+  /** `/name args` sent as text still resolves to the skill invocation. */
+  const resolveSlashMessage = (message: string): string => {
+    const match = /^\/(\S+)(?:\s+([\s\S]+))?$/.exec(message);
+    if (!match?.[1]) return message;
+    const skill = skills.find((entry) => entry.name === match[1]);
+    return skill ? skillInvocation(skill.name, match[2]) : message;
+  };
   const { messages, activity, questions } = toTimeline(
     chat.messages,
     chat.optimisticMessages,
@@ -1155,6 +1215,9 @@ export function ChatDock({
   useEffect(() => {
     registerMinimize?.(() => animatedMinimizeRef.current());
   }, [registerMinimize]);
+  useEffect(() => {
+    registerSend?.((message) => void sendRef.current(message));
+  }, [registerSend]);
 
   const dismiss = () => {
     if (isEmpty) animatedClose();
@@ -1183,18 +1246,56 @@ export function ChatDock({
     event?.preventDefault();
     const composed = takeComposer();
     if (!composed) return;
-    void chat.send(composed.message, composed.files);
+    void chat.send(resolveSlashMessage(composed.message), composed.files);
   };
 
   /** ⌘↵: jump the queue — interrupt the running turn and send this now. */
   const submitNow = () => {
     const composed = takeComposer();
     if (!composed) return;
-    void chat.sendNow(composed.message, composed.files);
+    void chat.sendNow(resolveSlashMessage(composed.message), composed.files);
   };
 
   const onKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>) => {
     if (event.nativeEvent.isComposing) return;
+    // The slash menu owns navigation keys while open (before recall's
+    // ArrowUp/Down claim below). Escape closes it and stays in the
+    // composer — preventDefault keeps the window listener from stepping
+    // the whole chat down.
+    if (slashMenuOpen) {
+      if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+        event.preventDefault();
+        setSlashIndex((current) => {
+          const last = slashMatches.length - 1;
+          const at = Math.min(current, last);
+          return event.key === "ArrowDown"
+            ? Math.min(at + 1, last)
+            : Math.max(at - 1, 0);
+        });
+        return;
+      }
+      if (event.key === "Tab") {
+        // Complete the name, keep typing arguments.
+        event.preventDefault();
+        const skill = slashMatches[slashSelected];
+        if (skill) {
+          setDraft(`/${skill.name} `);
+          setRecall(null);
+        }
+        return;
+      }
+      if (event.key === "Escape") {
+        event.preventDefault();
+        setSlashDismissed(true);
+        return;
+      }
+      if (event.key === "Enter" && !event.shiftKey && !event.metaKey) {
+        event.preventDefault();
+        const skill = slashMatches[slashSelected];
+        if (skill) runSlash(skill);
+        return;
+      }
+    }
     if (event.key === "PageUp") {
       event.preventDefault();
       jumpToPreviousRef.current?.();
@@ -1528,9 +1629,54 @@ export function ChatDock({
               />
             )}
             <form
-              className="field m-3 mt-1 flex shrink-0 flex-col rounded-xl bg-bg-raised/95 p-1.5"
+              className="field relative m-3 mt-1 flex shrink-0 flex-col rounded-xl bg-bg-raised/95 p-1.5"
               onSubmit={submit}
             >
+              {/* "/" command menu: skills as slash commands (ADR 0052).
+                  Rows commit on mousedown like the palette, so the
+                  textarea never loses focus. */}
+              {slashMenuOpen && (
+                <div
+                  role="listbox"
+                  aria-label="Skills"
+                  data-testid="slash-menu"
+                  className="absolute bottom-full left-0 z-20 mb-1.5 max-h-64 w-full overflow-y-auto rounded-lg border border-border bg-bg-raised/95 p-1.5 shadow-2xl backdrop-blur-xl"
+                >
+                  {slashMatches.map((skill, index) => (
+                    <div
+                      key={skill.name}
+                      role="option"
+                      tabIndex={-1}
+                      aria-selected={index === slashSelected}
+                      data-skill-name={skill.name}
+                      onMouseDown={(event) => {
+                        event.preventDefault();
+                        runSlash(skill);
+                      }}
+                      onMouseEnter={() => setSlashIndex(index)}
+                      className={`flex cursor-pointer items-baseline gap-2 rounded-md px-2 py-1.5 text-sm ${
+                        index === slashSelected
+                          ? "bg-bg-overlay text-fg"
+                          : "text-fg-muted"
+                      }`}
+                    >
+                      <span className="shrink-0 font-medium">
+                        /{skill.name}
+                      </span>
+                      {skill.description && (
+                        <span className="min-w-0 truncate text-xs text-fg-faint">
+                          {skill.description}
+                        </span>
+                      )}
+                      {skill.source === "host" && (
+                        <span className="ml-auto shrink-0 rounded border border-border px-1 text-[10px] text-fg-faint">
+                          App
+                        </span>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              )}
               {/* Pasted media waits as chips until the message sends. */}
               {attachments.length > 0 && (
                 <div
@@ -1616,8 +1762,10 @@ export function ChatDock({
                   value={draft}
                   onChange={(event) => {
                     setDraft(event.target.value);
-                    // Typing exits history-recall mode.
+                    // Typing exits history-recall mode and revives a
+                    // dismissed slash menu.
                     setRecall(null);
+                    setSlashDismissed(false);
                   }}
                   onKeyDown={onKeyDown}
                   placeholder={

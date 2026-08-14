@@ -1188,3 +1188,80 @@ check after each fix and remove temporary error suppressions.
   ...scaffoldSupportFiles(),
   ...appSupportFiles(),
 };
+
+/**
+ * Host-tier skills: playbooks the HOST ships, listed alongside a project's
+ * own `.agents/skills/` without ever being written into the project repo.
+ * Keys are paths relative to a host-skills root (`<name>/SKILL.md`), so a
+ * host can materialize the set on disk (e.g. as a Claude Code plugin) with
+ * the layout intact.
+ *
+ * These are the framework DEFAULTS: an embedder replaces, extends, or
+ * removes them through `CatamorphicCoreConfig.hostSkills` (ADR 0049 — same
+ * contract as `projectSeeds`). A project skill with the same name shadows a
+ * host skill everywhere.
+ */
+export const HOST_SKILLS: Record<string, string> = {
+  "publishing-to-github/SKILL.md": `---
+name: publishing-to-github
+description: Publish a project to GitHub — log the user into GitHub if needed, then push to a new repository or an existing empty one. Use when the user wants a project on GitHub, or wants to push, publish, or share a project that has no GitHub remote yet.
+---
+
+# Publishing a project to GitHub
+
+Goal: the project folder pushed to a GitHub repository the user owns, with
+\`origin\` configured so later pushes work.
+
+This flow is for projects with NO GitHub remote yet. If \`git remote -v\`
+already shows an origin, or the project was imported from GitHub, use the
+sync_project / create_pull_request tools instead — and never replace an
+existing remote without asking.
+
+Run everything below in a terminal at the project root (run_terminal, or
+your own shell if you have one).
+
+## 1. Preflight
+
+- \`git rev-parse --is-inside-work-tree\` — every project is a git
+  repository; in the unexpected case this fails, \`git init\` first.
+- \`git log --oneline -1\` — if there are no commits yet, create one from
+  what's there (\`git add -A && git commit\`); an empty project can get an
+  empty initial commit (\`git commit --allow-empty -m "init"\`) so there is
+  something to push.
+- \`command -v gh\` — the GitHub CLI handles both login and repo creation
+  in this flow. If it is missing, ask the user before installing it
+  (\`brew install gh\` on macOS).
+
+## 2. Authentication
+
+- \`gh auth status\` — already logged in? Continue.
+- If not: tell the user you are starting GitHub login, then run
+  \`gh auth login --web --git-protocol https\` in a visible terminal. It
+  prints a one-time code and opens the browser; the user finishes there.
+  Wait for the command to exit, then re-check \`gh auth status\`.
+- Never ask the user to paste tokens or passwords into the chat.
+
+## 3. Confirm before pushing
+
+Pushing is outward-facing. Confirm with the user before creating anything:
+the repository name, the owner (personal account or an organization), and
+visibility — default to private unless they say otherwise.
+
+## 4. Push
+
+- New repository:
+  \`gh repo create <owner>/<name> --private --source=. --remote=origin --push\`
+  (swap \`--private\` for \`--public\` if that was the choice).
+- Existing empty repository:
+  \`git remote add origin <url>\` then \`git push -u origin HEAD\`.
+  If the push is rejected because the repository is not actually empty,
+  stop and ask — never force-push over someone's existing history.
+
+## 5. Wrap up
+
+Report the repository URL. Note for the user: the app's automatic sync
+applies to projects imported from GitHub; this project now pushes and pulls
+through its git \`origin\` remote — you can run those pushes for them on
+request.
+`,
+};

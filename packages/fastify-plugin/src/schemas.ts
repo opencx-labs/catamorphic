@@ -806,6 +806,7 @@ export const SkillSchema = z.object({
   name: z.string(),
   description: z.string(),
   path: z.string(),
+  source: z.enum(["project", "host"]),
 });
 
 // --- Project agent definitions (ADR 0050) ---

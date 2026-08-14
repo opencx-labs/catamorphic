@@ -35,6 +35,12 @@ export interface DataPaths {
    * agents on the same harness can sign into different accounts.
    */
   agentHomesDir: string;
+  /**
+   * Host-tier skills (ADR 0049) materialized as a Claude Code plugin
+   * (`.claude-plugin/plugin.json` + `skills/<name>/SKILL.md`), so the
+   * claude-code harness discovers them natively. Rewritten at boot.
+   */
+  hostSkillsDir: string;
 }
 
 export function resolveDataPaths(): DataPaths {
@@ -54,5 +60,6 @@ export function resolveDataPaths(): DataPaths {
     themeFile: path.join(userData, "theme.json"),
     profilesDir: path.join(userData, "profiles"),
     agentHomesDir: path.join(userData, "agent-homes"),
+    hostSkillsDir: path.join(userData, "host-skills"),
   };
 }

@@ -144,6 +144,19 @@ export interface WorkspaceBridge {
     label: string | undefined,
     request: ElicitRequest,
   ): Promise<ElicitResult>;
+  /**
+   * An agent asks for a connector: the front window opens the connectors
+   * modal pre-filled with the agent's search query; the user decides what
+   * (if anything) to install. Resolves with the names of connections
+   * installed while the request was open. Long-lived — install flows
+   * include secrets forms and OAuth handoffs.
+   */
+  requestConnection(
+    projectId: string,
+    sessionId: string,
+    query: string,
+    reason: string | undefined,
+  ): Promise<{ installed: string[] }>;
 }
 
 const RPC_TIMEOUT_MS = 12_000;
@@ -343,6 +356,38 @@ export function registerAgentBridge(agentTerminals: AgentTerminals): {
           params,
         });
       }
+      setTimeout(() => {
+        if (pending.delete(id)) resolve(null);
+      }, timeoutMs);
+    });
+  };
+
+  /**
+   * Ask ONE window — the focused one, else the first alive — for flows
+   * that open interactive UI (a broadcast would pop the same modal in
+   * every window showing the project).
+   */
+  const rpcToFront = <T>(
+    method: string,
+    params: unknown,
+    timeoutMs = RPC_TIMEOUT_MS,
+  ): Promise<T | null> => {
+    const windows = BrowserWindow.getAllWindows().filter(
+      (window) => !window.isDestroyed(),
+    );
+    const target = BrowserWindow.getFocusedWindow() ?? windows[0];
+    if (!target || target.isDestroyed()) return Promise.resolve(null);
+    const id = ++nextId;
+    return new Promise<T | null>((resolve) => {
+      pending.set(id, {
+        resolve: resolve as (value: unknown) => void,
+        remaining: 1,
+      });
+      target.webContents.send("catamorphic:bridge-request", {
+        id,
+        method,
+        params,
+      });
       setTimeout(() => {
         if (pending.delete(id)) resolve(null);
       }, timeoutMs);
@@ -715,6 +760,17 @@ export function registerAgentBridge(agentTerminals: AgentTerminals): {
       // No window, or the user closed it without answering → decline; a
       // pending tool call must never hang forever on a missing UI.
       return result ?? { action: "decline" };
+    },
+
+    async requestConnection(projectId, sessionId, query, reason) {
+      const result = await rpcToFront<{ installed: string[] }>(
+        "requestConnection",
+        { projectId, sessionId, query, reason },
+        ELICIT_TIMEOUT_MS,
+      );
+      // No window, or the request expired unanswered → nothing installed;
+      // the tool call must resolve either way.
+      return result ?? { installed: [] };
     },
 
     async setControl(projectId, key, controlled) {

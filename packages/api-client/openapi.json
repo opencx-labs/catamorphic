@@ -8939,9 +8939,13 @@
                       },
                       "path": {
                         "type": "string"
+                      },
+                      "source": {
+                        "type": "string",
+                        "enum": ["project", "host"]
                       }
                     },
-                    "required": ["name", "description", "path"],
+                    "required": ["name", "description", "path", "source"],
                     "additionalProperties": false
                   }
                 }

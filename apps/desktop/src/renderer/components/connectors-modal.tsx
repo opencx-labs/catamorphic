@@ -26,11 +26,18 @@ export function ConnectorsModal({
   open,
   onClose,
   onOpenUrl,
+  agentRequest,
 }: {
   open: boolean;
   onClose: () => void;
   /** Open a connector's page (repo/readme) in a browser tab. */
   onOpenUrl: (url: string) => void;
+  /**
+   * Set while an agent's request_connection is waiting on this modal:
+   * seeds the search with the agent's query (on open) and shows why the
+   * agent asked. The user stays in charge of what actually installs.
+   */
+  agentRequest?: { query: string; reason?: string } | null;
 }) {
   const [connections, setConnections] = useState<ConnectionInfo[]>([]);
   const [installed, setInstalled] = useState<InstalledConnectorInfo[]>([]);
@@ -68,6 +75,20 @@ export function ConnectorsModal({
     const frame = requestAnimationFrame(() => inputRef.current?.focus());
     return () => cancelAnimationFrame(frame);
   }, [open]);
+
+  // An agent request seeds the search ONCE per open — after that the box
+  // is the user's; re-renders must not clobber their typing.
+  const seededRef = useRef(false);
+  useEffect(() => {
+    if (!open) {
+      seededRef.current = false;
+      return;
+    }
+    if (agentRequest && !seededRef.current) {
+      seededRef.current = true;
+      setQuery(agentRequest.query);
+    }
+  }, [open, agentRequest]);
 
   // Live search: debounce keystrokes, keep only the latest response. An
   // empty query still lists the browsable defaults once the modal opens.
@@ -193,6 +214,24 @@ export function ConnectorsModal({
           Installed connectors work with every agent; assign them per agent when
           editing it.
         </p>
+
+        {agentRequest && (
+          <div
+            className="mb-3 flex items-start gap-2 rounded-md border border-accent/40 bg-accent/10 px-2.5 py-2 text-xs"
+            data-testid="agent-connection-request"
+          >
+            <Plug className="mt-0.5 size-3.5 shrink-0 text-accent" />
+            <div className="min-w-0">
+              <span className="font-medium text-fg">
+                Your agent asks to connect “{agentRequest.query}”.
+              </span>{" "}
+              <span className="text-fg-muted">
+                {agentRequest.reason ??
+                  "Install it below to let the agent continue, or just close this."}
+              </span>
+            </div>
+          </div>
+        )}
 
         <input
           ref={inputRef}

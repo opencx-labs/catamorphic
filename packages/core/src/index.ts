@@ -17,6 +17,7 @@ export {
 } from "./identity.js";
 export {
   appScaffold,
+  HOST_SKILLS,
   PROJECT_CHECK_SCRIPT,
   PROJECT_CHECK_SCRIPT_PATH,
   SEED_SKILLS,
@@ -247,6 +248,7 @@ export {
   SecretsService,
 } from "./services/secrets-service.js";
 export {
+  parseSkillFrontmatter,
   type ProjectSkill,
   SKILLS_DIR,
   SkillsService,

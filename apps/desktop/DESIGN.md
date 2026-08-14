@@ -2105,3 +2105,28 @@ Patterned on what best-in-class palettes converged on (Chrome omnibox
   `useTemplates`, and `templateId` across HTTP, SDK, IPC, and preload.
   `packages/core/src/templates.ts` is renamed `seeds.ts` — what remains
   is what was always the real mechanism.
+
+### 2026-08-14 — Skills as commands; agents ask for connectors (ADR 0052)
+
+- **A skill invocation is a message.** Palette skill rows and composer
+  `/` commands compose one harness-neutral sentence — `Use the "<name>"
+  skill.` — and send it to a chat. With a chat focused, the palette row
+  is an action into that chat (same border accent as other scoped
+  commands, via a registered-sender map beside the close/minimize
+  registrations); with none, it's send-to-agent (float/⌘-tab rules).
+  The composer menu opens on `/` while the command token is being typed
+  (↑/↓/Tab/Enter/Escape before history-recall's arrow claim), and a
+  submitted `/name args` resolves to the invocation either way.
+- **Host skills** (ADR 0049's third hook): playbooks the app ships —
+  `publishing-to-github` first — merged into the skill list with
+  `source: "host"`, never written into the project. Claude Code loads
+  them natively from an app-data plugin (no symlinks; core stays the
+  source of truth); every other harness gets a Skills section in the
+  workspace prompt plus a `read_skill` tool (both tiers, by name).
+- **Agents can request connectors**: `request_connection` opens the
+  connectors modal seeded with the agent's query + a consent banner; the
+  user decides what installs, secrets never transit the chat. New tools
+  can't mount mid-turn, so the tool result says "finish your turn" and a
+  real install queues a continuation message — it dispatches after the
+  turn settles, when the provider cache (keyed on the MCP surface) has
+  already rebuilt the harness. The turn seam is the restart story.

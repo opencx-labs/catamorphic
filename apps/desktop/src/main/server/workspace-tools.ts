@@ -44,6 +44,20 @@ export type AppBuilder = (
   error?: string;
 }>;
 
+/**
+ * Reads a skill's SKILL.md by declared name — project tier (repo files) and
+ * host tier (ADR 0049) alike; wired to core's SkillsService after boot.
+ */
+export type SkillReader = (
+  projectId: string,
+  name: string,
+) => Promise<{
+  name: string;
+  source: "project" | "host";
+  path: string;
+  content: string;
+} | null>;
+
 /** Remote-sync + pull-request operations; wired to core after boot (ADR 0044). */
 export interface GitBridge {
   sync(projectId: string): Promise<{ status: string; rescueBranch?: string }>;
@@ -63,6 +77,8 @@ export interface WorkspaceToolkit {
   setAppBuilder(builder: AppBuilder): void;
   /** Late-bound: remote sync lives in core, which exists only after boot. */
   setGitBridge(git: GitBridge): void;
+  /** Late-bound: skills live in core, which exists only after boot. */
+  setSkillReader(reader: SkillReader): void;
 }
 
 const TRANSCRIPT_MESSAGE_CAP = 40;
@@ -75,6 +91,7 @@ export function buildWorkspaceToolkit(
   let setChatIcon: ChatIconSetter | null = null;
   let buildApp: AppBuilder | null = null;
   let gitBridge: GitBridge | null = null;
+  let readSkill: SkillReader | null = null;
 
   const tools: ExtraTool[] = [
     {
@@ -448,6 +465,62 @@ export function buildWorkspaceToolkit(
       },
     },
     {
+      name: "request_connection",
+      description:
+        "Ask the user to connect an external service (a connector/MCP server — e.g. Linear, Notion, a database) that the current task needs but isn't connected yet. Opens the app's connector setup pre-filled with your search query; the user reviews, authenticates, and installs — never ask them to paste credentials into the chat. If something was installed, its tools are NOT available in this turn: finish your turn promptly and say what you'll do next — the conversation continues automatically with the new connection mounted.",
+      parameters: {
+        query: z
+          .string()
+          .min(1)
+          .describe(
+            "What to search the connector catalogs for (a service name works best, e.g. 'linear')",
+          ),
+        reason: z
+          .string()
+          .optional()
+          .describe("One sentence shown to the user: why you need it"),
+      },
+      execute: async (input, ctx) => {
+        const { installed } = await bridge.requestConnection(
+          ctx.projectId,
+          ctx.sessionId ?? "",
+          String(input.query),
+          typeof input.reason === "string" ? input.reason : undefined,
+        );
+        if (installed.length === 0) {
+          return {
+            installed: [],
+            note: "The user didn't install a connection. Continue without it or ask them what they'd prefer.",
+          };
+        }
+        return {
+          installed,
+          note: `Installed: ${installed.join(", ")}. These tools become available on your NEXT turn — end this turn with a brief status; the conversation resumes automatically.`,
+        };
+      },
+    },
+    {
+      name: "read_skill",
+      description:
+        "Load a skill (a reusable playbook) by its declared name and return its SKILL.md content. Covers both tiers: project skills (files under .agents/skills/ in this project) and app skills shipped by the app. Use it when the user invokes a skill by name ('use the X skill', a palette or / command) or a task matches a skill's description from your skill listing — then follow the returned instructions.",
+      parameters: {
+        name: z
+          .string()
+          .min(1)
+          .describe("The skill's declared name, e.g. 'publishing-to-github'"),
+      },
+      execute: async (input, ctx) => {
+        if (!readSkill) throw new Error("Skills are not available yet.");
+        const result = await readSkill(ctx.projectId, String(input.name));
+        if (!result) {
+          throw new Error(
+            `No skill named '${String(input.name)}' exists in this project.`,
+          );
+        }
+        return result;
+      },
+    },
+    {
       name: "surface_control",
       description:
         "Manage a browser tab or terminal you control: 'release' hands it to the user once you're done driving it (do this whenever you finish a page or an interactive command; the tab stays open for them); 'reclaim' takes a surface back after the user took over (only when your task still needs it, and if they're actively using it, ask first); 'close' closes the tab entirely (terminals also end their process). Close surfaces that were only scaffolding; release ones the user will want.",
@@ -487,6 +560,9 @@ export function buildWorkspaceToolkit(
     },
     setGitBridge(git) {
       gitBridge = git;
+    },
+    setSkillReader(reader) {
+      readSkill = reader;
     },
   };
 }

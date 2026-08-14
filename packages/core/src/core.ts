@@ -7,7 +7,7 @@ import type {
 } from "@catamorphic/sandbox";
 import { instrumentSandboxProvider } from "@catamorphic/sandbox";
 import type { Kysely } from "kysely";
-import { SEED_SKILLS } from "./seeds.js";
+import { HOST_SKILLS, SEED_SKILLS } from "./seeds.js";
 import { AgentContextService } from "./services/agent-context-service.js";
 import { AgentDefinitionsService } from "./services/agent-definitions-service.js";
 import {
@@ -168,6 +168,14 @@ export interface CatamorphicCoreConfig {
    */
   projectSeeds?: (defaults: Record<string, string>) => Record<string, string>;
   /**
+   * Transform the default host-tier skills (ADR 0049): playbooks the host
+   * ships, listed alongside a project's own `.agents/skills/` without being
+   * written into the project repo. Receives the framework defaults keyed by
+   * `<name>/SKILL.md`; return the final map. Replacing or removing entries
+   * is legitimate. A project skill with the same name shadows a host skill.
+   */
+  hostSkills?: (defaults: Record<string, string>) => Record<string, string>;
+  /**
    * The standing system prompt prepended to every coding-agent session.
    * `undefined` keeps the framework default (the workflow-authoring
    * primer), a string replaces it, `false` removes it entirely
@@ -218,6 +226,8 @@ export class CatamorphicCore {
   readonly capabilities: CapabilityRegistry;
   /** The resolved per-project seed files, after the host's hook (ADR 0049). */
   readonly seedFiles: Record<string, string>;
+  /** The resolved host-tier skill files, after the host's hook (ADR 0049). */
+  readonly hostSkillFiles: Record<string, string>;
 
   constructor(config: CatamorphicCoreConfig) {
     this.db = config.db;
@@ -225,6 +235,8 @@ export class CatamorphicCore {
     // Doctrine resolves ONCE, at boot: every consumer below (project
     // creation, skill restore) sees the same host-final set (ADR 0049).
     this.seedFiles = config.projectSeeds?.({ ...SEED_SKILLS }) ?? SEED_SKILLS;
+    this.hostSkillFiles =
+      config.hostSkills?.({ ...HOST_SKILLS }) ?? HOST_SKILLS;
     this.sandboxProvider = config.sandboxProvider
       ? instrumentSandboxProvider(config.sandboxProvider)
       : undefined;
@@ -376,7 +388,9 @@ export class CatamorphicCore {
       executionWorker,
     });
 
-    this.skills = new SkillsService(this.db, this.projectManager);
+    this.skills = new SkillsService(this.db, this.projectManager, {
+      hostSkills: this.hostSkillFiles,
+    });
     // Committed project agent definitions (ADR 0050). The "e2e-fake" kind
     // is a desktop test seam, accepted only under the e2e flag — mirroring
     // how the desktop swaps in its fake harness and pick-folder stub.

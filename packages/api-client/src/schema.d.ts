@@ -4280,6 +4280,8 @@ export interface paths {
                             name: string;
                             description: string;
                             path: string;
+                            /** @enum {string} */
+                            source: "project" | "host";
                         }[];
                     };
                 };

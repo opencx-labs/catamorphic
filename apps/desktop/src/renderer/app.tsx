@@ -81,6 +81,7 @@ import {
   useKeybindings,
 } from "./lib/keybindings.js";
 import { notifyDesktop, playChime } from "./lib/notify.js";
+import { skillInvocation } from "./lib/skills.js";
 import { AppScreen, useApps } from "./screens/app-screen.js";
 import {
   type BrowserPageState,
@@ -524,12 +525,14 @@ export function App() {
     return desktopApi.onAgentsChanged(setAgentsData);
   }, []);
 
-
   // The agent setup wizard: one experience behind every entry point — the
   // auto-opened tab on agent-less profiles, the modal that gates starting
   // a chat with no agents, Settings' "Add agent", and the palette command.
   const [wizardModalOpen, setWizardModalOpen] = useState(false);
   const [connectorsModalOpen, setConnectorsModalOpen] = useState(false);
+  // Ref'd for the agent-bridge handler (a mount-time effect closure).
+  const setConnectorsModalOpenRef = useRef(setConnectorsModalOpen);
+  setConnectorsModalOpenRef.current = setConnectorsModalOpen;
   // Profiles whose auto-opened setup tab the user closed this session —
   // closing it skips setup (the modal still gates chat attempts).
   const setupDismissedRef = useRef(new Set<string>());
@@ -982,6 +985,11 @@ export function App() {
   // must play the dock's collapse before the mode flips, exactly like
   // the dash control (the tween runs before the workspace re-render).
   const chatMinimizersRef = useRef(new Map<string, () => void>());
+
+  // Live message senders per chat dock — how anything outside a dock
+  // (skill palette rows, post-auth continuations) speaks into an already
+  // open chat. Sends queue behind an in-flight turn like composer sends.
+  const chatSendersRef = useRef(new Map<string, (message: string) => void>());
 
   // Webview guest WebContents ids per browser tab — the agent bridge
   // drives pages from the main process by guest id.
@@ -1626,6 +1634,21 @@ export function App() {
     ? sessionsById.get(focusedChat.sessionId)
     : undefined;
 
+  // Palette skill rows (ADR 0052): the invocation lands in the focused
+  // chat when one exists — the border-accented target — else it starts a
+  // new chat exactly like "Send to agent".
+  const runSkill = (name: string, mode: "float" | "tab") => {
+    const send = focusedChat
+      ? chatSendersRef.current.get(focusedChat.localId)
+      : undefined;
+    if (focusedChat && send) {
+      send(skillInvocation(name));
+      revealChat(focusedChat.localId);
+      return;
+    }
+    sendToAgent(skillInvocation(name), mode);
+  };
+
   const updateSession = useUpdateAgentSession(projectId);
   const forkSession = useForkAgentSession(projectId);
 
@@ -1975,6 +1998,42 @@ export function App() {
   );
   const setElicitationRef = useRef(setElicitation);
   setElicitationRef.current = setElicitation;
+
+  // Pending request_connection from an agent: the connectors modal opens
+  // seeded with the agent's query; closing it settles the tool call with
+  // whatever got installed meanwhile (diffed by connection id), and a
+  // fresh install queues a continuation message into the asking chat.
+  const [connectorRequest, setConnectorRequest] = useState<{
+    query: string;
+    reason?: string;
+    sessionId: string;
+    before: Set<string>;
+    resolve: (result: { installed: string[] }) => void;
+  } | null>(null);
+  const setConnectorRequestRef = useRef(setConnectorRequest);
+  setConnectorRequestRef.current = setConnectorRequest;
+
+  // Settle a pending request_connection when the connectors modal closes:
+  // the diff of connection ids is what the user actually installed, and a
+  // fresh install queues a continuation into the asking chat — the send
+  // waits behind the in-flight turn, and by the time it dispatches the
+  // provider has rebuilt with the new MCP surface (its cache key covers
+  // connections), so the next turn runs with the connector mounted.
+  const finalizeConnectorRequest = async () => {
+    const request = connectorRequest;
+    if (!request) return;
+    const after = await desktopApi.connectionsList().catch(() => []);
+    const installed = after
+      .filter((connection) => !request.before.has(connection.id))
+      .map((connection) => connection.name);
+    request.resolve({ installed });
+    if (installed.length === 0) return;
+    const chat = workspaceRef.current.chats.find(
+      (entry) => entry.sessionId === request.sessionId,
+    );
+    const send = chat ? chatSendersRef.current.get(chat.localId) : undefined;
+    send?.(`The ${installed.join(", ")} connection is now set up — continue.`);
+  };
 
   // The tab being dragged from the strip (drop targets render while set).
   const [tabDragKey, setTabDragKey] = useState<string | null>(null);
@@ -2788,6 +2847,30 @@ export function App() {
             });
           });
         }
+        case "requestConnection": {
+          // Main sends this to ONE window (focused, else first) — no
+          // renderer-side focus guard, so an unfocused single window
+          // still shows the modal instead of silently declining.
+          const query = typeof params.query === "string" ? params.query : "";
+          const reason =
+            typeof params.reason === "string" ? params.reason : undefined;
+          const sessionId =
+            typeof params.sessionId === "string" ? params.sessionId : "";
+          const before = await desktopApi.connectionsList().catch(() => []);
+          return new Promise<unknown>((resolve) => {
+            setConnectorRequestRef.current({
+              query,
+              reason,
+              sessionId,
+              before: new Set(before.map((connection) => connection.id)),
+              resolve: (result) => {
+                setConnectorRequestRef.current(null);
+                resolve(result);
+              },
+            });
+            setConnectorsModalOpenRef.current(true);
+          });
+        }
         case "surfaceControl": {
           const key = String(params.key);
           const controlled = Boolean(params.controlled);
@@ -3100,6 +3183,7 @@ export function App() {
         onSelectProject: selectProject,
         onSwitchProfile: switchProfile,
         onSendToAgent: sendToAgent,
+        onRunSkill: runSkill,
         actionHandlers,
         agents: agentsData?.agents ?? [],
         defaultAgentId: agentsData?.defaultAgentId ?? null,
@@ -3695,6 +3779,9 @@ export function App() {
                   registerMinimize={(minimize) =>
                     chatMinimizersRef.current.set(entry.localId, minimize)
                   }
+                  registerSend={(send) =>
+                    chatSendersRef.current.set(entry.localId, send)
+                  }
                   onSessionCreated={onSessionCreated}
                   onSignalsChange={onSignalsChange}
                 />
@@ -3748,8 +3835,21 @@ export function App() {
       {/* Connectors manager: reachable from the palette and Settings. */}
       <ConnectorsModal
         open={connectorsModalOpen}
-        onClose={() => setConnectorsModalOpen(false)}
+        onClose={() => {
+          setConnectorsModalOpen(false);
+          void finalizeConnectorRequest();
+        }}
         onOpenUrl={(url) => openBrowserTab(url)}
+        agentRequest={
+          connectorRequest
+            ? {
+                query: connectorRequest.query,
+                ...(connectorRequest.reason
+                  ? { reason: connectorRequest.reason }
+                  : {}),
+              }
+            : null
+        }
       />
 
       {/* Boot veil: covers the workspace until its first real paint is

@@ -463,6 +463,74 @@ export class E2eFakeCodingAgent implements CodingAgentProvider {
       return;
     }
 
+    // `Use the "<name>" skill` — the EXACT message palette skill rows and
+    // composer /commands send — runs the REAL read_skill tool, so skill
+    // e2e covers renderer → invocation message → toolkit → core's merged
+    // tiers (project files + host skills) end to end.
+    const skillRun = /^Use the "([^"]+)" skill[.:]?/.exec(message.trim());
+    if (skillRun?.[1]) {
+      const name = skillRun[1];
+      const tool = this.workspaceTools.find(
+        (candidate) => candidate.name === "read_skill",
+      );
+      if (!tool) {
+        yield { type: "error", content: "read_skill unavailable" };
+        yield { type: "done" };
+        return;
+      }
+      yield { type: "title", content: "Skill exercise" };
+      try {
+        const result = (await tool.execute({ name }, state.toolContext)) as {
+          source?: string;
+          content?: string;
+        };
+        yield {
+          type: "text",
+          content: `skill loaded: ${name} (source:${result.source ?? "?"}, ${String(result.content ?? "").length} chars)`,
+        };
+      } catch (error) {
+        yield {
+          type: "text",
+          content: `skill error: ${error instanceof Error ? error.message : String(error)}`,
+        };
+      }
+      yield { type: "done" };
+      return;
+    }
+
+    // "connect: <query>" → the REAL request_connection tool: the front
+    // window opens the connectors modal seeded with the query; the tool
+    // resolves with whatever the user (the test) installed before closing.
+    const connectRun = /^connect:\s*(.+)$/s.exec(message.trim());
+    if (connectRun?.[1]) {
+      const tool = this.workspaceTools.find(
+        (candidate) => candidate.name === "request_connection",
+      );
+      if (!tool) {
+        yield { type: "error", content: "request_connection unavailable" };
+        yield { type: "done" };
+        return;
+      }
+      yield { type: "title", content: "Connection request" };
+      try {
+        const result = (await tool.execute(
+          { query: connectRun[1].trim(), reason: "E2E exercise" },
+          state.toolContext,
+        )) as { installed?: string[] };
+        yield {
+          type: "text",
+          content: `connection request settled: installed=[${(result.installed ?? []).join(", ")}]`,
+        };
+      } catch (error) {
+        yield {
+          type: "text",
+          content: `connection error: ${error instanceof Error ? error.message : String(error)}`,
+        };
+      }
+      yield { type: "done" };
+      return;
+    }
+
     // "show: <target>" → the REAL open_surface tool (focused open behind
     // the chat, or a background open + chip attention when the user is
     // elsewhere — the echoed "opened" field says which). "show later:"

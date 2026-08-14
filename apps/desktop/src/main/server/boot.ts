@@ -25,6 +25,10 @@ import type { ProfilesStore } from "../profiles.js";
 import { DesktopAgentRegistry } from "./agent-registry.js";
 import { E2eLocalSandboxProvider } from "./e2e-fakes.js";
 import { FileGithubTokenStore, GITHUB_APP } from "./github.js";
+import {
+  type HostSkillsRuntime,
+  materializeHostSkills,
+} from "./host-skills.js";
 import type { DataPaths } from "./paths.js";
 import { ProjectRootsStore } from "./project-roots.js";
 import {
@@ -90,6 +94,9 @@ export async function startEmbeddedServer(
   let projectSecretResolver:
     | ((projectId: string, name: string) => Promise<string | undefined>)
     | undefined;
+  // Host-tier skills (ADR 0049) materialize from core's resolved set once
+  // createCatamorphic returns; the registry reads them lazily (same seam).
+  let hostSkillsRuntime: HostSkillsRuntime | undefined;
   const agentRegistry = new DesktopAgentRegistry({
     profiles,
     profileConfig,
@@ -109,6 +116,7 @@ export async function startEmbeddedServer(
     projectRootPath: (projectId) => projectRoots.getSync(projectId),
     projectSecret: (projectId, name) =>
       projectSecretResolver?.(projectId, name) ?? Promise.resolve(undefined),
+    hostSkills: () => hostSkillsRuntime,
   });
   if (e2eFakeAgent) {
     const agents = profileConfig.forDefaultProfile().agents;
@@ -276,6 +284,36 @@ export async function startEmbeddedServer(
         projectId,
         input,
       ),
+  });
+
+  // Host-tier skills (ADR 0049): the desktop passes no hook, so this is the
+  // framework default set, staged as a native Claude Code plugin and listed
+  // in every harness's system prompt.
+  try {
+    hostSkillsRuntime = materializeHostSkills(
+      paths.hostSkillsDir,
+      catamorphic.core.hostSkillFiles,
+    );
+  } catch (cause) {
+    // Skills are additive; a failed materialization must not stop boot.
+    console.warn("[desktop] host-skills materialization failed:", cause);
+  }
+
+  // The agent's read_skill tool: by-name skill content from either tier,
+  // through core's SkillsService (project files win name collisions).
+  agentRegistry.workspaceToolkit?.setSkillReader(async (projectId, name) => {
+    const result = await catamorphic.core.skills.read(
+      { tenantId: DESKTOP_TENANT_ID, externalUserId: DESKTOP_USER_ID },
+      projectId,
+      name,
+    );
+    if (!result) return null;
+    return {
+      name: result.skill.name,
+      source: result.skill.source,
+      path: result.skill.path,
+      content: result.content,
+    };
   });
 
   const app: FastifyInstance = Fastify({ logger: { level: "warn" } });
