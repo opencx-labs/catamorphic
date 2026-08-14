@@ -108,11 +108,13 @@ describe("legacy settings migration", () => {
        return true;`,
       { label: "default-agent picker" },
     );
+    // The current default carries the check + "current" chip (the picker
+    // pins it first; the old "· default" text suffix is gone).
     await runWait(
       `return paletteRows()
         .some((el) => el.textContent.includes('Built-in') &&
-                      el.textContent.includes('· default'));`,
-      { label: "seeded Pi agent listed as default" },
+                      el.querySelector('[data-testid="palette-current"]'));`,
+      { label: "seeded Pi agent marked current" },
     );
     await run(`
       paletteInput().dispatchEvent(new KeyboardEvent('keydown',

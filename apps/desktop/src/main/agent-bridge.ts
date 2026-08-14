@@ -104,16 +104,24 @@ export interface WorkspaceBridge {
   ): Promise<void>;
   closeSurface(projectId: string, key: string): Promise<void>;
   /**
-   * Open (or focus) something tab-shaped BEHIND the agent's chat: an
-   * existing tab by key, a project app ("app:<name>"), a file
-   * ("file:<path>"), or a URL. The chat steps down to its floating dock
-   * so the user sees the opened tab.
+   * Open (or focus) something tab-shaped: an existing tab by key, a
+   * project app ("app:<name>"), a file ("file:<path>"), or a URL. If the
+   * user is watching the agent's chat, the tab opens BEHIND it (the chat
+   * steps down to its floating dock; `opened: "focused"`). If the user
+   * is on another surface, the tab is prepared in the background and the
+   * surface's chip on the agent's chat carries an attention indicator
+   * instead (`opened: "background"`, plus a `note` telling the agent to
+   * narrate rather than assume the user saw it).
    */
   openTarget(
     projectId: string,
     sessionId: string,
     target: string,
-  ): Promise<{ key: string }>;
+  ): Promise<{
+    key: string;
+    opened: "focused" | "background";
+    note?: string;
+  }>;
   /**
    * Point the user's attention at a UI element: a subtle glow plus
    * scroll-into-view. The glow stays until the user interacts with the
@@ -670,10 +678,10 @@ export function registerAgentBridge(agentTerminals: AgentTerminals): {
     },
 
     async openTarget(projectId, sessionId, target) {
-      const result = await rpc<{ key: string } | { error: string }>(
-        "openTarget",
-        { projectId, sessionId, target },
-      );
+      const result = await rpc<
+        | { key: string; opened: "focused" | "background"; note?: string }
+        | { error: string }
+      >("openTarget", { projectId, sessionId, target });
       if (!result || "error" in result) {
         throw new Error(
           (result as { error?: string } | null)?.error ??

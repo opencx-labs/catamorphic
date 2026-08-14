@@ -326,6 +326,50 @@ describe("animate-before-unmount", () => {
     expect(samples.at(-1)?.gone).toBe(true);
   });
 
+  it("chat messages tween in on every arrival path", async () => {
+    // The "preamble" script lands messages on all arrival paths: the
+    // optimistic user echo, flushed mid-turn preambles, and the final
+    // settled reply. Each must MOUNT in the hidden pose (opacity 0) and
+    // tween to visible — a message that appears already-opaque skipped
+    // its entrance (the pre-paint effect-flush regression).
+    await run(`pressKey('n', { metaKey: true }); return true;`);
+    await runWait(`return !!visibleDock();`, { label: "chat open" });
+    await run(`
+      const log = visibleDock().querySelector('[role="log"]');
+      window.__mounts = [];
+      window.__mountEls = [];
+      window.__mountsObs = new MutationObserver((muts) => {
+        for (const m of muts) for (const n of m.addedNodes) {
+          if (!(n instanceof HTMLElement)) continue;
+          const articles = n.matches('article') ? [n] : [...n.querySelectorAll('article')];
+          for (const a of articles) {
+            window.__mounts.push({ atInsert: getComputedStyle(a).opacity });
+            window.__mountEls.push(a);
+          }
+        }
+      });
+      window.__mountsObs.observe(log, { childList: true, subtree: true });
+      const ta = visibleDock().querySelector('form textarea');
+      setReactValue(ta, 'preamble entrance check');
+      ta.closest('form').requestSubmit();
+      return true;
+    `);
+    // 1 user echo + 2 flushed preambles + 1 final reply — each must have
+    // mounted hidden and (eventually) settled fully visible.
+    const mounts = await runWait<{ atInsert: string }[]>(
+      `if (window.__mounts.length < 4) return false;
+       const settled = window.__mountEls.every((el) =>
+         el.isConnected && getComputedStyle(el).opacity === '1');
+       if (!settled) return false;
+       window.__mountsObs.disconnect();
+       return window.__mounts;`,
+      { timeoutMs: 30_000, label: "all arrival paths mounted and settled" },
+    );
+    for (const mount of mounts) {
+      expect(Number(mount.atInsert)).toBeLessThan(1);
+    }
+  });
+
   it("closing a chat bubble plays bubble-out before removal", async () => {
     // The pose test minimized a drafted chat — it lives as a bubble now.
     await runWait(

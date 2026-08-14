@@ -62,4 +62,19 @@ describe("buildAppGuestDocument", () => {
     expect(doc).toContain(code);
     expect(doc).not.toContain("\\x3C");
   });
+
+  it("shims local/sessionStorage ahead of the bundle", () => {
+    // Opaque-origin guests throw on merely READING window.localStorage;
+    // one uncaught access (a save effect) blanks the whole app. The
+    // runtime must shadow both storages with in-memory stand-ins BEFORE
+    // the bundle script runs.
+    const doc = buildAppGuestDocument({ code: "APP()", css: "" });
+    for (const name of ["localStorage", "sessionStorage"]) {
+      expect(doc).toContain(`'${name}'`);
+    }
+    expect(doc).toContain("Object.defineProperty(window,name");
+    expect(doc.indexOf("Object.defineProperty(window,name")).toBeLessThan(
+      doc.indexOf("APP()"),
+    );
+  });
 });

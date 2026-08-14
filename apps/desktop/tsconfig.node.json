@@ -10,6 +10,7 @@
     "src/shared",
     "electron.vite.config.ts",
     "e2e",
-    "vitest.e2e.config.ts"
+    "vitest.e2e.config.ts",
+    "vitest.eval.config.ts"
   ]
 }

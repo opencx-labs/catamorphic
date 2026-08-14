@@ -1866,3 +1866,88 @@ Patterned on what best-in-class palettes converged on (Chrome omnibox
   mistaken for the command completing. Pinned by real-zsh-PTY tests
   (terminal-text.pty.test.ts): single echo, one C/D pair per command,
   bracketed-paste heredocs as one completion, exit codes intact.
+
+### 2026-08-14 — open_surface respects the user's focus; pane controls beat the overlay
+- **open_surface only moves the view of a user who is watching.** The
+  rule extends run_terminal's "the user's view doesn't move" to showing:
+  if the requesting chat IS the user's active surface (`chatVisible` —
+  its tab focused, or its floating dock up), the tab opens in front as
+  before, chat stepping down to its dock. If the user is on another
+  tab, open_surface prepares the target in the BACKGROUND (app/screen
+  tabs join the strip unfocused, browser panes load hidden, editors
+  attach to the asking chat, background terminals materialize their tab
+  without focus) and instead lights an **attention indicator on the
+  surface's chip** on the agent's chat: the unread dot (accent fill)
+  with the waiting-state pulse — the question badge's sanctioned loop,
+  since it's indeterminate until the user answers. Attention clears when
+  the user opens that surface (dismissal-by-interaction, like point_at);
+  chips whose key has no attached surface (an app tab) are synthesized
+  onto the rail so the dot always has a home, and host/activity chips
+  dedupe by key. The tool result narrates honestly —
+  `opened: "focused"` vs `opened: "background"` plus a note telling the
+  agent to say "it's ready" rather than assume the user saw it — and the
+  playbook teaches the same. A target the user is already looking at
+  counts as watched; a request with no chat to carry the chip falls back
+  to opening in front (an invisible background open would be worse than
+  a focus steal).
+- **Chips are pointable.** Every surface chip carries
+  `data-point-key="chip:<surface key>"`, so point_at can glow a chip on
+  the agent's own chat ("chip:terminal:<id>") with the standard
+  accent-ring waiting glow.
+- **Surface controls sit above the take-over veil.** The
+  AgentControlOverlay's blocking layer (z-20) was eating clicks on the
+  split pane's expand-to-full-width control (z-10) — an agent-held
+  terminal in a split couldn't be expanded. Pane CONTROLS (the unsplit
+  button, like the overlay's own pill) now ride z-30, above the veil:
+  the surface's content stays blocked, the chrome that manages the
+  surface stays clickable.
+
+### 2026-08-14 — Chat polish round: entrances that survive load, staged tab minimize, honest retries
+- **Message entrances use a double rAF and the standard easing.** The
+  timeline's enter transition armed itself with a single
+  requestAnimationFrame; under render pressure (the 500ms streaming
+  poll) React can flush effects before the mount frame paints, the rAF
+  lands pre-paint, and both poses collapse into one style recalc — the
+  message pops in with no tween. Two chained rAFs guarantee a painted
+  hidden pose first. The entrance also moves to `--ease-standard`
+  (it was `ease-out`, a quiet one-easing violation), and the registry
+  copy's `transition-[opacity,transform]` becomes `[opacity,translate]`
+  — Tailwind v4's translate-y-* sets the individual property, so the
+  slide half of its entrance had never animated at all. Pinned by a
+  motion e2e that mounts all arrival paths (optimistic echo, flushed
+  preambles, final reply) and asserts each mounts hidden and settles
+  visible. Core's preamble flush (settle + fresh placeholder) now runs
+  in one transaction so a poll can never catch the half-state where the
+  activity line flickers off mid-turn.
+- **Minimizing a fullscreen chat tab stages like the registered close:
+  tween first, state flip after.** Flipping mode to "min" immediately
+  meant the collapse transition shared its 250ms with the workspace
+  re-render (next tab's content, strip, bubbles) — the first ~100ms
+  stalled and the collapse read as a blink. The dash control (and Cmd+M,
+  via a registered minimizer beside the registered closer) now plays the
+  dock's collapse to the floating hidden pose while the entry is still
+  mode "tab" (`presentsAsTab` drives the visual pose), then flips the
+  mode — tab-out, bubble-in, and the tab switch land after the tween.
+  The floating dock keeps its direct flip; nothing competes with it.
+- **Retry is never a dead button.** After an auth failure + reconnect,
+  the credential change rebuilds the provider, so the retry re-anchored
+  a fresh harness session from the settled transcript — which excludes
+  the failed turn's user message — and the ai-sdk native retryTurn
+  answered "Nothing to retry yet" forever. Core's ensureAnchor now
+  reports `reanchored`, and a retry on a fresh anchor replays through
+  sendMessage (the persisted user message; no duplicate row) instead of
+  the harness's native re-run. The e2e login stub stamps a unique key
+  per login so the reconnect e2e exercises the real rebuild path, and
+  the fake agent mirrors the ai-sdk retryTurn semantics. The timeline
+  hides Retry when no user turn exists to re-run, and the harness's
+  empty-state error copy now tells the user what to do.
+- **Pickers show what runs today.** The palette's model/agent pickers
+  pin the CURRENT choice as the first row of the unfiltered list with a
+  quiet check + "current" chip (11px, right-aligned); searching restores
+  normal ranking but keeps the chip. The effort picker keeps its
+  low→high order and only gets the chip — three fixed rows should never
+  reorder. The fork button on assistant messages is now a borderless
+  ghost icon button (fg-muted → bg-overlay tint + fg on hover) matching
+  the other message affordances, and its reveal no longer blinks when
+  the pointer crosses the gap to reach it (the wrapper bridges the gap
+  so group-hover never drops).

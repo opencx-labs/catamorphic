@@ -64,6 +64,14 @@ export interface ChatSurface {
   /** The agent is actively working here (spinner on the chip). */
   active?: boolean;
   /**
+   * The agent opened this surface in the BACKGROUND (open_surface while
+   * the user was on another tab): the chip carries an accent dot with
+   * the waiting-state pulse (the question badge's sanctioned loop —
+   * indeterminate until the user answers) until the user opens the
+   * surface. Dismissal-by-interaction, like point_at's glow.
+   */
+  attention?: boolean;
+  /**
    * Detail lines opened in an upward popover on click. Chips with `info`
    * aren't workspace tabs — the popover IS their surface (a subagent's
    * activity feed, a watcher's command).
@@ -386,6 +394,10 @@ function SurfaceChip({
       data-testid="surface-chip"
       data-kind={surface.kind}
       data-active={surface.active || undefined}
+      data-attention={surface.attention || undefined}
+      // Chips are point_at-addressable ("chip:<surface key>") — the
+      // agent can glow one on its own chat.
+      data-point-key={`chip:${surface.key}`}
     >
       <button
         type="button"
@@ -419,6 +431,12 @@ function SurfaceChip({
               surface.active ? "opacity-100" : "opacity-0"
             }`}
           />
+          {/* Background-opened surface waiting for the user: the unread
+              dot (accent fill) with the waiting-state pulse, cleared by
+              opening the chip. */}
+          {surface.attention && (
+            <span className="absolute -right-0.5 -top-0.5 size-1.5 animate-pulse rounded-full bg-accent" />
+          )}
         </span>
         <span className="max-w-36 truncate">{surface.label}</span>
       </button>
@@ -571,6 +589,9 @@ function SurfacesRail({
                   {surface.active && (
                     <LoaderCircle className="col-start-1 row-start-1 size-3.5 animate-spin text-accent" />
                   )}
+                  {surface.attention && (
+                    <span className="absolute -right-0.5 -top-0.5 size-1.5 animate-pulse rounded-full bg-accent" />
+                  )}
                 </span>
                 <span className="truncate">{surface.label}</span>
               </button>
@@ -609,6 +630,9 @@ function SurfacesRail({
               }`}
               aria-expanded={openGroup === kind}
               aria-label={`${group.length} ${SURFACE_GROUP_LABELS[kind]}`}
+              data-attention={
+                group.some((surface) => surface.attention) || undefined
+              }
             >
               <span className="relative grid size-3 shrink-0 place-items-center">
                 {(() => {
@@ -625,6 +649,11 @@ function SurfacesRail({
                     </>
                   );
                 })()}
+                {/* Attention aggregates onto the group chip, like the
+                    spinner does. */}
+                {group.some((surface) => surface.attention) && (
+                  <span className="absolute -right-0.5 -top-0.5 size-1.5 animate-pulse rounded-full bg-accent" />
+                )}
               </span>
               {group.length} {SURFACE_GROUP_LABELS[kind]}
               <ChevronUp
@@ -739,6 +768,12 @@ export interface ChatDockProps {
    * instead of unmounting the dock mid-frame.
    */
   registerClose?: (close: () => void) => void;
+  /**
+   * Hands the host the staged tab-minimize (collapse tween first, mode
+   * flip after), so external minimizers (Cmd+M) read the same as the
+   * dock's own dash control.
+   */
+  registerMinimize?: (minimize: () => void) => void;
   onSessionCreated: (localId: string, sessionId: string) => void;
   /**
    * The chat's live signals changed: the agent started/stopped working,
@@ -779,6 +814,7 @@ export function ChatDock({
   onEntryChange,
   onClose,
   registerClose,
+  registerMinimize,
   onSessionCreated,
   onSignalsChange,
 }: ChatDockProps) {
@@ -841,10 +877,26 @@ export function ChatDock({
     () => activityChips(chat.messages, chat.isWorking, uiTools),
     [chat.messages, chat.isWorking, uiTools],
   );
-  const railSurfaces = useMemo(
-    () => [...surfaces, ...chatActivityChips],
-    [surfaces, chatActivityChips],
-  );
+  const railSurfaces = useMemo(() => {
+    // One chip per key: a surface known to both the host and the turn
+    // events (an app tab prepared by open_surface AND touched by this
+    // turn's file edits) merges — activity animates it, host state
+    // (attention) rides along.
+    const activityByKey = new Map(
+      chatActivityChips.map((chip) => [chip.key, chip]),
+    );
+    const merged = surfaces.map((surface) => {
+      const activity = activityByKey.get(surface.key);
+      if (!activity) return surface;
+      activityByKey.delete(surface.key);
+      return {
+        ...activity,
+        ...surface,
+        active: surface.active || activity.active,
+      };
+    });
+    return [...merged, ...activityByKey.values()];
+  }, [surfaces, chatActivityChips]);
 
   // ↑/↓ in the composer recall previously sent messages, shell-history
   // style: ↑ from an empty (or recalled) draft steps back through what
@@ -1030,10 +1082,36 @@ export function ChatDock({
   // Closing an empty chat plays the same 250ms collapse as minimizing —
   // `closing` drops the expanded classes first, the unmount follows.
   const [closing, setClosing] = useState(false);
+  // Minimizing a chat TAB stages the same way (the registered-close
+  // pattern): the collapse tween plays first while the workspace is
+  // still untouched, and only then does the mode flip to "min" — the
+  // tab switch, strip tab-out, and bubble-in land AFTER the tween.
+  // Flipping the mode first made that whole workspace re-render (next
+  // tab's content included) stall the first ~100ms of a 250ms tween,
+  // which read as "the collapse doesn't animate".
+  const [minimizing, setMinimizing] = useState(false);
+  const minimizingRef = useRef(false);
   const expanded =
-    !closing && (entry.mode === "partial" || (isTab && tabActive));
+    !closing &&
+    !minimizing &&
+    (entry.mode === "partial" || (isTab && tabActive));
+  // The visual pose: during a staged tab minimize/close the section
+  // renders the floating-dock pose while the entry is still mode "tab",
+  // so the exit reads as the tab shrinking away toward the bubble strip.
+  const presentsAsTab = isTab && !closing && !minimizing;
 
   const setMode = (mode: ChatMode) => onEntryChange({ ...entry, mode });
+
+  const animatedMinimize = () => {
+    if (minimizingRef.current) return;
+    minimizingRef.current = true;
+    setMinimizing(true);
+    window.setTimeout(() => {
+      minimizingRef.current = false;
+      setMinimizing(false);
+      onEntryChangeRef.current({ ...entryRef.current, mode: "min" });
+    }, 250);
+  };
 
   // An untouched chat has nothing worth keeping — dismissing it (Escape
   // or the minimize button) closes it instead of parking an empty bubble.
@@ -1055,13 +1133,23 @@ export function ChatDock({
   };
   const animatedCloseRef = useRef(animatedClose);
   animatedCloseRef.current = animatedClose;
+  const animatedMinimizeRef = useRef(animatedMinimize);
+  animatedMinimizeRef.current = animatedMinimize;
 
   useEffect(() => {
     registerClose?.(() => animatedCloseRef.current());
   }, [registerClose]);
+  useEffect(() => {
+    registerMinimize?.(() => animatedMinimizeRef.current());
+  }, [registerMinimize]);
 
   const dismiss = () => {
     if (isEmpty) animatedClose();
+    // From a fullscreen tab, animate the collapse BEFORE the mode flip
+    // (see animatedMinimize); the floating dock keeps the direct flip —
+    // its collapse is the expanded-class transition, and no workspace
+    // tab switch competes with it.
+    else if (isTab && tabActive) animatedMinimize();
     else setMode("min");
   };
 
@@ -1192,6 +1280,8 @@ export function ChatDock({
     const onWindowKeyDown = (event: globalThis.KeyboardEvent) => {
       if (event.key !== "Escape" || event.isComposing) return;
       if (event.defaultPrevented) return;
+      // A staged minimize is already in flight; don't fight its timeout.
+      if (minimizingRef.current) return;
       event.preventDefault();
       if (entryRef.current.mode === "tab") {
         onEntryChangeRef.current({ ...entryRef.current, mode: "partial" });
@@ -1208,7 +1298,7 @@ export function ChatDock({
 
   // In a split, a tabbed chat occupies only its (ratio-sized) share of
   // the view; floating chats always overlay the full area.
-  const splitPane = isTab && tabActive && slot !== "full";
+  const splitPane = presentsAsTab && tabActive && slot !== "full";
   return (
     <div
       className={`pointer-events-none absolute z-30 flex flex-col items-center justify-end ${
@@ -1220,7 +1310,7 @@ export function ChatDock({
           ? "inset-y-0 left-0 border-r border-border p-0"
           : splitPane && slot === "right"
             ? "inset-y-0 right-0 p-0"
-            : isTab
+            : presentsAsTab
               ? "inset-0 p-0"
               : "inset-0 px-6 pb-16 pt-3"
       }`}
@@ -1258,10 +1348,10 @@ export function ChatDock({
         }}
         data-palette-target={(paletteTargeted && !isTab) || undefined}
         className={`pointer-events-auto relative flex w-full origin-bottom flex-col overflow-hidden backdrop-blur-xl transition-[max-width,height,opacity,translate,scale,background-color,border-radius,border-color] duration-250 ease-[cubic-bezier(0.2,0,0,1)] ${
-          isTab
+          presentsAsTab
             ? "h-full max-w-full rounded-none border-0 border-transparent bg-bg"
             : `h-[min(560px,100%)] max-w-3xl rounded-2xl border bg-bg-raised/95 drop-shadow-2xl ${
-                paletteTargeted ? "border-accent" : "border-border"
+                paletteTargeted && !isTab ? "border-accent" : "border-border"
               }`
         } ${
           expanded
@@ -1287,9 +1377,9 @@ export function ChatDock({
             and its controls float over the timeline's top-right corner. */}
         <header
           className={`flex shrink-0 items-center justify-between overflow-hidden border-b px-3 text-xs font-semibold transition-[height,border-color] duration-250 ease-[cubic-bezier(0.2,0,0,1)] ${
-            isTab ? "h-0 border-transparent" : "h-11 border-border"
+            presentsAsTab ? "h-0 border-transparent" : "h-11 border-border"
           }`}
-          aria-hidden={isTab}
+          aria-hidden={presentsAsTab}
         >
           <span className="flex min-w-0 items-center gap-2">
             <span className="grid size-6 shrink-0 place-items-center rounded-full border border-border-strong bg-bg-overlay">

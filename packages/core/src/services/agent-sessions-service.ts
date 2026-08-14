@@ -924,24 +924,31 @@ export class AgentSessionsService {
         status: "completed",
         events: JSON.parse(JSON.stringify(segmentEvents)) as JsonObject[],
       };
-      await this.db
-        .updateTable("agent_messages")
-        .set({ content: heldText, metadata })
-        .where("id", "=", assistantMessageId)
-        .execute();
+      const settledContent = heldText;
+      // One transaction: a client poll must never observe the settled
+      // preamble without its follow-up placeholder — that half-state
+      // reads as "turn over" for a tick (activity line and working
+      // indicators flicker off and back mid-turn).
+      const next = await this.db.transaction().execute(async (trx) => {
+        await trx
+          .updateTable("agent_messages")
+          .set({ content: settledContent, metadata })
+          .where("id", "=", assistantMessageId)
+          .execute();
+        return trx
+          .insertInto("agent_messages")
+          .values({
+            session_id: sessionId,
+            role: "assistant",
+            content: "Thinking...",
+            metadata: progressMetadata([]),
+          })
+          .returning("id")
+          .executeTakeFirstOrThrow();
+      });
       lastFlushed = { id: assistantMessageId, events: segmentEvents };
       heldText = undefined;
       segmentEvents = [];
-      const next = await this.db
-        .insertInto("agent_messages")
-        .values({
-          session_id: sessionId,
-          role: "assistant",
-          content: "Thinking...",
-          metadata: progressMetadata([]),
-        })
-        .returning("id")
-        .executeTakeFirstOrThrow();
       assistantMessageId = next.id;
     };
     const continuesTurn = (event: AgentEvent): boolean =>
@@ -996,7 +1003,14 @@ export class AgentSessionsService {
           })()
         : // Retries prefer the harness's native re-run (no duplicated user
           // message in its history); harnesses without one get a re-send.
-          extras.retryOfAssistantId && agent.provider.retryTurn
+          // A freshly re-anchored session (host restart, credential rebuild
+          // after a re-auth) gets a re-send too: it was seeded from the
+          // settled transcript, which excludes the failed turn's user
+          // message — the harness has nothing to natively re-run, and
+          // asking it to produced dead "Nothing to retry" failures.
+          extras.retryOfAssistantId &&
+            agent.provider.retryTurn &&
+            !anchor.reanchored
           ? agent.provider.retryTurn(anchor.providerSession, {
               ...turnOptions,
               sanitizeReasoning: extras.sanitizeReasoning,
@@ -1250,6 +1264,14 @@ export class AgentSessionsService {
   ): Promise<{
     providerSession: ProviderSession;
     sandboxProviderId?: string;
+    /**
+     * The provider session was created just now from the persisted
+     * transcript (host restart, credential/config rebuild) instead of
+     * resuming a live in-memory session. A fresh anchor does NOT hold
+     * the in-flight turn — its user message is excluded from resurrection
+     * history — so a retry cannot use the harness's native re-run.
+     */
+    reanchored: boolean;
   }> {
     const anchored =
       session.provider_session_id !== null &&
@@ -1271,6 +1293,7 @@ export class AgentSessionsService {
             sandboxId: "",
             workingDirectory,
           },
+          reanchored: false,
         };
       }
       const providerSession = await agent.provider.startSession({
@@ -1293,7 +1316,7 @@ export class AgentSessionsService {
         })
         .where("id", "=", session.id)
         .execute();
-      return { providerSession };
+      return { providerSession, reanchored: true };
     }
 
     if (anchored && session.provider_session_id && session.sandbox_id) {
@@ -1307,6 +1330,7 @@ export class AgentSessionsService {
           workingDirectory: this.projectDir(),
         },
         sandboxProviderId,
+        reanchored: false,
       };
     }
 
@@ -1336,7 +1360,11 @@ export class AgentSessionsService {
       })
       .where("id", "=", session.id)
       .execute();
-    return { providerSession, sandboxProviderId: handle.providerId };
+    return {
+      providerSession,
+      sandboxProviderId: handle.providerId,
+      reanchored: true,
+    };
   }
 
   /**

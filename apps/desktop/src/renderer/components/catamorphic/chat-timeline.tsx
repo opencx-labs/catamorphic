@@ -153,6 +153,9 @@ export function ChatTimeline({
       message.role === "user" &&
       message.content !== QUESTIONS_DISMISSED_MESSAGE,
   );
+  // Retry re-runs the conversation's last user turn; a timeline with no
+  // user turn at all has nothing to re-run (the button would be dead).
+  const hasRetryableTurn = messages.some((message) => message.role === "user");
   return (
     <StickToBottom
       className={`relative overflow-hidden ${className}`}
@@ -178,7 +181,9 @@ export function ChatTimeline({
               resolveAgentName={resolveAgentName}
               onLinkClick={onLinkClick}
               resolveToolIcon={resolveToolIcon}
-              onRetry={onRetry}
+              // Retry re-runs the last user turn; without one there is
+              // nothing to re-run — hide the button, never show a dead one.
+              onRetry={hasRetryableTurn ? onRetry : undefined}
               onReauth={onReauth}
               reauthLabel={reauthLabel}
               onFork={onFork}
@@ -376,9 +381,21 @@ function MessageImpl({
   const metadata = asRecord(message.metadata);
   const [entered, setEntered] = useState(false);
 
+  // Double rAF: the first frame aligns with the commit, the second
+  // guarantees the browser resolved the hidden pose before it flips —
+  // a single rAF can fire before the mount frame ever paints (React
+  // flushes effects pre-paint under load, e.g. the 500ms streaming
+  // poll), collapsing both poses into one style recalc and skipping
+  // the entrance transition entirely.
   useEffect(() => {
-    const frame = requestAnimationFrame(() => setEntered(true));
-    return () => cancelAnimationFrame(frame);
+    let second: number | undefined;
+    const first = requestAnimationFrame(() => {
+      second = requestAnimationFrame(() => setEntered(true));
+    });
+    return () => {
+      cancelAnimationFrame(first);
+      if (second !== undefined) cancelAnimationFrame(second);
+    };
   }, []);
 
   // Agent/effort switches render as a centered divider, not a message.
@@ -410,7 +427,7 @@ function MessageImpl({
 
   const attachments = message.attachments ?? attachmentsFromMetadata(metadata);
   const failed = metadata?.status === "failed";
-  const enterClasses = `motion-safe:transition-[opacity,translate] motion-safe:duration-200 motion-safe:ease-out ${entered ? "motion-safe:translate-y-0 motion-safe:opacity-100" : "motion-safe:translate-y-1 motion-safe:opacity-0"}`;
+  const enterClasses = `motion-safe:transition-[opacity,translate] motion-safe:duration-200 motion-safe:ease-[cubic-bezier(0.2,0,0,1)] ${entered ? "motion-safe:translate-y-0 motion-safe:opacity-100" : "motion-safe:translate-y-1 motion-safe:opacity-0"}`;
 
   // Failed turns render as an error card with recovery actions (the
   // actions only on the latest message — older failures are history).
@@ -454,13 +471,16 @@ function MessageImpl({
       {attachments.length > 0 && <AttachmentStrip attachments={attachments} />}
       {/* Fork the conversation from this reply: everything up to here is
           copied into a new chat that goes off on a tangent. */}
+      {/* The pl-2 bridges the gap between the message edge and the
+          button: without it the pointer leaves the group mid-crossing
+          and the reveal fades out and back in — a visible blink. */}
       {message.role === "assistant" && onFork && (
-        <span className="absolute -right-8 bottom-0 opacity-0 transition-opacity duration-150 group-hover/msg:opacity-100">
+        <span className="absolute -right-8 bottom-0 pl-2 opacity-0 transition-opacity duration-150 group-hover/msg:opacity-100">
           <ShortcutHint label="Fork the chat from here">
             <button
               type="button"
               onClick={() => onFork(message.id)}
-              className="grid size-6 cursor-pointer place-items-center rounded-md border border-border bg-bg-raised text-fg-muted transition-colors duration-100 hover:text-fg"
+              className="grid size-6 cursor-pointer place-items-center rounded-md text-fg-muted transition-colors duration-150 hover:bg-bg-overlay hover:text-fg"
               aria-label="Fork the conversation from this message"
               data-testid="chat-fork"
             >

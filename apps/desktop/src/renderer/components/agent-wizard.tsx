@@ -608,6 +608,7 @@ export function AgentWizard({
                   onChange={(event) =>
                     setProvider(event.target.value as AiSdkProvider)
                   }
+                  data-testid="agent-wizard-provider"
                   className="field h-8 px-2 text-[13px] text-fg"
                 >
                   <option value="anthropic">Anthropic</option>
@@ -631,6 +632,7 @@ export function AgentWizard({
                   // biome-ignore lint/a11y/noAutofocus: primary field of this step
                   autoFocus
                   autoComplete="off"
+                  data-testid="agent-wizard-key-input"
                   className="field h-8 px-2 font-mono text-[13px] text-fg placeholder:font-sans placeholder:text-fg-faint"
                 />
               </label>
@@ -650,6 +652,7 @@ export function AgentWizard({
                 pending={busy}
                 pendingLabel="Adding…"
                 disabled={!apiKey.trim()}
+                data-testid="agent-wizard-key-submit"
                 className="h-8 w-fit cursor-pointer rounded-md bg-accent px-4 text-[13px] font-medium text-accent-fg transition-opacity duration-150 hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
               >
                 Add agent

@@ -430,10 +430,15 @@ function AgentControlOverlay({
   );
 }
 
-/** Floating "return to full width" control on non-browser split panes. */
+/**
+ * Floating "return to full width" control on non-browser split panes.
+ * z-30 keeps it above the AgentControlOverlay (z-20, whose blocking
+ * layer spans the whole pane): surface CONTROLS stay clickable on an
+ * agent-held pane; only the surface's content is blocked.
+ */
 function PaneUnsplitButton({ onClick }: { onClick: () => void }) {
   return (
-    <span className="absolute right-2 top-2 z-10">
+    <span className="absolute right-2 top-2 z-30">
       <ShortcutHint label="Full width">
         <button
           type="button"
@@ -470,6 +475,13 @@ export function App() {
     Record<string, ChatLiveSignals>
   >({});
   const [unreadByChat, setUnreadByChat] = useState<Record<string, boolean>>({});
+  // Surfaces an agent opened in the BACKGROUND (open_surface while the
+  // user was on another tab): chat localId → surface keys whose chip
+  // carries the attention indicator. Cleared when the user opens that
+  // surface (dismissal-by-interaction, like point_at's glow).
+  const [chipAttention, setChipAttention] = useState<Record<string, string[]>>(
+    {},
+  );
   const [bubblesCollapsed, setBubblesCollapsed] = useState(false);
 
   // Notification preferences (per profile): soft chime + desktop banner
@@ -963,6 +975,11 @@ export function App() {
   // same 250ms collapse Escape does, not unmount the dock mid-frame.
   const chatClosersRef = useRef(new Map<string, () => void>());
 
+  // Staged tab-minimize per chat dock — Cmd+M on a fullscreen chat tab
+  // must play the dock's collapse before the mode flips, exactly like
+  // the dash control (the tween runs before the workspace re-render).
+  const chatMinimizersRef = useRef(new Map<string, () => void>());
+
   // Webview guest WebContents ids per browser tab — the agent bridge
   // drives pages from the main process by guest id.
   const browserGuestIdsRef = useRef(new Map<string, number>());
@@ -1329,6 +1346,7 @@ export function App() {
 
   const closeChat = (localId: string) => {
     chatClosersRef.current.delete(localId);
+    chatMinimizersRef.current.delete(localId);
     updateWorkspace((ws) => {
       const chats = ws.chats.filter((chat) => chat.localId !== localId);
       return {
@@ -1972,6 +1990,19 @@ export function App() {
    */
   const unsplitTimerRef = useRef<number | undefined>(undefined);
   const openSurface = (key: string, mode: "tab" | "split") => {
+    // Opening a surface answers any attention its chip was holding
+    // (open_surface-in-background) — dismissal-by-interaction.
+    setChipAttention((current) => {
+      if (!Object.values(current).some((keys) => keys.includes(key))) {
+        return current;
+      }
+      return Object.fromEntries(
+        Object.entries(current).map(([chatId, keys]) => [
+          chatId,
+          keys.filter((candidate) => candidate !== key),
+        ]),
+      );
+    });
     // App chips point at the app by name — materialize its tab if the
     // user hasn't opened it yet (the key doubles as the tab key).
     if (key.startsWith("app:")) {
@@ -2089,8 +2120,22 @@ export function App() {
     ws.chats.at(-1);
 
   const toggleChatMinimized = () => {
-    const chat = actionChat(workspaceRef.current);
-    if (chat) toggleChat(chat.localId);
+    const ws = workspaceRef.current;
+    const chat = actionChat(ws);
+    if (!chat) return;
+    // Minimizing the focused fullscreen chat tab goes through the dock's
+    // staged minimize (collapse tween, THEN the mode flip) so Cmd+M reads
+    // exactly like the dash control. Everything else keeps the toggle.
+    const focusedTab =
+      chat.mode === "tab" &&
+      ws.activeChatId === chat.localId &&
+      ws.activeTabKey === chatTabKey(chat.localId);
+    const staged = chatMinimizersRef.current.get(chat.localId);
+    if (focusedTab && staged) {
+      staged();
+      return;
+    }
+    toggleChat(chat.localId);
   };
 
   const expandChatToTab = () => {
@@ -2475,16 +2520,49 @@ export function App() {
           const target = String(params.target ?? "");
           const sessionId =
             typeof params.sessionId === "string" ? params.sessionId : undefined;
+          // Who is asking, and is the user watching them? If the
+          // requesting chat IS the user's active surface (its tab
+          // focused, or its floating dock up), the agent is showing
+          // them something — open in front, as always. Otherwise the
+          // user is busy elsewhere: never steal their focus. Prepare
+          // the tab in the background and light the attention dot on
+          // the surface's chip on the agent's own chat; the result
+          // tells the agent which of the two happened so it narrates
+          // honestly. A target the user is ALREADY looking at counts
+          // as watched — nothing to steal.
+          const requesterId = resolveWorkingChat(sessionId);
+          const requester = ws.chats.find(
+            (chat) => chat.localId === requesterId,
+          );
+          // Without a chat to carry the chip, a background open would
+          // be invisible — fall back to opening in front.
+          const watching = requester ? chatVisible(ws, requester) : true;
+          const openInBackground = (key: string) =>
+            !watching && Boolean(requester) && ws.activeTabKey !== key;
+          const background = (key: string) => {
+            if (requester) {
+              setChipAttention((current) => {
+                const keys = current[requester.localId] ?? [];
+                return keys.includes(key)
+                  ? current
+                  : { ...current, [requester.localId]: [...keys, key] };
+              });
+            }
+            return {
+              key,
+              opened: "background" as const,
+              note: "The user is looking at something else — the tab is ready in the background and its chip is highlighted on your chat. Tell them it's ready instead of assuming they saw it.",
+            };
+          };
           // The chat steps down from full tab to its floating dock so the
           // opened tab is visible behind it — the agent is SHOWING the
           // user something, not replacing their view with itself.
           const stepChatAside = () => {
-            const chatLocalId = resolveWorkingChat(sessionId);
-            if (!chatLocalId) return;
+            if (!requesterId) return;
             updateWorkspace((current) => ({
               ...current,
               chats: current.chats.map((chat) =>
-                chat.localId === chatLocalId && chat.mode === "tab"
+                chat.localId === requesterId && chat.mode === "tab"
                   ? { ...chat, mode: "partial" }
                   : chat,
               ),
@@ -2492,8 +2570,17 @@ export function App() {
           };
           if (target.startsWith("app:")) {
             const name = target.slice("app:".length);
+            const key = `app:${name}`;
+            if (openInBackground(key)) {
+              updateWorkspace((current) => ({
+                ...current,
+                tabs: current.tabs.some((tab) => tabKey(tab) === key)
+                  ? current.tabs
+                  : [...current.tabs, { kind: "app", name }],
+              }));
+              return background(key);
+            }
             updateWorkspace((current) => {
-              const key = `app:${name}`;
               const exists = current.tabs.some((tab) => tabKey(tab) === key);
               return {
                 ...current,
@@ -2505,11 +2592,28 @@ export function App() {
               };
             });
             stepChatAside();
-            return { key: `app:${name}` };
+            return { key, opened: "focused" };
           }
           if (target.startsWith("file:")) {
             const filePath = target.slice("file:".length);
             const localId = crypto.randomUUID();
+            if (openInBackground(editorTabKey(localId)) && requester) {
+              updateWorkspace((current) => ({
+                ...current,
+                editors: [
+                  ...current.editors,
+                  // Attached to the asking chat, so the chip carrying
+                  // the attention dot has a rail to ride.
+                  {
+                    localId,
+                    filePath,
+                    dirty: false,
+                    chatLocalId: requester.localId,
+                  },
+                ],
+              }));
+              return background(editorTabKey(localId));
+            }
             updateWorkspace((current) => ({
               ...current,
               editors: [
@@ -2520,36 +2624,53 @@ export function App() {
               split: null,
             }));
             stepChatAside();
-            return { key: editorTabKey(localId) };
+            return { key: editorTabKey(localId), opened: "focused" };
           }
           if (/^https?:\/\//.test(target)) {
             if (!activeProfileRef.current) return { error: "No profile" };
             const localId = crypto.randomUUID();
+            const entry: BrowserEntry = {
+              localId,
+              profileId: activeProfileRef.current?.id ?? "",
+              initialUrl: target,
+              url: target,
+              title: target,
+              faviconUrl: null,
+              chatLocalId: requesterId,
+            };
+            if (openInBackground(browserTabKey(localId))) {
+              // The hidden pane keeps webviews alive, so the page
+              // loads while the user finishes what they're doing.
+              updateWorkspace((current) => ({
+                ...current,
+                browsers: [...current.browsers, entry],
+              }));
+              return background(browserTabKey(localId));
+            }
             updateWorkspace((current) => ({
               ...current,
-              browsers: [
-                ...current.browsers,
-                {
-                  localId,
-                  profileId: activeProfileRef.current?.id ?? "",
-                  initialUrl: target,
-                  url: target,
-                  title: target,
-                  faviconUrl: null,
-                  chatLocalId: resolveWorkingChat(sessionId),
-                },
-              ],
+              browsers: [...current.browsers, entry],
               activeTabKey: browserTabKey(localId),
               split: null,
             }));
             stepChatAside();
-            return { key: browserTabKey(localId) };
+            return { key: browserTabKey(localId), opened: "focused" };
           }
           // A background agent terminal: open_surface is the agent
-          // explicitly SHOWING it — materialize the tab and focus it.
+          // explicitly SHOWING it — materialize the tab (focused only
+          // if the user is watching the agent).
           if (target.startsWith("terminal:")) {
             const localId = target.slice("terminal:".length);
             if (ws.terminals.some((t) => t.localId === localId)) {
+              if (openInBackground(target)) {
+                updateWorkspace((current) => ({
+                  ...current,
+                  terminals: current.terminals.map((t) =>
+                    t.localId === localId ? { ...t, background: false } : t,
+                  ),
+                }));
+                return background(target);
+              }
               updateWorkspace((current) => ({
                 ...current,
                 terminals: current.terminals.map((t) =>
@@ -2559,7 +2680,7 @@ export function App() {
                 split: null,
               }));
               stepChatAside();
-              return { key: target };
+              return { key: target, opened: "focused" };
             }
           }
           // An existing tab key from workspace_overview: focus it.
@@ -2570,6 +2691,9 @@ export function App() {
               error: `No such target: ${target}. Use a tab key from workspace_overview, "app:<name>", "file:<path>", or a URL.`,
             };
           }
+          // The tab already exists; "background" is just not focusing
+          // it — the chip's attention dot does the pointing.
+          if (openInBackground(target)) return background(target);
           updateWorkspace((current) => ({
             ...current,
             activeTabKey: target,
@@ -2586,7 +2710,7 @@ export function App() {
               : {}),
           }));
           if (!target.startsWith("chat:")) stepChatAside();
-          return { key: target };
+          return { key: target, opened: "focused" };
         }
         case "pointAt": {
           const target = String(params.target ?? "").trim();
@@ -2825,44 +2949,109 @@ export function App() {
       : split.leftKey
     : undefined;
 
+  /**
+   * A rail chip for an attention key with no attached surface behind it
+   * (an app tab open_surface prepared in the background, another chat's
+   * tab, …): the attention dot needs a chip to live on, so one is
+   * synthesized from what the workspace knows about the key.
+   */
+  const synthesizedSurface = (key: string): ChatSurface => {
+    if (key.startsWith("app:")) {
+      return { key, kind: "app", label: key.slice("app:".length) };
+    }
+    if (key.startsWith("browser:")) {
+      const entry = workspace.browsers.find(
+        (browser) => browserTabKey(browser.localId) === key,
+      );
+      return {
+        key,
+        kind: "browser",
+        label: entry?.title || entry?.url || "Page",
+        faviconUrl: entry?.faviconUrl,
+      };
+    }
+    if (key.startsWith("terminal:")) {
+      const entry = workspace.terminals.find(
+        (terminal) => terminalTabKey(terminal.localId) === key,
+      );
+      return { key, kind: "terminal", label: entry?.title || "Terminal" };
+    }
+    if (key.startsWith("editor:")) {
+      const entry = workspace.editors.find(
+        (editor) => editorTabKey(editor.localId) === key,
+      );
+      return {
+        key,
+        kind: "editor",
+        label: entry?.filePath?.split("/").at(-1) || "Editor",
+      };
+    }
+    if (key.startsWith("chat:")) {
+      return {
+        key,
+        kind: "chat",
+        label: chatLabels[key.slice("chat:".length)] ?? "Chat",
+      };
+    }
+    const tab = workspace.tabs.find((candidate) => tabKey(candidate) === key);
+    return { key, kind: "app", label: tab?.label ?? tab?.name ?? key };
+  };
+
   /** The agent's working tabs for a chat — its surfaces rail. */
-  const surfacesFor = (chat: ChatDockEntry): ChatSurface[] => [
-    // Conversations forked from this one ride the rail as chips too.
-    ...workspace.chats
-      .filter((candidate) => candidate.parentLocalId === chat.localId)
-      .map((candidate) => ({
-        key: chatTabKey(candidate.localId),
-        kind: "chat" as const,
-        label: chatLabels[candidate.localId] ?? "Fork",
-        active: Boolean(signalsByChat[candidate.localId]?.working),
-      })),
-    ...workspace.browsers
-      .filter((browser) => browser.chatLocalId === chat.localId)
-      .map((browser) => ({
-        key: browserTabKey(browser.localId),
-        kind: "browser" as const,
-        label: browser.title || browser.url || "Page",
-        faviconUrl: browser.faviconUrl,
-        active: Boolean(browser.agentControlled),
-      })),
-    ...workspace.terminals
-      .filter((terminal) => terminal.chatLocalId === chat.localId)
-      .map((terminal) => ({
-        key: terminalTabKey(terminal.localId),
-        kind: "terminal" as const,
-        label: terminal.title || "Terminal",
-        // The spinner tracks the COMMAND, not the shell: busy means a
-        // foreground process is actually running in there right now.
-        active: terminal.busy === true,
-      })),
-    ...workspace.editors
-      .filter((editor) => editor.chatLocalId === chat.localId)
-      .map((editor) => ({
-        key: editorTabKey(editor.localId),
-        kind: "editor" as const,
-        label: editor.filePath?.split("/").at(-1) || "Editor",
-      })),
-  ];
+  const surfacesFor = (chat: ChatDockEntry): ChatSurface[] => {
+    const attentionKeys = chipAttention[chat.localId] ?? [];
+    const surfaces: ChatSurface[] = [
+      // Conversations forked from this one ride the rail as chips too.
+      ...workspace.chats
+        .filter((candidate) => candidate.parentLocalId === chat.localId)
+        .map((candidate) => ({
+          key: chatTabKey(candidate.localId),
+          kind: "chat" as const,
+          label: chatLabels[candidate.localId] ?? "Fork",
+          active: Boolean(signalsByChat[candidate.localId]?.working),
+        })),
+      ...workspace.browsers
+        .filter((browser) => browser.chatLocalId === chat.localId)
+        .map((browser) => ({
+          key: browserTabKey(browser.localId),
+          kind: "browser" as const,
+          label: browser.title || browser.url || "Page",
+          faviconUrl: browser.faviconUrl,
+          active: Boolean(browser.agentControlled),
+        })),
+      ...workspace.terminals
+        .filter((terminal) => terminal.chatLocalId === chat.localId)
+        .map((terminal) => ({
+          key: terminalTabKey(terminal.localId),
+          kind: "terminal" as const,
+          label: terminal.title || "Terminal",
+          // The spinner tracks the COMMAND, not the shell: busy means a
+          // foreground process is actually running in there right now.
+          active: terminal.busy === true,
+        })),
+      ...workspace.editors
+        .filter((editor) => editor.chatLocalId === chat.localId)
+        .map((editor) => ({
+          key: editorTabKey(editor.localId),
+          kind: "editor" as const,
+          label: editor.filePath?.split("/").at(-1) || "Editor",
+        })),
+    ];
+    if (attentionKeys.length === 0) return surfaces;
+    // Chips whose surface the agent opened in the background carry the
+    // attention dot until the user opens them.
+    const marked = surfaces.map((surface) =>
+      attentionKeys.includes(surface.key)
+        ? { ...surface, attention: true }
+        : surface,
+    );
+    for (const key of attentionKeys) {
+      if (!marked.some((surface) => surface.key === key)) {
+        marked.push({ ...synthesizedSurface(key), attention: true });
+      }
+    }
+    return marked;
+  };
 
   // Everything the palette searches and acts on, shared by both hosts
   // (the Cmd+P overlay and palette "New Tab" tabs).
@@ -3460,6 +3649,9 @@ export function App() {
                   onClose={closeChat}
                   registerClose={(close) =>
                     chatClosersRef.current.set(entry.localId, close)
+                  }
+                  registerMinimize={(minimize) =>
+                    chatMinimizersRef.current.set(entry.localId, minimize)
                   }
                   onSessionCreated={onSessionCreated}
                   onSignalsChange={onSignalsChange}

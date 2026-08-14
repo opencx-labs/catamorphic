@@ -4,6 +4,7 @@ import * as lucide from "lucide-react";
 import {
   ArrowRight,
   Bot,
+  Check,
   ChevronLeft,
   ChevronRight,
   Columns2,
@@ -203,10 +204,27 @@ interface PaletteItem {
   keywords: string[];
   /** Preformatted chip, e.g. "⌘B". */
   shortcut?: string;
+  /**
+   * Picker rows: this row IS the active choice (current model/agent/
+   * effort). Renders a quiet check + "current" chip on the right, and the
+   * unfiltered picker list pins it first (normal ranking while searching).
+   */
+  current?: boolean;
   /** Navigate items load something tab-shaped and honor the commit mode. */
   kind: "action" | "navigate";
   run: (mode: CommitMode) => void;
 }
+
+/**
+ * Unfiltered picker lists open with the active choice on top — "what runs
+ * today" must be visible before picking. Stable sort: everything else
+ * keeps its order. Searching skips this (normal ranking; the check chip
+ * still marks the current row wherever it lands).
+ */
+const pinCurrentFirst = (rows: PaletteItem[]): PaletteItem[] =>
+  [...rows].sort(
+    (a, b) => Number(b.current ?? false) - Number(a.current ?? false),
+  );
 
 /** The whole input is URL-shaped: scheme, or domain(+path) with no spaces. */
 const URLISH =
@@ -827,15 +845,25 @@ export function CommandPalette({
       const current = agent.model;
       const rows: PaletteItem[] = [];
       if (agent.harness === "ai-sdk" && agent.provider === "openrouter") {
+        const modelRow = (model: OpenRouterCatalog["models"][number]) =>
+          ({
+            id: `pick:model:${model.id}`,
+            icon: Cpu,
+            label: model.name,
+            detail: `${model.id}${model.free ? " · free" : ""}`,
+            keywords: [],
+            kind: "action",
+            ...(model.id === current ? { current: true } : {}),
+            run: () => onPickModel(agent.id, model.id),
+          }) satisfies PaletteItem;
         rows.push({
           id: "pick:model:",
           icon: Cpu,
           label: "Best free model (automatic)",
-          detail: `${catalog?.bestFreeModelId ?? "resolved from the catalog"}${
-            current === "" ? " · current" : ""
-          }`,
+          detail: catalog?.bestFreeModelId ?? "resolved from the catalog",
           keywords: ["best", "free", "auto", "default"],
           kind: "action",
+          ...(current === "" ? { current: true } : {}),
           run: () => onPickModel(agent.id, ""),
         });
         const models = (catalog?.models ?? [])
@@ -843,6 +871,26 @@ export function CommandPalette({
           .sort(
             (a, b) => Number(b.free) - Number(a.free) || b.created - a.created,
           );
+        // The unfiltered list pins the CURRENT model right under the
+        // automatic row — picking a model must show what runs today.
+        // While searching, normal ranking applies (the check still marks
+        // the current row wherever it lands).
+        if (!trimmed && current) {
+          const pinned = models.find((model) => model.id === current);
+          rows.push(
+            pinned
+              ? modelRow(pinned)
+              : {
+                  id: `pick:model:${current}`,
+                  icon: Cpu,
+                  label: current,
+                  keywords: [],
+                  kind: "action",
+                  current: true,
+                  run: () => onPickModel(agent.id, current),
+                },
+          );
+        }
         // Zero state: the newest free models only — the browsable shortlist.
         // Typing searches the whole catalog.
         const matched = trimmed
@@ -855,23 +903,13 @@ export function CommandPalette({
               .sort((a, b) => b.score - a.score)
               .map((entry) => entry.model)
           : models
-              .filter((model) => model.free)
+              .filter((model) => model.free && model.id !== current)
               .sort((a, b) => b.created - a.created)
               .slice(0, 20);
         for (const model of matched.slice(0, 50)) {
-          rows.push({
-            id: `pick:model:${model.id}`,
-            icon: Cpu,
-            label: model.name,
-            detail: `${model.id}${model.free ? " · free" : ""}${
-              model.id === current ? " · current" : ""
-            }`,
-            keywords: [],
-            kind: "action",
-            run: () => onPickModel(agent.id, model.id),
-          });
+          rows.push(modelRow(model));
         }
-        return rows;
+        return trimmed ? rows : pinCurrentFirst(rows);
       }
       // CLIs run their own default; Anthropic/OpenAI need an explicit id.
       if (agent.harness !== "ai-sdk") {
@@ -879,9 +917,9 @@ export function CommandPalette({
           id: "pick:model:",
           icon: Cpu,
           label: "Harness default (automatic)",
-          detail: current === "" ? "current" : undefined,
           keywords: ["default", "auto"],
           kind: "action",
+          ...(current === "" ? { current: true } : {}),
           run: () => onPickModel(agent.id, ""),
         });
       }
@@ -889,6 +927,31 @@ export function CommandPalette({
       // catalog, `codex debug models`, or the provider's /v1/models).
       const supported =
         harnessModels?.agentId === agent.id ? harnessModels.models : [];
+      const supportedRow = (model: HarnessModelInfo) =>
+        ({
+          id: `pick:model:${model.id}`,
+          icon: Cpu,
+          label: model.name,
+          // Aliases ("sonnet") show the versioned id they resolve to.
+          detail: model.resolvedId ?? model.id,
+          keywords: [],
+          kind: "action",
+          ...(model.id === current ? { current: true } : {}),
+          run: () => onPickModel(agent.id, model.id),
+        }) satisfies PaletteItem;
+      // A pinned model the harness didn't list still needs a visible row.
+      const customCurrentRow: PaletteItem | null =
+        current && !supported.some((model) => model.id === current)
+          ? {
+              id: `pick:model:${current}`,
+              icon: Cpu,
+              label: current,
+              keywords: [],
+              kind: "action",
+              current: true,
+              run: () => onPickModel(agent.id, current),
+            }
+          : null;
       const matchedSupported = trimmed
         ? supported
             .map((model) => ({
@@ -898,30 +961,18 @@ export function CommandPalette({
             .filter((entry) => entry.score > 0)
             .sort((a, b) => b.score - a.score)
             .map((entry) => entry.model)
-        : supported;
+        : // Unfiltered: pin the current model to the top of the list
+          // (normal ranking takes over the moment the user types).
+          supported
+            .slice()
+            .sort(
+              (a, b) => Number(b.id === current) - Number(a.id === current),
+            );
+      if (customCurrentRow && !trimmed) rows.push(customCurrentRow);
       for (const model of matchedSupported.slice(0, 50)) {
-        rows.push({
-          id: `pick:model:${model.id}`,
-          icon: Cpu,
-          label: model.name,
-          // Aliases ("sonnet") show the versioned id they resolve to.
-          detail: `${model.resolvedId ?? model.id}${model.id === current ? " · current" : ""}`,
-          keywords: [],
-          kind: "action",
-          run: () => onPickModel(agent.id, model.id),
-        });
+        rows.push(supportedRow(model));
       }
-      if (current && !supported.some((model) => model.id === current)) {
-        rows.push({
-          id: `pick:model:${current}`,
-          icon: Cpu,
-          label: current,
-          detail: "current",
-          keywords: [],
-          kind: "action",
-          run: () => onPickModel(agent.id, current),
-        });
-      }
+      if (customCurrentRow && trimmed) rows.push(customCurrentRow);
       if (
         trimmed &&
         trimmed !== current &&
@@ -937,7 +988,7 @@ export function CommandPalette({
           run: () => onPickModel(agent.id, trimmed),
         });
       }
-      return rows;
+      return trimmed ? rows : pinCurrentFirst(rows);
     }
 
     if (picker) {
@@ -956,30 +1007,26 @@ export function CommandPalette({
                 id: `pick:effort:${level.id}`,
                 icon: Gauge,
                 label: level.label,
-                detail:
-                  level.id === current
-                    ? `${level.description} · current`
-                    : level.description,
+                detail: level.description,
                 keywords: [level.id, "effort", "reasoning"],
                 kind: "action" as const,
+                // The three levels keep their low→high order; the check
+                // alone marks the active one (no reordering).
+                ...(level.id === current ? { current: true } : {}),
                 run: () => onPickEffort(level.id),
               };
             })
           : agents.map((agent) => {
-              const marker =
+              const isCurrent =
                 picker === "default-agent"
                   ? agent.id === defaultAgentId
-                    ? " · default"
-                    : ""
                   : agent.id ===
-                      ((focusedChat?.agentId ?? defaultAgentId) || "")
-                    ? " · current"
-                    : "";
+                    ((focusedChat?.agentId ?? defaultAgentId) || "");
               return {
                 id: `pick:agent:${agent.id}`,
                 icon: Bot,
                 label: agent.name,
-                detail: `${agentSourceLabel(agent)} · ${agentAuthLabel(agent)}${marker}`,
+                detail: `${agentSourceLabel(agent)} · ${agentAuthLabel(agent)}`,
                 keywords: [
                   agent.name,
                   agent.harness,
@@ -987,6 +1034,7 @@ export function CommandPalette({
                   agent.model,
                 ],
                 kind: "action" as const,
+                ...(isCurrent ? { current: true } : {}),
                 run: () =>
                   picker === "default-agent"
                     ? onPickDefaultAgent(agent.id)
@@ -1011,7 +1059,9 @@ export function CommandPalette({
           },
         ];
       }
-      if (!trimmed) return rows;
+      // Agent pickers pin the current agent first while unfiltered; the
+      // effort picker keeps its low→high order (three fixed rows).
+      if (!trimmed) return picker === "effort" ? rows : pinCurrentFirst(rows);
       return rows
         .map((item) => ({
           item,
@@ -1509,6 +1559,15 @@ export function CommandPalette({
                 {item.detail && (
                   <span className="min-w-0 truncate text-[12px] text-fg-faint">
                     {item.detail}
+                  </span>
+                )}
+                {item.current && (
+                  <span
+                    className="ml-auto flex shrink-0 items-center gap-1 text-[11px] text-fg-faint"
+                    data-testid="palette-current"
+                  >
+                    <Check className="size-3.5" />
+                    current
                   </span>
                 )}
                 {item.shortcut && (

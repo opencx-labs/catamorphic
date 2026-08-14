@@ -24,6 +24,7 @@ import {
   jsonSchema,
   type LanguageModel,
   type ModelMessage,
+  stepCountIs,
   type Tool,
   ToolLoopAgent,
   tool,
@@ -347,7 +348,16 @@ export class AiSdkCodingAgent implements CodingAgentProvider {
       return;
     }
     if (state.messages.length === 0) {
-      yield { type: "error", content: "Nothing to retry yet" };
+      // Defensive: hosts route retries on a freshly restored session
+      // through sendMessage (the restored history excludes the failed
+      // turn), so this should be unreachable — but if it ever surfaces,
+      // it must tell the user what to do, not "Nothing to retry yet".
+      yield {
+        type: "error",
+        content:
+          "This conversation was restored and the failed turn can't be " +
+          "replayed automatically. Send your message again to continue.",
+      };
       return;
     }
     if (opts?.sanitizeReasoning) {
@@ -378,6 +388,11 @@ export class AiSdkCodingAgent implements CodingAgentProvider {
       model,
       instructions: state.instructions,
       tools: state.tools,
+      // The AI SDK's default stop condition is stepCountIs(20) — far too
+      // small for real coding turns (scaffold a workspace, build, fix,
+      // rebuild easily exceeds it) and it ends the turn SILENTLY mid-work.
+      // Interruption stays available via abort; the cap is a runaway guard.
+      stopWhen: stepCountIs(150),
       ...(effort ? { providerOptions: effortProviderOptions(effort) } : {}),
     });
 

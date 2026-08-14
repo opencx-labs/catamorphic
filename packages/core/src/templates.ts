@@ -692,6 +692,11 @@ lib mode does not inject it, and a bundle that still references
 \`process.env\` at runtime ships dev-mode React (bigger and slower; the
 host shims \`process\` so it runs, but never rely on that).
 
+Apps run in a sandboxed iframe with an opaque origin. \`localStorage\` /
+\`sessionStorage\` work (the host shims them) but hold data only while the
+app is open — nothing persists across reloads. Durable state belongs in
+workflows: define one and call it through the app contract.
+
 - One screen per app; no routing. The host controls where it renders.
 - \`getContext()\` from \`@catamorphic/app\` gives the mount snapshot
   (tenant, user, host extras). Anything richer is one workflow call away.

@@ -138,6 +138,17 @@ export class E2eLocalSandboxProvider implements SandboxProvider {
  *   auth-error rewrite in agent-errors.ts).
  * - anything else → set_title + one text reply echoing the message.
  */
+
+/**
+ * One-shot failure triggers, process-wide: a given trigger message fails
+ * once and recovers on retry (same content re-runs); a NEW trigger message
+ * fails again. Deliberately NOT per provider instance — a reconnect updates
+ * the stored credential, which rebuilds the provider (agent-registry cache
+ * key), exactly like production; the failure cause (the "expired key") must
+ * not come back with the rebuilt instance.
+ */
+const oneShotFailures = new Set<string>();
+
 export class E2eFakeCodingAgent implements CodingAgentProvider {
   readonly name = "e2e-fake";
   private readonly sessions = new Map<
@@ -146,13 +157,14 @@ export class E2eFakeCodingAgent implements CodingAgentProvider {
       sandboxId: string;
       workingDirectory: string;
       askedQuestion: boolean;
-      /**
-       * Per-prompt one-shot failures: a given trigger message fails once
-       * and recovers on retry (same content re-runs). A NEW trigger
-       * message fails again — reconnect/retry flows need fresh failures.
-       */
-      failedPrompts: Set<string>;
       interrupted: boolean;
+      /**
+       * The last turn this in-memory session ran, for retryTurn — the
+       * same "history lives in memory" semantics as the ai-sdk harness,
+       * so retry flows exercise the production paths (native re-run on a
+       * live session; core's sendMessage fallback after a re-anchor).
+       */
+      lastTurn?: { message: string; opts?: TurnOptions };
       /** Context for driving the real workspace toolkit ("terminal:"). */
       toolContext: ExtraToolContext;
     }
@@ -186,7 +198,6 @@ export class E2eFakeCodingAgent implements CodingAgentProvider {
       sandboxId: opts.sandboxId,
       workingDirectory: opts.workingDirectory,
       askedQuestion: false,
-      failedPrompts: new Set(),
       interrupted: false,
       toolContext: { projectId: opts.projectId, sessionId: opts.sessionId },
     });
@@ -212,6 +223,7 @@ export class E2eFakeCodingAgent implements CodingAgentProvider {
       return;
     }
     state.interrupted = false;
+    state.lastTurn = { message, ...(opts ? { opts } : {}) };
     const prompt = message.toLowerCase();
 
     // Media messages echo what arrived (exercises the attachment path).
@@ -451,11 +463,15 @@ export class E2eFakeCodingAgent implements CodingAgentProvider {
       return;
     }
 
-    // "show: <target>" → the REAL open_surface tool (tab opens behind the
-    // chat; the chat steps down to its floating dock).
-    const showRun = /^show:\s*(.+)$/s.exec(message.trim());
+    // "show: <target>" → the REAL open_surface tool (focused open behind
+    // the chat, or a background open + chip attention when the user is
+    // elsewhere — the echoed "opened" field says which). "show later:"
+    // delays the call ~2.5s so a test can move the user's focus away
+    // first (the focus-steal regression pin).
+    const showRun = /^show(\s+later)?:\s*(.+)$/s.exec(message.trim());
     if (showRun) {
-      const target = showRun[1]?.trim() ?? "";
+      const [, later, rawTarget] = showRun;
+      const target = rawTarget?.trim() ?? "";
       const tool = this.workspaceTools.find(
         (candidate) => candidate.name === "open_surface",
       );
@@ -464,13 +480,20 @@ export class E2eFakeCodingAgent implements CodingAgentProvider {
         yield { type: "done" };
         return;
       }
+      if (later) {
+        const deadline = Date.now() + 2500;
+        while (Date.now() < deadline && !state.interrupted) {
+          await new Promise((resolve) => setTimeout(resolve, 100));
+        }
+      }
       try {
         const result = (await tool.execute({ target }, state.toolContext)) as {
           key?: string;
+          opened?: string;
         };
         yield {
           type: "text",
-          content: `Opened ${target} ("key":"${result.key ?? "unknown"}").`,
+          content: `Opened ${target} ("key":"${result.key ?? "unknown"}", "opened":"${result.opened ?? "unknown"}").`,
         };
       } catch (error) {
         yield {
@@ -483,8 +506,8 @@ export class E2eFakeCodingAgent implements CodingAgentProvider {
     }
 
     if (prompt.includes("auth error")) {
-      if (!state.failedPrompts.has(prompt)) {
-        state.failedPrompts.add(prompt);
+      if (!oneShotFailures.has(prompt)) {
+        oneShotFailures.add(prompt);
         yield { type: "error", content: "User not found." };
         yield { type: "done" };
         return;
@@ -497,8 +520,8 @@ export class E2eFakeCodingAgent implements CodingAgentProvider {
     // "rate limit" → a provider-style 429, once per message; drives the
     // auto-retry backoff loop, whose retry then recovers.
     if (prompt.includes("rate limit")) {
-      if (!state.failedPrompts.has(prompt)) {
-        state.failedPrompts.add(prompt);
+      if (!oneShotFailures.has(prompt)) {
+        oneShotFailures.add(prompt);
         yield { type: "error", content: "429 rate limit exceeded" };
         yield { type: "done" };
         return;
@@ -524,6 +547,40 @@ export class E2eFakeCodingAgent implements CodingAgentProvider {
     yield { type: "title", content: "Quick chat" };
     yield { type: "text", content: `You said: ${message}` };
     yield { type: "done" };
+  }
+
+  /**
+   * Native retry-in-place, mirroring the ai-sdk harness: the failed turn
+   * re-runs from in-memory session state without a new user message. A
+   * freshly re-anchored session (provider rebuilt after a reconnect)
+   * holds no turn — core must route that retry through sendMessage
+   * instead of ever reaching the defensive error below.
+   */
+  async *retryTurn(
+    session: ProviderSession,
+    opts?: TurnOptions & { sanitizeReasoning?: boolean },
+  ): AsyncIterable<AgentEvent> {
+    const state = session.providerSessionId
+      ? this.sessions.get(session.providerSessionId)
+      : undefined;
+    if (!state) {
+      yield {
+        type: "error",
+        content: "Session not found (host restarted?); start a new session",
+      };
+      return;
+    }
+    if (!state.lastTurn) {
+      yield {
+        type: "error",
+        content:
+          "This conversation was restored and the failed turn can't be " +
+          "replayed automatically. Send your message again to continue.",
+      };
+      return;
+    }
+    const { message, opts: lastOpts } = state.lastTurn;
+    yield* this.sendMessage(session, message, { ...lastOpts, ...opts });
   }
 
   async dispose(session: ProviderSession): Promise<void> {

@@ -130,20 +130,24 @@ describe("agents and profiles", () => {
 
   it("changes the default agent through the palette picker", async () => {
     await openPicker("Change default agent", "Default agent");
+    // The current default carries the check chip and sits first in the
+    // unfiltered list.
     await runWait(
       `const rows = paletteRows();
        return rows.some((el) => el.textContent.includes('Fake Agent') &&
-                                el.textContent.includes('· default')) &&
+                                el.querySelector('[data-testid="palette-current"]')) &&
               rows.some((el) => el.textContent.includes('Other Fake'));`,
-      { label: "agent rows with default marker" },
+      { label: "agent rows with current-default marker" },
     );
     await run(pickOption("Other Fake"));
     await openPicker("Change default agent", "Default agent");
     await runWait(
-      `return paletteRows()
-        .some((el) => el.textContent.includes('Other Fake') &&
-                      el.textContent.includes('· default'));`,
-      { label: "default moved to Other Fake" },
+      `const rows = paletteRows();
+       const marked = rows.find((el) =>
+         el.querySelector('[data-testid="palette-current"]'));
+       return !!marked && marked.textContent.includes('Other Fake') &&
+              rows.indexOf(marked) === 0;`,
+      { label: "default moved to Other Fake and pinned first" },
     );
     await run(paletteEscape);
   });
@@ -201,19 +205,26 @@ describe("agents and profiles", () => {
 
   it("changes the default agent's effort through the effort picker", async () => {
     await openPicker("Change model effort", "Effort");
+    // The current level carries the check chip; the three rows keep their
+    // low→high order (marked, never reordered).
     await runWait(
       `const rows = paletteRows();
        return rows.some((el) => el.textContent.includes('Medium effort') &&
-                                el.textContent.includes('· current')) &&
+                                el.querySelector('[data-testid="palette-current"]')) &&
               rows.some((el) => el.textContent.includes('High effort'));`,
       { label: "effort rows with current marker" },
+    );
+    await runWait(
+      `const rows = paletteRows().filter((el) => el.textContent.includes('effort'));
+       return rows.length === 3 && rows[0].textContent.includes('Low effort');`,
+      { label: "effort rows keep low→high order" },
     );
     await run(pickOption("High effort"));
     await openPicker("Change model effort", "Effort");
     await runWait(
       `return paletteRows()
         .some((el) => el.textContent.includes('High effort') &&
-                      el.textContent.includes('· current'));`,
+                      el.querySelector('[data-testid="palette-current"]'));`,
       { label: "current effort moved to high" },
     );
     await run(paletteEscape);
@@ -245,13 +256,19 @@ describe("agents and profiles", () => {
           ?.model === 'my-custom-model');`,
       { label: "default agent's model updated" },
     );
-    // Re-entering the picker shows the pick as current.
+    // Re-entering the picker shows the pick as current — pinned to the
+    // top of the unfiltered list with the check chip.
     await openPicker("Change model", "Model");
     await runWait(
       `return paletteRows().some((el) =>
         el.textContent.includes('my-custom-model') &&
-        el.textContent.includes('current'));`,
+        el.querySelector('[data-testid="palette-current"]'));`,
       { label: "current marker on the new model" },
+    );
+    await runWait(
+      `const first = paletteRows()[0];
+       return !!first && first.textContent.includes('my-custom-model');`,
+      { label: "current model pinned first while unfiltered" },
     );
     await run(paletteEscape);
   });
@@ -592,13 +609,27 @@ describe("agents and profiles", () => {
       { timeoutMs: 30_000, label: "reconnect button on the auth card" },
     );
     await run(`$('[data-testid="chat-reauth"]').click(); return true;`);
-    // The e2e login stub completes ~immediately; the successful reconnect
-    // must retry the failed turn WITHOUT another click or message.
+    // The e2e login stub completes ~immediately and stamps a NEW key —
+    // which rebuilds the provider (production PKCE parity), so this
+    // retry runs against a freshly re-anchored harness session. The
+    // successful reconnect must retry the failed turn WITHOUT another
+    // click or message.
     await runWait(
       `return $$('[role="log"] article')
         .some((el) => el.textContent.includes('Recovered after reconnecting.'));`,
       { timeoutMs: 30_000, label: "reconnect auto-retried the turn" },
     );
+    // The dead-retry regression: a re-anchored session routed through the
+    // harness's native re-run answered "nothing to retry" forever. That
+    // wording (old or new) must never land in the transcript here.
+    const deadRetry = await run<boolean>(`
+      return $$('[role="log"] article').some((el) =>
+        el.textContent.includes('Nothing to retry') ||
+        el.textContent.includes("can't be replayed"));
+    `);
+    if (deadRetry) {
+      throw new Error("re-anchored retry dead-ended instead of re-running");
+    }
   });
 
   it("auto-retries rate-limited turns with a visible countdown", async () => {

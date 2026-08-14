@@ -24,6 +24,14 @@ export function buildAppGuestDocument(args: {
   // - `process` shim: Vite lib-mode builds keep `process.env.NODE_ENV`
   //   verbatim (lib mode never injects the define) and the guest frame has
   //   no Node globals, so an unshimmed bundle would throw before mounting.
+  // - storage shim: the sandbox withholds `allow-same-origin`, so the guest
+  //   has an opaque origin and merely READING `window.localStorage` throws a
+  //   SecurityError. Agent-built apps reach for localStorage constantly, and
+  //   one uncaught access (a save effect, say) tears the whole React tree
+  //   down to a blank page. Shadow local/sessionStorage with an in-memory
+  //   Storage so apps run correctly; contents last for the document's
+  //   lifetime only (the building-apps skill tells agents durable state
+  //   belongs in workflows).
   // - auto-height: most apps never call reportHeight(); observe the
   //   document and post the same resize message the client library would.
   //   scrollHeight is max(content, viewport), so it ratchets up to the
@@ -32,6 +40,16 @@ export function buildAppGuestDocument(args: {
   //   the same vars the initial <style> below seeds.
   const runtime =
     'var process={env:{NODE_ENV:"production"}};' +
+    "(()=>{const mem=()=>{const m=new Map();return{" +
+    "getItem:(k)=>m.has(String(k))?m.get(String(k)):null," +
+    "setItem:(k,v)=>{m.set(String(k),String(v))}," +
+    "removeItem:(k)=>{m.delete(String(k))}," +
+    "clear:()=>{m.clear()}," +
+    "key:(i)=>[...m.keys()][i]??null," +
+    "get length(){return m.size}}};" +
+    "for(const name of['localStorage','sessionStorage']){" +
+    "try{void window[name]}catch{" +
+    "Object.defineProperty(window,name,{value:mem(),configurable:true})}}})();" +
     "addEventListener('load',()=>{const post=()=>parent.postMessage(" +
     `{catamorphicApp:${APP_PROTOCOL_VERSION},kind:'resize',height:document.documentElement.scrollHeight},'*');` +
     "post();const o=new ResizeObserver(post);o.observe(document.documentElement);o.observe(document.body)});" +

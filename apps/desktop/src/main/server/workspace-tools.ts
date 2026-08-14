@@ -113,7 +113,7 @@ export function buildWorkspaceToolkit(
     {
       name: "open_surface",
       description:
-        "Open (or focus) something tab-shaped in the user's workspace, BEHIND your chat — your chat steps down to its floating dock so the user sees the tab. Targets: an existing tab key from workspace_overview, 'app:<name>' (a published project app), 'file:<path>' (opens the file in an editor tab), or an http(s) URL (browser tab). Use it to show the user something: an app you built, a file you changed, a page.",
+        "Open (or focus) something tab-shaped in the user's workspace. Targets: an existing tab key from workspace_overview, 'app:<name>' (a published project app), 'file:<path>' (opens the file in an editor tab), or an http(s) URL (browser tab). Use it to show the user something: an app you built, a file you changed, a page. If the user is watching your chat, the tab opens behind it (your chat steps down to its floating dock); if they're busy on another surface, their view is NOT moved — the tab opens in the background and its chip on your chat is highlighted instead. The result's `opened` field says which happened ('focused' vs 'background'); after a background open, tell the user it's ready and where — never assume they saw it.",
       parameters: {
         target: z
           .string()
@@ -129,11 +129,13 @@ export function buildWorkspaceToolkit(
     {
       name: "point_at",
       description:
-        "Point the user's attention at a UI element with a subtle glow and scroll it into view. The glow stays until the user interacts with that element or you point at something else (pass keep_previous to stack pointers instead of replacing them). Targets: a workspace tab key from workspace_overview (glows that tab), 'app:<name>', or 'sidebar:<item label>' (glows that sidebar entry). Use clear_pointers when nothing should be highlighted anymore.",
+        "Point the user's attention at a UI element with a subtle glow and scroll it into view. The glow stays until the user interacts with that element or you point at something else (pass keep_previous to stack pointers instead of replacing them). Targets: a workspace tab key from workspace_overview (glows that tab), 'app:<name>', 'sidebar:<item label>' (glows that sidebar entry), or 'chip:<surface key>' (glows that surface's chip on your own chat, e.g. 'chip:terminal:<id>'). Use clear_pointers when nothing should be highlighted anymore.",
       parameters: {
         target: z
           .string()
-          .describe("Tab key, 'app:<name>', or 'sidebar:<item label>'"),
+          .describe(
+            "Tab key, 'app:<name>', 'sidebar:<item label>', or 'chip:<surface key>'",
+          ),
         note: z
           .string()
           .optional()

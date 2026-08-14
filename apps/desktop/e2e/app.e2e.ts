@@ -747,6 +747,62 @@ describe("agent shows and points", () => {
       label: "glow dismissed by interaction",
     });
   });
+
+  it("open_surface while the user is elsewhere opens in the background and lights the chip", async () => {
+    // "show later:" makes the fake wait ~2.5s before calling
+    // open_surface — time for the test to park the chat (Cmd+M) so the
+    // user is demonstrably on another surface when the call lands.
+    await runWait(`return !!floatingDock();`, { label: "chat open" });
+    await run(`
+      const ta = floatingDock().querySelector('textarea');
+      setReactValue(ta, 'show later: app:bg-demo');
+      ta.closest('form').requestSubmit();
+      return true;
+    `);
+    await run(`pressKey('m', { metaKey: true }); return true;`);
+    await runWait(`return !floatingDock();`, { label: "chat parked" });
+    // The tab is PREPARED in the background (it appears in the strip)…
+    await runWait(`return !!$('[data-point-key="app:bg-demo"]');`, {
+      timeoutMs: 30_000,
+      label: "app tab created in the background",
+    });
+    // …and the tool result told the agent it was a background open.
+    await runWait(
+      `return timelineMessages().some((m) =>
+         m.text.includes('"opened":"background"'));`,
+      { timeoutMs: 30_000, label: "tool result reported the background open" },
+    );
+    // No focus steal: a browser tab still owns the view (hidden browser
+    // panes carry .invisible — the active one must not).
+    await run(`
+      const bars = $$('input[aria-label="Address and search bar"]');
+      if (!bars.some((el) => !el.closest('.invisible'))) {
+        throw new Error('open_surface stole focus while the user was elsewhere');
+      }
+      return true;
+    `);
+    // Reopening the chat shows the chip carrying the attention dot.
+    await run(`pressKey('m', { metaKey: true }); return true;`);
+    await runWait(
+      `return !!floatingDock()?.querySelector(
+         '[data-testid="surface-chip"][data-attention][data-kind="app"]');`,
+      { label: "app chip carries the attention indicator" },
+    );
+    // Clicking the chip clears the attention and focuses the tab
+    // (dismissal-by-interaction): every browser pane goes hidden.
+    await run(`
+      floatingDock()
+        .querySelector('[data-testid="surface-chip"][data-attention] button')
+        .click();
+      return true;
+    `);
+    await runWait(
+      `return !$('[data-testid="surface-chip"][data-attention]') &&
+              $$('input[aria-label="Address and search bar"]')
+                .every((el) => el.closest('.invisible'));`,
+      { label: "attention cleared and the app tab focused" },
+    );
+  });
 });
 
 describe("subagents and background watchers", () => {

@@ -15,6 +15,16 @@ const DESKTOP_DIR = path.resolve(import.meta.dirname, "..");
 // answer the next run's CDP handshake.
 const cdpPort = () => 9300 + Math.floor(Math.random() * 400);
 
+export interface FrameHandle {
+  /** Evaluate JS inside the frame; resolves the JSON-serialized result. */
+  eval: <T = unknown>(expression: string) => Promise<T>;
+  waitFor: <T = unknown>(
+    expression: string,
+    opts?: { timeoutMs?: number; label?: string },
+  ) => Promise<T>;
+  close: () => void;
+}
+
 export interface AppHandle {
   /** Evaluate JS in the app window; resolves the JSON-serialized result. */
   eval: <T = unknown>(expression: string) => Promise<T>;
@@ -24,6 +34,15 @@ export interface AppHandle {
     opts?: { timeoutMs?: number; label?: string },
   ) => Promise<T>;
   screenshot: (filePath: string) => Promise<void>;
+  /**
+   * Attach a second CDP session to an out-of-process iframe — e.g. a
+   * sandboxed app guest, whose opaque origin makes it unreachable from the
+   * page context — found by URL substring across the browser's targets.
+   */
+  connectToFrame: (
+    urlSubstring: string,
+    opts?: { timeoutMs?: number },
+  ) => Promise<FrameHandle>;
   /** Captured app stdout/stderr so far (diagnosing server-side behavior). */
   getOutput: () => string;
   userDataDir: string;
@@ -66,6 +85,10 @@ export async function launchApp(opts: LaunchOpts = {}): Promise<AppHandle> {
         ...process.env,
         ELECTRON_RUN_AS_NODE: undefined,
         CATAMORPHIC_E2E_DATA_DIR: userDataDir,
+        // Deterministic fake agent by default. Eval-style tests opt out by
+        // passing CATAMORPHIC_E2E_FAKE_AGENT: "" (or "0") in opts.env — the
+        // spread below wins, and every main-process check treats anything
+        // but "1" as off (boot.ts, ipc.ts, harness-models.ts).
         CATAMORPHIC_E2E_FAKE_AGENT: "1",
         ...opts.env,
       },
@@ -88,8 +111,58 @@ export async function launchApp(opts: LaunchOpts = {}): Promise<AppHandle> {
       "window.catamorphicDesktop && window.catamorphicDesktop.getServerState().then(s=>!!s.url)",
       { timeoutMs: 60_000, label: "embedded server ready" },
     );
+    // App iframes with an opaque origin render out of process; their CDP
+    // targets appear on the same /json endpoint as the page. Attach a
+    // dedicated WebSocket so tests can evaluate inside the frame.
+    const connectToFrame = async (
+      urlSubstring: string,
+      frameOpts: { timeoutMs?: number } = {},
+    ): Promise<FrameHandle> => {
+      const deadline = Date.now() + (frameOpts.timeoutMs ?? 30_000);
+      let seen = "";
+      while (Date.now() < deadline) {
+        try {
+          const targets = (await fetch(`http://127.0.0.1:${port}/json`).then(
+            (response) => response.json(),
+          )) as { type: string; url: string; webSocketDebuggerUrl: string }[];
+          seen = targets
+            .map((target) => `${target.type} ${target.url}`)
+            .join("\n");
+          const frame = targets.find((target) =>
+            target.url.includes(urlSubstring),
+          );
+          if (frame) {
+            const frameWs = new WebSocket(frame.webSocketDebuggerUrl);
+            await new Promise<void>((resolve, reject) => {
+              frameWs.addEventListener("open", () => resolve(), {
+                once: true,
+              });
+              frameWs.addEventListener("error", (event) => reject(event), {
+                once: true,
+              });
+            });
+            const frameClient = await createClient(frameWs, { page: false });
+            return {
+              eval: frameClient.eval,
+              waitFor: frameClient.waitFor,
+              close: () => frameWs.close(),
+            };
+          }
+        } catch {
+          // /json can 404 transiently while targets churn; keep polling.
+        }
+        await sleep(500);
+      }
+      throw new Error(
+        `No CDP target matching "${urlSubstring}" within ${
+          frameOpts.timeoutMs ?? 30_000
+        }ms.\n--- targets ---\n${seen}`,
+      );
+    };
+
     return {
       ...client,
+      connectToFrame,
       getOutput: () => output,
       userDataDir,
       stop: async () => {
@@ -149,7 +222,7 @@ async function connectCdp(
   throw new Error(`CDP never became reachable: ${String(lastError)}`);
 }
 
-async function createClient(ws: WebSocket) {
+async function createClient(ws: WebSocket, opts: { page?: boolean } = {}) {
   let nextId = 1;
   const pending = new Map<
     number,
@@ -178,7 +251,8 @@ async function createClient(ws: WebSocket) {
   };
 
   await send("Runtime.enable");
-  await send("Page.enable");
+  // Frame targets only need Runtime; Page powers the window screenshot.
+  if (opts.page !== false) await send("Page.enable");
 
   const evaluate = async <T>(expression: string): Promise<T> => {
     const result = (await send("Runtime.evaluate", {

@@ -461,7 +461,10 @@ export function registerIpcHandlers(
     // so onboarding flows run end to end without leaving the machine.
     if (process.env.CATAMORPHIC_E2E_FAKE_AGENT === "1") {
       if (agent.harness === "ai-sdk") {
-        store.update(id, { apiKey: "sk-or-e2e-fake" });
+        // A fresh key per login, like the real PKCE flow: the credential
+        // change rebuilds the cached provider (agent-registry cache key),
+        // so reconnect-then-retry e2e covers the production re-anchor path.
+        store.update(id, { apiKey: `sk-or-e2e-fake-${Date.now()}` });
         agentsChanged(event, store);
       }
       // Deferred so the renderer's agentLogin() call resolves (and the

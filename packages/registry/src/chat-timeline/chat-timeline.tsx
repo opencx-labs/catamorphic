@@ -176,14 +176,30 @@ function Message({
   const files = changedFiles(message);
   const [entered, setEntered] = useState(false);
 
+  // Double rAF: the first frame aligns with the commit, the second
+  // guarantees the browser resolved the hidden pose before it flips —
+  // a single rAF can fire before the mount frame ever paints (React
+  // flushes effects pre-paint under load, e.g. a streaming poll),
+  // collapsing both poses into one style recalc and skipping the
+  // entrance transition entirely.
   useEffect(() => {
-    const frame = requestAnimationFrame(() => setEntered(true));
-    return () => cancelAnimationFrame(frame);
+    let second: number | undefined;
+    const first = requestAnimationFrame(() => {
+      second = requestAnimationFrame(() => setEntered(true));
+    });
+    return () => {
+      cancelAnimationFrame(first);
+      if (second !== undefined) cancelAnimationFrame(second);
+    };
   }, []);
 
   return (
     <article
-      className={`max-w-[85%] text-sm motion-safe:transition-[opacity,transform] motion-safe:duration-200 motion-safe:ease-out ${entered ? "motion-safe:translate-y-0 motion-safe:opacity-100" : "motion-safe:translate-y-1 motion-safe:opacity-0"} ${message.role === "user" ? "ml-auto rounded-xl rounded-br-sm border border-info/30 bg-info/10 px-3 py-2" : "mr-auto"}`}
+      // transition-[opacity,translate], not transform: Tailwind v4's
+      // translate-y-* sets the individual `translate` property, which a
+      // `transform` transition does not cover — the slide half of the
+      // entrance would snap while only opacity faded.
+      className={`max-w-[85%] text-sm motion-safe:transition-[opacity,translate] motion-safe:duration-200 motion-safe:ease-[cubic-bezier(0.2,0,0,1)] ${entered ? "motion-safe:translate-y-0 motion-safe:opacity-100" : "motion-safe:translate-y-1 motion-safe:opacity-0"} ${message.role === "user" ? "ml-auto rounded-xl rounded-br-sm border border-info/30 bg-info/10 px-3 py-2" : "mr-auto"}`}
     >
       <div className="mb-1 text-[10px] font-semibold uppercase tracking-wider text-fg-faint">
         {message.role === "user" ? "You" : "Agent"}
