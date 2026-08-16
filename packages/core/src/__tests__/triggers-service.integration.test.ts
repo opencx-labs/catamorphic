@@ -14,6 +14,7 @@ import { sql } from "kysely";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { CatamorphicCore } from "../core.js";
 import type { Identity } from "../identity.js";
+import { AccessDeniedError } from "../services/artifact-scope.js";
 import type { TriggerKindRuntime } from "../services/trigger-kinds.js";
 import {
   TriggerBindingsInvalidError,
@@ -401,6 +402,65 @@ describeIf("TriggersService end to end", () => {
       .execute();
     expect(jobs[0]?.status).toBe("pending");
     expect(jobs[0]?.attempt).toBeGreaterThanOrEqual(1);
+  }, 30_000);
+
+  it("runs.call: settles a non-suspending workflow inline for a builder", async () => {
+    const outcome = await core.runs.call({
+      identity,
+      projectId,
+      workflowName: "escalateTicket",
+      input: { ticketId: "T-500" },
+      budgetMs: 20_000,
+    });
+    expect(outcome).toMatchObject({
+      status: "completed",
+      output: { escalated: "T-500" },
+    });
+    const run = await core.runs.get({ identity, runId: outcome.runId });
+    expect(run.status).toBe("completed");
+  }, 30_000);
+
+  it("runs.call: a workflow-scoped viewer may call exactly its workflow", async () => {
+    const viewer = {
+      ...identity,
+      externalUserId: "viewer",
+      scope: [{ kind: "workflow" as const, projectId, name: "escalateTicket" }],
+    };
+    const outcome = await core.runs.call({
+      identity: viewer,
+      projectId,
+      workflowName: "escalateTicket",
+      input: { ticketId: "T-501" },
+      budgetMs: 20_000,
+    });
+    expect(outcome.status).toBe("completed");
+    // The viewer can read the run it started, and nothing else.
+    const run = await core.runs.get({ identity: viewer, runId: outcome.runId });
+    expect(run.status).toBe("completed");
+    await expect(
+      core.runs.call({
+        identity: viewer,
+        projectId,
+        workflowName: "awaitApproval",
+        input: { ticketId: "T-502" },
+      }),
+    ).rejects.toThrow(AccessDeniedError);
+  }, 30_000);
+
+  it("runs.call: hands back the run at the first durable wait", async () => {
+    const outcome = await core.runs.call({
+      identity,
+      projectId,
+      workflowName: "awaitApproval",
+      input: { ticketId: "T-503" },
+      budgetMs: 20_000,
+    });
+    expect(outcome).toMatchObject({
+      status: "suspended",
+      suspendedOn: "pause",
+    });
+    const run = await core.runs.get({ identity, runId: outcome.runId });
+    expect(run.status).toBe("waiting");
   }, 30_000);
 
   it("fans out one fire across every bound workflow", async () => {

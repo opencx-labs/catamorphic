@@ -166,7 +166,7 @@ For local development against a catamorphic checkout, install via `file:` links 
 
 ## HTTP path: `@catamorphic/fastify-plugin`
 
-Register the plugin on the host's Fastify server:
+Register the plugin on the host's Fastify server, telling it who is calling:
 
 ```ts
 import { catamorphicPlugin } from "@catamorphic/fastify-plugin";
@@ -174,30 +174,54 @@ import { catamorphicPlugin } from "@catamorphic/fastify-plugin";
 app.register(catamorphicPlugin, {
   core: catamorphic.core,
   prefix: "/api", // the generated api-client expects /api
+  // The one identity mechanism. Runs on every request (including iframe
+  // navigations to served app documents, which carry your session cookie).
+  identity: async (request) => {
+    const session = await verifySession(request); // your auth
+    if (!session) return null;                     // → 401
+    return { tenantId: session.orgId, externalUserId: session.userId };
+  },
 });
 ```
 
-The plugin is fully encapsulated (its Zod compilers and error handler don't leak into the host app) and registers no CORS: the host owns cross-origin policy. For a sidecar process or spec generation, `createApp({ core })` returns a complete Fastify app with CORS + Swagger UI at `/docs` and the plugin mounted at `/api`.
+The plugin is fully encapsulated (its Zod compilers and error handler don't leak into the host app) and registers no CORS: the host owns cross-origin policy. For a sidecar process or spec generation, `createApp({ core, identity })` returns a complete Fastify app with CORS + Swagger UI at `/docs` and the plugin mounted at `/api`.
 
-Every request requires two headers (there are no defaults):
+**There is no default identity.** The `identity` resolver is required and the plugin reads no headers on its own. Hosts whose auth terminates *in front of* the plugin (a gateway or proxy route that already verified the session) can pass the stock header resolver, `identityFromHeaders()`, which reads `X-Catamorphic-Tenant-Id` (host org id) and `X-External-User-Id` (host user id) — but a plugin mounted with it must never be reachable by browsers directly, since anyone could then claim any identity.
 
-- `X-Catamorphic-Tenant-Id`: host org id
-- `X-External-User-Id`: host user id
+### Builders and viewers: identity scope
 
-**Set these server-side from the host's verified auth context** (session, JWT). Never trust values forwarded from the browser. Typical setup: the host exposes its own authenticated proxy route, or wraps `fetch` in the api-client to inject the headers after verifying the session.
+An identity is either **full** (a builder: the whole project surface — files, deploys, secrets, agents, every run control) or **scoped** (a viewer: exactly the listed artifacts and nothing else). Scope is a list of artifact refs by name:
+
+```ts
+identity: async (request) => {
+  const session = await verifySession(request);
+  if (!session) return null;
+  const base = { tenantId: session.orgId, externalUserId: session.userId };
+  if (session.isEmployee) return base;                       // builder
+  // A customer: exactly the apps your entitlement table grants them.
+  const apps = await db.customerApps(session.userId);        // [{ projectId, name }]
+  return {
+    ...base,
+    scope: apps.map((a) => ({ kind: "app", projectId: a.projectId, name: a.name })),
+  };
+}
+```
+
+`{ kind: "app", projectId, name }` grants the app's served document plus, transitively, the workflows frozen into its *active published* version; `{ kind: "workflow", projectId, name }` grants one workflow directly (a per-customer MCP tool, a host-triggered action). Refs name artifacts by `(projectId, name)` — what an entitlement table naturally stores, stable across republishes — and catamorphic resolves the active version at check time, so a retired version can never be reached. Which users are builders and which artifacts each viewer gets is host policy (a table, a role, whatever you like); catamorphic only enforces the result. Enforcement lives in core, so `server-sdk` callers get it too: `catamorphic.forTenant({ tenantId }).forUser({ externalUserId, scope })`. See [`docs/decisions/0053-identity-scope-and-app-routes.md`](docs/decisions/0053-identity-scope-and-app-routes.md).
 
 The generated HTTP client lives in `@catamorphic/api-client`; construct it with `createApiClient({ baseUrl, fetch })`.
 
 All execution uses one Runs route family:
 
-- `POST /api/projects/:projectId/workflows/:name/runs` triggers a Run.
+- `POST /api/projects/:projectId/workflows/:name/runs` triggers a Run (async; returns the Run).
+- `POST /api/projects/:projectId/workflows/:name/calls` **calls** a workflow synchronously: the run is driven inline until it settles or reaches a durable wait, and the response is `{ status: "completed", output } | { status: "failed", error } | { status: "suspended", runId, suspendedOn }` — poll `runId` in the last case. Sync is a calling mode, not a workflow kind: same durable run record, same deployed commit.
 - `GET /api/projects/:projectId/workflows/:name/runs` lists Runs.
 - `GET /api/runs/:runId` and `/api/runs/:runId/*` expose detail and capability-specific controls.
 
+Apps have their own execution routes — `POST /api/projects/:id/apps/:name/calls/:workflow`, `POST …/apps/:name/runs/:workflow`, `GET …/apps/:name/runs/:runId` — which the `AppMount` component uses. The URL names the app, so the plugin narrows whoever arrives to that app structurally (a builder is confined to the app while inside it; a viewer must be entitled to it) before the server re-authorizes against the frozen workflow set. Nothing is claimed by the client.
+
 Every Run executes an immutable deployed commit and retains that provenance;
-there is no mutable-source or test mode. The synchronous trigger-firing path
-runs any workflow inline until its first durable wait, so a workflow that
-cannot suspend settles in the request.
+there is no mutable-source or test mode.
 
 ## React bindings: `@catamorphic/react`
 
@@ -214,9 +238,9 @@ const queryClient = new QueryClient();
 const apiClient = createApiClient({
   baseUrl: process.env.NEXT_PUBLIC_CATAMORPHIC_URL!,
   fetch: async (input, init) => {
-    // Route through the host's authenticated proxy, which sets
-    // X-Catamorphic-Tenant-Id + X-External-User-Id from the session.
-    return fetch(input, init);
+    // Same origin as your API: the session cookie rides along and the
+    // plugin's `identity` resolver turns it into a catamorphic identity.
+    return fetch(input, { ...init, credentials: "include" });
   },
 });
 

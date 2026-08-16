@@ -8,7 +8,7 @@ import { getTracer, withSpan } from "@catamorphic/otel";
 import type { Kysely, Selectable } from "kysely";
 import { authorFor, type Identity } from "../identity.js";
 import { SEED_SKILLS } from "../seeds.js";
-import { assertProjectSurface } from "./app-audience.js";
+import { assertFullIdentity } from "./artifact-scope.js";
 
 const tracer = getTracer("@catamorphic/core");
 
@@ -167,7 +167,7 @@ export class ProjectsService {
     identity: Identity,
     input: CreateProjectInput,
   ): Promise<Project> {
-    assertProjectSurface(identity);
+    assertFullIdentity(identity);
     return withSpan(
       {
         tracer,
@@ -258,7 +258,7 @@ export class ProjectsService {
     identity: Identity,
     input: ListProjectsInput = {},
   ): Promise<ListProjectsResult> {
-    assertProjectSurface(identity);
+    assertFullIdentity(identity);
     const { tenantId } = identity;
     const limit = input.limit ?? 50;
     const offset = input.offset ?? 0;
@@ -405,7 +405,7 @@ export class ProjectsService {
     identity: Identity,
     projectId: string,
   ): Promise<ProjectRow> {
-    assertProjectSurface(identity);
+    assertFullIdentity(identity);
     const row = await this.db
       .selectFrom("projects")
       .where("id", "=", projectId)
@@ -420,7 +420,7 @@ export class ProjectsService {
     identity: Identity,
     projectId: string,
   ): Promise<void> {
-    assertProjectSurface(identity);
+    assertFullIdentity(identity);
     const row = await this.db
       .selectFrom("projects")
       .where("id", "=", projectId)

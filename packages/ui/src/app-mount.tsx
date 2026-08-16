@@ -10,7 +10,7 @@ import {
   isGuestMessage,
 } from "@catamorphic/app";
 import { useCatamorphic } from "@catamorphic/react";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 const MIN_HEIGHT_PX = 240;
 const MAX_HEIGHT_PX = 2000;
@@ -82,10 +82,12 @@ type ViewState =
  * `sandbox="allow-scripts"` and **no** `allow-same-origin` — an opaque
  * origin with no cookies, no storage, and no reach into the host DOM or the
  * API origin. The guest holds zero credentials; every call arrives here via
- * postMessage and is forwarded with the app-audience headers, so the server
- * re-authorizes each one against the version's frozen workflow set. The
- * iframe cannot navigate the host or open popups; network inside the frame
- * is limited by the served document's default-deny CSP.
+ * postMessage and is forwarded to the app's own routes
+ * (`/projects/:id/apps/:name/calls|runs`), where the server narrows the
+ * caller to this app structurally and re-authorizes each call against the
+ * active version's frozen workflow set (ADR 0053). The iframe cannot
+ * navigate the host or open popups; network inside the frame is limited by
+ * the served document's default-deny CSP.
  */
 export function AppMount({
   projectId,
@@ -154,22 +156,9 @@ export function AppMount({
     };
   }, [apiClient, projectId, appName, channel]);
 
-  const audienceHeaders = useMemo(
-    () =>
-      view.state === "ready"
-        ? {
-            "X-Catamorphic-App-Id": view.appId,
-            "X-Catamorphic-App-Version-Id": view.versionId,
-          }
-        : undefined,
-    [view],
-  );
-
   const handleGuestMessage = useCallback(
     async (message: GuestToHostMessage) => {
-      if (view.state !== "ready" || !audienceHeaders) return;
-      // Narrowed copy the hoisted handleCall below can close over.
-      const headers = audienceHeaders;
+      if (view.state !== "ready") return;
       const frame = frameRef.current;
       if (!frame?.contentWindow) return;
       const reply = (payload: HostToGuestMessage) => {
@@ -202,7 +191,6 @@ export function AppMount({
               "/api/projects/{projectId}/apps/{appName}/storage",
               {
                 params: { path: { projectId, appName } },
-                headers,
                 body: { data },
               },
             );
@@ -260,8 +248,10 @@ export function AppMount({
           try {
             snapshot = await fetchRunSnapshot({
               apiClient,
+              projectId,
+              appName,
+              channel,
               runId: message.runId,
-              headers,
             });
           } finally {
             inFlightPolls.current -= 1;
@@ -288,35 +278,76 @@ export function AppMount({
       async function handleCall(
         message: Extract<GuestToHostMessage, { kind: "call" }>,
       ): Promise<void> {
+        const query = channel ? { channel } : undefined;
+        // Input was JSON-validated above; the generated body type wants
+        // the JsonValueInput shape.
+        const body = { input: message.input } as never;
+        if (message.mode === "start") {
+          const response = await apiClient.POST(
+            "/api/projects/{projectId}/apps/{appName}/runs/{workflowName}",
+            {
+              params: {
+                path: {
+                  projectId,
+                  appName,
+                  workflowName: message.workflowName,
+                },
+                query,
+              },
+              body,
+            },
+          );
+          if (response.error || !response.data) {
+            fail("denied", "This app is not authorized to call that workflow");
+            return;
+          }
+          reply({
+            catamorphicApp: APP_PROTOCOL_VERSION,
+            kind: "result",
+            callId: message.callId,
+            ok: true,
+            value: { runId: response.data.id },
+          });
+          return;
+        }
+        // Sync call: the server drives the run inline and answers with the
+        // output unless the workflow reaches a durable wait or the budget,
+        // in which case it hands back the run id and we poll it here.
         const response = await apiClient.POST(
-          "/api/projects/{projectId}/workflows/{name}/runs",
+          "/api/projects/{projectId}/apps/{appName}/calls/{workflowName}",
           {
-            params: { path: { projectId, name: message.workflowName } },
-            // Input was JSON-validated above; the generated body type wants
-            // the JsonValueInput shape.
-            body: { input: message.input } as never,
-            headers,
+            params: {
+              path: { projectId, appName, workflowName: message.workflowName },
+              query,
+            },
+            body,
           },
         );
         if (response.error || !response.data) {
           fail("denied", "This app is not authorized to call that workflow");
           return;
         }
-        const runId = response.data.id;
-        if (message.mode === "start") {
+        const settled = response.data;
+        if (settled.status === "completed") {
           reply({
             catamorphicApp: APP_PROTOCOL_VERSION,
             kind: "result",
             callId: message.callId,
             ok: true,
-            value: { runId },
+            value: settled.output,
           });
+          return;
+        }
+        if (settled.status === "failed") {
+          fail("workflow_failed", settled.error);
           return;
         }
         const outcome = await pollUntilTerminal({
           apiClient,
-          runId,
-          headers,
+          projectId,
+          appName,
+          channel,
+          runId: settled.runId,
         });
         if (outcome.status === "completed") {
           reply({
@@ -333,14 +364,14 @@ export function AppMount({
           // yet succeed.
           fail(
             "timeout",
-            `App call timed out after ${RUN_POLL_TIMEOUT_MS / 1000}s; run ${runId} may still complete`,
+            `App call timed out after ${RUN_POLL_TIMEOUT_MS / 1000}s; run ${settled.runId} may still complete`,
           );
         } else {
           fail("workflow_failed", outcome.error ?? `Run ${outcome.status}`);
         }
       }
     },
-    [apiClient, audienceHeaders, projectId, appName, view.state],
+    [apiClient, projectId, appName, channel, view.state],
   );
 
   useEffect(() => {
@@ -475,15 +506,30 @@ interface BrokerRunSnapshot {
   };
 }
 
-async function fetchRunSnapshot(args: {
+interface AppRunAddress {
   apiClient: BrokerClient;
+  projectId: string;
+  appName: string;
+  channel?: "published" | "dev";
   runId: string;
-  headers: Record<string, string>;
-}): Promise<BrokerRunSnapshot | null> {
-  const response = await args.apiClient.GET("/api/runs/{runId}", {
-    params: { path: { runId: args.runId } },
-    headers: args.headers,
-  });
+}
+
+async function fetchRunSnapshot(
+  args: AppRunAddress,
+): Promise<BrokerRunSnapshot | null> {
+  const response = await args.apiClient.GET(
+    "/api/projects/{projectId}/apps/{appName}/runs/{runId}",
+    {
+      params: {
+        path: {
+          projectId: args.projectId,
+          appName: args.appName,
+          runId: args.runId,
+        },
+        query: args.channel ? { channel: args.channel } : undefined,
+      },
+    },
+  );
   const run = response.data;
   if (!run) return null;
   const batch = run.batchScopes?.[0];
@@ -503,11 +549,9 @@ async function fetchRunSnapshot(args: {
   };
 }
 
-async function pollUntilTerminal(args: {
-  apiClient: BrokerClient;
-  runId: string;
-  headers: Record<string, string>;
-}): Promise<BrokerRunSnapshot & { timedOut?: boolean }> {
+async function pollUntilTerminal(
+  args: AppRunAddress,
+): Promise<BrokerRunSnapshot & { timedOut?: boolean }> {
   const startedAt = Date.now();
   for (;;) {
     const snapshot = await fetchRunSnapshot(args);

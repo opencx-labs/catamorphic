@@ -475,7 +475,7 @@ export const FireTriggerSchema = z.object({
   budgetMs: z.number().int().min(1_000).max(300_000).optional(),
 });
 
-export const TriggerSuspensionReasonSchema = z.enum([
+export const RunSuspensionReasonSchema = z.enum([
   "pause",
   "child",
   "paused",
@@ -483,6 +483,34 @@ export const TriggerSuspensionReasonSchema = z.enum([
   "batch",
   "budget",
   "queue",
+]);
+export const TriggerSuspensionReasonSchema = RunSuspensionReasonSchema;
+
+/** Body of a synchronous call: a trigger plus a wall-clock budget. */
+export const CallRunSchema = TriggerRunSchema.extend({
+  budgetMs: z.number().int().min(1_000).max(300_000).optional(),
+});
+
+/**
+ * How a synchronous call settled. Discriminated on `status`; `suspended`
+ * means the run is still live and can be polled by `runId`.
+ */
+export const RunCallOutcomeSchema = z.discriminatedUnion("status", [
+  z.object({
+    status: z.literal("completed"),
+    runId: z.string(),
+    output: JsonOutSchema,
+  }),
+  z.object({
+    status: z.literal("failed"),
+    runId: z.string(),
+    error: z.string(),
+  }),
+  z.object({
+    status: z.literal("suspended"),
+    runId: z.string(),
+    suspendedOn: RunSuspensionReasonSchema,
+  }),
 ]);
 
 export const TriggerFireOutcomeSchema = z.object({

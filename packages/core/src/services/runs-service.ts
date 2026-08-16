@@ -27,13 +27,13 @@ import {
 } from "@catamorphic/sandbox";
 import type { Kysely, Selectable } from "kysely";
 import type { Identity } from "../identity.js";
-import {
-  AppAccessDeniedError,
-  assertProjectSurface,
-  assertWorkflowAllowed,
-  resolveAppAudience,
-} from "./app-audience.js";
 import type { AppPoliciesService } from "./app-policies-service.js";
+import {
+  AccessDeniedError,
+  assertFullIdentity,
+  assertScopeAllowsWorkflow,
+  resolveScope,
+} from "./artifact-scope.js";
 import type {
   DeploymentArtifact,
   DeploymentArtifactsService,
@@ -285,6 +285,34 @@ export interface TriggerProductionRunInput {
   onConflict?: EnrollmentConflictPolicy;
 }
 
+export type RunSuspensionReason =
+  | "pause"
+  | "child"
+  | "paused"
+  | "backoff"
+  | "batch"
+  | "budget"
+  | "queue";
+
+/**
+ * How a synchronous call settled. `completed` and `failed` are terminal;
+ * `suspended` means the run is still live — it reached a durable wait (a
+ * pause, a child, a retry backoff, a batch) or the call's wall-clock budget —
+ * and the polling workers carry it on. Callers keep `runId` either way.
+ */
+export type RunCallOutcome =
+  | { status: "completed"; runId: string; output: Json }
+  | { status: "failed"; runId: string; error: string }
+  | { status: "suspended"; runId: string; suspendedOn: RunSuspensionReason };
+
+export interface CallRunInput extends TriggerProductionRunInput {
+  /**
+   * Wall-clock budget before detaching with `suspended: budget`. Clamped to
+   * [1s, 5min]; defaults to 30s.
+   */
+  budgetMs?: number;
+}
+
 export interface CancelRunInput extends GetRunInput {
   reason?: string;
 }
@@ -445,6 +473,16 @@ interface PreparedSource {
 
 const tracer = getTracer("@catamorphic/core");
 
+const DEFAULT_CALL_BUDGET_MS = 30_000;
+const MAX_CALL_BUDGET_MS = 300_000;
+const SYNC_LEASE_SECONDS = 60;
+/** Poll cadence while another worker holds the run's current job. */
+const SYNC_POLL_MS = 50;
+
+function delay(milliseconds: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, milliseconds));
+}
+
 export class RunsService {
   private readonly preparedSources = new Map<string, Promise<PreparedSource>>();
 
@@ -483,23 +521,23 @@ export class RunsService {
       ])
       .executeTakeFirst();
     if (!row) {
-      // Uniform denial for audience identities: a 404-for-missing /
-      // 403-for-denied split would let a guest probe which run ids exist.
-      if (args.identity.appAudience) throw new AppAccessDeniedError();
+      // Uniform denial for scoped identities: a 404-for-missing /
+      // 403-for-denied split would let a viewer probe which run ids exist.
+      if (args.identity.scope) throw new AccessDeniedError();
       throw new RunNotFoundError(args.runId);
     }
-    if (args.identity.appAudience) {
-      // Run polling mirrors triggering (ADR 0036): an audience identity may
-      // read only production runs of workflows in its frozen set, within the
-      // project its version belongs to — never arbitrary tenant runs by id.
-      const context = await resolveAppAudience({
+    if (args.identity.scope) {
+      // Run polling mirrors triggering (ADR 0036, 0053): a scoped identity
+      // may read only runs of workflows its scope resolves to, within the
+      // run's own project — never arbitrary tenant runs by id.
+      const context = await resolveScope({
         db: this.db,
         identity: args.identity,
         projectId: row.project_id,
         policies: this.deps.appPolicies,
       });
       if (!context?.allowedWorkflows.has(row.workflow_name)) {
-        throw new AppAccessDeniedError();
+        throw new AccessDeniedError();
       }
     }
     const [pause, batches, steps, attempts] = await Promise.all([
@@ -566,7 +604,7 @@ export class RunsService {
   }
 
   async listItems(args: ListBatchItemsInput): Promise<ListBatchItemsResult> {
-    assertProjectSurface(args.identity);
+    assertFullIdentity(args.identity);
     await this.requireBatchScope(args);
     const limit = Math.max(1, Math.min(args.limit ?? 100, 500));
     const offset = Math.max(0, args.offset ?? 0);
@@ -615,7 +653,7 @@ export class RunsService {
   }
 
   async listItemSteps(args: ListBatchItemStepsInput): Promise<BatchItemStep[]> {
-    assertProjectSurface(args.identity);
+    assertFullIdentity(args.identity);
     await this.requireBatchScope(args);
     const item = await this.db
       .selectFrom("batch_items")
@@ -653,7 +691,7 @@ export class RunsService {
 
   async list(args: ListRunsInput): Promise<ListRunsResult> {
     await this.requireProject(args.identity, args.projectId);
-    const audience = await resolveAppAudience({
+    const scoped = await resolveScope({
       db: this.db,
       identity: args.identity,
       projectId: args.projectId,
@@ -672,16 +710,16 @@ export class RunsService {
     let countQuery = this.db
       .selectFrom("workflow_runs")
       .where("project_id", "=", args.projectId);
-    if (audience) {
-      // Audience identities see only production runs of their frozen set —
+    if (scoped) {
+      // Scoped identities see only runs of the workflows their scope resolves to —
       // the read-side mirror of the trigger gate (ADR 0036).
       if (
         args.workflowName &&
-        !audience.allowedWorkflows.has(args.workflowName)
+        !scoped.allowedWorkflows.has(args.workflowName)
       ) {
-        throw new AppAccessDeniedError();
+        throw new AccessDeniedError();
       }
-      const frozen = [...audience.allowedWorkflows];
+      const frozen = [...scoped.allowedWorkflows];
       if (frozen.length === 0) return { items: [], total: 0 };
       query = query.where("workflow_name", "in", frozen);
       countQuery = countQuery.where("workflow_name", "in", frozen);
@@ -766,8 +804,126 @@ export class RunsService {
     return this.trigger(args);
   }
 
+  /**
+   * Triggers a run and drives it inline until it settles or would wait: the
+   * request-path shape of execution. Same authorization, same durable run
+   * record, same immutable deployed commit as `triggerProduction` — sync is a
+   * calling mode, not a workflow kind (ADR 0040, 0053). A workflow that never
+   * suspends settles in the call; one that does returns `suspended` with the
+   * run id and the polling workers finish it.
+   */
+  async call(args: CallRunInput): Promise<RunCallOutcome> {
+    const budgetMs = Math.min(
+      Math.max(1_000, args.budgetMs ?? DEFAULT_CALL_BUDGET_MS),
+      MAX_CALL_BUDGET_MS,
+    );
+    const run = await this.trigger(args);
+    return this.driveInline({
+      tenantId: args.identity.tenantId,
+      runId: run.id,
+      deadline: Date.now() + budgetMs,
+    });
+  }
+
+  /**
+   * Runs a run's queue jobs inline until it settles or would wait. Detaching
+   * is always just "stop claiming": the next job stays pending and the
+   * polling workers continue the run asynchronously. Callers must already
+   * be authorized for the run (this reads run rows by id).
+   */
+  async driveInline(args: {
+    tenantId: string;
+    runId: string;
+    deadline: number;
+  }): Promise<RunCallOutcome> {
+    const workerId = `sync-call:${crypto.randomUUID()}`;
+    const controller = new AbortController();
+    const abortTimer = setTimeout(
+      () => controller.abort(),
+      Math.max(0, args.deadline - Date.now()),
+    );
+    const suspended = (suspendedOn: RunSuspensionReason): RunCallOutcome => ({
+      status: "suspended",
+      runId: args.runId,
+      suspendedOn,
+    });
+    try {
+      for (;;) {
+        const run = await this.db
+          .selectFrom("workflow_runs")
+          .select(["status", "phase", "result", "error"])
+          .where("id", "=", args.runId)
+          .executeTakeFirst();
+        if (!run) {
+          return {
+            status: "failed",
+            runId: args.runId,
+            error: "Run disappeared while executing",
+          };
+        }
+        if (run.status === "completed") {
+          return {
+            status: "completed",
+            runId: args.runId,
+            output: (run.result ?? null) as Json,
+          };
+        }
+        if (run.status === "failed" || run.status === "canceled") {
+          return {
+            status: "failed",
+            runId: args.runId,
+            error: run.error ?? `Run ${run.status}`,
+          };
+        }
+        if (run.status === "waiting") {
+          return suspended(run.phase === "pause" ? "pause" : "child");
+        }
+        if (run.status === "paused" || run.status === "canceling") {
+          return suspended("paused");
+        }
+        if (Date.now() >= args.deadline) return suspended("budget");
+
+        const job = await this.deps.executionJobs.nextForRun({
+          tenantId: args.tenantId,
+          runId: args.runId,
+        });
+        if (!job) {
+          // The run is live but jobless: a transition is committing on
+          // another connection. Bounded by the deadline check above.
+          await delay(SYNC_POLL_MS);
+          continue;
+        }
+        if (job.status === "running") {
+          // A polling worker beat us to the claim; wait for its outcome.
+          await delay(SYNC_POLL_MS);
+          continue;
+        }
+        if (job.kind !== "durable_boundary") return suspended("batch");
+        if (new Date(job.availableAt).getTime() > Date.now()) {
+          return suspended("backoff");
+        }
+        const claimed = await this.deps.executionJobs.claimById({
+          jobId: job.id,
+          workerId,
+          leaseSeconds: SYNC_LEASE_SECONDS,
+        });
+        if (!claimed) continue;
+        await this.deps.executionWorker.runClaimedJob({
+          job: claimed,
+          workerId,
+          leaseSeconds: SYNC_LEASE_SECONDS,
+          signal: controller.signal,
+        });
+        // Every disposition — completed, deferred, failed, lease lost — is
+        // reflected in the run/job rows the next iteration reads.
+      }
+    } finally {
+      clearTimeout(abortTimer);
+    }
+  }
+
   async cancel(args: CancelRunInput): Promise<Run> {
-    assertProjectSurface(args.identity);
+    assertFullIdentity(args.identity);
     const invocations = await this.deps.coordinator.cancel(args);
     await Promise.all(
       invocations.map((invocation) =>
@@ -778,7 +934,7 @@ export class RunsService {
   }
 
   async pause(args: PauseRunInput): Promise<Run> {
-    assertProjectSurface(args.identity);
+    assertFullIdentity(args.identity);
     const outcome = await this.deps.coordinator.pauseOperator(args);
     if (outcome === "unavailable") {
       throw new RunCapabilityError("pauseProcessing", "pause");
@@ -787,7 +943,7 @@ export class RunsService {
   }
 
   async resume(args: ResumeRunInput): Promise<Run> {
-    assertProjectSurface(args.identity);
+    assertFullIdentity(args.identity);
     const outcome = await this.deps.coordinator.resumeOperator(args);
     if (outcome === "unavailable") {
       throw new RunCapabilityError("resumeProcessing", "resume");
@@ -796,7 +952,7 @@ export class RunsService {
   }
 
   async resumePause(args: ResumeRunPauseInput): Promise<Run> {
-    assertProjectSurface(args.identity);
+    assertFullIdentity(args.identity);
     await this.deps.coordinator.resumePause(args);
     return this.get(args);
   }
@@ -818,7 +974,7 @@ export class RunsService {
     idempotencyKey: string;
     value: Json;
   }): Promise<Run> {
-    assertProjectSurface(args.identity);
+    assertFullIdentity(args.identity);
     const run = await this.findActiveByKey(args);
     if (!run) {
       throw new RunSignalNotFoundError(
@@ -865,7 +1021,7 @@ export class RunsService {
     correlationKey: string;
     reason?: string;
   }): Promise<Run | null> {
-    assertProjectSurface(args.identity);
+    assertFullIdentity(args.identity);
     const run = await this.findActiveByKey(args);
     if (!run) return null;
     return this.cancel({
@@ -961,7 +1117,11 @@ export class RunsService {
     const source = await this.prepareProductionSource(args);
     if (!source.commitSha)
       throw new ProductionDeploymentNotFoundError(args.projectId);
-    const plugins = await this.loadPlugins(args.identity, args.projectId, args.workflowName);
+    const plugins = await this.loadPlugins(
+      args.identity,
+      args.projectId,
+      args.workflowName,
+    );
     return this.deps.deploymentArtifacts.ensure({
       tenantId: args.identity.tenantId,
       projectId: args.projectId,
@@ -1201,9 +1361,9 @@ export class RunsService {
         },
       },
       async (span) => {
-        if (args.identity.appAudience) {
-          // App viewers reach exactly the frozen workflow set.
-          await assertWorkflowAllowed({
+        if (args.identity.scope) {
+          // Viewers reach exactly what their scope resolves to.
+          await assertScopeAllowsWorkflow({
             db: this.db,
             identity: args.identity,
             projectId: args.projectId,
@@ -1247,7 +1407,11 @@ export class RunsService {
       if (decision.kind === "restart") supersededRunId = decision.runId;
     }
     const source = await this.prepareProductionSource(args);
-    const plugins = await this.loadPlugins(args.identity, args.projectId, args.workflowName);
+    const plugins = await this.loadPlugins(
+      args.identity,
+      args.projectId,
+      args.workflowName,
+    );
     const input = args.input ?? null;
     // The graph's input schema is a projection of the workflow's TS input
     // type; rejecting here fails at the door with a path-level error instead

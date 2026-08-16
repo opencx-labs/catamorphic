@@ -15,8 +15,7 @@ import {
   uploadPluginPayloads,
 } from "@catamorphic/sandbox";
 import type { Kysely, Selectable } from "kysely";
-import type { Identity } from "../identity.js";
-import { assertProjectSurface } from "./app-audience.js";
+import { type Identity, scopeCovers } from "../identity.js";
 import {
   type AppBundleStore,
   appBundleKey,
@@ -27,6 +26,7 @@ import {
   type AppPoliciesService,
   AppsDisabledError,
 } from "./app-policies-service.js";
+import { assertFullIdentity } from "./artifact-scope.js";
 import type { DevSandboxService } from "./dev-sandbox-service.js";
 import { ProjectNotFoundError } from "./projects-service.js";
 
@@ -517,7 +517,9 @@ export class AppsService {
    * What a viewer should see for an app, as data rather than an error: the
    * host renders each state with its own copy, and a new state is a compile
    * error at the switch, not a mystery 403 (assertNever on the client).
-   * This is the one read an app-audience identity may perform.
+   * This is the one read a scoped identity may perform: the identity must
+   * cover `{ kind: "app", projectId, name, channel }` or the app reads as
+   * not found.
    */
   async viewState(args: {
     identity: Identity;
@@ -525,8 +527,9 @@ export class AppsService {
     appName: string;
     /**
      * "published" (default) serves the active published version — what
-     * external viewers see. "dev" serves the newest ready build of any kind,
-     * so the owner can open the version being developed right now.
+     * external viewers see. "dev" serves the newest ready build this same
+     * user made, so a builder can open the version being developed right
+     * now (mirrors the `dev` app ref in `resolveScope`).
      */
     channel?: "published" | "dev";
   }): Promise<
@@ -545,8 +548,19 @@ export class AppsService {
         allowedNetworkOrigins: string[];
       }
   > {
-    // Deliberately NOT assertProjectSurface: viewers land here. Tenant scoping
-    // still applies through the project join below.
+    // Deliberately NOT assertFullIdentity: viewers land here. Tenant scoping
+    // still applies through the project join below, and a scoped identity
+    // must cover this very app.
+    if (
+      args.identity.scope !== undefined &&
+      !scopeCovers(args.identity.scope, {
+        kind: "app",
+        projectId: args.projectId,
+        name: args.appName,
+      })
+    ) {
+      return { state: "not_found" };
+    }
     const app = await this.db
       .selectFrom("apps")
       .innerJoin("projects", "projects.id", "apps.project_id")
@@ -570,20 +584,18 @@ export class AppsService {
       ]);
     versionQuery =
       args.channel === "dev"
-        ? versionQuery.orderBy("created_at", "desc").limit(1)
+        ? versionQuery
+            .where(
+              "built_by_external_user_id",
+              "=",
+              args.identity.externalUserId,
+            )
+            .orderBy("created_at", "desc")
+            .limit(1)
         : versionQuery.where("is_active", "=", true);
     const version = await versionQuery.executeTakeFirst();
     if (!version?.bundle_key || !version.css_key) {
       return { state: "not_published" };
-    }
-
-    // An audience identity may only view the app it is scoped to.
-    const audience = args.identity.appAudience;
-    if (
-      audience &&
-      (audience.appId !== app.id || audience.appVersionId !== version.id)
-    ) {
-      return { state: "not_found" };
     }
 
     const [code, css] = await Promise.all([
@@ -895,7 +907,7 @@ export class AppsService {
     identity: Identity,
     projectId: string,
   ): Promise<void> {
-    assertProjectSurface(identity);
+    assertFullIdentity(identity);
     const row = await this.db
       .selectFrom("projects")
       .where("id", "=", projectId)

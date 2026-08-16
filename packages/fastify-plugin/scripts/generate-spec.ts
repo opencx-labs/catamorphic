@@ -1,8 +1,9 @@
 import fs from "node:fs";
 import path from "node:path";
 import { createApp } from "../src/app.js";
+import { identityFromHeaders } from "../src/http-identity.js";
 
-const app = createApp();
+const app = createApp({ identity: identityFromHeaders() });
 await app.ready();
 
 const spec = app.swagger();

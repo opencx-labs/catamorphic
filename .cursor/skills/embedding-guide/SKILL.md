@@ -60,7 +60,7 @@ function MyApp({ projectId, workflowName, files }) {
 The host app boots catamorphic in-process via one of two paths:
 
 - **`@catamorphic/server-sdk`** (recommended) — call `createCatamorphic({ database, storage, sandboxProvider?, pluginResolver? })` once at startup, run `await catamorphic.migrate()`, explicitly start `catamorphic.startExecutionWorker(...)` in worker processes, then use `catamorphic.forTenant(orgId).forUser(userId)` per request. Public methods take keyed objects and Runs live on `scoped.runs`.
-- **`@catamorphic/fastify-plugin`** — register `catamorphicPlugin` on the host's Fastify server with `{ core, prefix: "/api" }` (or run `createApp({ core })` as a sidecar). Every request must carry `X-Catamorphic-Tenant-Id` and `X-External-User-Id` headers set from the host's auth context. The frontend talks to it through `@catamorphic/api-client`.
+- **`@catamorphic/fastify-plugin`** — register `catamorphicPlugin` on the host's Fastify server with `{ core, prefix: "/api", identity }` (or run `createApp({ core, identity })` as a sidecar). `identity` is the required resolver that turns each request into `{ tenantId, externalUserId, scope? }` from the host's own session (or `identityFromHeaders()` behind a trusted gateway). The frontend talks to it through `@catamorphic/api-client`.
 
 ## Workflow and Run model
 

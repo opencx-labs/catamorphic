@@ -35,12 +35,9 @@ Every scoped call needs two ids:
 - **`tenantId`** — host's org id. Auto-upserts `catamorphic.tenants(id)` on first use. Host can safely `JOIN host.orgs.id = catamorphic.projects.tenant_id`.
 - **`externalUserId`** — host's user id. Never persisted; used only for per-user git working dirs + git commit authorship.
 
-In the SDK this is bound via `cat.forTenant(orgId).forUser(userId)`. Over HTTP it is sent as two headers on **every** request:
+In the SDK this is bound via `cat.forTenant({ tenantId }).forUser({ externalUserId, scope? })`. Over HTTP the fastify-plugin's **required `identity` resolver** turns each request (your session cookie, JWT, …) into an identity — there is no default and no headers are read unless you pass the stock `identityFromHeaders()` behind your own gateway.
 
-- `X-Catamorphic-Tenant-Id`
-- `X-External-User-Id`
-
-Never hardcode these; always pull from the host's auth context.
+Identities are **full** (a builder: whole project surface) or **scoped** (a viewer: `scope: [{ kind: "app", projectId, name }, { kind: "workflow", projectId, name }]` — exactly those artifacts, nothing else). Which users get which is host policy; catamorphic enforces it. Never hardcode ids; always derive from the host's auth context.
 
 ## Backend Path A — Library-Direct SDK
 
@@ -188,31 +185,34 @@ The plugin is encapsulated (its Zod compilers + error handler don't leak) and re
 ```ts
 import { createApp } from "@catamorphic/fastify-plugin";
 
-const app = createApp({ core: catamorphic.core });
+const app = createApp({
+  core: catamorphic.core,
+  identity: async (request) => {
+    const session = await verifySession(request);
+    if (!session) return null; // 401
+    const base = { tenantId: session.orgId, externalUserId: session.userId };
+    return session.isEmployee
+      ? base
+      : { ...base, scope: await entitlementsFor(session.userId) };
+  },
+});
 await app.listen({ port: 8500, host: "0.0.0.0" });
 ```
 
-Every route requires `X-Catamorphic-Tenant-Id` and `X-External-User-Id` — there are no defaults. Set them server-side from the host's verified auth context.
+Every route runs the `identity` resolver first — there is no default. Behind your own gateway that already sets `X-Catamorphic-Tenant-Id` / `X-External-User-Id`, pass `identity: identityFromHeaders()` instead (never browser-reachable).
 
-The host consumes the server via the generated client:
+The host consumes the server via the generated client, from the same origin so the session rides along:
 
 ```ts
 import { createApiClient } from "@catamorphic/api-client";
 
 export const apiClient = createApiClient({
   baseUrl: process.env.NEXT_PUBLIC_CATAMORPHIC_URL!,
-  fetch: async (input, init) => {
-    const headers = new Headers(
-      input instanceof Request ? input.headers : init?.headers,
-    );
-    headers.set("X-Catamorphic-Tenant-Id", currentOrgId());
-    headers.set("X-External-User-Id", currentUserId());
-    return fetch(input, { ...init, headers });
-  },
+  fetch: (input, init) => fetch(input, { ...init, credentials: "include" }),
 });
 ```
 
-**Important**: when `input` is a `Request` (as produced by openapi-fetch), seed the `Headers` from `input.headers` before overriding — otherwise `Content-Type: application/json` is dropped and Fastify returns 415.
+**Important**: if you wrap `fetch` to add headers, seed the `Headers` from `input.headers` when `input` is a `Request` (as produced by openapi-fetch) — otherwise `Content-Type: application/json` is dropped and Fastify returns 415.
 
 Type-safe calls go through `apiClient.GET("/projects", …)` etc. For paths openapi-fetch can't template (Fastify wildcards), use `apiClient.fetch(apiClient.baseUrl + "/…")`.
 
@@ -236,14 +236,9 @@ const queryClient = new QueryClient({
 
 const apiClient = createApiClient({
   baseUrl: process.env.NEXT_PUBLIC_CATAMORPHIC_URL!,
-  fetch: async (input, init) => {
-    const headers = new Headers(
-      input instanceof Request ? input.headers : init?.headers,
-    );
-    headers.set("X-Catamorphic-Tenant-Id", orgId);
-    headers.set("X-External-User-Id", userId);
-    return fetch(input, { ...init, headers });
-  },
+  // Same origin as the plugin: the session cookie is the credential and the
+  // plugin's `identity` resolver maps it to a catamorphic identity.
+  fetch: (input, init) => fetch(input, { ...init, credentials: "include" }),
 });
 
 export function Providers({ children }) {
@@ -564,7 +559,7 @@ Frontend (HTTP path):
 
 ## Common Pitfalls
 
-- **Missing `X-Catamorphic-Tenant-Id` / `X-External-User-Id`**. `@catamorphic/fastify-plugin` returns 400 on every route that needs identity — both headers are mandatory (no standalone fallback). Set them on *every* request via a `fetch` wrapper — don't set them per-call.
+- **401 on every route.** The plugin's `identity` resolver returned `null` — it did not find your session on the request. Check the cookie/JWT reaches the plugin's origin (`credentials: "include"`, same origin or CORS with credentials). A 400 means `identityFromHeaders()` got a missing/malformed header.
 - **`Content-Type: application/json` stripped by `fetch` wrapper.** openapi-fetch passes a built `Request` as `input`; always seed `new Headers(input instanceof Request ? input.headers : init?.headers)` before overriding.
 - **Using `@catamorphic/ui` without the stylesheet.** Import `@catamorphic/ui/styles.css` once at the root — class names use the `.catamorphic-*` prefix so host CSS doesn't clash.
 - **Double `QueryClientProvider`.** `CatamorphicProvider` mounts its own if you don't pass `queryClient`. In hosts that already have one, pass it explicitly so queries share a cache.

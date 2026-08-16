@@ -57,8 +57,8 @@ describe("seed skill support files", () => {
       expect(skill).toContain(`files/${name}`);
     }
     // The copyable app scaffold matches the canonical one.
-    expect(SEED_SKILLS[".agents/skills/building-apps/files/vite.config.ts"]).toBe(
-      appScaffold({ name: "my-app" })["apps/my-app/vite.config.ts"],
-    );
+    expect(
+      SEED_SKILLS[".agents/skills/building-apps/files/vite.config.ts"],
+    ).toBe(appScaffold({ name: "my-app" })["apps/my-app/vite.config.ts"]);
   });
 });

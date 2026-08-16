@@ -18,7 +18,7 @@ import {
   DURABLE_WORKFLOW_SKILL_PATH,
   SEED_SKILLS,
 } from "../seeds.js";
-import { assertProjectSurface } from "./app-audience.js";
+import { assertFullIdentity } from "./artifact-scope.js";
 import type {
   CodingAgentRegistry,
   RegisteredCodingAgent,
@@ -1669,7 +1669,7 @@ export class AgentSessionsService {
     identity: Identity,
     projectId: string,
   ): Promise<void> {
-    assertProjectSurface(identity);
+    assertFullIdentity(identity);
     const row = await this.db
       .selectFrom("projects")
       .where("id", "=", projectId)

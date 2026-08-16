@@ -1,6 +1,9 @@
 # 0037 — App guest runtime (`@catamorphic/app`) and host mount
 
-- **Status:** Accepted
+- **Status:** Accepted — updated by
+  [0053](0053-identity-scope-and-app-routes.md): the mount forwards calls to
+  the app's own routes (no audience headers) and `invoke` is a synchronous
+  call that polls only when the run suspends.
 - **Date:** 2026-07-27
 - **Expands:** 0002, 0032, 0036
 

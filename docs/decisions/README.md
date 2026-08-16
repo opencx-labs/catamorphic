@@ -48,8 +48,8 @@ Settled design decisions live here as short Architecture Decision Records. They 
 | [0033](0033-user-declared-secrets.md) | Projects declare their own secrets in code | Accepted |
 | [0034](0034-batch-write-scalability-and-claim-receipts.md) | Batch admission counters, concurrent sinks, and claim receipts | Accepted |
 | [0035](0035-app-entity-and-build-pipeline.md) | App entity, build pipeline, and bundle storage | Accepted |
-| [0036](0036-app-authorization-and-audience.md) | App authorization: contract surface, frozen sets, audience identities | Accepted |
-| [0037](0037-app-guest-runtime-and-mount.md) | App guest runtime (`@catamorphic/app`) and host mount | Accepted |
+| [0036](0036-app-authorization-and-audience.md) | App authorization: contract surface, frozen sets, audience identities | Accepted (audience headers superseded by 0053) |
+| [0037](0037-app-guest-runtime-and-mount.md) | App guest runtime (`@catamorphic/app`) and host mount | Accepted (mount headers + polling superseded by 0053) |
 | [0038](0038-coding-agent-registry-and-host-execution.md) | Coding-agent registry: per-session agents, host execution, effort | Accepted |
 | [0039](0039-custom-trigger-kinds.md) | Custom trigger kinds: host-defined events, typed bindings, sync firing | Accepted |
 | [0040](0040-one-workflow-model.md) | One workflow model: every workflow is `defineWorkflow`, every run a deployed commit | Accepted |
@@ -64,3 +64,5 @@ Settled design decisions live here as short Architecture Decision Records. They 
 | [0049](0049-doctrine-is-the-embedders.md) | Doctrine is the embedder's: seed/template/standing-prompt hooks, mechanics split from design doctrine | Accepted (templates part superseded by 0051) |
 | [0050](0050-project-agent-definitions.md) | Project agent definitions: committed `agents/*.json`, consent-bound credentials | Accepted |
 | [0051](0051-no-project-templates.md) | No project templates: agents build from skills | Accepted |
+| [0052](0052-skills-as-commands.md) | Skills as commands, and the agent-initiated auth loop | Accepted |
+| [0053](0053-identity-scope-and-app-routes.md) | Identity scope: one artifact vocabulary, structural narrowing, synchronous calls | Accepted |

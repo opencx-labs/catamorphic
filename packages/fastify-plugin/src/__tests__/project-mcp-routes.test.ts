@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { createApp } from "../app.js";
+import { createTestApp } from "./test-app.js";
 
 const PROJECT_ID = "a1b2c3d4-e5f6-4890-abcd-ef1234567890";
 const MCP_URL = `/api/projects/${PROJECT_ID}/mcp`;
@@ -10,7 +10,7 @@ const HEADERS = {
   "content-type": "application/json",
 };
 
-const apps: ReturnType<typeof createApp>[] = [];
+const apps: ReturnType<typeof createTestApp>[] = [];
 
 afterEach(async () => {
   await Promise.all(apps.splice(0).map((app) => app.close()));
@@ -93,7 +93,7 @@ function fakeCore(overrides?: {
 }
 
 async function rpc(
-  app: ReturnType<typeof createApp>,
+  app: ReturnType<typeof createTestApp>,
   method: string,
   params?: Record<string, unknown>,
 ) {
@@ -111,7 +111,7 @@ async function rpc(
 
 describe("project workflow-tools MCP endpoint", () => {
   it("answers initialize as the workflow-tools server", async () => {
-    const app = createApp({ core: fakeCore() as never });
+    const app = createTestApp({ core: fakeCore() as never });
     apps.push(app);
     const { result } = await rpc(app, "initialize", {
       protocolVersion: "2025-06-18",
@@ -125,7 +125,7 @@ describe("project workflow-tools MCP endpoint", () => {
 
   it("returns 503 when the host registered no tool kinds", async () => {
     const core = { ...fakeCore(), mcpToolKinds: [] };
-    const app = createApp({ core: core as never });
+    const app = createTestApp({ core: core as never });
     apps.push(app);
     const response = await app.inject({
       method: "POST",
@@ -137,7 +137,7 @@ describe("project workflow-tools MCP endpoint", () => {
   });
 
   it("serves one tool per binding plus the poll tool", async () => {
-    const app = createApp({ core: fakeCore() as never });
+    const app = createTestApp({ core: fakeCore() as never });
     apps.push(app);
     const { result } = await rpc(app, "tools/list");
     const tools = result?.tools as Array<Record<string, unknown>>;
@@ -186,7 +186,7 @@ describe("project workflow-tools MCP endpoint", () => {
 
   it("fires the bound workflow sync and returns the settled output", async () => {
     const core = fakeCore();
-    const app = createApp({ core: core as never });
+    const app = createTestApp({ core: core as never });
     apps.push(app);
     const { result } = await rpc(app, "tools/call", {
       name: "lookupWeather",
@@ -205,7 +205,7 @@ describe("project workflow-tools MCP endpoint", () => {
 
   it("unwraps {'input': ...} for wrapped tools and resolves name overrides", async () => {
     const core = fakeCore();
-    const app = createApp({ core: core as never });
+    const app = createTestApp({ core: core as never });
     apps.push(app);
     await rpc(app, "tools/call", {
       name: "daily_digest",
@@ -228,7 +228,7 @@ describe("project workflow-tools MCP endpoint", () => {
         suspendedOn: "pause",
       },
     });
-    const app = createApp({ core: core as never });
+    const app = createTestApp({ core: core as never });
     apps.push(app);
     const { result } = await rpc(app, "tools/call", {
       name: "daily_digest",
@@ -246,7 +246,7 @@ describe("project workflow-tools MCP endpoint", () => {
     core.triggers.fire.mockRejectedValueOnce(
       new Error("Run input is invalid: city: expected string"),
     );
-    const app = createApp({ core: core as never });
+    const app = createTestApp({ core: core as never });
     apps.push(app);
     const { result, error } = await rpc(app, "tools/call", {
       name: "lookupWeather",
@@ -258,7 +258,7 @@ describe("project workflow-tools MCP endpoint", () => {
   });
 
   it("answers the poll tool with the run snapshot", async () => {
-    const app = createApp({ core: fakeCore() as never });
+    const app = createTestApp({ core: fakeCore() as never });
     apps.push(app);
     const { result } = await rpc(app, "tools/call", {
       name: "catamorphic_poll_run",
@@ -277,7 +277,7 @@ describe("project workflow-tools MCP endpoint", () => {
       workflowName: "otherWorkflow",
       config: { description: "clashes", name: "lookupWeather" },
     };
-    const app = createApp({
+    const app = createTestApp({
       core: fakeCore({ bindings: [WEATHER_BINDING, clash] }) as never,
     });
     apps.push(app);
@@ -287,7 +287,7 @@ describe("project workflow-tools MCP endpoint", () => {
   });
 
   it("answers unknown tools with a tool error", async () => {
-    const app = createApp({ core: fakeCore() as never });
+    const app = createTestApp({ core: fakeCore() as never });
     apps.push(app);
     const { result } = await rpc(app, "tools/call", {
       name: "nope",

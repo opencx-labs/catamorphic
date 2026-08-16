@@ -1,11 +1,16 @@
-import { AppVersionNotFoundError } from "@catamorphic/core";
+import {
+  AccessDeniedError,
+  AppVersionNotFoundError,
+  RunNotFoundError,
+} from "@catamorphic/core";
 import { afterEach, describe, expect, it } from "vitest";
 import { createApp } from "../app.js";
+import { createTestApp } from "./test-app.js";
 
 const PROJECT_ID = "a1b2c3d4-e5f6-4890-abcd-ef1234567890";
 const VERSION_ID = "b2c3d4e5-f6a7-4890-bcde-a12345678901";
 const APP_ID = "c3d4e5f6-a7b8-4890-acde-123456789012";
-const apps: ReturnType<typeof createApp>[] = [];
+const apps: ReturnType<typeof createTestApp>[] = [];
 
 afterEach(async () => {
   await Promise.all(apps.splice(0).map((app) => app.close()));
@@ -44,7 +49,7 @@ describe("app route contracts", () => {
     url: string;
     payload?: object;
   }[])("registers $method $url", async ({ method, url, payload }) => {
-    const app = createApp();
+    const app = createTestApp();
     apps.push(app);
     const response = await app.inject({
       method,
@@ -59,44 +64,18 @@ describe("app route contracts", () => {
     expect(response.statusCode).toBe(503);
   });
 
-  it("rejects a lone app audience header", async () => {
-    const app = createApp();
+  it("answers 401 when the host's resolver says nobody is signed in", async () => {
+    const app = createApp({ identity: () => null });
     apps.push(app);
     const response = await app.inject({
       method: "GET",
-      url: `/api/projects/${PROJECT_ID}/apps`,
-      headers: {
-        "x-catamorphic-tenant-id": "tenant-1",
-        "x-external-user-id": "user-1",
-        "x-catamorphic-app-id": APP_ID,
-      },
+      url: `/api/projects/${PROJECT_ID}/apps/ops-dashboard/view-state`,
     });
-    // Identity resolution runs before the 503 core check in handlers that
-    // resolve identity first; either way a half-formed audience is a 400.
-    expect([400, 503]).toContain(response.statusCode);
-    if (response.statusCode === 400) {
-      expect(response.json().error).toMatch(/App requests must send both/);
-    }
-  });
-
-  it("rejects malformed audience header values", async () => {
-    const app = createApp();
-    apps.push(app);
-    const response = await app.inject({
-      method: "GET",
-      url: `/api/projects/${PROJECT_ID}/apps`,
-      headers: {
-        "x-catamorphic-tenant-id": "tenant-1",
-        "x-external-user-id": "user-1",
-        "x-catamorphic-app-id": "not-a-uuid",
-        "x-catamorphic-app-version-id": VERSION_ID,
-      },
-    });
-    expect([400, 503]).toContain(response.statusCode);
+    expect(response.statusCode).toBe(401);
   });
 
   it("rejects a commitSha that is not a hex object name", async () => {
-    const app = createApp();
+    const app = createTestApp();
     apps.push(app);
     const response = await app.inject({
       method: "POST",
@@ -127,7 +106,7 @@ describe("guest document serving", () => {
     get?: () => Promise<{ data: Record<string, string>; revision: string }>;
     put?: (...args: unknown[]) => Promise<void>;
   }) {
-    const app = createApp({
+    const app = createTestApp({
       core: {
         apps: { viewState: async () => readyState },
         appStorage: {
@@ -282,7 +261,7 @@ describe("guest document serving", () => {
   });
 
   it("answers 404 for a non-ready app", async () => {
-    const app = createApp({
+    const app = createTestApp({
       core: {
         apps: { viewState: async () => ({ state: "not_published" }) },
       } as never,
@@ -310,7 +289,7 @@ describe("bundle route caching", () => {
         },
       },
     };
-    const app = createApp({ core: core as never });
+    const app = createTestApp({ core: core as never });
     apps.push(app);
     return app;
   }
@@ -359,7 +338,7 @@ describe("bundle route caching", () => {
   });
 
   it("a denied conditional request does not become a 304", async () => {
-    const app = createApp({
+    const app = createTestApp({
       core: {
         apps: {
           assertBundleReadable: async () => {
@@ -398,7 +377,7 @@ describe("app storage", () => {
 
   it("PUT persists the snapshot through the service", async () => {
     const puts: unknown[] = [];
-    const app = createApp({
+    const app = createTestApp({
       core: {
         apps: { viewState: async () => readyState },
         appStorage: {
@@ -422,7 +401,7 @@ describe("app storage", () => {
   });
 
   it("guest document bakes the caller's seed in, HTML-inert", async () => {
-    const app = createApp({
+    const app = createTestApp({
       core: {
         apps: { viewState: async () => readyState },
         appStorage: {
@@ -446,5 +425,151 @@ describe("app storage", () => {
     expect(response.body).not.toContain("</script><img");
     // Storage writes must invalidate the browser's cached document.
     expect(response.headers.etag).toContain("r7");
+  });
+});
+
+describe("app-originated execution (structural narrowing)", () => {
+  function coreCapturingIdentity() {
+    const seen: unknown[] = [];
+    const core = {
+      apps: {},
+      runs: {
+        call: async (args: { identity: unknown; workflowName: string }) => {
+          seen.push(args.identity);
+          return {
+            status: "completed",
+            runId: "d4e5f6a7-b8c9-4890-bdef-234567890123",
+            output: { called: args.workflowName },
+          };
+        },
+        triggerProduction: async (args: { identity: unknown }) => {
+          seen.push(args.identity);
+          return {
+            id: "d4e5f6a7-b8c9-4890-bdef-234567890123",
+            projectId: PROJECT_ID,
+            workflowName: "listOrders",
+            status: "queued",
+            phase: null,
+            capabilities: {},
+            createdAt: "2026-08-01T00:00:00.000Z",
+            updatedAt: "2026-08-01T00:00:00.000Z",
+            startedAt: null,
+            completedAt: null,
+            error: null,
+            result: null,
+          };
+        },
+        get: async (args: { identity: unknown }) => {
+          seen.push(args.identity);
+          throw new RunNotFoundError("d4e5f6a7-b8c9-4890-bdef-234567890123");
+        },
+      },
+    };
+    return { core, seen };
+  }
+
+  const appRef = {
+    kind: "app",
+    projectId: PROJECT_ID,
+    name: "ops-dashboard",
+  };
+
+  it("a builder is confined to the app on the calls route", async () => {
+    const { core, seen } = coreCapturingIdentity();
+    const app = createTestApp({ core: core as never });
+    apps.push(app);
+    const response = await app.inject({
+      method: "POST",
+      url: `/api/projects/${PROJECT_ID}/apps/ops-dashboard/calls/listOrders`,
+      headers: {
+        "x-catamorphic-tenant-id": "tenant-1",
+        "x-external-user-id": "builder",
+      },
+      payload: { input: { status: "open" } },
+    });
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toEqual({
+      status: "completed",
+      runId: "d4e5f6a7-b8c9-4890-bdef-234567890123",
+      output: { called: "listOrders" },
+    });
+    // Full identity in, app-scoped identity out — the bundle never inherits
+    // the builder's project access.
+    expect(seen[0]).toEqual({
+      tenantId: "tenant-1",
+      externalUserId: "builder",
+      scope: [appRef],
+    });
+  });
+
+  it("the dev channel narrows onto the dev ref", async () => {
+    const { core, seen } = coreCapturingIdentity();
+    const app = createTestApp({ core: core as never });
+    apps.push(app);
+    await app.inject({
+      method: "POST",
+      url: `/api/projects/${PROJECT_ID}/apps/ops-dashboard/runs/listOrders?channel=dev`,
+      headers: {
+        "x-catamorphic-tenant-id": "tenant-1",
+        "x-external-user-id": "builder",
+      },
+      payload: { input: {} },
+    });
+    expect(seen[0]).toEqual({
+      tenantId: "tenant-1",
+      externalUserId: "builder",
+      scope: [{ ...appRef, channel: "dev" }],
+    });
+  });
+
+  it("a viewer entitled to the app keeps it; one who is not gets an empty scope", async () => {
+    const { core, seen } = coreCapturingIdentity();
+    const app = createApp({
+      core: core as never,
+      identity: (request) => ({
+        tenantId: "tenant-1",
+        externalUserId: String(request.headers["x-user"]),
+        scope:
+          request.headers["x-user"] === "customer-a"
+            ? [appRef as never]
+            : [{ kind: "app", projectId: PROJECT_ID, name: "other-app" }],
+      }),
+    });
+    apps.push(app);
+    for (const user of ["customer-a", "customer-b"]) {
+      await app.inject({
+        method: "GET",
+        url: `/api/projects/${PROJECT_ID}/apps/ops-dashboard/runs/d4e5f6a7-b8c9-4890-bdef-234567890123`,
+        headers: { "x-user": user },
+      });
+    }
+    expect(seen).toEqual([
+      { tenantId: "tenant-1", externalUserId: "customer-a", scope: [appRef] },
+      { tenantId: "tenant-1", externalUserId: "customer-b", scope: [] },
+    ]);
+  });
+
+  it("a scoped identity is turned away from the project surface", async () => {
+    const app = createApp({
+      core: {
+        apps: {
+          list: async ({ identity }: { identity: { scope?: unknown[] } }) => {
+            if (identity.scope) throw new AccessDeniedError();
+            return [];
+          },
+        },
+      } as never,
+      identity: () => ({
+        tenantId: "tenant-1",
+        externalUserId: "customer-a",
+        scope: [appRef as never],
+      }),
+    });
+    apps.push(app);
+    const response = await app.inject({
+      method: "GET",
+      url: `/api/projects/${PROJECT_ID}/apps`,
+    });
+    expect(response.statusCode).toBe(403);
   });
 });

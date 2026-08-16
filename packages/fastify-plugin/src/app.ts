@@ -4,6 +4,7 @@ import fastifySwagger from "@fastify/swagger";
 import fastifySwaggerUi from "@fastify/swagger-ui";
 import Fastify from "fastify";
 import { jsonSchemaTransform } from "fastify-type-provider-zod";
+import type { IdentityResolver } from "./http-identity.js";
 import { catamorphicPlugin } from "./plugin.js";
 
 export type { RouteContext } from "./plugin.js";
@@ -15,6 +16,11 @@ export interface AppConfig {
    * workflow endpoints respond 503.
    */
   core?: CatamorphicCore;
+  /**
+   * Who is calling — see `CatamorphicPluginOptions.identity`. A sidecar that
+   * sits behind the host's own auth typically passes `identityFromHeaders()`.
+   */
+  identity: IdentityResolver;
 }
 
 /**
@@ -24,7 +30,7 @@ export interface AppConfig {
  * catamorphic into an existing Fastify app should register
  * `catamorphicPlugin` directly instead.
  */
-export function createApp(config: AppConfig = {}) {
+export function createApp(config: AppConfig) {
   const app = Fastify({
     logger: true,
     forceCloseConnections: true,
@@ -73,7 +79,11 @@ export function createApp(config: AppConfig = {}) {
     routePrefix: "/docs",
   });
 
-  app.register(catamorphicPlugin, { core: config.core, prefix: "/api" });
+  app.register(catamorphicPlugin, {
+    core: config.core,
+    identity: config.identity,
+    prefix: "/api",
+  });
 
   return app;
 }

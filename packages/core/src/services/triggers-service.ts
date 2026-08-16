@@ -12,9 +12,11 @@ import {
 import type { Kysely } from "kysely";
 import { type Identity, SYSTEM_AUTHOR } from "../identity.js";
 import { PROJECT_CHECK_SCRIPT, PROJECT_CHECK_SCRIPT_PATH } from "../seeds.js";
-import type { ExecutionJobsService } from "./execution-jobs-service.js";
-import type { ExecutionWorkerService } from "./execution-worker-service.js";
-import type { EnrollmentConflictPolicy, RunsService } from "./runs-service.js";
+import type {
+  EnrollmentConflictPolicy,
+  RunSuspensionReason,
+  RunsService,
+} from "./runs-service.js";
 import {
   renderTriggerTypesModule,
   TRIGGER_TYPES_SOURCE_PATH,
@@ -48,14 +50,7 @@ export interface TriggerBindingInfo {
   outputSchema: Json;
 }
 
-export type TriggerSuspensionReason =
-  | "pause"
-  | "child"
-  | "paused"
-  | "backoff"
-  | "batch"
-  | "budget"
-  | "queue";
+export type TriggerSuspensionReason = RunSuspensionReason;
 
 export type TriggerFireOutcome =
   | { workflowName: string; runId: string; status: "started" }
@@ -138,15 +133,10 @@ interface TriggersServiceDeps {
   mcpToolKinds?: readonly McpToolKindSpec[];
   projectManager: ProjectManager;
   runs: RunsService;
-  executionJobs: ExecutionJobsService;
-  executionWorker: ExecutionWorkerService;
 }
 
 const DEFAULT_SYNC_BUDGET_MS = 30_000;
 const MAX_SYNC_BUDGET_MS = 300_000;
-const SYNC_LEASE_SECONDS = 60;
-/** Poll cadence while another worker holds the run's current job. */
-const SYNC_POLL_MS = 50;
 
 /**
  * Host-defined trigger kinds: workflows subscribe with
@@ -366,126 +356,12 @@ export class TriggersService {
         status: "started",
       };
     }
-    return this.driveRunInline({
+    const outcome = await this.deps.runs.driveInline({
       tenantId: args.identity.tenantId,
-      workflowName: args.workflowName,
       runId: run.id,
       deadline: args.deadline,
     });
-  }
-
-  /**
-   * Runs a run's queue jobs inline until it settles or would wait. Detaching
-   * is always just "stop claiming": the next job stays pending and the
-   * polling workers continue the run asynchronously.
-   */
-  private async driveRunInline(args: {
-    tenantId: string;
-    workflowName: string;
-    runId: string;
-    deadline: number;
-  }): Promise<TriggerFireOutcome> {
-    const workerId = `sync-trigger:${crypto.randomUUID()}`;
-    const controller = new AbortController();
-    const abortTimer = setTimeout(
-      () => controller.abort(),
-      Math.max(0, args.deadline - Date.now()),
-    );
-    try {
-      for (;;) {
-        const run = await this.db
-          .selectFrom("workflow_runs")
-          .select(["status", "phase", "result", "error"])
-          .where("id", "=", args.runId)
-          .executeTakeFirst();
-        if (!run) {
-          return {
-            workflowName: args.workflowName,
-            runId: args.runId,
-            status: "failed",
-            error: "Run disappeared while executing",
-          };
-        }
-        if (run.status === "completed") {
-          return {
-            workflowName: args.workflowName,
-            runId: args.runId,
-            status: "completed",
-            output: (run.result ?? null) as Json,
-          };
-        }
-        if (run.status === "failed" || run.status === "canceled") {
-          return {
-            workflowName: args.workflowName,
-            runId: args.runId,
-            status: "failed",
-            error: run.error ?? `Run ${run.status}`,
-          };
-        }
-        if (run.status === "waiting") {
-          return this.suspended(
-            args,
-            run.phase === "pause" ? "pause" : "child",
-          );
-        }
-        if (run.status === "paused" || run.status === "canceling") {
-          return this.suspended(args, "paused");
-        }
-        if (Date.now() >= args.deadline) {
-          return this.suspended(args, "budget");
-        }
-
-        const job = await this.deps.executionJobs.nextForRun({
-          tenantId: args.tenantId,
-          runId: args.runId,
-        });
-        if (!job) {
-          // The run is live but jobless: a transition is committing on
-          // another connection. Bounded by the deadline check above.
-          await delay(SYNC_POLL_MS);
-          continue;
-        }
-        if (job.status === "running") {
-          // A polling worker beat us to the claim; wait for its outcome.
-          await delay(SYNC_POLL_MS);
-          continue;
-        }
-        if (job.kind !== "durable_boundary") {
-          return this.suspended(args, "batch");
-        }
-        if (new Date(job.availableAt).getTime() > Date.now()) {
-          return this.suspended(args, "backoff");
-        }
-        const claimed = await this.deps.executionJobs.claimById({
-          jobId: job.id,
-          workerId,
-          leaseSeconds: SYNC_LEASE_SECONDS,
-        });
-        if (!claimed) continue;
-        await this.deps.executionWorker.runClaimedJob({
-          job: claimed,
-          workerId,
-          leaseSeconds: SYNC_LEASE_SECONDS,
-          signal: controller.signal,
-        });
-        // Every disposition — completed, deferred, failed, lease lost — is
-        // reflected in the run/job rows the next iteration reads.
-      }
-    } finally {
-      clearTimeout(abortTimer);
-    }
-  }
-
-  private suspended(
-    args: { workflowName: string; runId: string },
-    suspendedOn: TriggerSuspensionReason,
-  ): TriggerFireOutcome {
-    return {
-      workflowName: args.workflowName,
-      runId: args.runId,
-      status: "suspended",
-      suspendedOn,
-    };
+    return { workflowName: args.workflowName, ...outcome };
   }
 
   /**
@@ -727,8 +603,4 @@ export class TriggersService {
     });
     return bindings;
   }
-}
-
-function delay(milliseconds: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, milliseconds));
 }

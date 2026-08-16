@@ -1,10 +1,10 @@
 import { buildAppGuestDocument } from "@catamorphic/app";
+import { narrowIdentity } from "@catamorphic/core";
 import type { FastifyInstance } from "fastify";
 import type { RouteContext } from "../app.js";
 import { resolveIdentity } from "../http-identity.js";
 import {
   callPollRunTool,
-  fetchRunSnapshot,
   handleMcpPost,
   McpRequestError,
   negotiateProtocolVersion,
@@ -27,9 +27,9 @@ import {
  *   host and speaks `tools/call` back through it;
  * - a `catamorphic_poll_run` tool so durable runs keep their poll loop.
  *
- * Tool calls execute under the owning app's audience identity, so the
- * frozen-workflow-set authorization applies to MCP callers exactly as it
- * does to the in-product iframe.
+ * Tool calls execute under the caller's identity narrowed to the owning
+ * app, so the frozen-workflow-set authorization applies to MCP callers
+ * exactly as it does to the in-product iframe.
  *
  * The endpoint is a stateless Streamable-HTTP JSON-RPC handler speaking
  * the `initialize`-handshake protocol era (≤2025-11-25) — what every
@@ -37,9 +37,7 @@ import {
  * client also defaults to it). Requests are independent; no sessions.
  */
 
-const RUN_POLL_INTERVAL_MS = 500;
-const RUN_POLL_TIMEOUT_MS = 120_000;
-const TERMINAL_RUN_STATUSES = new Set(["completed", "failed", "canceled"]);
+const RUN_CALL_BUDGET_MS = 120_000;
 
 interface PublishedApp {
   name: string;
@@ -238,48 +236,58 @@ async function callTool(
   if (!owner) {
     return toolError(`Unknown tool: ${name}`);
   }
-  // The audience identity puts MCP callers on the exact authorization
-  // path the in-product iframe uses: the run is re-authorized against
-  // the app version's frozen workflow set server-side.
-  const audienceIdentity = {
-    ...identity,
-    appAudience: { appId: owner.appId, appVersionId: owner.versionId },
-  } as Identity;
+  // Narrowing to the owning app puts MCP callers on the exact authorization
+  // path the in-product iframe uses: the run is re-authorized against the
+  // app's active version's frozen workflow set server-side (ADR 0053).
+  const scoped = narrowIdentity(identity, {
+    kind: "app",
+    projectId,
+    name: owner.name,
+  });
 
-  let run: { id: string };
+  if (args.mode === "start") {
+    let run: { id: string };
+    try {
+      run = await core.runs.triggerProduction({
+        identity: scoped,
+        projectId,
+        workflowName: name,
+        input: (args.input ?? null) as never,
+      });
+    } catch (error) {
+      return toolError(
+        error instanceof Error ? error.message : "Workflow trigger failed",
+      );
+    }
+    return toolValue({ runId: run.id });
+  }
+
+  // Sync call: settles inline unless the workflow reaches a durable wait or
+  // the budget, in which case the caller polls the run.
+  let outcome: Awaited<ReturnType<Core["runs"]["call"]>>;
   try {
-    run = await core.runs.triggerProduction({
-      identity: audienceIdentity,
+    outcome = await core.runs.call({
+      identity: scoped,
       projectId,
       workflowName: name,
       input: (args.input ?? null) as never,
+      budgetMs: RUN_CALL_BUDGET_MS,
     });
   } catch (error) {
     return toolError(
       error instanceof Error ? error.message : "Workflow trigger failed",
     );
   }
-
-  if (args.mode === "start") {
-    return toolValue({ runId: run.id });
-  }
-
-  const startedAt = Date.now();
-  for (;;) {
-    const snapshot = await fetchRunSnapshot(core, audienceIdentity, run.id);
-    if (snapshot.status === "completed") {
-      return toolValue(snapshot.output);
-    }
-    if (TERMINAL_RUN_STATUSES.has(snapshot.status)) {
-      return toolError(snapshot.error ?? `Run ${snapshot.status}`);
-    }
-    if (Date.now() - startedAt > RUN_POLL_TIMEOUT_MS) {
+  switch (outcome.status) {
+    case "completed":
+      return toolValue(outcome.output);
+    case "failed":
+      return toolError(outcome.error);
+    case "suspended":
       return toolError(
-        `Workflow still running after ${RUN_POLL_TIMEOUT_MS / 1000}s; ` +
-          `poll run ${run.id} with ${POLL_RUN_TOOL}.`,
+        `Workflow still running (${outcome.suspendedOn}); ` +
+          `poll run ${outcome.runId} with ${POLL_RUN_TOOL}.`,
       );
-    }
-    await sleep(RUN_POLL_INTERVAL_MS);
   }
 }
 
@@ -291,8 +299,4 @@ async function callTool(
  */
 function buildAppDocument(app: PublishedApp): string {
   return buildAppGuestDocument({ code: app.code, css: app.css });
-}
-
-function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
 }

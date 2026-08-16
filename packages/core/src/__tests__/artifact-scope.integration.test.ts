@@ -1,18 +1,18 @@
 import { createDatabase, migrateToLatest } from "@catamorphic/db";
 import { sql } from "kysely";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import type { Identity } from "../identity.js";
-import {
-  AppAccessDeniedError,
-  assertProjectSurface,
-  assertWorkflowAllowed,
-  resolveAppAudience,
-} from "../services/app-audience.js";
+import { type Identity, narrowIdentity } from "../identity.js";
 import { AppPoliciesService } from "../services/app-policies-service.js";
+import {
+  AccessDeniedError,
+  assertFullIdentity,
+  assertScopeAllowsWorkflow,
+  resolveScope,
+} from "../services/artifact-scope.js";
 
 const connectionString = process.env.DATABASE_URL ?? "";
 const describeIf = connectionString ? describe : describe.skip;
-const schema = `catamorphic_audience_${crypto.randomUUID().replaceAll("-", "")}`;
+const schema = `catamorphic_scope_${crypto.randomUUID().replaceAll("-", "")}`;
 const db = createDatabase({ connectionString, schema, poolSize: 8 });
 
 const tenantId = crypto.randomUUID();
@@ -26,10 +26,10 @@ const builder: Identity = { tenantId, externalUserId: "builder" };
 const viewer: Identity = {
   tenantId,
   externalUserId: "viewer",
-  appAudience: { appId, appVersionId: activeVersionId },
+  scope: [{ kind: "app", projectId, name: "dashboard" }],
 };
 
-describeIf("app audience enforcement", () => {
+describeIf("artifact scope enforcement", () => {
   beforeAll(async () => {
     await migrateToLatest({ db, schema });
     await db
@@ -77,6 +77,8 @@ describeIf("app audience enforcement", () => {
             "dangerousOldWorkflow",
           ]),
           is_active: false,
+          // Newer than the active build: the builder's latest dev build.
+          created_at: new Date(Date.now() + 60_000),
         },
       ])
       .execute();
@@ -88,27 +90,30 @@ describeIf("app audience enforcement", () => {
   });
 
   it("full identities pass every gate untouched", async () => {
-    expect(() => assertProjectSurface(builder)).not.toThrow();
+    expect(() => assertFullIdentity(builder)).not.toThrow();
     await expect(
-      assertWorkflowAllowed({
+      assertScopeAllowsWorkflow({
         db,
         identity: builder,
         projectId,
         workflowName: "anythingAtAll",
       }),
     ).resolves.toBeUndefined();
-    expect(
-      await resolveAppAudience({ db, identity: builder, projectId }),
-    ).toBeNull();
+    expect(await resolveScope({ db, identity: builder, projectId })).toBeNull();
   });
 
-  it("audience identities are rejected from every project surface", () => {
-    expect(() => assertProjectSurface(viewer)).toThrow(AppAccessDeniedError);
+  it("scoped identities are rejected from every project surface", () => {
+    expect(() => assertFullIdentity(viewer)).toThrow(AccessDeniedError);
+    // Even an empty scope is a scoped identity — a viewer of nothing is
+    // still not a builder.
+    expect(() => assertFullIdentity({ ...builder, scope: [] })).toThrow(
+      AccessDeniedError,
+    );
   });
 
-  it("allows exactly the frozen workflow set", async () => {
+  it("an app ref allows exactly the active version's frozen set", async () => {
     await expect(
-      assertWorkflowAllowed({
+      assertScopeAllowsWorkflow({
         db,
         identity: viewer,
         projectId,
@@ -116,50 +121,139 @@ describeIf("app audience enforcement", () => {
       }),
     ).resolves.toBeUndefined();
     await expect(
-      assertWorkflowAllowed({
+      assertScopeAllowsWorkflow({
         db,
         identity: viewer,
         projectId,
         workflowName: "deleteAllData",
       }),
-    ).rejects.toThrow(AppAccessDeniedError);
-  });
-
-  it("a retired version id is a denial, not its old wider set", async () => {
-    const stale: Identity = {
-      ...viewer,
-      appAudience: { appId, appVersionId: retiredVersionId },
-    };
+    ).rejects.toThrow(AccessDeniedError);
+    // The retired version's wider set is unreachable: refs name apps, not
+    // versions, and only the active version resolves.
     await expect(
-      assertWorkflowAllowed({
+      assertScopeAllowsWorkflow({
         db,
-        identity: stale,
+        identity: viewer,
         projectId,
         workflowName: "dangerousOldWorkflow",
       }),
-    ).rejects.toThrow(AppAccessDeniedError);
+    ).rejects.toThrow(AccessDeniedError);
   });
 
-  it("a forged version id from another app or tenant is a denial", async () => {
-    const forgedApp: Identity = {
-      ...viewer,
-      appAudience: {
-        appId: crypto.randomUUID(),
-        appVersionId: activeVersionId,
-      },
+  it("a workflow ref allows exactly that workflow in that project", async () => {
+    const direct: Identity = {
+      ...builder,
+      scope: [{ kind: "workflow", projectId, name: "exportReport" }],
     };
     await expect(
-      resolveAppAudience({ db, identity: forgedApp, projectId }),
-    ).rejects.toThrow(AppAccessDeniedError);
+      assertScopeAllowsWorkflow({
+        db,
+        identity: direct,
+        projectId,
+        workflowName: "exportReport",
+      }),
+    ).resolves.toBeUndefined();
+    await expect(
+      assertScopeAllowsWorkflow({
+        db,
+        identity: direct,
+        projectId,
+        workflowName: "listOrders",
+      }),
+    ).rejects.toThrow(AccessDeniedError);
+    await expect(
+      assertScopeAllowsWorkflow({
+        db,
+        identity: direct,
+        projectId: crypto.randomUUID(),
+        workflowName: "exportReport",
+      }),
+    ).rejects.toThrow(AccessDeniedError);
+  });
+
+  it("refs to another project, an unknown app, or another tenant resolve to nothing", async () => {
+    const otherProject: Identity = {
+      ...viewer,
+      scope: [
+        { kind: "app", projectId: crypto.randomUUID(), name: "dashboard" },
+      ],
+    };
+    expect(
+      (await resolveScope({ db, identity: otherProject, projectId }))
+        ?.allowedWorkflows.size,
+    ).toBe(0);
+
+    const unknownApp: Identity = {
+      ...viewer,
+      scope: [{ kind: "app", projectId, name: "no-such-app" }],
+    };
+    expect(
+      (await resolveScope({ db, identity: unknownApp, projectId }))
+        ?.allowedWorkflows.size,
+    ).toBe(0);
 
     const crossTenant: Identity = {
       tenantId: otherTenantId,
       externalUserId: "viewer",
-      appAudience: { appId, appVersionId: activeVersionId },
+      scope: [{ kind: "app", projectId, name: "dashboard" }],
     };
+    expect(
+      (await resolveScope({ db, identity: crossTenant, projectId }))
+        ?.allowedWorkflows.size,
+    ).toBe(0);
+  });
+
+  it("a dev ref resolves only to the caller's own latest build", async () => {
+    // The builder narrowed onto the dev channel of their own app: the retired
+    // (newer, non-active) build is theirs, so it resolves.
+    const ownDev = narrowIdentity(builder, {
+      kind: "app",
+      projectId,
+      name: "dashboard",
+      channel: "dev",
+    });
     await expect(
-      resolveAppAudience({ db, identity: crossTenant, projectId }),
-    ).rejects.toThrow(AppAccessDeniedError);
+      assertScopeAllowsWorkflow({
+        db,
+        identity: ownDev,
+        projectId,
+        workflowName: "dangerousOldWorkflow",
+      }),
+    ).resolves.toBeUndefined();
+    // A viewer asking for dev gets nothing — not the published set either.
+    const viewerDev = narrowIdentity(viewer, {
+      kind: "app",
+      projectId,
+      name: "dashboard",
+      channel: "dev",
+    });
+    expect(
+      (await resolveScope({ db, identity: viewerDev, projectId }))
+        ?.allowedWorkflows.size,
+    ).toBe(0);
+  });
+
+  it("narrowing intersects: a foreign artifact leaves an empty scope", async () => {
+    const narrowed = narrowIdentity(viewer, {
+      kind: "app",
+      projectId,
+      name: "other-app",
+    });
+    expect(narrowed.scope).toEqual([]);
+    const kept = narrowIdentity(viewer, {
+      kind: "app",
+      projectId,
+      name: "dashboard",
+    });
+    expect(kept.scope).toHaveLength(1);
+    const confined = narrowIdentity(builder, {
+      kind: "workflow",
+      projectId,
+      name: "listOrders",
+    });
+    expect(confined.scope).toEqual([
+      { kind: "workflow", projectId, name: "listOrders" },
+    ]);
   });
 
   it("the tenant workflow allowlist narrows but never widens", async () => {
@@ -169,7 +263,7 @@ describeIf("app audience enforcement", () => {
       workflowAllowlist: ["listOrders", "notInFrozenSet"],
     });
     try {
-      const context = await resolveAppAudience({
+      const context = await resolveScope({
         db,
         identity: viewer,
         projectId,
@@ -185,13 +279,13 @@ describeIf("app audience enforcement", () => {
     }
   });
 
-  it("the tenant kill switch denies audiences outright", async () => {
+  it("the tenant kill switch denies app scopes outright", async () => {
     const policies = new AppPoliciesService(db);
     await policies.upsert({ tenantId, appsEnabled: false });
     try {
       await expect(
-        resolveAppAudience({ db, identity: viewer, projectId, policies }),
-      ).rejects.toThrow(AppAccessDeniedError);
+        resolveScope({ db, identity: viewer, projectId, policies }),
+      ).rejects.toThrow(AccessDeniedError);
     } finally {
       await policies.upsert({ tenantId, appsEnabled: true });
     }
@@ -236,13 +330,13 @@ describeIf("app audience enforcement", () => {
       .execute();
     try {
       await expect(
-        assertWorkflowAllowed({
+        assertScopeAllowsWorkflow({
           db,
           identity: viewer,
           projectId,
           workflowName: "listOrders",
         }),
-      ).rejects.toThrow(AppAccessDeniedError);
+      ).rejects.toThrow(AccessDeniedError);
     } finally {
       await db
         .updateTable("app_versions")

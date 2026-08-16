@@ -10,6 +10,13 @@ import { catamorphicPlugin } from "@catamorphic/fastify-plugin";
 app.register(catamorphicPlugin, {
   core: catamorphic.core, // built with @catamorphic/server-sdk
   prefix: "/api",         // the generated api-client expects /api
+  identity: async (request) => {
+    // Who is calling — from YOUR session. See "Identity" below.
+    const session = await verifySession(request);
+    return session
+      ? { tenantId: session.orgId, externalUserId: session.userId }
+      : null;
+  },
 });
 ```
 
@@ -23,7 +30,8 @@ The plugin is fully encapsulated:
 
 There is one Runs route family for every Workflow:
 
-- `POST /api/projects/:projectId/workflows/:name/runs` triggers a Run of the deployed commit.
+- `POST /api/projects/:projectId/workflows/:name/runs` triggers a Run of the deployed commit (async).
+- `POST /api/projects/:projectId/workflows/:name/calls` calls a workflow synchronously — driven inline until it settles or reaches a durable wait; answers `completed | failed | suspended` (with `runId` to poll).
 - `GET /api/projects/:projectId/workflows/:name/runs` lists Runs.
 - `GET /api/runs/:runId` and `/api/runs/:runId/*` expose detail and capability-driven controls.
 
@@ -42,19 +50,43 @@ parser execution descriptors.
 
 ## Identity
 
-Every request requires two headers (no defaults):
+The plugin has exactly one identity mechanism: the required `identity`
+resolver. It runs on every request and returns the caller's identity or
+`null` (→ 401). There are no defaults and no headers are read unless you opt
+in.
 
-- `X-Catamorphic-Tenant-Id` — host org id
-- `X-External-User-Id` — host user id
+```ts
+app.register(catamorphicPlugin, {
+  core,
+  prefix: "/api",
+  identity: async (request) => {
+    const session = await verifySession(request);
+    if (!session) return null;
+    const base = { tenantId: session.orgId, externalUserId: session.userId };
+    if (session.isEmployee) return base;                 // builder: full identity
+    return { ...base, scope: await entitlementsFor(session.userId) }; // viewer
+  },
+});
+```
 
-Set them **server-side from the host's verified auth context** (session/JWT). Never forward browser-supplied values unchecked.
+- A **full** identity (no `scope`) is a builder with the whole project surface.
+- A **scoped** identity may reach exactly the listed artifacts — `{ kind: "app", projectId, name }` (the app's document plus its active version's frozen workflow set) or `{ kind: "workflow", projectId, name }` — and nothing else. Denials are a uniform 403.
+- Hosts whose auth terminates in front of the plugin (gateway, proxy) can pass `identityFromHeaders()`, which reads `X-Catamorphic-Tenant-Id` and `X-External-User-Id`. Never expose such a mount to browsers directly.
+
+## Apps
+
+Viewer-facing app routes (`view-state`, `guest`, `storage`, `calls/:workflow`,
+`runs/:workflow`, `runs/:runId`) narrow the caller to that app structurally —
+the URL names it — so a builder is confined to the app while inside it and a
+viewer must be entitled to it. `AppMount` in `@catamorphic/ui` uses these
+routes; nothing is claimed by the client.
 
 ## Standalone app (sidecar / spec generation)
 
 ```ts
-import { createApp } from "@catamorphic/fastify-plugin";
+import { createApp, identityFromHeaders } from "@catamorphic/fastify-plugin";
 
-const app = createApp({ core });
+const app = createApp({ core, identity: identityFromHeaders() });
 await app.listen({ port: 8500 });
 // Swagger UI at /docs, API at /api/*
 ```

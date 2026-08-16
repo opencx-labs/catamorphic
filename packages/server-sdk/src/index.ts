@@ -48,10 +48,12 @@ export type {
   WriteFileInput,
 } from "@catamorphic/core";
 export {
+  AccessDeniedError,
   appScaffold,
   createCatamorphicCore,
   GithubNotConnectedError,
   GithubTokenExpiredError,
+  narrowIdentity,
   PluginSecretsMissingError,
   ProductionDeploymentNotFoundError,
   ProjectFileNotFoundError,
@@ -63,6 +65,7 @@ export {
   RunSignalNotFoundError,
   SandboxProviderNotConfiguredError,
   SEED_SKILLS,
+  scopeCovers,
   TenantActiveRunLimitError,
   WorkflowNotFoundError,
   workspaceFiles,
@@ -93,9 +96,16 @@ export type WorkflowCapabilities = CoreWorkflowSummary["capabilities"];
 export type {
   AgentTurnSettledEvent,
   AppBundleStore,
+  AppRef,
+  ArtifactRef,
+  CallRunInput,
   CapabilityContext,
   CapabilityProviderRuntime,
+  DocumentRef,
+  Identity,
   ProjectLifecycleHooks,
+  RunCallOutcome,
+  RunSuspensionReason,
   TriggerBindingInfo,
   TriggerFireOutcome,
   TriggerFireResult,
@@ -104,6 +114,7 @@ export type {
   TriggerKindRuntime,
   TriggerMode,
   TriggerSuspensionReason,
+  WorkflowRef,
 } from "@catamorphic/core";
 export {
   CapabilityResolutionError,

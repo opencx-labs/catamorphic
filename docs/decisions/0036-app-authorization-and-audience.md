@@ -1,6 +1,10 @@
 # 0036 — App authorization: contract surface, frozen sets, audience identities
 
-- **Status:** Accepted
+- **Status:** Accepted — audience identity headers superseded by
+  [0053](0053-identity-scope-and-app-routes.md): `appAudience` became the
+  general `Identity.scope` (artifact refs by name), narrowing is structural
+  on the app's own routes, and `X-Catamorphic-App-*` headers no longer exist.
+  Gates 1–3 and every consequence below stand.
 - **Date:** 2026-07-27
 - **Expands:** 0001, 0002, 0028, 0032, 0035
 

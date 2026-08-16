@@ -1,14 +1,8 @@
 import {
-  PluginSecretsMissingError,
-  ProductionDeploymentNotFoundError,
   ProjectNotFoundError,
   RunCapabilityError,
-  RunEnrollmentConflictError,
-  RunInputInvalidError,
   RunResumeConflictError,
   RunSignalNotFoundError,
-  SandboxProviderNotConfiguredError,
-  TenantActiveRunLimitError,
   WorkflowNotFoundError,
 } from "@catamorphic/core";
 import type { FastifyInstance } from "fastify";
@@ -17,10 +11,12 @@ import { z } from "zod";
 import type { RouteContext } from "../app.js";
 import { resolveIdentity } from "../http-identity.js";
 import {
+  CallRunSchema,
   CancelRunByKeySchema,
   ErrorSchema,
   ListSchema,
   RefQuerySchema,
+  RunCallOutcomeSchema,
   RunSchema,
   RunsQuerySchema,
   SignalRunSchema,
@@ -29,6 +25,7 @@ import {
   WorkflowNameParamsSchema,
   WorkflowSummarySchema,
 } from "../schemas.js";
+import { replyForTriggerError } from "./run-errors.js";
 import { attachTriggerKindDisplays } from "./triggers.js";
 
 export function registerWorkflowRoutes(
@@ -141,37 +138,52 @@ export function registerWorkflowRoutes(
         });
         return reply.status(201).send(run);
       } catch (err) {
-        if (err instanceof ProjectNotFoundError) {
-          return reply.status(404).send({ error: "Project not found" });
-        }
-        if (err instanceof WorkflowNotFoundError) {
-          return reply.status(404).send({ error: "Workflow not found" });
-        }
-        if (err instanceof ProductionDeploymentNotFoundError) {
-          return reply.status(409).send({ error: err.message });
-        }
-        if (err instanceof RunEnrollmentConflictError) {
-          return reply.status(409).send({ error: err.message });
-        }
-        if (err instanceof TenantActiveRunLimitError) {
-          return reply.status(429).send({ error: err.message });
-        }
-        if (err instanceof RunCapabilityError) {
-          return reply.status(409).send({ error: err.message });
-        }
-        if (err instanceof PluginSecretsMissingError) {
-          return reply.status(400).send({ error: err.message });
-        }
-        if (err instanceof RunInputInvalidError) {
-          return reply.status(400).send({ error: err.message });
-        }
-        if (err instanceof SandboxProviderNotConfiguredError) {
-          return reply.status(503).send({
-            error:
-              "Sandbox provider not configured. Set CLOUDFLARE_SANDBOX_API_URL and CLOUDFLARE_SANDBOX_API_KEY (recommended) or DAYTONA_API_KEY to enable workflow execution.",
-          });
-        }
-        throw err;
+        return replyForTriggerError(err, reply) ?? Promise.reject(err);
+      }
+    },
+  });
+
+  typed.route({
+    method: "POST",
+    url: "/projects/:projectId/workflows/:name/calls",
+    schema: {
+      params: WorkflowNameParamsSchema,
+      body: CallRunSchema,
+      response: {
+        200: RunCallOutcomeSchema,
+        400: ErrorSchema,
+        404: ErrorSchema,
+        409: ErrorSchema,
+        429: ErrorSchema,
+        503: ErrorSchema,
+      },
+    },
+    handler: async (request, reply) => {
+      if (!ctx.core)
+        return reply.status(503).send({ error: "Service not configured" });
+      try {
+        // Sync is a calling mode, not a workflow kind: the run is triggered
+        // exactly like an async one and driven inline until it settles or
+        // reaches a durable wait, at which point `suspended` hands the run
+        // id back for polling.
+        const outcome = await ctx.core.runs.call({
+          identity: resolveIdentity(request),
+          projectId: request.params.projectId,
+          workflowName: request.params.name,
+          input: request.body.input,
+          ...(request.body.correlationKey === undefined
+            ? {}
+            : { correlationKey: request.body.correlationKey }),
+          ...(request.body.onConflict === undefined
+            ? {}
+            : { onConflict: request.body.onConflict }),
+          ...(request.body.budgetMs === undefined
+            ? {}
+            : { budgetMs: request.body.budgetMs }),
+        });
+        return reply.send(outcome);
+      } catch (err) {
+        return replyForTriggerError(err, reply) ?? Promise.reject(err);
       }
     },
   });

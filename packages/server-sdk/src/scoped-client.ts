@@ -1,5 +1,7 @@
 import type {
+  ArtifactRef,
   BatchItemStep,
+  CallRunInput,
   CancelRunInput,
   CatamorphicCore,
   WorkflowDetail as CoreWorkflowDetail,
@@ -23,6 +25,7 @@ import type {
   ResumeRunInput,
   ResumeRunPauseInput,
   Run,
+  RunCallOutcome,
   RunDetail,
   TriggerBindingInfo,
   TriggerFireResult,
@@ -94,6 +97,13 @@ export interface RunsResource {
   triggerProduction(
     args: Omit<TriggerProductionRunInput, "identity">,
   ): Promise<Run>;
+  /**
+   * Triggers a run and drives it inline until it settles or reaches a
+   * durable wait — the request-path shape of execution. Same authorization
+   * and durable run record as `triggerProduction`; a `suspended` outcome
+   * carries the run id for `get` polling.
+   */
+  call(args: Omit<CallRunInput, "identity">): Promise<RunCallOutcome>;
   list(args: Omit<ListRunsInput, "identity">): Promise<ListRunsResult>;
   get(args: Omit<GetRunInput, "identity">): Promise<RunDetail>;
   cancel(args: Omit<CancelRunInput, "identity">): Promise<Run>;
@@ -280,6 +290,7 @@ function buildRuns(core: CatamorphicCore, identity: Identity): RunsResource {
   return {
     triggerProduction: (args) =>
       core.runs.triggerProduction({ ...args, identity }),
+    call: (args) => core.runs.call({ ...args, identity }),
     list: (args) => core.runs.list({ ...args, identity }),
     get: (args) => core.runs.get({ ...args, identity }),
     cancel: (args) => core.runs.cancel({ ...args, identity }),
@@ -339,10 +350,19 @@ export class TenantScopedClient {
     readonly tenantId: string,
   ) {}
 
-  forUser(args: { externalUserId: string }): ScopedClient {
+  /**
+   * Binds the user. Omit `scope` for a builder (full project surface); pass
+   * the artifacts a viewer is entitled to — an app, a workflow — for a
+   * scoped identity that can reach exactly those (ADR 0053).
+   */
+  forUser(args: {
+    externalUserId: string;
+    scope?: readonly ArtifactRef[];
+  }): ScopedClient {
     return new ScopedClient(this.core, {
       tenantId: this.tenantId,
       externalUserId: args.externalUserId,
+      ...(args.scope === undefined ? {} : { scope: args.scope }),
     });
   }
 }

@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { createApp } from "../app.js";
+import { createTestApp } from "./test-app.js";
 
 const PROJECT_ID = "a1b2c3d4-e5f6-4890-abcd-ef1234567890";
 const APP_ID = "c3d4e5f6-a7b8-4890-acde-123456789012";
@@ -12,7 +12,7 @@ const HEADERS = {
   "content-type": "application/json",
 };
 
-const apps: ReturnType<typeof createApp>[] = [];
+const apps: ReturnType<typeof createTestApp>[] = [];
 
 afterEach(async () => {
   await Promise.all(apps.splice(0).map((app) => app.close()));
@@ -30,6 +30,18 @@ function fakeCore() {
           result: { ok: args.workflowName },
         });
         return { id };
+      }),
+      call: vi.fn(async (args: { workflowName: string }) => {
+        const id = `run-${args.workflowName}`;
+        runs.set(id, {
+          status: "completed",
+          result: { ok: args.workflowName },
+        });
+        return {
+          status: "completed",
+          runId: id,
+          output: { ok: args.workflowName },
+        };
       }),
       get: vi.fn(async (args: { runId: string }) => {
         const run = runs.get(args.runId);
@@ -60,7 +72,7 @@ function fakeCore() {
 }
 
 async function rpc(
-  app: ReturnType<typeof createApp>,
+  app: ReturnType<typeof createTestApp>,
   method: string,
   params?: Record<string, unknown>,
 ) {
@@ -78,7 +90,7 @@ async function rpc(
 
 describe("apps MCP endpoint", () => {
   it("answers initialize with the legacy handshake and capabilities", async () => {
-    const app = createApp({ core: fakeCore() as never });
+    const app = createTestApp({ core: fakeCore() as never });
     apps.push(app);
     const { result } = await rpc(app, "initialize", {
       protocolVersion: "2025-06-18",
@@ -93,7 +105,7 @@ describe("apps MCP endpoint", () => {
   });
 
   it("accepts notifications with a 202 and no body", async () => {
-    const app = createApp({ core: fakeCore() as never });
+    const app = createTestApp({ core: fakeCore() as never });
     apps.push(app);
     const response = await app.inject({
       method: "POST",
@@ -105,7 +117,7 @@ describe("apps MCP endpoint", () => {
   });
 
   it("lists one tool per allowed workflow with MCP Apps ui metadata", async () => {
-    const app = createApp({ core: fakeCore() as never });
+    const app = createTestApp({ core: fakeCore() as never });
     apps.push(app);
     const { result } = await rpc(app, "tools/list");
     const tools = result?.tools as Array<Record<string, unknown>>;
@@ -118,7 +130,7 @@ describe("apps MCP endpoint", () => {
   });
 
   it("serves the app bundle as a ui:// resource with the standard mimeType", async () => {
-    const app = createApp({ core: fakeCore() as never });
+    const app = createTestApp({ core: fakeCore() as never });
     apps.push(app);
     const { result } = await rpc(app, "resources/read", {
       uri: "ui://apps/ops-dashboard",
@@ -131,28 +143,30 @@ describe("apps MCP endpoint", () => {
     expect(String(content?.text)).toContain("Content-Security-Policy");
   });
 
-  it("executes a workflow tool under the app audience and returns output", async () => {
+  it("calls a workflow tool synchronously, narrowed to the owning app", async () => {
     const core = fakeCore();
-    const app = createApp({ core: core as never });
+    const app = createTestApp({ core: core as never });
     apps.push(app);
     const { result } = await rpc(app, "tools/call", {
       name: "listOrders",
       arguments: { input: { status: "open" } },
     });
     expect(result?.structuredContent).toEqual({ ok: "listOrders" });
-    expect(core.runs.triggerProduction).toHaveBeenCalledWith(
+    expect(core.runs.call).toHaveBeenCalledWith(
       expect.objectContaining({
         workflowName: "listOrders",
         input: { status: "open" },
         identity: expect.objectContaining({
-          appAudience: { appId: APP_ID, appVersionId: VERSION_ID },
+          scope: [
+            { kind: "app", projectId: PROJECT_ID, name: "ops-dashboard" },
+          ],
         }),
       }),
     );
   });
 
   it("mode start returns the runId; poll tool reads the run", async () => {
-    const app = createApp({ core: fakeCore() as never });
+    const app = createTestApp({ core: fakeCore() as never });
     apps.push(app);
     const start = await rpc(app, "tools/call", {
       name: "reconcile",
@@ -172,7 +186,7 @@ describe("apps MCP endpoint", () => {
   });
 
   it("answers unknown tools with an isError result, unknown methods with -32601", async () => {
-    const app = createApp({ core: fakeCore() as never });
+    const app = createTestApp({ core: fakeCore() as never });
     apps.push(app);
     const call = await rpc(app, "tools/call", {
       name: "not_allowed",

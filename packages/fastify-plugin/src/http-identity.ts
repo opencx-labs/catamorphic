@@ -1,62 +1,67 @@
 import type { Identity } from "@catamorphic/core";
 import type { FastifyRequest } from "fastify";
 
+/**
+ * The one identity mechanism of the HTTP surface. The host supplies a
+ * resolver when it registers the plugin; it runs on every request (including
+ * iframe navigations to served app documents, which carry the host's own
+ * session cookie) and returns the caller's {@link Identity} — full for a
+ * builder, scoped for a viewer — or `null` for "not authenticated" (401).
+ *
+ * There is no default: catamorphic is embed-only and never guesses who is
+ * calling. Hosts that terminate auth elsewhere (a proxy, a sidecar behind
+ * the host's gateway) pass {@link identityFromHeaders}; everyone else writes
+ * the few lines that turn their verified session into an identity.
+ */
+export type IdentityResolver = (
+  request: FastifyRequest,
+) => Identity | null | Promise<Identity | null>;
+
 const TENANT_HEADER = "x-catamorphic-tenant-id";
 const EXTERNAL_USER_HEADER = "x-external-user-id";
-const APP_ID_HEADER = "x-catamorphic-app-id";
-const APP_VERSION_HEADER = "x-catamorphic-app-version-id";
 
 const USER_ID_RE = /^[A-Za-z0-9._-]+$/;
 const TENANT_ID_RE = /^[A-Za-z0-9._-]+$/;
-const UUID_RE =
-  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 /**
- * Per-request identity resolver for the Fastify HTTP surface. Reads the
- * `X-Catamorphic-Tenant-Id` and `X-External-User-Id` headers. Both are
- * required on every request — catamorphic is embed-only, so the host app is
- * always responsible for injecting identity from its own auth context.
- *
- * When the host forwards a request that originated inside a published app, it
- * additionally sets `X-Catamorphic-App-Id` + `X-Catamorphic-App-Version-Id`.
- * These headers are a *narrowing* claim, never a widening one: they restrict
- * the identity to the app's frozen workflow set, so a guest forging them can
- * only reduce its own access. It is the host's job to set them on every
- * app-originated request — an app request forwarded without them would run
- * with the viewer's full project access.
+ * A stock resolver reading `X-Catamorphic-Tenant-Id` and `X-External-User-Id`.
+ * Only for hosts whose auth layer sits *in front of* the plugin and sets these
+ * headers itself from a verified session (a proxy route, a gateway); never
+ * expose a plugin using this resolver directly to browsers, since anyone
+ * could then claim any identity. Both headers are required and yield full
+ * identities — a header-terminated host that wants scoped viewers wraps this
+ * in its own resolver.
  */
-export function resolveIdentity(request: FastifyRequest): Identity {
-  return {
+export function identityFromHeaders(): IdentityResolver {
+  return (request) => ({
     tenantId: getTenantId(request),
     externalUserId: getExternalUserId(request),
-    appAudience: getAppAudience(request),
-  };
+  });
 }
 
-function getAppAudience(
-  request: FastifyRequest,
-): Identity["appAudience"] | undefined {
-  const appId = headerValue(request, APP_ID_HEADER);
-  const appVersionId = headerValue(request, APP_VERSION_HEADER);
-  if (!appId && !appVersionId) return undefined;
-  if (!appId || !appVersionId) {
+const IDENTITY_KEY = Symbol.for("catamorphic.identity");
+
+interface IdentityCarrier {
+  [IDENTITY_KEY]?: Identity;
+}
+
+/** Stores the resolved identity on the request (plugin-internal). */
+export function attachIdentity(request: FastifyRequest, identity: Identity) {
+  (request as unknown as IdentityCarrier)[IDENTITY_KEY] = identity;
+}
+
+/**
+ * The identity the plugin's resolver attached to this request. Routes call
+ * this; it never reads headers itself.
+ */
+export function resolveIdentity(request: FastifyRequest): Identity {
+  const identity = (request as unknown as IdentityCarrier)[IDENTITY_KEY];
+  if (!identity) {
     throw new HttpIdentityError(
-      "App requests must send both X-Catamorphic-App-Id and X-Catamorphic-App-Version-Id",
+      "No identity on request: the catamorphic plugin's identity resolver did not run",
     );
   }
-  if (!UUID_RE.test(appId) || !UUID_RE.test(appVersionId)) {
-    throw new HttpIdentityError("Invalid app audience headers");
-  }
-  return { appId, appVersionId };
-}
-
-function headerValue(
-  request: FastifyRequest,
-  name: string,
-): string | undefined {
-  const raw = request.headers[name];
-  const value = Array.isArray(raw) ? raw[0] : raw;
-  return value?.trim() || undefined;
+  return identity;
 }
 
 export function getExternalUserId(request: FastifyRequest): string {
@@ -64,7 +69,7 @@ export function getExternalUserId(request: FastifyRequest): string {
   const value = Array.isArray(raw) ? raw[0] : raw;
   if (!value?.trim()) {
     throw new HttpIdentityError(
-      "Missing X-External-User-Id header. Embedding apps must pass the host user id on every request.",
+      "Missing X-External-User-Id header. Hosts using identityFromHeaders() must set the host user id on every request.",
     );
   }
   const trimmed = value.trim();
@@ -79,7 +84,7 @@ export function getTenantId(request: FastifyRequest): string {
   const value = Array.isArray(raw) ? raw[0] : raw;
   if (!value?.trim()) {
     throw new HttpIdentityError(
-      "Missing X-Catamorphic-Tenant-Id header. Embedding apps must pass the host org id on every request.",
+      "Missing X-Catamorphic-Tenant-Id header. Hosts using identityFromHeaders() must set the host org id on every request.",
     );
   }
   const trimmed = value.trim();
@@ -89,6 +94,7 @@ export function getTenantId(request: FastifyRequest): string {
   return trimmed;
 }
 
+/** A malformed identity claim from the host (400), distinct from 401. */
 export class HttpIdentityError extends Error {
   constructor(message: string) {
     super(message);

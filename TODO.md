@@ -82,10 +82,29 @@
   Today the workflow-tools MCP endpoint (ADR 0042) is local and
   host-proxied. The direction: a stock Catamorphic server people run on
   their own infra; Catamorphic desktop connects to it and calls
-  MCPs/workflows remotely instead of locally; permissions plus the ability
-  to publicly expose apps/MCP endpoints, with per-tenant/per-project auth
-  (likely host-issued bearer tokens bound to tenant + project — Catamorphic
-  stays out of the user/OAuth business). Motivating case: our customer
-  engineering team wants AI-built custom issue trackers per customer — one
-  project/tenant each, tenants connecting to their own workflow tools over
-  MCP.
+  MCPs/workflows remotely instead of locally. Identity is settled (ADR
+  0053: the host's `identity` resolver returns full or scoped identities;
+  the server is that resolver plus a token-issuing auth adapter and a
+  config file); embed first, then promote the reference host into the
+  stock server. Motivating case: our customer engineering team wants
+  AI-built custom issue trackers per customer — customers as scoped
+  viewers of per-customer apps, tenants connecting to their own workflow
+  tools over MCP.
+- **Publications: artifacts with audiences (parked, ADR 0053).** A
+  publication binds an artifact (`app` or `document` — a path in the
+  project) to `{ channel, audience: host-authenticated | public }`;
+  catamorphic serves it and enforces what the host asserted, the host owns
+  URL minting/revocation. Public = an anonymous, read-only,
+  tenant-scoped identity minted only for public publications — the one
+  non-host identity. The `document` artifact ref kind is already reserved
+  in `Identity.scope`.
+- **Caller identity in runs (parked, ADR 0053).** Stamp the triggering
+  identity (tenant, external user, scope, via) server-side onto the run and
+  surface it in `BoundaryContext` as `context.caller` — never in `input`,
+  which is author-typed. Lets one shared multi-customer app isolate data
+  per caller without trusting the bundle.
+- **Authorization seam (parked, ADR 0053).** Policy stays out of core:
+  `createCatamorphic({ authorize })` returning a scope, with two stock
+  implementations — host-DB entitlements and a designated sync workflow in
+  the project (`authorize` in the contract surface). Roles are a policy
+  vocabulary passed through, not stored by core.

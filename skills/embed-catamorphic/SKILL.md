@@ -224,13 +224,16 @@ export const catamorphic = createCatamorphic({
 Apps are sandboxed React bundles living in the same repo as the workflows
 they call. The callable set is the contract surface
 (`workflows/src/app-api.ts`), frozen per published version and
-re-authorized on every call under an app-audience identity; a viewer who
-cannot edit the project can still run the app (ADR 0036). The guest bundle
-imports `@catamorphic/app` for a typed client: `.call(input)` settles
-inline when the workflow can, `.start(input)` returns a pollable run
-handle. Hosts mount apps with `AppMount` from `@catamorphic/ui` (opaque
-origin, default-deny CSP), or serve the guest document from the fastify
-plugin's app routes.
+re-authorized on every call against the caller's identity narrowed to that
+app; a viewer who cannot edit the project can still run the app (ADR 0036,
+0053 — see "Customers and other viewers" below). The guest bundle imports
+`@catamorphic/app` for a typed client: `.call(input)` is a **synchronous
+call** — the server drives the run inline and answers with the output
+unless the workflow reaches a durable wait — and `.start(input)` returns a
+pollable run handle. Hosts mount apps with `AppMount` from
+`@catamorphic/ui` (opaque origin, default-deny CSP), which talks to the
+app's own routes (`/api/projects/:id/apps/:name/calls|runs`); the URL names
+the app, so narrowing is structural and the client claims nothing.
 
 - **MCP Apps interop, both directions**: the `@catamorphic/app` runtime is
   dual-dialect, so the same bundle runs inside MCP Apps hosts (Claude,
@@ -438,18 +441,133 @@ HTTP for frontends (required for the React UI):
 
 ```ts
 import { catamorphicPlugin } from "@catamorphic/fastify-plugin";
-app.register(catamorphicPlugin, { core: catamorphic.core, prefix: "/api" });
+app.register(catamorphicPlugin, {
+  core: catamorphic.core,
+  prefix: "/api",
+  // REQUIRED. Who is calling, from the host's own session. Runs on every
+  // request; `null` means 401. See the recipe below for viewers.
+  identity: async (request) => {
+    const session = await verifySession(request);
+    return session
+      ? { tenantId: session.orgId, externalUserId: session.userId }
+      : null;
+  },
+});
 ```
 
-Every HTTP request needs `X-Catamorphic-Tenant-Id` and `X-External-User-Id`.
-**Set them server-side from the host's verified session. Never accept them
-from the browser.** (In a desktop app the embedded server sets fixed values.)
+**There is no default identity and no header fallback.** The plugin never
+reads identity headers unless the host passes `identityFromHeaders()`,
+which is only correct behind the host's own gateway that already verified
+the session (never browser-reachable). In a desktop app the resolver returns
+one fixed identity.
 
-React: wrap the tree in `CatamorphicProvider` (`@catamorphic/react`), then
-drop in `WorkflowEditor` from `@catamorphic/ui`, mount apps with
-`AppMount`, or compose from headless hooks (`useProjects`, `useRuns`,
-`useTriggerRun`, `useAgentSessions`, …). shadcn-style source-owned
-components: `@catamorphic/registry`.
+React: wrap the tree in `CatamorphicProvider` (`@catamorphic/react`) with an
+api-client pointed at the same origin (`credentials: "include"` so the
+session cookie rides along), then drop in `WorkflowEditor` from
+`@catamorphic/ui`, mount apps with `AppMount`, or compose from headless
+hooks (`useProjects`, `useRuns`, `useTriggerRun`, `useAgentSessions`, …).
+shadcn-style source-owned components: `@catamorphic/registry`.
+
+Synchronous execution for hosts: `scoped.runs.call({ projectId,
+workflowName, input })` (SDK) or `POST
+/api/projects/:id/workflows/:name/calls` (HTTP) drives the run inline and
+returns `{ status: "completed", output } | { status: "failed", error } |
+{ status: "suspended", runId, suspendedOn }`. Same durable run, same
+deployed commit — sync is a calling mode, not a workflow kind. Prefer it for
+request-path work (a button, an API endpoint); use `triggerProduction` for
+fire-and-forget.
+
+## Recipe: customers and other viewers use apps behind the host's auth
+
+The most common external-user shape: the host's employees build apps in a
+project; the host's *customers* open those apps inside the host's product,
+signed in with the host's regular auth, and can call exactly the app's
+workflows and nothing else. Nothing about users, roles, or OAuth enters
+catamorphic — the host resolves *who* and *what they are entitled to*;
+catamorphic enforces it. Full contract: ADR 0053.
+
+Vocabulary: an identity is **full** (no `scope`: a builder, whole project
+surface) or **scoped** (`scope: ArtifactRef[]`: a viewer of exactly those
+artifacts). Refs are by name, never by id:
+
+```ts
+{ kind: "app", projectId, name }        // the app's document + its active version's frozen workflow set
+{ kind: "workflow", projectId, name }   // one workflow directly (a customer-facing tool)
+```
+
+1. **Entitlement table in the host's DB** — keyed the way refs are:
+
+   ```sql
+   create table customer_app_grants (
+     customer_user_id text not null,
+     project_id       uuid not null,   -- catamorphic.projects.id
+     app_name         text not null,   -- apps/<name>
+     primary key (customer_user_id, project_id, app_name)
+   );
+   ```
+
+2. **Resolver** — the whole of the host's auth integration:
+
+   ```ts
+   app.register(catamorphicPlugin, {
+     core: catamorphic.core,
+     prefix: "/api",
+     identity: async (request) => {
+       const session = await verifySession(request);
+       if (!session) return null;
+       const base = { tenantId: HOST_ORG_ID, externalUserId: session.userId };
+       if (session.isEmployee) return base; // builder
+       const grants = await db.query(
+         "select project_id, app_name from customer_app_grants where customer_user_id = $1",
+         [session.userId],
+       );
+       return {
+         ...base,
+         scope: grants.map((g) => ({
+           kind: "app" as const,
+           projectId: g.project_id,
+           name: g.app_name,
+         })),
+       };
+     },
+   });
+   ```
+
+3. **Customer page** — plain `AppMount`, no special props:
+
+   ```tsx
+   <CatamorphicProvider apiClient={apiClient}>
+     <AppMount projectId={grant.projectId} appName={grant.appName} />
+   </CatamorphicProvider>
+   ```
+
+   The mount fetches the served guest document (an iframe navigation that
+   carries the session cookie, hence the resolver runs) and forwards the
+   guest's calls to `POST /api/projects/:id/apps/:name/calls/:workflow`.
+   The server narrows the caller to that app structurally, then
+   re-authorizes each call against the active version's frozen set.
+
+What the customer can and cannot do, without any further host code:
+
+- open an app they are granted; call its frozen workflows (sync or async);
+  poll only the runs they may see; use per-user app storage;
+- **not** read files, deploy, see secrets, open agent sessions, cancel or
+  pause runs, list other apps, or reach an app they were not granted (all a
+  uniform 403 / not-found — nothing enumerable);
+- a forged or stale request cannot widen anything: an app the resolver did
+  not grant narrows to an empty scope, a retired version cannot be named.
+
+Employees keep full identities and, while inside an app, are confined to it
+too (defence in depth against the untrusted bundle).
+
+The SDK path is the same shape:
+`catamorphic.forTenant({ tenantId }).forUser({ externalUserId, scope })`.
+
+Verify the integration with four requests (the plugin's own tests do the
+same, `packages/fastify-plugin/src/__tests__/app-routes.test.ts`):
+employee → `GET /api/projects/:id/apps` 200; granted customer →
+`POST …/apps/:name/calls/:workflow` 200 and `GET /api/projects/:id/apps`
+403; customer without a grant → app routes 403; signed-out → 401.
 
 ## Rules that keep integrations correct
 
@@ -457,7 +575,10 @@ components: `@catamorphic/registry`.
   user id is never persisted; it scopes git working copies and commit
   authorship.
 - Every public SDK method takes one keyed object parameter, including
-  identity binding: `forTenant({ tenantId }).forUser({ externalUserId })`.
+  identity binding: `forTenant({ tenantId }).forUser({ externalUserId, scope? })`.
+- The fastify plugin's `identity` resolver is required and is the only
+  identity mechanism; scope is the output of host policy, catamorphic only
+  enforces it (ADR 0053).
 - Projects are general-purpose. Never assume a project is about code or
   scaffold the workflow workspace preemptively; it appears when the first
   automation or app is wanted (ADR 0043).

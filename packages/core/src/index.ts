@@ -8,12 +8,19 @@ export {
 export type { CatamorphicCoreConfig } from "./core.js";
 export { CatamorphicCore, createCatamorphicCore } from "./core.js";
 export {
-  type AppAudience,
+  type AppRef,
+  type ArtifactRef,
   authorFor,
+  type DocumentRef,
   type ExternalUserId,
   type Identity,
+  isScoped,
+  narrowIdentity,
   SYSTEM_AUTHOR,
+  sameArtifact,
+  scopeCovers,
   type TenantId,
+  type WorkflowRef,
 } from "./identity.js";
 export {
   appScaffold,
@@ -50,12 +57,6 @@ export {
   type AgentTurnSettledEvent,
   type SyncedFileChange,
 } from "./services/agent-sessions-service.js";
-export {
-  AppAccessDeniedError,
-  assertProjectSurface,
-  assertWorkflowAllowed,
-  resolveAppAudience,
-} from "./services/app-audience.js";
 export type { AppBundleStore } from "./services/app-bundle-store.js";
 export { appBundleKey, appVersionPrefix } from "./services/app-bundle-store.js";
 export {
@@ -83,6 +84,13 @@ export {
   AppVersionNotFoundError,
   type AppVersionStatus,
 } from "./services/apps-service.js";
+export {
+  AccessDeniedError,
+  assertFullIdentity,
+  assertScopeAllowsWorkflow,
+  type ResolvedScope,
+  resolveScope,
+} from "./services/artifact-scope.js";
 export {
   type CapabilityContext,
   type CapabilityProviderRuntime,
@@ -207,6 +215,7 @@ export {
   type BatchItemStatus,
   type BatchItemStep,
   type BatchProgress,
+  type CallRunInput,
   type CancelRunInput,
   type EnrollmentConflictPolicy,
   type GetRunInput,
@@ -223,6 +232,7 @@ export {
   type ResumeRunPauseInput,
   type Run,
   type RunArtifact,
+  type RunCallOutcome,
   type RunCapabilities,
   RunCapabilityError,
   type RunDetail,
@@ -235,6 +245,7 @@ export {
   RunSignalNotFoundError,
   type RunStatus,
   type RunStep,
+  type RunSuspensionReason,
   RunsService,
   SandboxProviderNotConfiguredError,
   type StepStatus,
@@ -249,8 +260,8 @@ export {
 } from "./services/secrets-service.js";
 export {
   humanizeSkillName,
-  parseSkillFrontmatter,
   type ProjectSkill,
+  parseSkillFrontmatter,
   SKILLS_DIR,
   SkillsService,
 } from "./services/skills-service.js";

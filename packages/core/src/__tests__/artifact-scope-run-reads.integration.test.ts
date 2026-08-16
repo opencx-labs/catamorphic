@@ -7,7 +7,7 @@ import { sql } from "kysely";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { CatamorphicCore } from "../core.js";
 import type { Identity } from "../identity.js";
-import { AppAccessDeniedError } from "../services/app-audience.js";
+import { AccessDeniedError } from "../services/artifact-scope.js";
 import { RunNotFoundError } from "../services/runs-service.js";
 
 /**
@@ -19,7 +19,7 @@ import { RunNotFoundError } from "../services/runs-service.js";
 
 const connectionString = process.env.DATABASE_URL ?? "";
 const describeIf = connectionString ? describe : describe.skip;
-const schema = `catamorphic_audience_reads_${crypto.randomUUID().replaceAll("-", "")}`;
+const schema = `catamorphic_scope_reads_${crypto.randomUUID().replaceAll("-", "")}`;
 const db = createDatabase({ connectionString, schema, poolSize: 8 });
 
 const tenantId = crypto.randomUUID();
@@ -47,17 +47,17 @@ const builder: Identity = { tenantId, externalUserId: "builder" };
 const viewer: Identity = {
   tenantId,
   externalUserId: "viewer",
-  appAudience: { appId, appVersionId: versionId },
+  scope: [{ kind: "app", projectId, name: "dashboard" }],
 };
 
 let tempDirectory = "";
 let core: CatamorphicCore;
 
-describeIf("app audience run reads", () => {
+describeIf("scoped identity run reads", () => {
   beforeAll(async () => {
     await migrateToLatest({ db, schema });
     tempDirectory = await fs.mkdtemp(
-      path.join(os.tmpdir(), "catamorphic-audience-reads-"),
+      path.join(os.tmpdir(), "catamorphic-scope-reads-"),
     );
     const projectManager = new ProjectManager(
       new FsBackend(path.join(tempDirectory, "dev")),
@@ -161,7 +161,7 @@ describeIf("app audience run reads", () => {
     await fs.rm(tempDirectory, { recursive: true, force: true });
   });
 
-  it("lets an audience read a production run of its frozen set", async () => {
+  it("lets a scoped identity read a production run of its frozen set", async () => {
     const run = await core.runs.get({ identity: viewer, runId: allowedRunId });
     expect(run.id).toBe(allowedRunId);
     expect(run.workflowName).toBe("listOrders");
@@ -170,13 +170,13 @@ describeIf("app audience run reads", () => {
   it("denies reading a run of a workflow outside the frozen set", async () => {
     await expect(
       core.runs.get({ identity: viewer, runId: forbiddenRunId }),
-    ).rejects.toThrow(AppAccessDeniedError);
+    ).rejects.toThrow(AccessDeniedError);
   });
 
   it("denies reading a run in another project of the same tenant", async () => {
     await expect(
       core.runs.get({ identity: viewer, runId: otherProjectRunId }),
-    ).rejects.toThrow(AppAccessDeniedError);
+    ).rejects.toThrow(AccessDeniedError);
   });
 
   it("denies uniformly so run ids cannot be enumerated", async () => {
@@ -185,7 +185,7 @@ describeIf("app audience run reads", () => {
     const missing = crypto.randomUUID();
     await expect(
       core.runs.get({ identity: viewer, runId: missing }),
-    ).rejects.toThrow(AppAccessDeniedError);
+    ).rejects.toThrow(AccessDeniedError);
     // The builder still gets the precise error.
     await expect(
       core.runs.get({ identity: builder, runId: missing }),
@@ -216,17 +216,17 @@ describeIf("app audience run reads", () => {
         projectId,
         workflowName: "exportAllCustomerData",
       }),
-    ).rejects.toThrow(AppAccessDeniedError);
+    ).rejects.toThrow(AccessDeniedError);
   });
 
-  it("batch drill-downs stay closed to audiences", async () => {
+  it("batch drill-downs stay closed to scoped identities", async () => {
     await expect(
       core.runs.listItems({
         identity: viewer,
         runId: allowedRunId,
         workflowStepAttemptId: crypto.randomUUID(),
       }),
-    ).rejects.toThrow(AppAccessDeniedError);
+    ).rejects.toThrow(AccessDeniedError);
     await expect(
       core.runs.listItemSteps({
         identity: viewer,
@@ -234,18 +234,18 @@ describeIf("app audience run reads", () => {
         workflowStepAttemptId: crypto.randomUUID(),
         itemId: crypto.randomUUID(),
       }),
-    ).rejects.toThrow(AppAccessDeniedError);
+    ).rejects.toThrow(AccessDeniedError);
   });
 
-  it("run controls stay closed to audiences", async () => {
+  it("run controls stay closed to scoped identities", async () => {
     await expect(
       core.runs.cancel({ identity: viewer, runId: allowedRunId }),
-    ).rejects.toThrow(AppAccessDeniedError);
+    ).rejects.toThrow(AccessDeniedError);
     await expect(
       core.runs.pause({ identity: viewer, runId: allowedRunId }),
-    ).rejects.toThrow(AppAccessDeniedError);
+    ).rejects.toThrow(AccessDeniedError);
     await expect(
       core.runs.resume({ identity: viewer, runId: allowedRunId }),
-    ).rejects.toThrow(AppAccessDeniedError);
+    ).rejects.toThrow(AccessDeniedError);
   });
 });

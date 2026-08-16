@@ -1929,6 +1929,125 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/projects/{projectId}/workflows/{name}/calls": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    projectId: string;
+                    name: string;
+                };
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": {
+                        input?: components["schemas"]["JsonValueInput"];
+                        correlationKey?: string;
+                        /** @enum {string} */
+                        onConflict?: "ignore" | "error" | "restart";
+                        budgetMs?: number;
+                    };
+                };
+            };
+            responses: {
+                /** @description Default Response */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            /** @enum {string} */
+                            status: "completed";
+                            runId: string;
+                            output: unknown;
+                        } | {
+                            /** @enum {string} */
+                            status: "failed";
+                            runId: string;
+                            error: string;
+                        } | {
+                            /** @enum {string} */
+                            status: "suspended";
+                            runId: string;
+                            /** @enum {string} */
+                            suspendedOn: "pause" | "child" | "paused" | "backoff" | "batch" | "budget" | "queue";
+                        };
+                    };
+                };
+                /** @description Default Response */
+                400: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                409: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                429: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                503: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                        };
+                    };
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/projects/{projectId}/workflows/{name}/signals": {
         parameters: {
             query?: never;
@@ -4880,6 +4999,508 @@ export interface paths {
                 };
             };
         };
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/projects/{projectId}/apps/{appName}/calls/{workflowName}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: {
+            parameters: {
+                query?: {
+                    channel?: "published" | "dev";
+                };
+                header?: never;
+                path: {
+                    projectId: string;
+                    appName: string;
+                    workflowName: string;
+                };
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": {
+                        input?: components["schemas"]["JsonValueInput"];
+                        correlationKey?: string;
+                        /** @enum {string} */
+                        onConflict?: "ignore" | "error" | "restart";
+                        budgetMs?: number;
+                    };
+                };
+            };
+            responses: {
+                /** @description Default Response */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            /** @enum {string} */
+                            status: "completed";
+                            runId: string;
+                            output: unknown;
+                        } | {
+                            /** @enum {string} */
+                            status: "failed";
+                            runId: string;
+                            error: string;
+                        } | {
+                            /** @enum {string} */
+                            status: "suspended";
+                            runId: string;
+                            /** @enum {string} */
+                            suspendedOn: "pause" | "child" | "paused" | "backoff" | "batch" | "budget" | "queue";
+                        };
+                    };
+                };
+                /** @description Default Response */
+                400: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                409: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                429: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                503: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                        };
+                    };
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/projects/{projectId}/apps/{appName}/runs/{workflowName}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: {
+            parameters: {
+                query?: {
+                    channel?: "published" | "dev";
+                };
+                header?: never;
+                path: {
+                    projectId: string;
+                    appName: string;
+                    workflowName: string;
+                };
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": {
+                        input?: components["schemas"]["JsonValueInput"];
+                        correlationKey?: string;
+                        /** @enum {string} */
+                        onConflict?: "ignore" | "error" | "restart";
+                    };
+                };
+            };
+            responses: {
+                /** @description Default Response */
+                201: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            /** Format: uuid */
+                            id: string;
+                            /** Format: uuid */
+                            projectId: string;
+                            workflowName: string;
+                            correlationKey: string | null;
+                            capabilities: {
+                                cancel: boolean;
+                                pauseProcessing: boolean;
+                                resumeProcessing: boolean;
+                                submitInput: boolean;
+                                inspectItems: boolean;
+                            };
+                            /** @enum {string} */
+                            status: "pending" | "running" | "waiting" | "paused" | "canceling" | "completed" | "failed" | "canceled";
+                            /** @enum {string} */
+                            phase: "execute" | "boundary" | "source" | "process" | "sink" | "pause" | "child";
+                            currentStepIndex: number | null;
+                            activePause: {
+                                /** Format: uuid */
+                                id: string;
+                                /** @enum {string} */
+                                status: "open" | "resumed" | "timed_out" | "canceled";
+                                state: unknown;
+                                /** Format: date-time */
+                                timeoutAt: string | null;
+                                /** Format: date-time */
+                                createdAt: string;
+                                /** Format: date-time */
+                                resolvedAt: string | null;
+                            } | null;
+                            batchScopes: {
+                                /** Format: uuid */
+                                workflowStepAttemptId: string;
+                                stepIndex: number;
+                                nodeId: string;
+                                attempt: number;
+                                /** @enum {string} */
+                                status: "pending" | "running" | "waiting" | "completed" | "failed" | "canceled";
+                                estimated: number | null;
+                                discovered: number;
+                                succeeded: number;
+                                failed: number;
+                                skipped: number;
+                                sinkCompletedChunks: number;
+                                sinkTotalChunks: number;
+                                artifact: unknown;
+                            }[];
+                            provenance: {
+                                commitSha?: string;
+                            };
+                            artifact?: {
+                                /** Format: uuid */
+                                deploymentArtifactId: string;
+                            };
+                            initiatedBy: string | null;
+                            input: unknown;
+                            result: unknown;
+                            error: string | null;
+                            /** Format: uuid */
+                            parentRunId: string | null;
+                            /** Format: date-time */
+                            createdAt: string;
+                            /** Format: date-time */
+                            updatedAt: string;
+                            /** Format: date-time */
+                            startedAt: string | null;
+                            /** Format: date-time */
+                            completedAt: string | null;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                400: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                409: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                429: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                503: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                        };
+                    };
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/projects/{projectId}/apps/{appName}/runs/{runId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: {
+            parameters: {
+                query?: {
+                    channel?: "published" | "dev";
+                };
+                header?: never;
+                path: {
+                    projectId: string;
+                    appName: string;
+                    runId: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Default Response */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            /** Format: uuid */
+                            id: string;
+                            /** Format: uuid */
+                            projectId: string;
+                            workflowName: string;
+                            correlationKey: string | null;
+                            capabilities: {
+                                cancel: boolean;
+                                pauseProcessing: boolean;
+                                resumeProcessing: boolean;
+                                submitInput: boolean;
+                                inspectItems: boolean;
+                            };
+                            /** @enum {string} */
+                            status: "pending" | "running" | "waiting" | "paused" | "canceling" | "completed" | "failed" | "canceled";
+                            /** @enum {string} */
+                            phase: "execute" | "boundary" | "source" | "process" | "sink" | "pause" | "child";
+                            currentStepIndex: number | null;
+                            activePause: {
+                                /** Format: uuid */
+                                id: string;
+                                /** @enum {string} */
+                                status: "open" | "resumed" | "timed_out" | "canceled";
+                                state: unknown;
+                                /** Format: date-time */
+                                timeoutAt: string | null;
+                                /** Format: date-time */
+                                createdAt: string;
+                                /** Format: date-time */
+                                resolvedAt: string | null;
+                            } | null;
+                            batchScopes: {
+                                /** Format: uuid */
+                                workflowStepAttemptId: string;
+                                stepIndex: number;
+                                nodeId: string;
+                                attempt: number;
+                                /** @enum {string} */
+                                status: "pending" | "running" | "waiting" | "completed" | "failed" | "canceled";
+                                estimated: number | null;
+                                discovered: number;
+                                succeeded: number;
+                                failed: number;
+                                skipped: number;
+                                sinkCompletedChunks: number;
+                                sinkTotalChunks: number;
+                                artifact: unknown;
+                            }[];
+                            provenance: {
+                                commitSha?: string;
+                            };
+                            artifact?: {
+                                /** Format: uuid */
+                                deploymentArtifactId: string;
+                            };
+                            initiatedBy: string | null;
+                            input: unknown;
+                            result: unknown;
+                            error: string | null;
+                            /** Format: uuid */
+                            parentRunId: string | null;
+                            /** Format: date-time */
+                            createdAt: string;
+                            /** Format: date-time */
+                            updatedAt: string;
+                            /** Format: date-time */
+                            startedAt: string | null;
+                            /** Format: date-time */
+                            completedAt: string | null;
+                            steps: {
+                                /** Format: uuid */
+                                id: string;
+                                /** Format: uuid */
+                                runId: string;
+                                nodeId: string;
+                                occurrence: number;
+                                attempt: number;
+                                name: string;
+                                /** @enum {string} */
+                                status: "pending" | "running" | "completed" | "failed" | "skipped";
+                                input: unknown;
+                                output: unknown;
+                                error: string | null;
+                                /** Format: date-time */
+                                startedAt: string | null;
+                                /** Format: date-time */
+                                completedAt: string | null;
+                            }[];
+                            workflowStepAttempts: {
+                                /** Format: uuid */
+                                id: string;
+                                /** Format: uuid */
+                                runId: string;
+                                stepIndex: number;
+                                nodeId: string;
+                                /** @enum {string} */
+                                executor: "boundary" | "batch";
+                                attempt: number;
+                                /** @enum {string} */
+                                status: "pending" | "running" | "waiting" | "completed" | "failed" | "canceled";
+                                input: unknown;
+                                output: unknown;
+                                error: string | null;
+                                /** Format: date-time */
+                                startedAt: string | null;
+                                /** Format: date-time */
+                                completedAt: string | null;
+                            }[];
+                        };
+                    };
+                };
+                /** @description Default Response */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                503: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                        };
+                    };
+                };
+            };
+        };
+        put?: never;
         post?: never;
         delete?: never;
         options?: never;

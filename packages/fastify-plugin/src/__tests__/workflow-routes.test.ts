@@ -1,13 +1,13 @@
 import type { CatamorphicCore } from "@catamorphic/core";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { createApp } from "../app.js";
+import { createTestApp } from "./test-app.js";
 
 const PROJECT_ID = "a1b2c3d4-e5f6-4890-abcd-ef1234567890";
 const headers = {
   "x-catamorphic-tenant-id": "tenant-1",
   "x-external-user-id": "user-1",
 };
-const apps: ReturnType<typeof createApp>[] = [];
+const apps: ReturnType<typeof createTestApp>[] = [];
 
 afterEach(async () => {
   await Promise.all(apps.splice(0).map((app) => app.close()));
@@ -39,7 +39,7 @@ describe("workflow route contracts", () => {
       },
     ]);
     const core = { workflows: { list } } as unknown as CatamorphicCore;
-    const app = createApp({ core });
+    const app = createTestApp({ core });
     apps.push(app);
 
     const response = await app.inject({
@@ -109,7 +109,7 @@ describe("workflow route contracts", () => {
       allFiles: { "src/index.ts": "export const example = true;" },
     }));
     const core = { workflows: { get } } as unknown as CatamorphicCore;
-    const app = createApp({ core });
+    const app = createTestApp({ core });
     apps.push(app);
 
     const response = await app.inject({
@@ -149,7 +149,7 @@ describe("workflow route contracts", () => {
       sourceCode: "export const example = true;",
     }));
     const core = { workflows: { get } } as unknown as CatamorphicCore;
-    const app = createApp({ core });
+    const app = createTestApp({ core });
     apps.push(app);
 
     const response = await app.inject({

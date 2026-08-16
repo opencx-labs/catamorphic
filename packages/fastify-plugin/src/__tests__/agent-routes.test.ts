@@ -1,11 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { createApp } from "../app.js";
+import { createTestApp } from "./test-app.js";
 
 const PROJECT_ID = "a1b2c3d4-e5f6-4890-abcd-ef1234567890";
 const SESSION_ID = "b2c3d4e5-f6a7-4890-bcde-a12345678901";
 
 async function buildApp() {
-  const app = createApp();
+  const app = createTestApp();
   await app.ready();
   return app;
 }

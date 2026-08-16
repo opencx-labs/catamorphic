@@ -2262,3 +2262,25 @@ Patterned on what best-in-class palettes converged on (Chrome omnibox
   exact save, and close-then-Cmd+Shift+T (which once crashed the renderer:
   tiptap's `view` getter THROWS post-destroy, so effect cleanups must
   capture `editor.view.dom` at setup, never read it at teardown).
+
+### 2026-08-17 — Identity scope, structural app narrowing, sync calls (ADR 0053)
+- The framework's identity grew one general concept instead of an app
+  special case: `Identity.scope` is a list of artifact refs by name
+  (`app`, `workflow`, reserved `document`); absent = builder, present =
+  viewer of exactly those. The desktop is the single-user host: its whole
+  identity story is one resolver line in `boot.ts` (`identity: () =>
+  DESKTOP_IDENTITY`) — the header-defaulting `onRequest` hack is gone,
+  because the fastify plugin now has exactly one identity mechanism (a
+  required host resolver) and no defaults.
+- Narrowing is structural, not a client claim: `AppMount` talks to the
+  app's own routes (`/apps/:name/calls|runs`), and the server confines
+  whoever arrives to that app. Inside an app, even the desktop's builder
+  identity sees only what a viewer would; the dev channel resolves to the
+  builder's own latest build.
+- App `.call()` is synchronous end to end (server drives the run inline;
+  polls only when the workflow suspends), so app UIs settle in one round
+  trip. Sync is a calling mode, not a workflow kind — one workflow model.
+- Motivating case recorded in TODO.md: customers using per-customer apps
+  behind the host's own auth; publications (documents with audiences),
+  caller identity in runs, and an authorize seam are parked there and will
+  speak this vocabulary.

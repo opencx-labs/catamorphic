@@ -148,7 +148,7 @@ describe("AppMount", () => {
     });
   });
 
-  it("forwards guest calls with the app audience headers", async () => {
+  it("forwards guest starts to the app's own run route, no headers", async () => {
     const posts: { url: string; init: unknown }[] = [];
     const apiClient = makeApiClient({
       onPost: (url, init) => {
@@ -175,9 +175,110 @@ describe("AppMount", () => {
     await waitFor(() => {
       expect(posts).toHaveLength(1);
     });
-    const init = posts[0]?.init as { headers?: Record<string, string> };
-    expect(init.headers?.["X-Catamorphic-App-Id"]).toBe(APP_ID);
-    expect(init.headers?.["X-Catamorphic-App-Version-Id"]).toBe(VERSION_ID);
+    // The URL names the app: narrowing is structural on the server, so the
+    // mount carries no audience claim of its own.
+    expect(posts[0]?.url).toBe(
+      "/api/projects/{projectId}/apps/{appName}/runs/{workflowName}",
+    );
+    const init = posts[0]?.init as {
+      headers?: Record<string, string>;
+      params: { path: Record<string, string> };
+    };
+    expect(init.headers).toBeUndefined();
+    expect(init.params.path).toEqual({
+      projectId: PROJECT_ID,
+      appName: "ops-dashboard",
+      workflowName: "listOrders",
+    });
+  });
+
+  it("answers an invoke from the synchronous call route", async () => {
+    const posts: { url: string; init: unknown }[] = [];
+    const apiClient = makeApiClient({
+      onPost: (url, init) => {
+        posts.push({ url, init });
+        return {
+          data: { status: "completed", runId: "run-1", output: { n: 3 } },
+          error: null,
+        };
+      },
+    });
+    const { frame } = await mountReadyFrame(apiClient);
+    const replies: unknown[] = [];
+    vi.spyOn(frame.contentWindow, "postMessage").mockImplementation(
+      (data: unknown) => {
+        replies.push(data);
+      },
+    );
+
+    window.dispatchEvent(
+      new MessageEvent("message", {
+        source: frame.contentWindow,
+        data: {
+          catamorphicApp: APP_PROTOCOL_VERSION,
+          kind: "call",
+          callId: "c1",
+          workflowName: "listOrders",
+          mode: "invoke",
+          input: {},
+        },
+      }),
+    );
+
+    await waitFor(() => {
+      expect(replies).toHaveLength(1);
+    });
+    expect(posts[0]?.url).toBe(
+      "/api/projects/{projectId}/apps/{appName}/calls/{workflowName}",
+    );
+    // No poll happened: the sync call settled and the output went straight
+    // back to the guest.
+    expect(apiClient.GET).toHaveBeenCalledTimes(1); // the view-state read
+    expect(replies[0]).toMatchObject({
+      kind: "result",
+      callId: "c1",
+      ok: true,
+      value: { n: 3 },
+    });
+  });
+
+  it("polls the app run route when a call suspends", async () => {
+    const apiClient = makeApiClient({
+      onPost: () => ({
+        data: { status: "suspended", runId: "run-1", suspendedOn: "budget" },
+        error: null,
+      }),
+    });
+    const { frame } = await mountReadyFrame(apiClient);
+    const replies: unknown[] = [];
+    vi.spyOn(frame.contentWindow, "postMessage").mockImplementation(
+      (data: unknown) => {
+        replies.push(data);
+      },
+    );
+
+    window.dispatchEvent(
+      new MessageEvent("message", {
+        source: frame.contentWindow,
+        data: {
+          catamorphicApp: APP_PROTOCOL_VERSION,
+          kind: "call",
+          callId: "c1",
+          workflowName: "listOrders",
+          mode: "invoke",
+          input: {},
+        },
+      }),
+    );
+
+    await waitFor(() => {
+      expect(replies).toHaveLength(1);
+    });
+    const gets = apiClient.GET.mock.calls.map((call) => call[0]);
+    expect(gets).toContain(
+      "/api/projects/{projectId}/apps/{appName}/runs/{runId}",
+    );
+    expect(replies[0]).toMatchObject({ ok: true, value: { ok: true } });
   });
 
   it("rejects oversized guest input before it reaches the network", async () => {

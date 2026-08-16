@@ -353,12 +353,15 @@ export async function startEmbeddedServer(
     origin: true,
     methods: ["GET", "HEAD", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
   });
-  app.addHook("onRequest", async (request) => {
-    request.headers["x-catamorphic-tenant-id"] ??= DESKTOP_TENANT_ID;
-    request.headers["x-external-user-id"] ??= DESKTOP_USER_ID;
-  });
+  // The desktop is a single-user host: every request is the one local user,
+  // a builder with the full project surface. This line is the whole of the
+  // desktop's identity story — there is no default inside the plugin.
   await app.register(catamorphicPlugin, {
     core: catamorphic.core,
+    identity: () => ({
+      tenantId: DESKTOP_TENANT_ID,
+      externalUserId: DESKTOP_USER_ID,
+    }),
     prefix: "/api",
   });
 

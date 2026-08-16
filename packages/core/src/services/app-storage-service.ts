@@ -1,6 +1,6 @@
 import type { DB } from "@catamorphic/db";
 import type { Kysely } from "kysely";
-import type { Identity } from "../identity.js";
+import { type Identity, scopeCovers } from "../identity.js";
 import { AppNotFoundError } from "./apps-service.js";
 
 /**
@@ -31,6 +31,7 @@ export class AppStorageSnapshotTooLargeError extends Error {
  * channel. Isolation is structural: rows are keyed by the caller's own
  * `externalUserId`, and the app row is resolved through the caller's
  * tenant+project, so no identity can read or write anyone else's snapshot.
+ * A scoped identity additionally has to cover the app (ADR 0053).
  */
 export class AppStorageService {
   constructor(private readonly db: Kysely<DB>) {}
@@ -84,6 +85,12 @@ export class AppStorageService {
   }
 
   private appRow(identity: Identity, projectId: string, appName: string) {
+    if (
+      identity.scope !== undefined &&
+      !scopeCovers(identity.scope, { kind: "app", projectId, name: appName })
+    ) {
+      return Promise.resolve(undefined);
+    }
     return this.db
       .selectFrom("apps")
       .innerJoin("projects", "projects.id", "apps.project_id")

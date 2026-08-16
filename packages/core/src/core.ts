@@ -384,8 +384,6 @@ export class CatamorphicCore {
       mcpToolKinds: this.mcpToolKinds,
       projectManager: this.projectManager,
       runs: this.runs,
-      executionJobs,
-      executionWorker,
     });
 
     this.skills = new SkillsService(this.db, this.projectManager, {

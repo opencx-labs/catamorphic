@@ -1,12 +1,12 @@
 import { afterEach, describe, expect, it } from "vitest";
-import { createApp } from "../app.js";
+import { createTestApp } from "./test-app.js";
 
 const PROJECT_ID = "a1b2c3d4-e5f6-4890-abcd-ef1234567890";
 const RUN_ID = "b2c3d4e5-f6a7-4890-bcde-a12345678901";
 const ATTEMPT_ID = "c3d4e5f6-a7b8-4890-acde-123456789012";
 const ITEM_ID = "d4e5f6a7-b8c9-4890-8efa-234567890123";
 const PAUSE_ID = "e5f6a7b8-c9d0-4890-9fab-345678901234";
-const apps: ReturnType<typeof createApp>[] = [];
+const apps: ReturnType<typeof createTestApp>[] = [];
 
 afterEach(async () => {
   await Promise.all(apps.splice(0).map((app) => app.close()));
@@ -45,7 +45,7 @@ describe("run route contracts", () => {
     url: string;
     payload?: object;
   }[])("registers $method $url", async ({ method, url, payload }) => {
-    const app = createApp();
+    const app = createTestApp();
     apps.push(app);
     const response = await app.inject({ method, url, payload });
     expect(response.statusCode).toBe(503);
@@ -60,14 +60,14 @@ describe("run route contracts", () => {
     ["POST", `/api/runs/${RUN_ID}/report`],
     ["POST", "/api/playground/run"],
   ] as const)("does not register legacy %s %s", async (method, url) => {
-    const app = createApp();
+    const app = createTestApp();
     apps.push(app);
     const response = await app.inject({ method, url, payload: {} });
     expect(response.statusCode).toBe(404);
   });
 
   it("publishes only canonical unified run paths", async () => {
-    const app = createApp();
+    const app = createTestApp();
     apps.push(app);
     await app.ready();
     const paths = app.swagger().paths ?? {};
@@ -101,7 +101,7 @@ describe("run route contracts", () => {
   });
 
   it("publishes capabilities without workflow kind or execution descriptors", async () => {
-    const app = createApp();
+    const app = createTestApp();
     apps.push(app);
     await app.ready();
     const paths = app.swagger().paths ?? {};
@@ -122,7 +122,7 @@ describe("run route contracts", () => {
   });
 
   it("publishes ordered Batch processing scopes instead of singular progress", async () => {
-    const app = createApp();
+    const app = createTestApp();
     apps.push(app);
     await app.ready();
     const runOperations = JSON.stringify([
@@ -139,7 +139,7 @@ describe("run route contracts", () => {
   });
 
   it("publishes recursive JSON-compatible run inputs", async () => {
-    const app = createApp();
+    const app = createTestApp();
     apps.push(app);
     await app.ready();
     const spec = app.swagger();

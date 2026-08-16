@@ -20,13 +20,10 @@ import { QueryClient } from "@tanstack/react-query";
 const queryClient = new QueryClient();
 
 const apiClient = createApiClient({
-  baseUrl: "https://catamorphic.example.com",
-  fetch: async (input, init) => {
-    const headers = new Headers(init?.headers);
-    headers.set("X-Catamorphic-Tenant-Id", currentOrgId);
-    headers.set("X-External-User-Id", currentUserId);
-    return fetch(input, { ...init, headers });
-  },
+  // Your own API origin: the session cookie rides along and the
+  // fastify-plugin's `identity` resolver turns it into a catamorphic identity.
+  baseUrl: "https://app.example.com",
+  fetch: (input, init) => fetch(input, { ...init, credentials: "include" }),
 });
 
 export function Providers({ children }: { children: React.ReactNode }) {
