@@ -26,7 +26,12 @@ import type {
   StartSessionOpts,
   TurnOptions,
 } from "@catamorphic/sandbox";
-import { buildPluginsPreamble, stagePluginDocs } from "@catamorphic/sandbox";
+import {
+  buildPluginsPreamble,
+  isMediaAttachment,
+  renderTextAttachments,
+  stagePluginDocs,
+} from "@catamorphic/sandbox";
 import type { ZodRawShape } from "zod";
 
 export interface ClaudeCodeAgentOpts {
@@ -848,6 +853,10 @@ async function withAttachments(
   providerSessionId: string,
 ): Promise<string> {
   if (!attachments || attachments.length === 0) return message;
+  // Text context goes straight into the prompt; only media needs temp files.
+  const withText = `${message}${renderTextAttachments(attachments)}`;
+  const media = attachments.filter(isMediaAttachment);
+  if (media.length === 0) return withText;
   const dir = path.join(
     os.tmpdir(),
     "catamorphic-attachments",
@@ -855,7 +864,7 @@ async function withAttachments(
   );
   await fs.mkdir(dir, { recursive: true });
   const lines: string[] = [];
-  for (const attachment of attachments) {
+  for (const attachment of media) {
     // Names come from the user's clipboard/files — keep them readable but
     // path-safe, and unique enough not to clobber a same-named sibling.
     const safeName = `${crypto.randomUUID().slice(0, 8)}-${attachment.name.replace(/[^\w.-]+/g, "_")}`;
@@ -863,7 +872,7 @@ async function withAttachments(
     await fs.writeFile(filePath, Buffer.from(attachment.dataBase64, "base64"));
     lines.push(`- ${filePath} (${attachment.mediaType})`);
   }
-  return `${message}\n\n[The user attached ${attachments.length === 1 ? "a file" : "files"} with this message — use the Read tool to view:\n${lines.join("\n")}]`;
+  return `${withText}\n\n[The user attached ${media.length === 1 ? "a file" : "files"} with this message — use the Read tool to view:\n${lines.join("\n")}]`;
 }
 
 /**

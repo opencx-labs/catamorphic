@@ -1,0 +1,584 @@
+/*
+ * Markdown editor styles. Everything is driven by the design tokens
+ * (styles.css), so light theme comes from the [data-theme="light"] token
+ * flip — the one exception (syntax "type" amber) is overridden explicitly.
+ * Loaded with the lazy markdown chunk, not upfront.
+ */
+
+.cat-mdedit-pane {
+  position: relative;
+  display: flex;
+  min-height: 0;
+  flex: 1;
+  flex-direction: column;
+  background: var(--color-bg);
+}
+
+.cat-mdedit-scroll {
+  min-height: 0;
+  flex: 1;
+  overflow-y: auto;
+  /* Reserve the scrollbar's width on both edges at all times, so the
+     centered column cannot shift when the scrollbar appears/disappears. */
+  scrollbar-gutter: stable both-edges;
+}
+
+/* Mount: positioned ancestor for every overlay (drag handle wrapper, bubble
+   menu, row grip/indicator/tint) so they scroll with the document. */
+.cat-mdedit {
+  position: relative;
+  min-height: 100%;
+  padding: 32px 0 120px;
+}
+
+.cat-mdedit .ProseMirror,
+.cat-mdedit .ProseMirror:focus-visible {
+  /* The caret is the focus indicator — the app's global :focus-visible
+     ring would frame the whole document. */
+  outline: none;
+  /* 720px text measure + 80px side aprons: the aprons keep drag coordinates
+     inside the ProseMirror box, so the drop indicator survives straying
+     left/right of the text while dragging. */
+  max-width: 880px;
+  padding: 0 80px;
+  margin: 0 auto;
+  font-size: 14px;
+  line-height: 1.7;
+  color: var(--color-fg);
+  caret-color: var(--color-accent);
+}
+
+.cat-mdedit .ProseMirror ::selection {
+  background: color-mix(in srgb, var(--color-accent) 22%, transparent);
+}
+
+/* Content is never a drag source — dragging starts only from the handle
+   (paired with the dragstart guard in editorProps). */
+.cat-mdedit .ProseMirror,
+.cat-mdedit .ProseMirror * {
+  -webkit-user-drag: none;
+}
+
+/* --- Markdown element treatment: the .cat-markdown family, at document
+       scale — h1 = 20px page title, h2 = 16px panel title, h3 = 14px. --- */
+
+.cat-mdedit .ProseMirror > *:first-child {
+  margin-top: 0;
+}
+.cat-mdedit .ProseMirror p,
+.cat-mdedit .ProseMirror ul,
+.cat-mdedit .ProseMirror ol,
+.cat-mdedit .ProseMirror pre,
+.cat-mdedit .ProseMirror blockquote,
+.cat-mdedit .ProseMirror table {
+  margin: 0.5em 0;
+}
+.cat-mdedit .ProseMirror h1,
+.cat-mdedit .ProseMirror h2,
+.cat-mdedit .ProseMirror h3,
+.cat-mdedit .ProseMirror h4 {
+  margin: 1em 0 0.35em;
+  font-weight: 600;
+  color: var(--color-fg);
+  line-height: 1.35;
+}
+.cat-mdedit .ProseMirror h1 {
+  font-size: 20px;
+}
+.cat-mdedit .ProseMirror h2 {
+  font-size: 16px;
+}
+.cat-mdedit .ProseMirror h3,
+.cat-mdedit .ProseMirror h4 {
+  font-size: 14px;
+}
+
+/* Lists: indent lives on the ITEM, not the list, so the marker area is part
+   of the item's own box — hovering a bullet/number targets that item and the
+   drag handle appears. Native outside-markers anchor badly under this
+   layout, so markers are custom-drawn snug against the text. */
+.cat-mdedit .ProseMirror ul:not([data-type="taskList"]),
+.cat-mdedit .ProseMirror ol {
+  list-style: none;
+  padding-left: 0;
+}
+.cat-mdedit .ProseMirror ul:not([data-type="taskList"]) > li {
+  position: relative;
+  padding-left: 1.4em;
+}
+.cat-mdedit .ProseMirror ul:not([data-type="taskList"]) > li::before {
+  content: "";
+  position: absolute;
+  left: calc(1.4em - 13px);
+  top: 0.72em;
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: currentColor;
+}
+/* nested bullets: hollow, one level of visual depth */
+.cat-mdedit .ProseMirror ul:not([data-type="taskList"]) ul > li::before {
+  background: transparent;
+  border: 1px solid currentColor;
+}
+.cat-mdedit .ProseMirror ol {
+  counter-reset: cat-mdedit-ol;
+}
+.cat-mdedit .ProseMirror ol > li {
+  position: relative;
+  padding-left: 1.6em;
+  counter-increment: cat-mdedit-ol;
+}
+.cat-mdedit .ProseMirror ol > li::before {
+  content: counter(cat-mdedit-ol) ".";
+  position: absolute;
+  left: 0;
+  width: calc(1.6em - 7px);
+  text-align: right;
+}
+.cat-mdedit .ProseMirror li {
+  margin: 0.15em 0;
+}
+
+.cat-mdedit .ProseMirror code {
+  font-family: var(--font-mono);
+  font-size: 0.9em;
+  background: var(--color-bg-inset);
+  border: 1px solid var(--color-border);
+  border-radius: 4px;
+  padding: 0.1em 0.35em;
+}
+.cat-mdedit .ProseMirror pre {
+  background: var(--color-bg-inset);
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+  padding: 10px 12px;
+  overflow-x: auto;
+}
+.cat-mdedit .ProseMirror pre code {
+  background: none;
+  border: none;
+  padding: 0;
+  font-size: 0.85em;
+  line-height: 1.55;
+}
+
+.cat-mdedit .ProseMirror blockquote {
+  border-left: 2px solid var(--color-border-strong);
+  padding-left: 0.8em;
+  color: var(--color-fg-muted);
+}
+
+.cat-mdedit .ProseMirror a {
+  color: var(--color-accent);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  cursor: pointer;
+}
+
+.cat-mdedit .ProseMirror hr {
+  border: none;
+  border-top: 1px solid var(--color-border);
+  margin: 0.75em 0;
+}
+
+/* Tables: rounded raised card with hairline internal dividers. */
+.cat-mdedit .ProseMirror table {
+  border-collapse: separate;
+  border-spacing: 0;
+  width: 100%;
+  margin: 0.75em 0;
+  font-size: 0.95em;
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+  overflow: hidden;
+  background: var(--color-bg-raised);
+}
+.cat-mdedit .ProseMirror th,
+.cat-mdedit .ProseMirror td {
+  border-right: 1px solid var(--color-border);
+  border-bottom: 1px solid var(--color-border);
+  padding: 7px 14px;
+  text-align: left;
+  min-width: 80px;
+}
+.cat-mdedit .ProseMirror th:last-child,
+.cat-mdedit .ProseMirror td:last-child {
+  border-right: none;
+}
+.cat-mdedit .ProseMirror tr:last-child td {
+  border-bottom: none;
+}
+.cat-mdedit .ProseMirror th {
+  background: var(--color-bg-overlay);
+  font-weight: 600;
+  font-size: 12px;
+  color: var(--color-fg-muted);
+  letter-spacing: 0.01em;
+}
+.cat-mdedit .ProseMirror tbody tr {
+  transition: background 150ms var(--ease-standard);
+}
+.cat-mdedit .ProseMirror tbody tr:hover {
+  background: color-mix(in srgb, var(--color-fg) 3%, transparent);
+}
+.cat-mdedit .ProseMirror th p,
+.cat-mdedit .ProseMirror td p {
+  margin: 0;
+}
+.cat-mdedit .ProseMirror .selectedCell {
+  background: color-mix(in srgb, var(--color-accent) 10%, transparent);
+}
+
+/* Task lists: custom checkbox (native unchecked boxes paint white), the
+   label exactly one text line tall so the box rides the first line's
+   vertical center — no magic nudges. */
+.cat-mdedit .ProseMirror ul[data-type="taskList"] {
+  list-style: none;
+  padding-left: 0.2em;
+}
+.cat-mdedit .ProseMirror ul[data-type="taskList"] li {
+  display: flex;
+  gap: 10px;
+  align-items: flex-start;
+  margin: 0.25em 0;
+}
+.cat-mdedit .ProseMirror ul[data-type="taskList"] li > label {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  height: 1.7em;
+}
+.cat-mdedit .ProseMirror ul[data-type="taskList"] li > div {
+  flex: 1;
+}
+.cat-mdedit .ProseMirror ul[data-type="taskList"] p {
+  margin: 0;
+}
+.cat-mdedit
+  .ProseMirror
+  ul[data-type="taskList"]
+  li[data-checked="true"]
+  > div {
+  color: var(--color-fg-muted);
+  text-decoration: line-through;
+  text-decoration-color: var(--color-fg-faint);
+}
+.cat-mdedit .ProseMirror input[type="checkbox"] {
+  appearance: none;
+  width: 14px;
+  height: 14px;
+  border: 1px solid var(--color-border-strong);
+  border-radius: 4px;
+  background: var(--color-bg-inset);
+  margin: 0;
+  cursor: pointer;
+  display: inline-grid;
+  place-content: center;
+  transition:
+    background 150ms var(--ease-standard),
+    border-color 150ms var(--ease-standard);
+}
+.cat-mdedit .ProseMirror input[type="checkbox"]:hover {
+  border-color: var(--color-fg-faint);
+}
+.cat-mdedit .ProseMirror input[type="checkbox"]:checked {
+  background: var(--color-accent);
+  border-color: var(--color-accent);
+}
+.cat-mdedit .ProseMirror input[type="checkbox"]:checked::before {
+  content: "";
+  width: 8px;
+  height: 8px;
+  background: var(--color-accent-fg);
+  clip-path: polygon(14% 44%, 0 65%, 50% 100%, 100% 16%, 80% 0%, 43% 62%);
+}
+
+/* --- Syntax highlighting on the status-token palette — low chroma so code
+       reads calmly on the inset well. Tokens flip with the theme; the one
+       non-token color (types, amber) gets an explicit light override. --- */
+.cat-mdedit {
+  --cat-mdedit-type: #c4a86d;
+}
+[data-theme="light"] .cat-mdedit {
+  --cat-mdedit-type: #8a6d2f;
+}
+.cat-mdedit .hljs-comment,
+.cat-mdedit .hljs-quote {
+  color: var(--color-fg-faint);
+  font-style: italic;
+}
+.cat-mdedit .hljs-keyword,
+.cat-mdedit .hljs-selector-tag,
+.cat-mdedit .hljs-tag {
+  color: var(--color-info);
+}
+.cat-mdedit .hljs-string,
+.cat-mdedit .hljs-regexp,
+.cat-mdedit .hljs-addition {
+  color: var(--color-success);
+}
+.cat-mdedit .hljs-number,
+.cat-mdedit .hljs-literal,
+.cat-mdedit .hljs-deletion {
+  color: var(--color-danger);
+}
+.cat-mdedit .hljs-title,
+.cat-mdedit .hljs-title.function_ {
+  color: var(--color-fg);
+  font-weight: 500;
+}
+.cat-mdedit .hljs-type,
+.cat-mdedit .hljs-built_in,
+.cat-mdedit .hljs-title.class_ {
+  color: var(--cat-mdedit-type);
+}
+.cat-mdedit .hljs-attr,
+.cat-mdedit .hljs-attribute,
+.cat-mdedit .hljs-variable,
+.cat-mdedit .hljs-params,
+.cat-mdedit .hljs-symbol,
+.cat-mdedit .hljs-bullet,
+.cat-mdedit .hljs-meta {
+  color: var(--color-fg-muted);
+}
+
+/* --- Frontmatter ("Properties"): preserved byte-exact, edited as text --- */
+.cat-mdedit-frontmatter {
+  max-width: 720px;
+  margin: 0 auto 8px;
+}
+.cat-mdedit-frontmatter > button {
+  appearance: none;
+  border: none;
+  background: none;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 4px;
+  border-radius: 4px;
+  font-family: var(--font-sans);
+  font-size: 11px;
+  color: var(--color-fg-faint);
+  cursor: pointer;
+  transition: color 150ms var(--ease-standard);
+}
+.cat-mdedit-frontmatter > button:hover {
+  color: var(--color-fg-muted);
+}
+.cat-mdedit-frontmatter > textarea {
+  display: block;
+  width: 100%;
+  margin-top: 4px;
+  resize: vertical;
+  background: var(--color-bg-inset);
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+  padding: 8px 10px;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  line-height: 1.55;
+  color: var(--color-fg-muted);
+  outline: none;
+  transition:
+    border-color 150ms var(--ease-standard),
+    box-shadow 150ms var(--ease-standard);
+}
+.cat-mdedit-frontmatter > textarea:focus {
+  border-color: var(--color-accent);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--color-accent) 18%, transparent);
+}
+
+/* --- Drag handle (extension-owned chrome; classes managed by motion.ts) --- */
+.cat-mdedit-handle {
+  display: grid;
+  place-content: center;
+  width: 20px;
+  height: 24px;
+  border-radius: 6px;
+  color: var(--color-fg-faint);
+  cursor: grab;
+  transition:
+    background 150ms var(--ease-standard),
+    color 150ms var(--ease-standard),
+    opacity 160ms var(--ease-standard),
+    transform 160ms var(--ease-standard);
+}
+.cat-mdedit-handle:hover {
+  background: color-mix(in srgb, var(--color-fg) 8%, transparent);
+  color: var(--color-fg-muted);
+}
+.cat-mdedit-handle:active {
+  cursor: grabbing;
+}
+.cat-mdedit-handle.unpositioned {
+  opacity: 0;
+  transform: scale(0.9);
+}
+.cat-mdedit-handle.glide {
+  transition:
+    top 140ms var(--ease-standard),
+    left 140ms var(--ease-standard),
+    translate 140ms var(--ease-standard),
+    opacity 160ms var(--ease-standard),
+    transform 160ms var(--ease-standard),
+    background 150ms var(--ease-standard),
+    color 150ms var(--ease-standard);
+}
+/* On marker-bearing list items the handle sits just left of the bullet/
+   number (translate, not transform — must compose with the appear scale). */
+.cat-mdedit-handle.for-list-item {
+  translate: -4px 0;
+}
+
+/* --- Bubble menu: overlay surface, marks-only formatting --- */
+.cat-mdedit-bubble {
+  position: absolute;
+  top: 0;
+  left: 0; /* pinned so its static position never adds overflow */
+  z-index: 50;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 3px;
+  background: var(--color-bg-overlay);
+  border: 1px solid var(--color-border-strong);
+  border-radius: 8px;
+  box-shadow: 0 8px 24px rgb(0 0 0 / 0.45);
+}
+[data-theme="light"] .cat-mdedit-bubble {
+  box-shadow: 0 8px 24px rgb(0 0 0 / 0.15);
+}
+/* While the mouse is down (drag-selecting) the menu stays hidden even if
+   the extension shows it; it appears on mouse lift instead. */
+.cat-mdedit-bubble.suppressed {
+  visibility: hidden !important;
+}
+.cat-mdedit-bubble button {
+  appearance: none;
+  border: none;
+  background: none;
+  position: relative;
+  width: 26px;
+  height: 26px;
+  display: grid;
+  place-content: center;
+  border-radius: 6px;
+  color: var(--color-fg-muted);
+  font-family: var(--font-sans);
+  font-size: 13px;
+  cursor: pointer;
+  transition:
+    background 150ms var(--ease-standard),
+    color 150ms var(--ease-standard);
+}
+.cat-mdedit-bubble button:hover {
+  background: color-mix(in srgb, var(--color-fg) 8%, transparent);
+  color: var(--color-fg);
+}
+.cat-mdedit-bubble button.is-active {
+  color: var(--color-accent);
+  background: color-mix(in srgb, var(--color-accent) 12%, transparent);
+}
+.cat-mdedit-bubble .divider {
+  width: 1px;
+  height: 16px;
+  margin: 0 3px;
+  background: var(--color-border);
+}
+.cat-mdedit-bubble button.bold {
+  font-weight: 700;
+}
+.cat-mdedit-bubble button.italic {
+  font-style: italic;
+  font-family: Georgia, serif;
+}
+.cat-mdedit-bubble button.strike {
+  text-decoration: line-through;
+}
+.cat-mdedit-bubble button.code {
+  font-family: var(--font-mono);
+  font-size: 10px;
+}
+/* Tooltips: the app's floating-note treatment, after a hover delay. */
+.cat-mdedit-bubble button::after {
+  content: attr(data-tip);
+  position: absolute;
+  bottom: calc(100% + 8px);
+  left: 50%;
+  transform: translate(-50%, 2px);
+  white-space: nowrap;
+  padding: 2px 8px;
+  border-radius: 6px;
+  border: 1px solid var(--color-border-strong);
+  background: var(--color-bg-overlay);
+  color: var(--color-fg);
+  font-size: 11px;
+  font-weight: 400;
+  font-style: normal;
+  font-family: var(--font-sans);
+  text-decoration: none;
+  pointer-events: none;
+  opacity: 0;
+  transition:
+    opacity 120ms var(--ease-standard) 0ms,
+    transform 120ms var(--ease-standard) 0ms;
+}
+.cat-mdedit-bubble button:hover::after {
+  opacity: 1;
+  transform: translate(-50%, 0);
+  transition-delay: 450ms, 450ms;
+}
+
+/* --- Table row drag overlays --- */
+.cat-mdedit-rowgrip {
+  position: absolute;
+  z-index: 40;
+  width: 16px;
+  height: 22px;
+  display: grid;
+  place-content: center;
+  border-radius: 4px;
+  border: 1px solid var(--color-border);
+  background: var(--color-bg-overlay);
+  color: var(--color-fg-faint);
+  cursor: grab;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 150ms var(--ease-standard);
+}
+.cat-mdedit-rowgrip.show {
+  opacity: 1;
+  pointer-events: auto;
+}
+.cat-mdedit-rowgrip.glide {
+  transition:
+    top 140ms var(--ease-standard),
+    left 140ms var(--ease-standard),
+    opacity 150ms var(--ease-standard);
+}
+.cat-mdedit-rowgrip:hover {
+  color: var(--color-fg-muted);
+}
+.cat-mdedit-rowgrip:active {
+  cursor: grabbing;
+}
+.cat-mdedit-rowindicator {
+  display: none;
+  position: absolute;
+  z-index: 45;
+  height: 2px;
+  border-radius: 1px;
+  background: var(--color-accent);
+  pointer-events: none;
+}
+/* Source-row tint lives in an overlay (NOT a class on the tr — ProseMirror
+   reverts attribute mutations on its content DOM). */
+.cat-mdedit-rowtint {
+  display: none;
+  position: absolute;
+  z-index: 35;
+  background: color-mix(in srgb, var(--color-accent) 8%, transparent);
+  pointer-events: none;
+  border-radius: 2px;
+}

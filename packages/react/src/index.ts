@@ -156,6 +156,9 @@ export {
 export { useSelectedNode } from "./hooks/use-selected-node.js";
 export {
   type AgentChatAttachment,
+  type AgentChatMediaAttachment,
+  type AgentChatTextAttachment,
+  type AgentChatTextSource,
   type SendAgentMessageInput,
   useSendAgentMessage,
 } from "./hooks/use-send-agent-message.js";

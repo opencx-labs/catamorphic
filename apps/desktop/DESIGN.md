@@ -2207,3 +2207,58 @@ Patterned on what best-in-class palettes converged on (Chrome omnibox
   bypasses `WithSchemaPlugin`) resolved tables via `search_path`, which
   desktop's PGlite session never set — async job claiming was silently
   broken on desktop. boot.ts now sets `search_path` once at open.
+
+### 2026-08-15 — Markdown files open as documents, not source
+
+- `.md`/`.markdown` files open in a rich markdown editor (Tiptap/ProseMirror,
+  `components/markdown/`) inside the SAME editor tab kind — Monaco stays for
+  everything else, and the drafts/save/dirty plumbing in editor-screen is
+  shared untouched. Markdown is the source of truth: the document model
+  round-trips through `@tiptap/markdown`, so files agents write with plain
+  tools open here and vice versa. The tiptap chunk is lazy (loads on first
+  .md open) and the drag-handle's collaboration imports are stubbed at build
+  time (`lib/tiptap-collab-stub.ts` + vite alias) so yjs never enters the
+  bundle.
+- The editing feel, ported from the tryout that chose Tiptap: marks stay
+  hidden (no reveal-at-cursor layout shift — the explicit reason Milkdown
+  and the Obsidian-mechanic editors lost); bubble menu on mouse LIFT with
+  app-overlay tooltips; drag handles for sections AND individual list items
+  (rule-scoped: a node drags iff its parent is the doc or a list — tables
+  drag whole); pointer-driven table-row reordering with an accent drop line
+  (one transaction, one undo step; the header row never moves — in markdown
+  it IS the header); custom list markers snug to the text so hovering a
+  bullet/number still targets its item; custom checkboxes on the field
+  treatment (native ones paint white).
+- Formatting guardrails run as appendTransaction normalizers — bad states
+  are unrepresentable, not discouraged: max one blank line between blocks
+  (the cursor's own blank is exempt so Enter always lands on a typeable
+  line), and adjacent same-type lists auto-merge (deleting an item can
+  split a list; markdown would re-merge it on reparse anyway).
+- Motion on the standard curve throughout: input-rule transforms enter with
+  a rise-and-settle, drops FLIP, handles glide between targets. Hard rule
+  learned twice: NEVER mutate classes/attributes on ProseMirror-managed
+  DOM (PM reverts them, or re-renders in a loop) — content animates via
+  WAAPI only; class toggling is for chrome we own.
+- Every color is a token, so profile themes (dark AND light) apply without
+  editor-specific work; the one non-token syntax color has an explicit
+  light override. Opening a file is never an "edit": the emitted markdown
+  is baselined against the serializer's canonical form (and trailing-blank
+  noise from StarterKit's trailingNode), so the dirty dot means the user
+  actually changed something.
+- Agents show documents in chat: `open_surface file:<path>` now chips onto
+  the asking chat's rail even when it opens focused, and the turn-step
+  "Edited <path>" rows click through to the file (absolute host-agent paths
+  are relativized against the project root via IPC).
+- Frontmatter is preserved byte-exact, never parsed as content:
+  @tiptap/markdown would render the `---` fences as thematic breaks and the
+  YAML as paragraphs, so the block is split off before the editor sees it
+  and re-joined into every emitted string (`frontmatter.ts`). It surfaces
+  as a collapsed "Properties" row above the document that expands to a
+  plain-text mono well — text editing beats a lossy structured properties
+  UI while round-trip fidelity is the contract (skills depend on it).
+- e2e: `e2e/markdown.e2e.ts` pins the whole contract — rich editor for
+  .md, clean-open (no phantom dirty), typing/save round-trip through the
+  file API, per-tab file switching isolation, frontmatter panel + byte-
+  exact save, and close-then-Cmd+Shift+T (which once crashed the renderer:
+  tiptap's `view` getter THROWS post-destroy, so effect cleanups must
+  capture `editor.view.dom` at setup, never read it at teardown).

@@ -581,11 +581,15 @@ describe("ClaudeCodeAgent", () => {
         ]);
         // The CLI blocks on the permission round-trip; the stream only
         // continues once the host resolves it with the user's answers.
-        decision = await params.options?.canUseTool?.("AskUserQuestion", askInput, {
-          signal: new AbortController().signal,
-          toolUseID: "ask_1",
-          requestId: "req_ask",
-        } as never);
+        decision = await params.options?.canUseTool?.(
+          "AskUserQuestion",
+          askInput,
+          {
+            signal: new AbortController().signal,
+            toolUseID: "ask_1",
+            requestId: "req_ask",
+          } as never,
+        );
         yield assistantMessage([
           { type: "text", text: "Great choices — setting that up." },
         ]);

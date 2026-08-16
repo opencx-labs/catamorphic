@@ -8,9 +8,18 @@ export {
   stagedPluginFiles,
   stagePluginDocs,
 } from "./coding-agent/plugin-staging.js";
+export {
+  describeTextSource,
+  isMediaAttachment,
+  isTextAttachment,
+  renderTextAttachments,
+} from "./coding-agent/text-attachments.js";
 export type {
   AgentAttachment,
   AgentEffort,
+  AgentMediaAttachment,
+  AgentTextAttachment,
+  AgentTextSource,
   AgentMcpServerConfig,
   AgentPluginConfig,
   AttachedPluginForAgent,

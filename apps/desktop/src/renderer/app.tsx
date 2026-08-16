@@ -80,6 +80,7 @@ import {
   matchesBinding,
   useKeybindings,
 } from "./lib/keybindings.js";
+import { readEditorSelection } from "./lib/editor-selection.js";
 import { notifyDesktop, playChime } from "./lib/notify.js";
 import { skillInvocation } from "./lib/skills.js";
 import { AppScreen, useApps } from "./screens/app-screen.js";
@@ -1124,6 +1125,10 @@ export function App() {
   // must play the dock's collapse before the mode flips, exactly like
   // the dash control (the tween runs before the workspace re-render).
   const chatMinimizersRef = useRef(new Map<string, () => void>());
+  // Per-chat "re-pull the editor selection" counters (see addChat).
+  const [selectionPulls, setSelectionPulls] = useState<Record<string, number>>(
+    {},
+  );
 
   // Live message senders per chat dock — how anything outside a dock
   // (skill palette rows, post-auth continuations) speaks into an already
@@ -1528,13 +1533,19 @@ export function App() {
     if (!requireAgents()) return;
     updateWorkspace((ws) => {
       // Already looking at a fresh chat (no session yet)? Don't stack
-      // another empty one on top — Cmd+N/+ is a no-op there.
+      // another empty one on top — Cmd+N/+ is a no-op there, except that
+      // it re-pulls the editor selection: "select, Cmd+N, ask" must work
+      // whether or not an empty chat was already waiting.
       const active = ws.chats.find((chat) => chat.localId === ws.activeChatId);
       const activeIsVisible =
         active?.mode === "partial" ||
         (active?.mode === "tab" &&
           ws.activeTabKey === chatTabKey(active.localId));
       if (activeIsVisible && !active.sessionId && !active.pendingMessage) {
+        setSelectionPulls((current) => ({
+          ...current,
+          [active.localId]: (current[active.localId] ?? 0) + 1,
+        }));
         return ws;
       }
       // Floating chats become a full tab anyway when the workspace is
@@ -2611,7 +2622,24 @@ export function App() {
             if (key.startsWith("editor:")) {
               const id = key.slice("editor:".length);
               const entry = ws.editors.find((e) => e.localId === id);
-              return { ...base, kind: "editor", filePath: entry?.filePath };
+              // The focused editor's live selection rides along so the
+              // agent knows what "this" means without a pill.
+              const selection =
+                ws.activeTabKey === key ? readEditorSelection() : null;
+              return {
+                ...base,
+                kind: "editor",
+                filePath: entry?.filePath,
+                ...(selection && selection.filePath === entry?.filePath
+                  ? {
+                      selection: {
+                        text: selection.text,
+                        startLine: selection.startLine,
+                        endLine: selection.endLine,
+                      },
+                    }
+                  : {}),
+              };
             }
             if (key.startsWith("chat:")) {
               const id = key.slice("chat:".length);
@@ -2700,7 +2728,22 @@ export function App() {
           if (key.startsWith("editor:")) {
             const id = key.slice("editor:".length);
             const entry = ws.editors.find((e) => e.localId === id);
-            return entry ? { kind: "editor", filePath: entry.filePath } : null;
+            if (!entry) return null;
+            const selection =
+              ws.activeTabKey === key ? readEditorSelection() : null;
+            return {
+              kind: "editor",
+              filePath: entry.filePath,
+              ...(selection && selection.filePath === entry.filePath
+                ? {
+                    selection: {
+                      text: selection.text,
+                      startLine: selection.startLine,
+                      endLine: selection.endLine,
+                    },
+                  }
+                : {}),
+            };
           }
           if (key.startsWith("chat:")) {
             const id = key.slice("chat:".length);
@@ -2875,7 +2918,14 @@ export function App() {
               ...current,
               editors: [
                 ...current.editors,
-                { localId, filePath, dirty: false },
+                // Attached to the asking chat even when focused, so "show
+                // the user this file" always leaves a chip on the rail.
+                {
+                  localId,
+                  filePath,
+                  dirty: false,
+                  chatLocalId: requester?.localId,
+                },
               ],
               activeTabKey: editorTabKey(localId),
               split: null,
@@ -3905,12 +3955,35 @@ export function App() {
                       }));
                     }
                   }}
+                  onFileClick={(path) => {
+                    // Host-agent file_edit events carry absolute paths; the
+                    // file API speaks project-relative. Relativize against
+                    // the project root, then chip onto this chat's rail.
+                    const open = (relative: string) =>
+                      openEditorTab({
+                        filePath: relative,
+                        chatLocalId: entry.localId,
+                      });
+                    if (!path.startsWith("/") || !projectId) {
+                      open(path);
+                      return;
+                    }
+                    void desktopApi.projectRoot(projectId).then((root) => {
+                      const prefix = root ? `${root}/` : null;
+                      open(
+                        prefix && path.startsWith(prefix)
+                          ? path.slice(prefix.length)
+                          : path,
+                      );
+                    });
+                  }}
                   onFork={(messageId) => forkChat(entry, messageId)}
                   onOpenParent={
                     chatForks[entry.localId]
                       ? () => openParentChat(entry)
                       : undefined
                   }
+                  pullSelectionNonce={selectionPulls[entry.localId] ?? 0}
                   onFocusRequest={
                     split &&
                     viewSlots[chatTabKey(entry.localId)] &&

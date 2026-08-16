@@ -18,7 +18,12 @@ import type {
   StartSessionOpts,
   TurnOptions,
 } from "@catamorphic/sandbox";
-import { buildPluginsPreamble, stagedPluginFiles } from "@catamorphic/sandbox";
+import {
+  buildPluginsPreamble,
+  isMediaAttachment,
+  renderTextAttachments,
+  stagedPluginFiles,
+} from "@catamorphic/sandbox";
 import {
   dynamicTool,
   jsonSchema,
@@ -505,17 +510,23 @@ export class AiSdkCodingAgent implements CodingAgentProvider {
   }
 }
 
-/** User message, with any attachments as image/file parts beside the text. */
+/**
+ * User message: text attachments (pastes, selections, URLs, paths) render as
+ * a labelled context block after the prose; media attachments become
+ * image/file parts beside it.
+ */
 function userMessage(
   message: string,
   attachments: NonNullable<TurnOptions["attachments"]>,
 ): ModelMessage {
-  if (attachments.length === 0) return { role: "user", content: message };
+  const text = `${message}${renderTextAttachments(attachments)}`;
+  const media = attachments.filter(isMediaAttachment);
+  if (media.length === 0) return { role: "user", content: text };
   return {
     role: "user",
     content: [
-      { type: "text", text: message },
-      ...attachments.map((attachment) =>
+      { type: "text", text },
+      ...media.map((attachment) =>
         attachment.kind === "image"
           ? {
               type: "image" as const,

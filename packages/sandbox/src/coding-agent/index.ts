@@ -4,6 +4,12 @@ export {
   stagedPluginFiles,
   stagePluginDocs,
 } from "./plugin-staging.js";
+export {
+  describeTextSource,
+  isMediaAttachment,
+  isTextAttachment,
+  renderTextAttachments,
+} from "./text-attachments.js";
 export type {
   AttachedPluginForAgent,
   CodingAgentProvider,

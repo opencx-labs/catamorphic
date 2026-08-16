@@ -8346,35 +8346,134 @@
                 "properties": {
                   "message": {
                     "type": "string",
-                    "minLength": 1
+                    "maxLength": 200000
                   },
                   "attachments": {
-                    "maxItems": 8,
+                    "maxItems": 32,
                     "type": "array",
                     "items": {
-                      "type": "object",
-                      "properties": {
-                        "kind": {
-                          "type": "string",
-                          "enum": ["image", "document"]
+                      "anyOf": [
+                        {
+                          "type": "object",
+                          "properties": {
+                            "kind": {
+                              "type": "string",
+                              "enum": ["image", "document"]
+                            },
+                            "name": {
+                              "type": "string",
+                              "minLength": 1,
+                              "maxLength": 200
+                            },
+                            "mediaType": {
+                              "type": "string",
+                              "minLength": 1,
+                              "maxLength": 100
+                            },
+                            "dataBase64": {
+                              "type": "string",
+                              "minLength": 1,
+                              "maxLength": 14000000
+                            }
+                          },
+                          "required": [
+                            "kind",
+                            "name",
+                            "mediaType",
+                            "dataBase64"
+                          ]
                         },
-                        "name": {
-                          "type": "string",
-                          "minLength": 1,
-                          "maxLength": 200
-                        },
-                        "mediaType": {
-                          "type": "string",
-                          "minLength": 1,
-                          "maxLength": 100
-                        },
-                        "dataBase64": {
-                          "type": "string",
-                          "minLength": 1,
-                          "maxLength": 14000000
+                        {
+                          "type": "object",
+                          "properties": {
+                            "kind": {
+                              "type": "string",
+                              "enum": ["text"]
+                            },
+                            "name": {
+                              "type": "string",
+                              "minLength": 1,
+                              "maxLength": 200
+                            },
+                            "text": {
+                              "type": "string",
+                              "maxLength": 2000000
+                            },
+                            "source": {
+                              "oneOf": [
+                                {
+                                  "type": "object",
+                                  "properties": {
+                                    "type": {
+                                      "type": "string",
+                                      "enum": ["paste"]
+                                    }
+                                  },
+                                  "required": ["type"]
+                                },
+                                {
+                                  "type": "object",
+                                  "properties": {
+                                    "type": {
+                                      "type": "string",
+                                      "enum": ["selection"]
+                                    },
+                                    "filePath": {
+                                      "type": "string",
+                                      "minLength": 1,
+                                      "maxLength": 4096
+                                    },
+                                    "startLine": {
+                                      "type": "integer",
+                                      "minimum": 0,
+                                      "exclusiveMinimum": true,
+                                      "maximum": 9007199254740991
+                                    },
+                                    "endLine": {
+                                      "type": "integer",
+                                      "minimum": 0,
+                                      "exclusiveMinimum": true,
+                                      "maximum": 9007199254740991
+                                    }
+                                  },
+                                  "required": ["type", "filePath"]
+                                },
+                                {
+                                  "type": "object",
+                                  "properties": {
+                                    "type": {
+                                      "type": "string",
+                                      "enum": ["url"]
+                                    },
+                                    "url": {
+                                      "type": "string",
+                                      "minLength": 1,
+                                      "maxLength": 8192
+                                    }
+                                  },
+                                  "required": ["type", "url"]
+                                },
+                                {
+                                  "type": "object",
+                                  "properties": {
+                                    "type": {
+                                      "type": "string",
+                                      "enum": ["path"]
+                                    },
+                                    "path": {
+                                      "type": "string",
+                                      "minLength": 1,
+                                      "maxLength": 4096
+                                    }
+                                  },
+                                  "required": ["type", "path"]
+                                }
+                              ]
+                            }
+                          },
+                          "required": ["kind", "name", "text", "source"]
                         }
-                      },
-                      "required": ["kind", "name", "mediaType", "dataBase64"]
+                      ]
                     }
                   }
                 },

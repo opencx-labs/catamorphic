@@ -226,17 +226,84 @@ export class E2eFakeCodingAgent implements CodingAgentProvider {
     state.lastTurn = { message, ...(opts ? { opts } : {}) };
     const prompt = message.toLowerCase();
 
-    // Media messages echo what arrived (exercises the attachment path).
+    // Attachments echo what arrived (exercises the attachment path). Text
+    // pills additionally echo their source and content so e2e can assert
+    // the model-facing payload, not just the name.
     if (opts?.attachments && opts.attachments.length > 0) {
       const names = opts.attachments
         .map((attachment) => attachment.name)
         .join(", ");
-      yield { type: "title", content: "Media received" };
+      const texts = opts.attachments.filter(
+        (attachment) => attachment.kind === "text",
+      );
+      yield {
+        type: "title",
+        content: texts.length > 0 ? "Context received" : "Media received",
+      };
       yield {
         type: "text",
         content: `Received ${opts.attachments.length} attachment${
           opts.attachments.length > 1 ? "s" : ""
         }: ${names}`,
+      };
+      for (const attachment of texts) {
+        if (attachment.kind !== "text") continue;
+        yield {
+          type: "text",
+          content: `[text-pill ${attachment.source.type}${
+            attachment.source.type === "selection"
+              ? ` ${attachment.source.filePath}:${attachment.source.startLine ?? "?"}-${attachment.source.endLine ?? "?"}`
+              : ""
+          }] ${attachment.text}`,
+        };
+      }
+      yield { type: "done" };
+      return;
+    }
+
+    // "read the editor": overview → active editor tab → read_tab, echoing
+    // the live selection the bridge exposes (agent-side selection path).
+    if (prompt.includes("read the editor")) {
+      const overviewTool = this.workspaceTools.find(
+        (candidate) => candidate.name === "workspace_overview",
+      );
+      const readTool = this.workspaceTools.find(
+        (candidate) => candidate.name === "read_tab",
+      );
+      if (!overviewTool || !readTool) {
+        yield { type: "error", content: "workspace tools unavailable" };
+        yield { type: "done" };
+        return;
+      }
+      yield { type: "title", content: "Reading the editor" };
+      const overview = (await overviewTool.execute({}, state.toolContext)) as {
+        tabs?: Array<{ key: string; kind?: string; active?: boolean }>;
+        activeTabKey?: string;
+      };
+      const tabs = overview.tabs ?? [];
+      const editor =
+        tabs.find(
+          (tab) =>
+            tab.kind === "editor" &&
+            (tab.active || tab.key === overview.activeTabKey),
+        ) ?? tabs.find((tab) => tab.kind === "editor");
+      if (!editor) {
+        yield { type: "text", content: "No editor tab is open." };
+        yield { type: "done" };
+        return;
+      }
+      const detail = (await readTool.execute(
+        { key: editor.key },
+        state.toolContext,
+      )) as {
+        filePath?: string;
+        selection?: { text?: string; startLine?: number; endLine?: number };
+      };
+      yield {
+        type: "text",
+        content: detail.selection
+          ? `[editor ${detail.filePath}:${detail.selection.startLine ?? "?"}-${detail.selection.endLine ?? "?"}] ${detail.selection.text ?? ""}`
+          : `[editor ${detail.filePath}] no selection`,
       };
       yield { type: "done" };
       return;

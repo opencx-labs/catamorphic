@@ -783,7 +783,7 @@ export const AgentMessageSchema = z.object({
 
 export const OkSchema = z.object({ ok: z.literal(true) });
 
-export const AgentAttachmentSchema = z.object({
+export const AgentMediaAttachmentSchema = z.object({
   kind: z.enum(["image", "document"]),
   name: z.string().min(1).max(200),
   /** MIME type, e.g. "image/png", "application/pdf". */
@@ -792,10 +792,44 @@ export const AgentAttachmentSchema = z.object({
   dataBase64: z.string().min(1).max(14_000_000),
 });
 
-export const SendMessageSchema = z.object({
-  message: z.string().min(1),
-  attachments: z.array(AgentAttachmentSchema).max(8).optional(),
+export const AgentTextSourceSchema = z.discriminatedUnion("type", [
+  z.object({ type: z.literal("paste") }),
+  z.object({
+    type: z.literal("selection"),
+    filePath: z.string().min(1).max(4096),
+    startLine: z.number().int().positive().optional(),
+    endLine: z.number().int().positive().optional(),
+  }),
+  z.object({ type: z.literal("url"), url: z.string().min(1).max(8192) }),
+  z.object({ type: z.literal("path"), path: z.string().min(1).max(4096) }),
+]);
+
+/** Text context beside a message: paste, editor selection, URL, path. */
+export const AgentTextAttachmentSchema = z.object({
+  kind: z.literal("text"),
+  name: z.string().min(1).max(200),
+  /** ~2MB of text — well past any sane paste, well short of the DB row cap. */
+  text: z.string().max(2_000_000),
+  source: AgentTextSourceSchema,
 });
+
+export const AgentAttachmentSchema = z.union([
+  AgentMediaAttachmentSchema,
+  AgentTextAttachmentSchema,
+]);
+
+export const SendMessageSchema = z
+  .object({
+    // Empty prose is fine when attachments carry the message ("look at
+    // this" with just a pill); rejected only when BOTH are empty.
+    message: z.string().max(200_000),
+    attachments: z.array(AgentAttachmentSchema).max(32).optional(),
+  })
+  .refine(
+    (body) =>
+      body.message.trim().length > 0 || (body.attachments?.length ?? 0) > 0,
+    { message: "A message needs text or at least one attachment." },
+  );
 
 export const AgentSessionDetailSchema = AgentSessionSchema.extend({
   messages: z.array(AgentMessageSchema),

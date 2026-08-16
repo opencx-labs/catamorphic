@@ -1,4 +1,8 @@
-import { type AgentChatAttachment, useAgentChat } from "@catamorphic/react";
+import {
+  type AgentChatAttachment,
+  type AgentChatTextAttachment,
+  useAgentChat,
+} from "@catamorphic/react";
 import {
   AppWindow,
   ArrowUp,
@@ -29,6 +33,9 @@ import {
   useState,
 } from "react";
 import { commandScore } from "../lib/command-score";
+import { readEditorSelection } from "../lib/editor-selection";
+import { classifyPastedText, selectionName, textPill } from "../lib/text-pills";
+import { ComposerPill } from "./composer-pill";
 import {
   type AgentInfo,
   desktopApi,
@@ -155,9 +162,19 @@ const DOCUMENT_TYPES = new Set([
 
 const MAX_ATTACHMENT_BYTES = 10 * 1024 * 1024;
 
-interface ComposerAttachment extends AgentChatAttachment {
+type ComposerAttachment = AgentChatAttachment & {
   id: string;
-}
+  /** Mid pill-out; dropped from state on animation end. */
+  exiting?: boolean;
+};
+
+const isTextPill = (
+  attachment: ComposerAttachment,
+): attachment is ComposerAttachment & AgentChatTextAttachment =>
+  attachment.kind === "text";
+
+/** Server-side attachment cap, mirrored so the composer can refuse early. */
+const MAX_ATTACHMENTS = 32;
 
 async function fileToAttachment(
   file: File,
@@ -753,6 +770,12 @@ export interface ChatDockProps {
   onOpenMcpApp?: (view: McpAppRef, mode: "tab" | "split") => void;
   /** Set while this tab is the unfocused pane of a split: click focuses. */
   onFocusRequest?: () => void;
+  /**
+   * Bumped by the host when the user re-invokes "chat" on this already
+   * front chat (Cmd+N with a fresh chat open): the dock re-pulls the
+   * editor selection as if it had just come to the front.
+   */
+  pullSelectionNonce?: number;
   /** Set while this tab sits in a split: return it to a full-width tab. */
   onUnsplit?: () => void;
   /**
@@ -765,6 +788,8 @@ export interface ChatDockProps {
     url: string,
     modifiers: { metaKey: boolean; shiftKey: boolean },
   ) => void;
+  /** An edited-file row in the turn-step log was clicked — open the file. */
+  onFileClick?: (path: string) => void;
   /** Fork the conversation from this assistant message (hover action). */
   onFork?: (messageId: string) => void;
   /** Set on forked chats: reveal the parent conversation. */
@@ -823,8 +848,10 @@ export function ChatDock({
   onOpenSurface,
   onOpenMcpApp,
   onFocusRequest,
+  pullSelectionNonce = 0,
   onUnsplit,
   onLinkClick,
+  onFileClick,
   onFork,
   onOpenParent,
   onEntryChange,
@@ -1234,7 +1261,9 @@ export function ChatDock({
     files: AgentChatAttachment[];
   } | null => {
     const message = draft.trim();
-    const files = attachments.map(({ id: _id, ...attachment }) => attachment);
+    const files = attachments
+      .filter((attachment) => !attachment.exiting)
+      .map(({ id: _id, exiting: _exiting, ...attachment }) => attachment);
     if (!message && files.length === 0) return null;
     setDraft("");
     setAttachments([]);
@@ -1319,6 +1348,23 @@ export function ChatDock({
       if (recallDown()) event.preventDefault();
       return;
     }
+    // Backspace in an empty composer pops the newest attachment (the
+    // palette's chip-pop, applied to pills and media alike).
+    if (
+      event.key === "Backspace" &&
+      draft.length === 0 &&
+      !event.metaKey &&
+      !event.altKey
+    ) {
+      const last = attachments
+        .filter((attachment) => !attachment.exiting)
+        .at(-1);
+      if (last) {
+        event.preventDefault();
+        removeAttachment(last.id);
+      }
+      return;
+    }
     if (event.key !== "Enter") return;
     if (event.metaKey) {
       event.preventDefault();
@@ -1331,17 +1377,44 @@ export function ChatDock({
     }
   };
 
+  /** Animated removal: mark exiting, drop on pill-out's animationend. */
+  const removeAttachment = (id: string) =>
+    setAttachments((current) =>
+      current.map((attachment) =>
+        attachment.id === id ? { ...attachment, exiting: true } : attachment,
+      ),
+    );
+  const dropExited = (id: string) =>
+    setAttachments((current) =>
+      current.filter((attachment) => attachment.id !== id),
+    );
+
+  /** Add a text pill (paste, selection, URL, path); capped like the server. */
+  const addTextPill = (pill: AgentChatTextAttachment) =>
+    setAttachments((current) => {
+      const live = current.filter((attachment) => !attachment.exiting);
+      if (live.length >= MAX_ATTACHMENTS) return current;
+      return [...current, { ...pill, id: crypto.randomUUID() }];
+    });
+  const addTextPillRef = useRef(addTextPill);
+  addTextPillRef.current = addTextPill;
+
   /** Convert dropped/pasted files into composer chips (capability-gated). */
   const addFiles = (files: File[]) => {
     if (files.length === 0) return;
     void Promise.all(files.map(fileToAttachment)).then((converted) => {
       const usable = converted.filter(
         (attachment): attachment is ComposerAttachment =>
-          attachment !== null && accepts.includes(attachment.kind),
+          attachment !== null &&
+          attachment.kind !== "text" &&
+          accepts.includes(attachment.kind),
       );
-      if (usable.length > 0) {
-        setAttachments((current) => [...current, ...usable]);
-      }
+      if (usable.length === 0) return;
+      setAttachments((current) => {
+        const live = current.filter((attachment) => !attachment.exiting);
+        const room = Math.max(0, MAX_ATTACHMENTS - live.length);
+        return [...current, ...usable.slice(0, room)];
+      });
     });
   };
 
@@ -1352,21 +1425,80 @@ export function ChatDock({
 
   // Paste is handled at the WINDOW while this chat is the front surface:
   // requiring the caret to be exactly in the textarea made "copy a
-  // screenshot, click the chat, Cmd+V" silently do nothing. Text pastes
-  // stay native — only pastes that carry files are intercepted.
+  // screenshot, click the chat, Cmd+V" silently do nothing. Files become
+  // media chips (capability-gated); big text, URLs, and file paths become
+  // text pills (universal — every harness takes text); ordinary short text
+  // stays a native paste into whatever field has the caret.
   const frontSurface = entry.mode === "partial" || (isTab && tabActive);
   useEffect(() => {
     if (!frontSurface) return;
     const onWindowPaste = (event: globalThis.ClipboardEvent) => {
-      if (!acceptsMediaRef.current || event.defaultPrevented) return;
+      if (event.defaultPrevented) return;
       const files = filesFrom(event.clipboardData);
-      if (files.length === 0) return;
+      if (files.length > 0) {
+        if (!acceptsMediaRef.current) return;
+        event.preventDefault();
+        addFilesRef.current(files);
+        return;
+      }
+      // Text pills only when the paste is aimed at THIS composer (or at no
+      // field at all): pasting a URL into a settings input must stay a
+      // plain paste there.
+      const target = event.target;
+      const inComposer =
+        target instanceof HTMLTextAreaElement
+          ? target.getAttribute("aria-label") === "Message the assistant"
+          : !(target instanceof HTMLInputElement) &&
+            !(target instanceof HTMLElement && target.isContentEditable);
+      if (!inComposer) return;
+      const text = event.clipboardData?.getData("text/plain") ?? "";
+      const classified = classifyPastedText(text);
+      if (classified.kind !== "pill") return;
       event.preventDefault();
-      addFilesRef.current(files);
+      addTextPillRef.current(
+        textPill(
+          text.replace(/\r\n?/g, "\n"),
+          classified.source,
+          classified.name,
+        ),
+      );
     };
     window.addEventListener("paste", onWindowPaste);
     return () => window.removeEventListener("paste", onWindowPaste);
   }, [frontSurface]);
+
+  // Editor selection → pill. When this chat BECOMES the front surface
+  // (Cmd+N created it, Cmd+M restored it, the user clicked into it) and an
+  // editor has a live selection, that selection arrives as a pill: the
+  // reference (file · lines) plus the text itself, since files change and
+  // the quote pins what was meant. Pull happens on the transition only, so
+  // an idle chat never grabs anything; a repeat of the identical selection
+  // is not re-added.
+  const lastSelectionPillRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (!frontSurface) return;
+    const selection = readEditorSelection();
+    if (!selection) return;
+    const key = `${selection.filePath}\u0000${selection.startLine ?? ""}\u0000${selection.text}`;
+    if (lastSelectionPillRef.current === key) return;
+    lastSelectionPillRef.current = key;
+    addTextPillRef.current(
+      textPill(
+        selection.text,
+        {
+          type: "selection",
+          filePath: selection.filePath,
+          ...(selection.startLine !== undefined
+            ? { startLine: selection.startLine }
+            : {}),
+          ...(selection.endLine !== undefined
+            ? { endLine: selection.endLine }
+            : {}),
+        },
+        selectionName(selection),
+      ),
+    );
+  }, [frontSurface, pullSelectionNonce]);
 
   // Drag & drop onto the chat surface attaches too (with a drop cue) —
   // dragging an image in is the first thing many people try.
@@ -1587,6 +1719,7 @@ export function ChatDock({
             error={chat.error?.message ?? null}
             emptyState={emptyStateFor(entry.localId)}
             onLinkClick={onLinkClick}
+            onFileClick={onFileClick}
             resolveToolIcon={resolveToolIcon}
             onFork={entry.sessionId ? onFork : undefined}
             registerJumpToPreviousUserMessage={(jump) => {
@@ -1681,46 +1814,63 @@ export function ChatDock({
                 </div>
               )}
               {/* Pasted media waits as chips until the message sends. */}
+              {/* Attachments wait as pills/chips until the message sends:
+                  text pills (pastes, selections, links, paths) expand to
+                  show their content; media chips show a thumb or name.
+                  Both enter with pill-in and leave with pill-out. */}
               {attachments.length > 0 && (
                 <div
                   className="flex flex-wrap gap-1.5 px-1.5 pb-1 pt-0.5"
                   data-testid="composer-attachments"
                 >
-                  {attachments.map((attachment) => (
-                    <span
-                      key={attachment.id}
-                      className="group/att relative flex items-center gap-1.5 overflow-hidden rounded-lg border border-border bg-bg-inset text-[11px] text-fg-muted"
-                    >
-                      {attachment.kind === "image" ? (
-                        <img
-                          src={`data:${attachment.mediaType};base64,${attachment.dataBase64}`}
-                          alt={attachment.name}
-                          className="size-10 object-cover"
-                        />
-                      ) : (
-                        <span className="flex items-center gap-1.5 py-2 pl-2">
-                          <FileText className="size-3.5" />
-                          <span className="max-w-32 truncate">
-                            {attachment.name}
-                          </span>
-                        </span>
-                      )}
-                      <button
-                        type="button"
-                        onClick={() =>
-                          setAttachments((current) =>
-                            current.filter(
-                              (candidate) => candidate.id !== attachment.id,
-                            ),
-                          )
-                        }
-                        className="grid size-5 shrink-0 cursor-pointer place-items-center self-start text-fg-faint hover:text-fg"
-                        aria-label={`Remove ${attachment.name}`}
+                  {attachments.map((attachment) =>
+                    isTextPill(attachment) ? (
+                      <ComposerPill
+                        key={attachment.id}
+                        attachment={attachment}
+                        exiting={attachment.exiting}
+                        onRemove={() => removeAttachment(attachment.id)}
+                        onExited={() => dropExited(attachment.id)}
+                      />
+                    ) : (
+                      <span
+                        key={attachment.id}
+                        className={`group/att relative flex items-center gap-1.5 overflow-hidden rounded-lg border border-border bg-bg-inset text-[11px] text-fg-muted ${
+                          attachment.exiting
+                            ? "animate-pill-out"
+                            : "animate-pill-in"
+                        }`}
+                        onAnimationEnd={(event) => {
+                          if (event.animationName === "pill-out") {
+                            dropExited(attachment.id);
+                          }
+                        }}
                       >
-                        <X className="size-3" />
-                      </button>
-                    </span>
-                  ))}
+                        {attachment.kind === "image" ? (
+                          <img
+                            src={`data:${attachment.mediaType};base64,${attachment.dataBase64}`}
+                            alt={attachment.name}
+                            className="size-10 object-cover"
+                          />
+                        ) : (
+                          <span className="flex items-center gap-1.5 py-2 pl-2">
+                            <FileText className="size-3.5" />
+                            <span className="max-w-32 truncate">
+                              {attachment.name}
+                            </span>
+                          </span>
+                        )}
+                        <button
+                          type="button"
+                          onClick={() => removeAttachment(attachment.id)}
+                          className="grid size-5 shrink-0 cursor-pointer place-items-center self-start text-fg-faint hover:text-fg"
+                          aria-label={`Remove ${attachment.name}`}
+                        >
+                          <X className="size-3" />
+                        </button>
+                      </span>
+                    ),
+                  )}
                 </div>
               )}
               <div className="flex items-center gap-2">
@@ -1786,7 +1936,10 @@ export function ChatDock({
                   <button
                     type="submit"
                     className="grid size-8 shrink-0 place-items-center rounded-lg bg-accent text-accent-fg transition-opacity duration-150 disabled:opacity-35"
-                    disabled={!draft.trim() && attachments.length === 0}
+                    disabled={
+                      !draft.trim() &&
+                      !attachments.some((attachment) => !attachment.exiting)
+                    }
                     aria-label="Send message"
                   >
                     <ArrowUp className="size-4" />

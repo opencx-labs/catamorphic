@@ -6,13 +6,23 @@ import {
 import Editor, { type OnMount } from "@monaco-editor/react";
 import "../lib/monaco-setup.js";
 import { FileCode, Search } from "lucide-react";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { Suspense, lazy, useEffect, useMemo, useRef, useState } from "react";
 import { ShortcutHint } from "../components/shortcut-hint.js";
 import { commandScore } from "../lib/command-score.js";
+import { registerSelectionReader } from "../lib/editor-selection.js";
 import { useTheme } from "../lib/theme.js";
 
 type EditorInstance = Parameters<OnMount>[0];
 type MonacoInstance = Parameters<OnMount>[1];
+
+// Markdown files open in the rich markdown editor instead of Monaco — same
+// tab kind, same drafts/save plumbing, different surface. Lazy so the
+// tiptap chunk loads only when a markdown file is actually opened.
+const MarkdownEditor = lazy(
+  () => import("../components/markdown/markdown-editor.js"),
+);
+
+const isMarkdownPath = (path: string) => /\.(md|markdown)$/i.test(path);
 
 /**
  * A code editor tab: quick-open over the project's files, Monaco on the
@@ -85,6 +95,24 @@ export function EditorScreen({
     );
   };
 
+  // Selection channel: while this pane's editor has focus, chats can pull
+  // "what's selected" to build a selection pill (see lib/editor-selection).
+  const filePathRef = useRef(filePath);
+  filePathRef.current = filePath;
+  const unregisterRef = useRef<(() => void) | null>(null);
+  const publishReader = (
+    read: () => { text: string; startLine?: number; endLine?: number } | null,
+  ) => {
+    unregisterRef.current?.();
+    unregisterRef.current = registerSelectionReader(() => {
+      const path = filePathRef.current;
+      if (!path) return null;
+      const selection = read();
+      return selection ? { filePath: path, ...selection } : null;
+    });
+  };
+  useEffect(() => () => unregisterRef.current?.(), []);
+
   const handleMount: OnMount = (
     editor: EditorInstance,
     monaco: MonacoInstance,
@@ -92,6 +120,24 @@ export function EditorScreen({
     editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyS, () =>
       saveRef.current(),
     );
+    const readMonacoSelection = () => {
+      const selection = editor.getSelection();
+      const model = editor.getModel();
+      if (!selection || !model || selection.isEmpty()) return null;
+      const text = model.getValueInRange(selection);
+      if (!text.trim()) return null;
+      return {
+        text,
+        startLine: selection.startLineNumber,
+        endLine:
+          selection.endColumn === 1 &&
+          selection.endLineNumber > selection.startLineNumber
+            ? selection.endLineNumber - 1
+            : selection.endLineNumber,
+      };
+    };
+    editor.onDidFocusEditorText(() => publishReader(readMonacoSelection));
+    publishReader(readMonacoSelection);
     editor.focus();
   };
 
@@ -125,8 +171,24 @@ export function EditorScreen({
           </button>
         )}
       </div>
-      <div className="min-h-0 flex-1">
-        {savedContent !== undefined ? (
+      <div className="flex min-h-0 flex-1 flex-col">
+        {savedContent !== undefined && isMarkdownPath(filePath) ? (
+          <Suspense fallback={<div className="flex-1 bg-bg" />}>
+            <MarkdownEditor
+              key={filePath}
+              value={draft ?? savedContent}
+              onChange={handleChange}
+              onSave={() => saveRef.current()}
+              onSelectionReader={(reader) => {
+                if (reader) publishReader(reader);
+                else {
+                  unregisterRef.current?.();
+                  unregisterRef.current = null;
+                }
+              }}
+            />
+          </Suspense>
+        ) : savedContent !== undefined ? (
           <Editor
             height="100%"
             path={`file:///${filePath}`}

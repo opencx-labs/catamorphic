@@ -96,14 +96,44 @@ export interface AgentPluginConfig {
   path: string;
 }
 
+/** Where a text attachment came from — shown on the pill, told to the model. */
+export type AgentTextSource =
+  | { type: "paste" }
+  | {
+      type: "selection";
+      /** Project-relative path of the file the text was selected in. */
+      filePath: string;
+      /** 1-based inclusive line range, when known. */
+      startLine?: number;
+      endLine?: number;
+    }
+  | { type: "url"; url: string }
+  | { type: "path"; path: string };
+
 /** A media file sent along with a user message. */
-export interface AgentAttachment {
+export interface AgentMediaAttachment {
   kind: "image" | "document";
   name: string;
   /** MIME type, e.g. "image/png", "application/pdf". */
   mediaType: string;
   dataBase64: string;
 }
+
+/**
+ * Text context sent along with a user message: a big paste, an editor
+ * selection, a URL, a file path. Universal — every harness can take text —
+ * and delivered as structured context beside the prose, never spliced into
+ * the user's own words.
+ */
+export interface AgentTextAttachment {
+  kind: "text";
+  /** Short label (first line of a paste, `file.md · 12–24`, the URL…). */
+  name: string;
+  text: string;
+  source: AgentTextSource;
+}
+
+export type AgentAttachment = AgentMediaAttachment | AgentTextAttachment;
 
 /** Per-turn overrides; anything unset falls back to the provider's defaults. */
 export interface TurnOptions {

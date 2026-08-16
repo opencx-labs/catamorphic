@@ -13,12 +13,35 @@ import {
 import { useCatamorphic } from "../provider.js";
 import type { SentAgentMessage } from "../types.js";
 
-export interface AgentChatAttachment {
+export type AgentChatTextSource =
+  | { type: "paste" }
+  | {
+      type: "selection";
+      filePath: string;
+      startLine?: number;
+      endLine?: number;
+    }
+  | { type: "url"; url: string }
+  | { type: "path"; path: string };
+
+export interface AgentChatMediaAttachment {
   kind: "image" | "document";
   name: string;
   mediaType: string;
   dataBase64: string;
 }
+
+/** Text context (paste / editor selection / URL / path) beside a message. */
+export interface AgentChatTextAttachment {
+  kind: "text";
+  name: string;
+  text: string;
+  source: AgentChatTextSource;
+}
+
+export type AgentChatAttachment =
+  | AgentChatMediaAttachment
+  | AgentChatTextAttachment;
 
 export interface SendAgentMessageInput {
   sessionId: string;

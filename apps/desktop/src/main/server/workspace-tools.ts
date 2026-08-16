@@ -212,14 +212,14 @@ export function buildWorkspaceToolkit(
     {
       name: "workspace_overview",
       description:
-        "See the user's live workspace: every open tab (browser pages, terminals, editors, chats) with keys and titles, which tab is active (what the user is looking at right now), other chat conversations, and the sidebar's configured shortcuts. Start here whenever the user refers to something they can see, another conversation, or 'that page/terminal'. Expand any entry with read_tab.",
+        "See the user's live workspace: every open tab (browser pages, terminals, editors, chats) with keys and titles, which tab is active (what the user is looking at right now), the focused editor's current text selection if any, other chat conversations, and the sidebar's configured shortcuts. Start here whenever the user refers to something they can see, another conversation, 'this'/'the selected text', or 'that page/terminal'. Expand any entry with read_tab.",
       parameters: {},
       execute: (_input, ctx) => bridge.overview(ctx.projectId),
     },
     {
       name: "read_tab",
       description:
-        "Expand one workspace tab by key (from workspace_overview): browser tabs return the page's visible text, terminals their recent output, chats their conversation transcript, editors the open file's path. Use it to look into anything the user can see, or anything running in the background.",
+        "Expand one workspace tab by key (from workspace_overview): browser tabs return the page's visible text, terminals their recent output, chats their conversation transcript, editors the open file's path plus the user's current text selection (text and line range) when that editor is focused — so 'this paragraph' or 'the selected code' resolves without asking. Use it to look into anything the user can see, or anything running in the background.",
       parameters: {
         key: z
           .string()

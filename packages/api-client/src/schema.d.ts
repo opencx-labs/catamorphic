@@ -3938,13 +3938,36 @@ export interface paths {
                 content: {
                     "application/json": {
                         message: string;
-                        attachments?: {
+                        attachments?: ({
                             /** @enum {string} */
                             kind: "image" | "document";
                             name: string;
                             mediaType: string;
                             dataBase64: string;
-                        }[];
+                        } | {
+                            /** @enum {string} */
+                            kind: "text";
+                            name: string;
+                            text: string;
+                            source: {
+                                /** @enum {string} */
+                                type: "paste";
+                            } | {
+                                /** @enum {string} */
+                                type: "selection";
+                                filePath: string;
+                                startLine?: number;
+                                endLine?: number;
+                            } | {
+                                /** @enum {string} */
+                                type: "url";
+                                url: string;
+                            } | {
+                                /** @enum {string} */
+                                type: "path";
+                                path: string;
+                            };
+                        })[];
                     };
                 };
             };

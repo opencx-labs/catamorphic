@@ -7,14 +7,17 @@ import {
   Bot,
   ChevronRight,
   ChevronUp,
+  ClipboardType,
   FileText,
   GitFork,
   KeyRound,
+  Link2,
   LoaderCircle,
   Pencil,
   Radio,
   RotateCcw,
   SquareTerminal,
+  TextQuote,
   Trash2,
   Wrench,
   Zap,
@@ -27,12 +30,31 @@ import { ShortcutHint } from "../shortcut-hint";
 
 const REMARK_PLUGINS = [remarkGfm];
 
-export interface ChatAttachmentView {
-  kind: "image" | "document";
-  name: string;
-  mediaType: string;
-  dataBase64: string;
-}
+export type ChatTextSourceView =
+  | { type: "paste" }
+  | {
+      type: "selection";
+      filePath: string;
+      startLine?: number;
+      endLine?: number;
+    }
+  | { type: "url"; url: string }
+  | { type: "path"; path: string };
+
+export type ChatAttachmentView =
+  | {
+      kind: "image" | "document";
+      name: string;
+      mediaType: string;
+      dataBase64: string;
+    }
+  | {
+      /** Text context: a paste, editor selection, URL, or file path. */
+      kind: "text";
+      name: string;
+      text: string;
+      source: ChatTextSourceView;
+    };
 
 export interface ChatTimelineMessage {
   id: string;
@@ -100,6 +122,12 @@ export interface ChatTimelineProps {
     modifiers: { metaKey: boolean; shiftKey: boolean },
   ) => void;
   /**
+   * A file path in the turn-step log was clicked ("Edited docs/plan.md").
+   * Hosts open the file in an editor surface; without it the rows stay
+   * inert text.
+   */
+  onFileClick?: (path: string) => void;
+  /**
    * Icon URL for a tool name (MCP tools are `server/tool`; the host maps
    * the server key to its connector icon). Undefined → generic glyph.
    */
@@ -141,6 +169,7 @@ export function ChatTimeline({
   contentClassName = "",
   resolveAgentName,
   onLinkClick,
+  onFileClick,
   resolveToolIcon,
   onFork,
   registerJumpToPreviousUserMessage,
@@ -180,6 +209,7 @@ export function ChatTimeline({
               isLast={message.id === lastConversationId}
               resolveAgentName={resolveAgentName}
               onLinkClick={onLinkClick}
+              onFileClick={onFileClick}
               resolveToolIcon={resolveToolIcon}
               // Retry re-runs the last user turn; without one there is
               // nothing to re-run — hide the button, never show a dead one.
@@ -362,6 +392,7 @@ function MessageImpl({
   isLast,
   resolveAgentName,
   onLinkClick,
+  onFileClick,
   resolveToolIcon,
   onRetry,
   onReauth,
@@ -372,6 +403,7 @@ function MessageImpl({
   isLast: boolean;
   resolveAgentName?: (agentId: string) => string | undefined;
   onLinkClick?: ChatTimelineProps["onLinkClick"];
+  onFileClick?: (path: string) => void;
   resolveToolIcon?: (toolName: string) => string | undefined;
   onRetry?: () => void;
   onReauth?: () => void;
@@ -493,6 +525,7 @@ function MessageImpl({
         <TurnSteps
           steps={turnSteps(message)}
           resolveToolIcon={resolveToolIcon}
+          onFileClick={onFileClick}
         />
       )}
       {message.role === "user" ? (
@@ -541,6 +574,8 @@ interface TurnStep {
   label: string;
   /** Monospace label (commands, paths, unrecognized tool names). */
   mono?: boolean;
+  /** Edited file path — makes the row a click-through to the editor. */
+  filePath?: string;
   /** Tool name as the harness reported it (`server/tool` for MCP). */
   toolName?: string;
   /** Preformatted expandable body (tool input/result, full command). */
@@ -671,6 +706,7 @@ function turnSteps(message: ChatTimelineMessage): TurnStep[] {
         kind: "file_edit",
         label: `Edited ${path || "a file"}`,
         mono: true,
+        filePath: path || undefined,
       });
     } else if (event.type === "tool_call") {
       const toolName =
@@ -714,9 +750,11 @@ function turnSteps(message: ChatTimelineMessage): TurnStep[] {
 function TurnSteps({
   steps,
   resolveToolIcon,
+  onFileClick,
 }: {
   steps: TurnStep[];
   resolveToolIcon?: (toolName: string) => string | undefined;
+  onFileClick?: (path: string) => void;
 }) {
   const [expanded, setExpanded] = useState(false);
   if (steps.length === 0) return null;
@@ -752,6 +790,7 @@ function TurnSteps({
                 iconUrl={
                   step.toolName ? resolveToolIcon?.(step.toolName) : undefined
                 }
+                onFileClick={onFileClick}
               />
             ))}
           </div>
@@ -761,17 +800,34 @@ function TurnSteps({
   );
 }
 
-function StepRow({ step, iconUrl }: { step: TurnStep; iconUrl?: string }) {
+function StepRow({
+  step,
+  iconUrl,
+  onFileClick,
+}: {
+  step: TurnStep;
+  iconUrl?: string;
+  onFileClick?: (path: string) => void;
+}) {
   const [open, setOpen] = useState(false);
   const Icon = STEP_ICONS[step.kind];
   const expandable = Boolean(step.detail);
+  // Edited-file rows click through to the file in an editor surface.
+  const opensFile = Boolean(step.filePath && onFileClick);
+  const interactive = expandable || opensFile;
   return (
     <div data-testid="chat-step">
       <button
         type="button"
-        onClick={expandable ? () => setOpen((value) => !value) : undefined}
+        onClick={
+          opensFile
+            ? () => onFileClick?.(step.filePath as string)
+            : expandable
+              ? () => setOpen((value) => !value)
+              : undefined
+        }
         className={`flex w-full items-center gap-1.5 rounded px-1 py-0.5 text-left text-[11px] text-fg-muted ${
-          expandable
+          interactive
             ? "cursor-pointer transition-colors duration-100 hover:bg-bg-inset hover:text-fg"
             : "cursor-default"
         }`}
@@ -823,8 +879,15 @@ function AttachmentStrip({
 }) {
   return (
     <div className="mb-1.5 flex flex-wrap justify-end gap-1.5">
-      {attachments.map((attachment) =>
-        attachment.kind === "image" ? (
+      {attachments.map((attachment, index) =>
+        attachment.kind === "text" ? (
+          <SentTextPill
+            // Attachments are append-only per message; index is stable.
+            // biome-ignore lint/suspicious/noArrayIndexKey: static list
+            key={index}
+            attachment={attachment}
+          />
+        ) : attachment.kind === "image" ? (
           <img
             key={`${attachment.name}:${attachment.dataBase64.length}:${attachment.dataBase64.slice(-24)}`}
             src={`data:${attachment.mediaType};base64,${attachment.dataBase64}`}
@@ -1248,13 +1311,112 @@ function isConversationMessage(message: ChatTimelineMessage): boolean {
   return message.content.trim().length > 0;
 }
 
+const SENT_PILL_ICONS = {
+  paste: ClipboardType,
+  selection: TextQuote,
+  url: Link2,
+  path: FileText,
+} as const;
+
+/** A sent text pill: collapsed label, expandable to the full text. */
+function SentTextPill({
+  attachment,
+}: {
+  attachment: Extract<ChatAttachmentView, { kind: "text" }>;
+}) {
+  const [open, setOpen] = useState(false);
+  const Icon = SENT_PILL_ICONS[attachment.source.type];
+  const isReference =
+    attachment.source.type === "url" || attachment.source.type === "path";
+  return (
+    <div className="min-w-0 max-w-full" data-testid="sent-text-pill">
+      <button
+        type="button"
+        onClick={isReference ? undefined : () => setOpen((value) => !value)}
+        title={isReference ? attachment.text : undefined}
+        className={`flex max-w-full items-center gap-1.5 rounded-md border border-border bg-bg-inset px-2 py-1 text-[11px] text-fg-muted ${
+          isReference
+            ? "cursor-default"
+            : "cursor-pointer transition-colors duration-100 hover:bg-bg-overlay hover:text-fg"
+        }`}
+        aria-expanded={isReference ? undefined : open}
+      >
+        <Icon className="size-3 shrink-0" />
+        <span className="max-w-56 truncate">{attachment.name}</span>
+        {!isReference && (
+          <ChevronRight
+            className={`size-3 shrink-0 text-fg-faint transition-transform duration-150 ${open ? "rotate-90" : ""}`}
+          />
+        )}
+      </button>
+      {!isReference && (
+        <div
+          className={`grid transition-[grid-template-rows] duration-200 ease-[cubic-bezier(0.2,0,0,1)] ${
+            open ? "grid-rows-[1fr]" : "grid-rows-[0fr]"
+          }`}
+        >
+          <div className="overflow-hidden">
+            <pre className="mt-1 max-h-56 max-w-md overflow-auto whitespace-pre-wrap break-words rounded-md border border-border bg-bg-inset p-2 text-left font-mono text-[11px] leading-4 text-fg-muted">
+              {attachment.text}
+            </pre>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function textSourceFromMetadata(value: unknown): ChatTextSourceView | null {
+  const record = asRecord(value);
+  switch (record?.type) {
+    case "paste":
+      return { type: "paste" };
+    case "selection":
+      return typeof record.filePath === "string"
+        ? {
+            type: "selection",
+            filePath: record.filePath,
+            ...(typeof record.startLine === "number"
+              ? { startLine: record.startLine }
+              : {}),
+            ...(typeof record.endLine === "number"
+              ? { endLine: record.endLine }
+              : {}),
+          }
+        : null;
+    case "url":
+      return typeof record.url === "string"
+        ? { type: "url", url: record.url }
+        : null;
+    case "path":
+      return typeof record.path === "string"
+        ? { type: "path", path: record.path }
+        : null;
+    default:
+      return null;
+  }
+}
+
 function attachmentsFromMetadata(
   metadata: Record<string, unknown> | undefined,
 ): ChatAttachmentView[] {
   const raw = metadata?.attachments;
   if (!Array.isArray(raw)) return [];
-  return raw.flatMap((entry) => {
+  return raw.flatMap((entry): ChatAttachmentView[] => {
     const record = asRecord(entry);
+    if (record?.kind === "text" && typeof record.text === "string") {
+      const source = textSourceFromMetadata(record.source);
+      return source
+        ? [
+            {
+              kind: "text",
+              name: typeof record.name === "string" ? record.name : "Text",
+              text: record.text,
+              source,
+            } satisfies ChatAttachmentView,
+          ]
+        : [];
+    }
     return typeof record?.dataBase64 === "string" &&
       typeof record?.mediaType === "string"
       ? [
