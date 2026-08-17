@@ -393,6 +393,10 @@ export class ConnectorsService {
     const config = toAgentMcpServer(store.get(connectionId) ?? connection);
     if (!config) return { ok: false, error: "Connection is incomplete" };
     const probe = await probeMcpServer(config);
+    // A successful probe refreshes the cached roster the permission editor
+    // lists and `auto` reads (annotations) for harnesses that can't see
+    // them at call time.
+    if (probe.ok && probe.tools) store.setTools(connectionId, probe.tools);
     if (
       !probe.ok &&
       config.transport !== "stdio" &&

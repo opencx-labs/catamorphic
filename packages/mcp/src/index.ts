@@ -6,6 +6,7 @@ export {
   type McpConnectionProbe,
   type McpIcon,
   type McpResourceContent,
+  type McpToolAnnotations,
   type McpToolInfo,
   pickIcon,
   probeMcpServer,

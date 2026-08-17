@@ -3,11 +3,17 @@ import type {
   AgentEvent,
   AgentMcpServerConfig,
   CodingAgentProvider,
+  McpToolPolicyLayers,
   ProviderSession,
   StartSessionOpts,
+  ToolPolicyAnnotations,
   TurnOptions,
 } from "@catamorphic/sandbox";
-import { buildPluginsPreamble, stagePluginDocs } from "@catamorphic/sandbox";
+import {
+  buildPluginsPreamble,
+  resolveToolPermissionAcross,
+  stagePluginDocs,
+} from "@catamorphic/sandbox";
 import {
   Codex,
   type CodexOptions,
@@ -50,6 +56,19 @@ export interface CodexAgentOpts {
    * whatever protocol revision each server negotiates.
    */
   mcpServers?: Record<string, AgentMcpServerConfig>;
+  /**
+   * Per-server tool permissions (see @catamorphic/sandbox tool-policy).
+   * Codex offers no per-call approval channel to a host (its approvals
+   * are the CLI's own prompts, and this harness runs with approvals off),
+   * so the policy applies COARSELY at spawn: tools that resolve to `deny`
+   * — and, failing closed, tools that would `ask` — are written to the
+   * server's `disabled_tools`. Only tools named in the policy or in
+   * {@link mcpToolAnnotations} can be resolved ahead of time; unknown
+   * tools follow the default only when it is explicit.
+   */
+  mcpPolicies?: Record<string, McpToolPolicyLayers>;
+  /** Tool annotations per server, so `auto` can be resolved at spawn. */
+  mcpToolAnnotations?: Record<string, Record<string, ToolPolicyAnnotations>>;
 }
 
 /**
@@ -80,7 +99,11 @@ export class CodexAgent implements CodingAgentProvider {
 
   constructor(opts: CodexAgentOpts = {}) {
     this.opts = opts;
-    const config = mcpServersConfig(opts.mcpServers ?? {});
+    const config = mcpServersConfig(
+      opts.mcpServers ?? {},
+      opts.mcpPolicies,
+      opts.mcpToolAnnotations,
+    );
     this.client = new Codex({
       apiKey: opts.apiKey,
       baseUrl: opts.baseUrl,
@@ -230,6 +253,8 @@ export class CodexAgent implements CodingAgentProvider {
  */
 function mcpServersConfig(
   servers: Record<string, AgentMcpServerConfig>,
+  policies?: Record<string, McpToolPolicyLayers>,
+  annotations?: Record<string, Record<string, ToolPolicyAnnotations>>,
 ): CodexOptions["config"] | undefined {
   const names = Object.keys(servers);
   if (names.length === 0) return undefined;
@@ -238,8 +263,9 @@ function mcpServersConfig(
     // Codex config keys are TOML bare keys; anything else must be quoted
     // upstream, so normalize here instead of failing at spawn time.
     const key = name.replace(/[^A-Za-z0-9_-]/g, "_");
-    mcpServers[key] =
-      config.transport === "stdio"
+    const disabled = disabledToolsFor(policies?.[name], annotations?.[name]);
+    mcpServers[key] = {
+      ...(config.transport === "stdio"
         ? {
             command: config.command,
             ...(config.args ? { args: config.args } : {}),
@@ -248,9 +274,34 @@ function mcpServersConfig(
         : {
             url: config.url,
             ...(config.headers ? { http_headers: config.headers } : {}),
-          };
+          }),
+      ...(disabled.length > 0 ? { disabled_tools: disabled } : {}),
+    };
   }
   return { mcp_servers: mcpServers };
+}
+
+/**
+ * Tools the policy resolves to anything but `allow`, among the tools it
+ * knows about (named in a rule, or listed by the host's annotations). Ask
+ * fails closed here — Codex cannot ask.
+ */
+export function disabledToolsFor(
+  layers: McpToolPolicyLayers | undefined,
+  annotations: Record<string, ToolPolicyAnnotations> | undefined,
+): string[] {
+  if (!layers || layers.length === 0) return [];
+  const known = new Set<string>([
+    ...layers.flatMap((layer) => Object.keys(layer.tools ?? {})),
+    ...Object.keys(annotations ?? {}),
+  ]);
+  return [...known]
+    .filter(
+      (tool) =>
+        resolveToolPermissionAcross(layers, tool, annotations?.[tool]) !==
+        "allow",
+    )
+    .sort();
 }
 
 /**

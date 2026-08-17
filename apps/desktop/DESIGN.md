@@ -2416,3 +2416,32 @@ Patterned on what best-in-class palettes converged on (Chrome omnibox
   fill every declared field; Slack's search tool rejected
   `context_channel_id: ""` on every call, which was the "connector is
   failing" turn — a model habit, not a Slack outage.
+
+### 2026-08-18 — Tool permissions (ADR 0054)
+
+- Every MCP tool call now passes a policy: `{default, tools}` per
+  connection with `auto` = read-only runs / everything else asks; an
+  agent may carry its own layer; layers INTERSECT (strictest wins) so a
+  connection is a ceiling an agent can only narrow — the shape that
+  survives remote-defined agents and member-owned credentials.
+- `ask` = the front window's consent modal (`tool-permission-modal.tsx`,
+  the elicitation modal's twin): who, which tool on which connection,
+  arguments on demand, read-only/destructive hint; Allow once / Always
+  allow / Deny. "Always allow" writes the rule onto the connection's
+  policy AND is remembered by the asking harness, so nothing re-asks
+  mid-conversation; providers read policies through a getter and the
+  cache key ignores them — an edit never resets a chat.
+- Connectors → Permissions per installed connection: a Segmented default
+  and a per-tool Segmented with the effective answer shown in the
+  "Default" position ("Ask ·"), rosters cached from probes (Fetch when
+  none). Codex has no ask channel: ask fails closed there (disabled_tools).
+- e2e: `tool-permissions.e2e.ts` (fake agent's `permission: server/tool`
+  → real bridge → modal → decision echoed; Always allow persists the rule),
+  editor round-trip in `connectors-oauth.e2e.ts`; unit tests for the
+  resolver (sandbox), the ai-sdk gate, Codex `disabledToolsFor`.
+- Found while re-running the suite: stepping a chat down from a tab to
+  the floating dock (Escape) let the tab surfacing behind it (a New Tab
+  palette autofocuses) steal focus, so a Cmd+W right after closed the
+  palette tab, not the chat. The dock now reclaims the composer's focus on
+  that transition (sync, next frame, and after the tab-in window) — the
+  user was in the chat and stays in the chat.

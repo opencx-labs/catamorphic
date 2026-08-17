@@ -72,6 +72,8 @@ const api = {
     ipcRenderer.invoke("catamorphic:connections-update", id, patch),
   connectionsRemove: (id: string): Promise<boolean> =>
     ipcRenderer.invoke("catamorphic:connections-remove", id),
+  connectionsSetPolicy: (id: string, policy: unknown): Promise<boolean> =>
+    ipcRenderer.invoke("catamorphic:connections-set-policy", id, policy),
   connectionsProbe: (id: string): Promise<unknown> =>
     ipcRenderer.invoke("catamorphic:connections-probe", id),
   connectionsAuthorize: (id: string): Promise<unknown> =>

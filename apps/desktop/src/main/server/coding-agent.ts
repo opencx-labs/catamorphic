@@ -6,7 +6,9 @@ import type {
   AgentMcpServerConfig,
   ExtraTool,
   ExtraToolContext,
+  McpToolPolicyLayers,
   SandboxProvider,
+  ToolPermissionHandler,
 } from "@catamorphic/sandbox";
 import type { AgentConfig } from "../agents-store.js";
 
@@ -48,17 +50,34 @@ You work in a sandboxed copy of the project. After each of your turns, your edit
  * agent config. Returns undefined until the config has an API key and a
  * resolved model id (OpenRouter's default arrives from the live catalog).
  */
-export function buildAiSdkAgent(
-  config: AgentConfig,
-  sandboxProvider: SandboxProvider,
-  modelId: string,
-  extraTools?: ExtraTool[],
-  mcpServers?: Record<string, AgentMcpServerConfig>,
-  onElicit?: ElicitHandler,
+export interface BuildAiSdkAgentOpts {
+  config: AgentConfig;
+  sandboxProvider: SandboxProvider;
+  modelId: string;
+  extraTools?: ExtraTool[];
+  mcpServers?: Record<string, AgentMcpServerConfig>;
   mcpServersForSession?: (
     context: ExtraToolContext,
-  ) => Record<string, AgentMcpServerConfig>,
-): AiSdkCodingAgent | undefined {
+  ) => Record<string, AgentMcpServerConfig>;
+  onElicit?: ElicitHandler;
+  /** Per-server tool policy layers + the prompt for `ask` tools. */
+  mcpPolicies?:
+    | Record<string, McpToolPolicyLayers>
+    | (() => Record<string, McpToolPolicyLayers>);
+  onToolPermission?: ToolPermissionHandler;
+}
+
+export function buildAiSdkAgent({
+  config,
+  sandboxProvider,
+  modelId,
+  extraTools,
+  mcpServers,
+  mcpServersForSession,
+  onElicit,
+  mcpPolicies,
+  onToolPermission,
+}: BuildAiSdkAgentOpts): AiSdkCodingAgent | undefined {
   if (!config.apiKey || !modelId) return undefined;
   const provider = config.provider ?? "anthropic";
   const resolveModel = (id: string) =>
@@ -82,5 +101,7 @@ export function buildAiSdkAgent(
     mcpServers,
     mcpServersForSession,
     ...(onElicit ? { onElicit } : {}),
+    ...(mcpPolicies ? { mcpPolicies } : {}),
+    ...(onToolPermission ? { onToolPermission } : {}),
   });
 }

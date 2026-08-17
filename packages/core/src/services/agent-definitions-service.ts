@@ -110,6 +110,24 @@ export function agentDefinitionSchema(opts?: { allowE2eFake?: boolean }) {
      * the host UI so a user knows what to connect; enforcement later.
      */
     connections: z.array(z.string().min(1)).optional(),
+    /**
+     * Per-connector tool policies, keyed by connector name (what
+     * `connections` lists — a committed definition can't know a member's
+     * local connection ids). Layered on the member's own connection
+     * policy: this can narrow what a connector allows, never widen it.
+     * The shape a hosting backend defines for its remote agents too.
+     */
+    toolPolicies: z
+      .record(
+        z.string().min(1),
+        z.object({
+          default: z.enum(["allow", "ask", "deny", "auto"]).optional(),
+          tools: z
+            .record(z.string(), z.enum(["allow", "ask", "deny"]))
+            .optional(),
+        }),
+      )
+      .optional(),
     /** Reserved for kind "acp": how to reach the agent. */
     acp: z
       .object({
@@ -131,6 +149,13 @@ export interface AgentDefinition {
   description?: string;
   credentials?: AgentDefinitionCredentials;
   connections?: string[];
+  toolPolicies?: Record<
+    string,
+    {
+      default?: "allow" | "ask" | "deny" | "auto";
+      tools?: Record<string, "allow" | "ask" | "deny">;
+    }
+  >;
   acp?: { endpoint?: string; command?: string[] };
 }
 
@@ -182,7 +207,9 @@ export function validateAgentDefinition(
  * re-consent before the definition can touch personal credentials again.
  *
  * Deliberately NOT covered: name, description, connections — display
- * concerns whose edits must not invalidate consent.
+ * concerns whose edits must not invalidate consent — and toolPolicies,
+ * which can only NARROW what the member's own connection policy allows
+ * (policies intersect), so a change can never expand what consent covers.
  */
 export function definitionHash(
   definition: AgentDefinition,

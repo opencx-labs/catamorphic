@@ -1,4 +1,8 @@
 import type { ElicitRequest, ElicitResult } from "@catamorphic/mcp";
+import type {
+  ToolPermissionDecision,
+  ToolPermissionRequest,
+} from "@catamorphic/sandbox";
 import { BrowserWindow, ipcMain, webContents } from "electron";
 import type { AgentTerminals } from "./terminal.js";
 import {
@@ -144,6 +148,15 @@ export interface WorkspaceBridge {
     label: string | undefined,
     request: ElicitRequest,
   ): Promise<ElicitResult>;
+  /**
+   * An agent wants to use an MCP tool whose policy says "ask": the front
+   * window shows the consent card (tool, server, arguments); resolves
+   * with allow (once / always) or deny. Deny when no window can show it.
+   */
+  toolPermission(
+    label: string | undefined,
+    request: ToolPermissionRequest,
+  ): Promise<ToolPermissionDecision>;
   /**
    * An agent asks for a connector: the front window opens the connectors
    * modal pre-filled with the agent's search query; the user decides what
@@ -760,6 +773,15 @@ export function registerAgentBridge(agentTerminals: AgentTerminals): {
       // No window, or the user closed it without answering → decline; a
       // pending tool call must never hang forever on a missing UI.
       return result ?? { action: "decline" };
+    },
+
+    async toolPermission(label, request) {
+      const result = await rpc<ToolPermissionDecision>(
+        "toolPermission",
+        { label, request },
+        ELICIT_TIMEOUT_MS,
+      );
+      return result ?? { decision: "deny" };
     },
 
     async requestConnection(projectId, sessionId, query, reason) {

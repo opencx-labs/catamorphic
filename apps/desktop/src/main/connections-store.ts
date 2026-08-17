@@ -5,8 +5,9 @@ import {
   bearerHeaders,
   type McpOAuthClientHint,
   type McpOAuthState,
+  type McpToolAnnotations,
 } from "@catamorphic/mcp";
-import type { AgentMcpServerConfig } from "@catamorphic/sandbox";
+import type { AgentMcpServerConfig, McpToolPolicy } from "@catamorphic/sandbox";
 import { safeStorage } from "electron";
 
 /**
@@ -50,6 +51,22 @@ export interface McpConnection {
   oauth?: McpOAuthState;
   /** Pre-registered OAuth client the source (plugin) declared, if any. */
   oauthClient?: McpOAuthClientHint;
+  /**
+   * The profile's ceiling for this connection's tools (see
+   * @catamorphic/sandbox tool-policy). Absent = `auto`: read-only tools
+   * run, the rest ask. Agents can only narrow this.
+   */
+  toolPolicy?: McpToolPolicy;
+  /** Tools last seen on the server (name/description/annotations) — what
+   * the permission editor lists and what `auto` reads for harnesses that
+   * can't see annotations at call time. */
+  tools?: CachedMcpTool[];
+}
+
+export interface CachedMcpTool {
+  name: string;
+  description: string;
+  annotations?: McpToolAnnotations;
 }
 
 interface StoredConnection
@@ -83,6 +100,8 @@ export interface PublicMcpConnection {
   iconUrl?: string;
   /** Set once the connection has been through OAuth (tokens on file). */
   authorized: boolean;
+  toolPolicy?: McpToolPolicy;
+  tools?: CachedMcpTool[];
 }
 
 export interface CreateConnectionInput {
@@ -192,6 +211,41 @@ export class ConnectionsStore {
     }
     this.save();
     return this.decrypt(stored);
+  }
+
+  /** The profile's tool policy for a connection (undefined = auto). */
+  setToolPolicy(id: string, policy: McpToolPolicy | undefined): void {
+    const stored = this.data.connections.find((entry) => entry.id === id);
+    if (!stored) return;
+    if (policy && (policy.default || Object.keys(policy.tools ?? {}).length)) {
+      stored.toolPolicy = policy;
+    } else {
+      stored.toolPolicy = undefined;
+    }
+    this.save();
+  }
+
+  /** One rule, in place: what "Always allow" writes. */
+  setToolPermission(
+    id: string,
+    tool: string,
+    permission: "allow" | "ask" | "deny",
+  ): void {
+    const stored = this.data.connections.find((entry) => entry.id === id);
+    if (!stored) return;
+    stored.toolPolicy = {
+      ...stored.toolPolicy,
+      tools: { ...stored.toolPolicy?.tools, [tool]: permission },
+    };
+    this.save();
+  }
+
+  /** Remember the server's tool roster (from a probe/authorize). */
+  setTools(id: string, tools: CachedMcpTool[]): void {
+    const stored = this.data.connections.find((entry) => entry.id === id);
+    if (!stored) return;
+    stored.tools = tools;
+    this.save();
   }
 
   /** Replace the OAuth state (called from the provider on every step of a

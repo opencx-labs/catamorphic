@@ -74,6 +74,17 @@ export interface McpToolInfo {
   inputSchema: Record<string, unknown>;
   /** The tool's `_meta`, when present (MCP Apps ui linkage lives here). */
   meta?: Record<string, unknown>;
+  /** Spec tool annotations (hints, not guarantees) — permission defaults
+   * key off `readOnlyHint` / `destructiveHint`. */
+  annotations?: McpToolAnnotations;
+}
+
+export interface McpToolAnnotations {
+  title?: string;
+  readOnlyHint?: boolean;
+  destructiveHint?: boolean;
+  idempotentHint?: boolean;
+  openWorldHint?: boolean;
 }
 
 export interface McpResourceContent {
@@ -199,6 +210,26 @@ async function connectTransport(
   }
 }
 
+function pickAnnotations(raw: Record<string, unknown>): McpToolAnnotations {
+  const bool = (value: unknown) =>
+    typeof value === "boolean" ? value : undefined;
+  return {
+    ...(typeof raw.title === "string" ? { title: raw.title } : {}),
+    ...(bool(raw.readOnlyHint) !== undefined
+      ? { readOnlyHint: bool(raw.readOnlyHint) }
+      : {}),
+    ...(bool(raw.destructiveHint) !== undefined
+      ? { destructiveHint: bool(raw.destructiveHint) }
+      : {}),
+    ...(bool(raw.idempotentHint) !== undefined
+      ? { idempotentHint: bool(raw.idempotentHint) }
+      : {}),
+    ...(bool(raw.openWorldHint) !== undefined
+      ? { openWorldHint: bool(raw.openWorldHint) }
+      : {}),
+  };
+}
+
 /** Result content flattened to text the model (or a settings pane) can read. */
 export function flattenToolResult(result: {
   content?: Array<Record<string, unknown>>;
@@ -238,6 +269,9 @@ export async function connectMcpServer(
     >,
     ...((tool as { _meta?: Record<string, unknown> })._meta
       ? { meta: (tool as { _meta?: Record<string, unknown> })._meta }
+      : {}),
+    ...(tool.annotations
+      ? { annotations: pickAnnotations(tool.annotations) }
       : {}),
   }));
   return {
@@ -285,6 +319,12 @@ export interface McpConnectionProbe {
   ok: boolean;
   toolCount?: number;
   toolNames?: string[];
+  /** Name, description and annotations per tool (permission editors). */
+  tools?: Array<{
+    name: string;
+    description: string;
+    annotations?: McpToolAnnotations;
+  }>;
   protocolVersion?: string;
   error?: string;
 }
@@ -299,6 +339,11 @@ export async function probeMcpServer(
       ok: true,
       toolCount: server.tools.length,
       toolNames: server.tools.map((tool) => tool.name).slice(0, 50),
+      tools: server.tools.map((tool) => ({
+        name: tool.name,
+        description: tool.description,
+        ...(tool.annotations ? { annotations: tool.annotations } : {}),
+      })),
       protocolVersion: server.protocolVersion,
     };
     await server.close().catch(() => {});

@@ -17,6 +17,7 @@ import type {
   SandboxProvider,
   SandboxStatus,
   StartSessionOpts,
+  ToolPermissionHandler,
   TurnOptions,
 } from "@catamorphic/sandbox";
 
@@ -179,6 +180,12 @@ export class E2eFakeCodingAgent implements CodingAgentProvider {
      * path with the deterministic agent.
      */
     private readonly workspaceTools: ExtraTool[] = [],
+    /**
+     * The real tool-permission prompt (bridge → renderer consent modal),
+     * so "permission: <server>/<tool>" exercises the ask path end to end
+     * without a model or a live MCP server.
+     */
+    private readonly askToolPermission?: ToolPermissionHandler,
   ) {}
 
   interrupt(providerSessionId: string): void {
@@ -561,6 +568,36 @@ export class E2eFakeCodingAgent implements CodingAgentProvider {
           content: `skill error: ${error instanceof Error ? error.message : String(error)}`,
         };
       }
+      yield { type: "done" };
+      return;
+    }
+
+    // "permission: <server>/<tool>" → the REAL tool-permission ask: the
+    // front window shows the consent modal; the echo says what came back.
+    const permissionRun = /^permission:\s*([^/\s]+)\/(\S+)$/.exec(
+      message.trim(),
+    );
+    if (permissionRun?.[1] && permissionRun[2]) {
+      if (!this.askToolPermission) {
+        yield { type: "error", content: "tool permission prompt unavailable" };
+        yield { type: "done" };
+        return;
+      }
+      const decision = await this.askToolPermission({
+        server: permissionRun[1],
+        tool: permissionRun[2],
+        description: "E2E fake tool",
+        input: { text: "hello from e2e" },
+        annotations: { readOnlyHint: false },
+      });
+      yield {
+        type: "text",
+        content: `permission decision: ${decision.decision}${
+          decision.decision === "allow" && decision.remember
+            ? ` (${decision.remember})`
+            : ""
+        }`,
+      };
       yield { type: "done" };
       return;
     }

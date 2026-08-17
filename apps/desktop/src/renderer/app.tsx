@@ -59,6 +59,10 @@ import { PrsNav } from "./components/prs-nav.js";
 import { ShortcutHint } from "./components/shortcut-hint.js";
 import { SidebarItemRow } from "./components/sidebar-item-row.js";
 import {
+  type PendingToolPermission,
+  ToolPermissionModal,
+} from "./components/tool-permission-modal";
+import {
   tabKey,
   type WorkspaceTab,
   WorkspaceTabBar,
@@ -2207,6 +2211,11 @@ export function App() {
   );
   const setElicitationRef = useRef(setElicitation);
   setElicitationRef.current = setElicitation;
+  // Pending tool-permission ask (an MCP tool whose policy says "ask").
+  const [toolPermission, setToolPermission] =
+    useState<PendingToolPermission | null>(null);
+  const setToolPermissionRef = useRef(setToolPermission);
+  setToolPermissionRef.current = setToolPermission;
 
   // Pending request_connection from an agent: the connectors modal opens
   // seeded with the agent's query; closing it settles the tool call with
@@ -3113,6 +3122,28 @@ export function App() {
             });
           });
         }
+        case "toolPermission": {
+          if (!document.hasFocus()) return null;
+          const request = params.request as
+            | PendingToolPermission["request"]
+            | undefined;
+          if (!request || typeof request.tool !== "string") {
+            return { decision: "deny" };
+          }
+          const label =
+            typeof params.label === "string" ? params.label : undefined;
+          return new Promise<unknown>((resolve) => {
+            setToolPermissionRef.current({
+              id: crypto.randomUUID(),
+              label,
+              request,
+              resolve: (decision) => {
+                setToolPermissionRef.current(null);
+                resolve(decision);
+              },
+            });
+          });
+        }
         case "requestConnection": {
           // Main sends this to ONE window (focused, else first) — no
           // renderer-side focus guard, so an unfocused single window
@@ -3484,6 +3515,7 @@ export function App() {
         pending={elicitation}
         onOpenUrl={(url) => openBrowserTab(url)}
       />
+      <ToolPermissionModal pending={toolPermission} />
       {/* Project-agent consent (ADR 0050): approve, then complete the
           original pick and refresh the roster's consent state. */}
       <ProjectAgentConsentDialog

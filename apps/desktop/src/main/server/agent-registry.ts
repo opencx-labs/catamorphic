@@ -13,7 +13,10 @@ import type {
   AgentPluginConfig,
   CodingAgentProvider,
   ExtraToolContext,
+  McpToolPolicyLayers,
   SandboxProvider,
+  ToolPermissionHandler,
+  ToolPolicyAnnotations,
 } from "@catamorphic/sandbox";
 import type { WorkspaceBridge } from "../agent-bridge.js";
 import type { AgentConfig } from "../agents-store.js";
@@ -90,6 +93,18 @@ export interface DesktopAgentRegistryDeps {
 interface ResolvedMcp {
   servers: Record<string, AgentMcpServerConfig>;
   plugins: AgentPluginConfig[];
+  /**
+   * Tool policy layers per server key: the connection's own (the
+   * profile's ceiling) then the agent's narrowing, when it has one. Every
+   * assigned connection gets an entry — the harness gates the ones it
+   * finds here and pre-approves the rest (session-scoped surfaces).
+   */
+  policies: Record<string, McpToolPolicyLayers>;
+  /** Cached tool annotations per server key (for `auto` off the hot path). */
+  annotations: Record<string, Record<string, ToolPolicyAnnotations>>;
+  /** Server key → connection id, so "Always allow" can land on the right
+   * connection's policy. */
+  connectionIds: Record<string, string>;
 }
 
 /**
@@ -157,7 +172,16 @@ export class DesktopAgentRegistry implements CodingAgentRegistry {
     // would drop the built-in agent's in-memory sessions mid-conversation.
     // Connection/connector edits DO rebuild, so the next turn runs with
     // the new server set.
-    const key = JSON.stringify({ ...config, model: "", effort: "", mcp });
+    // Policies are deliberately NOT part of the key: harnesses read them
+    // live (see livePolicies), so a permission edit — or an "Always
+    // allow" mid-turn — never rebuilds the provider under a conversation.
+    const key = JSON.stringify({
+      ...config,
+      toolPolicies: undefined,
+      model: "",
+      effort: "",
+      mcp: { servers: mcp.servers, plugins: mcp.plugins },
+    });
     const defaults = this.freshDefaults(config);
     const cached = this.cache.get(id);
     if (cached && cached.key === key) {
@@ -173,7 +197,7 @@ export class DesktopAgentRegistry implements CodingAgentRegistry {
     // resource closer under this id, which an eviction after it would
     // immediately tear down.
     this.evict(id);
-    const built = this.build(config, mcp);
+    const built = this.build(config, mcp, profileId);
     if (!built) return undefined;
     this.cache.set(id, {
       key,
@@ -210,12 +234,33 @@ export class DesktopAgentRegistry implements CodingAgentRegistry {
     // same key names the same connection for every agent and for the
     // MCP-apps view resolver, whatever this agent's assignment is.
     const servers: Record<string, AgentMcpServerConfig> = {};
+    const policies: ResolvedMcp["policies"] = {};
+    const annotations: ResolvedMcp["annotations"] = {};
+    const connectionIds: Record<string, string> = {};
     for (const [key, connection] of connectionServerKeys(
       stores.connections.list(),
     )) {
       if (picked && !picked.has(connection.id)) continue;
       const mapped = toAgentMcpServer(connection);
-      if (mapped) servers[key] = mapped;
+      if (!mapped) continue;
+      servers[key] = mapped;
+      connectionIds[key] = connection.id;
+      // Layers: the connection's policy (absent = auto), then the agent's
+      // (profile agents key by connection id; committed/remote definitions
+      // by connector name or server key).
+      const agentPolicy =
+        config.toolPolicies?.[connection.id] ??
+        config.toolPolicies?.[connection.name] ??
+        config.toolPolicies?.[key];
+      policies[key] = [
+        connection.toolPolicy ?? {},
+        ...(agentPolicy ? [agentPolicy] : []),
+      ];
+      annotations[key] = Object.fromEntries(
+        (connection.tools ?? [])
+          .filter((tool) => tool.annotations)
+          .map((tool) => [tool.name, tool.annotations ?? {}]),
+      );
     }
 
     const plugins: AgentPluginConfig[] = [];
@@ -234,7 +279,59 @@ export class DesktopAgentRegistry implements CodingAgentRegistry {
     // assignment — they are app doctrine, not a connector.
     const hostSkillsPlugin = this.deps.hostSkills?.()?.plugin;
     if (hostSkillsPlugin) plugins.push(hostSkillsPlugin);
-    return { servers, plugins };
+    return { servers, plugins, policies, annotations, connectionIds };
+  }
+
+  /**
+   * The `ask` prompt for an agent's MCP tools: the front window's consent
+   * modal, labeled with the agent. "Always allow" is persisted on the
+   * connection's policy (the profile ceiling) so the next provider build
+   * and every other agent see it; the asking harness remembers it too.
+   */
+  private toolPermissionHandler(
+    config: AgentConfig,
+    profileId: string,
+  ): ToolPermissionHandler | undefined {
+    const bridge = this.deps.workspaceBridge;
+    if (!bridge) return undefined;
+    return async (request) => {
+      const decision = await bridge.toolPermission(config.name, request);
+      if (decision.decision === "allow" && decision.remember === "always") {
+        const connectionId = this.livePolicies(config, profileId).connectionIds[
+          request.server
+        ];
+        if (connectionId) {
+          this.deps.profileConfig
+            .forProfile(profileId)
+            .connections.setToolPermission(connectionId, request.tool, "allow");
+        }
+      }
+      return decision;
+    };
+  }
+
+  /**
+   * The current policy layers/annotations for an agent, re-resolved from
+   * the stores on every read — what the harness getters call, so edits in
+   * the connectors modal apply to the next tool call, not the next
+   * provider build. Cheap: a pass over the profile's connections.
+   */
+  private livePolicies(
+    config: AgentConfig,
+    profileId: string,
+  ): Pick<ResolvedMcp, "policies" | "annotations" | "connectionIds"> {
+    const latest =
+      this.deps.profileConfig.forProfile(profileId).agents.get(config.id) ??
+      config;
+    const mcp = this.resolveMcp(
+      { ...latest, toolPolicies: latest.toolPolicies ?? config.toolPolicies },
+      profileId,
+    );
+    return {
+      policies: mcp.policies,
+      annotations: mcp.annotations,
+      connectionIds: mcp.connectionIds,
+    };
   }
 
   /**
@@ -404,6 +501,9 @@ export class DesktopAgentRegistry implements CodingAgentRegistry {
           ? "api-key"
           : "local",
       apiKey: bindingAuth?.mode === "api-key" ? bindingAuth.apiKey : null,
+      // Keyed by connector NAME in a committed definition; resolveMcp
+      // matches by name/server key as well as by id.
+      ...(def.toolPolicies ? { toolPolicies: def.toolPolicies } : {}),
     };
     // Informational v1: the definition's `connections` are shown in the
     // UI; the agent gets the owning profile's full connection surface
@@ -422,7 +522,7 @@ export class DesktopAgentRegistry implements CodingAgentRegistry {
       apiKey: config.apiKey,
       source,
       rootPath,
-      mcp,
+      mcp: { servers: mcp.servers, plugins: mcp.plugins },
     });
     const cached = this.cache.get(id);
     if (cached && cached.key === key) {
@@ -437,8 +537,15 @@ export class DesktopAgentRegistry implements CodingAgentRegistry {
     this.evict(id);
     const registered =
       source === "secret" && !this.deps.e2eFake
-        ? this.buildSecretProjectAgent(id, def, config, mcp, projectId)
-        : this.build(config, mcp);
+        ? this.buildSecretProjectAgent(
+            id,
+            def,
+            config,
+            mcp,
+            projectId,
+            profileId,
+          )
+        : this.build(config, mcp, profileId);
     if (!registered) {
       return this.failFast(
         id,
@@ -464,6 +571,7 @@ export class DesktopAgentRegistry implements CodingAgentRegistry {
     config: AgentConfig,
     mcp: ResolvedMcp,
     projectId: string,
+    profileId: string,
   ): RegisteredCodingAgent | undefined {
     const secretName = def.credentials?.secret;
     if (!secretName) return undefined;
@@ -474,7 +582,7 @@ export class DesktopAgentRegistry implements CodingAgentRegistry {
           `The project agent "${def.name}" authenticates with the project secret "${secretName}", which has no value — add it under the project's secrets and send your message again.`,
         );
       }
-      const built = this.build({ ...config, apiKey: value }, mcp);
+      const built = this.build({ ...config, apiKey: value }, mcp, profileId);
       if (!built) {
         return new FailFastCodingAgent(
           `The project agent "${def.name}" could not be constructed — check its model configuration in agents/ and try again.`,
@@ -526,6 +634,7 @@ export class DesktopAgentRegistry implements CodingAgentRegistry {
   private build(
     config: AgentConfig,
     mcp: ResolvedMcp,
+    profileId: string,
   ): RegisteredCodingAgent | undefined {
     // E2E: same registry mechanics, scripted provider — renderer flows
     // (agent lists, switching, effort) exercise the real plumbing. The
@@ -538,6 +647,7 @@ export class DesktopAgentRegistry implements CodingAgentRegistry {
             new E2eFakeCodingAgent(
               this.deps.sandboxProvider,
               this.workspaceToolkit?.tools,
+              this.toolPermissionHandler(config, profileId),
             ),
           ),
           config,
@@ -550,17 +660,21 @@ export class DesktopAgentRegistry implements CodingAgentRegistry {
     switch (config.harness) {
       case "ai-sdk": {
         const bridge = this.deps.workspaceBridge;
-        const provider = buildAiSdkAgent(
+        const provider = buildAiSdkAgent({
           config,
-          this.deps.sandboxProvider,
-          this.resolvedModel(config) ?? "",
-          this.workspaceToolkit?.tools,
-          mcp.servers,
+          sandboxProvider: this.deps.sandboxProvider,
+          modelId: this.resolvedModel(config) ?? "",
+          extraTools: this.workspaceToolkit?.tools,
+          mcpServers: mcp.servers,
           // Elicitation from this agent's connectors → the front window,
           // labeled with the agent so the user knows who's asking.
-          bridge ? (request) => bridge.elicit(config.name, request) : undefined,
-          (context) => this.sessionMcpServers(context),
-        );
+          onElicit: bridge
+            ? (request) => bridge.elicit(config.name, request)
+            : undefined,
+          mcpServersForSession: (context) => this.sessionMcpServers(context),
+          mcpPolicies: () => this.livePolicies(config, profileId).policies,
+          onToolPermission: this.toolPermissionHandler(config, profileId),
+        });
         if (provider) {
           // This harness owns real MCP client connections (stdio child
           // processes); eviction must close them, not leak them.
@@ -619,6 +733,11 @@ export class DesktopAgentRegistry implements CodingAgentRegistry {
                 mcpServersForSession: (context) =>
                   this.sessionMcpServers(context),
                 plugins: mcp.plugins,
+                mcpPolicies: () =>
+                  this.livePolicies(config, profileId).policies,
+                mcpToolAnnotations: () =>
+                  this.livePolicies(config, profileId).annotations,
+                onToolPermission: this.toolPermissionHandler(config, profileId),
               }),
               { hasTools: true },
             ),
@@ -650,8 +769,11 @@ export class DesktopAgentRegistry implements CodingAgentRegistry {
                   ? { env: { CODEX_HOME: this.agentHome(config.id) } }
                   : {}),
                 // Assigned connections ride as mcp_servers.* config
-                // overrides; the CLI owns the client connections.
+                // overrides; the CLI owns the client connections. Policy
+                // is coarse here (disabled_tools) — Codex can't ask.
                 mcpServers: mcp.servers,
+                mcpPolicies: mcp.policies,
+                mcpToolAnnotations: mcp.annotations,
               }),
               { hasTools: false },
             ),

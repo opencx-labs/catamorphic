@@ -28,6 +28,8 @@ export interface AgentInfo {
   /** Media kinds this agent's chat composer accepts. */
   accepts: Array<"image" | "document">;
   connections: AgentConnectionsSetting;
+  /** Per-connection tool policies layered on the profile's (by id). */
+  toolPolicies: Record<string, McpToolPolicy>;
 }
 
 export interface AgentsData {
@@ -86,6 +88,7 @@ export function projectAgentAsInfo(agent: ProjectAgentInfo): AgentInfo {
     apiKeyMasked: null,
     accepts: harness === "codex" ? [] : ["image", "document"],
     connections: { mode: "all" },
+    toolPolicies: {},
   };
 }
 
@@ -132,6 +135,27 @@ export interface ConnectionInfo {
     | { kind: "plugin"; plugin: string };
   /** Has been through OAuth (tokens on file). */
   authorized: boolean;
+  /** The profile's ceiling for this connection's tools (undefined = auto). */
+  toolPolicy?: McpToolPolicy;
+  /** Tools last seen on the server. */
+  tools?: Array<{
+    name: string;
+    description: string;
+    annotations?: ToolAnnotations;
+  }>;
+}
+
+export type ToolPermission = "allow" | "ask" | "deny";
+export interface McpToolPolicy {
+  default?: ToolPermission | "auto";
+  tools?: Record<string, ToolPermission>;
+}
+export interface ToolAnnotations {
+  title?: string;
+  readOnlyHint?: boolean;
+  destructiveHint?: boolean;
+  idempotentHint?: boolean;
+  openWorldHint?: boolean;
 }
 
 export interface CreateConnectionInput {
@@ -159,6 +183,11 @@ export interface ConnectionProbe {
   ok: boolean;
   toolCount?: number;
   toolNames?: string[];
+  tools?: Array<{
+    name: string;
+    description: string;
+    annotations?: ToolAnnotations;
+  }>;
   protocolVersion?: string;
   error?: string;
   /** The server wants a user to authorize (401): offer the OAuth flow. */
@@ -536,6 +565,11 @@ export interface CatamorphicDesktopApi {
   ) => Promise<ConnectionInfo | null>;
   connectionsRemove: (id: string) => Promise<boolean>;
   connectionsProbe: (id: string) => Promise<ConnectionProbe>;
+  /** Replace the profile's tool policy for a connection (null = auto). */
+  connectionsSetPolicy: (
+    id: string,
+    policy: McpToolPolicy | null,
+  ) => Promise<boolean>;
   /** Run OAuth for a remote connection (opens the consent page as a tab). */
   connectionsAuthorize: (id: string) => Promise<{ toolCount: number }>;
   connectorsSearch: (query: string) => Promise<ConnectorSearchData>;

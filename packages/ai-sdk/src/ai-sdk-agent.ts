@@ -4,6 +4,7 @@ import {
   connectMcpServer,
   type ElicitHandler,
   flattenToolResult,
+  type McpToolInfo,
 } from "@catamorphic/mcp";
 import type {
   AgentEffort,
@@ -13,15 +14,18 @@ import type {
   CodingAgentProvider,
   ExtraTool,
   ExtraToolContext,
+  McpToolPolicyLayers,
   ProviderSession,
   SandboxProvider,
   StartSessionOpts,
+  ToolPermissionHandler,
   TurnOptions,
 } from "@catamorphic/sandbox";
 import {
   buildPluginsPreamble,
   isMediaAttachment,
   renderTextAttachments,
+  resolveToolPermissionAcross,
   stagedPluginFiles,
 } from "@catamorphic/sandbox";
 import {
@@ -97,7 +101,29 @@ export interface AiSdkCodingAgentOpts {
    * the stateless era. Omit and servers see no elicitation capability.
    */
   onElicit?: ElicitHandler;
+  /**
+   * Per-server tool permissions (layers: connection ceiling, agent
+   * narrowing). A tool resolving to `deny` fails with a message the model
+   * can read; `ask` raises {@link onToolPermission}. Servers without an
+   * entry run unrestricted (session-scoped project surfaces, hosts that
+   * don't police tools). See @catamorphic/sandbox tool-policy.
+   */
+  mcpPolicies?: McpPolicySource;
+  /**
+   * How to ask the user about an `ask` tool. Omitted = there is nobody to
+   * ask, so `ask` fails closed (the tool is refused, with a message).
+   */
+  onToolPermission?: ToolPermissionHandler;
 }
+
+/**
+ * Policies as a value, or as a getter the harness consults on every call —
+ * so a permission edit applies to a live conversation without the host
+ * rebuilding the provider (which would drop in-memory sessions).
+ */
+export type McpPolicySource =
+  | Record<string, McpToolPolicyLayers>
+  | (() => Record<string, McpToolPolicyLayers>);
 
 interface AiSdkSessionState {
   instructions: string;
@@ -203,6 +229,50 @@ export class AiSdkCodingAgent implements CodingAgentProvider {
     );
   }
 
+  /**
+   * The permission gate MCP tools run through. "Always allow" answers
+   * are remembered for this provider's lifetime (the host persists them
+   * for the next one), so a granted tool never re-asks mid-conversation.
+   */
+  private toolGate(): McpToolGate {
+    const remembered = new Set<string>();
+    const source = this.opts.mcpPolicies ?? {};
+    const ask = this.opts.onToolPermission;
+    return async (server, tool, input) => {
+      const policies = typeof source === "function" ? source() : source;
+      const layers = policies[server];
+      if (!layers) return;
+      const key = `${server}\u0000${tool.name}`;
+      if (remembered.has(key)) return;
+      const permission = resolveToolPermissionAcross(
+        layers,
+        tool.name,
+        tool.annotations,
+      );
+      if (permission === "allow") return;
+      if (permission === "deny" || !ask) {
+        throw new Error(
+          permission === "deny"
+            ? `The tool "${tool.name}" on ${server} is turned off in this connection's permissions.`
+            : `The tool "${tool.name}" on ${server} needs the user's permission, and there is no one to ask in this context.`,
+        );
+      }
+      const answer = await ask({
+        server,
+        tool: tool.name,
+        description: tool.description,
+        input,
+        annotations: tool.annotations,
+      });
+      if (answer.decision === "deny") {
+        throw new Error(
+          `The user declined to let you use "${tool.name}" on ${server} for this call.`,
+        );
+      }
+      if (answer.remember === "always") remembered.add(key);
+    };
+  }
+
   async startSession(opts: StartSessionOpts): Promise<ProviderSession> {
     const pluginFiles = stagedPluginFiles(opts.attachedPlugins);
     if (Object.keys(pluginFiles).length > 0) {
@@ -223,9 +293,10 @@ export class AiSdkCodingAgent implements CodingAgentProvider {
       .join("\n\n");
     const providerSessionId = crypto.randomUUID();
 
+    const gate = this.toolGate();
     const mcpTools =
       Object.keys(this.opts.mcpServers ?? {}).length > 0
-        ? buildMcpTools(await this.connectMcp())
+        ? buildMcpTools(await this.connectMcp(), gate)
         : {};
 
     // Session-scoped servers (per-project surfaces) connect fresh per
@@ -247,7 +318,7 @@ export class AiSdkCodingAgent implements CodingAgentProvider {
           }
         }),
       );
-      Object.assign(mcpTools, buildMcpTools(scoped));
+      Object.assign(mcpTools, buildMcpTools(scoped, gate));
     }
 
     this.sessions.set(providerSessionId, {
@@ -590,8 +661,16 @@ interface ToolContext {
  * (the same namespacing Claude Code uses, so events read alike across
  * harnesses). Results are flattened text; errors surface as tool errors.
  */
+/** Resolves (tool may run) or throws (refused/declined) before a call. */
+type McpToolGate = (
+  server: string,
+  tool: McpToolInfo,
+  input: Record<string, unknown>,
+) => Promise<void>;
+
 function buildMcpTools(
   connections: Map<string, ConnectedMcpServer>,
+  gate?: McpToolGate,
 ): Record<string, Tool> {
   const tools: Record<string, Tool> = {};
   for (const [serverName, server] of connections) {
@@ -603,16 +682,17 @@ function buildMcpTools(
           info.inputSchema as Parameters<typeof jsonSchema>[0],
         ),
         execute: async (input) => {
+          const args = pruneEmptyOptionalArgs(
+            input as Record<string, unknown>,
+            info.inputSchema,
+          );
+          // Permission first: deny/ask throw with a message the model
+          // reads as the tool result — the turn goes on.
+          await gate?.(serverName, info, args);
           // Prefer structured content: MCP Apps views render it, and the
           // model reads JSON fine. Text-only results stay text;
           // flattenToolResult throws on isError results.
-          const raw = await server.callToolRaw(
-            info.name,
-            pruneEmptyOptionalArgs(
-              input as Record<string, unknown>,
-              info.inputSchema,
-            ),
-          );
+          const raw = await server.callToolRaw(info.name, args);
           if (raw.structuredContent !== undefined && !raw.isError) {
             return raw.structuredContent;
           }

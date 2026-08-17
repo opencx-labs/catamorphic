@@ -14,6 +14,8 @@ import {
   type ConnectorSearchData,
   desktopApi,
   type InstalledConnectorInfo,
+  type McpToolPolicy,
+  type ToolPermission,
 } from "../lib/desktop-api";
 import { useListMotion } from "../lib/list-motion";
 import { Modal } from "./modal";
@@ -73,6 +75,8 @@ export function ConnectorsModal({
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [probes, setProbes] = useState<Record<string, ConnectionProbe>>({});
+  // Which connection's permission editor is expanded.
+  const [permissionsFor, setPermissionsFor] = useState<string | null>(null);
   // OAuth in flight / just finished, per connection id.
   const [authFlows, setAuthFlows] = useState<
     Record<string, { status: "authorizing" | "error"; message?: string }>
@@ -435,101 +439,151 @@ export function ConnectorsModal({
                   const canAuthorize =
                     connection.transport !== "stdio" &&
                     (probeResult?.needsAuth || authFlow?.status === "error");
+                  const permissionsOpen = permissionsFor === connection.id;
                   return (
                     <div
                       key={connection.id}
-                      className="flex items-center gap-2 rounded-md border border-border bg-bg-raised/40 px-2.5 py-1.5"
+                      className="rounded-md border border-border bg-bg-raised/40 px-2.5 py-1.5"
                       data-testid="connection-row"
                       data-connection-id={connection.id}
                     >
-                      <ConnectorIcon
-                        iconUrl={connection.iconUrl}
-                        name={connection.name}
-                      />
-                      <div className="min-w-0 flex-1">
-                        <div className="flex items-baseline gap-2">
-                          <span className="truncate text-[13px]">
-                            {connection.name}
-                          </span>
-                          <span className="shrink-0 text-[11px] text-fg-faint">
-                            MCP · {connection.transport}
-                            {connection.source.kind === "plugin"
-                              ? ` · from ${connection.source.plugin}`
-                              : connection.source.kind === "registry"
-                                ? " · registry"
-                                : ""}
-                          </span>
+                      <div className="flex items-center gap-2">
+                        <ConnectorIcon
+                          iconUrl={connection.iconUrl}
+                          name={connection.name}
+                        />
+                        <div className="min-w-0 flex-1">
+                          <div className="flex items-baseline gap-2">
+                            <span className="truncate text-[13px]">
+                              {connection.name}
+                            </span>
+                            <span className="shrink-0 text-[11px] text-fg-faint">
+                              MCP · {connection.transport}
+                              {connection.source.kind === "plugin"
+                                ? ` · from ${connection.source.plugin}`
+                                : connection.source.kind === "registry"
+                                  ? " · registry"
+                                  : ""}
+                            </span>
+                          </div>
+                          {authFlow?.status === "authorizing" ? (
+                            <p
+                              className="flex items-center gap-1 truncate text-[11px] text-fg-muted"
+                              data-testid="connection-authorizing"
+                            >
+                              <Loader2 className="size-3 shrink-0 animate-spin" />
+                              Finish signing in — the consent page opened in a
+                              tab
+                            </p>
+                          ) : authFlow?.status === "error" ? (
+                            <p className="truncate text-[11px] text-danger">
+                              {authFlow.message ?? "Authorization failed"}
+                            </p>
+                          ) : probeResult ? (
+                            <p
+                              className={`truncate text-[11px] ${probeResult.ok ? "text-fg-muted" : probeResult.needsAuth ? "text-warning" : probeResult.error ? "text-danger" : "text-fg-faint"}`}
+                            >
+                              {probeResult.ok
+                                ? `${probeResult.toolCount} tools${probeResult.protocolVersion ? ` · MCP ${probeResult.protocolVersion}` : ""}`
+                                : (probeResult.error ?? "Checking…")}
+                            </p>
+                          ) : connection.authorized ? (
+                            <p className="flex items-center gap-1 truncate text-[11px] text-fg-faint">
+                              <ShieldCheck className="size-3 shrink-0" />
+                              Authorized
+                            </p>
+                          ) : null}
                         </div>
-                        {authFlow?.status === "authorizing" ? (
-                          <p
-                            className="flex items-center gap-1 truncate text-[11px] text-fg-muted"
-                            data-testid="connection-authorizing"
+                        {canAuthorize && (
+                          <button
+                            type="button"
+                            onClick={() => void authorize(connection.id)}
+                            className="shrink-0 cursor-pointer rounded-md bg-accent px-2 py-0.5 text-xs font-medium text-accent-fg transition-colors duration-150 hover:bg-accent/90"
+                            data-testid="connection-authorize"
                           >
-                            <Loader2 className="size-3 shrink-0 animate-spin" />
-                            Finish signing in — the consent page opened in a tab
-                          </p>
-                        ) : authFlow?.status === "error" ? (
-                          <p className="truncate text-[11px] text-danger">
-                            {authFlow.message ?? "Authorization failed"}
-                          </p>
-                        ) : probeResult ? (
-                          <p
-                            className={`truncate text-[11px] ${probeResult.ok ? "text-fg-muted" : probeResult.needsAuth ? "text-warning" : probeResult.error ? "text-danger" : "text-fg-faint"}`}
-                          >
-                            {probeResult.ok
-                              ? `${probeResult.toolCount} tools${probeResult.protocolVersion ? ` · MCP ${probeResult.protocolVersion}` : ""}`
-                              : (probeResult.error ?? "Checking…")}
-                          </p>
-                        ) : connection.authorized ? (
-                          <p className="flex items-center gap-1 truncate text-[11px] text-fg-faint">
-                            <ShieldCheck className="size-3 shrink-0" />
-                            Authorized
-                          </p>
-                        ) : null}
-                      </div>
-                      {canAuthorize && (
+                            Authorize
+                          </button>
+                        )}
                         <button
                           type="button"
-                          onClick={() => void authorize(connection.id)}
-                          className="shrink-0 cursor-pointer rounded-md bg-accent px-2 py-0.5 text-xs font-medium text-accent-fg transition-colors duration-150 hover:bg-accent/90"
-                          data-testid="connection-authorize"
+                          onClick={() =>
+                            setPermissionsFor(
+                              permissionsOpen ? null : connection.id,
+                            )
+                          }
+                          className={`flex shrink-0 cursor-pointer items-center gap-1 text-xs transition-colors duration-150 ${
+                            permissionsOpen
+                              ? "text-fg"
+                              : "text-fg-muted hover:text-fg"
+                          }`}
+                          aria-expanded={permissionsOpen}
+                          data-testid="connection-permissions"
                         >
-                          Authorize
+                          <ShieldCheck className="size-3.5" />
+                          Permissions
                         </button>
-                      )}
-                      <button
-                        type="button"
-                        onClick={() => void probe(connection.id)}
-                        className="shrink-0 cursor-pointer text-xs text-fg-muted hover:text-fg"
-                      >
-                        Test
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() =>
-                          void desktopApi
-                            .connectionsUpdate(connection.id, {
-                              enabled: !connection.enabled,
-                            })
-                            .then(refresh)
-                        }
-                        className={`shrink-0 cursor-pointer text-xs ${connection.enabled ? "text-fg-muted hover:text-fg" : "text-warning"}`}
-                      >
-                        {connection.enabled ? "Disable" : "Enable"}
-                      </button>
-                      {connection.source.kind !== "plugin" && (
+                        <button
+                          type="button"
+                          onClick={() => void probe(connection.id)}
+                          className="shrink-0 cursor-pointer text-xs text-fg-muted hover:text-fg"
+                        >
+                          Test
+                        </button>
                         <button
                           type="button"
                           onClick={() =>
                             void desktopApi
-                              .connectionsRemove(connection.id)
+                              .connectionsUpdate(connection.id, {
+                                enabled: !connection.enabled,
+                              })
                               .then(refresh)
                           }
-                          className="shrink-0 cursor-pointer text-xs text-fg-muted hover:text-danger"
-                          aria-label={`Remove ${connection.name}`}
+                          className={`shrink-0 cursor-pointer text-xs ${connection.enabled ? "text-fg-muted hover:text-fg" : "text-warning"}`}
                         >
-                          <Trash2 className="size-3.5" />
+                          {connection.enabled ? "Disable" : "Enable"}
                         </button>
+                        {connection.source.kind !== "plugin" && (
+                          <button
+                            type="button"
+                            onClick={() =>
+                              void desktopApi
+                                .connectionsRemove(connection.id)
+                                .then(refresh)
+                            }
+                            className="shrink-0 cursor-pointer text-xs text-fg-muted hover:text-danger"
+                            aria-label={`Remove ${connection.name}`}
+                          >
+                            <Trash2 className="size-3.5" />
+                          </button>
+                        )}
+                      </div>
+                      {permissionsOpen && (
+                        <ToolPolicyEditor
+                          connection={connection}
+                          onProbe={() => void probe(connection.id)}
+                          probing={
+                            probes[connection.id] !== undefined &&
+                            !probes[connection.id]?.ok &&
+                            !probes[connection.id]?.error
+                          }
+                          onChange={(policy) => {
+                            // Optimistic: the change event refreshes the list.
+                            setConnections((current) =>
+                              current.map((entry) =>
+                                entry.id === connection.id
+                                  ? {
+                                      ...entry,
+                                      toolPolicy: policy ?? undefined,
+                                    }
+                                  : entry,
+                              ),
+                            );
+                            void desktopApi.connectionsSetPolicy(
+                              connection.id,
+                              policy,
+                            );
+                          }}
+                        />
                       )}
                     </div>
                   );
@@ -734,6 +788,216 @@ export function ConnectorsModal({
         </div>
       </div>
     </Modal>
+  );
+}
+
+const PERMISSION_LABELS: Record<ToolPermission, string> = {
+  allow: "Allow",
+  ask: "Ask",
+  deny: "Off",
+};
+
+/**
+ * Per-connection tool permissions: the profile's ceiling for this
+ * connection (agents can only narrow it). A default for the roster
+ * (Auto = read-only tools run, others ask) and a per-tool override; the
+ * roster is what the last probe listed, so an unprobed connection offers
+ * to fetch it. Every change saves immediately.
+ */
+function ToolPolicyEditor({
+  connection,
+  onChange,
+  onProbe,
+  probing,
+}: {
+  connection: ConnectionInfo;
+  onChange: (policy: McpToolPolicy | null) => void;
+  onProbe: () => void;
+  probing: boolean;
+}) {
+  const policy = connection.toolPolicy ?? {};
+  const tools = connection.tools ?? [];
+  const setDefault = (value: ToolPermission | "auto") =>
+    onChange(
+      normalizePolicy({
+        ...policy,
+        default: value === "auto" ? undefined : value,
+      }),
+    );
+  const setTool = (name: string, value: ToolPermission | "default") => {
+    const next = { ...policy.tools };
+    if (value === "default") delete next[name];
+    else next[name] = value;
+    onChange(normalizePolicy({ ...policy, tools: next }));
+  };
+  const resolved = (tool: (typeof tools)[number]): ToolPermission => {
+    const explicit = policy.tools?.[tool.name];
+    if (explicit) return explicit;
+    if (policy.default && policy.default !== "auto") return policy.default;
+    return tool.annotations?.readOnlyHint ? "allow" : "ask";
+  };
+  return (
+    <div
+      className="mt-2 flex flex-col gap-2 border-t border-border pt-2"
+      data-testid="tool-policy-editor"
+    >
+      <div className="flex items-center gap-2">
+        <span className="min-w-0 flex-1 text-[11px] text-fg-muted">
+          Tools without a rule
+          <span className="text-fg-faint">
+            {" "}
+            — Auto runs read-only tools and asks about the rest
+          </span>
+        </span>
+        <Segmented
+          value={policy.default ?? "auto"}
+          options={[
+            { value: "auto", label: "Auto" },
+            { value: "allow", label: "Allow" },
+            { value: "ask", label: "Ask" },
+            { value: "deny", label: "Off" },
+          ]}
+          onChange={(value) => setDefault(value as ToolPermission | "auto")}
+          testId="tool-policy-default"
+        />
+      </div>
+      <p className="text-[10px] text-fg-faint">
+        Ask opens a consent prompt when an agent reaches for the tool. Agents
+        can narrow these rules, never widen them. Codex agents can't ask — for
+        them, Ask means Off.
+      </p>
+      {tools.length === 0 ? (
+        <div className="flex items-center gap-2 text-[11px] text-fg-faint">
+          {probing ? (
+            <>
+              <Loader2 className="size-3 animate-spin" />
+              Listing tools…
+            </>
+          ) : (
+            <>
+              No tool list yet.
+              <button
+                type="button"
+                onClick={onProbe}
+                className="cursor-pointer text-fg-muted underline-offset-2 hover:text-fg hover:underline"
+              >
+                Fetch the server's tools
+              </button>
+            </>
+          )}
+        </div>
+      ) : (
+        <ul className="flex flex-col gap-1" data-testid="tool-policy-tools">
+          {tools.map((tool) => {
+            const explicit = policy.tools?.[tool.name];
+            const effective = resolved(tool);
+            return (
+              <li
+                key={tool.name}
+                className="flex items-center gap-2"
+                data-tool={tool.name}
+                data-effective={effective}
+              >
+                <div className="min-w-0 flex-1">
+                  <div className="flex items-baseline gap-1.5">
+                    <span className="truncate font-mono text-[11px] text-fg">
+                      {tool.name}
+                    </span>
+                    {tool.annotations?.readOnlyHint ? (
+                      <span className="shrink-0 text-[10px] text-fg-faint">
+                        read-only
+                      </span>
+                    ) : tool.annotations?.destructiveHint ? (
+                      <span className="shrink-0 text-[10px] text-danger/80">
+                        destructive
+                      </span>
+                    ) : null}
+                  </div>
+                  {tool.description && (
+                    <p className="truncate text-[11px] text-fg-faint">
+                      {tool.description}
+                    </p>
+                  )}
+                </div>
+                <Segmented
+                  value={explicit ?? "default"}
+                  options={[
+                    {
+                      value: "default",
+                      label: explicit
+                        ? "Default"
+                        : `${PERMISSION_LABELS[effective]} ·`,
+                      title: "Follow the default above",
+                    },
+                    { value: "allow", label: "Allow" },
+                    { value: "ask", label: "Ask" },
+                    { value: "deny", label: "Off" },
+                  ]}
+                  onChange={(value) =>
+                    setTool(tool.name, value as ToolPermission | "default")
+                  }
+                />
+              </li>
+            );
+          })}
+        </ul>
+      )}
+    </div>
+  );
+}
+
+/** Drop empty policies so "auto, no rules" stores as nothing. */
+function normalizePolicy(policy: McpToolPolicy): McpToolPolicy | null {
+  const tools = Object.fromEntries(
+    Object.entries(policy.tools ?? {}).filter(([, value]) => value),
+  );
+  const next: McpToolPolicy = {
+    ...(policy.default && policy.default !== "auto"
+      ? { default: policy.default }
+      : {}),
+    ...(Object.keys(tools).length > 0 ? { tools } : {}),
+  };
+  return Object.keys(next).length > 0 ? next : null;
+}
+
+/** A small pill group — one active choice, no layout shift on change. */
+function Segmented({
+  value,
+  options,
+  onChange,
+  testId,
+}: {
+  value: string;
+  options: Array<{ value: string; label: string; title?: string }>;
+  onChange: (value: string) => void;
+  testId?: string;
+}) {
+  return (
+    <div
+      className="flex shrink-0 rounded-md border border-border bg-bg-inset p-0.5"
+      data-testid={testId}
+    >
+      {options.map((option) => {
+        const active = option.value === value;
+        return (
+          <button
+            key={option.value}
+            type="button"
+            aria-pressed={active}
+            title={option.title}
+            onClick={() => onChange(option.value)}
+            className={`h-5 cursor-pointer rounded px-1.5 text-[10px] font-medium transition-colors duration-100 ${
+              active
+                ? "bg-bg-overlay text-fg"
+                : "text-fg-faint hover:text-fg-muted"
+            }`}
+            data-value={option.value}
+          >
+            {option.label}
+          </button>
+        );
+      })}
+    </div>
   );
 }
 

@@ -66,3 +66,4 @@ Settled design decisions live here as short Architecture Decision Records. They 
 | [0051](0051-no-project-templates.md) | No project templates: agents build from skills | Accepted |
 | [0052](0052-skills-as-commands.md) | Skills as commands, and the agent-initiated auth loop | Accepted |
 | [0053](0053-identity-scope-and-app-routes.md) | Identity scope: one artifact vocabulary, structural narrowing, synchronous calls | Accepted |
+| [0054](0054-tool-permissions.md) | Tool permissions: layered connection/agent policies that intersect; ask via host prompt | Accepted |

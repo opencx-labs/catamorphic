@@ -215,6 +215,110 @@ describe("AiSdkCodingAgent", () => {
     ]);
   });
 
+  it("gates MCP tools by policy: deny refuses, ask consults the host, always-allow sticks", async () => {
+    const callToolRaw = vi.fn(async (_name: string, _args: unknown) => ({
+      content: [{ type: "text", text: "sent" }],
+    }));
+    const server = {
+      tools: [
+        {
+          name: "post_message",
+          description: "Post",
+          inputSchema: { type: "object", properties: {} },
+          annotations: { readOnlyHint: false },
+        },
+        {
+          name: "list_channels",
+          description: "List",
+          inputSchema: { type: "object", properties: {} },
+          annotations: { readOnlyHint: true },
+        },
+        {
+          name: "delete_channel",
+          description: "Delete",
+          inputSchema: { type: "object", properties: {} },
+          annotations: { destructiveHint: true },
+        },
+      ],
+      callTool: vi.fn(async () => "unused"),
+      callToolRaw,
+      readResource: vi.fn(),
+      close: vi.fn(async () => {}),
+    };
+    connectMcpServerMock.mockResolvedValueOnce(server);
+    const provider = createProvider();
+    const model = new MockLanguageModelV4({
+      doStream: [
+        toolCallStream("mcp__slack__list_channels", {}),
+        toolCallStream("mcp__slack__delete_channel", {}),
+        toolCallStream("mcp__slack__post_message", { text: "hi" }),
+        toolCallStream("mcp__slack__post_message", { text: "again" }),
+        textStream("done"),
+      ],
+    });
+    const asks: string[] = [];
+    const agent = new AiSdkCodingAgent({
+      model,
+      sandboxProvider: provider,
+      mcpServers: {
+        slack: { transport: "http", url: "https://mcp.slack.com/mcp" },
+      },
+      // Connection ceiling: auto (read-only allowed, rest asks), delete off.
+      mcpPolicies: { slack: [{ tools: { delete_channel: "deny" } }] },
+      onToolPermission: async (request) => {
+        asks.push(request.tool);
+        return { decision: "allow", remember: "always" };
+      },
+    });
+    const session = await start(agent);
+    const events = await collect(agent, session, "go");
+
+    // list_channels: read-only → ran without asking.
+    // delete_channel: denied → never called, error result carries the reason.
+    // post_message: asked once ("always"), then ran again without asking.
+    expect(asks).toEqual(["post_message"]);
+    expect(callToolRaw.mock.calls.map((call) => call[0])).toEqual([
+      "list_channels",
+      "post_message",
+      "post_message",
+    ]);
+    expect(JSON.stringify(events)).toMatch(/delete_channel.*turned off/);
+  });
+
+  it("an ask with nobody to ask fails closed", async () => {
+    connectMcpServerMock.mockResolvedValueOnce({
+      tools: [
+        {
+          name: "post_message",
+          description: "Post",
+          inputSchema: { type: "object", properties: {} },
+        },
+      ],
+      callTool: vi.fn(async () => "unused"),
+      callToolRaw: vi.fn(async () => ({ content: [] })),
+      readResource: vi.fn(),
+      close: vi.fn(async () => {}),
+    });
+    const provider = createProvider();
+    const model = new MockLanguageModelV4({
+      doStream: [
+        toolCallStream("mcp__slack__post_message", {}),
+        textStream("ok"),
+      ],
+    });
+    const agent = new AiSdkCodingAgent({
+      model,
+      sandboxProvider: provider,
+      mcpServers: {
+        slack: { transport: "http", url: "https://mcp.slack.com/mcp" },
+      },
+      mcpPolicies: { slack: [{}] },
+    });
+    const session = await start(agent);
+    const events = await collect(agent, session, "go");
+    expect(JSON.stringify(events)).toMatch(/no one to ask/);
+  });
+
   it("skips MCP servers that fail to connect instead of breaking the session", async () => {
     connectMcpServerMock.mockRejectedValueOnce(new Error("boom"));
     const provider = createProvider();

@@ -158,4 +158,48 @@ describe("connector OAuth", () => {
       true,
     );
   }, 120_000);
+
+  it("Permissions lists the probed tools and saves per-tool rules on the connection", async () => {
+    await run(
+      `row().querySelector('[data-testid="connection-permissions"]').click(); return true;`,
+    );
+    await runWait(
+      `const item = row()?.querySelector('[data-testid="tool-policy-tools"] li[data-tool="hello"]');
+       return !!item && item.dataset.effective === 'ask';`,
+      { label: "hello tool listed, auto → ask (no annotations)" },
+    );
+    await app.screenshot(
+      "/private/tmp/claude-501/-Users-tabaza-Desktop-catamorphic/415f6510-da48-4924-8082-6f94d52a0c92/scratchpad/tool-policy-editor.png",
+    );
+    // Turn it off.
+    await run(`
+      row().querySelector('[data-testid="tool-policy-tools"] li[data-tool="hello"] button[data-value="deny"]').click();
+      return true;
+    `);
+    await runWait(
+      `return row()?.querySelector('li[data-tool="hello"]')?.dataset.effective === 'deny';`,
+      { label: "hello → off" },
+    );
+    let list = await app.eval<
+      Array<{ name: string; toolPolicy?: { tools?: Record<string, string> } }>
+    >(`window.catamorphicDesktop.connectionsList()`);
+    expect(
+      list.find((c) => c.name === "Fake OAuth")?.toolPolicy?.tools,
+    ).toEqual({ hello: "deny" });
+    // Back to default, then a connection-wide Allow default.
+    await run(
+      `row().querySelector('li[data-tool="hello"] button[data-value="default"]').click(); return true;`,
+    );
+    await run(
+      `row().querySelector('[data-testid="tool-policy-default"] button[data-value="allow"]').click(); return true;`,
+    );
+    await runWait(
+      `return row()?.querySelector('li[data-tool="hello"]')?.dataset.effective === 'allow';`,
+      { label: "default allow → hello allowed" },
+    );
+    list = await app.eval(`window.catamorphicDesktop.connectionsList()`);
+    expect(list.find((c) => c.name === "Fake OAuth")?.toolPolicy).toEqual({
+      default: "allow",
+    });
+  });
 });

@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
+import type { McpToolPolicy } from "@catamorphic/sandbox";
 import { safeStorage } from "electron";
 
 /**
@@ -59,6 +60,13 @@ export interface AgentConfig {
   apiKey: string | null;
   /** MCP connection assignment; absent means `{ mode: "all" }`. */
   connections?: AgentConnectionsSetting;
+  /**
+   * Per-connection tool policies this agent adds on top of the profile's
+   * (keyed by connection id; see @catamorphic/sandbox tool-policy). Layers
+   * intersect — an agent can narrow what the connection allows, never
+   * widen it. The same shape a remote host would define for its agents.
+   */
+  toolPolicies?: Record<string, McpToolPolicy>;
 }
 
 interface StoredAgent extends Omit<AgentConfig, "apiKey"> {
@@ -89,6 +97,8 @@ export interface PublicAgentConfig {
   accepts: AgentAttachmentKind[];
   /** MCP connection assignment (always materialized; default "all"). */
   connections: AgentConnectionsSetting;
+  /** Per-connection tool policies layered on the profile's (by id). */
+  toolPolicies: Record<string, McpToolPolicy>;
 }
 
 /**
@@ -128,6 +138,7 @@ export interface CreateAgentInput {
   auth?: AgentAuthMode;
   apiKey?: string | null;
   connections?: AgentConnectionsSetting;
+  toolPolicies?: Record<string, McpToolPolicy>;
 }
 
 export interface UpdateAgentInput {
@@ -139,6 +150,8 @@ export interface UpdateAgentInput {
   /** New key; omit to keep the stored one, null to clear it. */
   apiKey?: string | null;
   connections?: AgentConnectionsSetting;
+  /** Replace the per-connection tool policies (null clears them). */
+  toolPolicies?: Record<string, McpToolPolicy> | null;
 }
 
 export class AgentsStore {
@@ -218,6 +231,7 @@ export class AgentsStore {
             : "api-key"
           : "local"),
       ...(input.connections ? { connections: input.connections } : {}),
+      ...(input.toolPolicies ? { toolPolicies: input.toolPolicies } : {}),
       ...this.encrypt(input.apiKey ?? null),
     };
     this.data.agents.push(stored);
@@ -238,6 +252,9 @@ export class AgentsStore {
     if (patch.effort !== undefined) stored.effort = patch.effort;
     if (patch.auth !== undefined) stored.auth = patch.auth;
     if (patch.connections !== undefined) stored.connections = patch.connections;
+    if (patch.toolPolicies !== undefined) {
+      stored.toolPolicies = patch.toolPolicies ?? undefined;
+    }
     if (patch.apiKey !== undefined) {
       const { apiKeyEncrypted, apiKeyPlaintext } = this.encrypt(
         patch.apiKey?.trim() || null,
@@ -302,5 +319,6 @@ export function toPublicAgent(agent: AgentConfig): PublicAgentConfig {
     apiKeyMasked: apiKey ? `${apiKey.slice(0, 7)}…${apiKey.slice(-4)}` : null,
     accepts: agentAccepts(agent),
     connections: agent.connections ?? { mode: "all" },
+    toolPolicies: agent.toolPolicies ?? {},
   };
 }

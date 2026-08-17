@@ -9,6 +9,7 @@ import {
   pollDeviceToken,
   requestDeviceCode,
 } from "@catamorphic/github";
+import type { McpToolPolicy } from "@catamorphic/sandbox";
 import { app, BrowserWindow, dialog, ipcMain, shell } from "electron";
 import type { BindingAuth } from "./agent-bindings-store.js";
 import {
@@ -435,11 +436,25 @@ export function registerIpcHandlers(
     return removed;
   });
 
-  ipcMain.handle("catamorphic:connections-probe", (event, id: string) =>
-    connectors
-      ? connectors.probeConnection(windows.profileFor(event.sender), id)
-      : { ok: false, error: "Connectors are unavailable" },
+  ipcMain.handle(
+    "catamorphic:connections-set-policy",
+    (event, id: string, policy: McpToolPolicy | null) => {
+      storesFor(event).connections.setToolPolicy(id, policy ?? undefined);
+      connectionsChanged(event);
+      return true;
+    },
   );
+
+  ipcMain.handle("catamorphic:connections-probe", async (event, id: string) => {
+    if (!connectors) return { ok: false, error: "Connectors are unavailable" };
+    const probe = await connectors.probeConnection(
+      windows.profileFor(event.sender),
+      id,
+    );
+    // A probe refreshes the connection's cached tool roster.
+    if (probe.ok) connectionsChanged(event);
+    return probe;
+  });
 
   // OAuth for a remote connection. The consent page opens as a browser tab
   // in the asking window (the profile's own cookies/logins apply); once

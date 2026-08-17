@@ -22,14 +22,18 @@ import type {
   CodingAgentProvider,
   ExtraTool,
   ExtraToolContext,
+  McpToolPolicyLayers,
   ProviderSession,
   StartSessionOpts,
+  ToolPermissionHandler,
+  ToolPolicyAnnotations,
   TurnOptions,
 } from "@catamorphic/sandbox";
 import {
   buildPluginsPreamble,
   isMediaAttachment,
   renderTextAttachments,
+  resolveToolPermissionAcross,
   stagePluginDocs,
 } from "@catamorphic/sandbox";
 import type { ZodRawShape } from "zod";
@@ -104,6 +108,27 @@ export interface ClaudeCodeAgentOpts {
    * harness gets them, not just this one.
    */
   plugins?: AgentPluginConfig[];
+  /**
+   * Per-server tool permissions (see @catamorphic/sandbox tool-policy).
+   * A server with an entry loses its server-wide allowlist entry; each of
+   * its tools then routes through `canUseTool`, where the policy decides:
+   * allow, deny (with a message the model reads), or ask the host via
+   * {@link onToolPermission}. Servers without an entry stay pre-approved.
+   */
+  mcpPolicies?:
+    | Record<string, McpToolPolicyLayers>
+    | (() => Record<string, McpToolPolicyLayers>);
+  /**
+   * Tool annotations per server (tool name → hints), for `auto` policies:
+   * the CLI's permission callback carries no annotations, so the host
+   * supplies what it learned when it last listed the server's tools.
+   * Both accept a getter so edits apply live (no provider rebuild).
+   */
+  mcpToolAnnotations?:
+    | Record<string, Record<string, ToolPolicyAnnotations>>
+    | (() => Record<string, Record<string, ToolPolicyAnnotations>>);
+  /** How to ask the user about an `ask` tool; omitted = ask fails closed. */
+  onToolPermission?: ToolPermissionHandler;
 }
 
 /**
@@ -482,6 +507,78 @@ export class ClaudeCodeAgent implements CodingAgentProvider {
    * executable overrides, unattended permissions, and the model/effort
    * defaults with per-turn overrides applied.
    */
+  /** "Always allow" answers, remembered for this provider's lifetime. */
+  private readonly rememberedTools = new Set<string>();
+
+  private currentPolicies(): Record<string, McpToolPolicyLayers> | undefined {
+    const source = this.opts.mcpPolicies;
+    return typeof source === "function" ? source() : source;
+  }
+
+  private currentAnnotations(): Record<
+    string,
+    Record<string, ToolPolicyAnnotations>
+  > {
+    const source = this.opts.mcpToolAnnotations;
+    return (typeof source === "function" ? source() : source) ?? {};
+  }
+
+  /**
+   * The policy verdict for an external MCP tool call, or undefined when
+   * the tool isn't one of the policed servers' (built-ins, workspace, and
+   * unpoliced servers fall through to the allowlist rules).
+   */
+  private async policedMcpDecision(
+    toolName: string,
+    input: Record<string, unknown>,
+  ): Promise<PermissionResult | undefined> {
+    const policies = this.currentPolicies();
+    if (!policies || !toolName.startsWith("mcp__")) return undefined;
+    const annotations = this.currentAnnotations();
+    // Longest server key wins: "mcp__foo__bar__tool" is server "foo__bar"
+    // if that server exists.
+    const server = Object.keys(policies)
+      .filter((name) => toolName.startsWith(`mcp__${name}__`))
+      .sort((a, b) => b.length - a.length)[0];
+    if (!server) return undefined;
+    const tool = toolName.slice(`mcp__${server}__`.length);
+    const key = `${server}\u0000${tool}`;
+    if (this.rememberedTools.has(key)) return { behavior: "allow" };
+    const permission = resolveToolPermissionAcross(
+      policies[server],
+      tool,
+      annotations[server]?.[tool],
+    );
+    if (permission === "allow") return { behavior: "allow" };
+    if (permission === "deny") {
+      return {
+        behavior: "deny",
+        message: `The tool "${tool}" on ${server} is turned off in this connection's permissions.`,
+      };
+    }
+    const ask = this.opts.onToolPermission;
+    if (!ask) {
+      return {
+        behavior: "deny",
+        message: `The tool "${tool}" on ${server} needs the user's permission, and there is no one to ask in this context.`,
+      };
+    }
+    const answer = await ask({
+      server,
+      tool,
+      input,
+      annotations: annotations[server]?.[tool],
+    });
+    if (answer.decision === "deny") {
+      return {
+        behavior: "deny",
+        message: `The user declined to let you use "${tool}" on ${server} for this call.`,
+      };
+    }
+    if (answer.remember === "always") this.rememberedTools.add(key);
+    return { behavior: "allow" };
+  }
+
   private buildOptions(
     cwd: string | undefined,
     systemPrompt: string | undefined,
@@ -596,8 +693,11 @@ export class ClaudeCodeAgent implements CodingAgentProvider {
           ? extraTools.map((def) => `mcp__workspace__${def.name}`)
           : []),
         // Server-wide allow per external connection ("mcp__<name>" covers
-        // every tool the server exposes).
-        ...Object.keys(externalServers).map((name) => `mcp__${name}`),
+        // every tool the server exposes) — unless the host set a policy
+        // for it, in which case each tool comes through canUseTool.
+        ...Object.keys(externalServers)
+          .filter((name) => !this.currentPolicies()?.[name])
+          .map((name) => `mcp__${name}`),
       ],
       // Removing (not merely denying) the built-in shell tools takes them
       // out of the model's context — otherwise the CLI's own system prompt
@@ -619,6 +719,8 @@ export class ClaudeCodeAgent implements CodingAgentProvider {
             live.raiseAsk();
           });
         }
+        const policed = await this.policedMcpDecision(toolName, input);
+        if (policed) return policed;
         return denyUnlistedTools(toolName, input, options);
       },
       hooks: backgroundTaskHooks((event) => live.hookEvents.push(event)),

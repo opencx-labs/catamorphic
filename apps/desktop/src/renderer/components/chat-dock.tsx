@@ -1556,6 +1556,27 @@ export function ChatDock({
     const frame = requestAnimationFrame(() => inputRef.current?.focus());
     return () => cancelAnimationFrame(frame);
   }, [expanded]);
+  // Stepping down from a tab to the floating dock (Escape) keeps the
+  // user IN the chat: the tab that surfaces behind it (a New Tab palette
+  // autofocuses its input) must not steal focus — Cmd+W right after
+  // should still close the chat, and typing should still land here.
+  // The surfacing tab may mount (and focus) a couple of frames later,
+  // after its pane-in animation — so claim focus now, next frame, and
+  // once more after that animation window (tab-in is 200ms).
+  const previousModeRef = useRef(entry.mode);
+  useEffect(() => {
+    const previous = previousModeRef.current;
+    previousModeRef.current = entry.mode;
+    if (!(previous === "tab" && entry.mode === "partial")) return;
+    const focus = () => inputRef.current?.focus();
+    focus();
+    const frame = requestAnimationFrame(focus);
+    const timer = window.setTimeout(focus, 260);
+    return () => {
+      cancelAnimationFrame(frame);
+      window.clearTimeout(timer);
+    };
+  }, [entry.mode]);
 
   // Window-level so Escape works regardless of what has focus. Escape steps
   // the chat down one size: full tab → floating dock → bubble. At most one
