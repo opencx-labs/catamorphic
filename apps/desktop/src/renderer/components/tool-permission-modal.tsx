@@ -33,18 +33,27 @@ export interface PendingToolPermission {
 
 export function ToolPermissionModal({
   pending,
+  queued = 0,
 }: {
   pending: PendingToolPermission | null;
+  /** Asks waiting behind this one (shown so the user isn't surprised). */
+  queued?: number;
 }) {
   if (!pending) return null;
   return (
     <Modal open onClose={() => pending.resolve({ decision: "deny" })}>
-      <PermissionCard key={pending.id} pending={pending} />
+      <PermissionCard key={pending.id} pending={pending} queued={queued} />
     </Modal>
   );
 }
 
-function PermissionCard({ pending }: { pending: PendingToolPermission }) {
+function PermissionCard({
+  pending,
+  queued,
+}: {
+  pending: PendingToolPermission;
+  queued: number;
+}) {
   const { request, label, resolve } = pending;
   const [showArgs, setShowArgs] = useState(false);
   const args = JSON.stringify(request.input, null, 2);
@@ -127,6 +136,8 @@ function PermissionCard({ pending }: { pending: PendingToolPermission }) {
       <p className="mt-2 text-[11px] text-fg-faint">
         "Always allow" adds a rule to this connection's permissions in
         Connectors — you can change it there anytime.
+        {queued > 0 &&
+          ` ${queued} more request${queued === 1 ? "" : "s"} waiting.`}
       </p>
     </div>
   );

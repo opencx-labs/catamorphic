@@ -263,7 +263,7 @@ function mcpServersConfig(
     // Codex config keys are TOML bare keys; anything else must be quoted
     // upstream, so normalize here instead of failing at spawn time.
     const key = name.replace(/[^A-Za-z0-9_-]/g, "_");
-    const disabled = disabledToolsFor(policies?.[name], annotations?.[name]);
+    const filter = codexToolFilter(policies?.[name], annotations?.[name]);
     mcpServers[key] = {
       ...(config.transport === "stdio"
         ? {
@@ -275,33 +275,52 @@ function mcpServersConfig(
             url: config.url,
             ...(config.headers ? { http_headers: config.headers } : {}),
           }),
-      ...(disabled.length > 0 ? { disabled_tools: disabled } : {}),
+      ...(filter.enabled_tools ? { enabled_tools: filter.enabled_tools } : {}),
+      ...(filter.disabled_tools
+        ? { disabled_tools: filter.disabled_tools }
+        : {}),
     };
   }
   return { mcp_servers: mcpServers };
 }
 
 /**
- * Tools the policy resolves to anything but `allow`, among the tools it
- * knows about (named in a rule, or listed by the host's annotations). Ask
- * fails closed here — Codex cannot ask.
+ * The Codex-side rendering of a policy. Ask fails closed here — Codex
+ * cannot ask. Two shapes:
+ * - When tools the host has NOT listed would still be allowed (every
+ *   layer's default is `allow`), an unknown tool may run: emit
+ *   `disabled_tools` for the known ones that resolve to anything else.
+ * - Otherwise an unknown tool must not run (it would resolve to ask/deny,
+ *   or to `auto` without annotations = ask): emit `enabled_tools`, the
+ *   allowlist of known tools that resolve to `allow`.
  */
-export function disabledToolsFor(
+export function codexToolFilter(
   layers: McpToolPolicyLayers | undefined,
   annotations: Record<string, ToolPolicyAnnotations> | undefined,
-): string[] {
-  if (!layers || layers.length === 0) return [];
+): { enabled_tools?: string[]; disabled_tools?: string[] } {
+  if (!layers || layers.length === 0) return {};
   const known = new Set<string>([
     ...layers.flatMap((layer) => Object.keys(layer.tools ?? {})),
     ...Object.keys(annotations ?? {}),
   ]);
-  return [...known]
-    .filter(
-      (tool) =>
-        resolveToolPermissionAcross(layers, tool, annotations?.[tool]) !==
-        "allow",
-    )
-    .sort();
+  const resolve = (tool: string) =>
+    resolveToolPermissionAcross(layers, tool, annotations?.[tool]);
+  // A tool nobody named and nobody annotated: does it run?
+  const unknownRuns = resolve("\u0000unknown-tool\u0000") === "allow";
+  const sorted = [...known].sort();
+  if (unknownRuns) {
+    const disabled = sorted.filter((tool) => resolve(tool) !== "allow");
+    return disabled.length > 0 ? { disabled_tools: disabled } : {};
+  }
+  return { enabled_tools: sorted.filter((tool) => resolve(tool) === "allow") };
+}
+
+/** @deprecated use {@link codexToolFilter}; kept for the tests' name. */
+export function disabledToolsFor(
+  layers: McpToolPolicyLayers | undefined,
+  annotations: Record<string, ToolPolicyAnnotations> | undefined,
+): string[] {
+  return codexToolFilter(layers, annotations).disabled_tools ?? [];
 }
 
 /**

@@ -20,10 +20,13 @@ import {
   ListSchema,
   OkSchema,
   PaginationQuerySchema,
+  PendingToolPermissionsSchema,
   ProjectAgentEntrySchema,
   ProjectIdParamsSchema,
   SendMessageSchema,
   SkillSchema,
+  ToolPermissionDecisionSchema,
+  ToolPermissionIdParamsSchema,
   UpdateAgentSessionSchema,
 } from "../schemas.js";
 
@@ -223,6 +226,91 @@ export function registerAgentRoutes(app: FastifyInstance, ctx: RouteContext) {
         }
         throw err;
       }
+    },
+  });
+
+  // Tool permissions (ADR 0054), for hosts that answer "ask" over HTTP:
+  // the pending asks of a session, and the answer. Only when the host
+  // configured a broker (the desktop answers through its own bridge).
+  typed.route({
+    method: "GET",
+    url: "/projects/:projectId/agent/sessions/:sessionId/permissions",
+    schema: {
+      params: AgentSessionIdParamsSchema,
+      response: {
+        200: PendingToolPermissionsSchema,
+        404: ErrorSchema,
+        503: ErrorSchema,
+      },
+    },
+    handler: async (request, reply) => {
+      const agentSessions = ctx.core?.agentSessions;
+      const broker = ctx.core?.toolPermissions;
+      if (!agentSessions || !broker) {
+        return reply
+          .status(503)
+          .send({ error: "Tool permissions are not configured" });
+      }
+      try {
+        await agentSessions.assertSession(
+          resolveIdentity(request),
+          request.params.projectId,
+          request.params.sessionId,
+        );
+      } catch (err) {
+        if (
+          err instanceof ProjectNotFoundError ||
+          err instanceof AgentSessionNotFoundError
+        ) {
+          return reply.status(404).send({ error: "Session not found" });
+        }
+        throw err;
+      }
+      return reply.send({
+        permissions: broker.list(request.params.sessionId),
+      });
+    },
+  });
+
+  typed.route({
+    method: "POST",
+    url: "/projects/:projectId/agent/sessions/:sessionId/permissions/:permissionId",
+    schema: {
+      params: ToolPermissionIdParamsSchema,
+      body: ToolPermissionDecisionSchema,
+      response: { 200: OkSchema, 404: ErrorSchema, 503: ErrorSchema },
+    },
+    handler: async (request, reply) => {
+      const agentSessions = ctx.core?.agentSessions;
+      const broker = ctx.core?.toolPermissions;
+      if (!agentSessions || !broker) {
+        return reply
+          .status(503)
+          .send({ error: "Tool permissions are not configured" });
+      }
+      try {
+        await agentSessions.assertSession(
+          resolveIdentity(request),
+          request.params.projectId,
+          request.params.sessionId,
+        );
+      } catch (err) {
+        if (
+          err instanceof ProjectNotFoundError ||
+          err instanceof AgentSessionNotFoundError
+        ) {
+          return reply.status(404).send({ error: "Session not found" });
+        }
+        throw err;
+      }
+      const pending = broker.get(request.params.permissionId);
+      // An ask belongs to the session it was raised in — answering it from
+      // another session's URL is a 404, not a hijack.
+      if (!pending || pending.sessionId !== request.params.sessionId) {
+        return reply.status(404).send({ error: "Permission not found" });
+      }
+      broker.answer(request.params.permissionId, request.body);
+      return reply.send({ ok: true });
     },
   });
 

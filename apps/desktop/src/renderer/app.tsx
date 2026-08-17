@@ -1801,7 +1801,9 @@ export function App() {
         const ws = workspaceRef.current;
         let closed = false;
         for (const browser of ws.browsers) {
-          if (browser.url.startsWith(prefix)) {
+          // The callback path specifically: with a fixed port (Slack's
+          // 3118) a bare origin match could close a dev-server tab.
+          if (browser.url.startsWith(`${prefix}/callback`)) {
             closeTabRef.current(browserTabKey(browser.localId), {
               force: true,
             });
@@ -2211,11 +2213,14 @@ export function App() {
   );
   const setElicitationRef = useRef(setElicitation);
   setElicitationRef.current = setElicitation;
-  // Pending tool-permission ask (an MCP tool whose policy says "ask").
-  const [toolPermission, setToolPermission] =
-    useState<PendingToolPermission | null>(null);
-  const setToolPermissionRef = useRef(setToolPermission);
-  setToolPermissionRef.current = setToolPermission;
+  // Pending tool-permission asks (MCP tools whose policy says "ask"). A
+  // QUEUE: harnesses run a step's tool calls concurrently, so two asks can
+  // land together — each must get its own answer, FIFO.
+  const [toolPermissions, setToolPermissions] = useState<
+    PendingToolPermission[]
+  >([]);
+  const setToolPermissionsRef = useRef(setToolPermissions);
+  setToolPermissionsRef.current = setToolPermissions;
 
   // Pending request_connection from an agent: the connectors modal opens
   // seeded with the agent's query; closing it settles the tool call with
@@ -3123,7 +3128,8 @@ export function App() {
           });
         }
         case "toolPermission": {
-          if (!document.hasFocus()) return null;
+          // Main sends this to ONE window (focused, else first) — no
+          // focus guard here, or an alt-tabbed user would auto-deny.
           const request = params.request as
             | PendingToolPermission["request"]
             | undefined;
@@ -3133,15 +3139,21 @@ export function App() {
           const label =
             typeof params.label === "string" ? params.label : undefined;
           return new Promise<unknown>((resolve) => {
-            setToolPermissionRef.current({
-              id: crypto.randomUUID(),
-              label,
-              request,
-              resolve: (decision) => {
-                setToolPermissionRef.current(null);
-                resolve(decision);
+            const id = crypto.randomUUID();
+            setToolPermissionsRef.current((queue) => [
+              ...queue,
+              {
+                id,
+                label,
+                request,
+                resolve: (decision) => {
+                  setToolPermissionsRef.current((current) =>
+                    current.filter((entry) => entry.id !== id),
+                  );
+                  resolve(decision);
+                },
               },
-            });
+            ]);
           });
         }
         case "requestConnection": {
@@ -3515,7 +3527,10 @@ export function App() {
         pending={elicitation}
         onOpenUrl={(url) => openBrowserTab(url)}
       />
-      <ToolPermissionModal pending={toolPermission} />
+      <ToolPermissionModal
+        pending={toolPermissions[0] ?? null}
+        queued={Math.max(0, toolPermissions.length - 1)}
+      />
       {/* Project-agent consent (ADR 0050): approve, then complete the
           original pick and refresh the roster's consent state. */}
       <ProjectAgentConsentDialog

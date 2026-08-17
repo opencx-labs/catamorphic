@@ -63,6 +63,7 @@ import type {
   McpToolKindSpec,
   TriggerKindRuntime,
 } from "./services/trigger-kinds.js";
+import type { ToolPermissionBroker } from "./services/tool-permission-broker.js";
 import { TriggersService } from "./services/triggers-service.js";
 import { WorkflowsService } from "./services/workflows-service.js";
 
@@ -80,6 +81,13 @@ export interface CatamorphicCoreConfig {
    * user) dev sandbox.
    */
   codingAgent?: CodingAgentProvider | CodingAgentRegistry;
+  /**
+   * Where tool-permission asks (ADR 0054) park for hosts that answer them
+   * over HTTP: hand its `handlerFor(agent)` to your providers'
+   * `onToolPermission`, and the plugin serves the pending list + answer
+   * routes. Hosts with their own consent UI (the desktop bridge) omit it.
+   */
+  toolPermissions?: ToolPermissionBroker;
   /**
    * Resolve a project's directory on the host filesystem, required for
    * registry agents with `execution: "host"` (Claude Code, Codex).
@@ -215,6 +223,7 @@ export class CatamorphicCore {
   readonly devSandboxes?: DevSandboxService;
   readonly agentContext?: AgentContextService;
   readonly agentSessions?: AgentSessionsService;
+  readonly toolPermissions?: ToolPermissionBroker;
   readonly apps?: AppsService;
   readonly appPolicies: AppPoliciesService;
   readonly github?: GithubService;
@@ -230,6 +239,7 @@ export class CatamorphicCore {
   readonly hostSkillFiles: Record<string, string>;
 
   constructor(config: CatamorphicCoreConfig) {
+    this.toolPermissions = config.toolPermissions;
     this.db = config.db;
     this.projectManager = config.projectManager;
     // Doctrine resolves ONCE, at boot: every consumer below (project

@@ -281,6 +281,31 @@ Hooks shipped:
 
 All hooks reject with the typed `CatamorphicError` envelope (discriminated by `code`: `unauthorized`, `not_found`, `validation`, `conflict`, `server_error`, `network`, `unknown`). Use `isCatamorphicError(err)` and switch on `err.code`; never branch on `err.message`. Shared OpenAPI-derived domain types (`Project`, `Run`, `RepoStatus`, `BranchInfo`, `ConflictEntry`, `PluginInfo`, `Secret`, `AgentSession`, …) live behind a single `@catamorphic/react/types` barrel.
 
+## Agent tool permissions for hosts (ADR 0054)
+
+Coding-agent harnesses gate every MCP tool call through a permission policy
+(`allow` / `ask` / `deny`; `auto` = read-only tools run, others ask). A host
+supplies two things:
+
+- **Policies** — per server key, as layers that intersect (strictest wins).
+  Pass `mcpPolicies` (a value or a getter) to `AiSdkCodingAgent` /
+  `ClaudeCodeAgent` / `CodexAgent`; a shared org credential's ceiling is
+  simply the first layer, the user's own policy the second, the agent's the
+  third. Codex has no per-call approval channel: `deny` and `ask` become
+  `disabled_tools` there.
+- **The answer to `ask`** — `onToolPermission`. Hosts with their own consent
+  UI implement it directly. Browser-served hosts use the broker: create a
+  `ToolPermissionBroker` (from `@catamorphic/core`), pass it as
+  `toolPermissions` on the core config and hand `broker.handlerFor(agentName)`
+  to each provider. The plugin then serves
+  `GET /projects/:id/agent/sessions/:sid/permissions` and
+  `POST …/permissions/:pid` (`{decision: "allow" | "deny", remember?:
+  "always"}`); `useToolPermissions()` in `@catamorphic/react` polls them
+  while a turn runs and the registry's `tool-permission-card` (already inside
+  `agent-chat`) renders the consent. Unanswered asks deny after five minutes.
+  Persisting an "always allow" is the host's job — it knows where the
+  connection's policy lives.
+
 ## Ready-made components: `@catamorphic/ui`
 
 `@catamorphic/ui` ships the workflow canvas (`WorkflowEditor`, `WorkflowCanvas`), detail panel, history sidebar, toolbar, and AI bar as composable React components built on `@catamorphic/react`. Everything is opt-in: use `WorkflowEditor` for the full experience, or compose `WorkflowCanvas` + your own chrome. Code editors are plugged in via render props (bring your own Monaco/CodeMirror). Import `@catamorphic/ui/styles.css` once.
@@ -289,7 +314,7 @@ All hooks reject with the typed `CatamorphicError` envelope (discriminated by `c
 
 `@catamorphic/registry` is a shadcn-style copy-paste registry for hosts that want to own the component source. Items are JSON manifests that inline a single React component file; consumers run `npx shadcn add <path-or-url>/r/<item>.json` and the component drops into `components/catamorphic/`. The component then imports hooks from `@catamorphic/react` and primitives from `@catamorphic/ui` only: there's no runtime dependency on the registry itself.
 
-Items shipped: `catamorphic-provider`, `projects-list`, `project-editor`, `file-explorer`, `git-panel`, `diff-drawer`, `runs-panel`, `plugins-settings`, `monaco-editor`, `agent-chat`.
+Items shipped: `catamorphic-provider`, `projects-list`, `project-editor`, `file-explorer`, `git-panel`, `diff-drawer`, `runs-panel`, `plugins-settings`, `monaco-editor`, `agent-chat`, `chat-timeline`, `sessions-list`, `tool-permission-card`.
 
 Catamorphic doesn't host the registry itself. After `bun run build`, the built manifests live at `packages/registry/dist/r/<name>.json`; hosts install them from `./node_modules/@catamorphic/registry/dist/r/<name>.json` or from a URL the host serves. To add a new item: drop a `src/<name>/<name>.tsx` + `registry-item.json` under `packages/registry/src/`, run `bun run build`, and re-install it in the host.
 

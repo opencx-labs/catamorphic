@@ -84,6 +84,9 @@ export function resolveToolPermissionAcross(
 
 /** A request the harness raises when a tool resolves to `ask`. */
 export interface ToolPermissionRequest {
+  /** Host chat session the call belongs to, when the harness knows it —
+   * lets a host route the ask to the right conversation. */
+  sessionId?: string;
   /** Server key the harness knows the connection by (`mcp__<server>__…`). */
   server: string;
   tool: string;

@@ -238,18 +238,20 @@ export class AiSdkCodingAgent implements CodingAgentProvider {
     const remembered = new Set<string>();
     const source = this.opts.mcpPolicies ?? {};
     const ask = this.opts.onToolPermission;
-    return async (server, tool, input) => {
+    return async (server, tool, input, sessionId) => {
       const policies = typeof source === "function" ? source() : source;
       const layers = policies[server];
       if (!layers) return;
       const key = `${server}\u0000${tool.name}`;
-      if (remembered.has(key)) return;
       const permission = resolveToolPermissionAcross(
         layers,
         tool.name,
         tool.annotations,
       );
       if (permission === "allow") return;
+      // A remembered "always allow" only short-circuits the ASK — a later
+      // Off in the editor still wins (policies are read live).
+      if (permission === "ask" && remembered.has(key)) return;
       if (permission === "deny" || !ask) {
         throw new Error(
           permission === "deny"
@@ -258,6 +260,7 @@ export class AiSdkCodingAgent implements CodingAgentProvider {
         );
       }
       const answer = await ask({
+        ...(sessionId ? { sessionId } : {}),
         server,
         tool: tool.name,
         description: tool.description,
@@ -296,7 +299,7 @@ export class AiSdkCodingAgent implements CodingAgentProvider {
     const gate = this.toolGate();
     const mcpTools =
       Object.keys(this.opts.mcpServers ?? {}).length > 0
-        ? buildMcpTools(await this.connectMcp(), gate)
+        ? buildMcpTools(await this.connectMcp(), gate, opts.sessionId)
         : {};
 
     // Session-scoped servers (per-project surfaces) connect fresh per
@@ -318,7 +321,7 @@ export class AiSdkCodingAgent implements CodingAgentProvider {
           }
         }),
       );
-      Object.assign(mcpTools, buildMcpTools(scoped, gate));
+      Object.assign(mcpTools, buildMcpTools(scoped, gate, opts.sessionId));
     }
 
     this.sessions.set(providerSessionId, {
@@ -666,11 +669,13 @@ type McpToolGate = (
   server: string,
   tool: McpToolInfo,
   input: Record<string, unknown>,
+  sessionId?: string,
 ) => Promise<void>;
 
 function buildMcpTools(
   connections: Map<string, ConnectedMcpServer>,
   gate?: McpToolGate,
+  sessionId?: string,
 ): Record<string, Tool> {
   const tools: Record<string, Tool> = {};
   for (const [serverName, server] of connections) {
@@ -688,7 +693,7 @@ function buildMcpTools(
           );
           // Permission first: deny/ask throw with a message the model
           // reads as the tool result — the turn goes on.
-          await gate?.(serverName, info, args);
+          await gate?.(serverName, info, args, sessionId);
           // Prefer structured content: MCP Apps views render it, and the
           // model reads JSON fine. Text-only results stay text;
           // flattenToolResult throws on isError results.

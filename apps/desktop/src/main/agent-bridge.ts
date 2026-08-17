@@ -776,7 +776,9 @@ export function registerAgentBridge(agentTerminals: AgentTerminals): {
     },
 
     async toolPermission(label, request) {
-      const result = await rpc<ToolPermissionDecision>(
+      // ONE window (focused, else the first): an unfocused app must still
+      // queue the ask rather than auto-deny it — the user just alt-tabbed.
+      const result = await rpcToFront<ToolPermissionDecision>(
         "toolPermission",
         { label, request },
         ELICIT_TIMEOUT_MS,

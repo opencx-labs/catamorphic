@@ -139,6 +139,9 @@ export interface ConnectionInfo {
   authorized: boolean;
   /** The profile's ceiling for this connection's tools (undefined = auto). */
   toolPolicy?: McpToolPolicy;
+  /** A ceiling set by whoever provisioned the connection (an org sharing
+   * a credential); layer zero, read-only here. */
+  ceiling?: { policy: McpToolPolicy; source: string };
   /** Tools last seen on the server. */
   tools?: Array<{
     name: string;
@@ -169,6 +172,7 @@ export interface CreateConnectionInput {
   args?: string[];
   env?: Record<string, string>;
   enabled?: boolean;
+  ceiling?: { policy: McpToolPolicy; source: string };
 }
 
 export interface UpdateConnectionInput {

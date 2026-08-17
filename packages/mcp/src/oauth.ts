@@ -1,3 +1,4 @@
+import { randomBytes } from "node:crypto";
 import http from "node:http";
 import type { AddressInfo } from "node:net";
 import type { AgentMcpServerConfig } from "@catamorphic/sandbox";
@@ -80,6 +81,8 @@ export function createOAuthProvider(opts: {
   store: McpOAuthStore;
   redirectUrl: string;
   onRedirect?: (url: URL) => void | Promise<void>;
+  /** OAuth `state` for this flow (the callback must echo it). */
+  state?: string;
 }): OAuthClientProvider {
   const { store, redirectUrl, onRedirect } = opts;
   const patch = (partial: Partial<McpOAuthState>) =>
@@ -91,6 +94,7 @@ export function createOAuthProvider(opts: {
     get clientMetadata() {
       return clientMetadata(redirectUrl);
     },
+    ...(opts.state ? { state: () => opts.state as string } : {}),
     clientInformation: () => store.load().clientInformation,
     saveClientInformation: (info) => patch({ clientInformation: info }),
     tokens: () => store.load().tokens,
@@ -134,13 +138,22 @@ export function bearerHeaders(
 }
 
 /** Whether tokens are within `withinMs` of expiring (or already expired).
- * Tokens without an `expires_in` never count as expiring. */
+ * Tokens without an `expires_in` count as expiring hourly when a refresh
+ * token exists (so they get renewed), never otherwise. */
 export function tokensExpiring(
   state: McpOAuthState | undefined,
   withinMs = 5 * 60_000,
 ): boolean {
   const tokens = state?.tokens;
-  if (!tokens?.expires_in || !state?.tokensObtainedAt) return false;
+  if (!tokens || !state?.tokensObtainedAt) return false;
+  if (!tokens.expires_in) {
+    // No lifetime advertised: if we CAN refresh, do so hourly rather than
+    // discovering the expiry from a 401 mid-conversation.
+    return (
+      Boolean(tokens.refresh_token) &&
+      Date.now() + withinMs >= state.tokensObtainedAt + 60 * 60_000
+    );
+  }
   return (
     Date.now() + withinMs >= state.tokensObtainedAt + tokens.expires_in * 1000
   );
@@ -190,7 +203,13 @@ export async function authorizeMcpServer(
   if (config.transport === "stdio") {
     throw new Error("Only remote (http/sse) servers use OAuth");
   }
-  const listener = await startLoopbackListener(opts.client?.callbackPort);
+  // The callback must echo this — a stray or crafted hit on the loopback
+  // port must not be able to finish (or abort) the flow.
+  const state = randomBytes(16).toString("hex");
+  const listener = await startLoopbackListener(
+    opts.client?.callbackPort,
+    state,
+  );
   try {
     const store = opts.store;
     // Fresh registration every time (the redirect URI carries this run's
@@ -213,6 +232,7 @@ export async function authorizeMcpServer(
     const provider = createOAuthProvider({
       store,
       redirectUrl: listener.redirectUrl,
+      state,
       onRedirect: (url) => {
         redirected = url;
       },
@@ -348,11 +368,17 @@ interface CallbackParams {
 }
 
 /**
- * The redirect leg. Ephemeral port on 127.0.0.1 by default; a fixed
- * `port` (pre-registered client) binds dual-stack and advertises
- * `localhost`, the host such registrations use.
+ * The redirect leg. Loopback ONLY — never a LAN-reachable socket: an
+ * ephemeral port on 127.0.0.1 by default; a fixed `port` (pre-registered
+ * client) on 127.0.0.1 and, best effort, ::1, advertising `localhost`
+ * (the host such registrations use; browsers try both families).
+ * Callbacks without the expected `state` are ignored (404), so a stray
+ * hit can neither finish nor abort the flow.
  */
-async function startLoopbackListener(port?: number): Promise<{
+async function startLoopbackListener(
+  port: number | undefined,
+  expectedState: string,
+): Promise<{
   redirectUrl: string;
   origin: string;
   waitForCallback(timeoutMs: number): Promise<CallbackParams>;
@@ -362,9 +388,12 @@ async function startLoopbackListener(port?: number): Promise<{
   const received = new Promise<CallbackParams>((resolve) => {
     resolveCallback = resolve;
   });
-  const server = http.createServer((request, response) => {
+  const handler: http.RequestListener = (request, response) => {
     const url = new URL(request.url ?? "/", "http://127.0.0.1");
-    if (url.pathname !== CALLBACK_PATH) {
+    if (
+      url.pathname !== CALLBACK_PATH ||
+      url.searchParams.get("state") !== expectedState
+    ) {
       response.writeHead(404).end();
       return;
     }
@@ -380,7 +409,8 @@ async function startLoopbackListener(port?: number): Promise<{
     });
     response.end(callbackPage(params));
     resolveCallback?.(params);
-  });
+  };
+  const server = http.createServer(handler);
   await new Promise<void>((resolve, reject) => {
     server.once("error", (error: NodeJS.ErrnoException) =>
       reject(
@@ -391,10 +421,18 @@ async function startLoopbackListener(port?: number): Promise<{
           : error,
       ),
     );
-    if (port) server.listen(port, () => resolve());
-    else server.listen(0, "127.0.0.1", () => resolve());
+    server.listen(port ?? 0, "127.0.0.1", () => resolve());
   });
   const bound = (server.address() as AddressInfo).port;
+  // Fixed port: `localhost` may resolve to ::1 first; listen there too if
+  // we can (a missing/blocked v6 loopback is not an error).
+  const v6 = port ? http.createServer(handler) : null;
+  if (v6) {
+    await new Promise<void>((resolve) => {
+      v6.once("error", () => resolve());
+      v6.listen(bound, "::1", () => resolve());
+    });
+  }
   const origin = port
     ? `http://localhost:${bound}`
     : `http://127.0.0.1:${bound}`;
@@ -414,8 +452,10 @@ async function startLoopbackListener(port?: number): Promise<{
       }),
     close: () => {
       server.close();
+      v6?.close();
       // Any lingering keep-alive sockets shouldn't pin the process.
       server.closeAllConnections?.();
+      v6?.closeAllConnections?.();
     },
   };
 }

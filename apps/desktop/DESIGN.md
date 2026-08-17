@@ -2465,3 +2465,28 @@ Patterned on what best-in-class palettes converged on (Chrome omnibox
   Settings tab opened inside a project shows real names.
 - `Segmented` (`components/segmented.tsx`) is now the shared pill group
   used by both permission editors. e2e: `agent-tool-policy.e2e.ts`.
+
+### 2026-08-18 — Remote-ready permissions + review fixes
+
+- **Ceilings**: a connection can carry a provisioner ceiling
+  (`ceiling: {policy, source}`) — layer zero, read-only, "Ceiling set by
+  Acme Corp" in both editors, effective answers computed under it. The
+  renderer now has a policy mirror (`lib/tool-policy.ts`) cross-checked
+  against the sandbox resolver by a unit test, so the editors and the
+  harness can't disagree.
+- **Host-answered asks**: `ToolPermissionBroker` + routes + React hook +
+  registry `tool-permission-card` (see ADR 0054 §8). Web hosts get consent
+  cards inline in `agent-chat` with no desktop involvement.
+- **Review fixes** (post-commit pass): concurrent asks are a FIFO queue
+  (two tools in one step used to orphan the first for 5 minutes); asks go
+  to the front window (an unfocused app auto-denied); a remembered
+  "Always allow" no longer outranks a later Off; Codex allowlists instead
+  of failing open on unlisted tools and rebuilds on policy edits; the
+  loopback listener binds 127.0.0.1/::1 only and verifies `state`; the
+  callback-tab close matches `/callback`, not the whole origin; install
+  authorizes one connection at a time; CRLF-safe selection-pill dedupe;
+  tokens without `expires_in` refresh hourly when refreshable.
+- Known, deliberately left: a token refresh still rebuilds ai-sdk
+  providers (bearer rides the server config); plugin reinstall re-ids
+  connections (agent narrowing keyed by id dangles); the consent modal
+  outlives the bridge's 5-minute deny.

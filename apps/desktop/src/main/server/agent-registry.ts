@@ -100,7 +100,11 @@ export const WORKFLOWS_SERVER_KEY = "catamorphic";
  * that connection to "ask".
  */
 function agentLayer(policy: McpToolPolicy): McpToolPolicy {
-  return { default: "allow", ...policy };
+  return {
+    ...policy,
+    default:
+      policy.default && policy.default !== "auto" ? policy.default : "allow",
+  };
 }
 
 /** An agent's resolved MCP surface: servers for every harness, plugin
@@ -196,6 +200,11 @@ export class DesktopAgentRegistry implements CodingAgentRegistry {
       model: "",
       effort: "",
       mcp: { servers: mcp.servers, plugins: mcp.plugins },
+      // Codex applies policy at spawn (no live getter), so for it — and
+      // only it — a policy edit must rebuild.
+      ...(config.harness === "codex"
+        ? { policies: mcp.policies, annotations: mcp.annotations }
+        : {}),
     });
     const defaults = this.freshDefaults(config);
     const cached = this.cache.get(id);
@@ -268,13 +277,20 @@ export class DesktopAgentRegistry implements CodingAgentRegistry {
         config.toolPolicies?.[connection.name] ??
         config.toolPolicies?.[key];
       policies[key] = [
+        // Layer zero when present: the provisioner's ceiling (an org's
+        // shared credential). Then the user's own, then the agent's.
+        ...(connection.ceiling ? [connection.ceiling.policy] : []),
         connection.toolPolicy ?? {},
         ...(agentPolicy ? [agentLayer(agentPolicy)] : []),
       ];
+      // The FULL cached roster (empty hints when a tool has none): Codex
+      // derives its allow/deny lists from what's known here, and a tool
+      // that exists but wasn't listed would otherwise escape the policy.
       annotations[key] = Object.fromEntries(
-        (connection.tools ?? [])
-          .filter((tool) => tool.annotations)
-          .map((tool) => [tool.name, tool.annotations ?? {}]),
+        (connection.tools ?? []).map((tool) => [
+          tool.name,
+          tool.annotations ?? {},
+        ]),
       );
     }
 

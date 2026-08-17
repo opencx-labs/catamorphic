@@ -67,6 +67,7 @@ const SHOTS =
   "/private/tmp/claude-501/-Users-tabaza-Desktop-catamorphic/415f6510-da48-4924-8082-6f94d52a0c92/scratchpad";
 
 let connectionId = "";
+let sharedId = "";
 
 describe("agent tool access", () => {
   it("boots, creates a project, an authorized 'fake' connection with a probed roster", async () => {
@@ -99,6 +100,14 @@ describe("agent tool access", () => {
     );
     expect(probe.ok).toBe(true);
     expect(probe.toolCount).toBe(1);
+    // A second connection provisioned with an org ceiling (layer zero).
+    const shared = await app.eval<{ id: string }>(
+      `window.catamorphicDesktop.connectionsCreate({ name: 'shared', transport: 'http', url: ${JSON.stringify(`${base}/mcp`)}, headers: { Authorization: 'Bearer access-token-1' }, ceiling: { policy: { default: 'deny' }, source: 'Acme Corp' } })`,
+    );
+    sharedId = shared.id;
+    await app.eval(
+      `window.catamorphicDesktop.connectionsProbe(${JSON.stringify(sharedId)})`,
+    );
   }, 180_000);
 
   it("Settings → edit agent shows Tool access with the connection's tools and Project workflows", async () => {
@@ -134,6 +143,17 @@ describe("agent tool access", () => {
       `return rowFor(${JSON.stringify(connectionId)})?.querySelector('li[data-tool="hello"]')?.dataset.effective === 'deny' &&
               rowFor(${JSON.stringify(connectionId)}).textContent.includes('Narrowed');`,
       { label: "hello → Off, row narrowed" },
+    );
+    // The org-ceilinged connection: read-only ceiling shown, effective Off
+    // for its tool no matter what the agent picks.
+    await run(
+      `rowFor(${JSON.stringify(sharedId)}).querySelector('button[aria-expanded]').click(); return true;`,
+    );
+    await runWait(
+      `const row = rowFor(${JSON.stringify(sharedId)});
+       return !!row && row.textContent.includes('ceiling set by Acme Corp') &&
+              row.querySelector('li[data-tool="hello"]')?.dataset.effective === 'deny';`,
+      { label: "ceiling shown; effective Off under it" },
     );
     // Workflows: default Ask for this agent.
     await run(

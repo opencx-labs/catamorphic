@@ -1407,7 +1407,8 @@ export function ChatDock({
             isTextPill(attachment) &&
             attachment.source.type === "selection" &&
             attachment.source.filePath === source.filePath &&
-            attachment.text === pill.text,
+            attachment.text.replace(/\r\n?/g, "\n") ===
+              pill.text.replace(/\r\n?/g, "\n"),
         )
       ) {
         return current;

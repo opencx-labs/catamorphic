@@ -163,6 +163,12 @@ export {
   useSendAgentMessage,
 } from "./hooks/use-send-agent-message.js";
 export {
+  type PendingToolPermission,
+  type ToolPermissionAnswer,
+  type UseToolPermissionsOptions,
+  useToolPermissions,
+} from "./hooks/use-tool-permissions.js";
+export {
   type UpdateAgentSessionInput,
   useUpdateAgentSession,
 } from "./hooks/use-update-agent-session.js";

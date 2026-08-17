@@ -1,8 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { disabledToolsFor } from "../codex-agent.js";
+import { codexToolFilter } from "../codex-agent.js";
 
-describe("disabledToolsFor (Codex has no approval channel)", () => {
-  it("disables deny AND ask tools it can resolve; leaves allowed ones", () => {
+describe("codexToolFilter (Codex has no approval channel)", () => {
+  it("allowlists when unknown tools must not run (auto/ask/deny defaults)", () => {
     const layers = [
       {
         tools: {
@@ -14,18 +14,21 @@ describe("disabledToolsFor (Codex has no approval channel)", () => {
     const annotations = {
       list_channels: { readOnlyHint: true },
       create_channel: { readOnlyHint: false },
+      opaque: {},
     };
-    expect(disabledToolsFor(layers, annotations)).toEqual([
-      "create_channel", // auto → ask → fails closed
-      "delete_channel",
-    ]);
-    expect(disabledToolsFor(undefined, annotations)).toEqual([]);
-    // Explicit allow default: nothing to disable but the explicit deny.
+    // Default auto: unknown → ask → fails closed → allowlist of allows.
+    expect(codexToolFilter(layers, annotations)).toEqual({
+      enabled_tools: ["list_channels", "post_message"],
+    });
+    expect(codexToolFilter(undefined, annotations)).toEqual({});
+  });
+
+  it("denylists when unknown tools may run (explicit allow default)", () => {
     expect(
-      disabledToolsFor(
-        [{ default: "allow", tools: { x: "deny" } }],
-        annotations,
-      ),
-    ).toEqual(["x"]);
+      codexToolFilter([{ default: "allow", tools: { x: "deny", y: "ask" } }], {
+        z: { readOnlyHint: true },
+      }),
+    ).toEqual({ disabled_tools: ["x", "y"] });
+    expect(codexToolFilter([{ default: "allow" }], {})).toEqual({});
   });
 });

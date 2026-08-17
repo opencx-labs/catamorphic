@@ -18,6 +18,11 @@ import {
   type ToolPermission,
 } from "../lib/desktop-api";
 import { useListMotion } from "../lib/list-motion";
+import {
+  describePolicy,
+  PERMISSION_LABELS,
+  resolveAcross,
+} from "../lib/tool-policy";
 import { Modal } from "./modal";
 import { PendingButton } from "./pending-button";
 import { Segmented } from "./segmented";
@@ -231,7 +236,9 @@ export function ConnectorsModal({
   const settleInstalled = async (connectionIds: string[]) => {
     for (const id of connectionIds) {
       const result = await probe(id);
-      if (result.needsAuth) void authorize(id);
+      // One consent flow at a time: two tabs at once (and two loopback
+      // listeners on the same pre-registered port) would collide.
+      if (result.needsAuth) await authorize(id);
     }
   };
 
@@ -792,12 +799,6 @@ export function ConnectorsModal({
   );
 }
 
-const PERMISSION_LABELS: Record<ToolPermission, string> = {
-  allow: "Allow",
-  ask: "Ask",
-  deny: "Off",
-};
-
 /**
  * Per-connection tool permissions: the profile's ceiling for this
  * connection (agents can only narrow it). A default for the roster
@@ -831,17 +832,30 @@ function ToolPolicyEditor({
     else next[name] = value;
     onChange(normalizePolicy({ ...policy, tools: next }));
   };
-  const resolved = (tool: (typeof tools)[number]): ToolPermission => {
-    const explicit = policy.tools?.[tool.name];
-    if (explicit) return explicit;
-    if (policy.default && policy.default !== "auto") return policy.default;
-    return tool.annotations?.readOnlyHint ? "allow" : "ask";
-  };
+  // Effective = provisioner ceiling (when one exists) ∩ this policy —
+  // the same math the harness does, so the label never lies.
+  const ceiling = connection.ceiling?.policy;
+  const resolved = (tool: (typeof tools)[number]): ToolPermission =>
+    resolveAcross([ceiling, policy], tool.name, tool.annotations);
   return (
     <div
       className="mt-2 flex flex-col gap-2 border-t border-border pt-2"
       data-testid="tool-policy-editor"
     >
+      {connection.ceiling && (
+        <p
+          className="flex items-center gap-1.5 rounded-md border border-border bg-bg-overlay/60 px-2 py-1 text-[11px] text-fg-muted"
+          data-testid="tool-policy-ceiling"
+        >
+          <ShieldCheck className="size-3 shrink-0 text-fg-faint" />
+          <span className="min-w-0 truncate">
+            Ceiling set by{" "}
+            <span className="text-fg">{connection.ceiling.source}</span> —{" "}
+            {describePolicy(connection.ceiling.policy)}. Your rules can only
+            narrow it.
+          </span>
+        </p>
+      )}
       <div className="flex items-center gap-2">
         <span className="min-w-0 flex-1 text-[11px] text-fg-muted">
           Tools without a rule

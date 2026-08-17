@@ -51,14 +51,6 @@
   dropped the touched-files chips, and gates the jump-to-previous arrow on
   scrollability. `packages/registry/src/chat-timeline` is the installable
   source of truth and still has the old behavior.
-- **Long term: user-connected remote blob storage.** Projects will hold
-  documents and media, not just code. Code/text stays in git (GitHub as
-  the collaboration backend), but large binaries don't belong there —
-  let users connect their own blob store (S3/R2/Drive-style) that the
-  project references, so teammates pull code via git and blobs via the
-  configured store. Needs: a pointer format in-repo (git-lfs-like or our
-  own manifest), per-project storage config, agent awareness of what's a
-  blob vs. text. Parked until project structure + local/remote sync land.
 - **ACP harness.** Project agent definitions (ADR 0050) accept
   `kind: "acp"` today but resolve it to a fail-fast "not built yet"
   entry. Build the real ACP client harness: a `CodingAgentProvider`
@@ -90,21 +82,16 @@
   AI-built custom issue trackers per customer — customers as scoped
   viewers of per-customer apps, tenants connecting to their own workflow
   tools over MCP.
-- **Publications: artifacts with audiences (parked, ADR 0053).** A
-  publication binds an artifact (`app` or `document` — a path in the
-  project) to `{ channel, audience: host-authenticated | public }`;
-  catamorphic serves it and enforces what the host asserted, the host owns
-  URL minting/revocation. Public = an anonymous, read-only,
-  tenant-scoped identity minted only for public publications — the one
-  non-host identity. The `document` artifact ref kind is already reserved
-  in `Identity.scope`.
-- **Caller identity in runs (parked, ADR 0053).** Stamp the triggering
-  identity (tenant, external user, scope, via) server-side onto the run and
-  surface it in `BoundaryContext` as `context.caller` — never in `input`,
-  which is author-typed. Lets one shared multi-customer app isolate data
-  per caller without trusting the bundle.
-- **Authorization seam (parked, ADR 0053).** Policy stays out of core:
-  `createCatamorphic({ authorize })` returning a scope, with two stock
-  implementations — host-DB entitlements and a designated sync workflow in
-  the project (`authorize` in the contract surface). Roles are a policy
-  vocabulary passed through, not stored by core.
+- **Company brain: roles, scoped agents, project store (ADR 0055, proposed).**
+  Absorbs the previously parked publications / caller-identity / authorize-
+  seam / blob-storage items. Build order once accepted: (1) `agent` scope
+  kind + scoped agent sessions on the server, caller scope ∩ agent tool
+  policy (ADR 0054 plus one layer); (2) `roles/<name>.json` + `resolveRoles`
+  helper, embed-skill recipe uses it; (3) the project store — service,
+  routes, `read/write/list_document` agent tools, desktop Documents surface,
+  document subtree refs with `access`, `written_by` stamping, pluggable blob
+  backend; (4) `context.caller` in `BoundaryContext`; (5) propose-a-change:
+  bot PR "on behalf of" via the CodeHost seam; (6) publications = `document`
+  refs with a `public` audience (anonymous, read-only, tenant-scoped
+  identity minted only for those). Open questions listed at the end of the
+  ADR.

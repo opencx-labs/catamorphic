@@ -57,10 +57,24 @@ export interface McpConnection {
    * run, the rest ask. Agents can only narrow this.
    */
   toolPolicy?: McpToolPolicy;
+  /**
+   * A ceiling set by whoever provisioned the connection on the user's
+   * behalf — an organization sharing a service credential through a
+   * remote instance. Layer zero: the user's own `toolPolicy` and any
+   * agent's policy sit under it and can only narrow further. Read-only in
+   * the editors, shown as "Set by <source>".
+   */
+  ceiling?: McpConnectionCeiling;
   /** Tools last seen on the server (name/description/annotations) — what
    * the permission editor lists and what `auto` reads for harnesses that
    * can't see annotations at call time. */
   tools?: CachedMcpTool[];
+}
+
+export interface McpConnectionCeiling {
+  policy: McpToolPolicy;
+  /** Who set it, for the UI ("Acme Corp"). */
+  source: string;
 }
 
 export interface CachedMcpTool {
@@ -101,6 +115,7 @@ export interface PublicMcpConnection {
   /** Set once the connection has been through OAuth (tokens on file). */
   authorized: boolean;
   toolPolicy?: McpToolPolicy;
+  ceiling?: McpConnectionCeiling;
   tools?: CachedMcpTool[];
 }
 
@@ -116,6 +131,7 @@ export interface CreateConnectionInput {
   source?: ConnectionSource;
   iconUrl?: string;
   oauthClient?: McpOAuthClientHint;
+  ceiling?: McpConnectionCeiling;
 }
 
 export interface UpdateConnectionInput {
@@ -128,6 +144,8 @@ export interface UpdateConnectionInput {
   /** New env map; omit to keep the stored one, null to clear it. */
   env?: Record<string, string> | null;
   enabled?: boolean;
+  /** Provisioner-set ceiling; null clears it. */
+  ceiling?: McpConnectionCeiling | null;
 }
 
 export class ConnectionsStore {
@@ -180,6 +198,7 @@ export class ConnectionsStore {
       ...(input.args && input.args.length > 0 ? { args: input.args } : {}),
       ...(input.iconUrl ? { iconUrl: input.iconUrl } : {}),
       ...(input.oauthClient ? { oauthClient: input.oauthClient } : {}),
+      ...(input.ceiling ? { ceiling: input.ceiling } : {}),
       enabled: input.enabled ?? true,
       source: input.source ?? { kind: "manual" },
       ...encryptMap("headers", input.headers),
@@ -199,6 +218,8 @@ export class ConnectionsStore {
     if (patch.command !== undefined) stored.command = patch.command;
     if (patch.args !== undefined) stored.args = patch.args;
     if (patch.enabled !== undefined) stored.enabled = patch.enabled;
+    if (patch.ceiling !== undefined)
+      stored.ceiling = patch.ceiling ?? undefined;
     if (patch.headers !== undefined) {
       const next = encryptMap("headers", patch.headers ?? undefined);
       stored.headersEncrypted = next.headersEncrypted;

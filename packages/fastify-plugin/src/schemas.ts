@@ -811,6 +811,41 @@ export const AgentMessageSchema = z.object({
 
 export const OkSchema = z.object({ ok: z.literal(true) });
 
+// --- tool permissions (ADR 0054) ---
+export const ToolPermissionIdParamsSchema = AgentSessionIdParamsSchema.extend({
+  permissionId: z.string().uuid(),
+});
+export const PendingToolPermissionSchema = z.object({
+  id: z.string(),
+  sessionId: z.string().optional(),
+  agentLabel: z.string().optional(),
+  request: z.object({
+    sessionId: z.string().optional(),
+    server: z.string(),
+    tool: z.string(),
+    description: z.string().optional(),
+    input: z.record(z.string(), z.unknown()),
+    annotations: z
+      .object({
+        readOnlyHint: z.boolean().optional(),
+        destructiveHint: z.boolean().optional(),
+      })
+      .optional(),
+  }),
+  createdAt: z.string(),
+  expiresAt: z.string(),
+});
+export const PendingToolPermissionsSchema = z.object({
+  permissions: z.array(PendingToolPermissionSchema),
+});
+export const ToolPermissionDecisionSchema = z.discriminatedUnion("decision", [
+  z.object({
+    decision: z.literal("allow"),
+    remember: z.literal("always").optional(),
+  }),
+  z.object({ decision: z.literal("deny") }),
+]);
+
 export const AgentMediaAttachmentSchema = z.object({
   kind: z.enum(["image", "document"]),
   name: z.string().min(1).max(200),

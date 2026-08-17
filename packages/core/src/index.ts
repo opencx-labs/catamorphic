@@ -32,6 +32,10 @@ export {
 } from "./seeds.js";
 export { AgentContextService } from "./services/agent-context-service.js";
 export {
+  type PendingToolPermission,
+  ToolPermissionBroker,
+} from "./services/tool-permission-broker.js";
+export {
   AGENT_DEFINITION_KINDS,
   AGENT_DEFINITIONS_DIR,
   type AgentDefinition,

@@ -116,3 +116,27 @@ describe("agent routes", () => {
     });
   });
 });
+
+describe("tool permission routes (no core → 503, validation first)", () => {
+  it("lists 503 without a broker and validates ids", async () => {
+    const app = await buildApp();
+    const res = await app.inject({
+      method: "GET",
+      url: `/api/projects/${PROJECT_ID}/agent/sessions/${SESSION_ID}/permissions`,
+    });
+    expect(res.statusCode).toBe(503);
+    const bad = await app.inject({
+      method: "POST",
+      url: `/api/projects/${PROJECT_ID}/agent/sessions/${SESSION_ID}/permissions/not-a-uuid`,
+      payload: { decision: "allow" },
+    });
+    expect(bad.statusCode).toBe(400);
+    const badBody = await app.inject({
+      method: "POST",
+      url: `/api/projects/${PROJECT_ID}/agent/sessions/${SESSION_ID}/permissions/${SESSION_ID}`,
+      payload: { decision: "maybe" },
+    });
+    expect(badBody.statusCode).toBe(400);
+    await app.close();
+  });
+});

@@ -9,6 +9,13 @@ import {
   type ToolAnnotations,
   type ToolPermission,
 } from "../lib/desktop-api.js";
+import {
+  agentLayer,
+  PERMISSION_LABELS as LABEL,
+  resolveAcross,
+  resolveToolPermission,
+  stricterPermission as stricter,
+} from "../lib/tool-policy.js";
 import { ConnectorIcon } from "./connectors-modal.js";
 import { Segmented } from "./segmented.js";
 
@@ -38,25 +45,12 @@ interface ToolLike {
   annotations?: ToolAnnotations;
 }
 
-const RANK: Record<ToolPermission, number> = { deny: 0, ask: 1, allow: 2 };
-const stricter = (a: ToolPermission, b: ToolPermission): ToolPermission =>
-  RANK[a] <= RANK[b] ? a : b;
-const LABEL: Record<ToolPermission, string> = {
-  allow: "Allow",
-  ask: "Ask",
-  deny: "Off",
-};
-
-/** The connection's own answer for a tool (its ceiling). */
+/** The connection side's answer for a tool: provisioner ceiling ∩ own policy. */
 function ceilingFor(
-  policy: McpToolPolicy | undefined,
+  ceiling: Array<McpToolPolicy | undefined>,
   tool: ToolLike,
 ): ToolPermission {
-  const explicit = policy?.tools?.[tool.name];
-  if (explicit) return explicit;
-  const fallback = policy?.default ?? "auto";
-  if (fallback !== "auto") return fallback;
-  return tool.annotations?.readOnlyHint ? "allow" : "ask";
+  return resolveAcross(ceiling, tool.name, tool.annotations);
 }
 
 /** The agent's answer for a tool: its rule, its default, else no opinion. */
@@ -64,10 +58,7 @@ function agentAnswer(
   policy: McpToolPolicy | undefined,
   toolName: string,
 ): ToolPermission {
-  const explicit = policy?.tools?.[toolName];
-  if (explicit) return explicit;
-  const fallback = policy?.default;
-  return fallback && fallback !== "auto" ? fallback : "allow";
+  return resolveToolPermission(agentLayer(policy), toolName);
 }
 
 function isNarrowed(policy: McpToolPolicy | undefined): boolean {
@@ -179,7 +170,8 @@ export function AgentToolPolicyField({
             subtitle={`MCP · ${connection.transport}`}
             tools={connection.tools ?? []}
             emptyHint="No tool list yet — Test the connection in Connectors to fetch it."
-            ceiling={connection.toolPolicy}
+            ceiling={[connection.ceiling?.policy, connection.toolPolicy]}
+            ceilingSource={connection.ceiling?.source}
             policy={value[connection.id]}
             expanded={expanded === connection.id}
             onToggle={() =>
@@ -210,7 +202,7 @@ export function AgentToolPolicyField({
               : "Open an agent from inside a project to list its workflows."
           }
           // No connection ceiling: the agent's word is the whole answer.
-          ceiling={{ default: "allow" }}
+          ceiling={[{ default: "allow" }]}
           policy={value[WORKFLOWS_POLICY_KEY]}
           expanded={expanded === WORKFLOWS_POLICY_KEY}
           onToggle={() =>
@@ -240,6 +232,7 @@ function PolicyRow({
   tools,
   emptyHint,
   ceiling,
+  ceilingSource,
   policy,
   expanded,
   onToggle,
@@ -253,7 +246,9 @@ function PolicyRow({
   subtitle: string;
   tools: ToolLike[];
   emptyHint: string;
-  ceiling: McpToolPolicy | undefined;
+  ceiling: Array<McpToolPolicy | undefined>;
+  /** Who set a provisioner ceiling, when one exists (shown read-only). */
+  ceilingSource?: string;
   policy: McpToolPolicy | undefined;
   expanded: boolean;
   onToggle: () => void;
@@ -299,6 +294,7 @@ function PolicyRow({
             <span className="block truncate text-[12px] text-fg">{title}</span>
             <span className="block truncate text-[10px] text-fg-faint">
               {subtitle}
+              {ceilingSource && ` · ceiling set by ${ceilingSource}`}
               {ruleCount > 0 &&
                 ` · ${ruleCount} rule${ruleCount === 1 ? "" : "s"}`}
             </span>

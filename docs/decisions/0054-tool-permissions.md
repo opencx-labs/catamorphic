@@ -89,6 +89,29 @@ agent that pinned one tool would narrow every other tool of the
 connection to "ask". The editor therefore offers the agent Inherit / Ask /
 Off only — the only moves that can change the answer.
 
+**8. Two remote-readiness pieces (same day).**
+- **Provisioner ceiling** — `McpConnection.ceiling: { policy, source }`,
+  set by whoever provisions a connection on the user's behalf (an
+  organization sharing a credential through a remote instance). Layer
+  zero above the user's own policy; read-only in both editors, shown as
+  "Ceiling set by <source>".
+- **Host-answered `ask`** — `ToolPermissionBroker` (`@catamorphic/core`,
+  `config.toolPermissions`): a harness's `onToolPermission` parks the ask
+  as a pending record; the plugin serves `GET …/sessions/:sid/permissions`
+  and `POST …/permissions/:pid`; `useToolPermissions()` polls while a turn
+  runs and the registry's `tool-permission-card` (mounted inside
+  `agent-chat`) renders consent. Unanswered asks deny after five minutes;
+  requests now carry `sessionId` so the ask lands in the right chat. The
+  desktop keeps its bridge modal (queued FIFO, delivered to the front
+  window so an alt-tabbed user isn't auto-denied).
+
+**9. Codex, revised.** Its filter now allowlists (`enabled_tools`) whenever
+an unlisted tool would not resolve to allow (auto/ask/deny defaults) and
+denylists (`disabled_tools`) only under an explicit allow default; the
+host feeds it the FULL cached roster; its provider cache key includes
+the policy digest (Codex reads policy at spawn — a rebuild is the only
+way an edit reaches it).
+
 ## Consequences
 
 - Connectors modal: each installed connection has a Permissions editor

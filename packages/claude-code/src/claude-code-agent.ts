@@ -531,6 +531,7 @@ export class ClaudeCodeAgent implements CodingAgentProvider {
   private async policedMcpDecision(
     toolName: string,
     input: Record<string, unknown>,
+    sessionId?: string,
   ): Promise<PermissionResult | undefined> {
     const policies = this.currentPolicies();
     if (!policies || !toolName.startsWith("mcp__")) return undefined;
@@ -543,13 +544,17 @@ export class ClaudeCodeAgent implements CodingAgentProvider {
     if (!server) return undefined;
     const tool = toolName.slice(`mcp__${server}__`.length);
     const key = `${server}\u0000${tool}`;
-    if (this.rememberedTools.has(key)) return { behavior: "allow" };
     const permission = resolveToolPermissionAcross(
       policies[server],
       tool,
       annotations[server]?.[tool],
     );
     if (permission === "allow") return { behavior: "allow" };
+    // A remembered "always allow" only short-circuits the ASK — a later
+    // Off in the editor still wins (policies are read live).
+    if (permission === "ask" && this.rememberedTools.has(key)) {
+      return { behavior: "allow" };
+    }
     if (permission === "deny") {
       return {
         behavior: "deny",
@@ -564,6 +569,7 @@ export class ClaudeCodeAgent implements CodingAgentProvider {
       };
     }
     const answer = await ask({
+      ...(sessionId ? { sessionId } : {}),
       server,
       tool,
       input,
@@ -719,7 +725,11 @@ export class ClaudeCodeAgent implements CodingAgentProvider {
             live.raiseAsk();
           });
         }
-        const policed = await this.policedMcpDecision(toolName, input);
+        const policed = await this.policedMcpDecision(
+          toolName,
+          input,
+          toolContext?.sessionId,
+        );
         if (policed) return policed;
         return denyUnlistedTools(toolName, input, options);
       },

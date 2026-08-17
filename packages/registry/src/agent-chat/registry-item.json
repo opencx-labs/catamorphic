@@ -6,7 +6,8 @@
   "dependencies": ["@catamorphic/react", "lucide-react", "use-stick-to-bottom"],
   "registryDependencies": [
     "@catamorphic/catamorphic-provider",
-    "@catamorphic/chat-timeline"
+    "@catamorphic/chat-timeline",
+    "@catamorphic/tool-permission-card"
   ],
   "files": [
     {

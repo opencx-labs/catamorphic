@@ -1679,6 +1679,16 @@ export class AgentSessionsService {
     if (!row) throw new ProjectNotFoundError(projectId);
   }
 
+  /** Ownership check without loading messages: throws when the session
+   * isn't the caller's / the project's. */
+  async assertSession(
+    identity: Identity,
+    projectId: string,
+    sessionId: string,
+  ): Promise<void> {
+    await this.requireSession(identity, projectId, sessionId);
+  }
+
   private async requireSession(
     identity: Identity,
     projectId: string,
