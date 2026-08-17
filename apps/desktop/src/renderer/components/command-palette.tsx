@@ -60,6 +60,7 @@ import {
   type SidebarConfig,
 } from "../lib/desktop-api.js";
 import { formatBinding, useKeybindings } from "../lib/keybindings.js";
+import { useListMotion } from "../lib/list-motion.js";
 import { useProjectSkills } from "../lib/skills.js";
 import { useApps } from "../screens/app-screen.js";
 import { resolveInput } from "../screens/browser-screen.js";
@@ -705,7 +706,7 @@ export function CommandPalette({
       setExitingPicker(null);
       // Next open is a fresh first paint — the panel's enter animation
       // covers it; stale row positions would fade-rise every row.
-      rowTopsRef.current.clear();
+      listMotionRef.current.reset();
     }, 250);
     return () => clearTimeout(timer);
   }, [open]);
@@ -1396,15 +1397,10 @@ export function CommandPalette({
   //
   // 1. cmdk's animated height — the scroll container's height is a CSS
   //    variable tracking content size; a height transition tweens it.
-  // 2. FLIP on surviving rows — filtering doesn't remove rows from the
-  //    edges, it removes them from the middle, so survivors teleport up
-  //    to fill the holes and only the bottom gap animates. That reads as
-  //    a snap even with the height tween working. So: record each row's
-  //    top before render (keyed by item id), and on change play the
-  //    old→new delta as a transform that eases to zero.
-  const rowTopsRef = useRef(new Map<string, number>());
-  // biome-ignore lint/correctness/useExhaustiveDependencies: row heights
-  // are fixed, so results is the only thing that moves or resizes rows.
+  // 2. FLIP on surviving rows + fade-rise on new ones — the shared
+  //    search-list motion in lib/list-motion (connector search uses the
+  //    same hook, so every as-you-type list in the app moves alike).
+  // biome-ignore lint/correctness/useExhaustiveDependencies: results is the "rows changed" signal; the refs are stable
   useLayoutEffect(() => {
     const list = listRef.current;
     const sizer = sizerRef.current;
@@ -1413,68 +1409,15 @@ export function CommandPalette({
     // height would spend most of the tween past the max-h cutoff.
     const height = Math.min(sizer.offsetHeight, LIST_MAX_HEIGHT);
     list.style.setProperty("--palette-list-height", `${height}px`);
-
-    // Read phase, then write phase — interleaving offsetTop reads with
-    // style writes forces a reflow per row (measured as a multi-hundred-ms
-    // main-thread stall on large lists).
-    const previousTops = rowTopsRef.current;
-    // First paint of this palette: the panel's own enter animation covers
-    // it; per-row enters on top would double the motion.
-    const firstPass = previousTops.size === 0;
-    const nextTops = new Map<string, number>();
-    const rows: { row: HTMLElement; delta: number; entering: boolean }[] = [];
-    for (const node of sizer.children) {
-      const row = node as HTMLElement;
-      const id = row.dataset.itemId;
-      if (!id) continue;
-      const top = row.offsetTop;
-      nextTops.set(id, top);
-      const before = previousTops.get(id);
-      if (before === undefined) {
-        // A row the previous result set didn't have (paste replaced the
-        // whole list, delete-all brought the zero-state back): fade-rise
-        // it in so full swaps read as motion, not a snap.
-        rows.push({ row, delta: 0, entering: !firstPass });
-        continue;
-      }
-      // A keystroke can land mid-glide; the row's true visual position is
-      // its old layout spot PLUS the in-flight transform. Starting the new
-      // glide from the raw layout delta would teleport it backwards.
-      const matrix = new DOMMatrixReadOnly(getComputedStyle(row).transform);
-      const delta = before + matrix.m42 - top;
-      rows.push({ row, delta: Math.round(delta), entering: false });
-    }
-    rowTopsRef.current = nextTops;
-    for (const { row, delta, entering } of rows) {
-      if (delta) {
-        // FLIP: jump to the old position without animating the jump.
-        row.style.transition = "none";
-        row.style.transform = `translateY(${delta}px)`;
-      } else if (entering) {
-        row.style.transition = "none";
-        row.style.transform = "translateY(4px)";
-        row.style.opacity = "0";
-      } else {
-        // Back to the class transition (transition-colors) untouched.
-        row.style.transition = "";
-        row.style.transform = "";
-        row.style.opacity = "";
-      }
-    }
-    if (rows.some(({ delta, entering }) => delta || entering)) {
-      requestAnimationFrame(() => {
-        for (const { row, delta, entering } of rows) {
-          if (!delta && !entering) continue;
-          // Colors stay in the list so the selection fade keeps working
-          // while (and after) the row glides.
-          row.style.transition =
-            "transform 200ms cubic-bezier(0.2, 0, 0, 1), opacity 200ms cubic-bezier(0.2, 0, 0, 1), background-color 100ms, color 100ms";
-          row.style.transform = "";
-          row.style.opacity = "";
-        }
-      });
-    }
   }, [results]);
+  // Colors stay in the list so the selection fade keeps working while
+  // (and after) a row glides. First paint of the palette skips per-row
+  // enters: the panel's own enter animation covers it.
+  const listMotion = useListMotion(sizerRef, results, {
+    keepTransitions: "background-color 100ms, color 100ms",
+  });
+  const listMotionRef = useRef(listMotion);
+  listMotionRef.current = listMotion;
 
   const selected = Math.min(selectedIndex, Math.max(results.length - 1, 0));
 
@@ -1826,8 +1769,11 @@ export function CommandPalette({
           if (event.target === event.currentTarget) onClose();
         }}
       />
+      {/* The wrapper spans the full width to center the panel; it must not
+          eat clicks beside the panel (the panel re-enables pointer events),
+          or click-away only worked above/below the panel's vertical band. */}
       <div
-        className={`relative flex w-full origin-top justify-center transition-[opacity,translate,scale] duration-200 ease-[cubic-bezier(0.2,0,0,1)] ${
+        className={`pointer-events-none relative flex w-full origin-top justify-center transition-[opacity,translate,scale] duration-200 ease-[cubic-bezier(0.2,0,0,1)] ${
           open
             ? "translate-y-0 scale-100 opacity-100"
             : "-translate-y-2 scale-[0.98] opacity-0"

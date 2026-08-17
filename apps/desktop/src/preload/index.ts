@@ -74,8 +74,14 @@ const api = {
     ipcRenderer.invoke("catamorphic:connections-remove", id),
   connectionsProbe: (id: string): Promise<unknown> =>
     ipcRenderer.invoke("catamorphic:connections-probe", id),
+  connectionsAuthorize: (id: string): Promise<unknown> =>
+    ipcRenderer.invoke("catamorphic:connections-authorize", id),
   connectorsSearch: (query: string): Promise<unknown> =>
     ipcRenderer.invoke("catamorphic:connectors-search", query),
+  connectorsSearchPlugins: (query: string): Promise<unknown> =>
+    ipcRenderer.invoke("catamorphic:connectors-search-plugins", query),
+  connectorsSearchRegistry: (query: string): Promise<unknown> =>
+    ipcRenderer.invoke("catamorphic:connectors-search-registry", query),
   connectorsList: (): Promise<unknown> =>
     ipcRenderer.invoke("catamorphic:connectors-list"),
   connectorsInstallRegistry: (
@@ -275,6 +281,13 @@ const api = {
     ipcRenderer.on("catamorphic:browser-open-url", handler);
     return () =>
       ipcRenderer.removeListener("catamorphic:browser-open-url", handler);
+  },
+  onBrowserCloseUrl: (listener: (prefix: string) => void): (() => void) => {
+    const handler = (_event: unknown, payload: { prefix: string }) =>
+      listener(payload.prefix);
+    ipcRenderer.on("catamorphic:browser-close-url", handler);
+    return () =>
+      ipcRenderer.removeListener("catamorphic:browser-close-url", handler);
   },
   onBrowserFocusAddress: (
     listener: (webContentsId: number) => void,

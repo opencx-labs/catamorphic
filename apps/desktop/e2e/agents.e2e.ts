@@ -230,6 +230,46 @@ describe("agents and profiles", () => {
     await run(paletteEscape);
   });
 
+  it("clicking beside the picker panel closes the OVERLAY palette (click-away)", async () => {
+    // The overlay specifically (Cmd+P) — the New Tab palette is a page and
+    // exempt from click-away. Its input takes focus on open.
+    const overlayInput = `$$('textarea[aria-label="Search commands, pages, and more"]')
+      .find((el) => el.closest('.fixed') && !el.closest('[inert]'))`;
+    await run(
+      `if (!(${overlayInput})) pressKey('p', { metaKey: true }); return true;`,
+    );
+    await runWait(`return !!(${overlayInput});`, { label: "overlay palette" });
+    await run(
+      `setReactValue(${overlayInput}, 'Change model effort'); return true;`,
+    );
+    await runWait(
+      `const input = ${overlayInput};
+       const rows = [...input.closest('[role="dialog"]').querySelectorAll('[data-item-id]')];
+       const opt = rows.find((el) => el.textContent.includes('Change model effort'));
+       if (!opt) return false;
+       opt.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true }));
+       return true;`,
+      { label: "enter effort picker in the overlay" },
+    );
+    await runWait(
+      `const input = ${overlayInput};
+       return !!input && !!input.closest('[role="dialog"]').querySelector('[data-testid="palette-mode-chip"]');`,
+      { label: "overlay in picker mode" },
+    );
+    // A mousedown at the far left, level with the panel: that band used to
+    // be swallowed by the panel's centering wrapper.
+    await run(`
+      const input = ${overlayInput};
+      const rect = input.getBoundingClientRect();
+      const target = document.elementFromPoint(8, rect.top + 4);
+      target.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true, clientX: 8, clientY: rect.top + 4 }));
+      return true;
+    `);
+    await runWait(`return !(${overlayInput});`, {
+      label: "overlay closed by click-away",
+    });
+  });
+
   it("changes the current agent's model through the model picker", async () => {
     // No chat focused → the target is the profile's default agent
     // (ai-sdk/anthropic here, so the typed-id row is the path).

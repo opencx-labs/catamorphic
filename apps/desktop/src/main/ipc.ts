@@ -441,10 +441,52 @@ export function registerIpcHandlers(
       : { ok: false, error: "Connectors are unavailable" },
   );
 
+  // OAuth for a remote connection. The consent page opens as a browser tab
+  // in the asking window (the profile's own cookies/logins apply); once
+  // the loopback callback has been served the renderer closes that tab.
+  ipcMain.handle(
+    "catamorphic:connections-authorize",
+    async (event, id: string) => {
+      if (!connectors) throw new Error("Connectors are unavailable");
+      const sender = event.sender;
+      const result = await connectors.authorizeConnection(
+        windows.profileFor(sender),
+        id,
+        {
+          openUrl: (url) => {
+            if (!sender.isDestroyed())
+              sender.send("catamorphic:browser-open-url", { url });
+          },
+          onCallbackServed: (origin) => {
+            if (!sender.isDestroyed())
+              sender.send("catamorphic:browser-close-url", { prefix: origin });
+          },
+        },
+      );
+      connectionsChanged(event);
+      return result;
+    },
+  );
+
   ipcMain.handle("catamorphic:connectors-search", (event, query: string) =>
     connectors
       ? connectors.search(windows.profileFor(event.sender), String(query ?? ""))
       : { registry: [], plugins: [] },
+  );
+  // The two halves separately: plugins answer from cache (instant), the
+  // registry is a network round trip — the UI shows each as it lands.
+  ipcMain.handle(
+    "catamorphic:connectors-search-plugins",
+    (event, query: string) =>
+      connectors
+        ? connectors.searchPlugins(
+            windows.profileFor(event.sender),
+            String(query ?? ""),
+          )
+        : [],
+  );
+  ipcMain.handle("catamorphic:connectors-search-registry", (_event, query) =>
+    connectors ? connectors.searchRegistry(String(query ?? "")) : [],
   );
 
   ipcMain.handle("catamorphic:connectors-list", (event) =>
@@ -740,13 +782,21 @@ export function registerIpcHandlers(
       "catamorphic:dev-window",
       (
         event,
-        action: "maximize" | "unmaximize" | "minimize" | "restore" | "setSize",
+        action:
+          | "maximize"
+          | "unmaximize"
+          | "minimize"
+          | "restore"
+          | "setSize"
+          | "get",
         width?: number,
         height?: number,
       ) => {
         const window = BrowserWindow.fromWebContents(event.sender);
         if (!window) return null;
-        if (action === "setSize") {
+        if (action === "get") {
+          // Read-only: geometry as the OS reports it (window-state tests).
+        } else if (action === "setSize") {
           if (width && height) {
             if (window.isMaximized()) window.unmaximize();
             window.setBounds({ x: 0, y: 30, width, height });

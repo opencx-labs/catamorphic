@@ -198,6 +198,41 @@ export interface InstalledPluginInfo {
   version?: string;
   /** MCP servers the plugin declares, lifted to harness-neutral configs. */
   mcpServers: Record<string, AgentMcpServerConfig>;
+  /**
+   * Pre-registered OAuth clients some remote servers declare (`oauth:
+   * {clientId, callbackPort}` in `.mcp.json` — Slack's server has no
+   * dynamic registration, so the plugin ships the client id and the
+   * loopback port its redirect URI was registered with). Keyed like
+   * `mcpServers`.
+   */
+  mcpOAuth: Record<string, McpOAuthClientHint>;
+}
+
+/** A pre-registered OAuth client for a remote MCP server. */
+export interface McpOAuthClientHint {
+  clientId: string;
+  /** Loopback port the registered redirect URI (`/callback`) uses. */
+  callbackPort?: number;
+  scopes?: string[];
+}
+
+/** The `oauth` block of a `.mcp.json` server entry, when present. */
+export function liftMcpOAuthClient(
+  raw: unknown,
+): McpOAuthClientHint | undefined {
+  if (!raw || typeof raw !== "object") return undefined;
+  const oauth = (raw as { oauth?: unknown }).oauth;
+  if (!oauth || typeof oauth !== "object") return undefined;
+  const record = oauth as Record<string, unknown>;
+  if (typeof record.clientId !== "string" || !record.clientId) return undefined;
+  const port = Number(record.callbackPort);
+  return {
+    clientId: record.clientId,
+    ...(Number.isInteger(port) && port > 0 ? { callbackPort: port } : {}),
+    ...(Array.isArray(record.scopes)
+      ? { scopes: record.scopes.map(String) }
+      : {}),
+  };
 }
 
 /** Read an installed plugin's manifest and lift its MCP servers. */
@@ -222,15 +257,19 @@ export async function readInstalledPlugin(
     ...(manifest.mcpServers ?? {}),
   };
   const mcpServers: Record<string, AgentMcpServerConfig> = {};
+  const mcpOAuth: Record<string, McpOAuthClientHint> = {};
   for (const [name, raw] of Object.entries(declared)) {
     const lifted = liftMcpServer(raw, pluginDir);
     if (lifted) mcpServers[name] = lifted;
+    const oauth = liftMcpOAuthClient(raw);
+    if (lifted && oauth) mcpOAuth[name] = oauth;
   }
   return {
     name: manifest.name ?? path.basename(pluginDir),
     description: manifest.description ?? "",
     version: manifest.version,
     mcpServers,
+    mcpOAuth,
   };
 }
 

@@ -270,6 +270,63 @@ describe("context pills", () => {
     expect(count).toBe(1);
   });
 
+  it("copying out of the editor stamps the clipboard; pasting it makes a selection pill", async () => {
+    // Park the chat, select the FIRST paragraph (a different text than
+    // the earlier pill, so dedupe can't mask the paste), and copy.
+    await run(`pressKey('m', { metaKey: true }); return true;`);
+    await runWait(`return !frontDock();`, { label: "chat parked" });
+    const stamped = await run<{
+      filePath: string;
+      text: string;
+      startLine?: number;
+    }>(`
+      const h = window.__catMarkdownEditor; const doc = h.editor.state.doc;
+      let from = null, to = null;
+      doc.forEach((node, off) => {
+        if (node.type.name === 'paragraph' && from === null) { from = off + 1; to = off + node.nodeSize - 1; }
+      });
+      h.editor.commands.focus(); h.editor.commands.setTextSelection({ from, to });
+      const dt = new DataTransfer();
+      const ev = new ClipboardEvent('copy', { clipboardData: dt, bubbles: true, cancelable: true });
+      h.editor.view.dom.dispatchEvent(ev);
+      window.__pillsE2eClip = dt;
+      const raw = dt.getData('text/x-catamorphic-selection');
+      // Collapse the selection so restoring the chat pulls nothing on its own.
+      h.editor.commands.setTextSelection(from);
+      return raw ? JSON.parse(raw) : null;
+    `);
+    expect(stamped?.filePath).toBe("sel.md");
+    expect(stamped?.text).toBe("First paragraph here.");
+    expect(stamped?.startLine).toBe(3);
+    await run(`pressKey('m', { metaKey: true }); return true;`);
+    await runWait(`return !!composer();`, { label: "chat restored" });
+    const before = await run<number>(
+      `return pills().filter((p) => p.source === 'selection').length;`,
+    );
+    const prevented = await run<boolean>(`
+      composer().focus();
+      const ev = new ClipboardEvent('paste', { clipboardData: window.__pillsE2eClip, bubbles: true, cancelable: true });
+      composer().dispatchEvent(ev);
+      return ev.defaultPrevented;
+    `);
+    expect(prevented).toBe(true);
+    const labels = await runWait<string[]>(
+      `const list = pills().filter((p) => p.source === 'selection');
+       return list.length === ${before} + 1 ? list.map((p) => p.label) : false;`,
+      { label: "pasted selection pill" },
+    );
+    expect(labels).toContain("sel.md · 3");
+    // Pasting the same copy again is a no-op: one pill per selection.
+    await run(`
+      composer().dispatchEvent(new ClipboardEvent('paste', { clipboardData: window.__pillsE2eClip, bubbles: true, cancelable: true }));
+      return true;
+    `);
+    const after = await run<number>(
+      `return pills().filter((p) => p.source === 'selection').length;`,
+    );
+    expect(after).toBe(before + 1);
+  });
+
   it("the agent receives the selection pill with file and line range", async () => {
     await run(
       `setReactValue(composer(), 'What does this say?'); composerKey('Enter'); return true;`,

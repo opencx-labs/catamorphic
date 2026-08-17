@@ -23,14 +23,27 @@ export {
   fetchMarketplace,
   type InstalledPluginInfo,
   installPluginFromSource,
+  liftMcpOAuthClient,
   liftMcpServer,
   type MarketplacePluginEntry,
+  type McpOAuthClientHint,
   marketplaceGitUrl,
   marketplaceJsonUrls,
   type PluginSource,
   parseMarketplace,
   readInstalledPlugin,
 } from "./marketplace.js";
+export {
+  authorizeMcpServer,
+  bearerHeaders,
+  createOAuthProvider,
+  isAuthorizationError,
+  McpAuthorizationRequiredError,
+  type McpOAuthState,
+  type McpOAuthStore,
+  refreshMcpTokens,
+  tokensExpiring,
+} from "./oauth.js";
 export {
   type ConnectionInput,
   MCP_REGISTRY_URL,

@@ -6,10 +6,13 @@ import {
 import Editor, { type OnMount } from "@monaco-editor/react";
 import "../lib/monaco-setup.js";
 import { FileCode, Search } from "lucide-react";
-import { Suspense, lazy, useEffect, useMemo, useRef, useState } from "react";
+import { lazy, Suspense, useEffect, useMemo, useRef, useState } from "react";
 import { ShortcutHint } from "../components/shortcut-hint.js";
 import { commandScore } from "../lib/command-score.js";
-import { registerSelectionReader } from "../lib/editor-selection.js";
+import {
+  registerSelectionReader,
+  stampSelectionOnClipboard,
+} from "../lib/editor-selection.js";
 import { useTheme } from "../lib/theme.js";
 
 type EditorInstance = Parameters<OnMount>[0];
@@ -148,7 +151,13 @@ export function EditorScreen({
   }
 
   return (
-    <div className="flex min-h-0 flex-1 flex-col">
+    // Copies out of either editor carry their file + line range, so pasting
+    // into a chat makes a selection pill (see lib/editor-selection). React's
+    // handler runs after Monaco's/ProseMirror's own copy populated the event.
+    <div
+      className="flex min-h-0 flex-1 flex-col"
+      onCopy={stampSelectionOnClipboard}
+    >
       <div className="flex h-9 shrink-0 items-center gap-2 border-b border-border bg-bg-inset px-3">
         <ShortcutHint label="Open another file">
           <button

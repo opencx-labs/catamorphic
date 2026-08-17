@@ -20,6 +20,7 @@ import { type EmbeddedServer, startEmbeddedServer } from "./server/boot.js";
 import { resolveDataPaths } from "./server/paths.js";
 import { registerTerminalSupport } from "./terminal.js";
 import { windowBackgroundColor } from "./theme.js";
+import { WindowStateStore } from "./window-state.js";
 
 // macOS 26.x + Apple Silicon: V8's background compiler threads race the
 // OS's MAP_JIT write-protection and SIGTRAP in ThreadIsolation::
@@ -145,9 +146,17 @@ function createWindow(profileId?: string): BrowserWindow {
     ? (profilesStore.get(profileId) ?? profilesStore.lastActiveProfile())
     : profilesStore.lastActiveProfile();
   const stores = profileConfig.forProfile(profile.id);
+  // Placement survives a relaunch (size, position, maximized/fullscreen).
+  const windowState = new WindowStateStore(
+    path.join(app.getPath("userData"), "window-state.json"),
+  );
+  const saved = windowState.load();
   const window = new BrowserWindow({
-    width: 1200,
-    height: 800,
+    width: saved.width,
+    height: saved.height,
+    ...(saved.x !== undefined && saved.y !== undefined
+      ? { x: saved.x, y: saved.y }
+      : {}),
     minWidth: 720,
     minHeight: 480,
     title: "Catamorphic",
@@ -171,7 +180,14 @@ function createWindow(profileId?: string): BrowserWindow {
       backgroundThrottling: e2eDataDir === undefined,
     },
   });
-  window.once("ready-to-show", () => window.show());
+  if (saved.maximized) window.maximize();
+  window.once("ready-to-show", () => {
+    window.show();
+    // Fullscreen after show: entering it on a hidden window leaves macOS
+    // with a blank space until the next repaint.
+    if (saved.fullscreen) window.setFullScreen(true);
+  });
+  windowState.track(window, saved);
   // Captured now: `closed` fires after destruction, when touching
   // window.webContents throws "Object has been destroyed".
   const webContentsId = window.webContents.id;
@@ -358,6 +374,17 @@ app.whenReady().then(async () => {
     // picks it back up within a poll interval.
     powerMonitor.on("suspend", () => void server?.suspendExecution());
     powerMonitor.on("resume", () => server?.resumeExecution());
+    // OAuth-backed connections hand their token to harnesses as a plain
+    // header, so the app keeps it fresh: at boot, after sleep, and on a
+    // slow tick (refresh only fires when a token is near expiry).
+    const refreshConnectionTokens = () => {
+      for (const profile of profilesStore.list().profiles) {
+        void connectors.refreshTokens(profile.id).catch(() => {});
+      }
+    };
+    refreshConnectionTokens();
+    powerMonitor.on("resume", refreshConnectionTokens);
+    setInterval(refreshConnectionTokens, 4 * 60_000).unref();
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     dialog.showErrorBox(

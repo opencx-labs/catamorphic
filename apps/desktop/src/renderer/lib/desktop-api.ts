@@ -130,6 +130,8 @@ export interface ConnectionInfo {
     | { kind: "manual" }
     | { kind: "registry"; registryName: string }
     | { kind: "plugin"; plugin: string };
+  /** Has been through OAuth (tokens on file). */
+  authorized: boolean;
 }
 
 export interface CreateConnectionInput {
@@ -159,6 +161,8 @@ export interface ConnectionProbe {
   toolNames?: string[];
   protocolVersion?: string;
   error?: string;
+  /** The server wants a user to authorize (401): offer the OAuth flow. */
+  needsAuth?: boolean;
 }
 
 export interface ConnectorSearchData {
@@ -532,7 +536,15 @@ export interface CatamorphicDesktopApi {
   ) => Promise<ConnectionInfo | null>;
   connectionsRemove: (id: string) => Promise<boolean>;
   connectionsProbe: (id: string) => Promise<ConnectionProbe>;
+  /** Run OAuth for a remote connection (opens the consent page as a tab). */
+  connectionsAuthorize: (id: string) => Promise<{ toolCount: number }>;
   connectorsSearch: (query: string) => Promise<ConnectorSearchData>;
+  connectorsSearchPlugins: (
+    query: string,
+  ) => Promise<ConnectorSearchData["plugins"]>;
+  connectorsSearchRegistry: (
+    query: string,
+  ) => Promise<ConnectorSearchData["registry"]>;
   connectorsList: () => Promise<InstalledConnectorInfo[]>;
   connectorsInstallRegistry: (
     registryName: string,
@@ -660,6 +672,8 @@ export interface CatamorphicDesktopApi {
     query: string;
   }) => Promise<BrowserSuggestions>;
   onBrowserOpenUrl: (listener: (url: string) => void) => () => void;
+  /** Close browser tabs whose URL starts with `prefix` (OAuth callback). */
+  onBrowserCloseUrl: (listener: (prefix: string) => void) => () => void;
   onBrowserFocusAddress: (
     listener: (webContentsId: number) => void,
   ) => () => void;

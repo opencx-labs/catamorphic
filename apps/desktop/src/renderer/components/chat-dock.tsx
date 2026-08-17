@@ -33,19 +33,21 @@ import {
   useState,
 } from "react";
 import { commandScore } from "../lib/command-score";
-import { readEditorSelection } from "../lib/editor-selection";
-import { classifyPastedText, selectionName, textPill } from "../lib/text-pills";
-import { ComposerPill } from "./composer-pill";
 import {
   type AgentInfo,
   desktopApi,
   projectAgentAsInfo,
 } from "../lib/desktop-api";
 import {
+  readEditorSelection,
+  selectionFromClipboard,
+} from "../lib/editor-selection";
+import {
   type SkillInfo,
   skillInvocation,
   useProjectSkills,
 } from "../lib/skills";
+import { classifyPastedText, selectionName, textPill } from "../lib/text-pills";
 import { AgentQuestionPanel } from "./agent-question-panel";
 import {
   ChatTimeline,
@@ -54,6 +56,7 @@ import {
 } from "./catamorphic/chat-timeline";
 import { ChatGlyph } from "./chat-icon";
 import type { ChatSignals } from "./chat-signals";
+import { ComposerPill } from "./composer-pill";
 import { ShortcutHint } from "./shortcut-hint";
 
 export type ChatMode = "min" | "partial" | "tab";
@@ -1394,6 +1397,21 @@ export function ChatDock({
     setAttachments((current) => {
       const live = current.filter((attachment) => !attachment.exiting);
       if (live.length >= MAX_ATTACHMENTS) return current;
+      // The same selection can arrive twice (pulled when the chat came to
+      // the front, then pasted): one pill.
+      const source = pill.source;
+      if (
+        source.type === "selection" &&
+        live.some(
+          (attachment) =>
+            isTextPill(attachment) &&
+            attachment.source.type === "selection" &&
+            attachment.source.filePath === source.filePath &&
+            attachment.text === pill.text,
+        )
+      ) {
+        return current;
+      }
       return [...current, { ...pill, id: crypto.randomUUID() }];
     });
   const addTextPillRef = useRef(addTextPill);
@@ -1451,6 +1469,29 @@ export function ChatDock({
           : !(target instanceof HTMLInputElement) &&
             !(target instanceof HTMLElement && target.isContentEditable);
       if (!inComposer) return;
+      // Copied out of one of our editors: a selection pill whatever the
+      // size — the file + line range is the point, not the byte count.
+      const fromEditor = selectionFromClipboard(event.clipboardData);
+      if (fromEditor) {
+        event.preventDefault();
+        addTextPillRef.current(
+          textPill(
+            fromEditor.text.replace(/\r\n?/g, "\n"),
+            {
+              type: "selection",
+              filePath: fromEditor.filePath,
+              ...(fromEditor.startLine !== undefined
+                ? { startLine: fromEditor.startLine }
+                : {}),
+              ...(fromEditor.endLine !== undefined
+                ? { endLine: fromEditor.endLine }
+                : {}),
+            },
+            selectionName(fromEditor),
+          ),
+        );
+        return;
+      }
       const text = event.clipboardData?.getData("text/plain") ?? "";
       const classified = classifyPastedText(text);
       if (classified.kind !== "pill") return;
@@ -1593,6 +1634,7 @@ export function ChatDock({
           addFiles(filesFrom(event.dataTransfer));
         }}
         data-palette-target={(paletteTargeted && !isTab) || undefined}
+        data-floating-chat={entry.mode === "partial" || undefined}
         className={`pointer-events-auto relative flex w-full origin-bottom flex-col overflow-hidden backdrop-blur-xl transition-[max-width,height,opacity,translate,scale,background-color,border-radius,border-color] duration-250 ease-[cubic-bezier(0.2,0,0,1)] ${
           presentsAsTab
             ? "h-full max-w-full rounded-none border-0 border-transparent bg-bg"

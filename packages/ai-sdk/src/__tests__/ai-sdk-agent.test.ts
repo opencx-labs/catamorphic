@@ -399,3 +399,25 @@ describe("AiSdkCodingAgent", () => {
     expect(secondPrompt).not.toContain("x".repeat(100_001));
   });
 });
+
+describe("pruneEmptyOptionalArgs", () => {
+  it("drops empty optional values and keeps required ones", async () => {
+    const { pruneEmptyOptionalArgs } = await import("../ai-sdk-agent.js");
+    expect(
+      pruneEmptyOptionalArgs(
+        { query: "from:me", context_channel_id: "", cursor: null, limit: 5 },
+        {
+          type: "object",
+          properties: {},
+          required: ["query"],
+        },
+      ),
+    ).toEqual({ query: "from:me", limit: 5 });
+    expect(
+      pruneEmptyOptionalArgs(
+        { query: "" },
+        { type: "object", required: ["query"] },
+      ),
+    ).toEqual({ query: "" });
+  });
+});

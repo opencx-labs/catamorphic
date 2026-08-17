@@ -105,3 +105,18 @@ describe("liftMcpServer", () => {
     expect(liftMcpServer({ nonsense: true })).toBeUndefined();
   });
 });
+
+describe("liftMcpOAuthClient", () => {
+  it("reads a plugin's pre-registered OAuth client", async () => {
+    const { liftMcpOAuthClient } = await import("../marketplace.js");
+    expect(
+      liftMcpOAuthClient({
+        type: "http",
+        url: "https://mcp.slack.com/mcp",
+        oauth: { clientId: "160.889", callbackPort: 3118 },
+      }),
+    ).toEqual({ clientId: "160.889", callbackPort: 3118 });
+    expect(liftMcpOAuthClient({ url: "https://x", oauth: {} })).toBeUndefined();
+    expect(liftMcpOAuthClient({ url: "https://x" })).toBeUndefined();
+  });
+});

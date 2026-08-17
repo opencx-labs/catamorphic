@@ -75,12 +75,12 @@ import {
   type SidebarMenuEntry,
   type SidebarSectionConfig,
 } from "./lib/desktop-api.js";
+import { readEditorSelection } from "./lib/editor-selection.js";
 import {
   formatBinding,
   matchesBinding,
   useKeybindings,
 } from "./lib/keybindings.js";
-import { readEditorSelection } from "./lib/editor-selection.js";
 import { notifyDesktop, playChime } from "./lib/notify.js";
 import { skillInvocation } from "./lib/skills.js";
 import { AppScreen, useApps } from "./screens/app-screen.js";
@@ -548,6 +548,27 @@ function PaneUnsplitButton({ onClick }: { onClick: () => void }) {
       </ShortcutHint>
     </span>
   );
+}
+
+/** Whether the floating chat dock is where the user is working right now. */
+let lastPointerDownInFloatingChat = false;
+if (typeof window !== "undefined") {
+  window.addEventListener(
+    "pointerdown",
+    (event) => {
+      lastPointerDownInFloatingChat =
+        event.target instanceof Element &&
+        event.target.closest("[data-floating-chat]") !== null;
+    },
+    { capture: true },
+  );
+}
+function floatingChatHasFocus(): boolean {
+  const active = document.activeElement;
+  if (active && active !== document.body) {
+    return active.closest("[data-floating-chat]") !== null;
+  }
+  return lastPointerDownInFloatingChat;
 }
 
 export function App() {
@@ -1766,10 +1787,37 @@ export function App() {
   closeChatRef.current = closeChat;
   const closeTabRef = useRef(closeTab);
   closeTabRef.current = closeTab;
+  // An OAuth consent tab has done its job once the loopback callback was
+  // served: close it (with the tab's exit motion) instead of leaving a
+  // "you can close this tab" page behind. The tab may still be mid-redirect
+  // to the callback, so match on the live URL a moment later too.
+  useEffect(() => {
+    return desktopApi.onBrowserCloseUrl((prefix) => {
+      const closeMatching = () => {
+        const ws = workspaceRef.current;
+        let closed = false;
+        for (const browser of ws.browsers) {
+          if (browser.url.startsWith(prefix)) {
+            closeTabRef.current(browserTabKey(browser.localId), {
+              force: true,
+            });
+            closed = true;
+          }
+        }
+        return closed;
+      };
+      if (!closeMatching()) window.setTimeout(closeMatching, 800);
+    });
+  }, []);
   const closeActiveSurface = useCallback(() => {
     const ws = workspaceRef.current;
     const floating = ws.chats.find((chat) => chat.mode === "partial");
-    if (floating) {
+    // The floating chat only owns Cmd+W while the user is IN it. Focus is
+    // the tell (its composer takes focus on open); when nothing focusable
+    // holds focus (a click on a pane's blank chrome, a webview whose guest
+    // swallowed the click), the last pointer-down decides. Clicking into
+    // the tab behind the dock and pressing Cmd+W closes the tab.
+    if (floating && (!ws.activeTabKey || floatingChatHasFocus())) {
       // Through the dock's animated close (same collapse as Escape);
       // straight removal only if the dock never registered one.
       const animated = chatClosersRef.current.get(floating.localId);
@@ -4085,6 +4133,11 @@ export function App() {
           setConnectorsModalOpen(false);
           void finalizeConnectorRequest();
         }}
+        // OAuth: the modal steps aside so the consent tab is visible, then
+        // comes back once the callback landed. Stepping aside is not the
+        // user closing it — an agent's request stays pending until then.
+        onStepAside={() => setConnectorsModalOpen(false)}
+        onReturn={() => setConnectorsModalOpen(true)}
         onOpenUrl={(url) => openBrowserTab(url)}
         agentRequest={
           connectorRequest

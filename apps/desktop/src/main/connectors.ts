@@ -1,13 +1,19 @@
 import fs from "node:fs";
 import path from "node:path";
 import {
+  authorizeMcpServer,
   DEFAULT_MARKETPLACES,
   fetchMarketplace,
   installPluginFromSource,
+  isAuthorizationError,
   type MarketplacePluginEntry,
+  type McpConnectionProbe,
+  type McpOAuthClientHint,
+  type McpOAuthStore,
   type McpRegistryEntry,
   probeMcpServer,
   readInstalledPlugin,
+  refreshMcpTokens,
   searchMcpRegistry,
 } from "@catamorphic/mcp";
 import type { AgentMcpServerConfig } from "@catamorphic/sandbox";
@@ -16,7 +22,7 @@ import type {
   McpConnection,
   PublicMcpConnection,
 } from "./connections-store.js";
-import { toPublicConnection } from "./connections-store.js";
+import { toAgentMcpServer, toPublicConnection } from "./connections-store.js";
 
 /**
  * Connectors: the user-facing install layer over two open ecosystems —
@@ -53,9 +59,10 @@ export interface ConnectorSearchResult {
   registry: Array<
     Omit<McpRegistryEntry, "suggested"> & {
       /**
-       * Published under a DNS-verified vendor namespace (com.slack/…) rather
-       * than an individual GitHub account (io.github.…) — the registry's
-       * closest signal for "made by the vendor itself".
+       * Registry publications never carry the Official badge: a DNS-
+       * verified vendor namespace only proves the publisher owns a domain,
+       * and a dozen "Official" rows for one search means nothing. Kept as
+       * `false` so the two result kinds share a shape.
        */
       official: boolean;
       suggested?: {
@@ -77,16 +84,27 @@ export interface ConnectorSearchResult {
     version?: string;
     marketplace: string;
     installed: boolean;
-    /** From an Anthropic-maintained marketplace. */
+    /** From Anthropic's own curated marketplace (the one trusted repo). */
     official: boolean;
     /** Where to read about the plugin (its repository / subdirectory). */
     pageUrl?: string;
   }>;
 }
 
+const MARKETPLACE_CACHE_MS = 10 * 60_000;
+const REGISTRY_CACHE_MS = 5 * 60_000;
+
 export class ConnectorsService {
   private readonly registryEntries = new Map<string, McpRegistryEntry>();
   private readonly pluginEntries = new Map<string, MarketplacePluginEntry>();
+  private readonly marketplaceCache = new Map<
+    string,
+    { entries: Promise<MarketplacePluginEntry[]>; at: number }
+  >();
+  private readonly registryQueryCache = new Map<
+    string,
+    { entries: McpRegistryEntry[]; at: number }
+  >();
 
   constructor(
     private readonly deps: {
@@ -145,38 +163,84 @@ export class ConnectorsService {
     profileId: string,
     query: string,
   ): Promise<ConnectorSearchResult> {
+    const [registry, plugins] = await Promise.all([
+      this.searchRegistry(query),
+      this.searchPlugins(profileId, query),
+    ]);
+    return { registry, plugins };
+  }
+
+  /**
+   * The registry half: a remote substring search (~1s round trip, and
+   * >6000 servers, so no local mirror). Results are cached per query for
+   * the session — backspacing through a query is instant the second time.
+   */
+  async searchRegistry(
+    query: string,
+  ): Promise<ConnectorSearchResult["registry"]> {
+    const key = query.trim().toLowerCase();
+    const cached = this.registryQueryCache.get(key);
+    const registry =
+      cached && Date.now() - cached.at < REGISTRY_CACHE_MS
+        ? cached.entries
+        : await searchMcpRegistry(query, { limit: 20 })
+            .then((entries) => {
+              this.registryQueryCache.set(key, { entries, at: Date.now() });
+              return entries;
+            })
+            .catch(() => cached?.entries ?? []);
+    for (const entry of registry) this.registryEntries.set(entry.name, entry);
+    return registry.map((entry) => ({
+      ...entry,
+      official: false,
+      suggested: entry.suggested
+        ? {
+            transport: entry.suggested.config.transport,
+            inputs: entry.suggested.inputs,
+          }
+        : undefined,
+    }));
+  }
+
+  /** The plugin half: a local filter over cached marketplaces (fast). */
+  async searchPlugins(
+    profileId: string,
+    query: string,
+  ): Promise<ConnectorSearchResult["plugins"]> {
     const installed = new Set(
       this.listInstalled(profileId).map((connector) => connector.name),
     );
-    const [registry, plugins] = await Promise.all([
-      searchMcpRegistry(query, { limit: 20 }).catch(() => []),
-      this.searchMarketplaces(profileId, query),
-    ]);
-    for (const entry of registry) this.registryEntries.set(entry.name, entry);
+    const plugins = await this.searchMarketplaces(profileId, query);
     for (const entry of plugins) {
       this.pluginEntries.set(`${entry.marketplace}#${entry.name}`, entry);
     }
-    return {
-      registry: registry.map((entry) => ({
-        ...entry,
-        official: registryOfficial(entry.name),
-        suggested: entry.suggested
-          ? {
-              transport: entry.suggested.config.transport,
-              inputs: entry.suggested.inputs,
-            }
-          : undefined,
-      })),
-      plugins: plugins.map((entry) => ({
-        name: entry.name,
-        description: entry.description,
-        version: entry.version,
-        marketplace: entry.marketplace,
-        installed: installed.has(entry.name),
-        official: entry.marketplace.startsWith("anthropics/"),
-        pageUrl: pluginPageUrl(entry),
-      })),
-    };
+    return plugins.map((entry) => ({
+      name: entry.name,
+      description: entry.description,
+      version: entry.version,
+      marketplace: entry.marketplace,
+      installed: installed.has(entry.name),
+      official: entry.marketplace === OFFICIAL_MARKETPLACE,
+      pageUrl: pluginPageUrl(entry),
+    }));
+  }
+
+  /** Marketplace lists, fetched once per TTL (they're GitHub files — a
+   * fetch per keystroke was most of the search latency). */
+  private marketplaceEntries(ref: string): Promise<MarketplacePluginEntry[]> {
+    const cached = this.marketplaceCache.get(ref);
+    if (cached && Date.now() - cached.at < MARKETPLACE_CACHE_MS) {
+      return cached.entries;
+    }
+    const entries = fetchMarketplace(ref)
+      .catch(() => [] as MarketplacePluginEntry[])
+      .then((list) => {
+        // Failures aren't cached for long — the next search retries.
+        if (list.length === 0) this.marketplaceCache.delete(ref);
+        return list;
+      });
+    this.marketplaceCache.set(ref, { entries, at: Date.now() });
+    return entries;
   }
 
   private async searchMarketplaces(
@@ -185,9 +249,7 @@ export class ConnectorsService {
   ): Promise<MarketplacePluginEntry[]> {
     const needle = query.trim().toLowerCase();
     const lists = await Promise.all(
-      this.marketplaces(profileId).map((ref) =>
-        fetchMarketplace(ref).catch(() => [] as MarketplacePluginEntry[]),
-      ),
+      this.marketplaces(profileId).map((ref) => this.marketplaceEntries(ref)),
     );
     const entries = lists.flat();
     if (!needle) return entries.slice(0, 20);
@@ -261,6 +323,7 @@ export class ConnectorsService {
       description: entry.description,
       version: entry.version,
       mcpServers: {} as Record<string, AgentMcpServerConfig>,
+      mcpOAuth: {} as Record<string, McpOAuthClientHint>,
     }));
 
     const connections = this.deps.connectionsFor(profileId);
@@ -275,6 +338,9 @@ export class ConnectorsService {
           ? { command: config.command, args: config.args, env: config.env }
           : { url: config.url, headers: config.headers }),
         source: { kind: "plugin", plugin: pluginName },
+        ...(info.mcpOAuth[serverName]
+          ? { oauthClient: info.mcpOAuth[serverName] }
+          : {}),
       });
       connectionIds.push(connection.id);
     }
@@ -309,51 +375,141 @@ export class ConnectorsService {
     return true;
   }
 
-  /** Probe a stored connection (connect, list tools, close). */
-  async probeConnection(profileId: string, connectionId: string) {
-    const connection = this.deps.connectionsFor(profileId).get(connectionId);
+  /**
+   * Probe a stored connection (connect, list tools, close). A 401 from a
+   * remote server is reported as `needsAuth` — the UI's cue to offer the
+   * OAuth flow rather than print the raw error.
+   */
+  async probeConnection(
+    profileId: string,
+    connectionId: string,
+  ): Promise<ConnectionProbeResult> {
+    const store = this.deps.connectionsFor(profileId);
+    const connection = store.get(connectionId);
     if (!connection) return { ok: false, error: "Connection not found" };
-    const config = connectionToConfig(connection);
+    // Tokens near expiry get refreshed first, so a probe never fails on a
+    // token the refresher would have renewed a minute later.
+    await this.refreshConnectionTokens(store, connection).catch(() => {});
+    const config = toAgentMcpServer(store.get(connectionId) ?? connection);
     if (!config) return { ok: false, error: "Connection is incomplete" };
-    return probeMcpServer(config);
+    const probe = await probeMcpServer(config);
+    if (
+      !probe.ok &&
+      config.transport !== "stdio" &&
+      isAuthorizationError(probe.error)
+    ) {
+      return {
+        ...probe,
+        needsAuth: true,
+        error: connection.oauth?.tokens
+          ? "Authorization expired — authorize again"
+          : "Needs authorization",
+      };
+    }
+    return probe;
+  }
+
+  /**
+   * Interactive OAuth for a remote connection: opens the consent page via
+   * `openUrl`, catches the redirect on a loopback listener, stores tokens
+   * on the connection. Resolves once tokens have been proven by a connect.
+   */
+  async authorizeConnection(
+    profileId: string,
+    connectionId: string,
+    opts: {
+      openUrl: (url: string) => void;
+      onCallbackServed?: (origin: string) => void;
+    },
+  ): Promise<{ toolCount: number }> {
+    const store = this.deps.connectionsFor(profileId);
+    const connection = store.get(connectionId);
+    if (!connection) throw new Error("Connection not found");
+    if (connection.transport === "stdio" || !connection.url) {
+      throw new Error("Only remote connections can be authorized");
+    }
+    const config: AgentMcpServerConfig = {
+      transport: connection.transport,
+      url: connection.url,
+      ...(connection.headers ? { headers: connection.headers } : {}),
+    };
+    // Connections lifted from a plugin before it declared (or before we
+    // read) an `oauth` block: consult the installed plugin directly.
+    let client = connection.oauthClient;
+    if (!client && connection.source.kind === "plugin") {
+      const plugin = this.listInstalled(profileId).find(
+        (entry) =>
+          connection.source.kind === "plugin" &&
+          entry.name === connection.source.plugin,
+      );
+      if (plugin) {
+        client = await readInstalledPlugin(plugin.path)
+          .then((info) => info.mcpOAuth[connection.name])
+          .catch(() => undefined);
+      }
+    }
+    const result = await authorizeMcpServer(config, {
+      store: oauthStoreFor(store, connectionId),
+      openUrl: opts.openUrl,
+      onCallbackServed: opts.onCallbackServed,
+      ...(client ? { client } : {}),
+    });
+    return { toolCount: result.toolCount };
+  }
+
+  /** Refresh one connection's tokens if they're near expiry. */
+  private async refreshConnectionTokens(
+    store: ConnectionsStore,
+    connection: McpConnection,
+  ): Promise<void> {
+    if (!connection.oauth?.tokens || !connection.url) return;
+    if (connection.transport === "stdio") return;
+    await refreshMcpTokens(
+      {
+        transport: connection.transport,
+        url: connection.url,
+        ...(connection.headers ? { headers: connection.headers } : {}),
+      },
+      oauthStoreFor(store, connection.id),
+    );
+  }
+
+  /**
+   * Keep every OAuth-backed connection's bearer token fresh. Runs at boot
+   * and on a timer; the harnesses that read the token as a plain header
+   * (Claude Code, Codex) never refresh it themselves.
+   */
+  async refreshTokens(profileId: string): Promise<void> {
+    const store = this.deps.connectionsFor(profileId);
+    for (const connection of store.list()) {
+      if (!connection.enabled || !connection.oauth?.tokens) continue;
+      await this.refreshConnectionTokens(store, connection).catch(() => {});
+    }
   }
 }
 
-function connectionToConfig(
-  connection: McpConnection,
-): AgentMcpServerConfig | undefined {
-  if (connection.transport === "stdio") {
-    return connection.command
-      ? {
-          transport: "stdio",
-          command: connection.command,
-          args: connection.args,
-          env: connection.env,
-        }
-      : undefined;
-  }
-  return connection.url
-    ? {
-        transport: connection.transport,
-        url: connection.url,
-        headers: connection.headers,
-      }
-    : undefined;
+export type ConnectionProbeResult = McpConnectionProbe & {
+  /** The server wants a user to authorize (401); offer the OAuth flow. */
+  needsAuth?: boolean;
+};
+
+/** The OAuth persistence seam: state lives on the connection record. */
+function oauthStoreFor(
+  store: ConnectionsStore,
+  connectionId: string,
+): McpOAuthStore {
+  return {
+    load: () => store.get(connectionId)?.oauth ?? {},
+    save: (state) => store.setOAuth(connectionId, state),
+  };
 }
 
 function sanitizeDirName(name: string): string {
   return name.replace(/[^A-Za-z0-9._-]+/g, "-");
 }
 
-/**
- * Registry names are reverse-DNS namespaced ("com.slack/foo",
- * "io.github.owner/bar"). A non-GitHub namespace required DNS verification,
- * so it is the vendor's own publication.
- */
-function registryOfficial(name: string): boolean {
-  const namespace = name.split("/")[0] ?? "";
-  return namespace.length > 0 && !namespace.startsWith("io.github.");
-}
+/** The one marketplace whose plugins read "Official" and sort first. */
+const OFFICIAL_MARKETPLACE = "anthropics/claude-plugins-official";
 
 /** Human-readable home for a plugin: its repo (or subdirectory) on GitHub. */
 function pluginPageUrl(entry: MarketplacePluginEntry): string | undefined {

@@ -571,6 +571,37 @@ describe("chat surface shortcuts", () => {
       label: "dock unmounted after collapse",
     });
   });
+
+  it("Cmd+W closes the tab behind the floating chat when the tab has focus", async () => {
+    // A browser tab, then a floating chat over it.
+    await run(`pressKey('t', { metaKey: true, altKey: true }); return true;`);
+    await runWait(`return !!$('input[aria-label="Address and search bar"]');`, {
+      timeoutMs: 30_000,
+      label: "browser tab",
+    });
+    await run(`pressKey('n', { metaKey: true }); return true;`);
+    await runWait(`return !!floatingDock();`, { label: "floating chat open" });
+    // Click into the tab's own chrome: focus leaves the dock.
+    await run(`
+      const address = $('input[aria-label="Address and search bar"]');
+      address.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true }));
+      address.focus();
+      return document.activeElement === address;
+    `);
+    await run(`pressKey('w', { metaKey: true }); return true;`);
+    await runWait(
+      `return !$('input[aria-label="Address and search bar"]') && !!floatingDock();`,
+      { label: "browser tab closed, chat still floating" },
+    );
+    // Back in the chat, Cmd+W closes the chat.
+    await run(`
+      const ta = floatingDock().querySelector('textarea');
+      ta.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true }));
+      ta.focus(); return true;
+    `);
+    await run(`pressKey('w', { metaKey: true }); return true;`);
+    await runWait(`return !floatingDock();`, { label: "floating chat closed" });
+  });
 });
 
 describe("navigation shortcuts", () => {

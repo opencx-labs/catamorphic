@@ -608,7 +608,10 @@ function buildMcpTools(
           // flattenToolResult throws on isError results.
           const raw = await server.callToolRaw(
             info.name,
-            input as Record<string, unknown>,
+            pruneEmptyOptionalArgs(
+              input as Record<string, unknown>,
+              info.inputSchema,
+            ),
           );
           if (raw.structuredContent !== undefined && !raw.isError) {
             return raw.structuredContent;
@@ -621,6 +624,30 @@ function buildMcpTools(
     }
   }
   return tools;
+}
+
+/**
+ * Some models (OpenAI-family especially) fill every declared property and
+ * send `""`/`null` for the ones they have no value for; servers that
+ * validate optional fields then reject the call ("value is not a channel
+ * ID" for `context_channel_id: ""`, from Slack's search tool). Drop empty
+ * values for properties the schema doesn't require — an absent optional is
+ * what the model meant.
+ */
+export function pruneEmptyOptionalArgs(
+  input: Record<string, unknown>,
+  schema: Record<string, unknown>,
+): Record<string, unknown> {
+  const required = new Set(
+    Array.isArray(schema.required) ? (schema.required as string[]) : [],
+  );
+  const pruned: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(input)) {
+    const empty = value === "" || value === null;
+    if (empty && !required.has(key)) continue;
+    pruned[key] = value;
+  }
+  return pruned;
 }
 
 function createTools(

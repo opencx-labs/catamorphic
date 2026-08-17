@@ -12,7 +12,7 @@
   ],
   "scripts": {
     "dev": "docker compose up -d --wait && turbo dev --filter=@catamorphic/cloudflare-sandbox-bridge",
-    "dev:desktop": "turbo watch dev --filter=catamorphic-desktop",
+    "dev:desktop": "turbo run dev --no-daemon --concurrency=64 --filter=catamorphic-desktop...",
     "build": "turbo build",
     "test": "turbo test",
     "typecheck": "turbo typecheck",
@@ -28,7 +28,7 @@
     "@biomejs/biome": "^2.5.7",
     "@typescript/native-preview": "^7.0.0-dev.20260707.2",
     "tsup": "^8.5.1",
-    "turbo": "^2.10.9",
+    "turbo": "2.10.10",
     "typescript": "^7.0.2",
     "vitest": "^4.1.10"
   },

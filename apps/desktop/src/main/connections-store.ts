@@ -1,6 +1,11 @@
 import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
+import {
+  bearerHeaders,
+  type McpOAuthClientHint,
+  type McpOAuthState,
+} from "@catamorphic/mcp";
 import type { AgentMcpServerConfig } from "@catamorphic/sandbox";
 import { safeStorage } from "electron";
 
@@ -37,13 +42,24 @@ export interface McpConnection {
   source: ConnectionSource;
   /** Display icon (https/data url), e.g. from the registry entry. */
   iconUrl?: string;
+  /**
+   * OAuth state for remote servers that demanded it (client registration,
+   * tokens, discovery). Decrypted in memory; never crosses the
+   * contextBridge — the renderer only learns whether tokens exist.
+   */
+  oauth?: McpOAuthState;
+  /** Pre-registered OAuth client the source (plugin) declared, if any. */
+  oauthClient?: McpOAuthClientHint;
 }
 
-interface StoredConnection extends Omit<McpConnection, "headers" | "env"> {
+interface StoredConnection
+  extends Omit<McpConnection, "headers" | "env" | "oauth"> {
   headersEncrypted?: string;
   headersPlaintext?: Record<string, string>;
   envEncrypted?: string;
   envPlaintext?: Record<string, string>;
+  oauthEncrypted?: string;
+  oauthPlaintext?: McpOAuthState;
 }
 
 interface ConnectionsFile {
@@ -65,6 +81,8 @@ export interface PublicMcpConnection {
   enabled: boolean;
   source: ConnectionSource;
   iconUrl?: string;
+  /** Set once the connection has been through OAuth (tokens on file). */
+  authorized: boolean;
 }
 
 export interface CreateConnectionInput {
@@ -78,6 +96,7 @@ export interface CreateConnectionInput {
   enabled?: boolean;
   source?: ConnectionSource;
   iconUrl?: string;
+  oauthClient?: McpOAuthClientHint;
 }
 
 export interface UpdateConnectionInput {
@@ -141,6 +160,7 @@ export class ConnectionsStore {
       ...(input.command ? { command: input.command } : {}),
       ...(input.args && input.args.length > 0 ? { args: input.args } : {}),
       ...(input.iconUrl ? { iconUrl: input.iconUrl } : {}),
+      ...(input.oauthClient ? { oauthClient: input.oauthClient } : {}),
       enabled: input.enabled ?? true,
       source: input.source ?? { kind: "manual" },
       ...encryptMap("headers", input.headers),
@@ -172,6 +192,17 @@ export class ConnectionsStore {
     }
     this.save();
     return this.decrypt(stored);
+  }
+
+  /** Replace the OAuth state (called from the provider on every step of a
+   * flow — registration, verifier, tokens — and by the refresher). */
+  setOAuth(id: string, state: McpOAuthState | undefined): void {
+    const stored = this.data.connections.find((entry) => entry.id === id);
+    if (!stored) return;
+    const next = encryptJson("oauth", state);
+    stored.oauthEncrypted = next.oauthEncrypted;
+    stored.oauthPlaintext = next.oauthPlaintext;
+    this.save();
   }
 
   remove(id: string): boolean {
@@ -207,12 +238,16 @@ export class ConnectionsStore {
       headersPlaintext,
       envEncrypted,
       envPlaintext,
+      oauthEncrypted,
+      oauthPlaintext,
       ...rest
     } = stored;
+    const oauth = decryptJson<McpOAuthState>(oauthEncrypted, oauthPlaintext);
     return {
       ...rest,
       ...maybeMap("headers", headersEncrypted, headersPlaintext),
       ...maybeMap("env", envEncrypted, envPlaintext),
+      ...(oauth ? { oauth } : {}),
     };
   }
 }
@@ -233,6 +268,37 @@ function encryptMap(
     "[desktop] OS keychain encryption unavailable; storing connection secrets in plaintext.",
   );
   return { [`${key}Plaintext`]: map };
+}
+
+function encryptJson<T>(
+  key: "oauth",
+  value: T | undefined,
+): { oauthEncrypted?: string; oauthPlaintext?: T } {
+  if (value === undefined) return {};
+  if (safeStorage.isEncryptionAvailable()) {
+    return {
+      [`${key}Encrypted`]: safeStorage
+        .encryptString(JSON.stringify(value))
+        .toString("base64"),
+    };
+  }
+  return { [`${key}Plaintext`]: value };
+}
+
+function decryptJson<T>(
+  encrypted: string | undefined,
+  plaintext: T | undefined,
+): T | undefined {
+  if (encrypted) {
+    try {
+      return JSON.parse(
+        safeStorage.decryptString(Buffer.from(encrypted, "base64")),
+      ) as T;
+    } catch {
+      return undefined;
+    }
+  }
+  return plaintext;
 }
 
 function maybeMap(
@@ -257,12 +323,13 @@ function maybeMap(
 export function toPublicConnection(
   connection: McpConnection,
 ): PublicMcpConnection {
-  const { headers, env, ...rest } = connection;
+  const { headers, env, oauth, ...rest } = connection;
   return {
     ...rest,
     serverKey: connectionServerKey(connection),
     headerNames: Object.keys(headers ?? {}),
     envNames: Object.keys(env ?? {}),
+    authorized: Boolean(oauth?.tokens?.access_token),
   };
 }
 
@@ -280,10 +347,13 @@ export function toAgentMcpServer(
     };
   }
   if (!connection.url) return undefined;
+  // OAuth tokens ride as a bearer header: harnesses with their own MCP
+  // client (Claude Code, Codex) never learn OAuth exists.
+  const headers = { ...connection.headers, ...bearerHeaders(connection.oauth) };
   return {
     transport: connection.transport,
     url: connection.url,
-    ...(connection.headers ? { headers: connection.headers } : {}),
+    ...(Object.keys(headers).length > 0 ? { headers } : {}),
   };
 }
 

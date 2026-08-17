@@ -1,4 +1,12 @@
-import { BadgeCheck, ExternalLink, Plug, Trash2 } from "lucide-react";
+import {
+  BadgeCheck,
+  ExternalLink,
+  Loader2,
+  Plug,
+  Puzzle,
+  ShieldCheck,
+  Trash2,
+} from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
   type ConnectionInfo,
@@ -7,6 +15,7 @@ import {
   desktopApi,
   type InstalledConnectorInfo,
 } from "../lib/desktop-api";
+import { useListMotion } from "../lib/list-motion";
 import { Modal } from "./modal";
 import { PendingButton } from "./pending-button";
 
@@ -21,15 +30,32 @@ import { PendingButton } from "./pending-button";
  * publications first — a DNS-verified vendor namespace on the registry
  * side, an Anthropic-maintained marketplace on the plugin side — since the
  * registry API exposes no install counts to rank by.
+ *
+ * Installing a remote server that answers 401 flows straight into OAuth:
+ * the consent page opens as a browser tab, the loopback callback lands the
+ * tokens on the connection, and the row reports the tool count. The same
+ * "Authorize" path is offered whenever a probe says the server wants a
+ * user (first time, or after tokens expire).
  */
+const SKELETON_ROWS = ["a", "b", "c", "d", "e", "f"];
+
 export function ConnectorsModal({
   open,
   onClose,
+  onStepAside,
+  onReturn,
   onOpenUrl,
   agentRequest,
 }: {
   open: boolean;
   onClose: () => void;
+  /**
+   * Hide the modal WITHOUT treating it as the user closing it: an OAuth
+   * consent page is about to open as a browser tab and must be visible.
+   * `onReturn` shows the modal again once the flow settles.
+   */
+  onStepAside: () => void;
+  onReturn: () => void;
   /** Open a connector's page (repo/readme) in a browser tab. */
   onOpenUrl: (url: string) => void;
   /**
@@ -47,21 +73,21 @@ export function ConnectorsModal({
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [probes, setProbes] = useState<Record<string, ConnectionProbe>>({});
+  // OAuth in flight / just finished, per connection id.
+  const [authFlows, setAuthFlows] = useState<
+    Record<string, { status: "authorizing" | "error"; message?: string }>
+  >({});
   // Registry entries that need secrets before install expand a small form.
   const [secretsFor, setSecretsFor] = useState<string | null>(null);
   const [secretValues, setSecretValues] = useState<Record<string, string>>({});
   const inputRef = useRef<HTMLInputElement>(null);
+  const listRef = useRef<HTMLDivElement>(null);
 
-  const refresh = () => {
-    void desktopApi
-      .connectionsList()
-      .then(setConnections)
-      .catch(() => {});
-    void desktopApi
-      .connectorsList()
-      .then(setInstalled)
-      .catch(() => {});
-  };
+  const refresh = () =>
+    Promise.all([
+      desktopApi.connectionsList().then(setConnections),
+      desktopApi.connectorsList().then(setInstalled),
+    ]).catch(() => {});
   // biome-ignore lint/correctness/useExhaustiveDependencies: refresh is stable per mount
   useEffect(() => {
     if (!open) return;
@@ -90,21 +116,47 @@ export function ConnectorsModal({
     }
   }, [open, agentRequest]);
 
-  // Live search: debounce keystrokes, keep only the latest response. An
-  // empty query still lists the browsable defaults once the modal opens.
+  // Live search in two halves, each landing on its own: plugins answer
+  // from cached marketplaces on every keystroke (no debounce — it's a
+  // local filter), the registry is a ~1s network search debounced 200ms.
+  // Stale responses are dropped by sequence; the previous rows stay put
+  // until the new ones arrive, so typing never blanks the list. An empty
+  // query still lists the browsable defaults once the modal opens.
   const requestSeq = useRef(0);
-  // Bumped after installs so "Installed" markers in results stay honest.
-  const [resultsNonce, setResultsNonce] = useState(0);
   useEffect(() => {
     if (!open) return;
     const seq = ++requestSeq.current;
     setSearching(true);
+    let pluginsDone = false;
+    let registryDone = false;
+    const settle = () => {
+      if (pluginsDone && registryDone && requestSeq.current === seq) {
+        setSearching(false);
+      }
+    };
+    void desktopApi
+      .connectorsSearchPlugins(query)
+      .then((plugins) => {
+        if (requestSeq.current !== seq) return;
+        setResults((current) => ({
+          registry: current?.registry ?? [],
+          plugins,
+        }));
+      })
+      .catch(() => {})
+      .finally(() => {
+        pluginsDone = true;
+        settle();
+      });
     const timer = window.setTimeout(() => {
       desktopApi
-        .connectorsSearch(query)
-        .then((data) => {
+        .connectorsSearchRegistry(query)
+        .then((registry) => {
           if (requestSeq.current !== seq) return;
-          setResults(data);
+          setResults((current) => ({
+            plugins: current?.plugins ?? [],
+            registry,
+          }));
           setError(null);
         })
         .catch((cause) => {
@@ -112,11 +164,71 @@ export function ConnectorsModal({
           setError(cause instanceof Error ? cause.message : String(cause));
         })
         .finally(() => {
-          if (requestSeq.current === seq) setSearching(false);
+          registryDone = true;
+          settle();
         });
-    }, 250);
+    }, 200);
     return () => window.clearTimeout(timer);
-  }, [open, query, resultsNonce]);
+  }, [open, query]);
+
+  const probe = async (id: string): Promise<ConnectionProbe> => {
+    // A stale "authorization failed" line must not outlive a fresh probe.
+    setAuthFlows(({ [id]: _stale, ...rest }) => rest);
+    setProbes((current) => ({ ...current, [id]: { ok: false } }));
+    const result = await desktopApi.connectionsProbe(id);
+    setProbes((current) => ({ ...current, [id]: result }));
+    return result;
+  };
+
+  /**
+   * OAuth for one connection. The modal steps aside (the consent page
+   * opens as a workspace tab, which the modal would otherwise cover),
+   * main runs the flow, and the modal returns with the verdict.
+   */
+  const authorize = async (id: string) => {
+    setAuthFlows((current) => ({
+      ...current,
+      [id]: { status: "authorizing" },
+    }));
+    onStepAside();
+    // Back in view, land on the row that just changed.
+    const reveal = () =>
+      requestAnimationFrame(() =>
+        document
+          .querySelector(`[data-connection-id="${id}"]`)
+          ?.scrollIntoView({ block: "nearest", behavior: "smooth" }),
+      );
+    try {
+      await desktopApi.connectionsAuthorize(id);
+      setAuthFlows(({ [id]: _done, ...rest }) => rest);
+      onReturn();
+      reveal();
+      await probe(id);
+    } catch (cause) {
+      setAuthFlows((current) => ({
+        ...current,
+        [id]: {
+          status: "error",
+          message: cause instanceof Error ? cause.message : String(cause),
+        },
+      }));
+      onReturn();
+      reveal();
+    }
+  };
+
+  /**
+   * After an install: probe what landed, and when a remote server answers
+   * "needs authorization", start OAuth right away — the user clicked
+   * Install expecting a working connection, and the consent page IS the
+   * next step, not an error to read.
+   */
+  const settleInstalled = async (connectionIds: string[]) => {
+    for (const id of connectionIds) {
+      const result = await probe(id);
+      if (result.needsAuth) void authorize(id);
+    }
+  };
 
   const installRegistry = async (
     name: string,
@@ -125,10 +237,15 @@ export function ConnectorsModal({
     setBusy(name);
     setError(null);
     try {
-      await desktopApi.connectorsInstallRegistry(name, secrets);
+      const connection = await desktopApi.connectorsInstallRegistry(
+        name,
+        secrets,
+      );
       setSecretsFor(null);
       setSecretValues({});
-      refresh();
+      // The row reads Installed the moment busy clears: refresh first.
+      await refresh();
+      void settleInstalled([connection.id]);
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : String(cause));
     } finally {
@@ -137,12 +254,16 @@ export function ConnectorsModal({
   };
 
   const installPlugin = async (marketplace: string, name: string) => {
-    setBusy(`${marketplace}#${name}`);
+    const key = `${marketplace}#${name}`;
+    setBusy(key);
     setError(null);
     try {
-      await desktopApi.connectorsInstallPlugin(marketplace, name);
-      refresh();
-      setResultsNonce((nonce) => nonce + 1);
+      const installed = await desktopApi.connectorsInstallPlugin(
+        marketplace,
+        name,
+      );
+      await refresh();
+      void settleInstalled(installed.connectionIds);
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : String(cause));
     } finally {
@@ -150,27 +271,37 @@ export function ConnectorsModal({
     }
   };
 
-  const probe = async (id: string) => {
-    setProbes((current) => ({ ...current, [id]: { ok: false } }));
-    const result = await desktopApi.connectionsProbe(id);
-    setProbes((current) => ({ ...current, [id]: result }));
-  };
+  // "Installed" markers derive from the LIVE lists (connections for
+  // registry servers, installed connectors for plugins), never from the
+  // search response — so install and uninstall both reflect immediately.
+  const registryInstalled = (name: string) =>
+    connections.some(
+      (connection) =>
+        connection.source.kind === "registry" &&
+        connection.source.registryName === name,
+    );
+  const pluginInstalled = (name: string) =>
+    installed.some((connector) => connector.name === name);
 
   // One merged result list, officials first (no install counts exist to
-  // rank by), each kind keeping its own row rendering.
+  // rank by), each kind keeping its own row rendering. Rows glide/fade
+  // between result sets with the palette's list motion — one feel for
+  // every as-you-type list.
   const rows = useMemo(() => {
     if (!results) return [];
+    // Plugins first (Anthropic's official marketplace at the very top),
+    // then MCP registry servers; alphabetical inside each band.
     const merged = [
-      ...results.registry.map((entry) => ({
-        sort: entry.official ? 0 : 1,
-        label: entry.displayName,
-        node: "registry" as const,
-        entry,
-      })),
       ...results.plugins.map((entry) => ({
         sort: entry.official ? 0 : 1,
         label: entry.name,
         node: "plugin" as const,
+        entry,
+      })),
+      ...results.registry.map((entry) => ({
+        sort: 2,
+        label: entry.displayName,
+        node: "registry" as const,
         entry,
       })),
     ];
@@ -178,6 +309,12 @@ export function ConnectorsModal({
       (a, b) => a.sort - b.sort || a.label.localeCompare(b.label),
     );
   }, [results]);
+  const listMotion = useListMotion(listRef, rows, { enterOnFirstPass: true });
+  const listMotionRef = useRef(listMotion);
+  listMotionRef.current = listMotion;
+  useEffect(() => {
+    if (!open) listMotionRef.current.reset();
+  }, [open]);
 
   const pageButton = (url: string | undefined, name: string) =>
     url ? (
@@ -207,7 +344,9 @@ export function ConnectorsModal({
 
   return (
     <Modal open={open} onClose={onClose} width={620}>
-      <div className="flex max-h-[min(640px,80vh)] flex-col p-4">
+      {/* Fixed height: the panel is the same size before and after the
+          first results land, so opening never jumps mid-enter. */}
+      <div className="flex h-[min(640px,80vh)] flex-col p-4">
         <h2 className="text-sm font-semibold">Connectors</h2>
         <p className="mb-3 mt-0.5 text-xs text-fg-muted">
           Tools your agents can use — MCP servers and Claude Code plugins.
@@ -233,21 +372,211 @@ export function ConnectorsModal({
           </div>
         )}
 
-        <input
-          ref={inputRef}
-          value={query}
-          onChange={(event) => setQuery(event.target.value)}
-          placeholder="Search the MCP registry and plugin marketplaces…"
-          className="field mb-3 h-8 shrink-0 px-2 text-[13px] text-fg placeholder:text-fg-faint"
-          data-testid="connectors-search"
-          spellCheck={false}
-        />
+        <div className="relative mb-3 shrink-0">
+          <input
+            ref={inputRef}
+            value={query}
+            onChange={(event) => setQuery(event.target.value)}
+            placeholder="Search the MCP registry and plugin marketplaces…"
+            className="field h-8 w-full px-2 pr-8 text-[13px] text-fg placeholder:text-fg-faint"
+            data-testid="connectors-search"
+            spellCheck={false}
+          />
+          {/* Remote search: a quiet spinner says "still looking" while the
+              previous results stay put — no blank flash between sets. */}
+          <Loader2
+            className={`pointer-events-none absolute right-2.5 top-1/2 size-3.5 -translate-y-1/2 animate-spin text-fg-faint transition-opacity duration-150 ${
+              searching ? "opacity-100" : "opacity-0"
+            }`}
+            aria-hidden={!searching}
+            data-testid="connectors-searching"
+          />
+        </div>
 
         {error && <p className="mb-2 text-xs text-danger">{error}</p>}
 
         <div className="min-h-0 flex-1 overflow-y-auto">
+          {/* First load: skeleton rows hold the shape the results will
+              take, so the panel opens looking like itself instead of a
+              void that fills in later. */}
+          {!results && searching && (
+            <div
+              className="mb-4 flex flex-col gap-1.5"
+              aria-hidden
+              data-testid="connectors-skeleton"
+            >
+              {SKELETON_ROWS.map((row) => (
+                <div
+                  key={row}
+                  className="flex h-[54px] animate-pulse items-center gap-2 rounded-md border border-border bg-bg-raised/40 px-2.5"
+                >
+                  <span className="size-6 rounded bg-bg-overlay" />
+                  <span className="flex flex-1 flex-col gap-1.5">
+                    <span className="h-2.5 w-1/3 rounded bg-bg-overlay" />
+                    <span className="h-2 w-2/3 rounded bg-bg-overlay" />
+                  </span>
+                  <span className="h-7 w-16 rounded-md bg-bg-overlay" />
+                </div>
+              ))}
+            </div>
+          )}
+          {/* What's already installed comes first — it's what the user
+              acts on most (Test, Authorize, remove); search sits below. */}
+          {(connections.length > 0 || installed.length > 0) &&
+            !query.trim() && (
+              <div
+                className="mb-4 flex flex-col gap-1.5"
+                data-testid="installed-section"
+              >
+                <h3 className="text-xs font-medium text-fg-muted">Installed</h3>
+                {connections.map((connection) => {
+                  const probeResult = probes[connection.id];
+                  const authFlow = authFlows[connection.id];
+                  const canAuthorize =
+                    connection.transport !== "stdio" &&
+                    (probeResult?.needsAuth || authFlow?.status === "error");
+                  return (
+                    <div
+                      key={connection.id}
+                      className="flex items-center gap-2 rounded-md border border-border bg-bg-raised/40 px-2.5 py-1.5"
+                      data-testid="connection-row"
+                      data-connection-id={connection.id}
+                    >
+                      <ConnectorIcon
+                        iconUrl={connection.iconUrl}
+                        name={connection.name}
+                      />
+                      <div className="min-w-0 flex-1">
+                        <div className="flex items-baseline gap-2">
+                          <span className="truncate text-[13px]">
+                            {connection.name}
+                          </span>
+                          <span className="shrink-0 text-[11px] text-fg-faint">
+                            MCP · {connection.transport}
+                            {connection.source.kind === "plugin"
+                              ? ` · from ${connection.source.plugin}`
+                              : connection.source.kind === "registry"
+                                ? " · registry"
+                                : ""}
+                          </span>
+                        </div>
+                        {authFlow?.status === "authorizing" ? (
+                          <p
+                            className="flex items-center gap-1 truncate text-[11px] text-fg-muted"
+                            data-testid="connection-authorizing"
+                          >
+                            <Loader2 className="size-3 shrink-0 animate-spin" />
+                            Finish signing in — the consent page opened in a tab
+                          </p>
+                        ) : authFlow?.status === "error" ? (
+                          <p className="truncate text-[11px] text-danger">
+                            {authFlow.message ?? "Authorization failed"}
+                          </p>
+                        ) : probeResult ? (
+                          <p
+                            className={`truncate text-[11px] ${probeResult.ok ? "text-fg-muted" : probeResult.needsAuth ? "text-warning" : probeResult.error ? "text-danger" : "text-fg-faint"}`}
+                          >
+                            {probeResult.ok
+                              ? `${probeResult.toolCount} tools${probeResult.protocolVersion ? ` · MCP ${probeResult.protocolVersion}` : ""}`
+                              : (probeResult.error ?? "Checking…")}
+                          </p>
+                        ) : connection.authorized ? (
+                          <p className="flex items-center gap-1 truncate text-[11px] text-fg-faint">
+                            <ShieldCheck className="size-3 shrink-0" />
+                            Authorized
+                          </p>
+                        ) : null}
+                      </div>
+                      {canAuthorize && (
+                        <button
+                          type="button"
+                          onClick={() => void authorize(connection.id)}
+                          className="shrink-0 cursor-pointer rounded-md bg-accent px-2 py-0.5 text-xs font-medium text-accent-fg transition-colors duration-150 hover:bg-accent/90"
+                          data-testid="connection-authorize"
+                        >
+                          Authorize
+                        </button>
+                      )}
+                      <button
+                        type="button"
+                        onClick={() => void probe(connection.id)}
+                        className="shrink-0 cursor-pointer text-xs text-fg-muted hover:text-fg"
+                      >
+                        Test
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() =>
+                          void desktopApi
+                            .connectionsUpdate(connection.id, {
+                              enabled: !connection.enabled,
+                            })
+                            .then(refresh)
+                        }
+                        className={`shrink-0 cursor-pointer text-xs ${connection.enabled ? "text-fg-muted hover:text-fg" : "text-warning"}`}
+                      >
+                        {connection.enabled ? "Disable" : "Enable"}
+                      </button>
+                      {connection.source.kind !== "plugin" && (
+                        <button
+                          type="button"
+                          onClick={() =>
+                            void desktopApi
+                              .connectionsRemove(connection.id)
+                              .then(refresh)
+                          }
+                          className="shrink-0 cursor-pointer text-xs text-fg-muted hover:text-danger"
+                          aria-label={`Remove ${connection.name}`}
+                        >
+                          <Trash2 className="size-3.5" />
+                        </button>
+                      )}
+                    </div>
+                  );
+                })}
+                {installed.map((connector) => (
+                  <div
+                    key={connector.name}
+                    className="flex items-center gap-2 rounded-md border border-border bg-bg-raised/40 px-2.5 py-1.5"
+                  >
+                    <ConnectorIcon name={connector.name} kind="plugin" />
+                    <div className="min-w-0 flex-1">
+                      <div className="flex items-baseline gap-2">
+                        <span className="truncate text-[13px]">
+                          {connector.name}
+                        </span>
+                        <span className="shrink-0 text-[11px] text-fg-faint">
+                          Plugin · {connector.marketplace}
+                        </span>
+                      </div>
+                      <p className="truncate text-xs text-fg-muted">
+                        {connector.description}
+                      </p>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() =>
+                        void desktopApi
+                          .connectorsRemove(connector.name)
+                          .then(refresh)
+                      }
+                      className="shrink-0 cursor-pointer text-xs text-fg-muted hover:text-danger"
+                      aria-label={`Remove ${connector.name}`}
+                    >
+                      <Trash2 className="size-3.5" />
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )}
           {results && (
-            <div className="mb-4 flex flex-col gap-1.5">
+            <div ref={listRef} className="mb-4 flex flex-col gap-1.5">
+              {(connections.length > 0 || installed.length > 0) &&
+                !query.trim() && (
+                  <h3 className="text-xs font-medium text-fg-muted">
+                    Available
+                  </h3>
+                )}
               {rows.length === 0 && !searching && (
                 <p className="text-xs text-fg-faint">Nothing found.</p>
               )}
@@ -255,6 +584,7 @@ export function ConnectorsModal({
                 row.node === "registry" ? (
                   <div
                     key={`registry:${row.entry.name}`}
+                    data-item-id={`registry:${row.entry.name}`}
                     className="rounded-md border border-border bg-bg-raised/40 px-2.5 py-2"
                   >
                     <div className="flex items-center gap-2">
@@ -284,7 +614,8 @@ export function ConnectorsModal({
                         <PendingButton
                           type="button"
                           pending={busy === row.entry.name}
-                          pendingLabel="Installing…"
+                          done={registryInstalled(row.entry.name)}
+                          doneLabel="Installed"
                           onClick={() => {
                             const inputs = row.entry.suggested?.inputs ?? [];
                             if (inputs.length > 0) {
@@ -298,7 +629,7 @@ export function ConnectorsModal({
                               void installRegistry(row.entry.name, {});
                             }
                           }}
-                          className="h-7 shrink-0 cursor-pointer rounded-md border border-border px-2.5 text-xs text-fg hover:bg-bg-overlay"
+                          className="h-7 shrink-0 cursor-pointer rounded-md border border-border px-2.5 text-xs text-fg transition-colors duration-150 hover:bg-bg-overlay disabled:cursor-default disabled:text-fg-faint disabled:hover:bg-transparent"
                         >
                           Install
                         </PendingButton>
@@ -331,7 +662,6 @@ export function ConnectorsModal({
                         <PendingButton
                           type="button"
                           pending={busy === row.entry.name}
-                          pendingLabel="Installing…"
                           disabled={(row.entry.suggested.inputs ?? []).some(
                             (input) =>
                               input.required &&
@@ -350,8 +680,10 @@ export function ConnectorsModal({
                 ) : (
                   <div
                     key={`plugin:${row.entry.marketplace}#${row.entry.name}`}
+                    data-item-id={`plugin:${row.entry.marketplace}#${row.entry.name}`}
                     className="flex items-center gap-2 rounded-md border border-border bg-bg-raised/40 px-2.5 py-2"
                   >
+                    <ConnectorIcon name={row.entry.name} kind="plugin" />
                     <div className="min-w-0 flex-1">
                       <div className="flex items-baseline gap-2">
                         <span className="truncate text-[13px] font-medium">
@@ -367,146 +699,29 @@ export function ConnectorsModal({
                       </p>
                     </div>
                     {pageButton(row.entry.pageUrl, row.entry.name)}
-                    {row.entry.installed ? (
-                      <span className="shrink-0 text-xs text-fg-faint">
-                        Installed
-                      </span>
-                    ) : (
-                      <PendingButton
-                        type="button"
-                        pending={
-                          busy === `${row.entry.marketplace}#${row.entry.name}`
-                        }
-                        pendingLabel="Installing…"
-                        onClick={() =>
-                          void installPlugin(
-                            row.entry.marketplace,
-                            row.entry.name,
-                          )
-                        }
-                        className="h-7 shrink-0 cursor-pointer rounded-md border border-border px-2.5 text-xs text-fg hover:bg-bg-overlay"
-                      >
-                        Install
-                      </PendingButton>
-                    )}
+                    <PendingButton
+                      type="button"
+                      pending={
+                        busy === `${row.entry.marketplace}#${row.entry.name}`
+                      }
+                      done={pluginInstalled(row.entry.name)}
+                      doneLabel="Installed"
+                      onClick={() =>
+                        void installPlugin(
+                          row.entry.marketplace,
+                          row.entry.name,
+                        )
+                      }
+                      className="h-7 shrink-0 cursor-pointer rounded-md border border-border px-2.5 text-xs text-fg transition-colors duration-150 hover:bg-bg-overlay disabled:cursor-default disabled:text-fg-faint disabled:hover:bg-transparent"
+                    >
+                      Install
+                    </PendingButton>
                   </div>
                 ),
               )}
             </div>
           )}
 
-          {(connections.length > 0 || installed.length > 0) && (
-            <div className="flex flex-col gap-1.5">
-              <h3 className="mt-1 text-xs font-medium text-fg-muted">
-                Installed
-              </h3>
-              {connections.map((connection) => {
-                const probeResult = probes[connection.id];
-                return (
-                  <div
-                    key={connection.id}
-                    className="flex items-center gap-2 rounded-md border border-border bg-bg-raised/40 px-2.5 py-1.5"
-                    data-testid="connection-row"
-                  >
-                    <ConnectorIcon
-                      iconUrl={connection.iconUrl}
-                      name={connection.name}
-                    />
-                    <div className="min-w-0 flex-1">
-                      <div className="flex items-baseline gap-2">
-                        <span className="truncate text-[13px]">
-                          {connection.name}
-                        </span>
-                        <span className="shrink-0 text-[11px] text-fg-faint">
-                          {connection.transport}
-                          {connection.source.kind === "plugin"
-                            ? ` · from ${connection.source.plugin}`
-                            : connection.source.kind === "registry"
-                              ? " · registry"
-                              : ""}
-                        </span>
-                      </div>
-                      {probeResult && (
-                        <p
-                          className={`truncate text-[11px] ${probeResult.ok ? "text-fg-muted" : probeResult.error ? "text-danger" : "text-fg-faint"}`}
-                        >
-                          {probeResult.ok
-                            ? `${probeResult.toolCount} tools${probeResult.protocolVersion ? ` · MCP ${probeResult.protocolVersion}` : ""}`
-                            : (probeResult.error ?? "Checking…")}
-                        </p>
-                      )}
-                    </div>
-                    <button
-                      type="button"
-                      onClick={() => void probe(connection.id)}
-                      className="shrink-0 cursor-pointer text-xs text-fg-muted hover:text-fg"
-                    >
-                      Test
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() =>
-                        void desktopApi
-                          .connectionsUpdate(connection.id, {
-                            enabled: !connection.enabled,
-                          })
-                          .then(refresh)
-                      }
-                      className={`shrink-0 cursor-pointer text-xs ${connection.enabled ? "text-fg-muted hover:text-fg" : "text-warning"}`}
-                    >
-                      {connection.enabled ? "Disable" : "Enable"}
-                    </button>
-                    {connection.source.kind !== "plugin" && (
-                      <button
-                        type="button"
-                        onClick={() =>
-                          void desktopApi
-                            .connectionsRemove(connection.id)
-                            .then(refresh)
-                        }
-                        className="shrink-0 cursor-pointer text-xs text-fg-muted hover:text-danger"
-                        aria-label={`Remove ${connection.name}`}
-                      >
-                        <Trash2 className="size-3.5" />
-                      </button>
-                    )}
-                  </div>
-                );
-              })}
-              {installed.map((connector) => (
-                <div
-                  key={connector.name}
-                  className="flex items-center gap-2 rounded-md border border-border bg-bg-raised/40 px-2.5 py-1.5"
-                >
-                  <div className="min-w-0 flex-1">
-                    <div className="flex items-baseline gap-2">
-                      <span className="truncate text-[13px]">
-                        {connector.name}
-                      </span>
-                      <span className="shrink-0 text-[11px] text-fg-faint">
-                        plugin · {connector.marketplace}
-                      </span>
-                    </div>
-                    <p className="truncate text-xs text-fg-muted">
-                      {connector.description}
-                    </p>
-                  </div>
-                  <button
-                    type="button"
-                    onClick={() =>
-                      void desktopApi
-                        .connectorsRemove(connector.name)
-                        .then(refresh)
-                    }
-                    className="shrink-0 cursor-pointer text-xs text-fg-muted hover:text-danger"
-                    aria-label={`Remove ${connector.name}`}
-                  >
-                    <Trash2 className="size-3.5" />
-                  </button>
-                </div>
-              ))}
-            </div>
-          )}
           {!results &&
             connections.length === 0 &&
             installed.length === 0 &&
@@ -530,10 +745,14 @@ export function ConnectorsModal({
 export function ConnectorIcon({
   iconUrl,
   name,
+  kind = "mcp",
 }: {
   iconUrl?: string;
   name: string;
+  /** Glyph when there's no icon: plug for MCP servers, puzzle for plugins. */
+  kind?: "mcp" | "plugin";
 }) {
+  const Fallback = kind === "plugin" ? Puzzle : Plug;
   return (
     <span className="grid size-6 shrink-0 place-items-center overflow-hidden rounded border border-border bg-bg-inset">
       {iconUrl ? (
@@ -546,7 +765,7 @@ export function ConnectorIcon({
           }}
         />
       ) : (
-        <Plug className="size-3 text-fg-faint" aria-label={name} />
+        <Fallback className="size-3 text-fg-faint" aria-label={name} />
       )}
     </span>
   );

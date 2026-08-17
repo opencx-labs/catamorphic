@@ -85,14 +85,16 @@ Low-chroma so run states don't scream: `--color-success`, `--color-warning`,
 
 ## Buttons
 
-- **A button never changes size when it enters a pending/loading state.**
-  Use `<PendingButton>` (`components/pending-button.tsx`): it stacks the idle
-  and pending labels in one grid cell so the button always reserves the width
-  of the widest label, and pending merely toggles visibility. Never swap a
-  button's child text on `pending ?` directly — that reflows the layout
-  mid-action.
-- Pending buttons are also disabled while pending (PendingButton enforces
-  this).
+- **A button never changes size across its states.** Use `<PendingButton>`
+  (`components/pending-button.tsx`): it stacks the idle label, the pending
+  content, and (optionally) a done label in one grid cell so the button
+  always reserves the width of the widest, and state changes merely toggle
+  visibility. Pending shows a **spinner in the label's footprint** by
+  default; pass `pendingLabel` only when words carry information
+  ("Cloning…"). Use `done` + `doneLabel` ("Installed") for the state after
+  the action — never swap the button for a text span, that reflows the row.
+  Never swap a button's child text on `pending ?` directly.
+- Pending (and done) buttons are disabled (PendingButton enforces this).
 - **Every icon-only button gets a `ShortcutHint` tooltip.** A button whose
   meaning isn't carried by visible text must be wrapped in
   `<ShortcutHint label="…">` (plus `shortcut` when one exists) — never the
@@ -2284,3 +2286,133 @@ Patterned on what best-in-class palettes converged on (Chrome omnibox
   behind the host's own auth; publications (documents with audiences),
   caller identity in runs, and an authorize seam are parked there and will
   speak this vocabulary.
+
+### 2026-08-17 — Window placement, Cmd+W focus, editor copies, search-list motion, connector OAuth
+
+- **The window comes back where it was.** `main/window-state.ts` persists
+  size, position, maximized and fullscreen (`window-state.json` in
+  userData, app-level: placement is a fact about this machine's screens,
+  not the profile) on every settled move/resize and on close; a saved
+  position no display can show anymore is dropped so an unplugged monitor
+  never strands the window off-screen. Fullscreen re-enters after
+  `ready-to-show` (entering it on a hidden window paints a blank space).
+  e2e: `window-state.e2e.ts`.
+- **Cmd+W closes what the user is IN.** The floating chat used to own the
+  shortcut whenever it was open; now it owns it only while focus is inside
+  the dock (its composer takes focus on open) — and when nothing focusable
+  holds focus (a click on a pane's blank chrome, a webview whose guest
+  swallowed the click), the last pointer-down decides. Click into the tab
+  behind the dock, Cmd+W closes the tab; click back into the chat, Cmd+W
+  closes the chat. `data-floating-chat` marks the dock root.
+- **Copies out of an editor carry their provenance.** The editor pane
+  stamps `text/x-catamorphic-selection` (file, text, line range) onto the
+  clipboard after Monaco's / ProseMirror's own copy ran (the markdown
+  editor's copy is the selection serialized back to markdown, marks
+  intact); pasting that into a chat makes a **selection pill whatever the
+  size** — `sel.md · 3` — because the file + lines are the point, not the
+  byte count. Everything else keeps the size rule (big pastes, URLs, paths
+  → pills; short text stays native). The same selection arriving twice
+  (pulled when the chat came to the front, then pasted) is one pill.
+  Custom clipboard flavors round-trip within Chromium; other apps see the
+  plain text as before.
+- **One motion for every as-you-type list.** The palette's FLIP-on-
+  survivors + fade-rise-on-new-rows is now `lib/list-motion.ts`
+  (`useListMotion`) and drives connector search too. The connectors modal
+  also stopped jumping: its panel is a fixed height (same size before and
+  after the first results land, so the enter never reflows mid-tween),
+  the first load shows skeleton rows in the shape results take, a quiet
+  spinner in the search field says "still looking" while the previous
+  rows stay put, and rows glide/fade between result sets. Learned: an
+  always-mounted modal whose content arrives 250ms+ after open reads as a
+  glitch on FIRST open only (later opens already have content) — size the
+  container for the content that's coming, don't let it grow into it.
+- **Install buttons don't reflow.** PendingButton grew a spinner default
+  and a `done`/`doneLabel` state; "Install → (spinner) → Installed" all
+  live in one button footprint. Rows flip to Installed the instant the
+  install returns (a session-local set), not when the search re-run
+  confirms it a beat later — that beat was a visible flicker.
+- **Connectors that want OAuth get it — on Install.** Remote MCP servers
+  answering 401 (ClickHouse, most vendor-hosted servers) used to install
+  silently and then fail "Unauthorized" on Test. Now `@catamorphic/mcp`
+  runs the spec's authorization flow (`oauth.ts`: RFC 9728 → RFC 8414 →
+  dynamic client registration → PKCE code, on the SDK's `auth()`), with
+  the two host-owned pieces supplied by the desktop: **persistence** —
+  one OAuth state per connection, encrypted at rest beside its headers
+  (`connections-store.ts`, `oauth`) — and **the redirect leg** — a
+  loopback listener on 127.0.0.1 (RFC 8252) receives the code while the
+  consent page opens **as a browser tab in the profile's own session**
+  (its logins apply); once the callback is served the app closes that
+  tab and the modal, which stepped aside so the tab was visible, returns
+  to the row with the tool count. Tokens then ride as a plain
+  `Authorization: Bearer` header in every harness's server config, so
+  Claude Code and Codex never learn OAuth exists; the app refreshes them
+  at boot, on wake, and on a 4-minute tick (only when near expiry).
+  Install runs a probe and, on 401, starts the flow unasked — the user
+  clicked Install expecting a working connection, and the consent page
+  IS the next step, not an error to read. Test reports "Needs
+  authorization" with an Authorize button instead of the raw error.
+  Verified against the real ClickHouse AS (registration + consent URL)
+  and end to end in the app against an in-process fake
+  (`packages/mcp/src/__tests__/fake-oauth-server.ts`, spawned as a
+  sidecar by `e2e/connectors-oauth.e2e.ts`).
+- **Click-away is universal for overlays.** Every modal/palette-like
+  surface closes on a click outside it: the Modal backdrop, the palette
+  overlay backdrop, popovers via their document/window pointerdown
+  listeners. The one deliberate exception is the New Tab palette — it is
+  the page, not an overlay. Bug fixed here: the palette overlay's
+  centering wrapper spanned the full width and swallowed clicks BESIDE
+  the panel (only clicks above/below reached the backdrop), so pickers
+  (tall lists) looked un-dismissable. Wrapper is `pointer-events-none`,
+  the panel re-enables. e2e in agents.e2e.ts.
+- **Pre-registered OAuth clients.** Slack's MCP server has no dynamic
+  registration; its plugin ships `oauth: {clientId, callbackPort}` in
+  `.mcp.json`. `readInstalledPlugin` lifts that (`mcpOAuth`), the
+  connection stores it (`oauthClient`), and `authorizeMcpServer` then
+  skips registration and listens on that fixed port advertising
+  `http://localhost:<port>/callback` (the host such registrations use).
+  Connections lifted before this landed fall back to re-reading the
+  installed plugin. Verified against Slack's AS (consent URL with the
+  plugin's client id).
+- **Connector search feels fast now.** Marketplaces (GitHub files) are
+  cached 10 min in main — they were re-fetched on every keystroke; the
+  registry (~1s round trip, >6000 servers so no local mirror) is cached
+  per query for 5 min. The two halves land separately: plugins are a
+  local filter (no debounce), the registry follows 200ms debounced, and
+  the previous rows stay until new ones arrive. Installed connectors sit
+  ABOVE the search results (they're what the user acts on: Test,
+  Authorize, remove); "Installed" markers derive from the live lists,
+  never the search response — so uninstall reflects immediately (it used
+  to wait for a re-search that never came). Plugin rows got the icon slot
+  MCP rows had (a puzzle glyph), so the list aligns.
+- `dev:desktop` now runs `turbo daemon stop; turbo daemon clean` first
+  (both silenced — `clean` exits non-zero when `.turbo/daemon` doesn't
+  exist yet, which is the common case): a hung turbo daemon
+  (status says "not running" while a stale one holds the socket) is what
+  made `turbo watch` sit on the FSEvents cookie warning until Ctrl+C.
+  Turbo bumped to 2.10.10.
+
+### 2026-08-18 — dev:desktop off turbo watch; connectors modal round two; empty optional MCP args
+
+- `dev:desktop` no longer uses `turbo watch`: on this machine its FSEvents
+  cookie handshake times out intermittently and the polling fallback then
+  crawls the whole tree (node_modules, a 17k-entry `.turbo/cache`) before
+  anything runs — the "stuck on the warning" report. Now `turbo run dev
+  --no-daemon --concurrency=64 --filter=catamorphic-desktop...`: every
+  workspace dependency's own `dev` (`tsup --watch`) rebuilds its dist on
+  change and the renderer HMRs as before (2026-08-07 entry) — no turbo
+  file watcher, no daemon. Cost: ~22 tsup watchers; `.d.ts` only refresh
+  on a real `build`.
+- Connectors modal: the Installed section hides while a query is typed
+  (search results are the whole point then); **Official** means exactly
+  one thing — a plugin from `anthropics/claude-plugins-official` — and
+  those sort first; registry servers never wear the badge (a DNS-verified
+  namespace proved nothing worth a badge, and a dozen "Official" rows for
+  one query read as noise). Result order: plugins, then MCP servers.
+  Installed rows say `MCP · http · from slack` / `Plugin · <marketplace>`
+  so the two kinds are tellable. A probe clears a stale
+  "authorization failed" line (it was hiding Test's result).
+- ai-sdk harness: MCP tool args drop `""`/`null` for properties the tool
+  schema doesn't require (`pruneEmptyOptionalArgs`). OpenAI-family models
+  fill every declared field; Slack's search tool rejected
+  `context_channel_id: ""` on every call, which was the "connector is
+  failing" turn — a model habit, not a Slack outage.
