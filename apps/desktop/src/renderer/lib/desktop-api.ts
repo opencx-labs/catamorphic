@@ -112,6 +112,8 @@ export interface UpdateAgentInput {
   /** New key; omit to keep the stored one, null to clear it. */
   apiKey?: string | null;
   connections?: AgentConnectionsSetting;
+  /** Per-connection tool policies (null clears). */
+  toolPolicies?: Record<string, McpToolPolicy> | null;
 }
 
 /** A profile MCP connection as the renderer sees it (no secret values). */
@@ -565,6 +567,12 @@ export interface CatamorphicDesktopApi {
   ) => Promise<ConnectionInfo | null>;
   connectionsRemove: (id: string) => Promise<boolean>;
   connectionsProbe: (id: string) => Promise<ConnectionProbe>;
+  /** Tools of the project's workflow-tools MCP server (agent policy editor). */
+  projectWorkflowTools: (
+    projectId: string,
+  ) => Promise<
+    Array<{ name: string; description: string; annotations?: ToolAnnotations }>
+  >;
   /** Replace the profile's tool policy for a connection (null = auto). */
   connectionsSetPolicy: (
     id: string,

@@ -16,6 +16,7 @@ import {
   useState,
 } from "react";
 import { ACTION_LABELS, KEYBINDING_ACTIONS } from "../../shared/actions.js";
+import { AgentToolPolicyField } from "../components/agent-tool-policy-field.js";
 import { ConnectionsAssignmentField } from "../components/connections-field.js";
 import { PendingButton } from "../components/pending-button.js";
 import {
@@ -29,6 +30,7 @@ import {
   type ConnectionInfo,
   desktopApi,
   type ImportableBrowser,
+  type McpToolPolicy,
   type OpenRouterCatalog,
   type ThemePreset,
   type ThemeToken,
@@ -46,10 +48,13 @@ export function SettingsScreen({
   onClose,
   onAddAgent,
   onManageConnectors,
+  projectId,
 }: {
   onClose: () => void;
   onAddAgent: () => void;
   onManageConnectors: () => void;
+  /** The project this Settings tab lives in (agent tool access lists its workflows). */
+  projectId?: string;
 }) {
   return (
     <div className="mx-auto w-full max-w-md px-6 py-4">
@@ -65,7 +70,7 @@ export function SettingsScreen({
         </button>
       </header>
 
-      <AgentsSection onAddAgent={onAddAgent} />
+      <AgentsSection onAddAgent={onAddAgent} projectId={projectId} />
       <ConnectorsSection onManage={onManageConnectors} />
       <ThemeSection />
       <NotificationsSection />
@@ -102,7 +107,13 @@ interface AgentLoginUi {
  * wizard (opened by the host via `onAddAgent`); this section edits, signs
  * in, and removes the ones that exist.
  */
-function AgentsSection({ onAddAgent }: { onAddAgent: () => void }) {
+function AgentsSection({
+  onAddAgent,
+  projectId,
+}: {
+  onAddAgent: () => void;
+  projectId?: string;
+}) {
   const [data, setData] = useState<AgentsData | null>(null);
   const [loginOk, setLoginOk] = useState<Record<string, boolean>>({});
   const [login, setLogin] = useState<Record<string, AgentLoginUi>>({});
@@ -213,6 +224,7 @@ function AgentsSection({ onAddAgent }: { onAddAgent: () => void }) {
                 <AgentForm
                   key={agent.id}
                   agent={agent}
+                  projectId={projectId}
                   onDone={() => {
                     setEditingId(null);
                     refresh();
@@ -361,10 +373,12 @@ function AgentForm({
   agent,
   onDone,
   onCancel,
+  projectId,
 }: {
   agent: AgentInfo;
   onDone: () => void;
   onCancel: () => void;
+  projectId?: string;
 }) {
   const harness = agent.harness;
   const [name, setName] = useState(agent.name);
@@ -379,6 +393,9 @@ function AgentForm({
   const [connections, setConnections] = useState<AgentConnectionsSetting>(
     agent.connections,
   );
+  const [toolPolicies, setToolPolicies] = useState<
+    Record<string, McpToolPolicy>
+  >(agent.toolPolicies ?? {});
   const [profileConnections, setProfileConnections] = useState<
     ConnectionInfo[]
   >([]);
@@ -387,6 +404,8 @@ function AgentForm({
       .connectionsList()
       .then(setProfileConnections)
       .catch(() => {});
+    // Live: a probe elsewhere (Connectors) refreshes tool rosters here.
+    return desktopApi.onConnectionsChanged(setProfileConnections);
   }, []);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -419,6 +438,7 @@ function AgentForm({
         effort,
         auth: effectiveAuth,
         connections,
+        toolPolicies,
       };
       if (harness === "ai-sdk") patch.provider = provider;
       if (clearKey) patch.apiKey = null;
@@ -563,6 +583,14 @@ function AgentForm({
           available={profileConnections}
         />
       )}
+      <AgentToolPolicyField
+        value={toolPolicies}
+        onChange={setToolPolicies}
+        connections={profileConnections}
+        assignment={connections}
+        harness={harness}
+        projectId={projectId}
+      />
 
       {error && <p className="text-xs text-danger">{error}</p>}
 

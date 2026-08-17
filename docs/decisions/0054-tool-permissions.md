@@ -75,15 +75,31 @@ one click. Tool rosters (with annotations) are cached on the connection
 whenever it is probed or authorized, so `auto` resolves for harnesses
 that cannot see annotations at call time.
 
+**6. The project's workflow tools are a policed server too.** The
+per-session `catamorphic` server (a project's `ai.tool-call` workflows) is
+open by default; an agent's `toolPolicies.catamorphic` confines it — a
+default of Ask/Off plus per-workflow rules — which is how a host will
+control which workflows a remote agent may run and whether members must
+confirm.
+
+**7. Agent-layer semantics.** An agent policy's unset default means "no
+opinion" (allow — the intersection is the connection's ceiling); a
+connection policy's unset default means `auto`. Without that asymmetry an
+agent that pinned one tool would narrow every other tool of the
+connection to "ask". The editor therefore offers the agent Inherit / Ask /
+Off only — the only moves that can change the answer.
+
 ## Consequences
 
 - Connectors modal: each installed connection has a Permissions editor
   (default + per-tool, showing the effective answer). Codex users see the
   ask-fails-closed caveat there.
 - `probeMcpServer` returns tool annotations; the desktop caches them.
-- Deferred: an agent-level policy UI (the store, resolver and harness
-  plumbing exist; profile agents take it via agents.json, definitions via
-  their file); per-session "allow for this chat"; the reverse round-trip
-  from `.claude/settings.json` permission rules.
+- Settings → edit agent has a "Tool access" editor: one row per assigned
+  connection (tools from the cached roster, effective answer per tool
+  after the ceiling) plus Workflows (the current project's, listed live).
+- Deferred: per-session "allow for this chat"; the reverse round-trip
+  from `.claude/settings.json` permission rules; the wizard shows no
+  policy editor (creation is about getting signed in — edit after).
 - Codex remains the weakest harness here until it exposes an approval
   callback; when it does, the same policy layers plug in.

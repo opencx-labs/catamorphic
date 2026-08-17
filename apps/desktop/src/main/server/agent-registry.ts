@@ -13,6 +13,7 @@ import type {
   AgentPluginConfig,
   CodingAgentProvider,
   ExtraToolContext,
+  McpToolPolicy,
   McpToolPolicyLayers,
   SandboxProvider,
   ToolPermissionHandler,
@@ -86,6 +87,20 @@ export interface DesktopAgentRegistryDeps {
   hostSkills?: () => HostSkillsRuntime | undefined;
   /** E2E: every configured agent resolves to the scripted fake. */
   e2eFake?: boolean;
+}
+
+/** Server key of the per-project workflow-tools MCP server (session-scoped). */
+export const WORKFLOWS_SERVER_KEY = "catamorphic";
+
+/**
+ * An agent's policy as a layer. Its unset default means "no opinion" —
+ * `allow`, which leaves the intersection to the connection's ceiling —
+ * unlike a connection's unset default, which means `auto`. Without this
+ * an agent that pins one tool would silently narrow every other tool of
+ * that connection to "ask".
+ */
+function agentLayer(policy: McpToolPolicy): McpToolPolicy {
+  return { default: "allow", ...policy };
 }
 
 /** An agent's resolved MCP surface: servers for every harness, plugin
@@ -254,7 +269,7 @@ export class DesktopAgentRegistry implements CodingAgentRegistry {
         config.toolPolicies?.[key];
       policies[key] = [
         connection.toolPolicy ?? {},
-        ...(agentPolicy ? [agentPolicy] : []),
+        ...(agentPolicy ? [agentLayer(agentPolicy)] : []),
       ];
       annotations[key] = Object.fromEntries(
         (connection.tools ?? [])
@@ -279,6 +294,14 @@ export class DesktopAgentRegistry implements CodingAgentRegistry {
     // assignment — they are app doctrine, not a connector.
     const hostSkillsPlugin = this.deps.hostSkills?.()?.plugin;
     if (hostSkillsPlugin) plugins.push(hostSkillsPlugin);
+    // The project's own workflow-tools server (session-scoped, key
+    // "catamorphic") is unrestricted unless the agent says otherwise —
+    // an agent's `toolPolicies.catamorphic` is how a host narrows which
+    // workflows an agent may run (or must ask before running).
+    const workflowPolicy = config.toolPolicies?.[WORKFLOWS_SERVER_KEY];
+    if (workflowPolicy) {
+      policies[WORKFLOWS_SERVER_KEY] = [agentLayer(workflowPolicy)];
+    }
     return { servers, plugins, policies, annotations, connectionIds };
   }
 
@@ -343,7 +366,7 @@ export class DesktopAgentRegistry implements CodingAgentRegistry {
     context: ExtraToolContext,
   ): Record<string, AgentMcpServerConfig> {
     const url = this.deps.projectMcpUrl?.(context.projectId);
-    return url ? { catamorphic: { transport: "http", url } } : {};
+    return url ? { [WORKFLOWS_SERVER_KEY]: { transport: "http", url } } : {};
   }
 
   private freshDefaults(config: AgentConfig) {

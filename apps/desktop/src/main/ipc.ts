@@ -9,6 +9,7 @@ import {
   pollDeviceToken,
   requestDeviceCode,
 } from "@catamorphic/github";
+import { probeMcpServer } from "@catamorphic/mcp";
 import type { McpToolPolicy } from "@catamorphic/sandbox";
 import { app, BrowserWindow, dialog, ipcMain, shell } from "electron";
 import type { BindingAuth } from "./agent-bindings-store.js";
@@ -435,6 +436,22 @@ export function registerIpcHandlers(
     if (removed) connectionsChanged(event);
     return removed;
   });
+
+  // The project's workflow-tools MCP server, listed for the agent-policy
+  // editor (which workflows an agent may run). Same endpoint agents mount
+  // per session; the embedded server's URL is local, so no auth rides it.
+  ipcMain.handle(
+    "catamorphic:project-workflow-tools",
+    async (_event, projectId: string) => {
+      const base = state.current?.url;
+      if (!base) return [];
+      const probe = await probeMcpServer({
+        transport: "http",
+        url: `${base}/api/projects/${encodeURIComponent(String(projectId))}/mcp`,
+      });
+      return probe.ok ? (probe.tools ?? []) : [];
+    },
+  );
 
   ipcMain.handle(
     "catamorphic:connections-set-policy",

@@ -2445,3 +2445,23 @@ Patterned on what best-in-class palettes converged on (Chrome omnibox
   palette tab, not the chat. The dock now reclaims the composer's focus on
   that transition (sync, next frame, and after the tab-in window) — the
   user was in the chat and stays in the chat.
+
+### 2026-08-18 — Agent-level tool access (ADR 0054, part two)
+
+- Settings → edit agent → **Tool access**: a row per assigned connection
+  and one for the project's Workflows. Each row carries the agent's
+  default (Inherit / Ask / Off; Allow / Ask / Off for workflows, where the
+  agent's word is the whole answer) and expands to its tools with the
+  **effective** answer shown per tool (`→ Ask`) — the connection's
+  ceiling intersected with the agent's rule — so nothing here can lie
+  about what will happen. Rows read "Inherits" / "Narrowed"; the header
+  counts narrowed rows.
+- The agent may only narrow. Its unset default is "no opinion" (an
+  asymmetry with the connection's `auto` — see the ADR), otherwise
+  pinning one tool would silently turn every sibling to Ask.
+- Workflows are the session-scoped `catamorphic` server; an agent policy
+  under that key confines it. The current project's roster is listed by
+  probing its own MCP endpoint (`project-workflow-tools` IPC), so a
+  Settings tab opened inside a project shows real names.
+- `Segmented` (`components/segmented.tsx`) is now the shared pill group
+  used by both permission editors. e2e: `agent-tool-policy.e2e.ts`.

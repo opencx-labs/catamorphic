@@ -3727,6 +3727,7 @@ export function App() {
                         />
                       ) : tab.kind === "settings" ? (
                         <SettingsScreen
+                          projectId={projectId}
                           onClose={() => closeTab(tabKey(tab))}
                           onAddAgent={() => setWizardModalOpen(true)}
                           onManageConnectors={() =>
