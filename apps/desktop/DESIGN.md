@@ -2527,6 +2527,16 @@ Patterned on what best-in-class palettes converged on (Chrome omnibox
   URL. Program edits (outside `store/`) never ship; the warning row offers
   "Propose…", which sends the folder's program edits as a branch and, on
   GitHub-linked projects, a pull request on the member's behalf.
+- **The server tells the client what is possible.** On connect and every
+  sync the desktop reads `GET /me` (builder? which agents, which store
+  subtrees; the host's switches: publications public/members/off,
+  proposals on/off and whether they open PRs) and gates the Server section
+  on it: no link icon where publishing is off, no public radio on a
+  members-only host, no Propose… when the host takes none, and honest
+  wording ("as a pull request" vs "as a branch"). Hosts without `/me` show
+  everything and the click discovers. A 401 becomes "Sign in again", which
+  opens the link's `renew=` URL — the host's own login hands back a fresh
+  connect link; the desktop never learns how the host authenticates.
 - Deferred: auto-sync on focus/interval (today: manual + the 15s status
   poll), a per-file "restore this version" button, revoking links from the
   desktop (today: the agent or HTTP), and MCP-served skills/agents in the

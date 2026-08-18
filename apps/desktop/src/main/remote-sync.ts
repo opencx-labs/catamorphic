@@ -32,8 +32,39 @@ export interface RemoteProposalResult {
   pullRequest?: { url: string; number: number };
 }
 
+/** `GET /me` on the host (ADR 0055); null when the host predates it. */
+export interface RemoteMe {
+  version: number;
+  identity: { externalUserId: string; root: boolean };
+  projects: Array<{
+    projectId: string;
+    builder: boolean;
+    agents: string[];
+    workflows: string[];
+    apps: string[];
+    documents: Array<{ path: string; access: "read" | "write" }>;
+  }>;
+  features: {
+    publications: "public" | "members" | false;
+    proposals: boolean;
+    proposalsOpenPullRequests: boolean;
+    mcp: boolean;
+    agentSessions: boolean;
+    storeUploadMaxBytes: number;
+  };
+}
+
+/** A 401 from the host: the token no longer works. */
+export class RemoteAuthError extends Error {
+  constructor(what: string) {
+    super(`${what}: your access to this server has expired or was revoked`);
+    this.name = "RemoteAuthError";
+  }
+}
+
 /** The documents client plus the two members' verbs beside it. */
 export interface RemoteProjectClient extends RemoteDocumentsClient {
+  me(): Promise<RemoteMe | null>;
   publish(input: {
     path: string;
     audience: "public" | "members";
@@ -63,6 +94,7 @@ export function httpDocumentsClient(args: {
       )
       .join("&");
   const fail = async (response: Response, what: string): Promise<never> => {
+    if (response.status === 401) throw new RemoteAuthError(what);
     let detail = "";
     try {
       detail = ((await response.json()) as { error?: string }).error ?? "";
@@ -150,6 +182,18 @@ export function httpDocumentsClient(args: {
         ok: true,
         version: ((await response.json()) as { version: number }).version,
       };
+    },
+    async me() {
+      const response = await doFetch(
+        `${args.serverUrl.replace(/\/+$/, "")}/me`,
+        {
+          headers,
+        },
+      );
+      if (response.status === 404) return null;
+      if (!response.ok) return fail(response, "Reading your access");
+      const body = (await response.json()) as RemoteMe;
+      return body.version === 1 ? body : null;
     },
     async publish(input) {
       const response = await doFetch(

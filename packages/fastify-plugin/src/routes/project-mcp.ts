@@ -74,9 +74,14 @@ export function registerProjectMcpRoutes(
     if (!core) {
       return reply.status(503).send({ error: "Service not configured" });
     }
+    if (!ctx.features.mcp) {
+      return reply
+        .status(404)
+        .send({ error: "MCP is turned off on this server" });
+    }
     const { projectId } = request.params as { projectId: string };
     const identity = resolveIdentity(request);
-    const surface = surfaceTools(core, identity, projectId);
+    const surface = surfaceTools(core, identity, projectId, ctx.features);
 
     return handleMcpPost(reply, request.body, async (method, params) => {
       switch (method) {

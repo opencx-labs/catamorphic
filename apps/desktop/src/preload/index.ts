@@ -213,6 +213,8 @@ const api = {
     ipcRenderer.invoke("catamorphic:remote-publish", input),
   remotePropose: (input: unknown): Promise<unknown> =>
     ipcRenderer.invoke("catamorphic:remote-propose", input),
+  remoteRenew: (projectId: string): Promise<void> =>
+    ipcRenderer.invoke("catamorphic:remote-renew", projectId),
   remoteDisconnect: (projectId: string): Promise<void> =>
     ipcRenderer.invoke("catamorphic:remote-disconnect", projectId),
   onConnectLink: (listener: (link: string) => void): (() => void) => {

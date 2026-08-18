@@ -9,12 +9,31 @@ import { safeStorage } from "electron";
  * rest via safeStorage, like agent API keys), and when it last synced.
  * Profile-level: a profile is a person, and the token is theirs.
  */
+/** What the server said this member may do (`GET /me`, ADR 0055). */
+export interface RemoteCapabilities {
+  builder: boolean;
+  agents: string[];
+  documents: Array<{ path: string; access: "read" | "write" }>;
+  features: {
+    publications: "public" | "members" | false;
+    proposals: boolean;
+    proposalsOpenPullRequests: boolean;
+    mcp: boolean;
+    agentSessions: boolean;
+    storeUploadMaxBytes: number;
+  };
+}
+
 export interface RemoteProjectLink {
   /** The remote API base, e.g. https://brain.acme.com/api */
   serverUrl: string;
   remoteProjectId: string;
   remoteProjectName: string;
   lastSyncAt: string | null;
+  /** Where the user gets a fresh link when the token stops working. */
+  renewUrl?: string;
+  /** Last introspection result; absent on hosts without `GET /me`. */
+  capabilities?: RemoteCapabilities;
 }
 
 export interface RemoteProjectLinkWithToken extends RemoteProjectLink {
@@ -59,10 +78,15 @@ export class RemoteProjectsStore {
     this.save();
   }
 
-  touch(localProjectId: string, lastSyncAt: string): void {
+  touch(
+    localProjectId: string,
+    lastSyncAt: string,
+    capabilities?: RemoteCapabilities,
+  ): void {
     const stored = this.data.links[localProjectId];
     if (!stored) return;
     stored.lastSyncAt = lastSyncAt;
+    if (capabilities) stored.capabilities = capabilities;
     this.save();
   }
 
@@ -130,5 +154,7 @@ function publicLink(stored: StoredLink): RemoteProjectLink {
     remoteProjectId: stored.remoteProjectId,
     remoteProjectName: stored.remoteProjectName,
     lastSyncAt: stored.lastSyncAt ?? null,
+    ...(stored.renewUrl ? { renewUrl: stored.renewUrl } : {}),
+    ...(stored.capabilities ? { capabilities: stored.capabilities } : {}),
   };
 }

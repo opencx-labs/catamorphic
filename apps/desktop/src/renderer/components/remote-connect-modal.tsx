@@ -31,6 +31,7 @@ export function RemoteConnectModal({
   const [remoteProjectId, setRemoteProjectId] = useState("");
   const [name, setName] = useState("");
   const [parentDir, setParentDir] = useState("");
+  const [renewUrl, setRenewUrl] = useState<string | undefined>(undefined);
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -46,6 +47,7 @@ export function RemoteConnectModal({
     setServerUrl(link.serverUrl);
     setToken(link.token);
     setRemoteProjectId(link.remoteProjectId);
+    setRenewUrl(link.renewUrl);
     if (link.remoteProjectName) setName(link.remoteProjectName);
   }, [link]);
 
@@ -56,6 +58,7 @@ export function RemoteConnectModal({
     setServerUrl(parsed.serverUrl);
     setToken(parsed.token);
     setRemoteProjectId(parsed.remoteProjectId);
+    setRenewUrl(parsed.renewUrl);
     if (parsed.remoteProjectName) setName(parsed.remoteProjectName);
   };
 
@@ -94,6 +97,7 @@ export function RemoteConnectModal({
         remoteProjectId: remoteProjectId.trim(),
         name: name.trim(),
         rootPath: targetPath,
+        ...(renewUrl ? { renewUrl } : {}),
       });
       await queryClient.invalidateQueries({ queryKey: ["cat", "projects"] });
       onConnected({ id: result.id, name: result.name });

@@ -15,6 +15,7 @@ import { registerAppRoutes } from "./routes/apps.js";
 import { registerAppsMcpRoutes } from "./routes/apps-mcp.js";
 import { registerDocumentRoutes } from "./routes/documents.js";
 import { registerGithubRoutes } from "./routes/github.js";
+import { registerMeRoutes } from "./routes/me.js";
 import { registerMembershipRoutes } from "./routes/memberships.js";
 import { registerPlaygroundRoutes } from "./routes/playground.js";
 import { registerPluginRoutes } from "./routes/plugins.js";
@@ -52,10 +53,38 @@ export interface CatamorphicPluginOptions {
    * `identityFromHeaders()`.
    */
   identity: IdentityResolver;
+  /**
+   * Coarse host feature switches (ADR 0055). Enforced server-side by the
+   * routes concerned AND advertised on `GET /me`, so a client (the desktop,
+   * a member's own agent) can show what is possible instead of discovering
+   * it by 403. Scope stays the mechanism for "may not"; these are the few
+   * things a host decides for everyone.
+   */
+  features?: Partial<HostFeatures>;
 }
+
+/** What a host enables for all callers; defaults are the most permissive. */
+export interface HostFeatures {
+  /** Which publication audiences may be created: both, members only, or none. */
+  publications: "public" | "members" | false;
+  /** Whether members may propose program changes. */
+  proposals: boolean;
+  /** Whether the project MCP endpoint is served. */
+  mcp: boolean;
+  /** Largest store document accepted (bytes). */
+  storeUploadMaxBytes: number;
+}
+
+export const DEFAULT_HOST_FEATURES: HostFeatures = {
+  publications: "public",
+  proposals: true,
+  mcp: true,
+  storeUploadMaxBytes: 64 * 1024 * 1024,
+};
 
 export interface RouteContext {
   core?: CatamorphicCore;
+  features: HostFeatures;
 }
 
 /**
@@ -117,8 +146,12 @@ export const catamorphicPlugin: FastifyPluginAsync<
     attachIdentity(request, identity);
   });
 
-  const ctx: RouteContext = { core: opts.core };
+  const ctx: RouteContext = {
+    core: opts.core,
+    features: { ...DEFAULT_HOST_FEATURES, ...(opts.features ?? {}) },
+  };
 
+  registerMeRoutes(app, ctx);
   registerProjectRoutes(app, ctx);
   registerWorkflowRoutes(app, ctx);
   registerTriggerRoutes(app, ctx);

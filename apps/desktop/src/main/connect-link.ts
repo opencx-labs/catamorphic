@@ -7,6 +7,8 @@ export interface ConnectLink {
   token: string;
   remoteProjectId: string;
   remoteProjectName?: string;
+  /** Where to send the user for a fresh link when the token stops working. */
+  renewUrl?: string;
 }
 
 export function parseConnectLink(raw: string): ConnectLink | null {
@@ -30,10 +32,23 @@ export function parseConnectLink(raw: string): ConnectLink | null {
     return null;
   }
   const name = url.searchParams.get("name")?.trim();
+  const renew = url.searchParams.get("renew")?.trim();
+  let renewUrl: string | undefined;
+  if (renew) {
+    try {
+      const parsed = new URL(renew);
+      if (parsed.protocol === "https:" || parsed.protocol === "http:") {
+        renewUrl = renew;
+      }
+    } catch {
+      renewUrl = undefined;
+    }
+  }
   return {
     serverUrl: serverUrl.replace(/\/+$/, ""),
     token,
     remoteProjectId,
     ...(name ? { remoteProjectName: name } : {}),
+    ...(renewUrl ? { renewUrl } : {}),
   };
 }

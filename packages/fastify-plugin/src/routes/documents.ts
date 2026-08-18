@@ -178,6 +178,15 @@ export function registerDocumentRoutes(
         body.text !== undefined
           ? body.text
           : new Uint8Array(Buffer.from(body.base64 ?? "", "base64"));
+      const size =
+        typeof content === "string"
+          ? Buffer.byteLength(content)
+          : content.byteLength;
+      if (size > ctx.features.storeUploadMaxBytes) {
+        return reply.status(413).send({
+          error: `Document exceeds this server's limit of ${Math.floor(ctx.features.storeUploadMaxBytes / 1024 / 1024)}MB`,
+        });
+      }
       try {
         return reply.send(
           await core().documents.write({
@@ -304,10 +313,16 @@ export function registerDocumentRoutes(
       response: {
         201: ProposalResultSchema,
         400: ErrorSchema,
+        403: ErrorSchema,
         404: ErrorSchema,
       },
     },
     handler: async (request, reply) => {
+      if (!ctx.features.proposals) {
+        return reply
+          .status(403)
+          .send({ error: "Proposals are turned off on this server" });
+      }
       try {
         const result = await core().proposals.propose({
           identity: resolveIdentity(request),

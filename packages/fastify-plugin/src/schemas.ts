@@ -1093,6 +1093,33 @@ export const PublicationParamsSchema = ProjectIdParamsSchema.extend({
   slug: z.string().min(1).max(64),
 });
 
+// --- Introspection (ADR 0055) ---
+export const MeSchema = z.object({
+  version: z.literal(1),
+  identity: z.object({ externalUserId: z.string(), root: z.boolean() }),
+  projects: z.array(
+    z.object({
+      projectId: z.string(),
+      builder: z.boolean(),
+      agents: z.array(z.string()),
+      workflows: z.array(z.string()),
+      apps: z.array(z.string()),
+      documents: z.array(
+        z.object({ path: z.string(), access: z.enum(["read", "write"]) }),
+      ),
+    }),
+  ),
+  features: z.object({
+    publications: z.union([z.enum(["public", "members"]), z.literal(false)]),
+    proposals: z.boolean(),
+    /** True when a proposalBot is configured: proposals open pull requests. */
+    proposalsOpenPullRequests: z.boolean(),
+    mcp: z.boolean(),
+    agentSessions: z.boolean(),
+    storeUploadMaxBytes: z.number(),
+  }),
+});
+
 // --- Playground Parse ---
 // Pure AST parse of in-flight draft files → WorkflowGraph. Browser clients
 // can't run `@catamorphic/parser` (ts-morph → node:fs) so the server does it.

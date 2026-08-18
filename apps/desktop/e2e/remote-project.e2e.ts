@@ -24,6 +24,7 @@ const program = new Map<string, string>([
 ]);
 const writes: Array<{ path: string; ifVersion?: number; text: string }> = [];
 const publications: Array<Record<string, unknown>> = [];
+let revoked = false;
 const proposals: Array<Record<string, unknown>> = [];
 
 const helpers = `
@@ -49,7 +50,7 @@ const runWait = <T>(
 function startFakeServer(): Promise<void> {
   server = http.createServer((req, res) => {
     const url = new URL(req.url ?? "/", "http://localhost");
-    if (req.headers.authorization !== `Bearer ${TOKEN}`) {
+    if (revoked || req.headers.authorization !== `Bearer ${TOKEN}`) {
       res.writeHead(401, { "content-type": "application/json" });
       res.end(JSON.stringify({ error: "Unauthorized" }));
       return;
@@ -70,6 +71,33 @@ function startFakeServer(): Promise<void> {
         });
         req.on("end", () => resolve(raw ? JSON.parse(raw) : {}));
       });
+    if (req.method === "GET" && url.pathname === "/api/me") {
+      return send(200, {
+        version: 1,
+        identity: { externalUserId: "member", root: false },
+        projects: [
+          {
+            projectId: "remote-1",
+            builder: false,
+            agents: ["csm"],
+            workflows: [],
+            apps: [],
+            documents: [
+              { path: "docs/**", access: "read" },
+              { path: "store/customers/acme/**", access: "write" },
+            ],
+          },
+        ],
+        features: {
+          publications: "members",
+          proposals: true,
+          proposalsOpenPullRequests: true,
+          mcp: true,
+          agentSessions: true,
+          storeUploadMaxBytes: 1024 * 1024,
+        },
+      });
+    }
     if (
       req.method === "POST" &&
       url.pathname === "/api/projects/remote-1/publications"
@@ -236,7 +264,7 @@ describe("remote projects (ADR 0055)", () => {
       label: "connect modal",
     });
 
-    const link = `catamorphic://connect?server=${encodeURIComponent(serverUrl)}&token=${TOKEN}&project=remote-1&name=Acme%20brain`;
+    const link = `catamorphic://connect?server=${encodeURIComponent(serverUrl)}&token=${TOKEN}&project=remote-1&name=Acme%20brain&renew=${encodeURIComponent("https://example.test/join")}`;
     await run(
       `setReactValue($('[data-testid="remote-link-input"]'), ${JSON.stringify(link)}); return true;`,
     );
@@ -327,6 +355,10 @@ describe("remote projects (ADR 0055)", () => {
     await runWait(`return !!$('[data-testid="publish-submit"]');`, {
       label: "publish modal",
     });
+    // The host advertised members-only publications: no public option.
+    await runWait(`return $$('input[name="audience"]').length === 1;`, {
+      label: "public audience hidden per /me",
+    });
     await run(`$('[data-testid="publish-submit"]').click(); return true;`);
     await runWait(
       `const url = $('[data-testid="publish-url"]'); return !!url && url.value.includes('/projects/remote-1/publications/shared-1');`,
@@ -378,5 +410,15 @@ describe("remote projects (ADR 0055)", () => {
         },
       ],
     });
+  });
+
+  it("a revoked token turns Sync into a 'Sign in again' prompt", async () => {
+    revoked = true;
+    await run(`$('[data-testid="remote-sync"]').click(); return true;`);
+    await runWait(
+      `const m = $('[data-testid="remote-message"]'); return !!m && m.textContent.includes('expired or was revoked') && !!$('[data-testid="remote-renew"]');`,
+      { timeoutMs: 30_000, label: "renew prompt" },
+    );
+    revoked = false;
   });
 });

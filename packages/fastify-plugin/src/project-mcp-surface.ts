@@ -57,10 +57,16 @@ export async function allowedWorkflowNames(
   return resolved?.allowedWorkflows ?? null;
 }
 
+export interface SurfaceFeatures {
+  publications: "public" | "members" | false;
+  proposals: boolean;
+}
+
 export function surfaceTools(
   core: CatamorphicCore,
   identity: Identity,
   projectId: string,
+  features: SurfaceFeatures = { publications: "public", proposals: true },
 ): SurfaceTool[] {
   const tools: SurfaceTool[] = [];
   const guarded =
@@ -304,8 +310,9 @@ export function surfaceTools(
     );
   }
 
-  if (core.publications) {
+  if (core.publications && features.publications !== false) {
     const publications = core.publications;
+    const publicAllowed = features.publications === "public";
     tools.push(
       {
         definition: {
@@ -324,6 +331,11 @@ export function surfaceTools(
         },
         call: guarded(async (args) => {
           const audience = args.audience === "public" ? "public" : "members";
+          if (audience === "public" && !publicAllowed) {
+            throw new Error(
+              "Public links are turned off on this server; publish to members instead.",
+            );
+          }
           const publication = await publications.publish({
             identity,
             projectId,
@@ -374,7 +386,11 @@ export function surfaceTools(
     );
   }
 
-  if (core.proposals && mayUseProject(identity, projectId)) {
+  if (
+    core.proposals &&
+    features.proposals &&
+    mayUseProject(identity, projectId)
+  ) {
     const proposals = core.proposals;
     tools.push({
       definition: {

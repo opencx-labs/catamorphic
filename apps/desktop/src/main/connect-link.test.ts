@@ -15,6 +15,20 @@ describe("connect links (ADR 0055)", () => {
     });
   });
 
+  it("carries an optional renew URL for expired tokens", () => {
+    expect(
+      parseConnectLink(
+        "catamorphic://connect?server=https://x/api&token=t&project=p&renew=https%3A%2F%2Fx%2Fjoin",
+      ),
+    ).toMatchObject({ renewUrl: "https://x/join" });
+    // Non-http renew targets are dropped, not fatal.
+    expect(
+      parseConnectLink(
+        "catamorphic://connect?server=https://x/api&token=t&project=p&renew=javascript:alert(1)",
+      )?.renewUrl,
+    ).toBeUndefined();
+  });
+
   it("rejects anything else", () => {
     expect(
       parseConnectLink(

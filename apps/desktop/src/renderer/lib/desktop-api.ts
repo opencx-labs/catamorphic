@@ -306,6 +306,20 @@ export interface ConnectLink {
   token: string;
   remoteProjectId: string;
   remoteProjectName?: string;
+  renewUrl?: string;
+}
+export interface RemoteCapabilities {
+  builder: boolean;
+  agents: string[];
+  documents: Array<{ path: string; access: "read" | "write" }>;
+  features: {
+    publications: "public" | "members" | false;
+    proposals: boolean;
+    proposalsOpenPullRequests: boolean;
+    mcp: boolean;
+    agentSessions: boolean;
+    storeUploadMaxBytes: number;
+  };
 }
 export interface RemoteSyncReport {
   pulled: string[];
@@ -329,6 +343,8 @@ export interface RemoteProjectStatus {
   remoteProjectId: string;
   remoteProjectName: string;
   lastSyncAt: string | null;
+  renewUrl?: string;
+  capabilities?: RemoteCapabilities;
   local: { modified: string[]; deleted: string[]; programEdits: string[] };
 }
 export interface RemoteDocumentVersion {
@@ -587,6 +603,7 @@ export interface CatamorphicDesktopApi {
     remoteProjectId: string;
     name: string;
     rootPath: string;
+    renewUrl?: string;
   }) => Promise<{ id: string; name: string; report: RemoteSyncReport }>;
   remoteStatus: (projectId: string) => Promise<RemoteProjectStatus | null>;
   remoteSync: (projectId: string) => Promise<RemoteSyncReport>;
@@ -621,6 +638,7 @@ export interface CatamorphicDesktopApi {
     branch: string;
     pullRequest?: { url: string; number: number };
   }>;
+  remoteRenew: (projectId: string) => Promise<void>;
   remoteDisconnect: (projectId: string) => Promise<void>;
   onConnectLink: (listener: (link: string) => void) => () => void;
   getServerState: () => Promise<ServerInfo>;

@@ -260,6 +260,8 @@ export class CatamorphicCore {
   readonly documents: DocumentsService;
   /** Propose-a-change: member edits as branches/PRs on their behalf (ADR 0055). */
   readonly proposals: ProposalsService;
+  /** Whether proposals open pull requests (a proposalBot is configured). */
+  readonly proposalsOpenPullRequests: boolean;
   /** Publications: documents served to an audience at a stable URL (ADR 0055). */
   readonly publications: PublicationsService;
   readonly tenantPolicies: TenantPoliciesService;
@@ -472,6 +474,7 @@ export class CatamorphicCore {
         : {}),
     });
     this.publications = new PublicationsService(this.db);
+    this.proposalsOpenPullRequests = Boolean(config.proposalBot);
     this.proposals = new ProposalsService(
       this.db,
       this.projectManager,

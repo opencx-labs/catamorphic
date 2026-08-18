@@ -81,6 +81,12 @@ export function RemoteNav({
   };
 
   const localCount = status.local.modified.length + status.local.deleted.length;
+  // Gate on what the server advertised (GET /me); an older host advertises
+  // nothing and everything stays visible (discovered by 403 instead).
+  const features = status.capabilities?.features;
+  const canPublish = features ? features.publications !== false : true;
+  const canPropose = features ? features.proposals : true;
+  const expired = message !== null && /expired or was revoked/.test(message);
   const host = (() => {
     try {
       return new URL(status.serverUrl).host;
@@ -127,6 +133,19 @@ export function RemoteNav({
       {message && (
         <p className="text-xs text-fg-faint" data-testid="remote-message">
           {message}
+          {expired && status.renewUrl && (
+            <>
+              {" "}
+              <button
+                type="button"
+                onClick={() => void desktopApi.remoteRenew(projectId)}
+                data-testid="remote-renew"
+                className="cursor-pointer text-accent underline-offset-2 hover:underline"
+              >
+                Sign in again
+              </button>
+            </>
+          )}
         </p>
       )}
       {localCount > 0 && (
@@ -138,7 +157,7 @@ export function RemoteNav({
               badge="M"
               onOpen={() => onOpenFile(path)}
               onHistory={() => onOpenHistory(path)}
-              onPublish={() => onPublish(path)}
+              {...(canPublish ? { onPublish: () => onPublish(path) } : {})}
             />
           ))}
           {status.local.deleted.map((path) => (
@@ -154,16 +173,19 @@ export function RemoteNav({
       {status.local.programEdits.length > 0 && (
         <div className="flex items-center gap-2">
           <p className="min-w-0 flex-1 text-xs text-warning">
-            {status.local.programEdits.length} edited outside store/ won't ship.
+            {status.local.programEdits.length} edited outside store/ won't ship
+            {canPropose ? "." : " — this server takes no proposals."}
           </p>
-          <button
-            type="button"
-            onClick={() => onPropose(status.local.programEdits)}
-            data-testid="remote-propose"
-            className="h-6 shrink-0 cursor-pointer rounded-md border border-border px-2 text-xs text-fg-muted transition-colors duration-150 hover:bg-bg-overlay hover:text-fg"
-          >
-            Propose…
-          </button>
+          {canPropose && (
+            <button
+              type="button"
+              onClick={() => onPropose(status.local.programEdits)}
+              data-testid="remote-propose"
+              className="h-6 shrink-0 cursor-pointer rounded-md border border-border px-2 text-xs text-fg-muted transition-colors duration-150 hover:bg-bg-overlay hover:text-fg"
+            >
+              Propose…
+            </button>
+          )}
         </div>
       )}
     </div>

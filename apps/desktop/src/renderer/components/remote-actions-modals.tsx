@@ -30,6 +30,7 @@ export function RemotePublishModal({
   const [result, setResult] = useState<{ absoluteUrl: string } | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
+  const [publicAllowed, setPublicAllowed] = useState(true);
 
   useEffect(() => {
     if (!open) return;
@@ -38,7 +39,11 @@ export function RemotePublishModal({
     setResult(null);
     setError(null);
     setCopied(false);
-  }, [open]);
+    void desktopApi.remoteStatus(projectId).then((status) => {
+      const allowed = status?.capabilities?.features.publications;
+      setPublicAllowed(allowed === undefined || allowed === "public");
+    });
+  }, [open, projectId]);
 
   const submit = async (event: FormEvent) => {
     event.preventDefault();
@@ -95,21 +100,23 @@ export function RemotePublishModal({
                     </span>
                   </span>
                 </label>
-                <label className="flex cursor-pointer items-start gap-2 text-[13px] text-fg">
-                  <input
-                    type="radio"
-                    name="audience"
-                    checked={audience === "public"}
-                    onChange={() => setAudience("public")}
-                    className="mt-1"
-                  />
-                  <span>
-                    Anyone with the link
-                    <span className="block text-xs text-fg-faint">
-                      No sign-in. Only this document; revoke any time.
+                {publicAllowed && (
+                  <label className="flex cursor-pointer items-start gap-2 text-[13px] text-fg">
+                    <input
+                      type="radio"
+                      name="audience"
+                      checked={audience === "public"}
+                      onChange={() => setAudience("public")}
+                      className="mt-1"
+                    />
+                    <span>
+                      Anyone with the link
+                      <span className="block text-xs text-fg-faint">
+                        No sign-in. Only this document; revoke any time.
+                      </span>
                     </span>
-                  </span>
-                </label>
+                  </label>
+                )}
               </fieldset>
               <p className="text-xs text-fg-faint">
                 Unsaved local edits are shipped first, so the link shows what
@@ -185,6 +192,9 @@ export function RemoteProposeModal({
     pullRequest?: { url: string; number: number };
   } | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [opensPullRequest, setOpensPullRequest] = useState<boolean | null>(
+    null,
+  );
 
   useEffect(() => {
     if (!open) return;
@@ -193,7 +203,12 @@ export function RemoteProposeModal({
     setPending(false);
     setResult(null);
     setError(null);
-  }, [open]);
+    setOpensPullRequest(null);
+    void desktopApi.remoteStatus(projectId).then((status) => {
+      const features = status?.capabilities?.features;
+      setOpensPullRequest(features ? features.proposalsOpenPullRequests : null);
+    });
+  }, [open, projectId]);
 
   const submit = async (event: FormEvent) => {
     event.preventDefault();
@@ -225,7 +240,12 @@ export function RemoteProposeModal({
             </h2>
             <p className="mt-1 text-xs text-fg-muted">
               Edits outside store/ go to the people who maintain this project
-              for review, under your name.
+              for review, under your name
+              {opensPullRequest === true
+                ? ", as a pull request."
+                : opensPullRequest === false
+                  ? ", as a branch they can review."
+                  : "."}
             </p>
           </div>
           {!result ? (

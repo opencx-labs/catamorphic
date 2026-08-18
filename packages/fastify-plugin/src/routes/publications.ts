@@ -70,9 +70,26 @@ export function registerPublicationRoutes(
     schema: {
       params: ProjectIdParamsSchema,
       body: PublishSchema,
-      response: { 201: PublicationSchema, 400: ErrorSchema, 404: ErrorSchema },
+      response: {
+        201: PublicationSchema,
+        400: ErrorSchema,
+        403: ErrorSchema,
+        404: ErrorSchema,
+      },
     },
     handler: async (request, reply) => {
+      const allowed = ctx.features.publications;
+      if (
+        allowed === false ||
+        (allowed === "members" && request.body.audience === "public")
+      ) {
+        return reply.status(403).send({
+          error:
+            allowed === false
+              ? "Publishing is turned off on this server"
+              : "Public links are turned off on this server; publish to members instead",
+        });
+      }
       try {
         const publication = await core().publications.publish({
           identity: resolveIdentity(request),

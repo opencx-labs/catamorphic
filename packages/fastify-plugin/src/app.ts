@@ -5,7 +5,7 @@ import fastifySwaggerUi from "@fastify/swagger-ui";
 import Fastify from "fastify";
 import { jsonSchemaTransform } from "fastify-type-provider-zod";
 import type { IdentityResolver } from "./http-identity.js";
-import { catamorphicPlugin } from "./plugin.js";
+import { type CatamorphicPluginOptions, catamorphicPlugin } from "./plugin.js";
 
 export type { RouteContext } from "./plugin.js";
 
@@ -21,6 +21,8 @@ export interface AppConfig {
    * sits behind the host's own auth typically passes `identityFromHeaders()`.
    */
   identity: IdentityResolver;
+  /** Host feature switches; see `CatamorphicPluginOptions.features`. */
+  features?: CatamorphicPluginOptions["features"];
 }
 
 /**
@@ -82,6 +84,7 @@ export function createApp(config: AppConfig) {
   app.register(catamorphicPlugin, {
     core: config.core,
     identity: config.identity,
+    ...(config.features ? { features: config.features } : {}),
     prefix: "/api",
   });
 

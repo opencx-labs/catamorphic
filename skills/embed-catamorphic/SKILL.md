@@ -658,6 +658,13 @@ committed files; core expands them. Three pieces, all small:
    Hosts that keep roles/grants themselves call `resolveRoles(core, {
    tenantId, projectId, externalUserId, roles, grants })` instead.
 
+Say what the instance offers with `features` on the plugin (publications
+public/members/off, proposals, mcp, upload cap) — enforced and advertised
+on `GET /me` beside the caller's own scope summary, which the desktop reads
+to show only what a member can actually do. Put `renew=<your join URL>` on
+connect links so an expired token becomes "Sign in again" instead of a
+dead project.
+
 Members can also **propose** program changes (`propose_change` on the
 MCP endpoint / `POST /projects/:id/proposals`): configure `proposalBot`
 (an identity connected to GitHub) on `createCatamorphic` and proposals

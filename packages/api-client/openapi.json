@@ -40,6 +40,142 @@
     }
   },
   "paths": {
+    "/api/me": {
+      "get": {
+        "responses": {
+          "200": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "version": {
+                      "type": "number",
+                      "enum": [1]
+                    },
+                    "identity": {
+                      "type": "object",
+                      "properties": {
+                        "externalUserId": {
+                          "type": "string"
+                        },
+                        "root": {
+                          "type": "boolean"
+                        }
+                      },
+                      "required": ["externalUserId", "root"],
+                      "additionalProperties": false
+                    },
+                    "projects": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "projectId": {
+                            "type": "string"
+                          },
+                          "builder": {
+                            "type": "boolean"
+                          },
+                          "agents": {
+                            "type": "array",
+                            "items": {
+                              "type": "string"
+                            }
+                          },
+                          "workflows": {
+                            "type": "array",
+                            "items": {
+                              "type": "string"
+                            }
+                          },
+                          "apps": {
+                            "type": "array",
+                            "items": {
+                              "type": "string"
+                            }
+                          },
+                          "documents": {
+                            "type": "array",
+                            "items": {
+                              "type": "object",
+                              "properties": {
+                                "path": {
+                                  "type": "string"
+                                },
+                                "access": {
+                                  "type": "string",
+                                  "enum": ["read", "write"]
+                                }
+                              },
+                              "required": ["path", "access"],
+                              "additionalProperties": false
+                            }
+                          }
+                        },
+                        "required": [
+                          "projectId",
+                          "builder",
+                          "agents",
+                          "workflows",
+                          "apps",
+                          "documents"
+                        ],
+                        "additionalProperties": false
+                      }
+                    },
+                    "features": {
+                      "type": "object",
+                      "properties": {
+                        "publications": {
+                          "anyOf": [
+                            {
+                              "type": "string",
+                              "enum": ["public", "members"]
+                            },
+                            {
+                              "type": "boolean",
+                              "enum": [false]
+                            }
+                          ]
+                        },
+                        "proposals": {
+                          "type": "boolean"
+                        },
+                        "proposalsOpenPullRequests": {
+                          "type": "boolean"
+                        },
+                        "mcp": {
+                          "type": "boolean"
+                        },
+                        "agentSessions": {
+                          "type": "boolean"
+                        },
+                        "storeUploadMaxBytes": {
+                          "type": "number"
+                        }
+                      },
+                      "required": [
+                        "publications",
+                        "proposals",
+                        "proposalsOpenPullRequests",
+                        "mcp",
+                        "agentSessions",
+                        "storeUploadMaxBytes"
+                      ],
+                      "additionalProperties": false
+                    }
+                  },
+                  "required": ["version", "identity", "projects", "features"],
+                  "additionalProperties": false
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/projects": {
       "post": {
         "requestBody": {
@@ -11087,6 +11223,23 @@
               }
             }
           },
+          "403": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["error"],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
           "404": {
             "description": "Default Response",
             "content": {
@@ -11198,6 +11351,23 @@
             }
           },
           "400": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["error"],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "403": {
             "description": "Default Response",
             "content": {
               "application/json": {

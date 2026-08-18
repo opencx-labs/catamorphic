@@ -905,6 +905,22 @@ export function registerIpcHandlers(
       token: link.token,
       projectId: link.remoteProjectId,
     });
+  // What the server says this member may do (ADR 0055): stored on the link
+  // at connect and refreshed on every sync; absent on older hosts.
+  const introspect = async (
+    client: ReturnType<typeof httpDocumentsClient>,
+    remoteProjectId: string,
+  ) => {
+    const me = await client.me().catch(() => null);
+    if (!me) return undefined;
+    const project = me.projects.find((p) => p.projectId === remoteProjectId);
+    return {
+      builder: me.identity.root || (project?.builder ?? false),
+      agents: project?.agents ?? [],
+      documents: project?.documents ?? [],
+      features: me.features,
+    };
+  };
   const requireLink = (
     event: Electron.IpcMainInvokeEvent,
     projectId: string,
@@ -952,6 +968,7 @@ export function registerIpcHandlers(
         remoteProjectId: string;
         name: string;
         rootPath: string;
+        renewUrl?: string;
       },
     ) => {
       const server = state.current;
@@ -982,11 +999,13 @@ export function registerIpcHandlers(
         remoteProjectId: input.remoteProjectId,
         remoteProjectName: input.name,
         lastSyncAt: null,
+        ...(input.renewUrl ? { renewUrl: input.renewUrl } : {}),
       });
       const report = await syncRemoteProject(input.rootPath, client);
       storesFor(event).remoteProjects.touch(
         project.id,
         new Date().toISOString(),
+        await introspect(client, input.remoteProjectId),
       );
       await checkpointProgramSync(project.id, report);
       return { id: project.id, name: project.name, report };
@@ -1009,10 +1028,12 @@ export function registerIpcHandlers(
     async (event, projectId: string) => {
       const link = requireLink(event, projectId);
       const rootPath = await requireRoot(projectId);
-      const report = await syncRemoteProject(rootPath, remoteClient(link));
+      const client = remoteClient(link);
+      const report = await syncRemoteProject(rootPath, client);
       storesFor(event).remoteProjects.touch(
         projectId,
         new Date().toISOString(),
+        await introspect(client, link.remoteProjectId),
       );
       await checkpointProgramSync(projectId, report);
       notifyGitChanged(projectId);
@@ -1126,6 +1147,13 @@ export function registerIpcHandlers(
       });
     },
   );
+
+  ipcMain.handle("catamorphic:remote-renew", (event, projectId: string) => {
+    const link = requireLink(event, projectId);
+    if (!link.renewUrl)
+      throw new Error("This server gave no way to renew access");
+    void shell.openExternal(link.renewUrl);
+  });
 
   ipcMain.handle(
     "catamorphic:remote-disconnect",
