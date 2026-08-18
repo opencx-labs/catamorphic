@@ -342,7 +342,7 @@ const appSupportFiles = (): Record<string, string> => ({
 export const SEED_SKILLS: Record<string, string> = {
   [`${SCAFFOLD_SKILL_DIR}/SKILL.md`]: `---
 name: catamorphic-projects
-description: What a Catamorphic project can hold, and how to add the automations/apps workspace to a project that has none. Use when the user asks for their first workflow, automation, or app in this project, or asks what this project is.
+description: What a Catamorphic project can hold — documents, code, automations, apps, committed agents and roles, the project store — and how to add the automations/apps workspace to a project that has none. Use when the user asks for their first workflow, automation, or app, asks what this project is, or asks about who may see or do what (roles, members, the store, sharing).
 ---
 
 # Catamorphic projects
@@ -371,6 +371,71 @@ Then:
 3. Consult \`.agents/skills/writing-workflows/SKILL.md\` before writing workflow code, and \`.agents/skills/building-apps/SKILL.md\` before creating an app under \`apps/<name>/\`.
 
 Do NOT install the workspace preemptively — only when automations or apps are actually wanted.
+
+## The program, the store, and who may reach what
+
+A project has one path namespace with two backings:
+
+- Everything in git is the **program**: docs, code, workflows, apps, and the
+  committed \`agents/\` and \`roles/\` files below. It changes by commit (and,
+  for members without commit rights, by proposal — see below).
+- \`store/\` is the **project store**: data made by *using* the brain —
+  per-customer notes, contracts, generated decks, uploads. It is versioned
+  per write on the server, stamped with who wrote it, and NEVER committed to
+  git (\`store/\` is gitignored). Put audience-specific or fast-changing
+  content there, never next to the handbook. Read and write it through the
+  documents surface (\`documents_*\` MCP tools, \`context.documents\` in a
+  workflow, or the folder itself in the desktop) — not by committing.
+
+Access is enforced by the host from **roles you commit** as
+\`roles/<slug>.json\`, next to \`agents/<slug>.json\`:
+
+\`\`\`jsonc
+// roles/csm.json
+{
+  "version": 1,
+  "name": "CSM",
+  "description": "Customer success: their own customers, the handbook, the CSM assistant.",
+  "agents": ["csm-assistant"],                 // or { "name": "…", "toolPolicies": { "slack": { "default": "ask" } } }
+  "workflows": ["crm.lookup", "docs.search"],
+  "apps": ["customer-tracker"],
+  "documents": [
+    "docs/**",                                                       // read the handbook
+    { "path": "store/customers/{customer}/**", "access": "write" }   // their customers only
+  ]
+}
+// roles/admin.json
+{ "version": 1, "name": "Admin", "builder": true, "documents": ["store/**"] }
+\`\`\`
+
+Rules of thumb when authoring roles:
+
+- \`{param}\` placeholders are filled from each member's grants (the host
+  says "alice: customer = acme, globex"); an entry whose placeholder is not
+  granted yields nothing — never a wildcard.
+- \`"builder": true\` = may edit the program (files, deploys, secrets,
+  agents). It does NOT grant the store: even admins see only the
+  \`documents\` their role lists. Leave \`store/**\` off an admin role that
+  must not read every customer's data.
+- Name agents by their file slug (\`agents/csm-assistant.json\`), workflows by
+  their exported name, apps by \`apps/<name>\`. A role may narrow an agent's
+  tools with \`toolPolicies\` (allow / ask / deny per tool, per connector
+  server key, or \`catamorphic\` for the project's own workflow tools).
+- Keep roles few and readable; membership (who has which role and grants)
+  is the host's, not a file here.
+
+Two more things members do without commit rights:
+
+- **Propose a change** to the program (\`propose_change\` tool /
+  \`POST /projects/:id/proposals\`): the files land on a branch authored as
+  the member and, when the project is on GitHub, as a pull request on their
+  behalf. Use it for handbook fixes and new templates when you cannot commit.
+- **Publish** a store document (\`POST /projects/:id/publications\`, audience
+  \`members\` or \`public\`): a stable URL for a deck or a report; revoke by
+  slug. Publish only what the requester owns.
+
+For searching documents, read the host skill \`searching-documents\` first
+(primitives — list, read, grep, full text — before building an index).
 `,
   ".agents/skills/writing-workflows/SKILL.md": `---
 name: writing-workflows
@@ -385,8 +450,9 @@ Every workflow is an exported \`defineWorkflow(...)\` value whose ordered
 \`steps\` use the builder-scoped \`defineBoundary\` and \`defineBatch\`:
 
 - **Boundaries** hold orchestration code. A single boundary is enough for most
-  workflows; add more boundaries for explicit retry policies, pauses, or child
-  workflow calls.
+  workflows; add more boundaries for explicit retry policies, pauses, child
+  workflow calls, or host calls (\`context.documents.*\`,
+  \`context.host.<capability>.<fn>()\` — see \`durable-workflows\`).
 - **Batches** handle persisted paged collections, bounded concurrency, physical
   batching, progress, or resumable output.
 - **\`"use step"\` functions** hold IO and business operations. They are plain
@@ -1036,8 +1102,9 @@ Do not recreate the types locally or bypass the missing API with assertions.
 
 - \`defineWorkflow\` receives a builder callback.
 - \`defineBoundary\` is available only on that builder context.
-- \`pause\` and \`callWorkflow\` are available only in a boundary's
-  \`BoundaryContext\`.
+- \`pause\`, \`callWorkflow\`, \`documents\` and \`host\` are available only
+  in a boundary's \`BoundaryContext\`; \`caller\` (who triggered the run) is
+  there too.
 - A boundary is one atomic retry unit. If an attempt fails, all code in that
   boundary runs again. Ordinary \`"use step"\` functions called inside it may
   eventually be visualized, but are not separate persisted checkpoints.

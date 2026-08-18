@@ -63,14 +63,15 @@ app.register(catamorphicPlugin, {
     const session = await verifySession(request);
     if (!session) return null;
     const base = { tenantId: session.orgId, externalUserId: session.userId };
-    if (session.isEmployee) return base;                 // builder: full identity
+    if (session.isEmployee) return { ...base, scope: [{ kind: "project", projectId: BRAIN }] }; // builder
     return { ...base, scope: await entitlementsFor(session.userId) }; // viewer
   },
 });
 ```
 
-- A **full** identity (no `scope`) is a builder with the whole project surface.
-- A **scoped** identity may reach exactly the listed artifacts — `{ kind: "app", projectId, name }` (the app's document plus its active version's frozen workflow set) or `{ kind: "workflow", projectId, name }` — and nothing else. Denials are a uniform 403.
+- A **root** identity (no `scope`) reaches every project and surface — a host's service calls, the desktop's own local projects.
+- A **scoped** identity may reach exactly the listed artifacts — `{ kind: "project", projectId }` (a builder: the whole program surface), `{ kind: "app", projectId, name }` (the app's document plus its active version's frozen workflow set), `{ kind: "workflow", projectId, name }`, `{ kind: "agent", projectId, name, toolPolicies? }` (chat sessions on a committed project agent) or `{ kind: "document", projectId, path, access? }` (a file or `dir/**` subtree; the project store is reachable only this way) — and nothing else. Denials are a uniform 403.
+- Most hosts do not hand-write scopes: commit `roles/<slug>.json` in the project and resolve members through `core.memberships.identityFor(...)` (the stock table) or `resolveRoles(core, { roles, grants })`; members with a host-issued token use `identityFromBearer(verify)`. See INTEGRATION.md "Roles as files".
 - Hosts whose auth terminates in front of the plugin (gateway, proxy) can pass `identityFromHeaders()`, which reads `X-Catamorphic-Tenant-Id` and `X-External-User-Id`. Never expose such a mount to browsers directly.
 
 ## Apps

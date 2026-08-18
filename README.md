@@ -153,9 +153,13 @@ real defaults.
 # Use cases
 
 - **The company brain.** One shared project holds the team's docs, data,
-  and automations. Teammates work in it through agents; committed project
-  agents give everyone the same tuned personas; apps become the internal
-  tools; git carries the history.
+  and automations. Admins edit the program; everyone else uses it through
+  agents by role — roles are committed files, the project store keeps
+  audience-specific data (customer notes, contracts, decks) out of git,
+  members reach it from the desktop, their own agent over MCP, or the
+  host's product, and propose program changes as pull requests on their
+  behalf. Committed project agents give everyone the same tuned personas;
+  apps become the internal tools; git carries the history.
 - **A daily-driver dev shell.** Import your monorepo. Your CLAUDE.md and
   `.claude/` conventions load as-is, PRs and diffs are a sidebar click
   away, and worktrees, terminals, and the browser live in one window.
