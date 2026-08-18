@@ -149,6 +149,24 @@ export {
   type PreparedDevSandbox,
 } from "./services/dev-sandbox-service.js";
 export {
+  contentTypeFor,
+  type DocumentBlobStore,
+  DocumentConflictError,
+  type DocumentContent,
+  type DocumentEntry,
+  type DocumentMatch,
+  DocumentNotFoundError,
+  DocumentPathError,
+  type DocumentSource,
+  DocumentsService,
+  DocumentTooLargeError,
+  type DocumentVersion,
+  documentAccessAllowed,
+  isStorePath,
+  normalizeDocumentPath,
+  STORE_ROOT,
+} from "./services/documents-service.js";
+export {
   type ExecutionJob,
   type ExecutionJobKind,
   type ExecutionJobStatus,

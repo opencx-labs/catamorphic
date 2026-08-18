@@ -344,6 +344,37 @@ export interface RateReservationBuckets {
   updated_at: Generated<Timestamp>;
 }
 
+export interface StoreDocuments {
+  blob_key: string | null;
+  bytes: Buffer | null;
+  content_type: string;
+  created_at: Generated<Timestamp>;
+  deleted: Generated<boolean>;
+  id: Generated<string>;
+  path: string;
+  project_id: string;
+  search_vector: Generated<string | null>;
+  size: Int8;
+  text_content: string | null;
+  version: number;
+  written_at: Generated<Timestamp>;
+  written_by: string;
+}
+
+export interface StoreDocumentVersions {
+  blob_key: string | null;
+  bytes: Buffer | null;
+  content_type: string;
+  deleted: Generated<boolean>;
+  document_id: string;
+  id: Generated<string>;
+  size: Int8;
+  text_content: string | null;
+  version: number;
+  written_at: Generated<Timestamp>;
+  written_by: string;
+}
+
 export interface TenantAppPolicies {
   allowed_network_origins: Generated<Json>;
   apps_enabled: Generated<boolean>;
@@ -514,6 +545,8 @@ export interface DB {
   project_secrets: ProjectSecrets;
   projects: Projects;
   rate_reservation_buckets: RateReservationBuckets;
+  store_document_versions: StoreDocumentVersions;
+  store_documents: StoreDocuments;
   tenant_app_policies: TenantAppPolicies;
   tenant_execution_policies: TenantExecutionPolicies;
   tenants: Tenants;

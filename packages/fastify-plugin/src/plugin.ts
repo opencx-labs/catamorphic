@@ -13,6 +13,7 @@ import {
 import { registerAgentRoutes } from "./routes/agent.js";
 import { registerAppRoutes } from "./routes/apps.js";
 import { registerAppsMcpRoutes } from "./routes/apps-mcp.js";
+import { registerDocumentRoutes } from "./routes/documents.js";
 import { registerGithubRoutes } from "./routes/github.js";
 import { registerMembershipRoutes } from "./routes/memberships.js";
 import { registerPlaygroundRoutes } from "./routes/playground.js";
@@ -110,6 +111,7 @@ export const catamorphicPlugin: FastifyPluginAsync<
   registerRunRoutes(app, ctx);
   registerAgentRoutes(app, ctx);
   registerMembershipRoutes(app, ctx);
+  registerDocumentRoutes(app, ctx);
   registerAppRoutes(app, ctx);
   registerAppsMcpRoutes(app, ctx);
   registerProjectMcpRoutes(app, ctx);

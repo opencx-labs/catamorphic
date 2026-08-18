@@ -1003,6 +1003,51 @@ export const GrantMembershipSchema = z.object({
   grants: z.record(z.string().min(1), z.array(z.string())).optional(),
 });
 
+// --- Documents (ADR 0055) ---
+export const DocumentEntrySchema = z.object({
+  path: z.string(),
+  source: z.enum(["program", "store"]),
+  contentType: z.string(),
+  size: z.number(),
+  version: z.number().optional(),
+  writtenBy: z.string().optional(),
+  writtenAt: z.string().optional(),
+});
+
+export const DocumentContentSchema = DocumentEntrySchema.extend({
+  /** UTF-8 text when the document is text-like; absent for binaries. */
+  text: z.string().optional(),
+});
+
+export const DocumentVersionSchema = z.object({
+  version: z.number(),
+  deleted: z.boolean(),
+  contentType: z.string(),
+  size: z.number(),
+  writtenBy: z.string(),
+  writtenAt: z.string(),
+});
+
+export const DocumentMatchSchema = z.object({
+  path: z.string(),
+  source: z.enum(["program", "store"]),
+  lines: z.array(z.object({ line: z.number(), text: z.string() })),
+});
+
+export const WriteDocumentSchema = z
+  .object({
+    path: z.string().min(1),
+    /** UTF-8 text content — or `base64` for bytes; exactly one. */
+    text: z.string().optional(),
+    base64: z.string().optional(),
+    contentType: z.string().optional(),
+    /** Write only if the document is at this version (0 = does not exist). */
+    ifVersion: z.number().int().nonnegative().optional(),
+  })
+  .refine((v) => (v.text !== undefined) !== (v.base64 !== undefined), {
+    message: "Provide exactly one of text or base64",
+  });
+
 // --- Playground Parse ---
 // Pure AST parse of in-flight draft files → WorkflowGraph. Browser clients
 // can't run `@catamorphic/parser` (ts-morph → node:fs) so the server does it.

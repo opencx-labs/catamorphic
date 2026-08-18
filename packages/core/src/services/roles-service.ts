@@ -8,6 +8,7 @@ import type { Kysely } from "kysely";
 import { z } from "zod";
 import type { ArtifactRef, Identity } from "../identity.js";
 import { assertBuilder } from "./artifact-scope.js";
+import { readProgramFiles, withProgram } from "./program-reader.js";
 import { ProjectNotFoundError } from "./projects-service.js";
 
 /**
@@ -208,14 +209,6 @@ export interface ResolveRolesInput {
   grants?: RoleGrants;
 }
 
-/**
- * The reader identity role files are loaded under. Role resolution runs
- * inside the host's identity resolver — before the caller is anyone — so it
- * cannot use the caller's own working copy; a shared reader copy per
- * project keeps viewers from ever getting a clone of the program.
- */
-const ROLES_READER = "catamorphic-roles";
-
 /** How long a project's parsed role set is trusted before re-reading. */
 const DEFAULT_TTL_MS = 10_000;
 
@@ -228,9 +221,9 @@ interface CachedRoles {
  * Read-only view over a project's committed `roles/` directory, and the
  * expansion of a member's roles into an {@link Identity}. Mirrors
  * {@link AgentDefinitionsService}: never throws on a bad file (each is an
- * invalid entry), and reads the shared origin `main` when the project has a
- * remote (the program as shared, not one user's working copy) — the working
- * tree otherwise (single-machine hosts).
+ * invalid entry). Reads the program as shared (see `program-reader`):
+ * role resolution runs inside the host's identity resolver, before the
+ * caller is anyone, so it never touches a caller's working copy.
  */
 export class RolesService {
   private readonly cache = new Map<string, CachedRoles>();
@@ -328,47 +321,24 @@ export class RolesService {
     return entries;
   }
 
-  /** `roles/*.json` (top level only) → content. */
+  /** `roles/*.json` (top level only) → content, from the program as shared. */
   private async readRoleFiles(
     tenantId: string,
     projectId: string,
   ): Promise<Record<string, string>> {
     const prefix = `${ROLES_DIR}/`;
-    const isRoleFile = (file: string) =>
-      file.startsWith(prefix) &&
-      file.endsWith(".json") &&
-      !file.slice(prefix.length).includes("/");
-
-    const remote = this.projectManager.remoteBackend;
-    const repo: ProjectRepo = remote
-      ? await this.projectManager.openDev(tenantId, projectId, ROLES_READER)
-      : await this.projectManager.open(tenantId, projectId);
-    try {
-      if (remote) {
-        await fetchRemote({
-          dev: repo,
-          remote,
-          tenantId,
-          projectId,
-          remoteBranch: "main",
-        });
-        const sha = await repo
-          .resolveRef("refs/remotes/origin/main")
-          .catch(() => null);
-        if (!sha) return {};
-        const files = await repo.readFilesAtRef(sha, { prefix });
-        return Object.fromEntries(
-          Object.entries(files).filter(([file]) => isRoleFile(file)),
-        );
-      }
-      const files = (await repo.listFiles()).filter(isRoleFile);
-      const entries = await Promise.all(
-        files.map(async (file) => [file, await repo.readFile(file)] as const),
-      );
-      return Object.fromEntries(entries);
-    } finally {
-      await repo.dispose();
-    }
+    const files = await withProgram(
+      this.projectManager,
+      tenantId,
+      projectId,
+      (repo, ref) => readProgramFiles(repo, ref, prefix),
+    );
+    return Object.fromEntries(
+      Object.entries(files).filter(
+        ([file]) =>
+          file.endsWith(".json") && !file.slice(prefix.length).includes("/"),
+      ),
+    );
   }
 
   private async requireProject(

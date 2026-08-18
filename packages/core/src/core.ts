@@ -35,6 +35,10 @@ import { DeploymentRuntimeService } from "./services/deployment-runtime-service.
 import { KyselyDeploymentRuntimeStore } from "./services/deployment-runtime-store.js";
 import { DeploymentService } from "./services/deployment-service.js";
 import { DevSandboxService } from "./services/dev-sandbox-service.js";
+import {
+  type DocumentBlobStore,
+  DocumentsService,
+} from "./services/documents-service.js";
 import { ExecutionJobsService } from "./services/execution-jobs-service.js";
 import { ExecutionWorkerService } from "./services/execution-worker-service.js";
 import {
@@ -76,6 +80,13 @@ export interface CatamorphicCoreConfig {
    * by this much; membership is read fresh on every resolve. Default 10s.
    */
   rolesCacheTtlMs?: number;
+  /**
+   * Where project-store bytes live when a document is not text (ADR 0055):
+   * inline in Postgres by default; a filesystem or S3-compatible store
+   * (`FsBundleStore`, `S3ObjectStore`) when configured. Metadata, versions,
+   * text and the search index always stay in the database.
+   */
+  documentBlobStore?: DocumentBlobStore;
   db: Kysely<DB>;
   projectManager: ProjectManager;
   sandboxProvider?: SandboxProvider;
@@ -227,6 +238,8 @@ export class CatamorphicCore {
   readonly roles: RolesService;
   /** Stock `user → roles + grants` per project (ADR 0055). */
   readonly memberships: MembershipsService;
+  /** The documents surface: program (git) + project store (ADR 0055). */
+  readonly documents: DocumentsService;
   readonly tenantPolicies: TenantPoliciesService;
   readonly retention: RetentionService;
   readonly plugins?: PluginsService;
@@ -425,6 +438,12 @@ export class CatamorphicCore {
         : {}),
     });
     this.memberships = new MembershipsService(this.db, this.roles);
+    this.documents = new DocumentsService(this.db, {
+      projectManager: this.projectManager,
+      ...(config.documentBlobStore
+        ? { blobStore: config.documentBlobStore }
+        : {}),
+    });
 
     if (config.codingAgent && this.sandboxProvider && this.devSandboxes) {
       const codingAgents = isCodingAgentRegistry(config.codingAgent)

@@ -106,6 +106,8 @@ export interface ProjectRepo {
     ref: string,
     opts: { prefix: string },
   ): Promise<Record<string, string>>;
+  /** File paths at a ref, optionally under one directory prefix; no content. */
+  listFilesAtRef(ref: string, opts?: { prefix?: string }): Promise<string[]>;
 
   commit(
     message: string,

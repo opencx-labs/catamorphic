@@ -119,6 +119,31 @@ export class ProjectRepoImpl implements ProjectRepo {
     return this.walkFilesAtRef(ref, opts.prefix);
   }
 
+  async listFilesAtRef(
+    ref: string,
+    opts?: { prefix?: string },
+  ): Promise<string[]> {
+    const oid = await git.resolveRef({ fs: nodeFs, dir: this.repoPath, ref });
+    const prefix = opts?.prefix;
+    const paths: string[] = [];
+    await git.walk({
+      fs: nodeFs,
+      dir: this.repoPath,
+      trees: [git.TREE({ ref: oid })],
+      map: async (filepath, [entry]) => {
+        if (filepath === "." || !entry) return;
+        if (prefix !== undefined) {
+          const inside = filepath.startsWith(prefix);
+          const onTheWay = prefix.startsWith(`${filepath}/`);
+          if (!inside && !onTheWay) return null;
+          if (!inside) return;
+        }
+        if ((await entry.type()) === "blob") paths.push(filepath);
+      },
+    });
+    return paths.sort();
+  }
+
   private async walkFilesAtRef(
     ref: string,
     prefix?: string,
