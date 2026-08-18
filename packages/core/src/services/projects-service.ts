@@ -8,7 +8,7 @@ import { getTracer, withSpan } from "@catamorphic/otel";
 import type { Kysely, Selectable } from "kysely";
 import { authorFor, type Identity } from "../identity.js";
 import { SEED_SKILLS } from "../seeds.js";
-import { assertFullIdentity } from "./artifact-scope.js";
+import { assertBuilder, assertRootIdentity } from "./artifact-scope.js";
 
 const tracer = getTracer("@catamorphic/core");
 
@@ -167,7 +167,7 @@ export class ProjectsService {
     identity: Identity,
     input: CreateProjectInput,
   ): Promise<Project> {
-    assertFullIdentity(identity);
+    assertRootIdentity(identity);
     return withSpan(
       {
         tracer,
@@ -258,23 +258,32 @@ export class ProjectsService {
     identity: Identity,
     input: ListProjectsInput = {},
   ): Promise<ListProjectsResult> {
-    assertFullIdentity(identity);
     const { tenantId } = identity;
     const limit = input.limit ?? 50;
     const offset = input.offset ?? 0;
 
-    const rows = await this.db
+    // A scoped identity lists the projects its scope names in any capacity
+    // (builder, agent, app, document…): what it may open. Metadata only —
+    // every project surface still gates on its own ref.
+    const visible =
+      identity.scope === undefined
+        ? null
+        : [...new Set(identity.scope.map((ref) => ref.projectId))];
+    if (visible && visible.length === 0) return { items: [], total: 0 };
+
+    let query = this.db
       .selectFrom("projects")
-      .where("tenant_id", "=", tenantId)
+      .where("tenant_id", "=", tenantId);
+    if (visible) query = query.where("id", "in", visible);
+
+    const rows = await query
       .selectAll()
       .orderBy("created_at", "desc")
       .limit(limit)
       .offset(offset)
       .execute();
 
-    const total = await this.db
-      .selectFrom("projects")
-      .where("tenant_id", "=", tenantId)
+    const total = await query
       .select((eb) => eb.fn.countAll<number>().as("count"))
       .executeTakeFirstOrThrow()
       .then((r) => Number(r.count));
@@ -405,7 +414,7 @@ export class ProjectsService {
     identity: Identity,
     projectId: string,
   ): Promise<ProjectRow> {
-    assertFullIdentity(identity);
+    assertBuilder(identity, projectId);
     const row = await this.db
       .selectFrom("projects")
       .where("id", "=", projectId)
@@ -420,7 +429,7 @@ export class ProjectsService {
     identity: Identity,
     projectId: string,
   ): Promise<void> {
-    assertFullIdentity(identity);
+    assertBuilder(identity, projectId);
     const row = await this.db
       .selectFrom("projects")
       .where("id", "=", projectId)

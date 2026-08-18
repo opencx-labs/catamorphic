@@ -11,7 +11,7 @@ import {
   type WorkflowTriggerBinding,
 } from "@catamorphic/parser";
 import type { Identity } from "../identity.js";
-import { assertFullIdentity } from "./artifact-scope.js";
+import { assertBuilder } from "./artifact-scope.js";
 import {
   ProjectNotFoundError,
   type ProjectsService,
@@ -141,7 +141,7 @@ export class WorkflowsService {
     identity: Identity,
     projectId: string,
   ): Promise<void> {
-    assertFullIdentity(identity);
+    assertBuilder(identity, projectId);
     // Delegates to ProjectsService so "project exists" logic lives in one place.
     try {
       await this.projects.get(identity, projectId);

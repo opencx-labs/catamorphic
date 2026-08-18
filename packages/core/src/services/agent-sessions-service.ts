@@ -2,23 +2,35 @@ import type { DB, JsonObject } from "@catamorphic/db";
 import type { ProjectManager } from "@catamorphic/git";
 import { getTracer, withSpan } from "@catamorphic/otel";
 import type { PluginResolver } from "@catamorphic/plugins";
-import type {
-  AgentAttachment,
-  AgentEffort,
-  AgentEvent,
-  AttachedPluginForAgent,
-  ProviderSession,
-  SandboxProvider,
-  TurnOptions,
+import {
+  type AgentAttachment,
+  type AgentEffort,
+  type AgentEvent,
+  type AttachedPluginForAgent,
+  type McpToolPolicyLayers,
+  narrowingLayer,
+  PROJECT_TOOLS_SERVER_KEY,
+  type ProviderSession,
+  type SandboxProvider,
+  serverKeyOf,
+  type ToolPermission,
+  type TurnOptions,
 } from "@catamorphic/sandbox";
 import { type Kysely, type Selectable, sql } from "kysely";
-import type { Identity } from "../identity.js";
+import {
+  type AgentRef,
+  type Identity,
+  isBuilder,
+  scopeCovers,
+} from "../identity.js";
 import {
   BATCH_WORKFLOW_SKILL_PATH,
   DURABLE_WORKFLOW_SKILL_PATH,
   SEED_SKILLS,
 } from "../seeds.js";
-import { assertFullIdentity } from "./artifact-scope.js";
+import { parseProjectAgentId } from "./agent-definitions-service.js";
+import type { AppPoliciesService } from "./app-policies-service.js";
+import { AccessDeniedError, resolveScope } from "./artifact-scope.js";
 import type {
   CodingAgentRegistry,
   RegisteredCodingAgent,
@@ -281,6 +293,17 @@ interface AgentSessionsDeps {
    * string = replacement, `false` = none (ADR 0049).
    */
   standingAgentPrompt?: string | false;
+  /**
+   * The project's MCP tool roster (tool name → workflow name) at its
+   * production commit — how a scoped caller's workflow refs become a
+   * tool-policy layer on the project's tools server (ADR 0055).
+   */
+  mcpToolNames?: (
+    identity: Identity,
+    projectId: string,
+  ) => Promise<ReadonlyMap<string, string>>;
+  /** Tenant app policy, for scope resolution (app refs). */
+  appPolicies?: AppPoliciesService;
 }
 
 /**
@@ -307,6 +330,8 @@ export class AgentSessionsService {
   private readonly onTurnSettled?: AgentSessionsDeps["onTurnSettled"];
   private readonly seedFiles?: Record<string, string>;
   private readonly standingAgentPrompt?: string | false;
+  private readonly mcpToolNames?: AgentSessionsDeps["mcpToolNames"];
+  private readonly appPolicies?: AppPoliciesService;
   /**
    * Sessions with a turn currently executing in this process. Turns run
    * inside the send request, so an `in_progress` message whose session is
@@ -336,6 +361,8 @@ export class AgentSessionsService {
     this.onTurnSettled = deps.onTurnSettled;
     this.seedFiles = deps.seedFiles;
     this.standingAgentPrompt = deps.standingAgentPrompt;
+    this.mcpToolNames = deps.mcpToolNames;
+    this.appPolicies = deps.appPolicies;
   }
 
   async list(
@@ -347,18 +374,27 @@ export class AgentSessionsService {
     const limit = input.limit ?? 50;
     const offset = input.offset ?? 0;
 
-    const rows = await this.db
+    // A viewer sees only its own conversations, on agents its scope still
+    // covers (a revoked agent's sessions vanish from the list too).
+    let query = this.db
       .selectFrom("agent_sessions")
-      .where("project_id", "=", projectId)
+      .where("project_id", "=", projectId);
+    if (!isBuilder(identity, projectId)) {
+      const agentIds = this.coveredAgentIds(identity, projectId);
+      if (agentIds.length === 0) return { items: [], total: 0 };
+      query = query
+        .where("external_user_id", "=", identity.externalUserId)
+        .where("agent_id", "in", agentIds);
+    }
+
+    const rows = await query
       .selectAll()
       .orderBy("created_at", "desc")
       .limit(limit)
       .offset(offset)
       .execute();
 
-    const total = await this.db
-      .selectFrom("agent_sessions")
-      .where("project_id", "=", projectId)
+    const total = await query
       .select((eb) => eb.fn.countAll<number>().as("count"))
       .executeTakeFirstOrThrow()
       .then((r) => Number(r.count));
@@ -453,6 +489,7 @@ export class AgentSessionsService {
     input: { systemPrompt?: string; agentId?: string; effort?: AgentEffort },
   ): Promise<AgentSession> {
     await this.requireProject(identity, projectId);
+    this.assertAgentAccess(identity, projectId, input.agentId ?? null);
     // Validate up front so a bad agent id fails at create, not first send.
     const agent = this.resolveAgent(input.agentId ?? null);
 
@@ -509,6 +546,7 @@ export class AgentSessionsService {
     }> = {};
 
     if (patch.agentId !== undefined && patch.agentId !== session.agent_id) {
+      this.assertAgentAccess(identity, projectId, patch.agentId);
       const agent = this.codingAgents.get(patch.agentId);
       if (!agent) throw new AgentNotConfiguredError(patch.agentId);
       // Let the outgoing provider release its in-memory state.
@@ -894,12 +932,18 @@ export class AgentSessionsService {
     const attachments = extras.attachments?.length
       ? extras.attachments
       : undefined;
+    const callerLayers = await this.callerToolPolicies(
+      identity,
+      projectId,
+      session.agent_id,
+    );
     const turnOptions: TurnOptions = {
       ...agent.defaults,
       ...(session.model_effort
         ? { effort: session.model_effort as AgentEffort }
         : {}),
       ...(attachments ? { attachments } : {}),
+      ...(callerLayers ? { toolPolicies: callerLayers } : {}),
     };
 
     // Persist the user message and the in-progress placeholder BEFORE the
@@ -1351,6 +1395,7 @@ export class AgentSessionsService {
         }),
         attachedPlugins: await this.loadAttachedPlugins(projectId),
         history: await this.transcriptHistory(session.id),
+        ...(await this.callerOpts(identity, projectId, session.agent_id)),
       });
       await this.db
         .updateTable("agent_sessions")
@@ -1394,6 +1439,7 @@ export class AgentSessionsService {
       }),
       attachedPlugins: await this.loadAttachedPlugins(projectId),
       history: await this.transcriptHistory(session.id),
+      ...(await this.callerOpts(identity, projectId, session.agent_id)),
     });
     await this.db
       .updateTable("agent_sessions")
@@ -1665,11 +1711,21 @@ export class AgentSessionsService {
     return attached;
   }
 
+  /**
+   * The session surface admits builders and — ADR 0055 — scoped callers
+   * whose scope names at least one of this project's agents. Everything
+   * such a caller does is then checked against those agent refs.
+   */
   private async requireProject(
     identity: Identity,
     projectId: string,
   ): Promise<void> {
-    assertFullIdentity(identity);
+    if (
+      !isBuilder(identity, projectId) &&
+      this.coveredAgentIds(identity, projectId).length === 0
+    ) {
+      throw new AccessDeniedError();
+    }
     const row = await this.db
       .selectFrom("projects")
       .where("id", "=", projectId)
@@ -1677,6 +1733,119 @@ export class AgentSessionsService {
       .select("id")
       .executeTakeFirst();
     if (!row) throw new ProjectNotFoundError(projectId);
+  }
+
+  /** Registry ids of the project agents a scoped identity's refs name. */
+  private coveredAgentIds(identity: Identity, projectId: string): string[] {
+    return (identity.scope ?? [])
+      .filter(
+        (ref): ref is AgentRef =>
+          ref.kind === "agent" && ref.projectId === projectId,
+      )
+      .map((ref) => `project:${projectId}:${ref.name}`);
+  }
+
+  /** The scope entry that covers this agent id, for a scoped caller. */
+  private coveringAgentRef(
+    identity: Identity,
+    projectId: string,
+    agentId: string | null,
+  ): AgentRef | undefined {
+    if (!agentId || !identity.scope) return undefined;
+    const parsed = parseProjectAgentId(agentId);
+    if (!parsed || parsed.projectId !== projectId) return undefined;
+    const ref: AgentRef = { kind: "agent", projectId, name: parsed.slug };
+    if (!scopeCovers(identity.scope, ref)) return undefined;
+    return identity.scope.find(
+      (entry): entry is AgentRef =>
+        entry.kind === "agent" &&
+        entry.projectId === projectId &&
+        entry.name === parsed.slug,
+    );
+  }
+
+  /**
+   * A builder may use any agent; a scoped caller only a project agent its
+   * scope names — never the host's default or personal agents (a
+   * `null` agent id), which are not project artifacts.
+   */
+  private assertAgentAccess(
+    identity: Identity,
+    projectId: string,
+    agentId: string | null,
+  ): void {
+    if (isBuilder(identity, projectId)) return;
+    if (!this.coveringAgentRef(identity, projectId, agentId)) {
+      throw new AccessDeniedError();
+    }
+  }
+
+  /**
+   * The caller's tool-policy layers for a session (ADR 0055), or undefined
+   * for builders. Two sources, both narrowing only:
+   *  - the project's tools server (`catamorphic`): everything off except
+   *    the tools whose workflows the caller's scope resolves to (plus the
+   *    shared poll tool — run reads are scope-checked at the endpoint);
+   *  - the agent ref's own `toolPolicies`, per connector server key.
+   * The endpoint enforces scope independently when the host binds the
+   * caller to the session's MCP credentials; this layer is defence in
+   * depth and the ask/deny vocabulary the endpoint cannot express.
+   */
+  private async callerToolPolicies(
+    identity: Identity,
+    projectId: string,
+    agentId: string | null,
+  ): Promise<Record<string, McpToolPolicyLayers> | undefined> {
+    if (isBuilder(identity, projectId)) return undefined;
+    const ref = this.coveringAgentRef(identity, projectId, agentId);
+    if (!ref) throw new AccessDeniedError();
+    const layers: Record<string, McpToolPolicyLayers> = {};
+
+    const resolved = await resolveScope({
+      db: this.db,
+      identity,
+      projectId,
+      policies: this.appPolicies,
+    });
+    const tools: Record<string, ToolPermission> = {
+      catamorphic_poll_run: "allow",
+    };
+    if (resolved && this.mcpToolNames) {
+      const roster = await this.mcpToolNames(identity, projectId);
+      for (const [tool, workflow] of roster) {
+        if (resolved.allowedWorkflows.has(workflow)) tools[tool] = "allow";
+      }
+    }
+    layers[PROJECT_TOOLS_SERVER_KEY] = [{ default: "deny", tools }];
+
+    for (const [name, policy] of Object.entries(ref.toolPolicies ?? {})) {
+      const key = name === PROJECT_TOOLS_SERVER_KEY ? name : serverKeyOf(name);
+      layers[key] = [
+        ...(layers[key] ?? []),
+        narrowingLayer({
+          ...(policy.default ? { default: policy.default } : {}),
+          ...(policy.tools ? { tools: { ...policy.tools } } : {}),
+        }),
+      ];
+    }
+    return layers;
+  }
+
+  /** `caller` + `toolPolicies` for {@link StartSessionOpts}. */
+  private async callerOpts(
+    identity: Identity,
+    projectId: string,
+    agentId: string | null,
+  ): Promise<{
+    caller: Identity;
+    toolPolicies?: Record<string, McpToolPolicyLayers>;
+  }> {
+    const toolPolicies = await this.callerToolPolicies(
+      identity,
+      projectId,
+      agentId,
+    );
+    return { caller: identity, ...(toolPolicies ? { toolPolicies } : {}) };
   }
 
   /** Ownership check without loading messages: throws when the session
@@ -1702,6 +1871,16 @@ export class AgentSessionsService {
       .selectAll()
       .executeTakeFirst();
     if (!row) throw new AgentSessionNotFoundError(sessionId);
+    if (!isBuilder(identity, projectId)) {
+      // Own conversations only, on an agent the scope still covers. One
+      // uniform denial: a viewer must not learn which session ids exist.
+      if (
+        row.external_user_id !== identity.externalUserId ||
+        !this.coveringAgentRef(identity, projectId, row.agent_id)
+      ) {
+        throw new AccessDeniedError();
+      }
+    }
     return row;
   }
 }

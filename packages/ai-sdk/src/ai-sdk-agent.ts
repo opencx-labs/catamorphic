@@ -24,6 +24,7 @@ import type {
 import {
   buildPluginsPreamble,
   isMediaAttachment,
+  mergePolicyLayers,
   renderTextAttachments,
   resolveToolPermissionAcross,
   stagedPluginFiles,
@@ -138,6 +139,12 @@ interface AiSdkSessionState {
   abort?: AbortController;
   /** Set when the turn ended on an ask_user call awaiting the user's answer. */
   pendingAsk?: { toolCallId: string };
+  /**
+   * The caller's tool-policy layers (ADR 0055), replaced on every turn
+   * that carries them; the gate reads them live so a revoked grant applies
+   * to the next tool call.
+   */
+  callerPolicies?: Record<string, McpToolPolicyLayers>;
 }
 
 /**
@@ -234,13 +241,18 @@ export class AiSdkCodingAgent implements CodingAgentProvider {
    * are remembered for this provider's lifetime (the host persists them
    * for the next one), so a granted tool never re-asks mid-conversation.
    */
-  private toolGate(): McpToolGate {
+  private toolGate(
+    callerPolicies: () => Record<string, McpToolPolicyLayers> | undefined,
+  ): McpToolGate {
     const remembered = new Set<string>();
     const source = this.opts.mcpPolicies ?? {};
     const ask = this.opts.onToolPermission;
     return async (server, tool, input, sessionId) => {
-      const policies = typeof source === "function" ? source() : source;
-      const layers = policies[server];
+      const own = typeof source === "function" ? source() : source;
+      // The caller's layers (ADR 0055) sit beside the provider's own —
+      // one more intersection, read live per call.
+      const policies = mergePolicyLayers(own, callerPolicies());
+      const layers = policies?.[server];
       if (!layers) return;
       const key = `${server}\u0000${tool.name}`;
       const permission = resolveToolPermissionAcross(
@@ -296,7 +308,11 @@ export class AiSdkCodingAgent implements CodingAgentProvider {
       .join("\n\n");
     const providerSessionId = crypto.randomUUID();
 
-    const gate = this.toolGate();
+    // The gate reads the session's caller layers by id: they exist only
+    // once the state below is stored, and change per turn.
+    const gate = this.toolGate(
+      () => this.sessions.get(providerSessionId)?.callerPolicies,
+    );
     const mcpTools =
       Object.keys(this.opts.mcpServers ?? {}).length > 0
         ? buildMcpTools(await this.connectMcp(), gate, opts.sessionId)
@@ -308,6 +324,7 @@ export class AiSdkCodingAgent implements CodingAgentProvider {
     const scopedConfigs = this.opts.mcpServersForSession?.({
       projectId: opts.projectId,
       sessionId: opts.sessionId,
+      ...(opts.caller ? { caller: opts.caller } : {}),
     });
     const scopedMcp: ConnectedMcpServer[] = [];
     if (scopedConfigs) {
@@ -333,7 +350,11 @@ export class AiSdkCodingAgent implements CodingAgentProvider {
           workingDirectory: opts.workingDirectory,
         },
         this.opts.extraTools ?? [],
-        { projectId: opts.projectId, sessionId: opts.sessionId },
+        {
+          projectId: opts.projectId,
+          sessionId: opts.sessionId,
+          ...(opts.caller ? { caller: opts.caller } : {}),
+        },
         mcpTools,
       ),
       // Resurrected sessions (host restart, provider rebuild after a
@@ -345,6 +366,7 @@ export class AiSdkCodingAgent implements CodingAgentProvider {
       workingDirectory: opts.workingDirectory,
       running: false,
       scopedMcp,
+      ...(opts.toolPolicies ? { callerPolicies: opts.toolPolicies } : {}),
     });
 
     return {
@@ -379,6 +401,7 @@ export class AiSdkCodingAgent implements CodingAgentProvider {
       yield { type: "error", content: "A message is already running" };
       return;
     }
+    if (opts?.toolPolicies) state.callerPolicies = opts.toolPolicies;
     // Answers to a pending ask_user call resume the tool loop as the tool's
     // result; anything else is a regular user message.
     const pendingAsk = state.pendingAsk;
@@ -426,6 +449,7 @@ export class AiSdkCodingAgent implements CodingAgentProvider {
       yield { type: "error", content: "A message is already running" };
       return;
     }
+    if (opts?.toolPolicies) state.callerPolicies = opts.toolPolicies;
     if (state.messages.length === 0) {
       // Defensive: hosts route retries on a freshly restored session
       // through sendMessage (the restored history excludes the failed

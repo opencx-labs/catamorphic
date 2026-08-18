@@ -11,6 +11,7 @@ import type {
 } from "@catamorphic/sandbox";
 import {
   buildPluginsPreamble,
+  mergePolicyLayers,
   resolveToolPermissionAcross,
   stagePluginDocs,
 } from "@catamorphic/sandbox";
@@ -96,23 +97,56 @@ export class CodexAgent implements CodingAgentProvider {
    * host restart drops them before the first turn ran.
    */
   private readonly pendingInstructions = new Map<string, string>();
+  /**
+   * The caller's tool-policy layers per host session id (ADR 0055). Codex
+   * reads policy at spawn, so a session serving a scoped caller spawns
+   * through a client built with the merged (provider ∩ caller) filter —
+   * memoized by digest in {@link clientFor}, refreshed each turn.
+   */
+  private readonly callerPolicies = new Map<
+    string,
+    Record<string, McpToolPolicyLayers>
+  >();
+  private readonly clients = new Map<string, Codex>();
 
   constructor(opts: CodexAgentOpts = {}) {
     this.opts = opts;
+    this.client = this.buildClient(opts.mcpPolicies);
+  }
+
+  private buildClient(
+    policies: Record<string, McpToolPolicyLayers> | undefined,
+  ): Codex {
     const config = mcpServersConfig(
-      opts.mcpServers ?? {},
-      opts.mcpPolicies,
-      opts.mcpToolAnnotations,
+      this.opts.mcpServers ?? {},
+      policies,
+      this.opts.mcpToolAnnotations,
     );
-    this.client = new Codex({
-      apiKey: opts.apiKey,
-      baseUrl: opts.baseUrl,
-      codexPathOverride: opts.codexPathOverride,
+    return new Codex({
+      apiKey: this.opts.apiKey,
+      baseUrl: this.opts.baseUrl,
+      codexPathOverride: this.opts.codexPathOverride,
       ...(config ? { config } : {}),
       // The SDK stops inheriting process.env once env is provided — merge
       // ourselves so PATH and friends survive alongside the overrides.
-      ...(opts.env ? { env: mergedEnv(opts.env) } : {}),
+      ...(this.opts.env ? { env: mergedEnv(this.opts.env) } : {}),
     });
+  }
+
+  /** The client a session spawns through: the shared one, or one carrying
+   * the caller's narrowing when the session serves a scoped caller. */
+  private clientFor(hostSessionId: string): Codex {
+    const caller = this.callerPolicies.get(hostSessionId);
+    if (!caller) return this.client;
+    const digest = JSON.stringify(caller);
+    let client = this.clients.get(digest);
+    if (!client) {
+      client = this.buildClient(
+        mergePolicyLayers(this.opts.mcpPolicies, caller),
+      );
+      this.clients.set(digest, client);
+    }
+    return client;
   }
 
   async startSession(opts: StartSessionOpts): Promise<ProviderSession> {
@@ -123,6 +157,9 @@ export class CodexAgent implements CodingAgentProvider {
       .join("\n\n");
     if (instructions) {
       this.pendingInstructions.set(opts.sessionId, instructions);
+    }
+    if (opts.toolPolicies) {
+      this.callerPolicies.set(opts.sessionId, opts.toolPolicies);
     }
 
     // The CLI only reveals its thread id once a turn starts, so the id stays
@@ -145,10 +182,14 @@ export class CodexAgent implements CodingAgentProvider {
     // Each turn spawns a fresh CLI run with this turn's options, so per-turn
     // model/effort overrides take effect without any in-memory thread state.
     // The first turn starts the thread; later turns resume it by id.
+    if (opts?.toolPolicies) {
+      this.callerPolicies.set(session.sessionId, opts.toolPolicies);
+    }
+    const client = this.clientFor(session.sessionId);
     const threadOptions = this.threadOptions(session.workingDirectory, opts);
     const thread = session.providerSessionId
-      ? this.client.resumeThread(session.providerSessionId, threadOptions)
-      : this.client.startThread(threadOptions);
+      ? client.resumeThread(session.providerSessionId, threadOptions)
+      : client.startThread(threadOptions);
     const input = session.providerSessionId
       ? message
       : this.withInstructions(session.sessionId, message);
@@ -207,6 +248,7 @@ export class CodexAgent implements CodingAgentProvider {
   async dispose(session: ProviderSession): Promise<void> {
     // Threads live on disk under $CODEX_HOME; nothing else to release.
     this.pendingInstructions.delete(session.sessionId);
+    this.callerPolicies.delete(session.sessionId);
   }
 
   /**

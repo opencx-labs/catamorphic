@@ -188,26 +188,37 @@ The plugin is fully encapsulated (its Zod compilers and error handler don't leak
 
 **There is no default identity.** The `identity` resolver is required and the plugin reads no headers on its own. Hosts whose auth terminates *in front of* the plugin (a gateway or proxy route that already verified the session) can pass the stock header resolver, `identityFromHeaders()`, which reads `X-Catamorphic-Tenant-Id` (host org id) and `X-External-User-Id` (host user id) — but a plugin mounted with it must never be reachable by browsers directly, since anyone could then claim any identity.
 
-### Builders and viewers: identity scope
+### Root, builders and viewers: identity scope
 
-An identity is either **full** (a builder: the whole project surface — files, deploys, secrets, agents, every run control) or **scoped** (a viewer: exactly the listed artifacts and nothing else). Scope is a list of artifact refs by name:
+An identity is either **root** (`scope` absent: every project of the tenant, every surface — the desktop's own local projects, a host's service identity) or **scoped** (exactly the listed artifact refs and nothing else). Refs name artifacts by `(projectId, name|path)`:
+
+| Ref | Grants |
+| --- | --- |
+| `{ kind: "project", projectId }` | **Builder** of that project: files, deploys, secrets, agent definitions, every workflow, app and agent — the whole program surface (not the store, see below). |
+| `{ kind: "app", projectId, name }` | The app's served document plus, transitively, the workflows frozen into its *active published* version. |
+| `{ kind: "workflow", projectId, name }` | One workflow directly (a per-customer MCP tool, a host-triggered action). |
+| `{ kind: "agent", projectId, name, toolPolicies? }` | Chat sessions on the committed project agent `agents/<name>.json` (ADR 0050). Inside those sessions the caller's scope intersects the agent's tool policy: the project's tools server is narrowed to the caller's workflow refs, and `toolPolicies` (per connector server key, ADR 0054's shape) is one more narrowing layer. Own sessions only. |
+| `{ kind: "document", projectId, path, access? }` | A file (`docs/handbook.md`) or subtree (`store/customers/acme/**`) of the project's path namespace; `access` defaults to `read`, `write` implies read. Git paths are read-only through this ref; `store/…` paths are the project store, reachable ONLY through document refs — builders included. |
 
 ```ts
 identity: async (request) => {
   const session = await verifySession(request);
   if (!session) return null;
   const base = { tenantId: session.orgId, externalUserId: session.userId };
-  if (session.isEmployee) return base;                       // builder
-  // A customer: exactly the apps your entitlement table grants them.
-  const apps = await db.customerApps(session.userId);        // [{ projectId, name }]
+  if (session.isAdmin) return { ...base, scope: [{ kind: "project", projectId: BRAIN }] };
+  // A CSM: the CSM agent, its workflows, and their own customers' subtree.
   return {
     ...base,
-    scope: apps.map((a) => ({ kind: "app", projectId: a.projectId, name: a.name })),
+    scope: [
+      { kind: "agent", projectId: BRAIN, name: "csm-assistant" },
+      { kind: "workflow", projectId: BRAIN, name: "crm.lookup" },
+      ...session.customers.map((c) => ({ kind: "document", projectId: BRAIN, path: `store/customers/${c}/**`, access: "write" })),
+    ],
   };
 }
 ```
 
-`{ kind: "app", projectId, name }` grants the app's served document plus, transitively, the workflows frozen into its *active published* version; `{ kind: "workflow", projectId, name }` grants one workflow directly (a per-customer MCP tool, a host-triggered action). Refs name artifacts by `(projectId, name)` — what an entitlement table naturally stores, stable across republishes — and catamorphic resolves the active version at check time, so a retired version can never be reached. Which users are builders and which artifacts each viewer gets is host policy (a table, a role, whatever you like); catamorphic only enforces the result. Enforcement lives in core, so `server-sdk` callers get it too: `catamorphic.forTenant({ tenantId }).forUser({ externalUserId, scope })`. See [`docs/decisions/0053-identity-scope-and-app-routes.md`](docs/decisions/0053-identity-scope-and-app-routes.md).
+Which users are builders and which artifacts each viewer gets is host policy (a role file, an entitlement table); catamorphic only enforces the result. Enforcement lives in core, so `server-sdk` callers get it too: `catamorphic.forTenant({ tenantId }).forUser({ externalUserId, scope })`. Scoped agent sessions hand the harness the caller (`StartSessionOpts.caller`, forwarded on `ExtraToolContext.caller`) and the caller's policy layers (`StartSessionOpts.toolPolicies`, refreshed on every `TurnOptions.toolPolicies`) — a hosting backend uses `caller` in `mcpServersForSession` to mint the project MCP endpoint's credentials for that user, so the endpoint enforces the same scope structurally. See [`docs/decisions/0053-identity-scope-and-app-routes.md`](docs/decisions/0053-identity-scope-and-app-routes.md) and [`0055`](docs/decisions/0055-company-brain-roles-store-and-change-loop.md).
 
 The generated HTTP client lives in `@catamorphic/api-client`; construct it with `createApiClient({ baseUrl, fetch })`.
 

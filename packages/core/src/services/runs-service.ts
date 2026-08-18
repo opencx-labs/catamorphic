@@ -30,7 +30,7 @@ import type { Identity } from "../identity.js";
 import type { AppPoliciesService } from "./app-policies-service.js";
 import {
   AccessDeniedError,
-  assertFullIdentity,
+  assertBuilder,
   assertScopeAllowsWorkflow,
   resolveScope,
 } from "./artifact-scope.js";
@@ -536,7 +536,7 @@ export class RunsService {
         projectId: row.project_id,
         policies: this.deps.appPolicies,
       });
-      if (!context?.allowedWorkflows.has(row.workflow_name)) {
+      if (context && !context.allowedWorkflows.has(row.workflow_name)) {
         throw new AccessDeniedError();
       }
     }
@@ -604,7 +604,7 @@ export class RunsService {
   }
 
   async listItems(args: ListBatchItemsInput): Promise<ListBatchItemsResult> {
-    assertFullIdentity(args.identity);
+    await this.assertBuilderForRun(args.identity, args.runId);
     await this.requireBatchScope(args);
     const limit = Math.max(1, Math.min(args.limit ?? 100, 500));
     const offset = Math.max(0, args.offset ?? 0);
@@ -653,7 +653,7 @@ export class RunsService {
   }
 
   async listItemSteps(args: ListBatchItemStepsInput): Promise<BatchItemStep[]> {
-    assertFullIdentity(args.identity);
+    await this.assertBuilderForRun(args.identity, args.runId);
     await this.requireBatchScope(args);
     const item = await this.db
       .selectFrom("batch_items")
@@ -923,7 +923,7 @@ export class RunsService {
   }
 
   async cancel(args: CancelRunInput): Promise<Run> {
-    assertFullIdentity(args.identity);
+    await this.assertBuilderForRun(args.identity, args.runId);
     const invocations = await this.deps.coordinator.cancel(args);
     await Promise.all(
       invocations.map((invocation) =>
@@ -934,7 +934,7 @@ export class RunsService {
   }
 
   async pause(args: PauseRunInput): Promise<Run> {
-    assertFullIdentity(args.identity);
+    await this.assertBuilderForRun(args.identity, args.runId);
     const outcome = await this.deps.coordinator.pauseOperator(args);
     if (outcome === "unavailable") {
       throw new RunCapabilityError("pauseProcessing", "pause");
@@ -943,7 +943,7 @@ export class RunsService {
   }
 
   async resume(args: ResumeRunInput): Promise<Run> {
-    assertFullIdentity(args.identity);
+    await this.assertBuilderForRun(args.identity, args.runId);
     const outcome = await this.deps.coordinator.resumeOperator(args);
     if (outcome === "unavailable") {
       throw new RunCapabilityError("resumeProcessing", "resume");
@@ -952,7 +952,7 @@ export class RunsService {
   }
 
   async resumePause(args: ResumeRunPauseInput): Promise<Run> {
-    assertFullIdentity(args.identity);
+    await this.assertBuilderForRun(args.identity, args.runId);
     await this.deps.coordinator.resumePause(args);
     return this.get(args);
   }
@@ -974,7 +974,7 @@ export class RunsService {
     idempotencyKey: string;
     value: Json;
   }): Promise<Run> {
-    assertFullIdentity(args.identity);
+    assertBuilder(args.identity, args.projectId);
     const run = await this.findActiveByKey(args);
     if (!run) {
       throw new RunSignalNotFoundError(
@@ -1021,7 +1021,7 @@ export class RunsService {
     correlationKey: string;
     reason?: string;
   }): Promise<Run | null> {
-    assertFullIdentity(args.identity);
+    assertBuilder(args.identity, args.projectId);
     const run = await this.findActiveByKey(args);
     if (!run) return null;
     return this.cancel({
@@ -1653,6 +1653,28 @@ export class RunsService {
       .select("id")
       .executeTakeFirst();
     if (!row) throw new ProjectNotFoundError(projectId);
+  }
+
+  /**
+   * Run controls and drill-downs are builder operations; a run names its
+   * project, so the check goes through the run row (tenant-filtered — a
+   * foreign run id reads as not found, never as a builder-of-nothing pass).
+   */
+  private async assertBuilderForRun(
+    identity: Identity,
+    runId: string,
+  ): Promise<void> {
+    if (identity.scope === undefined) return;
+    const row = await this.db
+      .selectFrom("workflow_runs")
+      .innerJoin("projects", "projects.id", "workflow_runs.project_id")
+      .where("workflow_runs.id", "=", runId)
+      .where("projects.tenant_id", "=", identity.tenantId)
+      .select("workflow_runs.project_id")
+      .executeTakeFirst();
+    // Uniform denial: a scoped caller must not learn which run ids exist.
+    if (!row) throw new AccessDeniedError();
+    assertBuilder(identity, row.project_id);
   }
 
   private async requireBatchScope(args: {

@@ -32,6 +32,7 @@ import type {
 import {
   buildPluginsPreamble,
   isMediaAttachment,
+  mergePolicyLayers,
   renderTextAttachments,
   resolveToolPermissionAcross,
   stagePluginDocs,
@@ -214,6 +215,12 @@ interface SessionState {
   /** Context handed to extra (workspace) tools at execution time. */
   toolContext?: ExtraToolContext;
   /**
+   * The caller's tool-policy layers (ADR 0055): one more intersecting
+   * layer beside the provider's own, replaced by every turn that carries
+   * them so a revoked grant reaches the next tool call.
+   */
+  callerPolicies?: Record<string, McpToolPolicyLayers>;
+  /**
    * False until the CLI has confirmed the session exists on disk (its init
    * message on the first real turn). Until then, queries pass `sessionId`
    * (create with our chosen UUID); after, they pass `resume`.
@@ -311,6 +318,7 @@ export class ClaudeCodeAgent implements CodingAgentProvider {
     const toolContext: ExtraToolContext = {
       projectId: opts.projectId,
       sessionId: opts.sessionId,
+      ...(opts.caller ? { caller: opts.caller } : {}),
     };
 
     // No kickoff turn: we choose the session id ourselves and hand it to the
@@ -324,6 +332,7 @@ export class ClaudeCodeAgent implements CodingAgentProvider {
       workingDirectory: opts.workingDirectory,
       toolContext,
       transcriptExists: false,
+      ...(opts.toolPolicies ? { callerPolicies: opts.toolPolicies } : {}),
     });
 
     return {
@@ -374,7 +383,19 @@ export class ClaudeCodeAgent implements CodingAgentProvider {
       return;
     }
 
-    const state = this.sessions.get(providerSessionId);
+    let state = this.sessions.get(providerSessionId);
+    if (opts?.toolPolicies) {
+      // The caller's layers must survive a host restart (no stored state):
+      // a resurrected session serving a scoped caller stays narrowed.
+      if (!state) {
+        state = {
+          workingDirectory: session.workingDirectory,
+          transcriptExists: true,
+        };
+        this.sessions.set(providerSessionId, state);
+      }
+      state.callerPolicies = opts.toolPolicies;
+    }
     const cwd =
       session.workingDirectory || state?.workingDirectory || undefined;
 
@@ -400,6 +421,7 @@ export class ClaudeCodeAgent implements CodingAgentProvider {
             state?.toolContext,
             opts,
             live,
+            providerSessionId,
           ),
           ...anchor,
           abortController: live.abort,
@@ -510,9 +532,20 @@ export class ClaudeCodeAgent implements CodingAgentProvider {
   /** "Always allow" answers, remembered for this provider's lifetime. */
   private readonly rememberedTools = new Set<string>();
 
-  private currentPolicies(): Record<string, McpToolPolicyLayers> | undefined {
+  /**
+   * The provider's own layers merged with the session's caller layers
+   * (ADR 0055) — read live, per decision, so edits and per-turn refreshes
+   * both apply to the next call.
+   */
+  private currentPolicies(
+    providerSessionId?: string,
+  ): Record<string, McpToolPolicyLayers> | undefined {
     const source = this.opts.mcpPolicies;
-    return typeof source === "function" ? source() : source;
+    const own = typeof source === "function" ? source() : source;
+    const caller = providerSessionId
+      ? this.sessions.get(providerSessionId)?.callerPolicies
+      : undefined;
+    return mergePolicyLayers(own, caller);
   }
 
   private currentAnnotations(): Record<
@@ -531,9 +564,10 @@ export class ClaudeCodeAgent implements CodingAgentProvider {
   private async policedMcpDecision(
     toolName: string,
     input: Record<string, unknown>,
-    sessionId?: string,
+    sessionId: string | undefined,
+    providerSessionId: string | undefined,
   ): Promise<PermissionResult | undefined> {
-    const policies = this.currentPolicies();
+    const policies = this.currentPolicies(providerSessionId);
     if (!policies || !toolName.startsWith("mcp__")) return undefined;
     const annotations = this.currentAnnotations();
     // Longest server key wins: "mcp__foo__bar__tool" is server "foo__bar"
@@ -591,6 +625,7 @@ export class ClaudeCodeAgent implements CodingAgentProvider {
     toolContext: ExtraToolContext | undefined,
     turn: TurnOptions | undefined,
     live: LiveTurn,
+    providerSessionId?: string,
   ): Options {
     // Sessions resumed after a host restart have no stored context to run
     // extra tools with, so they run without the workspace server (the CLI
@@ -702,7 +737,7 @@ export class ClaudeCodeAgent implements CodingAgentProvider {
         // every tool the server exposes) — unless the host set a policy
         // for it, in which case each tool comes through canUseTool.
         ...Object.keys(externalServers)
-          .filter((name) => !this.currentPolicies()?.[name])
+          .filter((name) => !this.currentPolicies(providerSessionId)?.[name])
           .map((name) => `mcp__${name}`),
       ],
       // Removing (not merely denying) the built-in shell tools takes them
@@ -729,6 +764,7 @@ export class ClaudeCodeAgent implements CodingAgentProvider {
           toolName,
           input,
           toolContext?.sessionId,
+          providerSessionId,
         );
         if (policed) return policed;
         return denyUnlistedTools(toolName, input, options);

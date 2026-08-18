@@ -1,4 +1,20 @@
 import type { AgentEvent } from "../types.js";
+import type { McpToolPolicyLayers } from "./tool-policy.js";
+
+/**
+ * Who a session serves (ADR 0055). Structurally the host's `Identity`:
+ * tenant, user and — for scoped callers — the artifact refs they may
+ * touch, carried opaquely (this package never interprets them). Harnesses
+ * forward it on {@link ExtraToolContext} so host-supplied per-session MCP
+ * servers and tools can bind to the caller (a hosting backend mints the
+ * project MCP endpoint's credentials from it; the endpoint then enforces
+ * the caller's scope structurally).
+ */
+export interface SessionCaller {
+  tenantId: string;
+  externalUserId: string;
+  scope?: ReadonlyArray<{ readonly kind: string; readonly projectId: string }>;
+}
 
 /**
  * Lightweight description of a plugin package attached to a project. Passed
@@ -37,6 +53,18 @@ export interface StartSessionOpts {
    * with their own durable transcripts (Claude Code) ignore it.
    */
   history?: Array<{ role: "user" | "assistant"; content: string }>;
+  /** The identity this session serves; see {@link SessionCaller}. */
+  caller?: SessionCaller;
+  /**
+   * Per-session tool-policy layers by server key — the caller's narrowing
+   * (ADR 0055): what a scoped caller's role lets this agent reach, on top
+   * of the provider's own layers (connection ceiling, agent policy). Keys
+   * are normalized server keys ({@link serverKeyOf}). Intersected like
+   * every other layer; can only narrow. Also refreshed per turn through
+   * {@link TurnOptions.toolPolicies}, since a caller's scope can change
+   * between turns.
+   */
+  toolPolicies?: Record<string, McpToolPolicyLayers>;
 }
 
 export interface ProviderSession {
@@ -141,6 +169,13 @@ export interface TurnOptions {
   effort?: AgentEffort;
   /** Media sent with this turn's user message. */
   attachments?: AgentAttachment[];
+  /**
+   * The caller's tool-policy layers for this turn (see
+   * {@link StartSessionOpts.toolPolicies}). When present it REPLACES the
+   * session's stored layers — the host recomputes it from the caller's
+   * current scope every turn, so a revoked grant applies to the next call.
+   */
+  toolPolicies?: Record<string, McpToolPolicyLayers>;
 }
 
 /** What a host-supplied tool knows about the session it runs in. */
@@ -148,6 +183,8 @@ export interface ExtraToolContext {
   projectId: string;
   /** Host-side chat session id (see {@link StartSessionOpts.sessionId}). */
   sessionId?: string;
+  /** Who the session serves (see {@link StartSessionOpts.caller}). */
+  caller?: SessionCaller;
 }
 
 /**

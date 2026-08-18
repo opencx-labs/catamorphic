@@ -17,6 +17,14 @@
 
 export type ToolPermission = "allow" | "ask" | "deny";
 
+/**
+ * Server key of the project's own workflow-tools MCP server (ADR 0042), the
+ * one session-scoped server every harness mounts. Policies keyed by it
+ * (an agent's `toolPolicies.catamorphic`, a role's) narrow which of the
+ * project's workflows an agent may run.
+ */
+export const PROJECT_TOOLS_SERVER_KEY = "catamorphic";
+
 export interface McpToolPolicy {
   /** What tools without a rule get. `auto` = allow read-only, ask others. */
   default?: ToolPermission | "auto";
@@ -80,6 +88,53 @@ export function resolveToolPermissionAcross(
   return layers
     .map((layer) => resolveToolPermission(layer, toolName, annotations))
     .reduce(stricterPermission);
+}
+
+/**
+ * Merge two policy maps by concatenating layers per server key — the shape
+ * harnesses use to put a session's caller layers (ADR 0055) beside the
+ * provider's own. Concatenation is intersection under
+ * {@link resolveToolPermissionAcross}, so merging can only narrow.
+ */
+export function mergePolicyLayers(
+  base: Record<string, McpToolPolicyLayers> | undefined,
+  extra: Record<string, McpToolPolicyLayers> | undefined,
+): Record<string, McpToolPolicyLayers> | undefined {
+  if (!extra || Object.keys(extra).length === 0) return base;
+  const merged: Record<string, McpToolPolicyLayers> = { ...(base ?? {}) };
+  for (const [key, layers] of Object.entries(extra)) {
+    merged[key] = [...(merged[key] ?? []), ...layers];
+  }
+  return merged;
+}
+
+/**
+ * A narrowing layer's semantics (an agent's, a role's): an unset or `auto`
+ * default means "no opinion" — allow, so the intersection is whatever the
+ * layers below say — and only explicit rules can change the answer.
+ * Without this asymmetry a layer that pins one tool would narrow every
+ * other tool of the server to "ask" (ADR 0054 §7).
+ */
+export function narrowingLayer(policy: McpToolPolicy): McpToolPolicy {
+  return {
+    ...policy,
+    default:
+      policy.default && policy.default !== "auto" ? policy.default : "allow",
+  };
+}
+
+/**
+ * The stable, tool-name-safe server key for a connection or connector name
+ * (`mcp__<key>__<tool>` in Claude Code, TOML table keys in Codex). Hosts and
+ * role/agent definitions key policies by this, so "Slack" and "slack" name
+ * the same server everywhere.
+ */
+export function serverKeyOf(name: string): string {
+  return name
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "");
 }
 
 /** A request the harness raises when a tool resolves to `ask`. */

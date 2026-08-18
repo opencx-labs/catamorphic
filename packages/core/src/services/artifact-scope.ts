@@ -1,6 +1,6 @@
 import type { DB } from "@catamorphic/db";
 import type { Kysely } from "kysely";
-import type { AppRef, Identity } from "../identity.js";
+import { type AppRef, type Identity, isBuilder } from "../identity.js";
 import type { AppPoliciesService } from "./app-policies-service.js";
 
 /**
@@ -18,13 +18,23 @@ export class AccessDeniedError extends Error {
 }
 
 /**
- * Rejects scoped identities outright. Every project-surface operation
- * (files, deploys, secrets, agent sessions, app builds, run controls) calls
- * this: a viewer reaches catamorphic only through an artifact, and an
- * artifact only through its own surface.
+ * Rejects every scoped identity. Only tenant-wide operations that no
+ * project ref can cover (creating projects) call this: everything else is
+ * per project and uses {@link assertBuilder}.
  */
-export function assertFullIdentity(identity: Identity): void {
+export function assertRootIdentity(identity: Identity): void {
   if (identity.scope !== undefined) throw new AccessDeniedError();
+}
+
+/**
+ * Rejects identities that may not edit the project's program (ADR 0055):
+ * every project-surface operation (files, deploys, secrets, agent
+ * definitions, app builds, run controls, run drill-downs) calls this. A
+ * viewer reaches catamorphic only through an artifact, and an artifact only
+ * through its own surface.
+ */
+export function assertBuilder(identity: Identity, projectId: string): void {
+  if (!isBuilder(identity, projectId)) throw new AccessDeniedError();
 }
 
 export interface ResolvedScope {
@@ -39,7 +49,8 @@ export interface ResolvedScope {
 
 /**
  * Resolves what a scoped identity may call in a project. Returns null for
- * full identities.
+ * identities that build the project (root, or holding its `project` ref):
+ * they may call everything.
  *
  * App refs resolve to the app's *currently active published* version and its
  * frozen workflow set — a retired version cannot be named by a ref, so its
@@ -60,7 +71,9 @@ export async function resolveScope(args: {
   policies?: AppPoliciesService;
 }): Promise<ResolvedScope | null> {
   const scope = args.identity.scope;
-  if (scope === undefined) return null;
+  if (scope === undefined || isBuilder(args.identity, args.projectId)) {
+    return null;
+  }
 
   const allowed = new Set<string>();
   const apps = scope.filter(

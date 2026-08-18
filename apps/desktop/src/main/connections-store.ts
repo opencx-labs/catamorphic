@@ -7,7 +7,11 @@ import {
   type McpOAuthState,
   type McpToolAnnotations,
 } from "@catamorphic/mcp";
-import type { AgentMcpServerConfig, McpToolPolicy } from "@catamorphic/sandbox";
+import {
+  type AgentMcpServerConfig,
+  type McpToolPolicy,
+  serverKeyOf,
+} from "@catamorphic/sandbox";
 import { safeStorage } from "electron";
 
 /**
@@ -434,12 +438,7 @@ export function toAgentMcpServer(
 
 /** Stable, TOML/tool-name-safe server key for a connection. */
 export function connectionServerKey(connection: McpConnection): string {
-  const base = connection.name
-    .trim()
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, "-")
-    .replace(/^-+|-+$/g, "");
-  return base || connection.id.slice(0, 8);
+  return serverKeyOf(connection.name) || connection.id.slice(0, 8);
 }
 
 /**

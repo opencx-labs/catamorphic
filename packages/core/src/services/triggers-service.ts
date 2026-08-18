@@ -250,6 +250,29 @@ export class TriggersService {
       : scan.bindings;
   }
 
+  /**
+   * The project's MCP tool roster at its production commit: effective tool
+   * name → workflow name, for every binding of a registered tool kind. The
+   * same naming the deploy scan validates and the MCP endpoint serves.
+   */
+  async mcpToolNames(args: {
+    identity: Identity;
+    projectId: string;
+  }): Promise<ReadonlyMap<string, string>> {
+    const specs = new Map(
+      (this.deps.mcpToolKinds ?? []).map((spec) => [spec.kind, spec]),
+    );
+    const names = new Map<string, string>();
+    if (specs.size === 0) return names;
+    for (const binding of await this.list(args)) {
+      const spec = specs.get(binding.kind);
+      if (!spec) continue;
+      const name = spec.tool(binding.config).name ?? binding.workflowName;
+      if (!names.has(name)) names.set(name, binding.workflowName);
+    }
+    return names;
+  }
+
   async fire(args: {
     identity: Identity;
     projectId: string;

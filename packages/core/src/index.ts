@@ -8,14 +8,20 @@ export {
 export type { CatamorphicCoreConfig } from "./core.js";
 export { CatamorphicCore, createCatamorphicCore } from "./core.js";
 export {
+  type AgentRef,
+  type AgentRefToolPolicy,
   type AppRef,
   type ArtifactRef,
   authorFor,
   type DocumentRef,
+  documentRefCovers,
   type ExternalUserId,
   type Identity,
+  identityCovers,
+  isBuilder,
   isScoped,
   narrowIdentity,
+  type ProjectRef,
   SYSTEM_AUTHOR,
   sameArtifact,
   scopeCovers,
@@ -32,10 +38,6 @@ export {
 } from "./seeds.js";
 export { AgentContextService } from "./services/agent-context-service.js";
 export {
-  type PendingToolPermission,
-  ToolPermissionBroker,
-} from "./services/tool-permission-broker.js";
-export {
   AGENT_DEFINITION_KINDS,
   AGENT_DEFINITIONS_DIR,
   type AgentDefinition,
@@ -46,7 +48,10 @@ export {
   AgentDefinitionsService,
   agentDefinitionSchema,
   definitionHash,
+  PROJECT_AGENT_ID_PREFIX,
   type ProjectAgentEntry,
+  parseProjectAgentId,
+  projectAgentId,
   validateAgentDefinition,
 } from "./services/agent-definitions-service.js";
 export {
@@ -90,7 +95,8 @@ export {
 } from "./services/apps-service.js";
 export {
   AccessDeniedError,
-  assertFullIdentity,
+  assertBuilder,
+  assertRootIdentity,
   assertScopeAllowsWorkflow,
   type ResolvedScope,
   resolveScope,
@@ -276,6 +282,10 @@ export {
   type TenantRateLimitOverride,
   type UpsertTenantExecutionPolicyInput,
 } from "./services/tenant-policies-service.js";
+export {
+  type PendingToolPermission,
+  ToolPermissionBroker,
+} from "./services/tool-permission-broker.js";
 export {
   renderTriggerTypesModule,
   TRIGGER_TYPES_SOURCE_PATH,

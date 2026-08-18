@@ -13,12 +13,12 @@ import type {
   AgentPluginConfig,
   CodingAgentProvider,
   ExtraToolContext,
-  McpToolPolicy,
   McpToolPolicyLayers,
   SandboxProvider,
   ToolPermissionHandler,
   ToolPolicyAnnotations,
 } from "@catamorphic/sandbox";
+import { narrowingLayer, PROJECT_TOOLS_SERVER_KEY } from "@catamorphic/sandbox";
 import type { WorkspaceBridge } from "../agent-bridge.js";
 import type { AgentConfig } from "../agents-store.js";
 import {
@@ -90,22 +90,7 @@ export interface DesktopAgentRegistryDeps {
 }
 
 /** Server key of the per-project workflow-tools MCP server (session-scoped). */
-export const WORKFLOWS_SERVER_KEY = "catamorphic";
-
-/**
- * An agent's policy as a layer. Its unset default means "no opinion" —
- * `allow`, which leaves the intersection to the connection's ceiling —
- * unlike a connection's unset default, which means `auto`. Without this
- * an agent that pins one tool would silently narrow every other tool of
- * that connection to "ask".
- */
-function agentLayer(policy: McpToolPolicy): McpToolPolicy {
-  return {
-    ...policy,
-    default:
-      policy.default && policy.default !== "auto" ? policy.default : "allow",
-  };
-}
+export const WORKFLOWS_SERVER_KEY = PROJECT_TOOLS_SERVER_KEY;
 
 /** An agent's resolved MCP surface: servers for every harness, plugin
  * directories for the harness that can load them natively. */
@@ -281,7 +266,7 @@ export class DesktopAgentRegistry implements CodingAgentRegistry {
         // shared credential). Then the user's own, then the agent's.
         ...(connection.ceiling ? [connection.ceiling.policy] : []),
         connection.toolPolicy ?? {},
-        ...(agentPolicy ? [agentLayer(agentPolicy)] : []),
+        ...(agentPolicy ? [narrowingLayer(agentPolicy)] : []),
       ];
       // The FULL cached roster (empty hints when a tool has none): Codex
       // derives its allow/deny lists from what's known here, and a tool
@@ -316,7 +301,7 @@ export class DesktopAgentRegistry implements CodingAgentRegistry {
     // workflows an agent may run (or must ask before running).
     const workflowPolicy = config.toolPolicies?.[WORKFLOWS_SERVER_KEY];
     if (workflowPolicy) {
-      policies[WORKFLOWS_SERVER_KEY] = [agentLayer(workflowPolicy)];
+      policies[WORKFLOWS_SERVER_KEY] = [narrowingLayer(workflowPolicy)];
     }
     return { servers, plugins, policies, annotations, connectionIds };
   }

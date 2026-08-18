@@ -27,6 +27,47 @@ import { ProjectNotFoundError } from "./projects-service.js";
 export const AGENT_DEFINITIONS_DIR = "agents";
 
 /**
+ * Registry id of a project agent. Core's registry contract is id-only
+ * (`registry.get(id)`), so project scope is encoded IN the id:
+ *
+ *     project:<projectId>:<slug>
+ *
+ * Sessions persist that id in `agent_sessions.agent_id` like any other; a
+ * host registry parses it back out to load the definition from the project
+ * folder, and core parses it to enforce `agent` scope refs (ADR 0055).
+ */
+export const PROJECT_AGENT_ID_PREFIX = "project:";
+
+export function projectAgentId(projectId: string, slug: string): string {
+  return `${PROJECT_AGENT_ID_PREFIX}${projectId}:${slug}`;
+}
+
+/**
+ * Same slug alphabet the definitions service accepts. Doubles as
+ * path-traversal protection: the slug becomes a filename under `agents/`,
+ * and this pattern admits no separators and no leading dot.
+ */
+/**
+ * Same slug alphabet the definitions service accepts. Doubles as
+ * path-traversal protection: the slug becomes a filename under `agents/`,
+ * and this pattern admits no separators and no leading dot.
+ */
+const SLUG_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
+
+export function parseProjectAgentId(
+  id: string,
+): { projectId: string; slug: string } | undefined {
+  if (!id.startsWith(PROJECT_AGENT_ID_PREFIX)) return undefined;
+  const rest = id.slice(PROJECT_AGENT_ID_PREFIX.length);
+  const colon = rest.indexOf(":");
+  if (colon <= 0 || colon === rest.length - 1) return undefined;
+  const projectId = rest.slice(0, colon);
+  const slug = rest.slice(colon + 1);
+  if (!SLUG_PATTERN.test(slug)) return undefined;
+  return { projectId, slug };
+}
+
+/**
  * Harness kinds a project agent may declare:
  *  - `claude-code` / `codex`: the CLI harnesses, host execution.
  *  - `builtin`: the embedder's built-in sandboxed agent.
@@ -169,9 +210,6 @@ export interface ProjectAgentEntry {
   /** Present instead of `definition` when the file could not be used. */
   invalid?: { error: string };
 }
-
-/** Slugs must be filesystem- and registry-id-safe (`project:<id>:<slug>`). */
-const SLUG_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
 
 /**
  * Validate one raw definition (already JSON-parsed). Returns the parsed

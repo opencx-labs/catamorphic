@@ -59,11 +59,11 @@ import { RuntimeEventsService } from "./services/runtime-events-service.js";
 import { SecretsService } from "./services/secrets-service.js";
 import { SkillsService } from "./services/skills-service.js";
 import { TenantPoliciesService } from "./services/tenant-policies-service.js";
+import type { ToolPermissionBroker } from "./services/tool-permission-broker.js";
 import type {
   McpToolKindSpec,
   TriggerKindRuntime,
 } from "./services/trigger-kinds.js";
-import type { ToolPermissionBroker } from "./services/tool-permission-broker.js";
 import { TriggersService } from "./services/triggers-service.js";
 import { WorkflowsService } from "./services/workflows-service.js";
 
@@ -423,6 +423,9 @@ export class CatamorphicCore {
         onTurnSettled: config.onAgentTurnSettled,
         seedFiles: this.seedFiles,
         standingAgentPrompt: config.standingAgentPrompt,
+        mcpToolNames: (identity, projectId) =>
+          this.triggers.mcpToolNames({ identity, projectId }),
+        appPolicies: this.appPolicies,
       });
     }
   }

@@ -15,7 +15,7 @@ import {
   uploadPluginPayloads,
 } from "@catamorphic/sandbox";
 import type { Kysely, Selectable } from "kysely";
-import { type Identity, scopeCovers } from "../identity.js";
+import { type Identity, identityCovers } from "../identity.js";
 import {
   type AppBundleStore,
   appBundleKey,
@@ -26,7 +26,7 @@ import {
   type AppPoliciesService,
   AppsDisabledError,
 } from "./app-policies-service.js";
-import { assertFullIdentity } from "./artifact-scope.js";
+import { assertBuilder } from "./artifact-scope.js";
 import type { DevSandboxService } from "./dev-sandbox-service.js";
 import { ProjectNotFoundError } from "./projects-service.js";
 
@@ -548,12 +548,11 @@ export class AppsService {
         allowedNetworkOrigins: string[];
       }
   > {
-    // Deliberately NOT assertFullIdentity: viewers land here. Tenant scoping
+    // Deliberately NOT assertBuilder: viewers land here. Tenant scoping
     // still applies through the project join below, and a scoped identity
     // must cover this very app.
     if (
-      args.identity.scope !== undefined &&
-      !scopeCovers(args.identity.scope, {
+      !identityCovers(args.identity, {
         kind: "app",
         projectId: args.projectId,
         name: args.appName,
@@ -907,7 +906,7 @@ export class AppsService {
     identity: Identity,
     projectId: string,
   ): Promise<void> {
-    assertFullIdentity(identity);
+    assertBuilder(identity, projectId);
     const row = await this.db
       .selectFrom("projects")
       .where("id", "=", projectId)

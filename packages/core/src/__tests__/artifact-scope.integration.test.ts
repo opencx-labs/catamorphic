@@ -5,7 +5,8 @@ import { type Identity, narrowIdentity } from "../identity.js";
 import { AppPoliciesService } from "../services/app-policies-service.js";
 import {
   AccessDeniedError,
-  assertFullIdentity,
+  assertBuilder,
+  assertRootIdentity,
   assertScopeAllowsWorkflow,
   resolveScope,
 } from "../services/artifact-scope.js";
@@ -89,8 +90,9 @@ describeIf("artifact scope enforcement", () => {
     await db.destroy();
   });
 
-  it("full identities pass every gate untouched", async () => {
-    expect(() => assertFullIdentity(builder)).not.toThrow();
+  it("root identities pass every gate untouched", async () => {
+    expect(() => assertRootIdentity(builder)).not.toThrow();
+    expect(() => assertBuilder(builder, projectId)).not.toThrow();
     await expect(
       assertScopeAllowsWorkflow({
         db,
@@ -103,12 +105,29 @@ describeIf("artifact scope enforcement", () => {
   });
 
   it("scoped identities are rejected from every project surface", () => {
-    expect(() => assertFullIdentity(viewer)).toThrow(AccessDeniedError);
+    expect(() => assertBuilder(viewer, projectId)).toThrow(AccessDeniedError);
     // Even an empty scope is a scoped identity — a viewer of nothing is
     // still not a builder.
-    expect(() => assertFullIdentity({ ...builder, scope: [] })).toThrow(
+    expect(() => assertBuilder({ ...builder, scope: [] }, projectId)).toThrow(
       AccessDeniedError,
     );
+    expect(() => assertRootIdentity(viewer)).toThrow(AccessDeniedError);
+  });
+
+  it("a project ref makes a scoped identity a builder of that project only (ADR 0055)", async () => {
+    const admin: Identity = {
+      ...builder,
+      externalUserId: "admin",
+      scope: [{ kind: "project", projectId }],
+    };
+    expect(() => assertBuilder(admin, projectId)).not.toThrow();
+    expect(() => assertBuilder(admin, "some-other-project")).toThrow(
+      AccessDeniedError,
+    );
+    // Builders resolve to "everything" — no allowlist at all.
+    expect(await resolveScope({ db, identity: admin, projectId })).toBeNull();
+    // ...but never to tenant-wide operations.
+    expect(() => assertRootIdentity(admin)).toThrow(AccessDeniedError);
   });
 
   it("an app ref allows exactly the active version's frozen set", async () => {

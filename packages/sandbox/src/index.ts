@@ -17,9 +17,13 @@ export {
 export {
   type McpToolPolicy,
   type McpToolPolicyLayers,
+  mergePolicyLayers,
+  narrowingLayer,
+  PROJECT_TOOLS_SERVER_KEY,
   permissionFromAnnotations,
   resolveToolPermission,
   resolveToolPermissionAcross,
+  serverKeyOf,
   stricterPermission,
   type ToolPermission,
   type ToolPermissionDecision,
@@ -40,6 +44,7 @@ export type {
   ExtraTool,
   ExtraToolContext,
   ProviderSession,
+  SessionCaller,
   StartSessionOpts,
   TurnOptions,
 } from "./coding-agent/types.js";

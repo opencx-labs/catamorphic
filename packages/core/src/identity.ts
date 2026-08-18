@@ -16,16 +16,20 @@ export interface Identity {
   tenantId: string;
   externalUserId: string;
   /**
-   * The artifacts this identity may touch. Absent = a full identity: the
-   * whole project surface (files, deploys, secrets, agents, every run
-   * control) — a builder. Present = a scoped identity: it may reach exactly
-   * the listed artifacts (an app and, transitively, the workflows frozen into
-   * its published version; a workflow directly) and nothing else — a viewer.
+   * The artifacts this identity may touch. Absent = the ROOT identity: every
+   * project of the tenant, every surface, the whole store — the desktop's
+   * own local projects and a host's service identity (ADR 0055). Present =
+   * a scoped identity that may reach exactly the listed artifacts and
+   * nothing else: a `project` ref makes it a BUILDER of that project (files,
+   * deploys, secrets, agent definitions, every workflow/app/agent); an
+   * `app`, `workflow` or `agent` ref makes it a VIEWER of that artifact; a
+   * `document` ref grants a file or subtree — and the project store is
+   * reachable ONLY through document refs, builders included.
    *
    * Scope is the *output* of host policy, never its input: the host decides
    * which of its users are builders and which artifacts each viewer is
-   * entitled to (an entitlement table, a role, a workflow that resolves
-   * roles — the host's business), and catamorphic only enforces the result.
+   * entitled to (a role file expanded by `resolveRoles`, an entitlement
+   * table — the host's business), and catamorphic only enforces the result.
    * An empty scope is a valid identity that may do nothing.
    */
   scope?: readonly ArtifactRef[];
@@ -39,7 +43,44 @@ export interface Identity {
  * check time — a retired version can never be named, so it can never be
  * reached (ADR 0036, ADR 0053).
  */
-export type ArtifactRef = AppRef | WorkflowRef | DocumentRef;
+export type ArtifactRef =
+  | ProjectRef
+  | AppRef
+  | WorkflowRef
+  | DocumentRef
+  | AgentRef;
+
+/**
+ * Builder access to one project (ADR 0055): the whole program surface —
+ * files, deploys, secrets, agent definitions, every workflow, app and
+ * agent — but NOT the project store, which only document refs reach.
+ */
+export interface ProjectRef {
+  kind: "project";
+  projectId: string;
+}
+
+/**
+ * A committed project agent (ADR 0050, `agents/<slug>.json`) a scoped
+ * identity may open sessions on. `toolPolicies` is the caller's own
+ * narrowing of that agent's tools (ADR 0055): per server key (a connector's
+ * `serverKeyOf(name)`, or `catamorphic` for the project's workflow tools),
+ * one more layer in the ADR 0054 intersection — it can only narrow.
+ */
+export interface AgentRef {
+  kind: "agent";
+  projectId: string;
+  /** The agent's slug (`agents/<slug>.json`). */
+  name: string;
+  toolPolicies?: Readonly<Record<string, AgentRefToolPolicy>>;
+}
+
+/** Mirrors `@catamorphic/sandbox` `McpToolPolicy`; kept structural here so
+ * identity stays dependency-free. */
+export interface AgentRefToolPolicy {
+  default?: "allow" | "ask" | "deny" | "auto";
+  tools?: Readonly<Record<string, "allow" | "ask" | "deny">>;
+}
 
 export interface AppRef {
   kind: "app";
@@ -66,40 +107,81 @@ export interface WorkflowRef {
 }
 
 /**
- * Reserved for published documents (ADR 0053): a file path in the project,
- * served to an audience. Carried in the type so publications never have to
- * touch `Identity` again; no surface enforces or serves it yet, so a scope
- * holding only document refs allows nothing.
+ * A file or subtree of the project's one path namespace (ADR 0055): a git
+ * path (readable at the deployed commit) or a `store/…` path (the project
+ * store). `path` ending in `/**` covers the subtree; anything else names one
+ * file. `access` defaults to `read`; `write` implies read. Git paths are
+ * always read-only through this ref, whatever `access` says.
  */
 export interface DocumentRef {
   kind: "document";
   projectId: string;
   path: string;
+  access?: "read" | "write";
 }
 
-/** True when the identity is scoped (a viewer) rather than full (a builder). */
+/** True when the identity is scoped rather than root. */
 export function isScoped(identity: Identity): boolean {
   return identity.scope !== undefined;
+}
+
+/**
+ * True when the identity may edit the project's program: the root identity,
+ * or a scoped one holding the project's `project` ref (ADR 0055).
+ */
+export function isBuilder(identity: Identity, projectId: string): boolean {
+  return (
+    identity.scope === undefined ||
+    identity.scope.some(
+      (ref) => ref.kind === "project" && ref.projectId === projectId,
+    )
+  );
 }
 
 /** Structural equality on the fields that identify an artifact. */
 export function sameArtifact(a: ArtifactRef, b: ArtifactRef): boolean {
   if (a.kind !== b.kind || a.projectId !== b.projectId) return false;
   switch (a.kind) {
+    case "project":
+      return true;
     case "app":
       return a.name === (b as AppRef).name;
     case "workflow":
       return a.name === (b as WorkflowRef).name;
+    case "agent":
+      return a.name === (b as AgentRef).name;
     case "document":
       return a.path === (b as DocumentRef).path;
   }
 }
 
-/** Whether a scope (from a scoped identity) contains the given artifact. */
+/** Whether one document ref (an entry of a scope) grants another. */
+export function documentRefCovers(
+  entry: DocumentRef,
+  ref: DocumentRef,
+): boolean {
+  if (entry.projectId !== ref.projectId) return false;
+  if (ref.access === "write" && entry.access !== "write") return false;
+  if (entry.path.endsWith("/**")) {
+    const prefix = entry.path.slice(0, -2); // keep the trailing slash
+    return ref.path === prefix.slice(0, -1) || ref.path.startsWith(prefix);
+  }
+  return entry.path === ref.path;
+}
+
+/**
+ * Whether a scope (from a scoped identity) contains the given artifact.
+ * Document refs cover by subtree and access; every other kind by identity.
+ */
 export function scopeCovers(
   scope: readonly ArtifactRef[],
   ref: ArtifactRef,
 ): boolean {
+  if (ref.kind === "document") {
+    return scope.some(
+      (entry) => entry.kind === "document" && documentRefCovers(entry, ref),
+    );
+  }
   return scope.some((entry) => sameArtifact(entry, ref));
 }
 
@@ -108,9 +190,10 @@ export function scopeCovers(
  * artifact-scoped surface (an app's routes, an app's MCP endpoint) applies
  * structurally to whoever arrives:
  *
- * - a full identity becomes scoped to exactly that artifact (a builder using
- *   their own app is confined to it while inside it — the untrusted bundle
- *   never inherits project access, ADR 0036);
+ * - a builder (root, or holding the project ref) becomes scoped to exactly
+ *   that artifact (a builder using their own app is confined to it while
+ *   inside it — the untrusted bundle never inherits project access, ADR
+ *   0036);
  * - a scoped identity that covers the artifact is narrowed to it;
  * - a scoped identity that does not cover it gets an empty scope and can do
  *   nothing on that surface.
@@ -118,11 +201,18 @@ export function scopeCovers(
  * Narrowing can only ever shrink access, so it is always safe to apply.
  */
 export function narrowIdentity(identity: Identity, ref: ArtifactRef): Identity {
-  const scope =
-    identity.scope === undefined || scopeCovers(identity.scope, ref)
-      ? [ref]
-      : [];
-  return { ...identity, scope };
+  return { ...identity, scope: identityCovers(identity, ref) ? [ref] : [] };
+}
+
+/**
+ * Whether an identity may reach an artifact: builders of the project reach
+ * every artifact in it; scoped identities exactly what their scope covers.
+ */
+export function identityCovers(identity: Identity, ref: ArtifactRef): boolean {
+  return (
+    isBuilder(identity, ref.projectId) ||
+    (identity.scope !== undefined && scopeCovers(identity.scope, ref))
+  );
 }
 
 export type TenantId = string;

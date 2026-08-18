@@ -1,7 +1,7 @@
 import type { DB } from "@catamorphic/db";
 import type { Kysely } from "kysely";
 import type { Identity } from "../identity.js";
-import { assertFullIdentity } from "./artifact-scope.js";
+import { assertBuilder } from "./artifact-scope.js";
 import {
   type PluginsService,
   UndeclaredSecretError,
@@ -117,7 +117,7 @@ export class SecretsService {
     projectId: string;
     environment: SecretEnvironment;
   }): Promise<SecretStatus[]> {
-    assertFullIdentity(opts.identity);
+    assertBuilder(opts.identity, opts.projectId);
     const { identity, projectId, environment } = opts;
     await requireTenantProject(this.db, identity, projectId);
     const declared = await this.declaredSecrets({ identity, projectId });
@@ -154,7 +154,7 @@ export class SecretsService {
     name: string;
     value: string;
   }): Promise<SecretStatus> {
-    assertFullIdentity(opts.identity);
+    assertBuilder(opts.identity, opts.projectId);
     const { identity, projectId, environment, name, value } = opts;
     await requireTenantProject(this.db, identity, projectId);
     const declared = await this.declaredSecrets({ identity, projectId });
@@ -198,7 +198,7 @@ export class SecretsService {
     environment: SecretEnvironment;
     name: string;
   }): Promise<boolean> {
-    assertFullIdentity(opts.identity);
+    assertBuilder(opts.identity, opts.projectId);
     const { identity, projectId, environment, name } = opts;
     await requireTenantProject(this.db, identity, projectId);
     const result = await this.db

@@ -486,14 +486,22 @@ workflows and nothing else. Nothing about users, roles, or OAuth enters
 catamorphic — the host resolves *who* and *what they are entitled to*;
 catamorphic enforces it. Full contract: ADR 0053.
 
-Vocabulary: an identity is **full** (no `scope`: a builder, whole project
-surface) or **scoped** (`scope: ArtifactRef[]`: a viewer of exactly those
-artifacts). Refs are by name, never by id:
+Vocabulary: an identity is **root** (no `scope`: every project, every
+surface — a service identity or the desktop's own local projects) or
+**scoped** (`scope: ArtifactRef[]`: exactly those artifacts). Refs are by
+name, never by id (ADR 0053, ADR 0055):
 
 ```ts
-{ kind: "app", projectId, name }        // the app's document + its active version's frozen workflow set
-{ kind: "workflow", projectId, name }   // one workflow directly (a customer-facing tool)
+{ kind: "project", projectId }                    // builder of that project (files, deploys, secrets, agents, everything but the store)
+{ kind: "app", projectId, name }                  // the app's document + its active version's frozen workflow set
+{ kind: "workflow", projectId, name }             // one workflow directly (a customer-facing tool)
+{ kind: "agent", projectId, name, toolPolicies? } // chat with the committed project agent agents/<name>.json; own sessions only
+{ kind: "document", projectId, path, access? }    // a file or "dir/**" subtree; store/… paths are reachable only this way
 ```
+
+Employees who administer the brain are `project` refs, not root: root is
+for the host's own service calls. Members who only *use* the brain get
+`agent` + `workflow` + `document` refs (see "Roles" below).
 
 1. **Entitlement table in the host's DB** — keyed the way refs are:
 
@@ -516,7 +524,9 @@ artifacts). Refs are by name, never by id:
        const session = await verifySession(request);
        if (!session) return null;
        const base = { tenantId: HOST_ORG_ID, externalUserId: session.userId };
-       if (session.isEmployee) return base; // builder
+       if (session.isEmployee) {
+         return { ...base, scope: [{ kind: "project" as const, projectId: BRAIN_PROJECT_ID }] }; // builder
+       }
        const grants = await db.query(
          "select project_id, app_name from customer_app_grants where customer_user_id = $1",
          [session.userId],
@@ -557,8 +567,8 @@ What the customer can and cannot do, without any further host code:
 - a forged or stale request cannot widen anything: an app the resolver did
   not grant narrows to an empty scope, a retired version cannot be named.
 
-Employees keep full identities and, while inside an app, are confined to it
-too (defence in depth against the untrusted bundle).
+Employees keep builder identities and, while inside an app, are confined to
+it too (defence in depth against the untrusted bundle).
 
 The SDK path is the same shape:
 `catamorphic.forTenant({ tenantId }).forUser({ externalUserId, scope })`.

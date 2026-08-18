@@ -1,6 +1,6 @@
 import type { DB } from "@catamorphic/db";
 import type { Kysely } from "kysely";
-import { type Identity, scopeCovers } from "../identity.js";
+import { type Identity, identityCovers } from "../identity.js";
 import { AppNotFoundError } from "./apps-service.js";
 
 /**
@@ -85,10 +85,7 @@ export class AppStorageService {
   }
 
   private appRow(identity: Identity, projectId: string, appName: string) {
-    if (
-      identity.scope !== undefined &&
-      !scopeCovers(identity.scope, { kind: "app", projectId, name: appName })
-    ) {
+    if (!identityCovers(identity, { kind: "app", projectId, name: appName })) {
       return Promise.resolve(undefined);
     }
     return this.db
