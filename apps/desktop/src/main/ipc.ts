@@ -938,12 +938,16 @@ export function registerIpcHandlers(
   ) => {
     const server = state.current;
     if (!server) return;
-    const touchedProgram = [...report.pulled, ...report.removed].some(
+    // Only the files the sync touched: the user's own uncommitted work
+    // stays theirs, never swept into a "Sync from server" commit.
+    const touched = [...report.pulled, ...report.removed].filter(
       (file) => !file.startsWith("store/"),
     );
-    if (!touchedProgram) return;
+    if (touched.length === 0) return;
     await server.catamorphic.core.projects
-      .commitAll(identity, projectId, "Sync from server")
+      .commitAll(identity, projectId, "Sync from server", undefined, {
+        paths: touched,
+      })
       .catch(() => {});
   };
   const requireRoot = async (projectId: string) => {

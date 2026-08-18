@@ -38,6 +38,7 @@ import type {
 import type { DevSandboxService } from "./dev-sandbox-service.js";
 import type { DocumentsService } from "./documents-service.js";
 import type { PluginsService } from "./plugins-service.js";
+import { PROGRAM_READER } from "./program-reader.js";
 import { ProjectNotFoundError } from "./projects-service.js";
 import { type SyncedFileChange, syncSandboxChanges } from "./sandbox-sync.js";
 import {
@@ -960,7 +961,7 @@ export class AgentSessionsService {
         ? { effort: session.model_effort as AgentEffort }
         : {}),
       ...(attachments ? { attachments } : {}),
-      ...(callerLayers ? { toolPolicies: callerLayers } : {}),
+      toolPolicies: callerLayers ?? {},
     };
 
     // Persist the user message and the in-progress placeholder BEFORE the
@@ -1074,7 +1075,9 @@ export class AgentSessionsService {
       if (storeDir) {
         await syncRemoteProject(
           storeDir,
-          documentsClientFor(this.storeSync!.documents, identity, projectId),
+          documentsClientFor(this.storeSync!.documents, identity, projectId, {
+            source: "store",
+          }),
         ).catch((error) => {
           console.warn(
             `[catamorphic] store pull before turn failed: ${
@@ -1188,7 +1191,9 @@ export class AgentSessionsService {
         try {
           const report = await shipRemoteProject(
             storeDir,
-            documentsClientFor(this.storeSync!.documents, identity, projectId),
+            documentsClientFor(this.storeSync!.documents, identity, projectId, {
+              source: "store",
+            }),
           );
           if (
             report.shipped.length +
@@ -1712,10 +1717,13 @@ export class AgentSessionsService {
    * clean or the commit failed — a checkpoint must never break a turn.
    */
   /**
-   * The folder whose `store/` mirrors the caller's store view: the host
-   * project path for host-execution agents, the caller's dev copy for
-   * sandbox agents (their edits sync back into it). Null when the host did
-   * not enable store sync.
+   * The folder whose `store/` mirrors the caller's store view: the caller's
+   * own dev copy, which sandbox agents' edits sync back into. Host-execution
+   * agents work in ONE folder per project shared by every caller, so their
+   * store/ is never synced (one member's pulled files would be readable by
+   * the next member's agent, and ships would carry the wrong author) —
+   * they reach the store through the `documents_*` tools instead. Null when
+   * the host did not enable store sync.
    */
   private async storeSyncDir(
     identity: Identity,
@@ -1723,9 +1731,7 @@ export class AgentSessionsService {
     anchor: { providerSession: ProviderSession; sandboxProviderId?: string },
   ): Promise<string | null> {
     if (!this.storeSync) return null;
-    if (!anchor.sandboxProviderId) {
-      return anchor.providerSession.workingDirectory || null;
-    }
+    if (!anchor.sandboxProviderId) return null;
     const repo = await this.projectManager.openDev(
       identity.tenantId,
       projectId,
@@ -1833,23 +1839,31 @@ export class AgentSessionsService {
       .map((ref) => `project:${projectId}:${ref.name}`);
   }
 
-  /** The scope entry that covers this agent id, for a scoped caller. */
-  private coveringAgentRef(
+  /** Every scope entry that covers this agent id, for a scoped caller. */
+  private coveringAgentRefs(
     identity: Identity,
     projectId: string,
     agentId: string | null,
-  ): AgentRef | undefined {
-    if (!agentId || !identity.scope) return undefined;
+  ): AgentRef[] {
+    if (!agentId || !identity.scope) return [];
     const parsed = parseProjectAgentId(agentId);
-    if (!parsed || parsed.projectId !== projectId) return undefined;
+    if (!parsed || parsed.projectId !== projectId) return [];
     const ref: AgentRef = { kind: "agent", projectId, name: parsed.slug };
-    if (!scopeCovers(identity.scope, ref)) return undefined;
-    return identity.scope.find(
+    if (!scopeCovers(identity.scope, ref)) return [];
+    return identity.scope.filter(
       (entry): entry is AgentRef =>
         entry.kind === "agent" &&
         entry.projectId === projectId &&
         entry.name === parsed.slug,
     );
+  }
+
+  private coveringAgentRef(
+    identity: Identity,
+    projectId: string,
+    agentId: string | null,
+  ): AgentRef | undefined {
+    return this.coveringAgentRefs(identity, projectId, agentId)[0];
   }
 
   /**
@@ -1885,36 +1899,49 @@ export class AgentSessionsService {
     agentId: string | null,
   ): Promise<Record<string, McpToolPolicyLayers> | undefined> {
     if (isBuilder(identity, projectId)) return undefined;
-    const ref = this.coveringAgentRef(identity, projectId, agentId);
-    if (!ref) throw new AccessDeniedError();
+    const refs = this.coveringAgentRefs(identity, projectId, agentId);
+    if (refs.length === 0) throw new AccessDeniedError();
     const layers: Record<string, McpToolPolicyLayers> = {};
 
+    // The project tools server serves the workflow tools AND the documents /
+    // skills / publications / proposals / ask_agent surface, each of which
+    // authorizes itself against the caller's scope. This layer therefore
+    // denies only the WORKFLOW tools the scope does not resolve to and lets
+    // everything else through to the endpoint's own checks.
     const resolved = await resolveScope({
       db: this.db,
       identity,
       projectId,
       policies: this.appPolicies,
     });
-    const tools: Record<string, ToolPermission> = {
-      catamorphic_poll_run: "allow",
-    };
     if (resolved && this.mcpToolNames) {
-      const roster = await this.mcpToolNames(identity, projectId);
+      // The roster is read as the shared program reader: a viewer must not
+      // get a working copy of the project just to learn the tool names.
+      const roster = await this.mcpToolNames(
+        { tenantId: identity.tenantId, externalUserId: PROGRAM_READER },
+        projectId,
+      );
+      const tools: Record<string, ToolPermission> = {};
       for (const [tool, workflow] of roster) {
-        if (resolved.allowedWorkflows.has(workflow)) tools[tool] = "allow";
+        if (!resolved.allowedWorkflows.has(workflow)) tools[tool] = "deny";
       }
+      layers[PROJECT_TOOLS_SERVER_KEY] = [{ default: "allow", tools }];
     }
-    layers[PROJECT_TOOLS_SERVER_KEY] = [{ default: "deny", tools }];
 
-    for (const [name, policy] of Object.entries(ref.toolPolicies ?? {})) {
-      const key = name === PROJECT_TOOLS_SERVER_KEY ? name : serverKeyOf(name);
-      layers[key] = [
-        ...(layers[key] ?? []),
-        narrowingLayer({
-          ...(policy.default ? { default: policy.default } : {}),
-          ...(policy.tools ? { tools: { ...policy.tools } } : {}),
-        }),
-      ];
+    // Every covering ref contributes its narrowing (two roles naming the
+    // same agent intersect: the strictest answer wins, order-independent).
+    for (const ref of refs) {
+      for (const [name, policy] of Object.entries(ref.toolPolicies ?? {})) {
+        const key =
+          name === PROJECT_TOOLS_SERVER_KEY ? name : serverKeyOf(name);
+        layers[key] = [
+          ...(layers[key] ?? []),
+          narrowingLayer({
+            ...(policy.default ? { default: policy.default } : {}),
+            ...(policy.tools ? { tools: { ...policy.tools } } : {}),
+          }),
+        ];
+      }
     }
     return layers;
   }
@@ -1933,7 +1960,10 @@ export class AgentSessionsService {
       projectId,
       agentId,
     );
-    return { caller: identity, ...(toolPolicies ? { toolPolicies } : {}) };
+    // Builders send an EMPTY map, not none: a turn's layers replace the
+    // session's, so a builder continuing a viewer's session sheds the
+    // viewer's narrowing instead of inheriting it.
+    return { caller: identity, toolPolicies: toolPolicies ?? {} };
   }
 
   /** Ownership check without loading messages: throws when the session

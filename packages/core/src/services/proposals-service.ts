@@ -6,7 +6,7 @@ import {
   pushToRemote,
 } from "@catamorphic/git";
 import type { Kysely } from "kysely";
-import { authorFor, type Identity, isBuilder } from "../identity.js";
+import { authorFor, type Identity, mayUseProject } from "../identity.js";
 import { AccessDeniedError } from "./artifact-scope.js";
 import type { CodeHost } from "./code-host.js";
 import {
@@ -52,6 +52,15 @@ export interface ProposeInput {
 /** The working copy proposals are built in — one per project, never a member's. */
 const PROPOSALS_WORKER = "catamorphic-proposals";
 
+export class ProposalsUnsupportedError extends Error {
+  constructor() {
+    super(
+      "Proposals need a shared origin: this host keeps projects as plain folders, so there is no branch to propose onto",
+    );
+    this.name = "ProposalsUnsupportedError";
+  }
+}
+
 export class ProposalsService {
   private readonly queues = new Map<string, Promise<unknown>>();
 
@@ -69,6 +78,11 @@ export class ProposalsService {
   async propose(input: ProposeInput): Promise<ProposalResult> {
     const { identity, projectId } = input;
     if (!mayPropose(identity, projectId)) throw new AccessDeniedError();
+    // The worker copy is only dedicated on backends that keep per-user
+    // working copies; on a pathResolver backend (the desktop) openDev
+    // resolves to the user's own folder, which we must never reset.
+    if (!this.projectManager.remoteBackend)
+      throw new ProposalsUnsupportedError();
     const project = await this.db
       .selectFrom("projects")
       .where("id", "=", projectId)
@@ -126,18 +140,17 @@ export class ProposalsService {
     try {
       // Start from the program as shared: origin main (the internal origin,
       // kept converged with the code host by remote sync).
-      if (remote) {
-        await fetchRemote({
-          dev,
-          remote,
-          tenantId: identity.tenantId,
-          projectId,
-          remoteBranch: "main",
-        });
-      }
-      const base = remote
-        ? await dev.resolveRef("refs/remotes/origin/main").catch(() => "HEAD")
-        : "HEAD";
+      if (!remote) throw new ProposalsUnsupportedError();
+      await fetchRemote({
+        dev,
+        remote,
+        tenantId: identity.tenantId,
+        projectId,
+        remoteBranch: "main",
+      });
+      const base = await dev
+        .resolveRef("refs/remotes/origin/main")
+        .catch(() => "HEAD");
       await dev.resetWorkingTree();
       await dev.createBranch(branch, base);
       for (const change of args.changes) {
@@ -191,7 +204,7 @@ export class ProposalsService {
               .trim(),
           });
         }
-      } else if (remote) {
+      } else {
         await push({
           dev,
           remote,
@@ -211,10 +224,7 @@ export class ProposalsService {
 }
 
 /** Anyone who uses the project may propose: builders and members alike. */
-export function mayPropose(identity: Identity, projectId: string): boolean {
-  if (isBuilder(identity, projectId)) return true;
-  return (identity.scope ?? []).some((ref) => ref.projectId === projectId);
-}
+export const mayPropose = mayUseProject;
 
 /** `proposals/<user>/<title-slug>-<yyyymmdd-hhmmss>` */
 export function proposalBranch(

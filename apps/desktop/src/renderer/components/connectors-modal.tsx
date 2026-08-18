@@ -112,19 +112,24 @@ export function ConnectorsModal({
     return () => cancelAnimationFrame(frame);
   }, [open]);
 
-  // An agent request seeds the search ONCE per open — after that the box
-  // is the user's; re-renders must not clobber their typing.
-  const seededRef = useRef(false);
+  // An agent request seeds the search ONCE per request — after that the
+  // box is the user's; re-renders, and the OAuth step-aside/return (which
+  // toggles `open` without the user closing), must not clobber their
+  // typing. Keyed on the request's content, so a NEW request seeds again
+  // and the same one never re-seeds; no request (closed for good) forgets.
+  const seededForRef = useRef<string | null>(null);
+  const requestKey = agentRequest
+    ? `${agentRequest.query}\u0000${agentRequest.reason ?? ""}`
+    : null;
   useEffect(() => {
-    if (!open) {
-      seededRef.current = false;
+    if (!agentRequest) {
+      seededForRef.current = null;
       return;
     }
-    if (agentRequest && !seededRef.current) {
-      seededRef.current = true;
-      setQuery(agentRequest.query);
-    }
-  }, [open, agentRequest]);
+    if (!open || seededForRef.current === requestKey) return;
+    seededForRef.current = requestKey;
+    setQuery(agentRequest.query);
+  }, [open, agentRequest, requestKey]);
 
   // Live search in two halves, each landing on its own: plugins answer
   // from cached marketplaces on every keystroke (no debounce — it's a
@@ -292,8 +297,11 @@ export function ConnectorsModal({
         connection.source.kind === "registry" &&
         connection.source.registryName === name,
     );
-  const pluginInstalled = (name: string) =>
-    installed.some((connector) => connector.name === name);
+  const pluginInstalled = (marketplace: string, name: string) =>
+    installed.some(
+      (connector) =>
+        connector.name === name && connector.marketplace === marketplace,
+    );
 
   // One merged result list, officials first (no install counts exist to
   // rank by), each kind keeping its own row rendering. Rows glide/fade
@@ -766,7 +774,10 @@ export function ConnectorsModal({
                       pending={
                         busy === `${row.entry.marketplace}#${row.entry.name}`
                       }
-                      done={pluginInstalled(row.entry.name)}
+                      done={pluginInstalled(
+                        row.entry.marketplace,
+                        row.entry.name,
+                      )}
                       doneLabel="Installed"
                       onClick={() =>
                         void installPlugin(

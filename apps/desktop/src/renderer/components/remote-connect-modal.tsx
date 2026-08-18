@@ -70,11 +70,20 @@ export function RemoteConnectModal({
     if (picked) setParentDir(picked);
   };
 
-  const folderName = name
-    .trim()
-    .toLowerCase()
-    .replace(/[^a-z0-9._-]+/g, "-")
-    .replace(/^-+|-+$/g, "");
+  // Folder names are ASCII-safe slugs; a name with no ASCII (a non-Latin
+  // project name) falls back to the remote id so Connect never dead-ends.
+  const folderName =
+    name
+      .trim()
+      .toLowerCase()
+      .replace(/[^a-z0-9._-]+/g, "-")
+      .replace(/^-+|-+$/g, "") ||
+    remoteProjectId
+      .trim()
+      .toLowerCase()
+      .replace(/[^a-z0-9._-]+/g, "-")
+      .replace(/^-+|-+$/g, "") ||
+    "remote-project";
   const targetPath =
     parentDir && folderName ? `${parentDir}/${folderName}` : null;
   const canSubmit =

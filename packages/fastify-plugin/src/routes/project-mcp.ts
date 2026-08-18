@@ -99,13 +99,18 @@ export function registerProjectMcpRoutes(
           return {};
         case "tools/list": {
           const tools = await loadProjectTools(core, identity, projectId);
+          // A workflow tool that claims a surface name wins the name (the
+          // project chose it); the surface tool steps aside for this project.
+          const taken = new Set(tools.map((tool) => tool.name));
           return {
             tools: [
               ...tools.map(toolDefinition),
               ...(tools.length > 0 || core.mcpToolKinds.length > 0
                 ? [POLL_RUN_TOOL_DEFINITION]
                 : []),
-              ...surface.map((tool) => tool.definition),
+              ...surface
+                .filter((tool) => !taken.has(String(tool.definition.name)))
+                .map((tool) => tool.definition),
             ],
           };
         }
@@ -121,9 +126,14 @@ export function registerProjectMcpRoutes(
             typeof params.arguments === "object" && params.arguments !== null
               ? (params.arguments as Record<string, unknown>)
               : {};
-          const surfaced = surface.find(
-            (tool) => tool.definition.name === name,
+          const workflowTools = await loadProjectTools(
+            core,
+            identity,
+            projectId,
           );
+          const surfaced = workflowTools.some((tool) => tool.name === name)
+            ? undefined
+            : surface.find((tool) => tool.definition.name === name);
           if (surfaced) return surfaced.call(args);
           return callTool(core, identity, projectId, name, args);
         }

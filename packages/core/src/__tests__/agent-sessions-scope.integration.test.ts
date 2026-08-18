@@ -241,17 +241,11 @@ describeIf("scoped agent sessions (ADR 0055)", () => {
     const start = csm.starts.at(-1);
     if (!start) throw new Error("provider never started");
     expect(start.caller).toEqual(viewer);
-    // Project tools server: everything off except the scope's workflows,
-    // by TOOL name; the shared poll tool stays reachable.
+    // Project tools server: only the WORKFLOW tools outside the scope are
+    // denied (by TOOL name); the documents/skills/ask surface and the poll
+    // tool authorize themselves at the endpoint and stay reachable.
     expect(start.toolPolicies?.catamorphic).toEqual([
-      {
-        default: "deny",
-        tools: {
-          catamorphic_poll_run: "allow",
-          crm_lookup: "allow",
-          docs_search: "allow",
-        },
-      },
+      { default: "allow", tools: { crm_update: "deny" } },
     ]);
     // The agent ref's own narrowing, keyed by normalized server key, with
     // narrowing-layer semantics (explicit default kept).
@@ -269,8 +263,9 @@ describeIf("scoped agent sessions (ADR 0055)", () => {
     await sessions.sendMessage(admin, projectId, session.id, "hi");
     const start = sales.starts.at(-1);
     expect(start?.caller).toEqual(admin);
-    expect(start?.toolPolicies).toBeUndefined();
-    expect(sales.turns.at(-1)?.toolPolicies).toBeUndefined();
+    // An EMPTY map, not none: it replaces whatever a previous caller left.
+    expect(start?.toolPolicies).toEqual({});
+    expect(sales.turns.at(-1)?.toolPolicies).toEqual({});
   });
 
   it("revoking the agent from the scope closes the door mid-conversation", async () => {

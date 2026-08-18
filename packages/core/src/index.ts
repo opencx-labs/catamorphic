@@ -20,6 +20,7 @@ export {
   identityCovers,
   isBuilder,
   isScoped,
+  mayUseProject,
   narrowIdentity,
   type ProjectRef,
   SYSTEM_AUTHOR,
@@ -204,6 +205,7 @@ export {
   PluginsService,
   UndeclaredSecretError,
 } from "./services/plugins-service.js";
+export { forgetProgramFetch } from "./services/program-reader.js";
 export {
   type CreateProjectInput,
   type ListProjectsInput,
@@ -223,6 +225,7 @@ export {
   mayPropose,
   type ProposalResult,
   ProposalsService,
+  ProposalsUnsupportedError,
   type ProposedChange,
   type ProposeInput,
   proposalBranch,
@@ -231,6 +234,8 @@ export {
   type Publication,
   type PublicationAudience,
   PublicationNotFoundError,
+  PublicationSlugError,
+  PublicationSlugTakenError,
   PublicationsService,
 } from "./services/publications-service.js";
 export {

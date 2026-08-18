@@ -217,6 +217,8 @@ const api = {
     ipcRenderer.invoke("catamorphic:remote-renew", projectId),
   remoteDisconnect: (projectId: string): Promise<void> =>
     ipcRenderer.invoke("catamorphic:remote-disconnect", projectId),
+  remoteTakePendingLink: (): Promise<string | null> =>
+    ipcRenderer.invoke("catamorphic:remote-take-pending-link"),
   onConnectLink: (listener: (link: string) => void): (() => void) => {
     const handler = (_event: unknown, link: string) => listener(link);
     ipcRenderer.on("catamorphic:connect-link", handler);

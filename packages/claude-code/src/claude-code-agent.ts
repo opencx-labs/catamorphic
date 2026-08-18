@@ -369,6 +369,13 @@ export class ClaudeCodeAgent implements CodingAgentProvider {
     // parked canUseTool promise resolves with the user's answers, the tool
     // returns them, and the model continues on the SAME stream — this
     // (answer) turn simply keeps draining it.
+    // The turn's caller layers replace the session's before anything else —
+    // including the answer-to-a-parked-question path below, so a grant
+    // revoked between question and answer applies to the rest of the turn.
+    if (opts?.toolPolicies) {
+      const existing = this.sessions.get(providerSessionId);
+      if (existing) existing.callerPolicies = opts.toolPolicies;
+    }
     const awaiting = this.awaitingAnswers.get(providerSessionId);
     if (awaiting) {
       this.awaitingAnswers.delete(providerSessionId);

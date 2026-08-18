@@ -608,15 +608,20 @@ export function App() {
     null,
   );
   const [remotePropose, setRemotePropose] = useState<string[] | null>(null);
-  useEffect(
-    () =>
-      desktopApi.onConnectLink((raw) => {
+  useEffect(() => {
+    // Pull the pending link on mount (cold launch from an invite) and
+    // whenever main nudges; main clears it once taken.
+    const take = () => {
+      void desktopApi.remoteTakePendingLink().then((raw) => {
+        if (!raw) return;
         void desktopApi.remoteParseLink(raw).then((link) => {
           if (link) setRemoteConnect({ open: true, link });
         });
-      }),
-    [],
-  );
+      });
+    };
+    take();
+    return desktopApi.onConnectLink(take);
+  }, []);
   const [deletingProject, setDeletingProject] = useState<ProjectSummary | null>(
     null,
   );
@@ -2528,16 +2533,6 @@ export function App() {
     "manage-connectors": () => setConnectorsModalOpen(true),
     "connect-remote-project": () =>
       setRemoteConnect({ open: true, link: null }),
-    "remote-sync": () => {
-      if (projectId) {
-        void desktopApi.remoteSync(projectId).catch(() => {});
-      }
-    },
-    "remote-ship": () => {
-      if (projectId) {
-        void desktopApi.remoteShip(projectId).catch(() => {});
-      }
-    },
   };
   const actionHandlersRef = useRef(actionHandlers);
   actionHandlersRef.current = actionHandlers;

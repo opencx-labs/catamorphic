@@ -344,13 +344,14 @@ export class DesktopAgentRegistry implements CodingAgentRegistry {
     config: AgentConfig,
     profileId: string,
   ): Pick<ResolvedMcp, "policies" | "annotations" | "connectionIds"> {
+    // The profile store's copy is the live one for profile agents (a
+    // cleared policy is a real edit — no fallback to the build-time copy);
+    // project agents are not in that store and carry their definition's
+    // policies, which are part of their cache key so an edit rebuilds.
     const latest =
       this.deps.profileConfig.forProfile(profileId).agents.get(config.id) ??
       config;
-    const mcp = this.resolveMcp(
-      { ...latest, toolPolicies: latest.toolPolicies ?? config.toolPolicies },
-      profileId,
-    );
+    const mcp = this.resolveMcp(latest, profileId);
     return {
       policies: mcp.policies,
       annotations: mcp.annotations,
@@ -546,6 +547,9 @@ export class DesktopAgentRegistry implements CodingAgentRegistry {
       apiKey: config.apiKey,
       source,
       rootPath,
+      // Committed toolPolicies are outside the consent hash (they only
+      // narrow) but must reach a running provider: key on them too.
+      toolPolicies: def.toolPolicies ?? null,
       mcp: { servers: mcp.servers, plugins: mcp.plugins },
     });
     const cached = this.cache.get(id);

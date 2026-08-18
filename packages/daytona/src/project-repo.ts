@@ -99,6 +99,25 @@ export class DaytonaProjectRepo implements ProjectRepo {
     return result.result.split("\n").filter(Boolean).sort();
   }
 
+  // Sandbox command output is text: binaries round-trip as UTF-8 here (a
+  // known limit of the remote-sandbox storage; program binaries are rare).
+  async readBlobAtRef(
+    ref: string,
+    filePath: string,
+  ): Promise<Uint8Array | null> {
+    const files = await this.readTreeAtRef(ref, filePath);
+    const text = files[filePath];
+    return text === undefined ? null : new TextEncoder().encode(text);
+  }
+
+  async readFileBytes(filePath: string): Promise<Uint8Array | null> {
+    try {
+      return new TextEncoder().encode(await this.readFile(filePath));
+    } catch {
+      return null;
+    }
+  }
+
   async listBlobsAtRef(
     ref: string,
     opts?: { prefix?: string },
@@ -146,9 +165,10 @@ export class DaytonaProjectRepo implements ProjectRepo {
   async commit(
     message: string,
     author: { name: string; email: string },
+    opts?: { paths?: readonly string[] },
   ): Promise<string> {
     const sandbox = await this.getSandbox();
-    await sandbox.git.add(this.repoPath, ["."]);
+    await sandbox.git.add(this.repoPath, opts?.paths ? [...opts.paths] : ["."]);
     const commitResult = await sandbox.git.commit(
       this.repoPath,
       message,

@@ -389,6 +389,7 @@ export class ProjectsService {
     projectId: string,
     message: string,
     author = SYSTEM_AUTHOR,
+    opts?: { paths?: readonly string[] },
   ): Promise<string> {
     await this.requireExists(identity, projectId);
     const repo = await this.projectManager.openDev(
@@ -399,7 +400,7 @@ export class ProjectsService {
     try {
       const status = await repo.status();
       if (!status.dirty) return await repo.resolveRef("HEAD");
-      return await repo.commit(message, author);
+      return await repo.commit(message, author, opts);
     } finally {
       await repo.dispose();
     }

@@ -235,30 +235,6 @@ export const BUILTIN_ACTIONS = [
     ],
   },
   {
-    id: "remote-sync",
-    label: "Sync from server",
-    description:
-      "pull the latest documents from the server into this remote project",
-    defaultBinding: null,
-    keywords: ["remote", "server", "sync", "pull", "refresh", "download"],
-  },
-  {
-    id: "remote-ship",
-    label: "Ship changes to server",
-    description:
-      "push this project's local store edits to the server (version-checked)",
-    defaultBinding: null,
-    keywords: [
-      "remote",
-      "server",
-      "ship",
-      "push",
-      "upload",
-      "publish",
-      "store",
-    ],
-  },
-  {
     id: "manage-connectors",
     label: "Manage connectors…",
     description:

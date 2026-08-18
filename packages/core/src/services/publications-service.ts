@@ -1,7 +1,12 @@
 import { randomBytes } from "node:crypto";
 import type { DB } from "@catamorphic/db";
 import type { Kysely } from "kysely";
-import { type DocumentRef, type Identity, isBuilder } from "../identity.js";
+import {
+  type DocumentRef,
+  type Identity,
+  isBuilder,
+  mayUseProject,
+} from "../identity.js";
 import { AccessDeniedError } from "./artifact-scope.js";
 import {
   documentAccessAllowed,
@@ -31,6 +36,21 @@ export interface Publication {
   createdBy: string;
   createdAt: string;
   revokedAt: string | null;
+}
+
+export class PublicationSlugError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "PublicationSlugError";
+  }
+}
+
+/** The slug is already used in this project (revoked ones keep theirs). */
+export class PublicationSlugTakenError extends Error {
+  constructor(readonly slug: string) {
+    super(`Publication slug '${slug}' is already used in this project`);
+    this.name = "PublicationSlugTakenError";
+  }
 }
 
 export class PublicationNotFoundError extends Error {
@@ -66,22 +86,27 @@ export class PublicationsService {
     if (!mayPublish) throw new AccessDeniedError();
     const slug = input.slug ?? randomSlug();
     if (!SLUG_PATTERN.test(slug)) {
-      throw new Error(
+      throw new PublicationSlugError(
         "Publication slug must be 1-64 letters, digits, '.', '_' or '-'",
       );
     }
-    const row = await this.db
-      .insertInto("publications")
-      .values({
-        project_id: projectId,
-        slug,
-        path,
-        audience: input.audience,
-        created_by: identity.externalUserId,
-      })
-      .returningAll()
-      .executeTakeFirstOrThrow();
-    return mapPublication(row);
+    try {
+      const row = await this.db
+        .insertInto("publications")
+        .values({
+          project_id: projectId,
+          slug,
+          path,
+          audience: input.audience,
+          created_by: identity.externalUserId,
+        })
+        .returningAll()
+        .executeTakeFirstOrThrow();
+      return mapPublication(row);
+    } catch (error) {
+      if (isUniqueViolation(error)) throw new PublicationSlugTakenError(slug);
+      throw error;
+    }
   }
 
   /** Builders see every publication; members their own. */
@@ -180,10 +205,7 @@ export class PublicationsService {
       };
     }
     if (!input.caller || input.caller.tenantId !== row.tenant_id) return null;
-    const mayUse =
-      input.caller.scope === undefined ||
-      input.caller.scope.some((r) => r.projectId === input.projectId);
-    if (!mayUse) return null;
+    if (!mayUseProject(input.caller, input.projectId)) return null;
     return {
       identity: { ...input.caller, scope: [ref] },
       path: row.path,
@@ -203,6 +225,14 @@ export class PublicationsService {
       .executeTakeFirst();
     if (!row) throw new ProjectNotFoundError(projectId);
   }
+}
+
+function isUniqueViolation(error: unknown): boolean {
+  return (
+    typeof error === "object" &&
+    error !== null &&
+    (error as { code?: unknown }).code === "23505"
+  );
 }
 
 function randomSlug(): string {

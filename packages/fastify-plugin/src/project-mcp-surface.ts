@@ -2,6 +2,7 @@ import type { CatamorphicCore, Identity } from "@catamorphic/core";
 import {
   AccessDeniedError,
   isBuilder,
+  mayUseProject,
   projectAgentId,
   resolveScope,
 } from "@catamorphic/core";
@@ -30,17 +31,7 @@ export interface SurfaceTool {
   call: (args: Record<string, unknown>) => Promise<Record<string, unknown>>;
 }
 
-/** Whether this identity may use the project at all (documents/skills/agents). */
-export function mayUseProject(identity: Identity, projectId: string): boolean {
-  if (isBuilder(identity, projectId)) return true;
-  return (identity.scope ?? []).some(
-    (ref) =>
-      ref.projectId === projectId &&
-      (ref.kind === "agent" ||
-        ref.kind === "document" ||
-        ref.kind === "workflow"),
-  );
-}
+export { mayUseProject };
 
 /** Workflow names a scoped caller may see on the tools list; null = all. */
 export async function allowedWorkflowNames(
@@ -60,6 +51,7 @@ export async function allowedWorkflowNames(
 export interface SurfaceFeatures {
   publications: "public" | "members" | false;
   proposals: boolean;
+  storeUploadMaxBytes?: number;
 }
 
 export function surfaceTools(
@@ -199,23 +191,36 @@ export function surfaceTools(
             required: ["path"],
           },
         },
-        call: guarded(async (args) =>
-          documents.write({
+        call: guarded(async (args) => {
+          const content =
+            str(args.text) !== undefined
+              ? (str(args.text) as string)
+              : new Uint8Array(Buffer.from(str(args.base64) ?? "", "base64"));
+          const size =
+            typeof content === "string"
+              ? Buffer.byteLength(content)
+              : content.byteLength;
+          if (
+            features.storeUploadMaxBytes !== undefined &&
+            size > features.storeUploadMaxBytes
+          ) {
+            throw new Error(
+              `Document exceeds this server's limit of ${Math.floor(features.storeUploadMaxBytes / 1024 / 1024)}MB`,
+            );
+          }
+          return documents.write({
             identity,
             projectId,
             path: str(args.path) ?? "",
-            content:
-              str(args.text) !== undefined
-                ? (str(args.text) as string)
-                : new Uint8Array(Buffer.from(str(args.base64) ?? "", "base64")),
+            content,
             ...(str(args.contentType)
               ? { contentType: str(args.contentType) }
               : {}),
             ...(int(args.ifVersion) !== undefined
               ? { ifVersion: int(args.ifVersion) }
               : {}),
-          }),
-        ),
+          });
+        }),
       },
       {
         definition: {

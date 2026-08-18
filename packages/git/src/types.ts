@@ -108,15 +108,22 @@ export interface ProjectRepo {
   ): Promise<Record<string, string>>;
   /** File paths at a ref, optionally under one directory prefix; no content. */
   listFilesAtRef(ref: string, opts?: { prefix?: string }): Promise<string[]>;
+  /** One file's raw bytes at a ref, or null when absent (binaries intact). */
+  readBlobAtRef(ref: string, filePath: string): Promise<Uint8Array | null>;
+  /** One working-tree file's raw bytes, or null when absent. */
+  readFileBytes(filePath: string): Promise<Uint8Array | null>;
   /** File paths + blob ids at a ref (content-addressed digests, no content). */
   listBlobsAtRef(
     ref: string,
     opts?: { prefix?: string },
   ): Promise<Array<{ path: string; oid: string }>>;
 
+  /** Commit the working tree — or, with `paths`, only those files (added,
+   * modified or deleted), leaving everything else uncommitted. */
   commit(
     message: string,
     author: { name: string; email: string },
+    opts?: { paths?: readonly string[] },
   ): Promise<string>;
   log(options?: { maxCount?: number; ref?: string }): Promise<CommitInfo[]>;
   resolveRef(ref?: string): Promise<string>;

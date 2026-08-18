@@ -783,7 +783,14 @@ export function registerAgentBridge(agentTerminals: AgentTerminals): {
         { label, request },
         ELICIT_TIMEOUT_MS,
       );
-      return result ?? { decision: "deny" };
+      // Anything but a well-formed "allow" is a deny — a renderer error
+      // reply ({ error }) must never read as consent.
+      if (result?.decision === "allow") {
+        return result.remember === "always"
+          ? { decision: "allow", remember: "always" }
+          : { decision: "allow" };
+      }
+      return { decision: "deny" };
     },
 
     async requestConnection(projectId, sessionId, query, reason) {

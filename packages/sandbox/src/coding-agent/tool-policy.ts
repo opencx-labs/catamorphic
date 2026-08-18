@@ -61,7 +61,10 @@ export function resolveToolPermission(
   toolName: string,
   annotations?: ToolPolicyAnnotations,
 ): ToolPermission {
-  const explicit = policy?.tools?.[toolName];
+  const explicit =
+    policy?.tools && Object.hasOwn(policy.tools, toolName)
+      ? policy.tools[toolName]
+      : undefined;
   if (explicit) return explicit;
   const fallback = policy?.default ?? "auto";
   return fallback === "auto"

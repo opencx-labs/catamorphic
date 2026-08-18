@@ -119,6 +119,36 @@ export class ProjectRepoImpl implements ProjectRepo {
     return this.walkFilesAtRef(ref, opts.prefix);
   }
 
+  async readBlobAtRef(
+    ref: string,
+    filePath: string,
+  ): Promise<Uint8Array | null> {
+    assertSafePath(filePath);
+    try {
+      const oid = await git.resolveRef({ fs: nodeFs, dir: this.repoPath, ref });
+      const { blob } = await git.readBlob({
+        fs: nodeFs,
+        dir: this.repoPath,
+        oid,
+        filepath: filePath,
+      });
+      return blob;
+    } catch {
+      return null;
+    }
+  }
+
+  async readFileBytes(filePath: string): Promise<Uint8Array | null> {
+    assertSafePath(filePath);
+    try {
+      return new Uint8Array(
+        await fs.readFile(path.join(this.repoPath, filePath)),
+      );
+    } catch {
+      return null;
+    }
+  }
+
   async listFilesAtRef(
     ref: string,
     opts?: { prefix?: string },
@@ -193,9 +223,12 @@ export class ProjectRepoImpl implements ProjectRepo {
   async commit(
     message: string,
     author: { name: string; email: string },
+    opts?: { paths?: readonly string[] },
   ): Promise<string> {
+    const only = opts?.paths ? new Set(opts.paths) : null;
     const files = await this.listFiles();
     for (const file of files) {
+      if (only && !only.has(file)) continue;
       await git.add({ fs: nodeFs, dir: this.repoPath, filepath: file });
     }
 
@@ -204,6 +237,7 @@ export class ProjectRepoImpl implements ProjectRepo {
       dir: this.repoPath,
     });
     for (const [filepath, head, workdir, stage] of status) {
+      if (only && !only.has(filepath)) continue;
       if (head === 1 && workdir === 0 && stage === 1) {
         await git.remove({ fs: nodeFs, dir: this.repoPath, filepath });
       }

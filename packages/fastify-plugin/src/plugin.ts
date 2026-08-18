@@ -148,7 +148,14 @@ export const catamorphicPlugin: FastifyPluginAsync<
 
   const ctx: RouteContext = {
     core: opts.core,
-    features: { ...DEFAULT_HOST_FEATURES, ...(opts.features ?? {}) },
+    // Explicit `undefined` from a host (a field computed from env) must not
+    // erase the default.
+    features: {
+      ...DEFAULT_HOST_FEATURES,
+      ...Object.fromEntries(
+        Object.entries(opts.features ?? {}).filter(([, v]) => v !== undefined),
+      ),
+    },
   };
 
   registerMeRoutes(app, ctx);

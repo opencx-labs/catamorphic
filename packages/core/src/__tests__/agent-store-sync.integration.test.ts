@@ -139,7 +139,7 @@ describeIf("store sync around agent turns (ADR 0055)", () => {
     await fs.rm(tmpDir, { recursive: true, force: true });
   });
 
-  it("pulls the caller's store view before the turn and ships the agent's store writes as the caller after it", async () => {
+  it("host-execution turns never sync store/: the shared project folder stays clean", async () => {
     const sessions = core.agentSessions;
     if (!sessions) throw new Error("agent sessions not configured");
     provider.writes = [
@@ -147,8 +147,6 @@ describeIf("store sync around agent turns (ADR 0055)", () => {
         path: "store/customers/acme/notes.md",
         text: "# Acme\nRenewal in Q4.\n",
       },
-      { path: "store/customers/globex/notes.md", text: "should not land\n" },
-      { path: "docs/handbook.md", text: "program edit, not shipped\n" },
     ];
     const session = await sessions.create(alice, projectId, {
       agentId: `project:${projectId}:csm`,
@@ -160,19 +158,61 @@ describeIf("store sync around agent turns (ADR 0055)", () => {
       "take notes",
     );
     expect(reply.content).toContain("done");
+    // Nothing pulled into the shared folder (one folder serves every member)…
+    await expect(
+      fs.access(path.join(rootPath, "store/customers/acme/plan.md")),
+    ).rejects.toThrow();
+    // …and the agent's write stayed a file, not a store version.
+    await expect(
+      core.documents.read({
+        identity: root,
+        projectId,
+        path: "store/customers/acme/notes.md",
+      }),
+    ).rejects.toThrow(/not found/);
+    const detail = await sessions.get(alice, projectId, session.id);
+    expect(
+      (detail.messages.at(-1)?.metadata as { storeSync?: unknown })?.storeSync,
+    ).toBeUndefined();
+  });
 
-    // Pulled before the turn: what Alice may read is in the folder, the rest is not.
+  it("the caller-bound adapter pulls only what the caller may read and ships as the caller", async () => {
+    // What the per-caller dev copy path runs around a sandbox turn, driven
+    // directly: same adapter, same engine.
+    const { documentsClientFor, shipRemoteProject, syncRemoteProject } =
+      await import("../services/store-sync.js");
+    const folder = path.join(tmpDir, "alice-copy");
+    await fs.mkdir(folder, { recursive: true });
+    const client = documentsClientFor(core.documents, alice, projectId, {
+      source: "store",
+    });
+    await syncRemoteProject(folder, client);
     expect(
       await fs.readFile(
-        path.join(rootPath, "store/customers/acme/plan.md"),
+        path.join(folder, "store/customers/acme/plan.md"),
         "utf8",
       ),
     ).toBe("Plan v1\n");
     await expect(
-      fs.access(path.join(rootPath, "store/customers/globex/secret.md")),
+      fs.access(path.join(folder, "store/customers/globex/secret.md")),
     ).rejects.toThrow();
 
-    // Shipped after the turn, stamped with Alice.
+    await fs.mkdir(path.join(folder, "store/customers/globex"), {
+      recursive: true,
+    });
+    await fs.writeFile(
+      path.join(folder, "store/customers/acme/notes.md"),
+      "# Acme\nRenewal in Q4.\n",
+    );
+    await fs.writeFile(
+      path.join(folder, "store/customers/globex/notes.md"),
+      "should not land\n",
+    );
+    const report = await shipRemoteProject(folder, client);
+    expect(report.shipped).toEqual(["store/customers/acme/notes.md"]);
+    expect(report.failed.map((f) => f.path)).toEqual([
+      "store/customers/globex/notes.md",
+    ]);
     const notes = await core.documents.read({
       identity: root,
       projectId,
@@ -180,7 +220,6 @@ describeIf("store sync around agent turns (ADR 0055)", () => {
     });
     expect(notes.text).toContain("Renewal in Q4");
     expect(notes.writtenBy).toBe("alice");
-    // Outside her refs: refused, never lands.
     await expect(
       core.documents.read({
         identity: root,
@@ -188,30 +227,5 @@ describeIf("store sync around agent turns (ADR 0055)", () => {
         path: "store/customers/globex/notes.md",
       }),
     ).rejects.toThrow(/not found/);
-    // The turn's metadata says what became of each write.
-    const detail = await sessions.get(alice, projectId, session.id);
-    const last = detail.messages.at(-1);
-    const storeSync = (
-      last?.metadata as { storeSync?: Record<string, unknown> }
-    )?.storeSync;
-    expect(storeSync).toMatchObject({
-      shipped: ["store/customers/acme/notes.md"],
-    });
-    // The program edit stays a program edit: in the folder for the
-    // checkpoint commit (a program path is never a store row).
-    expect(
-      await fs.readFile(path.join(rootPath, "docs/handbook.md"), "utf8"),
-    ).toContain("program edit");
-    expect(
-      (
-        await core.documents.list({
-          identity: root,
-          projectId,
-          source: "store",
-        })
-      ).map((e) => e.path),
-    ).not.toContain("docs/handbook.md");
-    const failed = (storeSync?.failed ?? []) as Array<{ path: string }>;
-    expect(failed[0]?.path).toBe("store/customers/globex/notes.md");
   });
 });

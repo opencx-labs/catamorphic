@@ -4,6 +4,8 @@ import {
   ProjectNotFoundError,
   type Publication,
   PublicationNotFoundError,
+  PublicationSlugError,
+  PublicationSlugTakenError,
 } from "@catamorphic/core";
 import type { FastifyInstance, FastifyReply } from "fastify";
 import type { ZodTypeProvider } from "fastify-type-provider-zod";
@@ -58,8 +60,14 @@ export function registerPublicationRoutes(
     if (err instanceof PublicationNotFoundError) {
       return reply.status(404).send({ error: err.message });
     }
-    if (err instanceof DocumentPathError) {
+    if (
+      err instanceof DocumentPathError ||
+      err instanceof PublicationSlugError
+    ) {
       return reply.status(400).send({ error: err.message });
+    }
+    if (err instanceof PublicationSlugTakenError) {
+      return reply.status(409).send({ error: err.message });
     }
     throw err;
   };
@@ -75,6 +83,7 @@ export function registerPublicationRoutes(
         400: ErrorSchema,
         403: ErrorSchema,
         404: ErrorSchema,
+        409: ErrorSchema,
       },
     },
     handler: async (request, reply) => {
@@ -174,7 +183,10 @@ export function registerPublicationRoutes(
       }
       return reply.send(Buffer.from(doc.bytes));
     } catch (err) {
-      if (err instanceof DocumentNotFoundError) {
+      if (
+        err instanceof DocumentNotFoundError ||
+        err instanceof DocumentPathError
+      ) {
         return reply.status(404).send({ error: "Not found" });
       }
       throw err;

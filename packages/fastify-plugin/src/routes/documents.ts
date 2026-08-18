@@ -147,8 +147,13 @@ export function registerDocumentRoutes(
         if (doc.version !== undefined) {
           reply.header("x-catamorphic-document-version", String(doc.version));
         }
-        if (doc.writtenBy)
-          reply.header("x-catamorphic-written-by", doc.writtenBy);
+        if (doc.writtenBy) {
+          // Header values must be Latin-1 and single-line; ids are host text.
+          reply.header(
+            "x-catamorphic-written-by",
+            encodeURIComponent(doc.writtenBy),
+          );
+        }
         if (doc.writtenAt)
           reply.header("x-catamorphic-written-at", doc.writtenAt);
         return reply.send(Buffer.from(doc.bytes));

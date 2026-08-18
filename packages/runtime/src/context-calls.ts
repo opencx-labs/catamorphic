@@ -30,6 +30,11 @@ export function hostNamespace(
   return new Proxy(function target() {}, {
     get(_t, prop) {
       if (typeof prop !== "string") return undefined;
+      // Never look like a thenable or a serialisable value: an uncalled
+      // namespace that is awaited or JSON-encoded must fail fast, not hang.
+      if (prop === "then" || prop === "toJSON" || prop === "constructor") {
+        return undefined;
+      }
       return hostNamespace([...path, prop], call);
     },
     apply(_t, _this, argList) {

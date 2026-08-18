@@ -19,6 +19,19 @@ import {
  */
 export const PROGRAM_READER = "catamorphic-reader";
 
+/**
+ * How long a fetched origin sha is trusted before re-fetching. Reads of the
+ * program come in bursts (a sync of N files, a search over a tree); one
+ * fetch per burst is plenty, and roles/tools already tolerate this lag.
+ */
+const FETCH_TTL_MS = 5_000;
+const recentFetches = new Map<string, { at: number; sha: string | null }>();
+
+/** Drop the memoized origin fetch (a push just landed; read fresh). */
+export function forgetProgramFetch(tenantId: string, projectId: string): void {
+  recentFetches.delete(`${tenantId}:${projectId}`);
+}
+
 export async function withProgram<T>(
   projectManager: ProjectManager,
   tenantId: string,
@@ -31,6 +44,11 @@ export async function withProgram<T>(
     : await projectManager.open(tenantId, projectId);
   try {
     if (!remote) return await fn(repo, null);
+    const key = `${tenantId}:${projectId}`;
+    const recent = recentFetches.get(key);
+    if (recent && Date.now() - recent.at < FETCH_TTL_MS) {
+      return await fn(repo, recent.sha);
+    }
     await fetchRemote({
       dev: repo,
       remote,
@@ -41,6 +59,7 @@ export async function withProgram<T>(
     const sha = await repo
       .resolveRef("refs/remotes/origin/main")
       .catch(() => null);
+    recentFetches.set(key, { at: Date.now(), sha });
     return await fn(repo, sha);
   } finally {
     await repo.dispose();
@@ -102,6 +121,15 @@ export async function readProgramFiles(
     files.map(async (file) => [file, await repo.readFile(file)] as const),
   );
   return Object.fromEntries(entries);
+}
+
+/** One program file's raw bytes (binaries intact), or null when absent. */
+export async function readProgramBytes(
+  repo: ProjectRepo,
+  ref: string | null,
+  path: string,
+): Promise<Uint8Array | null> {
+  return ref ? repo.readBlobAtRef(ref, path) : repo.readFileBytes(path);
 }
 
 /** One program file, or null when absent. */

@@ -247,7 +247,7 @@ export class AiSdkCodingAgent implements CodingAgentProvider {
     const remembered = new Set<string>();
     const source = this.opts.mcpPolicies ?? {};
     const ask = this.opts.onToolPermission;
-    return async (server, tool, input, sessionId) => {
+    return async (server, tool, input, sessionId, abortSignal) => {
       const own = typeof source === "function" ? source() : source;
       // The caller's layers (ADR 0055) sit beside the provider's own —
       // one more intersection, read live per call.
@@ -271,7 +271,7 @@ export class AiSdkCodingAgent implements CodingAgentProvider {
             : `The tool "${tool.name}" on ${server} needs the user's permission, and there is no one to ask in this context.`,
         );
       }
-      const answer = await ask({
+      const asked = ask({
         ...(sessionId ? { sessionId } : {}),
         server,
         tool: tool.name,
@@ -279,6 +279,21 @@ export class AiSdkCodingAgent implements CodingAgentProvider {
         input,
         annotations: tool.annotations,
       });
+      const answer = abortSignal
+        ? await Promise.race([
+            asked,
+            new Promise<never>((_resolve, reject) => {
+              const abort = () =>
+                reject(
+                  new Error(
+                    "The turn was interrupted before the user answered.",
+                  ),
+                );
+              if (abortSignal.aborted) abort();
+              else abortSignal.addEventListener("abort", abort, { once: true });
+            }),
+          ])
+        : await asked;
       if (answer.decision === "deny") {
         throw new Error(
           `The user declined to let you use "${tool.name}" on ${server} for this call.`,
@@ -694,6 +709,7 @@ type McpToolGate = (
   tool: McpToolInfo,
   input: Record<string, unknown>,
   sessionId?: string,
+  abortSignal?: AbortSignal,
 ) => Promise<void>;
 
 function buildMcpTools(
@@ -710,14 +726,16 @@ function buildMcpTools(
         inputSchema: jsonSchema<Record<string, unknown>>(
           info.inputSchema as Parameters<typeof jsonSchema>[0],
         ),
-        execute: async (input) => {
+        execute: async (input, options) => {
           const args = pruneEmptyOptionalArgs(
             input as Record<string, unknown>,
             info.inputSchema,
           );
           // Permission first: deny/ask throw with a message the model
-          // reads as the tool result — the turn goes on.
-          await gate?.(serverName, info, args, sessionId);
+          // reads as the tool result — the turn goes on. An interrupted
+          // turn abandons a parked ask instead of running the tool later.
+          await gate?.(serverName, info, args, sessionId, options?.abortSignal);
+          options?.abortSignal?.throwIfAborted();
           // Prefer structured content: MCP Apps views render it, and the
           // model reads JSON fine. Text-only results stay text;
           // flattenToolResult throws on isError results.

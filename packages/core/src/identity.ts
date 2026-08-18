@@ -138,6 +138,17 @@ export function isBuilder(identity: Identity, projectId: string): boolean {
   );
 }
 
+/**
+ * Whether an identity uses the project at all — a builder, or a scoped
+ * identity holding any ref on it (an agent to chat with, a document to
+ * read, a workflow or app to call). The gate for member-facing surfaces
+ * that are not themselves an artifact: skills, proposals, `/me` summaries.
+ */
+export function mayUseProject(identity: Identity, projectId: string): boolean {
+  if (isBuilder(identity, projectId)) return true;
+  return (identity.scope ?? []).some((ref) => ref.projectId === projectId);
+}
+
 /** Structural equality on the fields that identify an artifact. */
 export function sameArtifact(a: ArtifactRef, b: ArtifactRef): boolean {
   if (a.kind !== b.kind || a.projectId !== b.projectId) return false;

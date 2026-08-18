@@ -137,7 +137,7 @@ export class CodexAgent implements CodingAgentProvider {
    * the caller's narrowing when the session serves a scoped caller. */
   private clientFor(hostSessionId: string): Codex {
     const caller = this.callerPolicies.get(hostSessionId);
-    if (!caller) return this.client;
+    if (!caller || Object.keys(caller).length === 0) return this.client;
     const digest = JSON.stringify(caller);
     let client = this.clients.get(digest);
     if (!client) {

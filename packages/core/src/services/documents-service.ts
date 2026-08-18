@@ -12,7 +12,7 @@ import type { AppBundleStore } from "./app-bundle-store.js";
 import { AccessDeniedError } from "./artifact-scope.js";
 import {
   listProgramBlobs,
-  readProgramFile,
+  readProgramBytes,
   readProgramFiles,
   withProgram,
 } from "./program-reader.js";
@@ -374,14 +374,13 @@ export class DocumentsService {
     this.assertAccess(args.identity, args.projectId, path, "read");
 
     if (!isStorePath(path)) {
-      const text = await withProgram(
+      const bytes = await withProgram(
         this.projectManager,
         args.identity.tenantId,
         args.projectId,
-        (repo, ref) => readProgramFile(repo, ref, path),
+        (repo, ref) => readProgramBytes(repo, ref, path),
       );
-      if (text === null) throw new DocumentNotFoundError(path);
-      const bytes = new TextEncoder().encode(text);
+      if (bytes === null) throw new DocumentNotFoundError(path);
       return {
         path,
         source: "program",

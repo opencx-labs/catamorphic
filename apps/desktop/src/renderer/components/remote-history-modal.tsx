@@ -24,6 +24,7 @@ export function RemoteHistoryModal({
 
   useEffect(() => {
     if (!path) return;
+    let live = true;
     setVersions([]);
     setSelected(null);
     setText(null);
@@ -31,24 +32,37 @@ export function RemoteHistoryModal({
     desktopApi
       .remoteHistory({ projectId, path })
       .then((list) => {
+        if (!live) return;
         setVersions(list);
         const latest = list.find((v) => !v.deleted);
         if (latest) setSelected(latest.version);
       })
-      .catch((cause) =>
-        setError(cause instanceof Error ? cause.message : String(cause)),
-      );
+      .catch((cause) => {
+        if (live)
+          setError(cause instanceof Error ? cause.message : String(cause));
+      });
+    return () => {
+      live = false;
+    };
   }, [projectId, path]);
 
   useEffect(() => {
     if (!path || selected === null) return;
+    // A slower earlier read must not land over a later selection.
+    let live = true;
     setText(null);
     desktopApi
       .remoteReadVersion({ projectId, path, version: selected })
-      .then((result) => setText(result.text ?? "(binary content)"))
-      .catch((cause) =>
-        setError(cause instanceof Error ? cause.message : String(cause)),
-      );
+      .then((result) => {
+        if (live) setText(result.text ?? "(binary content)");
+      })
+      .catch((cause) => {
+        if (live)
+          setError(cause instanceof Error ? cause.message : String(cause));
+      });
+    return () => {
+      live = false;
+    };
   }, [projectId, path, selected]);
 
   const name = path?.split("/").at(-1) ?? "";

@@ -640,6 +640,7 @@ export interface CatamorphicDesktopApi {
   }>;
   remoteRenew: (projectId: string) => Promise<void>;
   remoteDisconnect: (projectId: string) => Promise<void>;
+  remoteTakePendingLink: () => Promise<string | null>;
   onConnectLink: (listener: (link: string) => void) => () => void;
   getServerState: () => Promise<ServerInfo>;
   onServerChanged: (listener: (info: ServerInfo) => void) => () => void;

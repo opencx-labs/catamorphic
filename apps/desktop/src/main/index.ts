@@ -10,6 +10,7 @@ import {
 } from "electron";
 import { registerAgentBridge } from "./agent-bridge.js";
 import { registerBrowserSupport } from "./browser.js";
+import { toPublicConnection } from "./connections-store.js";
 import { ConnectorsService } from "./connectors.js";
 import { registerIpcHandlers, type ServerState } from "./ipc.js";
 import { type Keybindings, toAccelerator } from "./keybindings.js";
@@ -82,16 +83,24 @@ let pendingConnectLink: string | null =
   process.argv.find((arg) => arg.startsWith("catamorphic://")) ?? null;
 function deliverConnectLink(url: string): void {
   if (!url.startsWith("catamorphic://connect")) return;
+  // Pull, not push: the link stays pending until the renderer TAKES it
+  // (`remote-take-pending-link`), so a link arriving before <App> mounts
+  // its listener (cold launch, server still booting) is not lost. The push
+  // only nudges a mounted renderer to take it now.
+  pendingConnectLink = url;
   const window = BrowserWindow.getAllWindows()[0];
-  if (!window || window.webContents.isLoading()) {
-    pendingConnectLink = url;
-    return;
-  }
-  pendingConnectLink = null;
+  if (!window) return;
   window.webContents.send("catamorphic:connect-link", url);
   if (window.isMinimized()) window.restore();
   window.focus();
 }
+
+/** The renderer's side of the hand-off (registered here: no ipc.ts cycle). */
+ipcMain.handle("catamorphic:remote-take-pending-link", () => {
+  const link = pendingConnectLink;
+  pendingConnectLink = null;
+  return link;
+});
 
 const paths = resolveDataPaths();
 const profilesStore = new ProfilesStore(paths.profilesFile);
@@ -340,6 +349,16 @@ app.whenReady().then(async () => {
   });
   profileConfig.onPrefsChanged((profileId, prefs) => {
     sendToProfile(profileId, "catamorphic:prefs-changed", prefs);
+  });
+  profileConfig.onConnectionsChanged((profileId) => {
+    sendToProfile(
+      profileId,
+      "catamorphic:connections-changed",
+      profileConfig
+        .forProfile(profileId)
+        .connections.list()
+        .map(toPublicConnection),
+    );
   });
   app.on("browser-window-focus", applyMenuForFocusedWindow);
 

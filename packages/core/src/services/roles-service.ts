@@ -4,7 +4,11 @@ import type { Kysely } from "kysely";
 import { z } from "zod";
 import type { ArtifactRef, Identity } from "../identity.js";
 import { assertBuilder } from "./artifact-scope.js";
-import { readProgramFiles, withProgram } from "./program-reader.js";
+import {
+  forgetProgramFetch,
+  readProgramFiles,
+  withProgram,
+} from "./program-reader.js";
 import { ProjectNotFoundError } from "./projects-service.js";
 
 /**
@@ -246,7 +250,10 @@ export class RolesService {
   /** Drop the cached role set (a checkpoint, a push, a deploy landed). */
   invalidate(projectId: string): void {
     for (const key of this.cache.keys()) {
-      if (key.endsWith(`:${projectId}`)) this.cache.delete(key);
+      if (key.endsWith(`:${projectId}`)) {
+        this.cache.delete(key);
+        forgetProgramFetch(key.slice(0, -projectId.length - 1), projectId);
+      }
     }
   }
 

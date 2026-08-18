@@ -2,7 +2,11 @@
 
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useCallback } from "react";
-import { assertApiOk, runWithCatamorphicError } from "../lib/errors.js";
+import {
+  assertApiOk,
+  runWithCatamorphicError,
+  toCatamorphicError,
+} from "../lib/errors.js";
 import { useCatamorphic } from "../provider.js";
 
 /**
@@ -89,7 +93,7 @@ export function useToolPermissions(
       permissionId: string;
       answer: ToolPermissionAnswer;
     }) => {
-      await apiClient.POST(
+      const result = await apiClient.POST(
         "/api/projects/{projectId}/agent/sessions/{sessionId}/permissions/{permissionId}",
         {
           params: {
@@ -102,6 +106,15 @@ export function useToolPermissions(
           body: answer,
         },
       );
+      // openapi-fetch does not throw on 4xx/5xx: an expired or foreign ask
+      // (404), or a host without a broker (503), must surface as failure.
+      if (result.error || !result.response.ok) {
+        throw toCatamorphicError({
+          response: result.response,
+          body: result.error,
+          fallbackMessage: "Answering the permission request failed",
+        });
+      }
     },
     onSuccess: () => queryClient.invalidateQueries({ queryKey }),
   });
@@ -111,7 +124,9 @@ export function useToolPermissions(
     [mutation],
   );
   return {
-    permissions: query.data ?? [],
+    // Disabled = no turn is running: whatever was pending is dead. Never
+    // show a stale ask whose answer would 404.
+    permissions: enabled ? (query.data ?? []) : [],
     isLoading: query.isLoading,
     answer,
     isAnswering: mutation.isPending,

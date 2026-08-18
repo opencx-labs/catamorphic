@@ -57,6 +57,8 @@ export interface RemoteDocumentVersion {
 
 /** The slice of the documents API the engine needs; injectable for tests. */
 export interface RemoteDocumentsClient {
+  /** Which sources `list()` covers; absent = both. Prunes only within. */
+  readonly sources?: ReadonlyArray<"program" | "store">;
   list(): Promise<RemoteDocumentEntry[]>;
   readBytes(
     path: string,
@@ -276,8 +278,10 @@ export async function syncRemoteProject(
       continue;
     }
     const { bytes } = await client.readBytes(entry.path);
-    if (localModified && entry.source === "store") {
-      // Both sides moved: keep the user's edit, park the server's beside it.
+    if (localModified) {
+      // Both sides moved: keep the user's edit, park the server's beside it
+      // (program files too — a local program edit is a commit-in-waiting,
+      // never something a pull may silently revert).
       const copy = serverCopyPath(entry.path, entry.version ?? 0);
       writeLocal(root, copy, bytes);
       report.conflicts.push({
@@ -285,11 +289,13 @@ export async function syncRemoteProject(
         serverCopy: copy,
         serverVersion: entry.version ?? 0,
       });
-      // The manifest now knows the server version; the local edit still
+      // The manifest now knows the server state; the local edit still
       // differs from it, so `ship` will offer it (and 409 if it lost again).
       manifest.files[entry.path] = {
-        source: "store",
-        version: entry.version,
+        source: entry.source,
+        ...(entry.source === "store"
+          ? { version: entry.version }
+          : { digest: entry.digest }),
         hash: sha256(bytes),
       };
       continue;
@@ -305,9 +311,13 @@ export async function syncRemoteProject(
     report.pulled.push(entry.path);
   }
 
-  // Gone remotely: remove locally unless the user changed it since.
+  // Gone remotely: remove locally unless the user changed it since. Only
+  // for sources this client lists — a store-only client must never prune
+  // program files an earlier full sync recorded.
+  const covered = new Set(client.sources ?? ["program", "store"]);
   for (const [relative, known] of Object.entries(manifest.files)) {
     if (remotePaths.has(relative)) continue;
+    if (!covered.has(known.source)) continue;
     const local = readLocal(root, relative);
     if (local && sha256(local) === known.hash) {
       fs.rmSync(localPath(root, relative), { force: true });
@@ -363,14 +373,16 @@ export async function shipRemoteProject(
       continue;
     }
     // Someone wrote first: fetch theirs beside ours, remember their version
-    // so the next ship (after the user reconciles) can win.
-    const theirs = await client.readBytes(relative);
+    // so the next ship (after the user reconciles) can win. A conflict
+    // against a tombstone (they deleted it) has nothing to fetch: just
+    // remember the version so the retry supersedes the deletion.
+    const theirs = await client.readBytes(relative).catch(() => null);
     const copy = serverCopyPath(relative, result.currentVersion);
-    writeLocal(root, copy, theirs.bytes);
+    if (theirs) writeLocal(root, copy, theirs.bytes);
     manifest.files[relative] = {
       source: "store",
       version: result.currentVersion,
-      hash: sha256(theirs.bytes),
+      hash: theirs ? sha256(theirs.bytes) : "",
     };
     report.conflicts.push({
       path: relative,
@@ -398,13 +410,13 @@ export async function shipRemoteProject(
     }
     // Deleted here, edited there: bring theirs back beside nothing — the
     // user sees the server copy and decides.
-    const theirs = await client.readBytes(relative);
+    const theirs = await client.readBytes(relative).catch(() => null);
     const copy = serverCopyPath(relative, result.currentVersion);
-    writeLocal(root, copy, theirs.bytes);
+    if (theirs) writeLocal(root, copy, theirs.bytes);
     manifest.files[relative] = {
       source: "store",
       version: result.currentVersion,
-      hash: sha256(theirs.bytes),
+      hash: theirs ? sha256(theirs.bytes) : "",
     };
     report.conflicts.push({
       path: relative,
@@ -425,9 +437,16 @@ export function documentsClientFor(
   documents: DocumentsService,
   identity: Identity,
   projectId: string,
+  opts?: { source?: "program" | "store" },
 ): RemoteDocumentsClient {
   return {
-    list: () => documents.list({ identity, projectId }),
+    ...(opts?.source ? { sources: [opts.source] } : {}),
+    list: () =>
+      documents.list({
+        identity,
+        projectId,
+        ...(opts?.source ? { source: opts.source } : {}),
+      }),
     async readBytes(relative, version) {
       const doc = await documents.readBytes({
         identity,
