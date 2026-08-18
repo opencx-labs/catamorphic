@@ -449,6 +449,46 @@ Workflow code stays vendor-blind — it imports the plugin's client and reads
 names, and duplicate capability or trigger-kind names across plugins fail at
 boot.
 
+### Caller-bound host functions and the documents surface (ADR 0055)
+
+A capability provider may also expose **calls** — host functions a workflow
+reaches as `context.host.<capability>.<fn>(args)`. Runs are stamped with the
+identity that triggered them (`workflow_runs.caller_scope`); a boundary that
+returns a host call ends there, core executes the function **as that
+caller** (`{ caller, projectId, runId, workflowName }` is the first
+argument — a workflow cannot claim to be anyone), and the result is the next
+step's input, exactly like `callWorkflow`. A throw fails the step; the
+step's retry policy re-runs the call (at-least-once, like any step IO).
+
+```ts
+defineCapability({
+  name: "acme.crm",
+  calls: {
+    lookupAccount: async ({ caller }, args: { id: string }) =>
+      crm.accounts.get(args.id, { asUser: caller.externalUserId }),
+  },
+});
+// in a workflow:
+defineBoundary({ run: ({ input, host }: BoundaryContext<{ id: string }>) => host.acme.crm.lookupAccount({ id: input.id }) }),
+defineBoundary({ run: ({ input }: BoundaryContext<{ name: string }>) => ... }),
+```
+
+`context.documents` is the first built-in such capability: `list`, `read`,
+`write`, `delete`, `history`, `search` over the project's one path
+namespace — the program (git, read-only) and the project store (`store/…`,
+versioned, caller-stamped) — every operation narrowed to the caller's
+document refs. That is what makes project-authored search safe by
+construction: an indexer or ranker that reads through `context.documents`
+cannot leak what the caller may not see. `context.caller` (`{
+externalUserId, scope? }`) is available for anything else that needs to
+know who asked. The same surface is served over HTTP at
+`/projects/:id/documents` (list, `content` JSON, `raw` bytes, `PUT` text or
+base64 with `ifVersion`, `history`, `search?q=&mode=grep|text&prefix=`).
+Store bytes live inline in Postgres unless `documentBlobStore` (a
+filesystem or S3-compatible store) is configured; metadata, versions, text
+and the search index always stay in the database. The framework's
+`searching-documents` host skill carries the recipe agents follow.
+
 ### Reference architecture: a database per project
 
 The capability seam is how embedders give every project real database

@@ -60,10 +60,26 @@ export interface CallWorkflow {
   <Input, Output>(workflow: WorkflowDefinition<Input, Output>, options: { input: Input }): WorkflowTransition<Output>;
 }
 
+export interface WorkflowCaller { readonly externalUserId: string; readonly scope?: ReadonlyArray<{ readonly kind: string; readonly projectId: string; readonly [key: string]: unknown }> }
+export type HostCall<Result = unknown> = <Args>(args: Args) => WorkflowTransition<Result>;
+export interface HostNamespace { readonly [name: string]: HostNamespace & HostCall }
+export interface DocumentEntry { path: string; source: "program" | "store"; contentType: string; size: number; version?: number; writtenBy?: string; writtenAt?: string }
+export interface DocumentsCalls {
+  list(args: { prefix?: string; source?: "program" | "store" }): WorkflowTransition<DocumentEntry[]>;
+  read(args: { path: string; version?: number }): WorkflowTransition<DocumentEntry & { text?: string }>;
+  write(args: { path: string; text: string; contentType?: string; ifVersion?: number }): WorkflowTransition<DocumentEntry>;
+  delete(args: { path: string; ifVersion?: number }): WorkflowTransition<{ version: number }>;
+  history(args: { path: string }): WorkflowTransition<Array<{ version: number; deleted: boolean; contentType: string; size: number; writtenBy: string; writtenAt: string }>>;
+  search(args: { query: string; mode?: "grep" | "text"; prefix?: string; limit?: number }): WorkflowTransition<Array<{ path: string; source: "program" | "store"; lines: Array<{ line: number; text: string }> }>>;
+}
+
 export interface BoundaryContext<Input> {
   readonly input: Input;
   readonly pause: Pause;
   readonly callWorkflow: CallWorkflow;
+  readonly caller?: WorkflowCaller;
+  readonly host: HostNamespace;
+  readonly documents: DocumentsCalls;
 }
 
 declare const boundaryTypes: unique symbol;

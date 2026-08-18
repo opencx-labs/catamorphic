@@ -45,6 +45,7 @@ import {
   GithubService,
   type GithubServiceConfig,
 } from "./services/github-service.js";
+import { executeHostCall } from "./services/host-calls.js";
 import { MembershipsService } from "./services/memberships-service.js";
 import { PluginsService } from "./services/plugins-service.js";
 import {
@@ -395,6 +396,11 @@ export class CatamorphicCore {
       tenantPolicies: this.tenantPolicies,
       invokeRuntime: (args) => this.runs.invokeProductionRuntime(args),
       resolveChild: (args) => this.runs.resolveProductionWorkflow(args),
+      callHost: (args) =>
+        executeHostCall(
+          { documents: this.documents, capabilities: this.capabilities },
+          args,
+        ),
     });
     new BatchExecutionHandler(this.db, {
       coordinator,

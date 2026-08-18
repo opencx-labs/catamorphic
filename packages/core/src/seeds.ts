@@ -1043,6 +1043,16 @@ Do not recreate the types locally or bypass the missing API with assertions.
   eventually be visualized, but are not separate persisted checkpoints.
 - A returned transition resolves before the next boundary starts. The resolved
   value, not the transition object, is the next boundary's input.
+- \`caller\`, \`documents\` and \`host\` are also on \`BoundaryContext\`
+  (ADR 0055). \`caller\` is who triggered the run — stamped by the host from
+  the verified identity, never from \`input\`; absent when the host ran the
+  workflow as itself. \`documents.read/list/search/write/delete/history\`
+  and \`host.<capability>.<fn>(args)\` are transitions like
+  \`callWorkflow\`: return them from a boundary, receive the result as the
+  next boundary's input. They execute on the host AS THE CALLER — a
+  workflow can only reach what the caller may — so returning
+  \`documents.read({ path })\` for a path the caller lacks fails that step.
+  Retrying the step re-runs the call (at-least-once, like any step IO).
 - \`triggers: [trigger("kind", config)]\` subscribes the definition to a host
   trigger kind. Kind names and config/payload types come from the generated
   \`catamorphic-triggers.d.ts\`; config must be an inline constant, and the
@@ -1217,7 +1227,79 @@ check after each fix and remove temporary error suppressions.
  * contract as `projectSeeds`). A project skill with the same name shadows a
  * host skill everywhere.
  */
+
+/**
+ * How to search a project's documents (ADR 0055): the core primitives first,
+ * a project-owned index only when they run out. Host-tier so every agent
+ * building or using a brain reads the same recipe.
+ */
+const SEARCHING_DOCUMENTS_SKILL = `---
+name: searching-documents
+title: Search project documents
+description: Find things in a project's documents — the program (docs, handbook, code) and the project store (store/…, per-customer notes, contracts, generated files). Use before answering from documents, and when asked to build search or "semantic search" for a project.
+---
+
+# Searching project documents
+
+A project is one path namespace: the **program** (git — docs/, the handbook,
+workflows, apps; read at the shared main) and the **project store**
+(\`store/…\` — data made by using the brain: customer notes, contracts,
+generated decks; versioned per write, stamped with who wrote it). What you
+can see is exactly what the caller's grants cover: search never returns a
+document the caller may not read. Everything below is scope-filtered at the
+source, so use it freely.
+
+## Start with the primitives (usually enough)
+
+Over HTTP (the host mounts these at its API prefix), from a workflow
+(\`context.documents.*\`, ADR 0055), or from an MCP tool that wraps them:
+
+- **list** — \`GET /projects/:id/documents?prefix=docs\` (or \`prefix=store/customers/acme\`): paths, sizes, versions, authors.
+- **read** — \`GET …/documents/content?path=docs/handbook.md\` (JSON with \`text\`), \`…/documents/raw?path=\` for bytes, \`&version=N\` for history.
+- **grep** — \`GET …/documents/search?q=refund&prefix=docs\` — case-insensitive literal substring; matching lines with line numbers.
+- **full text** — \`…/documents/search?q=renewal acme&mode=text\` — words in any order (Postgres full-text on the store, tokenized match on the program).
+- **history** — \`…/documents/history?path=store/customers/acme/notes.md\`.
+
+Method: narrow by prefix, grep for the concrete term, read the few hits.
+Prefer several small greps to one broad full-text query; prefer reading a
+whole short document over stitching snippets. Cite paths (and versions for
+store documents) in answers.
+
+## When to build more (and how)
+
+Add a project-owned index only when the primitives fail on real questions:
+paraphrase ("customers unhappy with billing" ≠ "refund"), very large
+corpora, or ranking across thousands of documents. Then:
+
+1. **Keep the index in the project's Postgres**, next to the store — never in
+   the blob backend. Full-text (\`tsvector\`) plus vectors (\`pgvector\`) in one
+   table keyed by \`(path, version)\`; hybrid ranking (BM25/ts_rank + cosine)
+   beats either alone. Chunk by headings/paragraphs, keep the path and the
+   line range on every chunk so answers can cite.
+2. **Embed with the AI SDK** the project already depends on (\`embedMany\`
+   from \`ai\` with the host's provider); store the model id with the row and
+   re-embed on model change.
+3. **Index on write**: a workflow triggered when a store document changes
+   (or a periodic sweep) that reads the document through
+   \`context.documents.read\` and upserts chunks. Reading through
+   \`context.documents\` is what keeps the index honest about scope: the
+   indexer only sees what its caller may.
+4. **Serve as a workflow tool** (\`ai.tool-call\` trigger kind) that takes
+   \`{ query, prefix?, limit? }\`, embeds the query, ranks, and — before
+   returning — re-reads each hit through \`context.documents.read\` so a
+   caller who cannot read a document never sees its chunk. That final read
+   is not optional: the index is a hint, the documents surface is the law.
+5. Return the same shape as the primitives (\`path\`, \`source\`, \`lines\`)
+   plus a score, so agents can treat it like a smarter grep.
+
+Do not: run embeddings on every request, put document text into a vector
+DB outside the project's database, or return chunks without a final
+scope-checked read. Do not build this for a brain of a few hundred short
+documents — grep is faster and never lies.
+`;
+
 export const HOST_SKILLS: Record<string, string> = {
+  "searching-documents/SKILL.md": SEARCHING_DOCUMENTS_SKILL,
   "publishing-to-github/SKILL.md": `---
 name: publishing-to-github
 title: Publish to GitHub

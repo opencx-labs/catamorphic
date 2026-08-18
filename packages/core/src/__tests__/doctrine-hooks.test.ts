@@ -77,6 +77,17 @@ describe("hostSkills hook", () => {
     expect(frontmatter.description).toContain("GitHub");
   });
 
+  it("ships searching-documents (ADR 0055) with parseable frontmatter", () => {
+    const skill = HOST_SKILLS["searching-documents/SKILL.md"];
+    expect(skill).toBeDefined();
+    const frontmatter = parseSkillFrontmatter(skill ?? "");
+    expect(frontmatter.name).toBe("searching-documents");
+    // Primitives first, project-owned index only when they run out — and
+    // never a chunk without a final scope-checked read.
+    expect(skill).toContain("Start with the primitives");
+    expect(skill).toContain("context.documents.read");
+  });
+
   it("resolves once at construction and exposes the host-final map", () => {
     const hostSkills = vi.fn((defaults: Record<string, string>) => {
       const skills = { ...defaults };

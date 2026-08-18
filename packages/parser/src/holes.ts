@@ -65,7 +65,8 @@ function walk(
     walk(node.items, [...path, "[]"], supported, holes);
   }
   for (const combinator of ["anyOf", "oneOf", "allOf", "prefixItems"]) {
-    if (node[combinator] !== undefined) walk(node[combinator], path, false, holes);
+    if (node[combinator] !== undefined)
+      walk(node[combinator], path, false, holes);
   }
   if (
     node.additionalProperties !== undefined &&

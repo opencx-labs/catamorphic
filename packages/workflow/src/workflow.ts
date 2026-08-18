@@ -3,10 +3,7 @@ import {
   createBatch,
   type DefineBatch,
 } from "./batch.js";
-import type {
-  OutputTemplateMatches,
-  PayloadTemplateMatches,
-} from "./holes.js";
+import type { OutputTemplateMatches, PayloadTemplateMatches } from "./holes.js";
 import type { TriggerBinding } from "./index.js";
 import type {
   AssertJsonCompatible,
@@ -181,10 +178,105 @@ export type CallWorkflow = <Input, Output>(
   options: { input: Input },
 ) => WorkflowTransition<Output>;
 
+/**
+ * Who triggered the run (ADR 0055): stamped by the host at trigger time from
+ * the verified identity — never from `input`, which is author-typed. Absent
+ * for runs the host started as itself (root). `scope` is the caller's
+ * artifact refs (a viewer's grants); a full builder shows `scope: undefined`.
+ */
+export interface WorkflowCaller {
+  readonly externalUserId: string;
+  readonly scope?: ReadonlyArray<{
+    readonly kind: string;
+    readonly projectId: string;
+    readonly [key: string]: unknown;
+  }>;
+}
+
+/**
+ * A host-executed call, returned from a boundary like `callWorkflow`
+ * (ADR 0055): the boundary ends, the host runs the function with the run's
+ * caller attached, and the result becomes the next step's input. Retries
+ * of the step re-run the call — at-least-once, like any step IO.
+ */
+export type HostCall<Result = unknown> = <Args>(
+  args: Args,
+) => WorkflowTransition<Result>;
+
+/** `context.host.<capability…>.<fn>(args)`: dotted capability namespaces. */
+export interface HostNamespace {
+  readonly [name: string]: HostNamespace & HostCall;
+}
+
+export interface DocumentEntry {
+  path: string;
+  source: "program" | "store";
+  contentType: string;
+  size: number;
+  version?: number;
+  writtenBy?: string;
+  writtenAt?: string;
+}
+
+/**
+ * The documents surface, caller-bound (ADR 0055): every operation runs on
+ * the host with the run's caller identity, so a workflow can only ever
+ * reach what the caller may — search included. Same transition semantics
+ * as `callWorkflow`: return the call, receive the result in the next step.
+ */
+export interface DocumentsCalls {
+  list(args: {
+    prefix?: string;
+    source?: "program" | "store";
+  }): WorkflowTransition<DocumentEntry[]>;
+  read(args: {
+    path: string;
+    version?: number;
+  }): WorkflowTransition<DocumentEntry & { text?: string }>;
+  write(args: {
+    path: string;
+    text: string;
+    contentType?: string;
+    ifVersion?: number;
+  }): WorkflowTransition<DocumentEntry>;
+  delete(args: {
+    path: string;
+    ifVersion?: number;
+  }): WorkflowTransition<{ version: number }>;
+  history(args: { path: string }): WorkflowTransition<
+    Array<{
+      version: number;
+      deleted: boolean;
+      contentType: string;
+      size: number;
+      writtenBy: string;
+      writtenAt: string;
+    }>
+  >;
+  search(args: {
+    query: string;
+    mode?: "grep" | "text";
+    prefix?: string;
+    limit?: number;
+  }): WorkflowTransition<
+    Array<{
+      path: string;
+      source: "program" | "store";
+      lines: Array<{ line: number; text: string }>;
+    }>
+  >;
+}
+
 export interface BoundaryContext<Input> {
   readonly input: Input;
   readonly pause: Pause;
   readonly callWorkflow: CallWorkflow;
+  /** Who triggered the run; absent when the host started it as itself. */
+  readonly caller?: WorkflowCaller;
+  /** Host-executed capability calls, caller-bound (ADR 0055). */
+  readonly host: HostNamespace;
+  /** The documents surface, caller-bound (ADR 0055). */
+  readonly documents: DocumentsCalls;
 }
 
 export interface BoundaryOptions<Input, Returned> {

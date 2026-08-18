@@ -107,6 +107,9 @@ export {
   CapabilityRegistry,
   CapabilityResolutionError,
   DuplicateCapabilityProviderError,
+  type HostCallContext,
+  type HostCallFunction,
+  HostCallNotFoundError,
   ReservedCapabilityEnvError,
   UnfulfilledCapabilityError,
 } from "./services/capability-providers.js";
@@ -188,6 +191,7 @@ export {
   type ImportGithubRepoInput,
   ProjectNotLinkedToGithubError,
 } from "./services/github-service.js";
+export { executeHostCall, type HostCallInput } from "./services/host-calls.js";
 export {
   type GrantMembershipInput,
   type Membership,

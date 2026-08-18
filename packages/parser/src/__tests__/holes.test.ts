@@ -31,9 +31,9 @@ describe("schemaHoles", () => {
   });
 
   it("marks holes under unions and additionalProperties as unsupported", () => {
-    expect(
-      schemaHoles({ anyOf: [{ type: "string" }, HOLE("V")] }),
-    ).toEqual([{ name: "V", path: [], supported: false }]);
+    expect(schemaHoles({ anyOf: [{ type: "string" }, HOLE("V")] })).toEqual([
+      { name: "V", path: [], supported: false },
+    ]);
     expect(
       schemaHoles({ type: "object", additionalProperties: HOLE("V") }),
     ).toEqual([{ name: "V", path: [], supported: false }]);

@@ -1469,6 +1469,12 @@ export class RunsService {
               }),
               deployment_artifact_id: artifact.id,
               external_user_id: args.identity.externalUserId,
+              // Who triggered the run, as verified by the host (ADR 0055):
+              // the caller's scope, or null for builders/root.
+              caller_scope:
+                args.identity.scope === undefined
+                  ? null
+                  : jsonColumn(toJson(args.identity.scope)),
               status: "pending",
               phase:
                 source.graph.execution.steps[0]?.type === "batch"

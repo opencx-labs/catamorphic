@@ -39,6 +39,8 @@ describe("workflow contracts", () => {
         callWorkflow: () => {
           throw new Error("not used");
         },
+        host: {} as never,
+        documents: {} as never,
       }),
     ).resolves.toEqual({ orderId: "order-1", status: "prepared" });
   });

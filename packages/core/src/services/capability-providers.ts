@@ -1,4 +1,5 @@
 import type { CapabilityRequirement } from "@catamorphic/plugins";
+import type { Identity } from "../identity.js";
 import type { SecretEnvironment } from "./secrets-service.js";
 
 /**
@@ -28,10 +29,44 @@ export interface CapabilityProviderRuntime {
   /**
    * Mint env values for one run. Called on the run-launch path — keep it
    * fast and safe to call repeatedly (retried launches resolve again).
+   * Optional for call-only capabilities.
    */
-  resolve(
+  resolve?(
     context: CapabilityContext,
   ): Promise<Record<string, string>> | Record<string, string>;
+  /**
+   * Host functions a workflow may call as `context.host.<name>.<fn>(args)`
+   * (ADR 0055). Each runs on the host with the run's caller attached by
+   * core — a workflow cannot claim to be anyone — and its result becomes
+   * the next step's input. Retries of the step re-run the call.
+   */
+  calls?: Record<string, HostCallFunction>;
+}
+
+/** What a host function learns about the call it serves. */
+export interface HostCallContext {
+  /** The run's caller: tenant, user and — for viewers — their scope. */
+  caller: Identity;
+  projectId: string;
+  runId: string;
+  workflowName: string;
+}
+
+export type HostCallFunction = (
+  context: HostCallContext,
+  args: unknown,
+) => Promise<unknown> | unknown;
+
+export class HostCallNotFoundError extends Error {
+  constructor(
+    readonly capability: string,
+    readonly fn: string,
+  ) {
+    super(
+      `No host function '${fn}' on capability '${capability}'. Register it at boot (defineCapability({ name: "${capability}", calls: { ${fn} } })).`,
+    );
+    this.name = "HostCallNotFoundError";
+  }
 }
 
 export class DuplicateCapabilityProviderError extends Error {
@@ -106,6 +141,19 @@ export class CapabilityRegistry {
     return this.providers.has(name);
   }
 
+  /** Execute a host function (ADR 0055). Unknown capability/fn is an error. */
+  async call(
+    capability: string,
+    fn: string,
+    context: HostCallContext,
+    args: unknown,
+  ): Promise<unknown> {
+    const provider = this.providers.get(capability);
+    const call = provider?.calls?.[fn];
+    if (!call) throw new HostCallNotFoundError(capability, fn);
+    return call(context, args);
+  }
+
   /**
    * Resolve a set of requirements into one env map. Non-optional
    * requirements without a provider throw (attach validation should make
@@ -129,7 +177,7 @@ export class CapabilityRegistry {
       }
       let values: Record<string, string>;
       try {
-        values = await provider.resolve(context);
+        values = provider.resolve ? await provider.resolve(context) : {};
       } catch (cause) {
         throw new CapabilityResolutionError({
           capability: requirement.name,

@@ -1,6 +1,8 @@
 export {
   DEPLOYMENT_RUNTIME_VERSION,
+  DOCUMENTS_CAPABILITY,
   RUNTIME_PROTOCOL_VERSION,
+  type RuntimeHostCallTransition,
 } from "@catamorphic/runtime";
 export {
   buildPluginsPreamble,

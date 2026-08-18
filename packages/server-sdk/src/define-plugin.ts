@@ -1,6 +1,7 @@
 import type {
   CapabilityContext,
   CapabilityProviderRuntime,
+  HostCallFunction,
   McpToolKindSpec,
   ProjectLifecycleHooks,
   TriggerKindRuntime,
@@ -12,6 +13,12 @@ import type {
  * and returns env values that are merged into the run's environment and
  * never persisted — the place to mint short-lived, per-project credentials.
  *
+ * `calls` (ADR 0055) are host functions a workflow reaches as
+ * `context.host.<name>.<fn>(args)`: each runs on the host with the run's
+ * caller attached by core (`{ caller, projectId, runId, workflowName }`) —
+ * a workflow cannot claim to be anyone — and its result feeds the next
+ * step. Either or both of `resolve` / `calls` may be given.
+ *
  * Register the result under `createCatamorphic({ capabilityProviders })`,
  * or bundle it into a `definePlugin` host half.
  */
@@ -19,14 +26,16 @@ export function defineCapability(args: {
   /** Dot-namespaced name, e.g. "acme.database". */
   name: string;
   description?: string;
-  resolve: (
+  resolve?: (
     context: CapabilityContext,
   ) => Promise<Record<string, string>> | Record<string, string>;
+  calls?: Record<string, HostCallFunction>;
 }): CapabilityProviderRuntime {
   return {
     name: args.name,
     description: args.description,
-    resolve: args.resolve,
+    ...(args.resolve ? { resolve: args.resolve } : {}),
+    ...(args.calls ? { calls: args.calls } : {}),
   };
 }
 

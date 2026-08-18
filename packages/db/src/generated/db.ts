@@ -453,6 +453,7 @@ export interface WorkflowRunEvents {
 
 export interface WorkflowRuns {
   attempt: Generated<number>;
+  caller_scope: Json | null;
   cancel_reason: string | null;
   cancel_requested_at: Timestamp | null;
   completed_at: Timestamp | null;

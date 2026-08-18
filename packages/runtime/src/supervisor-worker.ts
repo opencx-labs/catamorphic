@@ -1,4 +1,9 @@
 import { pathToFileURL } from "node:url";
+import {
+  documentsCalls,
+  hostCallTransition,
+  hostNamespace,
+} from "./context-calls.js";
 import type { ResolvedRuntimeInvocation } from "./supervisor-dispatcher.js";
 import type {
   RuntimeBatchStepSuspension,
@@ -208,8 +213,19 @@ async function executeInvocationTarget(args: {
       input: options.input,
       ...(metadata ? { workflow: metadata } : {}),
     });
+    // Host calls (ADR 0055): a boundary returns the call; the host executes
+    // it with the run's caller attached and the result feeds the next step.
+    const documents = documentsCalls(hostCallTransition);
+    const caller = isRecord(input.caller) ? input.caller : undefined;
     const returned = await Reflect.apply(run, boundary, [
-      { input: input.value, pause, callWorkflow },
+      {
+        input: input.value,
+        pause,
+        callWorkflow,
+        ...(caller ? { caller } : {}),
+        host: hostNamespace([], hostCallTransition),
+        documents,
+      },
     ]);
     const safe = strictJson({
       value: returned,
@@ -218,7 +234,8 @@ async function executeInvocationTarget(args: {
     if (
       isRecord(safe) &&
       (safe.__catamorphicDurableTransition === "pause" ||
-        safe.__catamorphicDurableTransition === "child_workflow")
+        safe.__catamorphicDurableTransition === "child_workflow" ||
+        safe.__catamorphicDurableTransition === "host_call")
     ) {
       return { type: safe.__catamorphicDurableTransition, transition: safe };
     }

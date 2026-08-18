@@ -68,6 +68,25 @@ interface RuntimeInvocationRequestBase extends RuntimeArtifactIdentity {
   traceContext?: Record<string, string>;
 }
 
+/**
+ * The built-in capability behind `context.documents` (ADR 0055): a
+ * `host_call` transition whose `capability` is this name is served by the
+ * host's documents surface with the run's caller identity.
+ */
+export const DOCUMENTS_CAPABILITY = "catamorphic.documents";
+
+/**
+ * A boundary result carrying a host call (ADR 0055): the host runs
+ * `capability`.`fn`(`args`) with the run's caller attached and feeds the
+ * result to the next step, exactly like a child workflow's output.
+ */
+export interface RuntimeHostCallTransition {
+  __catamorphicDurableTransition: "host_call";
+  capability: string;
+  fn: string;
+  args: unknown;
+}
+
 export type RuntimeInvocationRequest =
   | (RuntimeInvocationRequestBase & {
       kind: "durable-boundary";

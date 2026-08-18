@@ -30,6 +30,13 @@ const PAUSED_RUN_PARK_MS = 60 * 60 * 1_000;
 
 interface BoundaryRuntimeContext {
   identity: Identity;
+  /**
+   * The run's caller (ADR 0055): the identity that triggered it — the
+   * run's user with the scope stamped at trigger time. What host calls
+   * and the documents surface act as; `identity` stays the run's
+   * mechanics identity (tenant, user).
+   */
+  caller: Identity;
   runId: string;
   workflowStepAttemptId: string;
   projectId: string;
@@ -77,6 +84,19 @@ export class BoundaryExecutionHandler {
         capabilities: WorkflowCapabilities;
         execution: WorkflowExecutionDescriptor;
       }>;
+      /**
+       * Execute a host call transition (ADR 0055) as the run's caller. The
+       * documents capability and the registry's `calls` both live here.
+       */
+      callHost(args: {
+        caller: Identity;
+        projectId: string;
+        runId: string;
+        workflowName: string;
+        capability: string;
+        fn: string;
+        args: unknown;
+      }): Promise<unknown>;
     },
   ) {
     deps.worker.registerHandler({
@@ -131,7 +151,17 @@ export class BoundaryExecutionHandler {
             ...context,
             invocationId,
             kind: "durable-boundary",
-            input: { value: context.input },
+            // The caller rides beside the input (never inside it — input is
+            // author-typed) so the boundary can read `context.caller`.
+            input: {
+              value: context.input,
+              caller: {
+                externalUserId: context.caller.externalUserId,
+                ...(context.caller.scope
+                  ? { scope: toJson(context.caller.scope) }
+                  : {}),
+              },
+            },
             signal: args.signal,
           }),
       });
@@ -203,6 +233,50 @@ export class BoundaryExecutionHandler {
           execution: child.execution,
           input: toJson(transition.input),
         },
+      });
+      return;
+    }
+    if (result.type === "host_call") {
+      const transition = jsonRecord(result.transition);
+      const capability = stringValue(transition.capability);
+      const fn = stringValue(transition.fn);
+      if (!capability || !fn) {
+        await this.deps.coordinator.failStep({
+          workflowStepAttemptId: context.workflowStepAttemptId,
+          job: args.job,
+          error: "Host call transition is missing its capability or function",
+        });
+        return;
+      }
+      // Executed here, as the caller, and recorded as this step's output —
+      // the next step receives it as input, like a child workflow's result.
+      // A throw fails the step; the step's retry policy re-runs the call.
+      let output: unknown;
+      try {
+        output = await this.deps.callHost({
+          caller: context.caller,
+          projectId: context.projectId,
+          runId: context.runId,
+          workflowName: context.workflowName,
+          capability,
+          fn,
+          args: transition.args,
+        });
+      } catch (error) {
+        await this.deps.coordinator.failStep({
+          workflowStepAttemptId: context.workflowStepAttemptId,
+          job: args.job,
+          error: `Host call ${capability}.${fn} failed: ${
+            error instanceof Error ? error.message : String(error)
+          }`,
+        });
+        return;
+      }
+      args.signal.throwIfAborted();
+      await this.deps.coordinator.completeStep({
+        workflowStepAttemptId: context.workflowStepAttemptId,
+        job: args.job,
+        output: toJson(output === undefined ? null : output),
       });
       return;
     }
@@ -308,6 +382,7 @@ export class BoundaryExecutionHandler {
         "workflow_runs.project_id",
         "workflow_runs.workflow_name",
         "workflow_runs.external_user_id",
+        "workflow_runs.caller_scope",
         "workflow_runs.status",
         "workflow_runs.deployment_artifact_id",
         "deployment_artifacts.commit_sha",
@@ -327,10 +402,17 @@ export class BoundaryExecutionHandler {
     const exportName = stringValue(target.exportName);
     if (!modulePath || !exportName)
       throw new Error("Execution target is invalid");
+    const identity: Identity = {
+      tenantId: row.tenant_id,
+      externalUserId: row.external_user_id,
+    };
     return {
-      identity: {
-        tenantId: row.tenant_id,
-        externalUserId: row.external_user_id,
+      identity,
+      caller: {
+        ...identity,
+        ...(Array.isArray(row.caller_scope)
+          ? { scope: row.caller_scope as unknown as Identity["scope"] }
+          : {}),
       },
       runId: row.run_id,
       workflowStepAttemptId: row.workflow_step_attempt_id,

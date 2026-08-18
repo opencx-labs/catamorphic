@@ -1,5 +1,10 @@
 export type { BunWorkerFactoryOptions } from "./bun-worker.js";
 export { BunWorkerFactory } from "./bun-worker.js";
+export {
+  documentsCalls,
+  hostCallTransition,
+  hostNamespace,
+} from "./context-calls.js";
 export type {
   ResolvedRuntimeInvocation,
   RuntimeInvocationDispatcherOptions,
@@ -45,8 +50,10 @@ export type {
 } from "./supervisor-protocol.js";
 export {
   DEPLOYMENT_RUNTIME_VERSION,
+  DOCUMENTS_CAPABILITY,
   parseRuntimeInvocationRequest,
   RUNTIME_PROTOCOL_VERSION,
+  type RuntimeHostCallTransition,
   toProtocolJson,
 } from "./supervisor-protocol.js";
 export type {
