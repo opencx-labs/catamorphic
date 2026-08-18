@@ -7,6 +7,7 @@ import type {
 } from "@catamorphic/sandbox";
 import { instrumentSandboxProvider } from "@catamorphic/sandbox";
 import type { Kysely } from "kysely";
+import type { Identity } from "./identity.js";
 import { HOST_SKILLS, SEED_SKILLS } from "./seeds.js";
 import { AgentContextService } from "./services/agent-context-service.js";
 import { AgentDefinitionsService } from "./services/agent-definitions-service.js";
@@ -52,6 +53,8 @@ import {
   type ProjectLifecycleHooks,
   ProjectsService,
 } from "./services/projects-service.js";
+import { ProposalsService } from "./services/proposals-service.js";
+import { PublicationsService } from "./services/publications-service.js";
 import { RateReservationsService } from "./services/rate-reservations-service.js";
 import { RemoteSyncService } from "./services/remote-sync-service.js";
 import {
@@ -88,6 +91,13 @@ export interface CatamorphicCoreConfig {
    * text and the search index always stay in the database.
    */
   documentBlobStore?: DocumentBlobStore;
+  /**
+   * The identity whose code-host connection opens pull requests for members'
+   * proposals (ADR 0055) — the organisation's bot account, connected to
+   * GitHub like any user. Absent = proposals land as branches on the
+   * project origin only.
+   */
+  proposalBot?: Identity;
   db: Kysely<DB>;
   projectManager: ProjectManager;
   sandboxProvider?: SandboxProvider;
@@ -241,6 +251,10 @@ export class CatamorphicCore {
   readonly memberships: MembershipsService;
   /** The documents surface: program (git) + project store (ADR 0055). */
   readonly documents: DocumentsService;
+  /** Propose-a-change: member edits as branches/PRs on their behalf (ADR 0055). */
+  readonly proposals: ProposalsService;
+  /** Publications: documents served to an audience at a stable URL (ADR 0055). */
+  readonly publications: PublicationsService;
   readonly tenantPolicies: TenantPoliciesService;
   readonly retention: RetentionService;
   readonly plugins?: PluginsService;
@@ -450,6 +464,13 @@ export class CatamorphicCore {
         ? { blobStore: config.documentBlobStore }
         : {}),
     });
+    this.publications = new PublicationsService(this.db);
+    this.proposals = new ProposalsService(
+      this.db,
+      this.projectManager,
+      this.github ? [this.github.codeHost] : [],
+      config.proposalBot,
+    );
 
     if (config.codingAgent && this.sandboxProvider && this.devSandboxes) {
       const codingAgents = isCodingAgentRegistry(config.codingAgent)

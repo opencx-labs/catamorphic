@@ -220,6 +220,20 @@ export {
   type WriteFileInput,
 } from "./services/projects-service.js";
 export {
+  mayPropose,
+  type ProposalResult,
+  ProposalsService,
+  type ProposedChange,
+  type ProposeInput,
+  proposalBranch,
+} from "./services/proposals-service.js";
+export {
+  type Publication,
+  type PublicationAudience,
+  PublicationNotFoundError,
+  PublicationsService,
+} from "./services/publications-service.js";
+export {
   type BlockedRateReservation,
   type GrantedRateReservation,
   type RateBucketKey,

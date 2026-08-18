@@ -20,6 +20,7 @@ import { registerPlaygroundRoutes } from "./routes/playground.js";
 import { registerPluginRoutes } from "./routes/plugins.js";
 import { registerProjectMcpRoutes } from "./routes/project-mcp.js";
 import { registerProjectRoutes } from "./routes/projects.js";
+import { registerPublicationRoutes } from "./routes/publications.js";
 import { registerRunRoutes } from "./routes/runs.js";
 import { registerTriggerRoutes } from "./routes/triggers.js";
 import { registerWorkflowRoutes } from "./routes/workflows.js";
@@ -96,8 +97,21 @@ export const catamorphicPlugin: FastifyPluginAsync<
   // stashed on the request for `resolveIdentity`. A `null` is the host
   // saying "not signed in".
   app.addHook("onRequest", async (request, reply) => {
-    const identity = await opts.identity(request);
+    // Public publications (ADR 0055) are the one anonymous surface: the
+    // route mints its own document-scoped identity. A missing/invalid
+    // session is still resolved (a signed-in member reading a public link
+    // is fine) but never required.
+    const isPublic =
+      (request.routeOptions.config as { public?: boolean } | undefined)
+        ?.public === true;
+    let identity: Awaited<ReturnType<typeof opts.identity>> = null;
+    try {
+      identity = await opts.identity(request);
+    } catch (error) {
+      if (!isPublic) throw error;
+    }
     if (!identity) {
+      if (isPublic) return;
       return reply.status(401).send({ error: "Unauthorized" });
     }
     attachIdentity(request, identity);
@@ -112,6 +126,7 @@ export const catamorphicPlugin: FastifyPluginAsync<
   registerAgentRoutes(app, ctx);
   registerMembershipRoutes(app, ctx);
   registerDocumentRoutes(app, ctx);
+  registerPublicationRoutes(app, ctx);
   registerAppRoutes(app, ctx);
   registerAppsMcpRoutes(app, ctx);
   registerProjectMcpRoutes(app, ctx);

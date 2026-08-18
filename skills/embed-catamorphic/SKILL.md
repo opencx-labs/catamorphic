@@ -658,6 +658,15 @@ committed files; core expands them. Three pieces, all small:
    Hosts that keep roles/grants themselves call `resolveRoles(core, {
    tenantId, projectId, externalUserId, roles, grants })` instead.
 
+Members can also **propose** program changes (`propose_change` on the
+MCP endpoint / `POST /projects/:id/proposals`): configure `proposalBot`
+(an identity connected to GitHub) on `createCatamorphic` and proposals
+open as pull requests on the member's behalf; without it they land as
+branches on the origin. And they can **publish** their own store documents
+(`POST /projects/:id/publications`, audience `public` or `members`);
+public ones are served unauthenticated at `/public/:projectId/:slug` as an
+anonymous identity scoped to that one document.
+
 What a member can and cannot do, without further host code:
 
 - open chats on the agents their role names (own conversations only); the

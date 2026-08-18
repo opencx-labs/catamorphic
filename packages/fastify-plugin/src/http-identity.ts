@@ -76,6 +76,11 @@ export function attachIdentity(request: FastifyRequest, identity: Identity) {
   (request as unknown as IdentityCarrier)[IDENTITY_KEY] = identity;
 }
 
+/** The attached identity, or null on a public route with no session. */
+export function optionalIdentity(request: FastifyRequest): Identity | null {
+  return (request as unknown as IdentityCarrier)[IDENTITY_KEY] ?? null;
+}
+
 /**
  * The identity the plugin's resolver attached to this request. Routes call
  * this; it never reads headers itself.

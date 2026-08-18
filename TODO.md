@@ -82,21 +82,20 @@
   AI-built custom issue trackers per customer — customers as scoped
   viewers of per-customer apps, tenants connecting to their own workflow
   tools over MCP.
-- **Company brain: roles, scoped agents, project store, remote projects (ADR 0055).**
-  Absorbs the previously parked publications / caller-identity / authorize-
-  seam / blob-storage items. Build order once accepted: (1) `project` +
-  `agent` scope kinds, scoped agent sessions on the server, caller scope ∩
-  agent tool policy (ADR 0054 plus one layer); (2) `roles/<name>.json` +
-  `resolveRoles`, stock `MembershipsService` (grant/revoke/identityFor),
-  `identityFromBearer`, embed-skill recipe rewritten around them; (3) the
-  project store — service + per-path versions + pluggable blob backend, the
-  scoped file surface (list/read/write with versions), document subtree
-  refs with `access`, `written_by` stamping, `context.caller` +
-  caller-bound `context.documents` in `BoundaryContext`, capability
-  `calls` (host functions as durable boundaries), the `searching-documents`
-  host-tier skill; (4) the per-project MCP
-  endpoint (documents, workflows, skills, "ask agent" tools) narrowed by
-  identity; (5) desktop remote projects — connect link, folder sync of the
-  scoped tree, ship with version check, per-file history; (6)
-  propose-a-change (bot PR "on behalf of") via the CodeHost seam,
-  publications = `document` refs with a `public` audience.
+- **ADR 0055 follow-ups (company brain).** The six steps landed (scope kinds
+  + scoped agent sessions; roles/memberships/`identityFromBearer`; project
+  store + documents surface + `context.caller/documents/host`; project MCP
+  endpoint; desktop remote projects; proposals + publications). Left for
+  later, in rough priority: (a) desktop remote projects — auto-sync on focus
+  / interval, a per-version "restore" button in the history modal, and
+  surfacing the project MCP endpoint's skills/agents in the connect flow;
+  (b) `context.host` typed through the generated projections (ADR 0041) so
+  `host.acme.crm.lookupAccount` is typed in project code; (c) an admin UI
+  for memberships/roles/publications in the desktop (today: HTTP + agent);
+  (d) the reader working copies (`catamorphic-reader`, `-proposals`) share
+  the per-user clone layout — a stock server should give them a bare/shared
+  checkout; (e) the store's `search` reads whole program trees for grep on
+  every call — index program text like store text once brains get large;
+  (f) proposals: PR reviews rendered natively; a "propose this edit" action
+  in the desktop editor for program files in remote projects; (g) public
+  publications for apps (today: documents only).

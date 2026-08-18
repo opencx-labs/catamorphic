@@ -70,13 +70,18 @@ export async function listProgramBlobs(
 ): Promise<Array<{ path: string; digest: string }>> {
   if (ref) {
     const blobs = await repo.listBlobsAtRef(ref, prefix ? { prefix } : {});
-    return blobs.map((blob) => ({ path: blob.path, digest: `git:${blob.oid}` }));
+    return blobs.map((blob) => ({
+      path: blob.path,
+      digest: `git:${blob.oid}`,
+    }));
   }
   const files = await listProgramFiles(repo, ref, prefix);
   return Promise.all(
     files.map(async (file) => ({
       path: file,
-      digest: `sha256:${createHash("sha256").update(await repo.readFile(file)).digest("hex")}`,
+      digest: `sha256:${createHash("sha256")
+        .update(await repo.readFile(file))
+        .digest("hex")}`,
     })),
   );
 }

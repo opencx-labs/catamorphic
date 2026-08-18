@@ -297,6 +297,55 @@ export function surfaceTools(
     );
   }
 
+  if (core.proposals && mayUseProject(identity, projectId)) {
+    const proposals = core.proposals;
+    tools.push({
+      definition: {
+        name: "propose_change",
+        description:
+          "Propose a change to the program — docs, templates, workflows, anything outside store/ — when you cannot commit directly. The files land on a branch from the shared main authored as the caller, and a pull request opens on the caller's behalf when the project is linked to a code host. Give a clear title and, for each change, the full new content (or delete: true).",
+        inputSchema: {
+          type: "object",
+          properties: {
+            title: { type: "string" },
+            body: { type: "string" },
+            changes: {
+              type: "array",
+              items: {
+                type: "object",
+                properties: {
+                  path: { type: "string" },
+                  content: { type: "string" },
+                  delete: { type: "boolean" },
+                },
+                required: ["path"],
+              },
+            },
+          },
+          required: ["title", "changes"],
+        },
+      },
+      call: guarded(async (args) => {
+        const changes = Array.isArray(args.changes)
+          ? (args.changes as Array<Record<string, unknown>>)
+          : [];
+        return proposals.propose({
+          identity,
+          projectId,
+          title: str(args.title) ?? "",
+          ...(str(args.body) ? { body: str(args.body) } : {}),
+          changes: changes.map((change) => ({
+            path: str(change.path) ?? "",
+            ...(typeof change.content === "string"
+              ? { content: change.content }
+              : {}),
+            ...(change.delete === true ? { delete: true } : {}),
+          })),
+        });
+      }),
+    });
+  }
+
   if (core.agentSessions) {
     const sessions = core.agentSessions;
     const agentNames = (identity.scope ?? [])

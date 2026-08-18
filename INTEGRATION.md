@@ -493,6 +493,13 @@ filesystem or S3-compatible store) is configured; metadata, versions, text
 and the search index always stay in the database. The framework's
 `searching-documents` host skill carries the recipe agents follow.
 
+### Proposals and publications (ADR 0055)
+
+Two more members' surfaces, both enforced by core and served by the plugin:
+
+- **Propose a change** — `POST /projects/:id/proposals` `{ title, body?, changes: [{ path, content } | { path, delete: true }] }` (also the MCP tool `propose_change`). Program paths only (store paths ship directly). Core commits the files on a fresh `proposals/<member>/<title>-<stamp>` branch from the shared `main`, authored as the member, and — when the project is linked to a code host and you configured `proposalBot` (the identity whose GitHub connection acts for members) — pushes it and opens a pull request "Proposed by <member> via Catamorphic". Without a bot the branch lands on the project origin, where builders see it. Anyone who may use the project may propose.
+- **Publications** — `POST /projects/:id/publications` `{ path, audience: "public" | "members", slug? }` → `{ slug, url, … }`; `GET` lists (builders all, members their own), `DELETE …/:slug` revokes. Builders publish what they may read; members what they may write (their own store documents). Serving: `GET /projects/:id/publications/:slug` for members (host auth) and `GET /public/:id/:slug` for `public` — the one route the identity hook lets through unauthenticated (route config `public: true`); it reads the document as an anonymous identity scoped to exactly that document, so nothing else is reachable. Unknown, revoked and not-for-you are one uniform 404.
+
 ### Reference architecture: a database per project
 
 The capability seam is how embedders give every project real database

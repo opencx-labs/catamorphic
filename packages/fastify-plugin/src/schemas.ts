@@ -1049,6 +1049,50 @@ export const WriteDocumentSchema = z
     message: "Provide exactly one of text or base64",
   });
 
+// --- Proposals (ADR 0055) ---
+export const ProposeChangeSchema = z.object({
+  title: z.string().min(1).max(200),
+  body: z.string().max(20_000).optional(),
+  changes: z
+    .array(
+      z.object({
+        path: z.string().min(1),
+        content: z.string().optional(),
+        delete: z.boolean().optional(),
+      }),
+    )
+    .min(1)
+    .max(200),
+});
+
+export const ProposalResultSchema = z.object({
+  branch: z.string(),
+  pullRequest: z.object({ url: z.string(), number: z.number() }).optional(),
+});
+
+// --- Publications (ADR 0055) ---
+export const PublicationSchema = z.object({
+  slug: z.string(),
+  projectId: z.string(),
+  path: z.string(),
+  audience: z.enum(["public", "members"]),
+  createdBy: z.string(),
+  createdAt: z.string(),
+  revokedAt: z.string().nullable(),
+  /** Where the audience reads it: the public path, or the members path. */
+  url: z.string(),
+});
+
+export const PublishSchema = z.object({
+  path: z.string().min(1),
+  audience: z.enum(["public", "members"]),
+  slug: z.string().min(1).max(64).optional(),
+});
+
+export const PublicationParamsSchema = ProjectIdParamsSchema.extend({
+  slug: z.string().min(1).max(64),
+});
+
 // --- Playground Parse ---
 // Pure AST parse of in-flight draft files → WorkflowGraph. Browser clients
 // can't run `@catamorphic/parser` (ts-morph → node:fs) so the server does it.

@@ -331,6 +331,17 @@ export interface ProjectSecrets {
   value: string;
 }
 
+export interface Publications {
+  audience: string;
+  created_at: Generated<Timestamp>;
+  created_by: string;
+  id: Generated<string>;
+  path: string;
+  project_id: string;
+  revoked_at: Timestamp | null;
+  slug: string;
+}
+
 export interface RateReservationBuckets {
   blocked_until: Timestamp | null;
   capacity: Numeric;
@@ -545,6 +556,7 @@ export interface DB {
   project_sandboxes: ProjectSandboxes;
   project_secrets: ProjectSecrets;
   projects: Projects;
+  publications: Publications;
   rate_reservation_buckets: RateReservationBuckets;
   store_document_versions: StoreDocumentVersions;
   store_documents: StoreDocuments;

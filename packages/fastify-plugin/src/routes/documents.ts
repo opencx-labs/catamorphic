@@ -17,6 +17,8 @@ import {
   DocumentVersionSchema,
   ErrorSchema,
   ProjectIdParamsSchema,
+  ProposalResultSchema,
+  ProposeChangeSchema,
   WriteDocumentSchema,
 } from "../schemas.js";
 
@@ -284,6 +286,37 @@ export function registerDocumentRoutes(
             ...rest,
           }),
         );
+      } catch (err) {
+        return handleErrors(err, reply);
+      }
+    },
+  });
+
+  // Propose a change to the program (ADR 0055): files land on a branch from
+  // the shared main, authored as the member; a PR opens through the host's
+  // bot when a code host is linked.
+  typed.route({
+    method: "POST",
+    url: "/projects/:projectId/proposals",
+    schema: {
+      params: ProjectIdParamsSchema,
+      body: ProposeChangeSchema,
+      response: {
+        201: ProposalResultSchema,
+        400: ErrorSchema,
+        404: ErrorSchema,
+      },
+    },
+    handler: async (request, reply) => {
+      try {
+        const result = await core().proposals.propose({
+          identity: resolveIdentity(request),
+          projectId: request.params.projectId,
+          title: request.body.title,
+          ...(request.body.body ? { body: request.body.body } : {}),
+          changes: request.body.changes,
+        });
+        return reply.status(201).send(result);
       } catch (err) {
         return handleErrors(err, reply);
       }
