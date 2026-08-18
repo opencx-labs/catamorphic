@@ -82,16 +82,21 @@
   AI-built custom issue trackers per customer — customers as scoped
   viewers of per-customer apps, tenants connecting to their own workflow
   tools over MCP.
-- **Company brain: roles, scoped agents, project store (ADR 0055, proposed).**
+- **Company brain: roles, scoped agents, project store, remote projects (ADR 0055).**
   Absorbs the previously parked publications / caller-identity / authorize-
-  seam / blob-storage items. Build order once accepted: (1) `agent` scope
-  kind + scoped agent sessions on the server, caller scope ∩ agent tool
-  policy (ADR 0054 plus one layer); (2) `roles/<name>.json` + `resolveRoles`
-  helper, embed-skill recipe uses it; (3) the project store — service,
-  routes, `read/write/list_document` agent tools, desktop Documents surface,
-  document subtree refs with `access`, `written_by` stamping, pluggable blob
-  backend; (4) `context.caller` in `BoundaryContext`; (5) propose-a-change:
-  bot PR "on behalf of" via the CodeHost seam; (6) publications = `document`
-  refs with a `public` audience (anonymous, read-only, tenant-scoped
-  identity minted only for those). Open questions listed at the end of the
-  ADR.
+  seam / blob-storage items. Build order once accepted: (1) `project` +
+  `agent` scope kinds, scoped agent sessions on the server, caller scope ∩
+  agent tool policy (ADR 0054 plus one layer); (2) `roles/<name>.json` +
+  `resolveRoles`, stock `MembershipsService` (grant/revoke/identityFor),
+  `identityFromBearer`, embed-skill recipe rewritten around them; (3) the
+  project store — service + per-path versions + pluggable blob backend, the
+  scoped file surface (list/read/write with versions), document subtree
+  refs with `access`, `written_by` stamping, `context.caller` +
+  caller-bound `context.documents` in `BoundaryContext`, capability
+  `calls` (host functions as durable boundaries), the `searching-documents`
+  host-tier skill; (4) the per-project MCP
+  endpoint (documents, workflows, skills, "ask agent" tools) narrowed by
+  identity; (5) desktop remote projects — connect link, folder sync of the
+  scoped tree, ship with version check, per-file history; (6)
+  propose-a-change (bot PR "on behalf of") via the CodeHost seam,
+  publications = `document` refs with a `public` audience.
