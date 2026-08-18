@@ -113,6 +113,24 @@ export type AgentMcpServerConfig =
     };
 
 /**
+ * Where a harness reads its agent-wide MCP servers from: a fixed map, or a
+ * getter the host keeps current. Harnesses read the getter live — at every
+ * connect (built-in agent), spawn (Codex) or query (Claude Code) — so a
+ * rotated OAuth token or renewed header reaches the next call without the
+ * host rebuilding the provider (which would drop its live sessions).
+ */
+export type McpServersSource =
+  | Record<string, AgentMcpServerConfig>
+  | (() => Record<string, AgentMcpServerConfig>);
+
+export function resolveMcpServers(
+  source: McpServersSource | undefined,
+): Record<string, AgentMcpServerConfig> {
+  if (!source) return {};
+  return typeof source === "function" ? source() : source;
+}
+
+/**
  * A Claude Code plugin staged on disk for harnesses that can load it
  * natively. MCP servers a plugin declares are NOT loaded from the plugin —
  * the host lifts them into {@link AgentMcpServerConfig}s so every harness

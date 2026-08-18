@@ -3,6 +3,7 @@ import type {
   AgentEvent,
   AgentMcpServerConfig,
   CodingAgentProvider,
+  McpServersSource,
   McpToolPolicyLayers,
   ProviderSession,
   StartSessionOpts,
@@ -12,6 +13,7 @@ import type {
 import {
   buildPluginsPreamble,
   mergePolicyLayers,
+  resolveMcpServers,
   resolveToolPermissionAcross,
   stagePluginDocs,
 } from "@catamorphic/sandbox";
@@ -54,9 +56,11 @@ export interface CodexAgentOpts {
    * option, but its CLI accepts arbitrary `--config` overrides — the SDK
    * flattens these into `mcp_servers.<name>.*` keys, the same shape a
    * `config.toml` would carry. The CLI owns the connections and speaks
-   * whatever protocol revision each server negotiates.
+   * whatever protocol revision each server negotiates. Every turn spawns
+   * a fresh CLI, so a getter (read per spawn) carries a rotated
+   * credential to the next turn without a provider rebuild.
    */
-  mcpServers?: Record<string, AgentMcpServerConfig>;
+  mcpServers?: McpServersSource;
   /**
    * Per-server tool permissions (see @catamorphic/sandbox tool-policy).
    * Codex offers no per-call approval channel to a host (its approvals
@@ -67,9 +71,13 @@ export interface CodexAgentOpts {
    * {@link mcpToolAnnotations} can be resolved ahead of time; unknown
    * tools follow the default only when it is explicit.
    */
-  mcpPolicies?: Record<string, McpToolPolicyLayers>;
+  mcpPolicies?:
+    | Record<string, McpToolPolicyLayers>
+    | (() => Record<string, McpToolPolicyLayers> | undefined);
   /** Tool annotations per server, so `auto` can be resolved at spawn. */
-  mcpToolAnnotations?: Record<string, Record<string, ToolPolicyAnnotations>>;
+  mcpToolAnnotations?:
+    | Record<string, Record<string, ToolPolicyAnnotations>>
+    | (() => Record<string, Record<string, ToolPolicyAnnotations>> | undefined);
 }
 
 /**
@@ -87,7 +95,6 @@ export interface CodexAgentOpts {
  */
 export class CodexAgent implements CodingAgentProvider {
   readonly name = "codex";
-  private readonly client: Codex;
   private readonly opts: CodexAgentOpts;
   /**
    * Standing instructions for sessions whose thread hasn't started yet,
@@ -107,21 +114,11 @@ export class CodexAgent implements CodingAgentProvider {
     string,
     Record<string, McpToolPolicyLayers>
   >();
-  private readonly clients = new Map<string, Codex>();
-
   constructor(opts: CodexAgentOpts = {}) {
     this.opts = opts;
-    this.client = this.buildClient(opts.mcpPolicies);
   }
 
-  private buildClient(
-    policies: Record<string, McpToolPolicyLayers> | undefined,
-  ): Codex {
-    const config = mcpServersConfig(
-      this.opts.mcpServers ?? {},
-      policies,
-      this.opts.mcpToolAnnotations,
-    );
+  private buildClient(config: CodexOptions["config"] | undefined): Codex {
     return new Codex({
       apiKey: this.opts.apiKey,
       baseUrl: this.opts.baseUrl,
@@ -133,20 +130,28 @@ export class CodexAgent implements CodingAgentProvider {
     });
   }
 
-  /** The client a session spawns through: the shared one, or one carrying
-   * the caller's narrowing when the session serves a scoped caller. */
+  /**
+   * The client a turn spawns through. A `Codex` is just spawn config, so
+   * one is built per turn from the live sources — servers with their
+   * current headers (a rotated token rides the next spawn), the
+   * provider's policies narrowed by the session's caller (ADR 0055) —
+   * with no provider rebuild and nothing to cache.
+   */
   private clientFor(hostSessionId: string): Codex {
-    const caller = this.callerPolicies.get(hostSessionId);
-    if (!caller || Object.keys(caller).length === 0) return this.client;
-    const digest = JSON.stringify(caller);
-    let client = this.clients.get(digest);
-    if (!client) {
-      client = this.buildClient(
-        mergePolicyLayers(this.opts.mcpPolicies, caller),
-      );
-      this.clients.set(digest, client);
-    }
-    return client;
+    const own =
+      typeof this.opts.mcpPolicies === "function"
+        ? this.opts.mcpPolicies()
+        : this.opts.mcpPolicies;
+    const annotations =
+      typeof this.opts.mcpToolAnnotations === "function"
+        ? this.opts.mcpToolAnnotations()
+        : this.opts.mcpToolAnnotations;
+    const config = mcpServersConfig(
+      resolveMcpServers(this.opts.mcpServers),
+      mergePolicyLayers(own, this.callerPolicies.get(hostSessionId)),
+      annotations,
+    );
+    return this.buildClient(config);
   }
 
   async startSession(opts: StartSessionOpts): Promise<ProviderSession> {
@@ -327,8 +332,10 @@ function mcpServersConfig(
 }
 
 /**
- * The Codex-side rendering of a policy. Ask fails closed here — Codex
- * cannot ask. Two shapes:
+ * The Codex-side rendering of a policy: the same per-tool resolution the
+ * shared `ToolGate` runs live in the other harnesses, applied once at
+ * spawn because Codex has no per-call approval channel — ask fails closed.
+ * Two shapes:
  * - When tools the host has NOT listed would still be allowed (every
  *   layer's default is `allow`), an unknown tool may run: emit
  *   `disabled_tools` for the known ones that resolve to anything else.
@@ -355,14 +362,6 @@ export function codexToolFilter(
     return disabled.length > 0 ? { disabled_tools: disabled } : {};
   }
   return { enabled_tools: sorted.filter((tool) => resolve(tool) === "allow") };
-}
-
-/** @deprecated use {@link codexToolFilter}; kept for the tests' name. */
-export function disabledToolsFor(
-  layers: McpToolPolicyLayers | undefined,
-  annotations: Record<string, ToolPolicyAnnotations> | undefined,
-): string[] {
-  return codexToolFilter(layers, annotations).disabled_tools ?? [];
 }
 
 /**

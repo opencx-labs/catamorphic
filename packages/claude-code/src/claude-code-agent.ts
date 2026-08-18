@@ -22,6 +22,7 @@ import type {
   CodingAgentProvider,
   ExtraTool,
   ExtraToolContext,
+  McpServersSource,
   McpToolPolicyLayers,
   ProviderSession,
   StartSessionOpts,
@@ -34,8 +35,9 @@ import {
   isMediaAttachment,
   mergePolicyLayers,
   renderTextAttachments,
-  resolveToolPermissionAcross,
+  resolveMcpServers,
   stagePluginDocs,
+  ToolGate,
 } from "@catamorphic/sandbox";
 import type { ZodRawShape } from "zod";
 
@@ -89,9 +91,10 @@ export interface ClaudeCodeAgentOpts {
    * External MCP servers for this agent (the host's resolved connection
    * set). Passed to the CLI as native `mcpServers` config and allowlisted
    * server-wide; the CLI negotiates protocol versions with each server
-   * itself.
+   * itself. A getter is read at every query, so a rotated credential
+   * rides the next turn without a provider rebuild.
    */
-  mcpServers?: Record<string, AgentMcpServerConfig>;
+  mcpServers?: McpServersSource;
   /**
    * Session-scoped MCP servers, resolved from the session's project —
    * how a host mounts per-project surfaces (e.g. Catamorphic's workflow
@@ -303,9 +306,13 @@ export class ClaudeCodeAgent implements CodingAgentProvider {
    * next sendMessage resumes it with the user's answers.
    */
   private readonly awaitingAnswers = new Map<string, LiveTurn>();
+  /** The shared gate (ADR 0054/0055); "always allow" answers live for
+   * this provider's lifetime. */
+  private readonly gate: ToolGate;
 
   constructor(opts?: ClaudeCodeAgentOpts) {
     this.opts = opts ?? {};
+    this.gate = new ToolGate(this.opts.onToolPermission);
   }
 
   async startSession(opts: StartSessionOpts): Promise<ProviderSession> {
@@ -536,8 +543,6 @@ export class ClaudeCodeAgent implements CodingAgentProvider {
    * executable overrides, unattended permissions, and the model/effort
    * defaults with per-turn overrides applied.
    */
-  /** "Always allow" answers, remembered for this provider's lifetime. */
-  private readonly rememberedTools = new Set<string>();
 
   /**
    * The provider's own layers merged with the session's caller layers
@@ -584,46 +589,18 @@ export class ClaudeCodeAgent implements CodingAgentProvider {
       .sort((a, b) => b.length - a.length)[0];
     if (!server) return undefined;
     const tool = toolName.slice(`mcp__${server}__`.length);
-    const key = `${server}\u0000${tool}`;
-    const permission = resolveToolPermissionAcross(
-      policies[server],
-      tool,
-      annotations[server]?.[tool],
-    );
-    if (permission === "allow") return { behavior: "allow" };
-    // A remembered "always allow" only short-circuits the ASK — a later
-    // Off in the editor still wins (policies are read live).
-    if (permission === "ask" && this.rememberedTools.has(key)) {
-      return { behavior: "allow" };
-    }
-    if (permission === "deny") {
-      return {
-        behavior: "deny",
-        message: `The tool "${tool}" on ${server} is turned off in this connection's permissions.`,
-      };
-    }
-    const ask = this.opts.onToolPermission;
-    if (!ask) {
-      return {
-        behavior: "deny",
-        message: `The tool "${tool}" on ${server} needs the user's permission, and there is no one to ask in this context.`,
-      };
-    }
-    const answer = await ask({
-      ...(sessionId ? { sessionId } : {}),
+    const toolAnnotations = annotations[server]?.[tool];
+    const verdict = await this.gate.decide({
       server,
       tool,
       input,
-      annotations: annotations[server]?.[tool],
+      layers: policies[server],
+      ...(toolAnnotations ? { annotations: toolAnnotations } : {}),
+      ...(sessionId ? { sessionId } : {}),
     });
-    if (answer.decision === "deny") {
-      return {
-        behavior: "deny",
-        message: `The user declined to let you use "${tool}" on ${server} for this call.`,
-      };
-    }
-    if (answer.remember === "always") this.rememberedTools.add(key);
-    return { behavior: "allow" };
+    return verdict.allowed
+      ? { behavior: "allow" }
+      : { behavior: "deny", message: verdict.message };
   }
 
   private buildOptions(
@@ -690,7 +667,7 @@ export class ClaudeCodeAgent implements CodingAgentProvider {
     // the host owns both maps and picks the session keys, so a collision
     // means it chose to shadow (e.g. a per-project "catamorphic" server).
     const externalServers = mapMcpServers({
-      ...this.opts.mcpServers,
+      ...resolveMcpServers(this.opts.mcpServers),
       ...(toolContext
         ? this.opts.mcpServersForSession?.(toolContext)
         : undefined),

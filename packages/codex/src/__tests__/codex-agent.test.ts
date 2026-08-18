@@ -156,22 +156,29 @@ describe("CodexAgent", () => {
     expect(events.some((event) => event.type === "background")).toBe(false);
   });
 
-  it("passes MCP servers as mcp_servers config overrides", () => {
-    new CodexAgent({
-      mcpServers: {
-        linear: {
-          transport: "http",
-          url: "https://mcp.linear.app/mcp",
-          headers: { Authorization: "Bearer x" },
+  const turnDone = () =>
+    scriptedThread([{ type: "turn.completed", usage: dummyUsage() }]);
+
+  it("passes MCP servers as mcp_servers config overrides, per spawn", async () => {
+    resumeThread.mockReturnValueOnce(turnDone());
+    await collect(
+      new CodexAgent({
+        mcpServers: {
+          linear: {
+            transport: "http",
+            url: "https://mcp.linear.app/mcp",
+            headers: { Authorization: "Bearer x" },
+          },
+          "local files": {
+            transport: "stdio",
+            command: "npx",
+            args: ["-y", "fs-mcp"],
+            env: { ROOT: "/data" },
+          },
         },
-        "local files": {
-          transport: "stdio",
-          command: "npx",
-          args: ["-y", "fs-mcp"],
-          env: { ROOT: "/data" },
-        },
-      },
-    });
+      }),
+      "hello",
+    );
 
     expect(codexCtor).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -192,8 +199,40 @@ describe("CodexAgent", () => {
     );
   });
 
-  it("passes no config when there are no MCP servers", () => {
-    new CodexAgent();
+  it("reads a live server source at every spawn (rotated token, no rebuild)", async () => {
+    let token = "Bearer old";
+    const agent = new CodexAgent({
+      mcpServers: () => ({
+        linear: {
+          transport: "http",
+          url: "https://mcp.linear.app/mcp",
+          headers: { Authorization: token },
+        },
+      }),
+    });
+    resumeThread.mockReturnValueOnce(turnDone());
+    await collect(agent, "one");
+    token = "Bearer new";
+    resumeThread.mockReturnValueOnce(turnDone());
+    await collect(agent, "two");
+    type Spawn = {
+      config: {
+        mcp_servers: { linear: { http_headers: { Authorization: string } } };
+      };
+    };
+    const tokens = codexCtor.mock.calls.map(
+      (call) => (call[0] as Spawn).config.mcp_servers.linear.http_headers,
+    );
+    expect(tokens.map((headers) => headers.Authorization)).toEqual([
+      "Bearer old",
+      "Bearer new",
+    ]);
+  });
+
+  it("passes no config when there are no MCP servers", async () => {
+    resumeThread.mockReturnValueOnce(turnDone());
+    await collect(new CodexAgent(), "hello");
+    expect(codexCtor).toHaveBeenCalledTimes(1);
     expect(codexCtor.mock.calls[0]?.[0]).not.toHaveProperty("config");
   });
 });

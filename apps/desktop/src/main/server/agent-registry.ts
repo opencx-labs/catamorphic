@@ -175,21 +175,19 @@ export class DesktopAgentRegistry implements CodingAgentRegistry {
     // below), so switching them must NOT rebuild the provider — a rebuild
     // would drop the built-in agent's in-memory sessions mid-conversation.
     // Connection/connector edits DO rebuild, so the next turn runs with
-    // the new server set.
-    // Policies are deliberately NOT part of the key: harnesses read them
-    // live (see livePolicies), so a permission edit — or an "Always
-    // allow" mid-turn — never rebuilds the provider under a conversation.
+    // the new server set — but header VALUES are not part of the key:
+    // harnesses read servers live (see liveServers), so a rotated OAuth
+    // token or renewed header reaches the next call in place, never
+    // rebuilding the provider under a conversation.
+    // Policies are deliberately NOT part of the key either: harnesses
+    // read them live (see livePolicies), so a permission edit — or an
+    // "Always allow" mid-turn — never rebuilds the provider.
     const key = JSON.stringify({
       ...config,
       toolPolicies: undefined,
       model: "",
       effort: "",
-      mcp: { servers: mcp.servers, plugins: mcp.plugins },
-      // Codex applies policy at spawn (no live getter), so for it — and
-      // only it — a policy edit must rebuild.
-      ...(config.harness === "codex"
-        ? { policies: mcp.policies, annotations: mcp.annotations }
-        : {}),
+      mcp: { servers: serverShapes(mcp.servers), plugins: mcp.plugins },
     });
     const defaults = this.freshDefaults(config);
     const cached = this.cache.get(id);
@@ -344,6 +342,24 @@ export class DesktopAgentRegistry implements CodingAgentRegistry {
     config: AgentConfig,
     profileId: string,
   ): Pick<ResolvedMcp, "policies" | "annotations" | "connectionIds"> {
+    return this.liveMcp(config, profileId);
+  }
+
+  /**
+   * The current server configs for an agent, re-resolved on every read —
+   * headers included, so the bearer a token refresh just wrote reaches
+   * the harness's next connect/spawn/query. The server SET is still part
+   * of the cache key (an added or removed connection rebuilds); only the
+   * values move underneath.
+   */
+  private liveServers(
+    config: AgentConfig,
+    profileId: string,
+  ): Record<string, AgentMcpServerConfig> {
+    return this.liveMcp(config, profileId).servers;
+  }
+
+  private liveMcp(config: AgentConfig, profileId: string): ResolvedMcp {
     // The profile store's copy is the live one for profile agents (a
     // cleared policy is a real edit — no fallback to the build-time copy);
     // project agents are not in that store and carry their definition's
@@ -351,12 +367,7 @@ export class DesktopAgentRegistry implements CodingAgentRegistry {
     const latest =
       this.deps.profileConfig.forProfile(profileId).agents.get(config.id) ??
       config;
-    const mcp = this.resolveMcp(latest, profileId);
-    return {
-      policies: mcp.policies,
-      annotations: mcp.annotations,
-      connectionIds: mcp.connectionIds,
-    };
+    return this.resolveMcp(latest, profileId);
   }
 
   /**
@@ -550,7 +561,7 @@ export class DesktopAgentRegistry implements CodingAgentRegistry {
       // Committed toolPolicies are outside the consent hash (they only
       // narrow) but must reach a running provider: key on them too.
       toolPolicies: def.toolPolicies ?? null,
-      mcp: { servers: mcp.servers, plugins: mcp.plugins },
+      mcp: { servers: serverShapes(mcp.servers), plugins: mcp.plugins },
     });
     const cached = this.cache.get(id);
     if (cached && cached.key === key) {
@@ -693,7 +704,7 @@ export class DesktopAgentRegistry implements CodingAgentRegistry {
           sandboxProvider: this.deps.sandboxProvider,
           modelId: this.resolvedModel(config) ?? "",
           extraTools: this.workspaceToolkit?.tools,
-          mcpServers: mcp.servers,
+          mcpServers: () => this.liveServers(config, profileId),
           // Elicitation from this agent's connectors → the front window,
           // labeled with the agent so the user knows who's asking.
           onElicit: bridge
@@ -757,7 +768,7 @@ export class DesktopAgentRegistry implements CodingAgentRegistry {
                 disableBash: this.workspaceToolkit !== undefined,
                 // The agent's assigned connections, plus native loading
                 // of connector plugins (skills/agents/commands).
-                mcpServers: mcp.servers,
+                mcpServers: () => this.liveServers(config, profileId),
                 mcpServersForSession: (context) =>
                   this.sessionMcpServers(context),
                 plugins: mcp.plugins,
@@ -799,9 +810,11 @@ export class DesktopAgentRegistry implements CodingAgentRegistry {
                 // Assigned connections ride as mcp_servers.* config
                 // overrides; the CLI owns the client connections. Policy
                 // is coarse here (disabled_tools) — Codex can't ask.
-                mcpServers: mcp.servers,
-                mcpPolicies: mcp.policies,
-                mcpToolAnnotations: mcp.annotations,
+                mcpServers: () => this.liveServers(config, profileId),
+                mcpPolicies: () =>
+                  this.livePolicies(config, profileId).policies,
+                mcpToolAnnotations: () =>
+                  this.livePolicies(config, profileId).annotations,
               }),
               { hasTools: false },
             ),
@@ -869,4 +882,27 @@ export class DesktopAgentRegistry implements CodingAgentRegistry {
       (projectId) => this.deps.profileConfig.projectSidebarStore(projectId),
     );
   }
+}
+
+/**
+ * The cache-key view of a server set: everything but header values.
+ * Which servers exist and where they point decides the provider; what
+ * they authenticate with is read live (a refreshed OAuth bearer must not
+ * rebuild the provider and drop its sessions).
+ */
+function serverShapes(
+  servers: Record<string, AgentMcpServerConfig>,
+): Record<string, unknown> {
+  return Object.fromEntries(
+    Object.entries(servers).map(([name, server]) => [
+      name,
+      server.transport === "stdio"
+        ? server
+        : {
+            transport: server.transport,
+            url: server.url,
+            headerNames: Object.keys(server.headers ?? {}).sort(),
+          },
+    ]),
+  );
 }

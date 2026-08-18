@@ -27,6 +27,9 @@ export {
   resolveToolPermissionAcross,
   serverKeyOf,
   stricterPermission,
+  ToolGate,
+  type ToolGateCall,
+  type ToolGateVerdict,
   type ToolPermission,
   type ToolPermissionDecision,
   type ToolPermissionHandler,
@@ -45,11 +48,13 @@ export type {
   CodingAgentProvider,
   ExtraTool,
   ExtraToolContext,
+  McpServersSource,
   ProviderSession,
   SessionCaller,
   StartSessionOpts,
   TurnOptions,
 } from "./coding-agent/types.js";
+export { resolveMcpServers } from "./coding-agent/types.js";
 export { CommandDeploymentRuntimeProvider } from "./command-deployment-runtime.js";
 export { instrumentSandboxProvider } from "./instrumented-provider.js";
 export {

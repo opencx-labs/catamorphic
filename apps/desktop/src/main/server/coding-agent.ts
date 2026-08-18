@@ -6,6 +6,7 @@ import type {
   AgentMcpServerConfig,
   ExtraTool,
   ExtraToolContext,
+  McpServersSource,
   McpToolPolicyLayers,
   SandboxProvider,
   ToolPermissionHandler,
@@ -55,7 +56,7 @@ export interface BuildAiSdkAgentOpts {
   sandboxProvider: SandboxProvider;
   modelId: string;
   extraTools?: ExtraTool[];
-  mcpServers?: Record<string, AgentMcpServerConfig>;
+  mcpServers?: McpServersSource;
   mcpServersForSession?: (
     context: ExtraToolContext,
   ) => Record<string, AgentMcpServerConfig>;

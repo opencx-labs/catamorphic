@@ -319,6 +319,67 @@ describe("AiSdkCodingAgent", () => {
     expect(JSON.stringify(events)).toMatch(/no one to ask/);
   });
 
+  it("reconnects a server in place when its config changes between turns (rotated token)", async () => {
+    const mkServer = (label: string) => ({
+      tools: [
+        {
+          name: "whoami",
+          description: "who",
+          inputSchema: { type: "object" },
+          annotations: { readOnlyHint: true },
+        },
+      ],
+      callTool: vi.fn(async () => label),
+      callToolRaw: vi.fn(async () => ({
+        content: [{ type: "text", text: label }],
+      })),
+      readResource: vi.fn(),
+      close: vi.fn(async () => {}),
+    });
+    const first = mkServer("first");
+    const second = mkServer("second");
+    connectMcpServerMock.mockClear();
+    connectMcpServerMock.mockResolvedValueOnce(first);
+    connectMcpServerMock.mockResolvedValueOnce(second);
+    let token = "Bearer old";
+    const provider = createProvider();
+    const model = new MockLanguageModelV4({
+      doStream: [
+        toolCallStream("mcp__api__whoami", {}),
+        textStream("one"),
+        toolCallStream("mcp__api__whoami", {}),
+        textStream("two"),
+      ],
+    });
+    const agent = new AiSdkCodingAgent({
+      model,
+      sandboxProvider: provider,
+      mcpServers: () => ({
+        api: {
+          transport: "http",
+          url: "https://api.example/mcp",
+          headers: { Authorization: token },
+        },
+      }),
+    });
+    const session = await start(agent);
+    await collect(agent, session, "first turn");
+    expect(first.callToolRaw).toHaveBeenCalledTimes(1);
+    expect(connectMcpServerMock).toHaveBeenCalledTimes(1);
+
+    token = "Bearer new";
+    await collect(agent, session, "second turn");
+    // Same session, same tool name — but the call went to the fresh
+    // connection carrying the new header, and the stale one was closed.
+    expect(connectMcpServerMock).toHaveBeenCalledTimes(2);
+    expect(connectMcpServerMock.mock.calls[1]?.[0]).toMatchObject({
+      headers: { Authorization: "Bearer new" },
+    });
+    expect(first.close).toHaveBeenCalled();
+    expect(second.callToolRaw).toHaveBeenCalledTimes(1);
+    expect(first.callToolRaw).toHaveBeenCalledTimes(1);
+  });
+
   it("skips MCP servers that fail to connect instead of breaking the session", async () => {
     connectMcpServerMock.mockRejectedValueOnce(new Error("boom"));
     const provider = createProvider();
@@ -523,5 +584,45 @@ describe("pruneEmptyOptionalArgs", () => {
         { type: "object", required: ["query"] },
       ),
     ).toEqual({ query: "" });
+  });
+
+  it("keeps null / empty when the property's schema means them", async () => {
+    const { pruneEmptyOptionalArgs } = await import("../ai-sdk-agent.js");
+    const schema = {
+      type: "object",
+      properties: {
+        due_date: { type: ["string", "null"], description: "null clears" },
+        owner: { anyOf: [{ type: "string" }, { type: "null" }] },
+        legacy: { type: "string", nullable: true },
+        note: { type: "string" },
+        channel: { type: "string", pattern: "^C[A-Z0-9]+$" },
+        code: { type: "string", minLength: 1 },
+        mode: { type: "string", enum: ["", "fast"] },
+        count: { type: "integer" },
+      },
+      required: [],
+    };
+    expect(
+      pruneEmptyOptionalArgs(
+        {
+          due_date: null,
+          owner: null,
+          legacy: null,
+          note: "",
+          channel: "",
+          code: "",
+          mode: "",
+          count: null,
+          unknown: "",
+        },
+        schema,
+      ),
+    ).toEqual({
+      due_date: null,
+      owner: null,
+      legacy: null,
+      note: "",
+      mode: "",
+    });
   });
 });

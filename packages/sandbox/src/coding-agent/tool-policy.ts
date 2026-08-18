@@ -160,3 +160,109 @@ export type ToolPermissionDecision =
 export type ToolPermissionHandler = (
   request: ToolPermissionRequest,
 ) => Promise<ToolPermissionDecision>;
+
+/** What a gate decides for one call: run it, or refuse with a message the
+ * model can read (turned off, nobody to ask, user declined, interrupted). */
+export type ToolGateVerdict =
+  | { allowed: true }
+  | { allowed: false; message: string };
+
+export interface ToolGateCall {
+  /** Server key the harness knows the connection by. */
+  server: string;
+  tool: string;
+  input: Record<string, unknown>;
+  /** The merged layers for that server; undefined = unpoliced server. */
+  layers: McpToolPolicyLayers | undefined;
+  annotations?: ToolPolicyAnnotations;
+  description?: string;
+  sessionId?: string;
+  /** The turn's abort — an interrupted turn abandons a parked ask. */
+  abortSignal?: AbortSignal;
+}
+
+/**
+ * The one allow / ask / deny decision every harness runs before an MCP tool
+ * call (ADR 0054, plus ADR 0055's caller layers): resolve across the layers
+ * (annotations decide `auto`), short-circuit a remembered "always allow" —
+ * only for ASK, a later Off still wins because policies are read live —
+ * refuse `deny` and "ask with nobody to ask", otherwise raise the host's ask
+ * and honour its answer.
+ *
+ * Harnesses adapt the verdict to their native shape (thrown error,
+ * PermissionResult, spawn-time filter); the state — remembered keys and the
+ * ask handler — lives here so wording, remember semantics and abort handling
+ * exist once.
+ */
+export class ToolGate {
+  private readonly remembered = new Set<string>();
+
+  constructor(private readonly ask?: ToolPermissionHandler) {}
+
+  async decide(call: ToolGateCall): Promise<ToolGateVerdict> {
+    if (!call.layers) return { allowed: true };
+    const key = `${call.server} ${call.tool}`;
+    const permission = resolveToolPermissionAcross(
+      call.layers,
+      call.tool,
+      call.annotations,
+    );
+    if (permission === "allow") return { allowed: true };
+    if (permission === "ask" && this.remembered.has(key)) {
+      return { allowed: true };
+    }
+    if (permission === "deny") {
+      return {
+        allowed: false,
+        message: `The tool "${call.tool}" on ${call.server} is turned off in this connection's permissions.`,
+      };
+    }
+    if (!this.ask) {
+      return {
+        allowed: false,
+        message: `The tool "${call.tool}" on ${call.server} needs the user's permission, and there is no one to ask in this context.`,
+      };
+    }
+    const asked = this.ask({
+      ...(call.sessionId ? { sessionId: call.sessionId } : {}),
+      server: call.server,
+      tool: call.tool,
+      ...(call.description !== undefined
+        ? { description: call.description }
+        : {}),
+      input: call.input,
+      ...(call.annotations ? { annotations: call.annotations } : {}),
+    });
+    let answer: ToolPermissionDecision;
+    try {
+      answer = call.abortSignal
+        ? await Promise.race([asked, rejectOnAbort(call.abortSignal)])
+        : await asked;
+    } catch (error) {
+      return {
+        allowed: false,
+        message:
+          error instanceof Error
+            ? error.message
+            : "The permission request failed.",
+      };
+    }
+    if (answer.decision !== "allow") {
+      return {
+        allowed: false,
+        message: `The user declined to let you use "${call.tool}" on ${call.server} for this call.`,
+      };
+    }
+    if (answer.remember === "always") this.remembered.add(key);
+    return { allowed: true };
+  }
+}
+
+function rejectOnAbort(signal: AbortSignal): Promise<never> {
+  return new Promise<never>((_resolve, reject) => {
+    const abort = () =>
+      reject(new Error("The turn was interrupted before the user answered."));
+    if (signal.aborted) abort();
+    else signal.addEventListener("abort", abort, { once: true });
+  });
+}

@@ -14,6 +14,7 @@ import type {
   CodingAgentProvider,
   ExtraTool,
   ExtraToolContext,
+  McpServersSource,
   McpToolPolicyLayers,
   ProviderSession,
   SandboxProvider,
@@ -26,8 +27,9 @@ import {
   isMediaAttachment,
   mergePolicyLayers,
   renderTextAttachments,
-  resolveToolPermissionAcross,
+  resolveMcpServers,
   stagedPluginFiles,
+  ToolGate,
 } from "@catamorphic/sandbox";
 import {
   dynamicTool,
@@ -83,8 +85,13 @@ export interface AiSdkCodingAgentOpts {
    * built-ins as `mcp__<server>__<tool>`. Connections are shared across
    * the agent's sessions and a server that fails to connect is skipped —
    * a broken connector must never break the chat.
+   *
+   * A getter is read live at every session start and turn: a server whose
+   * config changed (a rotated OAuth token, a renewed header) is
+   * reconnected in place, under the same tool names, so running sessions
+   * carry on with the fresh credential — no provider rebuild.
    */
-  mcpServers?: Record<string, AgentMcpServerConfig>;
+  mcpServers?: McpServersSource;
   /**
    * Session-scoped MCP servers, resolved from the session's project —
    * how a host mounts per-project surfaces (e.g. Catamorphic's workflow
@@ -154,39 +161,14 @@ interface AiSdkSessionState {
 export class AiSdkCodingAgent implements CodingAgentProvider {
   readonly name = "ai-sdk";
   private readonly sessions = new Map<string, AiSdkSessionState>();
-  /** Lazily-connected MCP servers, shared by every session of this agent. */
-  private mcpConnections?: Promise<Map<string, ConnectedMcpServer>>;
+  /** The agent-wide MCP connections, kept in step with the live source. */
+  private readonly mcp: McpPool;
 
-  constructor(private readonly opts: AiSdkCodingAgentOpts) {}
-
-  private connectMcp(): Promise<Map<string, ConnectedMcpServer>> {
-    this.mcpConnections ??= (async () => {
-      const connections = new Map<string, ConnectedMcpServer>();
-      await Promise.all(
-        Object.entries(this.opts.mcpServers ?? {}).map(
-          async ([name, config]) => {
-            try {
-              connections.set(
-                name,
-                await connectMcpServer(
-                  config,
-                  this.opts.onElicit
-                    ? { onElicit: this.opts.onElicit }
-                    : undefined,
-                ),
-              );
-            } catch (cause) {
-              console.warn(
-                `[ai-sdk] MCP server "${name}" failed to connect:`,
-                cause,
-              );
-            }
-          },
-        ),
-      );
-      return connections;
-    })();
-    return this.mcpConnections;
+  constructor(private readonly opts: AiSdkCodingAgentOpts) {
+    this.mcp = new McpPool(
+      () => resolveMcpServers(opts.mcpServers),
+      opts.onElicit,
+    );
   }
 
   /**
@@ -218,8 +200,6 @@ export class AiSdkCodingAgent implements CodingAgentProvider {
    * by hosts when they drop this provider instance for a rebuilt one.
    */
   async closeMcp(): Promise<void> {
-    const pending = this.mcpConnections;
-    this.mcpConnections = undefined;
     // Session-scoped connections of sessions the host never disposed.
     const scoped = [...this.sessions.values()].flatMap((state) => {
       const servers = state.scopedMcp;
@@ -227,79 +207,37 @@ export class AiSdkCodingAgent implements CodingAgentProvider {
       return servers;
     });
     await Promise.all(scoped.map((server) => server.close().catch(() => {})));
-    if (!pending) return;
-    const connections = await pending.catch(
-      () => new Map<string, ConnectedMcpServer>(),
-    );
-    await Promise.all(
-      [...connections.values()].map((server) => server.close().catch(() => {})),
-    );
+    await this.mcp.close();
   }
 
   /**
-   * The permission gate MCP tools run through. "Always allow" answers
-   * are remembered for this provider's lifetime (the host persists them
-   * for the next one), so a granted tool never re-asks mid-conversation.
+   * The permission gate MCP tools run through — the shared sandbox
+   * `ToolGate` (one decision, wording, remember and abort semantics for
+   * every harness), fed the provider's live layers merged with the
+   * session's caller layers (ADR 0055). "Always allow" answers live for
+   * this provider's lifetime (the host persists them for the next one).
    */
   private toolGate(
     callerPolicies: () => Record<string, McpToolPolicyLayers> | undefined,
   ): McpToolGate {
-    const remembered = new Set<string>();
+    const gate = new ToolGate(this.opts.onToolPermission);
     const source = this.opts.mcpPolicies ?? {};
-    const ask = this.opts.onToolPermission;
     return async (server, tool, input, sessionId, abortSignal) => {
       const own = typeof source === "function" ? source() : source;
-      // The caller's layers (ADR 0055) sit beside the provider's own —
-      // one more intersection, read live per call.
       const policies = mergePolicyLayers(own, callerPolicies());
-      const layers = policies?.[server];
-      if (!layers) return;
-      const key = `${server}\u0000${tool.name}`;
-      const permission = resolveToolPermissionAcross(
-        layers,
-        tool.name,
-        tool.annotations,
-      );
-      if (permission === "allow") return;
-      // A remembered "always allow" only short-circuits the ASK — a later
-      // Off in the editor still wins (policies are read live).
-      if (permission === "ask" && remembered.has(key)) return;
-      if (permission === "deny" || !ask) {
-        throw new Error(
-          permission === "deny"
-            ? `The tool "${tool.name}" on ${server} is turned off in this connection's permissions.`
-            : `The tool "${tool.name}" on ${server} needs the user's permission, and there is no one to ask in this context.`,
-        );
-      }
-      const asked = ask({
-        ...(sessionId ? { sessionId } : {}),
+      const verdict = await gate.decide({
         server,
         tool: tool.name,
-        description: tool.description,
         input,
-        annotations: tool.annotations,
+        layers: policies?.[server],
+        ...(tool.annotations ? { annotations: tool.annotations } : {}),
+        ...(tool.description !== undefined
+          ? { description: tool.description }
+          : {}),
+        ...(sessionId ? { sessionId } : {}),
+        ...(abortSignal ? { abortSignal } : {}),
       });
-      const answer = abortSignal
-        ? await Promise.race([
-            asked,
-            new Promise<never>((_resolve, reject) => {
-              const abort = () =>
-                reject(
-                  new Error(
-                    "The turn was interrupted before the user answered.",
-                  ),
-                );
-              if (abortSignal.aborted) abort();
-              else abortSignal.addEventListener("abort", abort, { once: true });
-            }),
-          ])
-        : await asked;
-      if (answer.decision === "deny") {
-        throw new Error(
-          `The user declined to let you use "${tool.name}" on ${server} for this call.`,
-        );
-      }
-      if (answer.remember === "always") remembered.add(key);
+      if (!verdict.allowed) throw new Error(verdict.message);
     };
   }
 
@@ -328,10 +266,12 @@ export class AiSdkCodingAgent implements CodingAgentProvider {
     const gate = this.toolGate(
       () => this.sessions.get(providerSessionId)?.callerPolicies,
     );
-    const mcpTools =
-      Object.keys(this.opts.mcpServers ?? {}).length > 0
-        ? buildMcpTools(await this.connectMcp(), gate, opts.sessionId)
-        : {};
+    const mcpTools = buildMcpTools(
+      await this.mcp.sync(),
+      this.mcp,
+      gate,
+      opts.sessionId,
+    );
 
     // Session-scoped servers (per-project surfaces) connect fresh per
     // session and mount beside the agent-wide set; on a name clash the
@@ -353,7 +293,10 @@ export class AiSdkCodingAgent implements CodingAgentProvider {
           }
         }),
       );
-      Object.assign(mcpTools, buildMcpTools(scoped, gate, opts.sessionId));
+      Object.assign(
+        mcpTools,
+        buildMcpTools(scoped, scoped, gate, opts.sessionId),
+      );
     }
 
     this.sessions.set(providerSessionId, {
@@ -417,6 +360,9 @@ export class AiSdkCodingAgent implements CodingAgentProvider {
       return;
     }
     if (opts?.toolPolicies) state.callerPolicies = opts.toolPolicies;
+    // Credentials may have rotated since the last turn: reconnect the
+    // servers whose config changed, in place, before the model runs.
+    await this.mcp.sync();
     // Answers to a pending ask_user call resume the tool loop as the tool's
     // result; anything else is a regular user message.
     const pendingAsk = state.pendingAsk;
@@ -699,6 +645,78 @@ interface ToolContext {
 }
 
 /**
+ * The agent-wide MCP connections, reconciled against a live source: each
+ * `sync` connects servers that are new or whose config changed (closing
+ * the stale connection — a rotated token reconnects in place), closes
+ * servers that left, and leaves the rest alone. Failures are skipped with
+ * a warning and retried on the next sync, never cached — a broken
+ * connector must not break the chat, and a transient one must not stay
+ * broken. Syncs are serialized so two sessions starting at once share one
+ * connect.
+ */
+class McpPool {
+  private readonly entries = new Map<
+    string,
+    { digest: string; server: ConnectedMcpServer }
+  >();
+  private inflight: Promise<Map<string, ConnectedMcpServer>> | undefined;
+
+  constructor(
+    private readonly source: () => Record<string, AgentMcpServerConfig>,
+    private readonly onElicit: ElicitHandler | undefined,
+  ) {}
+
+  get(name: string): ConnectedMcpServer | undefined {
+    return this.entries.get(name)?.server;
+  }
+
+  sync(): Promise<Map<string, ConnectedMcpServer>> {
+    this.inflight ??= this.reconcile().finally(() => {
+      this.inflight = undefined;
+    });
+    return this.inflight;
+  }
+
+  private async reconcile(): Promise<Map<string, ConnectedMcpServer>> {
+    const wanted = this.source();
+    const closing: Promise<void>[] = [];
+    for (const [name, entry] of this.entries) {
+      const config = wanted[name];
+      if (config && JSON.stringify(config) === entry.digest) continue;
+      this.entries.delete(name);
+      closing.push(entry.server.close().catch(() => {}));
+    }
+    await Promise.all([
+      ...closing,
+      ...Object.entries(wanted).map(async ([name, config]) => {
+        if (this.entries.has(name)) return;
+        try {
+          const server = await connectMcpServer(
+            config,
+            this.onElicit ? { onElicit: this.onElicit } : undefined,
+          );
+          this.entries.set(name, { digest: JSON.stringify(config), server });
+        } catch (cause) {
+          console.warn(
+            `[ai-sdk] MCP server "${name}" failed to connect:`,
+            cause,
+          );
+        }
+      }),
+    ]);
+    return new Map(
+      [...this.entries].map(([name, entry]) => [name, entry.server]),
+    );
+  }
+
+  async close(): Promise<void> {
+    const servers = [...this.entries.values()].map((entry) => entry.server);
+    this.entries.clear();
+    await Promise.all(servers.map((server) => server.close().catch(() => {})));
+  }
+}
+
+/**
  * MCP server tools → ai-sdk dynamic tools named `mcp__<server>__<tool>`
  * (the same namespacing Claude Code uses, so events read alike across
  * harnesses). Results are flattened text; errors surface as tool errors.
@@ -713,14 +731,18 @@ type McpToolGate = (
 ) => Promise<void>;
 
 function buildMcpTools(
+  /** The roster to declare tools from. */
   connections: Map<string, ConnectedMcpServer>,
+  /** Where a call finds its server — live, so a reconnected server (rotated
+   * credential) is what runs, under the tool names declared at start. */
+  live: { get(name: string): ConnectedMcpServer | undefined },
   gate?: McpToolGate,
   sessionId?: string,
 ): Record<string, Tool> {
   const tools: Record<string, Tool> = {};
-  for (const [serverName, server] of connections) {
+  for (const [serverName, roster] of connections) {
     const safeServer = serverName.replace(/[^A-Za-z0-9-]+/g, "_");
-    for (const info of server.tools) {
+    for (const info of roster.tools) {
       tools[`mcp__${safeServer}__${info.name}`] = dynamicTool({
         description: info.description,
         inputSchema: jsonSchema<Record<string, unknown>>(
@@ -736,6 +758,12 @@ function buildMcpTools(
           // turn abandons a parked ask instead of running the tool later.
           await gate?.(serverName, info, args, sessionId, options?.abortSignal);
           options?.abortSignal?.throwIfAborted();
+          const server = live.get(serverName);
+          if (!server) {
+            throw new Error(
+              `The MCP server "${serverName}" is not connected right now — its connection failed; try again in a moment.`,
+            );
+          }
           // Prefer structured content: MCP Apps views render it, and the
           // model reads JSON fine. Text-only results stay text;
           // flattenToolResult throws on isError results.
@@ -757,9 +785,13 @@ function buildMcpTools(
  * Some models (OpenAI-family especially) fill every declared property and
  * send `""`/`null` for the ones they have no value for; servers that
  * validate optional fields then reject the call ("value is not a channel
- * ID" for `context_channel_id: ""`, from Slack's search tool). Drop empty
- * values for properties the schema doesn't require — an absent optional is
- * what the model meant.
+ * ID" for `context_channel_id: ""`, from Slack's search tool). Drop such
+ * values for optional properties — but ONLY when the property's own schema
+ * could not have meant them: a `null` a schema admits (`type: [...,
+ * "null"]`, `nullable`, an `anyOf` null branch, an `enum` with null) is a
+ * value ("clear this field"), and so is `""` on a plain string with no
+ * `format`/`pattern`/`minLength`/`enum` ruling it out. Unknown properties
+ * (no schema) keep the old blanket rule.
  */
 export function pruneEmptyOptionalArgs(
   input: Record<string, unknown>,
@@ -768,13 +800,73 @@ export function pruneEmptyOptionalArgs(
   const required = new Set(
     Array.isArray(schema.required) ? (schema.required as string[]) : [],
   );
+  const properties =
+    typeof schema.properties === "object" && schema.properties !== null
+      ? (schema.properties as Record<string, unknown>)
+      : {};
   const pruned: Record<string, unknown> = {};
   for (const [key, value] of Object.entries(input)) {
-    const empty = value === "" || value === null;
-    if (empty && !required.has(key)) continue;
-    pruned[key] = value;
+    if (required.has(key) || (value !== "" && value !== null)) {
+      pruned[key] = value;
+      continue;
+    }
+    const property =
+      typeof properties[key] === "object" && properties[key] !== null
+        ? (properties[key] as Record<string, unknown>)
+        : undefined;
+    const meaningful =
+      value === null
+        ? schemaAdmitsNull(property)
+        : schemaAdmitsEmptyString(property);
+    if (meaningful) pruned[key] = value;
   }
   return pruned;
+}
+
+function schemaAdmitsNull(
+  property: Record<string, unknown> | undefined,
+): boolean {
+  if (!property) return false;
+  if (property.nullable === true) return true;
+  const type = property.type;
+  if (type === "null" || (Array.isArray(type) && type.includes("null"))) {
+    return true;
+  }
+  if (Array.isArray(property.enum) && property.enum.includes(null)) return true;
+  for (const branchKey of ["anyOf", "oneOf"] as const) {
+    const branches = property[branchKey];
+    if (
+      Array.isArray(branches) &&
+      branches.some((branch) =>
+        schemaAdmitsNull(
+          typeof branch === "object" && branch !== null
+            ? (branch as Record<string, unknown>)
+            : undefined,
+        ),
+      )
+    ) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function schemaAdmitsEmptyString(
+  property: Record<string, unknown> | undefined,
+): boolean {
+  if (!property) return false;
+  const type = property.type;
+  const isString =
+    type === "string" || (Array.isArray(type) && type.includes("string"));
+  if (!isString) return false;
+  if (Array.isArray(property.enum)) return property.enum.includes("");
+  if (typeof property.minLength === "number" && property.minLength > 0) {
+    return false;
+  }
+  if (property.format !== undefined || property.pattern !== undefined) {
+    return false;
+  }
+  return true;
 }
 
 function createTools(

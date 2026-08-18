@@ -1330,9 +1330,10 @@ Patterned on what best-in-class palettes converged on (Chrome omnibox
   `{mode:"all"}` (every current AND future connection — the default) or
   a picked subset; the wizard offers the choice at creation, Settings
   edits it later. The registry resolves the assignment on every lookup
-  and the provider cache key includes the resolved MCP surface, so a
+  and the provider cache key includes the resolved MCP surface — the
+  server SET and where each points, never header values — so a
   connection edit rebuilds the provider on the next turn while
-  model/effort switches still don't.
+  model/effort switches and credential rotations don't.
 - **One MCP client, both protocol generations, newest preferred.** The
   new `@catamorphic/mcp` package rides the official v2 SDK
   (`@modelcontextprotocol/client`) with `versionNegotiation: "auto"`:
@@ -2486,10 +2487,10 @@ Patterned on what best-in-class palettes converged on (Chrome omnibox
   callback-tab close matches `/callback`, not the whole origin; install
   authorizes one connection at a time; CRLF-safe selection-pill dedupe;
   tokens without `expires_in` refresh hourly when refreshable.
-- Known, deliberately left: a token refresh still rebuilds ai-sdk
-  providers (bearer rides the server config); plugin reinstall re-ids
-  connections (agent narrowing keyed by id dangles); the consent modal
-  outlives the bridge's 5-minute deny.
+- Known, deliberately left: plugin reinstall re-ids connections (agent
+  narrowing keyed by id dangles); the consent modal outlives the
+  bridge's 5-minute deny. (A token refresh used to rebuild ai-sdk
+  providers — closed on 2026-08-19, see below.)
 
 ### 2026-08-18 — Remote projects (ADR 0055)
 
@@ -2541,3 +2542,37 @@ Patterned on what best-in-class palettes converged on (Chrome omnibox
   poll), a per-file "restore this version" button, revoking links from the
   desktop (today: the agent or HTTP), and MCP-served skills/agents in the
   desktop's own connect flow.
+
+### 2026-08-19 — Live credentials, one tool gate
+
+- **Rotated tokens reach running sessions in place.** Every harness now
+  takes `mcpServers` as a live source (`McpServersSource`, a getter the
+  registry backs with `liveServers` → the connections store, bearer
+  included). The built-in agent keeps an `McpPool` reconciled against it
+  at every session start and turn: a server whose config changed
+  (rotated OAuth token, renewed header) is reconnected in place — stale
+  connection closed, same tool names, the session's next call goes to
+  the fresh one; Claude Code reads the source at every query and Codex
+  at every spawn (a `Codex` is just spawn config, so one is built per
+  turn from the live servers and policies — the Codex-only "rebuild on
+  policy edit" cache key is gone). The registry key holds the server
+  shape (`serverShapes`: transport, url, header *names*), so the app's
+  4-minute refresh writing a new bearer never rebuilds a provider and
+  never drops a conversation. Rule: **credentials are values under a
+  stable shape; the shape keys the provider, the values are read live.**
+- **One `ToolGate`.** The allow / ask / deny decision — resolve across
+  layers, remembered "always allow" (only short-circuits ASK), fail
+  closed with nobody to ask, ask with abort-on-interrupt, one wording
+  for every refusal — lives once in `@catamorphic/sandbox`. ai-sdk
+  throws its verdict as the tool error, Claude Code maps it to a
+  `PermissionResult`, Codex renders the same resolution into its
+  spawn-time `enabled_tools`/`disabled_tools`. A harness adds no
+  permission logic of its own.
+- Small closures from the same pass: `pruneEmptyOptionalArgs` is
+  schema-aware (a `null` the schema admits, an `""` a plain string
+  allows, are values — "clear this field" — not model filler);
+  `localStatus` in the store-sync engine uses a size+mtime fast path
+  from the manifest before hashing; the Publish/Propose modals read the
+  server's `features` from the section that already has them; the
+  fastify plugin validates roles with core's own `RoleDefinitionSchema`;
+  `requireTenantProject` is one helper in core.
