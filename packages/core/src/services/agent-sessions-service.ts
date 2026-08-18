@@ -31,12 +31,12 @@ import {
 import { parseProjectAgentId } from "./agent-definitions-service.js";
 import type { AppPoliciesService } from "./app-policies-service.js";
 import { AccessDeniedError, resolveScope } from "./artifact-scope.js";
-import type { DocumentsService } from "./documents-service.js";
 import type {
   CodingAgentRegistry,
   RegisteredCodingAgent,
 } from "./coding-agent-registry.js";
 import type { DevSandboxService } from "./dev-sandbox-service.js";
+import type { DocumentsService } from "./documents-service.js";
 import type { PluginsService } from "./plugins-service.js";
 import { ProjectNotFoundError } from "./projects-service.js";
 import { type SyncedFileChange, syncSandboxChanges } from "./sandbox-sync.js";
@@ -1074,11 +1074,7 @@ export class AgentSessionsService {
       if (storeDir) {
         await syncRemoteProject(
           storeDir,
-          documentsClientFor(
-            this.storeSync!.documents,
-            identity,
-            projectId,
-          ),
+          documentsClientFor(this.storeSync!.documents, identity, projectId),
         ).catch((error) => {
           console.warn(
             `[catamorphic] store pull before turn failed: ${

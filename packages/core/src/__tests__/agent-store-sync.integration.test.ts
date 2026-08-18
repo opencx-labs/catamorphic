@@ -26,7 +26,10 @@ import type { Identity } from "../identity.js";
 const connectionString = process.env.DATABASE_URL ?? "";
 const describeIf = connectionString ? describe : describe.skip;
 const schema = `catamorphic_storesync_${crypto.randomUUID().replaceAll("-", "")}`;
-const root: Identity = { tenantId: crypto.randomUUID(), externalUserId: "root" };
+const root: Identity = {
+  tenantId: crypto.randomUUID(),
+  externalUserId: "root",
+};
 
 const unusedSandboxProvider = new Proxy({} as SandboxProvider, {
   get(_t, prop) {
@@ -96,7 +99,10 @@ describeIf("store sync around agent turns (ADR 0055)", () => {
         list: () => [registered],
       },
     });
-    const project = await core.projects.create(root, { name: "brain", rootPath });
+    const project = await core.projects.create(root, {
+      name: "brain",
+      rootPath,
+    });
     projectId = project.id;
     registered.id = `project:${projectId}:csm`;
     alice = {
@@ -104,12 +110,27 @@ describeIf("store sync around agent turns (ADR 0055)", () => {
       externalUserId: "alice",
       scope: [
         { kind: "agent", projectId, name: "csm" },
-        { kind: "document", projectId, path: "store/customers/acme/**", access: "write" },
+        {
+          kind: "document",
+          projectId,
+          path: "store/customers/acme/**",
+          access: "write",
+        },
       ],
     };
     // Something already in the store Alice may see, and something she may not.
-    await core.documents.write({ identity: root, projectId, path: "store/customers/acme/plan.md", content: "Plan v1\n" });
-    await core.documents.write({ identity: root, projectId, path: "store/customers/globex/secret.md", content: "not for alice\n" });
+    await core.documents.write({
+      identity: root,
+      projectId,
+      path: "store/customers/acme/plan.md",
+      content: "Plan v1\n",
+    });
+    await core.documents.write({
+      identity: root,
+      projectId,
+      path: "store/customers/globex/secret.md",
+      content: "not for alice\n",
+    });
   }, 120_000);
 
   afterAll(async () => {
@@ -122,37 +143,75 @@ describeIf("store sync around agent turns (ADR 0055)", () => {
     const sessions = core.agentSessions;
     if (!sessions) throw new Error("agent sessions not configured");
     provider.writes = [
-      { path: "store/customers/acme/notes.md", text: "# Acme\nRenewal in Q4.\n" },
+      {
+        path: "store/customers/acme/notes.md",
+        text: "# Acme\nRenewal in Q4.\n",
+      },
       { path: "store/customers/globex/notes.md", text: "should not land\n" },
       { path: "docs/handbook.md", text: "program edit, not shipped\n" },
     ];
-    const session = await sessions.create(alice, projectId, { agentId: `project:${projectId}:csm` });
-    const reply = await sessions.sendMessage(alice, projectId, session.id, "take notes");
+    const session = await sessions.create(alice, projectId, {
+      agentId: `project:${projectId}:csm`,
+    });
+    const reply = await sessions.sendMessage(
+      alice,
+      projectId,
+      session.id,
+      "take notes",
+    );
     expect(reply.content).toContain("done");
 
     // Pulled before the turn: what Alice may read is in the folder, the rest is not.
-    expect(await fs.readFile(path.join(rootPath, "store/customers/acme/plan.md"), "utf8")).toBe("Plan v1\n");
-    await expect(fs.access(path.join(rootPath, "store/customers/globex/secret.md"))).rejects.toThrow();
+    expect(
+      await fs.readFile(
+        path.join(rootPath, "store/customers/acme/plan.md"),
+        "utf8",
+      ),
+    ).toBe("Plan v1\n");
+    await expect(
+      fs.access(path.join(rootPath, "store/customers/globex/secret.md")),
+    ).rejects.toThrow();
 
     // Shipped after the turn, stamped with Alice.
-    const notes = await core.documents.read({ identity: root, projectId, path: "store/customers/acme/notes.md" });
+    const notes = await core.documents.read({
+      identity: root,
+      projectId,
+      path: "store/customers/acme/notes.md",
+    });
     expect(notes.text).toContain("Renewal in Q4");
     expect(notes.writtenBy).toBe("alice");
     // Outside her refs: refused, never lands.
     await expect(
-      core.documents.read({ identity: root, projectId, path: "store/customers/globex/notes.md" }),
+      core.documents.read({
+        identity: root,
+        projectId,
+        path: "store/customers/globex/notes.md",
+      }),
     ).rejects.toThrow(/not found/);
     // The turn's metadata says what became of each write.
     const detail = await sessions.get(alice, projectId, session.id);
     const last = detail.messages.at(-1);
-    const storeSync = (last?.metadata as { storeSync?: Record<string, unknown> })?.storeSync;
+    const storeSync = (
+      last?.metadata as { storeSync?: Record<string, unknown> }
+    )?.storeSync;
     expect(storeSync).toMatchObject({
       shipped: ["store/customers/acme/notes.md"],
     });
     // The program edit stays a program edit: in the folder for the
     // checkpoint commit (a program path is never a store row).
-    expect(await fs.readFile(path.join(rootPath, "docs/handbook.md"), "utf8")).toContain("program edit");
-    expect((await core.documents.list({ identity: root, projectId, source: "store" })).map((e) => e.path)).not.toContain("docs/handbook.md");
-    expect((storeSync?.failed as Array<{ path: string }>)[0]?.path).toBe("store/customers/globex/notes.md");
+    expect(
+      await fs.readFile(path.join(rootPath, "docs/handbook.md"), "utf8"),
+    ).toContain("program edit");
+    expect(
+      (
+        await core.documents.list({
+          identity: root,
+          projectId,
+          source: "store",
+        })
+      ).map((e) => e.path),
+    ).not.toContain("docs/handbook.md");
+    const failed = (storeSync?.failed ?? []) as Array<{ path: string }>;
+    expect(failed[0]?.path).toBe("store/customers/globex/notes.md");
   });
 });

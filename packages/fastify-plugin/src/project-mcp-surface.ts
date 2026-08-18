@@ -343,7 +343,8 @@ export function surfaceTools(
       {
         definition: {
           name: "revoke_publication",
-          description: "Revoke a shared URL by slug; the link stops working immediately.",
+          description:
+            "Revoke a shared URL by slug; the link stops working immediately.",
           inputSchema: {
             type: "object",
             properties: { slug: { type: "string" } },
@@ -363,7 +364,8 @@ export function surfaceTools(
       {
         definition: {
           name: "list_publications",
-          description: "The shared URLs you may see (builders: all of the project's; members: your own).",
+          description:
+            "The shared URLs you may see (builders: all of the project's; members: your own).",
           inputSchema: { type: "object", properties: {} },
           annotations: READ_ONLY,
         },

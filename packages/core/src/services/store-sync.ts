@@ -446,12 +446,18 @@ export function documentsClientFor(
           path: input.path,
           content: input.bytes,
           ...(input.contentType ? { contentType: input.contentType } : {}),
-          ...(input.ifVersion !== undefined ? { ifVersion: input.ifVersion } : {}),
+          ...(input.ifVersion !== undefined
+            ? { ifVersion: input.ifVersion }
+            : {}),
         });
         return { ok: true, entry };
       } catch (error) {
         if (error instanceof DocumentConflictError) {
-          return { ok: false, conflict: true, currentVersion: error.currentVersion };
+          return {
+            ok: false,
+            conflict: true,
+            currentVersion: error.currentVersion,
+          };
         }
         throw error;
       }
@@ -462,17 +468,25 @@ export function documentsClientFor(
           identity,
           projectId,
           path: input.path,
-          ...(input.ifVersion !== undefined ? { ifVersion: input.ifVersion } : {}),
+          ...(input.ifVersion !== undefined
+            ? { ifVersion: input.ifVersion }
+            : {}),
         });
         return { ok: true, version: result.version };
       } catch (error) {
         if (error instanceof DocumentConflictError) {
-          return { ok: false, conflict: true, currentVersion: error.currentVersion };
+          return {
+            ok: false,
+            conflict: true,
+            currentVersion: error.currentVersion,
+          };
         }
-        if (error instanceof DocumentNotFoundError) return { ok: false, notFound: true };
+        if (error instanceof DocumentNotFoundError)
+          return { ok: false, notFound: true };
         throw error;
       }
     },
-    history: (relative) => documents.history({ identity, projectId, path: relative }),
+    history: (relative) =>
+      documents.history({ identity, projectId, path: relative }),
   };
 }
