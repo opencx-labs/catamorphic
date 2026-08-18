@@ -815,6 +815,7 @@ describe("ClaudeCodeAgent", () => {
     // Spawn failure: no init message, so no transcript was created.
     async function* failingQuery() {
       throw new Error("spawn claude ENOENT");
+      // biome-ignore lint/correctness/noUnreachable: the yield makes this a generator; it throws before producing anything
       yield undefined;
     }
     queryMock.mockReturnValueOnce(

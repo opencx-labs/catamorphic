@@ -221,7 +221,7 @@ describe("stdio supervisor", () => {
     const line = `${JSON.stringify({ id: 9, op: "health" })}\n`;
     harness.writeRaw(line.slice(0, 10));
     harness.writeRaw(
-      line.slice(10) + `${JSON.stringify({ id: 10, op: "health" })}\n`,
+      `${line.slice(10)}${JSON.stringify({ id: 10, op: "health" })}\n`,
     );
     const first = await harness.waitForFrame(
       (frame) => frame.kind === "response" && frame.id === 9,

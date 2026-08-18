@@ -132,6 +132,7 @@ export function normalizeDocumentPath(raw: string): string {
   if (!path) throw new DocumentPathError("Path is empty");
   if (path.startsWith("/"))
     throw new DocumentPathError("Path must be relative");
+  // biome-ignore lint/suspicious/noControlCharactersInRegex: rejecting control characters in paths is the point
   if (/[\u0000-\u001f\u007f]/.test(path)) {
     throw new DocumentPathError("Path contains control characters");
   }

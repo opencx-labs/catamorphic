@@ -17,8 +17,6 @@ import {
 import {
   RUNTIME_PROTOCOL_VERSION,
   type RunPluginPayload,
-  type RunResult,
-  RuntimeInfrastructureError,
   type RuntimeInvocation,
   type RuntimeInvocationReceipt,
   resolveWorkflowPackageFallback,
@@ -40,16 +38,12 @@ import type {
 } from "./deployment-artifacts-service.js";
 import type { DeploymentRuntimeService } from "./deployment-runtime-service.js";
 import type { DevSandboxService } from "./dev-sandbox-service.js";
-import type {
-  ExecutionJob,
-  ExecutionJobsService,
-} from "./execution-jobs-service.js";
+import type { ExecutionJobsService } from "./execution-jobs-service.js";
 import type {
   ExecutionWorkerHandle,
   ExecutionWorkerOptions,
   ExecutionWorkerService,
 } from "./execution-worker-service.js";
-import { uploadWorkspace } from "./playground/workspace-upload.js";
 import { ProjectNotFoundError } from "./projects-service.js";
 import type { RunCoordinator } from "./run-coordinator.js";
 import { jsonColumn, jsonRecord, toJson } from "./run-coordinator.js";
@@ -1643,11 +1637,6 @@ export class RunsService {
     return plugins;
   }
 
-  private requireDevSandboxes(): DevSandboxService {
-    if (!this.deps.devSandboxes) throw new SandboxProviderNotConfiguredError();
-    return this.deps.devSandboxes;
-  }
-
   private async requireProject(
     identity: Identity,
     projectId: string,
@@ -1954,19 +1943,4 @@ function runtimePackages(args: {
     ...(args.workflowPackage ? [args.workflowPackage] : []),
   ];
   return packages.length > 0 ? packages : undefined;
-}
-
-function changedFiles(args: {
-  before: Record<string, string>;
-  after: Record<string, string>;
-}): Record<string, string> {
-  return Object.fromEntries(
-    Object.entries(args.after).filter(
-      ([path, content]) => args.before[path] !== content,
-    ),
-  );
-}
-
-function shellQuote(value: string): string {
-  return `'${value.replace(/'/g, `'\\''`)}'`;
 }

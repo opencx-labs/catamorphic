@@ -117,6 +117,7 @@ export const MarkdownBubbleMenu = forwardRef<
   }, [editor]);
 
   return (
+    // biome-ignore lint/a11y/noStaticElementInteractions: mouse-down is swallowed so the editor keeps its selection; the buttons inside are the controls
     <div
       ref={(el) => {
         barRef.current = el;

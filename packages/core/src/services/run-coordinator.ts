@@ -5,7 +5,6 @@ import type {
   WorkflowExecutionDescriptor,
   WorkflowExecutionUnitDescriptor,
 } from "@catamorphic/parser";
-import type { RunResult } from "@catamorphic/sandbox";
 import { type Kysely, sql, type Transaction } from "kysely";
 import type { Identity } from "../identity.js";
 import type {

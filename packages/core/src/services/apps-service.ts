@@ -9,7 +9,6 @@ import {
 } from "@catamorphic/parser";
 import type { SandboxProvider } from "@catamorphic/sandbox";
 import {
-  APP_PACKAGE_NAME,
   loadAppPackagePayload,
   removePackageDependencies,
   uploadPluginPayloads,

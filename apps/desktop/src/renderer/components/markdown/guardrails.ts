@@ -96,7 +96,9 @@ export function moveTableRow(opts: {
 }): { node: PmNode; replaceFrom: number; replaceTo: number } {
   const { tableNode, tablePos, from, to } = opts;
   const rows: PmNode[] = [];
-  tableNode.forEach((row) => rows.push(row));
+  tableNode.forEach((row) => {
+    rows.push(row);
+  });
   const moved = rows.splice(from, 1)[0];
   if (!moved) throw new Error(`moveTableRow: no row at index ${from}`);
   rows.splice(to > from ? to - 1 : to, 0, moved);

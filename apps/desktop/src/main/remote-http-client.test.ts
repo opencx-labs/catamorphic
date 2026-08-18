@@ -127,7 +127,7 @@ describe("httpDocumentsClient", () => {
       serverUrl: base,
       token: "t",
       projectId,
-      fetch: fakeFetch((url, init) => {
+      fetch: fakeFetch((_url, init) => {
         if (init?.method === "PUT")
           return json(409, { error: "stale", currentVersion: 9 });
         if (init?.method === "DELETE") return json(404, { error: "gone" });

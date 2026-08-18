@@ -24,6 +24,7 @@ export async function listClaudeCodeModels(opts?: {
     release = resolve;
   });
   // Yields nothing; keeps the CLI's stdin open until we're done asking.
+  // biome-ignore lint/correctness/useYield: an empty async iterable is the point
   async function* silence() {
     await gate;
   }

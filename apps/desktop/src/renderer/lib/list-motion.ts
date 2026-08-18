@@ -38,6 +38,7 @@ export function useListMotion(
 } {
   const rowTopsRef = useRef(new Map<string, number>());
   const { enterOnFirstPass = false, keepTransitions = "" } = opts;
+  // biome-ignore lint/correctness/useExhaustiveDependencies: re-measures on the keys list only; options are read on each pass
   useLayoutEffect(() => {
     const sizer = sizerRef.current;
     if (!sizer) return;

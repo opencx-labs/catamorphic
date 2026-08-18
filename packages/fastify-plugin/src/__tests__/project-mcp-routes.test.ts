@@ -295,7 +295,7 @@ describe("project workflow-tools MCP endpoint", () => {
 });
 
 describe("project MCP surface (ADR 0055): documents, skills, ask_agent", () => {
-  const admin = {
+  const _admin = {
     "x-catamorphic-tenant-id": "tenant-1",
     "x-external-user-id": "admin",
     "content-type": "application/json",
@@ -419,7 +419,8 @@ describe("project MCP surface (ADR 0055): documents, skills, ask_agent", () => {
       text: "# Handbook",
     });
     expect(
-      (read.result?.structuredContent as { bytes?: unknown }).bytes,
+      (read.result?.structuredContent as { bytes?: unknown } | undefined)
+        ?.bytes,
     ).toBeUndefined();
     expect(calls.at(-1)).toMatchObject({
       op: "documents.read",
@@ -492,7 +493,7 @@ describe("project MCP surface (ADR 0055): documents, skills, ask_agent", () => {
     });
     apps.push(app);
     const { result } = await rpc(app, "tools/list");
-    const names = (result?.tools as Array<Record<string, unknown>>).map(
+    const names = ((result?.tools ?? []) as Array<Record<string, unknown>>).map(
       (t) => t.name,
     );
     expect(names).toContain("lookupWeather");

@@ -133,10 +133,6 @@ site-nav .nav-links a[aria-current] {
   background: var(--bg-overlay);
 }
 
-.nav-links .btn {
-  margin-left: 8px;
-}
-
 /* ---------- buttons ---------- */
 .btn {
   display: inline-flex;
@@ -153,6 +149,9 @@ site-nav .nav-links a[aria-current] {
     border-color 150ms var(--ease),
     color 150ms var(--ease);
   cursor: pointer;
+}
+.nav-links .btn {
+  margin-left: 8px;
 }
 
 .btn-primary {

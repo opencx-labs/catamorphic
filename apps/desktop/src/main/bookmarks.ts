@@ -72,10 +72,8 @@ export class BookmarksStore {
     projectId: string,
     input: { label: string; url: string; folderId?: string },
   ): Bookmark {
-    const scope = (this.data.byProject[projectId] ??= {
-      folders: [],
-      bookmarks: [],
-    });
+    this.data.byProject[projectId] ??= { folders: [], bookmarks: [] };
+    const scope = this.data.byProject[projectId];
     const bookmark: Bookmark = {
       id: randomUUID(),
       label: input.label.trim() || input.url,
@@ -88,10 +86,8 @@ export class BookmarksStore {
   }
 
   addFolder(projectId: string, label: string): BookmarkFolder {
-    const scope = (this.data.byProject[projectId] ??= {
-      folders: [],
-      bookmarks: [],
-    });
+    this.data.byProject[projectId] ??= { folders: [], bookmarks: [] };
+    const scope = this.data.byProject[projectId];
     const folder: BookmarkFolder = {
       id: randomUUID(),
       label: label.trim() || "New folder",
@@ -170,7 +166,8 @@ export class BookmarksStore {
     scope.bookmarks = scope.bookmarks.filter(
       (candidate) => candidate.id !== id,
     );
-    const pinned = (this.data.pinnedByProfile[profileId] ??= []);
+    this.data.pinnedByProfile[profileId] ??= [];
+    const pinned = this.data.pinnedByProfile[profileId];
     pinned.push({ ...bookmark, folderId: undefined });
     this.save();
   }
@@ -183,10 +180,8 @@ export class BookmarksStore {
     this.data.pinnedByProfile[profileId] = pinned.filter(
       (candidate) => candidate.id !== id,
     );
-    const scope = (this.data.byProject[projectId] ??= {
-      folders: [],
-      bookmarks: [],
-    });
+    this.data.byProject[projectId] ??= { folders: [], bookmarks: [] };
+    const scope = this.data.byProject[projectId];
     scope.bookmarks.push(bookmark);
     this.save();
   }

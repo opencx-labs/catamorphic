@@ -477,8 +477,11 @@ export class E2eFakeCodingAgent implements CodingAgentProvider {
           commandRunning?: boolean;
         };
         const cleanOutput = String(resultRecord.output ?? "")
+          // biome-ignore lint/suspicious/noControlCharactersInRegex: strips OSC sequences from terminal output
           .replace(/\u001b\][^\u0007\u001b]*(?:\u0007|\u001b\\)?/g, "")
+          // biome-ignore lint/suspicious/noControlCharactersInRegex: strips CSI sequences
           .replace(/\u001b\[[0-9;?]*[a-zA-Z]/g, "")
+          // biome-ignore lint/suspicious/noControlCharactersInRegex: strips keypad mode toggles
           .replace(/\u001b[=>]/g, "")
           .trim();
         yield {

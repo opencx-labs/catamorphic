@@ -3,6 +3,7 @@ import { documentsCalls, hostNamespace } from "../context-calls.js";
 
 describe("host call transitions (ADR 0055)", () => {
   it("context.host.<ns...>.<fn>(args) builds a host_call for the dotted capability", () => {
+    // biome-ignore lint/suspicious/noExplicitAny: exercising the untyped proxy the runtime hands workflows
     const host = hostNamespace([]) as Record<string, any>;
     expect(host.acme.crm.lookupCustomer({ id: "c1" })).toEqual({
       __catamorphicDurableTransition: "host_call",

@@ -315,7 +315,8 @@ describeIf("host calls from workflows (ADR 0055)", () => {
     const second = seen.find(
       (s) => s.exportName === "briefCustomer" && s.stepIndex === 1,
     );
-    expect((second?.input as { value: { text: string } }).value.text).toContain(
+    if (!second) throw new Error("second step never invoked");
+    expect((second.input as { value: { text: string } }).value.text).toContain(
       "Q4 renewal",
     );
 

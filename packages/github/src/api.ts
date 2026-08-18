@@ -131,7 +131,9 @@ export class GithubApi {
         draft: boolean;
         updated_at: string;
       }>
-    >(`/repos/${fullName}/pulls?state=open&sort=updated&direction=desc&per_page=50`);
+    >(
+      `/repos/${fullName}/pulls?state=open&sort=updated&direction=desc&per_page=50`,
+    );
     return raw.map((pr) => ({
       number: pr.number,
       title: pr.title,

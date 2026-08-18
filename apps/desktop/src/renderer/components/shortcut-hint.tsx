@@ -66,6 +66,7 @@ export function ShortcutHint({
   };
 
   return (
+    // biome-ignore lint/a11y/noStaticElementInteractions: hover-only hint anchor; the wrapped control stays the interactive element
     <span
       ref={anchorRef}
       className="inline-flex"

@@ -339,6 +339,7 @@ export function WorkspaceTabBar({
     // overflow-y-hidden: tabs hang 1px below the row (-mb-px overlaps the
     // border), and overflow-x-auto alone turns that spill into a phantom
     // vertical scrollbar in the corner.
+    // biome-ignore lint/a11y/noStaticElementInteractions: drag-and-drop target for tab reordering; tabs themselves are buttons
     <div
       className="app-no-drag flex min-w-0 flex-1 items-end gap-1 self-stretch overflow-x-auto overflow-y-hidden"
       onDragOver={(event) => {

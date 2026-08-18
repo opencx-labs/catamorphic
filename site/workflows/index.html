@@ -73,11 +73,11 @@
       </div>
 
       <div class="duo-link" aria-hidden="true">
-        <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14"/><path d="m13 6 6 6-6 6"/></svg>
+        <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12h14"/><path d="m13 6 6 6-6 6"/></svg>
         <span>parsed</span>
       </div>
 
-      <div class="graph-window" aria-label="The same workflow rendered as a visual graph">
+      <div class="graph-window" role="img" aria-label="The same workflow rendered as a visual graph">
         <div class="code-titlebar">
           <span class="graph-title">Welcome New User</span>
           <span class="pane-tag">what your users see</span>
@@ -99,32 +99,32 @@
     </div>
     <div class="grid">
       <div class="card reveal">
-        <span class="icon"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="16 18 22 12 16 6"/><polyline points="8 6 2 12 8 18"/></svg></span>
+        <span class="icon"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="16 18 22 12 16 6"/><polyline points="8 6 2 12 8 18"/></svg></span>
         <h3>Real TypeScript, in a real repo</h3>
         <p>User workflows run like normal programs: full IO, real npm dependencies, executed with Bun in an isolated sandbox. They live as code in the project's git repo, beside whatever else the project holds: docs, data, apps. Branches, history, and review come for free.</p>
       </div>
       <div class="card reveal">
-        <span class="icon"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/></svg></span>
+        <span class="icon"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/></svg></span>
         <h3>Visual graph for everyone</h3>
         <p>The AST parser turns code into an intuitive React Flow canvas, so non-technical users can read, run, and reshape automations.</p>
       </div>
       <div class="card reveal">
-        <span class="icon"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2a4 4 0 0 1 4 4v1h1a3 3 0 0 1 3 3v8a3 3 0 0 1-3 3H7a3 3 0 0 1-3-3v-8a3 3 0 0 1 3-3h1V6a4 4 0 0 1 4-4Z"/><circle cx="9" cy="14" r="1"/><circle cx="15" cy="14" r="1"/></svg></span>
+        <span class="icon"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 2a4 4 0 0 1 4 4v1h1a3 3 0 0 1 3 3v8a3 3 0 0 1-3 3H7a3 3 0 0 1-3-3v-8a3 3 0 0 1 3-3h1V6a4 4 0 0 1 4-4Z"/><circle cx="9" cy="14" r="1"/><circle cx="15" cy="14" r="1"/></svg></span>
         <h3>AI agents built in</h3>
         <p>Coding agents write and edit workflows from natural language, driving a dev sandbox remotely. Ships with AI SDK, Claude Code, and Codex harnesses.</p>
       </div>
       <div class="card reveal">
-        <span class="icon"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 1 1-9-9"/><path d="M21 3v6h-6"/></svg></span>
+        <span class="icon"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 12a9 9 0 1 1-9-9"/><path d="M21 3v6h-6"/></svg></span>
         <h3>Durable by default</h3>
         <p>Persisted continuation, retries, pauses, signals, rate budgets, and batch processing, all backed by Postgres with <code>SKIP LOCKED</code>. No extra infrastructure.</p>
       </div>
       <div class="card reveal">
-        <span class="icon"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M13 2 3 14h9l-1 8 10-12h-9l1-8Z"/></svg></span>
+        <span class="icon"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M13 2 3 14h9l-1 8 10-12h-9l1-8Z"/></svg></span>
         <h3>Triggered by events, callable as tools</h3>
         <p>Your product defines trigger kinds and workflows subscribe to them, so real events start real runs. Any workflow can also opt in as an MCP tool: its input type becomes the tool's schema, and an agent can call a workflow it wrote on the very next turn.</p>
       </div>
       <div class="card reveal">
-        <span class="icon"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 7h-9m9 10h-9M4 7h1m-1 10h1"/><circle cx="8" cy="7" r="2.5"/><circle cx="8" cy="17" r="2.5"/></svg></span>
+        <span class="icon"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 7h-9m9 10h-9M4 7h1m-1 10h1"/><circle cx="8" cy="7" r="2.5"/><circle cx="8" cy="17" r="2.5"/></svg></span>
         <h3>Runs anywhere</h3>
         <p>Every dependency has a light end: network Postgres or embedded pglite, cloud sandboxes, local ones, or plain processes for internal tools, S3 or plain folders. Our desktop app runs the whole engine serverless, by design, as proof.</p>
       </div>
@@ -173,7 +173,7 @@
 
       <div class="graph-panel reveal" aria-hidden="true">
         <p class="panel-title"><span>welcomeUser</span><span>graph</span></p>
-        <svg viewBox="0 0 440 380" fill="none">
+        <svg viewBox="0 0 440 380" fill="none" aria-hidden="true">
           <defs>
             <marker id="arr" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
               <path d="M0 0 L8 4 L0 8 Z" fill="#5c5c66"/>
@@ -280,7 +280,7 @@
   const io = new IntersectionObserver((entries) => {
     for (const e of entries) if (e.isIntersecting) { e.target.classList.add("in"); io.unobserve(e.target); }
   }, { threshold: 0.12 });
-  document.querySelectorAll(".reveal").forEach((el) => io.observe(el));
+  for (const el of document.querySelectorAll(".reveal")) io.observe(el);
 
   const install = document.getElementById("install");
   install.addEventListener("click", async () => {

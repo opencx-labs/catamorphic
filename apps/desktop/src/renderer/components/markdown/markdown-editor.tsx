@@ -116,6 +116,7 @@ export function MarkdownEditor({
   const [frontmatter, setFrontmatterState] = useState<string | null>(null);
   const [frontmatterOpen, setFrontmatterOpen] = useState(false);
 
+  // biome-ignore lint/correctness/useExhaustiveDependencies: mounts the editor once; the initial value is a seed, later values flow through the baseline diff
   useEffect(() => {
     const mount = mountRef.current;
     const bubble = bubbleRef.current;
@@ -348,6 +349,7 @@ export function MarkdownEditor({
   };
 
   return (
+    // biome-ignore lint/a11y/noStaticElementInteractions: a keyboard-shortcut catcher around the editor; the editor itself is the focusable control
     <div
       className="cat-mdedit-pane"
       onKeyDown={(event) => {
@@ -386,7 +388,7 @@ export function MarkdownEditor({
           <MarkdownBubbleMenu ref={bubbleRef} editor={editor} />
           <div ref={gripRef} className="cat-mdedit-rowgrip">
             <span
-              // eslint-disable-next-line react/no-danger
+              // biome-ignore lint/security/noDangerouslySetInnerHtml: a constant inline SVG, no user content
               dangerouslySetInnerHTML={{ __html: GRIP_DOTS_SVG }}
             />
           </div>

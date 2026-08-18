@@ -126,10 +126,11 @@ for await (const event of serverHandle) {
     for await (const event of handle) {
       if (event.kind !== "stdout") continue;
       buffer += decoder.decode(event.data, { stream: true });
-      let idx;
-      while ((idx = buffer.indexOf("\n")) !== -1) {
+      let idx: number = buffer.indexOf("\n");
+      while (idx !== -1) {
         const line = buffer.slice(0, idx);
         buffer = buffer.slice(idx + 1);
+        idx = buffer.indexOf("\n");
         if (line.trim()) pending.shift()?.(line);
       }
     }
@@ -138,7 +139,7 @@ for await (const event of serverHandle) {
     new Promise((resolve) => pending.push(resolve));
   const request = (msg: object): Promise<string> => {
     const reply = nextLine();
-    void stdin.write(JSON.stringify(msg) + "\n");
+    void stdin.write(`${JSON.stringify(msg)}\n`);
     return reply;
   };
 

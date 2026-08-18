@@ -3604,6 +3604,7 @@ export function App() {
             {projectId &&
               (sidebarConfig?.sections ?? []).map((section, index) => (
                 <ConfiguredSection
+                  // biome-ignore lint/suspicious/noArrayIndexKey: sections have no id; the same type may appear twice, and order IS identity here
                   key={`${section.type}:${index}`}
                   section={section}
                   projectId={projectId}
@@ -3728,464 +3729,456 @@ export function App() {
         </div>
 
         {projectId ? (
-          <>
-            <div className="relative flex min-h-0 flex-1 flex-col">
-              {/* Every tab pane lives in this wrapper so keyboard cycling
+          <div className="relative flex min-h-0 flex-1 flex-col">
+            {/* Every tab pane lives in this wrapper so keyboard cycling
                   can nudge the visible content from the direction of
                   travel; chat docks and bubbles stay outside (they own
                   their own motion). */}
-              <div
-                className={`relative flex min-h-0 flex-1 flex-col ${
-                  paneMotion
-                    ? paneMotion.direction === "left"
-                      ? "animate-pane-in-left"
-                      : "animate-pane-in-right"
-                    : ""
-                }`}
-                onAnimationEnd={(event) => {
-                  if (event.animationName.startsWith("pane-in")) {
-                    setPaneMotion(null);
-                  }
-                }}
-              >
-                {/* Screen-style tabs render whenever they occupy a view
+            <div
+              className={`relative flex min-h-0 flex-1 flex-col ${
+                paneMotion
+                  ? paneMotion.direction === "left"
+                    ? "animate-pane-in-left"
+                    : "animate-pane-in-right"
+                  : ""
+              }`}
+              onAnimationEnd={(event) => {
+                if (event.animationName.startsWith("pane-in")) {
+                  setPaneMotion(null);
+                }
+              }}
+            >
+              {/* Screen-style tabs render whenever they occupy a view
                     slot — in a split that can be two at once. */}
-                {workspace.tabs
-                  .filter((tab) => viewSlots[tabKey(tab)])
-                  .map((tab) => (
-                    <div
-                      key={tabKey(tab)}
-                      className={paneClass(tabKey(tab))}
-                      style={paneStyle(tabKey(tab))}
-                      {...paneFocusProps(tabKey(tab))}
-                    >
-                      {viewSlots[tabKey(tab)] !== "full" && (
-                        <PaneUnsplitButton
-                          onClick={() => openSurface(tabKey(tab), "tab")}
-                        />
-                      )}
-                      {tab.kind === "workflow" ? (
-                        <Suspense fallback={<div className="flex-1 bg-bg" />}>
-                          <WorkflowScreen
-                            projectId={projectId}
-                            workflowName={tab.name}
-                          />
-                        </Suspense>
-                      ) : tab.kind === "app" ? (
-                        <AppScreen projectId={projectId} appName={tab.name} />
-                      ) : tab.kind === "mcpapp" ? (
-                        <McpAppScreen
-                          toolKey={tab.toolKey}
-                          toolInput={tab.toolInput}
-                          toolResult={tab.toolResult}
-                          onOpenLink={(url) => openBrowserTab(url)}
-                        />
-                      ) : tab.kind === "settings" ? (
-                        <SettingsScreen
-                          projectId={projectId}
-                          onClose={() => closeTab(tabKey(tab))}
-                          onAddAgent={() => setWizardModalOpen(true)}
-                          onManageConnectors={() =>
-                            setConnectorsModalOpen(true)
-                          }
-                        />
-                      ) : tab.kind === "palette" && paletteProps ? (
-                        <CommandPalette
-                          key={tabKey(tab)}
-                          variant="tab"
-                          onClose={() => closeTab(tabKey(tab))}
-                          {...paletteProps}
-                        />
-                      ) : tab.kind === "agent-setup" ? (
-                        <AgentWizard
-                          variant="tab"
-                          onClose={() => closeTab(tabKey(tab))}
-                          onDone={() => closeTab(tabKey(tab))}
-                        />
-                      ) : tab.kind === "diff" ? (
-                        <Suspense fallback={<div className="flex-1 bg-bg" />}>
-                          <DiffScreen
-                            projectId={tab.projectId}
-                            source={tab.source}
-                          />
-                        </Suspense>
-                      ) : null}
-                    </div>
-                  ))}
-
-                {/* Browser tabs stay mounted while hidden — unmounting a
-                  webview would reload the page on every tab switch. */}
-                {workspace.browsers.map((browser) => (
+              {workspace.tabs
+                .filter((tab) => viewSlots[tabKey(tab)])
+                .map((tab) => (
                   <div
-                    key={browser.localId}
-                    className={paneClass(browserTabKey(browser.localId))}
-                    style={paneStyle(browserTabKey(browser.localId))}
-                    {...paneFocusProps(browserTabKey(browser.localId))}
+                    key={tabKey(tab)}
+                    className={paneClass(tabKey(tab))}
+                    style={paneStyle(tabKey(tab))}
+                    {...paneFocusProps(tabKey(tab))}
                   >
-                    <BrowserScreen
-                      profileId={browser.profileId}
-                      projectId={projectId}
-                      // Remounts (project/profile switches) resume at the
-                      // last known URL, not the tab's original one.
-                      initialUrl={browser.url || browser.initialUrl}
-                      active={browser.localId === activeBrowserTabId}
-                      visible={Boolean(
-                        viewSlots[browserTabKey(browser.localId)],
-                      )}
-                      keepAwake={Boolean(browser.agentControlled)}
-                      onStateChange={(state) =>
-                        onBrowserState(browser.localId, state)
-                      }
-                      registerNavigate={(navigate) =>
-                        browserNavigatorsRef.current.set(
-                          browser.localId,
-                          navigate,
-                        )
-                      }
-                      registerGuest={(guestId) => {
-                        if (guestId === null) {
-                          browserGuestIdsRef.current.delete(browser.localId);
-                        } else {
-                          browserGuestIdsRef.current.set(
-                            browser.localId,
-                            guestId,
-                          );
-                        }
-                      }}
-                      onUnsplit={
-                        viewSlots[browserTabKey(browser.localId)] &&
-                        viewSlots[browserTabKey(browser.localId)] !== "full"
-                          ? () =>
-                              openSurface(browserTabKey(browser.localId), "tab")
-                          : undefined
-                      }
-                    />
-                    <AgentControlOverlay
-                      kind="page"
-                      active={Boolean(browser.agentControlled)}
-                      onTakeOver={() =>
-                        takeOverSurface(browserTabKey(browser.localId))
-                      }
-                      onGoToChat={
-                        browser.chatLocalId
-                          ? () => revealChat(browser.chatLocalId as string)
-                          : undefined
-                      }
-                    />
+                    {viewSlots[tabKey(tab)] !== "full" && (
+                      <PaneUnsplitButton
+                        onClick={() => openSurface(tabKey(tab), "tab")}
+                      />
+                    )}
+                    {tab.kind === "workflow" ? (
+                      <Suspense fallback={<div className="flex-1 bg-bg" />}>
+                        <WorkflowScreen
+                          projectId={projectId}
+                          workflowName={tab.name}
+                        />
+                      </Suspense>
+                    ) : tab.kind === "app" ? (
+                      <AppScreen projectId={projectId} appName={tab.name} />
+                    ) : tab.kind === "mcpapp" ? (
+                      <McpAppScreen
+                        toolKey={tab.toolKey}
+                        toolInput={tab.toolInput}
+                        toolResult={tab.toolResult}
+                        onOpenLink={(url) => openBrowserTab(url)}
+                      />
+                    ) : tab.kind === "settings" ? (
+                      <SettingsScreen
+                        projectId={projectId}
+                        onClose={() => closeTab(tabKey(tab))}
+                        onAddAgent={() => setWizardModalOpen(true)}
+                        onManageConnectors={() => setConnectorsModalOpen(true)}
+                      />
+                    ) : tab.kind === "palette" && paletteProps ? (
+                      <CommandPalette
+                        key={tabKey(tab)}
+                        variant="tab"
+                        onClose={() => closeTab(tabKey(tab))}
+                        {...paletteProps}
+                      />
+                    ) : tab.kind === "agent-setup" ? (
+                      <AgentWizard
+                        variant="tab"
+                        onClose={() => closeTab(tabKey(tab))}
+                        onDone={() => closeTab(tabKey(tab))}
+                      />
+                    ) : tab.kind === "diff" ? (
+                      <Suspense fallback={<div className="flex-1 bg-bg" />}>
+                        <DiffScreen
+                          projectId={tab.projectId}
+                          source={tab.source}
+                        />
+                      </Suspense>
+                    ) : null}
                   </div>
                 ))}
 
-                {/* Terminals stay mounted while hidden — unmounting kills
+              {/* Browser tabs stay mounted while hidden — unmounting a
+                  webview would reload the page on every tab switch. */}
+              {workspace.browsers.map((browser) => (
+                <div
+                  key={browser.localId}
+                  className={paneClass(browserTabKey(browser.localId))}
+                  style={paneStyle(browserTabKey(browser.localId))}
+                  {...paneFocusProps(browserTabKey(browser.localId))}
+                >
+                  <BrowserScreen
+                    profileId={browser.profileId}
+                    projectId={projectId}
+                    // Remounts (project/profile switches) resume at the
+                    // last known URL, not the tab's original one.
+                    initialUrl={browser.url || browser.initialUrl}
+                    active={browser.localId === activeBrowserTabId}
+                    visible={Boolean(viewSlots[browserTabKey(browser.localId)])}
+                    keepAwake={Boolean(browser.agentControlled)}
+                    onStateChange={(state) =>
+                      onBrowserState(browser.localId, state)
+                    }
+                    registerNavigate={(navigate) =>
+                      browserNavigatorsRef.current.set(
+                        browser.localId,
+                        navigate,
+                      )
+                    }
+                    registerGuest={(guestId) => {
+                      if (guestId === null) {
+                        browserGuestIdsRef.current.delete(browser.localId);
+                      } else {
+                        browserGuestIdsRef.current.set(
+                          browser.localId,
+                          guestId,
+                        );
+                      }
+                    }}
+                    onUnsplit={
+                      viewSlots[browserTabKey(browser.localId)] &&
+                      viewSlots[browserTabKey(browser.localId)] !== "full"
+                        ? () =>
+                            openSurface(browserTabKey(browser.localId), "tab")
+                        : undefined
+                    }
+                  />
+                  <AgentControlOverlay
+                    kind="page"
+                    active={Boolean(browser.agentControlled)}
+                    onTakeOver={() =>
+                      takeOverSurface(browserTabKey(browser.localId))
+                    }
+                    onGoToChat={
+                      browser.chatLocalId
+                        ? () => revealChat(browser.chatLocalId as string)
+                        : undefined
+                    }
+                  />
+                </div>
+              ))}
+
+              {/* Terminals stay mounted while hidden — unmounting kills
                   the shell. Editors likewise, preserving undo history,
                   scroll position, and unsaved drafts across switches. */}
-                {workspace.terminals.map((terminal) => (
-                  <div
-                    key={terminal.localId}
-                    data-surface-pane
-                    className={paneClass(terminalTabKey(terminal.localId))}
-                    style={paneStyle(terminalTabKey(terminal.localId))}
-                    {...paneFocusProps(terminalTabKey(terminal.localId))}
-                  >
-                    {viewSlots[terminalTabKey(terminal.localId)] !==
-                      undefined &&
-                      viewSlots[terminalTabKey(terminal.localId)] !==
-                        "full" && (
-                        <PaneUnsplitButton
-                          onClick={() =>
-                            openSurface(terminalTabKey(terminal.localId), "tab")
-                          }
-                        />
-                      )}
-                    <TerminalScreen
-                      projectId={projectId}
-                      active={terminal.localId === activeTerminalTabId}
-                      attachSessionId={terminal.attachSessionId}
-                      restoreSessionId={terminal.restoreSessionId}
-                      readOnly={Boolean(terminal.agentControlled)}
-                      onTitle={(title) =>
-                        onTerminalTitle(terminal.localId, title)
-                      }
-                      onSession={(ptySessionId) =>
+              {workspace.terminals.map((terminal) => (
+                <div
+                  key={terminal.localId}
+                  data-surface-pane
+                  className={paneClass(terminalTabKey(terminal.localId))}
+                  style={paneStyle(terminalTabKey(terminal.localId))}
+                  {...paneFocusProps(terminalTabKey(terminal.localId))}
+                >
+                  {viewSlots[terminalTabKey(terminal.localId)] !== undefined &&
+                    viewSlots[terminalTabKey(terminal.localId)] !== "full" && (
+                      <PaneUnsplitButton
+                        onClick={() =>
+                          openSurface(terminalTabKey(terminal.localId), "tab")
+                        }
+                      />
+                    )}
+                  <TerminalScreen
+                    projectId={projectId}
+                    active={terminal.localId === activeTerminalTabId}
+                    attachSessionId={terminal.attachSessionId}
+                    restoreSessionId={terminal.restoreSessionId}
+                    readOnly={Boolean(terminal.agentControlled)}
+                    onTitle={(title) =>
+                      onTerminalTitle(terminal.localId, title)
+                    }
+                    onSession={(ptySessionId) =>
+                      updateWorkspace((ws) => ({
+                        ...ws,
+                        terminals: ws.terminals.map((t) =>
+                          t.localId === terminal.localId
+                            ? { ...t, ptySessionId }
+                            : t,
+                        ),
+                      }))
+                    }
+                    onExit={() => {
+                      // Agent terminals stay open to read; the activity
+                      // indicator stops. User terminals close as before.
+                      if (terminal.attachSessionId) {
                         updateWorkspace((ws) => ({
                           ...ws,
                           terminals: ws.terminals.map((t) =>
                             t.localId === terminal.localId
-                              ? { ...t, ptySessionId }
+                              ? { ...t, running: false }
                               : t,
                           ),
-                        }))
+                        }));
+                      } else {
+                        closeTab(terminalTabKey(terminal.localId));
                       }
-                      onExit={() => {
-                        // Agent terminals stay open to read; the activity
-                        // indicator stops. User terminals close as before.
-                        if (terminal.attachSessionId) {
-                          updateWorkspace((ws) => ({
-                            ...ws,
-                            terminals: ws.terminals.map((t) =>
-                              t.localId === terminal.localId
-                                ? { ...t, running: false }
-                                : t,
-                            ),
-                          }));
-                        } else {
-                          closeTab(terminalTabKey(terminal.localId));
-                        }
-                      }}
-                    />
-                    <AgentControlOverlay
-                      kind="terminal"
-                      active={Boolean(terminal.agentControlled)}
-                      onTakeOver={() =>
-                        takeOverSurface(terminalTabKey(terminal.localId))
-                      }
-                      onGoToChat={
-                        terminal.chatLocalId
-                          ? () => revealChat(terminal.chatLocalId as string)
-                          : undefined
-                      }
-                    />
-                  </div>
-                ))}
-
-                {workspace.editors.map((editor) => (
-                  <div
-                    key={editor.localId}
-                    className={paneClass(editorTabKey(editor.localId))}
-                    style={paneStyle(editorTabKey(editor.localId))}
-                    {...paneFocusProps(editorTabKey(editor.localId))}
-                  >
-                    {viewSlots[editorTabKey(editor.localId)] !== undefined &&
-                      viewSlots[editorTabKey(editor.localId)] !== "full" && (
-                        <PaneUnsplitButton
-                          onClick={() =>
-                            openSurface(editorTabKey(editor.localId), "tab")
-                          }
-                        />
-                      )}
-                    <Suspense fallback={<div className="flex-1 bg-bg" />}>
-                      <EditorScreen
-                        projectId={projectId}
-                        filePath={editor.filePath}
-                        onFileChange={(filePath) =>
-                          onEditorState(editor.localId, { filePath })
-                        }
-                        onDirtyChange={(dirty) =>
-                          onEditorState(editor.localId, { dirty })
-                        }
-                      />
-                    </Suspense>
-                  </div>
-                ))}
-              </div>
-
-              {/* Split divider: drag to resize. The full-region overlay
-                  during a drag keeps webviews from swallowing the moves. */}
-              {split && (
-                // biome-ignore lint/a11y/noStaticElementInteractions: pointer-only resize handle; the split is keyboard-reachable via Cmd+\ and tab focus
-                <div
-                  data-split-divider
-                  onMouseDown={startDividerDrag}
-                  className={`absolute inset-y-0 z-40 w-[7px] -translate-x-1/2 cursor-col-resize ${
-                    dividerDragging
-                      ? ""
-                      : "transition-[left] duration-200 ease-[cubic-bezier(0.2,0,0,1)]"
-                  }`}
-                  style={{ left: `${splitRatio * 100}%` }}
-                >
-                  <div className="mx-auto h-full w-px bg-transparent transition-colors duration-150 hover:bg-accent/60" />
+                    }}
+                  />
+                  <AgentControlOverlay
+                    kind="terminal"
+                    active={Boolean(terminal.agentControlled)}
+                    onTakeOver={() =>
+                      takeOverSurface(terminalTabKey(terminal.localId))
+                    }
+                    onGoToChat={
+                      terminal.chatLocalId
+                        ? () => revealChat(terminal.chatLocalId as string)
+                        : undefined
+                    }
+                  />
                 </div>
-              )}
-              {dividerDragging && (
-                <div className="absolute inset-0 z-50 cursor-col-resize" />
-              )}
-
-              {/* Dragging a tab: side drop zones tile it left or right. */}
-              {tabDragKey && (
-                <div className="absolute inset-0 z-50 flex">
-                  {(["left", "right"] as const).map((side) => (
-                    // biome-ignore lint/a11y/noStaticElementInteractions: drop target for an in-progress HTML5 drag only
-                    <div
-                      key={side}
-                      onDragOver={(event) => {
-                        event.preventDefault();
-                        setDropSideHover(side);
-                      }}
-                      onDragLeave={() =>
-                        setDropSideHover((current) =>
-                          current === side ? null : current,
-                        )
-                      }
-                      onDrop={(event) => {
-                        event.preventDefault();
-                        dropTabToSide(tabDragKey, side);
-                        setTabDragKey(null);
-                        setDropSideHover(null);
-                      }}
-                      className={`flex-1 border-2 border-dashed transition-colors duration-150 ${
-                        dropSideHover === side
-                          ? "border-accent/60 bg-accent/10"
-                          : "border-transparent"
-                      }`}
-                    />
-                  ))}
-                </div>
-              )}
-
-              {workspace.chats.map((entry) => (
-                <ChatDock
-                  key={entry.localId}
-                  projectId={projectId}
-                  entry={entry}
-                  title={chatLabels[entry.localId] ?? "AI assistant"}
-                  tabActive={Boolean(viewSlots[chatTabKey(entry.localId)])}
-                  slot={viewSlots[chatTabKey(entry.localId)] ?? "full"}
-                  splitRatio={splitRatio}
-                  splitResizing={dividerDragging}
-                  bubbleClearance={bubblesCollapsed ? "corner" : "strip"}
-                  defaultAgentId={agentsData?.defaultAgentId ?? undefined}
-                  paletteTargeted={entry.localId === targetedChat?.localId}
-                  surfaces={surfacesFor(entry)}
-                  onOpenSurface={openSurface}
-                  onOpenMcpApp={(view, mode) => {
-                    const name = view.toolUseId;
-                    openTab(
-                      {
-                        kind: "mcpapp",
-                        name,
-                        label: view.title,
-                        toolKey: view.toolKey,
-                        toolInput: view.toolInput,
-                        toolResult: view.toolResult,
-                      },
-                      mode === "split" ? "side" : undefined,
-                    );
-                  }}
-                  onLinkClick={(url, modifiers) => {
-                    // The palette's grammar, applied to links: plain =
-                    // open (the page takes the view, a fullscreen chat
-                    // steps down to the floating dock), ⌘ = new tab (the
-                    // chat keeps its place), ⌘⇧ = open to the side.
-                    if (modifiers.metaKey && modifiers.shiftKey) {
-                      openBrowserTab(url, {
-                        side: true,
-                        chatLocalId: entry.localId,
-                      });
-                      return;
-                    }
-                    if (modifiers.metaKey) {
-                      openBrowserTab(url, { chatLocalId: entry.localId });
-                      return;
-                    }
-                    openBrowserTab(url, { chatLocalId: entry.localId });
-                    if (entry.mode === "tab") {
-                      updateWorkspace((ws) => ({
-                        ...ws,
-                        activeChatId: entry.localId,
-                        chats: ws.chats.map((chat) =>
-                          chat.localId === entry.localId
-                            ? { ...chat, mode: "partial" }
-                            : chat.mode === "partial"
-                              ? { ...chat, mode: "min" }
-                              : chat,
-                        ),
-                      }));
-                    }
-                  }}
-                  onFileClick={(path) => {
-                    // Host-agent file_edit events carry absolute paths; the
-                    // file API speaks project-relative. Relativize against
-                    // the project root, then chip onto this chat's rail.
-                    const open = (relative: string) =>
-                      openEditorTab({
-                        filePath: relative,
-                        chatLocalId: entry.localId,
-                      });
-                    if (!path.startsWith("/") || !projectId) {
-                      open(path);
-                      return;
-                    }
-                    void desktopApi.projectRoot(projectId).then((root) => {
-                      const prefix = root ? `${root}/` : null;
-                      open(
-                        prefix && path.startsWith(prefix)
-                          ? path.slice(prefix.length)
-                          : path,
-                      );
-                    });
-                  }}
-                  onFork={(messageId) => forkChat(entry, messageId)}
-                  onOpenParent={
-                    chatForks[entry.localId]
-                      ? () => openParentChat(entry)
-                      : undefined
-                  }
-                  pullSelectionNonce={selectionPulls[entry.localId] ?? 0}
-                  onFocusRequest={
-                    split &&
-                    viewSlots[chatTabKey(entry.localId)] &&
-                    workspace.activeTabKey !== chatTabKey(entry.localId)
-                      ? () => selectTab(chatTabKey(entry.localId))
-                      : undefined
-                  }
-                  onUnsplit={
-                    viewSlots[chatTabKey(entry.localId)] &&
-                    viewSlots[chatTabKey(entry.localId)] !== "full"
-                      ? () => openSurface(chatTabKey(entry.localId), "tab")
-                      : undefined
-                  }
-                  onEntryChange={(next) =>
-                    updateWorkspace((ws) => ({
-                      ...ws,
-                      activeChatId: next.localId,
-                      activeTabKey:
-                        next.mode === "tab"
-                          ? chatTabKey(next.localId)
-                          : ws.activeTabKey === chatTabKey(next.localId)
-                            ? nextActiveTabKey(
-                                ws,
-                                chatTabKey(next.localId),
-                                ws.chats.map((chat) =>
-                                  chat.localId === next.localId ? next : chat,
-                                ),
-                              )
-                            : ws.activeTabKey,
-                      chats: ws.chats.map((chat) =>
-                        chat.localId === next.localId ? next : chat,
-                      ),
-                    }))
-                  }
-                  onClose={closeChat}
-                  registerClose={(close) =>
-                    chatClosersRef.current.set(entry.localId, close)
-                  }
-                  registerMinimize={(minimize) =>
-                    chatMinimizersRef.current.set(entry.localId, minimize)
-                  }
-                  registerSend={(send) =>
-                    chatSendersRef.current.set(entry.localId, send)
-                  }
-                  onSessionCreated={onSessionCreated}
-                  onSignalsChange={onSignalsChange}
-                />
               ))}
 
-              <ChatBubbles
-                entries={workspace.chats}
-                labels={chatLabels}
-                icons={chatIcons}
-                forks={chatForks}
-                signals={signalsByChat}
-                unread={unreadByChat}
-                activeLocalId={workspace.activeChatId}
-                autoCollapse={activeChatTabId !== undefined}
-                onCollapsedChange={setBubblesCollapsed}
-                onToggle={toggleChat}
-                onClose={closeChat}
-                onNewChat={() => addChat()}
-                onCollapse={minimizeFloatingChats}
-              />
+              {workspace.editors.map((editor) => (
+                <div
+                  key={editor.localId}
+                  className={paneClass(editorTabKey(editor.localId))}
+                  style={paneStyle(editorTabKey(editor.localId))}
+                  {...paneFocusProps(editorTabKey(editor.localId))}
+                >
+                  {viewSlots[editorTabKey(editor.localId)] !== undefined &&
+                    viewSlots[editorTabKey(editor.localId)] !== "full" && (
+                      <PaneUnsplitButton
+                        onClick={() =>
+                          openSurface(editorTabKey(editor.localId), "tab")
+                        }
+                      />
+                    )}
+                  <Suspense fallback={<div className="flex-1 bg-bg" />}>
+                    <EditorScreen
+                      projectId={projectId}
+                      filePath={editor.filePath}
+                      onFileChange={(filePath) =>
+                        onEditorState(editor.localId, { filePath })
+                      }
+                      onDirtyChange={(dirty) =>
+                        onEditorState(editor.localId, { dirty })
+                      }
+                    />
+                  </Suspense>
+                </div>
+              ))}
             </div>
-          </>
+
+            {/* Split divider: drag to resize. The full-region overlay
+                  during a drag keeps webviews from swallowing the moves. */}
+            {split && (
+              // biome-ignore lint/a11y/noStaticElementInteractions: pointer-only resize handle; the split is keyboard-reachable via Cmd+\ and tab focus
+              <div
+                data-split-divider
+                onMouseDown={startDividerDrag}
+                className={`absolute inset-y-0 z-40 w-[7px] -translate-x-1/2 cursor-col-resize ${
+                  dividerDragging
+                    ? ""
+                    : "transition-[left] duration-200 ease-[cubic-bezier(0.2,0,0,1)]"
+                }`}
+                style={{ left: `${splitRatio * 100}%` }}
+              >
+                <div className="mx-auto h-full w-px bg-transparent transition-colors duration-150 hover:bg-accent/60" />
+              </div>
+            )}
+            {dividerDragging && (
+              <div className="absolute inset-0 z-50 cursor-col-resize" />
+            )}
+
+            {/* Dragging a tab: side drop zones tile it left or right. */}
+            {tabDragKey && (
+              <div className="absolute inset-0 z-50 flex">
+                {(["left", "right"] as const).map((side) => (
+                  // biome-ignore lint/a11y/noStaticElementInteractions: drop target for an in-progress HTML5 drag only
+                  <div
+                    key={side}
+                    onDragOver={(event) => {
+                      event.preventDefault();
+                      setDropSideHover(side);
+                    }}
+                    onDragLeave={() =>
+                      setDropSideHover((current) =>
+                        current === side ? null : current,
+                      )
+                    }
+                    onDrop={(event) => {
+                      event.preventDefault();
+                      dropTabToSide(tabDragKey, side);
+                      setTabDragKey(null);
+                      setDropSideHover(null);
+                    }}
+                    className={`flex-1 border-2 border-dashed transition-colors duration-150 ${
+                      dropSideHover === side
+                        ? "border-accent/60 bg-accent/10"
+                        : "border-transparent"
+                    }`}
+                  />
+                ))}
+              </div>
+            )}
+
+            {workspace.chats.map((entry) => (
+              <ChatDock
+                key={entry.localId}
+                projectId={projectId}
+                entry={entry}
+                title={chatLabels[entry.localId] ?? "AI assistant"}
+                tabActive={Boolean(viewSlots[chatTabKey(entry.localId)])}
+                slot={viewSlots[chatTabKey(entry.localId)] ?? "full"}
+                splitRatio={splitRatio}
+                splitResizing={dividerDragging}
+                bubbleClearance={bubblesCollapsed ? "corner" : "strip"}
+                defaultAgentId={agentsData?.defaultAgentId ?? undefined}
+                paletteTargeted={entry.localId === targetedChat?.localId}
+                surfaces={surfacesFor(entry)}
+                onOpenSurface={openSurface}
+                onOpenMcpApp={(view, mode) => {
+                  const name = view.toolUseId;
+                  openTab(
+                    {
+                      kind: "mcpapp",
+                      name,
+                      label: view.title,
+                      toolKey: view.toolKey,
+                      toolInput: view.toolInput,
+                      toolResult: view.toolResult,
+                    },
+                    mode === "split" ? "side" : undefined,
+                  );
+                }}
+                onLinkClick={(url, modifiers) => {
+                  // The palette's grammar, applied to links: plain =
+                  // open (the page takes the view, a fullscreen chat
+                  // steps down to the floating dock), ⌘ = new tab (the
+                  // chat keeps its place), ⌘⇧ = open to the side.
+                  if (modifiers.metaKey && modifiers.shiftKey) {
+                    openBrowserTab(url, {
+                      side: true,
+                      chatLocalId: entry.localId,
+                    });
+                    return;
+                  }
+                  if (modifiers.metaKey) {
+                    openBrowserTab(url, { chatLocalId: entry.localId });
+                    return;
+                  }
+                  openBrowserTab(url, { chatLocalId: entry.localId });
+                  if (entry.mode === "tab") {
+                    updateWorkspace((ws) => ({
+                      ...ws,
+                      activeChatId: entry.localId,
+                      chats: ws.chats.map((chat) =>
+                        chat.localId === entry.localId
+                          ? { ...chat, mode: "partial" }
+                          : chat.mode === "partial"
+                            ? { ...chat, mode: "min" }
+                            : chat,
+                      ),
+                    }));
+                  }
+                }}
+                onFileClick={(path) => {
+                  // Host-agent file_edit events carry absolute paths; the
+                  // file API speaks project-relative. Relativize against
+                  // the project root, then chip onto this chat's rail.
+                  const open = (relative: string) =>
+                    openEditorTab({
+                      filePath: relative,
+                      chatLocalId: entry.localId,
+                    });
+                  if (!path.startsWith("/") || !projectId) {
+                    open(path);
+                    return;
+                  }
+                  void desktopApi.projectRoot(projectId).then((root) => {
+                    const prefix = root ? `${root}/` : null;
+                    open(
+                      prefix && path.startsWith(prefix)
+                        ? path.slice(prefix.length)
+                        : path,
+                    );
+                  });
+                }}
+                onFork={(messageId) => forkChat(entry, messageId)}
+                onOpenParent={
+                  chatForks[entry.localId]
+                    ? () => openParentChat(entry)
+                    : undefined
+                }
+                pullSelectionNonce={selectionPulls[entry.localId] ?? 0}
+                onFocusRequest={
+                  split &&
+                  viewSlots[chatTabKey(entry.localId)] &&
+                  workspace.activeTabKey !== chatTabKey(entry.localId)
+                    ? () => selectTab(chatTabKey(entry.localId))
+                    : undefined
+                }
+                onUnsplit={
+                  viewSlots[chatTabKey(entry.localId)] &&
+                  viewSlots[chatTabKey(entry.localId)] !== "full"
+                    ? () => openSurface(chatTabKey(entry.localId), "tab")
+                    : undefined
+                }
+                onEntryChange={(next) =>
+                  updateWorkspace((ws) => ({
+                    ...ws,
+                    activeChatId: next.localId,
+                    activeTabKey:
+                      next.mode === "tab"
+                        ? chatTabKey(next.localId)
+                        : ws.activeTabKey === chatTabKey(next.localId)
+                          ? nextActiveTabKey(
+                              ws,
+                              chatTabKey(next.localId),
+                              ws.chats.map((chat) =>
+                                chat.localId === next.localId ? next : chat,
+                              ),
+                            )
+                          : ws.activeTabKey,
+                    chats: ws.chats.map((chat) =>
+                      chat.localId === next.localId ? next : chat,
+                    ),
+                  }))
+                }
+                onClose={closeChat}
+                registerClose={(close) =>
+                  chatClosersRef.current.set(entry.localId, close)
+                }
+                registerMinimize={(minimize) =>
+                  chatMinimizersRef.current.set(entry.localId, minimize)
+                }
+                registerSend={(send) =>
+                  chatSendersRef.current.set(entry.localId, send)
+                }
+                onSessionCreated={onSessionCreated}
+                onSignalsChange={onSignalsChange}
+              />
+            ))}
+
+            <ChatBubbles
+              entries={workspace.chats}
+              labels={chatLabels}
+              icons={chatIcons}
+              forks={chatForks}
+              signals={signalsByChat}
+              unread={unreadByChat}
+              activeLocalId={workspace.activeChatId}
+              autoCollapse={activeChatTabId !== undefined}
+              onCollapsedChange={setBubblesCollapsed}
+              onToggle={toggleChat}
+              onClose={closeChat}
+              onNewChat={() => addChat()}
+              onCollapse={minimizeFloatingChats}
+            />
+          </div>
         ) : (
           <EmptyState
             loading={projectsQuery.isLoading}

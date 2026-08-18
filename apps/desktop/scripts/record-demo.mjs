@@ -47,7 +47,7 @@ async function getPage() {
   for (let i = 0; i < 120; i++) {
     if (child.exitCode !== null)
       throw new Error(
-        `Electron exited early: ${child.exitCode}\n` + appOut.slice(-2000),
+        `Electron exited early: ${child.exitCode}\n${appOut.slice(-2000)}`,
       );
     try {
       const targets = await fetch(`http://127.0.0.1:${PORT}/json`).then((r) =>
@@ -60,7 +60,7 @@ async function getPage() {
     } catch {}
     await sleep(500);
   }
-  throw new Error("no CDP page target\n" + appOut.slice(-2000));
+  throw new Error(`no CDP page target\n${appOut.slice(-2000)}`);
 }
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));

@@ -124,11 +124,13 @@
 .cat-mdedit .ProseMirror ol {
   counter-reset: cat-mdedit-ol;
 }
+/* biome-ignore lint/style/noDescendingSpecificity: list rules are grouped by list kind on purpose; ul/ol selectors never match the same element */
 .cat-mdedit .ProseMirror ol > li {
   position: relative;
   padding-left: 1.6em;
   counter-increment: cat-mdedit-ol;
 }
+/* biome-ignore lint/style/noDescendingSpecificity: grouped by list kind on purpose */
 .cat-mdedit .ProseMirror ol > li::before {
   content: counter(cat-mdedit-ol) ".";
   position: absolute;
@@ -136,6 +138,7 @@
   width: calc(1.6em - 7px);
   text-align: right;
 }
+/* biome-ignore lint/style/noDescendingSpecificity: the generic li rule follows the per-kind ones deliberately */
 .cat-mdedit .ProseMirror li {
   margin: 0.15em 0;
 }
@@ -452,6 +455,7 @@
 /* While the mouse is down (drag-selecting) the menu stays hidden even if
    the extension shows it; it appears on mouse lift instead. */
 .cat-mdedit-bubble.suppressed {
+  /* biome-ignore lint/complexity/noImportantStyles: overrides the Tiptap bubble extension's inline visibility */
   visibility: hidden !important;
 }
 .cat-mdedit-bubble button {

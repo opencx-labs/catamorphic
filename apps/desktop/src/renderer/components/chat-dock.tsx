@@ -1517,6 +1517,7 @@ export function ChatDock({
   // an idle chat never grabs anything; a repeat of the identical selection
   // is not re-added.
   const lastSelectionPillRef = useRef<string | null>(null);
+  // biome-ignore lint/correctness/useExhaustiveDependencies: runs when the front surface changes only; the pill helpers are stable refs
   useEffect(() => {
     if (!frontSurface) return;
     const selection = readEditorSelection();

@@ -1,9 +1,5 @@
 import type { DB } from "@catamorphic/db";
-import {
-  fetchRemote,
-  type ProjectManager,
-  type ProjectRepo,
-} from "@catamorphic/git";
+import type { ProjectManager } from "@catamorphic/git";
 import type { Kysely } from "kysely";
 import { z } from "zod";
 import type { ArtifactRef, Identity } from "../identity.js";
