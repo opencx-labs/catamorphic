@@ -261,7 +261,7 @@ The plugin serves the same as HTTP for admin UIs: `GET /projects/:id/roles`, `GE
 
 ### The project MCP endpoint: bring your own agent
 
-`POST /api/projects/:id/mcp` serves the caller's whole scope as one MCP server: the project's `mcpToolKinds` workflow tools (roster filtered to the caller's workflow refs), `documents_list/read/search/write/delete/history` (the documents surface, per the caller's document refs), `list_skills/read_skill`, and `ask_agent` (a synchronous turn with a project agent the caller may open sessions on). Claude Code, Cursor, or the host's own assistant connect with a host-issued token through `identityFromBearer`; the desktop's harnesses mount the same URL per session (`mcpServersForSession`). Being invited *is* receiving this URL.
+`POST /api/projects/:id/mcp` serves the caller's whole scope as one MCP server: the project's `mcpToolKinds` workflow tools (roster filtered to the caller's workflow refs), `documents_list/read/search/write/delete/history` (the documents surface, per the caller's document refs; `documents_write` takes `text` or `base64` for binaries), `publish_document/revoke_publication/list_publications`, `propose_change`, `list_skills/read_skill`, and `ask_agent` (a synchronous turn with a project agent the caller may open sessions on). Claude Code, Cursor, or the host's own assistant connect with a host-issued token through `identityFromBearer`; the desktop's harnesses mount the same URL per session (`mcpServersForSession`). Being invited *is* receiving this URL.
 
 The generated HTTP client lives in `@catamorphic/api-client`; construct it with `createApiClient({ baseUrl, fetch })`.
 
@@ -490,7 +490,13 @@ know who asked. The same surface is served over HTTP at
 base64 with `ifVersion`, `history`, `search?q=&mode=grep|text&prefix=`).
 Store bytes live inline in Postgres unless `documentBlobStore` (a
 filesystem or S3-compatible store) is configured; metadata, versions, text
-and the search index always stay in the database. The framework's
+and the search index always stay in the database. On a hosting backend,
+agents' `store/` writes in their working folder are **pulled before and
+shipped after every turn as the caller** (`storeSyncAroundTurns`, default
+on; the turn's message metadata carries `storeSync` with what shipped, was
+refused, or conflicted) — a member's agent can only land what the member
+may write. Hosts whose folders are the truth (the desktop's local projects)
+set it `false` and sync explicitly. The framework's
 `searching-documents` host skill carries the recipe agents follow.
 
 ### Proposals and publications (ADR 0055)

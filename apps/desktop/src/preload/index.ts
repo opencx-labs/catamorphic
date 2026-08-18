@@ -209,6 +209,10 @@ const api = {
     ipcRenderer.invoke("catamorphic:remote-history", input),
   remoteReadVersion: (input: unknown): Promise<unknown> =>
     ipcRenderer.invoke("catamorphic:remote-read-version", input),
+  remotePublish: (input: unknown): Promise<unknown> =>
+    ipcRenderer.invoke("catamorphic:remote-publish", input),
+  remotePropose: (input: unknown): Promise<unknown> =>
+    ipcRenderer.invoke("catamorphic:remote-propose", input),
   remoteDisconnect: (projectId: string): Promise<void> =>
     ipcRenderer.invoke("catamorphic:remote-disconnect", projectId),
   onConnectLink: (listener: (link: string) => void): (() => void) => {

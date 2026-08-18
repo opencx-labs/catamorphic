@@ -193,6 +193,21 @@ export {
 } from "./services/github-service.js";
 export { executeHostCall, type HostCallInput } from "./services/host-calls.js";
 export {
+  documentsClientFor,
+  type LocalStatus,
+  localStatus,
+  MANIFEST_PATH,
+  type RemoteDocumentEntry,
+  type RemoteDocumentsClient,
+  type RemoteDocumentVersion,
+  type ShipReport,
+  shipRemoteProject,
+  STORE_PREFIX,
+  serverCopyPath,
+  type SyncReport,
+  syncRemoteProject,
+} from "./services/store-sync.js";
+export {
   type GrantMembershipInput,
   type Membership,
   MembershipsService,

@@ -164,6 +164,9 @@ export async function startEmbeddedServer(
     hostProjectPathResolver: async (projectId) =>
       (await projectRoots.get(projectId)) ?? undefined,
     appBundleStore: new FsBundleStore(paths.appBundles),
+    // Local projects: the folder IS the store; remote projects sync their
+    // store/ explicitly (Ship). No per-turn pull/ship into the local store.
+    storeSyncAroundTurns: false,
     github: {
       app: GITHUB_APP,
       tokenStore: new FileGithubTokenStore(paths.githubFile),

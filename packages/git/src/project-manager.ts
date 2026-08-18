@@ -28,6 +28,10 @@ export const PROJECT_GITIGNORE = `node_modules/
 dist/
 .turbo/
 .DS_Store
+# The project store (ADR 0055): data made by using the project, versioned on
+# the server per write, never in git.
+store/
+.catamorphic/remote-sync.json
 `;
 
 const SYSTEM_AUTHOR = {

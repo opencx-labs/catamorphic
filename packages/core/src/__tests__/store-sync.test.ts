@@ -10,7 +10,7 @@ import {
   serverCopyPath,
   shipRemoteProject,
   syncRemoteProject,
-} from "./remote-sync.js";
+} from "../services/store-sync.js";
 
 /** An in-memory hosting backend: program files by digest, store by version. */
 class FakeServer implements RemoteDocumentsClient {

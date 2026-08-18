@@ -345,6 +345,19 @@ describe("project MCP surface (ADR 0055): documents, skills, ask_agent", () => {
         delete: record("documents.delete", { version: 2 }),
         history: record("documents.history", []),
       },
+      publications: {
+        publish: record("publications.publish", {
+          slug: "acme-deck",
+          projectId: PROJECT_ID,
+          path: "store/decks/sam/acme.md",
+          audience: "public",
+          createdBy: "user-1",
+          createdAt: "2026-08-18T00:00:00.000Z",
+          revokedAt: null,
+        }),
+        revoke: record("publications.revoke", undefined),
+        list: record("publications.list", []),
+      },
       skills: {
         listShared: record("skills.listShared", [
           {
@@ -396,6 +409,9 @@ describe("project MCP surface (ADR 0055): documents, skills, ask_agent", () => {
       "documents_history",
       "list_skills",
       "read_skill",
+      "publish_document",
+      "revoke_publication",
+      "list_publications",
       "ask_agent",
     ]);
     expect(tools.find((t) => t.name === "documents_read")?.annotations).toEqual(
@@ -447,6 +463,26 @@ describe("project MCP surface (ADR 0055): documents, skills, ask_agent", () => {
     expect(calls.at(-1)).toMatchObject({
       op: "documents.write",
       args: { path: "store/x.md", content: "hi", ifVersion: 0 },
+    });
+
+    // Binary writes ride base64.
+    await rpc(app, "tools/call", {
+      name: "documents_write",
+      arguments: {
+        path: "store/decks/sam/deck.pdf",
+        base64: Buffer.from([0x25, 0x50]).toString("base64"),
+      },
+    });
+    const binary = calls.at(-1)?.args as { content: Uint8Array };
+    expect(Array.from(binary.content)).toEqual([0x25, 0x50]);
+
+    const published = await rpc(app, "tools/call", {
+      name: "publish_document",
+      arguments: { path: "store/decks/sam/acme.md", audience: "public" },
+    });
+    expect(published.result?.structuredContent).toMatchObject({
+      slug: "acme-deck",
+      url: `/public/${PROJECT_ID}/acme-deck`,
     });
 
     const skill = await rpc(app, "tools/call", {

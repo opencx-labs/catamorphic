@@ -322,6 +322,7 @@ export interface RemoteShipReport {
     currentVersion: number;
   }>;
   notShippable: string[];
+  failed: Array<{ path: string; error: string }>;
 }
 export interface RemoteProjectStatus {
   serverUrl: string;
@@ -601,6 +602,24 @@ export interface CatamorphicDesktopApi {
   }) => Promise<{
     entry: { path: string; contentType: string; version?: number };
     text: string | null;
+  }>;
+  remotePublish: (input: {
+    projectId: string;
+    path: string;
+    audience: "public" | "members";
+  }) => Promise<{
+    slug: string;
+    url: string;
+    absoluteUrl: string;
+    audience: string;
+  }>;
+  remotePropose: (input: {
+    projectId: string;
+    title: string;
+    body?: string;
+  }) => Promise<{
+    branch: string;
+    pullRequest?: { url: string; number: number };
   }>;
   remoteDisconnect: (projectId: string) => Promise<void>;
   onConnectLink: (listener: (link: string) => void) => () => void;

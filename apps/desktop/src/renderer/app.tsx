@@ -57,6 +57,10 @@ import { ProjectAgentConsentDialog } from "./components/project-agent-consent.js
 import { ProjectModal } from "./components/project-modal.js";
 import { ProjectSwitcher } from "./components/project-switcher.js";
 import { PrsNav } from "./components/prs-nav.js";
+import {
+  RemoteProposeModal,
+  RemotePublishModal,
+} from "./components/remote-actions-modals.js";
 import { RemoteConnectModal } from "./components/remote-connect-modal.js";
 import { RemoteHistoryModal } from "./components/remote-history-modal.js";
 import { RemoteNav } from "./components/remote-nav.js";
@@ -600,6 +604,10 @@ export function App() {
   const [remoteHistoryPath, setRemoteHistoryPath] = useState<string | null>(
     null,
   );
+  const [remotePublishPath, setRemotePublishPath] = useState<string | null>(
+    null,
+  );
+  const [remotePropose, setRemotePropose] = useState<string[] | null>(null);
   useEffect(
     () =>
       desktopApi.onConnectLink((raw) => {
@@ -3624,6 +3632,8 @@ export function App() {
                   onOpenUrl={openUrl}
                   onOpenFile={(filePath) => openEditorTab({ filePath })}
                   onOpenHistory={setRemoteHistoryPath}
+                  onPublish={setRemotePublishPath}
+                  onPropose={setRemotePropose}
                 />
               ))}
           </div>
@@ -4296,11 +4306,24 @@ export function App() {
         }}
       />
       {projectId && (
-        <RemoteHistoryModal
-          projectId={projectId}
-          path={remoteHistoryPath}
-          onClose={() => setRemoteHistoryPath(null)}
-        />
+        <>
+          <RemoteHistoryModal
+            projectId={projectId}
+            path={remoteHistoryPath}
+            onClose={() => setRemoteHistoryPath(null)}
+          />
+          <RemotePublishModal
+            projectId={projectId}
+            path={remotePublishPath}
+            onClose={() => setRemotePublishPath(null)}
+          />
+          <RemoteProposeModal
+            projectId={projectId}
+            open={remotePropose !== null}
+            files={remotePropose ?? []}
+            onClose={() => setRemotePropose(null)}
+          />
+        </>
       )}
     </div>
   );
@@ -4320,6 +4343,8 @@ function ConfiguredSection({
   onOpenUrl,
   onOpenFile,
   onOpenHistory,
+  onPublish,
+  onPropose,
 }: {
   section: SidebarSectionConfig;
   projectId: string;
@@ -4333,6 +4358,8 @@ function ConfiguredSection({
   onOpenUrl: (url: string, mode: "tab" | "replace") => void;
   onOpenFile: (filePath: string) => void;
   onOpenHistory: (filePath: string) => void;
+  onPublish: (filePath: string) => void;
+  onPropose: (files: string[]) => void;
 }) {
   const defaultOpen = !section.collapsed;
   // Hide-when-empty: a section with nothing to list can drop its header
@@ -4466,6 +4493,8 @@ function ConfiguredSection({
               onEmptyChange={setEmpty}
               onOpenFile={onOpenFile}
               onOpenHistory={onOpenHistory}
+              onPublish={onPublish}
+              onPropose={onPropose}
             />
           </SidebarSection>
         );

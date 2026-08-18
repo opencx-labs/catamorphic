@@ -2519,7 +2519,15 @@ Patterned on what best-in-class palettes converged on (Chrome omnibox
   `remote-project.e2e.ts` runs a real in-test HTTP server. Builders with a
   git remote keep git for the program; the store sync only ever touches
   `store/`.
+- **Publish and Propose beside Ship.** Ship answers "is it on the
+  server?"; Publish answers "who can open it by link?" (members behind the
+  host's login, or anyone); they stay two verbs but meet in one moment:
+  a change row's link icon publishes, shipping the file first when it has
+  local edits so the link shows what you see, and hands back a copyable
+  URL. Program edits (outside `store/`) never ship; the warning row offers
+  "Propose…", which sends the folder's program edits as a branch and, on
+  GitHub-linked projects, a pull request on the member's behalf.
 - Deferred: auto-sync on focus/interval (today: manual + the 15s status
-  poll), a per-file "restore this version" button, propose-a-change for
-  program edits (ADR 0055 step 6), and MCP-served skills/agents in the
+  poll), a per-file "restore this version" button, revoking links from the
+  desktop (today: the agent or HTTP), and MCP-served skills/agents in the
   desktop's own connect flow.

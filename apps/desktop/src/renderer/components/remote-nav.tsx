@@ -1,4 +1,4 @@
-import { Clock3, Download, Upload } from "lucide-react";
+import { Clock3, Download, Link2, Upload } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
 import {
   desktopApi,
@@ -22,11 +22,15 @@ export function RemoteNav({
   onEmptyChange,
   onOpenFile,
   onOpenHistory,
+  onPublish,
+  onPropose,
 }: {
   projectId: string;
   onEmptyChange?: (empty: boolean) => void;
   onOpenFile: (path: string) => void;
   onOpenHistory: (path: string) => void;
+  onPublish: (path: string) => void;
+  onPropose: (files: string[]) => void;
 }) {
   const [status, setStatus] = useState<RemoteProjectStatus | null>(null);
   const [busy, setBusy] = useState<"sync" | "ship" | null>(null);
@@ -134,6 +138,7 @@ export function RemoteNav({
               badge="M"
               onOpen={() => onOpenFile(path)}
               onHistory={() => onOpenHistory(path)}
+              onPublish={() => onPublish(path)}
             />
           ))}
           {status.local.deleted.map((path) => (
@@ -147,10 +152,19 @@ export function RemoteNav({
         </ul>
       )}
       {status.local.programEdits.length > 0 && (
-        <p className="text-xs text-warning">
-          {status.local.programEdits.length} edited outside store/ won't ship —
-          the program changes by commit.
-        </p>
+        <div className="flex items-center gap-2">
+          <p className="min-w-0 flex-1 text-xs text-warning">
+            {status.local.programEdits.length} edited outside store/ won't ship.
+          </p>
+          <button
+            type="button"
+            onClick={() => onPropose(status.local.programEdits)}
+            data-testid="remote-propose"
+            className="h-6 shrink-0 cursor-pointer rounded-md border border-border px-2 text-xs text-fg-muted transition-colors duration-150 hover:bg-bg-overlay hover:text-fg"
+          >
+            Propose…
+          </button>
+        </div>
       )}
     </div>
   );
@@ -161,11 +175,13 @@ function ChangeRow({
   badge,
   onOpen,
   onHistory,
+  onPublish,
 }: {
   path: string;
   badge: "M" | "D";
   onOpen?: () => void;
   onHistory: () => void;
+  onPublish?: () => void;
 }) {
   const name = path.split("/").at(-1) ?? path;
   return (
@@ -186,6 +202,18 @@ function ChangeRow({
       >
         {name}
       </button>
+      {onPublish && (
+        <button
+          type="button"
+          onClick={onPublish}
+          title="Share a link"
+          aria-label={`Share a link to ${name}`}
+          data-testid="remote-publish"
+          className="grid size-5 shrink-0 cursor-pointer place-items-center rounded text-fg-faint opacity-0 transition-opacity duration-150 hover:text-fg group-hover:opacity-100 focus-visible:opacity-100"
+        >
+          <Link2 className="size-3" />
+        </button>
+      )}
       <button
         type="button"
         onClick={onHistory}
@@ -224,6 +252,11 @@ function describe(
   }
   if (r.notShippable.length) {
     parts.push(`${r.notShippable.length} outside store/ not shipped`);
+  }
+  if (r.failed.length) {
+    parts.push(
+      `${r.failed.length} refused: ${r.failed.map((f) => f.error).join("; ")}`,
+    );
   }
   return parts.length ? parts.join(", ") : "Nothing to ship";
 }

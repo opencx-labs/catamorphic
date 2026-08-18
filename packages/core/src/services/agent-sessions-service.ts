@@ -31,6 +31,7 @@ import {
 import { parseProjectAgentId } from "./agent-definitions-service.js";
 import type { AppPoliciesService } from "./app-policies-service.js";
 import { AccessDeniedError, resolveScope } from "./artifact-scope.js";
+import type { DocumentsService } from "./documents-service.js";
 import type {
   CodingAgentRegistry,
   RegisteredCodingAgent,
@@ -39,6 +40,11 @@ import type { DevSandboxService } from "./dev-sandbox-service.js";
 import type { PluginsService } from "./plugins-service.js";
 import { ProjectNotFoundError } from "./projects-service.js";
 import { type SyncedFileChange, syncSandboxChanges } from "./sandbox-sync.js";
+import {
+  documentsClientFor,
+  shipRemoteProject,
+  syncRemoteProject,
+} from "./store-sync.js";
 
 type SessionRow = Selectable<DB["agent_sessions"]>;
 type MessageRow = Selectable<DB["agent_messages"]>;
@@ -304,6 +310,15 @@ interface AgentSessionsDeps {
   ) => Promise<ReadonlyMap<string, string>>;
   /** Tenant app policy, for scope resolution (app refs). */
   appPolicies?: AppPoliciesService;
+  /**
+   * The documents surface. When present, `store/` in the caller's working
+   * copy is pulled before each turn and shipped after it AS THE CALLER
+   * (ADR 0055): a member's agent writing `store/customers/acme/notes.md`
+   * lands it in the store with the right author, and never anything the
+   * member may not write. Hosts whose working copies are the truth (the
+   * desktop's local projects) leave it unset.
+   */
+  storeSync?: { documents: DocumentsService };
 }
 
 /**
@@ -332,6 +347,7 @@ export class AgentSessionsService {
   private readonly standingAgentPrompt?: string | false;
   private readonly mcpToolNames?: AgentSessionsDeps["mcpToolNames"];
   private readonly appPolicies?: AppPoliciesService;
+  private readonly storeSync?: AgentSessionsDeps["storeSync"];
   /**
    * Sessions with a turn currently executing in this process. Turns run
    * inside the send request, so an `in_progress` message whose session is
@@ -363,6 +379,7 @@ export class AgentSessionsService {
     this.standingAgentPrompt = deps.standingAgentPrompt;
     this.mcpToolNames = deps.mcpToolNames;
     this.appPolicies = deps.appPolicies;
+    this.storeSync = deps.storeSync;
   }
 
   async list(
@@ -1051,6 +1068,25 @@ export class AgentSessionsService {
         session,
         agent,
       );
+      // The caller's view of the store, in the folder the agent works in
+      // (ADR 0055): pulled before the turn, shipped after it.
+      const storeDir = await this.storeSyncDir(identity, projectId, anchor);
+      if (storeDir) {
+        await syncRemoteProject(
+          storeDir,
+          documentsClientFor(
+            this.storeSync!.documents,
+            identity,
+            projectId,
+          ),
+        ).catch((error) => {
+          console.warn(
+            `[catamorphic] store pull before turn failed: ${
+              error instanceof Error ? error.message : String(error)
+            }`,
+          );
+        });
+      }
 
       if (anchor.sandboxProviderId) {
         const workingDirectory = this.projectDir();
@@ -1149,6 +1185,32 @@ export class AgentSessionsService {
           )
         : hostChangedFiles(events, anchor.providerSession.workingDirectory);
 
+      // Ship the turn's `store/` writes as the caller (ADR 0055) before the
+      // checkpoint: store paths are gitignored, so they never enter git.
+      let storeSync: JsonObject | undefined;
+      if (storeDir) {
+        try {
+          const report = await shipRemoteProject(
+            storeDir,
+            documentsClientFor(this.storeSync!.documents, identity, projectId),
+          );
+          if (
+            report.shipped.length +
+              report.deleted.length +
+              report.conflicts.length +
+              report.notShippable.length +
+              report.failed.length >
+            0
+          ) {
+            storeSync = JSON.parse(JSON.stringify(report)) as JsonObject;
+          }
+        } catch (error) {
+          storeSync = {
+            error: error instanceof Error ? error.message : String(error),
+          };
+        }
+      }
+
       // Checkpoint commit (ADR 0044): both harness families converge here —
       // sandbox edits just synced back, host edits are already in the tree.
       // Sweeps ALL dirty state (host harnesses under-report changed files);
@@ -1201,6 +1263,9 @@ export class AgentSessionsService {
             : "completed",
         events: JSON.parse(JSON.stringify(segmentEvents)) as JsonObject[],
         changedFiles: changedFiles.map((change) => ({ ...change })),
+        // What the turn's store/ writes became (ADR 0055): shipped, refused,
+        // conflicted, or outside store/. Hosts render it beside the reply.
+        ...(storeSync ? { storeSync } : {}),
         ...(errorKind ? { errorKind } : {}),
         ...(interrupted && failed ? { interrupted: true } : {}),
         ...(questionEvent?.questions
@@ -1650,6 +1715,33 @@ export class AgentSessionsService {
    * commit sha (stamped on the assistant message), null when the tree was
    * clean or the commit failed — a checkpoint must never break a turn.
    */
+  /**
+   * The folder whose `store/` mirrors the caller's store view: the host
+   * project path for host-execution agents, the caller's dev copy for
+   * sandbox agents (their edits sync back into it). Null when the host did
+   * not enable store sync.
+   */
+  private async storeSyncDir(
+    identity: Identity,
+    projectId: string,
+    anchor: { providerSession: ProviderSession; sandboxProviderId?: string },
+  ): Promise<string | null> {
+    if (!this.storeSync) return null;
+    if (!anchor.sandboxProviderId) {
+      return anchor.providerSession.workingDirectory || null;
+    }
+    const repo = await this.projectManager.openDev(
+      identity.tenantId,
+      projectId,
+      identity.externalUserId,
+    );
+    try {
+      return repo.repoPath;
+    } finally {
+      await repo.dispose();
+    }
+  }
+
   private async checkpointTurn(
     identity: Identity,
     projectId: string,

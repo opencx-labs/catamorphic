@@ -23,6 +23,8 @@ const program = new Map<string, string>([
   ["docs/handbook.md", "# Handbook\n\nRefunds take 5 days.\n"],
 ]);
 const writes: Array<{ path: string; ifVersion?: number; text: string }> = [];
+const publications: Array<Record<string, unknown>> = [];
+const proposals: Array<Record<string, unknown>> = [];
 
 const helpers = `
   const $ = (selector) => document.querySelector(selector);
@@ -60,6 +62,52 @@ function startFakeServer(): Promise<void> {
       res.writeHead(status, { "content-type": "application/json", ...headers });
       res.end(typeof body === "string" ? body : JSON.stringify(body));
     };
+    const readJson = (): Promise<Record<string, unknown>> =>
+      new Promise((resolve) => {
+        let raw = "";
+        req.on("data", (chunk) => {
+          raw += chunk;
+        });
+        req.on("end", () => resolve(raw ? JSON.parse(raw) : {}));
+      });
+    if (
+      req.method === "POST" &&
+      url.pathname === "/api/projects/remote-1/publications"
+    ) {
+      void readJson().then((body) => {
+        publications.push(body);
+        send(201, {
+          slug: "shared-1",
+          projectId: "remote-1",
+          path: body.path,
+          audience: body.audience,
+          createdBy: "member",
+          createdAt: new Date().toISOString(),
+          revokedAt: null,
+          url:
+            body.audience === "public"
+              ? "/public/remote-1/shared-1"
+              : "/projects/remote-1/publications/shared-1",
+        });
+      });
+      return;
+    }
+    if (
+      req.method === "POST" &&
+      url.pathname === "/api/projects/remote-1/proposals"
+    ) {
+      void readJson().then((body) => {
+        proposals.push(body);
+        send(201, {
+          branch: "proposals/member/x-1",
+          pullRequest: {
+            url: "https://github.com/acme/brain/pull/7",
+            number: 7,
+          },
+        });
+      });
+      return;
+    }
     const m = /^\/api\/projects\/([^/]+)\/documents(\/[a-z]+)?$/.exec(
       url.pathname,
     );
@@ -261,6 +309,74 @@ describe("remote projects (ADR 0055)", () => {
     expect(store.get("store/customers/acme/notes.md")).toEqual({
       version: 3,
       text: "Acme notes v2 + brief\n",
+    });
+  });
+
+  it("Publish ships a dirty store file first, then hands back the link", async () => {
+    fs.writeFileSync(
+      path.join(projectDir, "store/customers/acme/brief.md"),
+      "# Brief v2\n",
+    );
+    await runWait(`const row = byText('li', 'brief.md'); return !!row;`, {
+      timeoutMs: 30_000,
+      label: "brief.md listed as changed",
+    });
+    await run(
+      `const row = byText('li', 'brief.md'); row.querySelector('[data-testid="remote-publish"]').click(); return true;`,
+    );
+    await runWait(`return !!$('[data-testid="publish-submit"]');`, {
+      label: "publish modal",
+    });
+    await run(`$('[data-testid="publish-submit"]').click(); return true;`);
+    await runWait(
+      `const url = $('[data-testid="publish-url"]'); return !!url && url.value.includes('/projects/remote-1/publications/shared-1');`,
+      { timeoutMs: 30_000, label: "publish url" },
+    );
+    // Shipped first (v2 of brief.md), then published.
+    expect(writes.at(-1)).toMatchObject({
+      path: "store/customers/acme/brief.md",
+      ifVersion: 1,
+      text: "# Brief v2\n",
+    });
+    expect(publications).toEqual([
+      { path: "store/customers/acme/brief.md", audience: "members" },
+    ]);
+    await run(`pressKey('Escape'); return true;`);
+  });
+
+  it("Propose turns program edits into a pull request on the member's behalf", async () => {
+    fs.writeFileSync(
+      path.join(projectDir, "docs/handbook.md"),
+      "# Handbook\n\nRefunds take 3 days.\n",
+    );
+    await runWait(`return !!$('[data-testid="remote-propose"]');`, {
+      timeoutMs: 30_000,
+      label: "propose button",
+    });
+    await run(`$('[data-testid="remote-propose"]').click(); return true;`);
+    await runWait(`return !!$('[data-testid="propose-title"]');`, {
+      label: "propose modal",
+    });
+    await run(
+      `setReactValue($('[data-testid="propose-title"]'), 'Refunds now take 3 days'); return true;`,
+    );
+    await runWait(
+      `const btn = $('[data-testid="propose-submit"]'); if (btn && !btn.disabled) { btn.click(); return true; } return false;`,
+      { label: "propose submit" },
+    );
+    await runWait(
+      `const r = $('[data-testid="propose-result"]'); return !!r && r.textContent.includes('#7');`,
+      { timeoutMs: 30_000, label: "propose result" },
+    );
+    expect(proposals).toHaveLength(1);
+    expect(proposals[0]).toMatchObject({
+      title: "Refunds now take 3 days",
+      changes: [
+        {
+          path: "docs/handbook.md",
+          content: "# Handbook\n\nRefunds take 3 days.\n",
+        },
+      ],
     });
   });
 });

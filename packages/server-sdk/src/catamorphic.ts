@@ -11,6 +11,7 @@ import type {
   ExecutionWorkerOptions,
   GithubServiceConfig,
   McpToolKindSpec,
+  CatamorphicCoreConfig,
   ProjectLifecycleHooks,
   RetentionConfig,
   TriggerKindRuntime,
@@ -193,6 +194,17 @@ export interface CreateCatamorphicConfig {
    * or `false` for none (ADR 0049).
    */
   standingAgentPrompt?: string | false;
+  /**
+   * ADR 0055 knobs, passed through to core: where store bytes live, the
+   * roles cache, the identity whose GitHub connection opens members'
+   * proposals as pull requests, and whether agents' `store/` writes ship
+   * around turns (default on; a host whose folders are the truth sets
+   * false).
+   */
+  documentBlobStore?: CatamorphicCoreConfig["documentBlobStore"];
+  rolesCacheTtlMs?: number;
+  proposalBot?: CatamorphicCoreConfig["proposalBot"];
+  storeSyncAroundTurns?: boolean;
 }
 
 function resolveDatabase(config: DatabaseConfig): {
@@ -282,6 +294,10 @@ export class Catamorphic {
       projectSeeds: config.projectSeeds,
       hostSkills: config.hostSkills,
       standingAgentPrompt: config.standingAgentPrompt,
+      documentBlobStore: config.documentBlobStore,
+      rolesCacheTtlMs: config.rolesCacheTtlMs,
+      proposalBot: config.proposalBot,
+      storeSyncAroundTurns: config.storeSyncAroundTurns,
     });
   }
 

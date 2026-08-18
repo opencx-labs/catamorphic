@@ -177,16 +177,20 @@ export function surfaceTools(
         definition: {
           name: "documents_write",
           description:
-            "Write a store document (paths under store/ only; the program changes by commit). Creates a new version stamped with you. Pass ifVersion (the version you read) to refuse overwriting someone else's newer write; 0 means 'must not exist yet'.",
+            "Write a store document (paths under store/ only; the program changes by commit). Give text, or base64 for binary content (a PDF, an image). Creates a new version stamped with you. Pass ifVersion (the version you read) to refuse overwriting someone else's newer write; 0 means 'must not exist yet'.",
           inputSchema: {
             type: "object",
             properties: {
               path: { type: "string" },
               text: { type: "string" },
+              base64: {
+                type: "string",
+                description: "Binary content, base64-encoded (instead of text)",
+              },
               contentType: { type: "string" },
               ifVersion: { type: "integer" },
             },
-            required: ["path", "text"],
+            required: ["path"],
           },
         },
         call: guarded(async (args) =>
@@ -194,7 +198,10 @@ export function surfaceTools(
             identity,
             projectId,
             path: str(args.path) ?? "",
-            content: str(args.text) ?? "",
+            content:
+              str(args.text) !== undefined
+                ? (str(args.text) as string)
+                : new Uint8Array(Buffer.from(str(args.base64) ?? "", "base64")),
             ...(str(args.contentType)
               ? { contentType: str(args.contentType) }
               : {}),
@@ -293,6 +300,74 @@ export function surfaceTools(
           if (!found) throw new Error(`No skill named '${String(args.name)}'`);
           return { ...found.skill, content: found.content };
         }),
+      },
+    );
+  }
+
+  if (core.publications) {
+    const publications = core.publications;
+    tools.push(
+      {
+        definition: {
+          name: "publish_document",
+          description:
+            "Share a document by URL. audience=members: anyone who may use this project, behind the host's login; audience=public: anyone with the link (anonymous, that one document only). Builders publish anything they can read; members only store documents they may write. Returns the URL path (relative to the host's API base) and the slug to revoke with.",
+          inputSchema: {
+            type: "object",
+            properties: {
+              path: { type: "string" },
+              audience: { type: "string", enum: ["public", "members"] },
+              slug: { type: "string", description: "Optional readable handle" },
+            },
+            required: ["path", "audience"],
+          },
+        },
+        call: guarded(async (args) => {
+          const audience = args.audience === "public" ? "public" : "members";
+          const publication = await publications.publish({
+            identity,
+            projectId,
+            path: str(args.path) ?? "",
+            audience,
+            ...(str(args.slug) ? { slug: str(args.slug) } : {}),
+          });
+          return {
+            ...publication,
+            url:
+              audience === "public"
+                ? `/public/${projectId}/${publication.slug}`
+                : `/projects/${projectId}/publications/${publication.slug}`,
+          };
+        }),
+      },
+      {
+        definition: {
+          name: "revoke_publication",
+          description: "Revoke a shared URL by slug; the link stops working immediately.",
+          inputSchema: {
+            type: "object",
+            properties: { slug: { type: "string" } },
+            required: ["slug"],
+          },
+          annotations: { destructiveHint: true },
+        },
+        call: guarded(async (args) => {
+          await publications.revoke({
+            identity,
+            projectId,
+            slug: str(args.slug) ?? "",
+          });
+          return { revoked: true };
+        }),
+      },
+      {
+        definition: {
+          name: "list_publications",
+          description: "The shared URLs you may see (builders: all of the project's; members: your own).",
+          inputSchema: { type: "object", properties: {} },
+          annotations: READ_ONLY,
+        },
+        call: guarded(async () => publications.list({ identity, projectId })),
       },
     );
   }

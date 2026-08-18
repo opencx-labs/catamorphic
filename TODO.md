@@ -87,8 +87,9 @@
   store + documents surface + `context.caller/documents/host`; project MCP
   endpoint; desktop remote projects; proposals + publications). Left for
   later, in rough priority: (a) desktop remote projects — auto-sync on focus
-  / interval, a per-version "restore" button in the history modal, and
-  surfacing the project MCP endpoint's skills/agents in the connect flow;
+  / interval, a per-version "restore" button in the history modal, revoking
+  publications from the desktop, and surfacing the project MCP endpoint's
+  skills/agents in the connect flow;
   (b) `context.host` typed through the generated projections (ADR 0041) so
   `host.acme.crm.lookupAccount` is typed in project code; (c) an admin UI
   for memberships/roles/publications in the desktop (today: HTTP + agent);

@@ -1063,6 +1063,70 @@ export function registerIpcHandlers(
     },
   );
 
+  // Publish (ADR 0055): ships the file first when it has local edits, so
+  // the link always points at what the user sees.
+  ipcMain.handle(
+    "catamorphic:remote-publish",
+    async (
+      event,
+      input: {
+        projectId: string;
+        path: string;
+        audience: "public" | "members";
+      },
+    ) => {
+      const link = requireLink(event, input.projectId);
+      const rootPath = await requireRoot(input.projectId);
+      const client = remoteClient(link);
+      const status = localStatus(rootPath);
+      if (status.modified.includes(input.path)) {
+        const shipped = await shipRemoteProject(rootPath, client);
+        const failure = shipped.failed.find((f) => f.path === input.path);
+        if (failure)
+          throw new Error(`Could not ship ${input.path}: ${failure.error}`);
+        if (shipped.conflicts.some((c) => c.path === input.path)) {
+          throw new Error(
+            `${input.path} changed on the server; a server copy was saved beside yours. Reconcile, ship, then publish.`,
+          );
+        }
+      }
+      const publication = await client.publish({
+        path: input.path,
+        audience: input.audience,
+      });
+      return {
+        ...publication,
+        absoluteUrl: `${link.serverUrl.replace(/\/+$/, "")}${publication.url}`,
+      };
+    },
+  );
+
+  // Propose (ADR 0055): the folder's edits to program files become a
+  // branch/PR on the member's behalf.
+  ipcMain.handle(
+    "catamorphic:remote-propose",
+    async (
+      event,
+      input: { projectId: string; title: string; body?: string },
+    ) => {
+      const link = requireLink(event, input.projectId);
+      const rootPath = await requireRoot(input.projectId);
+      const status = localStatus(rootPath);
+      if (status.programEdits.length === 0) {
+        throw new Error("No edits outside store/ to propose");
+      }
+      const changes = status.programEdits.map((relative) => ({
+        path: relative,
+        content: fs.readFileSync(path.join(rootPath, relative), "utf8"),
+      }));
+      return remoteClient(link).propose({
+        title: input.title,
+        ...(input.body ? { body: input.body } : {}),
+        changes,
+      });
+    },
+  );
+
   ipcMain.handle(
     "catamorphic:remote-disconnect",
     (event, projectId: string) => {

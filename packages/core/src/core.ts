@@ -98,6 +98,13 @@ export interface CatamorphicCoreConfig {
    * project origin only.
    */
   proposalBot?: Identity;
+  /**
+   * Pull the caller's `store/` view into the agent's folder before each
+   * turn and ship its writes after (ADR 0055). Default on. Hosts whose
+   * working copies ARE the truth — the desktop's local projects, where the
+   * folder is the store — set false and sync explicitly (remote projects).
+   */
+  storeSyncAroundTurns?: boolean;
   db: Kysely<DB>;
   projectManager: ProjectManager;
   sandboxProvider?: SandboxProvider;
@@ -490,6 +497,9 @@ export class CatamorphicCore {
         mcpToolNames: (identity, projectId) =>
           this.triggers.mcpToolNames({ identity, projectId }),
         appPolicies: this.appPolicies,
+        ...(config.storeSyncAroundTurns === false
+          ? {}
+          : { storeSync: { documents: this.documents } }),
       });
     }
   }
