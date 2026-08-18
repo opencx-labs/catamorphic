@@ -6,7 +6,7 @@ import {
   type PluginsService,
   UndeclaredSecretError,
 } from "./plugins-service.js";
-import { ProjectNotFoundError } from "./projects-service.js";
+import { requireTenantProject } from "./projects-service.js";
 
 export interface SecretStatus {
   name: string;
@@ -56,20 +56,6 @@ export type ProjectSecretDeclarationsReader = (args: {
  * Plugin declarations win on name conflict, since the plugin's code reads the
  * value and its manifest states the contract.
  */
-async function requireTenantProject(
-  db: Kysely<DB>,
-  identity: Identity,
-  projectId: string,
-): Promise<void> {
-  const row = await db
-    .selectFrom("projects")
-    .where("id", "=", projectId)
-    .where("tenant_id", "=", identity.tenantId)
-    .select("id")
-    .executeTakeFirst();
-  if (!row) throw new ProjectNotFoundError(projectId);
-}
-
 export class SecretsService {
   constructor(
     private readonly db: Kysely<DB>,
@@ -119,7 +105,7 @@ export class SecretsService {
   }): Promise<SecretStatus[]> {
     assertBuilder(opts.identity, opts.projectId);
     const { identity, projectId, environment } = opts;
-    await requireTenantProject(this.db, identity, projectId);
+    await requireTenantProject(this.db, identity.tenantId, projectId);
     const declared = await this.declaredSecrets({ identity, projectId });
     if (declared.size === 0) return [];
 
@@ -156,7 +142,7 @@ export class SecretsService {
   }): Promise<SecretStatus> {
     assertBuilder(opts.identity, opts.projectId);
     const { identity, projectId, environment, name, value } = opts;
-    await requireTenantProject(this.db, identity, projectId);
+    await requireTenantProject(this.db, identity.tenantId, projectId);
     const declared = await this.declaredSecrets({ identity, projectId });
     const entry = declared.get(name);
     if (!entry) {
@@ -200,7 +186,7 @@ export class SecretsService {
   }): Promise<boolean> {
     assertBuilder(opts.identity, opts.projectId);
     const { identity, projectId, environment, name } = opts;
-    await requireTenantProject(this.db, identity, projectId);
+    await requireTenantProject(this.db, identity.tenantId, projectId);
     const result = await this.db
       .deleteFrom("project_secrets")
       .where("project_id", "=", projectId)

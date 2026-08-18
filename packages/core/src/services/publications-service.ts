@@ -12,7 +12,7 @@ import {
   documentAccessAllowed,
   normalizeDocumentPath,
 } from "./documents-service.js";
-import { ProjectNotFoundError } from "./projects-service.js";
+import { requireTenantProject } from "./projects-service.js";
 
 /**
  * Publications (ADR 0055): a document served at a stable URL to an
@@ -213,17 +213,8 @@ export class PublicationsService {
     };
   }
 
-  private async requireProject(
-    identity: Identity,
-    projectId: string,
-  ): Promise<void> {
-    const row = await this.db
-      .selectFrom("projects")
-      .where("id", "=", projectId)
-      .where("tenant_id", "=", identity.tenantId)
-      .select("id")
-      .executeTakeFirst();
-    if (!row) throw new ProjectNotFoundError(projectId);
+  private requireProject(identity: Identity, projectId: string) {
+    return requireTenantProject(this.db, identity.tenantId, projectId);
   }
 }
 

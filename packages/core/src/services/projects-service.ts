@@ -81,6 +81,26 @@ export class ProjectNotFoundError extends Error {
 }
 
 /**
+ * The one "this project exists in this tenant" check every service runs
+ * before touching a project. Throws {@link ProjectNotFoundError}; says
+ * nothing about what the identity may DO there — callers gate that
+ * separately (assertBuilder, scope refs, …).
+ */
+export async function requireTenantProject(
+  db: Kysely<DB>,
+  tenantId: string,
+  projectId: string,
+): Promise<void> {
+  const row = await db
+    .selectFrom("projects")
+    .where("id", "=", projectId)
+    .where("tenant_id", "=", tenantId)
+    .select("id")
+    .executeTakeFirst();
+  if (!row) throw new ProjectNotFoundError(projectId);
+}
+
+/**
  * Host-side project lifecycle hooks (ADR 0046), registered at boot
  * (`createCatamorphic({ projectHooks })` or a plugin's host half). Hooks are
  * awaited on the mutation path and must be idempotent: a rolled-back create

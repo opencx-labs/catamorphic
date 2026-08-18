@@ -2,10 +2,14 @@ import { Clock3, Download, Link2, Upload } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
 import {
   desktopApi,
+  type RemoteCapabilities,
   type RemoteProjectStatus,
   type RemoteShipReport,
   type RemoteSyncReport,
 } from "../lib/desktop-api.js";
+
+export type RemoteFeatures = RemoteCapabilities["features"];
+
 import { PendingButton } from "./pending-button.js";
 
 /**
@@ -29,8 +33,8 @@ export function RemoteNav({
   onEmptyChange?: (empty: boolean) => void;
   onOpenFile: (path: string) => void;
   onOpenHistory: (path: string) => void;
-  onPublish: (path: string) => void;
-  onPropose: (files: string[]) => void;
+  onPublish: (path: string, features: RemoteFeatures | undefined) => void;
+  onPropose: (files: string[], features: RemoteFeatures | undefined) => void;
 }) {
   const [status, setStatus] = useState<RemoteProjectStatus | null>(null);
   const [busy, setBusy] = useState<"sync" | "ship" | null>(null);
@@ -157,7 +161,9 @@ export function RemoteNav({
               badge="M"
               onOpen={() => onOpenFile(path)}
               onHistory={() => onOpenHistory(path)}
-              {...(canPublish ? { onPublish: () => onPublish(path) } : {})}
+              {...(canPublish
+                ? { onPublish: () => onPublish(path, features) }
+                : {})}
             />
           ))}
           {status.local.deleted.map((path) => (
@@ -179,7 +185,7 @@ export function RemoteNav({
           {canPropose && (
             <button
               type="button"
-              onClick={() => onPropose(status.local.programEdits)}
+              onClick={() => onPropose(status.local.programEdits, features)}
               data-testid="remote-propose"
               className="h-6 shrink-0 cursor-pointer rounded-md border border-border px-2 text-xs text-fg-muted transition-colors duration-150 hover:bg-bg-overlay hover:text-fg"
             >

@@ -4,8 +4,10 @@ import path from "node:path";
 import type { Identity } from "../identity.js";
 import {
   DocumentConflictError,
+  type DocumentEntry,
   DocumentNotFoundError,
   type DocumentsService,
+  type DocumentVersion,
 } from "./documents-service.js";
 
 /**
@@ -35,25 +37,9 @@ import {
  * the member may not write).
  */
 
-export interface RemoteDocumentEntry {
-  path: string;
-  source: "program" | "store";
-  contentType: string;
-  size: number;
-  version?: number;
-  writtenBy?: string;
-  writtenAt?: string;
-  digest?: string;
-}
-
-export interface RemoteDocumentVersion {
-  version: number;
-  deleted: boolean;
-  contentType: string;
-  size: number;
-  writtenBy: string;
-  writtenAt: string;
-}
+/** The documents surface's own shapes; one definition, wherever it travels. */
+export type RemoteDocumentEntry = DocumentEntry;
+export type RemoteDocumentVersion = DocumentVersion;
 
 /** The slice of the documents API the engine needs; injectable for tests. */
 export interface RemoteDocumentsClient {
@@ -89,6 +75,12 @@ interface ManifestEntry {
   version?: number;
   digest?: string;
   hash: string;
+  /**
+   * The local file's stat when it last matched `hash` (after a pull or a
+   * ship). Lets `localStatus` skip re-hashing untouched files: same
+   * size + mtime = unchanged; anything else falls back to the hash.
+   */
+  stat?: { size: number; mtimeMs: number };
 }
 
 interface Manifest {
@@ -184,6 +176,40 @@ function writeLocal(root: string, relative: string, bytes: Uint8Array): void {
   fs.writeFileSync(target, bytes);
 }
 
+/** The local file's stat, for the manifest's cheap unchanged check. */
+function statLocal(
+  root: string,
+  relative: string,
+): ManifestEntry["stat"] | undefined {
+  try {
+    const stat = fs.statSync(localPath(root, relative));
+    return { size: stat.size, mtimeMs: stat.mtimeMs };
+  } catch {
+    return undefined;
+  }
+}
+
+/** Whether a local file is unchanged since its manifest entry, cheaply
+ * when the stat matches, by content hash otherwise. */
+function unchangedLocally(
+  root: string,
+  relative: string,
+  entry: ManifestEntry,
+): boolean {
+  if (entry.stat) {
+    const stat = statLocal(root, relative);
+    if (
+      stat &&
+      stat.size === entry.stat.size &&
+      stat.mtimeMs === entry.stat.mtimeMs
+    ) {
+      return true;
+    }
+  }
+  const bytes = readLocal(root, relative);
+  return bytes !== null && sha256(bytes) === entry.hash;
+}
+
 /** `store/customers/acme/notes.md` → `store/customers/acme/notes (server v3).md` */
 export function serverCopyPath(relative: string, version: number): string {
   const ext = path.extname(relative);
@@ -225,10 +251,10 @@ export function localStatus(root: string): LocalStatus {
     // Server copies from a conflict are scratch, never shipped.
     if (/ \(server v\d+\)(\.[^/]*)?$/.test(relative)) continue;
     seen.add(relative);
-    const bytes = readLocal(root, relative);
-    if (!bytes) continue;
     const entry = manifest.files[relative];
-    if (!entry || entry.hash !== sha256(bytes)) modified.push(relative);
+    if (!entry || !unchangedLocally(root, relative, entry)) {
+      modified.push(relative);
+    }
   }
   for (const [relative, entry] of Object.entries(manifest.files)) {
     if (entry.source === "store") {
@@ -237,8 +263,12 @@ export function localStatus(root: string): LocalStatus {
       }
       continue;
     }
-    const bytes = readLocal(root, relative);
-    if (bytes && sha256(bytes) !== entry.hash) programEdits.push(relative);
+    if (
+      fs.existsSync(localPath(root, relative)) &&
+      !unchangedLocally(root, relative, entry)
+    ) {
+      programEdits.push(relative);
+    }
   }
   return { modified, deleted, programEdits };
 }
@@ -307,6 +337,7 @@ export async function syncRemoteProject(
         ? { version: entry.version }
         : { digest: entry.digest }),
       hash: sha256(bytes),
+      stat: statLocal(root, entry.path),
     };
     report.pulled.push(entry.path);
   }
@@ -368,6 +399,7 @@ export async function shipRemoteProject(
         source: "store",
         version: result.entry.version,
         hash: sha256(bytes),
+        stat: statLocal(root, relative),
       };
       report.shipped.push(relative);
       continue;

@@ -39,7 +39,7 @@ import type { DevSandboxService } from "./dev-sandbox-service.js";
 import type { DocumentsService } from "./documents-service.js";
 import type { PluginsService } from "./plugins-service.js";
 import { PROGRAM_READER } from "./program-reader.js";
-import { ProjectNotFoundError } from "./projects-service.js";
+import { requireTenantProject } from "./projects-service.js";
 import { type SyncedFileChange, syncSandboxChanges } from "./sandbox-sync.js";
 import {
   documentsClientFor,
@@ -1820,13 +1820,7 @@ export class AgentSessionsService {
     ) {
       throw new AccessDeniedError();
     }
-    const row = await this.db
-      .selectFrom("projects")
-      .where("id", "=", projectId)
-      .where("tenant_id", "=", identity.tenantId)
-      .select("id")
-      .executeTakeFirst();
-    if (!row) throw new ProjectNotFoundError(projectId);
+    await requireTenantProject(this.db, identity.tenantId, projectId);
   }
 
   /** Registry ids of the project agents a scoped identity's refs name. */

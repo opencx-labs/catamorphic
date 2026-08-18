@@ -3,6 +3,7 @@ import { type FormEvent, useEffect, useState } from "react";
 import { desktopApi } from "../lib/desktop-api.js";
 import { Modal } from "./modal.js";
 import { PendingButton } from "./pending-button.js";
+import type { RemoteFeatures } from "./remote-nav.js";
 
 /**
  * The two members' verbs beside Ship (ADR 0055):
@@ -17,11 +18,14 @@ import { PendingButton } from "./pending-button.js";
 export function RemotePublishModal({
   projectId,
   path,
+  features,
   onClose,
 }: {
   projectId: string;
   /** Store path to publish; null = closed. */
   path: string | null;
+  /** The host's advertised switches (from the Server section's status). */
+  features: RemoteFeatures | undefined;
   onClose: () => void;
 }) {
   const open = path !== null;
@@ -30,7 +34,8 @@ export function RemotePublishModal({
   const [result, setResult] = useState<{ absoluteUrl: string } | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
-  const [publicAllowed, setPublicAllowed] = useState(true);
+  const publicAllowed =
+    features === undefined || features.publications === "public";
 
   useEffect(() => {
     if (!open) return;
@@ -39,11 +44,7 @@ export function RemotePublishModal({
     setResult(null);
     setError(null);
     setCopied(false);
-    void desktopApi.remoteStatus(projectId).then((status) => {
-      const allowed = status?.capabilities?.features.publications;
-      setPublicAllowed(allowed === undefined || allowed === "public");
-    });
-  }, [open, projectId]);
+  }, [open]);
 
   const submit = async (event: FormEvent) => {
     event.preventDefault();
@@ -176,12 +177,14 @@ export function RemoteProposeModal({
   projectId,
   open,
   files,
+  features,
   onClose,
 }: {
   projectId: string;
   open: boolean;
   /** The program files with local edits that will be proposed. */
   files: string[];
+  features: RemoteFeatures | undefined;
   onClose: () => void;
 }) {
   const [title, setTitle] = useState("");
@@ -192,9 +195,7 @@ export function RemoteProposeModal({
     pullRequest?: { url: string; number: number };
   } | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [opensPullRequest, setOpensPullRequest] = useState<boolean | null>(
-    null,
-  );
+  const opensPullRequest = features ? features.proposalsOpenPullRequests : null;
 
   useEffect(() => {
     if (!open) return;
@@ -203,12 +204,7 @@ export function RemoteProposeModal({
     setPending(false);
     setResult(null);
     setError(null);
-    setOpensPullRequest(null);
-    void desktopApi.remoteStatus(projectId).then((status) => {
-      const features = status?.capabilities?.features;
-      setOpensPullRequest(features ? features.proposalsOpenPullRequests : null);
-    });
-  }, [open, projectId]);
+  }, [open]);
 
   const submit = async (event: FormEvent) => {
     event.preventDefault();

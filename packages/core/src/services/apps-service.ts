@@ -27,7 +27,7 @@ import {
 } from "./app-policies-service.js";
 import { assertBuilder } from "./artifact-scope.js";
 import type { DevSandboxService } from "./dev-sandbox-service.js";
-import { ProjectNotFoundError } from "./projects-service.js";
+import { requireTenantProject } from "./projects-service.js";
 
 const tracer = getTracer("@catamorphic/core");
 
@@ -906,13 +906,7 @@ export class AppsService {
     projectId: string,
   ): Promise<void> {
     assertBuilder(identity, projectId);
-    const row = await this.db
-      .selectFrom("projects")
-      .where("id", "=", projectId)
-      .where("tenant_id", "=", identity.tenantId)
-      .select("id")
-      .executeTakeFirst();
-    if (!row) throw new ProjectNotFoundError(projectId);
+    await requireTenantProject(this.db, identity.tenantId, projectId);
   }
 }
 

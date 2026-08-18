@@ -1,3 +1,4 @@
+import { RoleDefinitionSchema as CoreRoleDefinitionSchema } from "@catamorphic/core";
 import { z } from "zod";
 
 // --- Params ---
@@ -943,41 +944,9 @@ export const ProjectAgentEntrySchema = z.object({
 });
 
 // --- Roles & memberships (ADR 0055) ---
-const RoleToolPolicySchema = z.object({
-  default: z.enum(["allow", "ask", "deny", "auto"]).optional(),
-  tools: z.record(z.string(), z.enum(["allow", "ask", "deny"])).optional(),
-});
-
-export const RoleDefinitionSchema = z.object({
-  version: z.literal(1),
-  name: z.string(),
-  description: z.string().optional(),
-  builder: z.boolean().optional(),
-  agents: z
-    .array(
-      z.union([
-        z.string(),
-        z.object({
-          name: z.string(),
-          toolPolicies: z.record(z.string(), RoleToolPolicySchema).optional(),
-        }),
-      ]),
-    )
-    .optional(),
-  workflows: z.array(z.string()).optional(),
-  apps: z.array(z.string()).optional(),
-  documents: z
-    .array(
-      z.union([
-        z.string(),
-        z.object({
-          path: z.string(),
-          access: z.enum(["read", "write"]).optional(),
-        }),
-      ]),
-    )
-    .optional(),
-});
+// The role file schema is core's (`RoleDefinitionSchema`): one definition,
+// so the OpenAPI spec and runtime validation can never disagree.
+export const RoleDefinitionSchema = CoreRoleDefinitionSchema;
 
 export const ProjectRoleEntrySchema = z.object({
   slug: z.string(),

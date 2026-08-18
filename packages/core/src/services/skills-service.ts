@@ -3,7 +3,7 @@ import type { ProjectManager, ProjectRepo } from "@catamorphic/git";
 import type { Kysely } from "kysely";
 import type { Identity } from "../identity.js";
 import { readProgramFiles, withProgram } from "./program-reader.js";
-import { ProjectNotFoundError } from "./projects-service.js";
+import { requireTenantProject } from "./projects-service.js";
 
 /**
  * Directory (relative to the project root) where per-project agent skills
@@ -179,17 +179,8 @@ export class SkillsService {
       });
   }
 
-  private async requireProject(
-    identity: Identity,
-    projectId: string,
-  ): Promise<void> {
-    const row = await this.db
-      .selectFrom("projects")
-      .where("id", "=", projectId)
-      .where("tenant_id", "=", identity.tenantId)
-      .select("id")
-      .executeTakeFirst();
-    if (!row) throw new ProjectNotFoundError(projectId);
+  private requireProject(identity: Identity, projectId: string) {
+    return requireTenantProject(this.db, identity.tenantId, projectId);
   }
 
   private async withDev<T>(

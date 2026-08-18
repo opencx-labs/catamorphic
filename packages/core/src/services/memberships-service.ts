@@ -2,7 +2,7 @@ import type { DB } from "@catamorphic/db";
 import type { Kysely } from "kysely";
 import type { Identity } from "../identity.js";
 import { assertBuilder } from "./artifact-scope.js";
-import { ProjectNotFoundError } from "./projects-service.js";
+import { requireTenantProject } from "./projects-service.js";
 import type { RoleGrants, RolesService } from "./roles-service.js";
 
 /**
@@ -146,17 +146,8 @@ export class MembershipsService {
     });
   }
 
-  private async requireProject(
-    tenantId: string,
-    projectId: string,
-  ): Promise<void> {
-    const row = await this.db
-      .selectFrom("projects")
-      .where("id", "=", projectId)
-      .where("tenant_id", "=", tenantId)
-      .select("id")
-      .executeTakeFirst();
-    if (!row) throw new ProjectNotFoundError(projectId);
+  private requireProject(tenantId: string, projectId: string) {
+    return requireTenantProject(this.db, tenantId, projectId);
   }
 }
 

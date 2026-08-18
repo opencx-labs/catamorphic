@@ -16,7 +16,7 @@ import {
   readProgramFiles,
   withProgram,
 } from "./program-reader.js";
-import { ProjectNotFoundError } from "./projects-service.js";
+import { requireTenantProject } from "./projects-service.js";
 
 /**
  * The documents surface (ADR 0055): one path namespace, two backings.
@@ -814,17 +814,8 @@ export class DocumentsService {
     return new Uint8Array();
   }
 
-  private async requireProject(
-    identity: Identity,
-    projectId: string,
-  ): Promise<void> {
-    const row = await this.db
-      .selectFrom("projects")
-      .where("id", "=", projectId)
-      .where("tenant_id", "=", identity.tenantId)
-      .select("id")
-      .executeTakeFirst();
-    if (!row) throw new ProjectNotFoundError(projectId);
+  private requireProject(identity: Identity, projectId: string) {
+    return requireTenantProject(this.db, identity.tenantId, projectId);
   }
 }
 

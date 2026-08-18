@@ -218,6 +218,7 @@ export {
   ProjectNotFoundError,
   ProjectProvisioningError,
   ProjectsService,
+  requireTenantProject,
   type UpdateProjectInput,
   type WriteFileInput,
 } from "./services/projects-service.js";

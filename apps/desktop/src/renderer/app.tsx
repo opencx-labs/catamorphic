@@ -63,7 +63,7 @@ import {
 } from "./components/remote-actions-modals.js";
 import { RemoteConnectModal } from "./components/remote-connect-modal.js";
 import { RemoteHistoryModal } from "./components/remote-history-modal.js";
-import { RemoteNav } from "./components/remote-nav.js";
+import { type RemoteFeatures, RemoteNav } from "./components/remote-nav.js";
 import { ShortcutHint } from "./components/shortcut-hint.js";
 import { SidebarItemRow } from "./components/sidebar-item-row.js";
 import {
@@ -604,10 +604,14 @@ export function App() {
   const [remoteHistoryPath, setRemoteHistoryPath] = useState<string | null>(
     null,
   );
-  const [remotePublishPath, setRemotePublishPath] = useState<string | null>(
-    null,
-  );
-  const [remotePropose, setRemotePropose] = useState<string[] | null>(null);
+  const [remotePublish, setRemotePublish] = useState<{
+    path: string;
+    features: RemoteFeatures | undefined;
+  } | null>(null);
+  const [remotePropose, setRemotePropose] = useState<{
+    files: string[];
+    features: RemoteFeatures | undefined;
+  } | null>(null);
   useEffect(() => {
     // Pull the pending link on mount (cold launch from an invite) and
     // whenever main nudges; main clears it once taken.
@@ -3627,8 +3631,12 @@ export function App() {
                   onOpenUrl={openUrl}
                   onOpenFile={(filePath) => openEditorTab({ filePath })}
                   onOpenHistory={setRemoteHistoryPath}
-                  onPublish={setRemotePublishPath}
-                  onPropose={setRemotePropose}
+                  onPublish={(path, features) =>
+                    setRemotePublish({ path, features })
+                  }
+                  onPropose={(files, features) =>
+                    setRemotePropose({ files, features })
+                  }
                 />
               ))}
           </div>
@@ -4309,13 +4317,15 @@ export function App() {
           />
           <RemotePublishModal
             projectId={projectId}
-            path={remotePublishPath}
-            onClose={() => setRemotePublishPath(null)}
+            path={remotePublish?.path ?? null}
+            features={remotePublish?.features}
+            onClose={() => setRemotePublish(null)}
           />
           <RemoteProposeModal
             projectId={projectId}
             open={remotePropose !== null}
-            files={remotePropose ?? []}
+            files={remotePropose?.files ?? []}
+            features={remotePropose?.features}
             onClose={() => setRemotePropose(null)}
           />
         </>
@@ -4353,8 +4363,8 @@ function ConfiguredSection({
   onOpenUrl: (url: string, mode: "tab" | "replace") => void;
   onOpenFile: (filePath: string) => void;
   onOpenHistory: (filePath: string) => void;
-  onPublish: (filePath: string) => void;
-  onPropose: (files: string[]) => void;
+  onPublish: (filePath: string, features: RemoteFeatures | undefined) => void;
+  onPropose: (files: string[], features: RemoteFeatures | undefined) => void;
 }) {
   const defaultOpen = !section.collapsed;
   // Hide-when-empty: a section with nothing to list can drop its header

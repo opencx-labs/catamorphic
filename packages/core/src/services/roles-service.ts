@@ -9,7 +9,7 @@ import {
   readProgramFiles,
   withProgram,
 } from "./program-reader.js";
-import { ProjectNotFoundError } from "./projects-service.js";
+import { requireTenantProject } from "./projects-service.js";
 
 /**
  * Roles as committed files (ADR 0055): `roles/<name>.json`, next to
@@ -344,16 +344,7 @@ export class RolesService {
     );
   }
 
-  private async requireProject(
-    tenantId: string,
-    projectId: string,
-  ): Promise<void> {
-    const row = await this.db
-      .selectFrom("projects")
-      .where("id", "=", projectId)
-      .where("tenant_id", "=", tenantId)
-      .select("id")
-      .executeTakeFirst();
-    if (!row) throw new ProjectNotFoundError(projectId);
+  private requireProject(tenantId: string, projectId: string) {
+    return requireTenantProject(this.db, tenantId, projectId);
   }
 }

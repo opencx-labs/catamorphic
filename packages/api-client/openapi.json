@@ -9889,7 +9889,8 @@
                             "enum": [1]
                           },
                           "name": {
-                            "type": "string"
+                            "type": "string",
+                            "minLength": 1
                           },
                           "description": {
                             "type": "string"
@@ -9902,13 +9903,15 @@
                             "items": {
                               "anyOf": [
                                 {
-                                  "type": "string"
+                                  "type": "string",
+                                  "minLength": 1
                                 },
                                 {
                                   "type": "object",
                                   "properties": {
                                     "name": {
-                                      "type": "string"
+                                      "type": "string",
+                                      "minLength": 1
                                     },
                                     "toolPolicies": {
                                       "type": "object",
@@ -9945,13 +9948,15 @@
                           "workflows": {
                             "type": "array",
                             "items": {
-                              "type": "string"
+                              "type": "string",
+                              "minLength": 1
                             }
                           },
                           "apps": {
                             "type": "array",
                             "items": {
-                              "type": "string"
+                              "type": "string",
+                              "minLength": 1
                             }
                           },
                           "documents": {
@@ -9959,13 +9964,15 @@
                             "items": {
                               "anyOf": [
                                 {
-                                  "type": "string"
+                                  "type": "string",
+                                  "minLength": 1
                                 },
                                 {
                                   "type": "object",
                                   "properties": {
                                     "path": {
-                                      "type": "string"
+                                      "type": "string",
+                                      "minLength": 1
                                     },
                                     "access": {
                                       "type": "string",
