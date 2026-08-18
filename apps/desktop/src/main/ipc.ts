@@ -914,6 +914,22 @@ export function registerIpcHandlers(
       throw new Error("This project is not connected to a remote server");
     return link;
   };
+  // Materialized program files are committed so the Changes section stays
+  // about the user's own work (store/ is gitignored and never enters git).
+  const checkpointProgramSync = async (
+    projectId: string,
+    report: { pulled: string[]; removed: string[] },
+  ) => {
+    const server = state.current;
+    if (!server) return;
+    const touchedProgram = [...report.pulled, ...report.removed].some(
+      (file) => !file.startsWith("store/"),
+    );
+    if (!touchedProgram) return;
+    await server.catamorphic.core.projects
+      .commitAll(identity, projectId, "Sync from server")
+      .catch(() => {});
+  };
   const requireRoot = async (projectId: string) => {
     const server = state.current;
     if (!server) throw new Error("Server not running");
@@ -972,6 +988,7 @@ export function registerIpcHandlers(
         project.id,
         new Date().toISOString(),
       );
+      await checkpointProgramSync(project.id, report);
       return { id: project.id, name: project.name, report };
     },
   );
@@ -997,6 +1014,7 @@ export function registerIpcHandlers(
         projectId,
         new Date().toISOString(),
       );
+      await checkpointProgramSync(projectId, report);
       notifyGitChanged(projectId);
       return report;
     },

@@ -36,9 +36,9 @@ describe("proposal branch names (pure)", () => {
       proposalBranch(
         "Fix refund policy!",
         "alice@acme",
-        new Date(Date.UTC(2026, 7, 18, 9, 5)),
+        new Date(Date.UTC(2026, 7, 18, 9, 5, 7)),
       ),
-    ).toBe("proposals/alice-acme/fix-refund-policy-20260818-0905");
+    ).toBe("proposals/alice-acme/fix-refund-policy-20260818-090507");
   });
 });
 

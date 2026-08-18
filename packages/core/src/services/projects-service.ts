@@ -6,7 +6,7 @@ import type {
 } from "@catamorphic/git";
 import { getTracer, withSpan } from "@catamorphic/otel";
 import type { Kysely, Selectable } from "kysely";
-import { authorFor, type Identity } from "../identity.js";
+import { authorFor, type Identity, SYSTEM_AUTHOR } from "../identity.js";
 import { SEED_SKILLS } from "../seeds.js";
 import { assertBuilder, assertRootIdentity } from "./artifact-scope.js";
 
@@ -376,6 +376,33 @@ export class ProjectsService {
   ): Promise<Record<string, string>> {
     await this.requireExists(identity, projectId);
     return this.withDev(identity, projectId, (repo) => repo.readAllFiles());
+  }
+
+  /**
+   * Commit whatever is dirty in the caller's working copy under one message
+   * (the desktop's "Sync from server" checkpoint after materializing a remote
+   * project's program files, ADR 0055). Returns the new sha, or the current
+   * HEAD when the tree was clean.
+   */
+  async commitAll(
+    identity: Identity,
+    projectId: string,
+    message: string,
+    author = SYSTEM_AUTHOR,
+  ): Promise<string> {
+    await this.requireExists(identity, projectId);
+    const repo = await this.projectManager.openDev(
+      identity.tenantId,
+      projectId,
+      identity.externalUserId,
+    );
+    try {
+      const status = await repo.status();
+      if (!status.dirty) return await repo.resolveRef("HEAD");
+      return await repo.commit(message, author);
+    } finally {
+      await repo.dispose();
+    }
   }
 
   async writeFile(

@@ -216,7 +216,7 @@ export function mayPropose(identity: Identity, projectId: string): boolean {
   return (identity.scope ?? []).some((ref) => ref.projectId === projectId);
 }
 
-/** `proposals/<user>/<title-slug>-<yyyymmdd-hhmm>` */
+/** `proposals/<user>/<title-slug>-<yyyymmdd-hhmmss>` */
 export function proposalBranch(
   title: string,
   externalUserId: string,
@@ -231,7 +231,7 @@ export function proposalBranch(
   const pad = (n: number) => String(n).padStart(2, "0");
   const stamp = `${now.getUTCFullYear()}${pad(now.getUTCMonth() + 1)}${pad(
     now.getUTCDate(),
-  )}-${pad(now.getUTCHours())}${pad(now.getUTCMinutes())}`;
+  )}-${pad(now.getUTCHours())}${pad(now.getUTCMinutes())}${pad(now.getUTCSeconds())}`;
   return `proposals/${slug(externalUserId, 24) || "member"}/${
     slug(title, 40) || "change"
   }-${stamp}`;
