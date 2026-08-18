@@ -300,6 +300,45 @@ export interface BrowserImportResult {
   profilesCreated: string[];
 }
 
+// --- Remote projects (ADR 0055) ---
+export interface ConnectLink {
+  serverUrl: string;
+  token: string;
+  remoteProjectId: string;
+  remoteProjectName?: string;
+}
+export interface RemoteSyncReport {
+  pulled: string[];
+  removed: string[];
+  conflicts: Array<{ path: string; serverCopy: string; serverVersion: number }>;
+  unchanged: number;
+}
+export interface RemoteShipReport {
+  shipped: string[];
+  deleted: string[];
+  conflicts: Array<{
+    path: string;
+    serverCopy: string;
+    currentVersion: number;
+  }>;
+  notShippable: string[];
+}
+export interface RemoteProjectStatus {
+  serverUrl: string;
+  remoteProjectId: string;
+  remoteProjectName: string;
+  lastSyncAt: string | null;
+  local: { modified: string[]; deleted: string[]; programEdits: string[] };
+}
+export interface RemoteDocumentVersion {
+  version: number;
+  deleted: boolean;
+  contentType: string;
+  size: number;
+  writtenBy: string;
+  writtenAt: string;
+}
+
 export type GithubConnectResult =
   | { connected: true; login: string }
   | { error: string }
@@ -443,7 +482,15 @@ export interface SidebarItem {
 }
 
 export interface SidebarSectionConfig {
-  type: "workflows" | "apps" | "chats" | "bookmarks" | "git" | "prs" | "custom";
+  type:
+    | "workflows"
+    | "apps"
+    | "chats"
+    | "bookmarks"
+    | "git"
+    | "prs"
+    | "remote"
+    | "custom";
   title?: string;
   collapsed?: boolean;
   /**
@@ -532,6 +579,31 @@ export interface CatamorphicDesktopApi {
   onGithubConnected: (
     listener: (result: GithubConnectResult) => void,
   ) => () => void;
+  remoteParseLink: (link: string) => Promise<ConnectLink | null>;
+  remoteConnect: (input: {
+    serverUrl: string;
+    token: string;
+    remoteProjectId: string;
+    name: string;
+    rootPath: string;
+  }) => Promise<{ id: string; name: string; report: RemoteSyncReport }>;
+  remoteStatus: (projectId: string) => Promise<RemoteProjectStatus | null>;
+  remoteSync: (projectId: string) => Promise<RemoteSyncReport>;
+  remoteShip: (projectId: string) => Promise<RemoteShipReport>;
+  remoteHistory: (input: {
+    projectId: string;
+    path: string;
+  }) => Promise<RemoteDocumentVersion[]>;
+  remoteReadVersion: (input: {
+    projectId: string;
+    path: string;
+    version: number;
+  }) => Promise<{
+    entry: { path: string; contentType: string; version?: number };
+    text: string | null;
+  }>;
+  remoteDisconnect: (projectId: string) => Promise<void>;
+  onConnectLink: (listener: (link: string) => void) => () => void;
   getServerState: () => Promise<ServerInfo>;
   onServerChanged: (listener: (info: ServerInfo) => void) => () => void;
 

@@ -123,9 +123,16 @@ export class ProjectRepoImpl implements ProjectRepo {
     ref: string,
     opts?: { prefix?: string },
   ): Promise<string[]> {
+    return (await this.listBlobsAtRef(ref, opts)).map((entry) => entry.path);
+  }
+
+  async listBlobsAtRef(
+    ref: string,
+    opts?: { prefix?: string },
+  ): Promise<Array<{ path: string; oid: string }>> {
     const oid = await git.resolveRef({ fs: nodeFs, dir: this.repoPath, ref });
     const prefix = opts?.prefix;
-    const paths: string[] = [];
+    const blobs: Array<{ path: string; oid: string }> = [];
     await git.walk({
       fs: nodeFs,
       dir: this.repoPath,
@@ -138,10 +145,12 @@ export class ProjectRepoImpl implements ProjectRepo {
           if (!inside && !onTheWay) return null;
           if (!inside) return;
         }
-        if ((await entry.type()) === "blob") paths.push(filepath);
+        if ((await entry.type()) === "blob") {
+          blobs.push({ path: filepath, oid: (await entry.oid()) ?? "" });
+        }
       },
     });
-    return paths.sort();
+    return blobs.sort((a, b) => a.path.localeCompare(b.path));
   }
 
   private async walkFilesAtRef(

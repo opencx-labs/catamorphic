@@ -44,7 +44,15 @@ export interface SidebarItem {
 }
 
 export interface SidebarSectionConfig {
-  type: "workflows" | "apps" | "chats" | "bookmarks" | "git" | "prs" | "custom";
+  type:
+    | "workflows"
+    | "apps"
+    | "chats"
+    | "bookmarks"
+    | "git"
+    | "prs"
+    | "remote"
+    | "custom";
   /** Override the section heading. */
   title?: string;
   /** Start collapsed (default open). */
@@ -97,6 +105,7 @@ export const DEFAULT_SIDEBAR_CONFIG: SidebarConfig = {
     { type: "apps" },
     { type: "chats" },
     { type: "bookmarks" },
+    { type: "remote", title: "Server" },
     { type: "git", title: "Changes" },
     { type: "prs", title: "Pull Requests", collapsed: true },
   ],
@@ -116,6 +125,8 @@ export const DEFAULT_SIDEBAR_FILE = `// Catamorphic sidebar configuration.
 //   { type: "chats" }       built-in: this project's chats
 //   { type: "bookmarks" }   built-in: browser bookmarks (the address-bar
 //                           star writes these; stored in bookmarks.json)
+//   { type: "remote" }      built-in: for projects connected to a server —
+//                           sync/ship and local store changes (ADR 0055)
 //   { type: "git" }         built-in: uncommitted changes per git worktree
 //                           (click a file to open its diff)
 //   { type: "prs" }         built-in: the project's open pull requests
@@ -147,6 +158,7 @@ module.exports = {
     { type: "apps" },
     { type: "chats" },
     { type: "bookmarks" },
+    { type: "remote", title: "Server" },
     { type: "git", title: "Changes" },
     { type: "prs", title: "Pull Requests", collapsed: true },
 
@@ -176,6 +188,7 @@ const VALID_TYPES = new Set([
   "bookmarks",
   "git",
   "prs",
+  "remote",
   "custom",
 ]);
 

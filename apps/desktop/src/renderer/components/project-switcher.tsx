@@ -1,5 +1,12 @@
 import type { ProjectSummary } from "@catamorphic/react/types";
-import { Box, Check, ChevronsUpDown, FolderPlus, Trash2 } from "lucide-react";
+import {
+  Box,
+  Check,
+  ChevronsUpDown,
+  FolderPlus,
+  Link2,
+  Trash2,
+} from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { ShortcutHint } from "./shortcut-hint.js";
 
@@ -8,6 +15,7 @@ export interface ProjectSwitcherProps {
   activeProjectId?: string;
   onSelect: (projectId: string) => void;
   onNewProject: () => void;
+  onConnectRemote: () => void;
   onDeleteProject: (project: ProjectSummary) => void;
 }
 
@@ -16,6 +24,7 @@ export function ProjectSwitcher({
   activeProjectId,
   onSelect,
   onNewProject,
+  onConnectRemote,
   onDeleteProject,
 }: ProjectSwitcherProps) {
   const [open, setOpen] = useState(false);
@@ -129,6 +138,18 @@ export function ProjectSwitcher({
           >
             <FolderPlus className="size-3.5 shrink-0" />
             New project
+          </button>
+          <button
+            type="button"
+            onClick={() => {
+              onConnectRemote();
+              setOpen(false);
+            }}
+            data-testid="switcher-connect-remote"
+            className="flex h-8 w-full cursor-pointer items-center gap-2 rounded-md px-2 text-left text-[13px] text-fg-muted transition-colors duration-150 hover:bg-bg-raised hover:text-fg"
+          >
+            <Link2 className="size-3.5 shrink-0" />
+            Connect to a server…
           </button>
         </div>
       </div>

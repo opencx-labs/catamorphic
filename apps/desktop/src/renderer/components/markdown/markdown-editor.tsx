@@ -1,20 +1,20 @@
 import { Editor } from "@tiptap/core";
-import type { DragHandleRule } from "@tiptap/extension-drag-handle";
-import DragHandle from "@tiptap/extension-drag-handle";
 import BubbleMenu from "@tiptap/extension-bubble-menu";
 import CodeBlockLowlight from "@tiptap/extension-code-block-lowlight";
+import type { DragHandleRule } from "@tiptap/extension-drag-handle";
+import DragHandle from "@tiptap/extension-drag-handle";
 import { TableKit } from "@tiptap/extension-table";
 import TaskItem from "@tiptap/extension-task-item";
 import TaskList from "@tiptap/extension-task-list";
 import { Markdown } from "@tiptap/markdown";
-import StarterKit from "@tiptap/starter-kit";
-import { useEffect, useRef, useState } from "react";
-import { ChevronRight } from "lucide-react";
 import { DOMSerializer } from "@tiptap/pm/model";
+import StarterKit from "@tiptap/starter-kit";
+import { ChevronRight } from "lucide-react";
+import { useEffect, useRef, useState } from "react";
+import { MarkdownBubbleMenu } from "./bubble-menu.js";
 import { joinFrontmatter, splitFrontmatter } from "./frontmatter.js";
 import { MarkdownGuardrails } from "./guardrails.js";
 import { lowlight } from "./lowlight.js";
-import { MarkdownBubbleMenu } from "./bubble-menu.js";
 import {
   installBlockEntrances,
   installDropFlip,

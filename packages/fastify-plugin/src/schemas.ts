@@ -1012,6 +1012,7 @@ export const DocumentEntrySchema = z.object({
   version: z.number().optional(),
   writtenBy: z.string().optional(),
   writtenAt: z.string().optional(),
+  digest: z.string().optional(),
 });
 
 export const DocumentContentSchema = DocumentEntrySchema.extend({

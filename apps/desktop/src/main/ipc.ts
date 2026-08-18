@@ -20,6 +20,7 @@ import {
   toPublicAgent,
   type UpdateAgentInput,
 } from "./agents-store.js";
+import { parseConnectLink } from "./connect-link.js";
 import {
   type CreateConnectionInput,
   toPublicConnection,
@@ -41,6 +42,12 @@ import {
   openRouterPkceLogin,
 } from "./openrouter.js";
 import type { ProfileConfigManager } from "./profile-config.js";
+import {
+  httpDocumentsClient,
+  localStatus,
+  shipRemoteProject,
+  syncRemoteProject,
+} from "./remote-sync.js";
 import type { EmbeddedServer } from "./server/boot.js";
 import { DESKTOP_TENANT_ID, DESKTOP_USER_ID } from "./server/boot.js";
 import { GITHUB_APP } from "./server/github.js";
@@ -884,6 +891,167 @@ export function registerIpcHandlers(
     },
   );
 
+  // --- remote projects (ADR 0055) ---
+  // A local folder synced from a hosting backend's scoped documents surface:
+  // connect (from a link or by hand) creates the local project and pulls;
+  // sync pulls; ship pushes local store edits with version checks.
+  const remoteClient = (link: {
+    serverUrl: string;
+    token: string;
+    remoteProjectId: string;
+  }) =>
+    httpDocumentsClient({
+      serverUrl: link.serverUrl,
+      token: link.token,
+      projectId: link.remoteProjectId,
+    });
+  const requireLink = (
+    event: Electron.IpcMainInvokeEvent,
+    projectId: string,
+  ) => {
+    const link = storesFor(event).remoteProjects.get(projectId);
+    if (!link)
+      throw new Error("This project is not connected to a remote server");
+    return link;
+  };
+  const requireRoot = async (projectId: string) => {
+    const server = state.current;
+    if (!server) throw new Error("Server not running");
+    const rootPath = await server.projectRoots.get(projectId);
+    if (!rootPath) throw new Error("Project folder not found");
+    return rootPath;
+  };
+
+  ipcMain.handle("catamorphic:remote-parse-link", (_event, link: string) =>
+    parseConnectLink(link),
+  );
+
+  ipcMain.handle(
+    "catamorphic:remote-connect",
+    async (
+      event,
+      input: {
+        serverUrl: string;
+        token: string;
+        remoteProjectId: string;
+        name: string;
+        rootPath: string;
+      },
+    ) => {
+      const server = state.current;
+      if (!server) throw new Error("Server not running");
+      if (!path.isAbsolute(input.rootPath)) {
+        throw new Error("rootPath must be an absolute path");
+      }
+      const serverUrl = input.serverUrl.replace(/\/+$/, "");
+      // Verify the link before creating anything: one listing tells us the
+      // token works and what the member may see.
+      const client = remoteClient({ ...input, serverUrl });
+      await client.list();
+      const existed = fs.existsSync(input.rootPath);
+      const project = await server.catamorphic.core.projects.create(identity, {
+        name: input.name,
+        rootPath: input.rootPath,
+        importExisting: existed,
+      });
+      await server.projectRoots.set(project.id, input.rootPath);
+      // The store is never program: keep it out of the local git history.
+      appendGitignore(input.rootPath, [
+        "store/",
+        ".catamorphic/remote-sync.json",
+      ]);
+      storesFor(event).remoteProjects.set(project.id, {
+        serverUrl,
+        token: input.token,
+        remoteProjectId: input.remoteProjectId,
+        remoteProjectName: input.name,
+        lastSyncAt: null,
+      });
+      const report = await syncRemoteProject(input.rootPath, client);
+      storesFor(event).remoteProjects.touch(
+        project.id,
+        new Date().toISOString(),
+      );
+      return { id: project.id, name: project.name, report };
+    },
+  );
+
+  ipcMain.handle(
+    "catamorphic:remote-status",
+    async (event, projectId: string) => {
+      const link = storesFor(event).remoteProjects.get(projectId);
+      if (!link) return null;
+      const rootPath = await requireRoot(projectId);
+      const { token: _token, ...publicLink } = link;
+      return { ...publicLink, local: localStatus(rootPath) };
+    },
+  );
+
+  ipcMain.handle(
+    "catamorphic:remote-sync",
+    async (event, projectId: string) => {
+      const link = requireLink(event, projectId);
+      const rootPath = await requireRoot(projectId);
+      const report = await syncRemoteProject(rootPath, remoteClient(link));
+      storesFor(event).remoteProjects.touch(
+        projectId,
+        new Date().toISOString(),
+      );
+      notifyGitChanged(projectId);
+      return report;
+    },
+  );
+
+  ipcMain.handle(
+    "catamorphic:remote-ship",
+    async (event, projectId: string) => {
+      const link = requireLink(event, projectId);
+      const rootPath = await requireRoot(projectId);
+      const report = await shipRemoteProject(rootPath, remoteClient(link));
+      storesFor(event).remoteProjects.touch(
+        projectId,
+        new Date().toISOString(),
+      );
+      return report;
+    },
+  );
+
+  ipcMain.handle(
+    "catamorphic:remote-history",
+    async (event, input: { projectId: string; path: string }) => {
+      const link = requireLink(event, input.projectId);
+      return remoteClient(link).history(input.path);
+    },
+  );
+
+  ipcMain.handle(
+    "catamorphic:remote-read-version",
+    async (
+      event,
+      input: { projectId: string; path: string; version: number },
+    ) => {
+      const link = requireLink(event, input.projectId);
+      const { bytes, entry } = await remoteClient(link).readBytes(
+        input.path,
+        input.version,
+      );
+      let text: string | null = null;
+      try {
+        text = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+      } catch {
+        text = null;
+      }
+      return { entry, text };
+    },
+  );
+
+  ipcMain.handle(
+    "catamorphic:remote-disconnect",
+    (event, projectId: string) => {
+      storesFor(event).remoteProjects.delete(projectId);
+    },
+  );
+
   ipcMain.handle(
     "catamorphic:project-delete",
     async (_event, input: { projectId: string; trashFolder?: boolean }) => {
@@ -1140,5 +1308,29 @@ function resolveCodexBinary(): string | null {
     return fs.existsSync(binary) ? binary : null;
   } catch {
     return null;
+  }
+}
+
+/** Add lines to the folder's .gitignore when missing (idempotent). */
+function appendGitignore(rootPath: string, lines: string[]): void {
+  const file = path.join(rootPath, ".gitignore");
+  let current = "";
+  try {
+    current = fs.readFileSync(file, "utf8");
+  } catch {
+    current = "";
+  }
+  const present = new Set(current.split("\n").map((line) => line.trim()));
+  const missing = lines.filter((line) => !present.has(line));
+  if (missing.length === 0) return;
+  const suffix = current.length > 0 && !current.endsWith("\n") ? "\n" : "";
+  fs.writeFileSync(file, `${current}${suffix}${missing.join("\n")}\n`);
+}
+
+/** Tell every window a project's files moved under it. */
+function notifyGitChanged(projectId: string): void {
+  for (const window of BrowserWindow.getAllWindows()) {
+    if (window.isDestroyed()) continue;
+    window.webContents.send("catamorphic:git-changed", { projectId });
   }
 }

@@ -194,6 +194,29 @@ const api = {
     return () =>
       ipcRenderer.removeListener("catamorphic:github-connected", handler);
   },
+  // Remote projects (ADR 0055).
+  remoteParseLink: (link: string): Promise<unknown> =>
+    ipcRenderer.invoke("catamorphic:remote-parse-link", link),
+  remoteConnect: (input: unknown): Promise<unknown> =>
+    ipcRenderer.invoke("catamorphic:remote-connect", input),
+  remoteStatus: (projectId: string): Promise<unknown> =>
+    ipcRenderer.invoke("catamorphic:remote-status", projectId),
+  remoteSync: (projectId: string): Promise<unknown> =>
+    ipcRenderer.invoke("catamorphic:remote-sync", projectId),
+  remoteShip: (projectId: string): Promise<unknown> =>
+    ipcRenderer.invoke("catamorphic:remote-ship", projectId),
+  remoteHistory: (input: unknown): Promise<unknown> =>
+    ipcRenderer.invoke("catamorphic:remote-history", input),
+  remoteReadVersion: (input: unknown): Promise<unknown> =>
+    ipcRenderer.invoke("catamorphic:remote-read-version", input),
+  remoteDisconnect: (projectId: string): Promise<void> =>
+    ipcRenderer.invoke("catamorphic:remote-disconnect", projectId),
+  onConnectLink: (listener: (link: string) => void): (() => void) => {
+    const handler = (_event: unknown, link: string) => listener(link);
+    ipcRenderer.on("catamorphic:connect-link", handler);
+    return () =>
+      ipcRenderer.removeListener("catamorphic:connect-link", handler);
+  },
   getKeybindings: (): Promise<Record<string, string>> =>
     ipcRenderer.invoke("catamorphic:keybindings-get"),
   setKeybindings: (

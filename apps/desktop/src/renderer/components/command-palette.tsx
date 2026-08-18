@@ -9,11 +9,13 @@ import {
   ChevronRight,
   Columns2,
   Cpu,
+  Download,
   FileCode,
   Gauge,
   Globe,
   History,
   LayoutGrid,
+  Link2,
   type LucideIcon,
   Maximize2,
   MessageSquare,
@@ -26,6 +28,7 @@ import {
   Sparkles,
   SquareTerminal,
   Star,
+  Upload,
   UserRound,
   Workflow as WorkflowIcon,
   X,
@@ -110,6 +113,9 @@ const ACTION_ICONS: Partial<Record<ActionId, LucideIcon>> = {
   "change-effort": Gauge,
   "switch-model": Cpu,
   "manage-connectors": Plug,
+  "connect-remote-project": Link2,
+  "remote-sync": Download,
+  "remote-ship": Upload,
 };
 
 /**

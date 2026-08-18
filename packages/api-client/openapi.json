@@ -10300,6 +10300,9 @@
                       },
                       "writtenAt": {
                         "type": "string"
+                      },
+                      "digest": {
+                        "type": "string"
                       }
                     },
                     "required": ["path", "source", "contentType", "size"],
@@ -10391,6 +10394,9 @@
                       "type": "string"
                     },
                     "writtenAt": {
+                      "type": "string"
+                    },
+                    "digest": {
                       "type": "string"
                     },
                     "text": {
@@ -10511,6 +10517,9 @@
                       "type": "string"
                     },
                     "writtenAt": {
+                      "type": "string"
+                    },
+                    "digest": {
                       "type": "string"
                     }
                   },

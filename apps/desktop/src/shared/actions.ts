@@ -219,6 +219,46 @@ export const BUILTIN_ACTIONS = [
     ],
   },
   {
+    id: "connect-remote-project",
+    label: "Connect to a remote project…",
+    description:
+      "link a folder on this machine to a project on your team's server (paste the invite's connect link)",
+    defaultBinding: null,
+    keywords: [
+      "remote",
+      "server",
+      "connect",
+      "invite",
+      "link",
+      "team",
+      "brain",
+    ],
+  },
+  {
+    id: "remote-sync",
+    label: "Sync from server",
+    description:
+      "pull the latest documents from the server into this remote project",
+    defaultBinding: null,
+    keywords: ["remote", "server", "sync", "pull", "refresh", "download"],
+  },
+  {
+    id: "remote-ship",
+    label: "Ship changes to server",
+    description:
+      "push this project's local store edits to the server (version-checked)",
+    defaultBinding: null,
+    keywords: [
+      "remote",
+      "server",
+      "ship",
+      "push",
+      "upload",
+      "publish",
+      "store",
+    ],
+  },
+  {
     id: "manage-connectors",
     label: "Manage connectors…",
     description:

@@ -11,6 +11,7 @@ import {
   Columns2,
   FolderPlus,
   LayoutGrid,
+  Link2,
   MessageSquare,
   PanelLeft,
   Plus,
@@ -56,6 +57,9 @@ import { ProjectAgentConsentDialog } from "./components/project-agent-consent.js
 import { ProjectModal } from "./components/project-modal.js";
 import { ProjectSwitcher } from "./components/project-switcher.js";
 import { PrsNav } from "./components/prs-nav.js";
+import { RemoteConnectModal } from "./components/remote-connect-modal.js";
+import { RemoteHistoryModal } from "./components/remote-history-modal.js";
+import { RemoteNav } from "./components/remote-nav.js";
 import { ShortcutHint } from "./components/shortcut-hint.js";
 import { SidebarItemRow } from "./components/sidebar-item-row.js";
 import {
@@ -71,6 +75,7 @@ import {
   type AgentEffort,
   type AgentsData,
   type AppPrefs,
+  type ConnectLink,
   desktopApi,
   type Profile,
   type ProfilesData,
@@ -586,6 +591,24 @@ export function App() {
   const [activeProjectId, setActiveProjectId] = useState<string>();
   const [workspaces, setWorkspaces] = useState<Record<string, Workspace>>({});
   const [projectModalOpen, setProjectModalOpen] = useState(false);
+  // Remote projects (ADR 0055): connect from a link or by hand; per-file
+  // store history for the current project.
+  const [remoteConnect, setRemoteConnect] = useState<{
+    open: boolean;
+    link: ConnectLink | null;
+  }>({ open: false, link: null });
+  const [remoteHistoryPath, setRemoteHistoryPath] = useState<string | null>(
+    null,
+  );
+  useEffect(
+    () =>
+      desktopApi.onConnectLink((raw) => {
+        void desktopApi.remoteParseLink(raw).then((link) => {
+          if (link) setRemoteConnect({ open: true, link });
+        });
+      }),
+    [],
+  );
   const [deletingProject, setDeletingProject] = useState<ProjectSummary | null>(
     null,
   );
@@ -2495,6 +2518,18 @@ export function App() {
     "change-effort": () => openPalettePicker("effort"),
     "switch-model": () => openPalettePicker("model"),
     "manage-connectors": () => setConnectorsModalOpen(true),
+    "connect-remote-project": () =>
+      setRemoteConnect({ open: true, link: null }),
+    "remote-sync": () => {
+      if (projectId) {
+        void desktopApi.remoteSync(projectId).catch(() => {});
+      }
+    },
+    "remote-ship": () => {
+      if (projectId) {
+        void desktopApi.remoteShip(projectId).catch(() => {});
+      }
+    },
   };
   const actionHandlersRef = useRef(actionHandlers);
   actionHandlersRef.current = actionHandlers;
@@ -3558,6 +3593,9 @@ export function App() {
               activeProjectId={projectId}
               onSelect={selectProject}
               onNewProject={() => setProjectModalOpen(true)}
+              onConnectRemote={() =>
+                setRemoteConnect({ open: true, link: null })
+              }
               onDeleteProject={setDeletingProject}
             />
           </div>
@@ -3583,6 +3621,8 @@ export function App() {
                   onNewChat={() => addChat()}
                   onOpenSession={openSession}
                   onOpenUrl={openUrl}
+                  onOpenFile={(filePath) => openEditorTab({ filePath })}
+                  onOpenHistory={setRemoteHistoryPath}
                 />
               ))}
           </div>
@@ -4150,6 +4190,7 @@ export function App() {
           <EmptyState
             loading={projectsQuery.isLoading}
             onNewProject={() => setProjectModalOpen(true)}
+            onConnectRemote={() => setRemoteConnect({ open: true, link: null })}
           />
         )}
       </main>
@@ -4249,6 +4290,25 @@ export function App() {
         onClose={() => setDeletingProject(null)}
         onDeleted={onProjectDeleted}
       />
+      <RemoteConnectModal
+        open={remoteConnect.open}
+        link={remoteConnect.link}
+        onClose={() => setRemoteConnect({ open: false, link: null })}
+        onConnected={(project) => {
+          setRemoteConnect({ open: false, link: null });
+          if (activeProfile) {
+            void desktopApi.profilesClaimProject(activeProfile.id, project.id);
+          }
+          selectProject(project.id);
+        }}
+      />
+      {projectId && (
+        <RemoteHistoryModal
+          projectId={projectId}
+          path={remoteHistoryPath}
+          onClose={() => setRemoteHistoryPath(null)}
+        />
+      )}
     </div>
   );
 }
@@ -4265,6 +4325,8 @@ function ConfiguredSection({
   onNewChat,
   onOpenSession,
   onOpenUrl,
+  onOpenFile,
+  onOpenHistory,
 }: {
   section: SidebarSectionConfig;
   projectId: string;
@@ -4276,6 +4338,8 @@ function ConfiguredSection({
   onNewChat: () => void;
   onOpenSession: (session: AgentSession) => void;
   onOpenUrl: (url: string, mode: "tab" | "replace") => void;
+  onOpenFile: (filePath: string) => void;
+  onOpenHistory: (filePath: string) => void;
 }) {
   const defaultOpen = !section.collapsed;
   // Hide-when-empty: a section with nothing to list can drop its header
@@ -4285,7 +4349,9 @@ function ConfiguredSection({
   // (hidden, not unmounted) so its data fetch is what reveals the section.
   const hideEmpty =
     section.hideEmpty ??
-    (section.type === "workflows" || section.type === "apps");
+    (section.type === "workflows" ||
+      section.type === "apps" ||
+      section.type === "remote");
   const [empty, setEmpty] = useState(true);
   const body = (() => {
     switch (section.type) {
@@ -4393,6 +4459,20 @@ function ConfiguredSection({
               onOpenDiff={onOpenTab}
               onOpenUrl={onOpenUrl}
               onEmptyChange={setEmpty}
+            />
+          </SidebarSection>
+        );
+      case "remote":
+        return (
+          <SidebarSection
+            title={section.title ?? "Server"}
+            defaultOpen={defaultOpen}
+          >
+            <RemoteNav
+              projectId={projectId}
+              onEmptyChange={setEmpty}
+              onOpenFile={onOpenFile}
+              onOpenHistory={onOpenHistory}
             />
           </SidebarSection>
         );
@@ -4681,9 +4761,11 @@ function sessionLabel(session: AgentSession): string {
 function EmptyState({
   loading,
   onNewProject,
+  onConnectRemote,
 }: {
   loading: boolean;
   onNewProject: () => void;
+  onConnectRemote: () => void;
 }) {
   return (
     <div className="grid flex-1 place-items-center">
@@ -4695,14 +4777,25 @@ function EmptyState({
             <p className="text-sm text-fg-muted">
               Create a project from scratch or import an existing folder.
             </p>
-            <button
-              type="button"
-              onClick={onNewProject}
-              className="mt-4 inline-flex h-8 cursor-pointer items-center gap-2 rounded-md bg-accent px-3 text-[13px] font-medium text-accent-fg transition-opacity duration-150 hover:opacity-90"
-            >
-              <FolderPlus className="size-3.5" />
-              New project
-            </button>
+            <div className="mt-4 flex items-center justify-center gap-2">
+              <button
+                type="button"
+                onClick={onNewProject}
+                className="inline-flex h-8 cursor-pointer items-center gap-2 rounded-md bg-accent px-3 text-[13px] font-medium text-accent-fg transition-opacity duration-150 hover:opacity-90"
+              >
+                <FolderPlus className="size-3.5" />
+                New project
+              </button>
+              <button
+                type="button"
+                onClick={onConnectRemote}
+                data-testid="empty-connect-remote"
+                className="inline-flex h-8 cursor-pointer items-center gap-2 rounded-md border border-border px-3 text-[13px] text-fg-muted transition-colors duration-150 hover:bg-bg-overlay hover:text-fg"
+              >
+                <Link2 className="size-3.5" />
+                Connect to a server
+              </button>
+            </div>
           </>
         )}
       </div>

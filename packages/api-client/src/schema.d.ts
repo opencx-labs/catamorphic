@@ -5015,6 +5015,7 @@ export interface paths {
                             version?: number;
                             writtenBy?: string;
                             writtenAt?: string;
+                            digest?: string;
                         }[];
                     };
                 };
@@ -5075,6 +5076,7 @@ export interface paths {
                             version?: number;
                             writtenBy?: string;
                             writtenAt?: string;
+                            digest?: string;
                             text?: string;
                         };
                     };
@@ -5139,6 +5141,7 @@ export interface paths {
                             version?: number;
                             writtenBy?: string;
                             writtenAt?: string;
+                            digest?: string;
                         };
                     };
                 };

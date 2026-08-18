@@ -11,7 +11,7 @@ import {
 import type { AppBundleStore } from "./app-bundle-store.js";
 import { AccessDeniedError } from "./artifact-scope.js";
 import {
-  listProgramFiles,
+  listProgramBlobs,
   readProgramFile,
   readProgramFiles,
   withProgram,
@@ -58,6 +58,9 @@ export interface DocumentEntry {
   version?: number;
   writtenBy?: string;
   writtenAt?: string;
+  /** Program only: a content digest (`git:<oid>` / `sha256:<hex>`) so a
+   * syncing client can skip unchanged files without fetching them. */
+  digest?: string;
 }
 
 export interface DocumentContent extends DocumentEntry {
@@ -279,13 +282,13 @@ export class DocumentsService {
         `${STORE_ROOT}/`.startsWith(prefix));
 
     if (wantsProgram) {
-      const paths = await withProgram(
+      const blobs = await withProgram(
         this.projectManager,
         args.identity.tenantId,
         args.projectId,
-        (repo, ref) => listProgramFiles(repo, ref, prefix),
+        (repo, ref) => listProgramBlobs(repo, ref, prefix),
       );
-      for (const path of paths) {
+      for (const { path, digest } of blobs) {
         if (isStorePath(path)) continue; // gitignored by convention; never program
         if (
           !documentAccessAllowed(args.identity, args.projectId, path, "read")
@@ -297,6 +300,7 @@ export class DocumentsService {
           source: "program",
           contentType: contentTypeFor(path),
           size: -1,
+          digest,
         });
       }
     }

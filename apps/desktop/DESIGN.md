@@ -2490,3 +2490,36 @@ Patterned on what best-in-class palettes converged on (Chrome omnibox
   providers (bearer rides the server config); plugin reinstall re-ids
   connections (agent narrowing keyed by id dangles); the consent modal
   outlives the bridge's 5-minute deny.
+
+### 2026-08-18 — Remote projects (ADR 0055)
+
+- **A folder that syncs from a server.** A member of a company brain who
+  has no GitHub access connects a folder to the hosting backend and gets
+  exactly what their role covers: company docs read-only, their store
+  subtrees read/write. `Connect to a server…` lives beside `New project`
+  (empty state, project switcher, palette); it takes the invite's
+  `catamorphic://connect?server=…&token=…&project=…&name=…` link (deep
+  link or pasted — the fields fill themselves) plus a location. Connect =
+  create the local project, `.gitignore` `store/` and the sync manifest,
+  first sync. Tokens live in the profile's `remote-projects.json`,
+  safeStorage-encrypted like agent keys.
+- **Two verbs, no merge UI.** The sidebar's *Server* section (hidden for
+  local projects) shows host + last sync, **Sync** (pull) and **Ship**
+  (push, with the count of local store changes), the changed store files
+  (M/D rows → open / history), and a warning for edits outside `store/`
+  ("won't ship — the program changes by commit"). Conflicts on either
+  verb keep BOTH: the server's copy lands beside yours as
+  `name (server vN).ext` and the message says so; the user reconciles by
+  editing and shipping again. Store history is a modal (versions, author,
+  time, read-only text): restoring is copy-and-ship, deliberately.
+- **Where the mechanism lives.** `main/remote-sync.ts` is the engine (pure
+  over an injectable documents client + fs; unit-tested with a fake
+  server), `main/remote-projects-store.ts` the per-profile links,
+  `connect-link.ts` the link grammar; IPC `remote-*`; e2e
+  `remote-project.e2e.ts` runs a real in-test HTTP server. Builders with a
+  git remote keep git for the program; the store sync only ever touches
+  `store/`.
+- Deferred: auto-sync on focus/interval (today: manual + the 15s status
+  poll), a per-file "restore this version" button, propose-a-change for
+  program edits (ADR 0055 step 6), and MCP-served skills/agents in the
+  desktop's own connect flow.

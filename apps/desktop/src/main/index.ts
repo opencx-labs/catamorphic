@@ -59,13 +59,39 @@ if (e2eDataDir) {
 if (!e2eDataDir && !app.requestSingleInstanceLock()) {
   app.quit();
 }
-app.on("second-instance", () => {
+app.on("second-instance", (_event, argv) => {
   const window = BrowserWindow.getAllWindows()[0];
   if (window) {
     if (window.isMinimized()) window.restore();
     window.focus();
   }
+  // Windows/Linux deliver a protocol URL as an argv of the second launch.
+  const link = argv.find((arg) => arg.startsWith("catamorphic://"));
+  if (link) deliverConnectLink(link);
 });
+
+// `catamorphic://connect?…` links (ADR 0055): what an invite hands a member.
+// Registered as the protocol's handler; macOS delivers via open-url, other
+// platforms via argv (first launch here, later launches via second-instance).
+if (!e2eDataDir) app.setAsDefaultProtocolClient("catamorphic");
+app.on("open-url", (event, url) => {
+  event.preventDefault();
+  deliverConnectLink(url);
+});
+let pendingConnectLink: string | null =
+  process.argv.find((arg) => arg.startsWith("catamorphic://")) ?? null;
+function deliverConnectLink(url: string): void {
+  if (!url.startsWith("catamorphic://connect")) return;
+  const window = BrowserWindow.getAllWindows()[0];
+  if (!window || window.webContents.isLoading()) {
+    pendingConnectLink = url;
+    return;
+  }
+  pendingConnectLink = null;
+  window.webContents.send("catamorphic:connect-link", url);
+  if (window.isMinimized()) window.restore();
+  window.focus();
+}
 
 const paths = resolveDataPaths();
 const profilesStore = new ProfilesStore(paths.profilesFile);
@@ -181,6 +207,11 @@ function createWindow(profileId?: string): BrowserWindow {
     },
   });
   if (saved.maximized) window.maximize();
+  // A connect link that arrived before any window could take it (cold
+  // launch from the link) is delivered once the renderer is up.
+  window.webContents.once("did-finish-load", () => {
+    if (pendingConnectLink) deliverConnectLink(pendingConnectLink);
+  });
   window.once("ready-to-show", () => {
     window.show();
     // Fullscreen after show: entering it on a hidden window leaves macOS

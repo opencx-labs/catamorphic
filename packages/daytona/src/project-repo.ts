@@ -99,6 +99,28 @@ export class DaytonaProjectRepo implements ProjectRepo {
     return result.result.split("\n").filter(Boolean).sort();
   }
 
+  async listBlobsAtRef(
+    ref: string,
+    opts?: { prefix?: string },
+  ): Promise<Array<{ path: string; oid: string }>> {
+    const sandbox = await this.getSandbox();
+    const result = await sandbox.process.executeCommand(
+      `git ls-tree -r ${ref}${opts?.prefix ? ` -- ${shellQuote(opts.prefix)}` : ""}`,
+      this.repoPath,
+    );
+    // "<mode> blob <oid>\t<path>"
+    return result.result
+      .split("\n")
+      .filter(Boolean)
+      .map((line) => {
+        const [meta, filePath] = line.split("\t");
+        const oid = meta?.split(/\s+/)[2] ?? "";
+        return { path: filePath ?? "", oid };
+      })
+      .filter((entry) => entry.path)
+      .sort((a, b) => a.path.localeCompare(b.path));
+  }
+
   private async readTreeAtRef(
     ref: string,
     prefix?: string,

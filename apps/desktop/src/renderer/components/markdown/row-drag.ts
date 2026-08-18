@@ -1,6 +1,6 @@
 import type { Editor } from "@tiptap/core";
-import { EASE_STANDARD } from "./motion.js";
 import { moveTableRow } from "./guardrails.js";
+import { EASE_STANDARD } from "./motion.js";
 
 /**
  * Table row reordering. No extension does this, so we own the whole gesture:

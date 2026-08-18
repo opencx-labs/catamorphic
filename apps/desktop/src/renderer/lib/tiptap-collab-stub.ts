@@ -1,5 +1,5 @@
-import { PluginKey } from "@tiptap/pm/state";
 import type { Transaction } from "@tiptap/pm/state";
+import { PluginKey } from "@tiptap/pm/state";
 
 /**
  * Build-time stub for @tiptap/y-tiptap and @tiptap/extension-collaboration,

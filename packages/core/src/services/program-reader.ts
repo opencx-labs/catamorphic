@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import {
   fetchRemote,
   type ProjectManager,
@@ -55,6 +56,29 @@ export async function listProgramFiles(
   if (ref) return repo.listFilesAtRef(ref, prefix ? { prefix } : {});
   const all = await repo.listFiles();
   return all.filter((file) => file.startsWith(prefix)).sort();
+}
+
+/**
+ * File paths + content digests of the program under a prefix: git blob
+ * ids at a ref, a sha-256 of the working-tree file otherwise. Digests let
+ * a syncing client skip unchanged files without fetching them.
+ */
+export async function listProgramBlobs(
+  repo: ProjectRepo,
+  ref: string | null,
+  prefix: string,
+): Promise<Array<{ path: string; digest: string }>> {
+  if (ref) {
+    const blobs = await repo.listBlobsAtRef(ref, prefix ? { prefix } : {});
+    return blobs.map((blob) => ({ path: blob.path, digest: `git:${blob.oid}` }));
+  }
+  const files = await listProgramFiles(repo, ref, prefix);
+  return Promise.all(
+    files.map(async (file) => ({
+      path: file,
+      digest: `sha256:${createHash("sha256").update(await repo.readFile(file)).digest("hex")}`,
+    })),
+  );
 }
 
 /** Contents of the program's files under a prefix. */

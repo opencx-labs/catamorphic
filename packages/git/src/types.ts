@@ -108,6 +108,11 @@ export interface ProjectRepo {
   ): Promise<Record<string, string>>;
   /** File paths at a ref, optionally under one directory prefix; no content. */
   listFilesAtRef(ref: string, opts?: { prefix?: string }): Promise<string[]>;
+  /** File paths + blob ids at a ref (content-addressed digests, no content). */
+  listBlobsAtRef(
+    ref: string,
+    opts?: { prefix?: string },
+  ): Promise<Array<{ path: string; oid: string }>>;
 
   commit(
     message: string,
