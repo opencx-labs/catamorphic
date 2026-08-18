@@ -282,6 +282,15 @@ export interface ExecutionJobs {
   workflow_step_attempt_id: string | null;
 }
 
+export interface Memberships {
+  created_at: Generated<Timestamp>;
+  external_user_id: string;
+  grants: Generated<Json>;
+  project_id: string;
+  roles: Generated<Json>;
+  updated_at: Generated<Timestamp>;
+}
+
 export interface ProjectPlugins {
   created_at: Generated<Timestamp>;
   package_name: string;
@@ -499,6 +508,7 @@ export interface DB {
   deployment_artifacts: DeploymentArtifacts;
   deployment_runtimes: DeploymentRuntimes;
   execution_jobs: ExecutionJobs;
+  memberships: Memberships;
   project_plugins: ProjectPlugins;
   project_sandboxes: ProjectSandboxes;
   project_secrets: ProjectSecrets;

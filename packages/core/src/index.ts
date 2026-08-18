@@ -171,6 +171,11 @@ export {
   ProjectNotLinkedToGithubError,
 } from "./services/github-service.js";
 export {
+  type GrantMembershipInput,
+  type Membership,
+  MembershipsService,
+} from "./services/memberships-service.js";
+export {
   type AttachedPluginInfo,
   type PluginInfo,
   PluginNotAttachedError,
@@ -212,6 +217,19 @@ export {
   type RetentionConfig,
   RetentionService,
 } from "./services/retention-service.js";
+export {
+  expandRole,
+  fillTemplate,
+  type ProjectRoleEntry,
+  type ResolveRolesInput,
+  ROLES_DIR,
+  type RoleDefinition,
+  RoleDefinitionSchema,
+  type RoleGrants,
+  RolesService,
+  resolveRoles,
+  validateRoleDefinition,
+} from "./services/roles-service.js";
 export {
   RunPauseNotFoundError,
   RunResumeConflictError,

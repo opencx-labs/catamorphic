@@ -41,6 +41,7 @@ import {
   GithubService,
   type GithubServiceConfig,
 } from "./services/github-service.js";
+import { MembershipsService } from "./services/memberships-service.js";
 import { PluginsService } from "./services/plugins-service.js";
 import {
   type ProjectLifecycleHooks,
@@ -52,6 +53,7 @@ import {
   type RetentionConfig,
   RetentionService,
 } from "./services/retention-service.js";
+import { RolesService } from "./services/roles-service.js";
 import { RunCoordinator } from "./services/run-coordinator.js";
 import { RunPluginsLoader } from "./services/run-plugins-loader.js";
 import { RunsService } from "./services/runs-service.js";
@@ -68,6 +70,12 @@ import { TriggersService } from "./services/triggers-service.js";
 import { WorkflowsService } from "./services/workflows-service.js";
 
 export interface CatamorphicCoreConfig {
+  /**
+   * How long a project's parsed `roles/*.json` set is trusted before it is
+   * re-read from the shared origin (ADR 0055). Role *definitions* may lag
+   * by this much; membership is read fresh on every resolve. Default 10s.
+   */
+  rolesCacheTtlMs?: number;
   db: Kysely<DB>;
   projectManager: ProjectManager;
   sandboxProvider?: SandboxProvider;
@@ -215,6 +223,10 @@ export class CatamorphicCore {
   readonly deploymentRuntime?: DeploymentRuntimeService;
   readonly skills: SkillsService;
   readonly agentDefinitions: AgentDefinitionsService;
+  /** Committed `roles/*.json` and their expansion into identities (ADR 0055). */
+  readonly roles: RolesService;
+  /** Stock `user → roles + grants` per project (ADR 0055). */
+  readonly memberships: MembershipsService;
   readonly tenantPolicies: TenantPoliciesService;
   readonly retention: RetentionService;
   readonly plugins?: PluginsService;
@@ -407,6 +419,12 @@ export class CatamorphicCore {
       this.projectManager,
       { allowE2eFake: process.env.CATAMORPHIC_E2E_FAKE_AGENT === "1" },
     );
+    this.roles = new RolesService(this.db, this.projectManager, {
+      ...(config.rolesCacheTtlMs !== undefined
+        ? { ttlMs: config.rolesCacheTtlMs }
+        : {}),
+    });
+    this.memberships = new MembershipsService(this.db, this.roles);
 
     if (config.codingAgent && this.sandboxProvider && this.devSandboxes) {
       const codingAgents = isCodingAgentRegistry(config.codingAgent)

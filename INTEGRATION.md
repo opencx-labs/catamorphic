@@ -220,6 +220,45 @@ identity: async (request) => {
 
 Which users are builders and which artifacts each viewer gets is host policy (a role file, an entitlement table); catamorphic only enforces the result. Enforcement lives in core, so `server-sdk` callers get it too: `catamorphic.forTenant({ tenantId }).forUser({ externalUserId, scope })`. Scoped agent sessions hand the harness the caller (`StartSessionOpts.caller`, forwarded on `ExtraToolContext.caller`) and the caller's policy layers (`StartSessionOpts.toolPolicies`, refreshed on every `TurnOptions.toolPolicies`) — a hosting backend uses `caller` in `mcpServersForSession` to mint the project MCP endpoint's credentials for that user, so the endpoint enforces the same scope structurally. See [`docs/decisions/0053-identity-scope-and-app-routes.md`](docs/decisions/0053-identity-scope-and-app-routes.md) and [`0055`](docs/decisions/0055-company-brain-roles-store-and-change-loop.md).
 
+### Roles as files, memberships as the stock source (ADR 0055)
+
+Most hosts do not want to hand-write scopes. Commit roles into the project — `roles/<slug>.json`, next to `agents/` — and let core expand them:
+
+```jsonc
+// roles/csm.json
+{
+  "version": 1,
+  "name": "CSM",
+  "agents": ["csm-assistant"],                       // or { "name", "toolPolicies": { "slack": { "default": "ask" } } }
+  "workflows": ["crm.lookup", "docs.search"],
+  "apps": ["customer-tracker"],
+  "documents": ["docs/**", { "path": "store/customers/{customer}/**", "access": "write" }]
+}
+// roles/admin.json
+{ "version": 1, "name": "Admin", "builder": true, "documents": ["store/**"] }
+```
+
+`{param}` placeholders are filled from per-user **grants** (`{ customer: ["acme", "globex"] }`), one ref per value; an entry whose placeholder has no grant yields nothing. `builder: true` emits the `project` ref; an admin who may not see the whole store simply lists less. Role files are read from the shared origin `main` (a project without a remote reads its working tree), cached briefly (`rolesCacheTtlMs`, default 10s), and never throw: a broken file is reported by `GET /projects/:id/roles` and contributes nothing.
+
+Two ways to turn a verified user into an identity:
+
+```ts
+// 1. You keep roles/grants yourself (a table, an SSO claim):
+identity: async (req) => {
+  const u = await verifySession(req);
+  return u && resolveRoles(catamorphic.core, { tenantId: ORG, projectId: BRAIN, externalUserId: u.id, roles: u.roles, grants: u.grants });
+}
+// 2. The stock memberships table (core.memberships) keeps them:
+identity: async (req) => {
+  const u = await verifySession(req);
+  return u && catamorphic.core.memberships.identityFor({ tenantId: ORG, projectId: BRAIN, externalUserId: u.id });  // null = not a member
+}
+// An invite is one call (builder-only), plus whatever link you send:
+await catamorphic.core.memberships.grant({ identity: adminIdentity, projectId: BRAIN, externalUserId: "alice", roles: ["csm"], grants: { customer: ["acme"] } });
+```
+
+The plugin serves the same as HTTP for admin UIs: `GET /projects/:id/roles`, `GET|PUT|DELETE /projects/:id/memberships[/:externalUserId]` (`PUT` body `{ roles, grants? }`). Members arriving with a token the host issued (a connect link, their own agent on the MCP endpoint) use `identityFromBearer(verify)`: the host's `verify(token)` returns the identity (typically via `memberships.identityFor`) or `null`. Every request re-resolves, so revocation is immediate.
+
 The generated HTTP client lives in `@catamorphic/api-client`; construct it with `createApiClient({ baseUrl, fetch })`.
 
 All execution uses one Runs route family:

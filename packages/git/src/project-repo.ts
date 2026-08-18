@@ -109,6 +109,20 @@ export class ProjectRepoImpl implements ProjectRepo {
   }
 
   async readAllFilesAtRef(ref: string): Promise<Record<string, string>> {
+    return this.walkFilesAtRef(ref);
+  }
+
+  async readFilesAtRef(
+    ref: string,
+    opts: { prefix: string },
+  ): Promise<Record<string, string>> {
+    return this.walkFilesAtRef(ref, opts.prefix);
+  }
+
+  private async walkFilesAtRef(
+    ref: string,
+    prefix?: string,
+  ): Promise<Record<string, string>> {
     const oid = await git.resolveRef({
       fs: nodeFs,
       dir: this.repoPath,
@@ -124,6 +138,14 @@ export class ProjectRepoImpl implements ProjectRepo {
       trees: trees.map((t) => t.tree),
       map: async (filepath, [entry]) => {
         if (filepath === "." || !entry) return;
+        if (prefix !== undefined) {
+          // Prune: a directory outside the prefix (and not on the way to
+          // it) is not descended; a file outside it is not read.
+          const inside = filepath.startsWith(prefix);
+          const onTheWay = prefix.startsWith(`${filepath}/`);
+          if (!inside && !onTheWay) return null;
+          if (!inside) return;
+        }
         const type = await entry.type();
         if (type !== "blob") return;
         const content = await entry.content();

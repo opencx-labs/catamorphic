@@ -77,9 +77,23 @@ export class DaytonaProjectRepo implements ProjectRepo {
   }
 
   async readAllFilesAtRef(ref: string): Promise<Record<string, string>> {
+    return this.readTreeAtRef(ref);
+  }
+
+  async readFilesAtRef(
+    ref: string,
+    opts: { prefix: string },
+  ): Promise<Record<string, string>> {
+    return this.readTreeAtRef(ref, opts.prefix);
+  }
+
+  private async readTreeAtRef(
+    ref: string,
+    prefix?: string,
+  ): Promise<Record<string, string>> {
     const sandbox = await this.getSandbox();
     const result = await sandbox.process.executeCommand(
-      `git ls-tree -r --name-only ${ref}`,
+      `git ls-tree -r --name-only ${ref}${prefix ? ` -- ${shellQuote(prefix)}` : ""}`,
       this.repoPath,
     );
     const paths = result.result.split("\n").filter(Boolean);

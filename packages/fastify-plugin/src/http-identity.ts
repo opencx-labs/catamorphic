@@ -39,6 +39,32 @@ export function identityFromHeaders(): IdentityResolver {
   });
 }
 
+/**
+ * A stock resolver for hosts whose members arrive with a bearer token the
+ * host itself issued — the desktop's remote projects, a member's own agent
+ * on the project MCP endpoint, a connect link (ADR 0055). `verify` is the
+ * host's: it turns the token into who is calling (and, typically, hands
+ * that to `core.memberships.identityFor` or `resolveRoles`), or `null` for
+ * an unknown/expired token. A missing or malformed header is `null` too —
+ * 401, never a guess. Revocation is instant by construction: every request
+ * re-verifies.
+ */
+export function identityFromBearer(
+  verify: (
+    token: string,
+    request: FastifyRequest,
+  ) => Identity | null | Promise<Identity | null>,
+): IdentityResolver {
+  return async (request) => {
+    const raw = request.headers.authorization;
+    const header = Array.isArray(raw) ? raw[0] : raw;
+    if (!header) return null;
+    const match = /^Bearer\s+(\S+)$/i.exec(header.trim());
+    if (!match?.[1]) return null;
+    return verify(match[1], request);
+  };
+}
+
 const IDENTITY_KEY = Symbol.for("catamorphic.identity");
 
 interface IdentityCarrier {

@@ -579,6 +579,84 @@ employee → `GET /api/projects/:id/apps` 200; granted customer →
 `POST …/apps/:name/calls/:workflow` 200 and `GET /api/projects/:id/apps`
 403; customer without a grant → app routes 403; signed-out → 401.
 
+## Recipe: members use the brain by role (roles as files, ADR 0055)
+
+The company-brain shape: admins edit the project; sales, CSMs and
+engineers *use* it through agents, tools and documents. Nothing about
+users enters catamorphic — the host verifies who is calling; roles are
+committed files; core expands them. Three pieces, all small:
+
+1. **Role files in the project** — `roles/<slug>.json`, next to `agents/`.
+   Reviewed like code, and the agent building the host can write them:
+
+   ```jsonc
+   // roles/csm.json
+   {
+     "version": 1,
+     "name": "CSM",
+     "agents": ["csm-assistant"],
+     "workflows": ["crm.lookup", "docs.search"],
+     "documents": ["docs/**", { "path": "store/customers/{customer}/**", "access": "write" }]
+   }
+   // roles/admin.json
+   { "version": 1, "name": "Admin", "builder": true, "documents": ["store/**"] }
+   ```
+
+   `{customer}` is filled from the member's grants; no grant, no ref.
+   `builder: true` = the `project` ref (edit the program). The store
+   (`store/…`) is only ever reachable through document refs — an admin
+   role that must not see some data simply does not list it.
+
+2. **Membership** — either the host's own table/SSO claims, or the stock
+   one. Invite = one call, then send your own link:
+
+   ```ts
+   await catamorphic.core.memberships.grant({
+     identity: adminIdentity,            // a builder of the project
+     projectId: BRAIN, externalUserId: "alice",
+     roles: ["csm"], grants: { customer: ["acme", "globex"] },
+   });
+   ```
+
+   Same over HTTP for an admin UI: `PUT /api/projects/:id/memberships/alice`
+   `{ roles, grants }`; `GET …/roles` lists the role files (with per-file
+   validity); `DELETE …/memberships/alice` revokes.
+
+3. **Resolver** — one line after the host's own auth:
+
+   ```ts
+   app.register(catamorphicPlugin, {
+     core: catamorphic.core,
+     prefix: "/api",
+     // Browser sessions:
+     identity: async (req) => {
+       const u = await verifySession(req);
+       return u && catamorphic.core.memberships.identityFor({ tenantId: ORG, projectId: BRAIN, externalUserId: u.id });
+     },
+     // ...or members with a token the host issued (connect links, their own
+     // agent on the project MCP endpoint):
+     // identity: identityFromBearer(async (token) => { const u = await verifyToken(token); return u && catamorphic.core.memberships.identityFor({...}); }),
+   });
+   ```
+
+   Hosts that keep roles/grants themselves call `resolveRoles(core, {
+   tenantId, projectId, externalUserId, roles, grants })` instead.
+
+What a member can and cannot do, without further host code:
+
+- open chats on the agents their role names (own conversations only); the
+  agent's tools are narrowed to the role's workflows and `toolPolicies`,
+  in every harness; a role edit or revocation applies on the next request;
+- **not** open sessions on other agents or the host's personal ones, read
+  files, deploy, see secrets or other members' conversations;
+- admins (`builder: true`) do everything on the program; what they see of
+  the store is still exactly their document refs.
+
+Verify with four requests: admin → `GET /api/projects/:id/memberships`
+200; member → `POST /api/projects/:id/agent/sessions` with the role's
+agent 201 and with another agent 403; member → `GET …/memberships` 403;
+signed-out → 401.
+
 ## Rules that keep integrations correct
 
 - Tenant = host org id, upserted on first use. Never pre-register. External

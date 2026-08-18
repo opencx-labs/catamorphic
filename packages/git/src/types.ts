@@ -97,6 +97,15 @@ export interface ProjectRepo {
   listFiles(): Promise<string[]>;
   readAllFiles(): Promise<Record<string, string>>;
   readAllFilesAtRef(ref: string): Promise<Record<string, string>>;
+  /**
+   * The files under one directory prefix at a ref (e.g. `roles/`), without
+   * materializing the whole tree. `prefix` is a directory path with its
+   * trailing slash; results are keyed by full path.
+   */
+  readFilesAtRef(
+    ref: string,
+    opts: { prefix: string },
+  ): Promise<Record<string, string>>;
 
   commit(
     message: string,
