@@ -259,6 +259,10 @@ await catamorphic.core.memberships.grant({ identity: adminIdentity, projectId: B
 
 The plugin serves the same as HTTP for admin UIs: `GET /projects/:id/roles`, `GET|PUT|DELETE /projects/:id/memberships[/:externalUserId]` (`PUT` body `{ roles, grants? }`). Members arriving with a token the host issued (a connect link, their own agent on the MCP endpoint) use `identityFromBearer(verify)`: the host's `verify(token)` returns the identity (typically via `memberships.identityFor`) or `null`. Every request re-resolves, so revocation is immediate.
 
+### The project MCP endpoint: bring your own agent
+
+`POST /api/projects/:id/mcp` serves the caller's whole scope as one MCP server: the project's `mcpToolKinds` workflow tools (roster filtered to the caller's workflow refs), `documents_list/read/search/write/delete/history` (the documents surface, per the caller's document refs), `list_skills/read_skill`, and `ask_agent` (a synchronous turn with a project agent the caller may open sessions on). Claude Code, Cursor, or the host's own assistant connect with a host-issued token through `identityFromBearer`; the desktop's harnesses mount the same URL per session (`mcpServersForSession`). Being invited *is* receiving this URL.
+
 The generated HTTP client lives in `@catamorphic/api-client`; construct it with `createApiClient({ baseUrl, fetch })`.
 
 All execution uses one Runs route family:

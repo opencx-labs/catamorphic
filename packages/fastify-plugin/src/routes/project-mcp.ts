@@ -18,10 +18,15 @@ import {
   toolError,
   toolValue,
 } from "../mcp-shared.js";
+import { allowedWorkflowNames, surfaceTools } from "../project-mcp-surface.js";
 
 /**
- * MCP server for a project's AI-callable workflows (ADR 0042). One tool per
- * trigger binding of every kind the host registered under `mcpToolKinds`:
+ * MCP server for a project (ADR 0042, ADR 0055): the single "bring your own
+ * agent" door. Serves the project's AI-callable workflows — one tool per
+ * trigger binding of every kind the host registered under `mcpToolKinds` —
+ * beside the documents surface, skills and `ask_agent`
+ * (`project-mcp-surface.ts`), everything narrowed to the caller's scope by
+ * the core services themselves. Workflow tools:
  * the tool's input schema is the binding's frozen per-workflow schema (a
  * hole instantiated by the workflow's own input type), its metadata comes
  * from the binding's constant config, and calling it fires the trigger
@@ -66,11 +71,12 @@ export function registerProjectMcpRoutes(
 ) {
   app.post("/projects/:projectId/mcp", async (request, reply) => {
     const core = ctx.core;
-    if (!core || core.mcpToolKinds.length === 0) {
-      return reply.status(503).send({ error: "MCP tool kinds not configured" });
+    if (!core) {
+      return reply.status(503).send({ error: "Service not configured" });
     }
     const { projectId } = request.params as { projectId: string };
     const identity = resolveIdentity(request);
+    const surface = surfaceTools(core, identity, projectId);
 
     return handleMcpPost(reply, request.body, async (method, params) => {
       switch (method) {
@@ -79,8 +85,8 @@ export function registerProjectMcpRoutes(
             protocolVersion: negotiateProtocolVersion(params.protocolVersion),
             capabilities: { tools: { listChanged: false } },
             serverInfo: {
-              name: "catamorphic-workflows",
-              title: "Catamorphic workflow tools",
+              name: "catamorphic",
+              title: "Catamorphic project",
               version: "1.0.0",
             },
           };
@@ -89,7 +95,13 @@ export function registerProjectMcpRoutes(
         case "tools/list": {
           const tools = await loadProjectTools(core, identity, projectId);
           return {
-            tools: [...tools.map(toolDefinition), POLL_RUN_TOOL_DEFINITION],
+            tools: [
+              ...tools.map(toolDefinition),
+              ...(tools.length > 0 || core.mcpToolKinds.length > 0
+                ? [POLL_RUN_TOOL_DEFINITION]
+                : []),
+              ...surface.map((tool) => tool.definition),
+            ],
           };
         }
         case "resources/list":
@@ -104,6 +116,10 @@ export function registerProjectMcpRoutes(
             typeof params.arguments === "object" && params.arguments !== null
               ? (params.arguments as Record<string, unknown>)
               : {};
+          const surfaced = surface.find(
+            (tool) => tool.definition.name === name,
+          );
+          if (surfaced) return surfaced.call(args);
           return callTool(core, identity, projectId, name, args);
         }
         default:
@@ -124,11 +140,16 @@ async function loadProjectTools(
   projectId: string,
 ): Promise<ProjectTool[]> {
   const specs = new Map(core.mcpToolKinds.map((spec) => [spec.kind, spec]));
+  if (specs.size === 0) return [];
   const bindings = await core.triggers.list({ identity, projectId });
+  // A scoped caller sees only the workflows its scope resolves to (calls are
+  // re-checked at trigger time; this keeps the roster from enumerating).
+  const allowed = await allowedWorkflowNames(core, identity, projectId);
   const tools = new Map<string, ProjectTool>();
   for (const binding of bindings) {
     const spec = specs.get(binding.kind);
     if (!spec) continue;
+    if (allowed && !allowed.has(binding.workflowName)) continue;
     const metadata = spec.tool(binding.config);
     const name = metadata.name ?? binding.workflowName;
     const existing = tools.get(name);

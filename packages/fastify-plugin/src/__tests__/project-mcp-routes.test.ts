@@ -110,7 +110,7 @@ async function rpc(
 }
 
 describe("project workflow-tools MCP endpoint", () => {
-  it("answers initialize as the workflow-tools server", async () => {
+  it("answers initialize as the project server", async () => {
     const app = createTestApp({ core: fakeCore() as never });
     apps.push(app);
     const { result } = await rpc(app, "initialize", {
@@ -119,21 +119,18 @@ describe("project workflow-tools MCP endpoint", () => {
       clientInfo: { name: "test", version: "0" },
     });
     expect(result?.protocolVersion).toBe("2025-06-18");
-    expect(result?.serverInfo).toMatchObject({ name: "catamorphic-workflows" });
+    expect(result?.serverInfo).toMatchObject({ name: "catamorphic" });
     expect(result?.capabilities).toEqual({ tools: { listChanged: false } });
   });
 
-  it("returns 503 when the host registered no tool kinds", async () => {
+  it("serves without tool kinds: no workflow tools, no poll tool, the surface only", async () => {
+    // A host with no tool kinds still has a project surface (ADR 0055);
+    // this stub has none of documents/skills/agents either, so: nothing.
     const core = { ...fakeCore(), mcpToolKinds: [] };
     const app = createTestApp({ core: core as never });
     apps.push(app);
-    const response = await app.inject({
-      method: "POST",
-      url: MCP_URL,
-      headers: HEADERS,
-      payload: { jsonrpc: "2.0", id: 1, method: "tools/list" },
-    });
-    expect(response.statusCode).toBe(503);
+    const { result } = await rpc(app, "tools/list");
+    expect(result?.tools).toEqual([]);
   });
 
   it("serves one tool per binding plus the poll tool", async () => {
@@ -294,5 +291,215 @@ describe("project workflow-tools MCP endpoint", () => {
       arguments: {},
     });
     expect(result?.isError).toBe(true);
+  });
+});
+
+describe("project MCP surface (ADR 0055): documents, skills, ask_agent", () => {
+  const admin = {
+    "x-catamorphic-tenant-id": "tenant-1",
+    "x-external-user-id": "admin",
+    "content-type": "application/json",
+  };
+
+  function surfaceCore(overrides: Record<string, unknown> = {}) {
+    const calls: Array<{ op: string; args: unknown }> = [];
+    const record =
+      (op: string, result: unknown) =>
+      async (...args: unknown[]) => {
+        calls.push({ op, args: args.length === 1 ? args[0] : args });
+        return result;
+      };
+    const core = {
+      ...fakeCore(),
+      db: {},
+      appPolicies: { get: async () => null },
+      documents: {
+        list: record("documents.list", [
+          {
+            path: "docs/handbook.md",
+            source: "program",
+            contentType: "text/markdown",
+            size: -1,
+          },
+        ]),
+        read: record("documents.read", {
+          path: "docs/handbook.md",
+          source: "program",
+          contentType: "text/markdown",
+          size: 12,
+          text: "# Handbook",
+          bytes: new Uint8Array(),
+        }),
+        search: record("documents.search", [
+          {
+            path: "docs/handbook.md",
+            source: "program",
+            lines: [{ line: 3, text: "refunds" }],
+          },
+        ]),
+        write: record("documents.write", {
+          path: "store/x.md",
+          source: "store",
+          version: 1,
+        }),
+        delete: record("documents.delete", { version: 2 }),
+        history: record("documents.history", []),
+      },
+      skills: {
+        listShared: record("skills.listShared", [
+          {
+            name: "writing-briefs",
+            title: "Writing briefs",
+            description: "How we brief",
+            path: ".agents/skills/writing-briefs/SKILL.md",
+            source: "project",
+          },
+        ]),
+        readShared: record("skills.readShared", {
+          skill: {
+            name: "writing-briefs",
+            title: "Writing briefs",
+            description: "",
+            path: "x",
+            source: "project",
+          },
+          content: "# Briefs",
+        }),
+      },
+      agentSessions: {
+        create: record("sessions.create", { id: "session-1" }),
+        sendMessage: record("sessions.sendMessage", {
+          content: "Here is your brief.",
+        }),
+      },
+      ...overrides,
+    };
+    return { core, calls };
+  }
+
+  it("lists the surface tools beside the workflow tools, with read-only annotations", async () => {
+    const { core } = surfaceCore();
+    const app = createTestApp({ core: core as never });
+    apps.push(app);
+    const { result } = await rpc(app, "tools/list");
+    const tools = result?.tools as Array<Record<string, unknown>>;
+    const names = tools.map((tool) => tool.name);
+    expect(names).toEqual([
+      "lookupWeather",
+      "daily_digest",
+      "catamorphic_poll_run",
+      "documents_list",
+      "documents_read",
+      "documents_search",
+      "documents_write",
+      "documents_delete",
+      "documents_history",
+      "list_skills",
+      "read_skill",
+      "ask_agent",
+    ]);
+    expect(tools.find((t) => t.name === "documents_read")?.annotations).toEqual(
+      { readOnlyHint: true },
+    );
+    expect(
+      tools.find((t) => t.name === "documents_write")?.annotations,
+    ).toBeUndefined();
+  });
+
+  it("routes surface calls to the core services with the request identity", async () => {
+    const { core, calls } = surfaceCore();
+    const app = createTestApp({ core: core as never });
+    apps.push(app);
+    const read = await rpc(app, "tools/call", {
+      name: "documents_read",
+      arguments: { path: "docs/handbook.md" },
+    });
+    expect(read.result?.structuredContent).toMatchObject({
+      path: "docs/handbook.md",
+      text: "# Handbook",
+    });
+    expect(
+      (read.result?.structuredContent as { bytes?: unknown }).bytes,
+    ).toBeUndefined();
+    expect(calls.at(-1)).toMatchObject({
+      op: "documents.read",
+      args: {
+        path: "docs/handbook.md",
+        identity: { externalUserId: "user-1" },
+      },
+    });
+
+    const search = await rpc(app, "tools/call", {
+      name: "documents_search",
+      arguments: { query: "refunds", mode: "text", prefix: "docs" },
+    });
+    expect(calls.at(-1)).toMatchObject({
+      op: "documents.search",
+      args: { query: "refunds", mode: "text", prefix: "docs" },
+    });
+    expect(search.result?.isError).toBeUndefined();
+
+    await rpc(app, "tools/call", {
+      name: "documents_write",
+      arguments: { path: "store/x.md", text: "hi", ifVersion: 0 },
+    });
+    expect(calls.at(-1)).toMatchObject({
+      op: "documents.write",
+      args: { path: "store/x.md", content: "hi", ifVersion: 0 },
+    });
+
+    const skill = await rpc(app, "tools/call", {
+      name: "read_skill",
+      arguments: { name: "writing-briefs" },
+    });
+    expect(skill.result?.structuredContent).toMatchObject({
+      name: "writing-briefs",
+      content: "# Briefs",
+    });
+
+    const ask = await rpc(app, "tools/call", {
+      name: "ask_agent",
+      arguments: { agent: "csm-assistant", message: "brief acme" },
+    });
+    expect(ask.result?.structuredContent).toEqual({
+      sessionId: "session-1",
+      reply: "Here is your brief.",
+    });
+    expect(calls.at(-2)).toMatchObject({
+      op: "sessions.create",
+      args: expect.arrayContaining([
+        expect.objectContaining({
+          agentId: `project:${PROJECT_ID}:csm-assistant`,
+        }),
+      ]),
+    });
+  });
+
+  it("scoped callers see only their workflows on the roster", async () => {
+    // A viewer whose scope resolves to lookupWeather only. resolveScope reads
+    // the workflow refs; no DB round trip is needed for bare workflow refs.
+    const { core } = surfaceCore();
+    const viewerIdentity = {
+      tenantId: "tenant-1",
+      externalUserId: "viewer",
+      scope: [
+        { kind: "workflow", projectId: PROJECT_ID, name: "lookupWeather" },
+      ],
+    };
+    const app = createTestApp({
+      core: core as never,
+      identity: () => viewerIdentity as never,
+    });
+    apps.push(app);
+    const { result } = await rpc(app, "tools/list");
+    const names = (result?.tools as Array<Record<string, unknown>>).map(
+      (t) => t.name,
+    );
+    expect(names).toContain("lookupWeather");
+    expect(names).not.toContain("daily_digest");
+    // Documents tools stay (the service narrows them per call); skills need
+    // an agent/document/workflow ref — a workflow ref qualifies.
+    expect(names).toContain("documents_read");
+    expect(names).toContain("list_skills");
   });
 });

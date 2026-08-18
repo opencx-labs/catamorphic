@@ -410,12 +410,28 @@ createCatamorphic({
 });
 ```
 
-With `mcpToolKinds` registered, `POST /api/projects/:id/mcp` is a stateless
-MCP server: one tool per binding (schema from code, description from
-config), `tools/call` fires sync-until-first-wait and returns the output
-inline or `{runId}` for the `catamorphic_poll_run` tool. Point any MCP
-client at it with the host's identity headers; coding-agent harnesses
-accept it per session via `mcpServersForSession`.
+`POST /api/projects/:id/mcp` is the project's one MCP server (ADR 0042,
+ADR 0055) — the "bring your own agent" door. It serves, all narrowed to the
+caller's scope by the core services themselves:
+
+- one tool per `mcpToolKinds` binding (schema from code, description from
+  config); `tools/call` fires sync-until-first-wait and returns the output
+  inline or `{runId}` for `catamorphic_poll_run`; a scoped caller's roster
+  lists only the workflows its refs resolve to;
+- `documents_list / read / search / write / delete / history` over the
+  project's path namespace (program + `store/…`), per the caller's document
+  refs;
+- `list_skills / read_skill` for anyone who may use the project;
+- `ask_agent` — a synchronous turn with a project agent the caller may open
+  sessions on (`{ agent, message, sessionId? }` → `{ sessionId, reply }`).
+
+Point any MCP client (Claude Code, Cursor, the host's own assistant) at it
+with a token the host issued (`identityFromBearer`) — that URL plus a token
+is what an invite hands a member whose agent is not the desktop's.
+Coding-agent harnesses mount it per session via `mcpServersForSession`; a
+hosting backend mints the per-session credentials from
+`ExtraToolContext.caller` so the endpoint sees the same identity the chat
+does.
 
 ## Validating projects outside the agent (local editors, CI)
 

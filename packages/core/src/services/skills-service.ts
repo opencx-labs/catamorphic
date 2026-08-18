@@ -2,6 +2,7 @@ import type { DB } from "@catamorphic/db";
 import type { ProjectManager, ProjectRepo } from "@catamorphic/git";
 import type { Kysely } from "kysely";
 import type { Identity } from "../identity.js";
+import { readProgramFiles, withProgram } from "./program-reader.js";
 import { ProjectNotFoundError } from "./projects-service.js";
 
 /**
@@ -99,32 +100,66 @@ export class SkillsService {
     return content === undefined ? null : { skill: host, content };
   }
 
+  /**
+   * The skills as shared (ADR 0055): the program at origin main plus the
+   * host tier, read without a caller working copy — what the project MCP
+   * endpoint serves to members whose only relationship to the project is
+   * using it. Callers gate access (builder or agent ref) before calling.
+   */
+  async listShared(
+    identity: Identity,
+    projectId: string,
+  ): Promise<ProjectSkill[]> {
+    await this.requireProject(identity, projectId);
+    const files = await withProgram(
+      this.projectManager,
+      identity.tenantId,
+      projectId,
+      (repo, ref) => readProgramFiles(repo, ref, `${SKILLS_DIR}/`),
+    );
+    const projectSkills = skillsFromFiles(files);
+    const names = new Set(projectSkills.map((skill) => skill.name));
+    return [
+      ...projectSkills,
+      ...this.hostSkills().filter((skill) => !names.has(skill.name)),
+    ].sort((a, b) => a.name.localeCompare(b.name));
+  }
+
+  /** One skill's content, as shared (see {@link listShared}). */
+  async readShared(
+    identity: Identity,
+    projectId: string,
+    name: string,
+  ): Promise<{ skill: ProjectSkill; content: string } | null> {
+    await this.requireProject(identity, projectId);
+    const files = await withProgram(
+      this.projectManager,
+      identity.tenantId,
+      projectId,
+      (repo, ref) => readProgramFiles(repo, ref, `${SKILLS_DIR}/`),
+    );
+    const skill = skillsFromFiles(files).find((entry) => entry.name === name);
+    if (skill) {
+      const content = files[skill.path];
+      if (content !== undefined) return { skill, content };
+    }
+    const host = this.hostSkills().find((entry) => entry.name === name);
+    if (!host) return null;
+    const content = this.opts.hostSkills?.[host.path];
+    return content === undefined ? null : { skill: host, content };
+  }
+
   private async listProjectSkills(repo: ProjectRepo): Promise<ProjectSkill[]> {
     const files = await repo.listFiles();
     const skillFiles = files.filter(
       (file) => file.startsWith(`${SKILLS_DIR}/`) && file.endsWith("/SKILL.md"),
     );
-
-    const skills = await Promise.all(
-      skillFiles.map(async (file) => {
-        const source = await repo.readFile(file);
-        const frontmatter = parseSkillFrontmatter(source);
-        const dirName = file.slice(
-          SKILLS_DIR.length + 1,
-          file.length - "/SKILL.md".length,
-        );
-        const name = frontmatter.name ?? dirName;
-        return {
-          name,
-          title: frontmatter.title ?? humanizeSkillName(name),
-          description: frontmatter.description ?? "",
-          path: file,
-          source: "project" as const,
-        };
-      }),
+    const contents = await Promise.all(
+      skillFiles.map(
+        async (file) => [file, await repo.readFile(file)] as const,
+      ),
     );
-
-    return skills.sort((a, b) => a.name.localeCompare(b.name));
+    return skillsFromFiles(Object.fromEntries(contents));
   }
 
   private hostSkills(): ProjectSkill[] {
@@ -173,6 +208,31 @@ export class SkillsService {
       await repo.dispose();
     }
   }
+}
+
+/** `.agents/skills/<name>/SKILL.md` files → skills, sorted by name. */
+function skillsFromFiles(files: Record<string, string>): ProjectSkill[] {
+  return Object.entries(files)
+    .filter(
+      ([file]) =>
+        file.startsWith(`${SKILLS_DIR}/`) && file.endsWith("/SKILL.md"),
+    )
+    .map(([file, source]) => {
+      const frontmatter = parseSkillFrontmatter(source);
+      const dirName = file.slice(
+        SKILLS_DIR.length + 1,
+        file.length - "/SKILL.md".length,
+      );
+      const name = frontmatter.name ?? dirName;
+      return {
+        name,
+        title: frontmatter.title ?? humanizeSkillName(name),
+        description: frontmatter.description ?? "",
+        path: file,
+        source: "project" as const,
+      };
+    })
+    .sort((a, b) => a.name.localeCompare(b.name));
 }
 
 /**
