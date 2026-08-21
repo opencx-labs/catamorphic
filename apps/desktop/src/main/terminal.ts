@@ -4,7 +4,7 @@ import path from "node:path";
 import { type IPty, spawn as spawnPty } from "@lydell/node-pty";
 import { BrowserWindow, ipcMain, type WebContents } from "electron";
 import type { ServerState } from "./ipc.js";
-import { shellIntegrationEnv } from "./shell-integration.js";
+import { shellBinShimDir, shellIntegrationEnv } from "./shell-integration.js";
 import { scanOsc133 } from "./terminal-text.js";
 
 /**
@@ -119,7 +119,15 @@ export interface AgentTerminals {
 /** Closed-session scrollback kept for Cmd+Shift+T restores. */
 const MORGUE_CAP = 10;
 
-export function registerTerminalSupport(state: ServerState): {
+export function registerTerminalSupport(
+  state: ServerState,
+  /**
+   * Extra env for AGENT terminals, resolved at spawn (late-bound: the
+   * agent bridge that provides it registers after terminal support).
+   * Today: the `open`-shim hook URL + shim bin dir.
+   */
+  agentEnv?: (projectId: string) => Record<string, string>,
+): {
   dispose(): void;
   agentTerminals: AgentTerminals;
 } {
@@ -215,6 +223,13 @@ export function registerTerminalSupport(state: ServerState): {
     const integrationEnv = input.agent
       ? await shellIntegrationEnv(shell)
       : null;
+    // The `open` shim (URLs land as in-app tabs) rides the same
+    // agent-only integration: the zsh hooks put CATAMORPHIC_BIN first on
+    // PATH after the user's profiles ran.
+    const shimBin = input.agent ? await shellBinShimDir() : null;
+    const agentExtraEnv = input.agent
+      ? (agentEnv?.(input.agent.projectId) ?? {})
+      : {};
     const pty = spawnPty(
       shell,
       // A login shell, like Terminal.app — the user's PATH and prompt
@@ -230,6 +245,8 @@ export function registerTerminalSupport(state: ServerState): {
           TERM: "xterm-256color",
           COLORTERM: "truecolor",
           ...integrationEnv,
+          ...(shimBin ? { CATAMORPHIC_BIN: shimBin } : {}),
+          ...agentExtraEnv,
         },
       },
     );

@@ -1,3 +1,5 @@
+import crypto from "node:crypto";
+import http from "node:http";
 import type { ElicitRequest, ElicitResult } from "@catamorphic/mcp";
 import type {
   ToolPermissionDecision,
@@ -319,6 +321,8 @@ const GUEST_HELPERS = `
 
 export function registerAgentBridge(agentTerminals: AgentTerminals): {
   bridge: WorkspaceBridge;
+  /** Env for an agent terminal so its `open` shim reaches this app. */
+  openHookEnv(projectId: string): Record<string, string>;
   dispose(): void;
 } {
   // --- renderer RPC ---
@@ -827,9 +831,57 @@ export function registerAgentBridge(agentTerminals: AgentTerminals): {
     },
   };
 
+  // --- the terminal `open` hook ---
+  // A loopback endpoint the shell shim posts URLs to (see
+  // shell-integration.ts): `open https://…` in an agent terminal becomes
+  // the same in-app open as the open_surface tool — browser tab in front,
+  // the chat stepping down to its floating dock. Token-pathed so nothing
+  // else on the machine can drive it.
+  const hookToken = crypto.randomBytes(16).toString("hex");
+  let hookPort: number | null = null;
+  const hookServer = http.createServer((request, response) => {
+    const finish = (status: number, body: string) => {
+      response.writeHead(status, { "content-type": "text/plain" });
+      response.end(body);
+    };
+    const url = new URL(request.url ?? "/", "http://127.0.0.1");
+    if (request.method !== "POST" || url.pathname !== `/${hookToken}/open`) {
+      finish(404, "not found");
+      return;
+    }
+    const projectId = url.searchParams.get("projectId") ?? "";
+    let body = "";
+    request.on("data", (chunk: Buffer) => {
+      if (body.length < 16_384) body += chunk.toString();
+    });
+    request.on("end", () => {
+      const target = new URLSearchParams(body).get("url") ?? "";
+      if (!/^https?:\/\//.test(target) || !projectId) {
+        finish(400, "bad request");
+        return;
+      }
+      bridge
+        .openTarget(projectId, "", target)
+        .then(() => finish(200, "ok"))
+        .catch(() => finish(502, "no window"));
+    });
+  });
+  hookServer.listen(0, "127.0.0.1", () => {
+    const address = hookServer.address();
+    if (address && typeof address === "object") hookPort = address.port;
+  });
+
   return {
     bridge,
+    /** Env for an agent terminal so its `open` shim reaches this app. */
+    openHookEnv(projectId: string): Record<string, string> {
+      if (hookPort === null) return {};
+      return {
+        CATAMORPHIC_OPEN_HOOK: `http://127.0.0.1:${hookPort}/${hookToken}/open?projectId=${encodeURIComponent(projectId)}`,
+      };
+    },
     dispose() {
+      hookServer.close();
       pending.clear();
       takenOver.clear();
       terminalKeys.clear();
