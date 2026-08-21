@@ -28,6 +28,16 @@ const KIND_SIGNATURES: Array<{ kind: AgentErrorKind; pattern: RegExp }> = [
   { kind: "auth", pattern: /\binvalid api key\b/i },
   { kind: "auth", pattern: /\bno auth credentials\b/i },
   { kind: "auth", pattern: /\bunauthorized\b/i },
+  // Claude Code / Codex account sessions: the CLI's OAuth access token
+  // expired (≈8h life) and the refresh failed — e.g. after a long sleep,
+  // or another client sharing the credentials rotated the refresh token.
+  { kind: "auth", pattern: /\bfailed to authenticate\b/i },
+  {
+    kind: "auth",
+    pattern: /\boauth\b.{0,80}\b(expired|revoked|invalid|refresh)/i,
+  },
+  { kind: "auth", pattern: /\b(token|session)\b.{0,40}\bexpired\b/i },
+  { kind: "auth", pattern: /\bplease run \/login\b/i },
   // Mid-conversation model switches: reasoning/thinking output is signed
   // by the producing model; another model rejects the history.
   { kind: "model_incompat", pattern: /\bsignature\b/i },
@@ -69,8 +79,9 @@ export function rewriteAgentError(
     case "auth":
       return (
         `${providerLabel} rejected the credentials of the "${agentName}" agent ` +
-        `${said}. The key is likely invalid, expired, or revoked. Reconnect or ` +
-        `update it in Settings → Agents, or switch this chat to another agent.`
+        `${said}. The session or key has likely expired or been revoked. ` +
+        `Reconnect below or update it in Settings → Agents — your message ` +
+        `retries by itself once you're back. Or switch this chat to another agent.`
       );
     case "rate_limit":
       return (

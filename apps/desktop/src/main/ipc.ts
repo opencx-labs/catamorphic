@@ -1,4 +1,4 @@
-import { spawn } from "node:child_process";
+import { execFileSync, spawn } from "node:child_process";
 import fs from "node:fs";
 import { createRequire } from "node:module";
 import path from "node:path";
@@ -673,25 +673,102 @@ export function registerIpcHandlers(
     return dir;
   };
 
+  /**
+   * On macOS, Claude Code's default (~/.claude) login stores its OAuth
+   * credentials in the KEYCHAIN — there is no .credentials.json to stat.
+   * The fingerprint doubles as a change detector: the terminal /login flow
+   * gives no exit signal, so completion is "the credentials changed".
+   */
+  const claudeKeychainFingerprint = (): string | null => {
+    if (process.platform !== "darwin") return null;
+    try {
+      const raw = execFileSync(
+        "security",
+        ["find-generic-password", "-s", "Claude Code-credentials", "-w"],
+        { encoding: "utf-8", stdio: ["ignore", "pipe", "ignore"] },
+      );
+      const oauth = (
+        JSON.parse(raw) as { claudeAiOauth?: { expiresAt?: number } }
+      ).claudeAiOauth;
+      return `keychain:${oauth?.expiresAt ?? raw.length}`;
+    } catch {
+      return null;
+    }
+  };
+
+  /** Where an agent's CLI credentials live, and a change fingerprint. */
+  const agentCredentials = (agent: {
+    harness: string;
+    auth: string;
+    id: string;
+  }): { present: boolean; fingerprint: string } => {
+    const home =
+      agent.auth === "local"
+        ? agent.harness === "codex"
+          ? path.join(app.getPath("home"), ".codex")
+          : path.join(app.getPath("home"), ".claude")
+        : path.join(paths.agentHomesDir, agent.id);
+    const file =
+      agent.harness === "codex"
+        ? path.join(home, "auth.json")
+        : path.join(home, ".credentials.json");
+    try {
+      const stat = fs.statSync(file);
+      return {
+        present: true,
+        fingerprint: `file:${stat.mtimeMs}:${stat.size}`,
+      };
+    } catch {
+      // No file — the macOS keychain is the other place Claude Code keeps
+      // the default account's session.
+      if (agent.harness !== "codex" && agent.auth === "local") {
+        const keychain = claudeKeychainFingerprint();
+        if (keychain) return { present: true, fingerprint: keychain };
+      }
+      return { present: false, fingerprint: "absent" };
+    }
+  };
+
   ipcMain.handle("catamorphic:agent-login-status", (event, id: string) => {
     const agent = storesFor(event).agents.get(id);
     if (!agent) return false;
     if (agent.auth === "api-key" || agent.harness === "ai-sdk") {
       return agent.apiKey !== null;
     }
-    // `local` reads the machine's own CLI home; `account` the agent's.
-    const home =
-      agent.auth === "local"
-        ? agent.harness === "codex"
-          ? path.join(app.getPath("home"), ".codex")
-          : path.join(app.getPath("home"), ".claude")
-        : path.join(paths.agentHomesDir, id);
-    const credentialFiles =
-      agent.harness === "codex"
-        ? [path.join(home, "auth.json")]
-        : [path.join(home, ".credentials.json")];
-    return credentialFiles.some((file) => fs.existsSync(file));
+    return agentCredentials(agent).present;
   });
+
+  // One watcher per agent: a repeated login replaces the previous poll.
+  const loginWatchers = new Map<string, ReturnType<typeof setInterval>>();
+  const watchForLoginCompletion = (agent: {
+    harness: string;
+    auth: string;
+    id: string;
+  }) => {
+    const before = agentCredentials(agent).fingerprint;
+    const existing = loginWatchers.get(agent.id);
+    if (existing) clearInterval(existing);
+    const startedAt = Date.now();
+    const timer = setInterval(() => {
+      // The terminal login gives no exit signal; fresh credentials are the
+      // signal. Ten minutes with no change = the user walked away; stop
+      // quietly (nothing to broadcast — no login happened).
+      if (Date.now() - startedAt > 10 * 60 * 1000) {
+        clearInterval(timer);
+        loginWatchers.delete(agent.id);
+        return;
+      }
+      const now = agentCredentials(agent);
+      if (!now.present || now.fingerprint === before) return;
+      clearInterval(timer);
+      loginWatchers.delete(agent.id);
+      state.broadcast("catamorphic:agent-login-finished", {
+        agentId: agent.id,
+        ok: true,
+      });
+    }, 2000);
+    loginWatchers.set(agent.id, timer);
+  };
 
   ipcMain.handle("catamorphic:agent-login", async (event, id: string) => {
     const store = storesFor(event).agents;
@@ -800,6 +877,10 @@ export function registerIpcHandlers(
           { mode: 0o755 },
         );
         spawn("open", [script], { stdio: "ignore" });
+        // No process to wait on (`open` detaches): completion is detected
+        // by the credentials changing, which also fires the dock's
+        // auto-retry of the failed turn.
+        watchForLoginCompletion(agent);
         return { started: true, command };
       } catch (cause) {
         console.warn("[desktop] Failed to open the sign-in terminal:", cause);

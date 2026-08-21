@@ -100,3 +100,19 @@
   (f) proposals: PR reviews rendered natively; a "propose this edit" action
   in the desktop editor for program files in remote projects; (g) public
   publications for apps (today: documents only).
+- **Provider auth health, before the send fails (t3-code-inspired).** t3
+  Code probes each provider in the background (`claude auth status`, a
+  never-yielding Claude Agent SDK session that reads account/subscription
+  data without an API call) and shows a dismissible "X is unauthenticated
+  — sign in" banner over the chat. We now classify OAuth-expiry turn
+  failures and auto-retry after re-login, but we only learn AT send time.
+  Adopt the probe: check on app focus/resume + powerMonitor wake (the
+  laptop-lid case), read the keychain/file expiresAt where cheap, and
+  surface a quiet banner with the same one-click re-login. See
+  memory reference_t3_code.md; probe pattern in t3's
+  apps/server/src/provider/Layers/ClaudeProvider.ts.
+- **Remote machines for agents (t3-code-inspired).** t3 runs agents on
+  preconfigured remote environments over SSH (packages/ssh: auth,
+  command, tunnel) and tailscale, with pairing-link auth for its
+  web/mobile clients. When remote agent usage solidifies (self-hostable
+  server vision), mine those packages for the transport/auth shapes.

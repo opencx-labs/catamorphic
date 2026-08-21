@@ -2662,3 +2662,36 @@ Patterned on what best-in-class palettes converged on (Chrome omnibox
   entrance transition in reverse before unmounting (it used to blink
   out), and sent pills in the timeline preview on hover exactly like
   composer pills — one `ContextPill` everywhere.
+
+### 2026-08-21 — Auth failures become one-click recoveries
+
+- **"OAuth session expired" is an auth error, not a shrug.** Claude
+  Code's account session lives ~8h (macOS: in the KEYCHAIN under
+  "Claude Code-credentials", not ~/.claude/.credentials.json); after a
+  long sleep the refresh can fail — the SDK then says "Failed to
+  authenticate: OAuth session expired and could not be refreshed",
+  which our classifier didn't recognize, so the chat showed a dead-end
+  error with no action. classifyAgentError now maps CLI OAuth phrasing
+  (failed to authenticate / oauth…expired…refresh / session expired /
+  please run /login) to kind "auth": the message is rewritten to say
+  what happened and the error card offers Re-login.
+- **Re-login finishes itself.** The claude-code login is a Terminal
+  hand-off (`claude /login`) with no exit signal, so the dock's
+  auto-retry-after-reconnect never fired for it. Login now snapshots a
+  credential fingerprint (file mtime/size, or the keychain entry's
+  expiresAt on macOS) and polls for a change; fresh credentials
+  broadcast agent-login-finished and the failed turn retries by itself
+  — the user already said what they wanted. agent-login-status also
+  consults the keychain, so a logged-in Mac no longer reads as logged
+  out.
+- **What does NOT block a send:** MCP connector failures. The pool
+  catches connect errors and the turn proceeds without that server's
+  tools; connector reauth stays in Settings → Connections and is only
+  worth prompting when a tool of that connector is actually wanted.
+- **The code-copy step isn't ours.** The paste-a-code dance in
+  `claude /login` is Anthropic's own console OAuth flow; t3 Code (and
+  opencode) depend on the same CLI flow — nobody has in-app Anthropic
+  OAuth. Our job is launching it, detecting completion, and retrying —
+  which is now the whole loop. t3's provider-probe pattern (know you're
+  unauthenticated BEFORE the send) is recorded in TODO.md as the next
+  step.
