@@ -1656,13 +1656,15 @@ export class AgentSessionsService {
   ): Promise<void> {
     const paths = skillPaths.map(shellQuote).join(" ");
     const command = [
-      `cd ${shellQuote(this.projectDir())}`,
       `git add -- ${paths}`,
       `git -c user.name=catamorphic -c user.email=agent@catamorphic.dev commit -m catamorphic-workflow-skills --quiet -- ${paths}`,
     ].join(" && ");
+    // cwd via ExecOpts: see syncSandboxChanges — a `cd /workspace/...`
+    // embedded in the command breaks providers without a mounted root.
     const result = await this.sandboxProvider.executeCommand(
       sandboxProviderId,
       command,
+      { cwd: this.projectDir() },
     );
     if (result.exitCode !== 0) {
       throw new Error(`Failed to baseline workflow skills: ${result.result}`);
@@ -1677,7 +1679,6 @@ export class AgentSessionsService {
   private async ensureGitBaseline(sandboxProviderId: string): Promise<void> {
     const dir = this.projectDir();
     const command = [
-      `cd ${shellQuote(dir)}`,
       "(git rev-parse --git-dir >/dev/null 2>&1 || git init -b main >/dev/null)",
       "git add -A",
       `(git -c user.name=catamorphic -c user.email=agent@catamorphic.dev commit -m baseline --quiet || true)`,
@@ -1685,6 +1686,7 @@ export class AgentSessionsService {
     const result = await this.sandboxProvider.executeCommand(
       sandboxProviderId,
       command,
+      { cwd: dir },
     );
     if (result.exitCode !== 0) {
       throw new Error(

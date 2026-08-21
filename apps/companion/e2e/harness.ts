@@ -73,15 +73,36 @@ export interface CompanionHandle {
 }
 
 export async function launchCompanion(
-  opts: { env?: Record<string, string> } = {},
+  opts: {
+    env?: Record<string, string>;
+    /**
+     * Backend to spawn (given the API port). Default: the scripted fake
+     * (scripts/dev-server.mjs). The stock-server suite passes the real
+     * apps/server here.
+     */
+    backend?: (apiPort: number) => {
+      command: string;
+      args: string[];
+      cwd: string;
+      env?: Record<string, string | undefined>;
+    };
+    /** Redeemable connect link for the suite; default: the fake's invite. */
+    mintLink?: (apiBase: string) => Promise<string>;
+  } = {},
 ): Promise<CompanionHandle> {
   const chrome = chromeBinary();
   if (!chrome) throw new Error("No Chrome/Chromium binary found for e2e.");
 
   const apiPort = await freePort();
-  const server = spawn("node", ["scripts/dev-server.mjs"], {
+  const backend = opts.backend?.(apiPort) ?? {
+    command: "node",
+    args: ["scripts/dev-server.mjs"],
     cwd: APP_DIR,
-    env: { ...process.env, PORT: String(apiPort), ...opts.env },
+    env: { PORT: String(apiPort), ...opts.env },
+  };
+  const server = spawn(backend.command, backend.args, {
+    cwd: backend.cwd,
+    env: { ...process.env, ...backend.env },
     stdio: ["ignore", "pipe", "pipe"],
   });
   const previewPort = await freePort();
@@ -146,10 +167,13 @@ export async function launchCompanion(
   };
 
   try {
-    await waitForHttp(
-      `http://127.0.0.1:${apiPort}/api/me`.replace("/api/me", "/api/me"),
-      15_000,
-    ).catch(() => {});
+    const apiBase = `http://127.0.0.1:${apiPort}/api`;
+    // Slow backends (the stock server boots PGlite + migrations) get a
+    // generous window; the poll accepts any HTTP answer, 401 included.
+    await waitForHttp(`${apiBase}/me`, 90_000);
+    const connectLink =
+      (await opts.mintLink?.(apiBase)) ??
+      `catamorphic://connect?server=${encodeURIComponent(apiBase)}&token=invite-token&project=11111111-1111-4111-8111-111111111111&name=Acme%20Brain`;
     const ws = await connectCdp(chromeChild, cdpPort, appUrl);
     const client = await createClient(ws);
     // Phone-ish metrics so layout and touch affordances match the target.
@@ -163,13 +187,12 @@ export async function launchCompanion(
       timeoutMs: 20_000,
       label: "app shell rendered",
     });
-    const apiBase = `http://127.0.0.1:${apiPort}/api`;
     return {
       eval: client.eval,
       waitFor: client.waitFor,
       screenshot: client.screenshot,
       apiBase,
-      connectLink: `catamorphic://connect?server=${encodeURIComponent(apiBase)}&token=invite-token&project=11111111-1111-4111-8111-111111111111&name=Acme%20Brain`,
+      connectLink,
       stop: async () => {
         ws.close();
         await stopAll();

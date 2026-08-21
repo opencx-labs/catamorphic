@@ -71,3 +71,4 @@ Settled design decisions live here as short Architecture Decision Records. They 
 | [0056](0056-agent-configuration.md) | Agent configuration: one surface, layered defaults, enforced capabilities | Accepted |
 | [0057](0057-agent-usage-and-cost.md) | Agent usage and cost: transcript-scanned page, per-turn usage in metadata | Accepted |
 | [0058](0058-companion-pwa.md) | The companion PWA: chats on the go, wrapper-ready; tool asks answerable over HTTP | Accepted |
+| [0059](0059-stock-server.md) | The stock server: zero-dependency, disk-backed, invite-first; mDNS LAN discovery | Accepted |

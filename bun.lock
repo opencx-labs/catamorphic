@@ -106,6 +106,28 @@
         "vite": "^8.1.4",
       },
     },
+    "apps/server": {
+      "name": "catamorphic-server",
+      "version": "0.0.1",
+      "dependencies": {
+        "@ai-sdk/anthropic": "^4.0.18",
+        "@ai-sdk/openai": "^4.0.17",
+        "@catamorphic/ai-sdk": "workspace:*",
+        "@catamorphic/claude-code": "workspace:*",
+        "@catamorphic/core": "workspace:*",
+        "@catamorphic/db": "workspace:*",
+        "@catamorphic/fastify-plugin": "workspace:*",
+        "@catamorphic/local-process": "workspace:*",
+        "@catamorphic/sandbox": "workspace:*",
+        "@catamorphic/server-sdk": "workspace:*",
+        "@electric-sql/pglite": "^0.5.4",
+        "fastify": "^5.10.0",
+        "kysely": "^0.29.3",
+      },
+      "devDependencies": {
+        "@types/node": "^26.1.1",
+      },
+    },
     "packages/ai-sdk": {
       "name": "@catamorphic/ai-sdk",
       "version": "0.0.1",
@@ -1610,6 +1632,8 @@
     "catamorphic-companion": ["catamorphic-companion@workspace:apps/companion"],
 
     "catamorphic-desktop": ["catamorphic-desktop@workspace:apps/desktop"],
+
+    "catamorphic-server": ["catamorphic-server@workspace:apps/server"],
 
     "ccount": ["ccount@2.0.1", "", {}, "sha512-eyrF0jiFpY+3drT6383f1qhkbGsLSifNAjA61IUjZjmLCWjItY6LB9ft9YhoDgwfmclB2zhu51Lc7+95b8NRAg=="],
 

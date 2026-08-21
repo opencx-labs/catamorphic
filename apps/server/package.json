@@ -1,0 +1,31 @@
+{
+  "name": "catamorphic-server",
+  "version": "0.0.1",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "bun --watch src/index.ts",
+    "start": "bun src/index.ts",
+    "build": "tsc --project tsconfig.json --noEmit",
+    "typecheck": "tsgo --project ./tsconfig.json",
+    "test": "vitest run --config ../../vitest.config.ts"
+  },
+  "dependencies": {
+    "@ai-sdk/anthropic": "^4.0.18",
+    "@ai-sdk/openai": "^4.0.17",
+    "@catamorphic/ai-sdk": "workspace:*",
+    "@catamorphic/claude-code": "workspace:*",
+    "@catamorphic/core": "workspace:*",
+    "@catamorphic/db": "workspace:*",
+    "@catamorphic/fastify-plugin": "workspace:*",
+    "@catamorphic/local-process": "workspace:*",
+    "@catamorphic/sandbox": "workspace:*",
+    "@catamorphic/server-sdk": "workspace:*",
+    "@electric-sql/pglite": "^0.5.4",
+    "fastify": "^5.10.0",
+    "kysely": "^0.29.3"
+  },
+  "devDependencies": {
+    "@types/node": "^26.1.1"
+  }
+}

@@ -4,6 +4,7 @@ import {
   useToolPermissions,
 } from "@catamorphic/react";
 import type { QueryClient } from "@tanstack/react-query";
+import { useQuery } from "@tanstack/react-query";
 import { ArrowUp, ListPlus, Square, X, Zap } from "lucide-react";
 import { type FormEvent, useState } from "react";
 import {
@@ -17,7 +18,7 @@ import {
 import { ToolPermissionCard } from "../components/catamorphic/tool-permission-card.js";
 import { ChatGlyph } from "../components/chat-glyph.js";
 import { Screen } from "../components/screen.js";
-import { clientFor } from "../lib/api.js";
+import { clientFor, fetchMe } from "../lib/api.js";
 import { navigate } from "../lib/nav.js";
 import type { CompanionConnection } from "../lib/store.js";
 
@@ -60,8 +61,20 @@ function Chat({
   sessionId: string | null;
   animation?: string;
 }) {
+  // A scoped member must address the project agent explicitly
+  // (`project:<id>:<slug>`, ADR 0055) — a bare create is builder-only.
+  // Root tokens (the desktop's embedded server) use the host default.
+  const me = useQuery({
+    queryKey: ["companion", "me", connection.id],
+    queryFn: () => fetchMe(connection),
+    staleTime: 60_000,
+  });
+  const scopedAgent = me.data?.identity.root
+    ? undefined
+    : me.data?.projects.find((p) => p.projectId === projectId)?.agents[0];
   const chat = useAgentChat(projectId, {
     sessionId: sessionId ?? undefined,
+    ...(scopedAgent ? { agentId: `project:${projectId}:${scopedAgent}` } : {}),
     onSessionCreated: (created) =>
       // Adopt the lazily created session into the URL without growing the
       // back stack — Back should return to the sessions list, not to the
@@ -84,6 +97,9 @@ function Chat({
     },
   );
   const [draft, setDraft] = useState("");
+  // Until /me answers we don't know whether a fresh chat must carry the
+  // project agent id; hold the first send rather than 403 a scoped user.
+  const sendReady = sessionId !== null || me.isFetched;
   const { messages, activity, questions } = toTimeline(
     chat.messages,
     chat.optimisticMessages,
@@ -250,7 +266,7 @@ function Chat({
             <button
               type="submit"
               className="grid size-11 shrink-0 cursor-pointer place-items-center rounded-xl bg-accent text-accent-fg transition-transform duration-150 active:scale-95 disabled:opacity-35"
-              disabled={!draft.trim()}
+              disabled={!draft.trim() || !sendReady}
               aria-label={chat.isWorking ? "Queue message" : "Send message"}
               data-testid="chat-send"
             >

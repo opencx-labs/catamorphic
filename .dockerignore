@@ -1,0 +1,9 @@
+.git
+.claude
+node_modules
+**/node_modules
+**/dist
+**/.turbo
+apps/desktop/out
+apps/companion/dist
+site

@@ -9,6 +9,7 @@ import {
 } from "@catamorphic/git";
 import { getTracer, withSpan } from "@catamorphic/otel";
 import { authorFor } from "../identity.js";
+import { forgetProgramFetch } from "./program-reader.js";
 
 const tracer = getTracer("@catamorphic/core");
 
@@ -264,6 +265,11 @@ export class DeploymentService {
           remoteBranch: REMOTE_BRANCH,
           localSha: commitSha,
         });
+        // The shared program just moved: readers holding the 5s fetch
+        // memo (a pre-deploy existence check, a burst of reads) must not
+        // serve the pre-push tree to a role/tool resolution that follows
+        // the deploy immediately.
+        forgetProgramFetch(tenantId, projectId);
         return {
           status: "deployed" as const,
           commitSha: result.sha,

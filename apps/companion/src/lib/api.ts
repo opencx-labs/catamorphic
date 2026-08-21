@@ -18,9 +18,12 @@ export function clientBaseUrl(serverUrl: string): string {
 
 export function authedFetch(token: string): typeof fetch {
   return (input, init) => {
-    const headers = new Headers(init?.headers);
-    headers.set("authorization", `Bearer ${token}`);
-    return fetch(input, { ...init, headers });
+    // openapi-fetch hands a fully-built Request; merging via a fresh
+    // `headers` init would REPLACE its headers (dropping content-type).
+    // Rebuild through the Request constructor, then add the bearer.
+    const request = new Request(input, init);
+    request.headers.set("authorization", `Bearer ${token}`);
+    return fetch(request);
   };
 }
 

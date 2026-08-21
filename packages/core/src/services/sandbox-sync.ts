@@ -30,9 +30,14 @@ export async function syncSandboxChanges(opts: {
   projectDir: string;
 }): Promise<SyncedFileChange[]> {
   const dir = opts.projectDir;
+  // cwd via ExecOpts, not `cd`: virtual sandbox paths (/workspace/...) are
+  // only real inside providers with a mounted root — local-process (ADR
+  // 0047) maps them per-argument, so a cd embedded in the command string
+  // would resolve against the host filesystem.
   const status = await opts.provider.executeCommand(
     opts.sandboxProviderId,
-    `cd ${shellQuote(dir)} && git status --porcelain --untracked-files=all`,
+    "git status --porcelain --untracked-files=all",
+    { cwd: dir },
   );
   if (status.exitCode !== 0) return [];
 
@@ -66,7 +71,8 @@ export async function syncSandboxChanges(opts: {
   // Advance the sandbox baseline so subsequent syncs report only new changes.
   await opts.provider.executeCommand(
     opts.sandboxProviderId,
-    `cd ${shellQuote(dir)} && git add -A && (git -c user.name=catamorphic -c user.email=agent@catamorphic.dev commit -m sync --quiet || true)`,
+    "git add -A && (git -c user.name=catamorphic -c user.email=agent@catamorphic.dev commit -m sync --quiet || true)",
+    { cwd: dir },
   );
 
   return changes;
@@ -112,9 +118,4 @@ function unquotePath(raw: string): string {
     return trimmed.slice(1, -1);
   }
   return trimmed;
-}
-
-function shellQuote(value: string): string {
-  if (/^[A-Za-z0-9@%+=:,./_-]+$/.test(value)) return value;
-  return `'${value.replace(/'/g, `'\\''`)}'`;
 }
