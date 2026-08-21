@@ -55,8 +55,20 @@ export class ToolPermissionBroker {
     request: ToolPermissionRequest,
     agentLabel?: string,
   ): Promise<ToolPermissionDecision> {
-    return new Promise((resolve) => {
-      const id = randomUUID();
+    return this.open(request, agentLabel).promise;
+  }
+
+  /**
+   * Like {@link ask}, but hands back the pending id so a host racing this
+   * broker against its own consent UI can settle the entry from outside
+   * (`answer(id, ...)`) when the other surface wins.
+   */
+  open(
+    request: ToolPermissionRequest,
+    agentLabel?: string,
+  ): { id: string; promise: Promise<ToolPermissionDecision> } {
+    const id = randomUUID();
+    const promise = new Promise<ToolPermissionDecision>((resolve) => {
       const now = Date.now();
       const timer = setTimeout(() => {
         this.settle(id, { decision: "deny" });
@@ -74,6 +86,7 @@ export class ToolPermissionBroker {
       });
       this.emit();
     });
+    return { id, promise };
   }
 
   /** Pending asks, optionally for one session, oldest first. */

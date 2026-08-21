@@ -25,6 +25,8 @@ export type ToolPermissionDecisionView =
 
 export interface PendingToolPermission {
   id: string;
+  /** Main-process RPC id, so a bridge cancel can withdraw this card. */
+  askId?: number;
   /** The asking agent's name. */
   label?: string;
   request: ToolPermissionRequestView;

@@ -594,6 +594,9 @@ export class E2eFakeCodingAgent implements CodingAgentProvider {
         return;
       }
       const decision = await this.askToolPermission({
+        // The host session id, like real harnesses (ToolGate.decide) —
+        // remote clients list pending asks per session over HTTP.
+        ...(session.sessionId ? { sessionId: session.sessionId } : {}),
         server: permissionRun[1],
         tool: permissionRun[2],
         description: "E2E fake tool",

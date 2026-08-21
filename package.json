@@ -13,6 +13,7 @@
   "scripts": {
     "dev": "docker compose up -d --wait && turbo dev --filter=@catamorphic/cloudflare-sandbox-bridge",
     "dev:desktop": "turbo run dev --no-daemon --concurrency=64 --filter=catamorphic-desktop...",
+    "dev:companion": "turbo run dev --no-daemon --concurrency=64 --filter=catamorphic-companion...",
     "build": "turbo build",
     "test": "turbo test",
     "typecheck": "turbo typecheck",

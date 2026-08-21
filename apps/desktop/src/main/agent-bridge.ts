@@ -153,12 +153,15 @@ export interface WorkspaceBridge {
   /**
    * An agent wants to use an MCP tool whose policy says "ask": the front
    * window shows the consent card (tool, server, arguments); resolves
-   * with allow (once / always) or deny. Deny when no window can show it.
+   * with allow (once / always) or deny. Null when no window can show it,
+   * or when `signal` aborts (another surface answered first — the modal
+   * is withdrawn); callers without another surface treat null as deny.
    */
   toolPermission(
     label: string | undefined,
     request: ToolPermissionRequest,
-  ): Promise<ToolPermissionDecision>;
+    signal?: AbortSignal,
+  ): Promise<ToolPermissionDecision | null>;
   /**
    * An agent asks for a connector: the front window opens the connectors
    * modal pre-filled with the agent's search query; the user decides what
@@ -779,18 +782,54 @@ export function registerAgentBridge(agentTerminals: AgentTerminals): {
       return result ?? { action: "decline" };
     },
 
-    async toolPermission(label, request) {
+    async toolPermission(label, request, signal) {
       // ONE window (focused, else the first): an unfocused app must still
       // queue the ask rather than auto-deny it — the user just alt-tabbed.
-      const result = await rpcToFront<ToolPermissionDecision>(
-        "toolPermission",
-        { label, request },
-        ELICIT_TIMEOUT_MS,
+      const windows = BrowserWindow.getAllWindows().filter(
+        (window) => !window.isDestroyed(),
       );
+      const target = BrowserWindow.getFocusedWindow() ?? windows[0];
+      if (!target || target.isDestroyed()) return null;
+      if (signal?.aborted) return null;
+      const id = ++nextId;
+      const result = await new Promise<unknown>((resolve) => {
+        pending.set(id, {
+          resolve: resolve as (value: unknown) => void,
+          remaining: 1,
+        });
+        // askId rides along so a later cancel can name this exact card.
+        target.webContents.send("catamorphic:bridge-request", {
+          id,
+          method: "toolPermission",
+          params: { label, request, askId: id },
+        });
+        const timer = setTimeout(() => {
+          if (pending.delete(id)) resolve(null);
+        }, ELICIT_TIMEOUT_MS);
+        signal?.addEventListener(
+          "abort",
+          () => {
+            clearTimeout(timer);
+            if (!pending.delete(id)) return;
+            // Another surface answered first: withdraw the queued card.
+            if (!target.isDestroyed()) {
+              target.webContents.send("catamorphic:bridge-request", {
+                id: ++nextId,
+                method: "toolPermissionCancel",
+                params: { askId: id },
+              });
+            }
+            resolve(null);
+          },
+          { once: true },
+        );
+      });
+      if (result === null || result === undefined) return null;
       // Anything but a well-formed "allow" is a deny — a renderer error
       // reply ({ error }) must never read as consent.
-      if (result?.decision === "allow") {
-        return result.remember === "always"
+      const decision = result as { decision?: unknown; remember?: unknown };
+      if (decision.decision === "allow") {
+        return decision.remember === "always"
           ? { decision: "allow", remember: "always" }
           : { decision: "allow" };
       }

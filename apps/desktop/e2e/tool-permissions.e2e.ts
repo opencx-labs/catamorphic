@@ -106,6 +106,48 @@ describe("tool permissions", () => {
     ).toEqual({ post_message: "allow" });
   }, 60_000);
 
+  it("a remote client answers over HTTP; the modal withdraws", async () => {
+    await run(`send('permission: fake/upload_file'); return true;`);
+    await runWait(
+      `return !!modal() && modal().textContent.includes('upload_file');`,
+      { timeoutMs: 30_000, label: "third consent modal" },
+    );
+    // Act as the companion app: find the pending ask through the embedded
+    // server's permissions route and allow it. The broker races the modal,
+    // so the answer must both unblock the tool call AND withdraw the card.
+    const answered = await app.eval<{ ok: boolean; detail: string }>(`
+      (async () => {
+        const state = await window.catamorphicDesktop.getServerState();
+        const base = state.url + "/api";
+        const projects = await fetch(base + "/projects").then(r => r.json());
+        for (const project of projects.items) {
+          const sessions = await fetch(
+            base + "/projects/" + project.id + "/agent/sessions",
+          ).then(r => r.json());
+          for (const session of sessions.items) {
+            const url = base + "/projects/" + project.id +
+              "/agent/sessions/" + session.id + "/permissions";
+            const pending = await fetch(url).then(r => r.ok ? r.json() : { permissions: [] });
+            const ask = pending.permissions.find(p => p.request.tool === "upload_file");
+            if (!ask) continue;
+            const posted = await fetch(url + "/" + ask.id, {
+              method: "POST",
+              headers: { "content-type": "application/json" },
+              body: JSON.stringify({ decision: "allow" }),
+            });
+            return { ok: posted.ok, detail: "answered " + ask.id };
+          }
+        }
+        return { ok: false, detail: "no pending ask found over HTTP" };
+      })()
+    `);
+    expect(answered).toMatchObject({ ok: true });
+    await runWait(
+      `return !modal() && timeline().includes('permission decision: allow');`,
+      { timeoutMs: 30_000, label: "modal withdrawn, agent got allow" },
+    );
+  }, 60_000);
+
   it("Deny answers deny; the modal closes", async () => {
     await run(`send('permission: fake/delete_channel'); return true;`);
     await runWait(

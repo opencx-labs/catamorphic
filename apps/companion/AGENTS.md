@@ -1,0 +1,46 @@
+# Companion (mobile PWA)
+
+Phone-sized client for a Catamorphic server (ADR 0058): projects →
+sessions → chat. Reply, nudge (queue / send-now + interrupt), answer
+agent questions and tool-permission asks, start simple chats. Auth is a
+connect link (ADR 0055); profiles are local people on this device, each
+holding their redeemed links. Read `docs/decisions/0058-companion-pwa.md`
+before changing architecture.
+
+## Run
+
+- `bun run dev:companion` (repo root) — Vite dev server with workspace
+  watchers; `--host` is on, so open it from a phone on the LAN.
+- Backend for development: either the desktop app's embedded server
+  (paste a `catamorphic://connect?server=http://127.0.0.1:<port>/api&token=x&project=<id>`
+  link; any token works against the desktop's identity), or the fake:
+  `node scripts/dev-server.mjs` — it prints a redeemable connect link.
+  The fake's scripted agent: `ask …` parks a tool-permission ask,
+  `question …` asks a question, `fail …` fails the turn.
+
+## Verify
+
+- `bun run typecheck && bun run test` (unit: parsers, theme, nav)
+- `bun run test:e2e` — builds, then drives headless Chrome (CDP) against
+  the fake server: connect → chat → permission → question → back-stack.
+  Needs a local Chrome; suite skips without one.
+- `bun scripts/shots.ts <dir>` — screenshot tour for design review.
+- Repo root: `bun run lint` (Biome) before calling anything done.
+
+## Rules
+
+- Same design tokens as the desktop (`src/styles.css` mirrors
+  `apps/desktop/src/renderer/styles.css`; `lib/theme.ts` mirrors the
+  desktop's `theme.ts` presets — change them together).
+- `components/catamorphic/*` are copies of `packages/registry` sources
+  (the intended shadcn-style reuse); diff against the registry when
+  updating.
+- The service worker (`public/sw.js`) serves the offline shell ONLY.
+  App logic (queues, reconnection, polling) lives in app code — a
+  Capacitor wrap must be able to drop the SW without losing behavior.
+- No Web Push here: notifications are the future native wrap's job
+  (APNs/FCM); don't engineer around iOS Web Push.
+- Keep every fetch behind `lib/api.ts` (bearer wrapper) and storage
+  behind `lib/store.ts` (a wrap swaps in secure storage there).
+- Composer inputs stay ≥16px font-size (iOS zoom) and the page never
+  scrolls — screens own their scrolling (`overscroll-contain`).

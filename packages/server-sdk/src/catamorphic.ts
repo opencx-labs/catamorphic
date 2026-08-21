@@ -216,6 +216,13 @@ export interface CreateCatamorphicConfig {
   rolesCacheTtlMs?: number;
   proposalBot?: CatamorphicCoreConfig["proposalBot"];
   storeSyncAroundTurns?: boolean;
+  /**
+   * The HTTP answer surface for tool-permission asks (ADR 0054): harnesses
+   * park asks here and remote clients list/answer them over the plugin's
+   * permissions routes. Hosts with their own consent UI can omit it — or
+   * register one anyway and race the two.
+   */
+  toolPermissions?: CatamorphicCoreConfig["toolPermissions"];
 }
 
 function resolveDatabase(config: DatabaseConfig): {
@@ -310,6 +317,7 @@ export class Catamorphic {
       rolesCacheTtlMs: config.rolesCacheTtlMs,
       proposalBot: config.proposalBot,
       storeSyncAroundTurns: config.storeSyncAroundTurns,
+      toolPermissions: config.toolPermissions,
     });
   }
 

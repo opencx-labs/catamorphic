@@ -13,6 +13,32 @@
         "vitest": "^4.1.10",
       },
     },
+    "apps/companion": {
+      "name": "catamorphic-companion",
+      "version": "0.0.1",
+      "dependencies": {
+        "@catamorphic/api-client": "workspace:*",
+        "@catamorphic/react": "workspace:*",
+        "@catamorphic/ui": "workspace:*",
+        "@tanstack/react-query": "^5.101.2",
+        "lucide-react": "^1.25.0",
+        "react": "^19.2.7",
+        "react-dom": "^19.2.7",
+        "react-markdown": "^10.1.0",
+        "remark-gfm": "^4.0.1",
+        "use-stick-to-bottom": "^1.1.6",
+      },
+      "devDependencies": {
+        "@tailwindcss/vite": "^4.2.2",
+        "@types/node": "^26.1.1",
+        "@types/react": "^19.2.17",
+        "@types/react-dom": "^19.2.3",
+        "@vitejs/plugin-react": "^6.0.3",
+        "jsdom": "^29.1.1",
+        "tailwindcss": "^4.2.2",
+        "vite": "^8.1.4",
+      },
+    },
     "apps/desktop": {
       "name": "catamorphic-desktop",
       "version": "0.0.1",
@@ -1580,6 +1606,8 @@
     "caniuse-lite": ["caniuse-lite@1.0.30001809", "", {}, "sha512-xxWVywk6a6Arlk+hymeycyn/VgqEfLDxupvhH/xiY5SJ/18kmi9o6MiO320DCUzypORHLtvh0I4i04tUhCNHNQ=="],
 
     "capnweb": ["capnweb@0.8.0", "", {}, "sha512-BK/TuXUiyfLSKsmjojn70yN7oYG/JJzoURZ3tckjg5Zj2KcygPm0A5jyOlswK7SYB4f0Gh9tt+RZ132b80iLfA=="],
+
+    "catamorphic-companion": ["catamorphic-companion@workspace:apps/companion"],
 
     "catamorphic-desktop": ["catamorphic-desktop@workspace:apps/desktop"],
 

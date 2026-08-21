@@ -3250,12 +3250,15 @@ export function App() {
           }
           const label =
             typeof params.label === "string" ? params.label : undefined;
+          const askId =
+            typeof params.askId === "number" ? params.askId : undefined;
           return new Promise<unknown>((resolve) => {
             const id = crypto.randomUUID();
             setToolPermissionsRef.current((queue) => [
               ...queue,
               {
                 id,
+                askId,
                 label,
                 request,
                 resolve: (decision) => {
@@ -3267,6 +3270,18 @@ export function App() {
               },
             ]);
           });
+        }
+        case "toolPermissionCancel": {
+          // The ask was answered elsewhere (a remote companion client):
+          // withdraw the card silently — no deny, no answer, no flash.
+          const askId =
+            typeof params.askId === "number" ? params.askId : undefined;
+          if (askId !== undefined) {
+            setToolPermissionsRef.current((current) =>
+              current.filter((entry) => entry.askId !== askId),
+            );
+          }
+          return { ok: true };
         }
         case "requestConnection": {
           // Main sends this to ONE window (focused, else first) — no

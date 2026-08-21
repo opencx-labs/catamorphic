@@ -30,6 +30,17 @@ describe("ToolPermissionBroker", () => {
     expect(changes).toHaveBeenCalledTimes(2);
   });
 
+  it("open() exposes the id so a racing surface can settle from outside", async () => {
+    const broker = new ToolPermissionBroker();
+    const ask = broker.open(request, "Ops agent");
+    expect(broker.get(ask.id)?.agentLabel).toBe("Ops agent");
+    // The host's own UI answered first: settle the broker entry with the
+    // same decision so remote clients see it clear.
+    expect(broker.answer(ask.id, { decision: "allow" })).toBe(true);
+    await expect(ask.promise).resolves.toEqual({ decision: "allow" });
+    expect(broker.list()).toEqual([]);
+  });
+
   it("denies on timeout so a tool call never hangs on a missing UI", async () => {
     vi.useFakeTimers();
     try {

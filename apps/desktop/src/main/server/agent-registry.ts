@@ -6,6 +6,7 @@ import type {
   AgentDefinition,
   CodingAgentRegistry,
   RegisteredCodingAgent,
+  ToolPermissionBroker,
 } from "@catamorphic/core";
 import {
   definitionHash,
@@ -20,6 +21,7 @@ import type {
   ExtraToolContext,
   McpToolPolicyLayers,
   SandboxProvider,
+  ToolPermissionDecision,
   ToolPermissionHandler,
   ToolPolicyAnnotations,
 } from "@catamorphic/sandbox";
@@ -60,6 +62,12 @@ export interface DesktopAgentRegistryDeps {
   agentHomesDir: string;
   /** Agents' window into the user's workspace (tabs, browser, terminals). */
   workspaceBridge?: WorkspaceBridge;
+  /**
+   * HTTP answer surface for tool-permission asks (ADR 0054): remote
+   * clients list/answer pending asks through the embedded server. Raced
+   * against the desktop consent modal — whichever answers first wins.
+   */
+  toolPermissions?: ToolPermissionBroker;
   /** Installed connector plugins (Claude Code loads them natively). */
   connectors?: ConnectorsService;
   /**
@@ -387,9 +395,39 @@ export class DesktopAgentRegistry implements CodingAgentRegistry {
     profileId: string,
   ): ToolPermissionHandler | undefined {
     const bridge = this.deps.workspaceBridge;
-    if (!bridge) return undefined;
+    const broker = this.deps.toolPermissions;
+    if (!bridge && !broker) return undefined;
     return async (request) => {
-      const decision = await bridge.toolPermission(config.name, request);
+      // Race the desktop consent modal against the HTTP broker (remote
+      // companion clients): the first REAL answer wins, and the loser is
+      // withdrawn — the modal via abort, the broker entry via answer().
+      const decision = await new Promise<ToolPermissionDecision>((resolve) => {
+        let settled = false;
+        const abortModal = new AbortController();
+        const ask = broker?.open(request, config.name);
+        const settle = (
+          value: ToolPermissionDecision,
+          source: "bridge" | "broker",
+        ) => {
+          if (settled) return;
+          settled = true;
+          if (source === "bridge" && ask) broker?.answer(ask.id, value);
+          if (source === "broker") abortModal.abort();
+          resolve(value);
+        };
+        void ask?.promise.then((value) => settle(value, "broker"));
+        if (bridge) {
+          void bridge
+            .toolPermission(config.name, request, abortModal.signal)
+            .then((value) => {
+              // Null = no window, cancelled, or timed out. With a broker
+              // present its own timeout produces the deny; without one,
+              // deny here — a tool call must never hang on a missing UI.
+              if (value) settle(value, "bridge");
+              else if (!ask) settle({ decision: "deny" }, "bridge");
+            });
+        }
+      });
       if (decision.decision === "allow" && decision.remember === "always") {
         const connectionId = this.livePolicies(config, profileId).connectionIds[
           request.server

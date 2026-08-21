@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import { ToolPermissionBroker } from "@catamorphic/core";
 import type { DB } from "@catamorphic/db";
 import { DEFAULT_SCHEMA } from "@catamorphic/db";
 import { catamorphicPlugin } from "@catamorphic/fastify-plugin";
@@ -121,6 +122,10 @@ export async function startEmbeddedServer(
   // Host-tier skills (ADR 0049) materialize from core's resolved set once
   // createCatamorphic returns; the registry reads them lazily (same seam).
   let hostSkillsRuntime: HostSkillsRuntime | undefined;
+  // Tool-permission asks (ADR 0054) park on this broker so REMOTE clients
+  // (the companion app) can list and answer them over HTTP; the registry
+  // races it against the desktop's own consent modal — first answer wins.
+  const toolPermissions = new ToolPermissionBroker();
   const agentRegistry = new DesktopAgentRegistry({
     profiles,
     profileConfig,
@@ -128,6 +133,7 @@ export async function startEmbeddedServer(
     agentHomesDir: paths.agentHomesDir,
     e2eFake: e2eFakeAgent,
     workspaceBridge,
+    toolPermissions,
     connectors,
     // Each chat session gets its project's workflow-tools MCP server, so
     // agents can call ai.tool-call workflows like any other MCP tool. The
@@ -154,6 +160,7 @@ export async function startEmbeddedServer(
   }
 
   const catamorphic = createCatamorphic({
+    toolPermissions,
     database: { db },
     storage: {
       projectsPath: paths.projects,
