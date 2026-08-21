@@ -582,6 +582,8 @@ export interface ResolvedTheme extends ThemeConfig {
 }
 
 export interface CatamorphicDesktopApi {
+  /** Absolute path of a pasted/dropped File; "" when it has none. */
+  pathForFile: (file: File) => string;
   githubConnectStart: () => Promise<{
     userCode: string;
     verificationUri: string;

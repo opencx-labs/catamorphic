@@ -2576,3 +2576,89 @@ Patterned on what best-in-class palettes converged on (Chrome omnibox
   server's `features` from the section that already has them; the
   fastify plugin validates roles with core's own `RoleDefinitionSchema`;
   `requireTenantProject` is one helper in core.
+
+### 2026-08-19 — The composer holds pills inline
+
+- **Context lives where you put it.** The composer stopped being a
+  textarea with a strip of chips above it and became a contenteditable
+  where prose and pills share one flow: "look at ⟨sel.md · 3–10⟩ and fix
+  ⟨shot.png⟩". Pastes (big text, links, paths), editor selections, images,
+  documents and dropped workspace tabs land at the caret as pills; short
+  text pastes as plain text (rich clipboards flattened — the composer is
+  prose, not a document). Chromium owns typing, IME, selection and undo;
+  the DOM is the source of truth and is read back on every input event
+  (`lib/composer-serialize.ts`, unit-tested). Pills are
+  `contenteditable=false` host spans the editor treats as one character,
+  inserted through `execCommand("insertHTML")` so they ride the undo
+  stack like typed text; a React portal fills each host. Removal (✕,
+  Backspace/Delete against the pill, chip-pop with no prose left) plays
+  pill-out, then deletes the host *through the editing stack* — ⌘Z brings
+  a removed pill back, and a natively deleted host (select-all + delete)
+  is noticed on the next input and its pill dropped. Learned: keep the
+  attachment map keyed by id for the draft's lifetime, so an undo that
+  re-inserts a host revives its pill instead of orphaning it.
+- **The wire carries position.** A message is prose with U+FFFC (OBJECT
+  REPLACEMENT CHARACTER) where each pill sits — the n-th marker is the
+  n-th attachment. One sandbox function (`renderUserMessage`) turns that
+  into the model's text for every harness: markers become numbered
+  references (`[attachment 2: sel.md · 3–10]`), text attachments follow
+  as numbered fenced blocks, media rides the harness's own channel under
+  the same numbers. Codex, which took no attachments before, now gets
+  the text ones the same way. Marker-less messages (older, other clients)
+  render exactly as before. Titles, history recall and labels see
+  `[name]` in place of a marker, never the raw character.
+- **One pill.** `components/context-pill.tsx` is the token everywhere —
+  the composer (with ✕), the sent message (inline, read-only), the queued
+  message, and the palette's mode chip (which now shares
+  `PILL_SURFACE`: accent tint, accent text, rounded-md, 12px medium). No
+  more "well" pills that expand in place; a pill stays a compact token
+  and **hover previews it** in a portal popover — the pasted text in a
+  mono well with stats, the image, the tab's address, the document's
+  first bytes — clamped to the viewport, above the pill unless cramped.
+  Sent messages render their pills in the same spots the user put them.
+- **Tabs are context too.** Dragging a workspace tab onto a chat drops a
+  tab pill (kind icon + title; the model gets title, address/path and the
+  `workspace_read_tab` key). While a tab drags and a chat is in front,
+  the split-tile drop zones leave the bottom band clear so the composer
+  is reachable. Clicking a tab pill opens the tab.
+- Kept as they were: Enter sends / Shift+Enter breaks a line / ⌘↵ jumps
+  the queue, ↑/↓ shell-history recall (now swaps the prose and keeps the
+  pills; recalled text names its pills), the `/` skill menu, the
+  paperclip, the drop cue, PageUp, the focus-on-open dance, and the
+  `input-recall` motion. The window-level paste (nothing focused) still
+  attaches files and big pastes; a short paste with no field focused
+  still does nothing.
+
+### 2026-08-20 — Composer polish: animated growth, any file attaches
+
+- **The composer's size never snaps.** A frame around the editable
+  follows its measured height (ResizeObserver) through a 150ms tween:
+  Shift+Enter, a pill wrapping to the next line, recall of a longer
+  draft — the box glides. The editable itself stays auto-height under
+  its own max-h; the frame is presentation only.
+- **The empty composer's caret sits at the start.** The placeholder
+  ::before was in-flow, so Chromium parked the caret after the
+  placeholder text (mid-field) once select-all + delete emptied the
+  editable. It is absolutely positioned now — zero inline footprint.
+- **Pills fit the line.** Pill height is exactly 20px, descending 4px
+  below the baseline: it fills a leading-6 (24px) line box precisely, so
+  pasting a pill next to text no longer grows the line (the composer
+  was gaining ~2px and shifting the layout).
+- **Every file reaches the agent.** The old ladder silently dropped
+  unsupported types (.pcap), oversized files, and all media for
+  text-only agents. Now: media pill when the agent takes the kind AND
+  the file fits the 10MB per-file cap AND the message's 48MB media
+  budget — otherwise a **path pill** (via Electron's
+  `webUtils.getPathForFile`), which every harness reads itself. Same
+  pattern as Claude Code's own temp-file delivery. Only a pathless
+  synthetic file that can't ship as media is dropped. The paperclip
+  is always visible and never filters the picker.
+- **"Request body is too large" is gone.** Fastify's default 1MB
+  bodyLimit rejected any screenshot over ~750KB; the desktop server
+  (and the sidecar app) now take 96MB, and the composer's 48MB media
+  budget keeps real payloads far below it. Files past the budget
+  degrade to path pills instead of failing the send.
+- **Previews leave the way they came.** The hover popover now plays its
+  entrance transition in reverse before unmounting (it used to blink
+  out), and sent pills in the timeline preview on hover exactly like
+  composer pills — one `ContextPill` everywhere.

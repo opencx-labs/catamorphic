@@ -141,7 +141,13 @@ kbd {
    treatment (via :focus-within for wrappers like the chat composer), and
    this rule would stack a second ring inside it. Buttons inside a field
    (e.g. the composer's send button) keep the ring. */
-:focus-visible:not(.field, .field textarea, .field input, .field select) {
+:focus-visible:not(
+  .field,
+  .field textarea,
+  .field input,
+  .field select,
+  .field [contenteditable]
+) {
   outline: 2px solid var(--color-accent);
   outline-offset: 1px;
 }
@@ -284,6 +290,35 @@ kbd {
 .animate-pill-out {
   animation: pill-out 180ms cubic-bezier(0.2, 0, 0, 1) forwards;
   overflow: hidden;
+}
+
+/* The chat composer (contenteditable with inline pills). Placeholder rides
+   a ::before, absolutely positioned so it takes no inline space — an
+   in-flow pseudo pushes Chromium's caret to sit after the placeholder
+   text. Offsets mirror the composer's own padding (px-2.5 py-1.5); a
+   different host can override the vars. Pill hosts are inline atoms
+   Chromium won't type into. */
+.cat-composer {
+  position: relative;
+}
+
+.cat-composer[data-empty]::before {
+  content: attr(data-placeholder);
+  position: absolute;
+  top: var(--composer-pad-y, 6px);
+  left: var(--composer-pad-x, 10px);
+  right: var(--composer-pad-x, 10px);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--color-fg-faint);
+  pointer-events: none;
+}
+
+.cat-pill-host {
+  display: inline;
+  user-select: none;
+  -webkit-user-select: none;
 }
 
 /* Chat dock rise-in, matching its collapse transition in reverse */

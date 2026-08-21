@@ -19,6 +19,7 @@ import {
 import { Fragment, useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { formatBinding, useKeybindings } from "../lib/keybindings";
+import { TAB_DRAG_TYPE, type TabDragPayload } from "../lib/tab-drag";
 import { AnimatedTitle } from "./animated-title";
 import { ChatGlyph, hasCustomChatIcon } from "./chat-icon";
 import { SignalBadge, SignalGlyph } from "./chat-signals";
@@ -389,7 +390,18 @@ export function WorkspaceTabBar({
               draggable={Boolean(onReorder) && !exiting}
               onDragStart={(event) => {
                 event.dataTransfer.setData("text/plain", key);
-                event.dataTransfer.effectAllowed = "move";
+                // A tab dropped on a chat becomes a tab pill (the chat
+                // reads this flavor; the strip's own reorder reads the key).
+                event.dataTransfer.setData(
+                  TAB_DRAG_TYPE,
+                  JSON.stringify({
+                    key,
+                    kind: tab.kind,
+                    title: tab.label ?? tab.name,
+                    detail: tab.detail,
+                  } satisfies TabDragPayload),
+                );
+                event.dataTransfer.effectAllowed = "copyMove";
                 disarmHoverCard();
                 setDragKey(key);
                 onDragStateChange?.(key);

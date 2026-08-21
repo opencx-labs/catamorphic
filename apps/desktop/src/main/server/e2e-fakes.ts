@@ -20,6 +20,7 @@ import type {
   ToolPermissionHandler,
   TurnOptions,
 } from "@catamorphic/sandbox";
+import { inlineAttachmentReferences } from "@catamorphic/sandbox";
 
 const execFileAsync = promisify(execFile);
 
@@ -246,6 +247,12 @@ export class E2eFakeCodingAgent implements CodingAgentProvider {
       yield {
         type: "title",
         content: texts.length > 0 ? "Context received" : "Media received",
+      };
+      // The prose as the model would read it: inline markers become
+      // numbered references (the same rendering every real harness uses).
+      yield {
+        type: "text",
+        content: `[prose] ${inlineAttachmentReferences(message, opts.attachments)}`,
       };
       yield {
         type: "text",

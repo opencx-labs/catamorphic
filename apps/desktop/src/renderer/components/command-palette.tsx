@@ -65,6 +65,7 @@ import { useListMotion } from "../lib/list-motion.js";
 import { useProjectSkills } from "../lib/skills.js";
 import { useApps } from "../screens/app-screen.js";
 import { resolveInput } from "../screens/browser-screen.js";
+import { PILL_SURFACE } from "./context-pill.js";
 import type { WorkspaceTab } from "./workspace-tabs.js";
 
 /**
@@ -1598,7 +1599,7 @@ export function CommandPalette({
                 setExitingPicker(null);
               }
             }}
-            className={`mt-[9px] flex shrink-0 items-center gap-1.5 overflow-hidden whitespace-nowrap rounded-md bg-accent/15 py-1 pl-1.5 pr-2 text-[12px] font-medium text-accent ${
+            className={`mt-[9px] flex shrink-0 items-center gap-1.5 overflow-hidden whitespace-nowrap py-1 pl-1.5 pr-2 ${PILL_SURFACE} ${
               chip.live ? "animate-chip-in" : "animate-chip-out"
             }`}
           >

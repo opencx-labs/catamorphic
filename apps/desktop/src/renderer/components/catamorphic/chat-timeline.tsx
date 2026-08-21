@@ -7,17 +7,13 @@ import {
   Bot,
   ChevronRight,
   ChevronUp,
-  ClipboardType,
-  FileText,
   GitFork,
   KeyRound,
-  Link2,
   LoaderCircle,
   Pencil,
   Radio,
   RotateCcw,
   SquareTerminal,
-  TextQuote,
   Trash2,
   Wrench,
   Zap,
@@ -26,6 +22,8 @@ import { memo, useCallback, useEffect, useRef, useState } from "react";
 import Markdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { StickToBottom, useStickToBottomContext } from "use-stick-to-bottom";
+import { splitAttachmentMarkers } from "../../lib/composer-serialize";
+import { ContextPill } from "../context-pill";
 import { ShortcutHint } from "../shortcut-hint";
 
 const REMARK_PLUGINS = [remarkGfm];
@@ -39,7 +37,15 @@ export type ChatTextSourceView =
       endLine?: number;
     }
   | { type: "url"; url: string }
-  | { type: "path"; path: string };
+  | { type: "path"; path: string }
+  | {
+      type: "tab";
+      key: string;
+      kind: string;
+      title: string;
+      url?: string;
+      filePath?: string;
+    };
 
 export type ChatAttachmentView =
   | {
@@ -458,6 +464,12 @@ function MessageImpl({
   }
 
   const attachments = message.attachments ?? attachmentsFromMetadata(metadata);
+  // Pills the prose references inline (composer markers) render in place;
+  // the rest — older messages, other clients — sit in a strip above.
+  const stripAttachments =
+    message.role === "user"
+      ? attachments.slice(inlineMarkerCount(message.content, attachments))
+      : attachments;
   const failed = metadata?.status === "failed";
   const enterClasses = `motion-safe:transition-[opacity,translate] motion-safe:duration-200 motion-safe:ease-[cubic-bezier(0.2,0,0,1)] ${entered ? "motion-safe:translate-y-0 motion-safe:opacity-100" : "motion-safe:translate-y-1 motion-safe:opacity-0"}`;
 
@@ -500,7 +512,9 @@ function MessageImpl({
       data-user-message={message.role === "user" || undefined}
       className={`group/msg relative max-w-[85%] text-sm ${enterClasses} ${message.role === "user" ? "ml-auto rounded-xl rounded-br-sm border border-info/30 bg-info/10 px-3 py-2" : "mr-auto"}`}
     >
-      {attachments.length > 0 && <AttachmentStrip attachments={attachments} />}
+      {stripAttachments.length > 0 && (
+        <AttachmentStrip attachments={stripAttachments} />
+      )}
       {/* Fork the conversation from this reply: everything up to here is
           copied into a new chat that goes off on a tangent. */}
       {/* The pl-2 bridges the gap between the message edge and the
@@ -530,7 +544,7 @@ function MessageImpl({
       )}
       {message.role === "user" ? (
         <div className="whitespace-pre-wrap break-words leading-6">
-          {message.content}
+          <InlineMessage content={message.content} attachments={attachments} />
         </div>
       ) : (
         <div className="cat-markdown min-w-0 break-words leading-6">
@@ -871,7 +885,50 @@ function StepRow({
   );
 }
 
-/** Image thumbnails and document chips on a (user) message. */
+/** How many of the attachments the prose references inline. */
+function inlineMarkerCount(
+  content: string,
+  attachments: ChatAttachmentView[],
+): number {
+  return splitAttachmentMarkers(content).filter(
+    (part) => part.type === "pill" && part.index < attachments.length,
+  ).length;
+}
+
+/**
+ * User prose with its inline pills in place: each marker becomes the
+ * matching pill (same visual as the composer, read-only, hover preview);
+ * markers past the attachment list vanish. Marker-less attachments are the
+ * caller's to show (a strip, a count).
+ */
+function InlineMessage({
+  content,
+  attachments,
+}: {
+  content: string;
+  attachments: ChatAttachmentView[];
+}) {
+  return (
+    <>
+      {splitAttachmentMarkers(content).map((part, index) =>
+        part.type === "text" ? (
+          // biome-ignore lint/suspicious/noArrayIndexKey: static run list per message
+          <span key={index}>{part.text}</span>
+        ) : attachments[part.index] ? (
+          <ContextPill
+            // biome-ignore lint/suspicious/noArrayIndexKey: static run list per message
+            key={index}
+            view={attachments[part.index] as ChatAttachmentView}
+            animateIn={false}
+            testId="sent-pill"
+          />
+        ) : null,
+      )}
+    </>
+  );
+}
+
+/** Marker-less attachments on a (user) message: pills in a strip. */
 function AttachmentStrip({
   attachments,
 }: {
@@ -879,31 +936,16 @@ function AttachmentStrip({
 }) {
   return (
     <div className="mb-1.5 flex flex-wrap justify-end gap-1.5">
-      {attachments.map((attachment, index) =>
-        attachment.kind === "text" ? (
-          <SentTextPill
-            // Attachments are append-only per message; index is stable.
-            // biome-ignore lint/suspicious/noArrayIndexKey: static list
-            key={index}
-            attachment={attachment}
-          />
-        ) : attachment.kind === "image" ? (
-          <img
-            key={`${attachment.name}:${attachment.dataBase64.length}:${attachment.dataBase64.slice(-24)}`}
-            src={`data:${attachment.mediaType};base64,${attachment.dataBase64}`}
-            alt={attachment.name}
-            className="max-h-40 max-w-56 rounded-lg border border-border object-cover"
-          />
-        ) : (
-          <span
-            key={`${attachment.name}:${attachment.dataBase64.length}:${attachment.dataBase64.slice(-24)}`}
-            className="flex items-center gap-1.5 rounded-md border border-border bg-bg-inset px-2 py-1 text-[11px] text-fg-muted"
-          >
-            <FileText className="size-3" />
-            <span className="max-w-40 truncate">{attachment.name}</span>
-          </span>
-        ),
-      )}
+      {attachments.map((attachment, index) => (
+        <ContextPill
+          // Attachments are append-only per message; index is stable.
+          // biome-ignore lint/suspicious/noArrayIndexKey: static list
+          key={index}
+          view={attachment}
+          animateIn={false}
+          testId="sent-pill"
+        />
+      ))}
     </div>
   );
 }
@@ -1146,13 +1188,20 @@ function QueuedBubble({
           />
         ) : (
           <div className="whitespace-pre-wrap break-words leading-6">
-            {queued.content}
+            <InlineMessage
+              content={queued.content}
+              attachments={queued.attachments}
+            />
           </div>
         )}
-        {queued.attachments.length > 0 && (
-          <div className="mt-1 text-[11px] text-fg-faint">
-            {queued.attachments.length} attachment
-            {queued.attachments.length > 1 ? "s" : ""}
+        {queued.attachments.length >
+          inlineMarkerCount(queued.content, queued.attachments) && (
+          <div className="mt-1">
+            <AttachmentStrip
+              attachments={queued.attachments.slice(
+                inlineMarkerCount(queued.content, queued.attachments),
+              )}
+            />
           </div>
         )}
         <div className="mt-1 flex items-center justify-end gap-0.5 text-[10px] uppercase tracking-wider text-fg-faint">
@@ -1311,61 +1360,6 @@ function isConversationMessage(message: ChatTimelineMessage): boolean {
   return message.content.trim().length > 0;
 }
 
-const SENT_PILL_ICONS = {
-  paste: ClipboardType,
-  selection: TextQuote,
-  url: Link2,
-  path: FileText,
-} as const;
-
-/** A sent text pill: collapsed label, expandable to the full text. */
-function SentTextPill({
-  attachment,
-}: {
-  attachment: Extract<ChatAttachmentView, { kind: "text" }>;
-}) {
-  const [open, setOpen] = useState(false);
-  const Icon = SENT_PILL_ICONS[attachment.source.type];
-  const isReference =
-    attachment.source.type === "url" || attachment.source.type === "path";
-  return (
-    <div className="min-w-0 max-w-full" data-testid="sent-text-pill">
-      <button
-        type="button"
-        onClick={isReference ? undefined : () => setOpen((value) => !value)}
-        title={isReference ? attachment.text : undefined}
-        className={`flex max-w-full items-center gap-1.5 rounded-md border border-border bg-bg-inset px-2 py-1 text-[11px] text-fg-muted ${
-          isReference
-            ? "cursor-default"
-            : "cursor-pointer transition-colors duration-100 hover:bg-bg-overlay hover:text-fg"
-        }`}
-        aria-expanded={isReference ? undefined : open}
-      >
-        <Icon className="size-3 shrink-0" />
-        <span className="max-w-56 truncate">{attachment.name}</span>
-        {!isReference && (
-          <ChevronRight
-            className={`size-3 shrink-0 text-fg-faint transition-transform duration-150 ${open ? "rotate-90" : ""}`}
-          />
-        )}
-      </button>
-      {!isReference && (
-        <div
-          className={`grid transition-[grid-template-rows] duration-200 ease-[cubic-bezier(0.2,0,0,1)] ${
-            open ? "grid-rows-[1fr]" : "grid-rows-[0fr]"
-          }`}
-        >
-          <div className="overflow-hidden">
-            <pre className="mt-1 max-h-56 max-w-md overflow-auto whitespace-pre-wrap break-words rounded-md border border-border bg-bg-inset p-2 text-left font-mono text-[11px] leading-4 text-fg-muted">
-              {attachment.text}
-            </pre>
-          </div>
-        </div>
-      )}
-    </div>
-  );
-}
-
 function textSourceFromMetadata(value: unknown): ChatTextSourceView | null {
   const record = asRecord(value);
   switch (record?.type) {
@@ -1392,12 +1386,28 @@ function textSourceFromMetadata(value: unknown): ChatTextSourceView | null {
       return typeof record.path === "string"
         ? { type: "path", path: record.path }
         : null;
+    case "tab":
+      return typeof record.key === "string" &&
+        typeof record.kind === "string" &&
+        typeof record.title === "string"
+        ? {
+            type: "tab",
+            key: record.key,
+            kind: record.kind,
+            title: record.title,
+            ...(typeof record.url === "string" ? { url: record.url } : {}),
+            ...(typeof record.filePath === "string"
+              ? { filePath: record.filePath }
+              : {}),
+          }
+        : null;
     default:
       return null;
   }
 }
 
-function attachmentsFromMetadata(
+/** Attachments a persisted message carries in its metadata. */
+export function attachmentsFromMetadata(
   metadata: Record<string, unknown> | undefined,
 ): ChatAttachmentView[] {
   const raw = metadata?.attachments;

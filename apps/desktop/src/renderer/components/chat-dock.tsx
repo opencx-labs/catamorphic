@@ -1,6 +1,7 @@
 import {
   type AgentChatAttachment,
   type AgentChatTextAttachment,
+  messageWithAttachmentNames,
   useAgentChat,
 } from "@catamorphic/react";
 import {
@@ -10,7 +11,6 @@ import {
   ChevronUp,
   Columns2,
   FileCode,
-  FileText,
   GitFork,
   Globe,
   LayoutGrid,
@@ -21,9 +21,9 @@ import {
   PictureInPicture2,
   Radio,
   SquareTerminal,
-  X,
 } from "lucide-react";
 import {
+  type ClipboardEvent,
   type FormEvent,
   type KeyboardEvent,
   useCallback,
@@ -47,16 +47,22 @@ import {
   skillInvocation,
   useProjectSkills,
 } from "../lib/skills";
+import { TAB_DRAG_TYPE, type TabDragPayload } from "../lib/tab-drag";
 import { classifyPastedText, selectionName, textPill } from "../lib/text-pills";
 import { AgentQuestionPanel } from "./agent-question-panel";
 import {
+  attachmentsFromMetadata,
   ChatTimeline,
   QUESTIONS_DISMISSED_MESSAGE,
   toTimeline,
 } from "./catamorphic/chat-timeline";
 import { ChatGlyph } from "./chat-icon";
 import type { ChatSignals } from "./chat-signals";
-import { ComposerPill } from "./composer-pill";
+import {
+  type ComposerAttachment,
+  ComposerInput,
+  type ComposerInputHandle,
+} from "./composer-input";
 import { ShortcutHint } from "./shortcut-hint";
 
 export type ChatMode = "min" | "partial" | "tab";
@@ -165,30 +171,63 @@ const DOCUMENT_TYPES = new Set([
 
 const MAX_ATTACHMENT_BYTES = 10 * 1024 * 1024;
 
-type ComposerAttachment = AgentChatAttachment & {
-  id: string;
-  /** Mid pill-out; dropped from state on animation end. */
-  exiting?: boolean;
-};
-
-const isTextPill = (
-  attachment: ComposerAttachment,
-): attachment is ComposerAttachment & AgentChatTextAttachment =>
-  attachment.kind === "text";
+/**
+ * Total decoded media budget per message: keeps the request body far below
+ * the server's limit. Files past it still attach — as path pills.
+ */
+const MAX_TOTAL_MEDIA_BYTES = 48 * 1024 * 1024;
 
 /** Server-side attachment cap, mirrored so the composer can refuse early. */
 const MAX_ATTACHMENTS = 32;
 
-async function fileToAttachment(
-  file: File,
-): Promise<ComposerAttachment | null> {
-  if (file.size === 0 || file.size > MAX_ATTACHMENT_BYTES) return null;
-  const kind = file.type.startsWith("image/")
-    ? ("image" as const)
+/** A workspace tab dropped on the chat becomes a tab pill. */
+function tabPillFromDrag(
+  data: DataTransfer | null,
+): AgentChatTextAttachment | null {
+  const raw = data?.getData(TAB_DRAG_TYPE);
+  if (!raw) return null;
+  try {
+    const parsed = JSON.parse(raw) as Partial<
+      Record<keyof TabDragPayload, unknown>
+    >;
+    if (typeof parsed.key !== "string" || typeof parsed.kind !== "string") {
+      return null;
+    }
+    const title =
+      typeof parsed.title === "string" && parsed.title
+        ? parsed.title
+        : parsed.kind;
+    const detail =
+      typeof parsed.detail === "string" ? parsed.detail : undefined;
+    const source: AgentChatTextAttachment["source"] = {
+      type: "tab",
+      key: parsed.key,
+      kind: parsed.kind,
+      title,
+      ...(parsed.kind === "browser" && detail ? { url: detail } : {}),
+      ...(parsed.kind === "editor" && detail ? { filePath: detail } : {}),
+    };
+    // What the model reads without a tool call: title + address/path.
+    const text = detail ? `${title} — ${detail}` : title;
+    return textPill(text, source, title);
+  } catch {
+    return null;
+  }
+}
+
+/** The media kind a file would ship as, or null for unsupported types. */
+function mediaKindOf(file: File): "image" | "document" | null {
+  return file.type.startsWith("image/")
+    ? "image"
     : DOCUMENT_TYPES.has(file.type)
-      ? ("document" as const)
+      ? "document"
       : null;
-  if (!kind) return null;
+}
+
+async function encodeFile(
+  file: File,
+  kind: "image" | "document",
+): Promise<ComposerAttachment> {
   const buffer = await file.arrayBuffer();
   let binary = "";
   const bytes = new Uint8Array(buffer);
@@ -202,6 +241,21 @@ async function fileToAttachment(
     name: file.name || (kind === "image" ? "pasted-image.png" : "pasted-file"),
     mediaType: file.type,
     dataBase64: btoa(binary),
+  };
+}
+
+/** A file that can't ship as media still reaches the agent as a path. */
+function pathPillFor(file: File): ComposerAttachment | null {
+  // e2e seam: synthetic Files have no OS path, so tests inject one.
+  const lookup =
+    (window as { __e2ePathForFile?: (file: File) => string })
+      .__e2ePathForFile ?? desktopApi.pathForFile;
+  const path = lookup(file);
+  if (!path) return null;
+  const name = file.name || path.split(/[\\/]/).at(-1) || path;
+  return {
+    id: crypto.randomUUID(),
+    ...textPill(path, { type: "path", path }, name),
   };
 }
 
@@ -870,8 +924,25 @@ export function ChatDock({
     agentId: entry.agentId ?? defaultAgentId,
     onSessionCreated: (sessionId) => onSessionCreated(entry.localId, sessionId),
   });
+  // The composer's DOM is the source of truth (see ComposerInput); these
+  // mirror what it says so the rest of the dock can react — the prose
+  // (slash menu, recall gate, emptiness) and how many pills are live.
   const [draft, setDraft] = useState("");
-  const [attachments, setAttachments] = useState<ComposerAttachment[]>([]);
+  const [pillCount, setPillCount] = useState(0);
+  const composerRef = useRef<ComposerInputHandle>(null);
+  const draftRef = useRef(draft);
+  draftRef.current = draft;
+  // Set while the dock itself rewrites the prose (recall, slash-complete)
+  // so the change handler can tell "the user typed" from "we swapped".
+  const rewritingRef = useRef(false);
+  const rewriteText = (text: string) => {
+    rewritingRef.current = true;
+    try {
+      composerRef.current?.replaceText(text);
+    } finally {
+      rewritingRef.current = false;
+    }
+  };
 
   // Slash commands (ADR 0052): "/" at the start of the composer lists the
   // project's skills (both tiers, fetched fresh while relevant); a
@@ -905,9 +976,8 @@ export function ChatDock({
 
   /** Commit a slash-menu row: send the invocation (attachments ride along). */
   const runSlash = (skill: SkillInfo) => {
-    const files = attachments.map(({ id: _id, ...attachment }) => attachment);
-    setDraft("");
-    setAttachments([]);
+    const files = composerRef.current?.read().attachments ?? [];
+    composerRef.current?.clear();
     setRecall(null);
     void chat.send(skillInvocation(skill.name), files);
   };
@@ -996,6 +1066,8 @@ export function ChatDock({
   // style: ↑ from an empty (or recalled) draft steps back through what
   // you sent, ↓ steps forward and finally restores the stashed draft.
   // Typing anything exits recall mode.
+  // Recalled text names its pills — "fix [sel.md · 3–10]" — since the
+  // pills themselves belong to the message that was sent.
   const sentHistory = messages
     .filter(
       (message) =>
@@ -1003,7 +1075,17 @@ export function ChatDock({
         message.content !== QUESTIONS_DISMISSED_MESSAGE &&
         message.content.trim() !== "",
     )
-    .map((message) => message.content);
+    .map((message) =>
+      messageWithAttachmentNames(
+        message.content,
+        message.attachments ??
+          attachmentsFromMetadata(
+            typeof message.metadata === "object" && message.metadata !== null
+              ? (message.metadata as Record<string, unknown>)
+              : undefined,
+          ),
+      ),
+    );
   const [recall, setRecall] = useState<{ index: number; stash: string } | null>(
     null,
   );
@@ -1019,12 +1101,8 @@ export function ChatDock({
     const content = sentHistory[index];
     if (content === undefined) return;
     setRecall({ index, stash });
-    setDraft(content);
+    rewriteText(content);
     flashRecall();
-    requestAnimationFrame(() => {
-      const input = inputRef.current;
-      input?.setSelectionRange(input.value.length, input.value.length);
-    });
   };
   const recallUp = (): boolean => {
     if (sentHistory.length === 0) return false;
@@ -1040,7 +1118,7 @@ export function ChatDock({
   const recallDown = (): boolean => {
     if (recall === null) return false;
     if (recall.index >= sentHistory.length - 1) {
-      setDraft(recall.stash);
+      rewriteText(recall.stash);
       setRecall(null);
       flashRecall();
       return true;
@@ -1138,7 +1216,7 @@ export function ChatDock({
   // chat that no longer exists. The unmount cleanup is a separate effect:
   // a combined effect's cleanup would fire on every dep change, flapping
   // working false→true and producing phantom "finished" notifications.
-  const hasDraft = draft.trim().length > 0 || attachments.length > 0;
+  const hasDraft = draft.trim().length > 0 || pillCount > 0;
   const awaitingInput = Boolean(questions) && !chat.isWorking;
   useEffect(() => {
     onSignalsChange(entry.localId, {
@@ -1224,7 +1302,7 @@ export function ChatDock({
     !chat.isSending &&
     chat.queuedMessageCount === 0 &&
     draft.trim() === "" &&
-    attachments.length === 0;
+    pillCount === 0;
   const isEmptyRef = useRef(isEmpty);
   isEmptyRef.current = isEmpty;
   const onCloseRef = useRef(onClose);
@@ -1263,13 +1341,11 @@ export function ChatDock({
     message: string;
     files: AgentChatAttachment[];
   } | null => {
-    const message = draft.trim();
-    const files = attachments
-      .filter((attachment) => !attachment.exiting)
-      .map(({ id: _id, exiting: _exiting, ...attachment }) => attachment);
+    const composed = composerRef.current?.read();
+    if (!composed) return null;
+    const { message, attachments: files } = composed;
     if (!message && files.length === 0) return null;
-    setDraft("");
-    setAttachments([]);
+    composerRef.current?.clear();
     setRecall(null);
     return { message, files };
   };
@@ -1288,7 +1364,7 @@ export function ChatDock({
     void chat.sendNow(resolveSlashMessage(composed.message), composed.files);
   };
 
-  const onKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>) => {
+  const onKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
     if (event.nativeEvent.isComposing) return;
     // The slash menu owns navigation keys while open (before recall's
     // ArrowUp/Down claim below). Escape closes it and stays in the
@@ -1311,7 +1387,7 @@ export function ChatDock({
         event.preventDefault();
         const skill = slashMatches[slashSelected];
         if (skill) {
-          setDraft(`/${skill.name} `);
+          rewriteText(`/${skill.name} `);
           setRecall(null);
         }
         return;
@@ -1351,21 +1427,17 @@ export function ChatDock({
       if (recallDown()) event.preventDefault();
       return;
     }
-    // Backspace in an empty composer pops the newest attachment (the
-    // palette's chip-pop, applied to pills and media alike).
+    // Backspace with no prose left pops the newest pill (the palette's
+    // chip-pop) — the input already handles a caret sitting right against
+    // a pill; this covers a caret parked elsewhere in an otherwise empty
+    // composer.
     if (
       event.key === "Backspace" &&
       draft.length === 0 &&
       !event.metaKey &&
       !event.altKey
     ) {
-      const last = attachments
-        .filter((attachment) => !attachment.exiting)
-        .at(-1);
-      if (last) {
-        event.preventDefault();
-        removeAttachment(last.id);
-      }
+      if (composerRef.current?.removeLastPill()) event.preventDefault();
       return;
     }
     if (event.key !== "Enter") return;
@@ -1380,123 +1452,125 @@ export function ChatDock({
     }
   };
 
-  /** Animated removal: mark exiting, drop on pill-out's animationend. */
-  const removeAttachment = (id: string) =>
-    setAttachments((current) =>
-      current.map((attachment) =>
-        attachment.id === id ? { ...attachment, exiting: true } : attachment,
-      ),
-    );
-  const dropExited = (id: string) =>
-    setAttachments((current) =>
-      current.filter((attachment) => attachment.id !== id),
-    );
-
-  /** Add a text pill (paste, selection, URL, path); capped like the server. */
-  const addTextPill = (pill: AgentChatTextAttachment) =>
-    setAttachments((current) => {
-      const live = current.filter((attachment) => !attachment.exiting);
-      if (live.length >= MAX_ATTACHMENTS) return current;
-      // The same selection can arrive twice (pulled when the chat came to
-      // the front, then pasted): one pill.
-      const source = pill.source;
-      if (
-        source.type === "selection" &&
-        live.some(
+  /**
+   * Add a text pill (paste, selection, URL, path, tab) inline at the caret
+   * (or where it was dropped); capped like the server.
+   */
+  const addTextPill = (
+    pill: AgentChatTextAttachment,
+    at?: { x: number; y: number },
+  ) => {
+    const composer = composerRef.current;
+    if (!composer) return;
+    // The same selection can arrive twice (pulled when the chat came to
+    // the front, then pasted): one pill.
+    const source = pill.source;
+    if (
+      source.type === "selection" &&
+      composer
+        .read()
+        .attachments.some(
           (attachment) =>
-            isTextPill(attachment) &&
+            attachment.kind === "text" &&
             attachment.source.type === "selection" &&
             attachment.source.filePath === source.filePath &&
             attachment.text.replace(/\r\n?/g, "\n") ===
               pill.text.replace(/\r\n?/g, "\n"),
         )
-      ) {
-        return current;
-      }
-      return [...current, { ...pill, id: crypto.randomUUID() }];
-    });
+    ) {
+      return;
+    }
+    composer.insertPills([{ ...pill, id: crypto.randomUUID() }], { at });
+  };
   const addTextPillRef = useRef(addTextPill);
   addTextPillRef.current = addTextPill;
 
-  /** Convert dropped/pasted files into composer chips (capability-gated). */
-  const addFiles = (files: File[]) => {
+  /**
+   * Dropped/pasted files become inline pills. Media (image/document) when
+   * the agent takes that kind, the file fits the per-file cap, and the
+   * message's media budget has room; ANYTHING else — a .pcap, an oversized
+   * video, media for a text-only agent — still attaches, as a path pill
+   * the agent reads itself. Only a pathless File that can't ship as media
+   * (a synthetic clipboard bitmap too big to send) is dropped.
+   */
+  const addFiles = (files: File[], at?: { x: number; y: number }) => {
     if (files.length === 0) return;
-    void Promise.all(files.map(fileToAttachment)).then((converted) => {
-      const usable = converted.filter(
-        (attachment): attachment is ComposerAttachment =>
-          attachment !== null &&
-          attachment.kind !== "text" &&
-          accepts.includes(attachment.kind),
-      );
-      if (usable.length === 0) return;
-      setAttachments((current) => {
-        const live = current.filter((attachment) => !attachment.exiting);
-        const room = Math.max(0, MAX_ATTACHMENTS - live.length);
-        return [...current, ...usable.slice(0, room)];
-      });
-    });
+    void (async () => {
+      const current = composerRef.current?.read().attachments ?? [];
+      let budget =
+        MAX_TOTAL_MEDIA_BYTES -
+        current.reduce(
+          (total, attachment) =>
+            attachment.kind === "text"
+              ? total
+              : total + Math.round((attachment.dataBase64.length * 3) / 4),
+          0,
+        );
+      const pills: ComposerAttachment[] = [];
+      for (const file of files) {
+        const kind = mediaKindOf(file);
+        const asMedia =
+          kind !== null &&
+          accepts.includes(kind) &&
+          file.size > 0 &&
+          file.size <= MAX_ATTACHMENT_BYTES &&
+          file.size <= budget;
+        if (asMedia) {
+          pills.push(await encodeFile(file, kind));
+          budget -= file.size;
+          continue;
+        }
+        const pathPill = pathPillFor(file);
+        if (pathPill) pills.push(pathPill);
+      }
+      if (pills.length > 0) composerRef.current?.insertPills(pills, { at });
+    })();
   };
 
-  const acceptsMediaRef = useRef(accepts.length > 0);
-  acceptsMediaRef.current = accepts.length > 0;
   const addFilesRef = useRef(addFiles);
   addFilesRef.current = addFiles;
 
-  // Paste is handled at the WINDOW while this chat is the front surface:
-  // requiring the caret to be exactly in the textarea made "copy a
-  // screenshot, click the chat, Cmd+V" silently do nothing. Files become
-  // media chips (capability-gated); big text, URLs, and file paths become
-  // text pills (universal — every harness takes text); ordinary short text
-  // stays a native paste into whatever field has the caret.
-  const frontSurface = entry.mode === "partial" || (isTab && tabActive);
-  useEffect(() => {
-    if (!frontSurface) return;
-    const onWindowPaste = (event: globalThis.ClipboardEvent) => {
-      if (event.defaultPrevented) return;
-      const files = filesFrom(event.clipboardData);
-      if (files.length > 0) {
-        if (!acceptsMediaRef.current) return;
-        event.preventDefault();
-        addFilesRef.current(files);
-        return;
-      }
-      // Text pills only when the paste is aimed at THIS composer (or at no
-      // field at all): pasting a URL into a settings input must stay a
-      // plain paste there.
-      const target = event.target;
-      const inComposer =
-        target instanceof HTMLTextAreaElement
-          ? target.getAttribute("aria-label") === "Message the assistant"
-          : !(target instanceof HTMLInputElement) &&
-            !(target instanceof HTMLElement && target.isContentEditable);
-      if (!inComposer) return;
-      // Copied out of one of our editors: a selection pill whatever the
-      // size — the file + line range is the point, not the byte count.
-      const fromEditor = selectionFromClipboard(event.clipboardData);
-      if (fromEditor) {
-        event.preventDefault();
-        addTextPillRef.current(
-          textPill(
-            fromEditor.text.replace(/\r\n?/g, "\n"),
-            {
-              type: "selection",
-              filePath: fromEditor.filePath,
-              ...(fromEditor.startLine !== undefined
-                ? { startLine: fromEditor.startLine }
-                : {}),
-              ...(fromEditor.endLine !== undefined
-                ? { endLine: fromEditor.endLine }
-                : {}),
-            },
-            selectionName(fromEditor),
-          ),
-        );
-        return;
-      }
-      const text = event.clipboardData?.getData("text/plain") ?? "";
-      const classified = classifyPastedText(text);
-      if (classified.kind !== "pill") return;
-      event.preventDefault();
+  /**
+   * What a paste becomes. Files → media pills (capability-gated); a copy
+   * out of one of our editors → a selection pill whatever the size (the
+   * file + line range is the point, not the byte count); big text, URLs
+   * and file paths → text pills (universal — every harness takes text);
+   * ordinary short text → plain text at the caret when the paste is
+   * aimed at the composer, nothing otherwise. Returns whether it took
+   * the paste.
+   */
+  const consumePaste = (
+    data: DataTransfer | null,
+    opts: { intoComposer: boolean },
+  ): boolean => {
+    const files = filesFrom(data);
+    if (files.length > 0) {
+      addFilesRef.current(files);
+      return true;
+    }
+    const fromEditor = selectionFromClipboard(data);
+    if (fromEditor) {
+      addTextPillRef.current(
+        textPill(
+          fromEditor.text.replace(/\r\n?/g, "\n"),
+          {
+            type: "selection",
+            filePath: fromEditor.filePath,
+            ...(fromEditor.startLine !== undefined
+              ? { startLine: fromEditor.startLine }
+              : {}),
+            ...(fromEditor.endLine !== undefined
+              ? { endLine: fromEditor.endLine }
+              : {}),
+          },
+          selectionName(fromEditor),
+        ),
+      );
+      return true;
+    }
+    const text = data?.getData("text/plain") ?? "";
+    const classified = classifyPastedText(text);
+    if (classified.kind === "pill") {
       addTextPillRef.current(
         textPill(
           text.replace(/\r\n?/g, "\n"),
@@ -1504,6 +1578,44 @@ export function ChatDock({
           classified.name,
         ),
       );
+      return true;
+    }
+    if (!opts.intoComposer || !text) return false;
+    // Rich clipboards (HTML from a page) land as plain text — the composer
+    // is prose, not a document.
+    composerRef.current?.insertText(text.replace(/\r\n?/g, "\n"));
+    return true;
+  };
+  const consumePasteRef = useRef(consumePaste);
+  consumePasteRef.current = consumePaste;
+
+  /** Paste aimed at the composer: always ours (plain text, pills, files). */
+  const onComposerPaste = (event: ClipboardEvent<HTMLDivElement>) => {
+    event.preventDefault();
+    consumePaste(event.clipboardData, { intoComposer: true });
+  };
+
+  // Paste is ALSO handled at the WINDOW while this chat is the front
+  // surface: requiring the caret to be exactly in the composer made "copy
+  // a screenshot, click the chat, Cmd+V" silently do nothing. Only pastes
+  // aimed at no field at all count — pasting a URL into a settings input
+  // must stay a plain paste there.
+  const frontSurface = entry.mode === "partial" || (isTab && tabActive);
+  useEffect(() => {
+    if (!frontSurface) return;
+    const onWindowPaste = (event: globalThis.ClipboardEvent) => {
+      if (event.defaultPrevented) return;
+      const target = event.target;
+      const inField =
+        target instanceof HTMLInputElement ||
+        target instanceof HTMLTextAreaElement ||
+        (target instanceof HTMLElement && target.isContentEditable);
+      if (inField) return;
+      if (
+        consumePasteRef.current(event.clipboardData, { intoComposer: false })
+      ) {
+        event.preventDefault();
+      }
     };
     window.addEventListener("paste", onWindowPaste);
     return () => window.removeEventListener("paste", onWindowPaste);
@@ -1550,12 +1662,11 @@ export function ChatDock({
 
   // Expanding (bubble click, new chat) should land the user ready to type.
   // rAF waits out the `inert` removal — focus() is a no-op on inert subtrees.
-  const inputRef = useRef<HTMLTextAreaElement>(null);
   // The composer's attach button opens this hidden picker.
   const fileInputRef = useRef<HTMLInputElement>(null);
   useEffect(() => {
     if (!expanded) return;
-    const frame = requestAnimationFrame(() => inputRef.current?.focus());
+    const frame = requestAnimationFrame(() => composerRef.current?.focus());
     return () => cancelAnimationFrame(frame);
   }, [expanded]);
   // Stepping down from a tab to the floating dock (Escape) keeps the
@@ -1570,7 +1681,7 @@ export function ChatDock({
     const previous = previousModeRef.current;
     previousModeRef.current = entry.mode;
     if (!(previous === "tab" && entry.mode === "partial")) return;
-    const focus = () => inputRef.current?.focus();
+    const focus = () => composerRef.current?.focus();
     focus();
     const frame = requestAnimationFrame(focus);
     const timer = window.setTimeout(focus, 260);
@@ -1635,8 +1746,10 @@ export function ChatDock({
       <section
         onMouseDownCapture={onFocusRequest}
         onDragEnter={(event) => {
-          if (!acceptsMediaRef.current) return;
-          if (![...(event.dataTransfer?.types ?? [])].includes("Files")) return;
+          const types = [...(event.dataTransfer?.types ?? [])];
+          const droppable =
+            types.includes("Files") || types.includes(TAB_DRAG_TYPE);
+          if (!droppable) return;
           event.preventDefault();
           dragDepthRef.current += 1;
           setDropActive(true);
@@ -1654,7 +1767,20 @@ export function ChatDock({
           event.preventDefault();
           dragDepthRef.current = 0;
           setDropActive(false);
-          addFiles(filesFrom(event.dataTransfer));
+          // Dropped onto the composer itself: the pill lands where the
+          // pointer let go; anywhere else on the chat: at the caret/end.
+          const overComposer =
+            event.target instanceof HTMLElement &&
+            event.target.closest("[data-composer-input]") !== null;
+          const at = overComposer
+            ? { x: event.clientX, y: event.clientY }
+            : undefined;
+          const tab = tabPillFromDrag(event.dataTransfer);
+          if (tab) {
+            addTextPill(tab, at);
+            return;
+          }
+          addFiles(filesFrom(event.dataTransfer), at);
         }}
         data-palette-target={(paletteTargeted && !isTab) || undefined}
         data-floating-chat={entry.mode === "partial" || undefined}
@@ -1878,121 +2004,72 @@ export function ChatDock({
                   ))}
                 </div>
               )}
-              {/* Pasted media waits as chips until the message sends. */}
-              {/* Attachments wait as pills/chips until the message sends:
-                  text pills (pastes, selections, links, paths) expand to
-                  show their content; media chips show a thumb or name.
-                  Both enter with pill-in and leave with pill-out. */}
-              {attachments.length > 0 && (
-                <div
-                  className="flex flex-wrap gap-1.5 px-1.5 pb-1 pt-0.5"
-                  data-testid="composer-attachments"
-                >
-                  {attachments.map((attachment) =>
-                    isTextPill(attachment) ? (
-                      <ComposerPill
-                        key={attachment.id}
-                        attachment={attachment}
-                        exiting={attachment.exiting}
-                        onRemove={() => removeAttachment(attachment.id)}
-                        onExited={() => dropExited(attachment.id)}
-                      />
-                    ) : (
-                      <span
-                        key={attachment.id}
-                        className={`group/att relative flex items-center gap-1.5 overflow-hidden rounded-lg border border-border bg-bg-inset text-[11px] text-fg-muted ${
-                          attachment.exiting
-                            ? "animate-pill-out"
-                            : "animate-pill-in"
-                        }`}
-                        onAnimationEnd={(event) => {
-                          if (event.animationName === "pill-out") {
-                            dropExited(attachment.id);
-                          }
-                        }}
-                      >
-                        {attachment.kind === "image" ? (
-                          <img
-                            src={`data:${attachment.mediaType};base64,${attachment.dataBase64}`}
-                            alt={attachment.name}
-                            className="size-10 object-cover"
-                          />
-                        ) : (
-                          <span className="flex items-center gap-1.5 py-2 pl-2">
-                            <FileText className="size-3.5" />
-                            <span className="max-w-32 truncate">
-                              {attachment.name}
-                            </span>
-                          </span>
-                        )}
-                        <button
-                          type="button"
-                          onClick={() => removeAttachment(attachment.id)}
-                          className="grid size-5 shrink-0 cursor-pointer place-items-center self-start text-fg-faint hover:text-fg"
-                          aria-label={`Remove ${attachment.name}`}
-                        >
-                          <X className="size-3" />
-                        </button>
-                      </span>
-                    ),
-                  )}
-                </div>
-              )}
               <div className="flex items-center gap-2">
-                {accepts.length > 0 && (
-                  <ShortcutHint label="Attach files">
-                    <button
-                      type="button"
-                      onClick={() => fileInputRef.current?.click()}
-                      className="grid size-8 shrink-0 cursor-pointer place-items-center rounded-lg text-fg-muted transition-colors duration-150 hover:bg-bg-overlay hover:text-fg"
-                      aria-label="Attach files"
-                    >
-                      <Paperclip className="size-4" />
-                    </button>
-                  </ShortcutHint>
-                )}
+                {/* Any file attaches — as media when the agent takes it,
+                    as a path pill otherwise — so the picker never filters
+                    and never hides. */}
+                <ShortcutHint label="Attach files">
+                  <button
+                    type="button"
+                    onClick={() => fileInputRef.current?.click()}
+                    className="grid size-8 shrink-0 cursor-pointer place-items-center rounded-lg text-fg-muted transition-colors duration-150 hover:bg-bg-overlay hover:text-fg"
+                    aria-label="Attach files"
+                  >
+                    <Paperclip className="size-4" />
+                  </button>
+                </ShortcutHint>
                 <input
                   ref={fileInputRef}
                   type="file"
                   multiple
-                  accept={[
-                    ...(accepts.includes("image") ? ["image/*"] : []),
-                    ...(accepts.includes("document")
-                      ? [...DOCUMENT_TYPES]
-                      : []),
-                  ].join(",")}
                   className="hidden"
                   onChange={(event) => {
                     addFiles([...(event.target.files ?? [])]);
                     event.target.value = "";
                   }}
                 />
-                <textarea
-                  ref={inputRef}
+                {/* Prose and pills in one flow: pastes, selections, links,
+                    tabs, images and documents sit inline where they were
+                    dropped, enter with pill-in and leave with pill-out. */}
+                <ComposerInput
+                  ref={composerRef}
                   onAnimationEnd={(event) => {
                     if (event.animationName === "input-recall") {
                       setRecallAnimating(false);
                     }
                   }}
-                  className={`field-sizing-content max-h-24 min-h-9 min-w-0 flex-1 resize-none bg-transparent px-2.5 py-1.5 text-sm outline-none placeholder:text-fg-faint ${
+                  wrapperClassName="min-w-0 flex-1"
+                  className={`max-h-24 min-h-9 overflow-y-auto px-2.5 py-1.5 text-sm leading-6 ${
                     recallAnimating ? "animate-input-recall" : ""
                   }`}
-                  value={draft}
-                  onChange={(event) => {
-                    setDraft(event.target.value);
-                    // Typing exits history-recall mode and revives a
-                    // dismissed slash menu.
-                    setRecall(null);
-                    setSlashDismissed(false);
+                  onChange={(state) => {
+                    setPillCount(state.pillCount);
+                    setDraft(state.text);
+                    // Typing (or pasting) exits history-recall mode and
+                    // revives a dismissed slash menu; the dock's own
+                    // rewrites (recall itself) don't count.
+                    if (
+                      !rewritingRef.current &&
+                      state.text !== draftRef.current
+                    ) {
+                      setRecall(null);
+                      setSlashDismissed(false);
+                    }
                   }}
                   onKeyDown={onKeyDown}
+                  onPaste={onComposerPaste}
+                  onOpenTab={
+                    onOpenSurface
+                      ? (key) => onOpenSurface(key, "tab")
+                      : undefined
+                  }
+                  maxPills={MAX_ATTACHMENTS}
                   placeholder={
                     accepts.length > 0
                       ? placeholder
                       : `${placeholder.replace(/…$/, "")} (text only)…`
                   }
-                  rows={1}
-                  aria-label="Message the assistant"
+                  ariaLabel="Message the assistant"
                 />
                 <ShortcutHint
                   label={chat.isWorking ? "Queue (⌘↵ sends now)" : "Send"}
@@ -2001,10 +2078,7 @@ export function ChatDock({
                   <button
                     type="submit"
                     className="grid size-8 shrink-0 place-items-center rounded-lg bg-accent text-accent-fg transition-opacity duration-150 disabled:opacity-35"
-                    disabled={
-                      !draft.trim() &&
-                      !attachments.some((attachment) => !attachment.exiting)
-                    }
+                    disabled={!draft.trim() && pillCount === 0}
                     aria-label="Send message"
                   >
                     <ArrowUp className="size-4" />
