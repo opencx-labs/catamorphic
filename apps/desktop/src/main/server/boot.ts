@@ -351,7 +351,13 @@ export async function startEmbeddedServer(
     };
   });
 
-  const app: FastifyInstance = Fastify({ logger: { level: "warn" } });
+  // Fastify's default 1MB body cap rejects a single pasted screenshot;
+  // media attachments are ~10MB each (base64 4/3), the composer caps the
+  // total it sends well below this.
+  const app: FastifyInstance = Fastify({
+    logger: { level: "warn" },
+    bodyLimit: 96 * 1024 * 1024,
+  });
   await app.register(cors, {
     origin: true,
     methods: ["GET", "HEAD", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],

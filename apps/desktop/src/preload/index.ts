@@ -1,4 +1,4 @@
-import { contextBridge, ipcRenderer } from "electron";
+import { contextBridge, ipcRenderer, webUtils } from "electron";
 
 export interface ServerInfo {
   url: string | null;
@@ -8,6 +8,19 @@ export interface ServerInfo {
 const api = {
   getServerState: (): Promise<ServerInfo> =>
     ipcRenderer.invoke("catamorphic:server-state"),
+
+  /**
+   * Absolute filesystem path of a pasted/dropped File, "" when it has none
+   * (clipboard bitmaps, synthetic Files). Lets the composer attach any
+   * file at least as a path pill the agent can read itself.
+   */
+  pathForFile: (file: File): string => {
+    try {
+      return webUtils.getPathForFile(file);
+    } catch {
+      return "";
+    }
+  },
 
   // --- window ↔ profile ---
   windowProfile: (): Promise<string> =>
