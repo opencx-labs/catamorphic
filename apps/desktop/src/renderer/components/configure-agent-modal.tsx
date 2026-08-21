@@ -542,8 +542,10 @@ function ProfileAgentBody({
                   <span>
                     <span className="block text-[12px] text-fg">Memory</span>
                     <span className="block text-[11px] text-fg-faint">
-                      Let Claude Code keep its persistent auto-memory. Off =
-                      every session starts clean and writes nothing.
+                      Let Claude Code keep a persistent auto-memory. Off (the
+                      default): every session starts clean and writes nothing
+                      — remembered context changes an agent over time without
+                      you seeing it.
                     </span>
                   </span>
                 </label>
@@ -738,7 +740,11 @@ function ProjectAgentBody({
           {fact("Mode", agent.mode ?? "edit")}
           {fact(
             "Memory",
-            agent.memory === null ? null : agent.memory ? "on" : "off",
+            agent.kind === "claude-code"
+              ? agent.memory
+                ? "on"
+                : "off"
+              : null,
           )}
           {fact(
             "Credentials",

@@ -42,7 +42,7 @@ export interface AgentInfo {
   /** The agent's own main prompt ("" when none). */
   instructions: string;
   mode: AgentMode;
-  /** Claude Code auto-memory (other harnesses ignore it). */
+  /** Claude Code auto-memory — opt-in, default off (others ignore it). */
   memory: boolean;
   connections: AgentConnectionsSetting;
   skills: AgentSkillsSetting;
@@ -74,7 +74,7 @@ export interface ProjectAgentInfo {
   effort: AgentEffort | null;
   /** Normalized operating mode; null = the "edit" default. */
   mode: AgentMode | null;
-  /** Claude Code auto-memory; null = the definition doesn't say (on). */
+  /** Claude Code auto-memory; null = the definition doesn't say (off). */
   memory: boolean | null;
   credentialsSource: "profile" | "secret" | "local";
   secretName: string | null;
@@ -118,7 +118,7 @@ export function projectAgentAsInfo(agent: ProjectAgentInfo): AgentInfo {
     accepts: harness === "codex" ? [] : ["image", "document"],
     instructions: "",
     mode: agent.mode ?? "edit",
-    memory: agent.memory !== false,
+    memory: agent.memory === true,
     connections: { mode: "all" },
     skills: agent.skills
       ? { mode: "picked", names: agent.skills }

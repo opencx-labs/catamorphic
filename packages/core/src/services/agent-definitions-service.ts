@@ -153,8 +153,9 @@ export function agentDefinitionSchema(opts?: { allowE2eFake?: boolean }) {
      */
     mode: z.enum(["read-only", "edit", "full-access"]).optional(),
     /**
-     * Claude Code auto-memory. Absent = on (the CLI's own behavior);
-     * `false` disables it for every session of this agent.
+     * Claude Code auto-memory. Absent = OFF — memory is opt-in
+     * (ADR 0056): accumulated memories change an agent's behavior over
+     * time without users seeing it happen. `true` enables it.
      */
     memory: z.boolean().optional(),
     description: z.string().optional(),

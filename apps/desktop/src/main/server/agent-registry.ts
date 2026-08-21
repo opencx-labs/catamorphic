@@ -606,7 +606,7 @@ export class DesktopAgentRegistry implements CodingAgentRegistry {
       model: def.model ?? "",
       effort: def.effort ?? "medium",
       ...(def.mode ? { mode: def.mode } : {}),
-      ...(def.memory === false ? { memory: false } : {}),
+      ...(def.memory === true ? { memory: true } : {}),
       auth:
         source === "secret" || bindingAuth?.mode === "api-key"
           ? "api-key"
@@ -644,7 +644,7 @@ export class DesktopAgentRegistry implements CodingAgentRegistry {
       // nothing personal) that still shape the provider: key on them so
       // an edit reaches the next turn.
       toolPolicies: def.toolPolicies ?? null,
-      memory: def.memory ?? true,
+      memory: def.memory ?? false,
       skills: def.skills ?? null,
       connections: def.connections ?? null,
       mcp: { servers: serverShapes(mcp.servers), plugins: mcp.plugins },
@@ -868,7 +868,10 @@ export class DesktopAgentRegistry implements CodingAgentRegistry {
                 // The normalized mode (ADR 0056) on the CLI's own knob;
                 // read-only agents also lose the mutating workspace tools.
                 permissionMode: CLAUDE_PERMISSION_MODES[config.mode ?? "edit"],
-                ...(config.memory === false ? { memory: false } : {}),
+                // Memory is opt-in (ADR 0056): the harness mirrors the
+                // CLI (on when omitted), the product's doctrine is off —
+                // so the flag is always passed explicitly.
+                memory: config.memory === true,
                 ...(Object.keys(env).length > 0 ? { env } : {}),
                 extraTools: this.workspaceTools(config),
                 // Claude Code's own Bash runs inside the CLI where we

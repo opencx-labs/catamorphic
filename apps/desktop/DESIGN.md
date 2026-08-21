@@ -2763,8 +2763,11 @@ Patterned on what best-in-class palettes converged on (Chrome omnibox
 - **New agent options.** Instructions (the agent's own persona,
   textarea), Mode (read-only / edit / full access — one select, the
   per-harness mapping said in helper text; hidden for the sandboxed
-  built-in), Memory (Claude Code only, a checkbox honest about what off
-  means), Skills (all vs picked, same shape as connections; picked
+  built-in), Memory (Claude Code only; OPT-IN, default off — remembered
+  context changes an agent over time without the user seeing it, and a
+  silently drifting agent is worse than a stateless one; the checkbox
+  copy says exactly that), Skills (all vs picked, same shape as
+  connections; picked
   names that no longer resolve stay visible as removable "not found
   here" rows — a pick never silently shrinks). Effort grows extra-high
   and max rows in every picker, each described, with clamping named

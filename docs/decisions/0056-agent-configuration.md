@@ -52,11 +52,16 @@ Profile agents (`agents.json`) and committed definitions
   `sandboxMode read-only | workspace-write | danger-full-access`. The
   built-in agent is sandboxed with draft sync-back — mode does not apply
   and the UI says so.
-- **`memory`** — boolean, default true. Claude Code only. `false` spawns
-  the CLI with `CLAUDE_CODE_DISABLE_AUTO_MEMORY=1`, the SDK's supported
-  kill-switch for auto-memory. Works for every auth mode (it's per
-  process, not per settings file). Other harnesses have no memory; the
-  toggle is hidden.
+- **`memory`** — boolean, **default false**: memory is opt-in. Claude
+  Code only. Accumulated memories change an agent's behavior over time
+  without the user seeing it happen — a silently drifting agent is worse
+  than a stateless one — so nothing remembers unless the user turned it
+  on. Off spawns the CLI with `CLAUDE_CODE_DISABLE_AUTO_MEMORY=1`, the
+  SDK's supported kill-switch; works for every auth mode (per process,
+  not per settings file). The harness option itself mirrors the CLI (on
+  when omitted) — the opt-in default is product doctrine (0049), so the
+  desktop always passes the flag explicitly. Other harnesses have no
+  memory; the toggle is hidden.
 - **`skills`** — `{ mode: "all" } | { mode: "picked"; names: [...] }`
   (profile) / `skills: string[]` (committed; absent = all). Which skills
   the agent is *offered*: the system-prompt skills section lists only the

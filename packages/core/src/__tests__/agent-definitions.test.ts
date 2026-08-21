@@ -174,9 +174,7 @@ describe("definitionHash", () => {
     // does not invalidate standing consent.
     expect(definitionHash({ ...def, mode: "edit" })).toBe(definitionHash(def));
     // Memory and skills stay outside: nothing personal is widened.
-    expect(definitionHash({ ...def, memory: false })).toBe(
-      definitionHash(def),
-    );
+    expect(definitionHash({ ...def, memory: true })).toBe(definitionHash(def));
     expect(definitionHash({ ...def, skills: ["publishing-to-github"] })).toBe(
       definitionHash(def),
     );

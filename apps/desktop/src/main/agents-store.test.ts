@@ -42,12 +42,12 @@ describe("AgentsStore — ADR 0056 fields", () => {
       harness: "claude-code",
       instructions: "  You are the reviewer.  ",
       mode: "read-only",
-      memory: false,
+      memory: true,
       skills: { mode: "picked", names: ["publishing-to-github"] },
     });
     expect(agent.instructions).toBe("You are the reviewer.");
     expect(agent.mode).toBe("read-only");
-    expect(agent.memory).toBe(false);
+    expect(agent.memory).toBe(true);
     expect(agent.skills).toEqual({
       mode: "picked",
       names: ["publishing-to-github"],
@@ -65,27 +65,28 @@ describe("AgentsStore — ADR 0056 fields", () => {
     expect(stored.skills).toBeUndefined();
     expect(stored.instructions).toBeUndefined();
 
-    // The public shape materializes them for the renderer.
+    // The public shape materializes them for the renderer. Memory is
+    // OPT-IN (ADR 0056): a fresh agent remembers nothing.
     const publicAgent = toPublicAgent(plain);
     expect(publicAgent.mode).toBe("edit");
-    expect(publicAgent.memory).toBe(true);
+    expect(publicAgent.memory).toBe(false);
     expect(publicAgent.skills).toEqual({ mode: "all" });
     expect(publicAgent.instructions).toBe("");
   });
 
-  it("update clears back to defaults ('' instructions, edit mode, memory on, all skills)", () => {
+  it("update clears back to defaults ('' instructions, edit mode, memory off, all skills)", () => {
     const store = new AgentsStore(storeFile());
     const agent = store.create({
       harness: "claude-code",
       instructions: "persona",
       mode: "full-access",
-      memory: false,
+      memory: true,
       skills: { mode: "picked", names: ["a"] },
     });
     const updated = store.update(agent.id, {
       instructions: "",
       mode: "edit",
-      memory: true,
+      memory: false,
       skills: { mode: "all" },
     });
     expect(updated?.instructions).toBeUndefined();

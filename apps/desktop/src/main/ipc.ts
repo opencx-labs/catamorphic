@@ -96,7 +96,7 @@ export interface ProjectAgentInfo {
   effort: "low" | "medium" | "high" | "xhigh" | "max" | null;
   /** Normalized operating mode (ADR 0056); null = the "edit" default. */
   mode: "read-only" | "edit" | "full-access" | null;
-  /** Claude Code auto-memory; null = the definition doesn't say (on). */
+  /** Claude Code auto-memory; null = the definition doesn't say (off). */
   memory: boolean | null;
   credentialsSource: "profile" | "secret" | "local";
   secretName: string | null;

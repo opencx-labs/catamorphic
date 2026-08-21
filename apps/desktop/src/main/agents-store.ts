@@ -85,9 +85,11 @@ export interface AgentConfig {
   /** Operating mode; absent means "edit". */
   mode?: AgentModeSetting;
   /**
-   * Claude Code auto-memory; absent means on (the CLI's own behavior).
-   * `false` disables it for every session of this agent. Other harnesses
-   * have no memory and ignore it.
+   * Claude Code auto-memory; absent means OFF — memory is opt-in
+   * (ADR 0056): accumulated memories change an agent's behavior over
+   * time without the user seeing it happen, so nothing remembers unless
+   * the user turned it on. `true` enables the CLI's auto-memory. Other
+   * harnesses have no memory and ignore it.
    */
   memory?: boolean;
   /** MCP connection assignment; absent means `{ mode: "all" }`. */
@@ -139,7 +141,7 @@ export interface PublicAgentConfig {
   instructions: string;
   /** Operating mode (always materialized; default "edit"). */
   mode: AgentModeSetting;
-  /** Claude Code auto-memory (always materialized; default true). */
+  /** Claude Code auto-memory (always materialized; opt-in, default false). */
   memory: boolean;
   /** MCP connection assignment (always materialized; default "all"). */
   connections: AgentConnectionsSetting;
@@ -337,7 +339,7 @@ export class AgentsStore {
         ? { instructions: input.instructions.trim() }
         : {}),
       ...(input.mode && input.mode !== "edit" ? { mode: input.mode } : {}),
-      ...(input.memory === false ? { memory: false } : {}),
+      ...(input.memory === true ? { memory: true } : {}),
       ...(input.connections ? { connections: input.connections } : {}),
       ...(input.skills ? { skills: input.skills } : {}),
       ...(input.toolPolicies ? { toolPolicies: input.toolPolicies } : {}),
@@ -370,8 +372,8 @@ export class AgentsStore {
       else stored.mode = patch.mode;
     }
     if (patch.memory !== undefined) {
-      if (patch.memory) delete stored.memory;
-      else stored.memory = false;
+      if (patch.memory) stored.memory = true;
+      else delete stored.memory;
     }
     if (patch.connections !== undefined) stored.connections = patch.connections;
     if (patch.skills !== undefined) {
@@ -451,7 +453,7 @@ export function toPublicAgent(agent: AgentConfig): PublicAgentConfig {
     accepts: agentAccepts(agent),
     instructions: agent.instructions ?? "",
     mode: agent.mode ?? "edit",
-    memory: agent.memory !== false,
+    memory: agent.memory === true,
     connections: agent.connections ?? { mode: "all" },
     skills: agent.skills ?? { mode: "all" },
     toolPolicies: agent.toolPolicies ?? {},
