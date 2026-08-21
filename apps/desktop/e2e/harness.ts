@@ -35,6 +35,12 @@ export interface AppHandle {
   ) => Promise<T>;
   screenshot: (filePath: string) => Promise<void>;
   /**
+   * Press a real key through CDP (Chromium performs its default editing —
+   * a synthetic KeyboardEvent can't delete text in a contenteditable).
+   * `modifiers` is CDP's bitmask: Alt=1, Ctrl=2, Meta=4, Shift=8.
+   */
+  press: (key: KeyName, modifiers?: number) => Promise<void>;
+  /**
    * Attach a second CDP session to an out-of-process iframe — e.g. a
    * sandboxed app guest, whose opaque origin makes it unreachable from the
    * page context — found by URL substring across the browser's targets.
@@ -296,8 +302,28 @@ async function createClient(ws: WebSocket, opts: { page?: boolean } = {}) {
     fs.writeFileSync(filePath, Buffer.from(result.data, "base64"));
   };
 
-  return { eval: evaluate, waitFor, screenshot };
+  const press = async (key: KeyName, modifiers = 0): Promise<void> => {
+    const params = { key, modifiers, ...KEY_CODES[key] };
+    await send("Input.dispatchKeyEvent", { type: "keyDown", ...params });
+    await send("Input.dispatchKeyEvent", { type: "keyUp", ...params });
+  };
+
+  return { eval: evaluate, waitFor, screenshot, press };
 }
+
+export type KeyName = keyof typeof KEY_CODES;
+
+const KEY_CODES = {
+  Enter: { windowsVirtualKeyCode: 13, code: "Enter", text: "\r" },
+  Backspace: { windowsVirtualKeyCode: 8, code: "Backspace" },
+  Delete: { windowsVirtualKeyCode: 46, code: "Delete" },
+  Escape: { windowsVirtualKeyCode: 27, code: "Escape" },
+  Tab: { windowsVirtualKeyCode: 9, code: "Tab" },
+  ArrowUp: { windowsVirtualKeyCode: 38, code: "ArrowUp" },
+  ArrowDown: { windowsVirtualKeyCode: 40, code: "ArrowDown" },
+  ArrowLeft: { windowsVirtualKeyCode: 37, code: "ArrowLeft" },
+  ArrowRight: { windowsVirtualKeyCode: 39, code: "ArrowRight" },
+} as const;
 
 async function terminate(child: ChildProcess): Promise<void> {
   if (child.exitCode !== null) return;

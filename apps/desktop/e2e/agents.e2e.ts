@@ -25,8 +25,16 @@ const helpers = `
   const byText = (selector, text) =>
     $$(selector).find((el) => el.textContent.trim().includes(text));
   const visibleDock = () =>
-    $$('section[aria-label]').find((el) => !el.inert && el.querySelector('textarea'));
+    $$('section[aria-label]').find((el) => !el.inert && el.querySelector('[data-composer-input]'));
   const setReactValue = (el, value) => {
+    // The chat composer is a contenteditable (inline pills): set its text
+    // and let its input handler read the DOM back.
+    if (el.isContentEditable) {
+      const pills = [...el.querySelectorAll('[data-pill-id]')];
+      el.replaceChildren(...pills, document.createTextNode(value));
+      el.dispatchEvent(new InputEvent('input', { bubbles: true }));
+      return;
+    }
     const proto = el instanceof HTMLTextAreaElement
       ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;
     Object.getOwnPropertyDescriptor(proto, 'value').set.call(el, value);
@@ -507,7 +515,7 @@ describe("agents and profiles", () => {
     // Wait out any closing chat dock from earlier tests.
     await runWait(
       `return $$('section[aria-label]')
-        .filter((el) => el.querySelector('textarea')).length === 0;`,
+        .filter((el) => el.querySelector('[data-composer-input]')).length === 0;`,
       { label: "no chat docks mounted" },
     );
 
@@ -543,7 +551,7 @@ describe("agents and profiles", () => {
     });
     const dockCount = await run<number>(
       `return $$('section[aria-label]')
-        .filter((el) => !el.inert && el.querySelector('textarea')).length;`,
+        .filter((el) => !el.inert && el.querySelector('[data-composer-input]')).length;`,
     );
     if (dockCount !== 0) throw new Error("chat opened despite no agents");
 
@@ -572,7 +580,7 @@ describe("agents and profiles", () => {
     await run(`pressKey('n', { metaKey: true }); return true;`);
     await runWait(`return !!visibleDock();`, { label: "chat opens" });
     await run(`
-      const ta = visibleDock().querySelector('form textarea');
+      const ta = visibleDock().querySelector('[data-composer-input]');
       setReactValue(ta, 'hello free agent');
       ta.closest('form').requestSubmit();
       return true;
@@ -591,7 +599,7 @@ describe("agents and profiles", () => {
     // naming the agent and pointing at Settings, original preserved.
     await runWait(`return !!visibleDock();`, { label: "chat still open" });
     await run(`
-      const ta = visibleDock().querySelector('form textarea');
+      const ta = visibleDock().querySelector('[data-composer-input]');
       setReactValue(ta, 'please fail with an auth error');
       ta.closest('form').requestSubmit();
       return true;
@@ -636,7 +644,7 @@ describe("agents and profiles", () => {
   it("a successful reconnect retries the failed turn on its own", async () => {
     await runWait(`return !!visibleDock();`, { label: "chat open" });
     await run(`
-      const ta = visibleDock().querySelector('form textarea');
+      const ta = visibleDock().querySelector('[data-composer-input]');
       setReactValue(ta, 'one more auth error please');
       ta.closest('form').requestSubmit();
       return true;
@@ -675,7 +683,7 @@ describe("agents and profiles", () => {
   it("auto-retries rate-limited turns with a visible countdown", async () => {
     await runWait(`return !!visibleDock();`, { label: "chat open" });
     await run(`
-      const ta = visibleDock().querySelector('form textarea');
+      const ta = visibleDock().querySelector('[data-composer-input]');
       setReactValue(ta, 'please hit a rate limit');
       ta.closest('form').requestSubmit();
       return true;
@@ -696,14 +704,14 @@ describe("agents and profiles", () => {
 
   it("queues messages during a turn; edits hold their place until done", async () => {
     await run(`
-      const ta = visibleDock().querySelector('form textarea');
+      const ta = visibleDock().querySelector('[data-composer-input]');
       setReactValue(ta, 'respond slowly please');
       ta.closest('form').requestSubmit();
       return true;
     `);
     // Queue two while the slow turn runs: one to edit, one to delete.
     await run(`
-      const ta = visibleDock().querySelector('form textarea');
+      const ta = visibleDock().querySelector('[data-composer-input]');
       setReactValue(ta, 'wrong words');
       ta.closest('form').requestSubmit();
       setReactValue(ta, 'delete me');
@@ -769,7 +777,7 @@ describe("agents and profiles", () => {
   it("send-now and Cmd+Enter interrupt the running turn", async () => {
     // Queue behind a slow turn, then promote via the bubble's send-now.
     await run(`
-      const ta = visibleDock().querySelector('form textarea');
+      const ta = visibleDock().querySelector('[data-composer-input]');
       setReactValue(ta, 'respond slowly please');
       ta.closest('form').requestSubmit();
       setReactValue(ta, 'urgent now');
@@ -821,7 +829,7 @@ describe("agents and profiles", () => {
 
     // Cmd+Enter from the composer takes the same fast path.
     await run(`
-      const ta = visibleDock().querySelector('form textarea');
+      const ta = visibleDock().querySelector('[data-composer-input]');
       setReactValue(ta, 'respond slowly please');
       ta.closest('form').requestSubmit();
       return true;
@@ -832,7 +840,7 @@ describe("agents and profiles", () => {
       { timeoutMs: 30_000, label: "second slow turn running" },
     );
     await run(`
-      const ta = visibleDock().querySelector('form textarea');
+      const ta = visibleDock().querySelector('[data-composer-input]');
       setReactValue(ta, 'jump the line');
       ta.dispatchEvent(new KeyboardEvent('keydown',
         { key: 'Enter', metaKey: true, bubbles: true, cancelable: true }));
@@ -847,7 +855,7 @@ describe("agents and profiles", () => {
 
   it("pastes an image as an attachment and sends it", async () => {
     await run(`
-      const ta = visibleDock().querySelector('form textarea');
+      const ta = visibleDock().querySelector('[data-composer-input]');
       const dt = new DataTransfer();
       dt.items.add(new File([new Uint8Array([137, 80, 78, 71, 13, 10, 26, 10])],
         'pixel.png', { type: 'image/png' }));
@@ -855,11 +863,12 @@ describe("agents and profiles", () => {
         { clipboardData: dt, bubbles: true, cancelable: true }));
       return true;
     `);
-    await runWait(`return !!$('[data-testid="composer-attachments"] img');`, {
-      label: "pasted image chip in the composer",
-    });
+    await runWait(
+      `return !!$('[data-testid="composer-pill"][data-pill-kind="image"] img');`,
+      { label: "pasted image pill in the composer" },
+    );
     await run(`
-      const ta = visibleDock().querySelector('form textarea');
+      const ta = visibleDock().querySelector('[data-composer-input]');
       setReactValue(ta, 'here is a screenshot');
       ta.closest('form').requestSubmit();
       return true;
@@ -869,17 +878,18 @@ describe("agents and profiles", () => {
         .some((el) => el.textContent.includes('Received 1 attachment: pixel.png'));`,
       { timeoutMs: 30_000, label: "agent saw the attachment" },
     );
-    // The sent message renders the image thumbnail in the timeline.
-    await runWait(`return $$('[role="log"] article img').length > 0;`, {
-      label: "image thumbnail on the sent message",
-    });
+    // The sent message renders the image as an inline pill (thumbnail).
+    await runWait(
+      `return $$('[role="log"] article [data-testid="sent-pill"][data-pill-kind="image"] img').length > 0;`,
+      { label: "image pill on the sent message" },
+    );
   });
 
   it("terminal chips appear, spin only while the command runs, and survive tab open/close", async () => {
     await runWait(`return !!visibleDock();`, { label: "chat open" });
     // A slow-ish command: the chip must spin DURING it and stop AFTER.
     await run(`
-      const ta = visibleDock().querySelector('form textarea');
+      const ta = visibleDock().querySelector('[data-composer-input]');
       setReactValue(ta, 'terminal: sleep 3 && echo chip-done');
       ta.closest('form').requestSubmit();
       return true;
@@ -962,7 +972,7 @@ describe("agents and profiles", () => {
     await run(`pressKey('n', { metaKey: true }); return true;`);
     await runWait(`return !!visibleDock();`, { label: "fresh chat open" });
     await run(`
-      const ta = visibleDock().querySelector('form textarea');
+      const ta = visibleDock().querySelector('[data-composer-input]');
       setReactValue(ta, 'terminal: echo chip-two');
       ta.closest('form').requestSubmit();
       return true;
@@ -994,7 +1004,7 @@ describe("agents and profiles", () => {
       `return $$('[data-testid="surface-chip"]').length;`,
     );
     await run(`
-      const ta = visibleDock().querySelector('form textarea');
+      const ta = visibleDock().querySelector('[data-composer-input]');
       setReactValue(ta, 'terminal @${terminalId}: echo targeted-run');
       ta.closest('form').requestSubmit();
       return true;

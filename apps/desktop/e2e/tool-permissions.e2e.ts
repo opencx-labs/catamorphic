@@ -26,6 +26,14 @@ const helpers = `
   const byText = (selector, text) =>
     $$(selector).find((el) => el.textContent.trim().includes(text));
   const setReactValue = (el, value) => {
+    // The chat composer is a contenteditable (inline pills): set its text
+    // and let its input handler read the DOM back.
+    if (el.isContentEditable) {
+      const pills = [...el.querySelectorAll('[data-pill-id]')];
+      el.replaceChildren(...pills, document.createTextNode(value));
+      el.dispatchEvent(new InputEvent('input', { bubbles: true }));
+      return;
+    }
     const proto = el instanceof HTMLTextAreaElement
       ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;
     Object.getOwnPropertyDescriptor(proto, 'value').set.call(el, value);
@@ -35,8 +43,8 @@ const helpers = `
     window.dispatchEvent(new KeyboardEvent('keydown',
       { key, bubbles: true, cancelable: true, ...mods }));
   const composer = () =>
-    $$('section[aria-label]').find((el) => !el.inert && el.querySelector('textarea[aria-label="Message the assistant"]'))
-      ?.querySelector('textarea[aria-label="Message the assistant"]');
+    $$('section[aria-label]').find((el) => !el.inert && el.querySelector('[data-composer-input]'))
+      ?.querySelector('[data-composer-input]');
   const send = (text) => { const ta = composer(); setReactValue(ta, text); ta.closest('form').requestSubmit(); };
   const timeline = () => $$('[role="log"]').map((el) => el.textContent).join('\\n');
   const modal = () => $('[data-testid="tool-permission-modal"]');

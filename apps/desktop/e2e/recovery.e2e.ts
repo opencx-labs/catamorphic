@@ -21,8 +21,16 @@ const helpers = `
   const byText = (selector, text) =>
     $$(selector).find((el) => el.textContent.trim().includes(text));
   const visibleDock = () =>
-    $$('section[aria-label]').find((el) => !el.inert && el.querySelector('textarea'));
+    $$('section[aria-label]').find((el) => !el.inert && el.querySelector('[data-composer-input]'));
   const setReactValue = (el, value) => {
+    // The chat composer is a contenteditable (inline pills): set its text
+    // and let its input handler read the DOM back.
+    if (el.isContentEditable) {
+      const pills = [...el.querySelectorAll('[data-pill-id]')];
+      el.replaceChildren(...pills, document.createTextNode(value));
+      el.dispatchEvent(new InputEvent('input', { bubbles: true }));
+      return;
+    }
     const proto = el instanceof HTMLTextAreaElement
       ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;
     Object.getOwnPropertyDescriptor(proto, 'value').set.call(el, value);
@@ -82,7 +90,7 @@ describe("interrupted turn recovery", () => {
     await run(`pressKey('n', { metaKey: true }); return true;`);
     await runWait(`return !!visibleDock();`);
     await run(`
-      const ta = visibleDock().querySelector('textarea');
+      const ta = visibleDock().querySelector('[data-composer-input]');
       setReactValue(ta, 'work slowly please');
       ta.closest('form').requestSubmit();
       return true;
@@ -120,12 +128,9 @@ describe("interrupted turn recovery", () => {
     // the persisted transcript and the conversation just continues.
     await run(`
       const dock = $$('section[aria-label]')
-        .find((el) => !el.inert && el.querySelector('textarea'));
-      const ta = dock.querySelector('form textarea');
-      const proto = HTMLTextAreaElement.prototype;
-      Object.getOwnPropertyDescriptor(proto, 'value').set.call(
-        ta, 'hello after the relaunch');
-      ta.dispatchEvent(new Event('input', { bubbles: true }));
+        .find((el) => !el.inert && el.querySelector('[data-composer-input]'));
+      const ta = dock.querySelector('[data-composer-input]');
+      setReactValue(ta, 'hello after the relaunch');
       ta.closest('form').requestSubmit();
       return true;
     `);

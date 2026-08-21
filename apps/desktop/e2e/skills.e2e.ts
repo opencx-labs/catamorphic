@@ -30,8 +30,16 @@ const helpers = `
   const byText = (selector, text) =>
     $$(selector).find((el) => el.textContent.trim().includes(text));
   const visibleDock = () =>
-    $$('section[aria-label]').find((el) => !el.inert && el.querySelector('textarea'));
+    $$('section[aria-label]').find((el) => !el.inert && el.querySelector('[data-composer-input]'));
   const setReactValue = (el, value) => {
+    // The chat composer is a contenteditable (inline pills): set its text
+    // and let its input handler read the DOM back.
+    if (el.isContentEditable) {
+      const pills = [...el.querySelectorAll('[data-pill-id]')];
+      el.replaceChildren(...pills, document.createTextNode(value));
+      el.dispatchEvent(new InputEvent('input', { bubbles: true }));
+      return;
+    }
     const proto = el instanceof HTMLTextAreaElement
       ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;
     Object.getOwnPropertyDescriptor(proto, 'value').set.call(el, value);
@@ -51,7 +59,7 @@ const helpers = `
     if (!input) return [];
     return [...input.closest('[role="dialog"]').querySelectorAll('[role="option"]')];
   };
-  const composer = () => visibleDock()?.querySelector('form textarea');
+  const composer = () => visibleDock()?.querySelector('[data-composer-input]');
   const composerKey = (key, mods = {}) =>
     composer().dispatchEvent(new KeyboardEvent('keydown',
       { key, bubbles: true, cancelable: true, ...mods }));

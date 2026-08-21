@@ -124,8 +124,21 @@ switch (cmd) {
       },
       Escape: { windowsVirtualKeyCode: 27, key: "Escape", code: "Escape" },
       Tab: { windowsVirtualKeyCode: 9, key: "Tab", code: "Tab" },
+      Backspace: {
+        windowsVirtualKeyCode: 8,
+        key: "Backspace",
+        code: "Backspace",
+      },
+      ArrowUp: { windowsVirtualKeyCode: 38, key: "ArrowUp", code: "ArrowUp" },
+      ArrowDown: {
+        windowsVirtualKeyCode: 40,
+        key: "ArrowDown",
+        code: "ArrowDown",
+      },
     };
-    const k = keyMap[args[0]] ?? { key: args[0] };
+    // Optional second arg: modifier bitmask (Alt=1, Ctrl=2, Meta=4, Shift=8).
+    const modifiers = Number(args[1] ?? 0);
+    const k = { ...(keyMap[args[0]] ?? { key: args[0] }), modifiers };
     await send("Input.dispatchKeyEvent", { type: "keyDown", ...k });
     await send("Input.dispatchKeyEvent", { type: "keyUp", ...k });
     console.log("pressed", args[0]);

@@ -25,13 +25,21 @@ const helpers = `
   const byText = (selector, text) =>
     $$(selector).find((el) => el.textContent.trim().includes(text));
   const visibleDock = () =>
-    $$('section[aria-label]').find((el) => !el.inert && el.querySelector('textarea'));
+    $$('section[aria-label]').find((el) => !el.inert && el.querySelector('[data-composer-input]'));
   // Only the floating variant — a chat expanded into a tab is also a
   // visible dock, but full-bleed (max-w-full).
   const floatingDock = () =>
     $$('section[aria-label]').find((el) =>
-      !el.inert && el.querySelector('textarea') && !el.className.includes('max-w-full'));
+      !el.inert && el.querySelector('[data-composer-input]') && !el.className.includes('max-w-full'));
   const setReactValue = (el, value) => {
+    // The chat composer is a contenteditable (inline pills): set its text
+    // and let its input handler read the DOM back.
+    if (el.isContentEditable) {
+      const pills = [...el.querySelectorAll('[data-pill-id]')];
+      el.replaceChildren(...pills, document.createTextNode(value));
+      el.dispatchEvent(new InputEvent('input', { bubbles: true }));
+      return;
+    }
     const proto = el instanceof HTMLTextAreaElement
       ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;
     Object.getOwnPropertyDescriptor(proto, 'value').set.call(el, value);
@@ -228,7 +236,7 @@ describe("chat flows", () => {
       return true;
     `);
     const dockCount = await run<number>(
-      `return $$('section[aria-label]').filter((el) => el.querySelector('textarea')).length;`,
+      `return $$('section[aria-label]').filter((el) => el.querySelector('[data-composer-input]')).length;`,
     );
     expect(dockCount).toBe(1);
   });
@@ -236,7 +244,7 @@ describe("chat flows", () => {
   it("sends a message and renders the fake agent's reply", async () => {
     await run(`
       const dock = visibleDock();
-      const ta = dock.querySelector('textarea');
+      const ta = dock.querySelector('[data-composer-input]');
       setReactValue(ta, 'hello agent');
       ta.closest('form').requestSubmit();
       return true;
@@ -258,7 +266,7 @@ describe("chat flows", () => {
     );
     await runWait(`return !!visibleDock();`);
     await run(`
-      const ta = visibleDock().querySelector('textarea');
+      const ta = visibleDock().querySelector('[data-composer-input]');
       setReactValue(ta, 'do the preamble dance');
       ta.closest('form').requestSubmit();
       return true;
@@ -428,7 +436,7 @@ describe("chat tab activity indicators", () => {
       label: "chat tab in the strip",
     });
     await run(`
-      const ta = visibleDock().querySelector('textarea');
+      const ta = visibleDock().querySelector('[data-composer-input]');
       setReactValue(ta, 'work slowly please');
       ta.closest('form').requestSubmit();
       return true;
@@ -465,7 +473,7 @@ describe("chat tab activity indicators", () => {
     await run(`pressKey('n', { metaKey: true }); return true;`);
     await runWait(`return !!visibleDock();`, { label: "floating chat open" });
     await run(`
-      const ta = visibleDock().querySelector('textarea');
+      const ta = visibleDock().querySelector('[data-composer-input]');
       setReactValue(ta, 'work slowly please');
       ta.closest('form').requestSubmit();
       return true;
@@ -488,7 +496,7 @@ describe("question flow", () => {
     await run(`pressKey('n', { metaKey: true }); return true;`);
     await runWait(`return !!visibleDock();`);
     await run(`
-      const ta = visibleDock().querySelector('textarea');
+      const ta = visibleDock().querySelector('[data-composer-input]');
       setReactValue(ta, 'ask me a bunch of questions about myself');
       ta.closest('form').requestSubmit();
       return true;
@@ -560,7 +568,7 @@ describe("chat surface shortcuts", () => {
     });
     // Count docks (mounted sections), not just the visible one — minimized
     // bubbles from earlier tests keep their sections mounted too.
-    const docks = `$$('section[aria-label]').filter((el) => el.querySelector('form textarea')).length`;
+    const docks = `$$('section[aria-label]').filter((el) => el.querySelector('[data-composer-input]')).length`;
     const before = await run<number>(`return ${docks};`);
     await run(`pressKey('w', { metaKey: true }); return true;`);
     // Immediately after Cmd+W the dock must still be mounted: the same
@@ -595,7 +603,7 @@ describe("chat surface shortcuts", () => {
     );
     // Back in the chat, Cmd+W closes the chat.
     await run(`
-      const ta = floatingDock().querySelector('textarea');
+      const ta = floatingDock().querySelector('[data-composer-input]');
       ta.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true }));
       ta.focus(); return true;
     `);
@@ -654,7 +662,7 @@ describe("tiling and chat surfaces", () => {
     await runWait(`return !!floatingDock();`, { label: "chat open" });
     // The fake agent echoes the message — markdown link included.
     await run(`
-      const ta = floatingDock().querySelector('textarea');
+      const ta = floatingDock().querySelector('[data-composer-input]');
       setReactValue(ta, 'see [example](https://example.com/) ok');
       ta.closest('form').requestSubmit();
       return true;
@@ -735,7 +743,7 @@ describe("agent shows and points", () => {
     await run(`pressKey('m', { metaKey: true, shiftKey: true }); return true;`);
     await runWait(`return !floatingDock();`, { label: "chat is a tab" });
     await run(`
-      const ta = visibleDock().querySelector('textarea');
+      const ta = visibleDock().querySelector('[data-composer-input]');
       setReactValue(ta, 'show: https://example.com/');
       ta.closest('form').requestSubmit();
       return true;
@@ -757,7 +765,7 @@ describe("agent shows and points", () => {
       const el = $('[data-point-key^="browser:"]');
       if (!el) return false;
       const key = el.getAttribute('data-point-key');
-      const ta = floatingDock().querySelector('textarea');
+      const ta = floatingDock().querySelector('[data-composer-input]');
       setReactValue(ta, 'point: ' + key);
       ta.closest('form').requestSubmit();
       return true;
@@ -785,7 +793,7 @@ describe("agent shows and points", () => {
     // user is demonstrably on another surface when the call lands.
     await runWait(`return !!floatingDock();`, { label: "chat open" });
     await run(`
-      const ta = floatingDock().querySelector('textarea');
+      const ta = floatingDock().querySelector('[data-composer-input]');
       setReactValue(ta, 'show later: app:bg-demo');
       ta.closest('form').requestSubmit();
       return true;
@@ -841,7 +849,7 @@ describe("subagents and background watchers", () => {
     await run(`pressKey('n', { metaKey: true }); return true;`);
     await runWait(`return !!floatingDock();`, { label: "chat open" });
     await run(`
-      const ta = floatingDock().querySelector('textarea');
+      const ta = floatingDock().querySelector('[data-composer-input]');
       setReactValue(ta, 'please use a subagent for this');
       ta.closest('form').requestSubmit();
       return true;
@@ -873,7 +881,7 @@ describe("subagents and background watchers", () => {
 
   it("a background process gets a persistent watcher chip", async () => {
     await run(`
-      const ta = floatingDock().querySelector('textarea');
+      const ta = floatingDock().querySelector('[data-composer-input]');
       setReactValue(ta, 'start a watcher for the dev server');
       ta.closest('form').requestSubmit();
       return true;
@@ -887,7 +895,7 @@ describe("subagents and background watchers", () => {
     // Another turn later, the watcher is still there — background work
     // persists across turns until something ends it.
     await run(`
-      const ta = floatingDock().querySelector('textarea');
+      const ta = floatingDock().querySelector('[data-composer-input]');
       setReactValue(ta, 'thanks');
       ta.closest('form').requestSubmit();
       return true;

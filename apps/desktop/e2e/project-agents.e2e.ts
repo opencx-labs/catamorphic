@@ -33,8 +33,16 @@ const helpers = `
   const byText = (selector, text) =>
     $$(selector).find((el) => el.textContent.trim().includes(text));
   const visibleDock = () =>
-    $$('section[aria-label]').find((el) => !el.inert && el.querySelector('textarea'));
+    $$('section[aria-label]').find((el) => !el.inert && el.querySelector('[data-composer-input]'));
   const setReactValue = (el, value) => {
+    // The chat composer is a contenteditable (inline pills): set its text
+    // and let its input handler read the DOM back.
+    if (el.isContentEditable) {
+      const pills = [...el.querySelectorAll('[data-pill-id]')];
+      el.replaceChildren(...pills, document.createTextNode(value));
+      el.dispatchEvent(new InputEvent('input', { bubbles: true }));
+      return;
+    }
     const proto = el instanceof HTMLTextAreaElement
       ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;
     Object.getOwnPropertyDescriptor(proto, 'value').set.call(el, value);
@@ -194,7 +202,7 @@ describe("project agents", () => {
     // A first turn anchors the session on the profile default — the
     // switch below must then leave a marker naming the PROJECT agent.
     await run(`
-      const ta = visibleDock().querySelector('form textarea');
+      const ta = visibleDock().querySelector('[data-composer-input]');
       setReactValue(ta, 'warm up');
       ta.closest('form').requestSubmit();
       return true;
@@ -217,7 +225,7 @@ describe("project agents", () => {
       },
     );
     await run(`
-      const ta = visibleDock().querySelector('form textarea');
+      const ta = visibleDock().querySelector('[data-composer-input]');
       setReactValue(ta, 'hello project agent');
       ta.closest('form').requestSubmit();
       return true;
