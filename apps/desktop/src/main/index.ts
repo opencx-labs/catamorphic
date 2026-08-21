@@ -398,7 +398,13 @@ app.whenReady().then(async () => {
     async (projectId) =>
       (await state.current?.projectRoots.get(projectId)) ?? null,
   );
-  terminalSupport = registerTerminalSupport(state);
+  terminalSupport = registerTerminalSupport(
+    state,
+    (projectId) =>
+      // Late-bound: the bridge registers just below, before any terminal
+      // can spawn.
+      agentBridge?.openHookEnv(projectId) ?? {},
+  );
   agentBridge = registerAgentBridge(terminalSupport.agentTerminals);
   ipcMain.handle("catamorphic:webview-preload", () =>
     path.join(import.meta.dirname, "../preload/webview.cjs"),
@@ -434,6 +440,11 @@ app.whenReady().then(async () => {
     };
     refreshConnectionTokens();
     powerMonitor.on("resume", refreshConnectionTokens);
+    // A wake is when sessions turn out to have expired — nudge every
+    // window to re-probe its agents' auth health.
+    powerMonitor.on("resume", () =>
+      state.broadcast("catamorphic:agent-auth-maybe-changed", {}),
+    );
     setInterval(refreshConnectionTokens, 4 * 60_000).unref();
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);

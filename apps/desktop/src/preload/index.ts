@@ -58,6 +58,19 @@ const api = {
     ipcRenderer.invoke("catamorphic:agent-login", id),
   agentLoginStatus: (id: string): Promise<boolean> =>
     ipcRenderer.invoke("catamorphic:agent-login-status", id),
+  /** Proactive auth probe: what is knowably wrong before a send. */
+  agentAuthHealth: (id: string): Promise<"ok" | "expired" | "missing"> =>
+    ipcRenderer.invoke("catamorphic:agent-auth-health", id),
+  /** Fired on OS wake — sessions may have expired; re-probe. */
+  onAgentAuthMaybeChanged: (listener: () => void): (() => void) => {
+    const handler = () => listener();
+    ipcRenderer.on("catamorphic:agent-auth-maybe-changed", handler);
+    return () =>
+      ipcRenderer.removeListener(
+        "catamorphic:agent-auth-maybe-changed",
+        handler,
+      );
+  },
   onAgentsChanged: (listener: (data: unknown) => void): (() => void) => {
     const handler = (_event: unknown, data: unknown) => listener(data);
     ipcRenderer.on("catamorphic:agents-changed", handler);

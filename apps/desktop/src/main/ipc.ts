@@ -20,6 +20,7 @@ import {
   toPublicAgent,
   type UpdateAgentInput,
 } from "./agents-store.js";
+import { type AgentAuthHealth, claudeOauthHealth } from "./auth-health.js";
 import { parseConnectLink } from "./connect-link.js";
 import {
   type CreateConnectionInput,
@@ -679,20 +680,29 @@ export function registerIpcHandlers(
    * The fingerprint doubles as a change detector: the terminal /login flow
    * gives no exit signal, so completion is "the credentials changed".
    */
-  const claudeKeychainFingerprint = (): string | null => {
+  const claudeKeychainRaw = (): string | null => {
     if (process.platform !== "darwin") return null;
     try {
-      const raw = execFileSync(
+      return execFileSync(
         "security",
         ["find-generic-password", "-s", "Claude Code-credentials", "-w"],
         { encoding: "utf-8", stdio: ["ignore", "pipe", "ignore"] },
       );
+    } catch {
+      return null;
+    }
+  };
+
+  const claudeKeychainFingerprint = (): string | null => {
+    const raw = claudeKeychainRaw();
+    if (raw === null) return null;
+    try {
       const oauth = (
         JSON.parse(raw) as { claudeAiOauth?: { expiresAt?: number } }
       ).claudeAiOauth;
       return `keychain:${oauth?.expiresAt ?? raw.length}`;
     } catch {
-      return null;
+      return `keychain:${raw.length}`;
     }
   };
 
@@ -737,6 +747,40 @@ export function registerIpcHandlers(
     }
     return agentCredentials(agent).present;
   });
+
+  // Proactive auth health (t3-code-inspired): what is KNOWABLY wrong
+  // before a send — no credentials, or a refresh token past expiry. The
+  // dock probes on focus/wake and offers re-login ahead of the failure.
+  ipcMain.handle(
+    "catamorphic:agent-auth-health",
+    (event, id: string): AgentAuthHealth => {
+      // e2e seam: exercise the banner without touching real credentials.
+      const forced = process.env.CATAMORPHIC_E2E_AUTH_HEALTH;
+      if (forced === "ok" || forced === "expired" || forced === "missing") {
+        return forced;
+      }
+      const agent = storesFor(event).agents.get(id);
+      if (!agent) return "missing";
+      if (agent.auth === "api-key" || agent.harness === "ai-sdk") {
+        return agent.apiKey !== null ? "ok" : "missing";
+      }
+      if (agent.harness === "codex") {
+        // Codex's auth.json has no readable expiry; presence is the probe.
+        return agentCredentials(agent).present ? "ok" : "missing";
+      }
+      const home =
+        agent.auth === "local"
+          ? path.join(app.getPath("home"), ".claude")
+          : path.join(paths.agentHomesDir, agent.id);
+      let raw: string | null = null;
+      try {
+        raw = fs.readFileSync(path.join(home, ".credentials.json"), "utf-8");
+      } catch {
+        if (agent.auth === "local") raw = claudeKeychainRaw();
+      }
+      return claudeOauthHealth(raw, Date.now());
+    },
+  );
 
   // One watcher per agent: a repeated login replaces the previous poll.
   const loginWatchers = new Map<string, ReturnType<typeof setInterval>>();
