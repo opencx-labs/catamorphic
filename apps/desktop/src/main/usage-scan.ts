@@ -15,18 +15,14 @@
  * never yield different usage.
  */
 
-import { promises as fs, createReadStream } from "node:fs";
+import { createReadStream, promises as fs } from "node:fs";
 import path from "node:path";
 import {
-  dedupeWithinFile,
-  mightCarryUsage,
-  parseClaudeLine,
-  parseCodexLine,
-  createCodexScanState,
-  type CodexScanState,
-  type UsageProvider,
-  type UsageRecord,
-} from "./usage-transcripts.js";
+  localDayKey,
+  type UsageBucket,
+  type UsageSummary,
+  type UsageWindowDays,
+} from "../shared/usage.js";
 import {
   cacheSavingsUsd,
   parseRateTable,
@@ -34,11 +30,15 @@ import {
   type RateTable,
 } from "./usage-pricing.js";
 import {
-  localDayKey,
-  type UsageBucket,
-  type UsageSummary,
-  type UsageWindowDays,
-} from "../shared/usage.js";
+  type CodexScanState,
+  createCodexScanState,
+  dedupeWithinFile,
+  mightCarryUsage,
+  parseClaudeLine,
+  parseCodexLine,
+  type UsageProvider,
+  type UsageRecord,
+} from "./usage-transcripts.js";
 
 interface CachedFile {
   size: number;
@@ -96,7 +96,9 @@ export function createUsageScanner(deps: UsageScannerDeps): UsageScanner {
   let fileCache: Map<string, CachedFile> | undefined;
   let cacheDirty = false;
   let lastPersistMs: number | undefined;
-  let rates: { table: RateTable; fetchedAtMs: number; status: "fresh" | "cached" } | undefined;
+  let rates:
+    | { table: RateTable; fetchedAtMs: number; status: "fresh" | "cached" }
+    | undefined;
   let ratesFetchFailedAtMs: number | undefined;
   // Concurrent calls coalesce: a second request while a scan runs awaits
   // the same promise instead of racing the cache.
@@ -209,7 +211,10 @@ export function createUsageScanner(deps: UsageScannerDeps): UsageScanner {
     { provider: UsageProvider; dir: string }[]
   > {
     const candidates: { provider: UsageProvider; dir: string }[] = [
-      { provider: "claude", dir: path.join(deps.homeDir, ".claude", "projects") },
+      {
+        provider: "claude",
+        dir: path.join(deps.homeDir, ".claude", "projects"),
+      },
       { provider: "codex", dir: path.join(deps.homeDir, ".codex", "sessions") },
     ];
     // Account-auth agents run with CLAUDE_CONFIG_DIR / CODEX_HOME pointed
@@ -222,8 +227,14 @@ export function createUsageScanner(deps: UsageScannerDeps): UsageScanner {
       for (const entry of entries) {
         if (!entry.isDirectory()) continue;
         const home = path.join(deps.agentHomesDir, entry.name);
-        candidates.push({ provider: "claude", dir: path.join(home, "projects") });
-        candidates.push({ provider: "codex", dir: path.join(home, "sessions") });
+        candidates.push({
+          provider: "claude",
+          dir: path.join(home, "projects"),
+        });
+        candidates.push({
+          provider: "codex",
+          dir: path.join(home, "sessions"),
+        });
       }
     } catch {
       // No agent homes yet.
@@ -335,7 +346,12 @@ export function createUsageScanner(deps: UsageScannerDeps): UsageScanner {
       const state = cached.codexState
         ? { ...cached.codexState }
         : createCodexScanState();
-      const tail = await readFileRecords(filePath, provider, cached.parsedBytes, state);
+      const tail = await readFileRecords(
+        filePath,
+        provider,
+        cached.parsedBytes,
+        state,
+      );
       // Failed incremental read: serve the cached records untouched and
       // let the next scan retry.
       if (tail === null) return cached.records;
@@ -421,7 +437,8 @@ export function createUsageScanner(deps: UsageScannerDeps): UsageScanner {
     if (resolution === "hour") {
       // Aligned to the minute so hour buckets are stable fixed-duration
       // offsets from the window start (DST-proof, unlike wall-clock hours).
-      windowStartMs = Math.floor((windowEndMs - 24 * HOUR_MS) / 60_000) * 60_000;
+      windowStartMs =
+        Math.floor((windowEndMs - 24 * HOUR_MS) / 60_000) * 60_000;
     } else {
       // Local midnight of (today - (days - 1)): calendar arithmetic, not
       // fixed milliseconds, so the window survives DST transitions.
@@ -459,7 +476,9 @@ export function createUsageScanner(deps: UsageScannerDeps): UsageScanner {
     // stat+parse concurrently; results land by index so the sequential
     // aggregation below sees them in task order. Null = skipped (stale
     // mtime, or vanished between readdir and stat).
-    const results: (UsageRecord[] | null)[] = new Array(tasks.length).fill(null);
+    const results: (UsageRecord[] | null)[] = new Array(tasks.length).fill(
+      null,
+    );
     let nextTask = 0;
     await Promise.all(
       Array.from(
@@ -494,7 +513,10 @@ export function createUsageScanner(deps: UsageScannerDeps): UsageScanner {
       const provider = tasks[index]!.provider;
       scannedFiles += 1;
       for (const record of parsed) {
-        if (record.timestampMs < windowStartMs || record.timestampMs >= windowEndMs) {
+        if (
+          record.timestampMs < windowStartMs ||
+          record.timestampMs >= windowEndMs
+        ) {
           continue;
         }
         const day = localDayKey(record.timestampMs);

@@ -933,110 +933,110 @@ function SurfacesRail({
       {/* Detail popover for chips that ARE their surface (subagents,
           watchers): the chip's activity feed, expanded upward. */}
       <PopPanel
-          open={Boolean(infoSurface)}
-          className="absolute bottom-full left-0 z-20 mb-1.5 max-h-64 w-80 overflow-y-auto rounded-lg border border-border bg-bg-raised/95 p-2 shadow-2xl backdrop-blur-xl"
-          testId="surface-info-popover"
-        >
-          {infoSurface && (
-            <>
-              <div className="flex items-center gap-1.5 px-1 pb-1.5 text-[11px] font-semibold text-fg">
-                {(() => {
-                  const Icon = SURFACE_ICONS[infoSurface.kind];
-                  return infoSurface.active ? (
-                    <LoaderCircle className="size-3 animate-spin text-accent" />
-                  ) : (
-                    <Icon className="size-3" />
-                  );
-                })()}
-                <span className="truncate">{infoSurface.label}</span>
-              </div>
-              <div className="flex flex-col gap-0.5">
-                {infoSurface.info?.map((line, index) => (
-                  <div
-                    // biome-ignore lint/suspicious/noArrayIndexKey: static activity lines
-                    key={index}
-                    className="truncate px-1 font-mono text-[11px] text-fg-muted"
-                  >
-                    {line}
-                  </div>
-                ))}
-              </div>
-            </>
-          )}
-        </PopPanel>
-      <PopPanel
-          open={Boolean(groupSurfaces)}
-          className="absolute bottom-full left-0 z-20 mb-1.5 max-h-64 w-72 overflow-y-auto rounded-lg border border-border bg-bg-raised/95 p-1 shadow-2xl backdrop-blur-xl"
-        >
-          {groupSurfaces?.map((surface) => (
-            <div
-              key={surface.key}
-              className="group/chip flex items-center rounded-md text-[12px] text-fg-muted transition-colors duration-100 hover:bg-bg-overlay"
-            >
-              <button
-                type="button"
-                onClick={(event) => {
-                  if (surface.mcpApp) {
-                    onOpenMcpApp?.(
-                      surface.mcpApp,
-                      event.metaKey ? "split" : "tab",
-                    );
-                    setOpenGroup(null);
-                    return;
-                  }
-                  if (surface.info) {
-                    toggleInfo(surface.key);
-                    return;
-                  }
-                  onOpenSurface(surface.key, event.metaKey ? "split" : "tab");
-                  setOpenGroup(null);
-                }}
-                className="flex min-w-0 flex-1 cursor-pointer items-center gap-2 px-2 py-1.5 text-left hover:text-fg"
-              >
-                <span className="relative grid size-3.5 shrink-0 place-items-center">
-                  {surface.kind === "browser" && surface.faviconUrl ? (
-                    <img
-                      src={surface.faviconUrl}
-                      alt=""
-                      className={`col-start-1 row-start-1 size-3.5 rounded-[2px] ${surface.active ? "opacity-0" : ""}`}
-                    />
-                  ) : (
-                    (() => {
-                      const Icon = SURFACE_ICONS[surface.kind];
-                      return (
-                        <Icon
-                          className={`col-start-1 row-start-1 size-3.5 ${surface.active ? "opacity-0" : ""}`}
-                        />
-                      );
-                    })()
-                  )}
-                  {surface.active && (
-                    <LoaderCircle className="col-start-1 row-start-1 size-3.5 animate-spin text-accent" />
-                  )}
-                  {surface.attention && (
-                    <span className="absolute -right-0.5 -top-0.5 size-1.5 animate-pulse rounded-full bg-accent" />
-                  )}
-                </span>
-                <span className="truncate">{surface.label}</span>
-              </button>
-              {!surface.info && (
-                <ShortcutHint label="Open to the right" shortcut="⌘-click">
-                  <button
-                    type="button"
-                    onClick={() => {
-                      onOpenSurface(surface.key, "split");
-                      setOpenGroup(null);
-                    }}
-                    className="mr-1 grid size-6 shrink-0 cursor-pointer place-items-center rounded text-fg-faint opacity-0 transition-opacity duration-100 hover:text-fg group-hover/chip:opacity-100"
-                    aria-label={`Open ${surface.label} to the right`}
-                  >
-                    <Columns2 className="size-3" />
-                  </button>
-                </ShortcutHint>
-              )}
+        open={Boolean(infoSurface)}
+        className="absolute bottom-full left-0 z-20 mb-1.5 max-h-64 w-80 overflow-y-auto rounded-lg border border-border bg-bg-raised/95 p-2 shadow-2xl backdrop-blur-xl"
+        testId="surface-info-popover"
+      >
+        {infoSurface && (
+          <>
+            <div className="flex items-center gap-1.5 px-1 pb-1.5 text-[11px] font-semibold text-fg">
+              {(() => {
+                const Icon = SURFACE_ICONS[infoSurface.kind];
+                return infoSurface.active ? (
+                  <LoaderCircle className="size-3 animate-spin text-accent" />
+                ) : (
+                  <Icon className="size-3" />
+                );
+              })()}
+              <span className="truncate">{infoSurface.label}</span>
             </div>
-          ))}
-        </PopPanel>
+            <div className="flex flex-col gap-0.5">
+              {infoSurface.info?.map((line, index) => (
+                <div
+                  // biome-ignore lint/suspicious/noArrayIndexKey: static activity lines
+                  key={index}
+                  className="truncate px-1 font-mono text-[11px] text-fg-muted"
+                >
+                  {line}
+                </div>
+              ))}
+            </div>
+          </>
+        )}
+      </PopPanel>
+      <PopPanel
+        open={Boolean(groupSurfaces)}
+        className="absolute bottom-full left-0 z-20 mb-1.5 max-h-64 w-72 overflow-y-auto rounded-lg border border-border bg-bg-raised/95 p-1 shadow-2xl backdrop-blur-xl"
+      >
+        {groupSurfaces?.map((surface) => (
+          <div
+            key={surface.key}
+            className="group/chip flex items-center rounded-md text-[12px] text-fg-muted transition-colors duration-100 hover:bg-bg-overlay"
+          >
+            <button
+              type="button"
+              onClick={(event) => {
+                if (surface.mcpApp) {
+                  onOpenMcpApp?.(
+                    surface.mcpApp,
+                    event.metaKey ? "split" : "tab",
+                  );
+                  setOpenGroup(null);
+                  return;
+                }
+                if (surface.info) {
+                  toggleInfo(surface.key);
+                  return;
+                }
+                onOpenSurface(surface.key, event.metaKey ? "split" : "tab");
+                setOpenGroup(null);
+              }}
+              className="flex min-w-0 flex-1 cursor-pointer items-center gap-2 px-2 py-1.5 text-left hover:text-fg"
+            >
+              <span className="relative grid size-3.5 shrink-0 place-items-center">
+                {surface.kind === "browser" && surface.faviconUrl ? (
+                  <img
+                    src={surface.faviconUrl}
+                    alt=""
+                    className={`col-start-1 row-start-1 size-3.5 rounded-[2px] ${surface.active ? "opacity-0" : ""}`}
+                  />
+                ) : (
+                  (() => {
+                    const Icon = SURFACE_ICONS[surface.kind];
+                    return (
+                      <Icon
+                        className={`col-start-1 row-start-1 size-3.5 ${surface.active ? "opacity-0" : ""}`}
+                      />
+                    );
+                  })()
+                )}
+                {surface.active && (
+                  <LoaderCircle className="col-start-1 row-start-1 size-3.5 animate-spin text-accent" />
+                )}
+                {surface.attention && (
+                  <span className="absolute -right-0.5 -top-0.5 size-1.5 animate-pulse rounded-full bg-accent" />
+                )}
+              </span>
+              <span className="truncate">{surface.label}</span>
+            </button>
+            {!surface.info && (
+              <ShortcutHint label="Open to the right" shortcut="⌘-click">
+                <button
+                  type="button"
+                  onClick={() => {
+                    onOpenSurface(surface.key, "split");
+                    setOpenGroup(null);
+                  }}
+                  className="mr-1 grid size-6 shrink-0 cursor-pointer place-items-center rounded text-fg-faint opacity-0 transition-opacity duration-100 hover:text-fg group-hover/chip:opacity-100"
+                  aria-label={`Open ${surface.label} to the right`}
+                >
+                  <Columns2 className="size-3" />
+                </button>
+              </ShortcutHint>
+            )}
+          </div>
+        ))}
+      </PopPanel>
       <div className="flex items-center gap-1.5 overflow-x-auto pt-1">
         {[...byKind.entries()].map(([kind, group]) => (
           <KindStrip
@@ -2042,8 +2042,8 @@ export function ChatDock({
       const html = data?.getData("text/html") ?? "";
       if (html) {
         text =
-          new DOMParser().parseFromString(html, "text/html").body
-            .textContent ?? "";
+          new DOMParser().parseFromString(html, "text/html").body.textContent ??
+          "";
       }
     }
     const classified = classifyPastedText(text);

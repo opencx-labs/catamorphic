@@ -269,8 +269,18 @@ describe("useAgentChat", () => {
     );
     const { result } = renderHookWithProviders(() => useAgentChat(PROJECT_ID));
     const attachments = [
-      { kind: "text" as const, name: "a.md", text: "a", source: { type: "paste" as const } },
-      { kind: "text" as const, name: "b.md", text: "b", source: { type: "paste" as const } },
+      {
+        kind: "text" as const,
+        name: "a.md",
+        text: "a",
+        source: { type: "paste" as const },
+      },
+      {
+        kind: "text" as const,
+        name: "b.md",
+        text: "b",
+        source: { type: "paste" as const },
+      },
     ];
 
     act(() => {
@@ -295,7 +305,9 @@ describe("useAgentChat", () => {
     );
 
     // A marker was deleted: all pills reflow to the end, none remapped.
-    act(() => result.current.updateQueued(queuedId, `only ${ATTACHMENT_MARKER} left`));
+    act(() =>
+      result.current.updateQueued(queuedId, `only ${ATTACHMENT_MARKER} left`),
+    );
     expect(result.current.queue[0]?.content).toBe(
       `only  left${ATTACHMENT_MARKER}${ATTACHMENT_MARKER}`,
     );

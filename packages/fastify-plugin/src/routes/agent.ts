@@ -85,6 +85,10 @@ export function registerAgentRoutes(app: FastifyInstance, ctx: RouteContext) {
   typed.route({
     method: "PUT",
     url: "/projects/:projectId/agent/sessions/:sessionId/mirror",
+    // A mirror carries a whole transcript, message metadata (tool inputs
+    // and results) included: the same order of magnitude as the media a
+    // single message may carry, well past Fastify's 1MB default.
+    bodyLimit: 96 * 1024 * 1024,
     schema: {
       params: AgentSessionIdParamsSchema,
       body: MirrorAgentSessionSchema,

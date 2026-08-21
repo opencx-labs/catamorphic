@@ -10,10 +10,14 @@
  */
 import { RefreshCw } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import type { UsageBucket, UsageProvider } from "../../shared/usage.js";
+import {
+  formatTokenCount,
+  localDayKey,
+  totalTokens,
+} from "../../shared/usage.js";
 import { Segmented } from "../components/segmented.js";
 import { desktopApi, type UsageSummary } from "../lib/desktop-api.js";
-import type { UsageBucket, UsageProvider } from "../../shared/usage.js";
-import { formatTokenCount, localDayKey, totalTokens } from "../../shared/usage.js";
 
 const PROVIDERS: {
   key: UsageProvider;
@@ -252,7 +256,10 @@ function UsageChart({
       if (!rect || count === 0) return;
       const index = Math.min(
         count - 1,
-        Math.max(0, Math.floor(((event.clientX - rect.left) / rect.width) * count)),
+        Math.max(
+          0,
+          Math.floor(((event.clientX - rect.left) / rect.width) * count),
+        ),
       );
       setHover(index);
     },
@@ -324,7 +331,10 @@ function UsageChart({
               ];
             });
             return (
-              <g key={period.key} opacity={hover === null || hover === index ? 1 : 0.55}>
+              <g
+                key={period.key}
+                opacity={hover === null || hover === index ? 1 : 0.55}
+              >
                 {segments.map((segment, segmentIndex) => (
                   <rect
                     key={segment.provider.key}
@@ -500,7 +510,10 @@ export function UsageScreen() {
             {!empty && (
               <div className="mt-6 grid grid-cols-2 gap-px overflow-hidden rounded-lg border border-border bg-border sm:grid-cols-5">
                 {[
-                  { label: "Processed", value: formatTokenCount(rollup.tokens) },
+                  {
+                    label: "Processed",
+                    value: formatTokenCount(rollup.tokens),
+                  },
                   {
                     label: "Cached input",
                     value: formatTokenCount(rollup.cachedInput),
@@ -516,7 +529,9 @@ export function UsageScreen() {
                   },
                 ].map((stat) => (
                   <div key={stat.label} className="bg-bg-raised px-3 py-2.5">
-                    <div className="font-mono text-sm text-fg">{stat.value}</div>
+                    <div className="font-mono text-sm text-fg">
+                      {stat.value}
+                    </div>
                     <div className="mt-0.5 text-[10px] uppercase tracking-wide text-fg-faint">
                       {stat.label}
                     </div>
@@ -555,7 +570,9 @@ export function UsageScreen() {
                           {formatTokenCount(model.tokens)}
                         </td>
                         <td className="py-1.5 text-right font-mono text-fg-muted">
-                          {model.unpriced ? "Not priced" : formatUsd(model.costUsd)}
+                          {model.unpriced
+                            ? "Not priced"
+                            : formatUsd(model.costUsd)}
                         </td>
                       </tr>
                     );

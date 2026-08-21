@@ -21,8 +21,8 @@ import {
   type UsageTokens,
 } from "../shared/usage.js";
 
-export { totalTokens };
 export type { UsageProvider, UsageTokens };
+export { totalTokens };
 
 export interface UsageRecord {
   timestampMs: number;
@@ -44,7 +44,10 @@ export interface UsageRecord {
  * scan tolerable. Codex additionally needs `turn_context`/`session_meta`
  * lines through — they carry no usage but drive the reducer state.
  */
-export function mightCarryUsage(line: string, provider: UsageProvider): boolean {
+export function mightCarryUsage(
+  line: string,
+  provider: UsageProvider,
+): boolean {
   if (provider === "claude") return line.includes('"usage"');
   return (
     line.includes('"token_count"') ||
@@ -84,7 +87,8 @@ export function parseClaudeLine(line: string): UsageRecord | null {
   if (timestampMs === undefined) return null;
 
   const messageId = typeof message.id === "string" ? message.id : null;
-  const requestId = typeof record.requestId === "string" ? record.requestId : null;
+  const requestId =
+    typeof record.requestId === "string" ? record.requestId : null;
   const details = asRecord(usage.output_tokens_details);
   const outputTokens = positiveTokenCount(usage.output_tokens);
   return {
@@ -94,7 +98,9 @@ export function parseClaudeLine(line: string): UsageRecord | null {
     tokens: {
       inputTokens: positiveTokenCount(usage.input_tokens),
       cachedInputTokens: positiveTokenCount(usage.cache_read_input_tokens),
-      cacheCreationTokens: positiveTokenCount(usage.cache_creation_input_tokens),
+      cacheCreationTokens: positiveTokenCount(
+        usage.cache_creation_input_tokens,
+      ),
       outputTokens,
       reasoningTokens: Math.min(
         outputTokens,
@@ -128,7 +134,11 @@ export interface CodexScanState {
 }
 
 export function createCodexScanState(): CodexScanState {
-  return { sawSessionMeta: false, suppressingForkCopies: false, forkCopyAnchorMs: 0 };
+  return {
+    sawSessionMeta: false,
+    suppressingForkCopies: false,
+    forkCopyAnchorMs: 0,
+  };
 }
 
 /**
@@ -214,7 +224,10 @@ export function parseCodexLine(
   const outputTokens = positiveTokenCount(last.output_tokens);
   const tokens: UsageTokens = {
     // Codex reports input_tokens inclusive of the cached portion.
-    inputTokens: Math.max(0, inputTokens - cachedInputTokens - cacheCreationTokens),
+    inputTokens: Math.max(
+      0,
+      inputTokens - cachedInputTokens - cacheCreationTokens,
+    ),
     cachedInputTokens,
     cacheCreationTokens,
     outputTokens,
