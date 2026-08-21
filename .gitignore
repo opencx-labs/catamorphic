@@ -33,3 +33,4 @@ pgdata/
 
 # Project repos (local dev storage)
 data/
+.claude/worktrees/
