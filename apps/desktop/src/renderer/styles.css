@@ -321,6 +321,40 @@ kbd {
   -webkit-user-select: none;
 }
 
+/* Popover surfaces anchored to a control (surface-rail popovers, the
+   composer's slash menu): a quick rise + settle in, the reverse on the
+   way out. Exit holds its final frame until React unmounts on
+   animationend. */
+@keyframes pop-in {
+  from {
+    opacity: 0;
+    transform: translateY(4px) scale(0.98);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+.animate-pop-in {
+  animation: pop-in 160ms cubic-bezier(0.2, 0, 0, 1);
+}
+
+@keyframes pop-out {
+  from {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+  to {
+    opacity: 0;
+    transform: translateY(4px) scale(0.98);
+  }
+}
+
+.animate-pop-out {
+  animation: pop-out 140ms cubic-bezier(0.2, 0, 0, 1) forwards;
+}
+
 /* Chat dock rise-in, matching its collapse transition in reverse */
 @keyframes dock-in {
   from {
