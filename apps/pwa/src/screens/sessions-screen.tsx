@@ -6,6 +6,7 @@ import {
 import type { QueryClient } from "@tanstack/react-query";
 import { MessageSquarePlus } from "lucide-react";
 import { ChatGlyph } from "../components/chat-glyph.js";
+import { ConnectionTrouble } from "../components/connection-trouble.js";
 import { Screen } from "../components/screen.js";
 import { clientFor } from "../lib/api.js";
 import { navigate } from "../lib/nav.js";
@@ -78,9 +79,13 @@ function SessionsList({
             <p className="p-4 text-sm text-fg-faint">Loading sessions…</p>
           )}
           {sessions.isError && (
-            <p className="p-4 text-sm text-danger">
-              Couldn't load sessions: {sessions.error.message}
-            </p>
+            <div className="p-4">
+              <ConnectionTrouble
+                connection={connection}
+                projectId={projectId}
+                message={sessions.error.message}
+              />
+            </div>
           )}
           {items.length === 0 && sessions.isSuccess && (
             <div className="flex h-full flex-col items-center justify-center gap-2 p-8 text-center">

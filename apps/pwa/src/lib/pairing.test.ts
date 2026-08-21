@@ -13,6 +13,7 @@ const claim = (context?: PairingClaim["context"]): PairingClaim => ({
       token: "remote-token",
       project: "p-remote",
       name: "Acme Brain",
+      localProjectId: "p-local",
     },
   ],
   context,
@@ -32,6 +33,14 @@ describe("applyPairing", () => {
     );
     expect(remote?.projectId).toBe("p-remote");
     expect(remote?.projectName).toBe("Acme Brain");
+    // The failover hint: desktop project → its remote mirror.
+    expect(desktop?.mirrors).toEqual({
+      "p-local": {
+        serverUrl: "https://brain.acme.dev/api",
+        projectId: "p-remote",
+        name: "Acme Brain",
+      },
+    });
   });
 
   it("deep-links into the chat the desktop had focused", () => {

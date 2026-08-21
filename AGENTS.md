@@ -91,6 +91,15 @@ Internal packages:
 Apps:
 
 - `apps/desktop` — the Catamorphic desktop app (Electron), the in-repo reference host: it embeds the server in-process (`src/main/server/boot.ts`) and consumes the same hooks as any embedder. It is also a **dev shell** (ADR 0045): Claude Code fidelity (CLAUDE.md/`.claude` honored), worktrees, Monaco diff tabs, sidebar Changes/PRs, ghostty/PTY terminals with OSC 133, embedded browser, command palette. See `apps/desktop/AGENTS.md` and `apps/desktop/DESIGN.md`. Catamorphic itself remains embed-only.
+- `apps/pwa` — the mobile PWA (ADR 0058): phone-sized client of any Catamorphic server — projects → sessions → chat (queue/send-now nudge, interrupt, agent questions, tool-permission cards), connect-link auth, local profiles. Reaches a server three ways: an invite connect link, a desktop QR pairing (ADR 0060), or the stock server. See `apps/pwa/AGENTS.md`.
+- `apps/server` — the stock self-hostable server (ADR 0059): `docker run`-able, zero external services (PGlite + bare git origins + local-process execution + `auth.json` bearer tokens), invites over `POST /admin/invites` (returns ready-to-send connect links), unique-per-install mDNS hostname for LAN reach, `DATABASE_URL` opt-in for real Postgres. **Single-tenant only** (ADR 0047). See `apps/server/AGENTS.md`.
+
+How the three connect (setting up / troubleshooting, read in this order):
+
+1. **Auth is always a bearer token resolved per request** (ADR 0055): desktop = fixed local identity on loopback; stock server = `auth.json` (admin token printed at boot; member tokens minted by invites, access lives in the *membership*); desktop-LAN = device tokens from QR pairing (hashes in `<userData>/mobile-pairing.json`).
+2. **Invites are connect links**: `catamorphic://connect?server=<api base incl. /api>&token=…&project=…` — redeemable by the desktop (creates a synced remote project, ADR 0044/0055) and by the PWA (direct chat access).
+3. **QR pairing** (ADR 0060, palette → "Continue on mobile"): the desktop's LAN listener serves the built `apps/pwa/dist` at its root, exchanges a single-use 2-minute code for a device token, and proxies `/api/*` to the loopback embedded server (bearer required). The claim also hands the phone the profile's remote-project links + mirror map, and the focused chat's project/session (deep-link). The QR ships the **built** PWA — rebuild `apps/pwa` after UI changes.
+4. **Scoped members address agents as `project:<projectId>:<slug>`** — a bare session create is builder/root-only; the PWA derives the id from `GET /me`.
 
 ## Skills
 

@@ -95,6 +95,27 @@ describe("continue on mobile", () => {
     expect(Array.isArray(list.items)).toBe(true);
   });
 
+  it("lists the paired device and revocation kills its token", async () => {
+    const devices = await app.eval<
+      Array<{ id: string; label: string; lastSeenAt: string | null }>
+    >(`window.catamorphicDesktop.mobilePairingDevices()`);
+    expect(devices).toHaveLength(1);
+    expect(devices[0]?.lastSeenAt).toBeTruthy();
+    const revoked = await app.eval<boolean>(
+      `window.catamorphicDesktop.mobilePairingRevoke(${JSON.stringify(devices[0]?.id)})`,
+    );
+    expect(revoked).toBe(true);
+    const denied = await fetch(`${apiBase}/projects`, {
+      headers: { authorization: `Bearer ${token}` },
+    });
+    expect(denied.status).toBe(401);
+    expect(
+      await app.eval<unknown[]>(
+        `window.catamorphicDesktop.mobilePairingDevices()`,
+      ),
+    ).toHaveLength(0);
+  });
+
   it("rejects garbage tokens and garbage codes", async () => {
     const bad = await fetch(`${apiBase}/projects`, {
       headers: { authorization: "Bearer nope" },

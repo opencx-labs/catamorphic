@@ -163,6 +163,18 @@ export function registerIpcHandlers(
     },
   );
 
+  ipcMain.handle("catamorphic:mobile-pairing-devices", (event) =>
+    mobilePairing
+      ? mobilePairing.listDevices(windows.profileFor(event.sender))
+      : [],
+  );
+
+  ipcMain.handle(
+    "catamorphic:mobile-pairing-revoke",
+    (_event, deviceId: string) =>
+      mobilePairing ? mobilePairing.revokeDevice(deviceId) : false,
+  );
+
   // --- window ↔ profile ---
 
   ipcMain.handle("catamorphic:window-profile", (event) =>

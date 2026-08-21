@@ -17,6 +17,7 @@ import {
 } from "../components/catamorphic/chat-timeline.js";
 import { ToolPermissionCard } from "../components/catamorphic/tool-permission-card.js";
 import { ChatGlyph } from "../components/chat-glyph.js";
+import { ConnectionTrouble } from "../components/connection-trouble.js";
 import { Screen } from "../components/screen.js";
 import { clientFor, fetchMe } from "../lib/api.js";
 import { navigate } from "../lib/nav.js";
@@ -198,9 +199,11 @@ function Chat({
               </div>
             )}
             {chat.error && (
-              <p className="rounded-lg border border-danger/40 bg-danger/10 px-3 py-2 text-xs text-danger">
-                {chat.error.message}
-              </p>
+              <ConnectionTrouble
+                connection={connection}
+                projectId={projectId}
+                message={chat.error.message}
+              />
             )}
             {chat.queue.length > 0 && (
               <ul className="flex flex-col gap-1">

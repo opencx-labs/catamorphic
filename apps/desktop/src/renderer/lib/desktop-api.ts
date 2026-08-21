@@ -653,6 +653,17 @@ export interface CatamorphicDesktopApi {
     expiresAt: string;
     pwaReady: boolean;
   }>;
+  /** This profile's paired phones (for the management list). */
+  mobilePairingDevices: () => Promise<
+    Array<{
+      id: string;
+      label: string;
+      createdAt: string;
+      lastSeenAt: string | null;
+    }>
+  >;
+  /** Cut a paired phone off; its token dies on the next request. */
+  mobilePairingRevoke: (deviceId: string) => Promise<boolean>;
   remoteParseLink: (link: string) => Promise<ConnectLink | null>;
   remoteConnect: (input: {
     serverUrl: string;

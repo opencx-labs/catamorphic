@@ -15,12 +15,23 @@ let dataDir: string;
 let server: StockServer;
 let adminToken: string;
 
+let pwaDist: string;
+
 beforeAll(async () => {
   dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "stock-server-"));
+  pwaDist = fs.mkdtempSync(path.join(os.tmpdir(), "stock-pwa-dist-"));
+  fs.writeFileSync(
+    path.join(pwaDist, "index.html"),
+    "<!doctype html><title>pwa-stub</title>",
+  );
   server = await buildStockServer({
     dataDir,
     publicBases: ["http://catamorphic.local:4700"],
-    env: { CATAMORPHIC_FAKE_AGENT: "1", PATH: process.env.PATH },
+    env: {
+      CATAMORPHIC_FAKE_AGENT: "1",
+      CATAMORPHIC_PWA_DIST: pwaDist,
+      PATH: process.env.PATH,
+    },
   });
   adminToken = server.auth.ensureAdmin().token;
 }, 120_000);
@@ -28,6 +39,7 @@ beforeAll(async () => {
 afterAll(async () => {
   await server?.shutdown();
   fs.rmSync(dataDir, { recursive: true, force: true });
+  if (pwaDist) fs.rmSync(pwaDist, { recursive: true, force: true });
 });
 
 const inject = (
@@ -53,6 +65,14 @@ describe("stock server", () => {
   it("reports health and chat availability", async () => {
     const response = await inject("GET", "/healthz");
     expect(response.json()).toEqual({ ok: true, agentSessions: true });
+  });
+
+  it("serves the PWA at its root, SPA-falling back on unknown paths", async () => {
+    const root = await inject("GET", "/");
+    expect(root.statusCode).toBe(200);
+    expect(root.body).toContain("pwa-stub");
+    const deep = await inject("GET", "/anything/else");
+    expect(deep.body).toContain("pwa-stub");
   });
 
   it("rejects unauthenticated and unknown-token API calls", async () => {
@@ -86,6 +106,10 @@ describe("stock server", () => {
       "catamorphic://connect?server=http%3A%2F%2Fcatamorphic.local%3A4700%2Fapi",
     );
     expect(invite.connectLinks[0]).toContain(`project=${projectId}`);
+    // The plain-URL variant opens the PWA this server serves.
+    expect(invite.webLinks[0]).toMatch(
+      /^http:\/\/catamorphic\.local:4700\/\?server=/,
+    );
   }, 60_000);
 
   it("the member's /me shows the assistant and nothing more", async () => {

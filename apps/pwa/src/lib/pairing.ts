@@ -1,5 +1,10 @@
 import type { Route } from "./nav.js";
-import { activeProfile, addConnection, type PwaState } from "./store.js";
+import {
+  activeProfile,
+  addConnection,
+  type PwaConnection,
+  type PwaState,
+} from "./store.js";
 
 /**
  * Redeem a desktop QR pairing (`/?pair=<code>`, served by the desktop's
@@ -20,6 +25,8 @@ export interface PairingClaim {
     token: string;
     project: string;
     name: string;
+    /** The desktop project this remote mirrors. */
+    localProjectId?: string;
   }>;
   context?: { projectId?: string; sessionId?: string };
 }
@@ -46,6 +53,18 @@ export async function claimPairing(
 /** Store every connection the claim carries; the route to land on. */
 export function applyPairing(state: PwaState, claim: PairingClaim): Route {
   const profile = activeProfile(state);
+  // Desktop projects that also live on a remote server, keyed by the
+  // desktop's project id — the failover hint when the desktop is asleep.
+  const mirrors: NonNullable<PwaConnection["mirrors"]> = {};
+  for (const remote of claim.remotes) {
+    if (remote.localProjectId) {
+      mirrors[remote.localProjectId] = {
+        serverUrl: remote.server.replace(/\/+$/, ""),
+        projectId: remote.project,
+        name: remote.name,
+      };
+    }
+  }
   const desktop = addConnection(
     profile.id,
     {
@@ -57,6 +76,7 @@ export function applyPairing(state: PwaState, claim: PairingClaim): Route {
       remoteProjectName: claim.name,
     },
     claim.name,
+    Object.keys(mirrors).length > 0 ? { mirrors } : undefined,
   );
   for (const remote of claim.remotes) {
     addConnection(profile.id, {

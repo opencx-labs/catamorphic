@@ -42,7 +42,11 @@ Common host shapes, composed from those axes:
   (ADR 0040): the trust statement attaches to a reviewed deploy, not to
   whatever an agent typed five minutes ago. Never use this provider for
   multi-tenant hosts — the only isolation is a process boundary and an
-  explicit env.
+  explicit env. **This shape ships ready-made as the stock server**
+  (`apps/server`, ADR 0059): `docker run` with everything on disk, bearer
+  tokens in `auth.json`, invites over an admin API, mDNS LAN discovery,
+  `DATABASE_URL` to swap PGlite for real Postgres — read it as the
+  reference for this shape before writing a host from scratch.
 - **Read-only embed / reporting**: `@catamorphic/db` migrations plus SQL
   joins, or the SDK without a sandbox provider.
 

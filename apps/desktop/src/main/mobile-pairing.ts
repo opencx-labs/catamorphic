@@ -48,7 +48,18 @@ export interface PairedDevice {
   id: string;
   tokenHash: string;
   profileId: string;
+  /** Best-effort from the claiming request's user agent ("iPhone", …). */
+  label: string;
   createdAt: string;
+  lastSeenAt?: string;
+}
+
+/** What the renderer's device list shows (never the hash). */
+export interface PairedDeviceInfo {
+  id: string;
+  label: string;
+  createdAt: string;
+  lastSeenAt: string | null;
 }
 
 interface PairingFile {
@@ -93,12 +104,36 @@ export class MobilePairingService {
   ) {
     const stored = this.load();
     this.port = stored.port ?? DEFAULT_PORT;
-    this.devices = stored.devices ?? [];
+    this.devices = (stored.devices ?? []).map((device) => ({
+      ...device,
+      label: device.label ?? "Device",
+    }));
   }
 
   /** Auto-start at boot when phones are already paired — they reconnect. */
   hasDevices(): boolean {
     return this.devices.length > 0;
+  }
+
+  /** The profile's paired devices, for the management UI. */
+  listDevices(profileId: string): PairedDeviceInfo[] {
+    return this.devices
+      .filter((device) => device.profileId === profileId)
+      .map((device) => ({
+        id: device.id,
+        label: device.label,
+        createdAt: device.createdAt,
+        lastSeenAt: device.lastSeenAt ?? null,
+      }));
+  }
+
+  /** Cut a device off: its token stops working on the next request. */
+  revokeDevice(deviceId: string): boolean {
+    const before = this.devices.length;
+    this.devices = this.devices.filter((device) => device.id !== deviceId);
+    if (this.devices.length === before) return false;
+    this.save();
+    return true;
   }
 
   /** Begin a pairing: ensure the LAN listener, mint a single-use code. */
@@ -145,6 +180,7 @@ export class MobilePairingService {
         id: randomUUID(),
         tokenHash: hashToken(token),
         profileId: entry.profileId,
+        label: deviceLabel(request.headers["user-agent"]),
         createdAt: new Date().toISOString(),
       });
       this.save();
@@ -254,7 +290,17 @@ export class MobilePairingService {
     const match = raw ? /^Bearer\s+(\S+)$/i.exec(raw.trim()) : null;
     if (!match?.[1]) return false;
     const hash = hashToken(match[1]);
-    return this.devices.some((device) => device.tokenHash === hash);
+    const device = this.devices.find((entry) => entry.tokenHash === hash);
+    if (!device) return false;
+    // lastSeen keeps the device list honest; persist at most once a minute
+    // (the phone polls every 500ms while a turn runs).
+    const now = Date.now();
+    const last = device.lastSeenAt ? Date.parse(device.lastSeenAt) : 0;
+    if (now - last > 60_000) {
+      device.lastSeenAt = new Date(now).toISOString();
+      this.save();
+    }
+    return true;
   }
 
   /**
@@ -270,6 +316,9 @@ export class MobilePairingService {
       token: string;
       project: string;
       name: string;
+      /** The DESKTOP project this remote mirrors — the phone uses it to
+       * offer the remote as the way in when this desktop is asleep. */
+      localProjectId: string;
     }> = [];
     for (const localProjectId of Object.keys(store.list())) {
       const link = store.get(localProjectId);
@@ -282,6 +331,7 @@ export class MobilePairingService {
         token: link.token,
         project: link.remoteProjectId,
         name: link.remoteProjectName,
+        localProjectId,
       });
     }
     return links;
@@ -318,6 +368,17 @@ export class MobilePairingService {
 
 function hashToken(token: string): string {
   return createHash("sha256").update(token).digest("hex");
+}
+
+/** A human name for the device list, best-effort from the user agent. */
+function deviceLabel(userAgent: string | string[] | undefined): string {
+  const ua = (Array.isArray(userAgent) ? userAgent[0] : userAgent) ?? "";
+  if (/iPhone/i.test(ua)) return "iPhone";
+  if (/iPad/i.test(ua)) return "iPad";
+  if (/Android/i.test(ua)) return "Android phone";
+  if (/Macintosh/i.test(ua)) return "Mac browser";
+  if (/Windows/i.test(ua)) return "Windows browser";
+  return "Device";
 }
 
 function lanIps(): string[] {

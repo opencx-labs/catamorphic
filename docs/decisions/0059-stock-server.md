@@ -41,6 +41,13 @@ member's role ref resolves to, without requiring committed
 `ToolPermissionBroker`, so phones answer them over HTTP (ADR 0058's
 mechanism, here as the only surface).
 
+**The server serves the PWA at its root** (workspace `apps/pwa/dist`,
+`CATAMORPHIC_PWA_DIST` in Docker; a landing page without it) — this is
+the phone's off-network home: invites return `webLinks`
+(`https://server/?server=…&token=…`) that open the hosted app directly,
+and behind TLS the service worker and install prompt work, which the
+desktop's plain-http LAN origin cannot offer.
+
 **LAN discovery is a hostname, not a protocol.** A hand-rolled ~150-line
 mDNS responder answers A queries for `catamorphic.local`, because
 browsers cannot do mDNS but every phone OS resolves `.local` names —

@@ -16,6 +16,16 @@ export interface PwaConnection {
   projectId: string;
   projectName?: string;
   renewUrl?: string;
+  /**
+   * For a paired-desktop connection: which of its projects also live on
+   * a remote server (the desktop's remote-project links, ADR 0055),
+   * keyed by the DESKTOP's project id. When the desktop is asleep or off
+   * this network, the UI offers the mirror as the way in.
+   */
+  mirrors?: Record<
+    string,
+    { serverUrl: string; projectId: string; name: string }
+  >;
   addedAt: string;
 }
 
@@ -107,6 +117,21 @@ export function activeProfile(current: PwaState): PwaProfile {
   );
 }
 
+/** The connection holding this exact server+project, if one exists. */
+export function findConnection(
+  current: PwaState,
+  serverUrl: string,
+  projectId: string,
+): PwaConnection | undefined {
+  for (const profile of current.profiles) {
+    const found = profile.connections.find(
+      (c) => c.serverUrl === serverUrl && c.projectId === projectId,
+    );
+    if (found) return found;
+  }
+  return undefined;
+}
+
 export function connectionById(
   current: PwaState,
   connectionId: string,
@@ -135,6 +160,7 @@ export function addConnection(
   profileId: string,
   link: ConnectLink,
   projectName?: string,
+  extras?: Pick<PwaConnection, "mirrors">,
 ): PwaConnection {
   const existing = state.profiles
     .find((p) => p.id === profileId)
@@ -151,6 +177,7 @@ export function addConnection(
       ? { projectName: projectName ?? link.remoteProjectName }
       : {}),
     ...(link.renewUrl ? { renewUrl: link.renewUrl } : {}),
+    ...(extras?.mirrors ? { mirrors: extras.mirrors } : {}),
     addedAt: existing?.addedAt ?? new Date().toISOString(),
   };
   updateProfile(profileId, (profile) => ({

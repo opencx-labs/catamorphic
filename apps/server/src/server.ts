@@ -171,8 +171,34 @@ export async function buildStockServer(
     agentSessions: Boolean(core.agentSessions),
   }));
 
-  app.get("/", async (_request, reply) => {
-    return reply.type("text/html").send(LANDING_PAGE);
+  // The mobile PWA, served from THIS origin (workspace sibling in dev,
+  // CATAMORPHIC_PWA_DIST in the Docker image). Serving it here is what
+  // makes phones work AWAY from any LAN: invite links can point at
+  // `https://server/?server=…&token=…`, the app installs from a stable
+  // (ideally https) origin, and its service worker caches the shell.
+  // Without a bundle, a minimal landing page answers instead.
+  const pwaDist =
+    env.CATAMORPHIC_PWA_DIST ??
+    path.resolve(import.meta.dirname, "../../pwa/dist");
+  app.get("/*", async (request, reply) => {
+    if (!fs.existsSync(path.join(pwaDist, "index.html"))) {
+      return reply.type("text/html").send(LANDING_PAGE);
+    }
+    const requested = decodeURIComponent(
+      (request.url.split("?")[0] ?? "/").replace(/^\/+/, ""),
+    );
+    const resolved = path.resolve(pwaDist, requested || "index.html");
+    const file =
+      resolved.startsWith(pwaDist) &&
+      fs.existsSync(resolved) &&
+      fs.statSync(resolved).isFile()
+        ? resolved
+        : path.join(pwaDist, "index.html");
+    return reply
+      .type(
+        STATIC_CONTENT_TYPES[path.extname(file)] ?? "application/octet-stream",
+      )
+      .send(fs.readFileSync(file));
   });
 
   app.post("/admin/projects", async (request, reply) => {
@@ -230,6 +256,12 @@ export async function buildStockServer(
       connectLinks: (options.publicBases ?? []).map((base) =>
         buildConnectLink(base, record, project.name),
       ),
+      // The same credentials as a plain URL: opens the PWA this server
+      // serves at its root — the link to text someone.
+      webLinks: (options.publicBases ?? []).map(
+        (base) =>
+          `${base.replace(/\/+$/, "")}/?${connectParams(base, record, project.name)}`,
+      ),
     });
   });
 
@@ -283,7 +315,19 @@ export async function buildStockServer(
   };
 }
 
-function buildConnectLink(
+const STATIC_CONTENT_TYPES: Record<string, string> = {
+  ".html": "text/html; charset=utf-8",
+  ".js": "text/javascript",
+  ".css": "text/css",
+  ".svg": "image/svg+xml",
+  ".png": "image/png",
+  ".webmanifest": "application/manifest+json",
+  ".json": "application/json",
+  ".ico": "image/x-icon",
+  ".woff2": "font/woff2",
+};
+
+function connectParams(
   base: string,
   record: TokenRecord,
   projectName?: string,
@@ -295,7 +339,15 @@ function buildConnectLink(
     project: record.projectId ?? "",
   });
   if (projectName) params.set("name", projectName);
-  return `catamorphic://connect?${params.toString()}`;
+  return params.toString();
+}
+
+function buildConnectLink(
+  base: string,
+  record: TokenRecord,
+  projectName?: string,
+): string {
+  return `catamorphic://connect?${connectParams(base, record, projectName)}`;
 }
 
 const LANDING_PAGE = `<!doctype html>

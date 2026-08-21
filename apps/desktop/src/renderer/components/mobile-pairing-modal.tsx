@@ -1,8 +1,18 @@
-import { Copy, LoaderCircle, RefreshCw, Smartphone } from "lucide-react";
+import {
+  Copy,
+  LoaderCircle,
+  RefreshCw,
+  Smartphone,
+  Trash2,
+} from "lucide-react";
 import { toDataURL } from "qrcode";
 import { useCallback, useEffect, useState } from "react";
 import { desktopApi } from "../lib/desktop-api.js";
 import { Modal } from "./modal.js";
+
+type PairedDevice = Awaited<
+  ReturnType<typeof desktopApi.mobilePairingDevices>
+>[number];
 
 /**
  * "Continue on mobile": one QR, scanned with the phone camera. The code
@@ -57,9 +67,19 @@ export function MobilePairingModal({
     }
   }, [context]);
 
+  const [devices, setDevices] = useState<PairedDevice[]>([]);
+  const refreshDevices = useCallback(async () => {
+    setDevices(await desktopApi.mobilePairingDevices().catch(() => []));
+  }, []);
+
   useEffect(() => {
-    if (open) void generate();
-  }, [open, generate]);
+    if (!open) return;
+    void generate();
+    void refreshDevices();
+    // A scan lands while the modal is open: keep the list live.
+    const timer = setInterval(() => void refreshDevices(), 3000);
+    return () => clearInterval(timer);
+  }, [open, generate, refreshDevices]);
 
   if (!open) return null;
   return (
@@ -119,7 +139,57 @@ export function MobilePairingModal({
             </div>
           </>
         )}
+        {devices.length > 0 && (
+          <div className="w-full border-t border-border pt-3 text-left">
+            <h3 className="mb-1 text-[11px] font-semibold uppercase tracking-wider text-fg-faint">
+              Paired devices
+            </h3>
+            <ul className="flex flex-col">
+              {devices.map((device) => (
+                <li
+                  key={device.id}
+                  className="flex items-center gap-2 py-1.5"
+                  data-testid="paired-device"
+                >
+                  <Smartphone className="size-3.5 shrink-0 text-fg-faint" />
+                  <span className="min-w-0 flex-1">
+                    <span className="block truncate text-[13px]">
+                      {device.label}
+                    </span>
+                    <span className="block truncate text-[11px] text-fg-faint">
+                      {device.lastSeenAt
+                        ? `last seen ${relativeTime(device.lastSeenAt)}`
+                        : `paired ${relativeTime(device.createdAt)}`}
+                    </span>
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() =>
+                      void desktopApi
+                        .mobilePairingRevoke(device.id)
+                        .then(refreshDevices)
+                    }
+                    className="grid size-7 shrink-0 cursor-pointer place-items-center rounded-md text-fg-faint transition-colors duration-150 hover:bg-bg-overlay hover:text-danger"
+                    aria-label={`Revoke ${device.label}`}
+                    data-testid="revoke-device"
+                  >
+                    <Trash2 className="size-3.5" />
+                  </button>
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
       </div>
     </Modal>
   );
+}
+
+function relativeTime(iso: string): string {
+  const minutes = Math.round((Date.now() - new Date(iso).getTime()) / 60_000);
+  if (minutes < 1) return "just now";
+  if (minutes < 60) return `${minutes}m ago`;
+  const hours = Math.round(minutes / 60);
+  if (hours < 24) return `${hours}h ago`;
+  return `${Math.round(hours / 24)}d ago`;
 }

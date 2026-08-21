@@ -256,6 +256,10 @@ const api = {
   // Continue on mobile (QR pairing).
   mobilePairingStart: (context?: unknown): Promise<unknown> =>
     ipcRenderer.invoke("catamorphic:mobile-pairing-start", context),
+  mobilePairingDevices: (): Promise<unknown> =>
+    ipcRenderer.invoke("catamorphic:mobile-pairing-devices"),
+  mobilePairingRevoke: (deviceId: string): Promise<unknown> =>
+    ipcRenderer.invoke("catamorphic:mobile-pairing-revoke", deviceId),
   // Remote projects (ADR 0055).
   remoteParseLink: (link: string): Promise<unknown> =>
     ipcRenderer.invoke("catamorphic:remote-parse-link", link),

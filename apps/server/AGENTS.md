@@ -16,8 +16,11 @@ API, mDNS so the LAN reaches `http://catamorphic.local:4700`.
   `OPENAI_API_KEY` (`CATAMORPHIC_MODEL` overrides; anthropic defaults to
   claude-opus-5). `CATAMORPHIC_FAKE_AGENT=1` = deterministic echo agent.
 - Boot prints the admin token + ready-to-paste curl for projects/invites.
-  `POST /admin/invites` returns `connectLinks` for every address the
-  server answers on.
+  `POST /admin/invites` returns `connectLinks` (catamorphic:// scheme)
+  AND `webLinks` — plain URLs opening the PWA this server serves at its
+  root (`apps/pwa/dist` sibling, or `CATAMORPHIC_PWA_DIST`). Put the
+  server behind TLS and those webLinks are the durable, installable,
+  works-from-anywhere entry point for phones.
 
 ## Shape rules
 

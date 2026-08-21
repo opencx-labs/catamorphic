@@ -53,3 +53,12 @@ desktop connection plus the profile's remote-project links, and
 deep-links into the chat the desktop had focused. The desktop serves
 the BUILT bundle — after UI changes run `bun run build` here or the QR
 flow ships a stale app.
+
+Failover semantics (troubleshooting "the desktop is asleep"): the claim
+also carries a mirror map (desktop projectId → its remote server), kept
+on the desktop connection (`mirrors`). Desktop and remote are SEPARATE
+backends with separate chat sessions — there is no auto-switch and no
+session continuity; when a desktop-connection request fails,
+`components/connection-trouble.tsx` explains why in human terms and
+offers the project's remote mirror as the way in. The remote connections
+themselves work independently of the desktop from the moment of pairing.

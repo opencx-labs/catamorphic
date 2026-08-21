@@ -71,7 +71,8 @@
   skills ride the prompt note only (no native plugin). Also: a "remote
   sync" home for user-scoped state beyond skills — the designed shape is
   a self-scoped store subtree (`store/users/{user}/**` via a role grant,
-  0055 machinery) once the stock server exists.
+  0055 machinery) — the stock server's member role (ADR 0059) already
+  grants exactly that subtree.
 - **Agent channel integrations: Slack, code review.** The per-agent
   schema (capabilities + tool policies + mode) is the substrate; what's
   missing is the *binding* of an agent to a channel. Slack: a
@@ -93,18 +94,21 @@
   consent hashing, and HTTP surface stay unchanged. Gives authors types,
   autocomplete, and refactors; the check script should flag drift between
   source and generated JSON.
-- **Long term: a default self-hostable Catamorphic server + remote MCP.**
-  Today the workflow-tools MCP endpoint (ADR 0042) is local and
-  host-proxied. The direction: a stock Catamorphic server people run on
-  their own infra; Catamorphic desktop connects to it and calls
-  MCPs/workflows remotely instead of locally. Identity is settled (ADR
-  0053: the host's `identity` resolver returns full or scoped identities;
-  the server is that resolver plus a token-issuing auth adapter and a
-  config file); embed first, then promote the reference host into the
-  stock server. Motivating case: our customer engineering team wants
-  AI-built custom issue trackers per customer — customers as scoped
-  viewers of per-customer apps, tenants connecting to their own workflow
-  tools over MCP.
+- **Stock self-hostable server: SHIPPED 2026-08-21 (ADR 0059,
+  `apps/server`)** — docker-run-able, zero external services (PGlite +
+  bare git origins + local-process execution + `auth.json` tokens),
+  invites over `POST /admin/invites` (deploys `roles/member.json`,
+  grants membership, returns connect links), unique mDNS hostname for
+  LAN reach, `DATABASE_URL` opt-in for real Postgres. The mobile PWA
+  (`apps/pwa`, ADR 0058) is its first-class client, and desktop QR
+  pairing (ADR 0060) covers the personal-server case. Remaining
+  follow-ups: **passkeys** for self-serve token renewal (the `renew=`
+  slot on connect links is still empty), **OIDC + email-domain
+  auto-membership** (the company-brain door), an **admin/membership UI**
+  (today: curl + the printed admin token), device-revocation UI for
+  paired phones, and remote MCP for the desktop (calling a remote
+  server's workflow tools instead of local ones — the original
+  motivating case: per-customer apps with customers as scoped viewers).
 - **ADR 0055 follow-ups (company brain).** The six steps landed (scope kinds
   + scoped agent sessions; roles/memberships/`identityFromBearer`; project
   store + documents surface + `context.caller/documents/host`; project MCP
@@ -158,5 +162,7 @@
 - **Remote machines for agents (t3-code-inspired).** t3 runs agents on
   preconfigured remote environments over SSH (packages/ssh: auth,
   command, tunnel) and tailscale, with pairing-link auth for its
-  web/mobile clients. When remote agent usage solidifies (self-hostable
-  server vision), mine those packages for the transport/auth shapes.
+  web/mobile clients. Our pairing story landed differently (QR device
+  tokens on the desktop LAN listener, ADR 0060; invite links against the
+  stock server, ADR 0059); what's still worth mining from t3 is the SSH
+  remote-environment transport for running agents on OTHER machines.

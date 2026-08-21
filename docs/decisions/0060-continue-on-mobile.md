@@ -47,9 +47,15 @@ email-to-self, second machine).
 ## Consequences
 
 - Scanning grants access **as the desktop user (root)** — the modal says
-  so, codes are single-use and short-lived, and revocation is deleting
-  the device entry from `mobile-pairing.json` (a management UI is
-  follow-up work, alongside passkeys for the renew story).
+  so, codes are single-use and short-lived, and the same modal lists the
+  profile's paired devices (label from the claiming user agent, last
+  seen) with one-tap revocation; a revoked token dies on its next
+  request. Passkeys for the renew story remain follow-up work.
+- Desktop↔remote failover: the claim carries a desktop-project → remote
+  mirror map; when the desktop is unreachable the PWA's error card
+  offers the project's remote server as the way in
+  (`connection-trouble.tsx`). Backends stay separate — sessions do not
+  migrate.
 - The LAN transport is plain http; fine for a trusted network, not for
   hostile ones — the remote story runs through the stock server.
 - A DHCP address change orphans paired phones until they re-scan; the

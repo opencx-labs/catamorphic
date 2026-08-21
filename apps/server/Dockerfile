@@ -19,8 +19,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends git \
 
 WORKDIR /app
 COPY . .
+# Packages (dists the server resolves) + the mobile PWA the server serves
+# at its root (invite webLinks open it directly).
 RUN bun install --frozen-lockfile \
-  && bunx turbo run build --filter='./packages/*' --no-daemon \
+  && bunx turbo run build --filter='./packages/*' --filter=catamorphic-pwa --no-daemon \
   && rm -rf /root/.bun/install/cache
 
 ENV CATAMORPHIC_DATA_DIR=/data

@@ -49,8 +49,13 @@ https://github.com/opencx-labs/catamorphic. When docs leave a question open,
 read the source instead of guessing: each `packages/<name>/README.md`
 documents its package, `docs/decisions/` holds the ADRs behind settled
 designs, and `apps/desktop/src/main/server/boot.ts` is a complete
-real-world embedding (the lightest host shape). Cloning the repo for
-reference is a normal, expected part of integrating.
+real-world embedding (the lightest host shape). For a standalone HTTP
+server, `apps/server` (ADR 0059) is the stock self-hostable host: PGlite
+or `DATABASE_URL`, local-process execution, `identityFromBearer` over a
+token file, and a working invite flow (committed member role + grant +
+connect links) — start from it rather than assembling those pieces by
+hand. Cloning the repo for reference is a normal, expected part of
+integrating.
 
 Canonical deep docs (read before writing code):
 
