@@ -3713,6 +3713,7 @@ export interface paths {
                                 parentSessionId: string | null;
                                 /** @enum {string} */
                                 status: "active" | "closed";
+                                incognito: boolean;
                                 baseCommitSha: string | null;
                                 /** Format: date-time */
                                 createdAt: string;
@@ -3753,6 +3754,7 @@ export interface paths {
                         agentId?: string;
                         /** @enum {string} */
                         effort?: "low" | "medium" | "high" | "xhigh" | "max";
+                        incognito?: boolean;
                     };
                 };
             };
@@ -3782,6 +3784,7 @@ export interface paths {
                             parentSessionId: string | null;
                             /** @enum {string} */
                             status: "active" | "closed";
+                            incognito: boolean;
                             baseCommitSha: string | null;
                             /** Format: date-time */
                             createdAt: string;
@@ -3855,6 +3858,7 @@ export interface paths {
                         title?: string | null;
                         icon?: string | null;
                         provider?: string;
+                        agentSlug?: string;
                         messages: {
                             /** Format: uuid */
                             id: string;
@@ -3896,6 +3900,7 @@ export interface paths {
                             parentSessionId: string | null;
                             /** @enum {string} */
                             status: "active" | "closed";
+                            incognito: boolean;
                             baseCommitSha: string | null;
                             /** Format: date-time */
                             createdAt: string;
@@ -3991,6 +3996,7 @@ export interface paths {
                             parentSessionId: string | null;
                             /** @enum {string} */
                             status: "active" | "closed";
+                            incognito: boolean;
                             baseCommitSha: string | null;
                             /** Format: date-time */
                             createdAt: string;
@@ -4077,6 +4083,7 @@ export interface paths {
                             parentSessionId: string | null;
                             /** @enum {string} */
                             status: "active" | "closed";
+                            incognito: boolean;
                             baseCommitSha: string | null;
                             /** Format: date-time */
                             createdAt: string;
@@ -4156,6 +4163,7 @@ export interface paths {
                             parentSessionId: string | null;
                             /** @enum {string} */
                             status: "active" | "closed";
+                            incognito: boolean;
                             baseCommitSha: string | null;
                             /** Format: date-time */
                             createdAt: string;
@@ -4636,6 +4644,7 @@ export interface paths {
                             parentSessionId: string | null;
                             /** @enum {string} */
                             status: "active" | "closed";
+                            incognito: boolean;
                             baseCommitSha: string | null;
                             /** Format: date-time */
                             createdAt: string;

@@ -35,6 +35,10 @@ API, mDNS so the LAN reaches `http://catamorphic.local:4700`.
 - The admin surface (`/admin/*`, `/healthz`, `/`) lives OUTSIDE `/api` on
   purpose — `catamorphicPlugin` is encapsulated, so these routes carry
   their own auth (admin bearer).
+- `GET /admin/usage` (ADR 0062): per member × project rollup of the
+  usage each assistant turn carries in `metadata.usage` — sessions run
+  here and sessions mirrored from desktops (ADR 0061) both count;
+  incognito sessions never arrive by design.
 
 ## Verify
 

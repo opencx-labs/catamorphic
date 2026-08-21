@@ -74,3 +74,4 @@ Settled design decisions live here as short Architecture Decision Records. They 
 | [0059](0059-stock-server.md) | The stock server: zero-dependency, disk-backed, invite-first; mDNS LAN discovery | Accepted |
 | [0060](0060-continue-on-mobile.md) | Continue on mobile: QR pairing, bearer-gated LAN proxy, remote-link handoff | Accepted |
 | [0061](0061-session-mirroring.md) | Session mirroring: local-first chats pushed to the linked remote; fork-on-continuation | Accepted |
+| [0062](0062-session-privacy-and-fork-ux.md) | Session privacy & fork UX: incognito sessions, project policy, fork markers, admin usage | Accepted |

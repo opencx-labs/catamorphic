@@ -5,7 +5,7 @@ import {
 } from "@catamorphic/react";
 import type { QueryClient } from "@tanstack/react-query";
 import { useQuery } from "@tanstack/react-query";
-import { ArrowUp, ListPlus, Square, X, Zap } from "lucide-react";
+import { ArrowUp, GitFork, ListPlus, Square, X, Zap } from "lucide-react";
 import { type FormEvent, useState } from "react";
 import {
   AgentQuestionPanel,
@@ -20,8 +20,9 @@ import { ChatGlyph } from "../components/chat-glyph.js";
 import { ConnectionTrouble } from "../components/connection-trouble.js";
 import { Screen } from "../components/screen.js";
 import { clientFor, fetchMe } from "../lib/api.js";
+import { mirrorForkNotice } from "../lib/fork.js";
 import { navigate } from "../lib/nav.js";
-import type { PwaConnection } from "../lib/store.js";
+import { findConnection, getState, type PwaConnection } from "../lib/store.js";
 
 export function ChatScreen({
   connection,
@@ -108,6 +109,12 @@ function Chat({
   );
 
   const lastFailed = failedTurn(chat.messages);
+  // Continued on the linked server (ADR 0062): this copy is history —
+  // lock the composer and point at the live fork.
+  const fork = mirrorForkNotice(chat.messages);
+  const forkConnection = fork
+    ? findConnection(getState(), fork.serverUrl, fork.remoteProjectId)
+    : undefined;
 
   const submit = (event?: FormEvent) => {
     event?.preventDefault();
@@ -162,128 +169,174 @@ function Chat({
           emptyState="Ask the agent anything about this project."
         />
 
-        <div className="shrink-0 border-t border-border bg-bg-raised/95 backdrop-blur-xl">
-          <div className="flex flex-col gap-2 px-3 pt-2">
-            {permissions.permissions.map((permission) => (
-              <ToolPermissionCard
-                key={permission.id}
-                permission={permission}
-                busy={permissions.isAnswering}
-                onAnswer={(answer) =>
-                  void permissions.answer(permission.id, answer)
-                }
-              />
-            ))}
-            {questions && !chat.isSending && (
-              <AgentQuestionPanel
-                questions={questions}
-                onSubmit={(answer) => void chat.send(answer)}
-                onDismiss={() => void chat.send(QUESTIONS_DISMISSED_MESSAGE)}
-              />
-            )}
-            {lastFailed && !chat.isWorking && (
-              <div className="flex items-center justify-between gap-2 rounded-lg border border-danger/40 bg-danger/10 px-3 py-2 text-[13px]">
-                <span className="min-w-0 truncate text-danger">
-                  {lastFailed.interrupted
-                    ? "The turn was interrupted."
-                    : "The last turn failed."}
-                </span>
+        {fork ? (
+          <div className="pb-safe shrink-0 border-t border-border bg-bg-raised/95 p-3 backdrop-blur-xl">
+            <div
+              className="flex flex-col gap-2 rounded-xl border border-border bg-bg-inset p-3"
+              data-testid="fork-lock"
+            >
+              <p className="flex items-start gap-2 text-[13px] leading-5 text-fg-muted">
+                <GitFork className="mt-0.5 size-4 shrink-0 text-fg-faint" />
+                This conversation continued on {hostOf(fork.serverUrl)} — this
+                copy is history.
+              </p>
+              {forkConnection ? (
                 <button
                   type="button"
-                  onClick={() => void chat.retry()}
-                  className="shrink-0 cursor-pointer rounded-md border border-border-strong px-2.5 py-1 text-fg active:bg-bg-overlay"
-                  data-testid="chat-retry"
+                  onClick={() =>
+                    navigate({
+                      kind: "chat",
+                      connectionId: forkConnection.id,
+                      projectId: fork.remoteProjectId,
+                      sessionId: fork.sessionId,
+                    })
+                  }
+                  className="flex h-10 cursor-pointer items-center justify-center rounded-lg bg-accent text-[14px] font-semibold text-accent-fg active:scale-[0.99]"
+                  data-testid="open-fork"
                 >
-                  Retry
+                  Open the live conversation
                 </button>
-              </div>
-            )}
-            {chat.error && (
-              <ConnectionTrouble
-                connection={connection}
-                projectId={projectId}
-                message={chat.error.message}
-              />
-            )}
-            {chat.queue.length > 0 && (
-              <ul className="flex flex-col gap-1">
-                {chat.queue.map((queued) => (
-                  <li
-                    key={queued.id}
-                    className="flex items-center gap-2 rounded-lg border border-border bg-bg-inset px-3 py-1.5 text-[13px] text-fg-muted"
-                  >
-                    <span className="min-w-0 flex-1 truncate">
-                      {queued.content}
-                    </span>
-                    <span className="shrink-0 text-[10px] uppercase tracking-wide text-fg-faint">
-                      queued
-                    </span>
-                    <button
-                      type="button"
-                      onClick={() => chat.sendQueuedNow(queued.id)}
-                      className="grid size-6 shrink-0 cursor-pointer place-items-center rounded text-fg-faint active:text-fg"
-                      aria-label="Send now"
-                    >
-                      <Zap className="size-3.5" />
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => chat.removeQueued(queued.id)}
-                      className="grid size-6 shrink-0 cursor-pointer place-items-center rounded text-fg-faint active:text-fg"
-                      aria-label="Remove queued message"
-                    >
-                      <X className="size-3.5" />
-                    </button>
-                  </li>
-                ))}
-              </ul>
-            )}
-          </div>
-          <form
-            className="pb-safe flex items-end gap-2 p-3 pt-2"
-            onSubmit={submit}
-          >
-            <div className="field flex min-w-0 flex-1 items-end">
-              <textarea
-                className="max-h-32 min-h-11 w-full resize-none bg-transparent px-3 py-2.5 leading-6 outline-none [field-sizing:content] placeholder:text-fg-faint"
-                value={draft}
-                onChange={(event) => setDraft(event.target.value)}
-                placeholder={chat.isWorking ? "Message (queues)…" : "Message…"}
-                rows={1}
-                enterKeyHint="send"
-                aria-label="Message the agent"
-                data-testid="chat-input"
-              />
-            </div>
-            {chat.isWorking && draft.trim() && (
-              <button
-                type="button"
-                onClick={submitNow}
-                className="grid size-11 shrink-0 cursor-pointer place-items-center rounded-xl border border-border-strong bg-bg-overlay text-fg transition-transform duration-150 active:scale-95"
-                aria-label="Interrupt and send now"
-                data-testid="chat-send-now"
-              >
-                <Zap className="size-4.5" />
-              </button>
-            )}
-            <button
-              type="submit"
-              className="grid size-11 shrink-0 cursor-pointer place-items-center rounded-xl bg-accent text-accent-fg transition-transform duration-150 active:scale-95 disabled:opacity-35"
-              disabled={!draft.trim() || !sendReady}
-              aria-label={chat.isWorking ? "Queue message" : "Send message"}
-              data-testid="chat-send"
-            >
-              {chat.isWorking ? (
-                <ListPlus className="size-4.5" />
               ) : (
-                <ArrowUp className="size-4.5" />
+                <p className="text-xs text-fg-faint">
+                  Connect to {hostOf(fork.serverUrl)} to keep talking.
+                </p>
               )}
-            </button>
-          </form>
-        </div>
+            </div>
+          </div>
+        ) : (
+          <div className="shrink-0 border-t border-border bg-bg-raised/95 backdrop-blur-xl">
+            <div className="flex flex-col gap-2 px-3 pt-2">
+              {permissions.permissions.map((permission) => (
+                <ToolPermissionCard
+                  key={permission.id}
+                  permission={permission}
+                  busy={permissions.isAnswering}
+                  onAnswer={(answer) =>
+                    void permissions.answer(permission.id, answer)
+                  }
+                />
+              ))}
+              {questions && !chat.isSending && (
+                <AgentQuestionPanel
+                  questions={questions}
+                  onSubmit={(answer) => void chat.send(answer)}
+                  onDismiss={() => void chat.send(QUESTIONS_DISMISSED_MESSAGE)}
+                />
+              )}
+              {lastFailed && !chat.isWorking && (
+                <div className="flex items-center justify-between gap-2 rounded-lg border border-danger/40 bg-danger/10 px-3 py-2 text-[13px]">
+                  <span className="min-w-0 truncate text-danger">
+                    {lastFailed.interrupted
+                      ? "The turn was interrupted."
+                      : "The last turn failed."}
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => void chat.retry()}
+                    className="shrink-0 cursor-pointer rounded-md border border-border-strong px-2.5 py-1 text-fg active:bg-bg-overlay"
+                    data-testid="chat-retry"
+                  >
+                    Retry
+                  </button>
+                </div>
+              )}
+              {chat.error && (
+                <ConnectionTrouble
+                  connection={connection}
+                  projectId={projectId}
+                  message={chat.error.message}
+                />
+              )}
+              {chat.queue.length > 0 && (
+                <ul className="flex flex-col gap-1">
+                  {chat.queue.map((queued) => (
+                    <li
+                      key={queued.id}
+                      className="flex items-center gap-2 rounded-lg border border-border bg-bg-inset px-3 py-1.5 text-[13px] text-fg-muted"
+                    >
+                      <span className="min-w-0 flex-1 truncate">
+                        {queued.content}
+                      </span>
+                      <span className="shrink-0 text-[10px] uppercase tracking-wide text-fg-faint">
+                        queued
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() => chat.sendQueuedNow(queued.id)}
+                        className="grid size-6 shrink-0 cursor-pointer place-items-center rounded text-fg-faint active:text-fg"
+                        aria-label="Send now"
+                      >
+                        <Zap className="size-3.5" />
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => chat.removeQueued(queued.id)}
+                        className="grid size-6 shrink-0 cursor-pointer place-items-center rounded text-fg-faint active:text-fg"
+                        aria-label="Remove queued message"
+                      >
+                        <X className="size-3.5" />
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </div>
+            <form
+              className="pb-safe flex items-end gap-2 p-3 pt-2"
+              onSubmit={submit}
+            >
+              <div className="field flex min-w-0 flex-1 items-end">
+                <textarea
+                  className="max-h-32 min-h-11 w-full resize-none bg-transparent px-3 py-2.5 leading-6 outline-none [field-sizing:content] placeholder:text-fg-faint"
+                  value={draft}
+                  onChange={(event) => setDraft(event.target.value)}
+                  placeholder={
+                    chat.isWorking ? "Message (queues)…" : "Message…"
+                  }
+                  rows={1}
+                  enterKeyHint="send"
+                  aria-label="Message the agent"
+                  data-testid="chat-input"
+                />
+              </div>
+              {chat.isWorking && draft.trim() && (
+                <button
+                  type="button"
+                  onClick={submitNow}
+                  className="grid size-11 shrink-0 cursor-pointer place-items-center rounded-xl border border-border-strong bg-bg-overlay text-fg transition-transform duration-150 active:scale-95"
+                  aria-label="Interrupt and send now"
+                  data-testid="chat-send-now"
+                >
+                  <Zap className="size-4.5" />
+                </button>
+              )}
+              <button
+                type="submit"
+                className="grid size-11 shrink-0 cursor-pointer place-items-center rounded-xl bg-accent text-accent-fg transition-transform duration-150 active:scale-95 disabled:opacity-35"
+                disabled={!draft.trim() || !sendReady}
+                aria-label={chat.isWorking ? "Queue message" : "Send message"}
+                data-testid="chat-send"
+              >
+                {chat.isWorking ? (
+                  <ListPlus className="size-4.5" />
+                ) : (
+                  <ArrowUp className="size-4.5" />
+                )}
+              </button>
+            </form>
+          </div>
+        )}
       </div>
     </Screen>
   );
+}
+
+function hostOf(serverUrl: string): string {
+  try {
+    return new URL(serverUrl).host;
+  } catch {
+    return serverUrl;
+  }
 }
 
 function failedTurn(

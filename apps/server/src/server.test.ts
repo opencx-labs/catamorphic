@@ -190,7 +190,17 @@ describe("stock server", () => {
         id: "22222222-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
         role: "assistant",
         content: "desktop assistant reply",
-        metadata: { status: "completed", events: [] },
+        metadata: {
+          status: "completed",
+          events: [],
+          usage: {
+            inputTokens: 100,
+            cachedInputTokens: 40,
+            outputTokens: 25,
+            costUsd: 0.012,
+            model: "claude-opus-5",
+          },
+        },
         createdAt: new Date().toISOString(),
       },
     ];
@@ -244,6 +254,26 @@ describe("stock server", () => {
     expect(stale.statusCode).toBe(409);
     expect(stale.json().diverged).toBe(true);
   }, 60_000);
+
+  it("admins see per-member usage, mirrored turns included (ADR 0062)", async () => {
+    const denied = await inject("GET", "/admin/usage", memberToken);
+    expect(denied.statusCode).toBe(401);
+    const response = await inject("GET", "/admin/usage", adminToken);
+    expect(response.statusCode).toBe(200);
+    const sam = response
+      .json()
+      .items.find(
+        (entry: { user: string; projectId: string }) =>
+          entry.user === "sam" && entry.projectId === projectId,
+      );
+    expect(sam).toBeTruthy();
+    expect(sam.inputTokens).toBe(100);
+    expect(sam.cachedInputTokens).toBe(40);
+    expect(sam.outputTokens).toBe(25);
+    expect(sam.costUsd).toBeCloseTo(0.012);
+    expect(sam.sessions).toBeGreaterThanOrEqual(2);
+    expect(sam.turns).toBeGreaterThanOrEqual(3);
+  });
 
   it("revoking the invite cuts the member off instantly", async () => {
     const revoked = await inject(

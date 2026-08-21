@@ -11,6 +11,7 @@ import {
   ChevronUp,
   Columns2,
   FileCode,
+  Ghost,
   GitFork,
   Globe,
   LayoutGrid,
@@ -1061,6 +1062,8 @@ export interface ChatDockEntry {
   localId: string;
   sessionId?: string;
   mode: ChatMode;
+  /** Local-only session (ADR 0062): never mirrored to a linked remote. */
+  incognito?: boolean;
   /**
    * The chat this one was forked from, when the parent is (or was) open
    * in this workspace — puts the fork on the parent's surfaces rail.
@@ -1223,8 +1226,10 @@ export function ChatDock({
   const chat = useAgentChat(projectId, {
     sessionId: entry.sessionId,
     agentId: entry.agentId ?? defaultAgentId,
+    incognito: entry.incognito,
     onSessionCreated: (sessionId) => onSessionCreated(entry.localId, sessionId),
   });
+  const isIncognito = Boolean(entry.incognito || chat.session?.incognito);
   // The composer's DOM is the source of truth (see ComposerInput); these
   // mirror what it says so the rest of the dock can react — the prose
   // (slash menu, recall gate, emptiness) and how many pills are live.
@@ -2315,6 +2320,16 @@ export function ChatDock({
               )}
             </span>
             <span className="truncate">{title}</span>
+            {isIncognito && (
+              <span
+                className="flex shrink-0 items-center gap-1 rounded-full border border-border-strong bg-bg-inset px-1.5 py-0.5 text-[10px] font-medium text-fg-muted"
+                title="Incognito — stays on this machine, never synced to a linked server"
+                data-testid="chat-incognito-badge"
+              >
+                <Ghost className="size-3" />
+                Incognito
+              </span>
+            )}
           </span>
         </header>
         {/* A snug pill behind the controls so they never blend into (or

@@ -28,6 +28,16 @@ export class RemoteSessionMirror {
         projectId: string,
         sessionId: string,
       ) => Promise<AgentSessionDetail>;
+      /**
+       * Stamp the local copy with the fork marker (ADR 0062) once the
+       * remote reports divergence — the visible "continued on <host>"
+       * system row clients use to lock the stale copy.
+       */
+      markFork: (
+        projectId: string,
+        sessionId: string,
+        fork: { serverUrl: string; remoteProjectId: string },
+      ) => Promise<void>;
     },
   ) {}
 
@@ -54,6 +64,13 @@ export class RemoteSessionMirror {
       link.localProjectId,
       sessionId,
     );
+    // Incognito sessions never leave this machine (ADR 0062).
+    if (detail.incognito) return;
+    // A project agent's slug survives the trip: the same committed
+    // definition exists on the server, so the fork can run the SAME agent.
+    const slugMatch = detail.agentId
+      ? /^project:[^:]+:(.+)$/.exec(detail.agentId)
+      : null;
     const response = await fetch(
       `${link.serverUrl.replace(/\/+$/, "")}/projects/${encodeURIComponent(
         link.remoteProjectId,
@@ -68,6 +85,7 @@ export class RemoteSessionMirror {
           title: detail.title,
           icon: detail.icon,
           provider: detail.provider,
+          ...(slugMatch?.[1] ? { agentSlug: slugMatch[1] } : {}),
           messages: detail.messages.map((message) => ({
             id: message.id,
             role: message.role,
@@ -84,6 +102,19 @@ export class RemoteSessionMirror {
       };
       if (body.diverged) {
         this.diverged.add(sessionId);
+        // Stamp the local copy so every client shows "continued on the
+        // server" and treats this transcript as history (ADR 0062).
+        await this.deps
+          .markFork(link.localProjectId, sessionId, {
+            serverUrl: link.serverUrl,
+            remoteProjectId: link.remoteProjectId,
+          })
+          .catch((cause) => {
+            console.warn(
+              `[desktop] fork marker failed for ${sessionId}:`,
+              cause,
+            );
+          });
         console.warn(
           `[desktop] session ${sessionId} was continued on the server; mirroring stopped (it owns the fork now).`,
         );

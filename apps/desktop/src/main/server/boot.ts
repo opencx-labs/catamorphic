@@ -140,6 +140,15 @@ export async function startEmbeddedServer(
             sessionId,
           )
         : Promise.reject(new Error("agent sessions unavailable")),
+    markFork: (projectId, sessionId, fork) =>
+      catamorphic.core.agentSessions
+        ? catamorphic.core.agentSessions.recordMirrorFork(
+            { tenantId: DESKTOP_TENANT_ID, externalUserId: DESKTOP_USER_ID },
+            projectId,
+            sessionId,
+            fork,
+          )
+        : Promise.resolve(),
   });
   const agentRegistry = new DesktopAgentRegistry({
     profiles,

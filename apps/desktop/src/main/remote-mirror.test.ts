@@ -47,12 +47,16 @@ afterAll(() => {
   server.close();
 });
 
-function mirror() {
+const forkMarks: Array<{ sessionId: string; serverUrl: string }> = [];
+
+function mirror(overrides: { incognito?: boolean; agentId?: string } = {}) {
   const detail = {
     id: "s1",
     title: "Desk chat",
     icon: "zap:blue",
     provider: "ai-sdk",
+    incognito: overrides.incognito ?? false,
+    agentId: overrides.agentId ?? null,
     messages: [
       {
         id: "m1",
@@ -81,6 +85,9 @@ function mirror() {
       }),
     } as never,
     sessionDetail: async () => detail as never,
+    markFork: async (_projectId, sessionId, fork) => {
+      forkMarks.push({ sessionId, serverUrl: fork.serverUrl });
+    },
   });
 }
 
@@ -106,15 +113,32 @@ describe("RemoteSessionMirror", () => {
     expect(captured).toHaveLength(1);
   });
 
-  it("stops pushing a session once the remote reports divergence", async () => {
+  it("skips incognito sessions entirely (ADR 0062)", async () => {
+    const pusher = mirror({ incognito: true });
+    pusher.mirrorInBackground("local-1", "s1");
+    await flush();
+    expect(captured).toHaveLength(1);
+  });
+
+  it("carries the project-agent slug so the fork runs the same agent", async () => {
+    const pusher = mirror({ agentId: "project:local-1:reviewer" });
+    pusher.mirrorInBackground("local-1", "s1");
+    await flush();
+    expect(captured).toHaveLength(2);
+    const body = captured[1]?.body as { agentSlug?: string } | undefined;
+    expect(body?.agentSlug).toBe("reviewer");
+  });
+
+  it("stops pushing on divergence and stamps the local fork marker", async () => {
     respondDiverged = true;
     const pusher = mirror();
     pusher.mirrorInBackground("local-1", "s1");
     await flush();
-    expect(captured).toHaveLength(2);
+    expect(captured).toHaveLength(3);
+    expect(forkMarks).toEqual([{ sessionId: "s1", serverUrl: base }]);
     // The fork now lives on the server: no further pushes for s1.
     pusher.mirrorInBackground("local-1", "s1");
     await flush();
-    expect(captured).toHaveLength(2);
+    expect(captured).toHaveLength(3);
   });
 });

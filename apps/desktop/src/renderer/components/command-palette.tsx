@@ -12,6 +12,7 @@ import {
   Cpu,
   FileCode,
   Gauge,
+  Ghost,
   Globe,
   History,
   LayoutGrid,
@@ -96,6 +97,7 @@ type CommitMode = "replace" | "tab" | "side";
  */
 const ACTION_ICONS: Partial<Record<ActionId, LucideIcon>> = {
   "continue-on-mobile": Smartphone,
+  "new-incognito-chat": Ghost,
   "new-floating-chat": MessageSquarePlus,
   "toggle-chat-minimized": Minimize2,
   "chat-to-tab": Maximize2,
@@ -459,6 +461,7 @@ export function CommandPalette({
   onPickModel,
   onHighlightTarget,
   pickerRequest,
+  incognitoAllowed = true,
 }: {
   variant: "overlay" | "tab";
   /**
@@ -524,6 +527,8 @@ export function CommandPalette({
   onHighlightTarget?: (target: "chat" | "close" | null) => void;
   /** Overlay only: open straight into a picker (Cmd+P agent commands). */
   pickerRequest?: { kind: PaletteInPicker; nonce: string } | null;
+  /** Project policy (ADR 0062): hide the incognito command when false. */
+  incognitoAllowed?: boolean;
 }) {
   const [query, setQuery] = useState("");
   const [selectedIndex, setSelectedIndex] = useState(0);
@@ -764,7 +769,9 @@ export function CommandPalette({
       (action: ActionDefinition) =>
         !action.hiddenInPalette &&
         // Session-scoped: only offered while a chat is focused.
-        (action.id !== "switch-agent" || hasFocusedChat),
+        (action.id !== "switch-agent" || hasFocusedChat) &&
+        // Project policy (ADR 0062): incognito may be disabled here.
+        (action.id !== "new-incognito-chat" || incognitoAllowed),
     );
     // With a chat focused, the commands that act on THAT chat lead the
     // list — they're what "change the agent/model/effort" almost always
@@ -802,7 +809,7 @@ export function CommandPalette({
               ),
       };
     });
-  }, [keybindings, hasFocusedChat, enterPicker]);
+  }, [keybindings, hasFocusedChat, enterPicker, incognitoAllowed]);
 
   // Skills as commands (ADR 0052): a row is just a message send — into the
   // focused chat when one exists (an action, chat highlighted like other

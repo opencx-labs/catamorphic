@@ -256,6 +256,8 @@ const api = {
   // Continue on mobile (QR pairing).
   mobilePairingStart: (context?: unknown): Promise<unknown> =>
     ipcRenderer.invoke("catamorphic:mobile-pairing-start", context),
+  projectAllowIncognito: (projectId: string): Promise<unknown> =>
+    ipcRenderer.invoke("catamorphic:project-allow-incognito", projectId),
   mobilePairingDevices: (): Promise<unknown> =>
     ipcRenderer.invoke("catamorphic:mobile-pairing-devices"),
   mobilePairingRevoke: (deviceId: string): Promise<unknown> =>

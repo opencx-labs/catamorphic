@@ -255,9 +255,13 @@ interface Workspace {
   closedTabs: ClosedTab[];
 }
 
-const newChatEntry = (mode: ChatDockEntry["mode"]): ChatDockEntry => ({
+const newChatEntry = (
+  mode: ChatDockEntry["mode"],
+  opts?: { incognito?: boolean },
+): ChatDockEntry => ({
   localId: crypto.randomUUID(),
   mode,
+  ...(opts?.incognito ? { incognito: true } : {}),
 });
 
 // A fresh project workspace greets the user with a palette "New Tab" —
@@ -763,6 +767,23 @@ export function App() {
     ) ??
     projects[0];
   const projectId = activeProject?.id;
+
+  // Project policy (ADR 0062): the committed manifest may disable
+  // incognito sessions for this project's members.
+  const [incognitoAllowed, setIncognitoAllowed] = useState(true);
+  useEffect(() => {
+    if (!projectId) return;
+    let cancelled = false;
+    void desktopApi
+      .projectAllowIncognito(projectId)
+      .then((allowed) => {
+        if (!cancelled) setIncognitoAllowed(allowed);
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, [projectId]);
 
   // Layered sidebar fetch: runs at boot with no project yet (profile layer
   // keeps the boot gate working), again when the active project lands or
@@ -1608,7 +1629,7 @@ export function App() {
 
   // Cmd+T and the tab-strip + always open a full chat tab (Chrome muscle
   // memory); the sidebar +, bubble +, and Cmd+E open the floating aside.
-  const addChat = (forceMode?: "tab") => {
+  const addChat = (forceMode?: "tab", opts?: { incognito?: boolean }) => {
     if (!requireAgents()) return;
     updateWorkspace((ws) => {
       // Already looking at a fresh chat (no session yet)? Don't stack
@@ -1620,7 +1641,13 @@ export function App() {
         active?.mode === "partial" ||
         (active?.mode === "tab" &&
           ws.activeTabKey === chatTabKey(active.localId));
-      if (activeIsVisible && !active.sessionId && !active.pendingMessage) {
+      if (
+        activeIsVisible &&
+        !active.sessionId &&
+        !active.pendingMessage &&
+        // A fresh plain chat doesn't satisfy "new INCOGNITO chat".
+        Boolean(active.incognito) === Boolean(opts?.incognito)
+      ) {
         setSelectionPulls((current) => ({
           ...current,
           [active.localId]: (current[active.localId] ?? 0) + 1,
@@ -1635,7 +1662,10 @@ export function App() {
         ws.terminals.length === 0 &&
         ws.editors.length === 0 &&
         ws.chats.every((chat) => chat.mode !== "tab");
-      const entry = newChatEntry(forceMode ?? (noTabsOpen ? "tab" : "partial"));
+      const entry = newChatEntry(
+        forceMode ?? (noTabsOpen ? "tab" : "partial"),
+        opts,
+      );
       return {
         ...ws,
         chats: [
@@ -2584,6 +2614,11 @@ export function App() {
     "new-tab": openPaletteTab,
     "command-palette": () => setPaletteOpen((value) => !value),
     "new-floating-chat": () => addChat(),
+    // Policy-gated (ADR 0062): hidden from the palette when the project
+    // committed allowIncognito: false; the handler double-checks.
+    "new-incognito-chat": () => {
+      if (incognitoAllowed) addChat(undefined, { incognito: true });
+    },
     "toggle-chat-minimized": toggleChatMinimized,
     "chat-to-tab": expandChatToTab,
     "prev-chat": () => cycleChat(-1),
@@ -3921,6 +3956,7 @@ export function App() {
                       </Suspense>
                     ) : tab.kind === "palette" && paletteProps ? (
                       <CommandPalette
+                        incognitoAllowed={incognitoAllowed}
                         key={tabKey(tab)}
                         variant="tab"
                         onClose={() => closeTab(tabKey(tab))}
@@ -4340,6 +4376,7 @@ export function App() {
       {/* Stays mounted so the close transition can play out. */}
       {paletteProps && (
         <CommandPalette
+          incognitoAllowed={incognitoAllowed}
           variant="overlay"
           open={paletteOpen}
           onClose={() => setPaletteOpen(false)}

@@ -265,6 +265,87 @@ export async function buildStockServer(
     });
   });
 
+  /**
+   * Usage rollup for admins (ADR 0062): per member and project, summed
+   * from the usage each assistant turn carries in its metadata. Sessions
+   * run here AND sessions mirrored from desktops both count — incognito
+   * sessions never arrive, which is exactly their contract.
+   */
+  app.get("/admin/usage", async (request, reply) => {
+    if (!requireAdmin(request, reply)) return;
+    const rows = await core.db
+      .selectFrom("agent_messages")
+      .innerJoin(
+        "agent_sessions",
+        "agent_sessions.id",
+        "agent_messages.session_id",
+      )
+      .select([
+        "agent_sessions.external_user_id as user",
+        "agent_sessions.project_id as projectId",
+        "agent_sessions.id as sessionId",
+        "agent_messages.metadata as metadata",
+        "agent_messages.created_at as createdAt",
+      ])
+      .where("agent_messages.role", "=", "assistant")
+      .execute();
+    const byKey = new Map<
+      string,
+      {
+        user: string;
+        projectId: string;
+        sessions: Set<string>;
+        turns: number;
+        inputTokens: number;
+        cachedInputTokens: number;
+        outputTokens: number;
+        costUsd: number;
+        lastActivity: string;
+      }
+    >();
+    for (const row of rows) {
+      const key = `${row.user}:${row.projectId}`;
+      const entry = byKey.get(key) ?? {
+        user: row.user,
+        projectId: row.projectId,
+        sessions: new Set<string>(),
+        turns: 0,
+        inputTokens: 0,
+        cachedInputTokens: 0,
+        outputTokens: 0,
+        costUsd: 0,
+        lastActivity: new Date(0).toISOString(),
+      };
+      entry.sessions.add(row.sessionId);
+      entry.turns += 1;
+      const usage = (
+        row.metadata as {
+          usage?: {
+            inputTokens?: number;
+            cachedInputTokens?: number;
+            outputTokens?: number;
+            costUsd?: number;
+          };
+        } | null
+      )?.usage;
+      entry.inputTokens += usage?.inputTokens ?? 0;
+      entry.cachedInputTokens += usage?.cachedInputTokens ?? 0;
+      entry.outputTokens += usage?.outputTokens ?? 0;
+      entry.costUsd += usage?.costUsd ?? 0;
+      const at = new Date(row.createdAt).toISOString();
+      if (at > entry.lastActivity) entry.lastActivity = at;
+      byKey.set(key, entry);
+    }
+    return reply.send({
+      items: [...byKey.values()]
+        .map(({ sessions, ...entry }) => ({
+          ...entry,
+          sessions: sessions.size,
+        }))
+        .sort((a, b) => b.lastActivity.localeCompare(a.lastActivity)),
+    });
+  });
+
   app.delete("/admin/invites/:token", async (request, reply) => {
     if (!requireAdmin(request, reply)) return;
     const { token } = request.params as { token: string };

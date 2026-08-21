@@ -62,6 +62,7 @@ export function registerAgentRoutes(app: FastifyInstance, ctx: RouteContext) {
             systemPrompt: request.body.systemPrompt,
             agentId: request.body.agentId,
             effort: request.body.effort,
+            incognito: request.body.incognito,
           },
         );
         return reply.status(201).send(session);
@@ -110,6 +111,9 @@ export function registerAgentRoutes(app: FastifyInstance, ctx: RouteContext) {
             icon: request.body.icon ?? null,
             ...(request.body.provider
               ? { provider: request.body.provider }
+              : {}),
+            ...(request.body.agentSlug
+              ? { agentSlug: request.body.agentSlug }
               : {}),
             messages: request.body.messages.map((message) => ({
               ...message,

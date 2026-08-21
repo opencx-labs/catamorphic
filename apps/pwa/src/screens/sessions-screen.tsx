@@ -4,7 +4,7 @@ import {
   useProject,
 } from "@catamorphic/react";
 import type { QueryClient } from "@tanstack/react-query";
-import { MessageSquarePlus } from "lucide-react";
+import { Ghost, MessageSquarePlus } from "lucide-react";
 import { ChatGlyph } from "../components/chat-glyph.js";
 import { ConnectionTrouble } from "../components/connection-trouble.js";
 import { Screen } from "../components/screen.js";
@@ -116,7 +116,13 @@ function SessionsList({
                     >
                       {session.title ?? fallbackTitle(session.createdAt)}
                     </span>
-                    <span className="block truncate text-xs leading-4 text-fg-faint">
+                    <span className="flex items-center gap-1 truncate text-xs leading-4 text-fg-faint">
+                      {session.incognito && (
+                        <Ghost
+                          className="size-3 shrink-0"
+                          aria-label="Incognito — never synced"
+                        />
+                      )}
                       {relativeTime(session.updatedAt)}
                       {session.status === "closed" ? " · closed" : ""}
                     </span>

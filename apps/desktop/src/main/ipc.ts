@@ -54,6 +54,7 @@ import {
 } from "./openrouter.js";
 import type { ProfileConfigManager } from "./profile-config.js";
 import {
+  projectAllowsIncognito,
   projectDefaultAgentSlug,
   setProjectDefaultAgentSlug,
 } from "./project-manifest.js";
@@ -160,6 +161,15 @@ export function registerIpcHandlers(
         windows.profileFor(event.sender),
         context,
       );
+    },
+  );
+
+  // Project policy (ADR 0062): may members open incognito sessions here?
+  ipcMain.handle(
+    "catamorphic:project-allow-incognito",
+    async (_event, projectId: string) => {
+      const root = await state.current?.projectRoots.get(projectId);
+      return root ? projectAllowsIncognito(root) : true;
     },
   );
 

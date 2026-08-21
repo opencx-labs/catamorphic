@@ -68,6 +68,8 @@ export interface AgentSession {
   /** Session this one was forked from, if any. */
   parentSessionId: string | null;
   status: "active" | "closed";
+  /** Never mirrored to a linked remote; local-only history (ADR 0062). */
+  incognito: boolean;
   baseCommitSha: string | null;
   createdAt: string;
   updatedAt: string;
@@ -500,6 +502,8 @@ export class AgentSessionsService {
       systemPrompt?: string;
       agentId?: string;
       effort?: AgentEffort;
+      /** Local-only: never mirrored to a linked remote (ADR 0062). */
+      incognito?: boolean;
     } = {},
   ): Promise<AgentSession> {
     return withSpan(
@@ -519,7 +523,12 @@ export class AgentSessionsService {
   private async createInner(
     identity: Identity,
     projectId: string,
-    input: { systemPrompt?: string; agentId?: string; effort?: AgentEffort },
+    input: {
+      systemPrompt?: string;
+      agentId?: string;
+      effort?: AgentEffort;
+      incognito?: boolean;
+    },
   ): Promise<AgentSession> {
     await this.requireProject(identity, projectId);
     this.assertAgentAccess(identity, projectId, input.agentId ?? null);
@@ -542,6 +551,7 @@ export class AgentSessionsService {
         system_prompt: input.systemPrompt ?? null,
         sandbox_id: null,
         status: "active",
+        incognito: input.incognito ?? false,
         base_commit_sha: null,
       })
       .returningAll()
@@ -570,6 +580,13 @@ export class AgentSessionsService {
       title?: string | null;
       icon?: string | null;
       provider?: string;
+      /**
+       * The source session's PROJECT-agent slug, when it ran one: project
+       * agent definitions are committed files that sync between backends,
+       * so when this side has the same slug (and the caller's scope covers
+       * it), the fork continues on the SAME agent instead of the default.
+       */
+      agentSlug?: string;
       messages: Array<{
         id: string;
         role: "user" | "assistant" | "system";
@@ -590,7 +607,11 @@ export class AgentSessionsService {
       },
       async () => {
         await this.requireProject(identity, projectId);
-        const agentId = this.codingAgents.defaultAgentId(projectId) ?? null;
+        const agentId = this.mirrorAgentId(
+          identity,
+          projectId,
+          input.agentSlug,
+        );
         this.assertAgentAccess(identity, projectId, agentId);
 
         const existing = await this.db
@@ -674,6 +695,69 @@ export class AgentSessionsService {
         return mapSession(row);
       },
     );
+  }
+
+  /** The agent a mirrored session lands on: the source's project-agent
+   * slug when this registry has it AND the caller may use it, else the
+   * registry default. */
+  private mirrorAgentId(
+    identity: Identity,
+    projectId: string,
+    agentSlug: string | undefined,
+  ): string | null {
+    if (agentSlug) {
+      const preferred = `project:${projectId}:${agentSlug}`;
+      const usable =
+        this.codingAgents.get(preferred) !== undefined &&
+        (isBuilder(identity, projectId) ||
+          this.coveringAgentRef(identity, projectId, preferred) !== undefined);
+      if (usable) return preferred;
+    }
+    return this.codingAgents.defaultAgentId(projectId) ?? null;
+  }
+
+  /**
+   * The mirror source's side of a fork (ADR 0062): once the remote
+   * reported divergence, stamp the LOCAL copy with a visible system
+   * marker naming where the conversation went. Idempotent — one marker
+   * per session, however many times the 409 is re-learned.
+   */
+  async recordMirrorFork(
+    identity: Identity,
+    projectId: string,
+    sessionId: string,
+    fork: { serverUrl: string; remoteProjectId: string },
+  ): Promise<void> {
+    await this.requireSession(identity, projectId, sessionId);
+    const existing = await this.db
+      .selectFrom("agent_messages")
+      .select(["metadata"])
+      .where("session_id", "=", sessionId)
+      .where("role", "=", "system")
+      .execute();
+    const already = existing.some((row) => {
+      const marker = (row.metadata as { marker?: { kind?: string } } | null)
+        ?.marker;
+      return marker?.kind === "mirror_fork";
+    });
+    if (already) return;
+    const host = hostOf(fork.serverUrl);
+    await this.db
+      .insertInto("agent_messages")
+      .values({
+        session_id: sessionId,
+        role: "system",
+        content: `Continued on ${host} — this copy is history now.`,
+        metadata: {
+          marker: {
+            kind: "mirror_fork",
+            serverUrl: fork.serverUrl,
+            remoteProjectId: fork.remoteProjectId,
+            sessionId,
+          },
+        },
+      })
+      .execute();
   }
 
   /**
@@ -2309,6 +2393,14 @@ function truncate(value: string, max: number): string {
   return value.length <= max ? value : `${value.slice(0, max - 1)}…`;
 }
 
+function hostOf(serverUrl: string): string {
+  try {
+    return new URL(serverUrl).host;
+  } catch {
+    return serverUrl;
+  }
+}
+
 function mapSession(row: SessionRow): AgentSession {
   return {
     id: row.id,
@@ -2323,6 +2415,7 @@ function mapSession(row: SessionRow): AgentSession {
     icon: row.icon,
     parentSessionId: row.parent_session_id,
     status: row.status as "active" | "closed",
+    incognito: row.incognito,
     baseCommitSha: row.base_commit_sha,
     createdAt: row.created_at.toISOString(),
     updatedAt: row.updated_at.toISOString(),

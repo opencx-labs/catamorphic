@@ -280,6 +280,22 @@ export const BUILTIN_ACTIONS = [
     ],
   },
   {
+    id: "new-incognito-chat",
+    label: "New incognito chat",
+    description:
+      "open a floating chat that stays on this machine — never mirrored to a linked server, never in team history or usage",
+    defaultBinding: null,
+    keywords: [
+      "incognito",
+      "private",
+      "chat",
+      "secret",
+      "local",
+      "unsynced",
+      "ghost",
+    ],
+  },
+  {
     id: "continue-on-mobile",
     label: "Continue on mobile",
     description:

@@ -61,6 +61,7 @@ export interface AgentSessions {
   external_user_id: string;
   icon: string | null;
   id: Generated<string>;
+  incognito: Generated<boolean>;
   model_effort: string | null;
   parent_session_id: string | null;
   project_id: string;

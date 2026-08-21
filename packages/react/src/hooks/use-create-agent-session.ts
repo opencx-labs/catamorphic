@@ -18,6 +18,8 @@ export interface CreateAgentSessionInput {
   /** Host-registry key of the agent to run the session on. */
   agentId?: string;
   effort?: "low" | "medium" | "high" | "xhigh" | "max";
+  /** Local-only session: never mirrored to a linked remote (ADR 0062). */
+  incognito?: boolean;
 }
 
 /**

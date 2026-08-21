@@ -30,6 +30,16 @@ function readManifest(rootPath: string): Record<string, unknown> {
   return {};
 }
 
+/**
+ * Whether this project's members may open incognito sessions (ADR 0062).
+ * Default true; a team that wants ALL history synced and usage tracked
+ * commits `"allowIncognito": false`. Honored by clients — the mirror is
+ * a client push, so this is policy, not cryptography.
+ */
+export function projectAllowsIncognito(rootPath: string): boolean {
+  return readManifest(rootPath).allowIncognito !== false;
+}
+
 /** The committed default agent's slug, when the manifest declares one. */
 export function projectDefaultAgentSlug(rootPath: string): string | undefined {
   const value = readManifest(rootPath).defaultAgent;
