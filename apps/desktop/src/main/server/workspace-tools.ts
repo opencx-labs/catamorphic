@@ -45,15 +45,16 @@ export type AppBuilder = (
 }>;
 
 /**
- * Reads a skill's SKILL.md by declared name — project tier (repo files) and
- * host tier (ADR 0049) alike; wired to core's SkillsService after boot.
+ * Reads a skill's SKILL.md by declared name — project tier (repo files),
+ * the user's personal tier (ADR 0056), and host tier (ADR 0049) alike;
+ * wired to core's SkillsService after boot.
  */
 export type SkillReader = (
   projectId: string,
   name: string,
 ) => Promise<{
   name: string;
-  source: "project" | "host";
+  source: "project" | "user" | "host";
   path: string;
   content: string;
 } | null>;

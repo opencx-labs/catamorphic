@@ -11,6 +11,7 @@ import type {
   ExecutionWorkerHandle,
   ExecutionWorkerOptions,
   GithubServiceConfig,
+  Identity,
   McpToolKindSpec,
   ProjectLifecycleHooks,
   RetentionConfig,
@@ -189,6 +190,16 @@ export interface CreateCatamorphicConfig {
    */
   hostSkills?: (defaults: Record<string, string>) => Record<string, string>;
   /**
+   * The calling user's personal skill tier (ADR 0056): `<name>/SKILL.md`
+   * keyed files resolved LIVE per call, listed and readable for the
+   * caller beside the project and host tiers, never on the shared
+   * surface. Absent = no user tier.
+   */
+  userSkills?: (
+    identity: Identity,
+    projectId: string,
+  ) => Record<string, string>;
+  /**
    * The standing system prompt for coding-agent sessions: omit for the
    * framework's workflow-authoring default, pass a string to replace it,
    * or `false` for none (ADR 0049).
@@ -293,6 +304,7 @@ export class Catamorphic {
       projectHooks: contributions.projectHooks,
       projectSeeds: config.projectSeeds,
       hostSkills: config.hostSkills,
+      userSkills: config.userSkills,
       standingAgentPrompt: config.standingAgentPrompt,
       documentBlobStore: config.documentBlobStore,
       rolesCacheTtlMs: config.rolesCacheTtlMs,

@@ -23,6 +23,7 @@ import {
 } from "../mcp-apps.js";
 import type { ProfileConfigManager } from "../profile-config.js";
 import type { ProfilesStore } from "../profiles.js";
+import { userSkillFiles, userSkillInfos } from "../user-skills.js";
 import { DesktopAgentRegistry } from "./agent-registry.js";
 import { E2eLocalSandboxProvider } from "./e2e-fakes.js";
 import { FileGithubTokenStore, GITHUB_APP } from "./github.js";
@@ -140,6 +141,9 @@ export async function startEmbeddedServer(
     projectSecret: (projectId, name) =>
       projectSecretResolver?.(projectId, name) ?? Promise.resolve(undefined),
     hostSkills: () => hostSkillsRuntime,
+    // The profile's personal skill tier (ADR 0056), read live per turn.
+    userSkills: (profileId) =>
+      userSkillInfos(profileConfig.userSkillsDir(profileId)),
   });
   if (e2eFakeAgent) {
     const agents = profileConfig.forDefaultProfile().agents;
@@ -173,6 +177,10 @@ export async function startEmbeddedServer(
     },
     triggerKinds: DESKTOP_TRIGGER_KINDS,
     mcpToolKinds: DESKTOP_MCP_TOOL_KINDS,
+    // The user's personal skill tier (ADR 0056): profile-local files,
+    // listed and readable beside project and host skills, never shared.
+    userSkills: (_identity, projectId) =>
+      userSkillFiles(profileConfig.userSkillsDir(profiles.profileForProject(projectId).id)),
     // `triggers` is assigned right after construction; turns can only
     // settle later, once a chat message round-trips.
     onAgentTurnSettled: (event) => {

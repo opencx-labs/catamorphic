@@ -510,7 +510,7 @@ export class AgentSessionsService {
     await this.requireProject(identity, projectId);
     this.assertAgentAccess(identity, projectId, input.agentId ?? null);
     // Validate up front so a bad agent id fails at create, not first send.
-    const agent = this.resolveAgent(input.agentId ?? null);
+    const agent = this.resolveAgent(input.agentId ?? null, projectId);
 
     // Lazy anchoring: the provider session (and, for sandbox agents, the dev
     // sandbox) is established on the first turn. Creating a session is a
@@ -571,7 +571,7 @@ export class AgentSessionsService {
       // Let the outgoing provider release its in-memory state.
       if (session.provider_session_id) {
         const previous = this.codingAgents.get(
-          session.agent_id ?? this.codingAgents.defaultAgentId() ?? "",
+          session.agent_id ?? this.codingAgents.defaultAgentId(projectId) ?? "",
         );
         await previous?.provider
           .dispose({
@@ -876,7 +876,7 @@ export class AgentSessionsService {
     this.interruptedTurns.add(sessionId);
     if (session.provider_session_id) {
       try {
-        const agent = this.resolveAgent(session.agent_id);
+        const agent = this.resolveAgent(session.agent_id, projectId);
         agent.provider.interrupt?.(session.provider_session_id);
       } catch {
         // No resolvable agent — nothing to signal; the turn settles alone.
@@ -947,7 +947,7 @@ export class AgentSessionsService {
     // flag while a turn is marked running, and every turn consumes it on
     // the way out (success and error paths both delete).
     const { session } = extras;
-    const agent = this.resolveAgent(session.agent_id);
+    const agent = this.resolveAgent(session.agent_id, projectId);
     const attachments = extras.attachments?.length
       ? extras.attachments
       : undefined;
@@ -1376,7 +1376,7 @@ export class AgentSessionsService {
 
     if (session.provider_session_id) {
       const agent = this.codingAgents.get(
-        session.agent_id ?? this.codingAgents.defaultAgentId() ?? "",
+        session.agent_id ?? this.codingAgents.defaultAgentId(projectId) ?? "",
       );
       await agent?.provider
         .dispose({
@@ -1401,8 +1401,11 @@ export class AgentSessionsService {
 
   // --- Agent resolution & anchoring ---
 
-  private resolveAgent(agentId: string | null): RegisteredCodingAgent {
-    const id = agentId ?? this.codingAgents.defaultAgentId();
+  private resolveAgent(
+    agentId: string | null,
+    projectId?: string,
+  ): RegisteredCodingAgent {
+    const id = agentId ?? this.codingAgents.defaultAgentId(projectId);
     if (!id) throw new AgentNotConfiguredError(undefined);
     const agent = this.codingAgents.get(id);
     if (!agent) throw new AgentNotConfiguredError(id);

@@ -755,7 +755,13 @@ export const SandboxSchema = z.object({
 });
 
 // --- Agent Sessions ---
-export const AgentEffortSchema = z.enum(["low", "medium", "high"]);
+export const AgentEffortSchema = z.enum([
+  "low",
+  "medium",
+  "high",
+  "xhigh",
+  "max",
+]);
 
 export const AgentSessionSchema = z.object({
   id: z.string().uuid(),
@@ -914,7 +920,7 @@ export const SkillSchema = z.object({
   title: z.string(),
   description: z.string(),
   path: z.string(),
-  source: z.enum(["project", "host"]),
+  source: z.enum(["project", "user", "host"]),
 });
 
 // --- Project agent definitions (ADR 0050) ---
@@ -926,7 +932,9 @@ export const ProjectAgentDefinitionSchema = z.object({
   name: z.string(),
   kind: z.string(),
   model: z.string().optional(),
-  effort: z.enum(["low", "medium", "high"]).optional(),
+  effort: AgentEffortSchema.optional(),
+  mode: z.enum(["read-only", "edit", "full-access"]).optional(),
+  memory: z.boolean().optional(),
   description: z.string().optional(),
   credentials: z
     .object({
@@ -935,6 +943,7 @@ export const ProjectAgentDefinitionSchema = z.object({
     })
     .optional(),
   connections: z.array(z.string()).optional(),
+  skills: z.array(z.string()).optional(),
   acp: z
     .object({
       endpoint: z.string().optional(),

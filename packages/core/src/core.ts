@@ -221,6 +221,16 @@ export interface CatamorphicCoreConfig {
    */
   hostSkills?: (defaults: Record<string, string>) => Record<string, string>;
   /**
+   * The calling user's personal skill tier (ADR 0056): files keyed
+   * `<name>/SKILL.md` like `hostSkills`, resolved LIVE per call so edits
+   * apply without a restart. Personal by definition — listed and readable
+   * for the caller, never on the shared surface. Absent = no user tier.
+   */
+  userSkills?: (
+    identity: Identity,
+    projectId: string,
+  ) => Record<string, string>;
+  /**
    * The standing system prompt prepended to every coding-agent session.
    * `undefined` keeps the framework default (the workflow-authoring
    * primer), a string replaces it, `false` removes it entirely
@@ -452,6 +462,7 @@ export class CatamorphicCore {
 
     this.skills = new SkillsService(this.db, this.projectManager, {
       hostSkills: this.hostSkillFiles,
+      ...(config.userSkills ? { userSkills: config.userSkills } : {}),
     });
     // Committed project agent definitions (ADR 0050). The "e2e-fake" kind
     // is a desktop test seam, accepted only under the e2e flag — mirroring

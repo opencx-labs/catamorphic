@@ -58,7 +58,10 @@ export type {
   StartSessionOpts,
   TurnOptions,
 } from "./coding-agent/types.js";
-export { resolveMcpServers } from "./coding-agent/types.js";
+export {
+  AGENT_EFFORT_LEVELS,
+  resolveMcpServers,
+} from "./coding-agent/types.js";
 export { CommandDeploymentRuntimeProvider } from "./command-deployment-runtime.js";
 export { instrumentSandboxProvider } from "./instrumented-provider.js";
 export {

@@ -133,6 +133,21 @@ export interface ClaudeCodeAgentOpts {
     | (() => Record<string, Record<string, ToolPolicyAnnotations>>);
   /** How to ask the user about an `ask` tool; omitted = ask fails closed. */
   onToolPermission?: ToolPermissionHandler;
+  /**
+   * Claude Code permission mode for every session. Defaults to
+   * "acceptEdits" — the designed unattended mode (file edits land without
+   * prompts; unlisted tools are still denied). "plan" makes sessions
+   * read-only; "bypassPermissions" lifts the CLI's own checks entirely
+   * (the host's MCP tool policies still apply through `canUseTool`).
+   */
+  permissionMode?: "default" | "acceptEdits" | "plan" | "bypassPermissions";
+  /**
+   * Claude Code auto-memory (the persistent memory directory + MEMORY.md
+   * loaded each session). Defaults to on — the CLI's own behavior.
+   * `false` spawns every session with CLAUDE_CODE_DISABLE_AUTO_MEMORY=1,
+   * the CLI's supported kill switch, so nothing is loaded or written.
+   */
+  memory?: boolean;
 }
 
 /**
@@ -684,13 +699,19 @@ export class ClaudeCodeAgent implements CodingAgentProvider {
         preset: "claude_code",
         ...(systemPrompt ? { append: systemPrompt } : {}),
       },
-      env: { ...process.env, ...this.opts.env },
+      env: {
+        ...process.env,
+        ...(this.opts.memory === false
+          ? { CLAUDE_CODE_DISABLE_AUTO_MEMORY: "1" }
+          : {}),
+        ...this.opts.env,
+      },
       executable: this.opts.executable,
       executableArgs: this.opts.executableArgs,
       pathToClaudeCodeExecutable: this.opts.pathToClaudeCodeExecutable,
       model: turn?.model ?? this.opts.model,
       effort: turn?.effort ?? this.opts.effort,
-      permissionMode: "acceptEdits",
+      permissionMode: this.opts.permissionMode ?? "acceptEdits",
       ...(workspaceServer || Object.keys(externalServers).length > 0
         ? {
             mcpServers: {

@@ -86,10 +86,21 @@ export interface ProviderSession {
 
 /**
  * Normalized reasoning-effort scale shared by every harness. Each provider
- * maps it onto its native knob (thinking budgets, reasoning effort levels);
- * providers that have no such knob ignore it.
+ * maps it onto its native knob (thinking budgets, reasoning effort levels)
+ * and CLAMPS levels it doesn't reach (Codex tops out at xhigh, OpenAI
+ * reasoning effort at high); providers that have no such knob ignore it.
+ * The top levels are what "ultramode" is: reasoning depth, not a mode.
  */
-export type AgentEffort = "low" | "medium" | "high";
+export type AgentEffort = "low" | "medium" | "high" | "xhigh" | "max";
+
+/** All effort levels, low → max (UI orderings, validation). */
+export const AGENT_EFFORT_LEVELS = [
+  "low",
+  "medium",
+  "high",
+  "xhigh",
+  "max",
+] as const satisfies readonly AgentEffort[];
 
 /**
  * A harness-neutral MCP server configuration — the shape profile-level

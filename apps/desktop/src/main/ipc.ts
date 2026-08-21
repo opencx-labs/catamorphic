@@ -44,6 +44,10 @@ import {
 } from "./openrouter.js";
 import type { ProfileConfigManager } from "./profile-config.js";
 import {
+  projectDefaultAgentSlug,
+  setProjectDefaultAgentSlug,
+} from "./project-manifest.js";
+import {
   httpDocumentsClient,
   localStatus,
   shipRemoteProject,
@@ -71,6 +75,12 @@ export interface ServerState {
 export interface AgentsSnapshot {
   agents: PublicAgentConfig[];
   defaultAgentId: string | null;
+  /**
+   * This user's per-project default overrides (ADR 0056): project id →
+   * agent id. Layered above the project's committed default (see
+   * `ProjectAgentsData.projectDefaultSlug`) and `defaultAgentId`.
+   */
+  projectDefaults: Record<string, string>;
 }
 
 /** A project agent as the renderer sees it (definition + consent state). */
@@ -83,11 +93,17 @@ export interface ProjectAgentInfo {
   kind: string;
   description: string | null;
   model: string | null;
-  effort: "low" | "medium" | "high" | null;
+  effort: "low" | "medium" | "high" | "xhigh" | "max" | null;
+  /** Normalized operating mode (ADR 0056); null = the "edit" default. */
+  mode: "read-only" | "edit" | "full-access" | null;
+  /** Claude Code auto-memory; null = the definition doesn't say (on). */
+  memory: boolean | null;
   credentialsSource: "profile" | "secret" | "local";
   secretName: string | null;
-  /** Declared connector needs — informational in v1. */
+  /** Declared connector names — enforced by name match (ADR 0056). */
   connections: string[];
+  /** Picked skill names; null = every skill. */
+  skills: string[] | null;
   /** First lines of the persona file, for the consent dialog. */
   promptPreview: string | null;
   /**
@@ -102,6 +118,11 @@ export interface ProjectAgentInfo {
 
 export interface ProjectAgentsData {
   agents: ProjectAgentInfo[];
+  /**
+   * The project's committed default agent slug (`defaultAgent` in
+   * `.catamorphic/project.json`), when it declares one.
+   */
+  projectDefaultSlug: string | null;
 }
 
 export function registerIpcHandlers(
@@ -221,6 +242,7 @@ export function registerIpcHandlers(
   const agentsSnapshot = (store: AgentsStore): AgentsSnapshot => ({
     agents: store.list().map(toPublicAgent),
     defaultAgentId: store.defaultAgentId() ?? null,
+    projectDefaults: store.projectDefaults(),
   });
 
   const agentsChanged = (
@@ -278,6 +300,17 @@ export function registerIpcHandlers(
     agentsChanged(event, store);
   });
 
+  // This user's per-project default override (ADR 0056 layer 1). Null
+  // clears it, so resolution falls to the project's committed default.
+  ipcMain.handle(
+    "catamorphic:agents-set-project-default",
+    (event, projectId: string, agentId: string | null) => {
+      const store = storesFor(event).agents;
+      store.setProjectDefault(projectId, agentId);
+      agentsChanged(event, store);
+    },
+  );
+
   // --- project agents (committed agents/<slug>.json definitions, ADR 0050) ---
 
   const kindHarness = (kind: string): "ai-sdk" | "claude-code" | "codex" =>
@@ -316,9 +349,12 @@ export function registerIpcHandlers(
       description: definition?.description ?? null,
       model: definition?.model ?? null,
       effort: definition?.effort ?? null,
+      mode: definition?.mode ?? null,
+      memory: definition?.memory ?? null,
       credentialsSource: source,
       secretName: definition?.credentials?.secret ?? null,
       connections: definition?.connections ?? [],
+      skills: definition?.skills ?? null,
       promptPreview,
       consent,
       invalid: entry.invalid?.error ?? null,
@@ -329,7 +365,10 @@ export function registerIpcHandlers(
     "catamorphic:project-agents-list",
     async (_event, projectId: string): Promise<ProjectAgentsData> => {
       const server = state.current;
-      if (!server) return { agents: [] };
+      if (!server) return { agents: [], projectDefaultSlug: null };
+      const rootPath = server.projectRoots.getSync(projectId);
+      const projectDefaultSlug =
+        (rootPath ? projectDefaultAgentSlug(rootPath) : undefined) ?? null;
       try {
         const entries = await server.catamorphic.core.agentDefinitions.list(
           { tenantId: DESKTOP_TENANT_ID, externalUserId: DESKTOP_USER_ID },
@@ -337,11 +376,26 @@ export function registerIpcHandlers(
         );
         return {
           agents: entries.map((entry) => projectAgentInfo(projectId, entry)),
+          projectDefaultSlug,
         };
       } catch {
         // Unknown/deleted project: no agents rather than a broken palette.
-        return { agents: [] };
+        return { agents: [], projectDefaultSlug };
       }
+    },
+  );
+
+  // The project's committed default (ADR 0056 layer 2): a slug into the
+  // project's own agents/, written to `.catamorphic/project.json` — a
+  // work product every collaborator receives, not a personal preference.
+  ipcMain.handle(
+    "catamorphic:project-agents-set-default",
+    (event, projectId: string, slug: string | null) => {
+      const server = state.current;
+      const rootPath = server?.projectRoots.getSync(projectId);
+      if (!rootPath) throw new Error("Project folder not found");
+      setProjectDefaultAgentSlug(rootPath, slug);
+      agentsChanged(event, storesFor(event).agents);
     },
   );
 

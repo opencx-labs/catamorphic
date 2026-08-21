@@ -17,7 +17,7 @@ export interface CreateAgentSessionInput {
   systemPrompt?: string;
   /** Host-registry key of the agent to run the session on. */
   agentId?: string;
-  effort?: "low" | "medium" | "high";
+  effort?: "low" | "medium" | "high" | "xhigh" | "max";
 }
 
 /**

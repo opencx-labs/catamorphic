@@ -41,6 +41,24 @@ const api = {
     ipcRenderer.invoke("catamorphic:agents-remove", id),
   agentsSetDefault: (id: string): Promise<void> =>
     ipcRenderer.invoke("catamorphic:agents-set-default", id),
+  agentsSetProjectDefault: (
+    projectId: string,
+    agentId: string | null,
+  ): Promise<void> =>
+    ipcRenderer.invoke(
+      "catamorphic:agents-set-project-default",
+      projectId,
+      agentId,
+    ),
+  projectAgentsSetDefault: (
+    projectId: string,
+    slug: string | null,
+  ): Promise<void> =>
+    ipcRenderer.invoke(
+      "catamorphic:project-agents-set-default",
+      projectId,
+      slug,
+    ),
   agentModels: (id: string): Promise<unknown> =>
     ipcRenderer.invoke("catamorphic:agent-models", id),
   projectAgentsList: (projectId: string): Promise<unknown> =>

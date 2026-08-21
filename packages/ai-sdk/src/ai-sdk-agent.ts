@@ -623,7 +623,17 @@ function stripReasoningParts(messages: ModelMessage[]): ModelMessage[] {
  * Map the normalized effort scale onto each provider's native reasoning
  * knob. Both keys are always present — providers ignore options addressed
  * to someone else, so the same object works for Anthropic and OpenAI models.
+ * Anthropic gets a thinking budget per level; OpenAI's reasoning effort
+ * stops at "high", so the top levels clamp to it.
  */
+const ANTHROPIC_THINKING_BUDGETS: Record<AgentEffort, number> = {
+  low: 0,
+  medium: 10_000,
+  high: 32_000,
+  xhigh: 48_000,
+  max: 64_000,
+};
+
 function effortProviderOptions(effort: AgentEffort) {
   return {
     anthropic:
@@ -632,10 +642,13 @@ function effortProviderOptions(effort: AgentEffort) {
         : {
             thinking: {
               type: "enabled",
-              budgetTokens: effort === "high" ? 32_000 : 10_000,
+              budgetTokens: ANTHROPIC_THINKING_BUDGETS[effort],
             },
           },
-    openai: { reasoningEffort: effort },
+    openai: {
+      reasoningEffort:
+        effort === "xhigh" || effort === "max" ? "high" : effort,
+    },
   };
 }
 

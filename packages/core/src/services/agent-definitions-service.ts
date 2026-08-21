@@ -143,14 +143,35 @@ export function agentDefinitionSchema(opts?: { allowE2eFake?: boolean }) {
     name: z.string().min(1),
     kind: z.enum(kinds as readonly [string, ...string[]]),
     model: z.string().min(1).optional(),
-    effort: z.enum(["low", "medium", "high"]).optional(),
+    effort: z.enum(["low", "medium", "high", "xhigh", "max"]).optional(),
+    /**
+     * Normalized operating mode (ADR 0056), mapped per harness: Claude
+     * Code plan/acceptEdits/bypassPermissions, Codex sandbox read-only/
+     * workspace-write/danger-full-access. Absent = "edit". Sensitive —
+     * part of the consent hash: widening what an agent may touch must
+     * re-earn consent.
+     */
+    mode: z.enum(["read-only", "edit", "full-access"]).optional(),
+    /**
+     * Claude Code auto-memory. Absent = on (the CLI's own behavior);
+     * `false` disables it for every session of this agent.
+     */
+    memory: z.boolean().optional(),
     description: z.string().optional(),
     credentials: AgentDefinitionCredentialsSchema.optional(),
     /**
-     * Connector names this agent expects. Informational in v1: shown in
-     * the host UI so a user knows what to connect; enforcement later.
+     * Connector names this agent gets, matched against the running
+     * member's profile connections by name (ADR 0056 — enforced; the
+     * informational-v1 cut of ADR 0050 is closed). Absent = every
+     * connection, like a profile agent without a pinned subset.
      */
     connections: z.array(z.string().min(1)).optional(),
+    /**
+     * Skill names this agent is offered (any tier — project, user,
+     * host). Absent = all. Narrowing only, like toolPolicies: outside
+     * the consent hash.
+     */
+    skills: z.array(z.string().min(1)).optional(),
     /**
      * Per-connector tool policies, keyed by connector name (what
      * `connections` lists — a committed definition can't know a member's
@@ -186,10 +207,13 @@ export interface AgentDefinition {
   name: string;
   kind: AgentDefinitionKind;
   model?: string;
-  effort?: "low" | "medium" | "high";
+  effort?: "low" | "medium" | "high" | "xhigh" | "max";
+  mode?: "read-only" | "edit" | "full-access";
+  memory?: boolean;
   description?: string;
   credentials?: AgentDefinitionCredentials;
   connections?: string[];
+  skills?: string[];
   toolPolicies?: Record<
     string,
     {
@@ -244,10 +268,13 @@ export function validateAgentDefinition(
  * any change to a covered field makes stored consent stale, forcing
  * re-consent before the definition can touch personal credentials again.
  *
- * Deliberately NOT covered: name, description, connections — display
- * concerns whose edits must not invalidate consent — and toolPolicies,
- * which can only NARROW what the member's own connection policy allows
- * (policies intersect), so a change can never expand what consent covers.
+ * Deliberately NOT covered: name, description — display concerns whose
+ * edits must not invalidate consent — and connections, skills, and
+ * toolPolicies, which can only NARROW what the member's own profile
+ * allows (assignments and policies intersect), so a change can never
+ * expand what consent covers. `mode` IS covered: widening what the agent
+ * may do to the member's machine (read-only → full-access) must re-earn
+ * consent.
  */
 export function definitionHash(
   definition: AgentDefinition,
@@ -257,6 +284,7 @@ export function definitionHash(
   const sensitive = {
     kind: definition.kind,
     model: definition.model ?? null,
+    mode: definition.mode ?? "edit",
     credentials: {
       source: credentials.source,
       secret: credentials.secret ?? null,

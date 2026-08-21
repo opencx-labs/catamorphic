@@ -7760,7 +7760,7 @@
                   },
                   "effort": {
                     "type": "string",
-                    "enum": ["low", "medium", "high"]
+                    "enum": ["low", "medium", "high", "xhigh", "max"]
                   }
                 }
               }
@@ -7820,7 +7820,7 @@
                     "modelEffort": {
                       "nullable": true,
                       "type": "string",
-                      "enum": ["low", "medium", "high"]
+                      "enum": ["low", "medium", "high", "xhigh", "max"]
                     },
                     "title": {
                       "nullable": true,
@@ -8013,7 +8013,7 @@
                           "modelEffort": {
                             "nullable": true,
                             "type": "string",
-                            "enum": ["low", "medium", "high"]
+                            "enum": ["low", "medium", "high", "xhigh", "max"]
                           },
                           "title": {
                             "nullable": true,
@@ -8115,7 +8115,7 @@
                   "effort": {
                     "nullable": true,
                     "type": "string",
-                    "enum": ["low", "medium", "high"]
+                    "enum": ["low", "medium", "high", "xhigh", "max"]
                   }
                 }
               }
@@ -8185,7 +8185,7 @@
                     "modelEffort": {
                       "nullable": true,
                       "type": "string",
-                      "enum": ["low", "medium", "high"]
+                      "enum": ["low", "medium", "high", "xhigh", "max"]
                     },
                     "title": {
                       "nullable": true,
@@ -8378,7 +8378,7 @@
                     "modelEffort": {
                       "nullable": true,
                       "type": "string",
-                      "enum": ["low", "medium", "high"]
+                      "enum": ["low", "medium", "high", "xhigh", "max"]
                     },
                     "title": {
                       "nullable": true,
@@ -8589,7 +8589,7 @@
                     "modelEffort": {
                       "nullable": true,
                       "type": "string",
-                      "enum": ["low", "medium", "high"]
+                      "enum": ["low", "medium", "high", "xhigh", "max"]
                     },
                     "title": {
                       "nullable": true,
@@ -9476,7 +9476,7 @@
                     "modelEffort": {
                       "nullable": true,
                       "type": "string",
-                      "enum": ["low", "medium", "high"]
+                      "enum": ["low", "medium", "high", "xhigh", "max"]
                     },
                     "title": {
                       "nullable": true,
@@ -9690,7 +9690,7 @@
                       },
                       "source": {
                         "type": "string",
-                        "enum": ["project", "host"]
+                        "enum": ["project", "user", "host"]
                       }
                     },
                     "required": [
@@ -9787,7 +9787,14 @@
                           },
                           "effort": {
                             "type": "string",
-                            "enum": ["low", "medium", "high"]
+                            "enum": ["low", "medium", "high", "xhigh", "max"]
+                          },
+                          "mode": {
+                            "type": "string",
+                            "enum": ["read-only", "edit", "full-access"]
+                          },
+                          "memory": {
+                            "type": "boolean"
                           },
                           "description": {
                             "type": "string"
@@ -9807,6 +9814,12 @@
                             "additionalProperties": false
                           },
                           "connections": {
+                            "type": "array",
+                            "items": {
+                              "type": "string"
+                            }
+                          },
+                          "skills": {
                             "type": "array",
                             "items": {
                               "type": "string"

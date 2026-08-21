@@ -28,8 +28,13 @@ export interface RegisteredCodingAgent {
  * an agent added in Settings is usable without a server restart.
  */
 export interface CodingAgentRegistry {
-  /** Registry key of the agent used when a session does not name one. */
-  defaultAgentId(): string | undefined;
+  /**
+   * Registry key of the agent used when a session does not name one.
+   * Layered when the host supports it (ADR 0056): with a `projectId` the
+   * host may answer with the caller's per-project choice or the project's
+   * own committed default before falling back to the global default.
+   */
+  defaultAgentId(projectId?: string): string | undefined;
   get(id: string): RegisteredCodingAgent | undefined;
   list(): RegisteredCodingAgent[];
 }

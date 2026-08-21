@@ -284,7 +284,9 @@ export class CodexAgent implements CodingAgentProvider {
     turn?: TurnOptions,
   ): ThreadOptions {
     const model = turn?.model ?? this.opts.model;
-    const effort = turn?.effort ?? this.opts.effort;
+    const requested = turn?.effort ?? this.opts.effort;
+    // Codex's reasoning scale tops out at xhigh; "max" clamps onto it.
+    const effort = requested === "max" ? "xhigh" : requested;
     return {
       ...(workingDirectory ? { workingDirectory } : {}),
       skipGitRepoCheck: true,

@@ -4,8 +4,15 @@ export interface ServerInfo {
 }
 
 export type AgentHarness = "ai-sdk" | "claude-code" | "codex";
-export type AgentEffort = "low" | "medium" | "high";
+export type AgentEffort = "low" | "medium" | "high" | "xhigh" | "max";
 export type AgentAuthMode = "local" | "account" | "api-key";
+
+/**
+ * Normalized operating mode (ADR 0056), mapped per harness — Claude Code
+ * permission modes, Codex sandbox modes. Not applicable to the sandboxed
+ * built-in harness.
+ */
+export type AgentMode = "read-only" | "edit" | "full-access";
 
 /**
  * Which of the profile's MCP connections an agent gets: every current and
@@ -14,6 +21,11 @@ export type AgentAuthMode = "local" | "account" | "api-key";
 export type AgentConnectionsSetting =
   | { mode: "all" }
   | { mode: "picked"; connectionIds: string[] };
+
+/** Which skills an agent is offered: every skill, or a pinned set of names. */
+export type AgentSkillsSetting =
+  | { mode: "all" }
+  | { mode: "picked"; names: string[] };
 
 export interface AgentInfo {
   id: string;
@@ -27,7 +39,13 @@ export interface AgentInfo {
   apiKeyMasked: string | null;
   /** Media kinds this agent's chat composer accepts. */
   accepts: Array<"image" | "document">;
+  /** The agent's own main prompt ("" when none). */
+  instructions: string;
+  mode: AgentMode;
+  /** Claude Code auto-memory (other harnesses ignore it). */
+  memory: boolean;
   connections: AgentConnectionsSetting;
+  skills: AgentSkillsSetting;
   /** Per-connection tool policies layered on the profile's (by id). */
   toolPolicies: Record<string, McpToolPolicy>;
 }
@@ -35,6 +53,8 @@ export interface AgentInfo {
 export interface AgentsData {
   agents: AgentInfo[];
   defaultAgentId: string | null;
+  /** This user's per-project default overrides: project id → agent id. */
+  projectDefaults: Record<string, string>;
 }
 
 /**
@@ -52,9 +72,16 @@ export interface ProjectAgentInfo {
   description: string | null;
   model: string | null;
   effort: AgentEffort | null;
+  /** Normalized operating mode; null = the "edit" default. */
+  mode: AgentMode | null;
+  /** Claude Code auto-memory; null = the definition doesn't say (on). */
+  memory: boolean | null;
   credentialsSource: "profile" | "secret" | "local";
   secretName: string | null;
+  /** Declared connector names — enforced by name match (ADR 0056). */
   connections: string[];
+  /** Picked skill names; null = every skill. */
+  skills: string[] | null;
   promptPreview: string | null;
   consent: "not-required" | "none" | "stale" | "ok";
   invalid: string | null;
@@ -62,6 +89,8 @@ export interface ProjectAgentInfo {
 
 export interface ProjectAgentsData {
   agents: ProjectAgentInfo[];
+  /** The project's committed default agent slug, when declared. */
+  projectDefaultSlug: string | null;
 }
 
 /**
@@ -87,7 +116,13 @@ export function projectAgentAsInfo(agent: ProjectAgentInfo): AgentInfo {
     hasApiKey: false,
     apiKeyMasked: null,
     accepts: harness === "codex" ? [] : ["image", "document"],
+    instructions: "",
+    mode: agent.mode ?? "edit",
+    memory: agent.memory !== false,
     connections: { mode: "all" },
+    skills: agent.skills
+      ? { mode: "picked", names: agent.skills }
+      : { mode: "all" },
     toolPolicies: {},
   };
 }
@@ -100,7 +135,11 @@ export interface CreateAgentInput {
   effort?: AgentEffort;
   auth?: AgentAuthMode;
   apiKey?: string | null;
+  instructions?: string;
+  mode?: AgentMode;
+  memory?: boolean;
   connections?: AgentConnectionsSetting;
+  skills?: AgentSkillsSetting;
 }
 
 export interface UpdateAgentInput {
@@ -111,7 +150,12 @@ export interface UpdateAgentInput {
   auth?: AgentAuthMode;
   /** New key; omit to keep the stored one, null to clear it. */
   apiKey?: string | null;
+  /** New instructions; "" clears them. */
+  instructions?: string;
+  mode?: AgentMode;
+  memory?: boolean;
   connections?: AgentConnectionsSetting;
+  skills?: AgentSkillsSetting;
   /** Per-connection tool policies (null clears). */
   toolPolicies?: Record<string, McpToolPolicy> | null;
 }
@@ -659,6 +703,16 @@ export interface CatamorphicDesktopApi {
   ) => Promise<AgentInfo | null>;
   agentsRemove: (id: string) => Promise<boolean>;
   agentsSetDefault: (id: string) => Promise<void>;
+  /** Set (null = clear) this user's per-project default-agent override. */
+  agentsSetProjectDefault: (
+    projectId: string,
+    agentId: string | null,
+  ) => Promise<void>;
+  /** Set (null = clear) the project's committed default agent slug. */
+  projectAgentsSetDefault: (
+    projectId: string,
+    slug: string | null,
+  ) => Promise<void>;
   agentModels: (id: string) => Promise<{ models: HarnessModelInfo[] }>;
   projectAgentsList: (projectId: string) => Promise<ProjectAgentsData>;
   projectAgentApprove: (

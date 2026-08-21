@@ -23,7 +23,25 @@ import { safeStorage } from "electron";
  * key lands back in the config so the user never pastes one.
  */
 export type AgentHarness = "ai-sdk" | "claude-code" | "codex";
-export type AgentEffortSetting = "low" | "medium" | "high";
+export type AgentEffortSetting = "low" | "medium" | "high" | "xhigh" | "max";
+
+/**
+ * Normalized operating mode (ADR 0056), mapped per harness — Claude Code
+ * permission modes (plan / acceptEdits / bypassPermissions), Codex sandbox
+ * modes (read-only / workspace-write / danger-full-access). The built-in
+ * agent is sandboxed with draft sync-back; mode does not apply to it.
+ */
+export type AgentModeSetting = "read-only" | "edit" | "full-access";
+
+/**
+ * Which skills an agent is offered (any tier — project, user, host, by
+ * name). "all" (the default) includes every current and future skill;
+ * "picked" pins an explicit set: the prompt's skills section lists only
+ * those, and the host-skills plugin is withheld from Claude Code.
+ */
+export type AgentSkillsSetting =
+  | { mode: "all" }
+  | { mode: "picked"; names: string[] };
 /**
  * How an agent authenticates:
  *  - `local`  — the machine's existing CLI setup (~/.claude, ~/.codex): the
@@ -58,8 +76,24 @@ export interface AgentConfig {
   auth: AgentAuthMode;
   /** Decrypted in memory; never crosses the contextBridge. */
   apiKey: string | null;
+  /**
+   * The agent's own main prompt (its persona) — prepended at the provider
+   * boundary so it leads and the host playbooks follow, exactly like a
+   * project agent's `agents/<slug>.md` (ADR 0056). Harness-neutral.
+   */
+  instructions?: string;
+  /** Operating mode; absent means "edit". */
+  mode?: AgentModeSetting;
+  /**
+   * Claude Code auto-memory; absent means on (the CLI's own behavior).
+   * `false` disables it for every session of this agent. Other harnesses
+   * have no memory and ignore it.
+   */
+  memory?: boolean;
   /** MCP connection assignment; absent means `{ mode: "all" }`. */
   connections?: AgentConnectionsSetting;
+  /** Skills assignment; absent means `{ mode: "all" }`. */
+  skills?: AgentSkillsSetting;
   /**
    * Per-connection tool policies this agent adds on top of the profile's
    * (keyed by connection id; see @catamorphic/sandbox tool-policy). Layers
@@ -77,6 +111,12 @@ interface StoredAgent extends Omit<AgentConfig, "apiKey"> {
 interface AgentsFile {
   agents: StoredAgent[];
   defaultAgentId?: string;
+  /**
+   * This user's per-project default agent overrides (ADR 0056): project id
+   * → agent id (roster or `project:` id). Layered ABOVE the project's own
+   * committed default and the global `defaultAgentId`.
+   */
+  projectDefaults?: Record<string, string>;
 }
 
 /** Media kinds an agent's chat input accepts (paste/attach gating). */
@@ -95,8 +135,16 @@ export interface PublicAgentConfig {
   apiKeyMasked: string | null;
   /** What media the chat composer may attach for this agent. */
   accepts: AgentAttachmentKind[];
+  /** The agent's own main prompt ("" when none). */
+  instructions: string;
+  /** Operating mode (always materialized; default "edit"). */
+  mode: AgentModeSetting;
+  /** Claude Code auto-memory (always materialized; default true). */
+  memory: boolean;
   /** MCP connection assignment (always materialized; default "all"). */
   connections: AgentConnectionsSetting;
+  /** Skills assignment (always materialized; default "all"). */
+  skills: AgentSkillsSetting;
   /** Per-connection tool policies layered on the profile's (by id). */
   toolPolicies: Record<string, McpToolPolicy>;
 }
@@ -137,7 +185,11 @@ export interface CreateAgentInput {
   effort?: AgentEffortSetting;
   auth?: AgentAuthMode;
   apiKey?: string | null;
+  instructions?: string;
+  mode?: AgentModeSetting;
+  memory?: boolean;
   connections?: AgentConnectionsSetting;
+  skills?: AgentSkillsSetting;
   toolPolicies?: Record<string, McpToolPolicy>;
 }
 
@@ -149,7 +201,12 @@ export interface UpdateAgentInput {
   auth?: AgentAuthMode;
   /** New key; omit to keep the stored one, null to clear it. */
   apiKey?: string | null;
+  /** New instructions; "" clears them. */
+  instructions?: string;
+  mode?: AgentModeSetting;
+  memory?: boolean;
   connections?: AgentConnectionsSetting;
+  skills?: AgentSkillsSetting;
   /** Replace the per-connection tool policies (null clears them). */
   toolPolicies?: Record<string, McpToolPolicy> | null;
 }
@@ -211,6 +268,52 @@ export class AgentsStore {
     }
   }
 
+  /**
+   * This user's default-agent override for one project (ADR 0056 layer 1),
+   * validated like {@link defaultAgentId} — an override naming a removed
+   * agent is ignored so resolution falls to the next layer.
+   */
+  projectDefault(projectId: string): string | undefined {
+    const id = this.data.projectDefaults?.[projectId];
+    if (!id) return undefined;
+    if (
+      id.startsWith("project:") ||
+      this.data.agents.some((agent) => agent.id === id)
+    ) {
+      return id;
+    }
+    return undefined;
+  }
+
+  /** Set (or with null clear) the per-project default-agent override. */
+  setProjectDefault(projectId: string, agentId: string | null): void {
+    if (agentId === null) {
+      if (!this.data.projectDefaults?.[projectId]) return;
+      delete this.data.projectDefaults[projectId];
+      if (Object.keys(this.data.projectDefaults).length === 0) {
+        delete this.data.projectDefaults;
+      }
+      this.save();
+      return;
+    }
+    if (
+      !agentId.startsWith("project:") &&
+      !this.data.agents.some((agent) => agent.id === agentId)
+    ) {
+      return;
+    }
+    this.data.projectDefaults = {
+      ...this.data.projectDefaults,
+      [projectId]: agentId,
+    };
+    this.save();
+  }
+
+  /** The raw per-project overrides (renderer state; values validated live). */
+  projectDefaults(): Record<string, string> {
+    return { ...this.data.projectDefaults };
+  }
+
   create(input: CreateAgentInput): AgentConfig {
     const stored: StoredAgent = {
       id: randomUUID(),
@@ -230,7 +333,13 @@ export class AgentsStore {
             ? "account"
             : "api-key"
           : "local"),
+      ...(input.instructions?.trim()
+        ? { instructions: input.instructions.trim() }
+        : {}),
+      ...(input.mode && input.mode !== "edit" ? { mode: input.mode } : {}),
+      ...(input.memory === false ? { memory: false } : {}),
       ...(input.connections ? { connections: input.connections } : {}),
+      ...(input.skills ? { skills: input.skills } : {}),
       ...(input.toolPolicies ? { toolPolicies: input.toolPolicies } : {}),
       ...this.encrypt(input.apiKey ?? null),
     };
@@ -251,7 +360,24 @@ export class AgentsStore {
     if (patch.model !== undefined) stored.model = patch.model.trim();
     if (patch.effort !== undefined) stored.effort = patch.effort;
     if (patch.auth !== undefined) stored.auth = patch.auth;
+    if (patch.instructions !== undefined) {
+      const instructions = patch.instructions.trim();
+      if (instructions) stored.instructions = instructions;
+      else delete stored.instructions;
+    }
+    if (patch.mode !== undefined) {
+      if (patch.mode === "edit") delete stored.mode;
+      else stored.mode = patch.mode;
+    }
+    if (patch.memory !== undefined) {
+      if (patch.memory) delete stored.memory;
+      else stored.memory = false;
+    }
     if (patch.connections !== undefined) stored.connections = patch.connections;
+    if (patch.skills !== undefined) {
+      if (patch.skills.mode === "all") delete stored.skills;
+      else stored.skills = patch.skills;
+    }
     if (patch.toolPolicies !== undefined) {
       stored.toolPolicies = patch.toolPolicies ?? undefined;
     }
@@ -272,6 +398,11 @@ export class AgentsStore {
     if (this.data.agents.length === before) return false;
     if (this.data.defaultAgentId === id) {
       this.data.defaultAgentId = this.data.agents[0]?.id;
+    }
+    for (const [projectId, agentId] of Object.entries(
+      this.data.projectDefaults ?? {},
+    )) {
+      if (agentId === id) this.setProjectDefault(projectId, null);
     }
     this.save();
     return true;
@@ -318,7 +449,11 @@ export function toPublicAgent(agent: AgentConfig): PublicAgentConfig {
     hasApiKey: apiKey !== null,
     apiKeyMasked: apiKey ? `${apiKey.slice(0, 7)}…${apiKey.slice(-4)}` : null,
     accepts: agentAccepts(agent),
+    instructions: agent.instructions ?? "",
+    mode: agent.mode ?? "edit",
+    memory: agent.memory !== false,
     connections: agent.connections ?? { mode: "all" },
+    skills: agent.skills ?? { mode: "all" },
     toolPolicies: agent.toolPolicies ?? {},
   };
 }

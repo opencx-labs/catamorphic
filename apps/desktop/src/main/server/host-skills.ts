@@ -23,8 +23,8 @@ export interface HostSkillsRuntime {
   plugin: AgentPluginConfig;
   /** Names + descriptions, for skill listings composed elsewhere. */
   skills: Array<{ name: string; description: string }>;
-  /** System-prompt section for a harness with/without workspace tools. */
-  note: (hasTools: boolean) => string;
+  /** Where the skills were materialized (path hint for tool-less harnesses). */
+  skillsDir: string;
 }
 
 const PLUGIN_NAME = "catamorphic";
@@ -77,27 +77,90 @@ export function materializeHostSkills(
       };
     });
 
-  const listing = skills
+  return { plugin: { name: PLUGIN_NAME, path: dir }, skills, skillsDir };
+}
+
+const SKILLS_PREAMBLE =
+  "Skills are reusable playbooks invoked by name — when the user asks to \"use the X skill\" (the app's command palette and /commands send exactly that phrasing), or a task matches a skill's description, load the skill and follow it.";
+
+function listing(skills: Array<{ name: string; description: string }>): string {
+  return skills
     .map((skill) =>
       skill.description
         ? `  - ${skill.name}: ${skill.description}`
         : `  - ${skill.name}`,
     )
     .join("\n");
+}
 
-  const note = (hasTools: boolean) =>
-    [
+export interface SkillsNoteOpts {
+  /** App-tier skills (the materialized host set). */
+  appSkills: Array<{ name: string; description: string }>;
+  /** Materialized app-skills root, the path hint for tool-less harnesses. */
+  appSkillsDir?: string;
+  /** The user's personal tier (ADR 0056). */
+  userSkills?: Array<{ name: string; description: string }>;
+  /**
+   * A picked-skills agent's offer (ADR 0056): only these names appear.
+   * Undefined = every skill; an empty pick = no skills section at all.
+   */
+  picked?: string[];
+  /** Whether this harness carries the read_skill workspace tool. */
+  hasTools: boolean;
+}
+
+/**
+ * The system-prompt Skills section for one agent: the tier listings —
+ * project (generic; the repo's contents aren't known here), user, app —
+ * narrowed to the agent's picked set when it has one.
+ */
+export function composeSkillsNote(opts: SkillsNoteOpts): string | undefined {
+  const load = opts.hasTools
+    ? "Load a skill by name with the read_skill workspace tool (or your native Skill tool when it lists the name)."
+    : opts.appSkillsDir
+      ? `App skills live at \`${opts.appSkillsDir}/<name>/SKILL.md\` — read the file before following one.`
+      : undefined;
+
+  if (opts.picked) {
+    if (opts.picked.length === 0) return undefined;
+    const known = new Map(
+      [...opts.appSkills, ...(opts.userSkills ?? [])].map((skill) => [
+        skill.name,
+        skill,
+      ]),
+    );
+    const rows = opts.picked.map((name) => {
+      const skill = known.get(name);
+      return skill?.description ? `  - ${name}: ${skill.description}` : `  - ${name}`;
+    });
+    return [
       "## Skills",
       "",
-      "Skills are reusable playbooks invoked by name — when the user asks to \"use the X skill\" (the app's command palette and /commands send exactly that phrasing), or a task matches a skill's description, load the skill and follow it. Two tiers exist:",
+      SKILLS_PREAMBLE,
       "",
-      "- Project skills: files in this project under `.agents/skills/<name>/SKILL.md`.",
-      `- App skills, shipped by the app the user is working in:\n${listing}`,
-      "",
-      hasTools
-        ? "Load either tier by name with the read_skill workspace tool (or your native Skill tool when it lists the name)."
-        : `App skills live at \`${skillsDir}/<name>/SKILL.md\` — read the file before following one.`,
+      `This agent is offered ONLY these skills:\n${rows.join("\n")}`,
+      ...(load ? ["", load] : []),
     ].join("\n");
+  }
 
-  return { plugin: { name: PLUGIN_NAME, path: dir }, skills, note };
+  const userSkills = opts.userSkills ?? [];
+  const tiers = [
+    "- Project skills: files in this project under `.agents/skills/<name>/SKILL.md`.",
+    ...(userSkills.length > 0
+      ? [`- The user's personal skills (theirs alone):\n${listing(userSkills)}`]
+      : []),
+    ...(opts.appSkills.length > 0
+      ? [
+          `- App skills, shipped by the app the user is working in:\n${listing(opts.appSkills)}`,
+        ]
+      : []),
+  ];
+  return [
+    "## Skills",
+    "",
+    `${SKILLS_PREAMBLE} The tiers:`,
+    "",
+    ...tiers,
+    ...(load ? ["", load] : []),
+  ].join("\n");
 }

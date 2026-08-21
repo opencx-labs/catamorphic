@@ -2,9 +2,10 @@ import { useCatamorphic } from "@catamorphic/react";
 import { useEffect, useState } from "react";
 
 /**
- * A skill as the palette and composer see it: the two tiers merged by core
- * (`GET /projects/:id/skills`) — project skills from `.agents/skills/`, host
- * skills shipped by the app (ADR 0049), project winning name collisions.
+ * A skill as the palette and composer see it: the tiers merged by core
+ * (`GET /projects/:id/skills`) — project skills from `.agents/skills/`, the
+ * user's personal skills (ADR 0056), host skills shipped by the app
+ * (ADR 0049); name collisions resolve project > user > host.
  */
 export interface SkillInfo {
   name: string;
@@ -12,7 +13,7 @@ export interface SkillInfo {
   title: string;
   description: string;
   path: string;
-  source: "project" | "host";
+  source: "project" | "user" | "host";
 }
 
 /**

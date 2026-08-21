@@ -3706,7 +3706,7 @@ export interface paths {
                                 sandboxId: string | null;
                                 agentId: string | null;
                                 /** @enum {string|null} */
-                                modelEffort: "low" | "medium" | "high" | null;
+                                modelEffort: "low" | "medium" | "high" | "xhigh" | "max" | null;
                                 title: string | null;
                                 icon: string | null;
                                 /** Format: uuid */
@@ -3752,7 +3752,7 @@ export interface paths {
                         systemPrompt?: string;
                         agentId?: string;
                         /** @enum {string} */
-                        effort?: "low" | "medium" | "high";
+                        effort?: "low" | "medium" | "high" | "xhigh" | "max";
                     };
                 };
             };
@@ -3775,7 +3775,7 @@ export interface paths {
                             sandboxId: string | null;
                             agentId: string | null;
                             /** @enum {string|null} */
-                            modelEffort: "low" | "medium" | "high" | null;
+                            modelEffort: "low" | "medium" | "high" | "xhigh" | "max" | null;
                             title: string | null;
                             icon: string | null;
                             /** Format: uuid */
@@ -3868,7 +3868,7 @@ export interface paths {
                             sandboxId: string | null;
                             agentId: string | null;
                             /** @enum {string|null} */
-                            modelEffort: "low" | "medium" | "high" | null;
+                            modelEffort: "low" | "medium" | "high" | "xhigh" | "max" | null;
                             title: string | null;
                             icon: string | null;
                             /** Format: uuid */
@@ -3954,7 +3954,7 @@ export interface paths {
                             sandboxId: string | null;
                             agentId: string | null;
                             /** @enum {string|null} */
-                            modelEffort: "low" | "medium" | "high" | null;
+                            modelEffort: "low" | "medium" | "high" | "xhigh" | "max" | null;
                             title: string | null;
                             icon: string | null;
                             /** Format: uuid */
@@ -4010,7 +4010,7 @@ export interface paths {
                     "application/json": {
                         agentId?: string;
                         /** @enum {string|null} */
-                        effort?: "low" | "medium" | "high" | null;
+                        effort?: "low" | "medium" | "high" | "xhigh" | "max" | null;
                     };
                 };
             };
@@ -4033,7 +4033,7 @@ export interface paths {
                             sandboxId: string | null;
                             agentId: string | null;
                             /** @enum {string|null} */
-                            modelEffort: "low" | "medium" | "high" | null;
+                            modelEffort: "low" | "medium" | "high" | "xhigh" | "max" | null;
                             title: string | null;
                             icon: string | null;
                             /** Format: uuid */
@@ -4513,7 +4513,7 @@ export interface paths {
                             sandboxId: string | null;
                             agentId: string | null;
                             /** @enum {string|null} */
-                            modelEffort: "low" | "medium" | "high" | null;
+                            modelEffort: "low" | "medium" | "high" | "xhigh" | "max" | null;
                             title: string | null;
                             icon: string | null;
                             /** Format: uuid */
@@ -4651,7 +4651,7 @@ export interface paths {
                             description: string;
                             path: string;
                             /** @enum {string} */
-                            source: "project" | "host";
+                            source: "project" | "user" | "host";
                         }[];
                     };
                 };
@@ -4719,7 +4719,10 @@ export interface paths {
                                 kind: string;
                                 model?: string;
                                 /** @enum {string} */
-                                effort?: "low" | "medium" | "high";
+                                effort?: "low" | "medium" | "high" | "xhigh" | "max";
+                                /** @enum {string} */
+                                mode?: "read-only" | "edit" | "full-access";
+                                memory?: boolean;
                                 description?: string;
                                 credentials?: {
                                     /** @enum {string} */
@@ -4727,6 +4730,7 @@ export interface paths {
                                     secret?: string;
                                 };
                                 connections?: string[];
+                                skills?: string[];
                                 acp?: {
                                     endpoint?: string;
                                     command?: string[];

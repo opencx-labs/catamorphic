@@ -7,11 +7,16 @@ import type {
   CodingAgentRegistry,
   RegisteredCodingAgent,
 } from "@catamorphic/core";
-import { definitionHash, validateAgentDefinition } from "@catamorphic/core";
+import {
+  definitionHash,
+  projectAgentId,
+  validateAgentDefinition,
+} from "@catamorphic/core";
 import type {
   AgentMcpServerConfig,
   AgentPluginConfig,
   CodingAgentProvider,
+  ExtraTool,
   ExtraToolContext,
   McpToolPolicyLayers,
   SandboxProvider,
@@ -20,11 +25,15 @@ import type {
 } from "@catamorphic/sandbox";
 import { narrowingLayer, PROJECT_TOOLS_SERVER_KEY } from "@catamorphic/sandbox";
 import type { WorkspaceBridge } from "../agent-bridge.js";
-import type { AgentConfig } from "../agents-store.js";
+import type {
+  AgentConfig,
+  AgentConnectionsSetting,
+} from "../agents-store.js";
 import {
   connectionServerKeys,
   toAgentMcpServer,
 } from "../connections-store.js";
+import { projectDefaultAgentSlug } from "../project-manifest.js";
 import type { ConnectorsService } from "../connectors.js";
 import { bestFreeModelId, fetchOpenRouterModels } from "../openrouter.js";
 import type { ProfileConfigManager } from "../profile-config.js";
@@ -33,7 +42,7 @@ import { FriendlyAgentErrors } from "./agent-errors.js";
 import { buildAiSdkAgent } from "./coding-agent.js";
 import { DesktopConfigAgent } from "./desktop-config-agent.js";
 import { E2eFakeCodingAgent } from "./e2e-fakes.js";
-import type { HostSkillsRuntime } from "./host-skills.js";
+import { composeSkillsNote, type HostSkillsRuntime } from "./host-skills.js";
 import {
   AsyncInitCodingAgent,
   FailFastCodingAgent,
@@ -85,9 +94,47 @@ export interface DesktopAgentRegistryDeps {
    * decorator's system prompt.
    */
   hostSkills?: () => HostSkillsRuntime | undefined;
+  /**
+   * The profile's personal skill tier (ADR 0056), read live — names and
+   * descriptions for the per-agent skills section of the system prompt.
+   */
+  userSkills?: (
+    profileId: string,
+  ) => Array<{ name: string; description: string }>;
   /** E2E: every configured agent resolves to the scripted fake. */
   e2eFake?: boolean;
 }
+
+/**
+ * Per-harness mapping of the normalized operating mode (ADR 0056).
+ * "edit" is each harness's designed unattended default.
+ */
+const CLAUDE_PERMISSION_MODES = {
+  "read-only": "plan",
+  edit: "acceptEdits",
+  "full-access": "bypassPermissions",
+} as const;
+
+const CODEX_SANDBOX_MODES = {
+  "read-only": "read-only",
+  edit: "workspace-write",
+  "full-access": "danger-full-access",
+} as const;
+
+/**
+ * Workspace tools withheld from a read-only agent: anything that runs
+ * commands, mutates the project, or acts on the user's behalf. What's left
+ * is observation (overview, read_tab, read_terminal, snapshots) and
+ * pointing — a read-only agent can still show, watch, and explain.
+ */
+const MUTATING_WORKSPACE_TOOLS = new Set([
+  "run_terminal",
+  "write_terminal",
+  "browser_act",
+  "build_app",
+  "sync_project",
+  "create_pull_request",
+]);
 
 /** Server key of the per-project workflow-tools MCP server (session-scoped). */
 export const WORKFLOWS_SERVER_KEY = PROJECT_TOOLS_SERVER_KEY;
@@ -154,7 +201,24 @@ export class DesktopAgentRegistry implements CodingAgentRegistry {
     }
   }
 
-  defaultAgentId(): string | undefined {
+  /**
+   * Layered default resolution (ADR 0056), most specific first: the user's
+   * per-project override, the project's committed `defaultAgent` (the
+   * `.catamorphic/project.json` manifest), the owning profile's global
+   * default, the first roster agent. A layer naming a missing agent is
+   * skipped by the stores' own validation; an unconsented project default
+   * resolves into 0050's fail-fast consent pointer — visible, not silent.
+   */
+  defaultAgentId(projectId?: string): string | undefined {
+    if (projectId) {
+      const store = this.deps.profileConfig.forProject(projectId).agents;
+      const override = store.projectDefault(projectId);
+      if (override) return override;
+      const rootPath = this.deps.projectRootPath?.(projectId);
+      const slug = rootPath ? projectDefaultAgentSlug(rootPath) : undefined;
+      if (slug) return projectAgentId(projectId, slug);
+      return store.defaultAgentId();
+    }
     return this.deps.profileConfig.forDefaultProfile().agents.defaultAgentId();
   }
 
@@ -206,12 +270,18 @@ export class DesktopAgentRegistry implements CodingAgentRegistry {
     this.evict(id);
     const built = this.build(config, mcp, profileId);
     if (!built) return undefined;
+    // The agent's own instructions lead, exactly like a project agent's
+    // persona file — same wrapper, same position (outermost, so the host
+    // playbooks appended further in follow it).
+    const provider = config.instructions
+      ? new PersonaCodingAgent(built.provider, config.instructions)
+      : built.provider;
     this.cache.set(id, {
       key,
-      provider: built.provider,
+      provider,
       execution: built.execution,
     });
-    return { ...built, defaults };
+    return { id, provider, execution: built.execution, defaults };
   }
 
   /** Drop a cached provider, closing resources it holds (MCP clients). */
@@ -290,9 +360,14 @@ export class DesktopAgentRegistry implements CodingAgentRegistry {
       }
     }
     // Host-tier skills ride as a plugin regardless of connection
-    // assignment — they are app doctrine, not a connector.
+    // assignment — they are app doctrine, not a connector. A picked-skills
+    // agent (ADR 0056) is the exception: the plugin would hand Claude Code
+    // the whole app tier natively, so it is withheld and the picked set is
+    // offered through the prompt's skills section + read_skill instead.
     const hostSkillsPlugin = this.deps.hostSkills?.()?.plugin;
-    if (hostSkillsPlugin) plugins.push(hostSkillsPlugin);
+    if (hostSkillsPlugin && config.skills?.mode !== "picked") {
+      plugins.push(hostSkillsPlugin);
+    }
     // The project's own workflow-tools server (session-scoped, key
     // "catamorphic") is unrestricted unless the agent says otherwise —
     // an agent's `toolPolicies.catamorphic` is how a host narrows which
@@ -518,6 +593,7 @@ export class DesktopAgentRegistry implements CodingAgentRegistry {
       bindingAuth = binding.auth ?? { mode: "local" };
     }
 
+    const profileId = this.deps.profiles.profileForProject(projectId).id;
     const config: AgentConfig = {
       id,
       name: def.name,
@@ -532,19 +608,28 @@ export class DesktopAgentRegistry implements CodingAgentRegistry {
         : {}),
       model: def.model ?? "",
       effort: def.effort ?? "medium",
+      ...(def.mode ? { mode: def.mode } : {}),
+      ...(def.memory === false ? { memory: false } : {}),
       auth:
         source === "secret" || bindingAuth?.mode === "api-key"
           ? "api-key"
           : "local",
       apiKey: bindingAuth?.mode === "api-key" ? bindingAuth.apiKey : null,
+      // Enforced (ADR 0056, closing 0050's informational-v1 cut): named
+      // connectors resolve to the owning profile's connections by NAME;
+      // absent = the full surface, like a profile agent without a pin.
+      ...(def.connections
+        ? {
+            connections: this.connectionsByName(def.connections, profileId),
+          }
+        : {}),
+      ...(def.skills
+        ? { skills: { mode: "picked" as const, names: def.skills } }
+        : {}),
       // Keyed by connector NAME in a committed definition; resolveMcp
       // matches by name/server key as well as by id.
       ...(def.toolPolicies ? { toolPolicies: def.toolPolicies } : {}),
     };
-    // Informational v1: the definition's `connections` are shown in the
-    // UI; the agent gets the owning profile's full connection surface
-    // (assignment "all"), like a profile agent without a pinned subset.
-    const profileId = this.deps.profiles.profileForProject(projectId).id;
     const mcp = this.resolveMcp(config, profileId);
 
     const defaults = {
@@ -558,9 +643,13 @@ export class DesktopAgentRegistry implements CodingAgentRegistry {
       apiKey: config.apiKey,
       source,
       rootPath,
-      // Committed toolPolicies are outside the consent hash (they only
-      // narrow) but must reach a running provider: key on them too.
+      // Fields outside the consent hash (they only narrow, or touch
+      // nothing personal) that still shape the provider: key on them so
+      // an edit reaches the next turn.
       toolPolicies: def.toolPolicies ?? null,
+      memory: def.memory ?? true,
+      skills: def.skills ?? null,
+      connections: def.connections ?? null,
       mcp: { servers: serverShapes(mcp.servers), plugins: mcp.plugins },
     });
     const cached = this.cache.get(id);
@@ -658,6 +747,25 @@ export class DesktopAgentRegistry implements CodingAgentRegistry {
     };
   }
 
+  /**
+   * A committed definition's connector names → the owning profile's
+   * matching connections, as a picked assignment. A name with no matching
+   * connection simply isn't there — the consent dialog already lists what
+   * the definition expects, so the gap is visible before the first turn.
+   */
+  private connectionsByName(
+    names: string[],
+    profileId: string,
+  ): AgentConnectionsSetting {
+    const wanted = new Set(names);
+    const connectionIds = this.deps.profileConfig
+      .forProfile(profileId)
+      .connections.list()
+      .filter((connection) => wanted.has(connection.name))
+      .map((connection) => connection.id);
+    return { mode: "picked", connectionIds };
+  }
+
   private findConfig(
     id: string,
   ): { config: AgentConfig; profileId: string } | undefined {
@@ -703,6 +811,8 @@ export class DesktopAgentRegistry implements CodingAgentRegistry {
           config,
           sandboxProvider: this.deps.sandboxProvider,
           modelId: this.resolvedModel(config) ?? "",
+          // Mode does not apply to the sandboxed built-in agent (its edits
+          // land as a reviewable draft), so its toolset is never filtered.
           extraTools: this.workspaceToolkit?.tools,
           mcpServers: () => this.liveServers(config, profileId),
           // Elicitation from this agent's connectors → the front window,
@@ -731,6 +841,8 @@ export class DesktopAgentRegistry implements CodingAgentRegistry {
           provider: this.wrapErrors(
             this.withWorkspace(this.wrapSandboxAgent(provider), {
               hasTools: true,
+              config,
+              profileId,
             }),
             config,
           ),
@@ -756,8 +868,13 @@ export class DesktopAgentRegistry implements CodingAgentRegistry {
               new ClaudeCodeAgent({
                 model: config.model || undefined,
                 effort: config.effort,
+                // The normalized mode (ADR 0056) on the CLI's own knob;
+                // read-only agents also lose the mutating workspace tools.
+                permissionMode:
+                  CLAUDE_PERMISSION_MODES[config.mode ?? "edit"],
+                ...(config.memory === false ? { memory: false } : {}),
                 ...(Object.keys(env).length > 0 ? { env } : {}),
-                extraTools: this.workspaceToolkit?.tools,
+                extraTools: this.workspaceTools(config),
                 // Claude Code's own Bash runs inside the CLI where we
                 // can't see or manage it. With workspace terminals
                 // available, every command goes through tabs the user
@@ -778,7 +895,7 @@ export class DesktopAgentRegistry implements CodingAgentRegistry {
                   this.livePolicies(config, profileId).annotations,
                 onToolPermission: this.toolPermissionHandler(config, profileId),
               }),
-              { hasTools: true },
+              { hasTools: true, config, profileId },
             ),
             config,
           ),
@@ -801,6 +918,8 @@ export class DesktopAgentRegistry implements CodingAgentRegistry {
               new CodexAgent({
                 model: config.model || undefined,
                 effort: config.effort,
+                // The normalized mode (ADR 0056) on Codex's own sandbox.
+                sandboxMode: CODEX_SANDBOX_MODES[config.mode ?? "edit"],
                 ...(config.auth === "api-key" && config.apiKey
                   ? { apiKey: config.apiKey }
                   : {}),
@@ -816,7 +935,7 @@ export class DesktopAgentRegistry implements CodingAgentRegistry {
                 mcpToolAnnotations: () =>
                   this.livePolicies(config, profileId).annotations,
               }),
-              { hasTools: false },
+              { hasTools: false, config, profileId },
             ),
             config,
           ),
@@ -856,14 +975,46 @@ export class DesktopAgentRegistry implements CodingAgentRegistry {
   /** Workspace awareness (context snapshots + playbook), when bridged. */
   private withWorkspace(
     provider: CodingAgentProvider,
-    opts: { hasTools: boolean },
+    opts: { hasTools: boolean; config: AgentConfig; profileId: string },
   ): CodingAgentProvider {
     const bridge = this.deps.workspaceBridge;
     if (!bridge) return provider;
     const hasTools = opts.hasTools && this.workspaceToolkit !== undefined;
     return new WorkspaceContextAgent(provider, bridge, hasTools, () =>
-      this.deps.hostSkills?.()?.note(hasTools),
+      this.skillsNote(opts.config, opts.profileId, hasTools),
     );
+  }
+
+  /**
+   * The per-agent Skills section (ADR 0056): app tier + the profile's
+   * personal tier, narrowed to the agent's picked set when it has one.
+   */
+  private skillsNote(
+    config: AgentConfig,
+    profileId: string,
+    hasTools: boolean,
+  ): string | undefined {
+    const host = this.deps.hostSkills?.();
+    const setting = config.skills ?? { mode: "all" };
+    return composeSkillsNote({
+      appSkills: host?.skills ?? [],
+      ...(host ? { appSkillsDir: host.skillsDir } : {}),
+      userSkills: this.deps.userSkills?.(profileId) ?? [],
+      ...(setting.mode === "picked" ? { picked: setting.names } : {}),
+      hasTools,
+    });
+  }
+
+  /**
+   * The workspace toolset for one agent: a read-only agent (ADR 0056)
+   * loses the tools that run commands, mutate the project, or act on the
+   * user's behalf — its harness-side mode alone can't govern host tools.
+   */
+  private workspaceTools(config: AgentConfig): ExtraTool[] | undefined {
+    const tools = this.workspaceToolkit?.tools;
+    if (!tools) return undefined;
+    if ((config.mode ?? "edit") !== "read-only") return tools;
+    return tools.filter((tool) => !MUTATING_WORKSPACE_TOOLS.has(tool.name));
   }
 
   /**

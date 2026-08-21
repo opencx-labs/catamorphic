@@ -39,22 +39,32 @@ export interface ProjectSkill {
   path: string;
   /**
    * Which tier the skill comes from: `project` = a file in the project repo,
-   * `host` = shipped by the host app (ADR 0049), not present in the repo.
+   * `user` = the calling user's personal tier (ADR 0056 — never in any
+   * repo, never shared), `host` = shipped by the host app (ADR 0049).
    */
-  source: "project" | "host";
+  source: "project" | "user" | "host";
 }
 
 /**
  * Read-only view over a project's `.agents/skills/` directory, merged with
- * the host-tier skill set (ADR 0049). Writes go through the normal project
- * file APIs (project skills are just files in the repo); host skills are
- * config, resolved once at boot.
+ * the calling user's personal tier (ADR 0056) and the host-tier skill set
+ * (ADR 0049). Writes go through the normal project file APIs (project
+ * skills are just files in the repo); host skills are config, resolved once
+ * at boot; user skills are read live through the `userSkills` hook — the
+ * host resolves the caller's personal skill files (`<name>/SKILL.md` keys,
+ * like `hostSkills`) so an edit applies on the next list.
  */
 export class SkillsService {
   constructor(
     private readonly db: Kysely<DB>,
     private readonly projectManager: ProjectManager,
-    private readonly opts: { hostSkills?: Record<string, string> } = {},
+    private readonly opts: {
+      hostSkills?: Record<string, string>;
+      userSkills?: (
+        identity: Identity,
+        projectId: string,
+      ) => Record<string, string>;
+    } = {},
   ) {}
 
   async list(identity: Identity, projectId: string): Promise<ProjectSkill[]> {
@@ -62,12 +72,17 @@ export class SkillsService {
     const projectSkills = await this.withDev(identity, projectId, (repo) =>
       this.listProjectSkills(repo),
     );
-    // A project skill shadows a host skill of the same name: the repo is the
-    // more specific tier, and shadowing is how a project customizes a host
-    // playbook.
+    // Shadowing by name, most specific first: project > user > host. The
+    // repo outranks personal customization (committed team doctrine stays
+    // consistent for everyone); personal outranks shipped defaults.
     const taken = new Set(projectSkills.map((skill) => skill.name));
+    const userSkills = this.userSkills(identity, projectId).filter(
+      (skill) => !taken.has(skill.name),
+    );
+    for (const skill of userSkills) taken.add(skill.name);
     const merged = [
       ...projectSkills,
+      ...userSkills,
       ...this.hostSkills().filter((skill) => !taken.has(skill.name)),
     ];
     return merged.sort((a, b) => a.name.localeCompare(b.name));
@@ -94,6 +109,14 @@ export class SkillsService {
       },
     );
     if (fromProject) return fromProject;
+    const userFiles = this.opts.userSkills?.(identity, projectId) ?? {};
+    const user = skillsFromTier(userFiles, "user").find(
+      (skill) => skill.name === name,
+    );
+    if (user) {
+      const content = userFiles[user.path];
+      if (content !== undefined) return { skill: user, content };
+    }
     const host = this.hostSkills().find((skill) => skill.name === name);
     if (!host) return null;
     const content = this.opts.hostSkills?.[host.path];
@@ -163,20 +186,18 @@ export class SkillsService {
   }
 
   private hostSkills(): ProjectSkill[] {
-    return Object.entries(this.opts.hostSkills ?? {})
-      .filter(([path]) => path.endsWith("/SKILL.md"))
-      .map(([path, content]) => {
-        const frontmatter = parseSkillFrontmatter(content);
-        const dirName = path.slice(0, path.length - "/SKILL.md".length);
-        const name = frontmatter.name ?? dirName;
-        return {
-          name,
-          title: frontmatter.title ?? humanizeSkillName(name),
-          description: frontmatter.description ?? "",
-          path,
-          source: "host" as const,
-        };
-      });
+    return skillsFromTier(this.opts.hostSkills ?? {}, "host");
+  }
+
+  /**
+   * The caller's personal skills (ADR 0056). Deliberately absent from the
+   * shared surface (listShared/readShared) — they are personal.
+   */
+  private userSkills(identity: Identity, projectId: string): ProjectSkill[] {
+    return skillsFromTier(
+      this.opts.userSkills?.(identity, projectId) ?? {},
+      "user",
+    );
   }
 
   private requireProject(identity: Identity, projectId: string) {
@@ -199,6 +220,30 @@ export class SkillsService {
       await repo.dispose();
     }
   }
+}
+
+/**
+ * Tier-root-relative `<name>/SKILL.md` files → skills (the host and user
+ * tiers share this key convention).
+ */
+function skillsFromTier(
+  files: Record<string, string>,
+  source: "user" | "host",
+): ProjectSkill[] {
+  return Object.entries(files)
+    .filter(([path]) => path.endsWith("/SKILL.md"))
+    .map(([path, content]) => {
+      const frontmatter = parseSkillFrontmatter(content);
+      const dirName = path.slice(0, path.length - "/SKILL.md".length);
+      const name = frontmatter.name ?? dirName;
+      return {
+        name,
+        title: frontmatter.title ?? humanizeSkillName(name),
+        description: frontmatter.description ?? "",
+        path,
+        source,
+      };
+    });
 }
 
 /** `.agents/skills/<name>/SKILL.md` files → skills, sorted by name. */
