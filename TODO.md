@@ -62,6 +62,29 @@
   no personal consent is involved. Map ACP's session/turn/interrupt
   semantics onto the provider contract; per-agent home-dir isolation for
   the command transport.
+- **Agent configuration follow-ups (ADR 0056).** v1 cuts to close when
+  they start mattering: `read_skill` is not gated by an agent's picked
+  skills (the prompt's skills section is the offer; the tool reads any
+  tier); a picked-skills Claude Code agent loses native Skill-tool access
+  to app skills (the plugin is withheld whole — a per-agent filtered
+  plugin materialization under `agent-homes/` would restore it); user
+  skills ride the prompt note only (no native plugin). Also: a "remote
+  sync" home for user-scoped state beyond skills — the designed shape is
+  a self-scoped store subtree (`store/users/{user}/**` via a role grant,
+  0055 machinery) once the stock server exists.
+- **Agent channel integrations: Slack, code review.** The per-agent
+  schema (capabilities + tool policies + mode) is the substrate; what's
+  missing is the *binding* of an agent to a channel. Slack: a
+  Claude-Tag-class experience — a project agent wired to a Slack
+  connector answers mentions/threads, with the agent's toolPolicies
+  narrowing what it may do there ("seniors may post, juniors may not" is
+  already expressible in roles). Likely shape: a trigger kind
+  (`slack.mention`) + a workflow that opens an `ask_agent` turn, so it
+  rides ADR 0039/0042 rather than new machinery. Code review: an agent
+  assigned ONLY to reviews — a `github.pr-opened` trigger (CodeHost
+  seam, ADR 0045) invoking a read-only-mode agent whose persona is the
+  review doctrine, posting via the PR-review surface. Both are
+  consumers of ADR 0056; neither needs new agent-side schema.
 - **TS `defineAgent` layer over project agent JSON.** The committed
   `agents/<slug>.json` files are the substrate (ADR 0050); add the
   authoring layer: `defineAgent({...})` in project code, discovered by

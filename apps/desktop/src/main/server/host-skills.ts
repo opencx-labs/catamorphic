@@ -131,7 +131,9 @@ export function composeSkillsNote(opts: SkillsNoteOpts): string | undefined {
     );
     const rows = opts.picked.map((name) => {
       const skill = known.get(name);
-      return skill?.description ? `  - ${name}: ${skill.description}` : `  - ${name}`;
+      return skill?.description
+        ? `  - ${name}: ${skill.description}`
+        : `  - ${name}`;
     });
     return [
       "## Skills",

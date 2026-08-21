@@ -2736,3 +2736,41 @@ Patterned on what best-in-class palettes converged on (Chrome omnibox
 - Attach button ≡ paste: verified (and now e2e-pinned) that the
   paperclip inserts files at the caret through the same
   addFiles→insertPills machinery as pasting — one code path, one feel.
+
+### 2026-08-21 — One agent, one surface (ADR 0056)
+
+- **The configure-agent modal is THE surface for an agent.** Palette →
+  "Configure agent…" → in-palette agent picker → a 560px tabbed modal
+  (General / Prompt / Capabilities / Auth); Settings' pencil opens the
+  same modal, and its inline edit form is gone. Tabs are the project
+  modal's `ModalTab` strip + `AnimatedHeight` + `key={tab}` fade — both
+  extracted to `modal-tabs.tsx` as the shared pattern (the 200ms
+  fade-in/out mirror stays the sanctioned panel-swap animation). The
+  OpenRouter model searcher moved to its own component on the way.
+- **Project agents open read-only.** A committed definition is code, so
+  its modal body is facts (harness, model, mode, memory, credentials,
+  connections, skills, persona preview), consent state with the approve
+  action, the default-agent rows, and a pointer at `agents/<slug>.json`
+  — nothing here can silently edit a work product. Invalid definitions
+  are configurable-on-purpose: the modal is where the error is legible.
+- **Defaults are three labeled star rows, applied on click.** "My
+  default agent" / "My default in this project" / "Project default
+  (everyone)" act immediately, outside Save — they are pointers at the
+  agent, not part of it (same contract as the Settings star). The
+  palette's default-agent picker writes the per-project override when a
+  project is open, and grows a "Use the project's default" row while an
+  override exists — the way back down the layers is always visible.
+- **New agent options.** Instructions (the agent's own persona,
+  textarea), Mode (read-only / edit / full access — one select, the
+  per-harness mapping said in helper text; hidden for the sandboxed
+  built-in), Memory (Claude Code only, a checkbox honest about what off
+  means), Skills (all vs picked, same shape as connections; picked
+  names that no longer resolve stay visible as removable "not found
+  here" rows — a pick never silently shrinks). Effort grows extra-high
+  and max rows in every picker, each described, with clamping named
+  where it happens ("Codex tops out at extra high").
+- **Save spans tabs, so the disable reason must too.** The single Save
+  patch can be blocked by a missing API key while the user sits on
+  another tab; the footer says "Needs an API key — Auth tab" instead of
+  leaving a mute disabled button (nothing here can lie about what will
+  happen — the tool-access rule, applied to the form itself).

@@ -23,6 +23,7 @@ import {
   PanelLeft,
   Plug,
   Search,
+  Settings2,
   Settings as SettingsIcon,
   Sparkles,
   SquareTerminal,
@@ -109,6 +110,7 @@ const ACTION_ICONS: Partial<Record<ActionId, LucideIcon>> = {
   "setup-agent": Bot,
   "default-agent": Bot,
   "switch-agent": Bot,
+  "configure-agent": Settings2,
   "change-effort": Gauge,
   "switch-model": Cpu,
   "manage-connectors": Plug,
@@ -123,6 +125,7 @@ const ACTION_ICONS: Partial<Record<ActionId, LucideIcon>> = {
 export type PaletteInPicker =
   | "default-agent"
   | "switch-agent"
+  | "configure-agent"
   | "effort"
   | "model";
 
@@ -140,6 +143,11 @@ const PICKER_CHIPS: Record<
     icon: Bot,
     placeholder: "Pick an agent for this chat…",
   },
+  "configure-agent": {
+    chip: "Configure",
+    icon: Settings2,
+    placeholder: "Pick an agent to configure…",
+  },
   effort: {
     chip: "Effort",
     icon: Gauge,
@@ -156,6 +164,7 @@ const PICKER_CHIPS: Record<
 const PICKER_ACTIONS: Partial<Record<ActionId, PaletteInPicker>> = {
   "default-agent": "default-agent",
   "switch-agent": "switch-agent",
+  "configure-agent": "configure-agent",
   "change-effort": "effort",
   "switch-model": "model",
 };
@@ -225,6 +234,16 @@ const EFFORT_LEVELS: Array<{
   { id: "low", label: "Low effort", description: "Fast, direct responses" },
   { id: "medium", label: "Medium effort", description: "Balanced reasoning" },
   { id: "high", label: "High effort", description: "Deep, thorough reasoning" },
+  {
+    id: "xhigh",
+    label: "Extra-high effort",
+    description: "Extended reasoning (Codex's deepest)",
+  },
+  {
+    id: "max",
+    label: "Max effort",
+    description: "Deepest reasoning (Claude; elsewhere runs as extra-high)",
+  },
 ];
 
 interface PaletteItem {
@@ -430,6 +449,9 @@ export function CommandPalette({
   onPickDefaultAgent,
   onPickSessionAgent,
   onPickProjectAgent,
+  onConfigureAgent,
+  defaultAgentOverridden,
+  onClearDefaultOverride,
   onPickEffort,
   onPickModel,
   onHighlightTarget,
@@ -482,6 +504,12 @@ export function CommandPalette({
     agent: ProjectAgentInfo,
     target: "default" | "session",
   ) => void;
+  /** A configure-picker row was committed: open the agent's modal. */
+  onConfigureAgent: (agentId: string) => void;
+  /** This user's per-project default override is set (ADR 0056). */
+  defaultAgentOverridden?: boolean;
+  /** Clear that override, falling back to the project/global layers. */
+  onClearDefaultOverride?: () => void;
   onPickEffort: (effort: AgentEffort) => void;
   /** Change the target agent's model ("" = the automatic default). */
   onPickModel: (agentId: string, model: string) => void;
@@ -557,7 +585,13 @@ export function CommandPalette({
   // changes with approvals; a stale snapshot would show the wrong rows.
   const [projectAgents, setProjectAgents] = useState<ProjectAgentInfo[]>([]);
   useEffect(() => {
-    if (picker !== "default-agent" && picker !== "switch-agent") return;
+    if (
+      picker !== "default-agent" &&
+      picker !== "switch-agent" &&
+      picker !== "configure-agent"
+    ) {
+      return;
+    }
     let cancelled = false;
     void desktopApi
       .projectAgentsList(projectId)
@@ -1136,13 +1170,15 @@ export function CommandPalette({
           : [
               ...agents.map((agent) => {
                 const isCurrent =
-                  picker === "default-agent"
-                    ? agent.id === defaultAgentId
-                    : agent.id ===
-                      ((focusedChat?.agentId ?? defaultAgentId) || "");
+                  picker === "configure-agent"
+                    ? false
+                    : picker === "default-agent"
+                      ? agent.id === defaultAgentId
+                      : agent.id ===
+                        ((focusedChat?.agentId ?? defaultAgentId) || "");
                 return {
                   id: `pick:agent:${agent.id}`,
-                  icon: Bot,
+                  icon: picker === "configure-agent" ? Settings2 : Bot,
                   label: agent.name,
                   detail: `${agentSourceLabel(agent)} · ${agentAuthLabel(agent)}`,
                   keywords: [
@@ -1156,30 +1192,42 @@ export function CommandPalette({
                   run: () =>
                     picker === "default-agent"
                       ? onPickDefaultAgent(agent.id)
-                      : onPickSessionAgent(agent.id),
+                      : picker === "configure-agent"
+                        ? onConfigureAgent(agent.id)
+                        : onPickSessionAgent(agent.id),
                 };
               }),
               // The active project's committed agents (ADR 0050), under
               // their own scope label. Invalid definitions stay visible —
               // disabled, with the error where the description goes — so
-              // a typo'd file is diagnosable from the picker itself.
+              // a typo'd file is diagnosable from the picker itself. The
+              // configure picker keeps them clickable: its modal shows
+              // the full error and where to fix it.
               ...projectAgents.map((agent) => {
                 const isCurrent =
-                  picker === "default-agent"
-                    ? agent.id === defaultAgentId
-                    : agent.id ===
-                      ((focusedChat?.agentId ?? defaultAgentId) || "");
+                  picker === "configure-agent"
+                    ? false
+                    : picker === "default-agent"
+                      ? agent.id === defaultAgentId
+                      : agent.id ===
+                        ((focusedChat?.agentId ?? defaultAgentId) || "");
                 return {
                   id: `pick:agent:${agent.id}`,
-                  icon: Bot,
+                  icon: picker === "configure-agent" ? Settings2 : Bot,
                   label: agent.name,
                   detail: projectAgentDetail(agent),
                   keywords: [agent.name, agent.slug, "project", agent.kind],
                   kind: "action" as const,
                   group: "Project agents",
                   ...(isCurrent ? { current: true } : {}),
-                  ...(agent.invalid ? { disabled: true } : {}),
+                  ...(agent.invalid && picker !== "configure-agent"
+                    ? { disabled: true }
+                    : {}),
                   run: () => {
+                    if (picker === "configure-agent") {
+                      onConfigureAgent(agent.id);
+                      return;
+                    }
                     if (agent.invalid) return;
                     onPickProjectAgent(
                       agent,
@@ -1188,6 +1236,22 @@ export function CommandPalette({
                   },
                 };
               }),
+              // Layered defaults (ADR 0056): while this user's per-project
+              // override is set, offer the way back to the layers below.
+              ...(picker === "default-agent" && defaultAgentOverridden
+                ? [
+                    {
+                      id: "pick:agent-default-clear",
+                      icon: Bot,
+                      label: "Use the project's default",
+                      detail:
+                        "Clear your override for this project (falls back to the project, then your global default)",
+                      keywords: ["clear", "project", "default", "reset"],
+                      kind: "action" as const,
+                      run: () => onClearDefaultOverride?.(),
+                    },
+                  ]
+                : []),
             ];
       if (rows.length === 0) {
         return [
@@ -1387,6 +1451,9 @@ export function CommandPalette({
     onPickDefaultAgent,
     onPickSessionAgent,
     onPickProjectAgent,
+    onConfigureAgent,
+    defaultAgentOverridden,
+    onClearDefaultOverride,
     onPickEffort,
     onPickModel,
     targetAgent,

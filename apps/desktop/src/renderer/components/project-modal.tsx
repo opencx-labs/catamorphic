@@ -12,15 +12,10 @@ import {
   Lock,
   Search,
 } from "lucide-react";
-import {
-  type FormEvent,
-  type ReactNode,
-  useEffect,
-  useRef,
-  useState,
-} from "react";
+import { type FormEvent, useEffect, useState } from "react";
 import { desktopApi } from "../lib/desktop-api.js";
 import { Modal } from "./modal.js";
+import { AnimatedHeight, ModalTab } from "./modal-tabs.js";
 import { PendingButton } from "./pending-button.js";
 
 type Mode = "create" | "import" | "github";
@@ -147,19 +142,19 @@ export function ProjectModal({
             role="tablist"
             aria-label="Project source"
           >
-            <ModeTab
+            <ModalTab
               active={mode === "create"}
               onSelect={() => setMode("create")}
               icon={<FolderPlus className="size-3.5" />}
               label="New project"
             />
-            <ModeTab
+            <ModalTab
               active={mode === "import"}
               onSelect={() => setMode("import")}
               icon={<Import className="size-3.5" />}
               label="Import folder"
             />
-            <ModeTab
+            <ModalTab
               active={mode === "github"}
               onSelect={() => setMode("github")}
               icon={<GithubIcon className="size-3.5" />}
@@ -467,61 +462,5 @@ function GithubPanel({
         )}
       </div>
     </div>
-  );
-}
-
-/**
- * Animates its height to follow the content's measured size, so swapping the
- * mode fields glides instead of snapping the modal to a new height.
- */
-function AnimatedHeight({ children }: { children: ReactNode }) {
-  const innerRef = useRef<HTMLDivElement>(null);
-  const [height, setHeight] = useState<number>();
-
-  useEffect(() => {
-    const inner = innerRef.current;
-    if (!inner) return;
-    const observer = new ResizeObserver(() => setHeight(inner.offsetHeight));
-    observer.observe(inner);
-    setHeight(inner.offsetHeight);
-    return () => observer.disconnect();
-  }, []);
-
-  return (
-    <div
-      style={{ height }}
-      className="overflow-hidden transition-[height] duration-200 ease-[cubic-bezier(0.2,0,0,1)]"
-    >
-      <div ref={innerRef}>{children}</div>
-    </div>
-  );
-}
-
-function ModeTab({
-  active,
-  onSelect,
-  icon,
-  label,
-}: {
-  active: boolean;
-  onSelect: () => void;
-  icon: React.ReactNode;
-  label: string;
-}) {
-  return (
-    <button
-      type="button"
-      role="tab"
-      aria-selected={active}
-      onClick={onSelect}
-      className={`flex h-7 cursor-pointer items-center justify-center gap-1.5 rounded-md text-[13px] transition-colors duration-150 ${
-        active
-          ? "bg-bg-overlay text-fg shadow-sm"
-          : "text-fg-muted hover:text-fg"
-      }`}
-    >
-      {icon}
-      {label}
-    </button>
   );
 }

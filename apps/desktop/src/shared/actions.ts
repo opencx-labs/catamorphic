@@ -173,7 +173,8 @@ export const BUILTIN_ACTIONS = [
   {
     id: "default-agent",
     label: "Change default agent…",
-    description: "pick which configured AI agent new chats in this profile use",
+    description:
+      "pick which configured AI agent answers new chats — in the active project (your override) or globally",
     defaultBinding: null,
     keywords: [
       "switch",
@@ -184,6 +185,27 @@ export const BUILTIN_ACTIONS = [
       "codex",
       "built-in",
       "ai",
+    ],
+  },
+  {
+    id: "configure-agent",
+    label: "Configure agent…",
+    description:
+      "open an agent's configuration: model, effort, mode, instructions, memory, connections, skills, tool access, auth (ADR 0056)",
+    defaultBinding: null,
+    keywords: [
+      "agent",
+      "configure",
+      "settings",
+      "edit",
+      "instructions",
+      "prompt",
+      "persona",
+      "memory",
+      "mode",
+      "skills",
+      "capabilities",
+      "tools",
     ],
   },
   {

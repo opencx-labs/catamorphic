@@ -9,32 +9,18 @@ import {
   Trash2,
   X,
 } from "lucide-react";
-import {
-  type FormEvent,
-  type KeyboardEvent as ReactKeyboardEvent,
-  useEffect,
-  useState,
-} from "react";
+import { useEffect, useState } from "react";
 import { ACTION_LABELS, KEYBINDING_ACTIONS } from "../../shared/actions.js";
-import { AgentToolPolicyField } from "../components/agent-tool-policy-field.js";
-import { ConnectionsAssignmentField } from "../components/connections-field.js";
 import { PendingButton } from "../components/pending-button.js";
 import {
-  type AgentAuthMode,
-  type AgentConnectionsSetting,
-  type AgentEffort,
   type AgentHarness,
-  type AgentInfo,
   type AgentsData,
   type AppPrefs,
   type ConnectionInfo,
   desktopApi,
   type ImportableBrowser,
-  type McpToolPolicy,
-  type OpenRouterCatalog,
   type ThemePreset,
   type ThemeToken,
-  type UpdateAgentInput,
 } from "../lib/desktop-api.js";
 import {
   DEFAULT_KEYBINDINGS,
@@ -47,14 +33,14 @@ import { useTheme } from "../lib/theme.js";
 export function SettingsScreen({
   onClose,
   onAddAgent,
+  onConfigureAgent,
   onManageConnectors,
-  projectId,
 }: {
   onClose: () => void;
   onAddAgent: () => void;
+  /** Open the configure-agent modal (ADR 0056) for one roster agent. */
+  onConfigureAgent: (agentId: string) => void;
   onManageConnectors: () => void;
-  /** The project this Settings tab lives in (agent tool access lists its workflows). */
-  projectId?: string;
 }) {
   return (
     <div className="mx-auto w-full max-w-md px-6 py-4">
@@ -70,7 +56,10 @@ export function SettingsScreen({
         </button>
       </header>
 
-      <AgentsSection onAddAgent={onAddAgent} projectId={projectId} />
+      <AgentsSection
+        onAddAgent={onAddAgent}
+        onConfigureAgent={onConfigureAgent}
+      />
       <ConnectorsSection onManage={onManageConnectors} />
       <ThemeSection />
       <NotificationsSection />
@@ -87,14 +76,6 @@ const HARNESS_LABELS: Record<AgentHarness, string> = {
   codex: "Codex",
 };
 
-const MODEL_PLACEHOLDERS: Record<AgentHarness, string> = {
-  "ai-sdk": "claude-sonnet-4-5",
-  "claude-code": "claude-sonnet-4-5",
-  codex: "gpt-5.3-codex",
-};
-
-type AiSdkProvider = "anthropic" | "openai" | "openrouter";
-
 interface AgentLoginUi {
   pending?: boolean;
   command?: string;
@@ -109,16 +90,15 @@ interface AgentLoginUi {
  */
 function AgentsSection({
   onAddAgent,
-  projectId,
+  onConfigureAgent,
 }: {
   onAddAgent: () => void;
-  projectId?: string;
+  onConfigureAgent: (agentId: string) => void;
 }) {
   const [data, setData] = useState<AgentsData | null>(null);
   const [loginOk, setLoginOk] = useState<Record<string, boolean>>({});
   const [login, setLogin] = useState<Record<string, AgentLoginUi>>({});
   const [copiedId, setCopiedId] = useState<string | null>(null);
-  const [editingId, setEditingId] = useState<string | null>(null);
 
   useEffect(() => {
     void desktopApi.agentsList().then(setData);
@@ -219,20 +199,6 @@ function AgentsSection({
           )}
 
           {data.agents.map((agent) => {
-            if (editingId === agent.id) {
-              return (
-                <AgentForm
-                  key={agent.id}
-                  agent={agent}
-                  projectId={projectId}
-                  onDone={() => {
-                    setEditingId(null);
-                    refresh();
-                  }}
-                  onCancel={() => setEditingId(null)}
-                />
-              );
-            }
             const isDefault = agent.id === data.defaultAgentId;
             const connected = loginOk[agent.id] === true;
             const ui = login[agent.id] ?? {};
@@ -274,7 +240,7 @@ function AgentsSection({
                   </button>
                   <button
                     type="button"
-                    onClick={() => setEditingId(agent.id)}
+                    onClick={() => onConfigureAgent(agent.id)}
                     className="grid size-6 shrink-0 cursor-pointer place-items-center rounded text-fg-faint opacity-0 transition-colors duration-150 hover:text-fg group-hover:opacity-100"
                     aria-label={`Edit ${agent.name}`}
                     title="Edit"
@@ -365,260 +331,6 @@ function AgentsSection({
 }
 
 /**
- * Edit form for one existing agent (new agents come from the setup wizard).
- * The API key field is keep-by-default: empty input leaves the stored key
- * alone, "Clear saved key" removes it explicitly.
- */
-function AgentForm({
-  agent,
-  onDone,
-  onCancel,
-  projectId,
-}: {
-  agent: AgentInfo;
-  onDone: () => void;
-  onCancel: () => void;
-  projectId?: string;
-}) {
-  const harness = agent.harness;
-  const [name, setName] = useState(agent.name);
-  const [provider, setProvider] = useState<AiSdkProvider>(
-    agent.provider ?? "anthropic",
-  );
-  const [model, setModel] = useState(agent.model);
-  const [effort, setEffort] = useState<AgentEffort>(agent.effort);
-  const [auth, setAuth] = useState<AgentAuthMode>(agent.auth);
-  const [apiKey, setApiKey] = useState("");
-  const [clearKey, setClearKey] = useState(false);
-  const [connections, setConnections] = useState<AgentConnectionsSetting>(
-    agent.connections,
-  );
-  const [toolPolicies, setToolPolicies] = useState<
-    Record<string, McpToolPolicy>
-  >(agent.toolPolicies ?? {});
-  const [profileConnections, setProfileConnections] = useState<
-    ConnectionInfo[]
-  >([]);
-  useEffect(() => {
-    void desktopApi
-      .connectionsList()
-      .then(setProfileConnections)
-      .catch(() => {});
-    // Live: a probe elsewhere (Connectors) refreshes tool rosters here.
-    return desktopApi.onConnectionsChanged(setProfileConnections);
-  }, []);
-  const [saving, setSaving] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-
-  // Anthropic/OpenAI are key-only; OpenRouter can also sign in with an
-  // account, and the CLI harnesses add "this machine's login" on top.
-  const effectiveAuth: AgentAuthMode =
-    harness === "ai-sdk" && provider !== "openrouter"
-      ? "api-key"
-      : harness === "ai-sdk" && auth === "local"
-        ? "account"
-        : auth;
-  const hasSavedKey = agent.hasApiKey && !clearKey;
-  const keyPlaceholder = hasSavedKey
-    ? `Saved (${agent.apiKeyMasked}) — leave empty to keep`
-    : harness === "codex" || (harness === "ai-sdk" && provider === "openai")
-      ? "sk-…"
-      : harness === "ai-sdk" && provider === "openrouter"
-        ? "sk-or-…"
-        : "sk-ant-…";
-
-  const submit = async (event: FormEvent) => {
-    event.preventDefault();
-    setSaving(true);
-    setError(null);
-    try {
-      const patch: UpdateAgentInput = {
-        name: name.trim() || undefined,
-        model: model.trim(),
-        effort,
-        auth: effectiveAuth,
-        connections,
-        toolPolicies,
-      };
-      if (harness === "ai-sdk") patch.provider = provider;
-      if (clearKey) patch.apiKey = null;
-      else if (apiKey.trim()) patch.apiKey = apiKey.trim();
-      await desktopApi.agentsUpdate(agent.id, patch);
-      onDone();
-    } catch (cause) {
-      setError(cause instanceof Error ? cause.message : String(cause));
-    } finally {
-      setSaving(false);
-    }
-  };
-
-  return (
-    <form
-      onSubmit={submit}
-      className="flex flex-col gap-3 rounded-lg border border-border bg-bg-raised/40 p-3"
-    >
-      <span className="text-xs font-semibold">
-        {`Edit ${HARNESS_LABELS[harness]} agent`}
-      </span>
-
-      <label className="flex flex-col gap-1 text-xs text-fg-muted">
-        Name
-        <input
-          value={name}
-          onChange={(event) => setName(event.target.value)}
-          placeholder={HARNESS_LABELS[harness]}
-          className="field h-8 px-2 text-[13px] text-fg placeholder:text-fg-faint"
-          spellCheck={false}
-        />
-      </label>
-
-      {harness === "ai-sdk" && (
-        <label className="flex flex-col gap-1 text-xs text-fg-muted">
-          Provider
-          <select
-            value={provider}
-            onChange={(event) => {
-              const next = event.target.value as AiSdkProvider;
-              setProvider(next);
-              setAuth(next === "openrouter" ? "account" : "api-key");
-            }}
-            className="field h-8 px-2 text-[13px] text-fg"
-          >
-            <option value="anthropic">Anthropic</option>
-            <option value="openai">OpenAI</option>
-            <option value="openrouter">OpenRouter</option>
-          </select>
-        </label>
-      )}
-
-      {harness === "ai-sdk" && provider === "openrouter" ? (
-        <OpenRouterModelField value={model} onChange={setModel} />
-      ) : (
-        <label className="flex flex-col gap-1 text-xs text-fg-muted">
-          Model
-          <input
-            value={model}
-            onChange={(event) => setModel(event.target.value)}
-            placeholder={MODEL_PLACEHOLDERS[harness]}
-            className="field h-8 px-2 font-mono text-[13px] text-fg placeholder:font-sans placeholder:text-fg-faint"
-            spellCheck={false}
-          />
-          <span className="text-fg-faint">
-            {harness === "ai-sdk"
-              ? "Any model id your API key can access."
-              : "Leave empty to use the harness default."}
-          </span>
-        </label>
-      )}
-
-      <label className="flex flex-col gap-1 text-xs text-fg-muted">
-        Effort
-        <select
-          value={effort}
-          onChange={(event) => setEffort(event.target.value as AgentEffort)}
-          className="field h-8 px-2 text-[13px] text-fg"
-        >
-          <option value="low">Low</option>
-          <option value="medium">Medium</option>
-          <option value="high">High</option>
-        </select>
-      </label>
-
-      {(harness !== "ai-sdk" || provider === "openrouter") && (
-        <label className="flex flex-col gap-1 text-xs text-fg-muted">
-          Authentication
-          <select
-            value={effectiveAuth}
-            onChange={(event) => setAuth(event.target.value as AgentAuthMode)}
-            className="field h-8 px-2 text-[13px] text-fg"
-          >
-            {harness !== "ai-sdk" && (
-              <option value="local">This machine's login</option>
-            )}
-            <option value="account">
-              {harness === "ai-sdk"
-                ? "Account (sign in — no key needed)"
-                : "Separate account"}
-            </option>
-            <option value="api-key">API key</option>
-          </select>
-        </label>
-      )}
-
-      {effectiveAuth === "api-key" && (
-        <label className="flex flex-col gap-1 text-xs text-fg-muted">
-          API key
-          <input
-            type="password"
-            value={apiKey}
-            onChange={(event) => {
-              setApiKey(event.target.value);
-              if (event.target.value) setClearKey(false);
-            }}
-            placeholder={keyPlaceholder}
-            className="field h-8 px-2 font-mono text-[13px] text-fg placeholder:font-sans placeholder:text-fg-faint"
-            autoComplete="off"
-          />
-          <span className="flex items-center justify-between gap-2 text-fg-faint">
-            {clearKey
-              ? "Saved key will be removed."
-              : "Stored encrypted with your OS keychain."}
-            {agent.hasApiKey && (
-              <button
-                type="button"
-                onClick={() => setClearKey((value) => !value)}
-                className="shrink-0 cursor-pointer text-fg-muted hover:text-fg"
-              >
-                {clearKey ? "Keep saved key" : "Clear saved key"}
-              </button>
-            )}
-          </span>
-        </label>
-      )}
-
-      {profileConnections.length > 0 && (
-        <ConnectionsAssignmentField
-          value={connections}
-          onChange={setConnections}
-          available={profileConnections}
-        />
-      )}
-      <AgentToolPolicyField
-        value={toolPolicies}
-        onChange={setToolPolicies}
-        connections={profileConnections}
-        assignment={connections}
-        harness={harness}
-        projectId={projectId}
-      />
-
-      {error && <p className="text-xs text-danger">{error}</p>}
-
-      <div className="flex items-center gap-2">
-        <PendingButton
-          type="submit"
-          pending={saving}
-          pendingLabel="Saving…"
-          disabled={
-            effectiveAuth === "api-key" && !hasSavedKey && !apiKey.trim()
-          }
-          className="h-8 cursor-pointer rounded-md bg-accent px-4 text-[13px] font-medium text-accent-fg disabled:cursor-not-allowed disabled:opacity-50"
-        >
-          Save
-        </PendingButton>
-        <button
-          type="button"
-          onClick={onCancel}
-          className="h-8 cursor-pointer rounded-md px-3 text-[13px] text-fg-muted transition-colors duration-150 hover:bg-bg-overlay hover:text-fg"
-        >
-          Cancel
-        </button>
-      </div>
-    </form>
-  );
-}
-
-/**
  * Connectors live in their own manager modal (also reachable from the
  * palette: "Manage connectors…") — this section is the doorway plus a
  * quick count of what's installed.
@@ -658,207 +370,6 @@ function ConnectorsSection({ onManage }: { onManage: () => void }) {
         </span>
       </div>
     </section>
-  );
-}
-
-interface OpenRouterRow {
-  key: string;
-  /** "" selects the synthetic best-free entry (resolved dynamically). */
-  modelId: string;
-  title: string;
-  detail: string;
-  free: boolean;
-}
-
-/**
- * Searchable model picker for OpenRouter agents. The mono input is both the
- * stored value and the search box; a dropdown below it filters the catalog
- * while focused. An empty model means "current best free model", surfaced
- * as the synthetic first row. If the catalog can't load, degrades to the
- * plain text input.
- */
-function OpenRouterModelField({
-  value,
-  onChange,
-}: {
-  value: string;
-  onChange: (model: string) => void;
-}) {
-  const [catalog, setCatalog] = useState<OpenRouterCatalog | null>(null);
-  const [failed, setFailed] = useState(false);
-  const [open, setOpen] = useState(false);
-  const [active, setActive] = useState(0);
-
-  useEffect(() => {
-    let cancelled = false;
-    desktopApi
-      .openrouterModels()
-      .then((data) => {
-        if (!cancelled) setCatalog(data);
-      })
-      .catch(() => {
-        if (!cancelled) setFailed(true);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, []);
-
-  const query = value.trim().toLowerCase();
-  const bestId = catalog?.bestFreeModelId ?? null;
-  const showBest =
-    query === "" ||
-    "best free model (automatic)".includes(query) ||
-    (bestId?.toLowerCase().includes(query) ?? false);
-  const rows: OpenRouterRow[] = catalog
-    ? [
-        ...(showBest
-          ? [
-              {
-                key: " best",
-                modelId: "",
-                title: "Best free model (automatic)",
-                detail: bestId ?? "no free models right now",
-                free: false,
-              },
-            ]
-          : []),
-        ...catalog.models
-          .filter(
-            (m) =>
-              m.id.toLowerCase().includes(query) ||
-              m.name.toLowerCase().includes(query),
-          )
-          .sort(
-            (a, b) => Number(b.free) - Number(a.free) || b.created - a.created,
-          )
-          .slice(0, 50)
-          .map((m) => ({
-            key: m.id,
-            modelId: m.id,
-            title: m.name,
-            detail: m.id,
-            free: m.free,
-          })),
-      ]
-    : [];
-  const activeIndex = Math.min(active, Math.max(0, rows.length - 1));
-
-  const select = (modelId: string) => {
-    onChange(modelId);
-    setOpen(false);
-  };
-
-  const onKeyDown = (event: ReactKeyboardEvent<HTMLInputElement>) => {
-    if (event.key === "Escape") {
-      if (open) {
-        event.preventDefault();
-        event.stopPropagation();
-        setOpen(false);
-      }
-      return;
-    }
-    if (event.key === "ArrowDown" || event.key === "ArrowUp") {
-      event.preventDefault();
-      if (!open) {
-        setOpen(true);
-        setActive(0);
-        return;
-      }
-      const delta = event.key === "ArrowDown" ? 1 : -1;
-      setActive(Math.min(Math.max(activeIndex + delta, 0), rows.length - 1));
-      return;
-    }
-    if (event.key === "Enter" && open && rows.length > 0) {
-      event.preventDefault();
-      const row = rows[activeIndex];
-      if (row) select(row.modelId);
-    }
-  };
-
-  if (failed) {
-    return (
-      <label className="flex flex-col gap-1 text-xs text-fg-muted">
-        Model
-        <input
-          value={value}
-          onChange={(event) => onChange(event.target.value)}
-          placeholder="Best free model (automatic)"
-          className="field h-8 px-2 font-mono text-[13px] text-fg placeholder:font-sans placeholder:text-fg-faint"
-          spellCheck={false}
-        />
-        <span className="text-fg-faint">Couldn't load the model list.</span>
-      </label>
-    );
-  }
-
-  return (
-    <div className="flex flex-col gap-1 text-xs text-fg-muted">
-      Model
-      <div className="relative">
-        <input
-          value={value}
-          onChange={(event) => {
-            onChange(event.target.value);
-            setOpen(true);
-            setActive(0);
-          }}
-          onFocus={() => setOpen(true)}
-          onBlur={() => setOpen(false)}
-          onKeyDown={onKeyDown}
-          placeholder={`Best free model (${bestId ?? "automatic"})`}
-          aria-label="Model"
-          className="field h-8 w-full px-2 font-mono text-[13px] text-fg placeholder:font-sans placeholder:text-fg-faint"
-          spellCheck={false}
-          autoComplete="off"
-        />
-        {open && (
-          <div className="absolute inset-x-0 top-full z-10 mt-1 max-h-64 overflow-y-auto rounded-md border border-border bg-bg-overlay py-1">
-            {!catalog ? (
-              <p className="animate-pulse px-2.5 py-1.5 text-[13px] text-fg-muted">
-                Loading models…
-              </p>
-            ) : rows.length === 0 ? (
-              <p className="px-2.5 py-1.5 text-[13px] text-fg-faint">
-                No models match — the typed id is used as-is.
-              </p>
-            ) : (
-              rows.map((row, index) => (
-                <button
-                  key={row.key}
-                  type="button"
-                  onMouseDown={(event) => {
-                    event.preventDefault();
-                    select(row.modelId);
-                  }}
-                  onMouseEnter={() => setActive(index)}
-                  className={`flex w-full cursor-pointer items-center gap-2 px-2.5 py-1.5 text-left transition-colors duration-150 ${
-                    index === activeIndex ? "bg-bg-inset" : ""
-                  }`}
-                >
-                  <span className="min-w-0 flex-1">
-                    <span className="block truncate text-[13px] text-fg">
-                      {row.title}
-                    </span>
-                    <span className="block truncate font-mono text-[11px] text-fg-faint">
-                      {row.detail}
-                    </span>
-                  </span>
-                  {row.free && (
-                    <span className="shrink-0 rounded border border-border-strong px-1 text-[10px] text-fg-muted">
-                      free
-                    </span>
-                  )}
-                </button>
-              ))
-            )}
-          </div>
-        )}
-      </div>
-      <span className="text-fg-faint">
-        Leave empty to always use the current best free model.
-      </span>
-    </div>
   );
 }
 

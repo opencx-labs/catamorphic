@@ -125,6 +125,15 @@ describe("agent tool access", () => {
       label: "settings agents",
     });
     await run(`$('[aria-label^="Edit "]').click(); return true;`);
+    // The pencil opens the configure-agent modal (ADR 0056); Tool access
+    // lives in its Capabilities tab.
+    await runWait(`return !!$('[data-testid="agent-tab-capabilities"]');`, {
+      timeoutMs: 30_000,
+      label: "configure-agent modal",
+    });
+    await run(
+      `$('[data-testid="agent-tab-capabilities"]').click(); return true;`,
+    );
     await runWait(
       `return !!field() && !!rowFor(${JSON.stringify(connectionId)}) && !!rowFor('catamorphic');`,
       {
@@ -174,11 +183,13 @@ describe("agent tool access", () => {
       },
     );
     // The e2e default agent is key-based with no key saved: Save wants one.
-    await run(`
-      const key = $('form input[type="password"], form input[placeholder*="sk-"]');
-      if (key) setReactValue(key, 'sk-e2e-not-real');
-      return true;
-    `);
+    // The key field lives in the modal's Auth tab.
+    await run(`$('[data-testid="agent-tab-auth"]').click(); return true;`);
+    await runWait(
+      `const key = $('form input[type="password"], form input[placeholder*="sk-"]');
+       if (!key) return false; setReactValue(key, 'sk-e2e-not-real'); return true;`,
+      { label: "auth tab key field" },
+    );
     await runWait(
       `const b = byText('form button[type="submit"]', 'Save'); return !!b && !b.disabled;`,
       { label: "save enabled" },
@@ -186,10 +197,16 @@ describe("agent tool access", () => {
     await run(
       `byText('form button[type="submit"]', 'Save').click(); return true;`,
     );
-    await runWait(`return !field();`, {
-      timeoutMs: 30_000,
-      label: "form closed after save",
-    });
+    // The modal stays mounted while closed (exit transition); closed =
+    // its container went inert.
+    await runWait(
+      `const tab = $('[data-testid="agent-tab-capabilities"]');
+       return !tab || !!tab.closest('[inert]');`,
+      {
+        timeoutMs: 30_000,
+        label: "modal closed after save",
+      },
+    );
     const agents = await app.eval<{
       agents: Array<{ toolPolicies: Record<string, unknown> }>;
     }>(`window.catamorphicDesktop.agentsList()`);

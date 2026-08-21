@@ -165,4 +165,20 @@ describe("definitionHash", () => {
       definitionHash(def, "p"),
     );
   });
+
+  it("covers mode (ADR 0056) — widening access re-earns consent; the narrowing knobs don't", () => {
+    expect(definitionHash({ ...def, mode: "full-access" })).not.toBe(
+      definitionHash(def),
+    );
+    // Absent mode hashes as the "edit" default, so adding it explicitly
+    // does not invalidate standing consent.
+    expect(definitionHash({ ...def, mode: "edit" })).toBe(definitionHash(def));
+    // Memory and skills stay outside: nothing personal is widened.
+    expect(definitionHash({ ...def, memory: false })).toBe(
+      definitionHash(def),
+    );
+    expect(definitionHash({ ...def, skills: ["publishing-to-github"] })).toBe(
+      definitionHash(def),
+    );
+  });
 });

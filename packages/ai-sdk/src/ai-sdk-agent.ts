@@ -646,8 +646,7 @@ function effortProviderOptions(effort: AgentEffort) {
             },
           },
     openai: {
-      reasoningEffort:
-        effort === "xhigh" || effort === "max" ? "high" : effort,
+      reasoningEffort: effort === "xhigh" || effort === "max" ? "high" : effort,
     },
   };
 }

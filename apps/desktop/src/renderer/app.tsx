@@ -45,6 +45,7 @@ import {
 } from "./components/chat-dock.js";
 import { ChatGlyph } from "./components/chat-icon.js";
 import { CommandPalette } from "./components/command-palette.js";
+import { ConfigureAgentModal } from "./components/configure-agent-modal.js";
 import { ConnectorsModal } from "./components/connectors-modal.js";
 import { DeleteProjectModal } from "./components/delete-project-modal.js";
 import {
@@ -1988,18 +1989,77 @@ export function App() {
   // Overlay palette opened straight into a picker (Cmd+P commands run
   // from anywhere; palette tabs enter pickers through their own rows).
   const [pickerRequest, setPickerRequest] = useState<{
-    kind: "default-agent" | "switch-agent" | "effort" | "model";
+    kind:
+      | "default-agent"
+      | "switch-agent"
+      | "configure-agent"
+      | "effort"
+      | "model";
     nonce: string;
   } | null>(null);
   const openPalettePicker = (
-    kind: "default-agent" | "switch-agent" | "effort" | "model",
+    kind:
+      | "default-agent"
+      | "switch-agent"
+      | "configure-agent"
+      | "effort"
+      | "model",
   ) => {
     setPaletteOpen(true);
     setPickerRequest({ kind, nonce: crypto.randomUUID() });
   };
 
+  // Layered default agent (ADR 0056): this user's per-project override,
+  // then the project's committed default (.catamorphic/project.json), then
+  // the profile default. `agentsData` is the refetch trigger — setting the
+  // committed default broadcasts an agents-changed like any other layer.
+  const [projectDefaultSlug, setProjectDefaultSlug] = useState<string | null>(
+    null,
+  );
+  // biome-ignore lint/correctness/useExhaustiveDependencies: agentsData is a deliberate refetch trigger — a defaults edit broadcasts agents-changed
+  useEffect(() => {
+    if (!projectId) {
+      setProjectDefaultSlug(null);
+      return;
+    }
+    let cancelled = false;
+    void desktopApi
+      .projectAgentsList(projectId)
+      .then((data) => {
+        if (!cancelled) setProjectDefaultSlug(data.projectDefaultSlug);
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, [projectId, agentsData]);
+  const projectOverrideAgentId = projectId
+    ? (agentsData?.projectDefaults?.[projectId] ?? null)
+    : null;
+  const effectiveDefaultAgentId =
+    projectOverrideAgentId ??
+    (projectId && projectDefaultSlug
+      ? `project:${projectId}:${projectDefaultSlug}`
+      : null) ??
+    agentsData?.defaultAgentId ??
+    null;
+
   const pickDefaultAgent = (agentId: string) => {
-    void desktopApi.agentsSetDefault(agentId);
+    // Inside a project the palette pick is this user's per-project
+    // override (ADR 0056); the global default changes in the agent modal
+    // or Settings — or here, when no project is open.
+    if (projectId) void desktopApi.agentsSetProjectDefault(projectId, agentId);
+    else void desktopApi.agentsSetDefault(agentId);
+  };
+
+  // The configure-agent modal (ADR 0056): THE surface for one agent's
+  // configuration, reached from the palette picker and Settings. The id
+  // outlives `open` so the exit transition plays over the same content.
+  const [configureAgentId, setConfigureAgentId] = useState<string | null>(null);
+  const [configureAgentOpen, setConfigureAgentOpen] = useState(false);
+  const openConfigureAgent = (agentId: string) => {
+    setConfigureAgentId(agentId);
+    setConfigureAgentOpen(true);
   };
 
   const pickSessionAgent = (agentId: string) => {
@@ -2532,6 +2592,7 @@ export function App() {
     "setup-agent": () => setWizardModalOpen(true),
     "default-agent": () => openPalettePicker("default-agent"),
     "switch-agent": () => openPalettePicker("switch-agent"),
+    "configure-agent": () => openPalettePicker("configure-agent"),
     "change-effort": () => openPalettePicker("effort"),
     "switch-model": () => openPalettePicker("model"),
     "manage-connectors": () => setConnectorsModalOpen(true),
@@ -3537,7 +3598,7 @@ export function App() {
         onRunSkill: runSkill,
         actionHandlers,
         agents: agentsData?.agents ?? [],
-        defaultAgentId: agentsData?.defaultAgentId ?? null,
+        defaultAgentId: effectiveDefaultAgentId,
         focusedChat: focusedChat
           ? {
               agentId: focusedSession?.agentId ?? focusedChat.agentId ?? null,
@@ -3547,6 +3608,13 @@ export function App() {
         onPickDefaultAgent: pickDefaultAgent,
         onPickSessionAgent: pickSessionAgent,
         onPickProjectAgent: pickProjectAgent,
+        onConfigureAgent: openConfigureAgent,
+        defaultAgentOverridden: projectOverrideAgentId !== null,
+        onClearDefaultOverride: () => {
+          if (projectId) {
+            void desktopApi.agentsSetProjectDefault(projectId, null);
+          }
+        },
         onPickEffort: pickEffort,
         onPickModel: pickModel,
         onHighlightTarget: setPaletteTarget,
@@ -3795,9 +3863,9 @@ export function App() {
                       />
                     ) : tab.kind === "settings" ? (
                       <SettingsScreen
-                        projectId={projectId}
                         onClose={() => closeTab(tabKey(tab))}
                         onAddAgent={() => setWizardModalOpen(true)}
+                        onConfigureAgent={openConfigureAgent}
                         onManageConnectors={() => setConnectorsModalOpen(true)}
                       />
                     ) : tab.kind === "palette" && paletteProps ? (
@@ -4066,7 +4134,7 @@ export function App() {
                   workspace.activeTabKey !== undefined &&
                   workspace.activeTabKey !== chatTabKey(entry.localId)
                 }
-                defaultAgentId={agentsData?.defaultAgentId ?? undefined}
+                defaultAgentId={effectiveDefaultAgentId ?? undefined}
                 paletteTargeted={entry.localId === targetedChat?.localId}
                 surfaces={surfacesFor(entry)}
                 onOpenSurface={openSurface}
@@ -4236,6 +4304,15 @@ export function App() {
         open={wizardModalOpen}
         onClose={() => setWizardModalOpen(false)}
         onDone={() => setWizardModalOpen(false)}
+      />
+
+      {/* Configure-agent modal (ADR 0056): palette picker + Settings both
+          land here; project agents get the read-only definition view. */}
+      <ConfigureAgentModal
+        open={configureAgentOpen}
+        agentId={configureAgentId}
+        projectId={projectId}
+        onClose={() => setConfigureAgentOpen(false)}
       />
 
       {/* Connectors manager: reachable from the palette and Settings. */}

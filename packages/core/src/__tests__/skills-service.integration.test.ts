@@ -17,6 +17,9 @@ const identity: Identity = {
   externalUserId: "alice",
 };
 
+/** The user tier's backing map (ADR 0056) — mutated by tests, read live. */
+const userSkillFiles: Record<string, string> = {};
+
 const HOST_SKILLS = {
   "publishing-to-github/SKILL.md": [
     "---",
@@ -61,6 +64,8 @@ describeIf("SkillsService host tier (ADR 0049)", () => {
       // writes, so assertions stay independent of the framework seeds.
       projectSeeds: () => ({}),
       hostSkills: () => ({ ...HOST_SKILLS }),
+      // The user tier (ADR 0056) is a live getter — tests mutate the map.
+      userSkills: () => ({ ...userSkillFiles }),
     });
 
     const project = await core.projects.create(identity, {
@@ -122,5 +127,52 @@ describeIf("SkillsService host tier (ADR 0049)", () => {
     expect(shadowed?.content).toContain("project shadow body");
 
     expect(await core.skills.read(identity, projectId, "missing")).toBeNull();
+  });
+
+  it("user tier (ADR 0056): live-read, between project and host, absent from shared", async () => {
+    userSkillFiles["expenses/SKILL.md"] =
+      "---\nname: expenses\ndescription: Personal expense filing.\n---\n\nuser body";
+    // A personal skill shadowing a host name wins; a project name wins
+    // over the personal one.
+    userSkillFiles["publishing-to-github/SKILL.md"] =
+      "---\nname: publishing-to-github\ndescription: My USER variant.\n---\n\nuser github body";
+    userSkillFiles["shadowed/SKILL.md"] =
+      "---\nname: shadowed\ndescription: The USER version.\n---\n\nuser shadow body";
+    try {
+      const skills = await core.skills.list(identity, projectId);
+      expect(skills.map((skill) => `${skill.name}:${skill.source}`)).toEqual([
+        "expenses:user",
+        "local-notes:project",
+        "publishing-to-github:user",
+        "shadowed:project",
+      ]);
+
+      const user = await core.skills.read(identity, projectId, "expenses");
+      expect(user?.skill.source).toBe("user");
+      expect(user?.content).toContain("user body");
+      const github = await core.skills.read(
+        identity,
+        projectId,
+        "publishing-to-github",
+      );
+      expect(github?.skill.source).toBe("user");
+
+      // The shared surface (project MCP, ADR 0055) never lists or reads
+      // the user tier — personal by definition.
+      const shared = await core.skills.listShared(identity, projectId);
+      expect(
+        shared.some((skill) => (skill.source as string) === "user"),
+      ).toBe(false);
+      const sharedRead = await core.skills.readShared(
+        identity,
+        projectId,
+        "expenses",
+      );
+      expect(sharedRead).toBeNull();
+    } finally {
+      for (const key of Object.keys(userSkillFiles)) {
+        delete userSkillFiles[key];
+      }
+    }
   });
 });

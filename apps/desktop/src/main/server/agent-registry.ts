@@ -25,19 +25,16 @@ import type {
 } from "@catamorphic/sandbox";
 import { narrowingLayer, PROJECT_TOOLS_SERVER_KEY } from "@catamorphic/sandbox";
 import type { WorkspaceBridge } from "../agent-bridge.js";
-import type {
-  AgentConfig,
-  AgentConnectionsSetting,
-} from "../agents-store.js";
+import type { AgentConfig, AgentConnectionsSetting } from "../agents-store.js";
 import {
   connectionServerKeys,
   toAgentMcpServer,
 } from "../connections-store.js";
-import { projectDefaultAgentSlug } from "../project-manifest.js";
 import type { ConnectorsService } from "../connectors.js";
 import { bestFreeModelId, fetchOpenRouterModels } from "../openrouter.js";
 import type { ProfileConfigManager } from "../profile-config.js";
 import type { ProfilesStore } from "../profiles.js";
+import { projectDefaultAgentSlug } from "../project-manifest.js";
 import { FriendlyAgentErrors } from "./agent-errors.js";
 import { buildAiSdkAgent } from "./coding-agent.js";
 import { DesktopConfigAgent } from "./desktop-config-agent.js";
@@ -870,8 +867,7 @@ export class DesktopAgentRegistry implements CodingAgentRegistry {
                 effort: config.effort,
                 // The normalized mode (ADR 0056) on the CLI's own knob;
                 // read-only agents also lose the mutating workspace tools.
-                permissionMode:
-                  CLAUDE_PERMISSION_MODES[config.mode ?? "edit"],
+                permissionMode: CLAUDE_PERMISSION_MODES[config.mode ?? "edit"],
                 ...(config.memory === false ? { memory: false } : {}),
                 ...(Object.keys(env).length > 0 ? { env } : {}),
                 extraTools: this.workspaceTools(config),
