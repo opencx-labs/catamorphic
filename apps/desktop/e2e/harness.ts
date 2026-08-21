@@ -1,5 +1,6 @@
 import { type ChildProcess, spawn } from "node:child_process";
 import fs from "node:fs";
+import net from "node:net";
 import os from "node:os";
 import path from "node:path";
 
@@ -14,6 +15,24 @@ const DESKTOP_DIR = path.resolve(import.meta.dirname, "..");
 // Unique per-launch port: a leaked instance from an aborted run must not
 // answer the next run's CDP handshake.
 const cdpPort = () => 9300 + Math.floor(Math.random() * 400);
+
+/** A random CDP port that is actually free — a dev instance of the app
+ * (or anything else) may be squatting on one of the candidates. */
+async function freeCdpPort(): Promise<number> {
+  for (let attempt = 0; attempt < 20; attempt += 1) {
+    const port = await freeCdpPort();
+    const free = await new Promise<boolean>((resolve) => {
+      const probe = net
+        .connect({ host: "127.0.0.1", port }, () => {
+          probe.destroy();
+          resolve(false);
+        })
+        .on("error", () => resolve(true));
+    });
+    if (free) return port;
+  }
+  return cdpPort();
+}
 
 export interface FrameHandle {
   /** Evaluate JS inside the frame; resolves the JSON-serialized result. */

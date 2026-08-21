@@ -2695,3 +2695,44 @@ Patterned on what best-in-class palettes converged on (Chrome omnibox
   which is now the whole loop. t3's provider-probe pattern (know you're
   unauthenticated BEFORE the send) is recorded in TODO.md as the next
   step.
+
+### 2026-08-21 — The dock lurks; auth is probed; `open` comes home
+
+- **Auth is probed before it fails (t3-code-inspired).** The dock checks
+  the active agent's credentials while it's the front surface — on agent
+  change, window focus, and OS wake (powerMonitor resume broadcast) — via
+  `agent-auth-health`: keychain/file expiry for Claude sessions, key
+  presence for the rest. Only the KNOWABLY dead states report (no
+  credentials; refresh token past expiry) — an expired access token with
+  a live refresh is the SDK's business. A warning strip above the
+  composer says "X's session has expired — Re-login" with the one-click
+  flow that auto-retries; dismissible, re-armed when health changes.
+  The Re-login affordance now covers `local` CLI agents too (the common
+  case), not just per-agent account homes.
+- **The floating chat lurks while the agent works.** With a tab visible
+  behind and the turn running, the dock shrinks VERTICALLY (h-44, the
+  same 250ms height tween as its other morphs) to header + the tail of
+  the timeline — the latest preambles, courtesy of stick-to-bottom —
+  + composer; the surfaces rail yields. Hovering or focusing the dock
+  expands it; the pointer leaving re-shrinks unless focus is inside;
+  focusing or clicking outside (focusin + pointerdown capture, since
+  webviews swallow focus) shrinks; agent questions and the end of the
+  turn expand it for good. The state machine is deliberately attention-
+  shaped: focus beats hover; a freshly-sent message keeps the dock
+  expanded until the user moves their attention away.
+- **`open <url>` in an agent terminal opens IN the app.** Agent
+  terminals' zsh integration now also fronts a shim bin on PATH (after
+  the user's profiles ran, so path_helper can't demote it) whose `open`
+  posts pure-URL invocations to a token-guarded loopback hook in main;
+  the hook drives the same `openTarget` path as the open_surface tool —
+  browser tab in front, chat stepping down to its floating dock, chip on
+  the rail. Anything that isn't purely http(s) URLs falls through to
+  /usr/bin/open untouched. User terminals are untouched, same as the
+  OSC 133 rule.
+- Also: the dock's roster refetches on agents-changed broadcasts (a new
+  default agent used to be invisible to already-open docks), and the e2e
+  harness probes its random CDP port for freeness before spawning (a dev
+  instance squatting on one of the 400 candidates made launches flaky).
+- Attach button ≡ paste: verified (and now e2e-pinned) that the
+  paperclip inserts files at the caret through the same
+  addFiles→insertPills machinery as pasting — one code path, one feel.
