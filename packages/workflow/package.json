@@ -18,7 +18,7 @@
   ],
   "scripts": {
     "build": "tsup && tsc --project tsconfig.json --noEmit false --emitDeclarationOnly",
-    "dev": "tsup --watch",
+    "dev": "tsup --watch --no-clean",
     "test": "vitest run --config ../../vitest.config.ts",
     "typecheck": "tsgo --project ./tsconfig.json && tsgo --project ./tsconfig.type-tests.json"
   },
