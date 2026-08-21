@@ -725,6 +725,12 @@ export interface CatamorphicDesktopApi {
   ) => Promise<{ started: boolean; command?: string; error?: string }>;
   agentLoginStatus: (id: string) => Promise<boolean>;
   agentAuthHealth: (id: string) => Promise<"ok" | "expired" | "missing">;
+  agentCommands: (
+    projectId: string,
+    agentId: string,
+  ) => Promise<
+    Array<{ name: string; description: string; argumentHint: string }>
+  >;
   onAgentAuthMaybeChanged: (listener: () => void) => () => void;
   onAgentsChanged: (listener: (data: AgentsData) => void) => () => void;
   onAgentLoginFinished: (

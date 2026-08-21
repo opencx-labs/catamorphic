@@ -76,6 +76,13 @@ const api = {
     ipcRenderer.invoke("catamorphic:agent-login", id),
   agentLoginStatus: (id: string): Promise<boolean> =>
     ipcRenderer.invoke("catamorphic:agent-login-status", id),
+  /** The harness's own slash commands (Claude Code), cached in main. */
+  agentCommands: (
+    projectId: string,
+    agentId: string,
+  ): Promise<
+    Array<{ name: string; description: string; argumentHint: string }>
+  > => ipcRenderer.invoke("catamorphic:agent-commands", projectId, agentId),
   /** Proactive auth probe: what is knowably wrong before a send. */
   agentAuthHealth: (id: string): Promise<"ok" | "expired" | "missing"> =>
     ipcRenderer.invoke("catamorphic:agent-auth-health", id),

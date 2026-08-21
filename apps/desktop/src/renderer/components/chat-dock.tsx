@@ -27,6 +27,7 @@ import {
   type ClipboardEvent,
   type FormEvent,
   type KeyboardEvent,
+  type ReactNode,
   useCallback,
   useEffect,
   useMemo,
@@ -43,6 +44,7 @@ import {
   readEditorSelection,
   selectionFromClipboard,
 } from "../lib/editor-selection";
+import { useListMotion } from "../lib/list-motion";
 import {
   type SkillInfo,
   skillInvocation,
@@ -180,6 +182,18 @@ const MAX_TOTAL_MEDIA_BYTES = 48 * 1024 * 1024;
 
 /** Server-side attachment cap, mirrored so the composer can refuse early. */
 const MAX_ATTACHMENTS = 32;
+
+/** A "/" menu row: a project/host skill, or the harness's own command. */
+type SlashEntry = {
+  name: string;
+  description: string;
+} & (
+  | { kind: "skill"; skill: SkillInfo }
+  | {
+      kind: "command";
+      command: { name: string; description: string; argumentHint: string };
+    }
+);
 
 /** A workspace tab dropped on the chat becomes a tab pill. */
 function tabPillFromDrag(
@@ -461,6 +475,132 @@ const emptyStateFor = (localId: string): string => {
  * Chips carrying `info` (subagents, watchers) open their detail popover
  * instead — they have no workspace tab behind them.
  */
+/**
+ * An anchored popover that enters with pop-in and leaves with pop-out:
+ * stays mounted through the exit (content snapshotted by the caller via
+ * refs) and unmounts on animationend. `open` drives the direction.
+ */
+function PopPanel({
+  open,
+  className,
+  testId,
+  children,
+}: {
+  open: boolean;
+  className: string;
+  testId?: string;
+  children: ReactNode;
+}) {
+  const [mounted, setMounted] = useState(open);
+  useEffect(() => {
+    if (open) setMounted(true);
+  }, [open]);
+  if (!mounted) return null;
+  return (
+    <div
+      data-testid={testId}
+      onAnimationEnd={(event) => {
+        if (event.animationName === "pop-out" && !open) setMounted(false);
+      }}
+      className={`${className} ${open ? "animate-pop-in" : "animate-pop-out"}`}
+    >
+      {children}
+    </div>
+  );
+}
+
+/**
+ * The composer's "/" menu: project + host skills and the harness's own
+ * slash commands in one list. Pops in/out with the panel vocabulary;
+ * rows FLIP/fade as the filter narrows (the palette's list motion).
+ * Content snapshots through the exit so the panel never blanks mid-pop.
+ */
+function SlashMenu({
+  open,
+  matches,
+  selected,
+  onHover,
+  onCommit,
+}: {
+  open: boolean;
+  matches: SlashEntry[];
+  selected: number;
+  onHover: (index: number) => void;
+  onCommit: (entry: SlashEntry) => void;
+}) {
+  const lastMatchesRef = useRef<SlashEntry[]>([]);
+  if (open && matches.length > 0) lastMatchesRef.current = matches;
+  const shown = open && matches.length > 0 ? matches : lastMatchesRef.current;
+  const sizerRef = useRef<HTMLDivElement>(null);
+  const { reset } = useListMotion(
+    sizerRef,
+    shown.map((entry) => entry.name).join("\u0000"),
+    { keepTransitions: "background-color, color" },
+  );
+  useEffect(() => {
+    if (!open) reset();
+  }, [open, reset]);
+  if (shown.length === 0) return null;
+  return (
+    <PopPanel
+      open={open}
+      className="absolute bottom-full left-0 z-20 mb-1.5 max-h-64 w-full overflow-y-auto rounded-lg border border-border bg-bg-raised/95 p-1.5 shadow-2xl backdrop-blur-xl"
+      testId="slash-menu"
+    >
+      <div ref={sizerRef} role="listbox" aria-label="Commands">
+        {shown.map((entry, index) => (
+          <div
+            key={entry.name}
+            data-item-id={entry.name}
+            role="option"
+            tabIndex={-1}
+            aria-selected={index === selected}
+            data-skill-name={entry.name}
+            onMouseDown={(event) => {
+              event.preventDefault();
+              onCommit(entry);
+            }}
+            onMouseEnter={() => onHover(index)}
+            className={`flex cursor-pointer items-baseline gap-2 rounded-md px-2 py-1.5 text-sm ${
+              index === selected ? "bg-bg-overlay text-fg" : "text-fg-muted"
+            }`}
+          >
+            <span className="shrink-0 font-medium">
+              {entry.kind === "skill" ? entry.skill.title : `/${entry.name}`}
+            </span>
+            {entry.kind === "skill" ? (
+              <span className="shrink-0 font-mono text-[11px] text-fg-faint">
+                /{entry.name}
+              </span>
+            ) : (
+              entry.command.argumentHint && (
+                <span className="shrink-0 font-mono text-[11px] text-fg-faint">
+                  {entry.command.argumentHint}
+                </span>
+              )
+            )}
+            {entry.description && (
+              <span className="min-w-0 truncate text-xs text-fg-faint">
+                {entry.description}
+              </span>
+            )}
+            {entry.kind === "skill" && entry.skill.source === "host" && (
+              <span className="ml-auto shrink-0 rounded border border-border px-1 text-[10px] text-fg-faint">
+                App
+              </span>
+            )}
+            {entry.kind === "command" && (
+              <span className="ml-auto shrink-0 rounded border border-border px-1 text-[10px] text-fg-faint">
+                Claude Code
+              </span>
+            )}
+          </div>
+        ))}
+      </div>
+    </PopPanel>
+  );
+}
+
 function SurfaceChip({
   surface,
   onOpenSurface,
@@ -475,7 +615,7 @@ function SurfaceChip({
   const Icon = SURFACE_ICONS[surface.kind];
   return (
     <span
-      className="group/chip flex shrink-0 items-center overflow-hidden rounded-md border border-border bg-bg-inset text-[11px] text-fg-muted"
+      className="group/chip relative flex shrink-0 items-center overflow-hidden rounded-md border border-border bg-bg-inset text-[11px] text-fg-muted"
       data-testid="surface-chip"
       data-kind={surface.kind}
       data-active={surface.active || undefined}
@@ -493,7 +633,7 @@ function SurfaceChip({
               ? onToggleInfo(surface.key)
               : onOpenSurface(surface.key, event.metaKey ? "split" : "tab")
         }
-        className="flex min-w-0 cursor-pointer items-center gap-1.5 py-1 pl-2 pr-1.5 transition-colors duration-100 hover:text-fg"
+        className="flex min-w-0 cursor-pointer items-center gap-1.5 py-1 pl-2 pr-2 transition-colors duration-100 hover:text-fg"
       >
         <span className="relative grid size-3 shrink-0 place-items-center">
           {surface.kind === "browser" && surface.faviconUrl ? (
@@ -525,18 +665,199 @@ function SurfaceChip({
         </span>
         <span className="max-w-36 truncate">{surface.label}</span>
       </button>
+      {/* The split affordance only exists under the pointer: an overlay
+          on the chip's right end that fades over the label's tail (its
+          left edge is a gradient into the chip background) instead of
+          permanently reserving width on every chip. */}
       {!surface.info && (
-        <ShortcutHint label="Open to the right" shortcut="⌘-click">
-          <button
-            type="button"
-            onClick={() => onOpenSurface(surface.key, "split")}
-            className="grid size-6 shrink-0 cursor-pointer place-items-center text-fg-faint opacity-60 transition-[color,opacity] duration-100 hover:text-fg group-hover/chip:opacity-100"
-            aria-label={`Open ${surface.label} to the right`}
-          >
-            <Columns2 className="size-3" />
-          </button>
-        </ShortcutHint>
+        <span className="pointer-events-none absolute inset-y-0 right-0 opacity-0 transition-opacity duration-100 group-hover/chip:pointer-events-auto group-hover/chip:opacity-100">
+          <ShortcutHint label="Open to the right" shortcut="⌘-click">
+            <button
+              type="button"
+              onClick={() => onOpenSurface(surface.key, "split")}
+              className="grid h-full w-8 cursor-pointer place-items-center justify-items-end bg-gradient-to-l from-bg-inset from-55% to-transparent pr-1.5 text-fg-faint transition-colors duration-100 hover:text-fg"
+              aria-label={`Open ${surface.label} to the right`}
+            >
+              <Columns2 className="size-3" />
+            </button>
+          </ShortcutHint>
+        </span>
       )}
+    </span>
+  );
+}
+
+/** The collapsed "4 terminals" chip a crowded kind folds into. */
+function GroupChip({
+  kind,
+  group,
+  open,
+  onToggle,
+}: {
+  kind: ChatSurface["kind"];
+  group: ChatSurface[];
+  open: boolean;
+  onToggle: () => void;
+}) {
+  const Icon = SURFACE_ICONS[kind];
+  const anyActive = group.some((surface) => surface.active);
+  return (
+    <button
+      type="button"
+      onClick={onToggle}
+      className={`flex shrink-0 cursor-pointer items-center gap-1.5 rounded-md border py-1 pl-2 pr-1.5 text-[11px] transition-colors duration-100 ${
+        open
+          ? "border-border-strong bg-bg-overlay text-fg"
+          : "border-border bg-bg-inset text-fg-muted hover:text-fg"
+      }`}
+      aria-expanded={open}
+      aria-label={`${group.length} ${SURFACE_GROUP_LABELS[kind]}`}
+      data-attention={group.some((surface) => surface.attention) || undefined}
+    >
+      <span className="relative grid size-3 shrink-0 place-items-center">
+        <Icon
+          className={`col-start-1 row-start-1 size-3 transition-opacity duration-200 ${anyActive ? "opacity-0" : "opacity-100"}`}
+        />
+        <LoaderCircle
+          className={`col-start-1 row-start-1 size-3 animate-spin text-accent transition-opacity duration-200 ${anyActive ? "opacity-100" : "opacity-0"}`}
+        />
+        {/* Attention aggregates onto the group chip, like the spinner. */}
+        {group.some((surface) => surface.attention) && (
+          <span className="absolute -right-0.5 -top-0.5 size-1.5 animate-pulse rounded-full bg-accent" />
+        )}
+      </span>
+      {group.length} {SURFACE_GROUP_LABELS[kind]}
+      <ChevronUp
+        className={`size-3 text-fg-faint transition-transform duration-150 ${
+          open ? "rotate-180" : ""
+        }`}
+      />
+    </button>
+  );
+}
+
+/** What one kind renders on the rail: chips, or the collapsed group. */
+type RailItem =
+  | { id: string; type: "chip"; surface: ChatSurface }
+  | { id: string; type: "group"; group: ChatSurface[] };
+
+/**
+ * One kind's strip on the rail, with motion: chips (or the group chip
+ * they fold into past the threshold) enter with pill-in and leave with
+ * pill-out — the collapse reads as chips folding into the group, not a
+ * teleport. Removed items linger until their exit animation lands.
+ */
+function KindStrip({
+  kind,
+  group,
+  animateEnter,
+  openGroup,
+  onToggleGroup,
+  onOpenSurface,
+  onOpenMcpApp,
+  onToggleInfo,
+}: {
+  kind: ChatSurface["kind"];
+  group: ChatSurface[];
+  /** False on the rail's first paint — pre-existing chips don't animate. */
+  animateEnter: boolean;
+  openGroup: ChatSurface["kind"] | null;
+  onToggleGroup: (kind: ChatSurface["kind"]) => void;
+  onOpenSurface: (key: string, mode: "tab" | "split") => void;
+  onOpenMcpApp?: (view: McpAppRef, mode: "tab" | "split") => void;
+  onToggleInfo: (key: string) => void;
+}) {
+  const collapsed = group.length > SURFACE_GROUP_THRESHOLD;
+  const live: RailItem[] = collapsed
+    ? [{ id: `group:${kind}`, type: "group", group }]
+    : group.map((surface) => ({
+        id: `chip:${surface.key}`,
+        type: "chip",
+        surface,
+      }));
+  const liveIdsKey = live.map((item) => item.id).join("\u0000");
+  const [exiting, setExiting] = useState<RailItem[]>([]);
+  const prevIdsRef = useRef<Set<string> | null>(null);
+  const prevItemsRef = useRef<RailItem[]>([]);
+  // Entered ids keep their pill-in class for the element's lifetime —
+  // the animation runs once on insertion, and a mid-flight re-render
+  // must not strip the class and snap the tween.
+  const enteredRef = useRef(new Set<string>());
+  for (const item of live) {
+    const prev = prevIdsRef.current;
+    if (prev === null) {
+      if (animateEnter) enteredRef.current.add(item.id);
+    } else if (!prev.has(item.id)) {
+      enteredRef.current.add(item.id);
+    }
+  }
+  // biome-ignore lint/correctness/useExhaustiveDependencies: diffing is keyed on the id list; item objects are re-derived each render
+  useEffect(() => {
+    const previous = prevItemsRef.current;
+    const liveIds = new Set(live.map((item) => item.id));
+    prevIdsRef.current = liveIds;
+    prevItemsRef.current = live;
+    for (const id of enteredRef.current) {
+      if (!liveIds.has(id)) enteredRef.current.delete(id);
+    }
+    const removed = previous.filter((item) => !liveIds.has(item.id));
+    setExiting((current) => {
+      const kept = current.filter(
+        (item) =>
+          !liveIds.has(item.id) && !removed.some((gone) => gone.id === item.id),
+      );
+      const next = [...kept, ...removed];
+      return next.length === current.length &&
+        next.every((item, index) => item === current[index])
+        ? current
+        : next;
+    });
+  }, [liveIdsKey]);
+
+  const renderItem = (item: RailItem, exitingItem: boolean) => (
+    <span
+      key={item.id}
+      className={`flex shrink-0 items-center overflow-hidden ${
+        exitingItem
+          ? "animate-pill-out"
+          : enteredRef.current.has(item.id)
+            ? "animate-pill-in"
+            : ""
+      }`}
+      onAnimationEnd={
+        exitingItem
+          ? (event) => {
+              if (event.animationName === "pill-out") {
+                setExiting((current) =>
+                  current.filter((gone) => gone.id !== item.id),
+                );
+              }
+            }
+          : undefined
+      }
+    >
+      {item.type === "group" ? (
+        <GroupChip
+          kind={kind}
+          group={item.group}
+          open={openGroup === kind}
+          onToggle={() => onToggleGroup(kind)}
+        />
+      ) : (
+        <SurfaceChip
+          surface={item.surface}
+          onOpenSurface={onOpenSurface}
+          onOpenMcpApp={onOpenMcpApp}
+          onToggleInfo={onToggleInfo}
+        />
+      )}
+    </span>
+  );
+
+  return (
+    <span className="flex shrink-0 items-center gap-1.5">
+      {exiting.map((item) => renderItem(item, true))}
+      {live.map((item) => renderItem(item, false))}
     </span>
   );
 }
@@ -545,7 +866,8 @@ function SurfaceChip({
  * The surfaces rail. Kinds with many surfaces collapse into one group
  * chip ("4 pages") whose popover expands upward; kinds with few show
  * individual chips. Active surfaces (agent working, command running)
- * carry a spinner that aggregates onto their group chip.
+ * carry a spinner that aggregates onto their group chip. Collapse and
+ * expansion animate through KindStrip; the popovers pop in and out.
  */
 function SurfacesRail({
   surfaces,
@@ -593,29 +915,44 @@ function SurfacesRail({
   const openInfoSurface = openInfoKey
     ? surfaces.find((surface) => surface.key === openInfoKey)
     : undefined;
+  // Snapshots keep the popovers rendering through their exit animation.
+  const lastInfoRef = useRef<ChatSurface | null>(null);
+  if (openInfoSurface?.info) lastInfoRef.current = openInfoSurface;
+  const infoShown = openInfoSurface?.info
+    ? openInfoSurface
+    : lastInfoRef.current;
+  const groupSurfaces = openGroup ? byKind.get(openGroup) : undefined;
+  const lastGroupRef = useRef<ChatSurface[] | null>(null);
+  if (groupSurfaces) lastGroupRef.current = groupSurfaces;
+  const groupShown = groupSurfaces ?? lastGroupRef.current;
+  const firstPaintRef = useRef(true);
+  useEffect(() => {
+    firstPaintRef.current = false;
+  }, []);
 
   return (
     <div ref={railRef} className="relative mx-3">
       {/* Detail popover for chips that ARE their surface (subagents,
           watchers): the chip's activity feed, expanded upward. */}
-      {openInfoSurface?.info && (
-        <div
+      {infoShown?.info && (
+        <PopPanel
+          open={Boolean(openInfoSurface?.info)}
           className="absolute bottom-full left-0 z-20 mb-1.5 max-h-64 w-80 overflow-y-auto rounded-lg border border-border bg-bg-raised/95 p-2 shadow-2xl backdrop-blur-xl"
-          data-testid="surface-info-popover"
+          testId="surface-info-popover"
         >
           <div className="flex items-center gap-1.5 px-1 pb-1.5 text-[11px] font-semibold text-fg">
             {(() => {
-              const Icon = SURFACE_ICONS[openInfoSurface.kind];
-              return openInfoSurface.active ? (
+              const Icon = SURFACE_ICONS[infoShown.kind];
+              return infoShown.active ? (
                 <LoaderCircle className="size-3 animate-spin text-accent" />
               ) : (
                 <Icon className="size-3" />
               );
             })()}
-            <span className="truncate">{openInfoSurface.label}</span>
+            <span className="truncate">{infoShown.label}</span>
           </div>
           <div className="flex flex-col gap-0.5">
-            {openInfoSurface.info.map((line, index) => (
+            {infoShown.info.map((line, index) => (
               <div
                 // biome-ignore lint/suspicious/noArrayIndexKey: static activity lines
                 key={index}
@@ -625,11 +962,14 @@ function SurfacesRail({
               </div>
             ))}
           </div>
-        </div>
+        </PopPanel>
       )}
-      {openGroup && byKind.get(openGroup) && (
-        <div className="absolute bottom-full left-0 z-20 mb-1.5 max-h-64 w-72 overflow-y-auto rounded-lg border border-border bg-bg-raised/95 p-1 shadow-2xl backdrop-blur-xl">
-          {(byKind.get(openGroup) ?? []).map((surface) => (
+      {groupShown && (
+        <PopPanel
+          open={Boolean(groupSurfaces)}
+          className="absolute bottom-full left-0 z-20 mb-1.5 max-h-64 w-72 overflow-y-auto rounded-lg border border-border bg-bg-raised/95 p-1 shadow-2xl backdrop-blur-xl"
+        >
+          {groupShown.map((surface) => (
             <div
               key={surface.key}
               className="group/chip flex items-center rounded-md text-[12px] text-fg-muted transition-colors duration-100 hover:bg-bg-overlay"
@@ -697,68 +1037,24 @@ function SurfacesRail({
               )}
             </div>
           ))}
-        </div>
+        </PopPanel>
       )}
       <div className="flex items-center gap-1.5 overflow-x-auto pt-1">
-        {[...byKind.entries()].map(([kind, group]) =>
-          group.length > SURFACE_GROUP_THRESHOLD ? (
-            <button
-              key={kind}
-              type="button"
-              onClick={() =>
-                setOpenGroup((current) => (current === kind ? null : kind))
-              }
-              className={`flex shrink-0 cursor-pointer items-center gap-1.5 rounded-md border py-1 pl-2 pr-1.5 text-[11px] transition-colors duration-100 ${
-                openGroup === kind
-                  ? "border-border-strong bg-bg-overlay text-fg"
-                  : "border-border bg-bg-inset text-fg-muted hover:text-fg"
-              }`}
-              aria-expanded={openGroup === kind}
-              aria-label={`${group.length} ${SURFACE_GROUP_LABELS[kind]}`}
-              data-attention={
-                group.some((surface) => surface.attention) || undefined
-              }
-            >
-              <span className="relative grid size-3 shrink-0 place-items-center">
-                {(() => {
-                  const Icon = SURFACE_ICONS[kind];
-                  const anyActive = group.some((surface) => surface.active);
-                  return (
-                    <>
-                      <Icon
-                        className={`col-start-1 row-start-1 size-3 transition-opacity duration-200 ${anyActive ? "opacity-0" : "opacity-100"}`}
-                      />
-                      <LoaderCircle
-                        className={`col-start-1 row-start-1 size-3 animate-spin text-accent transition-opacity duration-200 ${anyActive ? "opacity-100" : "opacity-0"}`}
-                      />
-                    </>
-                  );
-                })()}
-                {/* Attention aggregates onto the group chip, like the
-                    spinner does. */}
-                {group.some((surface) => surface.attention) && (
-                  <span className="absolute -right-0.5 -top-0.5 size-1.5 animate-pulse rounded-full bg-accent" />
-                )}
-              </span>
-              {group.length} {SURFACE_GROUP_LABELS[kind]}
-              <ChevronUp
-                className={`size-3 text-fg-faint transition-transform duration-150 ${
-                  openGroup === kind ? "rotate-180" : ""
-                }`}
-              />
-            </button>
-          ) : (
-            group.map((surface) => (
-              <SurfaceChip
-                key={surface.key}
-                surface={surface}
-                onOpenSurface={onOpenSurface}
-                onOpenMcpApp={onOpenMcpApp}
-                onToggleInfo={toggleInfo}
-              />
-            ))
-          ),
-        )}
+        {[...byKind.entries()].map(([kind, group]) => (
+          <KindStrip
+            key={kind}
+            kind={kind}
+            group={group}
+            animateEnter={!firstPaintRef.current}
+            openGroup={openGroup}
+            onToggleGroup={(toggled) =>
+              setOpenGroup((current) => (current === toggled ? null : toggled))
+            }
+            onOpenSurface={onOpenSurface}
+            onOpenMcpApp={onOpenMcpApp}
+            onToggleInfo={toggleInfo}
+          />
+        ))}
       </div>
     </div>
   );
@@ -959,21 +1255,48 @@ export function ChatDock({
   // closes it, and submit still resolves `/name args` to the invocation.
   const slashing = draft.startsWith("/");
   const skills = useProjectSkills(projectId, slashing);
+  // The harness's OWN slash commands (Claude Code: built-ins,
+  // .claude/commands, plugin commands) merge in under the skills — the
+  // menu shows what the agent would actually accept, not just skills.
+  // Fetched (cached in main) when "/" starts; the effect lives below the
+  // roster, which knows the active agent.
+  const [harnessCommands, setHarnessCommands] = useState<
+    Array<{ name: string; description: string; argumentHint: string }>
+  >([]);
   const slashToken = /^\/([^\s/]*)$/.exec(draft)?.[1];
   const [slashDismissed, setSlashDismissed] = useState(false);
   const [slashIndex, setSlashIndex] = useState(0);
-  const slashMatches = useMemo(() => {
+  const slashMatches = useMemo<SlashEntry[]>(() => {
     if (slashToken === undefined) return [];
-    if (!slashToken) return skills;
-    return skills
-      .map((skill) => ({
+    const skillNames = new Set(skills.map((skill) => skill.name));
+    const all: SlashEntry[] = [
+      ...skills.map((skill) => ({
+        kind: "skill" as const,
+        name: skill.name,
+        description: skill.description,
         skill,
-        score: commandScore(skill.name, slashToken, [skill.description]),
+      })),
+      // A skill can also surface as a CLI command (the host-skills
+      // plugin); the skill row wins the name.
+      ...harnessCommands
+        .filter((command) => !skillNames.has(command.name))
+        .map((command) => ({
+          kind: "command" as const,
+          name: command.name,
+          description: command.description,
+          command,
+        })),
+    ];
+    if (!slashToken) return all;
+    return all
+      .map((entry) => ({
+        entry,
+        score: commandScore(entry.name, slashToken, [entry.description]),
       }))
-      .filter((entry) => entry.score > 0)
+      .filter((scored) => scored.score > 0)
       .sort((a, b) => b.score - a.score)
-      .map((entry) => entry.skill);
-  }, [slashToken, skills]);
+      .map((scored) => scored.entry);
+  }, [slashToken, skills, harnessCommands]);
   const slashMenuOpen =
     slashToken !== undefined && !slashDismissed && slashMatches.length > 0;
   const slashSelected = Math.min(slashIndex, slashMatches.length - 1);
@@ -983,11 +1306,16 @@ export function ChatDock({
   }, [slashToken]);
 
   /** Commit a slash-menu row: send the invocation (attachments ride along). */
-  const runSlash = (skill: SkillInfo) => {
+  const runSlash = (entry: SlashEntry) => {
     const files = composerRef.current?.read().attachments ?? [];
     composerRef.current?.clear();
     setRecall(null);
-    void chat.send(skillInvocation(skill.name), files);
+    // Skills send their harness-neutral invocation; harness commands go
+    // as the literal "/name" — the CLI executes those natively.
+    void chat.send(
+      entry.kind === "skill" ? skillInvocation(entry.name) : `/${entry.name}`,
+      files,
+    );
   };
 
   /** `/name args` sent as text still resolves to the skill invocation. */
@@ -1283,6 +1611,26 @@ export function ChatDock({
     };
   }, [frontSurface, sessionAuthAgent, activeAgent]);
 
+  // Harness command fetch: when "/" starts, ask main for the CLI's own
+  // command list. Main owns the gating (Claude Code agents only — others
+  // answer empty) and the cache; the id in the deps clears a stale list
+  // on agent switch.
+  const commandsAgentId = activeAgent?.id ?? null;
+  useEffect(() => {
+    setHarnessCommands([]);
+    if (!slashing || commandsAgentId === null) return;
+    let cancelled = false;
+    desktopApi
+      .agentCommands(projectId, commandsAgentId)
+      .then((commands) => {
+        if (!cancelled) setHarnessCommands(commands);
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, [slashing, commandsAgentId, projectId]);
+
   // Account logins (OpenRouter PKCE, per-agent CLI homes) AND `local`
   // CLI logins (the machine's own claude/codex session — the common
   // case) both re-login through agentLogin; only api-key agents are
@@ -1483,9 +1831,9 @@ export function ChatDock({
       if (event.key === "Tab") {
         // Complete the name, keep typing arguments.
         event.preventDefault();
-        const skill = slashMatches[slashSelected];
-        if (skill) {
-          rewriteText(`/${skill.name} `);
+        const entry = slashMatches[slashSelected];
+        if (entry) {
+          rewriteText(`/${entry.name} `);
           setRecall(null);
         }
         return;
@@ -1497,8 +1845,8 @@ export function ChatDock({
       }
       if (event.key === "Enter" && !event.shiftKey && !event.metaKey) {
         event.preventDefault();
-        const skill = slashMatches[slashSelected];
-        if (skill) runSlash(skill);
+        const entry = slashMatches[slashSelected];
+        if (entry) runSlash(entry);
         return;
       }
     }
@@ -2050,13 +2398,21 @@ export function ChatDock({
                 right of the current view. Only real surfaces earn a chip —
                 the new-terminal affordance lives with the header controls. */}
             {/* The rail yields while lurking — the strip's few rows
-                belong to the latest activity, not to chips. */}
-            {railSurfaces.length > 0 && onOpenSurface && !lurking && (
-              <SurfacesRail
-                surfaces={railSurfaces}
-                onOpenSurface={onOpenSurface}
-                onOpenMcpApp={onOpenMcpApp}
-              />
+                belong to the latest activity, not to chips. CSS-collapsed
+                (not unmounted) so chip motion state survives the lurk. */}
+            {railSurfaces.length > 0 && onOpenSurface && (
+              <div
+                className={`shrink-0 overflow-hidden transition-[max-height,opacity] duration-250 ease-[cubic-bezier(0.2,0,0,1)] ${
+                  lurking ? "max-h-0 opacity-0" : "max-h-12 opacity-100"
+                }`}
+                inert={lurking ? true : undefined}
+              >
+                <SurfacesRail
+                  surfaces={railSurfaces}
+                  onOpenSurface={onOpenSurface}
+                  onOpenMcpApp={onOpenMcpApp}
+                />
+              </div>
             )}
             {/* Proactive auth banner: the session is knowably dead
                 (probe on focus/wake) — offer the re-login BEFORE a send
@@ -2103,54 +2459,17 @@ export function ChatDock({
               className="field relative m-3 mt-1 flex shrink-0 flex-col rounded-xl bg-bg-raised/95 p-1.5"
               onSubmit={submit}
             >
-              {/* "/" command menu: skills as slash commands (ADR 0052).
-                  Rows commit on mousedown like the palette, so the
-                  textarea never loses focus. */}
-              {slashMenuOpen && (
-                <div
-                  role="listbox"
-                  aria-label="Skills"
-                  data-testid="slash-menu"
-                  className="absolute bottom-full left-0 z-20 mb-1.5 max-h-64 w-full overflow-y-auto rounded-lg border border-border bg-bg-raised/95 p-1.5 shadow-2xl backdrop-blur-xl"
-                >
-                  {slashMatches.map((skill, index) => (
-                    <div
-                      key={skill.name}
-                      role="option"
-                      tabIndex={-1}
-                      aria-selected={index === slashSelected}
-                      data-skill-name={skill.name}
-                      onMouseDown={(event) => {
-                        event.preventDefault();
-                        runSlash(skill);
-                      }}
-                      onMouseEnter={() => setSlashIndex(index)}
-                      className={`flex cursor-pointer items-baseline gap-2 rounded-md px-2 py-1.5 text-sm ${
-                        index === slashSelected
-                          ? "bg-bg-overlay text-fg"
-                          : "text-fg-muted"
-                      }`}
-                    >
-                      <span className="shrink-0 font-medium">
-                        {skill.title}
-                      </span>
-                      <span className="shrink-0 font-mono text-[11px] text-fg-faint">
-                        /{skill.name}
-                      </span>
-                      {skill.description && (
-                        <span className="min-w-0 truncate text-xs text-fg-faint">
-                          {skill.description}
-                        </span>
-                      )}
-                      {skill.source === "host" && (
-                        <span className="ml-auto shrink-0 rounded border border-border px-1 text-[10px] text-fg-faint">
-                          App
-                        </span>
-                      )}
-                    </div>
-                  ))}
-                </div>
-              )}
+              {/* "/" command menu: skills (ADR 0052) merged with the
+                  harness's own commands. Rows commit on mousedown like
+                  the palette, so the composer never loses focus; the
+                  panel pops in/out and rows glide as the filter types. */}
+              <SlashMenu
+                open={slashMenuOpen}
+                matches={slashMatches}
+                selected={slashSelected}
+                onHover={setSlashIndex}
+                onCommit={runSlash}
+              />
               <div className="flex items-center gap-2">
                 {/* Any file attaches — as media when the agent takes it,
                     as a path pill otherwise — so the picker never filters

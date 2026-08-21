@@ -2,6 +2,10 @@ import { execFileSync, spawn } from "node:child_process";
 import fs from "node:fs";
 import { createRequire } from "node:module";
 import path from "node:path";
+import {
+  type ClaudeSlashCommand,
+  listClaudeSlashCommands,
+} from "@catamorphic/claude-code";
 import { definitionHash, type ProjectAgentEntry } from "@catamorphic/core";
 import {
   buildInstallationUrl,
@@ -833,6 +837,66 @@ export function registerIpcHandlers(
         if (agent.auth === "local") raw = claudeKeychainRaw();
       }
       return claudeOauthHealth(raw, Date.now());
+    },
+  );
+
+  // The harness's own slash commands (Claude Code only): built-ins,
+  // .claude/commands, plugin and skill commands — probed with a
+  // never-yielding SDK session (no API call) and cached briefly. The
+  // composer's "/" menu merges these under the project's skills.
+  const commandsCache = new Map<
+    string,
+    | { at: number; commands: ClaudeSlashCommand[] }
+    | Promise<ClaudeSlashCommand[]>
+  >();
+  ipcMain.handle(
+    "catamorphic:agent-commands",
+    async (
+      event,
+      projectId: string,
+      agentId: string,
+    ): Promise<ClaudeSlashCommand[]> => {
+      // e2e: a fixed list — the real probe would spawn the actual CLI.
+      if (process.env.CATAMORPHIC_E2E_FAKE_AGENT === "1") {
+        return [
+          {
+            name: "compact",
+            description: "Clear conversation history but keep a summary",
+            argumentHint: "",
+          },
+          {
+            name: "review",
+            description: "Review a pull request",
+            argumentHint: "<pr-number>",
+          },
+        ];
+      }
+      const agent = storesFor(event).agents.get(agentId);
+      if (agent?.harness !== "claude-code") return [];
+      const root = await state.current?.projectRoots.get(projectId);
+      if (!root) return [];
+      const key = `${agentId}\u0000${root}`;
+      const cached = commandsCache.get(key);
+      if (cached instanceof Promise) return cached;
+      if (cached && Date.now() - cached.at < 5 * 60_000) {
+        return cached.commands;
+      }
+      const probe = listClaudeSlashCommands({
+        workingDirectory: root,
+        ...(agent.auth === "account"
+          ? { env: { CLAUDE_CONFIG_DIR: agentHome(agentId) } }
+          : {}),
+      })
+        .then((commands) => {
+          commandsCache.set(key, { at: Date.now(), commands });
+          return commands;
+        })
+        .catch(() => {
+          commandsCache.delete(key);
+          return [];
+        });
+      commandsCache.set(key, probe);
+      return probe;
     },
   );
 
