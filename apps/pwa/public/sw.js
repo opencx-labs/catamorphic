@@ -32,6 +32,18 @@ self.addEventListener("fetch", (event) => {
   if (request.method !== "GET") return;
   const url = new URL(request.url);
   if (url.origin !== self.location.origin) return;
+  // The PWA is served from the SAME origin as its API (the stock server's
+  // root, the desktop's LAN listener): API traffic must never enter the
+  // shell cache. Private transcripts in Cache storage, or a 500ms chat
+  // poll answered by the previous poll's body, are both unacceptable.
+  if (
+    url.pathname.startsWith("/api") ||
+    url.pathname.startsWith("/pair") ||
+    url.pathname.startsWith("/admin") ||
+    url.pathname === "/healthz"
+  ) {
+    return;
+  }
 
   if (request.mode === "navigate") {
     event.respondWith(

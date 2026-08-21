@@ -114,7 +114,7 @@ export function ConnectScreen({
           </p>
         </div>
         <textarea
-          className="field min-h-24 w-full resize-none p-3 font-mono text-[13px] leading-5 outline-none placeholder:text-fg-faint"
+          className="field min-h-24 w-full resize-none p-3 font-mono text-[16px] leading-6 outline-none placeholder:text-fg-faint"
           placeholder="catamorphic://connect?server=…&token=…&project=…"
           value={raw}
           onChange={(event) => {

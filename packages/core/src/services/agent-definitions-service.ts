@@ -54,6 +54,11 @@ export function projectAgentId(projectId: string, slug: string): string {
  */
 const SLUG_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
 
+/** The registry id for a project agent: `project:<projectId>:<slug>`. */
+export function formatProjectAgentId(projectId: string, slug: string): string {
+  return `${PROJECT_AGENT_ID_PREFIX}${projectId}:${slug}`;
+}
+
 export function parseProjectAgentId(
   id: string,
 ): { projectId: string; slug: string } | undefined {

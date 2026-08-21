@@ -39,6 +39,23 @@ export function clientFor(connection: PwaConnection): CatamorphicApiClient {
   return client;
 }
 
+/**
+ * POST JSON to an arbitrary origin path. The one pre-auth request in the
+ * app (the QR pair claim) goes through here so a native wrap swapping
+ * the transport still has a single seam.
+ */
+export async function postJson(
+  origin: string,
+  path: string,
+  body: unknown,
+): Promise<Response> {
+  return fetch(`${origin}${path}`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(body),
+  });
+}
+
 /** GET against the connection's API base (server-relative path). */
 export async function apiGet(
   connection: Pick<PwaConnection, "serverUrl" | "token">,

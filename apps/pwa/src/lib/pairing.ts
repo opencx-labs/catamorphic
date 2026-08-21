@@ -1,3 +1,4 @@
+import { postJson } from "./api.js";
 import type { Route } from "./nav.js";
 import {
   activeProfile,
@@ -35,15 +36,11 @@ export async function claimPairing(
   origin: string,
   code: string,
 ): Promise<PairingClaim> {
-  const response = await fetch(`${origin}/pair/claim`, {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({ code }),
-  });
+  const response = await postJson(origin, "/pair/claim", { code });
   if (!response.ok) {
     throw new Error(
       response.status === 410
-        ? "That QR code expired — generate a fresh one on the desktop."
+        ? "That QR code expired. Generate a fresh one on the desktop."
         : `Pairing failed (${response.status}).`,
     );
   }
@@ -70,9 +67,11 @@ export function applyPairing(state: PwaState, claim: PairingClaim): Route {
     {
       serverUrl: claim.server.replace(/\/+$/, ""),
       token: claim.token,
-      // A device token is root on the desktop: it covers every project.
-      // The link's own project is just the deep-link target (may be "").
-      remoteProjectId: claim.context?.projectId ?? "",
+      // A device token is root on the desktop: it covers every project, so
+      // the connection's own projectId stays "" (a stable dedupe key;
+      // re-pairing refreshes this connection instead of adding a twin).
+      // The deep-link target rides only on the returned route.
+      remoteProjectId: "",
       remoteProjectName: claim.name,
     },
     claim.name,

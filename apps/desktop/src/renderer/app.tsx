@@ -213,7 +213,7 @@ type ClosedTab = (
       ptySessionId?: string;
     }
   | { kind: "editor"; filePath: string | null; chatLocalId?: string }
-  | { kind: "chat"; sessionId?: string }
+  | { kind: "chat"; sessionId?: string; incognito?: boolean }
   | { kind: "screen"; tab: WorkspaceTab }
 ) & {
   /** The other pane when this tab was half of a split, to re-tile. */
@@ -1483,7 +1483,7 @@ export function App() {
         }
         case "chat": {
           const entry: ChatDockEntry = {
-            ...newChatEntry("tab"),
+            ...newChatEntry("tab", { incognito: record.incognito }),
             sessionId: record.sessionId,
           };
           key = chatTabKey(entry.localId);
@@ -1615,7 +1615,11 @@ export function App() {
         closedTabs: closing?.sessionId
           ? [
               ...ws.closedTabs,
-              { kind: "chat" as const, sessionId: closing.sessionId },
+              {
+                kind: "chat" as const,
+                sessionId: closing.sessionId,
+                incognito: closing.incognito,
+              },
             ].slice(-CLOSED_TABS_KEPT)
           : ws.closedTabs,
         activeChatId: ws.activeChatId === localId ? undefined : ws.activeChatId,
@@ -1962,9 +1966,15 @@ export function App() {
       { sessionId: parent.sessionId, messageId },
       {
         onSuccess: (session) => {
+          // A fork of an incognito chat holds the same transcript, so it
+          // inherits the flag: marked before any turn can settle, which
+          // is what keeps the mirror from ever seeing it (ADR 0062).
+          if (parent.incognito) {
+            void desktopApi.sessionSetIncognito(session.id, true);
+          }
           updateWorkspace((ws) => {
             const entry: ChatDockEntry = {
-              ...newChatEntry("tab"),
+              ...newChatEntry("tab", { incognito: parent.incognito }),
               sessionId: session.id,
               parentLocalId: parent.localId,
             };

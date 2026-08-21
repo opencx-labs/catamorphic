@@ -2,7 +2,11 @@ import fs from "node:fs";
 import path from "node:path";
 import { type Identity, ToolPermissionBroker } from "@catamorphic/core";
 import { type DB, DEFAULT_SCHEMA } from "@catamorphic/db";
-import { createApp, identityFromBearer } from "@catamorphic/fastify-plugin";
+import {
+  createApp,
+  identityFromBearer,
+  serveSpaDist,
+} from "@catamorphic/fastify-plugin";
 import { LocalProcessSandboxProvider } from "@catamorphic/local-process";
 import {
   type Catamorphic,
@@ -180,26 +184,11 @@ export async function buildStockServer(
   const pwaDist =
     env.CATAMORPHIC_PWA_DIST ??
     path.resolve(import.meta.dirname, "../../pwa/dist");
-  app.get("/*", async (request, reply) => {
-    if (!fs.existsSync(path.join(pwaDist, "index.html"))) {
-      return reply.type("text/html").send(LANDING_PAGE);
-    }
-    const requested = decodeURIComponent(
-      (request.url.split("?")[0] ?? "/").replace(/^\/+/, ""),
-    );
-    const resolved = path.resolve(pwaDist, requested || "index.html");
-    const file =
-      resolved.startsWith(pwaDist) &&
-      fs.existsSync(resolved) &&
-      fs.statSync(resolved).isFile()
-        ? resolved
-        : path.join(pwaDist, "index.html");
-    return reply
-      .type(
-        STATIC_CONTENT_TYPES[path.extname(file)] ?? "application/octet-stream",
-      )
-      .send(fs.readFileSync(file));
-  });
+  serveSpaDist(
+    app,
+    () => pwaDist,
+    (reply) => reply.type("text/html").send(LANDING_PAGE),
+  );
 
   app.post("/admin/projects", async (request, reply) => {
     if (!requireAdmin(request, reply)) return;
@@ -273,6 +262,13 @@ export async function buildStockServer(
    */
   app.get("/admin/usage", async (request, reply) => {
     if (!requireAdmin(request, reply)) return;
+    // Bounded by default: a server months into service holds far more
+    // history than an admin view needs, and every row carries its whole
+    // event log in `metadata`.
+    const days = Number((request.query as { days?: string }).days ?? 30);
+    const since = new Date(
+      Date.now() - (Number.isFinite(days) ? days : 30) * 86_400_000,
+    );
     const rows = await core.db
       .selectFrom("agent_messages")
       .innerJoin(
@@ -288,6 +284,7 @@ export async function buildStockServer(
         "agent_messages.created_at as createdAt",
       ])
       .where("agent_messages.role", "=", "assistant")
+      .where("agent_messages.created_at", ">=", since)
       .execute();
     const byKey = new Map<
       string,
@@ -337,6 +334,7 @@ export async function buildStockServer(
       byKey.set(key, entry);
     }
     return reply.send({
+      since: since.toISOString(),
       items: [...byKey.values()]
         .map(({ sessions, ...entry }) => ({
           ...entry,
@@ -395,18 +393,6 @@ export async function buildStockServer(
     },
   };
 }
-
-const STATIC_CONTENT_TYPES: Record<string, string> = {
-  ".html": "text/html; charset=utf-8",
-  ".js": "text/javascript",
-  ".css": "text/css",
-  ".svg": "image/svg+xml",
-  ".png": "image/png",
-  ".webmanifest": "application/manifest+json",
-  ".json": "application/json",
-  ".ico": "image/x-icon",
-  ".woff2": "font/woff2",
-};
 
 function connectParams(
   base: string,

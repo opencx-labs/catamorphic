@@ -143,16 +143,16 @@ export function MobilePairingModal({
             />
             <p className="max-w-xs text-xs leading-5 text-fg-muted">
               {target === "remote" && state.remote
-                ? `Scan with your phone's camera — this opens the project on ${state.remote.host}, so it works from anywhere and keeps working when this desktop is off. This link carries your server access; share it with no one.`
+                ? `Scan with your phone's camera. This opens the project on ${state.remote.host}, so it works from anywhere and keeps working when this desktop is off. The link carries your server access; share it with no one.`
                 : `Scan with your phone's camera (same Wi-Fi).${
                     context?.sessionId
                       ? " It opens straight into this chat."
                       : " It opens your projects."
-                  } The code is single-use and expires in 2 minutes — anyone who scans it gets access as you.`}
+                  } The code is single-use and expires in 2 minutes. Anyone who scans it gets access as you.`}
             </p>
             {!state.pwaReady && (
               <p className="rounded-lg border border-warning/40 bg-warning/10 px-3 py-2 text-xs text-warning">
-                The mobile app bundle isn't built yet — run{" "}
+                The mobile app bundle isn't built yet. Run{" "}
                 <code>bun run --filter catamorphic-pwa build</code> first.
               </p>
             )}

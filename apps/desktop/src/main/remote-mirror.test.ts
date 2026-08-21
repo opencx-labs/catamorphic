@@ -48,15 +48,26 @@ afterAll(() => {
 });
 
 const forkMarks: Array<{ sessionId: string; serverUrl: string }> = [];
+const incognitoMarks: string[] = [];
 
-function mirror(overrides: { incognito?: boolean; agentId?: string } = {}) {
-  const incognito = overrides.incognito ?? false;
+function mirror(
+  overrides: {
+    incognito?: boolean;
+    agentId?: string;
+    parentSessionId?: string;
+    incognitoIds?: string[];
+  } = {},
+) {
+  const incognitoIds = new Set(
+    overrides.incognitoIds ?? (overrides.incognito ? ["s1"] : []),
+  );
   const detail = {
     id: "s1",
     title: "Desk chat",
     icon: "zap:blue",
     provider: "ai-sdk",
     agentId: overrides.agentId ?? null,
+    parentSessionId: overrides.parentSessionId ?? null,
     messages: [
       {
         id: "m1",
@@ -84,7 +95,11 @@ function mirror(overrides: { incognito?: boolean; agentId?: string } = {}) {
         },
       }),
     } as never,
-    isIncognito: () => incognito,
+    isIncognito: (sessionId: string) => incognitoIds.has(sessionId),
+    markIncognito: (sessionId: string) => {
+      incognitoMarks.push(sessionId);
+      incognitoIds.add(sessionId);
+    },
     sessionDetail: async () => detail as never,
     markFork: async (_projectId, sessionId, fork) => {
       forkMarks.push({ sessionId, serverUrl: fork.serverUrl });
@@ -119,6 +134,19 @@ describe("RemoteSessionMirror", () => {
     pusher.mirrorInBackground("local-1", "s1");
     await flush();
     expect(captured).toHaveLength(1);
+  });
+
+  it("never mirrors a fork of an incognito chat, and records the inherited flag", async () => {
+    const pusher = mirror({
+      parentSessionId: "parent-1",
+      incognitoIds: ["parent-1"],
+    });
+    pusher.mirrorInBackground("local-1", "s1");
+    await flush();
+    // The fork's own id was never marked (a missed renderer marking), but
+    // the lineage check catches it before anything leaves the machine.
+    expect(captured).toHaveLength(1);
+    expect(incognitoMarks).toEqual(["s1"]);
   });
 
   it("carries the project-agent slug so the fork runs the same agent", async () => {

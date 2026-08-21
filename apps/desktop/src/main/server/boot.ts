@@ -136,6 +136,7 @@ export async function startEmbeddedServer(
     profileConfig,
     // Desktop-local privacy flag (ADR 0062): never crosses core.
     isIncognito: (sessionId) => incognitoSessions?.has(sessionId) ?? false,
+    markIncognito: (sessionId) => incognitoSessions?.set(sessionId, true),
     sessionDetail: (projectId, sessionId) =>
       catamorphic.core.agentSessions
         ? catamorphic.core.agentSessions.get(

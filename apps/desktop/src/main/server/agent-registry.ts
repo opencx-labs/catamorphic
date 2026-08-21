@@ -421,10 +421,17 @@ export class DesktopAgentRegistry implements CodingAgentRegistry {
             .toolPermission(config.name, request, abortModal.signal)
             .then((value) => {
               // Null = no window, cancelled, or timed out. With a broker
-              // present its own timeout produces the deny; without one,
-              // deny here — a tool call must never hang on a missing UI.
+              // present its own timeout produces the deny (and a paired
+              // phone may still answer); without one, deny here, because
+              // a tool call must never hang on a missing UI.
               if (value) settle(value, "bridge");
               else if (!ask) settle({ decision: "deny" }, "bridge");
+            })
+            .catch((cause) => {
+              // A throwing bridge must not leave the race unsettled (and
+              // must not surface as an unhandled rejection in main).
+              console.warn("[desktop] tool-permission prompt failed:", cause);
+              settle({ decision: "deny" }, "bridge");
             });
         }
       });

@@ -177,7 +177,7 @@ function Chat({
             >
               <p className="flex items-start gap-2 text-[13px] leading-5 text-fg-muted">
                 <GitFork className="mt-0.5 size-4 shrink-0 text-fg-faint" />
-                This conversation continued on {hostOf(fork.serverUrl)} — this
+                This conversation continued on {hostOf(fork.serverUrl)}. This
                 copy is history.
               </p>
               {forkConnection ? (

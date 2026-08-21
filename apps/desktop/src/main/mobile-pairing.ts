@@ -2,6 +2,7 @@ import { createHash, randomBytes, randomUUID } from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { serveSpaDist } from "@catamorphic/fastify-plugin";
 import { app as electronApp } from "electron";
 import Fastify, { type FastifyInstance } from "fastify";
 import type { ProfileConfigManager } from "./profile-config.js";
@@ -80,18 +81,6 @@ interface PendingPairing {
   expiresAt: number;
 }
 
-const CONTENT_TYPES: Record<string, string> = {
-  ".html": "text/html; charset=utf-8",
-  ".js": "text/javascript",
-  ".css": "text/css",
-  ".svg": "image/svg+xml",
-  ".png": "image/png",
-  ".webmanifest": "application/manifest+json",
-  ".json": "application/json",
-  ".ico": "image/x-icon",
-  ".woff2": "font/woff2",
-};
-
 export class MobilePairingService {
   private lanApp: FastifyInstance | null = null;
   private port: number;
@@ -157,6 +146,7 @@ export class MobilePairingService {
       expiresAt,
     });
     setTimeout(() => this.pending.delete(code), PAIRING_CODE_TTL_MS).unref?.();
+    const remote = this.remotePairing(profileId, context);
     const addresses = lanIps();
     const urls = (addresses.length > 0 ? addresses : ["127.0.0.1"]).map(
       (ip) => `http://${ip}:${this.port}/?pair=${code}`,
@@ -166,10 +156,7 @@ export class MobilePairingService {
       alternates: urls.slice(1),
       expiresAt: new Date(expiresAt).toISOString(),
       pwaReady: fs.existsSync(path.join(this.pwaDist(), "index.html")),
-      ...(() => {
-        const remote = this.remotePairing(profileId, context);
-        return remote ? { remote } : {};
-      })(),
+      ...(remote ? { remote } : {}),
     };
   }
 
@@ -239,69 +226,66 @@ export class MobilePairingService {
       });
     });
 
-    // The API surface: bearer-gated proxy onto the loopback embedded
-    // server. EVERY request needs a device token — the embedded server
-    // itself has no auth and answers as the desktop user.
-    app.all("/api/*", async (request, reply) => {
-      if (!this.authorized(request.headers.authorization)) {
-        return reply.status(401).send({ error: "Unauthorized" });
-      }
-      const upstream = this.deps.serverUrl();
-      if (!upstream) {
-        return reply
-          .status(503)
-          .send({ error: "The desktop is still booting" });
-      }
-      const url = `${upstream}${request.url}`;
-      const method = request.method;
-      const hasBody = method !== "GET" && method !== "HEAD";
-      const response = await fetch(url, {
-        method,
-        headers: {
-          ...(typeof request.headers["content-type"] === "string"
-            ? { "content-type": request.headers["content-type"] }
+    // The API surface lives in its own plugin scope so its raw-body
+    // parser (below) cannot affect this listener's JSON routes.
+    await app.register(async (proxy) => {
+      // A proxy, not a JSON API: keep every body as raw bytes so
+      // uploads and non-JSON content types reach the embedded server
+      // unchanged (Fastify would otherwise 415 or re-encode them).
+      proxy.addContentTypeParser(
+        "*",
+        { parseAs: "buffer" },
+        (_request, body, done) => done(null, body),
+      );
+      proxy.removeContentTypeParser(["application/json", "text/plain"]);
+      proxy.addContentTypeParser(
+        "application/json",
+        { parseAs: "buffer" },
+        (_request, body, done) => done(null, body),
+      );
+
+      // The API surface: bearer-gated proxy onto the loopback embedded
+      // server. EVERY request needs a device token — the embedded server
+      // itself has no auth and answers as the desktop user.
+      proxy.all("/api/*", async (request, reply) => {
+        if (!this.authorized(request.headers.authorization)) {
+          return reply.status(401).send({ error: "Unauthorized" });
+        }
+        const upstream = this.deps.serverUrl();
+        if (!upstream) {
+          return reply
+            .status(503)
+            .send({ error: "The desktop is still booting" });
+        }
+        const url = `${upstream}${request.url}`;
+        const method = request.method;
+        const body = Buffer.isBuffer(request.body) ? request.body : undefined;
+        const response = await fetch(url, {
+          method,
+          headers: {
+            ...(typeof request.headers["content-type"] === "string"
+              ? { "content-type": request.headers["content-type"] }
+              : {}),
+          },
+          ...(body && body.length > 0 && method !== "GET" && method !== "HEAD"
+            ? { body }
             : {}),
-        },
-        ...(hasBody && request.body !== undefined && request.body !== null
-          ? { body: JSON.stringify(request.body) }
-          : {}),
+        });
+        const payload = Buffer.from(await response.arrayBuffer());
+        return reply
+          .status(response.status)
+          .header(
+            "content-type",
+            response.headers.get("content-type") ?? "application/json",
+          )
+          .send(payload);
       });
-      const text = await response.text();
-      return reply
-        .status(response.status)
-        .header(
-          "content-type",
-          response.headers.get("content-type") ?? "application/json",
-        )
-        .send(text);
     });
 
     // Everything else is the PWA bundle (hash-routed SPA: unknown paths
-    // fall back to index.html).
-    app.get("/*", async (request, reply) => {
-      const dist = this.pwaDist();
-      if (!fs.existsSync(path.join(dist, "index.html"))) {
-        return reply
-          .status(503)
-          .type("text/plain")
-          .send(
-            "The mobile app bundle is missing. Build it first: bun run --filter catamorphic-pwa build",
-          );
-      }
-      const requested = decodeURIComponent(
-        (request.url.split("?")[0] ?? "/").replace(/^\/+/, ""),
-      );
-      const resolved = path.resolve(dist, requested || "index.html");
-      const file =
-        resolved.startsWith(dist) &&
-        fs.existsSync(resolved) &&
-        fs.statSync(resolved).isFile()
-          ? resolved
-          : path.join(dist, "index.html");
-      return reply
-        .type(CONTENT_TYPES[path.extname(file)] ?? "application/octet-stream")
-        .send(fs.readFileSync(file));
-    });
+    // fall back to index.html). Shared with the stock server's root so
+    // both origins serve identically.
+    serveSpaDist(app, () => this.pwaDist());
 
     // The persisted port keeps paired phones working across restarts;
     // walk forward when something else holds it (two desktop installs).

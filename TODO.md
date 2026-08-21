@@ -105,8 +105,7 @@
   follow-ups: **passkeys** for self-serve token renewal (the `renew=`
   slot on connect links is still empty), **OIDC + email-domain
   auto-membership** (the company-brain door), an **admin/membership UI**
-  (today: curl + the printed admin token), device-revocation UI for
-  paired phones, and remote MCP for the desktop (calling a remote
+  (today: curl + the printed admin token), and remote MCP for the desktop (calling a remote
   server's workflow tools instead of local ones — the original
   motivating case: per-customer apps with customers as scoped viewers).
 - **ADR 0055 follow-ups (company brain).** The six steps landed (scope kinds
@@ -159,6 +158,23 @@
   layouts); (c) an injected e2e-fakes layer replacing the inline env-var
   seams (CATAMORPHIC_E2E_AUTH_HEALTH, CATAMORPHIC_E2E_FAKE_AGENT) so
   mixed-state fixtures become possible and the usage page gets its e2e.
+- **Mobile/mirroring follow-ups (ADRs 0058-0062).** Known and
+  deliberate, in rough value order: (a) the mirror re-pushes the whole
+  transcript every settled turn (idempotent but O(n) per turn) - track
+  the last acked message id and push the tail, full push on 409;
+  (b) `/admin/usage` aggregates in JS over bounded rows - move the sums
+  into SQL when a team's history outgrows it; (c) shared modules for
+  things now hand-synced across apps: the theme presets, the chat-icon
+  vocabulary (an agent-facing contract, so drift is a real bug), the
+  question panel's answer protocol, the connect-link parse/build
+  vocabulary (parser in pwa+desktop, builders in server+pairing), and
+  the CDP e2e client (desktop and pwa harnesses); (d) drive the pwa e2e
+  against `buildStockServer` with the fake agent instead of the
+  hand-written `scripts/dev-server.mjs` wire fake; (e) memoize the pwa
+  chat timeline (React.memo rows, useMemo turn steps) - it re-parses
+  every message's tool payloads on each 500ms poll; (f) desktop-side
+  composer lock on a forked session (the PWA locks; the desktop only
+  shows the marker row).
 - **Remote machines for agents (t3-code-inspired).** t3 runs agents on
   preconfigured remote environments over SSH (packages/ssh: auth,
   command, tunnel) and tailscale, with pairing-link auth for its

@@ -116,7 +116,7 @@ export function ProfilesScreen({ animation }: { animation?: string }) {
         </ul>
 
         <h2 className="px-4 pb-1 pt-4 text-[11px] font-semibold uppercase tracking-wider text-fg-faint">
-          Connections — {active.name}
+          Connections ({active.name})
         </h2>
         {active.connections.length === 0 && (
           <p className="px-4 py-2 text-sm text-fg-muted">

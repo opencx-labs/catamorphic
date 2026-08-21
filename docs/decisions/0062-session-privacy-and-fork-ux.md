@@ -39,8 +39,15 @@ its lazy creation returns an id (long before a first turn could settle
 and trigger a mirror push); the pusher consults the set before every
 push. Palette "New incognito chat" + a Ghost badge on the dock; the
 chat entry's flag persists with the workspace snapshot. An incognito
-chat persists locally like any other but is **never mirrored** — off
+chat persists locally like any other but is **never mirrored**: off
 the server, out of team history, out of usage. Default remains synced.
+
+**Privacy is inherited, and enforced where it can leak.** A fork of an
+incognito chat carries the same transcript, so it inherits the flag at
+the fork call, and the pusher independently refuses any session whose
+parent is incognito (recording the inherited flag as it does). The
+renderer's marking is bookkeeping; the pusher's lineage check is the
+guarantee.
 
 **Project policy.** `.catamorphic/project.json` `"allowIncognito":
 false` disables the affordance for a project's members (palette entry

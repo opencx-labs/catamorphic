@@ -49,6 +49,7 @@ export {
   AgentDefinitionsService,
   agentDefinitionSchema,
   definitionHash,
+  formatProjectAgentId,
   PROJECT_AGENT_ID_PREFIX,
   type ProjectAgentEntry,
   parseProjectAgentId,

@@ -2330,7 +2330,7 @@ export function ChatDock({
             {isIncognito && (
               <span
                 className="flex shrink-0 items-center gap-1 rounded-full border border-border-strong bg-bg-inset px-1.5 py-0.5 text-[10px] font-medium text-fg-muted"
-                title="Incognito — stays on this machine, never synced to a linked server"
+                title="Incognito: stays on this machine, never synced to a linked server"
                 data-testid="chat-incognito-badge"
               >
                 <Ghost className="size-3" />

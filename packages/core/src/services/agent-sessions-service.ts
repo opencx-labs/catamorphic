@@ -29,7 +29,10 @@ import {
   DURABLE_WORKFLOW_SKILL_PATH,
   SEED_SKILLS,
 } from "../seeds.js";
-import { parseProjectAgentId } from "./agent-definitions-service.js";
+import {
+  formatProjectAgentId,
+  parseProjectAgentId,
+} from "./agent-definitions-service.js";
 import type { AppPoliciesService } from "./app-policies-service.js";
 import { AccessDeniedError, resolveScope } from "./artifact-scope.js";
 import type {
@@ -620,58 +623,59 @@ export class AgentSessionsService {
           throw new AgentTurnInProgressError(sessionId);
         }
 
-        const held = await this.db
-          .selectFrom("agent_messages")
-          .select(["id"])
-          .where("session_id", "=", sessionId)
-          .execute();
-        const incomingIds = new Set(input.messages.map((m) => m.id));
-        if (held.some((row) => !incomingIds.has(row.id))) {
-          throw new SessionMirrorDivergedError(sessionId);
-        }
+        // One transaction: the divergence check, the session upsert, and
+        // the appends must not interleave with a turn starting here (the
+        // append order IS the transcript order, via `seq`).
+        const row = await this.db.transaction().execute(async (trx) => {
+          const held = await trx
+            .selectFrom("agent_messages")
+            .select(["id"])
+            .where("session_id", "=", sessionId)
+            .forUpdate()
+            .execute();
+          const incomingIds = new Set(input.messages.map((m) => m.id));
+          if (held.some((entry) => !incomingIds.has(entry.id))) {
+            throw new SessionMirrorDivergedError(sessionId);
+          }
 
-        let row: SessionRow;
-        if (existing) {
-          row = await this.db
-            .updateTable("agent_sessions")
-            .set({
-              title: input.title ?? existing.title,
-              icon: input.icon ?? existing.icon,
-              updated_at: new Date(),
-            })
-            .where("id", "=", sessionId)
-            .returningAll()
-            .executeTakeFirstOrThrow();
-        } else {
-          row = await this.db
-            .insertInto("agent_sessions")
-            .values({
-              id: sessionId,
-              project_id: projectId,
-              external_user_id: identity.externalUserId,
-              provider: input.provider ?? "mirror",
-              provider_session_id: null,
-              agent_id: agentId,
-              model_effort: null,
-              system_prompt: null,
-              sandbox_id: null,
-              status: "active",
-              base_commit_sha: null,
-              title: input.title ?? null,
-              icon: input.icon ?? null,
-            })
-            .returningAll()
-            .executeTakeFirstOrThrow();
-        }
+          const session = existing
+            ? await trx
+                .updateTable("agent_sessions")
+                .set({
+                  title: input.title ?? existing.title,
+                  icon: input.icon ?? existing.icon,
+                  updated_at: new Date(),
+                })
+                .where("id", "=", sessionId)
+                .returningAll()
+                .executeTakeFirstOrThrow()
+            : await trx
+                .insertInto("agent_sessions")
+                .values({
+                  id: sessionId,
+                  project_id: projectId,
+                  external_user_id: identity.externalUserId,
+                  provider: input.provider ?? "mirror",
+                  provider_session_id: null,
+                  agent_id: agentId,
+                  model_effort: null,
+                  system_prompt: null,
+                  sandbox_id: null,
+                  status: "active",
+                  base_commit_sha: null,
+                  title: input.title ?? null,
+                  icon: input.icon ?? null,
+                })
+                .returningAll()
+                .executeTakeFirstOrThrow();
 
-        // `seq` is an identity column: transcript order IS insertion
-        // order, so append the unseen messages in payload order.
-        const heldIds = new Set(held.map((entry) => entry.id));
-        for (const message of input.messages) {
-          if (heldIds.has(message.id)) continue;
-          await this.db
-            .insertInto("agent_messages")
-            .values({
+          // `seq` is an identity column: transcript order IS insertion
+          // order, so append the unseen messages in payload order, in one
+          // statement (a mirror can carry hundreds of messages).
+          const heldIds = new Set(held.map((entry) => entry.id));
+          const fresh = input.messages
+            .filter((message) => !heldIds.has(message.id))
+            .map((message) => ({
               id: message.id,
               session_id: sessionId,
               role: message.role,
@@ -679,9 +683,12 @@ export class AgentSessionsService {
               metadata: message.metadata as JsonObject | null,
               commit_sha: null,
               created_at: new Date(message.createdAt),
-            })
-            .execute();
-        }
+            }));
+          if (fresh.length > 0) {
+            await trx.insertInto("agent_messages").values(fresh).execute();
+          }
+          return session;
+        });
         return mapSession(row);
       },
     );
@@ -696,7 +703,7 @@ export class AgentSessionsService {
     agentSlug: string | undefined,
   ): string | null {
     if (agentSlug) {
-      const preferred = `project:${projectId}:${agentSlug}`;
+      const preferred = formatProjectAgentId(projectId, agentSlug);
       const usable =
         this.codingAgents.get(preferred) !== undefined &&
         (isBuilder(identity, projectId) ||
@@ -737,7 +744,7 @@ export class AgentSessionsService {
       .values({
         session_id: sessionId,
         role: "system",
-        content: `Continued on ${host} — this copy is history now.`,
+        content: `Continued on ${host}. This copy is history now.`,
         metadata: {
           marker: {
             kind: "mirror_fork",

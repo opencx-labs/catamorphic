@@ -33,7 +33,7 @@ export function ConnectionTrouble({
         <CloudOff className="mt-0.5 size-4 shrink-0 text-fg-faint" />
         <p className="text-sm leading-6 text-fg-muted">
           {networkish
-            ? `Can't reach ${label} — it may be asleep, or you're on a different network.`
+            ? `Can't reach ${label}. It may be asleep, or you're on a different network.`
             : message}
         </p>
       </div>
@@ -51,7 +51,7 @@ export function ConnectionTrouble({
           data-testid="open-mirror"
         >
           <ExternalLink className="size-4" />
-          This project also lives on {new URL(mirror.serverUrl).host} — open
+          This project also lives on {new URL(mirror.serverUrl).host}. Open
           there
         </button>
       )}

@@ -1,4 +1,7 @@
-import type { AgentSessionDetail } from "@catamorphic/core";
+import {
+  type AgentSessionDetail,
+  parseProjectAgentId,
+} from "@catamorphic/core";
 import type { ProfileConfigManager } from "./profile-config.js";
 import type { ProfilesStore } from "./profiles.js";
 
@@ -25,6 +28,8 @@ export class RemoteSessionMirror {
       profileConfig: ProfileConfigManager;
       /** Desktop-local privacy flag (ADR 0062): skip these entirely. */
       isIncognito: (sessionId: string) => boolean;
+      /** Record an inherited flag (a fork of an incognito chat). */
+      markIncognito: (sessionId: string) => void;
       /** The session's full transcript, under the desktop identity. */
       sessionDetail: (
         projectId: string,
@@ -68,11 +73,22 @@ export class RemoteSessionMirror {
       link.localProjectId,
       sessionId,
     );
+    // Backstop for the privacy guarantee: a chat FORKED from an incognito
+    // one inherits its privacy even if the fork's own marking was missed.
+    // Enforced here, at the only place that can leak (ADR 0062).
+    if (
+      detail.parentSessionId &&
+      this.deps.isIncognito(detail.parentSessionId)
+    ) {
+      this.deps.markIncognito(sessionId);
+      return;
+    }
     // A project agent's slug survives the trip: the same committed
     // definition exists on the server, so the fork can run the SAME agent.
-    const slugMatch = detail.agentId
-      ? /^project:[^:]+:(.+)$/.exec(detail.agentId)
-      : null;
+    // Core owns the id convention; parsing it by hand here would drift.
+    const projectAgent = detail.agentId
+      ? parseProjectAgentId(detail.agentId)
+      : undefined;
     const response = await fetch(
       `${link.serverUrl.replace(/\/+$/, "")}/projects/${encodeURIComponent(
         link.remoteProjectId,
@@ -87,7 +103,7 @@ export class RemoteSessionMirror {
           title: detail.title,
           icon: detail.icon,
           provider: detail.provider,
-          ...(slugMatch?.[1] ? { agentSlug: slugMatch[1] } : {}),
+          ...(projectAgent ? { agentSlug: projectAgent.slug } : {}),
           messages: detail.messages.map((message) => ({
             id: message.id,
             role: message.role,
