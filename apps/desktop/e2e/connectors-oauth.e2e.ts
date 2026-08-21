@@ -1,7 +1,7 @@
 import { type ChildProcess, spawn } from "node:child_process";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { type AppHandle, launchApp } from "./harness.js";
+import { type AppHandle, launchApp, setReactValueJs } from "./harness.js";
 
 /**
  * OAuth for a remote connection, end to end inside the app: a connection
@@ -49,20 +49,7 @@ const helpers = `
   const $$ = (selector) => [...document.querySelectorAll(selector)];
   const byText = (selector, text) =>
     $$(selector).find((el) => el.textContent.trim().includes(text));
-  const setReactValue = (el, value) => {
-    // The chat composer is a contenteditable (inline pills): set its text
-    // and let its input handler read the DOM back.
-    if (el.isContentEditable) {
-      const pills = [...el.querySelectorAll('[data-pill-id]')];
-      el.replaceChildren(...pills, document.createTextNode(value));
-      el.dispatchEvent(new InputEvent('input', { bubbles: true }));
-      return;
-    }
-    const proto = el instanceof HTMLTextAreaElement
-      ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;
-    Object.getOwnPropertyDescriptor(proto, 'value').set.call(el, value);
-    el.dispatchEvent(new Event('input', { bubbles: true }));
-  };
+  ${setReactValueJs}
   const pressKey = (key, mods = {}) =>
     window.dispatchEvent(new KeyboardEvent('keydown',
       { key, bubbles: true, cancelable: true, ...mods }));

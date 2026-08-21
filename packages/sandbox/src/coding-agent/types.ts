@@ -170,7 +170,7 @@ export type AgentTextSource =
       /**
        * An open workspace tab (browser page, editor, terminal, chat…)
        * dragged into the composer. The key addresses it through the
-       * workspace tools (`workspace_read_tab`); title/url/filePath are what
+       * workspace tools (`read_tab`); title/url/filePath are what
        * the pill shows and what the model reads without a tool call.
        */
       type: "tab";

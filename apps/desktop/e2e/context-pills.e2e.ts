@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { type AppHandle, launchApp } from "./harness.js";
+import { type AppHandle, launchApp, setReactValueJs } from "./harness.js";
 
 /**
  * Context pills e2e: the composer is a contenteditable with INLINE pills.
@@ -61,18 +61,7 @@ const helpers = `
     composer().dispatchEvent(ev);
     return ev.defaultPrevented;
   };
-  const setReactValue = (el, value) => {
-    if (el.isContentEditable) {
-      const kept = [...el.querySelectorAll('[data-pill-id]')];
-      el.replaceChildren(...kept, document.createTextNode(value));
-      el.dispatchEvent(new InputEvent('input', { bubbles: true }));
-      return;
-    }
-    const proto = el instanceof HTMLTextAreaElement
-      ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;
-    Object.getOwnPropertyDescriptor(proto, 'value').set.call(el, value);
-    el.dispatchEvent(new Event('input', { bubbles: true }));
-  };
+  ${setReactValueJs}
   const pressKey = (key, mods = {}) =>
     window.dispatchEvent(new KeyboardEvent('keydown', {
       key, bubbles: true, cancelable: true, ...mods }));

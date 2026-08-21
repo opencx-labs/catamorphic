@@ -166,6 +166,10 @@ export function registerDocumentRoutes(
   typed.route({
     method: "PUT",
     url: "/projects/:projectId/documents/content",
+    // The body must fit the largest allowed document base64-inflated (4/3)
+    // plus the JSON envelope; the handler's storeUploadMaxBytes check owns
+    // the accurate 413 for decoded content.
+    bodyLimit: Math.ceil((ctx.features.storeUploadMaxBytes * 4) / 3) + 65_536,
     schema: {
       params: ProjectIdParamsSchema,
       body: WriteDocumentSchema,

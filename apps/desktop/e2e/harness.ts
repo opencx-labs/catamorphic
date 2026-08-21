@@ -20,7 +20,7 @@ const cdpPort = () => 9300 + Math.floor(Math.random() * 400);
  * (or anything else) may be squatting on one of the candidates. */
 async function freeCdpPort(): Promise<number> {
   for (let attempt = 0; attempt < 20; attempt += 1) {
-    const port = await freeCdpPort();
+    const port = cdpPort();
     const free = await new Promise<boolean>((resolve) => {
       const probe = net
         .connect({ host: "127.0.0.1", port }, () => {
@@ -100,7 +100,7 @@ export async function launchApp(opts: LaunchOpts = {}): Promise<AppHandle> {
     "dist",
     fs.readFileSync(path.join(electronPackage, "path.txt"), "utf-8").trim(),
   );
-  const port = cdpPort();
+  const port = await freeCdpPort();
   const child = spawn(
     electronBinary,
     [".", `--remote-debugging-port=${port}`],
@@ -343,6 +343,25 @@ const KEY_CODES = {
   ArrowLeft: { windowsVirtualKeyCode: 37, code: "ArrowLeft" },
   ArrowRight: { windowsVirtualKeyCode: 39, code: "ArrowRight" },
 } as const;
+
+/**
+ * Page-side helper source for suite `helpers` strings: set a field's value
+ * through the setter React instruments. The chat composer is a
+ * contenteditable (inline pills), so that branch keeps [data-pill-id]
+ * children, sets the text, and lets the input handler read the DOM back.
+ */
+export const setReactValueJs = `const setReactValue = (el, value) => {
+    if (el.isContentEditable) {
+      const pills = [...el.querySelectorAll('[data-pill-id]')];
+      el.replaceChildren(...pills, document.createTextNode(value));
+      el.dispatchEvent(new InputEvent('input', { bubbles: true }));
+      return;
+    }
+    const proto = el instanceof HTMLTextAreaElement
+      ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;
+    Object.getOwnPropertyDescriptor(proto, 'value').set.call(el, value);
+    el.dispatchEvent(new Event('input', { bubbles: true }));
+  };`;
 
 async function terminate(child: ChildProcess): Promise<void> {
   if (child.exitCode !== null) return;

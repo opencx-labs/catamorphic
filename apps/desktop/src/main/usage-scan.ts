@@ -15,14 +15,18 @@
  * never yield different usage.
  */
 
-import { createReadStream, promises as fs } from "node:fs";
+import { promises as fs, createReadStream } from "node:fs";
 import path from "node:path";
-import readline from "node:readline";
-import type {
-  UsageBucket,
-  UsageSummary,
-  UsageWindowDays,
-} from "../shared/usage.js";
+import {
+  dedupeWithinFile,
+  mightCarryUsage,
+  parseClaudeLine,
+  parseCodexLine,
+  createCodexScanState,
+  type CodexScanState,
+  type UsageProvider,
+  type UsageRecord,
+} from "./usage-transcripts.js";
 import {
   cacheSavingsUsd,
   parseRateTable,
@@ -30,29 +34,28 @@ import {
   type RateTable,
 } from "./usage-pricing.js";
 import {
-  createCodexScanState,
-  dedupeWithinFile,
-  mightCarryUsage,
-  parseClaudeLine,
-  parseCodexLine,
-  totalTokens,
-  type UsageProvider,
-  type UsageRecord,
-  type UsageTokens,
-} from "./usage-transcripts.js";
-
-export type { UsageBucket, UsageSummary, UsageWindowDays };
+  localDayKey,
+  type UsageBucket,
+  type UsageSummary,
+  type UsageWindowDays,
+} from "../shared/usage.js";
 
 interface CachedFile {
   size: number;
   mtimeMs: number;
   provider: UsageProvider;
   records: UsageRecord[];
+  /** Byte offset just past the last COMPLETE parsed line; a grown file
+   *  resumes parsing here instead of from byte 0. */
+  parsedBytes: number;
+  /** Codex reducer state as of parsedBytes; null for Claude entries. */
+  codexState: CodexScanState | null;
 }
 
 /** Bump whenever parser semantics change: cached entries would otherwise
- *  keep serving records parsed under the old rules forever. */
-const SCAN_CACHE_VERSION = 1;
+ *  keep serving records parsed under the old rules forever.
+ *  v2 = incremental entries (shape change: parsedBytes + codexState). */
+const SCAN_CACHE_VERSION = 2;
 /** The longest window the UI offers. */
 const CACHE_RETENTION_DAYS = 90;
 /** A session's last write can land well before local midnight on the
@@ -66,13 +69,15 @@ const LITELLM_RATES_URL =
 /** Rates move rarely; a day-old table keeps the page working offline. */
 const RATES_TTL_MS = 24 * 60 * 60 * 1000;
 const RATES_FETCH_TIMEOUT_MS = 10_000;
-
-/** ISO-ordered local YYYY-MM-DD (en-CA renders exactly that shape). */
-const dayFormatter = new Intl.DateTimeFormat("en-CA", {
-  year: "numeric",
-  month: "2-digit",
-  day: "2-digit",
-});
+/** Offline first runs must not stall every page load on a doomed fetch;
+ *  token counts render without prices. */
+const RATES_RETRY_BACKOFF_MS = 5 * 60 * 1000;
+/** A live transcript keeps every scan dirty; rewriting the whole cache
+ *  blob each time is wasted IO, and an unpersisted increment only costs
+ *  a re-parse after restart. */
+const PERSIST_MIN_INTERVAL_MS = 60_000;
+/** Files stat+parse through a small pool; aggregation stays sequential. */
+const CONCURRENT_FILE_READS = 8;
 
 export interface UsageScannerDeps {
   /** The user's home directory (machine-default provider homes live here). */
@@ -90,9 +95,9 @@ export interface UsageScanner {
 export function createUsageScanner(deps: UsageScannerDeps): UsageScanner {
   let fileCache: Map<string, CachedFile> | undefined;
   let cacheDirty = false;
-  let rates:
-    | { table: RateTable; fetchedAtMs: number; status: "fresh" | "cached" }
-    | undefined;
+  let lastPersistMs: number | undefined;
+  let rates: { table: RateTable; fetchedAtMs: number; status: "fresh" | "cached" } | undefined;
+  let ratesFetchFailedAtMs: number | undefined;
   // Concurrent calls coalesce: a second request while a scan runs awaits
   // the same promise instead of racing the cache.
   let inFlight: Promise<UsageSummary> | undefined;
@@ -114,6 +119,7 @@ export function createUsageScanner(deps: UsageScannerDeps): UsageScanner {
           if (
             typeof entry?.size === "number" &&
             typeof entry.mtimeMs === "number" &&
+            typeof entry.parsedBytes === "number" &&
             Array.isArray(entry.records)
           ) {
             fileCache.set(filePath, entry);
@@ -128,6 +134,12 @@ export function createUsageScanner(deps: UsageScannerDeps): UsageScanner {
 
   async function persistCache(): Promise<void> {
     if (!cacheDirty || !fileCache) return;
+    if (
+      lastPersistMs !== undefined &&
+      Date.now() - lastPersistMs < PERSIST_MIN_INTERVAL_MS
+    ) {
+      return;
+    }
     try {
       await fs.mkdir(deps.cacheDir, { recursive: true });
       await fs.writeFile(
@@ -139,6 +151,7 @@ export function createUsageScanner(deps: UsageScannerDeps): UsageScanner {
       );
       // Only after the write lands: a failed persist retries next scan.
       cacheDirty = false;
+      lastPersistMs = Date.now();
     } catch {
       // A slower next start, not a failed read.
     }
@@ -162,6 +175,14 @@ export function createUsageScanner(deps: UsageScannerDeps): UsageScanner {
         // No cached table; fall through to the fetch.
       }
     }
+    // A recent failure means offline or blocked; back off instead of
+    // paying the fetch timeout on every summary().
+    if (
+      ratesFetchFailedAtMs !== undefined &&
+      now - ratesFetchFailedAtMs < RATES_RETRY_BACKOFF_MS
+    ) {
+      return;
+    }
     try {
       const abort = new AbortController();
       const timer = setTimeout(() => abort.abort(), RATES_FETCH_TIMEOUT_MS);
@@ -172,12 +193,14 @@ export function createUsageScanner(deps: UsageScannerDeps): UsageScanner {
       const table = parseRateTable(document);
       if (table.size === 0) throw new Error("empty rate table");
       rates = { table, fetchedAtMs: now, status: "fresh" };
+      ratesFetchFailedAtMs = undefined;
       await fs.mkdir(deps.cacheDir, { recursive: true });
       await fs
         .writeFile(ratesPath, JSON.stringify({ fetchedAtMs: now, document }))
         .catch(() => {});
     } catch {
       // Keep serving the old table, but never keep claiming "fresh".
+      ratesFetchFailedAtMs = now;
       if (rates) rates = { ...rates, status: "cached" };
     }
   }
@@ -186,10 +209,7 @@ export function createUsageScanner(deps: UsageScannerDeps): UsageScanner {
     { provider: UsageProvider; dir: string }[]
   > {
     const candidates: { provider: UsageProvider; dir: string }[] = [
-      {
-        provider: "claude",
-        dir: path.join(deps.homeDir, ".claude", "projects"),
-      },
+      { provider: "claude", dir: path.join(deps.homeDir, ".claude", "projects") },
       { provider: "codex", dir: path.join(deps.homeDir, ".codex", "sessions") },
     ];
     // Account-auth agents run with CLAUDE_CONFIG_DIR / CODEX_HOME pointed
@@ -202,14 +222,8 @@ export function createUsageScanner(deps: UsageScannerDeps): UsageScanner {
       for (const entry of entries) {
         if (!entry.isDirectory()) continue;
         const home = path.join(deps.agentHomesDir, entry.name);
-        candidates.push({
-          provider: "claude",
-          dir: path.join(home, "projects"),
-        });
-        candidates.push({
-          provider: "codex",
-          dir: path.join(home, "sessions"),
-        });
+        candidates.push({ provider: "claude", dir: path.join(home, "projects") });
+        candidates.push({ provider: "codex", dir: path.join(home, "sessions") });
       }
     } catch {
       // No agent homes yet.
@@ -250,28 +264,41 @@ export function createUsageScanner(deps: UsageScannerDeps): UsageScanner {
     return files;
   }
 
-  /** Parse one file streaming; null means read failure, distinct from
-   *  empty — a failure must never be cached as "no usage". */
+  /** Parse lines from a byte offset onward, mutating `state` as the codex
+   *  reducer consumes them; null means read failure, distinct from empty —
+   *  a failure must never be cached as "no usage". Lines are split by hand
+   *  because byte offsets must advance only past COMPLETE lines: a torn
+   *  trailing line of a live file is left for the next scan to finish. */
   async function readFileRecords(
     filePath: string,
     provider: UsageProvider,
-  ): Promise<UsageRecord[] | null> {
+    start: number,
+    state: CodexScanState,
+  ): Promise<{ records: UsageRecord[]; parsedBytes: number } | null> {
     try {
       const records: UsageRecord[] = [];
-      const state = createCodexScanState();
-      const lines = readline.createInterface({
-        input: createReadStream(filePath, { encoding: "utf8" }),
-        crlfDelay: Infinity,
-      });
-      for await (const line of lines) {
-        if (!mightCarryUsage(line, provider)) continue;
-        const record =
-          provider === "claude"
-            ? parseClaudeLine(line)
-            : parseCodexLine(line, state);
-        if (record) records.push(record);
+      let parsedBytes = start;
+      // The utf8 decode is chunk-boundary-safe (string_decoder buffers a
+      // split multibyte sequence); `start` always lands on a line start,
+      // which is a character boundary.
+      const stream = createReadStream(filePath, { start, encoding: "utf8" });
+      let carry = "";
+      for await (const chunk of stream as AsyncIterable<string>) {
+        carry += chunk;
+        let newlineAt: number;
+        while ((newlineAt = carry.indexOf("\n")) !== -1) {
+          const line = carry.slice(0, newlineAt);
+          carry = carry.slice(newlineAt + 1);
+          parsedBytes += Buffer.byteLength(line, "utf8") + 1;
+          if (!mightCarryUsage(line, provider)) continue;
+          const record =
+            provider === "claude"
+              ? parseClaudeLine(line)
+              : parseCodexLine(line, state);
+          if (record) records.push(record);
+        }
       }
-      return provider === "claude" ? dedupeWithinFile(records) : records;
+      return { records, parsedBytes };
     } catch {
       return null;
     }
@@ -295,11 +322,67 @@ export function createUsageScanner(deps: UsageScannerDeps): UsageScanner {
     ) {
       return cached.records;
     }
-    const parsed = await readFileRecords(filePath, provider);
+    // Transcripts are append-only: a grown file resumes from parsedBytes
+    // with the persisted reducer state. Shrunk size or regressed mtime
+    // means the file was replaced; re-parse from byte 0.
+    if (
+      cached &&
+      cached.provider === provider &&
+      size > cached.size &&
+      mtimeMs >= cached.mtimeMs &&
+      cached.parsedBytes <= cached.size
+    ) {
+      const state = cached.codexState
+        ? { ...cached.codexState }
+        : createCodexScanState();
+      const tail = await readFileRecords(filePath, provider, cached.parsedBytes, state);
+      // Failed incremental read: serve the cached records untouched and
+      // let the next scan retry.
+      if (tail === null) return cached.records;
+      const records = [...cached.records];
+      if (provider === "claude") {
+        // Within-file dedupe must stay exact across increments: appended
+        // records check against the keys already kept in the cache.
+        const seen = new Set<string>();
+        for (const record of records) {
+          if (record.dedupeKey !== null) seen.add(record.dedupeKey);
+        }
+        for (const record of tail.records) {
+          if (record.dedupeKey !== null) {
+            if (seen.has(record.dedupeKey)) continue;
+            seen.add(record.dedupeKey);
+          }
+          records.push(record);
+        }
+      } else {
+        records.push(...tail.records);
+      }
+      cache.set(filePath, {
+        size,
+        mtimeMs,
+        provider,
+        records,
+        parsedBytes: tail.parsedBytes,
+        codexState: provider === "codex" ? state : null,
+      });
+      cacheDirty = true;
+      return records;
+    }
+    const state = createCodexScanState();
+    const parsed = await readFileRecords(filePath, provider, 0, state);
     if (parsed === null) return [];
-    cache.set(filePath, { size, mtimeMs, provider, records: parsed });
+    const records =
+      provider === "claude" ? dedupeWithinFile(parsed.records) : parsed.records;
+    cache.set(filePath, {
+      size,
+      mtimeMs,
+      provider,
+      records,
+      parsedBytes: parsed.parsedBytes,
+      codexState: provider === "codex" ? state : null,
+    });
     cacheDirty = true;
-    return parsed;
+    return records;
   }
 
   function pruneCache(
@@ -338,8 +421,7 @@ export function createUsageScanner(deps: UsageScannerDeps): UsageScanner {
     if (resolution === "hour") {
       // Aligned to the minute so hour buckets are stable fixed-duration
       // offsets from the window start (DST-proof, unlike wall-clock hours).
-      windowStartMs =
-        Math.floor((windowEndMs - 24 * HOUR_MS) / 60_000) * 60_000;
+      windowStartMs = Math.floor((windowEndMs - 24 * HOUR_MS) / 60_000) * 60_000;
     } else {
       // Local midnight of (today - (days - 1)): calendar arithmetic, not
       // fixed milliseconds, so the window survives DST transitions.
@@ -348,12 +430,13 @@ export function createUsageScanner(deps: UsageScannerDeps): UsageScanner {
       start.setDate(start.getDate() - (days - 1));
       windowStartMs = start.getTime();
     }
-    const sinceDay = dayFormatter.format(new Date(windowStartMs));
-    const untilDay = dayFormatter.format(new Date(windowEndMs));
+    const sinceDay = localDayKey(windowStartMs);
+    const untilDay = localDayKey(windowEndMs);
 
     await ensureRates();
     const table: RateTable = rates?.table ?? new Map();
     const roots = await resolveRoots();
+    await loadCache();
 
     const admissionCutoffMs = windowStartMs - MTIME_SLACK_MS;
     const buckets = new Map<string, UsageBucket>();
@@ -363,97 +446,120 @@ export function createUsageScanner(deps: UsageScannerDeps): UsageScanner {
     let duplicatesDropped = 0;
     const livePaths = new Set<string>();
 
+    // Files are sorted per root so aggregation order — and with it the
+    // first-record-wins global dedupe — is deterministic across scans.
+    const tasks: { provider: UsageProvider; filePath: string }[] = [];
     for (const root of roots) {
-      for (const filePath of await walkJsonl(root.dir)) {
+      for (const filePath of (await walkJsonl(root.dir)).sort()) {
         livePaths.add(filePath);
-        let size: number;
-        let mtimeMs: number;
-        try {
-          const stats = await fs.stat(filePath);
-          size = stats.size;
-          mtimeMs = stats.mtimeMs;
-        } catch {
-          continue; // vanished between readdir and stat
-        }
-        if (mtimeMs < admissionCutoffMs) continue;
-        scannedFiles += 1;
-        for (const record of await fileRecords(
-          filePath,
-          root.provider,
-          size,
-          mtimeMs,
-        )) {
-          if (
-            record.timestampMs < windowStartMs ||
-            record.timestampMs >= windowEndMs
-          ) {
-            continue;
-          }
-          const day = dayFormatter.format(new Date(record.timestampMs));
-          if (resolution === "day" && (day < sinceDay || day > untilDay)) {
-            continue;
-          }
-          // Global dedupe: resumed/forked Claude sessions copy records
-          // across transcripts; first record wins.
-          if (record.dedupeKey !== null) {
-            const key = `${root.provider} ${record.dedupeKey}`;
-            if (seenKeys.has(key)) {
-              duplicatesDropped += 1;
-              continue;
+        tasks.push({ provider: root.provider, filePath });
+      }
+    }
+
+    // stat+parse concurrently; results land by index so the sequential
+    // aggregation below sees them in task order. Null = skipped (stale
+    // mtime, or vanished between readdir and stat).
+    const results: (UsageRecord[] | null)[] = new Array(tasks.length).fill(null);
+    let nextTask = 0;
+    await Promise.all(
+      Array.from(
+        { length: Math.min(CONCURRENT_FILE_READS, tasks.length) },
+        async () => {
+          while (true) {
+            const index = nextTask++;
+            if (index >= tasks.length) return;
+            const task = tasks[index]!;
+            let stats;
+            try {
+              stats = await fs.stat(task.filePath);
+            } catch {
+              continue; // vanished between readdir and stat
             }
-            seenKeys.add(key);
-          }
-          if (record.sessionId) {
-            landedSessions.add(`${root.provider} ${record.sessionId}`);
-          }
-          const hourStart =
-            resolution === "hour"
-              ? new Date(
-                  windowStartMs +
-                    Math.floor((record.timestampMs - windowStartMs) / HOUR_MS) *
-                      HOUR_MS,
-                ).toISOString()
-              : undefined;
-          const bucketKey = `${day} ${hourStart ?? ""} ${root.provider} ${record.model}`;
-          let bucket = buckets.get(bucketKey);
-          if (!bucket) {
-            bucket = {
-              day,
-              ...(hourStart ? { hourStart } : {}),
-              provider: root.provider,
-              model: record.model,
-              tokens: {
-                inputTokens: 0,
-                cachedInputTokens: 0,
-                cacheCreationTokens: 0,
-                outputTokens: 0,
-                reasoningTokens: 0,
-              },
-              records: 0,
-              unpricedRecords: 0,
-              costUsd: 0,
-              cacheSavingsUsd: 0,
-            };
-            buckets.set(bucketKey, bucket);
-          }
-          bucket.tokens.inputTokens += record.tokens.inputTokens;
-          bucket.tokens.cachedInputTokens += record.tokens.cachedInputTokens;
-          bucket.tokens.cacheCreationTokens +=
-            record.tokens.cacheCreationTokens;
-          bucket.tokens.outputTokens += record.tokens.outputTokens;
-          bucket.tokens.reasoningTokens += record.tokens.reasoningTokens;
-          bucket.records += 1;
-          const cost = priceTokens(table, record.model, record.tokens);
-          if (cost === null) {
-            bucket.unpricedRecords += 1;
-          } else {
-            bucket.costUsd += cost;
-            bucket.cacheSavingsUsd += cacheSavingsUsd(
-              table,
-              record.model,
-              record.tokens,
+            if (stats.mtimeMs < admissionCutoffMs) continue;
+            results[index] = await fileRecords(
+              task.filePath,
+              task.provider,
+              stats.size,
+              stats.mtimeMs,
             );
           }
+        },
+      ),
+    );
+
+    for (let index = 0; index < tasks.length; index += 1) {
+      const parsed = results[index];
+      // Sparse slots (mtime-skipped, vanished mid-walk) stay unset.
+      if (parsed == null) continue;
+      const provider = tasks[index]!.provider;
+      scannedFiles += 1;
+      for (const record of parsed) {
+        if (record.timestampMs < windowStartMs || record.timestampMs >= windowEndMs) {
+          continue;
+        }
+        const day = localDayKey(record.timestampMs);
+        if (resolution === "day" && (day < sinceDay || day > untilDay)) {
+          continue;
+        }
+        // Global dedupe: resumed/forked Claude sessions copy records
+        // across transcripts; first record wins.
+        if (record.dedupeKey !== null) {
+          const key = `${provider} ${record.dedupeKey}`;
+          if (seenKeys.has(key)) {
+            duplicatesDropped += 1;
+            continue;
+          }
+          seenKeys.add(key);
+        }
+        if (record.sessionId) {
+          landedSessions.add(`${provider} ${record.sessionId}`);
+        }
+        const hourStart =
+          resolution === "hour"
+            ? new Date(
+                windowStartMs +
+                  Math.floor((record.timestampMs - windowStartMs) / HOUR_MS) *
+                    HOUR_MS,
+              ).toISOString()
+            : undefined;
+        const bucketKey = `${day} ${hourStart ?? ""} ${provider} ${record.model}`;
+        let bucket = buckets.get(bucketKey);
+        if (!bucket) {
+          bucket = {
+            day,
+            ...(hourStart ? { hourStart } : {}),
+            provider: provider,
+            model: record.model,
+            tokens: {
+              inputTokens: 0,
+              cachedInputTokens: 0,
+              cacheCreationTokens: 0,
+              outputTokens: 0,
+              reasoningTokens: 0,
+            },
+            records: 0,
+            unpricedRecords: 0,
+            costUsd: 0,
+            cacheSavingsUsd: 0,
+          };
+          buckets.set(bucketKey, bucket);
+        }
+        bucket.tokens.inputTokens += record.tokens.inputTokens;
+        bucket.tokens.cachedInputTokens += record.tokens.cachedInputTokens;
+        bucket.tokens.cacheCreationTokens += record.tokens.cacheCreationTokens;
+        bucket.tokens.outputTokens += record.tokens.outputTokens;
+        bucket.tokens.reasoningTokens += record.tokens.reasoningTokens;
+        bucket.records += 1;
+        const cost = priceTokens(table, record.model, record.tokens);
+        if (cost === null) {
+          bucket.unpricedRecords += 1;
+        } else {
+          bucket.costUsd += cost;
+          bucket.cacheSavingsUsd += cacheSavingsUsd(
+            table,
+            record.model,
+            record.tokens,
+          );
         }
       }
     }
@@ -500,5 +606,3 @@ export function createUsageScanner(deps: UsageScannerDeps): UsageScanner {
     },
   };
 }
-
-export { totalTokens };

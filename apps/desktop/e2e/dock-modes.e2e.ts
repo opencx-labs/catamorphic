@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { type AppHandle, launchApp } from "./harness.js";
+import { type AppHandle, launchApp, setReactValueJs } from "./harness.js";
 
 /**
  * Floating-dock behaviors around a working agent:
@@ -35,18 +35,11 @@ const helpers = `
   const composer = () => frontDock()?.querySelector('[data-composer-input]');
   const setComposer = (text) => {
     const c = composer(); c.focus();
-    const kept = [...c.querySelectorAll('[data-pill-id]')];
-    c.replaceChildren(...kept, document.createTextNode(text));
-    c.dispatchEvent(new InputEvent('input', { bubbles: true }));
+    setReactValue(c, text);
   };
   const send = () => composer().dispatchEvent(new KeyboardEvent('keydown', {
     key: 'Enter', bubbles: true, cancelable: true }));
-  const setReactValue = (el, value) => {
-    const proto = el instanceof HTMLTextAreaElement
-      ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;
-    Object.getOwnPropertyDescriptor(proto, 'value').set.call(el, value);
-    el.dispatchEvent(new Event('input', { bubbles: true }));
-  };
+  ${setReactValueJs}
   const pressKey = (key, mods = {}) =>
     window.dispatchEvent(new KeyboardEvent('keydown', {
       key, bubbles: true, cancelable: true, ...mods }));

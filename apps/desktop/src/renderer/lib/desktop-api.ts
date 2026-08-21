@@ -23,8 +23,7 @@ export type AgentMode = "read-only" | "edit" | "full-access";
  * future connection, or a pinned subset.
  */
 export type AgentConnectionsSetting =
-  | { mode: "all" }
-  | { mode: "picked"; connectionIds: string[] };
+  { mode: "all" } | { mode: "picked"; connectionIds: string[] };
 
 /** Which skills an agent is offered: every skill, or a pinned set of names. */
 export type AgentSkillsSetting =
@@ -405,9 +404,7 @@ export interface RemoteDocumentVersion {
 }
 
 export type GithubConnectResult =
-  | { connected: true; login: string }
-  | { error: string }
-  | null;
+  { connected: true; login: string } | { error: string } | null;
 
 export interface Profile {
   id: string;
@@ -728,7 +725,9 @@ export interface CatamorphicDesktopApi {
     id: string,
   ) => Promise<{ started: boolean; command?: string; error?: string }>;
   agentLoginStatus: (id: string) => Promise<boolean>;
-  agentAuthHealth: (id: string) => Promise<"ok" | "expired" | "missing">;
+  agentAuthHealth: (
+    id: string,
+  ) => Promise<{ health: "ok" | "expired" | "missing"; reauth: boolean }>;
   usageSummary: (days: number) => Promise<UsageSummary>;
   agentCommands: (
     projectId: string,

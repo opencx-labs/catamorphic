@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { type AppHandle, launchApp } from "./harness.js";
+import { type AppHandle, launchApp, setReactValueJs } from "./harness.js";
 
 /**
  * Markdown editor e2e: .md files open in the rich editor (not Monaco) inside
@@ -30,20 +30,7 @@ const helpers = `
       const rect = el.getBoundingClientRect();
       return rect.width > 0 && rect.height > 0;
     });
-  const setReactValue = (el, value) => {
-    // The chat composer is a contenteditable (inline pills): set its text
-    // and let its input handler read the DOM back.
-    if (el.isContentEditable) {
-      const pills = [...el.querySelectorAll('[data-pill-id]')];
-      el.replaceChildren(...pills, document.createTextNode(value));
-      el.dispatchEvent(new InputEvent('input', { bubbles: true }));
-      return;
-    }
-    const proto = el instanceof HTMLTextAreaElement
-      ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;
-    Object.getOwnPropertyDescriptor(proto, 'value').set.call(el, value);
-    el.dispatchEvent(new Event('input', { bubbles: true }));
-  };
+  ${setReactValueJs}
   const pressKey = (key, mods = {}) =>
     window.dispatchEvent(new KeyboardEvent('keydown', {
       key, bubbles: true, cancelable: true, ...mods }));

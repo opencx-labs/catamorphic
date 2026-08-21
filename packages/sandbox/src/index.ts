@@ -116,6 +116,7 @@ export type {
   StepEntry,
 } from "./types.js";
 export {
+  positiveTokenCount,
   RuntimeEventReportingError,
   RuntimeInfrastructureError,
 } from "./types.js";

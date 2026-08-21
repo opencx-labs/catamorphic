@@ -1,5 +1,6 @@
 "use client";
 
+import { ATTACHMENT_MARKER } from "@catamorphic/sandbox/attachments";
 import { useQueryClient } from "@tanstack/react-query";
 import { useRef, useState } from "react";
 import type { CatamorphicError } from "../lib/errors.js";
@@ -351,9 +352,22 @@ export function useAgentChat(
       await interrupt();
     },
     updateQueued: (id, content) => {
-      queueRef.current = queueRef.current.map((queued) =>
-        queued.id === id ? { ...queued, content } : queued,
-      );
+      queueRef.current = queueRef.current.map((queued) => {
+        if (queued.id !== id) return queued;
+        // Invariant: marker count equals attachments length (the n-th
+        // marker is the n-th attachment). A plain-text edit can delete or
+        // duplicate markers; when the counts diverge, reflow every pill to
+        // the end of the prose instead of silently remapping positions.
+        const withoutMarkers = content.split(ATTACHMENT_MARKER).join("");
+        const markerCount =
+          (content.length - withoutMarkers.length) / ATTACHMENT_MARKER.length;
+        const next =
+          markerCount === queued.attachments.length
+            ? content
+            : withoutMarkers +
+              ATTACHMENT_MARKER.repeat(queued.attachments.length);
+        return { ...queued, content: next };
+      });
       syncQueue();
     },
     removeQueued: (id) => {

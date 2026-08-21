@@ -1,3 +1,4 @@
+import { ATTACHMENT_MARKER } from "@catamorphic/sandbox/attachments";
 import { act, waitFor } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 import { apiUrl, HttpResponse, http } from "../../test/handlers.js";
@@ -231,6 +232,75 @@ describe("useAgentChat", () => {
     expect(result.current.queue[0]?.content).toBe("Repeat");
     finishFirst?.();
     await waitFor(() => expect(sends).toBe(2));
+  });
+
+  it("reflows attachment markers to the end when an edit desyncs them", async () => {
+    let finishFirst: (() => void) | undefined;
+    server.use(
+      http.post(apiUrl(`/api/projects/${PROJECT_ID}/agent/sessions`), () =>
+        HttpResponse.json(session, { status: 201 }),
+      ),
+      http.post(
+        apiUrl(
+          `/api/projects/${PROJECT_ID}/agent/sessions/${SESSION_ID}/messages`,
+        ),
+        async () => {
+          await new Promise<void>((resolve) => {
+            finishFirst = resolve;
+          });
+          return HttpResponse.json(
+            {
+              id: crypto.randomUUID(),
+              sessionId: SESSION_ID,
+              role: "assistant",
+              content: "Done",
+              commitSha: null,
+              metadata: null,
+              createdAt: new Date().toISOString(),
+            },
+            { status: 201 },
+          );
+        },
+      ),
+      http.get(
+        apiUrl(`/api/projects/${PROJECT_ID}/agent/sessions/${SESSION_ID}`),
+        () => HttpResponse.json({ ...session, messages: [] }),
+      ),
+    );
+    const { result } = renderHookWithProviders(() => useAgentChat(PROJECT_ID));
+    const attachments = [
+      { kind: "text" as const, name: "a.md", text: "a", source: { type: "paste" as const } },
+      { kind: "text" as const, name: "b.md", text: "b", source: { type: "paste" as const } },
+    ];
+
+    act(() => {
+      void result.current.send("First");
+      void result.current.send(
+        `see ${ATTACHMENT_MARKER} and ${ATTACHMENT_MARKER}`,
+        attachments,
+      );
+    });
+    await waitFor(() => expect(result.current.queue).toHaveLength(1));
+    const queuedId = result.current.queue[0]?.id as string;
+
+    // Marker count matches the attachments: the edit stands as typed.
+    act(() =>
+      result.current.updateQueued(
+        queuedId,
+        `look at ${ATTACHMENT_MARKER} then ${ATTACHMENT_MARKER}`,
+      ),
+    );
+    expect(result.current.queue[0]?.content).toBe(
+      `look at ${ATTACHMENT_MARKER} then ${ATTACHMENT_MARKER}`,
+    );
+
+    // A marker was deleted: all pills reflow to the end, none remapped.
+    act(() => result.current.updateQueued(queuedId, `only ${ATTACHMENT_MARKER} left`));
+    expect(result.current.queue[0]?.content).toBe(
+      `only  left${ATTACHMENT_MARKER}${ATTACHMENT_MARKER}`,
+    );
+    expect(result.current.queue[0]?.attachments).toHaveLength(2);
+    finishFirst?.();
   });
 
   it("reports isWorking while the server has an in-progress turn, without a local send", async () => {

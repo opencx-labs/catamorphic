@@ -5,7 +5,6 @@ import {
   mightCarryUsage,
   parseClaudeLine,
   parseCodexLine,
-  parseTranscriptLines,
   totalTokens,
 } from "./usage-transcripts.js";
 
@@ -272,18 +271,28 @@ describe("mightCarryUsage", () => {
   });
 });
 
-describe("parseTranscriptLines", () => {
-  it("runs the whole pipeline per provider", () => {
-    const claude = parseTranscriptLines([claudeLine(), claudeLine()], "claude");
-    expect(claude).toHaveLength(1);
-    const codex = parseTranscriptLines(
-      [
-        codexMeta(),
-        codexTurnContext(),
-        codexCount(usageDelta, "2026-08-20T10:00:05.000Z"),
-      ],
-      "codex",
-    );
-    expect(codex).toHaveLength(1);
+describe("the per-file pipeline end to end", () => {
+  it("dedupes claude per-content-block copies across a whole file", () => {
+    const records = [claudeLine(), claudeLine()]
+      .filter((line) => mightCarryUsage(line, "claude"))
+      .flatMap((line) => parseClaudeLine(line) ?? []);
+    expect(records).toHaveLength(2);
+    expect(dedupeWithinFile(records)).toHaveLength(1);
+  });
+
+  it("reduces the codex meta+context+count sequence to one record", () => {
+    const state = createCodexScanState();
+    const records = [
+      codexMeta(),
+      codexTurnContext(),
+      codexCount(usageDelta, "2026-08-20T10:00:05.000Z"),
+    ]
+      .filter((line) => mightCarryUsage(line, "codex"))
+      .flatMap((line) => parseCodexLine(line, state) ?? []);
+    expect(records).toHaveLength(1);
+    expect(records[0]).toMatchObject({
+      model: "gpt-5.6-sol",
+      sessionId: "019fbbc1-aaaa",
+    });
   });
 });

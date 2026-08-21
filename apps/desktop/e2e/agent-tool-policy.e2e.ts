@@ -1,7 +1,7 @@
 import { type ChildProcess, spawn } from "node:child_process";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { type AppHandle, launchApp } from "./harness.js";
+import { type AppHandle, launchApp, setReactValueJs } from "./harness.js";
 
 /**
  * Agent-level tool access (ADR 0054): Settings → edit agent shows a row per
@@ -48,20 +48,7 @@ const helpers = `
   const $$ = (selector) => [...document.querySelectorAll(selector)];
   const byText = (selector, text) =>
     $$(selector).find((el) => el.textContent.trim().includes(text));
-  const setReactValue = (el, value) => {
-    // The chat composer is a contenteditable (inline pills): set its text
-    // and let its input handler read the DOM back.
-    if (el.isContentEditable) {
-      const pills = [...el.querySelectorAll('[data-pill-id]')];
-      el.replaceChildren(...pills, document.createTextNode(value));
-      el.dispatchEvent(new InputEvent('input', { bubbles: true }));
-      return;
-    }
-    const proto = el instanceof HTMLTextAreaElement
-      ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;
-    Object.getOwnPropertyDescriptor(proto, 'value').set.call(el, value);
-    el.dispatchEvent(new Event('input', { bubbles: true }));
-  };
+  ${setReactValueJs}
   const field = () => $('[data-testid="agent-tool-policy"]');
   const rowFor = (key) => field()?.querySelector('[data-testid="agent-policy-row"][data-key="' + key + '"]');
 `;

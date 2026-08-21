@@ -5,6 +5,7 @@
  * (Claude Code does; Codex's stream reports neither). Danger red past
  * 90%, quiet otherwise.
  */
+import { formatTokenCount } from "../../shared/usage.js";
 import { ShortcutHint } from "./shortcut-hint.js";
 
 interface MessageLike {
@@ -40,12 +41,6 @@ export function latestContextSnapshot(
   return null;
 }
 
-function formatTokens(value: number): string {
-  if (value < 1000) return String(value);
-  if (value < 1_000_000) return `${Math.round(value / 1000)}K`;
-  return `${Number((value / 1_000_000).toPrecision(3))}M`;
-}
-
 export function ContextMeter({ messages }: { messages: MessageLike[] }) {
   const snapshot = latestContextSnapshot(messages);
   if (!snapshot) return null;
@@ -56,7 +51,7 @@ export function ContextMeter({ messages }: { messages: MessageLike[] }) {
   const circumference = 2 * Math.PI * radius;
   return (
     <ShortcutHint
-      label={`Context ${percent}% full · ${formatTokens(snapshot.usedTokens)} of ${formatTokens(snapshot.windowTokens)} tokens`}
+      label={`Context ${percent}% full · ${formatTokenCount(snapshot.usedTokens)} of ${formatTokenCount(snapshot.windowTokens)} tokens`}
     >
       <div
         className="grid size-8 shrink-0 place-items-center"

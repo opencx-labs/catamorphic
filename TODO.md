@@ -145,6 +145,16 @@
   joining transcript session ids to `agent_sessions.provider_session_id`;
   (e) per-subagent token attribution (Claude `isSidechain` records);
   (f) surface per-reply cost in the step log from `metadata.usage`.
+- **Review-deferred architecture cleanups (2026-08-21 code review).** Three
+  confirmed-but-invasive findings deferred from the fix pass: (a) slash
+  command listing as an optional provider capability (today: a Claude Code
+  special case across the ipc gate, the SlashEntry shape, and a hardcoded
+  badge; Codex has ~/.codex/prompts waiting); (b) per-harness transcript
+  usage-sources so the desktop scanner stops owning each CLI's on-disk
+  format (usage-transcripts.ts provider switches + hardcoded home
+  layouts); (c) an injected e2e-fakes layer replacing the inline env-var
+  seams (CATAMORPHIC_E2E_AUTH_HEALTH, CATAMORPHIC_E2E_FAKE_AGENT) so
+  mixed-state fixtures become possible and the usage page gets its e2e.
 - **Remote machines for agents (t3-code-inspired).** t3 runs agents on
   preconfigured remote environments over SSH (packages/ssh: auth,
   command, tunnel) and tailscale, with pairing-link auth for its

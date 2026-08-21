@@ -190,6 +190,9 @@ export function registerAgentRoutes(app: FastifyInstance, ctx: RouteContext) {
   typed.route({
     method: "POST",
     url: "/projects/:projectId/agent/sessions/:sessionId/messages",
+    // Base64 media rides in the message body (~10MB per attachment, 4/3
+    // inflated, up to 32); the rest of the API keeps Fastify's default cap.
+    bodyLimit: 96 * 1024 * 1024,
     schema: {
       params: AgentSessionIdParamsSchema,
       body: SendMessageSchema,

@@ -14,14 +14,15 @@
  *   suppressed or totals run ~1.85x high.
  */
 
+import { positiveTokenCount } from "@catamorphic/sandbox";
 import {
   totalTokens,
   type UsageProvider,
   type UsageTokens,
 } from "../shared/usage.js";
 
-export type { UsageProvider, UsageTokens };
 export { totalTokens };
+export type { UsageProvider, UsageTokens };
 
 export interface UsageRecord {
   timestampMs: number;
@@ -43,22 +44,13 @@ export interface UsageRecord {
  * scan tolerable. Codex additionally needs `turn_context`/`session_meta`
  * lines through — they carry no usage but drive the reducer state.
  */
-export function mightCarryUsage(
-  line: string,
-  provider: UsageProvider,
-): boolean {
+export function mightCarryUsage(line: string, provider: UsageProvider): boolean {
   if (provider === "claude") return line.includes('"usage"');
   return (
     line.includes('"token_count"') ||
     line.includes('"turn_context"') ||
     line.includes('"session_meta"')
   );
-}
-
-function positiveInt(value: unknown): number {
-  return typeof value === "number" && Number.isFinite(value) && value > 0
-    ? Math.trunc(value)
-    : 0;
 }
 
 function asRecord(value: unknown): Record<string, unknown> | undefined {
@@ -92,22 +84,21 @@ export function parseClaudeLine(line: string): UsageRecord | null {
   if (timestampMs === undefined) return null;
 
   const messageId = typeof message.id === "string" ? message.id : null;
-  const requestId =
-    typeof record.requestId === "string" ? record.requestId : null;
+  const requestId = typeof record.requestId === "string" ? record.requestId : null;
   const details = asRecord(usage.output_tokens_details);
-  const outputTokens = positiveInt(usage.output_tokens);
+  const outputTokens = positiveTokenCount(usage.output_tokens);
   return {
     timestampMs,
     model,
     sessionId: typeof record.sessionId === "string" ? record.sessionId : "",
     tokens: {
-      inputTokens: positiveInt(usage.input_tokens),
-      cachedInputTokens: positiveInt(usage.cache_read_input_tokens),
-      cacheCreationTokens: positiveInt(usage.cache_creation_input_tokens),
+      inputTokens: positiveTokenCount(usage.input_tokens),
+      cachedInputTokens: positiveTokenCount(usage.cache_read_input_tokens),
+      cacheCreationTokens: positiveTokenCount(usage.cache_creation_input_tokens),
       outputTokens,
       reasoningTokens: Math.min(
         outputTokens,
-        positiveInt(details?.thinking_tokens),
+        positiveTokenCount(details?.thinking_tokens),
       ),
     },
     // Records with neither id cannot be de-duplicated; keep them.
@@ -137,11 +128,7 @@ export interface CodexScanState {
 }
 
 export function createCodexScanState(): CodexScanState {
-  return {
-    sawSessionMeta: false,
-    suppressingForkCopies: false,
-    forkCopyAnchorMs: 0,
-  };
+  return { sawSessionMeta: false, suppressingForkCopies: false, forkCopyAnchorMs: 0 };
 }
 
 /**
@@ -221,22 +208,19 @@ export function parseCodexLine(
   }
   state.lastUsageSignature = signature;
 
-  const inputTokens = positiveInt(last.input_tokens);
-  const cachedInputTokens = positiveInt(last.cached_input_tokens);
-  const cacheCreationTokens = positiveInt(last.cache_write_input_tokens);
-  const outputTokens = positiveInt(last.output_tokens);
+  const inputTokens = positiveTokenCount(last.input_tokens);
+  const cachedInputTokens = positiveTokenCount(last.cached_input_tokens);
+  const cacheCreationTokens = positiveTokenCount(last.cache_write_input_tokens);
+  const outputTokens = positiveTokenCount(last.output_tokens);
   const tokens: UsageTokens = {
     // Codex reports input_tokens inclusive of the cached portion.
-    inputTokens: Math.max(
-      0,
-      inputTokens - cachedInputTokens - cacheCreationTokens,
-    ),
+    inputTokens: Math.max(0, inputTokens - cachedInputTokens - cacheCreationTokens),
     cachedInputTokens,
     cacheCreationTokens,
     outputTokens,
     reasoningTokens: Math.min(
       outputTokens,
-      positiveInt(last.reasoning_output_tokens),
+      positiveTokenCount(last.reasoning_output_tokens),
     ),
   };
   if (totalTokens(tokens) === 0) return null;
@@ -247,24 +231,6 @@ export function parseCodexLine(
     tokens,
     dedupeKey: null,
   };
-}
-
-/** Parse a whole file's lines (already split) into records. */
-export function parseTranscriptLines(
-  lines: Iterable<string>,
-  provider: UsageProvider,
-): UsageRecord[] {
-  const records: UsageRecord[] = [];
-  const state = createCodexScanState();
-  for (const line of lines) {
-    if (!mightCarryUsage(line, provider)) continue;
-    const record =
-      provider === "claude"
-        ? parseClaudeLine(line)
-        : parseCodexLine(line, state);
-    if (record) records.push(record);
-  }
-  return provider === "claude" ? dedupeWithinFile(records) : records;
 }
 
 /**

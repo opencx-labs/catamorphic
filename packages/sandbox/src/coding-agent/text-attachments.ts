@@ -52,7 +52,7 @@ export function describeTextSource(attachment: AgentTextAttachment): string {
       return `File path: ${source.path}`;
     case "tab": {
       const where = source.url ?? source.filePath;
-      return `Open ${source.kind} tab "${source.title}"${where ? ` (${where})` : ""} — key ${source.key}; read it with workspace_read_tab`;
+      return `Open ${source.kind} tab "${source.title}"${where ? ` (${where})` : ""} — key ${source.key}; read it with read_tab`;
     }
   }
 }
@@ -63,8 +63,13 @@ const isBareReference = (attachment: AgentTextAttachment): boolean =>
   attachment.source.type === "path" ||
   attachment.source.type === "tab";
 
+/** The minimal attachment shape the marker helpers need: a display name. */
+interface NamedAttachment {
+  name: string;
+}
+
 /** `[attachment 2: name]` — the inline stand-in for a marker. */
-const inlineReference = (index: number, attachment: AgentAttachment): string =>
+const inlineReference = (index: number, attachment: NamedAttachment): string =>
   `[attachment ${index + 1}: ${attachment.name}]`;
 
 /**
@@ -74,13 +79,10 @@ const inlineReference = (index: number, attachment: AgentAttachment): string =>
  * model prompt and for anything that shows the message as plain text
  * (session titles).
  */
-export function inlineAttachmentReferences(
+export function inlineAttachmentReferences<T extends NamedAttachment>(
   message: string,
-  attachments: AgentAttachment[],
-  render: (
-    index: number,
-    attachment: AgentAttachment,
-  ) => string = inlineReference,
+  attachments: readonly T[],
+  render: (index: number, attachment: T) => string = inlineReference,
 ): string {
   if (!message.includes(ATTACHMENT_MARKER)) return message;
   let next = 0;
@@ -95,7 +97,7 @@ export function inlineAttachmentReferences(
 /** Message text with markers replaced by `[name]` — for titles and labels. */
 export function messageWithAttachmentNames(
   message: string,
-  attachments: AgentAttachment[] | undefined,
+  attachments: ReadonlyArray<NamedAttachment> | undefined,
 ): string {
   return inlineAttachmentReferences(
     message,
@@ -128,12 +130,23 @@ export function renderTextAttachments(attachments: AgentAttachment[]): string {
  * The full model-facing text for a user turn: prose with inline references
  * in place of markers, then the text-attachment blocks. Media attachments
  * are referenced inline too (`[attachment 3: shot.png]`) — the harness
- * delivers their bytes its own way (image parts, temp files).
+ * delivers their bytes its own way (image parts, temp files). A harness
+ * that cannot deliver media at all passes `omitMedia`: each media marker
+ * becomes an explicit non-delivery note instead of a bare reference the
+ * model would go looking for. Numbering still counts media attachments
+ * either way, so text attachment numbers never shift.
  */
 export function renderUserMessage(
   message: string,
   attachments: AgentAttachment[] | undefined,
+  opts?: { omitMedia?: boolean },
 ): string {
   const list = attachments ?? [];
-  return `${inlineAttachmentReferences(message, list)}${renderTextAttachments(list)}`;
+  const render = opts?.omitMedia
+    ? (index: number, attachment: AgentAttachment) =>
+        isTextAttachment(attachment)
+          ? inlineReference(index, attachment)
+          : `[attachment ${index + 1}: ${attachment.name} (${attachment.kind} not delivered; this agent reads text only)]`
+    : undefined;
+  return `${inlineAttachmentReferences(message, list, render)}${renderTextAttachments(list)}`;
 }

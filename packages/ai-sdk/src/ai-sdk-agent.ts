@@ -27,6 +27,7 @@ import {
   buildPluginsPreamble,
   isMediaAttachment,
   mergePolicyLayers,
+  positiveTokenCount,
   renderUserMessage,
   resolveMcpServers,
   stagedPluginFiles,
@@ -1216,14 +1217,12 @@ function turnUsageFromAiSdk(
   },
   model: string | undefined,
 ): AgentTurnUsage | undefined {
-  const positive = (value: number | undefined) =>
-    typeof value === "number" && Number.isFinite(value) && value > 0
-      ? Math.trunc(value)
-      : 0;
-  const input = positive(usage.inputTokens);
-  const cached = positive(usage.inputTokenDetails?.cacheReadTokens);
-  const cacheCreation = positive(usage.inputTokenDetails?.cacheWriteTokens);
-  const output = positive(usage.outputTokens);
+  const input = positiveTokenCount(usage.inputTokens);
+  const cached = positiveTokenCount(usage.inputTokenDetails?.cacheReadTokens);
+  const cacheCreation = positiveTokenCount(
+    usage.inputTokenDetails?.cacheWriteTokens,
+  );
+  const output = positiveTokenCount(usage.outputTokens);
   if (input + output === 0) return undefined;
   return {
     ...(model ? { model } : {}),
@@ -1235,7 +1234,7 @@ function turnUsageFromAiSdk(
     outputTokens: output,
     reasoningTokens: Math.min(
       output,
-      positive(usage.outputTokenDetails?.reasoningTokens),
+      positiveTokenCount(usage.outputTokenDetails?.reasoningTokens),
     ),
   };
 }

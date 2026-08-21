@@ -33,30 +33,13 @@ export type AgentChatTextSource =
       filePath?: string;
     };
 
-/**
- * Marks where an attachment sits inline in a message (U+FFFC OBJECT
- * REPLACEMENT CHARACTER): the n-th marker is the n-th attachment. Messages
- * without markers list their attachments after the prose.
- */
-export const ATTACHMENT_MARKER = "\uFFFC";
-
-/**
- * A message as plain text: each marker replaced by `[name]` of its
- * attachment (composer history recall, labels). Markers past the list are
- * dropped.
- */
-export function messageWithAttachmentNames(
-  message: string,
-  attachments: ReadonlyArray<{ name: string }> | undefined,
-): string {
-  if (!message.includes(ATTACHMENT_MARKER)) return message;
-  let next = 0;
-  return message.replace(new RegExp(ATTACHMENT_MARKER, "g"), () => {
-    const attachment = attachments?.[next];
-    next += 1;
-    return attachment ? `[${attachment.name}]` : "";
-  });
-}
+// The marker helpers live beside the harness renderers in the sandbox
+// package (browser-safe "./attachments" subpath, not the node-only root
+// barrel) so pills mean the same thing on both sides of the wire.
+export {
+  ATTACHMENT_MARKER,
+  messageWithAttachmentNames,
+} from "@catamorphic/sandbox/attachments";
 
 export interface AgentChatMediaAttachment {
   kind: "image" | "document";

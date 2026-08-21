@@ -64,6 +64,18 @@ describe("serializeComposer", () => {
     );
   });
 
+  it("strips literal U+FFFC from prose so pasted text can't forge markers", () => {
+    // Word/PDF text flavors carry object-replacement chars; only pill
+    // ELEMENTS may produce markers, or positional mapping shifts.
+    const root = el("DIV", [
+      text(`before ${M} after`),
+      el("SPAN", [], { [PILL_ATTR]: "p1" }),
+    ]);
+    const result = serializeComposer(root, () => "att" as const);
+    expect(result.message).toBe(`before  after${M}`);
+    expect(result.attachments).toEqual(["att"]);
+  });
+
   it("is empty for the empty editable (and Chromium's leftover <br>)", () => {
     expect(serializeComposer(el("DIV", [el("BR")]), () => null)).toEqual({
       message: "",

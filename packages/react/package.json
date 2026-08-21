@@ -28,6 +28,7 @@
   "dependencies": {
     "@catamorphic/api-client": "workspace:*",
     "@catamorphic/parser": "workspace:*",
+    "@catamorphic/sandbox": "workspace:*",
     "@xyflow/react": "^12.11.2",
     "jotai": "^2.20.1"
   },

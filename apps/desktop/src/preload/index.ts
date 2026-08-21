@@ -83,8 +83,13 @@ const api = {
   ): Promise<
     Array<{ name: string; description: string; argumentHint: string }>
   > => ipcRenderer.invoke("catamorphic:agent-commands", projectId, agentId),
-  /** Proactive auth probe: what is knowably wrong before a send. */
-  agentAuthHealth: (id: string): Promise<"ok" | "expired" | "missing"> =>
+  /**
+   * Proactive auth probe: what is knowably wrong before a send, plus
+   * main's verdict on whether a one-click re-login flow exists.
+   */
+  agentAuthHealth: (
+    id: string,
+  ): Promise<{ health: "ok" | "expired" | "missing"; reauth: boolean }> =>
     ipcRenderer.invoke("catamorphic:agent-auth-health", id),
   /** Whole-machine transcript scan for the usage page (ADR 0057). */
   usageSummary: (days: number): Promise<unknown> =>

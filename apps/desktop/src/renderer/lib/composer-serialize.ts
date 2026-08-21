@@ -49,10 +49,13 @@ export function serializeComposer<T>(
     if (node.nodeType === TEXT_NODE) {
       // NBSPs are Chromium's way of keeping edge spaces alive; the message
       // wants ordinary spaces. Zero-width joiners/spaces from caret tricks
-      // never belong to the prose.
+      // never belong to the prose. A literal U+FFFC in TEXT is a pasted
+      // object-replacement char (Word/PDF text flavors carry them) \u2014 it
+      // must never survive as prose, because it IS the attachment marker
+      // and a phantom one shifts every pill's positional mapping.
       out += (node.nodeValue ?? "")
         .replace(/\u00a0/g, " ")
-        .replace(/\u200B|\u200C|\u200D|\uFEFF/g, "");
+        .replace(/\u200B|\u200C|\u200D|\uFEFF|\uFFFC/g, "");
       return;
     }
     if (node.nodeType !== ELEMENT_NODE) return;

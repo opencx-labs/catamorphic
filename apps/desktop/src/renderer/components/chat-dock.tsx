@@ -478,8 +478,10 @@ const emptyStateFor = (localId: string): string => {
  */
 /**
  * An anchored popover that enters with pop-in and leaves with pop-out:
- * stays mounted through the exit (content snapshotted by the caller via
- * refs) and unmounts on animationend. `open` drives the direction.
+ * stays mounted through the exit and unmounts on animationend. `open`
+ * drives the direction. The panel owns the exit snapshot — children
+ * freeze at the last open render, so callers pass live content (null
+ * while closed is fine) and never hand-roll snapshot refs.
  */
 function PopPanel({
   open,
@@ -493,6 +495,8 @@ function PopPanel({
   children: ReactNode;
 }) {
   const [mounted, setMounted] = useState(open);
+  const frozenRef = useRef<ReactNode>(children);
+  if (open) frozenRef.current = children;
   useEffect(() => {
     if (open) setMounted(true);
   }, [open]);
@@ -505,7 +509,7 @@ function PopPanel({
       }}
       className={`${className} ${open ? "animate-pop-in" : "animate-pop-out"}`}
     >
-      {children}
+      {open ? children : frozenRef.current}
     </div>
   );
 }
@@ -529,27 +533,25 @@ function SlashMenu({
   onHover: (index: number) => void;
   onCommit: (entry: SlashEntry) => void;
 }) {
-  const lastMatchesRef = useRef<SlashEntry[]>([]);
-  if (open && matches.length > 0) lastMatchesRef.current = matches;
-  const shown = open && matches.length > 0 ? matches : lastMatchesRef.current;
   const sizerRef = useRef<HTMLDivElement>(null);
   const { reset } = useListMotion(
     sizerRef,
-    shown.map((entry) => entry.name).join("\u0000"),
+    matches.map((entry) => entry.name).join("\u0000"),
     { keepTransitions: "background-color, color" },
   );
   useEffect(() => {
     if (!open) reset();
   }, [open, reset]);
-  if (shown.length === 0) return null;
+  // PopPanel freezes the last open render through the exit, so an
+  // emptied match list closes with the previous rows still visible.
   return (
     <PopPanel
-      open={open}
+      open={open && matches.length > 0}
       className="absolute bottom-full left-0 z-20 mb-1.5 max-h-64 w-full overflow-y-auto rounded-lg border border-border bg-bg-raised/95 p-1.5 shadow-2xl backdrop-blur-xl"
       testId="slash-menu"
     >
       <div ref={sizerRef} role="listbox" aria-label="Commands">
-        {shown.map((entry, index) => (
+        {matches.map((entry, index) => (
           <div
             key={entry.name}
             data-item-id={entry.name}
@@ -916,16 +918,10 @@ function SurfacesRail({
   const openInfoSurface = openInfoKey
     ? surfaces.find((surface) => surface.key === openInfoKey)
     : undefined;
-  // Snapshots keep the popovers rendering through their exit animation.
-  const lastInfoRef = useRef<ChatSurface | null>(null);
-  if (openInfoSurface?.info) lastInfoRef.current = openInfoSurface;
-  const infoShown = openInfoSurface?.info
-    ? openInfoSurface
-    : lastInfoRef.current;
+  // PopPanel freezes the last open render through the exit animation,
+  // so live (possibly null) content is passed straight in.
+  const infoSurface = openInfoSurface?.info ? openInfoSurface : null;
   const groupSurfaces = openGroup ? byKind.get(openGroup) : undefined;
-  const lastGroupRef = useRef<ChatSurface[] | null>(null);
-  if (groupSurfaces) lastGroupRef.current = groupSurfaces;
-  const groupShown = groupSurfaces ?? lastGroupRef.current;
   const firstPaintRef = useRef(true);
   useEffect(() => {
     firstPaintRef.current = false;
@@ -935,42 +931,43 @@ function SurfacesRail({
     <div ref={railRef} className="relative mx-3">
       {/* Detail popover for chips that ARE their surface (subagents,
           watchers): the chip's activity feed, expanded upward. */}
-      {infoShown?.info && (
-        <PopPanel
-          open={Boolean(openInfoSurface?.info)}
+      <PopPanel
+          open={Boolean(infoSurface)}
           className="absolute bottom-full left-0 z-20 mb-1.5 max-h-64 w-80 overflow-y-auto rounded-lg border border-border bg-bg-raised/95 p-2 shadow-2xl backdrop-blur-xl"
           testId="surface-info-popover"
         >
-          <div className="flex items-center gap-1.5 px-1 pb-1.5 text-[11px] font-semibold text-fg">
-            {(() => {
-              const Icon = SURFACE_ICONS[infoShown.kind];
-              return infoShown.active ? (
-                <LoaderCircle className="size-3 animate-spin text-accent" />
-              ) : (
-                <Icon className="size-3" />
-              );
-            })()}
-            <span className="truncate">{infoShown.label}</span>
-          </div>
-          <div className="flex flex-col gap-0.5">
-            {infoShown.info.map((line, index) => (
-              <div
-                // biome-ignore lint/suspicious/noArrayIndexKey: static activity lines
-                key={index}
-                className="truncate px-1 font-mono text-[11px] text-fg-muted"
-              >
-                {line}
+          {infoSurface && (
+            <>
+              <div className="flex items-center gap-1.5 px-1 pb-1.5 text-[11px] font-semibold text-fg">
+                {(() => {
+                  const Icon = SURFACE_ICONS[infoSurface.kind];
+                  return infoSurface.active ? (
+                    <LoaderCircle className="size-3 animate-spin text-accent" />
+                  ) : (
+                    <Icon className="size-3" />
+                  );
+                })()}
+                <span className="truncate">{infoSurface.label}</span>
               </div>
-            ))}
-          </div>
+              <div className="flex flex-col gap-0.5">
+                {infoSurface.info?.map((line, index) => (
+                  <div
+                    // biome-ignore lint/suspicious/noArrayIndexKey: static activity lines
+                    key={index}
+                    className="truncate px-1 font-mono text-[11px] text-fg-muted"
+                  >
+                    {line}
+                  </div>
+                ))}
+              </div>
+            </>
+          )}
         </PopPanel>
-      )}
-      {groupShown && (
-        <PopPanel
+      <PopPanel
           open={Boolean(groupSurfaces)}
           className="absolute bottom-full left-0 z-20 mb-1.5 max-h-64 w-72 overflow-y-auto rounded-lg border border-border bg-bg-raised/95 p-1 shadow-2xl backdrop-blur-xl"
         >
-          {groupShown.map((surface) => (
+          {groupSurfaces?.map((surface) => (
             <div
               key={surface.key}
               className="group/chip flex items-center rounded-md text-[12px] text-fg-muted transition-colors duration-100 hover:bg-bg-overlay"
@@ -1039,7 +1036,6 @@ function SurfacesRail({
             </div>
           ))}
         </PopPanel>
-      )}
       <div className="flex items-center gap-1.5 overflow-x-auto pt-1">
         {[...byKind.entries()].map(([kind, group]) => (
           <KindStrip
@@ -1573,6 +1569,9 @@ export function ChatDock({
   const [authHealth, setAuthHealth] = useState<"ok" | "expired" | "missing">(
     "ok",
   );
+  // Main's verdict on whether a one-click re-login flow exists for the
+  // active agent; the dock renders it verbatim and never re-derives it.
+  const [authReauth, setAuthReauth] = useState(false);
   const [authBannerDismissed, setAuthBannerDismissed] = useState(false);
   // Every re-login-able agent: CLI sessions (claude-code/codex, account
   // or local) and OpenRouter's PKCE key. Plain api-key agents are
@@ -1583,17 +1582,21 @@ export function ChatDock({
   useEffect(() => {
     if (!frontSurface || !sessionAuthAgent || !activeAgent) {
       setAuthHealth("ok");
+      // No probe ran for this agent, so no re-login verdict either — a
+      // stale true from the previous agent must not offer a broken flow.
+      setAuthReauth(false);
       return;
     }
     let cancelled = false;
     const probe = () => {
       desktopApi
         .agentAuthHealth(activeAgent.id)
-        .then((health) => {
+        .then((report) => {
           if (cancelled) return;
+          setAuthReauth(report.reauth);
           setAuthHealth((previous) => {
-            if (previous !== health) setAuthBannerDismissed(false);
-            return health;
+            if (previous !== report.health) setAuthBannerDismissed(false);
+            return report.health;
           });
         })
         .catch(() => {});
@@ -1632,14 +1635,10 @@ export function ChatDock({
     };
   }, [slashing, commandsAgentId, projectId]);
 
-  // Account logins (OpenRouter PKCE, per-agent CLI homes) AND `local`
-  // CLI logins (the machine's own claude/codex session — the common
-  // case) both re-login through agentLogin; only api-key agents are
-  // pointed at Settings by the error text instead.
+  // Whether a one-click re-login exists is main's verdict (the auth-health
+  // probe reports it); the dock only supplies the label and the launcher.
   const reauth =
-    activeAgent &&
-    (activeAgent.auth === "account" ||
-      (activeAgent.auth === "local" && activeAgent.harness !== "ai-sdk"))
+    activeAgent && authReauth
       ? {
           label:
             activeAgent.provider === "openrouter"
@@ -1877,10 +1876,13 @@ export function ChatDock({
     // Backspace with no prose left pops the newest pill (the palette's
     // chip-pop) — the input already handles a caret sitting right against
     // a pill; this covers a caret parked elsewhere in an otherwise empty
-    // composer.
+    // composer. emptyButPills, not the trimmed draft: a blank line
+    // (Shift+Enter) trims to an empty draft while a deletable break is
+    // still under the caret, and that break must win over the pill.
     if (
       event.key === "Backspace" &&
       draft.length === 0 &&
+      composerRef.current?.emptyButPills() &&
       !event.metaKey &&
       !event.altKey
     ) {
@@ -1940,9 +1942,14 @@ export function ChatDock({
    * the agent reads itself. Only a pathless File that can't ship as media
    * (a synthetic clipboard bitmap too big to send) is dropped.
    */
+  const addFilesQueueRef = useRef<Promise<void>>(Promise.resolve());
   const addFiles = (files: File[], at?: { x: number; y: number }) => {
     if (files.length === 0) return;
-    void (async () => {
+    // Serialized through one chain: the media budget is read from a
+    // snapshot of the composer, so a second drop landing while the first
+    // is still encoding must wait for its pills to insert or both drops
+    // would each be granted the full budget.
+    addFilesQueueRef.current = addFilesQueueRef.current.then(async () => {
       const current = composerRef.current?.read().attachments ?? [];
       let budget =
         MAX_TOTAL_MEDIA_BYTES -
@@ -1971,7 +1978,7 @@ export function ChatDock({
         if (pathPill) pills.push(pathPill);
       }
       if (pills.length > 0) composerRef.current?.insertPills(pills, { at });
-    })();
+    });
   };
 
   const addFilesRef = useRef(addFiles);
@@ -2015,7 +2022,18 @@ export function ChatDock({
       );
       return true;
     }
-    const text = data?.getData("text/plain") ?? "";
+    let text = data?.getData("text/plain") ?? "";
+    if (!text) {
+      // Copy buttons that write only a text/html flavor (ClipboardItem)
+      // must still paste something: take the markup's text. Without this,
+      // the unconditional preventDefault would swallow the paste whole.
+      const html = data?.getData("text/html") ?? "";
+      if (html) {
+        text =
+          new DOMParser().parseFromString(html, "text/html").body
+            .textContent ?? "";
+      }
+    }
     const classified = classifyPastedText(text);
     if (classified.kind === "pill") {
       addTextPillRef.current(
@@ -2051,6 +2069,15 @@ export function ChatDock({
     if (!frontSurface) return;
     const onWindowPaste = (event: globalThis.ClipboardEvent) => {
       if (event.defaultPrevented) return;
+      // Files attach regardless of focus: a text field has no native
+      // handling for a file paste, so gating on the target would silently
+      // drop "copy a screenshot, Cmd+V" whenever a field had the caret.
+      const files = filesFrom(event.clipboardData);
+      if (files.length > 0) {
+        addFilesRef.current(files);
+        event.preventDefault();
+        return;
+      }
       const target = event.target;
       const inField =
         target instanceof HTMLInputElement ||

@@ -11,6 +11,17 @@
 export type AgentAuthHealth = "ok" | "expired" | "missing";
 
 /**
+ * The agent-auth-health IPC answer. `reauth` is main's verdict on whether
+ * a one-click re-login flow exists for the agent (account logins, local
+ * claude-code/codex CLI sessions); the dock renders it verbatim and must
+ * not re-derive the policy.
+ */
+export interface AgentAuthHealthReport {
+  health: AgentAuthHealth;
+  reauth: boolean;
+}
+
+/**
  * Health from the raw credential JSON (keychain entry or
  * .credentials.json). Unparseable content counts as missing — whatever is
  * there, the CLI won't be able to use it either.

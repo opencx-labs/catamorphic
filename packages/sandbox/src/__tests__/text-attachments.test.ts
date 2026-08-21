@@ -104,7 +104,7 @@ describe("text attachments", () => {
         },
       }),
     ).toBe(
-      'Open browser tab "Docs" (https://x.y/docs) — key browser:1; read it with workspace_read_tab',
+      'Open browser tab "Docs" (https://x.y/docs) — key browser:1; read it with read_tab',
     );
   });
 
@@ -176,6 +176,27 @@ describe("text attachments", () => {
       "hi\n\n[Attachment 1: notes.txt — Pasted text]\n<<<\na\nb\n>>>",
     );
     expect(renderUserMessage("hi", undefined)).toBe("hi");
+  });
+
+  it("rewrites media references to non-delivery notes with omitMedia", () => {
+    const M = ATTACHMENT_MARKER;
+    const out = renderUserMessage(
+      `look at ${M} and ${M} please`,
+      [image, paste],
+      { omitMedia: true },
+    );
+    // The media marker becomes an explicit note; the text attachment keeps
+    // its exact reference and block, and numbering still counts the image
+    // (the paste stays #2).
+    expect(
+      out.startsWith(
+        "look at [attachment 1: shot.png (image not delivered; this agent reads text only)] and [attachment 2: notes.txt] please",
+      ),
+    ).toBe(true);
+    expect(out).toContain(
+      "[Attachment 2: notes.txt — Pasted text]\n<<<\na\nb\n>>>",
+    );
+    expect(out).not.toContain(M);
   });
 
   it("names attachments in plain-text renderings (titles)", () => {

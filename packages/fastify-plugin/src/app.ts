@@ -36,9 +36,6 @@ export function createApp(config: AppConfig) {
   const app = Fastify({
     logger: true,
     forceCloseConnections: true,
-    // Media attachments are ~10MB each (base64 4/3); Fastify's default
-    // 1MB cap rejects a single pasted screenshot.
-    bodyLimit: 96 * 1024 * 1024,
   });
 
   app.register(fastifyCors, {

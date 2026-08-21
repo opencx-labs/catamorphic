@@ -14,6 +14,7 @@ import type {
 import {
   buildPluginsPreamble,
   mergePolicyLayers,
+  positiveTokenCount,
   renderUserMessage,
   resolveMcpServers,
   resolveToolPermissionAcross,
@@ -199,7 +200,11 @@ export class CodexAgent implements CodingAgentProvider {
       : client.startThread(threadOptions);
     // Codex takes no media, but text pills (pastes, selections, links,
     // tabs) are universal context — rendered the same as every harness.
-    const prose = renderUserMessage(message, opts?.attachments);
+    // omitMedia turns each media reference into a non-delivery note so the
+    // model never hunts for bytes it was not given.
+    const prose = renderUserMessage(message, opts?.attachments, {
+      omitMedia: true,
+    });
     const input = session.providerSessionId
       ? prose
       : this.withInstructions(session.sessionId, prose);
@@ -423,18 +428,19 @@ function turnUsageFromCodex(
   },
   model?: string,
 ): AgentTurnUsage | undefined {
-  const positive = (value: number) =>
-    Number.isFinite(value) && value > 0 ? Math.trunc(value) : 0;
-  const input = positive(usage.input_tokens);
-  const cached = positive(usage.cached_input_tokens);
-  const output = positive(usage.output_tokens);
+  const input = positiveTokenCount(usage.input_tokens);
+  const cached = positiveTokenCount(usage.cached_input_tokens);
+  const output = positiveTokenCount(usage.output_tokens);
   if (input + output === 0) return undefined;
   return {
     ...(model ? { model } : {}),
     inputTokens: Math.max(0, input - cached),
     cachedInputTokens: cached,
     outputTokens: output,
-    reasoningTokens: Math.min(output, positive(usage.reasoning_output_tokens)),
+    reasoningTokens: Math.min(
+      output,
+      positiveTokenCount(usage.reasoning_output_tokens),
+    ),
   };
 }
 

@@ -1,7 +1,8 @@
-import { execFileSync, spawn } from "node:child_process";
+import { execFile, spawn } from "node:child_process";
 import fs from "node:fs";
 import { createRequire } from "node:module";
 import path from "node:path";
+import { promisify } from "node:util";
 import {
   type ClaudeSlashCommand,
   listClaudeSlashCommands,
@@ -25,7 +26,10 @@ import {
   toPublicAgent,
   type UpdateAgentInput,
 } from "./agents-store.js";
-import { type AgentAuthHealth, claudeOauthHealth } from "./auth-health.js";
+import {
+  type AgentAuthHealthReport,
+  claudeOauthHealth,
+} from "./auth-health.js";
 import { parseConnectLink } from "./connect-link.js";
 import {
   type CreateConnectionInput,
@@ -71,6 +75,8 @@ import {
   windowBackgroundColor,
 } from "./theme.js";
 import { createUsageScanner } from "./usage-scan.js";
+
+const execFileAsync = promisify(execFile);
 
 export interface ServerState {
   current: EmbeddedServer | null;
@@ -740,22 +746,32 @@ export function registerIpcHandlers(
    * The fingerprint doubles as a change detector: the terminal /login flow
    * gives no exit signal, so completion is "the credentials changed".
    */
-  const claudeKeychainRaw = (): string | null => {
+  // Focus/wake/login probes cluster, and the 2s login watcher must still
+  // observe fresh credentials within a beat — so the keychain answer is
+  // held for 3s, never longer.
+  let keychainCache: { at: number; value: string | null } | null = null;
+  const claudeKeychainRaw = async (): Promise<string | null> => {
     if (process.platform !== "darwin") return null;
-    try {
-      return execFileSync(
-        "security",
-        ["find-generic-password", "-s", "Claude Code-credentials", "-w"],
-        { encoding: "utf-8", stdio: ["ignore", "pipe", "ignore"] },
-      );
-    } catch {
-      return null;
+    if (keychainCache && Date.now() - keychainCache.at < 3000) {
+      return keychainCache.value;
     }
+    let value: string | null;
+    try {
+      const { stdout } = await execFileAsync("security", [
+        "find-generic-password",
+        "-s",
+        "Claude Code-credentials",
+        "-w",
+      ]);
+      value = stdout;
+    } catch {
+      value = null;
+    }
+    keychainCache = { at: Date.now(), value };
+    return value;
   };
 
-  const claudeKeychainFingerprint = (): string | null => {
-    const raw = claudeKeychainRaw();
-    if (raw === null) return null;
+  const claudeKeychainFingerprint = (raw: string): string => {
     try {
       const oauth = (
         JSON.parse(raw) as { claudeAiOauth?: { expiresAt?: number } }
@@ -766,12 +782,19 @@ export function registerIpcHandlers(
     }
   };
 
-  /** Where an agent's CLI credentials live, and a change fingerprint. */
-  const agentCredentials = (agent: {
+  /**
+   * Where an agent's CLI credentials live: presence, a change
+   * fingerprint, and the raw credential content (for the health probe).
+   */
+  const agentCredentials = async (agent: {
     harness: string;
     auth: string;
     id: string;
-  }): { present: boolean; fingerprint: string } => {
+  }): Promise<{
+    present: boolean;
+    fingerprint: string;
+    raw: string | null;
+  }> => {
     const home =
       agent.auth === "local"
         ? agent.harness === "codex"
@@ -787,58 +810,71 @@ export function registerIpcHandlers(
       return {
         present: true,
         fingerprint: `file:${stat.mtimeMs}:${stat.size}`,
+        raw: fs.readFileSync(file, "utf-8"),
       };
     } catch {
       // No file — the macOS keychain is the other place Claude Code keeps
       // the default account's session.
       if (agent.harness !== "codex" && agent.auth === "local") {
-        const keychain = claudeKeychainFingerprint();
-        if (keychain) return { present: true, fingerprint: keychain };
+        const raw = await claudeKeychainRaw();
+        if (raw !== null) {
+          return {
+            present: true,
+            fingerprint: claudeKeychainFingerprint(raw),
+            raw,
+          };
+        }
       }
-      return { present: false, fingerprint: "absent" };
+      return { present: false, fingerprint: "absent", raw: null };
     }
   };
 
-  ipcMain.handle("catamorphic:agent-login-status", (event, id: string) => {
-    const agent = storesFor(event).agents.get(id);
-    if (!agent) return false;
-    if (agent.auth === "api-key" || agent.harness === "ai-sdk") {
-      return agent.apiKey !== null;
-    }
-    return agentCredentials(agent).present;
-  });
+  ipcMain.handle(
+    "catamorphic:agent-login-status",
+    async (event, id: string) => {
+      const agent = storesFor(event).agents.get(id);
+      if (!agent) return false;
+      if (agent.auth === "api-key" || agent.harness === "ai-sdk") {
+        return agent.apiKey !== null;
+      }
+      return (await agentCredentials(agent)).present;
+    },
+  );
 
   // Proactive auth health (t3-code-inspired): what is KNOWABLY wrong
   // before a send — no credentials, or a refresh token past expiry. The
   // dock probes on focus/wake and offers re-login ahead of the failure.
   ipcMain.handle(
     "catamorphic:agent-auth-health",
-    (event, id: string): AgentAuthHealth => {
-      // e2e seam: exercise the banner without touching real credentials.
+    async (event, id: string): Promise<AgentAuthHealthReport> => {
+      const agent = storesFor(event).agents.get(id);
+      // Single authority on the one-click re-login offer: `account`
+      // logins (agent-scoped CLI home, incl. OpenRouter PKCE) and
+      // `local` claude-code/codex logins (the machine's own CLI
+      // session). The dock renders this verbatim and must not
+      // re-derive it.
+      const reauth =
+        agent !== undefined &&
+        (agent.auth === "account" ||
+          (agent.auth === "local" &&
+            (agent.harness === "claude-code" || agent.harness === "codex")));
+      // e2e seam: force the health verdict without touching real
+      // credentials; reauth stays computed from the agent (true for an
+      // unknown agent, so seam runs can still exercise the banner).
       const forced = process.env.CATAMORPHIC_E2E_AUTH_HEALTH;
       if (forced === "ok" || forced === "expired" || forced === "missing") {
-        return forced;
+        return { health: forced, reauth: agent === undefined ? true : reauth };
       }
-      const agent = storesFor(event).agents.get(id);
-      if (!agent) return "missing";
+      if (!agent) return { health: "missing", reauth };
       if (agent.auth === "api-key" || agent.harness === "ai-sdk") {
-        return agent.apiKey !== null ? "ok" : "missing";
+        return { health: agent.apiKey !== null ? "ok" : "missing", reauth };
       }
+      const credentials = await agentCredentials(agent);
       if (agent.harness === "codex") {
         // Codex's auth.json has no readable expiry; presence is the probe.
-        return agentCredentials(agent).present ? "ok" : "missing";
+        return { health: credentials.present ? "ok" : "missing", reauth };
       }
-      const home =
-        agent.auth === "local"
-          ? path.join(app.getPath("home"), ".claude")
-          : path.join(paths.agentHomesDir, agent.id);
-      let raw: string | null = null;
-      try {
-        raw = fs.readFileSync(path.join(home, ".credentials.json"), "utf-8");
-      } catch {
-        if (agent.auth === "local") raw = claudeKeychainRaw();
-      }
-      return claudeOauthHealth(raw, Date.now());
+      return { health: claudeOauthHealth(credentials.raw, Date.now()), reauth };
     },
   );
 
@@ -927,10 +963,15 @@ export function registerIpcHandlers(
     auth: string;
     id: string;
   }) => {
-    const before = agentCredentials(agent).fingerprint;
     const existing = loginWatchers.get(agent.id);
     if (existing) clearInterval(existing);
     const startedAt = Date.now();
+    const before = agentCredentials(agent).then(
+      (credentials) => credentials.fingerprint,
+    );
+    // The credential probe is async; a slow keychain read must not stack
+    // ticks on top of each other.
+    let probing = false;
     const timer = setInterval(() => {
       // The terminal login gives no exit signal; fresh credentials are the
       // signal. Ten minutes with no change = the user walked away; stop
@@ -940,13 +981,19 @@ export function registerIpcHandlers(
         loginWatchers.delete(agent.id);
         return;
       }
-      const now = agentCredentials(agent);
-      if (!now.present || now.fingerprint === before) return;
-      clearInterval(timer);
-      loginWatchers.delete(agent.id);
-      state.broadcast("catamorphic:agent-login-finished", {
-        agentId: agent.id,
-        ok: true,
+      if (probing) return;
+      probing = true;
+      void (async () => {
+        const now = await agentCredentials(agent);
+        if (!now.present || now.fingerprint === (await before)) return;
+        clearInterval(timer);
+        loginWatchers.delete(agent.id);
+        state.broadcast("catamorphic:agent-login-finished", {
+          agentId: agent.id,
+          ok: true,
+        });
+      })().finally(() => {
+        probing = false;
       });
     }, 2000);
     loginWatchers.set(agent.id, timer);

@@ -117,6 +117,46 @@ describe("agent routes", () => {
   });
 });
 
+// The raised body cap is scoped to the messages route (base64 media rides
+// in the message body); every other route keeps Fastify's default 1MB cap.
+describe("body limits", () => {
+  // Past Fastify's 1MB default, within the text-attachment schema cap.
+  const bigBody = "x".repeat(1_500_000);
+
+  it("lets a >1MB body through to the messages handler", async () => {
+    const app = await buildApp();
+    const res = await app.inject({
+      method: "POST",
+      url: `/api/projects/${PROJECT_ID}/agent/sessions/${SESSION_ID}/messages`,
+      payload: {
+        message: "look at this",
+        attachments: [
+          {
+            kind: "text",
+            name: "paste",
+            text: bigBody,
+            source: { type: "paste" },
+          },
+        ],
+      },
+    });
+    // 503 (no coding agent), not 413 — the parser accepted the body.
+    expect(res.statusCode).toBe(503);
+    await app.close();
+  });
+
+  it("rejects a >1MB body on other routes with 413", async () => {
+    const app = await buildApp();
+    const res = await app.inject({
+      method: "POST",
+      url: `/api/projects/${PROJECT_ID}/agent/sessions`,
+      payload: { note: bigBody },
+    });
+    expect(res.statusCode).toBe(413);
+    await app.close();
+  });
+});
+
 describe("tool permission routes (no core → 503, validation first)", () => {
   it("lists 503 without a broker and validates ids", async () => {
     const app = await buildApp();

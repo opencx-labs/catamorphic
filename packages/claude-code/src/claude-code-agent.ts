@@ -35,6 +35,7 @@ import {
   buildPluginsPreamble,
   isMediaAttachment,
   mergePolicyLayers,
+  positiveTokenCount,
   renderUserMessage,
   resolveMcpServers,
   stagePluginDocs,
@@ -912,15 +913,12 @@ interface ContentBlockLike {
   tool_use_id?: string;
 }
 
-/** Positive finite number at `key`, truncated to an integer; else 0. */
+/** {@link positiveTokenCount} of the value at `key`. */
 function usageInt(
   record: Record<string, unknown> | undefined,
   key: string,
 ): number {
-  const value = record?.[key];
-  return typeof value === "number" && Number.isFinite(value) && value > 0
-    ? Math.trunc(value)
-    : 0;
+  return positiveTokenCount(record?.[key]);
 }
 
 /**

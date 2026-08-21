@@ -2618,7 +2618,7 @@ Patterned on what best-in-class palettes converged on (Chrome omnibox
   Sent messages render their pills in the same spots the user put them.
 - **Tabs are context too.** Dragging a workspace tab onto a chat drops a
   tab pill (kind icon + title; the model gets title, address/path and the
-  `workspace_read_tab` key). While a tab drags and a chat is in front,
+  key for the workspace `read_tab` tool). While a tab drags and a chat is in front,
   the split-tile drop zones leave the bottom band clear so the composer
   is reachable. Clicking a tab pill opens the tab.
 - Kept as they were: Enter sends / Shift+Enter breaks a line / ⌘↵ jumps

@@ -69,6 +69,13 @@ export interface ComposerInputHandle {
   removeLastPill(): boolean;
   /** Ids of live pills, in document order. */
   livePillIds(): string[];
+  /**
+   * True when nothing deletable remains but pills: no prose text and at
+   * most Chromium's single placeholder <br>. The dock's Backspace
+   * chip-pop consults this so it never eats a pill while a line break
+   * is still under the caret.
+   */
+  emptyButPills(): boolean;
 }
 
 export interface ComposerInputProps {
@@ -359,6 +366,40 @@ export const ComposerInput = forwardRef<
       .filter((id) => id && !exitingRef.current.has(id));
   }, []);
 
+  const emptyButPills = useCallback(() => {
+    const root = rootRef.current;
+    if (!root) return true;
+    // A trimmed-empty draft is not proof the composer is empty: a blank
+    // line (Shift+Enter) serializes to whitespace the trim discards. Count
+    // real prose and line breaks directly; one <br> is Chromium's empty
+    // placeholder, a second means a deletable line break exists.
+    let breaks = 0;
+    const scan = (node: Node): boolean => {
+      if (node.nodeType === Node.TEXT_NODE) {
+        return (
+          (node.nodeValue ?? "")
+            .replace(ZERO_WIDTH, "")
+            .replace(/ /g, " ")
+            .trim().length > 0
+        );
+      }
+      if (!(node instanceof HTMLElement)) return false;
+      if (node.getAttribute(PILL_ATTR)) return false;
+      if (node.nodeName === "BR") {
+        breaks += 1;
+        return false;
+      }
+      for (const child of node.childNodes) {
+        if (scan(child)) return true;
+      }
+      return false;
+    };
+    for (const child of root.childNodes) {
+      if (scan(child)) return false;
+    }
+    return breaks <= 1;
+  }, []);
+
   useImperativeHandle(
     ref,
     () => ({
@@ -376,6 +417,7 @@ export const ComposerInput = forwardRef<
         return true;
       },
       livePillIds,
+      emptyButPills,
     }),
     [
       insertPills,
@@ -385,6 +427,7 @@ export const ComposerInput = forwardRef<
       clear,
       livePillIds,
       removePill,
+      emptyButPills,
     ],
   );
 

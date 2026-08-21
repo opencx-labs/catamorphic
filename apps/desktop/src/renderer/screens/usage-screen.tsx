@@ -10,10 +10,10 @@
  */
 import { RefreshCw } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import type { UsageBucket, UsageProvider } from "../../shared/usage.js";
-import { totalTokens } from "../../shared/usage.js";
 import { Segmented } from "../components/segmented.js";
 import { desktopApi, type UsageSummary } from "../lib/desktop-api.js";
+import type { UsageBucket, UsageProvider } from "../../shared/usage.js";
+import { formatTokenCount, localDayKey, totalTokens } from "../../shared/usage.js";
 
 const PROVIDERS: {
   key: UsageProvider;
@@ -38,23 +38,6 @@ const usdFormatter = new Intl.NumberFormat("en-US", {
 
 function formatUsd(value: number): string {
   return usdFormatter.format(value);
-}
-
-/** 3 significant figures with K/M/B/T so table columns line up. */
-function formatTokens(value: number): string {
-  if (value < 1000) return String(value);
-  const units = [
-    { at: 1e12, suffix: "T" },
-    { at: 1e9, suffix: "B" },
-    { at: 1e6, suffix: "M" },
-    { at: 1e3, suffix: "K" },
-  ];
-  for (const unit of units) {
-    if (value >= unit.at) {
-      return `${Number((value / unit.at).toPrecision(3))}${unit.suffix}`;
-    }
-  }
-  return String(value);
 }
 
 interface PeriodPoint {
@@ -89,11 +72,6 @@ interface Rollup {
   periods: PeriodPoint[];
 }
 
-const dayFormatter = new Intl.DateTimeFormat("en-CA", {
-  year: "numeric",
-  month: "2-digit",
-  day: "2-digit",
-});
 const dayLabelFormatter = new Intl.DateTimeFormat(undefined, {
   month: "short",
   day: "numeric",
@@ -120,11 +98,14 @@ function enumeratePeriods(summary: UsageSummary): PeriodPoint[] {
       });
     }
   } else {
+    // Compare day KEYS, not instants: the noon-pinned cursor would
+    // otherwise pass windowEndMs before local noon and drop today.
+    const untilDay = localDayKey(summary.windowEndMs);
     const cursor = new Date(summary.windowStartMs);
     cursor.setHours(12, 0, 0, 0); // noon: immune to DST hour shifts
-    while (cursor.getTime() <= summary.windowEndMs) {
+    while (localDayKey(cursor.getTime()) <= untilDay) {
       periods.push({
-        key: dayFormatter.format(cursor),
+        key: localDayKey(cursor.getTime()),
         label: dayLabelFormatter.format(cursor),
         byProvider: { claude: 0, codex: 0 },
       });
@@ -262,7 +243,7 @@ function UsageChart({
     ),
   );
   const scale = niceScale(peak);
-  const formatValue = metric === "cost" ? formatUsd : formatTokens;
+  const formatValue = metric === "cost" ? formatUsd : formatTokenCount;
   const count = periods.length;
 
   const onMouseMove = useCallback(
@@ -271,10 +252,7 @@ function UsageChart({
       if (!rect || count === 0) return;
       const index = Math.min(
         count - 1,
-        Math.max(
-          0,
-          Math.floor(((event.clientX - rect.left) / rect.width) * count),
-        ),
+        Math.max(0, Math.floor(((event.clientX - rect.left) / rect.width) * count)),
       );
       setHover(index);
     },
@@ -346,10 +324,7 @@ function UsageChart({
               ];
             });
             return (
-              <g
-                key={period.key}
-                opacity={hover === null || hover === index ? 1 : 0.55}
-              >
+              <g key={period.key} opacity={hover === null || hover === index ? 1 : 0.55}>
                 {segments.map((segment, segmentIndex) => (
                   <rect
                     key={segment.provider.key}
@@ -429,7 +404,7 @@ export function UsageScreen() {
     () => (summary ? rollUp(summary, metric) : null),
     [summary, metric],
   );
-  const formatValue = metric === "cost" ? formatUsd : formatTokens;
+  const formatValue = metric === "cost" ? formatUsd : formatTokenCount;
   const empty = rollup !== null && rollup.records === 0;
 
   return (
@@ -489,7 +464,7 @@ export function UsageScreen() {
                 >
                   {metric === "cost"
                     ? formatUsd(rollup.costUsd)
-                    : formatTokens(rollup.tokens)}
+                    : formatTokenCount(rollup.tokens)}
                 </div>
                 <div className="mt-1 text-xs text-fg-faint">
                   {rollup.records === 0
@@ -513,7 +488,7 @@ export function UsageScreen() {
                     <span className="font-mono text-fg">
                       {metric === "cost"
                         ? formatUsd(provider.costUsd)
-                        : formatTokens(provider.tokens)}
+                        : formatTokenCount(provider.tokens)}
                     </span>
                   </div>
                 ))}
@@ -525,25 +500,23 @@ export function UsageScreen() {
             {!empty && (
               <div className="mt-6 grid grid-cols-2 gap-px overflow-hidden rounded-lg border border-border bg-border sm:grid-cols-5">
                 {[
-                  { label: "Processed", value: formatTokens(rollup.tokens) },
+                  { label: "Processed", value: formatTokenCount(rollup.tokens) },
                   {
                     label: "Cached input",
-                    value: formatTokens(rollup.cachedInput),
+                    value: formatTokenCount(rollup.cachedInput),
                   },
                   {
                     label: "Uncached input",
-                    value: formatTokens(rollup.uncachedInput),
+                    value: formatTokenCount(rollup.uncachedInput),
                   },
-                  { label: "Output", value: formatTokens(rollup.output) },
+                  { label: "Output", value: formatTokenCount(rollup.output) },
                   {
                     label: "Cache savings",
                     value: formatUsd(rollup.cacheSavingsUsd),
                   },
                 ].map((stat) => (
                   <div key={stat.label} className="bg-bg-raised px-3 py-2.5">
-                    <div className="font-mono text-sm text-fg">
-                      {stat.value}
-                    </div>
+                    <div className="font-mono text-sm text-fg">{stat.value}</div>
                     <div className="mt-0.5 text-[10px] uppercase tracking-wide text-fg-faint">
                       {stat.label}
                     </div>
@@ -579,12 +552,10 @@ export function UsageScreen() {
                           {model.model}
                         </td>
                         <td className="py-1.5 text-right font-mono text-fg-muted">
-                          {formatTokens(model.tokens)}
+                          {formatTokenCount(model.tokens)}
                         </td>
                         <td className="py-1.5 text-right font-mono text-fg-muted">
-                          {model.unpriced
-                            ? "Not priced"
-                            : formatUsd(model.costUsd)}
+                          {model.unpriced ? "Not priced" : formatUsd(model.costUsd)}
                         </td>
                       </tr>
                     );

@@ -321,6 +321,13 @@ export interface AgentTurnUsage {
   contextWindow?: number;
 }
 
+/** Coerces a reported token counter to a usable count: a finite number > 0 truncated to an integer, anything else 0. */
+export function positiveTokenCount(value: unknown): number {
+  return typeof value === "number" && Number.isFinite(value) && value > 0
+    ? Math.trunc(value)
+    : 0;
+}
+
 export interface AgentEvent {
   type:
     | "text"
