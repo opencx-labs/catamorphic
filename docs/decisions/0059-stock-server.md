@@ -6,7 +6,7 @@ Status: Accepted (2026-08-21)
 
 ADR 0055 settled identity and TODO.md promised a "default self-hostable
 Catamorphic server": the resolver plus a token-issuing auth adapter and a
-config file. The companion PWA (ADR 0058) made it urgent — a phone needs
+config file. The mobile PWA (ADR 0058) made it urgent — a phone needs
 a server to point at, both on the LAN (the personal case) and remotely
 (the team case). Every ingredient existed as a library; no host did.
 
@@ -18,7 +18,7 @@ dir holds everything: PGlite (the desktop's own recipe — pgcrypto,
 `FsRemoteBackend`, `FsBundleStore`, and `LocalProcessSandboxProvider`
 (ADR 0047: the container IS the sandbox; bash+git+bun are the image's
 runtime contract; **single-tenant only**). The HTTP surface is the stock
-`createApp` (CORS, swagger, `/api`), so the companion and the generated
+`createApp` (CORS, swagger, `/api`), so the PWA and the generated
 client work unchanged.
 
 **Auth is a file, invites are the flow.** `auth.json` holds bearer
@@ -58,7 +58,7 @@ root, which local-process is not.
 
 ## Consequences
 
-- The companion's scoped path is now exercised for real: it reads `/me`
+- The PWA's scoped path is now exercised for real: it reads `/me`
   and addresses `project:<id>:<agent>` when the identity isn't root
   (`e2e/stock-server.e2e.ts` boots this server and drives the phone UI
   through invite → chat).

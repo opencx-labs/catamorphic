@@ -5,5 +5,5 @@ node_modules
 **/dist
 **/.turbo
 apps/desktop/out
-apps/companion/dist
+apps/pwa/dist
 site

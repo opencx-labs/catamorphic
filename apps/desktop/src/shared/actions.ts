@@ -279,6 +279,24 @@ export const BUILTIN_ACTIONS = [
       "marketplace",
     ],
   },
+  {
+    id: "continue-on-mobile",
+    label: "Continue on mobile",
+    description:
+      "show a QR code that opens this workspace — and the focused chat — on your phone",
+    defaultBinding: null,
+    keywords: [
+      "mobile",
+      "phone",
+      "qr",
+      "pair",
+      "pairing",
+      "handoff",
+      "continue",
+      "scan",
+      "pwa",
+    ],
+  },
 ] as const satisfies readonly ActionDefinition[];
 
 /** Union of built-in action ids ("new-tab" | "command-palette" | …). */

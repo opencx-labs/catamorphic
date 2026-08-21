@@ -15,6 +15,7 @@ import { ConnectorsService } from "./connectors.js";
 import { registerIpcHandlers, type ServerState } from "./ipc.js";
 import { type Keybindings, toAccelerator } from "./keybindings.js";
 import { McpAppsService } from "./mcp-apps.js";
+import { MobilePairingService } from "./mobile-pairing.js";
 import { ProfileConfigManager } from "./profile-config.js";
 import { ProfilesStore } from "./profiles.js";
 import { type EmbeddedServer, startEmbeddedServer } from "./server/boot.js";
@@ -383,6 +384,20 @@ app.whenReady().then(async () => {
         : Promise.resolve({ action: "decline" }),
   });
 
+  // "Continue on mobile": the LAN listener that serves the PWA and
+  // proxies /api with device-token auth. Auto-listens when phones are
+  // already paired, so they reconnect after a desktop restart.
+  const mobilePairing = new MobilePairingService({
+    file: path.join(paths.root, "..", "mobile-pairing.json"),
+    profileConfig,
+    serverUrl: () => state.current?.url ?? null,
+  });
+  if (mobilePairing.hasDevices()) {
+    mobilePairing.ensureListening().catch((error) => {
+      console.warn("[desktop] mobile listener failed to start:", error);
+    });
+  }
+
   registerIpcHandlers(
     profileConfig,
     state,
@@ -390,6 +405,7 @@ app.whenReady().then(async () => {
     paths,
     connectors,
     mcpApps,
+    mobilePairing,
   );
   browserSupport = registerBrowserSupport(
     profilesStore,

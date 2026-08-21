@@ -26,6 +26,7 @@ import {
   Search,
   Settings2,
   Settings as SettingsIcon,
+  Smartphone,
   Sparkles,
   SquareTerminal,
   Star,
@@ -94,6 +95,7 @@ type CommitMode = "replace" | "tab" | "side";
  * to Zap.
  */
 const ACTION_ICONS: Partial<Record<ActionId, LucideIcon>> = {
+  "continue-on-mobile": Smartphone,
   "new-floating-chat": MessageSquarePlus,
   "toggle-chat-minimized": Minimize2,
   "chat-to-tab": Maximize2,

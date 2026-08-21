@@ -46,6 +46,7 @@ import {
 import type { WindowProfileRegistry } from "./index.js";
 import { type Keybindings, normalizeKeybindings } from "./keybindings.js";
 import type { McpAppsService } from "./mcp-apps.js";
+import type { MobilePairingService, PairingContext } from "./mobile-pairing.js";
 import {
   bestFreeModelId,
   fetchOpenRouterModels,
@@ -144,9 +145,23 @@ export function registerIpcHandlers(
   paths: DataPaths,
   connectors?: ConnectorsService,
   mcpApps?: McpAppsService,
+  mobilePairing?: MobilePairingService,
 ): void {
   const storesFor = (event: Electron.IpcMainInvokeEvent) =>
     profileConfig.forProfile(windows.profileFor(event.sender));
+
+  // --- continue on mobile (QR pairing) ---
+
+  ipcMain.handle(
+    "catamorphic:mobile-pairing-start",
+    async (event, context?: PairingContext) => {
+      if (!mobilePairing) throw new Error("Pairing unavailable");
+      return mobilePairing.createPairing(
+        windows.profileFor(event.sender),
+        context,
+      );
+    },
+  );
 
   // --- window ↔ profile ---
 

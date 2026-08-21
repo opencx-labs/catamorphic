@@ -1,0 +1,36 @@
+{
+  "name": "catamorphic-pwa",
+  "version": "0.0.1",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite --host",
+    "build": "vite build",
+    "preview": "vite preview",
+    "typecheck": "tsgo --project ./tsconfig.json && tsgo --project ./tsconfig.node.json",
+    "test": "vitest run",
+    "test:e2e": "vite build && vitest run --config ./vitest.e2e.config.ts"
+  },
+  "dependencies": {
+    "@catamorphic/api-client": "workspace:*",
+    "@catamorphic/react": "workspace:*",
+    "@catamorphic/ui": "workspace:*",
+    "@tanstack/react-query": "^5.101.2",
+    "lucide-react": "^1.25.0",
+    "react": "^19.2.7",
+    "react-dom": "^19.2.7",
+    "react-markdown": "^10.1.0",
+    "remark-gfm": "^4.0.1",
+    "use-stick-to-bottom": "^1.1.6"
+  },
+  "devDependencies": {
+    "@tailwindcss/vite": "^4.2.2",
+    "jsdom": "^29.1.1",
+    "@types/node": "^26.1.1",
+    "@types/react": "^19.2.17",
+    "@types/react-dom": "^19.2.3",
+    "@vitejs/plugin-react": "^6.0.3",
+    "tailwindcss": "^4.2.2",
+    "vite": "^8.1.4"
+  }
+}

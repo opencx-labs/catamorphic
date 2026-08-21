@@ -643,6 +643,16 @@ export interface CatamorphicDesktopApi {
   onGithubConnected: (
     listener: (result: GithubConnectResult) => void,
   ) => () => void;
+  /** Continue on mobile: mint a QR pairing (single-use, ~2 min). */
+  mobilePairingStart: (context?: {
+    projectId?: string;
+    sessionId?: string;
+  }) => Promise<{
+    url: string;
+    alternates: string[];
+    expiresAt: string;
+    pwaReady: boolean;
+  }>;
   remoteParseLink: (link: string) => Promise<ConnectLink | null>;
   remoteConnect: (input: {
     serverUrl: string;

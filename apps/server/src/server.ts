@@ -66,18 +66,32 @@ export async function buildStockServer(
     fs.mkdirSync(path.join(data, dir), { recursive: true });
   }
 
-  // --- database: PGlite on disk --------------------------------------
-  const pglite = new PGlite(path.join(data, "db"), {
-    extensions: { pgcrypto },
-  });
-  const db = new Kysely<DB>({
-    dialect: new PGliteDialect({ pglite }),
-    plugins: [new WithSchemaPlugin(DEFAULT_SCHEMA)],
-  });
-  // WithSchemaPlugin only rewrites built queries; core's raw-SQL paths
-  // (the worker's claim CTE) resolve tables via search_path. PGlite is one
-  // session for the process's lifetime, so set it once here.
-  await sql.raw(`SET search_path TO "${DEFAULT_SCHEMA}", public`).execute(db);
+  // --- database: PGlite on disk, or DATABASE_URL for teams ------------
+  // PGlite is the zero-dependency default (one serialized connection);
+  // pointing DATABASE_URL at real Postgres is the scale-up path — the
+  // rest of the server is identical.
+  let ownDb: Kysely<DB> | undefined;
+  let workerConcurrency = 1;
+  let databaseConfig: { db: Kysely<DB> } | { connectionString: string };
+  if (env.DATABASE_URL) {
+    databaseConfig = { connectionString: env.DATABASE_URL };
+    workerConcurrency = 4;
+  } else {
+    const pglite = new PGlite(path.join(data, "db"), {
+      extensions: { pgcrypto },
+    });
+    ownDb = new Kysely<DB>({
+      dialect: new PGliteDialect({ pglite }),
+      plugins: [new WithSchemaPlugin(DEFAULT_SCHEMA)],
+    });
+    // WithSchemaPlugin only rewrites built queries; core's raw-SQL paths
+    // (the worker's claim CTE) resolve tables via search_path. PGlite is
+    // one session for the process's lifetime, so set it once here.
+    await sql
+      .raw(`SET search_path TO "${DEFAULT_SCHEMA}", public`)
+      .execute(ownDb);
+    databaseConfig = { db: ownDb };
+  }
 
   // --- execution: the container is the sandbox (ADR 0047) -------------
   const sandboxProvider = new LocalProcessSandboxProvider({
@@ -93,7 +107,7 @@ export async function buildStockServer(
   const agents = buildAgentRegistry({ sandboxProvider, toolPermissions, env });
 
   const catamorphic = createCatamorphic({
-    database: { db },
+    database: databaseConfig,
     storage: {
       projectsPath: path.join(data, "projects"),
       remotesPath: path.join(data, "remotes"),
@@ -104,10 +118,11 @@ export async function buildStockServer(
     toolPermissions,
   });
   await catamorphic.migrate();
-  // PGlite is a single serialized connection: one worker lane.
+  // PGlite is a single serialized connection: one worker lane there;
+  // real Postgres gets a few.
   const worker = catamorphic.startExecutionWorker({
     name: "stock-server",
-    concurrency: 1,
+    concurrency: workerConcurrency,
   });
   const core = catamorphic.core;
 
@@ -260,9 +275,10 @@ export async function buildStockServer(
     shutdown: async () => {
       await worker.stop();
       await app.close();
+      // For DATABASE_URL, close() also destroys the pool it created; the
+      // host-owned PGlite Kysely is ours to flush.
       await catamorphic.close();
-      // Host-owned Kysely: closing it flushes PGlite's WAL.
-      await db.destroy();
+      await ownDb?.destroy();
     },
   };
 }

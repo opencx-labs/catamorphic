@@ -253,6 +253,9 @@ const api = {
     return () =>
       ipcRenderer.removeListener("catamorphic:github-connected", handler);
   },
+  // Continue on mobile (QR pairing).
+  mobilePairingStart: (context?: unknown): Promise<unknown> =>
+    ipcRenderer.invoke("catamorphic:mobile-pairing-start", context),
   // Remote projects (ADR 0055).
   remoteParseLink: (link: string): Promise<unknown> =>
     ipcRenderer.invoke("catamorphic:remote-parse-link", link),

@@ -37,6 +37,6 @@ API, mDNS so the LAN reaches `http://catamorphic.local:4700`.
 
 - `bun run typecheck && bun run test` — includes the full inject-driven
   loop (boot → project → invite → scoped chat → revocation).
-- The cross-app proof lives in the companion:
-  `cd ../companion && bun x vitest run e2e/stock-server.e2e.ts --config ./vitest.e2e.config.ts`
+- The cross-app proof lives in the pwa:
+  `cd ../pwa && bun x vitest run e2e/stock-server.e2e.ts --config ./vitest.e2e.config.ts`
   boots THIS server and drives the phone UI against it.

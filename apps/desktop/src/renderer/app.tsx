@@ -53,6 +53,7 @@ import {
   type PendingElicitation,
 } from "./components/elicitation-modal.js";
 import { GitNav } from "./components/git-nav.js";
+import { MobilePairingModal } from "./components/mobile-pairing-modal.js";
 import { ProfileBar } from "./components/profile-bar.js";
 import { ProjectAgentConsentDialog } from "./components/project-agent-consent.js";
 import { ProjectModal } from "./components/project-modal.js";
@@ -612,6 +613,11 @@ export function App() {
   const [remoteHistoryPath, setRemoteHistoryPath] = useState<string | null>(
     null,
   );
+  // Continue on mobile: the QR pairing modal + the chat it should open.
+  const [mobilePairing, setMobilePairing] = useState<{
+    open: boolean;
+    context: { projectId?: string; sessionId?: string } | null;
+  }>({ open: false, context: null });
   const [remotePublish, setRemotePublish] = useState<{
     path: string;
     features: RemoteFeatures | undefined;
@@ -2607,6 +2613,18 @@ export function App() {
     "manage-connectors": () => setConnectorsModalOpen(true),
     "connect-remote-project": () =>
       setRemoteConnect({ open: true, link: null }),
+    // Capture the focused chat NOW: the QR should land the phone in the
+    // exact conversation that was on screen when the action ran.
+    "continue-on-mobile": () =>
+      setMobilePairing({
+        open: true,
+        context: {
+          ...(projectId ? { projectId } : {}),
+          ...(focusedChat?.sessionId
+            ? { sessionId: focusedChat.sessionId }
+            : {}),
+        },
+      }),
   };
   const actionHandlersRef = useRef(actionHandlers);
   actionHandlersRef.current = actionHandlers;
@@ -3664,6 +3682,11 @@ export function App() {
       <ToolPermissionModal
         pending={toolPermissions[0] ?? null}
         queued={Math.max(0, toolPermissions.length - 1)}
+      />
+      <MobilePairingModal
+        open={mobilePairing.open}
+        context={mobilePairing.context}
+        onClose={() => setMobilePairing({ open: false, context: null })}
       />
       {/* Project-agent consent (ADR 0050): approve, then complete the
           original pick and refresh the roster's consent state. */}

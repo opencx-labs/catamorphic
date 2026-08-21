@@ -85,7 +85,7 @@ export function buildAgentRegistry(deps: {
         sandboxProvider: deps.sandboxProvider,
         resolveModel,
         effort,
-        // Asks park on the broker: clients (the companion app) list and
+        // Asks park on the broker: clients (the pwa app) list and
         // answer them over the permissions routes (ADR 0054).
         onToolPermission: deps.toolPermissions.handlerFor("Assistant"),
       }),

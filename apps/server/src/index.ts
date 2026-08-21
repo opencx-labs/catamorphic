@@ -1,3 +1,6 @@
+import { randomBytes } from "node:crypto";
+import fs from "node:fs";
+import path from "node:path";
 import { lanAddresses, startMdnsResponder } from "./mdns.js";
 import { buildStockServer } from "./server.js";
 
@@ -9,13 +12,35 @@ import { buildStockServer } from "./server.js";
  *   CATAMORPHIC_DATA_DIR      data dir (default /data)
  *   CATAMORPHIC_PUBLIC_URL    public base for invite links (remote setups)
  *   CATAMORPHIC_MDNS          "off" disables LAN discovery; any other
- *                             value is the hostname (default catamorphic.local)
+ *                             value is the hostname (default catamorphic-<id>.local, unique per server)
  *   ANTHROPIC_API_KEY | OPENROUTER_API_KEY | OPENAI_API_KEY  enable chat
  *   CATAMORPHIC_MODEL / CATAMORPHIC_EFFORT                   agent tuning
  */
 const port = Number(process.env.PORT ?? 4700);
 const dataDir = process.env.CATAMORPHIC_DATA_DIR ?? "/data";
-const mdnsSetting = process.env.CATAMORPHIC_MDNS ?? "catamorphic.local";
+
+/**
+ * The default mDNS hostname is UNIQUE per server (a persisted suffix):
+ * several people running desktops/servers on one office Wi-Fi must not
+ * fight over the same name — mDNS has no referee, and answers would race.
+ * Set CATAMORPHIC_MDNS=catamorphic.local if you want the pretty name and
+ * know the network is yours.
+ */
+function serverHostname(): string {
+  const file = path.join(dataDir, "server-id");
+  let id: string;
+  try {
+    id = fs.readFileSync(file, "utf8").trim();
+    if (!/^[a-z0-9]{4,12}$/.test(id)) throw new Error("regenerate");
+  } catch {
+    id = randomBytes(3).toString("hex");
+    fs.mkdirSync(dataDir, { recursive: true });
+    fs.writeFileSync(file, `${id}\n`);
+  }
+  return `catamorphic-${id}.local`;
+}
+
+const mdnsSetting = process.env.CATAMORPHIC_MDNS ?? serverHostname();
 
 const mdns =
   mdnsSetting === "off"
