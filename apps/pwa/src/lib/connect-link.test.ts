@@ -42,6 +42,16 @@ describe("parseConnectLink", () => {
     expect(parseConnectLink("not a link")).toBeNull();
   });
 
+  it("carries a session deep-link when present", () => {
+    const link = parseConnectLink(
+      `catamorphic://connect?${BASE}&session=abc-123`,
+    );
+    expect(link?.sessionId).toBe("abc-123");
+    expect(
+      parseConnectLink(`catamorphic://connect?${BASE}`)?.sessionId,
+    ).toBeUndefined();
+  });
+
   it("strips trailing slashes from the server URL", () => {
     const link = connectLinkFromParams(
       new URLSearchParams({

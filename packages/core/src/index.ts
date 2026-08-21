@@ -65,6 +65,7 @@ export {
   AgentSessionsService,
   AgentTurnInProgressError,
   type AgentTurnSettledEvent,
+  SessionMirrorDivergedError,
   type SyncedFileChange,
 } from "./services/agent-sessions-service.js";
 export type { AppBundleStore } from "./services/app-bundle-store.js";

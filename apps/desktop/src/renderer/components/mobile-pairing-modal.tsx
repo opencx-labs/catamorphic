@@ -39,24 +39,38 @@ export function MobilePairingModal({
         qr: string;
         expiresAt: string;
         pwaReady: boolean;
+        remote?: { url: string; qr: string; host: string };
       }
   >({ kind: "loading" });
+  // Which QR shows: the project's remote server (works anywhere) when it
+  // has one, else this desktop over the local Wi-Fi.
+  const [target, setTarget] = useState<"remote" | "lan">("lan");
 
   const generate = useCallback(async () => {
     setState({ kind: "loading" });
     try {
       const info = await desktopApi.mobilePairingStart(context ?? undefined);
-      const qr = await toDataURL(info.url, {
+      const qrOptions = {
         margin: 1,
         width: 240,
         color: { dark: "#000000", light: "#ffffff" },
-      });
+      };
+      const qr = await toDataURL(info.url, qrOptions);
+      const remote = info.remote
+        ? {
+            url: info.remote.url,
+            host: info.remote.host,
+            qr: await toDataURL(info.remote.url, qrOptions),
+          }
+        : undefined;
+      setTarget(remote ? "remote" : "lan");
       setState({
         kind: "ready",
         url: info.url,
         qr,
         expiresAt: info.expiresAt,
         pwaReady: info.pwaReady,
+        ...(remote ? { remote } : {}),
       });
     } catch (error) {
       setState({
@@ -99,19 +113,42 @@ export function MobilePairingModal({
         )}
         {state.kind === "ready" && (
           <>
+            {state.remote && (
+              <div className="flex rounded-lg border border-border bg-bg-inset p-0.5 text-[12px]">
+                <button
+                  type="button"
+                  onClick={() => setTarget("remote")}
+                  className={`cursor-pointer rounded-md px-3 py-1 transition-colors duration-150 ${target === "remote" ? "bg-bg-overlay text-fg" : "text-fg-muted"}`}
+                  data-testid="pairing-target-remote"
+                >
+                  {state.remote.host}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setTarget("lan")}
+                  className={`cursor-pointer rounded-md px-3 py-1 transition-colors duration-150 ${target === "lan" ? "bg-bg-overlay text-fg" : "text-fg-muted"}`}
+                  data-testid="pairing-target-lan"
+                >
+                  This Wi-Fi
+                </button>
+              </div>
+            )}
             <img
-              src={state.qr}
+              src={
+                target === "remote" && state.remote ? state.remote.qr : state.qr
+              }
               alt="Pairing QR code"
               className="size-60 rounded-lg bg-white p-2"
               data-testid="mobile-pairing-qr"
             />
             <p className="max-w-xs text-xs leading-5 text-fg-muted">
-              Scan with your phone's camera (same Wi-Fi).
-              {context?.sessionId
-                ? " It opens straight into this chat."
-                : " It opens your projects."}{" "}
-              The code is single-use and expires in 2 minutes — anyone who scans
-              it gets access as you.
+              {target === "remote" && state.remote
+                ? `Scan with your phone's camera — this opens the project on ${state.remote.host}, so it works from anywhere and keeps working when this desktop is off. This link carries your server access; share it with no one.`
+                : `Scan with your phone's camera (same Wi-Fi).${
+                    context?.sessionId
+                      ? " It opens straight into this chat."
+                      : " It opens your projects."
+                  } The code is single-use and expires in 2 minutes — anyone who scans it gets access as you.`}
             </p>
             {!state.pwaReady && (
               <p className="rounded-lg border border-warning/40 bg-warning/10 px-3 py-2 text-xs text-warning">
@@ -122,7 +159,13 @@ export function MobilePairingModal({
             <div className="flex items-center gap-2">
               <button
                 type="button"
-                onClick={() => void navigator.clipboard.writeText(state.url)}
+                onClick={() =>
+                  void navigator.clipboard.writeText(
+                    target === "remote" && state.remote
+                      ? state.remote.url
+                      : state.url,
+                  )
+                }
                 className="flex h-8 cursor-pointer items-center gap-1.5 rounded-md border border-border-strong px-3 text-[12px] text-fg transition-colors duration-150 hover:bg-bg-overlay"
               >
                 <Copy className="size-3.5" />

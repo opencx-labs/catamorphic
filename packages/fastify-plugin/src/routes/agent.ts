@@ -4,6 +4,7 @@ import {
   AgentSessionNotFoundError,
   AgentTurnInProgressError,
   ProjectNotFoundError,
+  SessionMirrorDivergedError,
 } from "@catamorphic/core";
 import type { FastifyInstance } from "fastify";
 import type { ZodTypeProvider } from "fastify-type-provider-zod";
@@ -18,6 +19,8 @@ import {
   ErrorSchema,
   ForkAgentSessionSchema,
   ListSchema,
+  MirrorAgentSessionSchema,
+  MirrorConflictSchema,
   OkSchema,
   PaginationQuerySchema,
   PendingToolPermissionsSchema,
@@ -68,6 +71,65 @@ export function registerAgentRoutes(app: FastifyInstance, ctx: RouteContext) {
         }
         if (err instanceof AgentNotConfiguredError) {
           return reply.status(400).send({ error: err.message });
+        }
+        throw err;
+      }
+    },
+  });
+
+  // Session mirroring (ADR 0061): another backend (a linked desktop)
+  // pushes a session's transcript here so members see it on this server
+  // and can CONTINUE it here when the source dies. Idempotent per
+  // message id; 409 with `diverged: true` once this server has messages
+  // the source doesn't — the source must then stop pushing.
+  typed.route({
+    method: "PUT",
+    url: "/projects/:projectId/agent/sessions/:sessionId/mirror",
+    schema: {
+      params: AgentSessionIdParamsSchema,
+      body: MirrorAgentSessionSchema,
+      response: {
+        200: AgentSessionSchema,
+        404: ErrorSchema,
+        409: MirrorConflictSchema,
+        503: ErrorSchema,
+      },
+    },
+    handler: async (request, reply) => {
+      const agentSessions = ctx.core?.agentSessions;
+      if (!agentSessions)
+        return reply.status(503).send({ error: "Coding agent not configured" });
+      const identity = resolveIdentity(request);
+      try {
+        const session = await agentSessions.mirror(
+          identity,
+          request.params.projectId,
+          request.params.sessionId,
+          {
+            title: request.body.title ?? null,
+            icon: request.body.icon ?? null,
+            ...(request.body.provider
+              ? { provider: request.body.provider }
+              : {}),
+            messages: request.body.messages.map((message) => ({
+              ...message,
+              metadata: message.metadata ?? null,
+            })),
+          },
+        );
+        return reply.send(session);
+      } catch (err) {
+        if (err instanceof ProjectNotFoundError) {
+          return reply.status(404).send({ error: "Project not found" });
+        }
+        if (err instanceof SessionMirrorDivergedError) {
+          return reply.status(409).send({ error: err.message, diverged: true });
+        }
+        if (err instanceof AgentTurnInProgressError) {
+          return reply.status(409).send({
+            error: "A turn is in progress here; try again when it settles",
+            diverged: false,
+          });
         }
         throw err;
       }

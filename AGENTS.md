@@ -100,6 +100,7 @@ How the three connect (setting up / troubleshooting, read in this order):
 2. **Invites are connect links**: `catamorphic://connect?server=<api base incl. /api>&token=…&project=…` — redeemable by the desktop (creates a synced remote project, ADR 0044/0055) and by the PWA (direct chat access).
 3. **QR pairing** (ADR 0060, palette → "Continue on mobile"): the desktop's LAN listener serves the built `apps/pwa/dist` at its root, exchanges a single-use 2-minute code for a device token, and proxies `/api/*` to the loopback embedded server (bearer required). The claim also hands the phone the profile's remote-project links + mirror map, and the focused chat's project/session (deep-link). The QR ships the **built** PWA — rebuild `apps/pwa` after UI changes.
 4. **Scoped members address agents as `project:<projectId>:<slug>`** — a bare session create is builder/root-only; the PWA derives the id from `GET /me`.
+5. **Sessions mirror to the linked remote** (ADR 0061): after every settled turn on a remote-linked project the desktop pushes the transcript to `PUT …/agent/sessions/:id/mirror`; the server's copy is continuable there (history-seeded re-anchor), and a `409 diverged` means the server owns the fork — the desktop stops pushing. When the focused project has a remote, the pairing QR defaults to the REMOTE origin with a `session` deep-link.
 
 ## Skills
 

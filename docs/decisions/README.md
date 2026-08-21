@@ -73,3 +73,4 @@ Settled design decisions live here as short Architecture Decision Records. They 
 | [0058](0058-mobile-pwa.md) | The mobile PWA: chats on the go, wrapper-ready; tool asks answerable over HTTP | Accepted |
 | [0059](0059-stock-server.md) | The stock server: zero-dependency, disk-backed, invite-first; mDNS LAN discovery | Accepted |
 | [0060](0060-continue-on-mobile.md) | Continue on mobile: QR pairing, bearer-gated LAN proxy, remote-link handoff | Accepted |
+| [0061](0061-session-mirroring.md) | Session mirroring: local-first chats pushed to the linked remote; fork-on-continuation | Accepted |

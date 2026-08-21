@@ -652,6 +652,8 @@ export interface CatamorphicDesktopApi {
     alternates: string[];
     expiresAt: string;
     pwaReady: boolean;
+    /** Same project on its linked remote server's PWA origin. */
+    remote?: { url: string; host: string };
   }>;
   /** This profile's paired phones (for the management list). */
   mobilePairingDevices: () => Promise<

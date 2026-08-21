@@ -57,8 +57,11 @@ flow ships a stale app.
 Failover semantics (troubleshooting "the desktop is asleep"): the claim
 also carries a mirror map (desktop projectId → its remote server), kept
 on the desktop connection (`mirrors`). Desktop and remote are SEPARATE
-backends with separate chat sessions — there is no auto-switch and no
-session continuity; when a desktop-connection request fails,
-`components/connection-trouble.tsx` explains why in human terms and
-offers the project's remote mirror as the way in. The remote connections
-themselves work independently of the desktop from the moment of pairing.
+backends — no auto-switch; when a desktop-connection request fails,
+`components/connection-trouble.tsx` explains why and offers the
+project's remote mirror as the way in. Since ADR 0061 the desktop
+mirrors its transcripts to the linked remote after every settled turn,
+so the remote's copy of a chat is the SAME session id, continuable
+there (`?session=` deep-links from the remote-origin QR land in it);
+continuing on the server forks it — the desktop stops pushing that
+session.

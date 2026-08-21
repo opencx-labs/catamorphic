@@ -42,6 +42,13 @@ export interface PairingInfo {
   expiresAt: string;
   /** False when the PWA bundle is missing (the QR would 404). */
   pwaReady: boolean;
+  /**
+   * When the focused project is linked to a remote server: the SAME
+   * project on that server's own PWA origin (session included — mirroring
+   * keeps it there). Works from anywhere, survives this desktop dying,
+   * and behind TLS it's the origin worth installing from.
+   */
+  remote?: { url: string; host: string };
 }
 
 export interface PairedDevice {
@@ -159,6 +166,41 @@ export class MobilePairingService {
       alternates: urls.slice(1),
       expiresAt: new Date(expiresAt).toISOString(),
       pwaReady: fs.existsSync(path.join(this.pwaDist(), "index.html")),
+      ...(() => {
+        const remote = this.remotePairing(profileId, context);
+        return remote ? { remote } : {};
+      })(),
+    };
+  }
+
+  /**
+   * The remote-origin form of this pairing, when the focused project is
+   * linked to a server (ADR 0055): the member's own token + project on
+   * the server's PWA origin — no pairing code involved, because the
+   * credentials already exist and the origin is durable.
+   */
+  private remotePairing(
+    profileId: string,
+    context?: PairingContext,
+  ): { url: string; host: string } | undefined {
+    if (!context?.projectId) return undefined;
+    const link = this.deps.profileConfig
+      .forProfile(profileId)
+      .remoteProjects.get(context.projectId);
+    if (!link?.token) return undefined;
+    const origin = link.serverUrl.replace(/\/+$/, "").replace(/\/api$/, "");
+    const params = new URLSearchParams({
+      server: link.serverUrl.replace(/\/+$/, ""),
+      token: link.token,
+      project: link.remoteProjectId,
+      name: link.remoteProjectName,
+    });
+    // Mirroring (ADR 0061) puts the focused chat on the server under the
+    // SAME id — the phone can land straight in it.
+    if (context.sessionId) params.set("session", context.sessionId);
+    return {
+      url: `${origin}/?${params.toString()}`,
+      host: new URL(origin).host,
     };
   }
 

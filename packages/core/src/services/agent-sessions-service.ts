@@ -121,6 +121,20 @@ export class AgentTurnInProgressError extends Error {
   }
 }
 
+/**
+ * A mirror push found messages here the mirroring side doesn't know —
+ * the session was continued on THIS backend, so the mirror source must
+ * stop pushing (the conversation forked; this side owns it now).
+ */
+export class SessionMirrorDivergedError extends Error {
+  constructor(readonly sessionId: string) {
+    super(
+      `Agent session '${sessionId}' was continued on this server; the mirror source must stop pushing`,
+    );
+    this.name = "SessionMirrorDivergedError";
+  }
+}
+
 export { parsePorcelain, type SyncedFileChange } from "./sandbox-sync.js";
 
 const tracer = getTracer("@catamorphic/core");
@@ -534,6 +548,132 @@ export class AgentSessionsService {
       .executeTakeFirstOrThrow();
 
     return mapSession(row);
+  }
+
+  /**
+   * Mirror a session from another backend (a desktop pushing its local
+   * transcript to the server it's linked to, ADR 0061): upsert the
+   * session under the CALLER's identity with THIS registry's default
+   * agent, and append the messages this side doesn't have yet.
+   * Idempotent by message id. The provider anchor stays null, so a later
+   * sendMessage here re-anchors with the mirrored transcript as history —
+   * that IS the "continue on the server" path. If this side already holds
+   * messages the payload doesn't (someone continued here), the mirror is
+   * refused with {@link SessionMirrorDivergedError}: the fork's owner is
+   * now this backend.
+   */
+  async mirror(
+    identity: Identity,
+    projectId: string,
+    sessionId: string,
+    input: {
+      title?: string | null;
+      icon?: string | null;
+      provider?: string;
+      messages: Array<{
+        id: string;
+        role: "user" | "assistant" | "system";
+        content: string;
+        metadata: Record<string, unknown> | null;
+        createdAt: string;
+      }>;
+    },
+  ): Promise<AgentSession> {
+    return withSpan(
+      {
+        tracer,
+        name: "agent.session.mirror",
+        attributes: {
+          "catamorphic.project.id": projectId,
+          "catamorphic.session.id": sessionId,
+        },
+      },
+      async () => {
+        await this.requireProject(identity, projectId);
+        const agentId = this.codingAgents.defaultAgentId(projectId) ?? null;
+        this.assertAgentAccess(identity, projectId, agentId);
+
+        const existing = await this.db
+          .selectFrom("agent_sessions")
+          .selectAll()
+          .where("id", "=", sessionId)
+          .executeTakeFirst();
+        if (
+          existing &&
+          (existing.project_id !== projectId ||
+            existing.external_user_id !== identity.externalUserId)
+        ) {
+          throw new AccessDeniedError();
+        }
+        if (existing && this.runningTurns.has(sessionId)) {
+          throw new AgentTurnInProgressError(sessionId);
+        }
+
+        const held = await this.db
+          .selectFrom("agent_messages")
+          .select(["id"])
+          .where("session_id", "=", sessionId)
+          .execute();
+        const incomingIds = new Set(input.messages.map((m) => m.id));
+        if (held.some((row) => !incomingIds.has(row.id))) {
+          throw new SessionMirrorDivergedError(sessionId);
+        }
+
+        let row: SessionRow;
+        if (existing) {
+          row = await this.db
+            .updateTable("agent_sessions")
+            .set({
+              title: input.title ?? existing.title,
+              icon: input.icon ?? existing.icon,
+              updated_at: new Date(),
+            })
+            .where("id", "=", sessionId)
+            .returningAll()
+            .executeTakeFirstOrThrow();
+        } else {
+          row = await this.db
+            .insertInto("agent_sessions")
+            .values({
+              id: sessionId,
+              project_id: projectId,
+              external_user_id: identity.externalUserId,
+              provider: input.provider ?? "mirror",
+              provider_session_id: null,
+              agent_id: agentId,
+              model_effort: null,
+              system_prompt: null,
+              sandbox_id: null,
+              status: "active",
+              base_commit_sha: null,
+              title: input.title ?? null,
+              icon: input.icon ?? null,
+            })
+            .returningAll()
+            .executeTakeFirstOrThrow();
+        }
+
+        // `seq` is an identity column: transcript order IS insertion
+        // order, so append the unseen messages in payload order.
+        const heldIds = new Set(held.map((entry) => entry.id));
+        for (const message of input.messages) {
+          if (heldIds.has(message.id)) continue;
+          await this.db
+            .insertInto("agent_messages")
+            .values({
+              id: message.id,
+              session_id: sessionId,
+              role: message.role,
+              content: message.content,
+              metadata: message.metadata as JsonObject | null,
+              commit_sha: null,
+              created_at: new Date(message.createdAt),
+            })
+            .execute();
+        }
+        return mapSession(row);
+      },
+    );
   }
 
   /**

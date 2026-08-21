@@ -36,7 +36,7 @@ export function ConnectScreen({
     if (!pendingLink) return "";
     const link = pendingLink;
     pendingLink = null;
-    return `catamorphic://connect?server=${encodeURIComponent(link.serverUrl)}&token=${encodeURIComponent(link.token)}&project=${encodeURIComponent(link.remoteProjectId)}${link.remoteProjectName ? `&name=${encodeURIComponent(link.remoteProjectName)}` : ""}`;
+    return `catamorphic://connect?server=${encodeURIComponent(link.serverUrl)}&token=${encodeURIComponent(link.token)}&project=${encodeURIComponent(link.remoteProjectId)}${link.remoteProjectName ? `&name=${encodeURIComponent(link.remoteProjectName)}` : ""}${link.sessionId ? `&session=${encodeURIComponent(link.sessionId)}` : ""}`;
   });
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(() => {
@@ -75,12 +75,21 @@ export function ConnectScreen({
       }
       const connection = addConnection(profile.id, link, projectName);
       void me;
+      // A `session` param (a desktop QR onto the remote server) lands in
+      // that exact chat — mirroring keeps it there under the same id.
       navigate(
-        {
-          kind: "sessions",
-          connectionId: connection.id,
-          projectId: connection.projectId,
-        },
+        link.sessionId
+          ? {
+              kind: "chat",
+              connectionId: connection.id,
+              projectId: connection.projectId,
+              sessionId: link.sessionId,
+            }
+          : {
+              kind: "sessions",
+              connectionId: connection.id,
+              projectId: connection.projectId,
+            },
         { replace: !canGoBack },
       );
     } catch (cause) {

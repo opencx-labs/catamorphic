@@ -14,6 +14,8 @@ export interface ConnectLink {
   remoteProjectName?: string;
   /** Where to send the user for a fresh link when the token stops working. */
   renewUrl?: string;
+  /** Deep-link: land in this chat after connecting (a mirrored session). */
+  sessionId?: string;
 }
 
 export function parseConnectLink(raw: string): ConnectLink | null {
@@ -58,11 +60,13 @@ export function connectLinkFromParams(
       renewUrl = undefined;
     }
   }
+  const sessionId = params.get("session")?.trim();
   return {
     serverUrl: serverUrl.replace(/\/+$/, ""),
     token,
     remoteProjectId,
     ...(name ? { remoteProjectName: name } : {}),
     ...(renewUrl ? { renewUrl } : {}),
+    ...(sessionId ? { sessionId } : {}),
   };
 }

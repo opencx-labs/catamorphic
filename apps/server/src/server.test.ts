@@ -43,7 +43,7 @@ afterAll(async () => {
 });
 
 const inject = (
-  method: "GET" | "POST" | "DELETE",
+  method: "GET" | "POST" | "PUT" | "DELETE",
   url: string,
   token?: string,
   body?: unknown,
@@ -174,6 +174,75 @@ describe("stock server", () => {
       .messages.map((message: { content: string }) => message.content);
     expect(contents).toContain("hello server");
     expect(contents).toContain("Echo: hello server");
+  }, 60_000);
+
+  it("mirrors a desktop session and continues it server-side (ADR 0061)", async () => {
+    const sessionId = "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee";
+    const messages = [
+      {
+        id: "11111111-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+        role: "user",
+        content: "hello from the desktop",
+        metadata: null,
+        createdAt: new Date().toISOString(),
+      },
+      {
+        id: "22222222-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+        role: "assistant",
+        content: "desktop assistant reply",
+        metadata: { status: "completed", events: [] },
+        createdAt: new Date().toISOString(),
+      },
+    ];
+    const mirrorUrl = `/api/projects/${projectId}/agent/sessions/${sessionId}/mirror`;
+    const first = await inject("PUT", mirrorUrl, memberToken, {
+      title: "Desktop chat",
+      icon: "sparkles:orange",
+      provider: "ai-sdk",
+      messages,
+    });
+    expect(first.statusCode).toBe(200);
+    // Idempotent re-push: same payload, no duplicates.
+    expect(
+      (await inject("PUT", mirrorUrl, memberToken, { messages })).statusCode,
+    ).toBe(200);
+
+    const list = await inject(
+      "GET",
+      `/api/projects/${projectId}/agent/sessions`,
+      memberToken,
+    );
+    expect(list.json().items.map((s: { id: string }) => s.id)).toContain(
+      sessionId,
+    );
+
+    // Continue ON THE SERVER: the mirrored transcript seeds the anchor.
+    const sent = await inject(
+      "POST",
+      `/api/projects/${projectId}/agent/sessions/${sessionId}/messages`,
+      memberToken,
+      { message: "continue here" },
+    );
+    expect(sent.statusCode).toBe(201);
+    const detail = await inject(
+      "GET",
+      `/api/projects/${projectId}/agent/sessions/${sessionId}`,
+      memberToken,
+    );
+    const contents = detail
+      .json()
+      .messages.map((m: { content: string }) => m.content);
+    expect(contents).toEqual([
+      "hello from the desktop",
+      "desktop assistant reply",
+      "continue here",
+      "Echo: continue here",
+    ]);
+
+    // The desktop pushes again without the server-side turns → diverged.
+    const stale = await inject("PUT", mirrorUrl, memberToken, { messages });
+    expect(stale.statusCode).toBe(409);
+    expect(stale.json().diverged).toBe(true);
   }, 60_000);
 
   it("revoking the invite cuts the member off instantly", async () => {

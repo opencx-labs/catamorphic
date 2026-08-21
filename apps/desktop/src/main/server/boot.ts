@@ -24,6 +24,7 @@ import {
 } from "../mcp-apps.js";
 import type { ProfileConfigManager } from "../profile-config.js";
 import type { ProfilesStore } from "../profiles.js";
+import { RemoteSessionMirror } from "../remote-mirror.js";
 import { userSkillFiles, userSkillInfos } from "../user-skills.js";
 import { DesktopAgentRegistry } from "./agent-registry.js";
 import { E2eLocalSandboxProvider } from "./e2e-fakes.js";
@@ -126,6 +127,20 @@ export async function startEmbeddedServer(
   // (the companion app) can list and answer them over HTTP; the registry
   // races it against the desktop's own consent modal — first answer wins.
   const toolPermissions = new ToolPermissionBroker();
+  // Session mirroring to ADR 0055 remote links (late-bound: reads core
+  // through the closure after createCatamorphic returns).
+  const sessionMirror = new RemoteSessionMirror({
+    profiles,
+    profileConfig,
+    sessionDetail: (projectId, sessionId) =>
+      catamorphic.core.agentSessions
+        ? catamorphic.core.agentSessions.get(
+            { tenantId: DESKTOP_TENANT_ID, externalUserId: DESKTOP_USER_ID },
+            projectId,
+            sessionId,
+          )
+        : Promise.reject(new Error("agent sessions unavailable")),
+  });
   const agentRegistry = new DesktopAgentRegistry({
     profiles,
     profileConfig,
@@ -200,6 +215,10 @@ export async function startEmbeddedServer(
         { tenantId: DESKTOP_TENANT_ID, externalUserId: DESKTOP_USER_ID },
         event.projectId,
       );
+      // Local-first, synced (ADR 0061): the settled transcript mirrors to
+      // the ADR 0055 remote link, so phones on that server see this chat
+      // and can continue it there when this desktop is gone.
+      sessionMirror.mirrorInBackground(event.projectId, event.sessionId);
       // The turn checkpoint just moved git state; a sidebar waiting on
       // its 15s poll would show stale rows (and stale rows diff against
       // a HEAD that already contains them — two identical panes).

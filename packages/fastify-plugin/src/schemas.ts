@@ -798,6 +798,31 @@ export const UpdateAgentSessionSchema = z.object({
   effort: AgentEffortSchema.nullable().optional(),
 });
 
+/** A transcript pushed from another backend (ADR 0061). */
+export const MirrorAgentSessionSchema = z.object({
+  title: z.string().max(500).nullable().optional(),
+  icon: z.string().max(100).nullable().optional(),
+  /** The source's provider name, kept for provenance. */
+  provider: z.string().max(100).optional(),
+  messages: z
+    .array(
+      z.object({
+        id: z.string().uuid(),
+        role: z.enum(["user", "assistant", "system"]),
+        content: z.string().max(1_000_000),
+        metadata: z.record(z.string(), z.unknown()).nullable().optional(),
+        createdAt: z.string().datetime(),
+      }),
+    )
+    .max(2_000),
+});
+
+export const MirrorConflictSchema = z.object({
+  error: z.string(),
+  /** True: this server holds messages the source doesn't — stop pushing. */
+  diverged: z.boolean(),
+});
+
 export const ForkAgentSessionSchema = z.object({
   /**
    * Fork point: the transcript is copied up to and including this
