@@ -157,6 +157,39 @@ describe("agents and profiles", () => {
               rows.indexOf(marked) === 0;`,
       { label: "default moved to Other Fake and pinned first" },
     );
+    // Layered defaults (ADR 0056): inside a project the pick is this
+    // user's per-project override; the GLOBAL default is untouched.
+    await runWait(
+      `return window.catamorphicDesktop.agentsList().then((data) => {
+         const overridden = Object.values(data.projectDefaults ?? {}).some(
+           (id) => data.agents.find((agent) => agent.id === id)?.name === 'Other Fake');
+         const globalName = data.agents.find(
+           (agent) => agent.id === data.defaultAgentId)?.name;
+         return overridden && globalName === 'Fake Agent';
+       });`,
+      { label: "override set; global default untouched" },
+    );
+    // The way back down the layers: a clear-override row is offered while
+    // an override is set, and picking it restores the layers below.
+    // NB: pickOption interpolates into a single-quoted string — no
+    // apostrophes in the matcher.
+    await runWait(pickOption("Use the project"), {
+      label: "clear-override row",
+    });
+    await openPicker("Change default agent", "Default agent");
+    await runWait(
+      `const rows = paletteRows();
+       const marked = rows.find((el) =>
+         el.querySelector('[data-testid="palette-current"]'));
+       return !!marked && marked.textContent.includes('Fake Agent') &&
+              !rows.some((el) => el.textContent.includes("Use the project's default"));`,
+      { label: "override cleared; current back on the global default" },
+    );
+    await runWait(
+      `return window.catamorphicDesktop.agentsList().then((data) =>
+         Object.keys(data.projectDefaults ?? {}).length === 0);`,
+      { label: "projectDefaults empty after clear" },
+    );
     await run(paletteEscape);
   });
 
@@ -213,8 +246,8 @@ describe("agents and profiles", () => {
 
   it("changes the default agent's effort through the effort picker", async () => {
     await openPicker("Change model effort", "Effort");
-    // The current level carries the check chip; the three rows keep their
-    // low→high order (marked, never reordered).
+    // The current level carries the check chip; the five rows (ADR 0056:
+    // low → max) keep their order (marked, never reordered).
     await runWait(
       `const rows = paletteRows();
        return rows.some((el) => el.textContent.includes('Medium effort') &&
@@ -224,8 +257,11 @@ describe("agents and profiles", () => {
     );
     await runWait(
       `const rows = paletteRows().filter((el) => el.textContent.includes('effort'));
-       return rows.length === 3 && rows[0].textContent.includes('Low effort');`,
-      { label: "effort rows keep low→high order" },
+       return rows.length === 5 &&
+              rows[0].textContent.includes('Low effort') &&
+              rows[3].textContent.includes('Extra-high effort') &&
+              rows[4].textContent.includes('Max effort');`,
+      { label: "effort rows keep low→max order" },
     );
     await run(pickOption("High effort"));
     await openPicker("Change model effort", "Effort");

@@ -2122,10 +2122,12 @@ export function App() {
       updateSession.mutate({ sessionId: chat.sessionId, effort });
       return;
     }
-    // No focused session: the effort applies to the profile's default agent.
-    const defaultAgentId = agentsData?.defaultAgentId;
-    if (defaultAgentId) {
-      void desktopApi.agentsUpdate(defaultAgentId, { effort });
+    // No focused session: the effort applies to the effective default
+    // agent (the one the picker showed as current). A committed project
+    // agent's effort lives in its definition file — not editable here.
+    const targetId = effectiveDefaultAgentId;
+    if (targetId && agentsData?.agents.some((agent) => agent.id === targetId)) {
+      void desktopApi.agentsUpdate(targetId, { effort });
     }
   };
 
