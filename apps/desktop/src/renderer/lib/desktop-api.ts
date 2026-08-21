@@ -655,6 +655,8 @@ export interface CatamorphicDesktopApi {
     /** Same project on its linked remote server's PWA origin. */
     remote?: { url: string; host: string };
   }>;
+  /** Mark a just-created session incognito (desktop-local, ADR 0062). */
+  sessionSetIncognito: (sessionId: string, incognito: boolean) => Promise<void>;
   /** Project policy (ADR 0062): may members open incognito chats here? */
   projectAllowIncognito: (projectId: string) => Promise<boolean>;
   /** This profile's paired phones (for the management list). */

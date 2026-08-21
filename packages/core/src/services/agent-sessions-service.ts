@@ -68,8 +68,6 @@ export interface AgentSession {
   /** Session this one was forked from, if any. */
   parentSessionId: string | null;
   status: "active" | "closed";
-  /** Never mirrored to a linked remote; local-only history (ADR 0062). */
-  incognito: boolean;
   baseCommitSha: string | null;
   createdAt: string;
   updatedAt: string;
@@ -502,8 +500,6 @@ export class AgentSessionsService {
       systemPrompt?: string;
       agentId?: string;
       effort?: AgentEffort;
-      /** Local-only: never mirrored to a linked remote (ADR 0062). */
-      incognito?: boolean;
     } = {},
   ): Promise<AgentSession> {
     return withSpan(
@@ -523,12 +519,7 @@ export class AgentSessionsService {
   private async createInner(
     identity: Identity,
     projectId: string,
-    input: {
-      systemPrompt?: string;
-      agentId?: string;
-      effort?: AgentEffort;
-      incognito?: boolean;
-    },
+    input: { systemPrompt?: string; agentId?: string; effort?: AgentEffort },
   ): Promise<AgentSession> {
     await this.requireProject(identity, projectId);
     this.assertAgentAccess(identity, projectId, input.agentId ?? null);
@@ -551,7 +542,6 @@ export class AgentSessionsService {
         system_prompt: input.systemPrompt ?? null,
         sandbox_id: null,
         status: "active",
-        incognito: input.incognito ?? false,
         base_commit_sha: null,
       })
       .returningAll()
@@ -2415,7 +2405,6 @@ function mapSession(row: SessionRow): AgentSession {
     icon: row.icon,
     parentSessionId: row.parent_session_id,
     status: row.status as "active" | "closed",
-    incognito: row.incognito,
     baseCommitSha: row.base_commit_sha,
     createdAt: row.created_at.toISOString(),
     updatedAt: row.updated_at.toISOString(),

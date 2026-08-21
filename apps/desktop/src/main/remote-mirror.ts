@@ -23,6 +23,8 @@ export class RemoteSessionMirror {
     private readonly deps: {
       profiles: ProfilesStore;
       profileConfig: ProfileConfigManager;
+      /** Desktop-local privacy flag (ADR 0062): skip these entirely. */
+      isIncognito: (sessionId: string) => boolean;
       /** The session's full transcript, under the desktop identity. */
       sessionDetail: (
         projectId: string,
@@ -44,6 +46,8 @@ export class RemoteSessionMirror {
   /** Fire-and-forget from the turn-settled hook; never throws. */
   mirrorInBackground(projectId: string, sessionId: string): void {
     if (this.diverged.has(sessionId) || this.inflight.has(sessionId)) return;
+    // Incognito sessions never leave this machine (ADR 0062).
+    if (this.deps.isIncognito(sessionId)) return;
     const link = this.linkFor(projectId);
     if (!link) return;
     this.inflight.add(sessionId);
@@ -64,8 +68,6 @@ export class RemoteSessionMirror {
       link.localProjectId,
       sessionId,
     );
-    // Incognito sessions never leave this machine (ADR 0062).
-    if (detail.incognito) return;
     // A project agent's slug survives the trip: the same committed
     // definition exists on the server, so the fork can run the SAME agent.
     const slugMatch = detail.agentId

@@ -50,12 +50,12 @@ afterAll(() => {
 const forkMarks: Array<{ sessionId: string; serverUrl: string }> = [];
 
 function mirror(overrides: { incognito?: boolean; agentId?: string } = {}) {
+  const incognito = overrides.incognito ?? false;
   const detail = {
     id: "s1",
     title: "Desk chat",
     icon: "zap:blue",
     provider: "ai-sdk",
-    incognito: overrides.incognito ?? false,
     agentId: overrides.agentId ?? null,
     messages: [
       {
@@ -84,6 +84,7 @@ function mirror(overrides: { incognito?: boolean; agentId?: string } = {}) {
         },
       }),
     } as never,
+    isIncognito: () => incognito,
     sessionDetail: async () => detail as never,
     markFork: async (_projectId, sessionId, fork) => {
       forkMarks.push({ sessionId, serverUrl: fork.serverUrl });

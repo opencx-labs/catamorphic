@@ -256,6 +256,15 @@ const api = {
   // Continue on mobile (QR pairing).
   mobilePairingStart: (context?: unknown): Promise<unknown> =>
     ipcRenderer.invoke("catamorphic:mobile-pairing-start", context),
+  sessionSetIncognito: (
+    sessionId: string,
+    incognito: boolean,
+  ): Promise<unknown> =>
+    ipcRenderer.invoke(
+      "catamorphic:session-set-incognito",
+      sessionId,
+      incognito,
+    ),
   projectAllowIncognito: (projectId: string): Promise<unknown> =>
     ipcRenderer.invoke("catamorphic:project-allow-incognito", projectId),
   mobilePairingDevices: (): Promise<unknown> =>

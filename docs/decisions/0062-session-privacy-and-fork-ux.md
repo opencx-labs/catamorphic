@@ -29,12 +29,18 @@ receiving side uses `project:<its-id>:<slug>` when its registry has it
 AND the caller's scope covers it; otherwise the registry default.
 Personal/host agents never cross — they are not project artifacts.
 
-**Incognito sessions (`agent_sessions.incognito`, migration 050).**
-A per-session flag set at create (`incognito: true` through the whole
-stack: route → hooks → desktop palette "New incognito chat", Ghost
-badge on the dock and in the PWA list). An incognito chat persists
-locally like any other but is **never mirrored** — it stays off the
-server, out of team history, out of usage. Default remains synced.
+**Incognito sessions are a DESKTOP concept, not a core one.** The
+flag's entire meaning is "the mirror pusher must skip this chat", and
+mirroring is desktop machinery — so the flag lives in desktop state
+(`<userData>/incognito-sessions.json`, `IncognitoSessionsStore`), never
+in core's schema and never on any wire. Nothing about privacy should
+require the framework to know. The renderer marks a session the moment
+its lazy creation returns an id (long before a first turn could settle
+and trigger a mirror push); the pusher consults the set before every
+push. Palette "New incognito chat" + a Ghost badge on the dock; the
+chat entry's flag persists with the workspace snapshot. An incognito
+chat persists locally like any other but is **never mirrored** — off
+the server, out of team history, out of usage. Default remains synced.
 
 **Project policy.** `.catamorphic/project.json` `"allowIncognito":
 false` disables the affordance for a project's members (palette entry
@@ -59,6 +65,9 @@ individuals who need a private thought keep one.
   Desktop-side locking mirrors the PWA treatment and is follow-up work.
 - Usage numbers are as honest as the harnesses' reporting
   (`metadata.usage`); turns without usage still count as turns.
-- Coverage: pusher tests (incognito skip, agent-slug carry, fork-marker
-  stamp), stock-server tests (usage rollup incl. mirrored turns), PWA
-  fork-notice parsing, migration exercised by the PGlite suite.
+- Because the flag is desktop-local, the PWA cannot badge a desktop
+  connection's incognito sessions (it has no wire field to read) — an
+  accepted trade for keeping core clean; the desktop dock badges them.
+- Coverage: pusher tests (incognito skip via the store seam, agent-slug
+  carry, fork-marker stamp), stock-server tests (usage rollup incl.
+  mirrored turns), PWA fork-notice parsing.

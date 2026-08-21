@@ -17,6 +17,7 @@ import Fastify, { type FastifyInstance } from "fastify";
 import { Kysely, PGliteDialect, sql, WithSchemaPlugin } from "kysely";
 import type { WorkspaceBridge } from "../agent-bridge.js";
 import type { ConnectorsService } from "../connectors.js";
+import type { IncognitoSessionsStore } from "../incognito-sessions.js";
 import {
   type McpAppsService,
   mcpAppViewCsp,
@@ -78,6 +79,7 @@ export async function startEmbeddedServer(
   workspaceBridge?: WorkspaceBridge,
   connectors?: ConnectorsService,
   mcpApps?: McpAppsService,
+  incognitoSessions?: IncognitoSessionsStore,
 ): Promise<EmbeddedServer> {
   fs.mkdirSync(paths.db, { recursive: true });
 
@@ -132,6 +134,8 @@ export async function startEmbeddedServer(
   const sessionMirror = new RemoteSessionMirror({
     profiles,
     profileConfig,
+    // Desktop-local privacy flag (ADR 0062): never crosses core.
+    isIncognito: (sessionId) => incognitoSessions?.has(sessionId) ?? false,
     sessionDetail: (projectId, sessionId) =>
       catamorphic.core.agentSessions
         ? catamorphic.core.agentSessions.get(

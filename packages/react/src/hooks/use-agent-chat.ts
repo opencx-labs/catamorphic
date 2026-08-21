@@ -29,11 +29,6 @@ export interface UseAgentChatOptions {
    * sessions are unaffected — switch those via `useUpdateAgentSession`.
    */
   agentId?: string;
-  /**
-   * Create the lazy session as incognito (ADR 0062): local-only history,
-   * never mirrored to a linked remote. Read at send time, like `agentId`.
-   */
-  incognito?: boolean;
 }
 
 /** A message waiting behind the in-flight turn. */
@@ -171,8 +166,6 @@ export function useAgentChat(
   // Read at send time so the host's latest default applies to lazy creation.
   const agentIdRef = useRef(options.agentId);
   agentIdRef.current = options.agentId;
-  const incognitoRef = useRef(options.incognito);
-  incognitoRef.current = options.incognito;
   // Poll while a send is in flight OR the server still reports an
   // in-progress assistant turn. The latter covers sends that end in an HTTP
   // error: the server persists the terminal (failed) message, and without a
@@ -212,10 +205,9 @@ export function useAgentChat(
     if (!projectId) return null;
     const existingSessionId = activeSessionRef.current.sessionId;
     if (existingSessionId) return existingSessionId;
-    const created = await createSession.mutateAsync({
-      ...(agentIdRef.current ? { agentId: agentIdRef.current } : {}),
-      ...(incognitoRef.current ? { incognito: true } : {}),
-    });
+    const created = await createSession.mutateAsync(
+      agentIdRef.current ? { agentId: agentIdRef.current } : {},
+    );
     activeSessionRef.current = {
       projectId,
       controlledSessionId,

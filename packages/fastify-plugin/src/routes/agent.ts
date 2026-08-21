@@ -62,7 +62,6 @@ export function registerAgentRoutes(app: FastifyInstance, ctx: RouteContext) {
             systemPrompt: request.body.systemPrompt,
             agentId: request.body.agentId,
             effort: request.body.effort,
-            incognito: request.body.incognito,
           },
         );
         return reply.status(201).send(session);

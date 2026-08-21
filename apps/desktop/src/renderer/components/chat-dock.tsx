@@ -1226,10 +1226,17 @@ export function ChatDock({
   const chat = useAgentChat(projectId, {
     sessionId: entry.sessionId,
     agentId: entry.agentId ?? defaultAgentId,
-    incognito: entry.incognito,
-    onSessionCreated: (sessionId) => onSessionCreated(entry.localId, sessionId),
+    onSessionCreated: (sessionId) => {
+      // Desktop-local privacy flag (ADR 0062): recorded the moment the
+      // lazy session gets its id, well before the first turn can settle
+      // (and thus before the mirror could ever consider pushing it).
+      if (entry.incognito) {
+        void desktopApi.sessionSetIncognito(sessionId, true);
+      }
+      onSessionCreated(entry.localId, sessionId);
+    },
   });
-  const isIncognito = Boolean(entry.incognito || chat.session?.incognito);
+  const isIncognito = Boolean(entry.incognito);
   // The composer's DOM is the source of truth (see ComposerInput); these
   // mirror what it says so the rest of the dock can react — the prose
   // (slash menu, recall gate, emptiness) and how many pills are live.

@@ -43,6 +43,7 @@ import {
   gitOverview,
   listWorktreePaths,
 } from "./git-view.js";
+import type { IncognitoSessionsStore } from "./incognito-sessions.js";
 import type { WindowProfileRegistry } from "./index.js";
 import { type Keybindings, normalizeKeybindings } from "./keybindings.js";
 import type { McpAppsService } from "./mcp-apps.js";
@@ -147,6 +148,7 @@ export function registerIpcHandlers(
   connectors?: ConnectorsService,
   mcpApps?: McpAppsService,
   mobilePairing?: MobilePairingService,
+  incognitoSessions?: IncognitoSessionsStore,
 ): void {
   const storesFor = (event: Electron.IpcMainInvokeEvent) =>
     profileConfig.forProfile(windows.profileFor(event.sender));
@@ -161,6 +163,14 @@ export function registerIpcHandlers(
         windows.profileFor(event.sender),
         context,
       );
+    },
+  );
+
+  // Incognito sessions (ADR 0062): desktop-local, marked at creation.
+  ipcMain.handle(
+    "catamorphic:session-set-incognito",
+    (_event, sessionId: string, incognito: boolean) => {
+      incognitoSessions?.set(sessionId, incognito);
     },
   );
 

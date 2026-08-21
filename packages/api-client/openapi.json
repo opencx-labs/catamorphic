@@ -7761,9 +7761,6 @@
                   "effort": {
                     "type": "string",
                     "enum": ["low", "medium", "high", "xhigh", "max"]
-                  },
-                  "incognito": {
-                    "type": "boolean"
                   }
                 }
               }
@@ -7843,9 +7840,6 @@
                       "type": "string",
                       "enum": ["active", "closed"]
                     },
-                    "incognito": {
-                      "type": "boolean"
-                    },
                     "baseCommitSha": {
                       "nullable": true,
                       "type": "string",
@@ -7876,7 +7870,6 @@
                     "icon",
                     "parentSessionId",
                     "status",
-                    "incognito",
                     "baseCommitSha",
                     "createdAt",
                     "updatedAt"
@@ -8040,9 +8033,6 @@
                             "type": "string",
                             "enum": ["active", "closed"]
                           },
-                          "incognito": {
-                            "type": "boolean"
-                          },
                           "baseCommitSha": {
                             "nullable": true,
                             "type": "string",
@@ -8073,7 +8063,6 @@
                           "icon",
                           "parentSessionId",
                           "status",
-                          "incognito",
                           "baseCommitSha",
                           "createdAt",
                           "updatedAt"
@@ -8260,9 +8249,6 @@
                       "type": "string",
                       "enum": ["active", "closed"]
                     },
-                    "incognito": {
-                      "type": "boolean"
-                    },
                     "baseCommitSha": {
                       "nullable": true,
                       "type": "string",
@@ -8293,7 +8279,6 @@
                     "icon",
                     "parentSessionId",
                     "status",
-                    "incognito",
                     "baseCommitSha",
                     "createdAt",
                     "updatedAt"
@@ -8465,9 +8450,6 @@
                       "type": "string",
                       "enum": ["active", "closed"]
                     },
-                    "incognito": {
-                      "type": "boolean"
-                    },
                     "baseCommitSha": {
                       "nullable": true,
                       "type": "string",
@@ -8498,7 +8480,6 @@
                     "icon",
                     "parentSessionId",
                     "status",
-                    "incognito",
                     "baseCommitSha",
                     "createdAt",
                     "updatedAt"
@@ -8662,9 +8643,6 @@
                       "type": "string",
                       "enum": ["active", "closed"]
                     },
-                    "incognito": {
-                      "type": "boolean"
-                    },
                     "baseCommitSha": {
                       "nullable": true,
                       "type": "string",
@@ -8746,7 +8724,6 @@
                     "icon",
                     "parentSessionId",
                     "status",
-                    "incognito",
                     "baseCommitSha",
                     "createdAt",
                     "updatedAt",
@@ -8877,9 +8854,6 @@
                       "type": "string",
                       "enum": ["active", "closed"]
                     },
-                    "incognito": {
-                      "type": "boolean"
-                    },
                     "baseCommitSha": {
                       "nullable": true,
                       "type": "string",
@@ -8910,7 +8884,6 @@
                     "icon",
                     "parentSessionId",
                     "status",
-                    "incognito",
                     "baseCommitSha",
                     "createdAt",
                     "updatedAt"
@@ -9768,9 +9741,6 @@
                       "type": "string",
                       "enum": ["active", "closed"]
                     },
-                    "incognito": {
-                      "type": "boolean"
-                    },
                     "baseCommitSha": {
                       "nullable": true,
                       "type": "string",
@@ -9801,7 +9771,6 @@
                     "icon",
                     "parentSessionId",
                     "status",
-                    "incognito",
                     "baseCommitSha",
                     "createdAt",
                     "updatedAt"

@@ -12,6 +12,7 @@ import { registerAgentBridge } from "./agent-bridge.js";
 import { registerBrowserSupport } from "./browser.js";
 import { toPublicConnection } from "./connections-store.js";
 import { ConnectorsService } from "./connectors.js";
+import { IncognitoSessionsStore } from "./incognito-sessions.js";
 import { registerIpcHandlers, type ServerState } from "./ipc.js";
 import { type Keybindings, toAccelerator } from "./keybindings.js";
 import { McpAppsService } from "./mcp-apps.js";
@@ -384,6 +385,12 @@ app.whenReady().then(async () => {
         : Promise.resolve({ action: "decline" }),
   });
 
+  // Incognito sessions (ADR 0062): desktop-local state, consulted by the
+  // mirror pusher and written from the renderer's chat creation.
+  const incognitoSessions = new IncognitoSessionsStore(
+    path.join(paths.root, "..", "incognito-sessions.json"),
+  );
+
   // "Continue on mobile": the LAN listener that serves the PWA and
   // proxies /api with device-token auth. Auto-listens when phones are
   // already paired, so they reconnect after a desktop restart.
@@ -406,6 +413,7 @@ app.whenReady().then(async () => {
     connectors,
     mcpApps,
     mobilePairing,
+    incognitoSessions,
   );
   browserSupport = registerBrowserSupport(
     profilesStore,
@@ -435,6 +443,7 @@ app.whenReady().then(async () => {
       agentBridge?.bridge,
       connectors,
       mcpApps,
+      incognitoSessions,
     );
     state.broadcast("catamorphic:server-changed", {
       url: server.url,

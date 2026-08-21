@@ -776,8 +776,6 @@ export const AgentSessionSchema = z.object({
   icon: z.string().nullable(),
   parentSessionId: z.string().uuid().nullable(),
   status: z.enum(["active", "closed"]),
-  /** Never mirrored to a linked remote (ADR 0062). */
-  incognito: z.boolean(),
   baseCommitSha: z.string().length(40).nullable(),
   createdAt: z.string().datetime(),
   updatedAt: z.string().datetime(),
@@ -792,8 +790,6 @@ export const CreateAgentSessionSchema = z.object({
   /** Host-registry key of the agent to run this session on. */
   agentId: z.string().optional(),
   effort: AgentEffortSchema.optional(),
-  /** Local-only session: never mirrored to a linked remote (ADR 0062). */
-  incognito: z.boolean().optional(),
 });
 
 export const UpdateAgentSessionSchema = z.object({
