@@ -68,6 +68,9 @@ const api = {
   /** Proactive auth probe: what is knowably wrong before a send. */
   agentAuthHealth: (id: string): Promise<"ok" | "expired" | "missing"> =>
     ipcRenderer.invoke("catamorphic:agent-auth-health", id),
+  /** Whole-machine transcript scan for the usage page (ADR 0057). */
+  usageSummary: (days: number): Promise<unknown> =>
+    ipcRenderer.invoke("catamorphic:usage-summary", days),
   /** Fired on OS wake — sessions may have expired; re-probe. */
   onAgentAuthMaybeChanged: (listener: () => void): (() => void) => {
     const handler = () => listener();

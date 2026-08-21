@@ -1,6 +1,7 @@
 import type {
   AgentEffort,
   AgentEvent,
+  AgentTurnUsage,
   AgentMcpServerConfig,
   CodingAgentProvider,
   McpServersSource,
@@ -246,7 +247,7 @@ export class CodexAgent implements CodingAgentProvider {
           }
           runningCommands.clear();
         }
-        yield* mapEvent(event);
+        yield* mapEvent(event, opts?.model ?? this.opts.model);
       }
     } catch (error) {
       yield { type: "error", content: describeError(error) };
@@ -405,12 +406,46 @@ function describeError(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
-function mapEvent(event: ThreadEvent): AgentEvent[] {
+/**
+ * One AgentTurnUsage from a turn.completed event (ADR 0057). Codex reports
+ * `input_tokens` inclusive of the cached portion, so the uncached figure is
+ * the difference; `reasoning_output_tokens` is a subset of output. The SDK
+ * stream reports no context window, so occupancy fields stay unset.
+ */
+function turnUsageFromCodex(
+  usage: {
+    input_tokens: number;
+    cached_input_tokens: number;
+    output_tokens: number;
+    reasoning_output_tokens: number;
+  },
+  model?: string,
+): AgentTurnUsage | undefined {
+  const positive = (value: number) =>
+    Number.isFinite(value) && value > 0 ? Math.trunc(value) : 0;
+  const input = positive(usage.input_tokens);
+  const cached = positive(usage.cached_input_tokens);
+  const output = positive(usage.output_tokens);
+  if (input + output === 0) return undefined;
+  return {
+    ...(model ? { model } : {}),
+    inputTokens: Math.max(0, input - cached),
+    cachedInputTokens: cached,
+    outputTokens: output,
+    reasoningTokens: Math.min(output, positive(usage.reasoning_output_tokens)),
+  };
+}
+
+function mapEvent(event: ThreadEvent, model?: string): AgentEvent[] {
   switch (event.type) {
     case "item.completed":
       return mapItemEvent(event.item);
-    case "turn.completed":
-      return [{ type: "done" }];
+    case "turn.completed": {
+      const usage = turnUsageFromCodex(event.usage, model);
+      return usage
+        ? [{ type: "usage", usage }, { type: "done" }]
+        : [{ type: "done" }];
+    }
     case "turn.failed":
       return [{ type: "error", content: event.error.message }];
     case "error":

@@ -1,3 +1,7 @@
+import type { UsageSummary } from "../../shared/usage.js";
+
+export type { UsageSummary };
+
 export interface ServerInfo {
   url: string | null;
   hasCodingAgent: boolean;
@@ -671,6 +675,7 @@ export interface CatamorphicDesktopApi {
   ) => Promise<{ started: boolean; command?: string; error?: string }>;
   agentLoginStatus: (id: string) => Promise<boolean>;
   agentAuthHealth: (id: string) => Promise<"ok" | "expired" | "missing">;
+  usageSummary: (days: number) => Promise<UsageSummary>;
   agentCommands: (
     projectId: string,
     agentId: string,

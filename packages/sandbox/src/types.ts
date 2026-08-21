@@ -295,6 +295,32 @@ export type AgentErrorKind =
   | "unavailable"
   | "model_incompat";
 
+/**
+ * Per-turn token/cost accounting reported by a harness (ADR 0057). All
+ * fields optional: each harness fills what its stream actually reports.
+ * Counters are for the whole turn; `contextTokens`/`contextWindow` describe
+ * the session's context occupancy after the turn.
+ */
+export interface AgentTurnUsage {
+  /** Model that served the turn (the dominant one when several did). */
+  model?: string;
+  /** Uncached input tokens (never includes the cached portion). */
+  inputTokens?: number;
+  /** Cache-read input tokens. */
+  cachedInputTokens?: number;
+  /** Cache-write (creation) input tokens. */
+  cacheCreationTokens?: number;
+  outputTokens?: number;
+  /** Subset of outputTokens; informational, never added to totals. */
+  reasoningTokens?: number;
+  /** Harness-reported cost in USD, when the harness computes one. */
+  costUsd?: number;
+  /** Tokens currently occupying the session's context window. */
+  contextTokens?: number;
+  /** The serving model's context window size, when reported. */
+  contextWindow?: number;
+}
+
 export interface AgentEvent {
   type:
     | "text"
@@ -306,6 +332,7 @@ export interface AgentEvent {
     | "session"
     | "subagent"
     | "background"
+    | "usage"
     | "error"
     | "done";
   content?: string;
@@ -352,6 +379,12 @@ export interface AgentEvent {
    * running state to track.
    */
   status?: "started" | "ended" | "detected";
+  /**
+   * Set on "usage" events: the turn's accounting snapshot. At most one per
+   * turn, emitted just before "done". Hosts persist it beside the reply;
+   * it is bookkeeping, never step-log activity.
+   */
+  usage?: AgentTurnUsage;
 }
 
 export interface AgentSession {

@@ -22,6 +22,20 @@ const usage = {
   outputTokens: { total: 5, text: 5, reasoning: 0 },
 };
 
+// The turn's accounting event (ADR 0057): totalUsage sums the mock usage
+// above across the turn's model steps.
+const usageEvent = (steps: number) => ({
+  type: "usage" as const,
+  usage: {
+    model: "mock-model-id",
+    inputTokens: 10 * steps,
+    cachedInputTokens: 0,
+    cacheCreationTokens: 0,
+    outputTokens: 5 * steps,
+    reasoningTokens: 0,
+  },
+});
+
 function createProvider(files: Record<string, string> = {}): SandboxProvider {
   return {
     workspaceRoot: "/workspace",
@@ -211,6 +225,7 @@ describe("AiSdkCodingAgent", () => {
         toolResult: { open: 3 },
       },
       { type: "text", content: "You have 3 open issues." },
+      usageEvent(2),
       { type: "done" },
     ]);
   });
@@ -399,6 +414,7 @@ describe("AiSdkCodingAgent", () => {
 
     expect(events).toEqual([
       { type: "text", content: "Hello anyway." },
+      usageEvent(1),
       { type: "done" },
     ]);
   });
@@ -426,6 +442,7 @@ describe("AiSdkCodingAgent", () => {
     expect(events).toEqual([
       { type: "file_edit", content: "write", filePath: "src/generated.ts" },
       { type: "text", content: "Created the file." },
+      usageEvent(2),
       { type: "done" },
     ]);
   });

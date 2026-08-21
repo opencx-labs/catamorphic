@@ -1026,7 +1026,7 @@ export class AgentSessionsService {
       if (heldText === undefined) return;
       const metadata: JsonObject = {
         status: "completed",
-        events: JSON.parse(JSON.stringify(segmentEvents)) as JsonObject[],
+        events: stepLogEvents(segmentEvents),
       };
       const settledContent = heldText;
       // One transaction: a client poll must never observe the settled
@@ -1165,7 +1165,9 @@ export class AgentSessionsService {
         if (event.type === "text" && event.content) {
           heldText = event.content;
         }
-        if (event.type !== "done") {
+        // Usage is accounting that arrives right before done (ADR 0057) —
+        // never a progress beat, so it must not overwrite the activity line.
+        if (event.type !== "done" && event.type !== "usage") {
           await this.db
             .updateTable("agent_messages")
             .set({
@@ -1257,14 +1259,27 @@ export class AgentSessionsService {
             .reverse()
             .find((event) => event.type === "error" && event.errorKind)
             ?.errorKind;
+      // The turn's accounting snapshot (ADR 0057): at most one usage event,
+      // emitted by the harness just before done. It lands as metadata.usage
+      // on the settled reply, where the composer's context meter reads it.
+      const usageEvent = [...events]
+        .reverse()
+        .find((event) => event.type === "usage" && event.usage);
       const metadata: JsonObject = {
         status: failed
           ? "failed"
           : questionEvent
             ? "awaiting_input"
             : "completed",
-        events: JSON.parse(JSON.stringify(segmentEvents)) as JsonObject[],
+        events: stepLogEvents(segmentEvents),
         changedFiles: changedFiles.map((change) => ({ ...change })),
+        ...(usageEvent?.usage
+          ? {
+              usage: JSON.parse(
+                JSON.stringify(usageEvent.usage),
+              ) as JsonObject,
+            }
+          : {}),
         // What the turn's store/ writes became (ADR 0055): shipped, refused,
         // conflicted, or outside store/. Hosts render it beside the reply.
         ...(storeSync ? { storeSync } : {}),
@@ -2006,8 +2021,19 @@ export class AgentSessionsService {
 function progressMetadata(events: AgentEvent[]): JsonObject {
   return {
     status: "in_progress",
-    events: JSON.parse(JSON.stringify(events)) as JsonObject[],
+    events: stepLogEvents(events),
   };
+}
+
+/**
+ * Events serialized into a message's step log. Usage events are accounting
+ * (ADR 0057) — stamped on the settled message as `metadata.usage`, never
+ * rendered as activity rows — so they are filtered out here.
+ */
+function stepLogEvents(events: AgentEvent[]): JsonObject[] {
+  return JSON.parse(
+    JSON.stringify(events.filter((event) => event.type !== "usage")),
+  ) as JsonObject[];
 }
 
 export function activityLabel(event: AgentEvent): string {

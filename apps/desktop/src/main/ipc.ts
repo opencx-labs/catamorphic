@@ -25,6 +25,8 @@ import {
   type UpdateAgentInput,
 } from "./agents-store.js";
 import { type AgentAuthHealth, claudeOauthHealth } from "./auth-health.js";
+import { createUsageScanner } from "./usage-scan.js";
+import type { UsageSummary, UsageWindowDays } from "../shared/usage.js";
 import { parseConnectLink } from "./connect-link.js";
 import {
   type CreateConnectionInput,
@@ -783,6 +785,24 @@ export function registerIpcHandlers(
         if (agent.auth === "local") raw = claudeKeychainRaw();
       }
       return claudeOauthHealth(raw, Date.now());
+    },
+  );
+
+  // Usage and cost (ADR 0057): a whole-machine scan of the provider CLIs'
+  // own transcripts — machine-default homes plus every agent home — cached
+  // per file. Deliberately answers "what did I spend", not "what did this
+  // app spend"; the page says so.
+  const usageScanner = createUsageScanner({
+    homeDir: app.getPath("home"),
+    agentHomesDir: paths.agentHomesDir,
+    cacheDir: path.join(app.getPath("userData"), "usage"),
+  });
+  ipcMain.handle(
+    "catamorphic:usage-summary",
+    (_event, days: number): Promise<UsageSummary> => {
+      const window: UsageWindowDays =
+        days === 1 || days === 7 || days === 90 ? days : 30;
+      return usageScanner.summary(window);
     },
   );
 

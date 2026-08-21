@@ -66,6 +66,7 @@ import {
   ComposerInput,
   type ComposerInputHandle,
 } from "./composer-input";
+import { ContextMeter } from "./context-meter.js";
 import { ShortcutHint } from "./shortcut-hint";
 
 export type ChatMode = "min" | "partial" | "tab";
@@ -2537,6 +2538,9 @@ export function ChatDock({
                   }
                   ariaLabel="Message the assistant"
                 />
+                {/* Context ring (ADR 0057): quiet until a harness reports
+                    occupancy and window size; danger red past 90%. */}
+                <ContextMeter messages={chat.messages} />
                 <ShortcutHint
                   label={chat.isWorking ? "Queue (⌘↵ sends now)" : "Send"}
                   shortcut="↵"

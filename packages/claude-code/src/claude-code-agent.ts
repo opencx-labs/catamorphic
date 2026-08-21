@@ -16,6 +16,7 @@ import {
 import type {
   AgentEffort,
   AgentEvent,
+  AgentTurnUsage,
   AgentMcpServerConfig,
   AgentPluginConfig,
   AgentQuestion,
@@ -253,6 +254,12 @@ interface LiveTurn {
   hookEvents: AgentEvent[];
   /** Subagents this query spawned, keyed by their Task tool-use id. */
   openSubagents: Set<string>;
+  /**
+   * Raw `usage` of the last main-thread assistant message. Its input-side
+   * sum (input + cache read + cache creation) is the session's context
+   * occupancy after the turn — the result message only totals the turn.
+   */
+  lastMainUsage?: Record<string, unknown>;
   abort: AbortController;
   state?: SessionState;
   /** The parked AskUserQuestion call: its input and its answer resolver. */
@@ -495,7 +502,7 @@ export class ClaudeCodeAgent implements CodingAgentProvider {
           live.state.transcriptExists = true;
         }
         yield* live.hookEvents.splice(0);
-        for (const event of mapMessage(sdkMessage, live.openSubagents)) {
+        for (const event of mapMessage(sdkMessage, live.openSubagents, live)) {
           if (event.type === "done") done = true;
           yield event;
         }
@@ -884,9 +891,89 @@ interface ContentBlockLike {
   tool_use_id?: string;
 }
 
+/** Positive finite number at `key`, truncated to an integer; else 0. */
+function usageInt(
+  record: Record<string, unknown> | undefined,
+  key: string,
+): number {
+  const value = record?.[key];
+  return typeof value === "number" && Number.isFinite(value) && value > 0
+    ? Math.trunc(value)
+    : 0;
+}
+
+/**
+ * One AgentTurnUsage from the SDK result message (ADR 0057). Totals and
+ * cost come from the result itself; the dominant entry of `modelUsage`
+ * names the model and its context window; context occupancy is the
+ * input-side sum of the last main-thread assistant usage (its final
+ * iteration when the API reports several).
+ */
+function turnUsageFromResult(
+  message: SDKMessage,
+  lastMainUsage: Record<string, unknown> | undefined,
+): AgentTurnUsage | undefined {
+  const usage = (message as { usage?: Record<string, unknown> }).usage;
+  const costUsd = (message as { total_cost_usd?: number }).total_cost_usd;
+  const modelUsage = (
+    message as { modelUsage?: Record<string, Record<string, unknown>> }
+  ).modelUsage;
+
+  let model: string | undefined;
+  let contextWindow: number | undefined;
+  let dominantTokens = -1;
+  for (const [name, entry] of Object.entries(modelUsage ?? {})) {
+    const tokens =
+      usageInt(entry, "inputTokens") +
+      usageInt(entry, "cacheReadInputTokens") +
+      usageInt(entry, "outputTokens");
+    if (tokens > dominantTokens) {
+      dominantTokens = tokens;
+      model = name;
+      const window = usageInt(entry, "contextWindow");
+      contextWindow = window > 0 ? window : undefined;
+    }
+  }
+
+  let contextTokens: number | undefined;
+  if (lastMainUsage) {
+    const iterations = lastMainUsage["iterations"];
+    const current =
+      Array.isArray(iterations) && iterations.length > 0
+        ? (iterations[iterations.length - 1] as Record<string, unknown>)
+        : lastMainUsage;
+    const occupancy =
+      usageInt(current, "input_tokens") +
+      usageInt(current, "cache_read_input_tokens") +
+      usageInt(current, "cache_creation_input_tokens");
+    contextTokens = occupancy > 0 ? occupancy : undefined;
+  }
+
+  const totals: AgentTurnUsage = {
+    ...(model ? { model } : {}),
+    inputTokens: usageInt(usage, "input_tokens"),
+    cachedInputTokens: usageInt(usage, "cache_read_input_tokens"),
+    cacheCreationTokens: usageInt(usage, "cache_creation_input_tokens"),
+    outputTokens: usageInt(usage, "output_tokens"),
+    ...(typeof costUsd === "number" && Number.isFinite(costUsd) && costUsd > 0
+      ? { costUsd }
+      : {}),
+    ...(contextTokens ? { contextTokens } : {}),
+    ...(contextWindow ? { contextWindow } : {}),
+  };
+  const anyTokens =
+    (totals.inputTokens ?? 0) +
+      (totals.cachedInputTokens ?? 0) +
+      (totals.cacheCreationTokens ?? 0) +
+      (totals.outputTokens ?? 0) >
+    0;
+  return anyTokens || totals.costUsd || contextTokens ? totals : undefined;
+}
+
 function mapMessage(
   message: SDKMessage,
   openSubagents: Set<string>,
+  usageState: { lastMainUsage?: Record<string, unknown> },
 ): AgentEvent[] {
   switch (message.type) {
     case "assistant": {
@@ -895,6 +982,12 @@ function mapMessage(
       const parentToolUseId =
         (message as { parent_tool_use_id?: string | null })
           .parent_tool_use_id ?? undefined;
+      if (!parentToolUseId) {
+        const rawUsage = (message.message as { usage?: unknown }).usage;
+        if (rawUsage && typeof rawUsage === "object") {
+          usageState.lastMainUsage = rawUsage as Record<string, unknown>;
+        }
+      }
       const events: AgentEvent[] = [];
       for (const block of blocks) {
         // Text inside a subagent is the subagent's own conversation, not
@@ -959,11 +1052,14 @@ function mapMessage(
       return events;
     }
     case "result": {
+      const usage = turnUsageFromResult(message, usageState.lastMainUsage);
+      const usageEvents: AgentEvent[] = usage ? [{ type: "usage", usage }] : [];
       if (message.subtype === "success") {
-        return [{ type: "done" }];
+        return [...usageEvents, { type: "done" }];
       }
       const detail = message.errors.filter(Boolean).join("\n");
       return [
+        ...usageEvents,
         { type: "error", content: detail || message.subtype },
         { type: "done" },
       ];
