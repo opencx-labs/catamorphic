@@ -11,10 +11,14 @@ export {
   stagePluginDocs,
 } from "./coding-agent/plugin-staging.js";
 export {
+  ATTACHMENT_MARKER,
   describeTextSource,
+  inlineAttachmentReferences,
   isMediaAttachment,
   isTextAttachment,
+  messageWithAttachmentNames,
   renderTextAttachments,
+  renderUserMessage,
 } from "./coding-agent/text-attachments.js";
 export {
   type McpToolPolicy,

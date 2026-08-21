@@ -4147,6 +4147,14 @@ export interface paths {
                                 /** @enum {string} */
                                 type: "path";
                                 path: string;
+                            } | {
+                                /** @enum {string} */
+                                type: "tab";
+                                key: string;
+                                kind: string;
+                                title: string;
+                                url?: string;
+                                filePath?: string;
                             };
                         })[];
                     };

@@ -154,7 +154,21 @@ export type AgentTextSource =
       endLine?: number;
     }
   | { type: "url"; url: string }
-  | { type: "path"; path: string };
+  | { type: "path"; path: string }
+  | {
+      /**
+       * An open workspace tab (browser page, editor, terminal, chat…)
+       * dragged into the composer. The key addresses it through the
+       * workspace tools (`workspace_read_tab`); title/url/filePath are what
+       * the pill shows and what the model reads without a tool call.
+       */
+      type: "tab";
+      key: string;
+      kind: string;
+      title: string;
+      url?: string;
+      filePath?: string;
+    };
 
 /** A media file sent along with a user message. */
 export interface AgentMediaAttachment {

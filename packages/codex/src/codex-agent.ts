@@ -13,6 +13,7 @@ import type {
 import {
   buildPluginsPreamble,
   mergePolicyLayers,
+  renderUserMessage,
   resolveMcpServers,
   resolveToolPermissionAcross,
   stagePluginDocs,
@@ -195,9 +196,12 @@ export class CodexAgent implements CodingAgentProvider {
     const thread = session.providerSessionId
       ? client.resumeThread(session.providerSessionId, threadOptions)
       : client.startThread(threadOptions);
+    // Codex takes no media, but text pills (pastes, selections, links,
+    // tabs) are universal context — rendered the same as every harness.
+    const prose = renderUserMessage(message, opts?.attachments);
     const input = session.providerSessionId
-      ? message
-      : this.withInstructions(session.sessionId, message);
+      ? prose
+      : this.withInstructions(session.sessionId, prose);
 
     let stream: AsyncIterable<ThreadEvent>;
     try {

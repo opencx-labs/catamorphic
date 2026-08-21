@@ -26,7 +26,7 @@ import {
   buildPluginsPreamble,
   isMediaAttachment,
   mergePolicyLayers,
-  renderTextAttachments,
+  renderUserMessage,
   resolveMcpServers,
   stagedPluginFiles,
   ToolGate,
@@ -570,15 +570,16 @@ export class AiSdkCodingAgent implements CodingAgentProvider {
 }
 
 /**
- * User message: text attachments (pastes, selections, URLs, paths) render as
- * a labelled context block after the prose; media attachments become
- * image/file parts beside it.
+ * User message: inline attachment markers become numbered references, text
+ * attachments (pastes, selections, URLs, paths, tabs) render as labelled
+ * context blocks after the prose; media attachments become image/file parts
+ * beside it.
  */
 function userMessage(
   message: string,
   attachments: NonNullable<TurnOptions["attachments"]>,
 ): ModelMessage {
-  const text = `${message}${renderTextAttachments(attachments)}`;
+  const text = renderUserMessage(message, attachments);
   const media = attachments.filter(isMediaAttachment);
   if (media.length === 0) return { role: "user", content: text };
   return {

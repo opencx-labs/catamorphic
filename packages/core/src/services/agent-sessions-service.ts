@@ -8,6 +8,7 @@ import {
   type AgentEvent,
   type AttachedPluginForAgent,
   type McpToolPolicyLayers,
+  messageWithAttachmentNames,
   narrowingLayer,
   PROJECT_TOOLS_SERVER_KEY,
   type ProviderSession,
@@ -1336,7 +1337,12 @@ export class AgentSessionsService {
           ...(titleEvent?.content
             ? { title: truncate(titleEvent.content, 500) }
             : session.title === null
-              ? { title: truncate(message, 500) }
+              ? {
+                  title: truncate(
+                    messageWithAttachmentNames(message, attachments),
+                    500,
+                  ),
+                }
               : {}),
         })
         .where("id", "=", sessionId)

@@ -866,6 +866,14 @@ export const AgentTextSourceSchema = z.discriminatedUnion("type", [
   }),
   z.object({ type: z.literal("url"), url: z.string().min(1).max(8192) }),
   z.object({ type: z.literal("path"), path: z.string().min(1).max(4096) }),
+  z.object({
+    type: z.literal("tab"),
+    key: z.string().min(1).max(200),
+    kind: z.string().min(1).max(40),
+    title: z.string().min(1).max(500),
+    url: z.string().min(1).max(8192).optional(),
+    filePath: z.string().min(1).max(4096).optional(),
+  }),
 ]);
 
 /** Text context beside a message: paste, editor selection, URL, path. */

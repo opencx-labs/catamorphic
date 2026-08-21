@@ -159,6 +159,8 @@ export {
   type AgentChatMediaAttachment,
   type AgentChatTextAttachment,
   type AgentChatTextSource,
+  ATTACHMENT_MARKER,
+  messageWithAttachmentNames,
   type SendAgentMessageInput,
   useSendAgentMessage,
 } from "./hooks/use-send-agent-message.js";

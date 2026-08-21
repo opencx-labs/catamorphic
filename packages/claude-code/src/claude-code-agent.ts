@@ -34,7 +34,7 @@ import {
   buildPluginsPreamble,
   isMediaAttachment,
   mergePolicyLayers,
-  renderTextAttachments,
+  renderUserMessage,
   resolveMcpServers,
   stagePluginDocs,
   ToolGate,
@@ -984,9 +984,11 @@ async function withAttachments(
   attachments: TurnOptions["attachments"],
   providerSessionId: string,
 ): Promise<string> {
-  if (!attachments || attachments.length === 0) return message;
+  if (!attachments || attachments.length === 0) {
+    return renderUserMessage(message, attachments);
+  }
   // Text context goes straight into the prompt; only media needs temp files.
-  const withText = `${message}${renderTextAttachments(attachments)}`;
+  const withText = renderUserMessage(message, attachments);
   const media = attachments.filter(isMediaAttachment);
   if (media.length === 0) return withText;
   const dir = path.join(
@@ -1002,7 +1004,9 @@ async function withAttachments(
     const safeName = `${crypto.randomUUID().slice(0, 8)}-${attachment.name.replace(/[^\w.-]+/g, "_")}`;
     const filePath = path.join(dir, safeName);
     await fs.writeFile(filePath, Buffer.from(attachment.dataBase64, "base64"));
-    lines.push(`- ${filePath} (${attachment.mediaType})`);
+    lines.push(
+      `- [attachment ${attachments.indexOf(attachment) + 1}: ${attachment.name}] ${filePath} (${attachment.mediaType})`,
+    );
   }
   return `${withText}\n\n[The user attached ${media.length === 1 ? "a file" : "files"} with this message — use the Read tool to view:\n${lines.join("\n")}]`;
 }

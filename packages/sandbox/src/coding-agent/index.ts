@@ -5,10 +5,14 @@ export {
   stagePluginDocs,
 } from "./plugin-staging.js";
 export {
+  ATTACHMENT_MARKER,
   describeTextSource,
+  inlineAttachmentReferences,
   isMediaAttachment,
   isTextAttachment,
+  messageWithAttachmentNames,
   renderTextAttachments,
+  renderUserMessage,
 } from "./text-attachments.js";
 export type {
   AttachedPluginForAgent,
