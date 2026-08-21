@@ -21,6 +21,7 @@ import {
   PictureInPicture2,
   Radio,
   SquareTerminal,
+  X,
 } from "lucide-react";
 import {
   type ClipboardEvent,
@@ -809,6 +810,12 @@ export interface ChatDockProps {
    * single collapsed bubble at the right (side padding only), "none".
    */
   bubbleClearance: "none" | "corner" | "strip";
+  /**
+   * A tab is visible behind the floating dock. While the agent works,
+   * the dock lurks: it shrinks vertically to a strip showing the latest
+   * activity so the tab stays readable, and expands on hover/focus.
+   */
+  backdropTab?: boolean;
   /** Profile-default agent for lazily created sessions. */
   defaultAgentId?: string;
   /**
@@ -899,6 +906,7 @@ export function ChatDock({
   splitRatio = 0.5,
   splitResizing = false,
   bubbleClearance,
+  backdropTab = false,
   defaultAgentId,
   paletteTargeted,
   surfaces = [],
@@ -1137,10 +1145,16 @@ export function ChatDock({
     agents: AgentInfo[];
     defaultAgentId: string | null;
   }>({ agents: [], defaultAgentId: null });
-  // Refetched when the session's agent changes: a switch may involve an
-  // agent created after this dock mounted (marker names, capabilities).
+  // Refetched when the session's agent changes (a switch may involve an
+  // agent created after this dock mounted) and on agents-changed
+  // broadcasts (a new default agent must reach already-open docks).
   const sessionAgentId = chat.session?.agentId;
-  // biome-ignore lint/correctness/useExhaustiveDependencies: sessionAgentId is the refetch trigger, not a body dependency
+  const [rosterNonce, setRosterNonce] = useState(0);
+  useEffect(
+    () => desktopApi.onAgentsChanged(() => setRosterNonce((n) => n + 1)),
+    [],
+  );
+  // biome-ignore lint/correctness/useExhaustiveDependencies: sessionAgentId/rosterNonce are refetch triggers, not body dependencies
   useEffect(() => {
     let cancelled = false;
     // Profile roster + the project's committed agents (ADR 0050), merged:
@@ -1161,7 +1175,7 @@ export function ChatDock({
     return () => {
       cancelled = true;
     };
-  }, [sessionAgentId, projectId]);
+  }, [sessionAgentId, projectId, rosterNonce]);
   const activeAgent = roster.agents.find(
     (agent) =>
       agent.id ===
@@ -1190,8 +1204,93 @@ export function ChatDock({
       }),
     [],
   );
+  const isTab = entry.mode === "tab";
+  const frontSurface = entry.mode === "partial" || (isTab && tabActive);
+
+  // Lurk mode: while the agent works and a tab is visible behind the
+  // floating dock, the dock shrinks VERTICALLY to a strip — header, the
+  // tail of the timeline (the latest preambles; the timeline sticks to
+  // its bottom), composer — so the user can watch the tab. Hovering or
+  // focusing the dock expands it; leaving re-shrinks unless focus is
+  // inside; focusing/clicking outside shrinks; questions and the end of
+  // the turn expand it for good.
+  const sectionRef = useRef<HTMLElement>(null);
+  const [dockHovered, setDockHovered] = useState(false);
+  // Starts true: the dock claims focus when it opens.
+  const [dockEngaged, setDockEngaged] = useState(true);
+  useEffect(() => {
+    if (entry.mode !== "partial") return;
+    const inDock = (target: EventTarget | null) =>
+      target instanceof Node && sectionRef.current?.contains(target) === true;
+    const onFocusIn = (event: FocusEvent) =>
+      setDockEngaged(inDock(event.target));
+    // Clicks on unfocusable chrome (a webview, blank pane space) never
+    // fire focusin — the pointer decides too.
+    const onPointerDown = (event: PointerEvent) =>
+      setDockEngaged(inDock(event.target));
+    window.addEventListener("focusin", onFocusIn);
+    window.addEventListener("pointerdown", onPointerDown, true);
+    return () => {
+      window.removeEventListener("focusin", onFocusIn);
+      window.removeEventListener("pointerdown", onPointerDown, true);
+    };
+  }, [entry.mode]);
+
+  // Proactive auth health (t3-code-inspired): probed while this chat is
+  // the front surface — on agent change, window focus, and OS wake — so
+  // an expired session prompts BEFORE a send fails, not after. Only
+  // session-auth agents (claude-code/codex account or local logins) get
+  // the banner; API keys don't rot on a timer.
+  const [authHealth, setAuthHealth] = useState<"ok" | "expired" | "missing">(
+    "ok",
+  );
+  const [authBannerDismissed, setAuthBannerDismissed] = useState(false);
+  // Every re-login-able agent: CLI sessions (claude-code/codex, account
+  // or local) and OpenRouter's PKCE key. Plain api-key agents are
+  // Settings-only and never bannered.
+  const sessionAuthAgent =
+    activeAgent &&
+    (activeAgent.auth === "account" || activeAgent.auth === "local");
+  useEffect(() => {
+    if (!frontSurface || !sessionAuthAgent || !activeAgent) {
+      setAuthHealth("ok");
+      return;
+    }
+    let cancelled = false;
+    const probe = () => {
+      desktopApi
+        .agentAuthHealth(activeAgent.id)
+        .then((health) => {
+          if (cancelled) return;
+          setAuthHealth((previous) => {
+            if (previous !== health) setAuthBannerDismissed(false);
+            return health;
+          });
+        })
+        .catch(() => {});
+    };
+    probe();
+    const offWake = desktopApi.onAgentAuthMaybeChanged(probe);
+    const offLogin = desktopApi.onAgentLoginFinished((result) => {
+      if (result.agentId === activeAgent.id) probe();
+    });
+    window.addEventListener("focus", probe);
+    return () => {
+      cancelled = true;
+      offWake();
+      offLogin();
+      window.removeEventListener("focus", probe);
+    };
+  }, [frontSurface, sessionAuthAgent, activeAgent]);
+
+  // Account logins (OpenRouter PKCE, per-agent CLI homes) AND `local`
+  // CLI logins (the machine's own claude/codex session — the common
+  // case) both re-login through agentLogin; only api-key agents are
+  // pointed at Settings by the error text instead.
   const reauth =
-    activeAgent && activeAgent.auth === "account"
+    activeAgent &&
+    (activeAgent.auth === "account" ||
+      (activeAgent.auth === "local" && activeAgent.harness !== "ai-sdk"))
       ? {
           label:
             activeAgent.provider === "openrouter"
@@ -1259,7 +1358,6 @@ export function ChatDock({
     });
   }, []);
 
-  const isTab = entry.mode === "tab";
   // Closing an empty chat plays the same 250ms collapse as minimizing —
   // `closing` drops the expanded classes first, the unmount follows.
   const [closing, setClosing] = useState(false);
@@ -1600,7 +1698,6 @@ export function ChatDock({
   // a screenshot, click the chat, Cmd+V" silently do nothing. Only pastes
   // aimed at no field at all count — pasting a URL into a settings input
   // must stay a plain paste there.
-  const frontSurface = entry.mode === "partial" || (isTab && tabActive);
   useEffect(() => {
     if (!frontSurface) return;
     const onWindowPaste = (event: globalThis.ClipboardEvent) => {
@@ -1720,6 +1817,15 @@ export function ChatDock({
   // In a split, a tabbed chat occupies only its (ratio-sized) share of
   // the view; floating chats always overlay the full area.
   const splitPane = presentsAsTab && tabActive && slot !== "full";
+  const lurking =
+    entry.mode === "partial" &&
+    expanded &&
+    backdropTab &&
+    chat.isWorking &&
+    !questions &&
+    !dockHovered &&
+    !dockEngaged &&
+    !dropActive;
   return (
     <div
       className={`pointer-events-none absolute z-30 flex flex-col items-center justify-end ${
@@ -1744,6 +1850,9 @@ export function ChatDock({
       }
     >
       <section
+        ref={sectionRef}
+        onMouseEnter={() => setDockHovered(true)}
+        onMouseLeave={() => setDockHovered(false)}
         onMouseDownCapture={onFocusRequest}
         onDragEnter={(event) => {
           const types = [...(event.dataTransfer?.types ?? [])];
@@ -1784,10 +1893,13 @@ export function ChatDock({
         }}
         data-palette-target={(paletteTargeted && !isTab) || undefined}
         data-floating-chat={entry.mode === "partial" || undefined}
+        data-lurking={lurking || undefined}
         className={`pointer-events-auto relative flex w-full origin-bottom flex-col overflow-hidden backdrop-blur-xl transition-[max-width,height,opacity,translate,scale,background-color,border-radius,border-color] duration-250 ease-[cubic-bezier(0.2,0,0,1)] ${
           presentsAsTab
             ? "h-full max-w-full rounded-none border-0 border-transparent bg-bg"
-            : `h-[min(560px,100%)] max-w-3xl rounded-2xl border bg-bg-raised/95 drop-shadow-2xl ${
+            : `${
+                lurking ? "h-44" : "h-[min(560px,100%)]"
+              } max-w-3xl rounded-2xl border bg-bg-raised/95 drop-shadow-2xl ${
                 paletteTargeted && !isTab ? "border-accent" : "border-border"
               }`
         } ${
@@ -1937,13 +2049,48 @@ export function ChatDock({
                 the tab; the split button (or Cmd+click) tiles it to the
                 right of the current view. Only real surfaces earn a chip —
                 the new-terminal affordance lives with the header controls. */}
-            {railSurfaces.length > 0 && onOpenSurface && (
+            {/* The rail yields while lurking — the strip's few rows
+                belong to the latest activity, not to chips. */}
+            {railSurfaces.length > 0 && onOpenSurface && !lurking && (
               <SurfacesRail
                 surfaces={railSurfaces}
                 onOpenSurface={onOpenSurface}
                 onOpenMcpApp={onOpenMcpApp}
               />
             )}
+            {/* Proactive auth banner: the session is knowably dead
+                (probe on focus/wake) — offer the re-login BEFORE a send
+                fails. Dismissible; a health change re-arms it. */}
+            {authHealth !== "ok" &&
+              !authBannerDismissed &&
+              sessionAuthAgent &&
+              reauth && (
+                <div
+                  data-testid="auth-health-banner"
+                  className="mx-3 mb-1 flex shrink-0 animate-fade-in items-center gap-2 rounded-lg border border-warning/40 bg-warning/10 py-1.5 pl-3 pr-1.5 text-xs text-fg"
+                >
+                  <span className="min-w-0 flex-1 truncate">
+                    {authHealth === "expired"
+                      ? `${activeAgent?.name}'s session has expired.`
+                      : `${activeAgent?.name} isn't signed in.`}
+                  </span>
+                  <button
+                    type="button"
+                    onClick={reauth.run}
+                    className="shrink-0 cursor-pointer rounded-md bg-warning/20 px-2 py-1 font-medium transition-colors duration-150 hover:bg-warning/30"
+                  >
+                    {reauth.label}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setAuthBannerDismissed(true)}
+                    className="grid size-6 shrink-0 cursor-pointer place-items-center rounded-md text-fg-faint transition-colors duration-150 hover:bg-bg-overlay hover:text-fg"
+                    aria-label="Dismiss"
+                  >
+                    <X className="size-3" />
+                  </button>
+                </div>
+              )}
             {questions && !chat.isSending && (
               <AgentQuestionPanel
                 questions={questions}

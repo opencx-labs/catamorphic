@@ -4062,6 +4062,10 @@ export function App() {
                 splitRatio={splitRatio}
                 splitResizing={dividerDragging}
                 bubbleClearance={bubblesCollapsed ? "corner" : "strip"}
+                backdropTab={
+                  workspace.activeTabKey !== undefined &&
+                  workspace.activeTabKey !== chatTabKey(entry.localId)
+                }
                 defaultAgentId={agentsData?.defaultAgentId ?? undefined}
                 paletteTargeted={entry.localId === targetedChat?.localId}
                 surfaces={surfacesFor(entry)}
