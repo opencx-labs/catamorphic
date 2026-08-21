@@ -2736,3 +2736,35 @@ Patterned on what best-in-class palettes converged on (Chrome omnibox
 - Attach button ≡ paste: verified (and now e2e-pinned) that the
   paperclip inserts files at the caret through the same
   addFiles→insertPills machinery as pasting — one code path, one feel.
+
+### 2026-08-21 — Rail motion, popover vocabulary, the full "/" menu
+
+- **The split affordance only exists under the pointer.** Every rail
+  chip carried a permanent "open to the right" button — chrome on chrome.
+  It's now an overlay on the chip's right end that fades in on hover,
+  its left edge a gradient into the chip background so it covers the
+  label's tail instead of reserving width. The ⌘-click shortcut is
+  unchanged.
+- **Chips fold, they don't teleport.** A kind crossing the group
+  threshold used to swap its chips for the "4 terminals" chip in one
+  frame. KindStrip now diffs per kind: removed chips play pill-out
+  (width-collapse, the composer pill's vocabulary), the group chip
+  enters with pill-in — the collapse reads as folding. Entered ids keep
+  their class for the element's lifetime so a mid-flight re-render
+  can't snap the tween. The rail CSS-collapses (max-height + opacity,
+  not unmount) while the dock lurks, so this motion state survives.
+- **One popover vocabulary.** The rail's group and info popovers and
+  the composer's slash menu now share pop-in/pop-out (rise + settle,
+  reverse on exit, content snapshotted through the exit so panels never
+  blank mid-pop). PopPanel owns the mount/unmount dance.
+- **The "/" menu shows what the agent actually accepts.** Skills (ADR
+  0052) are merged with the HARNESS's own slash commands — for Claude
+  Code, probed with the same never-yielding SDK session as t3's
+  capabilities probe (initialization only, no API call): built-ins,
+  .claude/commands, plugin commands. Cached 5min in main
+  (`agent-commands` IPC), gated there (other harnesses answer empty),
+  name collisions go to the skill. Command rows show /name, the
+  argument hint, and a "Claude Code" badge; committing one sends the
+  literal `/name`, which the CLI executes natively (the composer already
+  passed unknown /text through raw). Rows glide under useListMotion as
+  the filter types.

@@ -197,6 +197,108 @@ describe("dock modes", () => {
     );
   }, 60_000);
 
+  it("the slash menu merges the harness's commands under the skills", async () => {
+    await run(`setComposer('/'); return true;`);
+    const rows = await runWait<string[]>(
+      `const menu = $('[data-testid="slash-menu"]');
+       if (!menu || !menu.querySelector('[data-skill-name="compact"]')) return false;
+       return [...menu.querySelectorAll('[role="option"]')].map((el) => el.dataset.skillName);`,
+      { timeoutMs: 15_000, label: "menu with harness commands" },
+    );
+    // The e2e fixture list from main: compact + review, tagged as the
+    // harness's own.
+    expect(rows).toContain("compact");
+    expect(rows).toContain("review");
+    expect(
+      await run<boolean>(
+        `return $('[data-testid="slash-menu"]').textContent.includes('Claude Code');`,
+      ),
+    ).toBe(true);
+    // The panel pops in (and pops out when the token dissolves).
+    expect(
+      await run<boolean>(
+        `return $('[data-testid="slash-menu"]').className.includes('animate-pop-in');`,
+      ),
+    ).toBe(true);
+    await run(`setComposer(''); return true;`);
+    await runWait(`return !$('[data-testid="slash-menu"]');`, {
+      label: "menu closed after its exit animation",
+    });
+    // Committing a command sends the literal /name to the harness.
+    await run(`setComposer('/compact'); return true;`);
+    await runWait(
+      `return !!$('[data-testid="slash-menu"] [data-skill-name="compact"]');`,
+      { label: "compact filtered" },
+    );
+    await run(`
+      composer().dispatchEvent(new KeyboardEvent('keydown', {
+        key: 'Enter', bubbles: true, cancelable: true }));
+      return true;
+    `);
+    await runWait(
+      `return frontDock().querySelector('[role="log"]').textContent.includes('You said: /compact');`,
+      { timeoutMs: 30_000, label: "harness received the raw command" },
+    );
+  }, 60_000);
+
+  it("chips fold into an animated group chip past the threshold; the split affordance is hover-only", async () => {
+    // Three quick terminal turns after the lurk test's one → 4 total
+    // crosses SURFACE_GROUP_THRESHOLD (3) and the kind collapses.
+    for (const label of ["two", "three", "four"]) {
+      await run(`setComposer('terminal: echo ${label}'); send(); return true;`);
+      await runWait(
+        `return frontDock().querySelector('[role="log"]').textContent.includes('${label}');`,
+        { timeoutMs: 30_000, label: `terminal turn ${label}` },
+      );
+    }
+    await runWait(
+      `return !!frontDock().querySelector('button[aria-label="4 terminals"]');`,
+      { timeoutMs: 15_000, label: "collapsed group chip" },
+    );
+    // The group chip ENTERED through the pill vocabulary (its wrapper
+    // keeps the class for the element's lifetime).
+    expect(
+      await run<boolean>(
+        `return !!frontDock().querySelector('.animate-pill-in button[aria-label="4 terminals"]');`,
+      ),
+    ).toBe(true);
+    // Its popover pops in and back out.
+    await run(
+      `frontDock().querySelector('button[aria-label="4 terminals"]').click(); return true;`,
+    );
+    await runWait(
+      `const pop = frontDock().querySelector('.animate-pop-in');
+       return !!pop && pop.textContent.includes('Agent terminal');`,
+      { label: "group popover popped in" },
+    );
+    await run(
+      `frontDock().querySelector('button[aria-label="4 terminals"]').click(); return true;`,
+    );
+    await runWait(
+      `return !!frontDock().querySelector('.animate-pop-out') ||
+              !frontDock().querySelector('.animate-pop-in');`,
+      { label: "group popover popping out" },
+    );
+    // Individual chips reserve no width for the split affordance: it
+    // lives in an overlay that only appears under the pointer.
+    await run(
+      `setComposer('terminal: open https://example.org'); send(); return true;`,
+    );
+    const overlay = await runWait<{ opacity: string; overlaid: boolean }>(
+      `const chip = frontDock().querySelector('[data-testid="surface-chip"][data-kind="browser"]');
+       if (!chip) return false;
+       const layer = [...chip.children].find((el) => el.className.includes('absolute'));
+       if (!layer) return false;
+       const chipRect = chip.getBoundingClientRect();
+       const layerRect = layer.getBoundingClientRect();
+       return { opacity: getComputedStyle(layer).opacity,
+                overlaid: Math.abs(layerRect.right - chipRect.right) < 2 };`,
+      { timeoutMs: 30_000, label: "browser chip with hover overlay" },
+    );
+    expect(overlay.opacity).toBe("0");
+    expect(overlay.overlaid).toBe(true);
+  }, 120_000);
+
   it("`open <url>` in an agent terminal lands as an in-app browser tab", async () => {
     await run(
       `setComposer('terminal: open https://example.com'); send(); return true;`,
