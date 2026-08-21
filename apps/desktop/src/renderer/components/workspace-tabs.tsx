@@ -1,6 +1,7 @@
 import {
   AppWindow,
   Bot,
+  ChartColumn,
   ChevronsLeft,
   ChevronsRight,
   FileCode,
@@ -139,6 +140,7 @@ export type WorkspaceTab = (
       faviconUrl?: string | null;
     }
   | { kind: "settings"; name: string; label?: string }
+  | { kind: "usage"; name: string; label?: string }
   | { kind: "palette"; name: string; label?: string }
   | { kind: "agent-setup"; name: string; label?: string }
   | { kind: "terminal"; name: string; label?: string }
@@ -171,6 +173,7 @@ const TAB_ICONS = {
   chat: MessageSquare,
   browser: Globe,
   settings: SettingsIcon,
+  usage: ChartColumn,
   palette: Search,
   "agent-setup": Bot,
   terminal: SquareTerminal,

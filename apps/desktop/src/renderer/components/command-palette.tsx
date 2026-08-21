@@ -4,6 +4,7 @@ import * as lucide from "lucide-react";
 import {
   ArrowRight,
   Bot,
+  ChartColumn,
   Check,
   ChevronLeft,
   ChevronRight,
@@ -942,6 +943,15 @@ export function CommandPalette({
       kind: "navigate",
       run: () =>
         onOpenTab({ kind: "settings", name: "settings", label: "Settings" }),
+    });
+    items.push({
+      id: "tab:usage",
+      icon: ChartColumn,
+      label: "Usage",
+      detail: "Tokens and cost across agents",
+      keywords: ["usage", "cost", "tokens", "spend", "billing", "consumption"],
+      kind: "navigate",
+      run: () => onOpenTab({ kind: "usage", name: "usage", label: "Usage" }),
     });
     return items;
   }, [

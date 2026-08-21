@@ -11,6 +11,7 @@ import type {
   AgentEvent,
   AgentMcpServerConfig,
   AgentQuestion,
+  AgentTurnUsage,
   CodingAgentProvider,
   ExtraTool,
   ExtraToolContext,
@@ -534,6 +535,18 @@ export class AiSdkCodingAgent implements CodingAgentProvider {
         yield { type: "text", content: text };
       }
       state.messages = [...requestMessages, ...(await result.responseMessages)];
+      const usage = turnUsageFromAiSdk(
+        await result.totalUsage,
+        opts?.model ??
+          (typeof model === "object" && model !== null && "modelId" in model
+            ? String((model as { modelId: unknown }).modelId)
+            : typeof model === "string"
+              ? model
+              : undefined),
+      );
+      if (usage) {
+        yield { type: "usage", usage };
+      }
       if (askedToolCallId && askedQuestions) {
         state.pendingAsk = { toolCallId: askedToolCallId };
         yield { type: "question", questions: askedQuestions };
@@ -1183,6 +1196,48 @@ function asRecord(value: unknown): Record<string, unknown> | undefined {
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+/**
+ * One AgentTurnUsage from the AI SDK's LanguageModelUsage (ADR 0057).
+ * `inputTokens` here is the provider's total prompt count; the cached and
+ * uncached splits live in inputTokenDetails when the provider reports them.
+ */
+function turnUsageFromAiSdk(
+  usage: {
+    inputTokens: number | undefined;
+    inputTokenDetails: {
+      noCacheTokens: number | undefined;
+      cacheReadTokens: number | undefined;
+      cacheWriteTokens: number | undefined;
+    };
+    outputTokens: number | undefined;
+    outputTokenDetails: { reasoningTokens: number | undefined };
+  },
+  model: string | undefined,
+): AgentTurnUsage | undefined {
+  const positive = (value: number | undefined) =>
+    typeof value === "number" && Number.isFinite(value) && value > 0
+      ? Math.trunc(value)
+      : 0;
+  const input = positive(usage.inputTokens);
+  const cached = positive(usage.inputTokenDetails?.cacheReadTokens);
+  const cacheCreation = positive(usage.inputTokenDetails?.cacheWriteTokens);
+  const output = positive(usage.outputTokens);
+  if (input + output === 0) return undefined;
+  return {
+    ...(model ? { model } : {}),
+    // Total prompt tokens include the cached portion; report the uncached
+    // remainder so the counters never double count.
+    inputTokens: Math.max(0, input - cached - cacheCreation),
+    cachedInputTokens: cached,
+    cacheCreationTokens: cacheCreation,
+    outputTokens: output,
+    reasoningTokens: Math.min(
+      output,
+      positive(usage.outputTokenDetails?.reasoningTokens),
+    ),
+  };
 }
 
 function truncateToolOutput(output: string): string {

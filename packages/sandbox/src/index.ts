@@ -81,6 +81,7 @@ export type {
   AgentQuestion,
   AgentQuestionOption,
   AgentSession,
+  AgentTurnUsage,
   CancelRuntimeInvocationArgs,
   CloneSource,
   CodingAgent,

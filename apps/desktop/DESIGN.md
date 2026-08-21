@@ -2769,6 +2769,60 @@ Patterned on what best-in-class palettes converged on (Chrome omnibox
   passed unknown /text through raw). Rows glide under useListMotion as
   the filter types.
 
+### 2026-08-21 — Usage: what did I spend, and how full is the context
+
+The first shipped item from the t3 Code gap study (ADR 0057): the app
+now answers the question every agent user eventually asks. Two capture
+paths, deliberately independent:
+
+- **The usage page reads the CLIs' own transcripts, not our turns.**
+  `~/.claude/projects` and `~/.codex/sessions` plus every account-auth
+  agent home under `agent-homes/` — so the page reports the user's whole
+  reality, terminal sessions included, and survives anything our DB
+  does. The caption says exactly that, and that cost is an API estimate
+  with subscription billing separate. Whole-machine is the point: t3's
+  reception proved "what did I spend" beats "what did this app spend".
+- **Parsing carries the overcount scars so the numbers are true.**
+  Claude writes one JSONL record per assistant content block, each
+  repeating the whole usage object — dedupe on message+request id,
+  globally across files, or totals run ~2.4x high. Codex deltas dedupe
+  by signature, attribute via the last `turn_context` (current rollouts
+  carry the kind only on the OUTER record — a real-shape regression test
+  pins that), keep only the first `session_meta`, and drop the fork-copy
+  burst (<1s gaps) or totals run ~1.85x high. Codex input_tokens
+  includes the cached share; reasoning is inside output and never
+  re-added. All pure functions in `main/usage-transcripts.ts`, tested.
+- **Pricing is fetched, never vendored.** LiteLLM's price table, at most
+  daily, disk-cached, 10s timeout; unpriceable models (`<synthetic>`,
+  bare family names) keep their tokens and price at zero, and the
+  footnote counts them. Cache savings = cached reads x the input-to-
+  cache-read spread. A per-file parsed-record cache keyed on
+  (size, mtime, provider) makes the warm scan ~66ms against ~2.4s cold
+  on a 600-file month; read failures are never cached as empty.
+- **The page** is a `usage` workspace tab (palette: "Usage"), one
+  reading column: headline number with the provider split beside it,
+  a stacked-bar chart (per-day, or per-hour on 24h — fixed offsets from
+  the window start, DST-proof), a five-stat strip, and the model table.
+  Series colors are fixed by provider — Claude Code wears info blue,
+  Codex success green (the token pair that passes CVD checks on both
+  themes); 2px segment gaps and the legend carry identity beyond color.
+  Hand-rolled SVG; y-labels live outside the svg, x-labels are
+  first/middle/last, hover dims siblings and shows a per-provider
+  tooltip.
+- **Turns now account for themselves.** Every harness emits one `usage`
+  AgentEvent before `done` (Claude: result totals + cost + dominant
+  model's context window + occupancy from the last main-thread
+  assistant usage; Codex: turn counters; ai-sdk: totalUsage). The
+  sessions service strips it from the step log — accounting, not
+  activity — and stamps `metadata.usage` on the settled reply, which
+  the renderer already polls. Zero new IPC for the live surface.
+- **The composer wears a context ring.** A 16px ring beside Send,
+  fed by the last reply's `metadata.usage`; quiet fg-faint until 90%
+  occupancy, danger red past it, tooltip with the real numbers.
+  Renders nothing until a harness has reported both occupancy and
+  window (Claude Code does; Codex's stream reports neither, so its
+  ring waits for the transcript-side follow-up).
+
 ### 2026-08-21 — One agent, one surface (ADR 0056)
 
 - **The configure-agent modal is THE surface for an agent.** Palette →

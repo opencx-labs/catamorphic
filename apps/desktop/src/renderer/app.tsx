@@ -118,6 +118,13 @@ const WorkflowScreen = lazy(() =>
     default: module.WorkflowScreen,
   })),
 );
+// The usage page (ADR 0057) is a rare destination; keep its chart code
+// off the startup parse path.
+const UsageScreen = lazy(() =>
+  import("./screens/usage-screen.js").then((module) => ({
+    default: module.UsageScreen,
+  })),
+);
 // Diff tabs ride the same Monaco chunk; lazy for the same reason.
 const DiffScreen = lazy(() =>
   import("./screens/diff-screen.js").then((module) => ({
@@ -3870,6 +3877,10 @@ export function App() {
                         onConfigureAgent={openConfigureAgent}
                         onManageConnectors={() => setConnectorsModalOpen(true)}
                       />
+                    ) : tab.kind === "usage" ? (
+                      <Suspense fallback={<div className="flex-1 bg-bg" />}>
+                        <UsageScreen />
+                      </Suspense>
                     ) : tab.kind === "palette" && paletteProps ? (
                       <CommandPalette
                         key={tabKey(tab)}

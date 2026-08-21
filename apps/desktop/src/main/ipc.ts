@@ -16,6 +16,7 @@ import {
 import { probeMcpServer } from "@catamorphic/mcp";
 import type { McpToolPolicy } from "@catamorphic/sandbox";
 import { app, BrowserWindow, dialog, ipcMain, shell } from "electron";
+import type { UsageSummary, UsageWindowDays } from "../shared/usage.js";
 import type { BindingAuth } from "./agent-bindings-store.js";
 import {
   type AgentsStore,
@@ -69,6 +70,7 @@ import {
   THEME_PRESETS,
   windowBackgroundColor,
 } from "./theme.js";
+import { createUsageScanner } from "./usage-scan.js";
 
 export interface ServerState {
   current: EmbeddedServer | null;
@@ -837,6 +839,24 @@ export function registerIpcHandlers(
         if (agent.auth === "local") raw = claudeKeychainRaw();
       }
       return claudeOauthHealth(raw, Date.now());
+    },
+  );
+
+  // Usage and cost (ADR 0057): a whole-machine scan of the provider CLIs'
+  // own transcripts — machine-default homes plus every agent home — cached
+  // per file. Deliberately answers "what did I spend", not "what did this
+  // app spend"; the page says so.
+  const usageScanner = createUsageScanner({
+    homeDir: app.getPath("home"),
+    agentHomesDir: paths.agentHomesDir,
+    cacheDir: path.join(app.getPath("userData"), "usage"),
+  });
+  ipcMain.handle(
+    "catamorphic:usage-summary",
+    (_event, days: number): Promise<UsageSummary> => {
+      const window: UsageWindowDays =
+        days === 1 || days === 7 || days === 90 ? days : 30;
+      return usageScanner.summary(window);
     },
   );
 

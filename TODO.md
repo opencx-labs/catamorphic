@@ -134,6 +134,17 @@
   surface a quiet banner with the same one-click re-login. See
   memory reference_t3_code.md; probe pattern in t3's
   apps/server/src/provider/Layers/ClaudeProvider.ts.
+- **Usage page follow-ups (ADR 0057, t3-code-inspired).** Shipped
+  2026-08-21: transcript-scanned usage tab + composer context ring.
+  Remaining: (a) an e2e with seeded fixture transcripts (the IPC has no
+  seam yet); (b) a Codex rate-limit/quota gauge — the rollouts'
+  `token_count` lines already carry `rate_limits.primary.used_percent`
+  and `resets_at`, which the SDK stream never exposes; (c) a Codex
+  context ring — `model_context_window` is also transcript-only, so the
+  meter needs a transcript-side assist; (d) an app-only scope filter by
+  joining transcript session ids to `agent_sessions.provider_session_id`;
+  (e) per-subagent token attribution (Claude `isSidechain` records);
+  (f) surface per-reply cost in the step log from `metadata.usage`.
 - **Remote machines for agents (t3-code-inspired).** t3 runs agents on
   preconfigured remote environments over SSH (packages/ssh: auth,
   command, tunnel) and tailscale, with pairing-link auth for its

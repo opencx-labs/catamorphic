@@ -160,9 +160,9 @@ describeIf("SkillsService host tier (ADR 0049)", () => {
       // The shared surface (project MCP, ADR 0055) never lists or reads
       // the user tier — personal by definition.
       const shared = await core.skills.listShared(identity, projectId);
-      expect(
-        shared.some((skill) => (skill.source as string) === "user"),
-      ).toBe(false);
+      expect(shared.some((skill) => (skill.source as string) === "user")).toBe(
+        false,
+      );
       const sharedRead = await core.skills.readShared(
         identity,
         projectId,

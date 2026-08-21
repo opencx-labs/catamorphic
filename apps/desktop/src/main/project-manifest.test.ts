@@ -44,9 +44,9 @@ describe("project manifest defaultAgent", () => {
 
     setProjectDefaultAgentSlug(root, null);
     expect(projectDefaultAgentSlug(root)).toBeUndefined();
-    expect(
-      JSON.parse(fs.readFileSync(manifestPath(root), "utf-8")).name,
-    ).toBe("acme");
+    expect(JSON.parse(fs.readFileSync(manifestPath(root), "utf-8")).name).toBe(
+      "acme",
+    );
   });
 
   it("creates the manifest when a project has none yet", () => {
