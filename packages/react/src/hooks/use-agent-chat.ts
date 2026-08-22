@@ -4,6 +4,7 @@ import { ATTACHMENT_MARKER } from "@catamorphic/sandbox/attachments";
 import { useQueryClient } from "@tanstack/react-query";
 import { useRef, useState } from "react";
 import type { CatamorphicError } from "../lib/errors.js";
+import { randomId } from "../lib/random-id.js";
 import { useCatamorphic } from "../provider.js";
 import type { AgentMessage, AgentSessionDetail } from "../types.js";
 import { useAgentSession } from "./use-agent-session.js";
@@ -283,7 +284,7 @@ export function useAgentChat(
     position: "back" | "front",
   ) => {
     const queued: QueuedAgentMessage = {
-      id: crypto.randomUUID(),
+      id: randomId(),
       content: message,
       attachments,
     };

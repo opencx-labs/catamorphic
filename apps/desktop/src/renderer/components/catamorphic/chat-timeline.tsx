@@ -1169,7 +1169,17 @@ function QueuedBubble({
             className="field-sizing-content w-full min-w-48 resize-none bg-transparent leading-6 text-fg outline-none"
             value={draft}
             onChange={(event) => setDraft(event.target.value)}
-            onBlur={commitEdit}
+            onBlur={(event) => {
+              // Chromium can briefly drop focus to nowhere while the
+              // timeline settles a streamed turn. That is not a user commit:
+              // keep the edit and queue hold intact. A real focus target,
+              // Enter, or Escape still completes the edit normally.
+              if (event.relatedTarget === null) {
+                requestAnimationFrame(() => editRef.current?.focus());
+                return;
+              }
+              commitEdit();
+            }}
             onKeyDown={(event) => {
               if (event.key === "Enter" && !event.shiftKey) {
                 event.preventDefault();

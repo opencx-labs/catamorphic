@@ -121,7 +121,7 @@ describeIf("ArtifactsRemoteBackend (integration)", () => {
     await repo.dispose();
 
     expect(files["src/index.ts"]).toContain("artifacts");
-    expect(files["package.json"]).toContain("artifacts-e2e");
+    expect(files[".catamorphic/project.json"]).toContain("artifacts-e2e");
   }, 120_000);
 
   it("hands out a clone source usable by a plain git client", async () => {

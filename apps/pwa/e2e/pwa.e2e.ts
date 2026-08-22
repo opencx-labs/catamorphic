@@ -46,6 +46,7 @@ describe.skipIf(!chromeBinary())("pwa PWA", () => {
   });
 
   it("redeems a connect link and lands on the project's sessions", async () => {
+    expect(await app.eval("window.isSecureContext")).toBe(false);
     // Fresh profile with no connections: the connect screen is home.
     await app.waitFor(
       "!!document.querySelector('[data-testid=connect-input]')",
@@ -121,5 +122,77 @@ describe.skipIf(!chromeBinary())("pwa PWA", () => {
     expect(await app.eval<string>("document.body.innerText")).toContain(
       "Acme Brain",
     );
+  });
+});
+
+describe.skipIf(!chromeBinary())("pwa installation", () => {
+  let app: PwaHandle;
+
+  beforeAll(async () => {
+    app = await launchPwa({ secureContext: true });
+    await app.waitFor(
+      "!!document.querySelector('[data-testid=connect-input]')",
+    );
+    await app.eval(TYPE("[data-testid=connect-input]", app.connectLink));
+    await app.waitFor(
+      "!document.querySelector('[data-testid=connect-submit]').disabled",
+    );
+    await app.eval(CLICK("[data-testid=connect-submit]"));
+    await app.waitFor("!!document.querySelector('[data-testid=new-chat]')", {
+      label: "sessions screen for install",
+      timeoutMs: 20_000,
+    });
+  }, 90_000);
+
+  afterAll(async () => {
+    await app?.stop();
+  });
+
+  it("offers installation once and remembers a native dismissal permanently", async () => {
+    expect(await app.eval("window.isSecureContext")).toBe(true);
+    await app.eval("navigator.serviceWorker.ready.then(() => true)");
+    expect(await app.installabilityErrors()).toEqual([]);
+
+    await app.eval(`
+      (() => {
+        const event = new Event('beforeinstallprompt', { cancelable: true });
+        Object.defineProperties(event, {
+          prompt: { value: () => Promise.resolve() },
+          userChoice: {
+            value: Promise.resolve({ outcome: 'dismissed', platform: 'web' }),
+          },
+        });
+        window.dispatchEvent(event);
+      })()
+    `);
+    await app.waitFor(
+      "!!document.querySelector('[data-testid=install-prompt]')",
+      { label: "install promotion" },
+    );
+    await app.eval(CLICK("[data-testid=install-confirm]"));
+    await app.waitFor(
+      "!document.querySelector('[data-testid=install-prompt]')",
+      { label: "dismissed install promotion" },
+    );
+
+    await app.eval("location.reload()");
+    await app.waitFor("!!document.querySelector('[data-testid=screen]')", {
+      label: "app after reload",
+    });
+    const appearedAgain = await app.eval<boolean>(`
+      (async () => {
+        const event = new Event('beforeinstallprompt', { cancelable: true });
+        Object.defineProperties(event, {
+          prompt: { value: () => Promise.resolve() },
+          userChoice: {
+            value: Promise.resolve({ outcome: 'dismissed', platform: 'web' }),
+          },
+        });
+        window.dispatchEvent(event);
+        await new Promise((resolve) => setTimeout(resolve, 250));
+        return !!document.querySelector('[data-testid=install-prompt]');
+      })()
+    `);
+    expect(appearedAgain).toBe(false);
   });
 });

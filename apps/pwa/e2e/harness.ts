@@ -43,14 +43,71 @@ async function freePort(): Promise<number> {
   });
 }
 
-async function waitForHttp(url: string, timeoutMs = 15_000): Promise<void> {
+interface WatchedChild {
+  process: ChildProcess;
+  failure: Promise<never>;
+}
+
+class ChildProcessFailure extends Error {}
+
+export function watchChild(
+  child: ChildProcess,
+  label: string,
+  onOutput: (chunk: string) => void,
+): WatchedChild {
+  child.stdout?.on("data", (chunk: Buffer) => onOutput(chunk.toString()));
+  child.stderr?.on("data", (chunk: Buffer) => onOutput(chunk.toString()));
+  const failure = new Promise<never>((_resolve, reject) => {
+    child.once("error", (error) => {
+      reject(
+        new ChildProcessFailure(`${label} failed to start: ${error.message}`),
+      );
+    });
+    child.once("exit", (code, signal) => {
+      reject(
+        new ChildProcessFailure(
+          `${label} exited early${code === null ? "" : ` with code ${code}`}${signal ? ` from ${signal}` : ""}`,
+        ),
+      );
+    });
+  });
+  // A child can exit during normal teardown after no startup operation is
+  // awaiting it. Keep that expected rejection observed.
+  void failure.catch(() => {});
+  return { process: child, failure };
+}
+
+export async function waitForHttp(
+  url: string,
+  options: {
+    timeoutMs: number;
+    requestTimeoutMs?: number;
+    childFailure: Promise<never>;
+    fetchRequest?: typeof fetch;
+  },
+): Promise<void> {
+  const {
+    timeoutMs,
+    requestTimeoutMs = 1_000,
+    childFailure,
+    fetchRequest = fetch,
+  } = options;
   const deadline = Date.now() + timeoutMs;
   let lastError: unknown;
   while (Date.now() < deadline) {
+    const remaining = deadline - Date.now();
     try {
-      await fetch(url);
+      await Promise.race([
+        fetchRequest(url, {
+          signal: AbortSignal.timeout(
+            Math.max(1, Math.min(requestTimeoutMs, remaining)),
+          ),
+        }),
+        childFailure,
+      ]);
       return;
     } catch (error) {
+      if (error instanceof ChildProcessFailure) throw error;
       lastError = error;
     }
     await sleep(200);
@@ -65,6 +122,9 @@ export interface PwaHandle {
     opts?: { timeoutMs?: number; label?: string },
   ) => Promise<T>;
   screenshot: (filePath: string) => Promise<void>;
+  installabilityErrors: () => Promise<
+    Array<{ errorId: string; errorArguments: unknown[] }>
+  >;
   /** The fake server's API base ("http://127.0.0.1:<port>/api"). */
   apiBase: string;
   /** A redeemable connect link against the fake server. */
@@ -88,6 +148,10 @@ export async function launchPwa(
     };
     /** Redeemable connect link for the suite; default: the fake's invite. */
     mintLink?: (apiBase: string) => Promise<string>;
+    /** Loopback is trustworthy in Chrome; false exercises phone-like LAN HTTP. */
+    secureContext?: boolean;
+    /** Keep this below the caller's beforeAll timeout so cleanup always runs. */
+    backendTimeoutMs?: number;
   } = {},
 ): Promise<PwaHandle> {
   const chrome = chromeBinary();
@@ -100,80 +164,101 @@ export async function launchPwa(
     cwd: APP_DIR,
     env: { PORT: String(apiPort), ...opts.env },
   };
-  const server = spawn(backend.command, backend.args, {
-    cwd: backend.cwd,
-    env: { ...process.env, ...backend.env },
-    stdio: ["ignore", "pipe", "pipe"],
-  });
-  const previewPort = await freePort();
-  const preview = spawn(
-    "bun",
-    [
-      "x",
-      "vite",
-      "preview",
-      // Explicit v4 loopback: the default binds ::1 only, and Chrome is
-      // pointed at 127.0.0.1.
-      "--host",
-      "127.0.0.1",
-      "--port",
-      String(previewPort),
-      "--strictPort",
-    ],
-    { cwd: APP_DIR, stdio: ["ignore", "pipe", "pipe"] },
-  );
   let output = "";
-  for (const child of [server, preview]) {
-    child.stdout?.on("data", (chunk: Buffer) => {
-      output += chunk.toString();
-    });
-    child.stderr?.on("data", (chunk: Buffer) => {
-      output += chunk.toString();
-    });
-  }
-
-  const cdpPort = await freePort();
-  const profileDir = fs.mkdtempSync(path.join(os.tmpdir(), "pwa-e2e-chrome-"));
-  const appUrl = `http://127.0.0.1:${previewPort}/`;
-  const chromeChild = spawn(
-    chrome,
-    [
-      "--headless=new",
-      `--remote-debugging-port=${cdpPort}`,
-      `--user-data-dir=${profileDir}`,
-      "--no-first-run",
-      "--no-default-browser-check",
-      "--window-size=390,844",
-      appUrl,
-    ],
-    { stdio: ["ignore", "pipe", "pipe"] },
-  );
-  chromeChild.stderr?.on("data", (chunk: Buffer) => {
-    output += chunk.toString();
-  });
-
-  const children = [server, preview, chromeChild];
+  const children: WatchedChild[] = [];
+  let profileDir: string | null = null;
+  let browserDiagnostics = "";
   const stopAll = async () => {
-    for (const child of children) {
-      if (child.exitCode === null) child.kill("SIGTERM");
-    }
-    await sleep(300);
-    for (const child of children) {
-      if (child.exitCode === null) child.kill("SIGKILL");
-    }
-    fs.rmSync(profileDir, { recursive: true, force: true });
+    await Promise.all(children.map((child) => stopChild(child.process)));
+    if (profileDir) fs.rmSync(profileDir, { recursive: true, force: true });
   };
 
   try {
+    const server = watchChild(
+      spawn(backend.command, backend.args, {
+        cwd: backend.cwd,
+        env: { ...process.env, ...backend.env },
+        stdio: ["ignore", "pipe", "pipe"],
+      }),
+      "Backend",
+      (chunk) => {
+        output += chunk;
+      },
+    );
+    children.push(server);
+    const previewPort = await freePort();
+    const preview = watchChild(
+      spawn(
+        "bun",
+        [
+          "--bun",
+          "vite",
+          "preview",
+          // Explicit v4 loopback: the default binds ::1 only, and Chrome is
+          // pointed at 127.0.0.1.
+          "--host",
+          "127.0.0.1",
+          "--port",
+          String(previewPort),
+          "--strictPort",
+        ],
+        { cwd: APP_DIR, stdio: ["ignore", "pipe", "pipe"] },
+      ),
+      "Vite preview",
+      (chunk) => {
+        output += chunk;
+      },
+    );
+    children.push(preview);
+    const cdpPort = await freePort();
+    profileDir = fs.mkdtempSync(path.join(os.tmpdir(), "pwa-e2e-chrome-"));
+    const appHost = opts.secureContext ? "127.0.0.1" : "catamorphic-pwa.test";
+    const appUrl = `http://${appHost}:${previewPort}/`;
+    const previewHealthUrl = `http://127.0.0.1:${previewPort}/`;
     const apiBase = `http://127.0.0.1:${apiPort}/api`;
     // Slow backends (the stock server boots PGlite + migrations) get a
     // generous window; the poll accepts any HTTP answer, 401 included.
-    await waitForHttp(`${apiBase}/me`, 90_000);
+    await waitForHttp(`${apiBase}/me`, {
+      timeoutMs: opts.backendTimeoutMs ?? 30_000,
+      childFailure: server.failure,
+    });
     const connectLink =
       (await opts.mintLink?.(apiBase)) ??
       `catamorphic://connect?server=${encodeURIComponent(apiBase)}&token=invite-token&project=11111111-1111-4111-8111-111111111111&name=Acme%20Brain`;
-    const ws = await connectCdp(chromeChild, cdpPort, appUrl);
-    const client = await createClient(ws);
+    // Do not give Chrome a one-shot navigation before Vite is listening.
+    // Chrome keeps its network error page open instead of retrying, which
+    // used to make a healthy built PWA look like a blank-screen regression.
+    await waitForHttp(previewHealthUrl, {
+      timeoutMs: 10_000,
+      childFailure: preview.failure,
+    });
+    const chromeChild = watchChild(
+      spawn(
+        chrome,
+        [
+          "--headless=new",
+          `--remote-debugging-port=${cdpPort}`,
+          `--user-data-dir=${profileDir}`,
+          "--no-first-run",
+          "--no-default-browser-check",
+          "--window-size=390,844",
+          ...(opts.secureContext
+            ? []
+            : ["--host-resolver-rules=MAP catamorphic-pwa.test 127.0.0.1"]),
+          appUrl,
+        ],
+        { stdio: ["ignore", "pipe", "pipe"] },
+      ),
+      "Chrome",
+      (chunk) => {
+        output += chunk;
+      },
+    );
+    children.push(chromeChild);
+    const ws = await connectCdp(chromeChild, cdpPort, appUrl, 15_000);
+    const client = await createClient(ws, (diagnostic) => {
+      browserDiagnostics += `${diagnostic}\n`;
+    });
     // Phone-ish metrics so layout and touch affordances match the target.
     await client.send("Emulation.setDeviceMetricsOverride", {
       width: 390,
@@ -182,13 +267,22 @@ export async function launchPwa(
       mobile: true,
     });
     await client.waitFor("!!document.querySelector('[data-testid=screen]')", {
-      timeoutMs: 20_000,
+      timeoutMs: 10_000,
       label: "app shell rendered",
     });
     return {
       eval: client.eval,
       waitFor: client.waitFor,
       screenshot: client.screenshot,
+      installabilityErrors: async () => {
+        const result = (await client.send("Page.getInstallabilityErrors")) as {
+          installabilityErrors: Array<{
+            errorId: string;
+            errorArguments: unknown[];
+          }>;
+        };
+        return result.installabilityErrors;
+      },
       apiBase,
       connectLink,
       stop: async () => {
@@ -199,41 +293,47 @@ export async function launchPwa(
   } catch (error) {
     await stopAll();
     throw new Error(
-      `Failed to launch pwa e2e: ${String(error)}\n--- output ---\n${output.slice(-4000)}`,
+      `Failed to launch pwa e2e: ${String(error)}\n--- browser ---\n${browserDiagnostics.slice(-4000)}\n--- output ---\n${output.slice(-4000)}`,
     );
   }
 }
 
 async function connectCdp(
-  child: ChildProcess,
+  child: WatchedChild,
   port: number,
   urlSubstring: string,
+  timeoutMs: number,
 ): Promise<WebSocket> {
-  const deadline = Date.now() + 30_000;
+  const deadline = Date.now() + timeoutMs;
   let lastError: unknown;
   while (Date.now() < deadline) {
-    if (child.exitCode !== null) {
-      throw new Error(`Chrome exited early with code ${child.exitCode}`);
-    }
     try {
-      const targets = (await fetch(`http://127.0.0.1:${port}/json`).then(
-        (response) => response.json(),
-      )) as { type: string; url: string; webSocketDebuggerUrl: string }[];
+      const targets = (await Promise.race([
+        fetch(`http://127.0.0.1:${port}/json`, {
+          signal: AbortSignal.timeout(1_000),
+        }).then((response) => response.json()),
+        child.failure,
+      ])) as { type: string; url: string; webSocketDebuggerUrl: string }[];
       const page = targets.find(
         (target) =>
           target.type === "page" && target.url.startsWith(urlSubstring),
       );
       if (page) {
         const ws = new WebSocket(page.webSocketDebuggerUrl);
-        await new Promise<void>((resolve, reject) => {
-          ws.addEventListener("open", () => resolve(), { once: true });
-          ws.addEventListener("error", (event) => reject(event), {
-            once: true,
-          });
-        });
+        await withTimeout(
+          new Promise<void>((resolve, reject) => {
+            ws.addEventListener("open", () => resolve(), { once: true });
+            ws.addEventListener("error", (event) => reject(event), {
+              once: true,
+            });
+          }),
+          5_000,
+          "CDP WebSocket open",
+        );
         return ws;
       }
     } catch (error) {
+      if (error instanceof ChildProcessFailure) throw error;
       lastError = error;
     }
     await sleep(250);
@@ -241,7 +341,10 @@ async function connectCdp(
   throw new Error(`CDP never became reachable: ${String(lastError)}`);
 }
 
-async function createClient(ws: WebSocket) {
+async function createClient(
+  ws: WebSocket,
+  onDiagnostic: (message: string) => void,
+) {
   let nextId = 1;
   const pending = new Map<
     number,
@@ -250,9 +353,28 @@ async function createClient(ws: WebSocket) {
   ws.addEventListener("message", (event) => {
     const message = JSON.parse(String(event.data)) as {
       id?: number;
+      method?: string;
       result?: unknown;
       error?: { message: string };
+      params?: {
+        exceptionDetails?: {
+          text: string;
+          exception?: { description?: string };
+        };
+        type?: string;
+        args?: Array<{ value?: unknown; description?: string }>;
+      };
     };
+    if (message.method === "Runtime.exceptionThrown") {
+      const details = message.params?.exceptionDetails;
+      onDiagnostic(details?.exception?.description ?? details?.text ?? "Error");
+    }
+    if (message.method === "Runtime.consoleAPICalled") {
+      const args = message.params?.args
+        ?.map((arg) => arg.description ?? String(arg.value ?? ""))
+        .join(" ");
+      onDiagnostic(`${message.params?.type ?? "console"}: ${args ?? ""}`);
+    }
     if (message.id === undefined) return;
     const waiter = pending.get(message.id);
     if (!waiter) return;
@@ -264,9 +386,13 @@ async function createClient(ws: WebSocket) {
   const send = (method: string, params?: unknown): Promise<unknown> => {
     const id = nextId++;
     ws.send(JSON.stringify({ id, method, params }));
-    return new Promise((resolve, reject) => {
-      pending.set(id, { resolve, reject });
-    });
+    return withTimeout(
+      new Promise((resolve, reject) => {
+        pending.set(id, { resolve, reject });
+      }),
+      10_000,
+      `CDP ${method}`,
+    );
   };
 
   await send("Runtime.enable");
@@ -319,3 +445,38 @@ async function createClient(ws: WebSocket) {
 
 const sleep = (ms: number) =>
   new Promise<void>((resolve) => setTimeout(resolve, ms));
+
+async function stopChild(child: ChildProcess): Promise<void> {
+  if (child.exitCode !== null || child.signalCode !== null) return;
+  const stopped = new Promise<void>((resolve) => {
+    child.once("close", () => resolve());
+    child.once("error", () => resolve());
+  });
+  child.kill("SIGTERM");
+  await Promise.race([stopped, sleep(300)]);
+  if (child.exitCode === null && child.signalCode === null) {
+    child.kill("SIGKILL");
+    await Promise.race([stopped, sleep(2_000)]);
+  }
+}
+
+async function withTimeout<T>(
+  promise: Promise<T>,
+  timeoutMs: number,
+  label: string,
+): Promise<T> {
+  let timeout: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise<never>((_resolve, reject) => {
+        timeout = setTimeout(
+          () => reject(new Error(`Timed out waiting for ${label}`)),
+          timeoutMs,
+        );
+      }),
+    ]);
+  } finally {
+    if (timeout) clearTimeout(timeout);
+  }
+}

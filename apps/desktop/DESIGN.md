@@ -149,6 +149,7 @@ the animation is wrong, not the test.
 | `bubble-in` / `bubble-out` | 200ms | each other |
 | `tab-in` / `tab-out` | 200ms / 180ms | each other (exit snappier) |
 | `fade-in` / `fade-out` (modal section swap; agent-control overlay) | 200ms | each other (exact mirror; `fade-out` holds its final frame for removal on animationend) |
+| `pairing-qr-in` (QR readiness reveal) | 200ms | — (one-shot content-ready signal inside a fixed stage) |
 | `profile-veil-in` / `profile-veil-out` (in-place profile switch) | 200ms | each other (exact mirror) |
 | `question-in` (ask_user panel) | 260ms | — |
 | `pane-in-left` / `pane-in-right` (keyboard tab cycling) | 200ms | — (content-changed signal on a persistent wrapper; no exit to pair) |
@@ -2863,3 +2864,28 @@ paths, deliberately independent:
   another tab; the footer says "Needs an API key — Auth tab" instead of
   leaving a mute disabled button (nothing here can lie about what will
   happen — the tool-access rule, applied to the form itself).
+
+### 2026-08-22 - Continue on mobile earns the QR
+
+- **Readiness comes before the credential.** The modal stays in its loading
+  state while the desktop validates the shipped mobile bundle, binds its LAN
+  listener, and performs Apple's randomized link-local UDP trigger. This is
+  where macOS asks for Local Network access. The operation retries while the
+  system prompt may be open; a continuing failure gets a specific System
+  Settings recovery message and no pairing code. Since macOS exposes no general
+  permission query and a self-connect cannot prove phone reachability, the QR
+  carries physical Wi-Fi and Ethernet addresses as alternatives.
+- **The modal uses the shared modal lifecycle.** It remains mounted in its
+  closed state so the standard opacity and scale transitions play in both
+  directions. Loading, errors, retries, and the QR live inside that shell.
+  Its QR stage, explanation, and actions reserve the same geometry in every
+  state; the finished code fades and sharpens into that stage instead of
+  resizing the modal.
+- **Local means plain HTTP.** We accept the browser's insecure-origin marker
+  on trusted Wi-Fi and keep the PWA compatible with that origin. We do not
+  install private certificates or train users to ignore certificate warnings.
+  A linked remote server remains the HTTPS route.
+- **The app owns its packaged identity.** Packaged builds declare Catamorphic
+  and include a local-network usage description. Unpackaged Electron dev runs
+  can still be identified by macOS as Electron because Electron is the signed
+  responsible application in that mode.

@@ -1,17 +1,18 @@
 {
   "name": "catamorphic-desktop",
+  "productName": "Catamorphic",
   "version": "0.0.1",
   "private": true,
   "type": "module",
   "main": "./out/main/index.js",
   "scripts": {
-    "dev": "env -u ELECTRON_RUN_AS_NODE electron-vite dev -- --remote-debugging-port=9333",
-    "build": "electron-vite build",
+    "dev": "env -u ELECTRON_RUN_AS_NODE bun --bun electron-vite dev -- --remote-debugging-port=9333",
+    "build": "bun --bun electron-vite build",
     "typecheck": "tsgo --project ./tsconfig.json && tsgo --project ./tsconfig.node.json",
-    "package": "electron-vite build && electron-builder",
-    "test": "vitest run --config ../../vitest.config.ts",
-    "test:e2e": "electron-vite build && vitest run --config ./vitest.e2e.config.ts",
-    "test:eval": "electron-vite build && vitest run --config ./vitest.eval.config.ts"
+    "package": "bun --bun run --cwd ../pwa build && bun --bun electron-vite build && bun --bun electron-builder",
+    "test": "node ../../node_modules/vitest/vitest.mjs run --config ../../vitest.config.ts",
+    "test:e2e": "bun --bun electron-vite build && node ../../node_modules/vitest/vitest.mjs run --config ./vitest.e2e.config.ts",
+    "test:eval": "bun --bun electron-vite build && node ../../node_modules/vitest/vitest.mjs run --config ./vitest.eval.config.ts"
   },
   "dependencies": {
     "@ai-sdk/anthropic": "^4.0.18",
@@ -70,12 +71,12 @@
     "@types/qrcode": "^1.5.5",
     "@types/react": "^19.2.17",
     "@types/react-dom": "^19.2.3",
-    "@vitejs/plugin-react": "^6.0.3",
+    "@vitejs/plugin-react": "^6.0.5",
     "electron": "^43.2.0",
     "electron-builder": "^26.15.3",
     "electron-vite": "^5.0.0",
     "tailwindcss": "^4.2.2",
-    "vite": "^8.1.4",
+    "vite": "^8.2.2",
     "monaco-editor": "^0.56.0"
   }
 }

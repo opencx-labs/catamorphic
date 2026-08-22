@@ -4,13 +4,13 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "vite --host",
-    "dev:bundle": "vite build --watch --emptyOutDir false --mode development",
-    "build": "vite build",
-    "preview": "vite preview",
+    "dev": "bun --bun vite --host",
+    "dev:bundle": "bun --bun vite build --watch --emptyOutDir false --mode development",
+    "build": "bun --bun vite build",
+    "preview": "bun --bun vite preview",
     "typecheck": "tsgo --project ./tsconfig.json && tsgo --project ./tsconfig.node.json",
-    "test": "vitest run",
-    "test:e2e": "vite build && vitest run --config ./vitest.e2e.config.ts"
+    "test": "node ../../node_modules/vitest/vitest.mjs run",
+    "test:e2e": "bun --bun vite build && node ../../node_modules/vitest/vitest.mjs run --config ./vitest.e2e.config.ts"
   },
   "dependencies": {
     "@catamorphic/api-client": "workspace:*",
@@ -30,8 +30,8 @@
     "@types/node": "^26.1.1",
     "@types/react": "^19.2.17",
     "@types/react-dom": "^19.2.3",
-    "@vitejs/plugin-react": "^6.0.3",
+    "@vitejs/plugin-react": "^6.0.5",
     "tailwindcss": "^4.2.2",
-    "vite": "^8.1.4"
+    "vite": "^8.2.2"
   }
 }

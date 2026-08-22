@@ -23,7 +23,7 @@ export function latestContextSnapshot(
 ): ContextSnapshot | null {
   for (let index = messages.length - 1; index >= 0; index -= 1) {
     const message = messages[index];
-    if (!message || message.role !== "assistant") continue;
+    if (message?.role !== "assistant") continue;
     const usage = message.metadata?.usage as
       | { contextTokens?: unknown; contextWindow?: unknown }
       | undefined;
@@ -53,6 +53,7 @@ export function ContextMeter({ messages }: { messages: MessageLike[] }) {
     <ShortcutHint
       label={`Context ${percent}% full · ${formatTokenCount(snapshot.usedTokens)} of ${formatTokenCount(snapshot.windowTokens)} tokens`}
     >
+      {/* biome-ignore lint/a11y/useSemanticElements: the custom SVG meter carries the complete meter semantics on its wrapper */}
       <div
         className="grid size-8 shrink-0 place-items-center"
         role="meter"
@@ -63,7 +64,13 @@ export function ContextMeter({ messages }: { messages: MessageLike[] }) {
         data-testid="context-meter"
         data-percent={percent}
       >
-        <svg width="16" height="16" viewBox="0 0 16 16" className="-rotate-90">
+        <svg
+          width="16"
+          height="16"
+          viewBox="0 0 16 16"
+          className="-rotate-90"
+          aria-hidden="true"
+        >
           <circle
             cx="8"
             cy="8"

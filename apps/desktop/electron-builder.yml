@@ -5,6 +5,9 @@ directories:
 files:
   - out/**
   - package.json
+extraResources:
+  - from: ../pwa/dist
+    to: pwa
 # Packages that load assets or native code from disk at runtime must escape
 # the asar archive: pglite (wasm), microsandbox (NAPI addon + platform
 # binaries), catamorphic db migrations (.sql read via fs), and the runtime
@@ -18,6 +21,8 @@ asarUnpack:
   - "**/node_modules/@catamorphic/runtime/dist/**"
 mac:
   category: public.app-category.developer-tools
+  extendInfo:
+    NSLocalNetworkUsageDescription: Catamorphic uses your local network so your phone can continue this workspace.
   target:
     - dmg
     - zip

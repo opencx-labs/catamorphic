@@ -213,3 +213,61 @@ kbd {
 .animate-question-in {
   animation: question-in 260ms var(--ease-standard);
 }
+
+@keyframes install-prompt-in {
+  from {
+    opacity: 0;
+    transform: translateY(-8px) scale(0.98);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+.animate-install-prompt-in {
+  animation: install-prompt-in 200ms var(--ease-standard);
+}
+
+@keyframes install-prompt-out {
+  from {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+  to {
+    opacity: 0;
+    transform: translateY(-8px) scale(0.98);
+  }
+}
+
+.animate-install-prompt-out {
+  animation: install-prompt-out 180ms var(--ease-standard) forwards;
+}
+
+@keyframes install-prompt-fade-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+@keyframes install-prompt-fade-out {
+  from {
+    opacity: 1;
+  }
+  to {
+    opacity: 0;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .animate-install-prompt-in {
+    animation: install-prompt-fade-in 100ms var(--ease-standard);
+  }
+
+  .animate-install-prompt-out {
+    animation: install-prompt-fade-out 100ms var(--ease-standard) forwards;
+  }
+}

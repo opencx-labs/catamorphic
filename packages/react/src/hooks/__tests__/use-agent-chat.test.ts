@@ -25,6 +25,59 @@ const session = {
 };
 
 describe("useAgentChat", () => {
+  it("sends on plain-HTTP origins where crypto.randomUUID is unavailable", async () => {
+    const descriptor = Object.getOwnPropertyDescriptor(crypto, "randomUUID");
+    Object.defineProperty(crypto, "randomUUID", {
+      configurable: true,
+      value: undefined,
+    });
+    let sends = 0;
+    try {
+      server.use(
+        http.post(apiUrl(`/api/projects/${PROJECT_ID}/agent/sessions`), () =>
+          HttpResponse.json(session, { status: 201 }),
+        ),
+        http.post(
+          apiUrl(
+            `/api/projects/${PROJECT_ID}/agent/sessions/${SESSION_ID}/messages`,
+          ),
+          () => {
+            sends += 1;
+            return HttpResponse.json(
+              {
+                id: "00000000-0000-4000-8000-000000000004",
+                sessionId: SESSION_ID,
+                role: "assistant",
+                content: "Done",
+                commitSha: null,
+                metadata: null,
+                createdAt: new Date().toISOString(),
+              },
+              { status: 201 },
+            );
+          },
+        ),
+        http.get(
+          apiUrl(`/api/projects/${PROJECT_ID}/agent/sessions/${SESSION_ID}`),
+          () => HttpResponse.json({ ...session, messages: [] }),
+        ),
+      );
+      const { result } = renderHookWithProviders(() =>
+        useAgentChat(PROJECT_ID),
+      );
+
+      await act(() => result.current.send("Hello from the LAN"));
+
+      await waitFor(() => expect(sends).toBe(1));
+    } finally {
+      if (descriptor) {
+        Object.defineProperty(crypto, "randomUUID", descriptor);
+      } else {
+        Reflect.deleteProperty(crypto, "randomUUID");
+      }
+    }
+  });
+
   it("creates one session lazily and reuses it", async () => {
     let creates = 0;
     let sends = 0;

@@ -77,7 +77,7 @@ export function parseClaudeLine(line: string): UsageRecord | null {
     return null; // torn trailing line of a live file; next scan re-reads
   }
   const record = asRecord(parsed);
-  if (!record || record.type !== "assistant") return null;
+  if (record?.type !== "assistant") return null;
   const message = asRecord(record.message);
   const usage = asRecord(message?.usage);
   if (!message || !usage) return null;

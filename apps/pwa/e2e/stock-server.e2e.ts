@@ -73,6 +73,7 @@ describe.skipIf(!chromeBinary())("pwa against the stock server", () => {
         ).then((r) => r.json())) as { token: string };
         return `catamorphic://connect?server=${encodeURIComponent(apiBase)}&token=${encodeURIComponent(invite.token)}&project=${project.id}&name=brain`;
       },
+      backendTimeoutMs: 120_000,
     });
   }, 180_000);
 

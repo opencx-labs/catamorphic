@@ -1,5 +1,6 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { useEffect, useRef, useState } from "react";
+import { InstallPromotion } from "./components/install-promotion.js";
 import { connectLinkFromParams } from "./lib/connect-link.js";
 import { navigate, type Route, routeDepth, useRoute } from "./lib/nav.js";
 import { applyPairing, claimPairing } from "./lib/pairing.js";
@@ -120,6 +121,7 @@ export function App() {
         animation={animation}
         hasConnections={profile.connections.length > 0}
       />
+      <InstallPromotion enabled={!pairing && profile.connections.length > 0} />
     </QueryClientProvider>
   );
 }

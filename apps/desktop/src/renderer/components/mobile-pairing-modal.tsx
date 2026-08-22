@@ -1,4 +1,5 @@
 import {
+  CircleAlert,
   Copy,
   LoaderCircle,
   RefreshCw,
@@ -6,7 +7,7 @@ import {
   Trash2,
 } from "lucide-react";
 import { toDataURL } from "qrcode";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { desktopApi } from "../lib/desktop-api.js";
 import { Modal } from "./modal.js";
 
@@ -38,41 +39,51 @@ export function MobilePairingModal({
         url: string;
         qr: string;
         expiresAt: string;
-        pwaReady: boolean;
         remote?: { url: string; qr: string; host: string };
       }
   >({ kind: "loading" });
+  const generation = useRef(0);
   // Which QR shows: the project's remote server (works anywhere) when it
   // has one, else this desktop over the local Wi-Fi.
   const [target, setTarget] = useState<"remote" | "lan">("lan");
 
   const generate = useCallback(async () => {
+    const request = ++generation.current;
+    const startedAt = performance.now();
     setState({ kind: "loading" });
     try {
       const info = await desktopApi.mobilePairingStart(context ?? undefined);
+      if (request !== generation.current) return;
       const qrOptions = {
         margin: 1,
         width: 240,
         color: { dark: "#000000", light: "#ffffff" },
       };
-      const qr = await toDataURL(info.url, qrOptions);
-      const remote = info.remote
-        ? {
-            url: info.remote.url,
-            host: info.remote.host,
-            qr: await toDataURL(info.remote.url, qrOptions),
-          }
-        : undefined;
+      const [qr, remoteQr] = await Promise.all([
+        toDataURL(info.url, qrOptions),
+        info.remote
+          ? toDataURL(info.remote.url, qrOptions)
+          : Promise.resolve(undefined),
+      ]);
+      const remainingEntrance = 180 - (performance.now() - startedAt);
+      if (remainingEntrance > 0) {
+        await new Promise((resolve) => setTimeout(resolve, remainingEntrance));
+      }
+      if (request !== generation.current) return;
+      const remote =
+        info.remote && remoteQr
+          ? { url: info.remote.url, host: info.remote.host, qr: remoteQr }
+          : undefined;
       setTarget(remote ? "remote" : "lan");
       setState({
         kind: "ready",
         url: info.url,
         qr,
         expiresAt: info.expiresAt,
-        pwaReady: info.pwaReady,
         ...(remote ? { remote } : {}),
       });
     } catch (error) {
+      if (request !== generation.current) return;
       setState({
         kind: "error",
         message:
@@ -92,28 +103,40 @@ export function MobilePairingModal({
     void refreshDevices();
     // A scan lands while the modal is open: keep the list live.
     const timer = setInterval(() => void refreshDevices(), 3000);
-    return () => clearInterval(timer);
+    return () => {
+      generation.current += 1;
+      clearInterval(timer);
+    };
   }, [open, generate, refreshDevices]);
 
-  if (!open) return null;
+  const isMac = /Mac/i.test(navigator.platform);
+
   return (
-    <Modal open onClose={onClose}>
-      <div className="flex w-105 max-w-full flex-col items-center gap-3 p-5 text-center">
+    <Modal open={open} onClose={onClose} labelledBy="mobile-pairing-title">
+      <div
+        className="flex w-105 max-w-full flex-col items-center gap-3 p-5 text-center"
+        data-testid="mobile-pairing-modal"
+        data-state={state.kind}
+      >
         <span className="grid size-10 place-items-center rounded-xl border border-border bg-bg-overlay">
           <Smartphone className="size-5 text-accent" />
         </span>
-        <h2 className="text-[15px] font-semibold">Continue on mobile</h2>
-        {state.kind === "loading" && (
-          <div className="grid h-60 w-60 place-items-center">
-            <LoaderCircle className="size-6 animate-spin text-fg-faint" />
-          </div>
-        )}
-        {state.kind === "error" && (
-          <p className="text-[13px] text-danger">{state.message}</p>
-        )}
-        {state.kind === "ready" && (
-          <>
-            {state.remote && (
+        <h2 id="mobile-pairing-title" className="text-[15px] font-semibold">
+          Continue on mobile
+        </h2>
+        <div className="grid h-8 place-items-center">
+          {state.kind === "loading" && (
+            <span className="text-[11px] font-medium uppercase tracking-wider text-fg-faint">
+              Preparing connection
+            </span>
+          )}
+          {state.kind === "error" && (
+            <span className="text-[11px] font-medium uppercase tracking-wider text-danger">
+              Connection unavailable
+            </span>
+          )}
+          {state.kind === "ready" &&
+            (state.remote ? (
               <div className="flex rounded-lg border border-border bg-bg-inset p-0.5 text-[12px]">
                 <button
                   type="button"
@@ -132,30 +155,79 @@ export function MobilePairingModal({
                   This Wi-Fi
                 </button>
               </div>
-            )}
+            ) : (
+              <span className="rounded-md border border-border bg-bg-inset px-3 py-1 text-[12px] text-fg-muted">
+                This Wi-Fi
+              </span>
+            ))}
+        </div>
+        <div
+          className={`relative grid size-60 shrink-0 place-items-center overflow-hidden rounded-lg border transition-colors duration-150 ${state.kind === "ready" ? "border-white bg-white" : "border-border bg-bg-inset"}`}
+          data-testid="mobile-pairing-qr-stage"
+        >
+          {state.kind === "loading" && (
+            <div className="grid size-16 place-items-center rounded-2xl border border-border bg-bg-overlay">
+              <LoaderCircle className="size-6 animate-spin text-fg-faint" />
+            </div>
+          )}
+          {state.kind === "error" && (
+            <CircleAlert className="size-8 text-danger" />
+          )}
+          {state.kind === "ready" && (
             <img
+              key={
+                target === "remote" && state.remote ? state.remote.qr : state.qr
+              }
               src={
                 target === "remote" && state.remote ? state.remote.qr : state.qr
               }
               alt="Pairing QR code"
-              className="size-60 rounded-lg bg-white p-2"
+              className="size-60 animate-pairing-qr-in bg-white p-2"
               data-testid="mobile-pairing-qr"
             />
-            <p className="max-w-xs text-xs leading-5 text-fg-muted">
-              {target === "remote" && state.remote
-                ? `Scan with your phone's camera. This opens the project on ${state.remote.host}, so it works from anywhere and keeps working when this desktop is off. The link carries your server access; share it with no one.`
-                : `Scan with your phone's camera (same Wi-Fi).${
-                    context?.sessionId
-                      ? " It opens straight into this chat."
-                      : " It opens your projects."
-                  } The code is single-use and expires in 2 minutes. Anyone who scans it gets access as you.`}
-            </p>
-            {!state.pwaReady && (
-              <p className="rounded-lg border border-warning/40 bg-warning/10 px-3 py-2 text-xs text-warning">
-                The mobile app bundle isn't built yet. Run{" "}
-                <code>bun run --filter catamorphic-pwa build</code> first.
-              </p>
-            )}
+          )}
+        </div>
+        <div
+          className="grid h-20 w-full place-items-center overflow-y-auto"
+          aria-live="polite"
+        >
+          <p
+            className={`max-w-xs text-xs leading-5 ${state.kind === "error" ? "text-danger" : "text-fg-muted"}`}
+          >
+            {state.kind === "loading" &&
+              (isMac
+                ? "Checking local network access. macOS may ask you to allow Catamorphic."
+                : "Checking that this device can accept a mobile connection.")}
+            {state.kind === "error" && state.message}
+            {state.kind === "ready" && target === "remote" && state.remote
+              ? `Scan with your phone. This secure link opens ${state.remote.host} and keeps working when this desktop is off. It includes your server access, so keep it private.`
+              : null}
+            {state.kind === "ready" && !(target === "remote" && state.remote)
+              ? `Scan with your phone on the same Wi-Fi.${
+                  context?.sessionId
+                    ? " It opens this chat."
+                    : " It opens your projects."
+                } The code works once, expires in 2 minutes, and grants access as you.`
+              : null}
+          </p>
+        </div>
+        <div className="grid h-8 place-items-center">
+          {state.kind === "loading" && (
+            <span className="text-[11px] text-fg-faint">
+              {isMac ? "Waiting for network permission" : "Checking network"}
+            </span>
+          )}
+          {state.kind === "error" && (
+            <button
+              type="button"
+              onClick={() => void generate()}
+              className="flex h-8 cursor-pointer items-center gap-1.5 rounded-md border border-border-strong px-3 text-[12px] text-fg transition-colors duration-150 hover:bg-bg-overlay"
+            >
+              <RefreshCw className="size-3.5" />
+              Try again
+            </button>
+          )}
+          {state.kind === "ready" && (
             <div className="flex items-center gap-2">
               <button
                 type="button"
@@ -180,8 +252,8 @@ export function MobilePairingModal({
                 New code
               </button>
             </div>
-          </>
-        )}
+          )}
+        </div>
         {devices.length > 0 && (
           <div className="w-full border-t border-border pt-3 text-left">
             <h3 className="mb-1 text-[11px] font-semibold uppercase tracking-wider text-fg-faint">

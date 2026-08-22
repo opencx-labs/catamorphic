@@ -15,7 +15,12 @@
  * never yield different usage.
  */
 
-import { createReadStream, promises as fs } from "node:fs";
+import {
+  createReadStream,
+  type Dirent,
+  promises as fs,
+  type Stats,
+} from "node:fs";
 import path from "node:path";
 import {
   localDayKey,
@@ -258,7 +263,7 @@ export function createUsageScanner(deps: UsageScannerDeps): UsageScanner {
 
   async function walkJsonl(dir: string): Promise<string[]> {
     const files: string[] = [];
-    let entries;
+    let entries: Dirent[];
     try {
       entries = await fs.readdir(dir, { withFileTypes: true });
     } catch {
@@ -296,8 +301,8 @@ export function createUsageScanner(deps: UsageScannerDeps): UsageScanner {
       let carry = "";
       for await (const chunk of stream as AsyncIterable<string>) {
         carry += chunk;
-        let newlineAt: number;
-        while ((newlineAt = carry.indexOf("\n")) !== -1) {
+        let newlineAt = carry.indexOf("\n");
+        while (newlineAt !== -1) {
           const line = carry.slice(0, newlineAt);
           carry = carry.slice(newlineAt + 1);
           parsedBytes += Buffer.byteLength(line, "utf8") + 1;
@@ -307,6 +312,7 @@ export function createUsageScanner(deps: UsageScannerDeps): UsageScanner {
               ? parseClaudeLine(line)
               : parseCodexLine(line, state);
           if (record) records.push(record);
+          newlineAt = carry.indexOf("\n");
         }
       }
       return { records, parsedBytes };
@@ -488,7 +494,7 @@ export function createUsageScanner(deps: UsageScannerDeps): UsageScanner {
             const index = nextTask++;
             if (index >= tasks.length) return;
             const task = tasks[index]!;
-            let stats;
+            let stats: Stats;
             try {
               stats = await fs.stat(task.filePath);
             } catch {

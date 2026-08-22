@@ -39,11 +39,9 @@ describe("continue on mobile", () => {
     const info = await app.eval<{
       url: string;
       expiresAt: string;
-      pwaReady: boolean;
     }>(
       `window.catamorphicDesktop.mobilePairingStart({ projectId: "p-ctx", sessionId: "s-ctx" })`,
     );
-    expect(info.pwaReady).toBe(true);
     const url = new URL(info.url);
     code = url.searchParams.get("pair") ?? "";
     expect(code.length).toBeGreaterThan(10);

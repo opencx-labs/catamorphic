@@ -50,6 +50,15 @@ committed `.catamorphic/theme.json` — the same `{ preset, overrides }`
 shape and resolution as the desktop's `theme.ts`, presets duplicated
 knowingly — and falls back to Catamorphic Dark. No theme UI on mobile.
 
+**Install promotion is capability-led and one-shot.** On a secure origin,
+the app captures Chromium's `beforeinstallprompt` event and offers the native
+install flow; iPhone and iPad get Safari's Share → Add to Home Screen
+instructions because iOS exposes no programmable prompt. Installed mode hides
+the promotion. Dismissing either form writes a permanent origin-local marker,
+so Catamorphic never asks that browser profile again unless its site data is
+cleared. The desktop's plain-HTTP LAN origin never offers installation; a
+remote server behind HTTPS is the installable origin.
+
 **The desktop now registers a `ToolPermissionBroker` and races it against
 its consent modal.** `broker.open()` (new) exposes the pending id; the
 registry's ask handler races modal vs. broker — first real answer wins,

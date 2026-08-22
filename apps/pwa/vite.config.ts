@@ -23,4 +23,7 @@ export default defineConfig({
       ignored: ["!**/node_modules/@catamorphic/**"],
     },
   },
+  preview: {
+    allowedHosts: ["catamorphic-pwa.test"],
+  },
 });

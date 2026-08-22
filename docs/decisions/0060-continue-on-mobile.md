@@ -44,6 +44,19 @@ was made.
 QR-first, not QR-only: the modal keeps a copy-link button (no camera,
 email-to-self, second machine).
 
+**The QR is the last step, not the readiness check.** Before minting a
+code, the desktop verifies that the packaged PWA and every asset referenced
+by its entry point exist and binds the LAN listener. On macOS it then follows
+[Apple TN3179](https://developer.apple.com/documentation/Technotes/tn3179-understanding-local-network-privacy)
+by connecting UDP sockets to randomized link-local peers. Accepting incoming
+TCP does not trigger Local Network privacy; the outbound UDP operation does,
+without sending traffic. It retries while the system prompt may be open. A
+continuing failure produces an actionable error and no code. macOS has no
+general permission-query API, so the QR includes the physical Wi-Fi and
+Ethernet addresses as alternatives instead of claiming that a self-connect
+proved phone reachability. The packaged desktop always carries the built PWA
+as an application resource.
+
 ## Consequences
 
 - Scanning grants access **as the desktop user (root)** — the modal says
@@ -56,8 +69,10 @@ email-to-self, second machine).
   offers the project's remote server as the way in
   (`connection-trouble.tsx`). Backends stay separate — sessions do not
   migrate.
-- The LAN transport is plain http; fine for a trusted network, not for
-  hostile ones — the remote story runs through the stock server.
+- The LAN transport is plain http. Mobile browsers may mark it insecure and
+  the PWA must not depend on secure-context-only APIs. Catamorphic does not
+  create or ask users to trust a private certificate. For a trusted browser
+  origin or an untrusted network, the remote server's HTTPS URL is the path.
 - A DHCP address change orphans paired phones until they re-scan; the
   persisted port keeps the common restart case working.
 - The pairing contract is pinned by `apps/desktop/e2e/mobile-pairing.e2e.ts`

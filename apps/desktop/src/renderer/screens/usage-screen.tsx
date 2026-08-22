@@ -282,6 +282,7 @@ function UsageChart({
           <span key={tick}>{formatValue(tick)}</span>
         ))}
       </div>
+      {/* biome-ignore lint/a11y/noStaticElementInteractions: pointer tracking only reveals redundant chart details */}
       <div
         ref={containerRef}
         className="relative min-w-0 flex-1"
@@ -414,7 +415,6 @@ export function UsageScreen() {
     () => (summary ? rollUp(summary, metric) : null),
     [summary, metric],
   );
-  const formatValue = metric === "cost" ? formatUsd : formatTokenCount;
   const empty = rollup !== null && rollup.records === 0;
 
   return (

@@ -1,4 +1,5 @@
 import { createHash, randomBytes, randomUUID } from "node:crypto";
+import dgram from "node:dgram";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -29,6 +30,7 @@ import type { ProfileConfigManager } from "./profile-config.js";
 
 const PAIRING_CODE_TTL_MS = 2 * 60_000;
 const DEFAULT_PORT = 4756;
+const LOCAL_NETWORK_PROBE_TIMEOUT_MS = 60_000;
 
 export interface PairingContext {
   projectId?: string;
@@ -41,8 +43,6 @@ export interface PairingInfo {
   /** The same URL for every other LAN address this machine has. */
   alternates: string[];
   expiresAt: string;
-  /** False when the PWA bundle is missing (the QR would 404). */
-  pwaReady: boolean;
   /**
    * When the focused project is linked to a remote server: the SAME
    * project on that server's own PWA origin (session included — mirroring
@@ -81,23 +81,30 @@ interface PendingPairing {
   expiresAt: number;
 }
 
+interface MobilePairingDeps {
+  /** `<userData>/mobile-pairing.json` */
+  file: string;
+  profileConfig: ProfileConfigManager;
+  /** Loopback base of the embedded server ("http://127.0.0.1:NNNN"). */
+  serverUrl: () => string | null;
+  /** Override for tests; defaults next to the repo / packaged resources. */
+  pwaDist?: string;
+  /** Test seams for the OS-facing listener and network interfaces. */
+  listen?: () => Promise<void>;
+  lanAddresses?: () => string[];
+  requestLocalNetworkAccess?: () => Promise<void>;
+  platform?: NodeJS.Platform;
+}
+
 export class MobilePairingService {
   private lanApp: FastifyInstance | null = null;
+  private listenerStart: Promise<void> | null = null;
+  private listening = false;
   private port: number;
   private devices: PairedDevice[];
   private readonly pending = new Map<string, PendingPairing>();
 
-  constructor(
-    private readonly deps: {
-      /** `<userData>/mobile-pairing.json` */
-      file: string;
-      profileConfig: ProfileConfigManager;
-      /** Loopback base of the embedded server ("http://127.0.0.1:NNNN"). */
-      serverUrl: () => string | null;
-      /** Override for tests; defaults next to the repo / packaged resources. */
-      pwaDist?: string;
-    },
-  ) {
+  constructor(private readonly deps: MobilePairingDeps) {
     const stored = this.load();
     this.port = stored.port ?? DEFAULT_PORT;
     this.devices = (stored.devices ?? []).map((device) => ({
@@ -137,7 +144,19 @@ export class MobilePairingService {
     profileId: string,
     context?: PairingContext,
   ): Promise<PairingInfo> {
+    this.assertPwaReady();
     await this.ensureListening();
+    const addresses = this.deps.lanAddresses?.() ?? lanIps();
+    if (addresses.length === 0) {
+      const device =
+        (this.deps.platform ?? process.platform) === "darwin"
+          ? "this Mac"
+          : "this computer";
+      throw new Error(
+        `Catamorphic could not find a local network address. Connect ${device} and your phone to the same Wi-Fi, then try again.`,
+      );
+    }
+    await this.requestLocalNetworkAccess();
     const code = randomBytes(16).toString("base64url");
     const expiresAt = Date.now() + PAIRING_CODE_TTL_MS;
     this.pending.set(code, {
@@ -147,15 +166,13 @@ export class MobilePairingService {
     });
     setTimeout(() => this.pending.delete(code), PAIRING_CODE_TTL_MS).unref?.();
     const remote = this.remotePairing(profileId, context);
-    const addresses = lanIps();
-    const urls = (addresses.length > 0 ? addresses : ["127.0.0.1"]).map(
+    const urls = addresses.map(
       (ip) => `http://${ip}:${this.port}/?pair=${code}`,
     );
     return {
       url: urls[0] as string,
       alternates: urls.slice(1),
       expiresAt: new Date(expiresAt).toISOString(),
-      pwaReady: fs.existsSync(path.join(this.pwaDist(), "index.html")),
       ...(remote ? { remote } : {}),
     };
   }
@@ -192,8 +209,27 @@ export class MobilePairingService {
   }
 
   async ensureListening(): Promise<void> {
-    if (this.lanApp) return;
+    if (this.listening || this.lanApp) return;
+    if (this.listenerStart) return this.listenerStart;
+    const start = this.startListening();
+    this.listenerStart = start;
+    try {
+      await start;
+      this.listening = true;
+    } finally {
+      if (this.listenerStart === start) this.listenerStart = null;
+    }
+  }
+
+  private async startListening(): Promise<void> {
+    if (this.deps.listen) {
+      await this.deps.listen();
+      return;
+    }
     const app = Fastify({ bodyLimit: 96 * 1024 * 1024 });
+
+    // A phone can use this after the separate outbound privacy preflight.
+    app.get("/pair/health", async () => ({ ok: true }));
 
     app.post("/pair/claim", async (request, reply) => {
       const body = (request.body ?? {}) as { code?: string };
@@ -289,26 +325,33 @@ export class MobilePairingService {
 
     // The persisted port keeps paired phones working across restarts;
     // walk forward when something else holds it (two desktop installs).
-    for (let attempt = 0; attempt < 20; attempt += 1) {
-      try {
-        await app.listen({ port: this.port, host: "0.0.0.0" });
-        this.lanApp = app;
-        this.save();
-        return;
-      } catch (error) {
-        if ((error as { code?: string }).code === "EADDRINUSE") {
-          this.port += 1;
-          continue;
+    try {
+      for (let attempt = 0; attempt < 20; attempt += 1) {
+        try {
+          await app.listen({ port: this.port, host: "0.0.0.0" });
+          this.lanApp = app;
+          this.save();
+          return;
+        } catch (error) {
+          if ((error as { code?: string }).code === "EADDRINUSE") {
+            this.port += 1;
+            continue;
+          }
+          throw error;
         }
-        throw error;
       }
+      throw new Error("No free port for the mobile listener");
+    } catch (error) {
+      await app.close().catch(() => {});
+      throw error;
     }
-    throw new Error("No free port for the mobile listener");
   }
 
   async stop(): Promise<void> {
+    await this.listenerStart?.catch(() => {});
     await this.lanApp?.close();
     this.lanApp = null;
+    this.listening = false;
   }
 
   private authorized(header: string | string[] | undefined): boolean {
@@ -374,6 +417,57 @@ export class MobilePairingService {
     return path.join(process.resourcesPath ?? "", "pwa");
   }
 
+  /** Refuse the flow before binding or minting a code when packaging is bad. */
+  private assertPwaReady(): void {
+    const dist = this.pwaDist();
+    const index = path.join(dist, "index.html");
+    if (!fs.existsSync(index)) {
+      throw new Error(
+        "The mobile app bundle is missing. Rebuild or reinstall Catamorphic, then try again.",
+      );
+    }
+    const html = fs.readFileSync(index, "utf8");
+    const references = Array.from(
+      html.matchAll(/(?:src|href)=["']\/([^"'?#]+)["']/g),
+      (match) => match[1],
+    ).filter((reference): reference is string => reference !== undefined);
+    const missing = references.find((reference) => {
+      const resolved = path.resolve(dist, reference);
+      const relative = path.relative(dist, resolved);
+      return (
+        relative.startsWith("..") ||
+        path.isAbsolute(relative) ||
+        !fs.existsSync(resolved)
+      );
+    });
+    if (missing) {
+      throw new Error(
+        `The mobile app bundle is incomplete. Rebuild or reinstall Catamorphic, then try again. Missing: /${missing}`,
+      );
+    }
+  }
+
+  private async requestLocalNetworkAccess(): Promise<void> {
+    if ((this.deps.platform ?? process.platform) !== "darwin") return;
+    try {
+      await (
+        this.deps.requestLocalNetworkAccess ?? triggerLocalNetworkAccess
+      )();
+      return;
+    } catch {
+      // Apple exposes denial for a specific connection, not as a general
+      // permission query. The connected-UDP trigger retries while the
+      // system prompt is open, then lands here for denial or no LAN route.
+    }
+    const device =
+      (this.deps.platform ?? process.platform) === "darwin"
+        ? "this Mac"
+        : "this computer";
+    throw new Error(
+      `Catamorphic could not access ${device} on your local network. In System Settings > Privacy & Security > Local Network, allow Catamorphic, then try again.`,
+    );
+  }
+
   private load(): PairingFile {
     try {
       return JSON.parse(fs.readFileSync(this.deps.file, "utf8")) as PairingFile;
@@ -392,6 +486,113 @@ export class MobilePairingService {
   }
 }
 
+/**
+ * Apple's TN3179 explicit-alert pattern: connect UDP sockets to randomized
+ * link-local peers. Connecting emits no packets, but it is an outbound local
+ * network operation, unlike accepting connections on our HTTP listener.
+ * Retry because macOS may reject the first operation while its prompt is open.
+ */
+async function triggerLocalNetworkAccess(): Promise<void> {
+  const deadline = Date.now() + LOCAL_NETWORK_PROBE_TIMEOUT_MS;
+  let lastError: unknown = new Error("No broadcast-capable interface");
+  while (Date.now() < deadline) {
+    const targets = localNetworkProbeTargets();
+    if (targets.length === 0) throw lastError;
+    const results = await Promise.allSettled(
+      targets.map((target) => connectUdp(target)),
+    );
+    if (results.some((result) => result.status === "fulfilled")) return;
+    lastError = results.find(
+      (result): result is PromiseRejectedResult => result.status === "rejected",
+    )?.reason;
+    await new Promise((resolve) => setTimeout(resolve, 500));
+  }
+  throw lastError;
+}
+
+interface UdpTarget {
+  family: "udp4" | "udp6";
+  address: string;
+}
+
+function connectUdp({ family, address }: UdpTarget): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const socket = dgram.createSocket(family);
+    let settled = false;
+    const finish = (error?: Error) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timeout);
+      socket.close();
+      if (error) reject(error);
+      else resolve();
+    };
+    const timeout = setTimeout(
+      () => finish(new Error(`Local network check timed out for ${address}`)),
+      1_500,
+    );
+    socket.once("error", finish);
+    socket.connect(9, address, () => finish());
+  });
+}
+
+function localNetworkProbeTargets(): UdpTarget[] {
+  const targets: UdpTarget[] = [];
+  for (const [name, entries] of Object.entries(os.networkInterfaces())) {
+    if (!isPhysicalLanInterface(name)) continue;
+    for (const entry of entries ?? []) {
+      if (entry.internal) continue;
+      if (entry.family === "IPv6" && /^fe[89ab]/i.test(entry.address)) {
+        targets.push({
+          family: "udp6",
+          address: `fe80::${randomIpv6Host()}%${name}`,
+        });
+      } else if (entry.family === "IPv4") {
+        const peer = randomIpv4Peer(entry.address, entry.netmask);
+        if (peer) targets.push({ family: "udp4", address: peer });
+      }
+    }
+  }
+  return targets;
+}
+
+function randomIpv6Host(): string {
+  const bytes = randomBytes(8);
+  return Array.from({ length: 4 }, (_, index) =>
+    bytes.readUInt16BE(index * 2).toString(16),
+  ).join(":");
+}
+
+function randomIpv4Peer(address: string, netmask: string): string | null {
+  const ip = ipv4ToNumber(address);
+  const mask = ipv4ToNumber(netmask);
+  if (ip === null || mask === null) return null;
+  const hostMask = ~mask >>> 0;
+  if (hostMask < 3) return null;
+  const network = (ip & mask) >>> 0;
+  let host = randomBytes(4).readUInt32BE(0) & hostMask;
+  if (host === 0 || host === hostMask) host = 1;
+  const peer = (network | host) >>> 0;
+  return numberToIpv4(peer === ip ? (network | 2) >>> 0 : peer);
+}
+
+function ipv4ToNumber(address: string): number | null {
+  const octets = address.split(".").map(Number);
+  if (
+    octets.length !== 4 ||
+    octets.some((octet) => !Number.isInteger(octet) || octet < 0 || octet > 255)
+  ) {
+    return null;
+  }
+  return octets.reduce((value, octet) => (value << 8) | octet, 0) >>> 0;
+}
+
+function numberToIpv4(address: number): string {
+  return [24, 16, 8, 0]
+    .map((shift) => String((address >>> shift) & 0xff))
+    .join(".");
+}
+
 function hashToken(token: string): string {
   return createHash("sha256").update(token).digest("hex");
 }
@@ -408,11 +609,18 @@ function deviceLabel(userAgent: string | string[] | undefined): string {
 }
 
 function lanIps(): string[] {
-  const ips: string[] = [];
-  for (const entries of Object.values(os.networkInterfaces())) {
+  const ips = new Set<string>();
+  for (const [name, entries] of Object.entries(os.networkInterfaces())) {
+    if (!isPhysicalLanInterface(name)) continue;
     for (const entry of entries ?? []) {
-      if (entry.family === "IPv4" && !entry.internal) ips.push(entry.address);
+      if (entry.family === "IPv4" && !entry.internal) ips.add(entry.address);
     }
   }
-  return ips;
+  return [...ips];
+}
+
+function isPhysicalLanInterface(name: string): boolean {
+  if (process.platform === "darwin") return /^en\d+$/i.test(name);
+  if (process.platform === "win32") return /wi-?fi|ethernet/i.test(name);
+  return /^(?:en|eth|wl)/i.test(name);
 }

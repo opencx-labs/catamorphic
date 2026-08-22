@@ -53,9 +53,24 @@ export const PROFILE_COLORS = [
 
 const STORAGE_KEY = "catamorphic-pwa.v1";
 
+/**
+ * UUID v4 backed by getRandomValues, which remains available on the local
+ * HTTP origin used by desktop pairing. crypto.randomUUID is secure-context
+ * only and would abort this module before React can mount on that origin.
+ */
+function randomId(): string {
+  const bytes = crypto.getRandomValues(new Uint8Array(16));
+  bytes[6] = ((bytes[6] ?? 0) & 0x0f) | 0x40;
+  bytes[8] = ((bytes[8] ?? 0) & 0x3f) | 0x80;
+  const hex = Array.from(bytes, (byte) =>
+    byte.toString(16).padStart(2, "0"),
+  ).join("");
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
+}
+
 function defaultState(): PwaState {
   const profile: PwaProfile = {
-    id: crypto.randomUUID(),
+    id: randomId(),
     name: "You",
     color: PROFILE_COLORS[0],
     connections: [],
@@ -169,7 +184,7 @@ export function addConnection(
         c.serverUrl === link.serverUrl && c.projectId === link.remoteProjectId,
     );
   const connection: PwaConnection = {
-    id: existing?.id ?? crypto.randomUUID(),
+    id: existing?.id ?? randomId(),
     serverUrl: link.serverUrl,
     token: link.token,
     projectId: link.remoteProjectId,
@@ -202,7 +217,7 @@ export function createProfile(name: string): PwaProfile {
     PROFILE_COLORS[state.profiles.length % PROFILE_COLORS.length] ??
     PROFILE_COLORS[0];
   const profile: PwaProfile = {
-    id: crypto.randomUUID(),
+    id: randomId(),
     name: name.trim() || `Profile ${state.profiles.length + 1}`,
     color,
     connections: [],

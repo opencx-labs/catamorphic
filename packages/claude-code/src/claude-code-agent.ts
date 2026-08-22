@@ -956,7 +956,7 @@ function turnUsageFromResult(
 
   let contextTokens: number | undefined;
   if (lastMainUsage) {
-    const iterations = lastMainUsage["iterations"];
+    const iterations = lastMainUsage.iterations;
     const current =
       Array.isArray(iterations) && iterations.length > 0
         ? (iterations[iterations.length - 1] as Record<string, unknown>)

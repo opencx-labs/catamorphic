@@ -193,7 +193,7 @@ describe("git-sync over S3RemoteBackend", () => {
     try {
       const files = await repoB.readAllFiles();
       expect(files["src/feature.ts"]).toBe("export const feature = true;");
-      expect(files["package.json"]).toContain("s3-sync-test");
+      expect(files[".catamorphic/project.json"]).toContain("s3-sync-test");
     } finally {
       await repoB.dispose();
     }
