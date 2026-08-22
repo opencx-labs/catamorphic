@@ -24,6 +24,8 @@ import { S3RemoteBackend } from "../s3-remote-backend.js";
 const BUCKET = process.env.S3_BUCKET ?? "";
 const ACCESS_KEY_ID = process.env.S3_ACCESS_KEY_ID ?? "";
 const SECRET_ACCESS_KEY = process.env.S3_SECRET_ACCESS_KEY ?? "";
+const ENDPOINT = process.env.S3_ENDPOINT || undefined;
+const REGION = process.env.S3_REGION || undefined;
 
 const configured = !!(BUCKET && ACCESS_KEY_ID && SECRET_ACCESS_KEY);
 
@@ -31,8 +33,8 @@ async function s3Accessible(): Promise<boolean> {
   if (!configured) return false;
   const probe = new S3ObjectStore({
     bucket: BUCKET,
-    endpoint: process.env.S3_ENDPOINT,
-    region: process.env.S3_REGION,
+    endpoint: ENDPOINT,
+    region: REGION,
     forcePathStyle: process.env.S3_FORCE_PATH_STYLE === "true",
     credentials: {
       accessKeyId: ACCESS_KEY_ID,
@@ -64,8 +66,8 @@ const AUTHOR = { name: "Alice", email: "alice@test.dev" };
 describeIf("S3RemoteBackend (integration)", () => {
   const store = new S3ObjectStore({
     bucket: BUCKET,
-    endpoint: process.env.S3_ENDPOINT,
-    region: process.env.S3_REGION,
+    endpoint: ENDPOINT,
+    region: REGION,
     forcePathStyle: process.env.S3_FORCE_PATH_STYLE === "true",
     credentials: {
       accessKeyId: ACCESS_KEY_ID,
