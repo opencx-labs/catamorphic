@@ -1,5 +1,5 @@
 import http from "node:http";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { RemoteSessionMirror } from "./remote-mirror.js";
 
 /**
@@ -107,14 +107,14 @@ function mirror(
   });
 }
 
-const flush = () => new Promise((resolve) => setTimeout(resolve, 150));
+const waitForCapturedLength = (length: number) =>
+  vi.waitFor(() => expect(captured).toHaveLength(length), { timeout: 5_000 });
 
 describe("RemoteSessionMirror", () => {
   it("pushes the transcript to the link's mirror route", async () => {
     const pusher = mirror();
     pusher.mirrorInBackground("local-1", "s1");
-    await flush();
-    expect(captured).toHaveLength(1);
+    await waitForCapturedLength(1);
     expect(captured[0]?.url).toBe(
       "/api/projects/remote-1/agent/sessions/s1/mirror",
     );
@@ -125,14 +125,12 @@ describe("RemoteSessionMirror", () => {
   it("does nothing for projects without a remote link", async () => {
     const pusher = mirror();
     pusher.mirrorInBackground("unlinked", "s1");
-    await flush();
     expect(captured).toHaveLength(1);
   });
 
   it("skips incognito sessions entirely (ADR 0062)", async () => {
     const pusher = mirror({ incognito: true });
     pusher.mirrorInBackground("local-1", "s1");
-    await flush();
     expect(captured).toHaveLength(1);
   });
 
@@ -142,7 +140,7 @@ describe("RemoteSessionMirror", () => {
       incognitoIds: ["parent-1"],
     });
     pusher.mirrorInBackground("local-1", "s1");
-    await flush();
+    await vi.waitFor(() => expect(incognitoMarks).toEqual(["s1"]));
     // The fork's own id was never marked (a missed renderer marking), but
     // the lineage check catches it before anything leaves the machine.
     expect(captured).toHaveLength(1);
@@ -152,8 +150,7 @@ describe("RemoteSessionMirror", () => {
   it("carries the project-agent slug so the fork runs the same agent", async () => {
     const pusher = mirror({ agentId: "project:local-1:reviewer" });
     pusher.mirrorInBackground("local-1", "s1");
-    await flush();
-    expect(captured).toHaveLength(2);
+    await waitForCapturedLength(2);
     const body = captured[1]?.body as { agentSlug?: string } | undefined;
     expect(body?.agentSlug).toBe("reviewer");
   });
@@ -162,12 +159,12 @@ describe("RemoteSessionMirror", () => {
     respondDiverged = true;
     const pusher = mirror();
     pusher.mirrorInBackground("local-1", "s1");
-    await flush();
-    expect(captured).toHaveLength(3);
-    expect(forkMarks).toEqual([{ sessionId: "s1", serverUrl: base }]);
+    await waitForCapturedLength(3);
+    await vi.waitFor(() =>
+      expect(forkMarks).toEqual([{ sessionId: "s1", serverUrl: base }]),
+    );
     // The fork now lives on the server: no further pushes for s1.
     pusher.mirrorInBackground("local-1", "s1");
-    await flush();
     expect(captured).toHaveLength(3);
   });
 });
