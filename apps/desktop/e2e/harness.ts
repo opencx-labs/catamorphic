@@ -110,6 +110,10 @@ export async function launchApp(opts: LaunchOpts = {}): Promise<AppHandle> {
         ...process.env,
         ELECTRON_RUN_AS_NODE: undefined,
         CATAMORPHIC_E2E_DATA_DIR: userDataDir,
+        // Hidden is the interruption-free default. The visible command
+        // overrides this for suites that exercise native window semantics.
+        CATAMORPHIC_E2E_WINDOW_MODE:
+          process.env.CATAMORPHIC_E2E_WINDOW_MODE ?? "hidden",
         // Deterministic fake agent by default. Eval-style tests opt out by
         // passing CATAMORPHIC_E2E_FAKE_AGENT: "" (or "0") in opts.env — the
         // spread below wins, and every main-process check treats anything
@@ -358,9 +362,14 @@ export const setReactValueJs = `const setReactValue = (el, value) => {
       return;
     }
     const proto = el instanceof HTMLTextAreaElement
-      ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;
+      ? HTMLTextAreaElement.prototype
+      : el instanceof HTMLSelectElement
+        ? HTMLSelectElement.prototype : HTMLInputElement.prototype;
     Object.getOwnPropertyDescriptor(proto, 'value').set.call(el, value);
-    el.dispatchEvent(new Event('input', { bubbles: true }));
+    el.dispatchEvent(new Event(
+      el instanceof HTMLSelectElement ? 'change' : 'input',
+      { bubbles: true },
+    ));
   };`;
 
 async function terminate(child: ChildProcess): Promise<void> {

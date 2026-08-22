@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { type FrameHandle, launchApp } from "./harness.js";
+import { type FrameHandle, launchApp, setReactValueJs } from "./harness.js";
 
 /**
  * Eval-style e2e: a REAL model-backed agent builds a small app end to end —
@@ -73,16 +73,8 @@ const helpers = `
   const byText = (selector, text) =>
     $$(selector).find((el) => el.textContent.trim().includes(text));
   const visibleDock = () =>
-    $$('section[aria-label]').find((el) => !el.inert && el.querySelector('textarea'));
-  const setReactValue = (el, value) => {
-    const proto = el instanceof HTMLTextAreaElement
-      ? HTMLTextAreaElement.prototype
-      : el instanceof HTMLSelectElement
-        ? HTMLSelectElement.prototype : HTMLInputElement.prototype;
-    Object.getOwnPropertyDescriptor(proto, 'value').set.call(el, value);
-    el.dispatchEvent(new Event('input', { bubbles: true }));
-    el.dispatchEvent(new Event('change', { bubbles: true }));
-  };
+    $$('section[aria-label]').find((el) => !el.inert && el.querySelector('[data-composer-input]'));
+  ${setReactValueJs}
   const pressKey = (key, mods = {}) =>
     window.dispatchEvent(new KeyboardEvent('keydown',
       { key, bubbles: true, cancelable: true, ...mods }));
@@ -187,7 +179,7 @@ describeIf("agent build eval (real model)", () => {
         { timeoutMs: 30_000, label: "chat dock open" },
       );
       await run(`
-          const ta = visibleDock().querySelector('form textarea');
+          const ta = visibleDock().querySelector('[data-composer-input]');
           setReactValue(ta, ${JSON.stringify(EVAL_PROMPT)});
           ta.closest('form').requestSubmit();
           return true;

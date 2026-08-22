@@ -67,9 +67,14 @@ bun run test
 
 ```bash
 bun run test:e2e
+bun run test:e2e:visible
 ```
 
-Builds the app and drives the real Electron binary over CDP against an
+The default command keeps the real Electron window hidden so local runs do
+not steal focus. The visible command runs the focus and native-window suites
+(`skills`, `tool-permissions`, and `window-state`) with a displayed window;
+run both before every commit. Both commands build the app and drive the real
+Electron binary over CDP against an
 isolated temp `userData` dir with a deterministic fake agent
 (`CATAMORPHIC_E2E_FAKE_AGENT=1`) — no API key, no microsandbox, and no
 interference with a normally-running app instance. Covers the main flows:

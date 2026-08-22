@@ -12,6 +12,7 @@ import { registerAgentBridge } from "./agent-bridge.js";
 import { registerBrowserSupport } from "./browser.js";
 import { toPublicConnection } from "./connections-store.js";
 import { ConnectorsService } from "./connectors.js";
+import { shouldShowWindow } from "./e2e-window-mode.js";
 import { IncognitoSessionsStore } from "./incognito-sessions.js";
 import { registerIpcHandlers, type ServerState } from "./ipc.js";
 import { type Keybindings, toAccelerator } from "./keybindings.js";
@@ -52,6 +53,10 @@ app.userAgentFallback = app.userAgentFallback
 // E2E runs point userData at a throwaway dir so tests never touch real
 // settings/projects/DB, and may run beside a normally-running app.
 const e2eDataDir = process.env.CATAMORPHIC_E2E_DATA_DIR;
+const showWindow = shouldShowWindow({
+  e2eDataDir,
+  e2eWindowMode: process.env.CATAMORPHIC_E2E_WINDOW_MODE,
+});
 if (e2eDataDir) {
   app.setPath("userData", e2eDataDir);
 }
@@ -224,6 +229,14 @@ function createWindow(profileId?: string): BrowserWindow {
     if (pendingConnectLink) deliverConnectLink(pendingConnectLink);
   });
   window.once("ready-to-show", () => {
+    if (!showWindow) {
+      // On macOS, a never-shown BrowserWindow can remain unavailable to CDP.
+      // Enter the native shown lifecycle without activating the app, then
+      // hide in the same turn so local E2E runs never steal keyboard focus.
+      window.showInactive();
+      window.hide();
+      return;
+    }
     window.show();
     // Fullscreen after show: entering it on a hidden window leaves macOS
     // with a blank space until the next repaint.

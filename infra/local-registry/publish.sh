@@ -9,5 +9,11 @@ curl -sf http://localhost:4873/-/ping >/dev/null 2>&1 || {
 }
 cd ../..
 for p in app parser workflow; do
-  (cd "packages/$p" && bun run build && bun publish --registry http://localhost:4873) || true
+  (
+    cd "packages/$p"
+    bun run build
+    bun publish \
+      --config=infra/local-registry/bunfig.toml \
+      --tolerate-republish
+  )
 done

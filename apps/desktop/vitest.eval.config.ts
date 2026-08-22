@@ -10,6 +10,7 @@ import { defineConfig } from "vitest/config";
 export default defineConfig({
   test: {
     include: ["e2e/**/*.eval.ts"],
+    pool: "forks",
     fileParallelism: false,
     // A real agent turn (sandbox boot, install, build) can take minutes.
     testTimeout: 600_000,

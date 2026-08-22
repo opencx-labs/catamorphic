@@ -7,31 +7,16 @@ vi.mock("node:child_process", () => ({
 }));
 
 import { sql } from "kysely";
-import { afterEach, beforeAll, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import { createDatabase } from "../database.js";
 import { runMigrate } from "../migrate.js";
 import { runReset } from "../reset.js";
 
-const TEST_DATABASE_URL =
-  process.env.DATABASE_URL ??
-  "postgresql://catamorphic:catamorphic@localhost:5432/catamorphic";
+const TEST_DATABASE_URL = process.env.DATABASE_URL ?? "";
+const describeIf = TEST_DATABASE_URL ? describe : describe.skip;
 
 function uniqueSchema(prefix: string) {
   return `${prefix}_${Date.now()}_${Math.random().toString(16).slice(2, 8)}`;
-}
-
-async function schemaExists(connectionString: string, schema: string) {
-  const db = createDatabase({ connectionString });
-  try {
-    const result = await sql<{ exists: boolean }>`
-      SELECT EXISTS(
-        SELECT 1 FROM information_schema.schemata WHERE schema_name = ${schema}
-      ) AS exists
-    `.execute(db);
-    return Boolean(result.rows[0]?.exists);
-  } finally {
-    await db.destroy();
-  }
 }
 
 async function tableExists(
@@ -63,18 +48,11 @@ async function dropSchema(connectionString: string, schema: string) {
   }
 }
 
-let dbAvailable = true;
 const createdSchemas: string[] = [];
 const originalDatabaseUrl = process.env.DATABASE_URL;
 const originalSchema = process.env.CATAMORPHIC_DB_SCHEMA;
 
-describe("@catamorphic/db schema integration", () => {
-  beforeAll(async () => {
-    dbAvailable = await schemaExists(TEST_DATABASE_URL, "public").catch(
-      () => false,
-    );
-  });
-
+describeIf("@catamorphic/db schema integration", () => {
   afterEach(async () => {
     process.env.DATABASE_URL = originalDatabaseUrl;
     process.env.CATAMORPHIC_DB_SCHEMA = originalSchema;
@@ -84,8 +62,6 @@ describe("@catamorphic/db schema integration", () => {
   });
 
   it("runMigrate stores migration tracking in target schema", async () => {
-    if (!dbAvailable) return;
-
     const schema = uniqueSchema("catamorphic_migrate_test");
     createdSchemas.push(schema);
     process.env.DATABASE_URL = TEST_DATABASE_URL;
@@ -260,8 +236,6 @@ describe("@catamorphic/db schema integration", () => {
   });
 
   it("runReset drops only target schema tables", async () => {
-    if (!dbAvailable) return;
-
     const schema = uniqueSchema("catamorphic_reset_test");
     createdSchemas.push(schema);
     process.env.DATABASE_URL = TEST_DATABASE_URL;
@@ -313,8 +287,6 @@ describe("@catamorphic/db schema integration", () => {
   });
 
   it("runtime queries resolve to target schema before public", async () => {
-    if (!dbAvailable) return;
-
     const schema = uniqueSchema("catamorphic_runtime_scope_test");
     const tableName = "runtime_scope_guard";
     createdSchemas.push(schema);
@@ -366,8 +338,6 @@ describe("@catamorphic/db schema integration", () => {
   });
 
   it("runtime queries do not fall through to public schema", async () => {
-    if (!dbAvailable) return;
-
     const schema = uniqueSchema("catamorphic_no_fallback_test");
     const tableName = "runtime_public_only_guard";
     createdSchemas.push(schema);

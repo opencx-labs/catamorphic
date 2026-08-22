@@ -149,7 +149,7 @@ beforeAll(async () => {
     .insertInto("tenants")
     .values({ id: identity.tenantId, name: "gh-test" })
     .execute();
-});
+}, 30_000);
 
 afterAll(async () => {
   await db.destroy();

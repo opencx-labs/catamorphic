@@ -574,9 +574,11 @@ Integration tests hit the **real services** using the keys in the repo root `.en
 - **Cloudflare Sandbox** (`packages/cloudflare`, `packages/core`): needs `CLOUDFLARE_SANDBOX_API_URL` plus the explicit opt-in `CF_SANDBOX_INTEGRATION=1` (start the bridge first: `bun run dev` in `packages/cloudflare-sandbox-bridge`).
 - **Cloudflare Artifacts** (`packages/cloudflare`): runs whenever the `CLOUDFLARE_ACCOUNT_ID` / `CLOUDFLARE_API_TOKEN` / `CLOUDFLARE_ARTIFACTS_NAMESPACE` keys are set and the account has Artifacts beta access; skips with a warning while feature-gated.
 
-Unit tests run with no setup. The desktop app additionally has an e2e suite
-(`cd apps/desktop && bun run test:e2e`) that drives the real Electron binary
-over CDP with a deterministic fake agent.
+Unit tests run with no setup. The desktop app additionally has hidden and
+visible E2E suites that drive the real Electron binary over CDP with a
+deterministic fake agent. Run `bun run test:e2e` from `apps/desktop` for the
+interruption-free suite and `bun run test:e2e:visible` for focus and native
+window behavior.
 
 ## Tech stack
 
