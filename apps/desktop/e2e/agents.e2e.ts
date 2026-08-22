@@ -819,7 +819,7 @@ describe("agents and profiles", () => {
     // Queue behind a slow turn, then promote via the bubble's send-now.
     await run(`
       const ta = visibleDock().querySelector('[data-composer-input]');
-      setReactValue(ta, 'respond slowly please');
+      setReactValue(ta, 'respond slowly and wait for interruption');
       ta.closest('form').requestSubmit();
       setReactValue(ta, 'urgent now');
       ta.closest('form').requestSubmit();
@@ -871,7 +871,7 @@ describe("agents and profiles", () => {
     // Cmd+Enter from the composer takes the same fast path.
     await run(`
       const ta = visibleDock().querySelector('[data-composer-input]');
-      setReactValue(ta, 'respond slowly please');
+      setReactValue(ta, 'respond slowly and wait for interruption');
       ta.closest('form').requestSubmit();
       return true;
     `);

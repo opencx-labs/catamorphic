@@ -433,7 +433,11 @@ export class E2eFakeCodingAgent implements CodingAgentProvider {
       yield { type: "title", content: "Slow burn" };
       yield { type: "text", content: "Working on it, give me a moment." };
       yield { type: "command", content: "sleep" };
-      const deadline = Date.now() + 4000;
+      // Hidden Chromium renderers can throttle DOM updates heavily on loaded
+      // CI runners. Keep the interruption fixture alive long enough for its
+      // send-now control to render; ordinary slow-turn tests retain 4 seconds.
+      const delayMs = prompt.includes("wait for interruption") ? 30_000 : 4000;
+      const deadline = Date.now() + delayMs;
       while (Date.now() < deadline && !state.interrupted) {
         await new Promise((resolve) => setTimeout(resolve, 100));
       }
