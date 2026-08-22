@@ -816,11 +816,22 @@ describe("agents and profiles", () => {
   });
 
   it("send-now and Cmd+Enter interrupt the running turn", async () => {
-    // Queue behind a slow turn, then promote via the bubble's send-now.
+    // Wait until the provider is anchored and handling the slow turn before
+    // queueing. A completed turn earlier in this shared transcript also says
+    // "Working on it", so the live activity is the synchronization point.
     await run(`
       const ta = visibleDock().querySelector('[data-composer-input]');
       setReactValue(ta, 'respond slowly and wait for interruption');
       ta.closest('form').requestSubmit();
+      return true;
+    `);
+    await runWait(
+      `return $('[role="log"] span.animate-pulse')?.textContent.trim() === 'Waiting...';`,
+      { timeoutMs: 30_000, label: "first slow turn running" },
+    );
+    // Queue behind the running turn, then promote via the bubble's send-now.
+    await run(`
+      const ta = visibleDock().querySelector('[data-composer-input]');
       setReactValue(ta, 'urgent now');
       ta.closest('form').requestSubmit();
       return true;
@@ -876,8 +887,7 @@ describe("agents and profiles", () => {
       return true;
     `);
     await runWait(
-      `return $$('[role="log"] div, [role="log"] span')
-        .some((el) => el.textContent.includes('Working on it'));`,
+      `return $('[role="log"] span.animate-pulse')?.textContent.trim() === 'Waiting...';`,
       { timeoutMs: 30_000, label: "second slow turn running" },
     );
     await run(`
