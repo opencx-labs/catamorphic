@@ -28,6 +28,16 @@ export function chromeBinary(): string | null {
   );
 }
 
+export function chromeLaunchArgs({
+  ci,
+  platform,
+}: {
+  ci: string | undefined;
+  platform: NodeJS.Platform;
+}): string[] {
+  return ci === "true" && platform === "linux" ? ["--no-sandbox"] : [];
+}
+
 async function freePort(): Promise<number> {
   return new Promise((resolve, reject) => {
     const server = net.createServer();
@@ -239,6 +249,10 @@ export async function launchPwa(
           "--headless=new",
           `--remote-debugging-port=${cdpPort}`,
           `--user-data-dir=${profileDir}`,
+          ...chromeLaunchArgs({
+            ci: process.env.CI,
+            platform: process.platform,
+          }),
           "--no-first-run",
           "--no-default-browser-check",
           "--window-size=390,844",

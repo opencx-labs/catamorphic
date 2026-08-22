@@ -2,7 +2,17 @@
 
 import { spawn } from "node:child_process";
 import { describe, expect, it, vi } from "vitest";
-import { waitForHttp, watchChild } from "./harness.js";
+import { chromeLaunchArgs, waitForHttp, watchChild } from "./harness.js";
+
+describe("PWA E2E Chrome arguments", () => {
+  it("disables the Chrome sandbox only in Linux CI", () => {
+    expect(chromeLaunchArgs({ ci: "true", platform: "linux" })).toEqual([
+      "--no-sandbox",
+    ]);
+    expect(chromeLaunchArgs({ ci: undefined, platform: "linux" })).toEqual([]);
+    expect(chromeLaunchArgs({ ci: "true", platform: "darwin" })).toEqual([]);
+  });
+});
 
 describe("PWA E2E process lifecycle", () => {
   it("bounds an HTTP probe even when the server never responds", async () => {
