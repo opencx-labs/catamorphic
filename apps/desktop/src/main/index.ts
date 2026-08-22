@@ -410,6 +410,7 @@ app.whenReady().then(async () => {
     state,
     windows,
     paths,
+    profilesStore,
     connectors,
     mcpApps,
     mobilePairing,

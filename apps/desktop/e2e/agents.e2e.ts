@@ -551,9 +551,13 @@ describe("agents and profiles", () => {
     await runWait(
       `const visibleFree = $$('[data-testid="agent-wizard-free"]')
          .filter((el) => !el.closest('[inert]'));
+       const wizard = $$('[data-testid="agent-wizard"]')
+         .find((el) => !el.closest('[inert]'));
+       const freeMentions = wizard?.innerText.match(/\\bfree\\b/gi) ?? [];
        return wizardVisible() &&
               !!byText('[role="tab"], button', 'Set up agent') &&
-              visibleFree.length === 1;`,
+              visibleFree.length === 1 &&
+              freeMentions.length === 1;`,
       {
         timeoutMs: 15_000,
         label: "setup tab auto-opened, free option present",
@@ -593,11 +597,25 @@ describe("agents and profiles", () => {
     await runWait(
       `return window.catamorphicDesktop.agentsList().then((data) =>
         data.agents.length === 1 &&
-        data.agents[0].name === 'Free models' &&
+        data.agents[0].name === 'OpenRouter' &&
         data.agents[0].provider === 'openrouter' &&
         data.agents[0].hasApiKey);`,
       { label: "OpenRouter agent created with a stamped credential" },
     );
+
+    // The onboarding description is the only user-facing place that calls
+    // out the zero-cost path. Agent names and model pickers stay neutral.
+    await openPicker("Change model", "Model");
+    await runWait(
+      `const rows = paletteRows();
+       return rows.length > 0 &&
+              rows.some((row) => row.textContent.includes('Automatic model')) &&
+              rows.every((row) =>
+                !row.textContent.includes('Best free model') &&
+                !row.textContent.includes(' · free'));`,
+      { label: "OpenRouter model picker uses neutral wording" },
+    );
+    await run(paletteEscape);
 
     // Chats flow again on the onboarded agent.
     await run(`pressKey('n', { metaKey: true }); return true;`);
@@ -630,7 +648,7 @@ describe("agents and profiles", () => {
     await runWait(
       `return $$('[role="log"] article').some((el) =>
         el.textContent.includes(
-          'OpenRouter rejected the credentials of the "Free models" agent') &&
+          'OpenRouter rejected the credentials of the "OpenRouter" agent') &&
         el.textContent.includes('User not found.') &&
         el.textContent.includes('Settings'));`,
       { timeoutMs: 30_000, label: "friendly auth error in the chat" },

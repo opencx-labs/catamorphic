@@ -54,11 +54,13 @@ import {
   openRouterPkceLogin,
 } from "./openrouter.js";
 import type { ProfileConfigManager } from "./profile-config.js";
+import type { ProfilesStore } from "./profiles.js";
 import {
   projectAllowsIncognito,
   projectDefaultAgentSlug,
   setProjectDefaultAgentSlug,
 } from "./project-manifest.js";
+import { createReservedProject } from "./project-path.js";
 import {
   httpDocumentsClient,
   localStatus,
@@ -140,11 +142,17 @@ export interface ProjectAgentsData {
   projectDefaultSlug: string | null;
 }
 
+const defaultProjectsDir = () =>
+  process.env.CATAMORPHIC_E2E_DATA_DIR
+    ? path.join(process.env.CATAMORPHIC_E2E_DATA_DIR, "Catamorphic")
+    : path.join(app.getPath("home"), "Catamorphic");
+
 export function registerIpcHandlers(
   profileConfig: ProfileConfigManager,
   state: ServerState,
   windows: WindowProfileRegistry,
   paths: DataPaths,
+  profiles: ProfilesStore,
   connectors?: ConnectorsService,
   mcpApps?: McpAppsService,
   mobilePairing?: MobilePairingService,
@@ -1209,11 +1217,7 @@ export function registerIpcHandlers(
   // Where new projects go by default: ~/Catamorphic/<name>. Always a real,
   // user-visible folder — project data never hides in app data. E2E runs
   // keep projects inside the throwaway userData dir instead of the home.
-  ipcMain.handle("catamorphic:default-projects-dir", () =>
-    process.env.CATAMORPHIC_E2E_DATA_DIR
-      ? path.join(process.env.CATAMORPHIC_E2E_DATA_DIR, "Catamorphic")
-      : path.join(app.getPath("home"), "Catamorphic"),
-  );
+  ipcMain.handle("catamorphic:default-projects-dir", defaultProjectsDir);
 
   const identity = {
     tenantId: DESKTOP_TENANT_ID,
@@ -1247,6 +1251,53 @@ export function registerIpcHandlers(
       return { id: project.id, name: project.name };
     },
   );
+
+  // The empty-state fast path: still a normal user-visible project, with a
+  // collision-safe folder and the same core creation path as the full modal.
+  ipcMain.handle("catamorphic:project-create-default", async (event) => {
+    const server = state.current;
+    if (!server) throw new Error("Server not running");
+    const profileId = windows.profileFor(event.sender);
+    const initialized = await createReservedProject({
+      parentDir: defaultProjectsDir(),
+      slug: "default-project",
+      create: (rootPath) =>
+        server.catamorphic.core.projects.create(identity, {
+          name: "Default project",
+          rootPath,
+        }),
+      provision: async ({ project, rootPath }) => {
+        await server.projectRoots.set(project.id, rootPath);
+        profiles.claimProject(profileId, project.id);
+      },
+      rollback: async ({ project }) => {
+        // Keep the root mapping and profile claim intact when core deletion
+        // fails: a recoverable project is better than an invisible DB row.
+        await server.catamorphic.core.projects.delete(identity, project.id);
+      },
+      cleanup: async ({ project }) => {
+        const cleanupFailures: unknown[] = [];
+        try {
+          await server.projectRoots.delete(project.id);
+        } catch (cause) {
+          cleanupFailures.push(cause);
+        }
+        try {
+          profiles.releaseProject(project.id);
+        } catch (cause) {
+          cleanupFailures.push(cause);
+        }
+        if (cleanupFailures.length > 0) {
+          throw new AggregateError(
+            cleanupFailures,
+            "Default project rollback failed",
+          );
+        }
+      },
+    });
+    state.broadcast("catamorphic:profiles-changed", profiles.list());
+    return { id: initialized.project.id, name: initialized.project.name };
+  });
 
   // --- remote projects (ADR 0055) ---
   // A local folder synced from a hosting backend's scoped documents surface:

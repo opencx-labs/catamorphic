@@ -79,6 +79,89 @@ const createProjectViaUi = async (name: string): Promise<void> => {
   );
 };
 
+describe("agent-first onboarding", () => {
+  beforeAll(async () => {
+    app = await launchApp();
+    await run(`
+      return window.catamorphicDesktop.agentsList().then((data) =>
+        Promise.all(data.agents.map((agent) =>
+          window.catamorphicDesktop.agentsRemove(agent.id))));
+    `);
+  });
+
+  afterAll(async () => {
+    await app?.stop();
+  });
+
+  it("creates a collision-safe Default project and opens the agent wizard", async () => {
+    const projectsDir = path.join(app.userDataDir, "Catamorphic");
+    const occupiedDir = path.join(projectsDir, "default-project");
+    fs.mkdirSync(occupiedDir, { recursive: true });
+    fs.writeFileSync(path.join(occupiedDir, "KEEP.txt"), "leave me alone\n");
+
+    await runWait(`return !!byText('button', 'New project');`, {
+      timeoutMs: 60_000,
+      label: "empty project state",
+    });
+    expect(await run(`return !!$('[data-testid="empty-start-agent"]');`)).toBe(
+      true,
+    );
+    await run(`$('[data-testid="empty-start-agent"]').click(); return true;`);
+    await runWait(
+      `const wizard = $$('[data-testid="agent-wizard"]')
+         .find((el) => !el.closest('[inert]'));
+       return !!wizard &&
+              !!byText('button', 'Default project') &&
+              !byText('[role="tab"], button', 'Set up agent');`,
+      { timeoutMs: 60_000, label: "agent wizard over the default workspace" },
+    );
+
+    const createdDir = path.join(projectsDir, "default-project-2");
+    const manifest = JSON.parse(
+      fs.readFileSync(
+        path.join(createdDir, ".catamorphic/project.json"),
+        "utf-8",
+      ),
+    ) as { name: string };
+    expect(manifest.name).toBe("Default project");
+    expect(fs.readFileSync(path.join(occupiedDir, "KEEP.txt"), "utf-8")).toBe(
+      "leave me alone\n",
+    );
+
+    await run(`
+      $$('[data-testid="agent-wizard-free"]')
+        .find((el) => !el.closest('[inert]'))
+        .click();
+      return true;
+    `);
+    await runWait(
+      `return !$$('[data-testid="agent-wizard"]')
+         .some((el) => !el.closest('[inert]')) &&
+              !!byText('button', 'Default project') &&
+              !visibleDock();`,
+      {
+        timeoutMs: 15_000,
+        label: "wizard closes into Default project without opening chat",
+      },
+    );
+  });
+
+  it("allocates distinct folders for concurrent default projects", async () => {
+    const roots = await run<(string | null)[]>(`
+      return Promise.all([
+        window.catamorphicDesktop.createDefaultProject(),
+        window.catamorphicDesktop.createDefaultProject(),
+      ]).then((projects) => Promise.all(projects.map((project) =>
+        window.catamorphicDesktop.projectRoot(project.id))));
+    `);
+
+    expect(roots).toHaveLength(2);
+    expect(roots[0]).not.toBeNull();
+    expect(roots[1]).not.toBeNull();
+    expect(roots[0]).not.toBe(roots[1]);
+  });
+});
+
 describe("blank project onboarding", () => {
   let projectDir: string;
 

@@ -7,18 +7,18 @@ import { desktopApi, type OpenRouterCatalog } from "../lib/desktop-api.js";
 
 interface OpenRouterRow {
   key: string;
-  /** "" selects the synthetic best-free entry (resolved dynamically). */
+  /** "" selects the synthetic automatic entry (resolved dynamically). */
   modelId: string;
   title: string;
   detail: string;
-  free: boolean;
 }
 
 /**
  * Searchable model picker for OpenRouter agents. The mono input is both the
  * stored value and the search box; a dropdown below it filters the catalog
- * while focused. An empty model means "current best free model", surfaced
- * as the synthetic first row. If the catalog can't load, degrades to the
+ * while focused. An empty model delegates selection to the OpenRouter
+ * catalog, surfaced as the synthetic first row. If the catalog can't load,
+ * degrades to the
  * plain text input. Shared by Settings and the configure-agent modal.
  */
 export function OpenRouterModelField({
@@ -52,7 +52,7 @@ export function OpenRouterModelField({
   const bestId = catalog?.bestFreeModelId ?? null;
   const showBest =
     query === "" ||
-    "best free model (automatic)".includes(query) ||
+    "automatic model".includes(query) ||
     (bestId?.toLowerCase().includes(query) ?? false);
   const rows: OpenRouterRow[] = catalog
     ? [
@@ -61,9 +61,8 @@ export function OpenRouterModelField({
               {
                 key: " best",
                 modelId: "",
-                title: "Best free model (automatic)",
-                detail: bestId ?? "no free models right now",
-                free: false,
+                title: "Automatic model",
+                detail: bestId ?? "Resolved when you start a chat",
               },
             ]
           : []),
@@ -82,7 +81,6 @@ export function OpenRouterModelField({
             modelId: m.id,
             title: m.name,
             detail: m.id,
-            free: m.free,
           })),
       ]
     : [];
@@ -127,7 +125,7 @@ export function OpenRouterModelField({
         <input
           value={value}
           onChange={(event) => onChange(event.target.value)}
-          placeholder="Best free model (automatic)"
+          placeholder="Automatic model"
           className="field h-8 px-2 font-mono text-[13px] text-fg placeholder:font-sans placeholder:text-fg-faint"
           spellCheck={false}
         />
@@ -150,7 +148,7 @@ export function OpenRouterModelField({
           onFocus={() => setOpen(true)}
           onBlur={() => setOpen(false)}
           onKeyDown={onKeyDown}
-          placeholder={`Best free model (${bestId ?? "automatic"})`}
+          placeholder={`Automatic model (${bestId ?? "resolved when needed"})`}
           aria-label="Model"
           className="field h-8 w-full px-2 font-mono text-[13px] text-fg placeholder:font-sans placeholder:text-fg-faint"
           spellCheck={false}
@@ -188,11 +186,6 @@ export function OpenRouterModelField({
                       {row.detail}
                     </span>
                   </span>
-                  {row.free && (
-                    <span className="shrink-0 rounded border border-border-strong px-1 text-[10px] text-fg-muted">
-                      free
-                    </span>
-                  )}
                 </button>
               ))
             )}
@@ -200,7 +193,7 @@ export function OpenRouterModelField({
         )}
       </div>
       <span className="text-fg-faint">
-        Leave empty to always use the current best free model.
+        Leave empty to use the current automatic model.
       </span>
     </div>
   );

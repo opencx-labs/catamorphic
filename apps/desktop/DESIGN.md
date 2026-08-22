@@ -811,13 +811,13 @@ Patterned on what best-in-class palettes converged on (Chrome omnibox
   open it too. The CLI harnesses default to `local` auth — the machine's
   existing `claude login` / `codex login` is inherited with zero
   configuration (Codex offers "Sign in with ChatGPT" when absent); API
-  keys are a separate explicit option, and the zero-friction path is
-  last: "Continue with free models" runs OpenRouter's browser PKCE flow,
-  so the user approves once and never pastes a key. No model ids are pinned in
-  code: an OpenRouter agent with no model resolves to the catalog's
-  current best free model (newest free model with a ≥32k context), and
-  the Settings model field for OpenRouter is a searchable selector over
-  the live catalog with "Best free model (automatic)" as the first row.
+  keys are a separate explicit option, and the zero-friction path is last:
+  OpenRouter's description is the one place that notes free models are
+  available, then browser PKCE lets the user approve once without pasting a
+  key. The created agent is named "OpenRouter" and the rest of the UI stays
+  neutral. No model ids are pinned in code: an unpinned OpenRouter agent
+  resolves to the catalog's current best zero-cost model (newest with a ≥32k
+  context), and model pickers call that choice "Automatic model."
 - **Import is "from other browsers", not "from Chrome".** A generic
   Chromium importer (Chrome, Edge, Brave, Arc, Chromium) reads Local
   State profiles + Bookmarks files; Settings lets each source profile

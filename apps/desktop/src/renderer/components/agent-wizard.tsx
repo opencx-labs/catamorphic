@@ -180,7 +180,7 @@ export function AgentWizard({
     const agent =
       flow === "free"
         ? await desktopApi.agentsCreate({
-            name: "Free models",
+            name: "OpenRouter",
             harness: "ai-sdk",
             provider: "openrouter",
             auth: "account",

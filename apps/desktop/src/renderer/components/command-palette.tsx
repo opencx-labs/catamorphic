@@ -1020,7 +1020,7 @@ export function CommandPalette({
             id: `pick:model:${model.id}`,
             icon: Cpu,
             label: model.name,
-            detail: `${model.id}${model.free ? " · free" : ""}`,
+            detail: model.id,
             keywords: [],
             kind: "action",
             ...(model.id === current ? { current: true } : {}),
@@ -1029,7 +1029,7 @@ export function CommandPalette({
         rows.push({
           id: "pick:model:",
           icon: Cpu,
-          label: "Best free model (automatic)",
+          label: "Automatic model",
           detail: catalog?.bestFreeModelId ?? "resolved from the catalog",
           keywords: ["best", "free", "auto", "default"],
           kind: "action",

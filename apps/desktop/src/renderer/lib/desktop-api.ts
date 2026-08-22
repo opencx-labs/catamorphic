@@ -859,6 +859,7 @@ export interface CatamorphicDesktopApi {
     rootPath: string;
     importExisting?: boolean;
   }) => Promise<{ id: string; name: string }>;
+  createDefaultProject: () => Promise<{ id: string; name: string }>;
   deleteProject: (input: {
     projectId: string;
     trashFolder?: boolean;

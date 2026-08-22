@@ -225,6 +225,8 @@ const api = {
     importExisting?: boolean;
   }): Promise<{ id: string; name: string }> =>
     ipcRenderer.invoke("catamorphic:project-create", input),
+  createDefaultProject: (): Promise<{ id: string; name: string }> =>
+    ipcRenderer.invoke("catamorphic:project-create-default"),
   deleteProject: (input: {
     projectId: string;
     trashFolder?: boolean;

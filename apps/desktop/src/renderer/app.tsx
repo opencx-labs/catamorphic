@@ -16,6 +16,7 @@ import {
   PanelLeft,
   Plus,
   Settings as SettingsIcon,
+  Sparkles,
   Wand2,
   Workflow as WorkflowIcon,
 } from "lucide-react";
@@ -54,6 +55,7 @@ import {
 } from "./components/elicitation-modal.js";
 import { GitNav } from "./components/git-nav.js";
 import { MobilePairingModal } from "./components/mobile-pairing-modal.js";
+import { PendingButton } from "./components/pending-button.js";
 import { ProfileBar } from "./components/profile-bar.js";
 import { ProjectAgentConsentDialog } from "./components/project-agent-consent.js";
 import { ProjectModal } from "./components/project-modal.js";
@@ -767,6 +769,18 @@ export function App() {
     ) ??
     projects[0];
   const projectId = activeProject?.id;
+
+  const startWithAgent = async (): Promise<void> => {
+    const project = await desktopApi.createDefaultProject();
+    if (activeProfile) {
+      // This entry point explicitly asks for the Cmd+N-style modal. Prevent
+      // the agent-less-profile effect from opening its setup tab underneath.
+      setupDismissedRef.current.add(activeProfile.id);
+    }
+    await projectsQuery.refetch();
+    selectProject(project.id);
+    setWizardModalOpen(true);
+  };
 
   // Project policy (ADR 0062): the committed manifest may disable
   // incognito sessions for this project's members.
@@ -4379,6 +4393,7 @@ export function App() {
             loading={projectsQuery.isLoading}
             onNewProject={() => setProjectModalOpen(true)}
             onConnectRemote={() => setRemoteConnect({ open: true, link: null })}
+            onStartWithAgent={startWithAgent}
           />
         )}
       </main>
@@ -4981,11 +4996,28 @@ function EmptyState({
   loading,
   onNewProject,
   onConnectRemote,
+  onStartWithAgent,
 }: {
   loading: boolean;
   onNewProject: () => void;
   onConnectRemote: () => void;
+  onStartWithAgent: () => Promise<void>;
 }) {
+  const [startingAgent, setStartingAgent] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const start = async () => {
+    if (startingAgent) return;
+    setStartingAgent(true);
+    setError(null);
+    try {
+      await onStartWithAgent();
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : String(cause));
+      setStartingAgent(false);
+    }
+  };
+
   return (
     <div className="grid flex-1 place-items-center">
       <div className="max-w-sm text-center">
@@ -4994,13 +5026,27 @@ function EmptyState({
         ) : (
           <>
             <p className="text-sm text-fg-muted">
-              Create a project from scratch or import an existing folder.
+              Start with an agent, create a project, or connect to a server.
             </p>
-            <div className="mt-4 flex items-center justify-center gap-2">
+            <div className="mt-4 flex flex-wrap items-center justify-center gap-2">
+              <PendingButton
+                type="button"
+                pending={startingAgent}
+                pendingLabel="Starting…"
+                onClick={() => void start()}
+                data-testid="empty-start-agent"
+                className="inline-flex h-8 cursor-pointer items-center gap-2 rounded-md bg-accent px-3 text-[13px] font-medium text-accent-fg transition-opacity duration-150 hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                <span className="inline-flex items-center gap-2">
+                  <Sparkles className="size-3.5" />
+                  Start with an agent
+                </span>
+              </PendingButton>
               <button
                 type="button"
                 onClick={onNewProject}
-                className="inline-flex h-8 cursor-pointer items-center gap-2 rounded-md bg-accent px-3 text-[13px] font-medium text-accent-fg transition-opacity duration-150 hover:opacity-90"
+                disabled={startingAgent}
+                className="inline-flex h-8 cursor-pointer items-center gap-2 rounded-md border border-border px-3 text-[13px] text-fg-muted transition-colors duration-150 hover:bg-bg-overlay hover:text-fg disabled:cursor-not-allowed disabled:opacity-60"
               >
                 <FolderPlus className="size-3.5" />
                 New project
@@ -5008,13 +5054,15 @@ function EmptyState({
               <button
                 type="button"
                 onClick={onConnectRemote}
+                disabled={startingAgent}
                 data-testid="empty-connect-remote"
-                className="inline-flex h-8 cursor-pointer items-center gap-2 rounded-md border border-border px-3 text-[13px] text-fg-muted transition-colors duration-150 hover:bg-bg-overlay hover:text-fg"
+                className="inline-flex h-8 cursor-pointer items-center gap-2 rounded-md border border-border px-3 text-[13px] text-fg-muted transition-colors duration-150 hover:bg-bg-overlay hover:text-fg disabled:cursor-not-allowed disabled:opacity-60"
               >
                 <Link2 className="size-3.5" />
                 Connect to a server
               </button>
             </div>
+            {error && <p className="mt-3 text-[12px] text-danger">{error}</p>}
           </>
         )}
       </div>
