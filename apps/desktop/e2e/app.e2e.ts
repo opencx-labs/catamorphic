@@ -42,7 +42,8 @@ const helpers = `
       role: el.className.includes('ml-auto') ? 'You' : 'Agent',
       text: el.textContent.trim(),
     }));
-  const spinnersOn = () => $$('svg.animate-spin').filter((el) => {
+  const spinnersOn = (includeExiting = true) => $$('svg.animate-spin').filter((el) => {
+    if (!includeExiting && el.closest('.animate-bubble-out')) return false;
     let node = el, opacity = 1;
     while (node && node !== document.body) {
       opacity *= parseFloat(getComputedStyle(node).opacity);
@@ -481,9 +482,12 @@ describe("chat tab activity indicators", () => {
         === ${mountedChatCount - 1};`,
       { timeoutMs: 10_000, label: "chat unmounted after the close animation" },
     );
-    await runWait(`return spinnersOn() === 0;`, {
+    // A hidden renderer pauses the exiting bubble's CSS animation, so its
+    // snapshot can remain until the window is visible again. It is not live
+    // activity; every live chat/tab/aggregate spinner must already be gone.
+    await runWait(`return spinnersOn(false) === 0;`, {
       timeoutMs: 2_000,
-      label: "no visible spinners after the close",
+      label: "no live spinners after the close",
     });
   });
 });
