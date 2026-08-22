@@ -2889,3 +2889,23 @@ paths, deliberately independent:
   and include a local-network usage description. Unpackaged Electron dev runs
   can still be identified by macOS as Electron because Electron is the signed
   responsible application in that mode.
+
+### 2026-08-23 - Agents coordinate before they isolate (ADR 0063)
+
+- **The visible project folder stays the default.** Starting a chat never
+  creates a worktree. Agents see other active sessions in the project and
+  decide whether independent work can share the folder, should wait, or needs
+  an isolated worktree. This keeps presentations, documents, and ordinary
+  business work where non-technical users expect to find them.
+- **Sharing means actually sharing.** Sessions in one checkout share files,
+  Git state, whole-tree checkpoints, commits, and rollback. The app does not
+  imply per-agent ownership or build file-locking machinery. It serializes
+  checkpoint Git operations and describes rollback as checkout-wide.
+- **Isolation is role doctrine, not a universal mode.** Agents can be
+  shared-first, isolate-on-contention, or isolation-required. The mechanics
+  are identical across harnesses; Catamorphic owns top-level checkout
+  selection and harnesses receive the selected directory.
+- **Peer context is project-local and privacy-preserving.** Agents receive
+  compact active-session summaries and may read bounded peer transcripts.
+  Cross-project discovery is an explicit capability, never a default, and
+  incognito sessions remain invisible to other agents.
