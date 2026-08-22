@@ -468,9 +468,19 @@ describe("chat tab activity indicators", () => {
     await runWait(`return spinnersOn() > 0;`, {
       label: "spinner during the turn",
     });
+    const mountedChatCount = await run<number>(`
+      return $$('section[aria-label]')
+        .filter((el) => el.querySelector('[data-composer-input]')).length;
+    `);
     // Close the chat while the agent is still working: no orphaned
     // activity indicator may stay behind anywhere.
     await run(`pressKey('w', { metaKey: true }); return true;`);
+    await runWait(
+      `return $$('section[aria-label]')
+        .filter((el) => el.querySelector('[data-composer-input]')).length
+        === ${mountedChatCount - 1};`,
+      { timeoutMs: 10_000, label: "chat unmounted after the close animation" },
+    );
     await runWait(`return spinnersOn() === 0;`, {
       timeoutMs: 2_000,
       label: "no visible spinners after the close",
