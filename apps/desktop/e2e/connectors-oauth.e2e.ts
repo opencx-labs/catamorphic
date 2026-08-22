@@ -163,9 +163,6 @@ describe("connector OAuth", () => {
        return !!item && item.dataset.effective === 'ask';`,
       { label: "hello tool listed, auto → ask (no annotations)" },
     );
-    await app.screenshot(
-      "/private/tmp/claude-501/-Users-tabaza-Desktop-catamorphic/415f6510-da48-4924-8082-6f94d52a0c92/scratchpad/tool-policy-editor.png",
-    );
     // Turn it off.
     await run(`
       row().querySelector('[data-testid="tool-policy-tools"] li[data-tool="hello"] button[data-value="deny"]').click();

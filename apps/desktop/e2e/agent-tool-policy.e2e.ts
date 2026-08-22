@@ -58,9 +58,6 @@ const runWait = <T>(
   body: string,
   opts?: { timeoutMs?: number; label?: string },
 ) => app.waitFor<T>(`(() => { ${helpers}\n${body} })()`, opts);
-const SHOTS =
-  "/private/tmp/claude-501/-Users-tabaza-Desktop-catamorphic/415f6510-da48-4924-8082-6f94d52a0c92/scratchpad";
-
 let connectionId = "";
 let sharedId = "";
 
@@ -138,7 +135,6 @@ describe("agent tool access", () => {
        return !!li && li.dataset.effective === 'ask';`,
       { label: "hello listed with effective Ask" },
     );
-    await app.screenshot(`${SHOTS}/agent-tool-policy.png`);
     // Narrow it: Off. Effective → deny.
     await run(
       `rowFor(${JSON.stringify(connectionId)}).querySelector('li[data-tool="hello"] button[data-value="deny"]').click(); return true;`,

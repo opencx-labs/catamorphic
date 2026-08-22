@@ -43,9 +43,6 @@ const runWait = <T>(
   opts?: { timeoutMs?: number; label?: string },
 ) => app.waitFor<T>(`(() => { ${helpers}\n${body} })()`, opts);
 
-const SHOTS =
-  "/private/tmp/claude-501/-Users-tabaza-Desktop-catamorphic/415f6510-da48-4924-8082-6f94d52a0c92/scratchpad";
-
 describe("tool permissions", () => {
   it("boots, creates a project, a 'fake' connection, and a chat", async () => {
     await run(`window.focus(); return true;`);
@@ -87,7 +84,6 @@ describe("tool permissions", () => {
     await runWait(`return !!$('[data-testid="tool-permission-args"]');`, {
       label: "arguments shown",
     });
-    await app.screenshot(`${SHOTS}/tool-permission-modal.png`);
     await run(
       `$('[data-testid="tool-permission-always"]').click(); return true;`,
     );
