@@ -56,6 +56,10 @@ jobs:
         with:
           node-version: 24.13.0
       - run: bun install --frozen-lockfile
+      - name: Install desktop test window manager
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes openbox
       - run: bun run lint
       - run: bun run typecheck
       - run: bun run build
@@ -66,7 +70,9 @@ jobs:
       - name: PWA end-to-end tests
         run: bun run --cwd apps/pwa test:e2e
       - name: Desktop end-to-end tests (visible realism)
-        run: xvfb-run -a --server-args="-screen 0 1440x900x24" bun run --cwd apps/desktop test:e2e:visible
+        run: >-
+          xvfb-run -a --server-args="-screen 0 1440x900x24"
+          bash -c 'openbox >/dev/null 2>&1 & exec bun run --cwd apps/desktop test:e2e:visible'
       - name: Desktop end-to-end tests (hidden)
         run: xvfb-run -a --server-args="-screen 0 1440x900x24" bun run --cwd apps/desktop test:e2e
       - name: Publish packages to the local eval registry
