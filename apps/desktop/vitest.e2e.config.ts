@@ -21,6 +21,9 @@ export default defineConfig({
     fileParallelism: false,
     testTimeout: 120_000,
     hookTimeout: 120_000,
+    // A shared Electron launch failure otherwise consumes one hook timeout
+    // per file and obscures the first useful startup diagnostic in CI.
+    bail: process.env.CI === "true" ? 1 : 0,
     // Motion tests sample computed styles on a 25ms cadence; a loaded
     // machine (cold build in the same run) can starve the sampler past
     // an animation. One retry absorbs that without hiding real breaks.

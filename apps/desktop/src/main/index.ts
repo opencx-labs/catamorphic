@@ -487,6 +487,7 @@ app.whenReady().then(async () => {
     setInterval(refreshConnectionTokens, 4 * 60_000).unref();
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
+    console.error("[desktop] embedded server failed to start:", error);
     dialog.showErrorBox(
       "Catamorphic failed to start",
       `The embedded server could not boot.\n\n${message}`,

@@ -126,10 +126,14 @@ export async function launchApp(opts: LaunchOpts = {}): Promise<AppHandle> {
   );
   let output = "";
   child.stdout?.on("data", (chunk: Buffer) => {
-    output += chunk.toString();
+    const text = chunk.toString();
+    output += text;
+    if (process.env.CI === "true") process.stdout.write(text);
   });
   child.stderr?.on("data", (chunk: Buffer) => {
-    output += chunk.toString();
+    const text = chunk.toString();
+    output += text;
+    if (process.env.CI === "true") process.stderr.write(text);
   });
 
   try {

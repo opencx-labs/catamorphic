@@ -65,10 +65,10 @@ jobs:
       - run: bun run test
       - name: PWA end-to-end tests
         run: bun run --cwd apps/pwa test:e2e
-      - name: Desktop end-to-end tests (hidden)
-        run: xvfb-run -a --server-args="-screen 0 1440x900x24" bun run --cwd apps/desktop test:e2e
       - name: Desktop end-to-end tests (visible realism)
         run: xvfb-run -a --server-args="-screen 0 1440x900x24" bun run --cwd apps/desktop test:e2e:visible
+      - name: Desktop end-to-end tests (hidden)
+        run: xvfb-run -a --server-args="-screen 0 1440x900x24" bun run --cwd apps/desktop test:e2e
       - name: Publish packages to the local eval registry
         if: ${{ env.ANTHROPIC_API_KEY != '' || env.OPENAI_API_KEY != '' }}
         run: ./infra/local-registry/publish.sh
