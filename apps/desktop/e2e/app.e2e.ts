@@ -43,6 +43,10 @@ const helpers = `
       text: el.textContent.trim(),
     }));
   const spinnersOn = (includeExiting = true) => $$('svg.animate-spin').filter((el) => {
+    // Hidden Chromium can pause opacity transitions on mounted alternatives
+    // such as the inactive aggregate bubble. Inert/aria-hidden UI is not a
+    // live activity surface, regardless of the transition frame it retains.
+    if (!includeExiting && el.closest('[inert], [aria-hidden="true"]')) return false;
     if (!includeExiting && el.closest('.animate-bubble-out')) return false;
     let node = el, opacity = 1;
     while (node && node !== document.body) {
