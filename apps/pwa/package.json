@@ -5,6 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "vite --host",
+    "dev:bundle": "vite build --watch --emptyOutDir false --mode development",
     "build": "vite build",
     "preview": "vite preview",
     "typecheck": "tsgo --project ./tsconfig.json && tsgo --project ./tsconfig.node.json",

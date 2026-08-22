@@ -17,6 +17,17 @@
       "cache": false,
       "persistent": true
     },
+    "dev:bundle": {
+      "dependsOn": ["^build"],
+      "cache": false,
+      "persistent": true
+    },
+    "catamorphic-desktop#dev": {
+      "dependsOn": ["^build", "catamorphic-pwa#build"],
+      "with": ["catamorphic-pwa#dev:bundle"],
+      "cache": false,
+      "persistent": true
+    },
     "test": {
       "dependsOn": ["^build"]
     },

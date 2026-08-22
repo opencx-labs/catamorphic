@@ -51,8 +51,10 @@ A desktop QR opens this app at `/?pair=<code>` on the desktop's LAN
 listener (ADR 0060): `lib/pairing.ts` claims the code, stores the
 desktop connection plus the profile's remote-project links, and
 deep-links into the chat the desktop had focused. The desktop serves
-the BUILT bundle — after UI changes run `bun run build` here or the QR
-flow ships a stale app.
+the BUILT bundle, not this app's dev server. `bun run dev:desktop`
+keeps that bundle current for you (a watch build runs alongside the
+desktop); anywhere else, run `bun run build` here after UI changes or
+the QR flow ships a stale app.
 
 Failover semantics (troubleshooting "the desktop is asleep"): the claim
 also carries a mirror map (desktop projectId → its remote server), kept

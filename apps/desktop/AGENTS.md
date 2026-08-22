@@ -38,8 +38,12 @@ claim carries the profile's remote-project links + a
 localProjectId→remote mirror map, and the focused chat's context, so
 the phone deep-links into the open conversation and can fall back to a
 project's remote server when this desktop is asleep. Contract e2e:
-`e2e/mobile-pairing.e2e.ts`; the QR serves the BUILT PWA — rebuild
-`apps/pwa` after its UI changes.
+`e2e/mobile-pairing.e2e.ts`. The QR serves the BUILT PWA bundle, so
+`bun run dev:desktop` builds `apps/pwa` before Electron starts and keeps
+a `vite build --watch` running beside it (turbo.json's
+`catamorphic-desktop#dev`): edit PWA source, scan again, get the new
+code. Building the desktop any other way (bare `electron-vite dev`,
+`test:e2e`) does not, so rebuild `apps/pwa` by hand there.
 
 ## Verification Checklist
 
