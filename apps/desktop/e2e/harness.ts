@@ -3,6 +3,7 @@ import fs from "node:fs";
 import net from "node:net";
 import os from "node:os";
 import path from "node:path";
+import { electronLaunchArgs } from "./harness-args.js";
 
 /**
  * E2E harness: builds the app (electron-vite), launches the real Electron
@@ -103,7 +104,11 @@ export async function launchApp(opts: LaunchOpts = {}): Promise<AppHandle> {
   const port = await freeCdpPort();
   const child = spawn(
     electronBinary,
-    [".", `--remote-debugging-port=${port}`],
+    electronLaunchArgs({
+      cdpPort: port,
+      ci: process.env.CI,
+      platform: process.platform,
+    }),
     {
       cwd: DESKTOP_DIR,
       env: {
