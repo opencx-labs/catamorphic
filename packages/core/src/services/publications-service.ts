@@ -227,7 +227,9 @@ function isUniqueViolation(error: unknown): boolean {
 }
 
 function randomSlug(): string {
-  return randomBytes(9).toString("base64url");
+  // Hex preserves 72 bits of entropy while guaranteeing the first character
+  // satisfies SLUG_PATTERN. Base64url can begin with "-" or "_".
+  return randomBytes(9).toString("hex");
 }
 
 function mapPublication(row: {
