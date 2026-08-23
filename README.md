@@ -540,7 +540,7 @@ cd packages/fastify-plugin && bun run generate-spec
 cd ../api-client && bun run generate
 ```
 
-Catamorphic itself is embed-only: in production you run a **host app** that boots it in-process. For local development, the root `bun run dev` boots the dev infra: `docker compose up -d --wait` (Postgres + OTel collector + ClickHouse) plus the Cloudflare sandbox bridge (`:8787`). The desktop app runs with `bun run dev:desktop`. To iterate on catamorphic alongside your own host instead, link the packages via `file:` (see `.cursor/skills/using-catamorphic/SKILL.md` → "Local dev linking").
+Catamorphic itself is embed-only: in production you run a **host app** that boots it in-process. For local development, the root `bun run dev` boots the dev infra: `docker compose up -d --wait` (Postgres + OTel collector + ClickHouse) plus the Cloudflare sandbox bridge (`:8787`). The desktop app runs with `bun run dev:desktop`. To iterate on catamorphic alongside your own host instead, link the packages via `file:` (see `.agents/skills/using-catamorphic/SKILL.md` → "Local dev linking").
 
 ## Scripts
 

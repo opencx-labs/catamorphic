@@ -1,3 +1,8 @@
+---
+name: code-first-architecture
+description: Use when designing or changing Catamorphic workflow authoring, AST parsing, graph rendering, visual editing, or the boundary between workflow code and generated representations.
+---
+
 # Code-First Architecture
 
 ## Core Principle

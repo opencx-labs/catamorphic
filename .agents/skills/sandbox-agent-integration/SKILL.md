@@ -1,3 +1,8 @@
+---
+name: sandbox-agent-integration
+description: Use when changing Catamorphic sandbox providers, workflow execution sandboxes, coding-agent providers, dev sandbox lifecycle, sandbox instrumentation, or agent file staging.
+---
+
 # Sandbox & Agent Integration
 
 ## Overview

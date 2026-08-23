@@ -1,3 +1,8 @@
+---
+name: embedding-guide
+description: Use when embedding or composing Catamorphic's WorkflowEditor and headless React hooks inside a host UI, including editor props, state control, styling, and AI or run callbacks.
+---
+
 # Embedding Guide
 
 ## Overview

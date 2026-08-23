@@ -166,7 +166,7 @@ const db = createDatabase({ pool: hostPgPool });
 await migrateToLatest({ db, schema: "catamorphic" });
 ```
 
-For local development against a catamorphic checkout, install via `file:` links and rebuild after changes: see `.cursor/skills/using-catamorphic/SKILL.md` → "Local dev linking".
+For local development against a catamorphic checkout, install via `file:` links and rebuild after changes: see `.agents/skills/using-catamorphic/SKILL.md` → "Local dev linking".
 
 ## HTTP path: `@catamorphic/fastify-plugin`
 

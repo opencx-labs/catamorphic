@@ -106,9 +106,12 @@ How the three connect (setting up / troubleshooting, read in this order):
 ## Skills
 
 - `skills/embed-catamorphic/SKILL.md` — the public skill for embedding Catamorphic in a host product
-- `.cursor/skills/plugin-e2e-integration/SKILL.md` — business-agnostic end-to-end plugin integration flow
-- `.cursor/skills/using-catamorphic/SKILL.md` — embedding catamorphic in a host app (local dev linking)
-- `.cursor/skills/embedding-guide/SKILL.md`, `.cursor/skills/api-type-safety/SKILL.md`, `.cursor/skills/code-first-architecture/SKILL.md`, `.cursor/skills/database-conventions/SKILL.md`, `.cursor/skills/sandbox-agent-integration/SKILL.md`, `.cursor/skills/workflow-code-conventions/SKILL.md`
+- `.agents/skills/` — canonical repository-internal skills, following the
+  [Agent Skills](https://agentskills.io) layout. `.cursor/skills` is a
+  compatibility symlink to this directory.
+- `.agents/skills/plugin-e2e-integration/SKILL.md` — business-agnostic end-to-end plugin integration flow
+- `.agents/skills/using-catamorphic/SKILL.md` — embedding catamorphic in a host app (local dev linking)
+- `.agents/skills/embedding-guide/SKILL.md`, `.agents/skills/api-type-safety/SKILL.md`, `.agents/skills/code-first-architecture/SKILL.md`, `.agents/skills/database-conventions/SKILL.md`, `.agents/skills/sandbox-agent-integration/SKILL.md`, `.agents/skills/workflow-code-conventions/SKILL.md`
 
 Per-project seed skills that ship to every user project live in
 `packages/core/src/seeds.ts` (`SEED_SKILLS`): `catamorphic-projects`,
