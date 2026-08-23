@@ -314,10 +314,9 @@ describe("animate-before-unmount", () => {
           const stage = $('[data-testid="mobile-pairing-qr-stage"]');
           if (modal?.dataset.state === 'loading' && stage) {
             const panel = heading.closest('[role="dialog"]');
-            const stageRect = stage.getBoundingClientRect();
             loadingLayout = {
-              height: panel.getBoundingClientRect().height,
-              stage: { width: stageRect.width, height: stageRect.height },
+              height: panel.offsetHeight,
+              stage: { width: stage.offsetWidth, height: stage.offsetHeight },
             };
           }
         }
@@ -338,9 +337,8 @@ describe("animate-before-unmount", () => {
       while (!$('[data-testid="mobile-pairing-qr"]')) {
         await new Promise(requestAnimationFrame);
       }
-      const readyStageRect = $('[data-testid="mobile-pairing-qr-stage"]')
-        .getBoundingClientRect();
-      const readyHeight = panel.getBoundingClientRect().height;
+      const readyStage = $('[data-testid="mobile-pairing-qr-stage"]');
+      const readyHeight = panel.offsetHeight;
       const qrAnimation = getComputedStyle(
         $('[data-testid="mobile-pairing-qr"]'),
       ).animationName;
@@ -359,8 +357,8 @@ describe("animate-before-unmount", () => {
         readyHeight,
         loadingStage: loadingLayout.stage,
         readyStage: {
-          width: readyStageRect.width,
-          height: readyStageRect.height,
+          width: readyStage.offsetWidth,
+          height: readyStage.offsetHeight,
         },
         qrAnimation,
       };
@@ -368,14 +366,9 @@ describe("animate-before-unmount", () => {
     `);
     expect(samples.enterTransition).toBe(true);
     expect(samples.exitTransition).toBe(true);
-    expect(samples.readyHeight).toBeCloseTo(samples.loadingHeight, 0);
-    expect(samples.loadingStage.width).toBeCloseTo(240, 0);
-    expect(samples.loadingStage.height).toBeCloseTo(240, 0);
-    expect(samples.readyStage.width).toBeCloseTo(samples.loadingStage.width, 0);
-    expect(samples.readyStage.height).toBeCloseTo(
-      samples.loadingStage.height,
-      0,
-    );
+    expect(samples.readyHeight).toBe(samples.loadingHeight);
+    expect(samples.loadingStage).toEqual({ width: 240, height: 240 });
+    expect(samples.readyStage).toEqual(samples.loadingStage);
     expect(samples.qrAnimation).toBe("pairing-qr-in");
   });
 
