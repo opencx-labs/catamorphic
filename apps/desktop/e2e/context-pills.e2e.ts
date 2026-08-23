@@ -161,7 +161,7 @@ describe("context pills", () => {
       `hover(frontDock().querySelector('[data-testid="composer-pill"][data-pill-kind="paste"]')); return true;`,
     );
     const text = await runWait<string>(
-      `const well = $('[data-testid="pill-preview-text"]');
+      `const well = $('[data-testid="pill-preview"][data-open="true"] [data-testid="pill-preview-text"]');
        return well && well.getBoundingClientRect().height > 20 ? well.textContent : false;`,
       { label: "paste preview" },
     );
@@ -169,14 +169,17 @@ describe("context pills", () => {
     await run(
       `unhover(frontDock().querySelector('[data-testid="composer-pill"][data-pill-kind="paste"]')); return true;`,
     );
-    await runWait(`return !$('[data-testid="pill-preview"]');`, {
-      label: "preview closed",
-    });
+    await runWait(
+      `return !$('[data-testid="pill-preview"][data-open="true"]');`,
+      {
+        label: "preview closed",
+      },
+    );
     await run(
       `hover(frontDock().querySelector('[data-testid="composer-pill"][data-pill-kind="url"]')); return true;`,
     );
     const ref = await runWait<string>(
-      `const pop = $('[data-testid="pill-preview"]'); return pop ? pop.textContent : false;`,
+      `const pop = $('[data-testid="pill-preview"][data-open="true"]'); return pop ? pop.textContent : false;`,
       { label: "url preview" },
     );
     expect(ref).toContain("https://example.com/docs/page?x=1");
@@ -184,9 +187,12 @@ describe("context pills", () => {
     await run(
       `unhover(frontDock().querySelector('[data-testid="composer-pill"][data-pill-kind="url"]')); return true;`,
     );
-    await runWait(`return !$('[data-testid="pill-preview"]');`, {
-      label: "preview closed again",
-    });
+    await runWait(
+      `return !$('[data-testid="pill-preview"][data-open="true"]');`,
+      {
+        label: "preview closed again",
+      },
+    );
   });
 
   it("Backspace against a pill pops it with an exit animation; ⌘Z brings it back; ✕ removes too", async () => {
