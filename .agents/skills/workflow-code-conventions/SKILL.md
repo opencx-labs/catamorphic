@@ -1,3 +1,8 @@
+---
+name: workflow-code-conventions
+description: Use when creating, reviewing, or changing Catamorphic workflow definitions, step functions, boundaries, batches, pauses, child workflows, or workflow authoring metadata.
+---
+
 # Workflow Code Conventions
 
 ## Workflow Definitions

@@ -1,3 +1,8 @@
+---
+name: plugin-e2e-integration
+description: Use when integrating, debugging, or documenting discovery, attachment, configuration, sandbox staging, and execution of an external Catamorphic workflow plugin.
+---
+
 # Plugin E2E Integration (Business-Agnostic)
 
 ## Use This Skill When
@@ -50,4 +55,3 @@ This guide is intentionally domain-neutral. It applies to any plugin package tha
 - `packages/sandbox/src/run-executor.ts`
 - `packages/sandbox/src/coding-agent/codex-agent.ts`
 - `INTEGRATION.md`
-

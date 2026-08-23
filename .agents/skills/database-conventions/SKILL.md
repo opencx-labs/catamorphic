@@ -1,3 +1,8 @@
+---
+name: database-conventions
+description: Use when changing Catamorphic database connections, schemas, migrations, Kysely queries, migration execution, or generated database types.
+---
+
 # Database Conventions
 
 ## Stack
@@ -6,7 +11,7 @@
 - **Kysely** for type-safe SQL queries
 - **kysely-codegen** generates TypeScript types from the live database schema
 
-Catamorphic always lives in its own `catamorphic` schema (hosts mount it inside their own database). The `db:codegen` script in [packages/db/package.json](../../packages/db/package.json) passes `--include-pattern 'catamorphic.*' --default-schema=catamorphic` so the generated `DB` type is scoped to Catamorphic tables only and uses bare names (`projects`, `tenants`, …), independent of whatever else lives in the target database. Do not remove those flags — running codegen against a host DB without them will generate unqualified names for host tables and schema-qualified names for Catamorphic tables, breaking every query in `@catamorphic/core`.
+Catamorphic always lives in its own `catamorphic` schema (hosts mount it inside their own database). The `db:codegen` script in [packages/db/package.json](../../../packages/db/package.json) passes `--include-pattern 'catamorphic.*' --default-schema=catamorphic` so the generated `DB` type is scoped to Catamorphic tables only and uses bare names (`projects`, `tenants`, …), independent of whatever else lives in the target database. Do not remove those flags — running codegen against a host DB without them will generate unqualified names for host tables and schema-qualified names for Catamorphic tables, breaking every query in `@catamorphic/core`.
 
 ## Connection
 

@@ -1,3 +1,8 @@
+---
+name: api-type-safety
+description: Use when adding or changing Catamorphic Fastify routes, Zod request or response schemas, OpenAPI generation, generated API client types, or typed client calls.
+---
+
 # API Type Safety Pipeline
 
 ## Overview
