@@ -95,6 +95,19 @@ export type AgentDefinitionKind =
   | "e2e-fake";
 
 /**
+ * Default doctrine an agent follows when another session is active in the
+ * same project checkout. It guides the agent's decision; it does not reserve
+ * files or automatically move a session.
+ */
+export const AGENT_COORDINATION_STRATEGIES = [
+  "shared-first",
+  "isolate-on-contention",
+  "isolation-required",
+] as const;
+export type AgentCoordinationStrategy =
+  (typeof AGENT_COORDINATION_STRATEGIES)[number];
+
+/**
  * How a project agent authenticates:
  *  - `profile` (default): the running user's own personal credentials — the
  *    profile's matching auth for the harness. Requires per-user consent.
@@ -157,6 +170,8 @@ export function agentDefinitionSchema(opts?: { allowE2eFake?: boolean }) {
      * re-earn consent.
      */
     mode: z.enum(["read-only", "edit", "full-access"]).optional(),
+    /** Checkout-coordination doctrine. Absent = "shared-first". */
+    coordination: z.enum(AGENT_COORDINATION_STRATEGIES).optional(),
     /**
      * Claude Code auto-memory. Absent = OFF — memory is opt-in
      * (ADR 0056): accumulated memories change an agent's behavior over
@@ -215,6 +230,7 @@ export interface AgentDefinition {
   model?: string;
   effort?: "low" | "medium" | "high" | "xhigh" | "max";
   mode?: "read-only" | "edit" | "full-access";
+  coordination?: AgentCoordinationStrategy;
   memory?: boolean;
   description?: string;
   credentials?: AgentDefinitionCredentials;

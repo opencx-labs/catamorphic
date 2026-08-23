@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
+import type { AgentCoordinationStrategy } from "@catamorphic/core";
 import type { McpToolPolicy } from "@catamorphic/sandbox";
 import { safeStorage } from "electron";
 
@@ -84,6 +85,8 @@ export interface AgentConfig {
   instructions?: string;
   /** Operating mode; absent means "edit". */
   mode?: AgentModeSetting;
+  /** Checkout doctrine; absent means "shared-first". */
+  coordination?: AgentCoordinationStrategy;
   /**
    * Claude Code auto-memory; absent means OFF — memory is opt-in
    * (ADR 0056): accumulated memories change an agent's behavior over
@@ -141,6 +144,8 @@ export interface PublicAgentConfig {
   instructions: string;
   /** Operating mode (always materialized; default "edit"). */
   mode: AgentModeSetting;
+  /** Checkout-coordination doctrine (always materialized). */
+  coordination: AgentCoordinationStrategy;
   /** Claude Code auto-memory (always materialized; opt-in, default false). */
   memory: boolean;
   /** MCP connection assignment (always materialized; default "all"). */
@@ -189,6 +194,7 @@ export interface CreateAgentInput {
   apiKey?: string | null;
   instructions?: string;
   mode?: AgentModeSetting;
+  coordination?: AgentCoordinationStrategy;
   memory?: boolean;
   connections?: AgentConnectionsSetting;
   skills?: AgentSkillsSetting;
@@ -206,6 +212,7 @@ export interface UpdateAgentInput {
   /** New instructions; "" clears them. */
   instructions?: string;
   mode?: AgentModeSetting;
+  coordination?: AgentCoordinationStrategy;
   memory?: boolean;
   connections?: AgentConnectionsSetting;
   skills?: AgentSkillsSetting;
@@ -339,6 +346,9 @@ export class AgentsStore {
         ? { instructions: input.instructions.trim() }
         : {}),
       ...(input.mode && input.mode !== "edit" ? { mode: input.mode } : {}),
+      ...(input.coordination && input.coordination !== "shared-first"
+        ? { coordination: input.coordination }
+        : {}),
       ...(input.memory === true ? { memory: true } : {}),
       ...(input.connections ? { connections: input.connections } : {}),
       ...(input.skills ? { skills: input.skills } : {}),
@@ -370,6 +380,10 @@ export class AgentsStore {
     if (patch.mode !== undefined) {
       if (patch.mode === "edit") delete stored.mode;
       else stored.mode = patch.mode;
+    }
+    if (patch.coordination !== undefined) {
+      if (patch.coordination === "shared-first") delete stored.coordination;
+      else stored.coordination = patch.coordination;
     }
     if (patch.memory !== undefined) {
       if (patch.memory) stored.memory = true;
@@ -453,6 +467,7 @@ export function toPublicAgent(agent: AgentConfig): PublicAgentConfig {
     accepts: agentAccepts(agent),
     instructions: agent.instructions ?? "",
     mode: agent.mode ?? "edit",
+    coordination: agent.coordination ?? "shared-first",
     memory: agent.memory === true,
     connections: agent.connections ?? { mode: "all" },
     skills: agent.skills ?? { mode: "all" },

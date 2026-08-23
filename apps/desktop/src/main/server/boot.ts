@@ -1,4 +1,6 @@
+import { randomBytes } from "node:crypto";
 import fs from "node:fs";
+import path from "node:path";
 import { ToolPermissionBroker } from "@catamorphic/core";
 import type { DB } from "@catamorphic/db";
 import { DEFAULT_SCHEMA } from "@catamorphic/db";
@@ -36,11 +38,22 @@ import {
 } from "./host-skills.js";
 import type { DataPaths } from "./paths.js";
 import { ProjectRootsStore } from "./project-roots.js";
+import { SessionCheckouts } from "./session-checkouts.js";
 import {
   DESKTOP_MCP_TOOL_KINDS,
   DESKTOP_TRIGGER_KINDS,
   DesktopTriggers,
 } from "./triggers.js";
+import {
+  effectiveSessionAgentId,
+  isolationConflictPeerSessionIds,
+  type ProjectSessionContext,
+} from "./workspace-context-agent.js";
+import {
+  registerWorkspaceMcpRoute,
+  workspaceMcpAuthorizationMatches,
+  workspaceMcpCapability,
+} from "./workspace-mcp.js";
 import { WorkspaceStateStore } from "./workspace-state.js";
 
 /** The desktop app is single-tenant: one fixed identity for the machine. */
@@ -51,6 +64,8 @@ export interface EmbeddedServer {
   url: string;
   catamorphic: Catamorphic;
   projectRoots: ProjectRootsStore;
+  /** Desktop-local checkout assignment and Git worktree lifecycle. */
+  sessionCheckouts: SessionCheckouts;
   /** Per-project open-workspace snapshots (tabs, chats, ordering). */
   workspaceStates: WorkspaceStateStore;
   /** Dynamic roster of configured agents (per-profile agents.json files). */
@@ -106,6 +121,11 @@ export async function startEmbeddedServer(
   // the shared catamorphic schema never learns about filesystem paths.
   const projectRoots = new ProjectRootsStore(pglite);
   await projectRoots.init();
+  const sessionCheckouts = new SessionCheckouts({
+    pglite,
+    projectRoot: (projectId) => projectRoots.getSync(projectId),
+  });
+  await sessionCheckouts.init();
   const workspaceStates = new WorkspaceStateStore(pglite);
   await workspaceStates.init();
 
@@ -116,6 +136,10 @@ export async function startEmbeddedServer(
   // Known only after listen(); the resolver reads it lazily, and sessions
   // can only start once the server is up.
   let apiBaseUrl: string | undefined;
+  // Derive a distinct capability for each spawned Codex task. The loopback
+  // server also serves browser-visible HTTP, and an exposed task token must
+  // not authorize another task's terminal or checkout tools.
+  const workspaceMcpSecret = randomBytes(32);
   // Core's SecretsService only exists once createCatamorphic returns; the
   // registry reads it through this late-bound seam (same pattern as
   // apiBaseUrl above) for secret-credentialed project agents (ADR 0050).
@@ -125,6 +149,21 @@ export async function startEmbeddedServer(
   // Host-tier skills (ADR 0049) materialize from core's resolved set once
   // createCatamorphic returns; the registry reads them lazily (same seam).
   let hostSkillsRuntime: HostSkillsRuntime | undefined;
+  let sessionPeersResolver:
+    | ((
+        projectId: string,
+        sessionId: string,
+      ) => Promise<ProjectSessionContext[]>)
+    | undefined;
+  let requiresIsolatedCheckout: (
+    projectId: string,
+    sessionId: string,
+    checkoutPath: string,
+  ) => Promise<boolean> = async () => false;
+  let isolationConflictPeers: (
+    projectId: string,
+    sessionId: string,
+  ) => Promise<string[]> = async () => [];
   // Tool-permission asks (ADR 0054) park on this broker so REMOTE clients
   // (the companion app) can list and answer them over HTTP; the registry
   // races it against the desktop's own consent modal — first answer wins.
@@ -170,6 +209,21 @@ export async function startEmbeddedServer(
     // the URL.
     projectMcpUrl: (projectId) =>
       apiBaseUrl ? `${apiBaseUrl}/api/projects/${projectId}/mcp` : undefined,
+    workspaceMcpServer: (projectId, sessionId, agentId) =>
+      apiBaseUrl
+        ? {
+            transport: "http",
+            url: `${apiBaseUrl}/desktop/workspace-mcp/${encodeURIComponent(projectId)}/${encodeURIComponent(sessionId)}/${encodeURIComponent(agentId)}`,
+            headers: {
+              Authorization: `Bearer ${workspaceMcpCapability({
+                secret: workspaceMcpSecret,
+                projectId,
+                sessionId,
+                agentId,
+              })}`,
+            },
+          }
+        : undefined,
     // Project agents (`project:<id>:<slug>`, ADR 0050): definitions are
     // read from the project's folder; secrets resolve through core.
     projectRootPath: (projectId) => projectRoots.getSync(projectId),
@@ -179,6 +233,10 @@ export async function startEmbeddedServer(
     // The profile's personal skill tier (ADR 0056), read live per turn.
     userSkills: (profileId) =>
       userSkillInfos(profileConfig.userSkillsDir(profileId)),
+    sessionPeers: (projectId, sessionId) =>
+      sessionPeersResolver?.(projectId, sessionId) ?? Promise.resolve([]),
+    checkoutNotice: (_projectId, sessionId) =>
+      Promise.resolve(sessionCheckouts.takeRecoveryWarning(sessionId)),
   });
   if (e2eFakeAgent) {
     const agents = profileConfig.forDefaultProfile().agents;
@@ -201,8 +259,43 @@ export async function startEmbeddedServer(
     codingAgent: agentRegistry,
     // Host-execution agents (Claude Code, Codex) run right in the project's
     // user-visible folder.
-    hostProjectPathResolver: async (projectId) =>
-      (await projectRoots.get(projectId)) ?? undefined,
+    hostAgentCheckout: {
+      resolve: async (input) => {
+        const current = await sessionCheckouts.describe(input);
+        if (
+          await requiresIsolatedCheckout(
+            input.projectId,
+            input.sessionId,
+            current.path,
+          )
+        ) {
+          if (current.kind !== "primary") {
+            throw new Error(
+              "Isolation policy prevents sharing this assigned worktree with another running session. Choose another worktree or wait for that session to finish.",
+            );
+          }
+          const created = await sessionCheckouts.createManaged({
+            ...input,
+            ensureAvailable: async (checkoutPath) => {
+              if (
+                await requiresIsolatedCheckout(
+                  input.projectId,
+                  input.sessionId,
+                  checkoutPath,
+                )
+              ) {
+                throw new Error(
+                  "Isolation policy prevents sharing the new worktree with another running session.",
+                );
+              }
+            },
+          });
+          return created.path;
+        }
+        return current.path;
+      },
+      checkpoint: (input) => sessionCheckouts.checkpoint(input),
+    },
     appBundleStore: new FsBundleStore(paths.appBundles),
     // Local projects: the folder IS the store; remote projects sync their
     // store/ explicitly (Ship). No per-turn pull/ship into the local store.
@@ -225,10 +318,16 @@ export async function startEmbeddedServer(
       triggers.onAgentTurnSettled(event);
       // Linked projects converge with their remote after every settled
       // turn (ADR 0044); no-remote projects no-op on one row read.
-      catamorphic.core.remoteSync.syncInBackground(
-        { tenantId: DESKTOP_TENANT_ID, externalUserId: DESKTOP_USER_ID },
-        event.projectId,
-      );
+      const primary = projectRoots.getSync(event.projectId);
+      if (
+        primary &&
+        path.resolve(primary) === path.resolve(event.workingDirectory)
+      ) {
+        catamorphic.core.remoteSync.syncInBackground(
+          { tenantId: DESKTOP_TENANT_ID, externalUserId: DESKTOP_USER_ID },
+          event.projectId,
+        );
+      }
       // Local-first, synced (ADR 0061): the settled transcript mirrors to
       // the ADR 0055 remote link, so phones on that server see this chat
       // and can continue it there when this desktop is gone.
@@ -274,10 +373,158 @@ export async function startEmbeddedServer(
     console.log(`[desktop] Applied migrations: ${applied.join(", ")}`);
   }
 
+  const desktopIdentity = {
+    tenantId: DESKTOP_TENANT_ID,
+    externalUserId: DESKTOP_USER_ID,
+  };
+  isolationConflictPeers = async (projectId, sessionId) => {
+    const detail = await catamorphic.core.agentSessions?.get(
+      desktopIdentity,
+      projectId,
+      sessionId,
+    );
+    if (!detail) return [];
+    const peers = await catamorphic.core.agentSessions?.listPeers(
+      desktopIdentity,
+      projectId,
+      sessionId,
+    );
+    return isolationConflictPeerSessionIds({
+      projectId,
+      agentId: detail.agentId,
+      peers: (peers ?? [])
+        .filter(
+          (peer) => peer.running && !(incognitoSessions?.has(peer.id) ?? false),
+        )
+        .map((peer) => ({ id: peer.id, agentId: peer.agentId })),
+      defaultAgentId: (id) => agentRegistry.defaultAgentId(id),
+      coordinationForAgent: (id) => agentRegistry.coordinationForAgent(id),
+    });
+  };
+  requiresIsolatedCheckout = async (projectId, sessionId, checkoutPath) => {
+    const peerSessionIds = await isolationConflictPeers(projectId, sessionId);
+    return sessionCheckouts.isOccupied({
+      projectId,
+      sessionId,
+      path: checkoutPath,
+      peerSessionIds,
+    });
+  };
+  sessionPeersResolver = async (projectId, sessionId) => {
+    const peers =
+      (await catamorphic.core.agentSessions?.listPeers(
+        desktopIdentity,
+        projectId,
+        sessionId,
+      )) ?? [];
+    const visible = peers.filter(
+      (peer) => !(incognitoSessions?.has(peer.id) ?? false),
+    );
+    return Promise.all(
+      visible.map(async (peer) => {
+        const checkout = await sessionCheckouts.describe({
+          projectId,
+          sessionId: peer.id,
+        });
+        return {
+          ...peer,
+          checkout: { kind: checkout.kind, branch: checkout.branch },
+        };
+      }),
+    );
+  };
+
+  agentRegistry.workspaceToolkit?.setSessionCoordinationBridge({
+    list: (projectId, sessionId) =>
+      sessionPeersResolver?.(projectId, sessionId) ?? Promise.resolve([]),
+    read: async (projectId, ownSessionId, peerSessionId) => {
+      const peers = await sessionPeersResolver?.(projectId, ownSessionId);
+      if (!peers?.some((peer) => peer.id === peerSessionId)) return null;
+      const detail = await catamorphic.core.agentSessions?.get(
+        desktopIdentity,
+        projectId,
+        peerSessionId,
+      );
+      if (!detail) return null;
+      return {
+        title: detail.title,
+        messages: detail.messages.map((message) => ({
+          role: message.role,
+          content: message.content,
+        })),
+      };
+    },
+    setActivity: async (projectId, sessionId, activity) => {
+      await catamorphic.core.agentSessions?.setActivity(
+        desktopIdentity,
+        projectId,
+        sessionId,
+        activity,
+      );
+    },
+  });
+  agentRegistry.workspaceToolkit?.setCheckoutBridge({
+    current: (projectId, sessionId) =>
+      sessionCheckouts.describe({ projectId, sessionId }),
+    list: (projectId) => sessionCheckouts.list(projectId),
+    create: async (projectId, sessionId) => {
+      return sessionCheckouts.createManaged({
+        projectId,
+        sessionId,
+        ensureAvailable: async (checkoutPath) => {
+          if (
+            await requiresIsolatedCheckout(projectId, sessionId, checkoutPath)
+          ) {
+            throw new Error(
+              "Isolation policy prevents sharing the new worktree with another running session.",
+            );
+          }
+        },
+      });
+    },
+    use: (projectId, sessionId, checkoutPath) =>
+      sessionCheckouts.withAssignmentLock({
+        projectId,
+        operation: async () => {
+          if (
+            await requiresIsolatedCheckout(projectId, sessionId, checkoutPath)
+          ) {
+            throw new Error(
+              "Isolation policy prevents using a checkout occupied by another running session.",
+            );
+          }
+          return sessionCheckouts.adopt({
+            projectId,
+            sessionId,
+            path: checkoutPath,
+          });
+        },
+      }),
+    usePrimary: (projectId, sessionId) =>
+      sessionCheckouts.withAssignmentLock({
+        projectId,
+        operation: async () => {
+          const root = projectRoots.getSync(projectId);
+          if (!root) throw new Error(`Project '${projectId}' has no folder`);
+          if (await requiresIsolatedCheckout(projectId, sessionId, root)) {
+            throw new Error(
+              "Isolation policy prevents using the primary checkout while another protected session is running there.",
+            );
+          }
+          return sessionCheckouts.returnPrimary({ projectId, sessionId });
+        },
+      }),
+  });
+  agentRegistry.workspaceToolkit?.setSessionVisibility(
+    async (_projectId, sessionId) =>
+      !(incognitoSessions?.has(sessionId) ?? false),
+  );
+
   // The workspace toolkit's read_tab expands chat tabs into transcripts;
   // the chat store only exists from here on.
   agentRegistry.workspaceToolkit?.setChatTranscriptReader(
     async (projectId, sessionId) => {
+      if (incognitoSessions?.has(sessionId)) return null;
       const detail = await catamorphic.core.agentSessions?.get(
         { tenantId: DESKTOP_TENANT_ID, externalUserId: DESKTOP_USER_ID },
         projectId,
@@ -351,7 +598,18 @@ export async function startEmbeddedServer(
   // The agent's git tools (ADR 0044): explicit sync and PR creation on the
   // project's linked remote, through the provider-agnostic core service.
   agentRegistry.workspaceToolkit?.setGitBridge({
-    sync: async (projectId) => {
+    sync: async (projectId, sessionId) => {
+      const checkout = await sessionCheckouts.describe({
+        projectId,
+        sessionId,
+      });
+      if (checkout.kind !== "primary") {
+        return {
+          status: "isolated",
+          branch: checkout.branch,
+          note: "This session is isolated, so main was not synced. Use create_pull_request to share this worktree's changes.",
+        };
+      }
       const outcome = await catamorphic.core.remoteSync.sync(
         { tenantId: DESKTOP_TENANT_ID, externalUserId: DESKTOP_USER_ID },
         projectId,
@@ -363,12 +621,29 @@ export async function startEmbeddedServer(
           : {}),
       };
     },
-    createPullRequest: (projectId, input) =>
-      catamorphic.core.remoteSync.createPullRequest(
-        { tenantId: DESKTOP_TENANT_ID, externalUserId: DESKTOP_USER_ID },
+    createPullRequest: async (projectId, sessionId, input) => {
+      const checkout = await sessionCheckouts.describe({
         projectId,
-        input,
-      ),
+        sessionId,
+      });
+      if (checkout.kind === "primary") {
+        return catamorphic.core.remoteSync.createPullRequest(
+          desktopIdentity,
+          projectId,
+          input,
+        );
+      }
+      const prepared = await sessionCheckouts.preparePullRequest({
+        projectId,
+        sessionId,
+        message: input.title,
+      });
+      return catamorphic.core.remoteSync.createPullRequestFromRef(
+        desktopIdentity,
+        projectId,
+        { ...input, localRef: prepared.branch },
+      );
+    },
   });
 
   // Host-tier skills (ADR 0049): the desktop passes no hook, so this is the
@@ -408,6 +683,52 @@ export async function startEmbeddedServer(
     logger: { level: "warn" },
     bodyLimit: 96 * 1024 * 1024,
   });
+  registerWorkspaceMcpRoute(
+    app,
+    async ({ projectId, sessionId, agentId, authorization }) => {
+      if (
+        !workspaceMcpAuthorizationMatches({
+          secret: workspaceMcpSecret,
+          projectId,
+          sessionId,
+          agentId,
+          authorization,
+        })
+      ) {
+        return null;
+      }
+      const detail = await catamorphic.core.agentSessions?.get(
+        desktopIdentity,
+        projectId,
+        sessionId,
+      );
+      if (
+        !detail ||
+        effectiveSessionAgentId({
+          projectId,
+          agentId: detail.agentId,
+          defaultAgentId: (id) => agentRegistry.defaultAgentId(id),
+        }) !== agentId
+      ) {
+        return null;
+      }
+      const tools = agentRegistry.workspaceToolsForAgent(agentId);
+      if (!tools) return null;
+      const workingDirectory = await sessionCheckouts.resolve({
+        projectId,
+        sessionId,
+      });
+      return {
+        tools,
+        context: {
+          projectId,
+          sessionId,
+          ...(workingDirectory ? { workingDirectory } : {}),
+          caller: desktopIdentity,
+        },
+      };
+    },
+  );
   await app.register(cors, {
     origin: true,
     methods: ["GET", "HEAD", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
@@ -513,6 +834,7 @@ export async function startEmbeddedServer(
     url,
     catamorphic,
     projectRoots,
+    sessionCheckouts,
     workspaceStates,
     agentRegistry,
     triggers,

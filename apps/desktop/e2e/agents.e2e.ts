@@ -55,6 +55,21 @@ const runWait = <T>(
   opts?: { timeoutMs?: number; label?: string },
 ) => app.waitFor<T>(`(() => { ${helpers}\n${body} })()`, opts);
 
+const openFreshChat = async (label: string) => {
+  const previousId = await run<string | null>(
+    `return visibleDock()?.dataset.chatLocalId ?? null;`,
+  );
+  await run(`
+    pressKey('n', { metaKey: true });
+    return true;
+  `);
+  await runWait(
+    `const dock = visibleDock();
+     return !!dock && dock.dataset.chatLocalId !== ${JSON.stringify(previousId)};`,
+    { timeoutMs: 30_000, label },
+  );
+};
+
 const ensurePalette = async () => {
   await run(
     `if (!paletteInput()) pressKey('p', { metaKey: true }); return true;`,
@@ -1091,6 +1106,125 @@ describe("agents and profiles", () => {
       `return $$('[role="log"] div')
         .some((el) => el.textContent.trim() === 'Switched to Second Fake');`,
       { timeoutMs: 15_000, label: "agent-change marker in the timeline" },
+    );
+  });
+
+  it("checkpoints a worktree selected mid-turn and carries it into the next turn", async () => {
+    await run(`
+      return window.catamorphicDesktop.agentsCreate({
+        name: 'Host Fake',
+        harness: 'codex',
+        auth: 'local',
+        coordination: 'isolate-on-contention'
+      }).then(async (agent) => {
+        const registry = await window.catamorphicDesktop.agentsList();
+        await Promise.all(Object.keys(registry.projectDefaults ?? {}).map(
+          (projectId) => window.catamorphicDesktop.agentsSetProjectDefault(
+            projectId,
+            agent.id,
+          ),
+        ));
+        await window.catamorphicDesktop.agentsSetDefault(agent.id);
+      });
+    `);
+
+    await openFreshChat("first host chat");
+    await run(`
+      const ta = visibleDock().querySelector('[data-composer-input]');
+      setReactValue(ta, 'respond slowly and hold for coordination');
+      ta.closest('form').requestSubmit();
+      return true;
+    `);
+    await runWait(
+      `return $$('[role="log"] article')
+        .some((el) => el.textContent.includes('Working on it, give me a moment.'));`,
+      { timeoutMs: 30_000, label: "first host agent running" },
+    );
+
+    await openFreshChat("second host chat");
+    await run(`
+      const ta = visibleDock().querySelector('[data-composer-input]');
+      setReactValue(ta, 'coordinate worktree');
+      ta.closest('form').requestSubmit();
+      return true;
+    `);
+    const coordinationResult = await runWait<string>(
+      `const result = $$('[role="log"] article').find((el) =>
+        el.textContent.includes('coordination result:') ||
+        el.textContent.includes('coordination tools unavailable') ||
+        el.textContent.includes('failed'));
+       return result?.textContent || false;`,
+      { timeoutMs: 30_000, label: "coordination agent response" },
+    );
+    if (
+      !coordinationResult.includes('"running":true') ||
+      !coordinationResult.includes('"kind":"managed"')
+    ) {
+      throw new Error(`Unexpected coordination result: ${coordinationResult}`);
+    }
+
+    await run(`
+      const ta = visibleDock().querySelector('[data-composer-input]');
+      setReactValue(ta, 'terminal: git show --format= --name-only HEAD && pwd');
+      ta.closest('form').requestSubmit();
+      return true;
+    `);
+    await runWait(
+      `return $$('[role="log"] article').some((el) =>
+        el.textContent.includes('terminal result:') &&
+        el.textContent.includes('coordination-same-turn.txt') &&
+        el.textContent.includes('/.catamorphic/worktrees/'));`,
+      {
+        timeoutMs: 30_000,
+        label: "same-turn worktree edit checkpointed before next turn",
+      },
+    );
+    await runWait(
+      `const badge = visibleDock()?.querySelector('[data-testid="chat-checkout-badge"]');
+       return badge?.textContent.includes('catamorphic/');`,
+      { label: "active chat isolated branch badge" },
+    );
+  });
+
+  it("keeps incognito chats out of agent coordination surfaces", async () => {
+    await ensurePalette();
+    await resetPalette();
+    await run(
+      `setReactValue(paletteInput(), 'New incognito chat'); return true;`,
+    );
+    await runWait(pickOption("New incognito chat"), {
+      label: "new incognito chat action",
+    });
+    await runWait(
+      `return !!visibleDock() && visibleDock().textContent.includes('Incognito');`,
+      { label: "incognito chat open" },
+    );
+    await run(`
+      const ta = visibleDock().querySelector('[data-composer-input]');
+      setReactValue(ta, 'respond slowly and wait for interruption private-marker');
+      ta.closest('form').requestSubmit();
+      return true;
+    `);
+    await runWait(
+      `return $$('[role="log"] article')
+        .some((el) => el.textContent.includes('Working on it, give me a moment.'));`,
+      { timeoutMs: 30_000, label: "incognito agent running" },
+    );
+
+    await openFreshChat("normal privacy chat");
+    await run(`
+      const ta = visibleDock().querySelector('[data-composer-input]');
+      setReactValue(ta, 'inspect coordination privacy');
+      ta.closest('form').requestSubmit();
+      return true;
+    `);
+    await runWait(
+      `const result = $$('[role="log"] article').find((el) =>
+         el.textContent.includes('privacy result:'));
+       return !!result &&
+         !result.textContent.includes('private-marker') &&
+         !result.textContent.includes('Private marker');`,
+      { timeoutMs: 30_000, label: "incognito absent from agent surfaces" },
     );
   });
 });

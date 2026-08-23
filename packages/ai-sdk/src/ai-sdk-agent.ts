@@ -281,6 +281,7 @@ export class AiSdkCodingAgent implements CodingAgentProvider {
     const scopedConfigs = this.opts.mcpServersForSession?.({
       projectId: opts.projectId,
       sessionId: opts.sessionId,
+      workingDirectory: opts.workingDirectory,
       ...(opts.caller ? { caller: opts.caller } : {}),
     });
     const scopedMcp: ConnectedMcpServer[] = [];
@@ -313,6 +314,7 @@ export class AiSdkCodingAgent implements CodingAgentProvider {
         {
           projectId: opts.projectId,
           sessionId: opts.sessionId,
+          workingDirectory: opts.workingDirectory,
           ...(opts.caller ? { caller: opts.caller } : {}),
         },
         mcpTools,

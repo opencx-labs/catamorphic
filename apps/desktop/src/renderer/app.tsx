@@ -10,6 +10,7 @@ import {
   ChevronRight,
   Columns2,
   FolderPlus,
+  GitBranch,
   LayoutGrid,
   Link2,
   MessageSquare,
@@ -88,6 +89,7 @@ import {
   type Profile,
   type ProfilesData,
   type ProjectAgentInfo,
+  type SessionCheckoutInfo,
   type SidebarConfig,
   type SidebarMenuEntry,
   type SidebarSectionConfig,
@@ -4952,6 +4954,19 @@ function SessionsNav({
 }) {
   const sessionsQuery = useAgentSessions(projectId);
   const sessions = sessionsQuery.data?.items ?? [];
+  const [checkouts, setCheckouts] = useState<SessionCheckoutInfo[]>([]);
+  useEffect(() => {
+    const load = () => {
+      void desktopApi.sessionCheckouts(projectId).then(setCheckouts);
+    };
+    load();
+    return desktopApi.onGitChanged((event) => {
+      if (event.projectId === projectId) load();
+    });
+  }, [projectId]);
+  const checkoutBySession = new Map(
+    checkouts.map((checkout) => [checkout.sessionId, checkout]),
+  );
   const isEmpty = sessions.length === 0;
   useEffect(() => {
     onEmptyChange?.(isEmpty);
@@ -4979,6 +4994,16 @@ function SessionsNav({
               className="size-3.5 shrink-0"
             />
             <AnimatedTitle text={sessionLabel(session)} />
+            {checkoutBySession.get(session.id) ? (
+              <span className="ml-auto flex max-w-28 shrink-0 items-center gap-1 truncate rounded bg-bg-inset px-1.5 py-0.5 text-[10px] text-fg-faint">
+                <GitBranch className="size-2.5 shrink-0" />
+                <span className="truncate">
+                  {checkoutBySession.get(session.id)?.kind === "external"
+                    ? "External"
+                    : (checkoutBySession.get(session.id)?.branch ?? "Worktree")}
+                </span>
+              </span>
+            ) : null}
           </button>
         </li>
       ))}

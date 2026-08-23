@@ -113,6 +113,11 @@ export interface ProjectAgentInfo {
   effort: "low" | "medium" | "high" | "xhigh" | "max" | null;
   /** Normalized operating mode (ADR 0056); null = the "edit" default. */
   mode: "read-only" | "edit" | "full-access" | null;
+  coordination:
+    | "shared-first"
+    | "isolate-on-contention"
+    | "isolation-required"
+    | null;
   /** Claude Code auto-memory; null = the definition doesn't say (off). */
   memory: boolean | null;
   credentialsSource: "profile" | "secret" | "local";
@@ -417,6 +422,7 @@ export function registerIpcHandlers(
       model: definition?.model ?? null,
       effort: definition?.effort ?? null,
       mode: definition?.mode ?? null,
+      coordination: definition?.coordination ?? null,
       memory: definition?.memory ?? null,
       credentialsSource: source,
       secretName: definition?.credentials?.secret ?? null,
@@ -1654,6 +1660,12 @@ export function registerIpcHandlers(
       if (!rootPath) return { available: false, worktrees: [] };
       return gitOverview(rootPath);
     },
+  );
+
+  ipcMain.handle(
+    "catamorphic:session-checkouts",
+    async (_event, projectId: string) =>
+      (await state.current?.sessionCheckouts.assigned(projectId)) ?? [],
   );
 
   ipcMain.handle(

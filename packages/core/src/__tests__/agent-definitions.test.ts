@@ -12,6 +12,21 @@ const base = {
 } as const;
 
 describe("validateAgentDefinition", () => {
+  it("accepts checkout coordination doctrine and rejects unknown strategies", () => {
+    const valid = validateAgentDefinition({
+      ...base,
+      coordination: "isolate-on-contention",
+    });
+    expect(valid).toMatchObject({
+      definition: { coordination: "isolate-on-contention" },
+    });
+
+    const invalid = validateAgentDefinition({
+      ...base,
+      coordination: "worktree-every-time",
+    });
+    expect("error" in invalid).toBe(true);
+  });
   it("accepts a minimal definition", () => {
     const result = validateAgentDefinition(base);
     expect(result).toEqual({

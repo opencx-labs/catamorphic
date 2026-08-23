@@ -90,6 +90,17 @@ workspace itself: browser tabs, terminals, `open_surface`, `point_at`.
 (ADRs [0038](docs/decisions/0038-coding-agent-registry-and-host-execution.md),
 [0042](docs/decisions/0042-parameterized-trigger-kinds-and-workflow-tools-mcp.md))
 
+Concurrent sessions start in the same visible project checkout. Before a
+turn, each agent sees the other active sessions in that project and can read
+their bounded transcripts. It can keep sharing the folder, wait, or use the
+same harness-neutral tools to create or adopt a Git worktree. Per-agent
+coordination doctrine ranges from `shared-first` to `isolation-required`, so
+non-technical roles can stay in one familiar folder while engineering agents
+isolate only when needed. Shared sessions deliberately share files, Git
+state, checkpoint commits, and rollback; Catamorphic does not pretend those
+changes belong to one agent. (ADR
+[0063](docs/decisions/0063-agent-checkout-coordination.md))
+
 **Project agent definitions**: an agent can be a work product. Committed
 `agents/<slug>.json` files (plus an optional `agents/<slug>.md` persona)
 version with the project and appear in every collaborator's picker. A
@@ -128,13 +139,16 @@ polished, accessible components with zero CSS.
 Import a real monorepo and use the desktop as your daily driver. The
 Claude Code harness runs at full fidelity: the SDK's own preset system
 prompt, and the repo's CLAUDE.md, `.claude/` skills, agents, commands, and
-settings load exactly as in the CLI. Worktrees are first-class (discovered,
-listed, diffed). Diff tabs render in Monaco; the sidebar has Changes and
-Pull Requests sections; PR review opens per-file diffs through the
-CodeHost seam. Terminals are real PTYs with shell integration (OSC 133);
-the embedded browser and the command palette round out the shell. All of
-it degrades quietly for non-technical users.
-(ADR [0045](docs/decisions/0045-desktop-as-dev-shell.md))
+settings load exactly as in the CLI. Worktrees are first-class: discovered,
+listed, diffed, and assignable by agents when concurrent work needs
+isolation. Checkout management is harness-neutral, so Claude Code, Codex,
+and the built-in agent follow the same policy. Diff tabs render in Monaco;
+the sidebar has Changes and Pull Requests sections; PR review opens per-file
+diffs through the CodeHost seam. Terminals are real PTYs with shell
+integration (OSC 133); the embedded browser and the command palette round
+out the shell. All of it degrades quietly for non-technical users.
+(ADRs [0045](docs/decisions/0045-desktop-as-dev-shell.md),
+[0063](docs/decisions/0063-agent-checkout-coordination.md))
 
 ## Your product, your feel and doctrine (embedding)
 

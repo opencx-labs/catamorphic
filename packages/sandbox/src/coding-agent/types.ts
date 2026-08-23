@@ -226,6 +226,8 @@ export interface ExtraToolContext {
   projectId: string;
   /** Host-side chat session id (see {@link StartSessionOpts.sessionId}). */
   sessionId?: string;
+  /** Checkout or sandbox directory selected by the host for this turn. */
+  workingDirectory?: string;
   /** Who the session serves (see {@link StartSessionOpts.caller}). */
   caller?: SessionCaller;
 }

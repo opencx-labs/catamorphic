@@ -207,7 +207,11 @@ export class E2eFakeCodingAgent implements CodingAgentProvider {
       workingDirectory: opts.workingDirectory,
       askedQuestion: false,
       interrupted: false,
-      toolContext: { projectId: opts.projectId, sessionId: opts.sessionId },
+      toolContext: {
+        projectId: opts.projectId,
+        sessionId: opts.sessionId,
+        workingDirectory: opts.workingDirectory,
+      },
     });
     return {
       providerSessionId,
@@ -230,6 +234,8 @@ export class E2eFakeCodingAgent implements CodingAgentProvider {
       yield { type: "error", content: "Session not found" };
       return;
     }
+    state.workingDirectory = session.workingDirectory;
+    state.toolContext.workingDirectory = session.workingDirectory;
     state.interrupted = false;
     state.lastTurn = { message, ...(opts ? { opts } : {}) };
     const prompt = message.toLowerCase();
@@ -430,13 +436,22 @@ export class E2eFakeCodingAgent implements CodingAgentProvider {
     // (spinners, minimize, mode flips, queueing, interrupts) before the
     // agent completes. Interruptible: the sleep polls the abort flag.
     if (prompt.includes("slowly")) {
-      yield { type: "title", content: "Slow burn" };
+      yield {
+        type: "title",
+        content: prompt.includes("private-marker")
+          ? "Private marker"
+          : "Slow burn",
+      };
       yield { type: "text", content: "Working on it, give me a moment." };
       yield { type: "command", content: "sleep" };
       // Hidden Chromium renderers can throttle DOM updates heavily on loaded
       // CI runners. Keep the interruption fixture alive long enough for its
       // send-now control to render; ordinary slow-turn tests retain 4 seconds.
-      const delayMs = prompt.includes("wait for interruption") ? 30_000 : 4000;
+      const delayMs = prompt.includes("hold for coordination")
+        ? 90_000
+        : prompt.includes("wait for interruption")
+          ? 30_000
+          : 4000;
       const deadline = Date.now() + delayMs;
       while (Date.now() < deadline && !state.interrupted) {
         await new Promise((resolve) => setTimeout(resolve, 100));
@@ -447,6 +462,63 @@ export class E2eFakeCodingAgent implements CodingAgentProvider {
         return;
       }
       yield { type: "text", content: "Done after a long think." };
+      yield { type: "done" };
+      return;
+    }
+
+    if (prompt.includes("coordinate worktree")) {
+      const listSessions = this.workspaceTools.find(
+        (candidate) => candidate.name === "list_project_sessions",
+      );
+      const createWorktree = this.workspaceTools.find(
+        (candidate) => candidate.name === "create_worktree",
+      );
+      if (!listSessions || !createWorktree) {
+        yield { type: "error", content: "coordination tools unavailable" };
+        yield { type: "done" };
+        return;
+      }
+      const peers = await listSessions.execute({}, state.toolContext);
+      const checkout = await createWorktree.execute({}, state.toolContext);
+      if (
+        checkout &&
+        typeof checkout === "object" &&
+        "path" in checkout &&
+        typeof checkout.path === "string"
+      ) {
+        const filePath = path.join(checkout.path, "coordination-same-turn.txt");
+        fs.writeFileSync(filePath, "created after checkout transition\n");
+        yield { type: "file_edit", content: "write", filePath };
+      }
+      yield { type: "title", content: "Coordinating work" };
+      yield {
+        type: "text",
+        content: `coordination result: ${JSON.stringify({ peers, checkout })}`,
+      };
+      yield { type: "done" };
+      return;
+    }
+
+    if (prompt.includes("inspect coordination privacy")) {
+      const listSessions = this.workspaceTools.find(
+        (candidate) => candidate.name === "list_project_sessions",
+      );
+      const overview = this.workspaceTools.find(
+        (candidate) => candidate.name === "workspace_overview",
+      );
+      if (!listSessions || !overview) {
+        yield { type: "error", content: "coordination tools unavailable" };
+        yield { type: "done" };
+        return;
+      }
+      yield { type: "title", content: "Checking privacy" };
+      yield {
+        type: "text",
+        content: `privacy result: ${JSON.stringify({
+          peers: await listSessions.execute({}, state.toolContext),
+          overview: await overview.execute({}, state.toolContext),
+        })}`,
+      };
       yield { type: "done" };
       return;
     }

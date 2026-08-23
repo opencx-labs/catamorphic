@@ -776,6 +776,8 @@ export const AgentSessionSchema = z.object({
   icon: z.string().nullable(),
   parentSessionId: z.string().uuid().nullable(),
   status: z.enum(["active", "closed"]),
+  activity: z.string().nullable(),
+  running: z.boolean(),
   baseCommitSha: z.string().length(40).nullable(),
   createdAt: z.string().datetime(),
   updatedAt: z.string().datetime(),
@@ -783,6 +785,21 @@ export const AgentSessionSchema = z.object({
 
 export const AgentSessionIdParamsSchema = ProjectIdParamsSchema.extend({
   sessionId: z.string().uuid(),
+});
+
+export const AgentSessionPeerSchema = z.object({
+  id: z.string().uuid(),
+  projectId: z.string().uuid(),
+  title: z.string().nullable(),
+  agentId: z.string().nullable(),
+  running: z.boolean(),
+  task: z.string().max(240).nullable(),
+  activity: z.string().max(500).nullable(),
+  updatedAt: z.string().datetime(),
+});
+
+export const UpdateAgentSessionActivitySchema = z.object({
+  activity: z.string().max(500).nullable(),
 });
 
 export const CreateAgentSessionSchema = z.object({

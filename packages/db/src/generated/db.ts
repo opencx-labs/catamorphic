@@ -55,6 +55,7 @@ export interface AgentMessages {
 }
 
 export interface AgentSessions {
+  activity: string | null;
   agent_id: string | null;
   base_commit_sha: string | null;
   created_at: Generated<Timestamp>;

@@ -3713,6 +3713,8 @@ export interface paths {
                                 parentSessionId: string | null;
                                 /** @enum {string} */
                                 status: "active" | "closed";
+                                activity: string | null;
+                                running: boolean;
                                 baseCommitSha: string | null;
                                 /** Format: date-time */
                                 createdAt: string;
@@ -3782,6 +3784,8 @@ export interface paths {
                             parentSessionId: string | null;
                             /** @enum {string} */
                             status: "active" | "closed";
+                            activity: string | null;
+                            running: boolean;
                             baseCommitSha: string | null;
                             /** Format: date-time */
                             createdAt: string;
@@ -3897,6 +3901,8 @@ export interface paths {
                             parentSessionId: string | null;
                             /** @enum {string} */
                             status: "active" | "closed";
+                            activity: string | null;
+                            running: boolean;
                             baseCommitSha: string | null;
                             /** Format: date-time */
                             createdAt: string;
@@ -3992,6 +3998,8 @@ export interface paths {
                             parentSessionId: string | null;
                             /** @enum {string} */
                             status: "active" | "closed";
+                            activity: string | null;
+                            running: boolean;
                             baseCommitSha: string | null;
                             /** Format: date-time */
                             createdAt: string;
@@ -4078,6 +4086,8 @@ export interface paths {
                             parentSessionId: string | null;
                             /** @enum {string} */
                             status: "active" | "closed";
+                            activity: string | null;
+                            running: boolean;
                             baseCommitSha: string | null;
                             /** Format: date-time */
                             createdAt: string;
@@ -4157,6 +4167,8 @@ export interface paths {
                             parentSessionId: string | null;
                             /** @enum {string} */
                             status: "active" | "closed";
+                            activity: string | null;
+                            running: boolean;
                             baseCommitSha: string | null;
                             /** Format: date-time */
                             createdAt: string;
@@ -4189,6 +4201,147 @@ export interface paths {
                 };
                 /** @description Default Response */
                 409: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                503: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                        };
+                    };
+                };
+            };
+        };
+        trace?: never;
+    };
+    "/api/projects/{projectId}/agent/sessions/{sessionId}/peers": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    projectId: string;
+                    sessionId: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Default Response */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            /** Format: uuid */
+                            id: string;
+                            /** Format: uuid */
+                            projectId: string;
+                            title: string | null;
+                            agentId: string | null;
+                            running: boolean;
+                            task: string | null;
+                            activity: string | null;
+                            /** Format: date-time */
+                            updatedAt: string;
+                        }[];
+                    };
+                };
+                /** @description Default Response */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                503: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                        };
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/projects/{projectId}/agent/sessions/{sessionId}/activity": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    projectId: string;
+                    sessionId: string;
+                };
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": {
+                        activity: string | null;
+                    };
+                };
+            };
+            responses: {
+                /** @description Default Response */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            /** @enum {boolean} */
+                            ok: true;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                404: {
                     headers: {
                         [name: string]: unknown;
                     };
@@ -4637,6 +4790,8 @@ export interface paths {
                             parentSessionId: string | null;
                             /** @enum {string} */
                             status: "active" | "closed";
+                            activity: string | null;
+                            running: boolean;
                             baseCommitSha: string | null;
                             /** Format: date-time */
                             createdAt: string;

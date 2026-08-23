@@ -1,4 +1,5 @@
 import crypto from "node:crypto";
+import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { type IPty, spawn as spawnPty } from "@lydell/node-pty";
@@ -88,7 +89,10 @@ function defaultShell(): string {
 
 /** Main-side handle the agent workspace bridge drives terminals with. */
 export interface AgentTerminals {
-  create(projectId: string): Promise<{ sessionId: string; cwd: string }>;
+  create(
+    projectId: string,
+    workingDirectory?: string,
+  ): Promise<{ sessionId: string; cwd: string }>;
   /** Write to an agent-owned session only (the default input path). */
   write(sessionId: string, data: string): boolean;
   /**
@@ -206,6 +210,7 @@ export function registerTerminalSupport(
 
   const spawnSession = async (input: {
     projectId?: string;
+    workingDirectory?: string;
     cols?: number;
     rows?: number;
     sender: WebContents | null;
@@ -214,7 +219,13 @@ export function registerTerminalSupport(
     const rootPath = input.projectId
       ? await state.current?.projectRoots.get(input.projectId)
       : null;
-    const cwd = rootPath ?? os.homedir();
+    const requestedDirectory = input.workingDirectory
+      ? await fs.access(input.workingDirectory).then(
+          () => input.workingDirectory,
+          () => undefined,
+        )
+      : undefined;
+    const cwd = requestedDirectory ?? rootPath ?? os.homedir();
     const shell = defaultShell();
     // Agent terminals spawn with OSC 133 shell integration for exact
     // busy/exit tracking; user terminals stay exactly as the user's
@@ -415,9 +426,10 @@ export function registerTerminalSupport(
   }, 500);
 
   const agentTerminals: AgentTerminals = {
-    create: (projectId) =>
+    create: (projectId, workingDirectory) =>
       spawnSession({
         projectId,
+        workingDirectory,
         cols: 100,
         rows: 30,
         sender: null,

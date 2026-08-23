@@ -63,6 +63,35 @@ describe("agent routes", () => {
     });
   });
 
+  describe("agent session coordination", () => {
+    it("registers peer listing and activity routes", async () => {
+      const app = await buildApp();
+      const peers = await app.inject({
+        method: "GET",
+        url: `/api/projects/${PROJECT_ID}/agent/sessions/${SESSION_ID}/peers`,
+      });
+      const activity = await app.inject({
+        method: "PATCH",
+        url: `/api/projects/${PROJECT_ID}/agent/sessions/${SESSION_ID}/activity`,
+        payload: { activity: "Editing the renewal deck" },
+      });
+      expect(peers.statusCode).toBe(503);
+      expect(activity.statusCode).toBe(503);
+      await app.close();
+    });
+
+    it("bounds session activity", async () => {
+      const app = await buildApp();
+      const response = await app.inject({
+        method: "PATCH",
+        url: `/api/projects/${PROJECT_ID}/agent/sessions/${SESSION_ID}/activity`,
+        payload: { activity: "x".repeat(501) },
+      });
+      expect(response.statusCode).toBe(400);
+      await app.close();
+    });
+  });
+
   describe("POST /api/projects/:projectId/agent/sessions/:sessionId/messages", () => {
     it("responds 503 when no coding agent is configured", async () => {
       const app = await buildApp();

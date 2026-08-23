@@ -12,9 +12,10 @@
   permission round-trips, background tasks — without model calls. Worth
   building once; every harness regression class lands in it.
 - **Dev-shell follow-ups (ADR 0045).** PR review depth on the CodeHost
-  seam: inline comments, approvals, merge-from-app; a worktree
-  create/remove surface (today worktrees are made by agents/terminals and
-  only *shown*); diff-tab niceties (stage/discard hunks, open-file jump);
+  seam: inline comments, approvals, merge-from-app; a human-facing worktree
+  cleanup surface (agents can create and adopt worktrees, but Catamorphic
+  intentionally never removes an external worktree automatically); diff-tab
+  niceties (stage/discard hunks, open-file jump);
   an isomorphic-git fallback for the read surfaces so "Changes" works
   without system git; right-click beyond the sidebar (tabs, chat rows,
   editor). Also consider surfacing which sidebar layer is active

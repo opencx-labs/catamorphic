@@ -300,15 +300,70 @@ describe("ClaudeCodeAgent", () => {
       expect.arrayContaining(["Bash", "PowerShell", "Monitor"]),
     );
 
-    // A session resurrected after a host restart (no stored context) runs
-    // without the workspace server — the built-ins come back so the agent
-    // still has a shell.
+    // A session resurrected after a host restart reconstructs its workspace
+    // context from ProviderSession, so it keeps the same terminal surface.
     queryMock.mockReturnValueOnce(scriptedQuery([successResult]));
     await collect(agent, "Continue");
     options = lastQueryOptions();
-    expect(options.allowedTools).toContain("Bash");
-    expect(options.allowedTools).not.toContain("mcp__workspace__run_terminal");
-    expect(options.disallowedTools).toBeUndefined();
+    expect(options.allowedTools).toContain("mcp__workspace__run_terminal");
+    expect(options.allowedTools).not.toContain("Bash");
+    expect(options.disallowedTools).toEqual(
+      expect.arrayContaining(["Bash", "PowerShell", "Monitor"]),
+    );
+  });
+
+  it("refreshes workspace context when the host changes checkout", async () => {
+    const contexts: unknown[] = [];
+    const agent = new ClaudeCodeAgent({
+      mcpServersForSession: (context) => {
+        contexts.push({ ...context });
+        return {};
+      },
+    });
+    const started = await agent.startSession({
+      projectId: "project-1",
+      userId: "user-1",
+      sandboxId: "sandbox-1",
+      sessionId: "chat-1",
+      workingDirectory: "/workspace/project",
+      caller: { tenantId: "tenant-1", externalUserId: "user-1" },
+    });
+    const startedId = started.providerSessionId;
+    if (!startedId) throw new Error("expected a chosen session id");
+    queryMock.mockReturnValueOnce(
+      scriptedQuery([
+        initMessage(startedId),
+        { ...successResult, session_id: startedId },
+      ]),
+    );
+    for await (const _event of agent.sendMessage(started, "First step")) {
+      // drain
+    }
+
+    queryMock.mockReturnValueOnce(scriptedQuery([successResult]));
+    const moved = {
+      ...started,
+      workingDirectory: "/workspace/worktrees/chat-1",
+    };
+    for await (const _event of agent.sendMessage(moved, "Continue there")) {
+      // drain
+    }
+
+    expect(lastQueryOptions().cwd).toBe("/workspace/worktrees/chat-1");
+    expect(contexts).toEqual([
+      {
+        projectId: "project-1",
+        sessionId: "chat-1",
+        workingDirectory: "/workspace/project",
+        caller: { tenantId: "tenant-1", externalUserId: "user-1" },
+      },
+      {
+        projectId: "project-1",
+        sessionId: "chat-1",
+        workingDirectory: "/workspace/worktrees/chat-1",
+        caller: { tenantId: "tenant-1", externalUserId: "user-1" },
+      },
+    ]);
   });
 
   it("maps subagent lifecycle and attributes nested activity", async () => {

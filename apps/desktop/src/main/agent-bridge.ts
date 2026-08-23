@@ -67,6 +67,7 @@ export interface WorkspaceBridge {
     command: string,
     targetTerminalId?: string,
     timeoutMs?: number,
+    workingDirectory?: string,
   ): Promise<{
     key: string;
     terminalId: string;
@@ -566,6 +567,7 @@ export function registerAgentBridge(agentTerminals: AgentTerminals): {
       command,
       targetTerminalId,
       timeoutMs,
+      workingDirectory,
     ) {
       if (!command.trim()) {
         throw new Error("Empty command.");
@@ -606,7 +608,10 @@ export function registerAgentBridge(agentTerminals: AgentTerminals): {
           await rpc("surfaceControl", { projectId, key, controlled: true });
         }
       } else {
-        const created = await agentTerminals.create(projectId);
+        const created = await agentTerminals.create(
+          projectId,
+          workingDirectory,
+        );
         terminalId = created.sessionId;
         const attached = await rpc<{ key: string } | null>(
           "attachAgentTerminal",

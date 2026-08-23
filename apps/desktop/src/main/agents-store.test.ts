@@ -35,7 +35,7 @@ afterEach(() => {
 const PROJECT = "11111111-1111-4111-8111-111111111111";
 
 describe("AgentsStore — ADR 0056 fields", () => {
-  it("persists instructions, mode, memory, and skills; defaults stay implicit", () => {
+  it("persists instructions, mode, memory, skills, and coordination; defaults stay implicit", () => {
     const file = storeFile();
     const store = new AgentsStore(file);
     const agent = store.create({
@@ -44,6 +44,7 @@ describe("AgentsStore — ADR 0056 fields", () => {
       mode: "read-only",
       memory: true,
       skills: { mode: "picked", names: ["publishing-to-github"] },
+      coordination: "isolate-on-contention",
     });
     expect(agent.instructions).toBe("You are the reviewer.");
     expect(agent.mode).toBe("read-only");
@@ -52,6 +53,7 @@ describe("AgentsStore — ADR 0056 fields", () => {
       mode: "picked",
       names: ["publishing-to-github"],
     });
+    expect(agent.coordination).toBe("isolate-on-contention");
 
     // Defaults are absent on disk, not stored as literals: the file grows
     // only what deviates.
@@ -64,6 +66,7 @@ describe("AgentsStore — ADR 0056 fields", () => {
     expect(stored.memory).toBeUndefined();
     expect(stored.skills).toBeUndefined();
     expect(stored.instructions).toBeUndefined();
+    expect(stored.coordination).toBeUndefined();
 
     // The public shape materializes them for the renderer. Memory is
     // OPT-IN (ADR 0056): a fresh agent remembers nothing.
@@ -72,9 +75,10 @@ describe("AgentsStore — ADR 0056 fields", () => {
     expect(publicAgent.memory).toBe(false);
     expect(publicAgent.skills).toEqual({ mode: "all" });
     expect(publicAgent.instructions).toBe("");
+    expect(publicAgent.coordination).toBe("shared-first");
   });
 
-  it("update clears back to defaults ('' instructions, edit mode, memory off, all skills)", () => {
+  it("update clears back to defaults including shared-first coordination", () => {
     const store = new AgentsStore(storeFile());
     const agent = store.create({
       harness: "claude-code",
@@ -82,17 +86,20 @@ describe("AgentsStore — ADR 0056 fields", () => {
       mode: "full-access",
       memory: true,
       skills: { mode: "picked", names: ["a"] },
+      coordination: "isolation-required",
     });
     const updated = store.update(agent.id, {
       instructions: "",
       mode: "edit",
       memory: false,
       skills: { mode: "all" },
+      coordination: "shared-first",
     });
     expect(updated?.instructions).toBeUndefined();
     expect(updated?.mode).toBeUndefined();
     expect(updated?.memory).toBeUndefined();
     expect(updated?.skills).toBeUndefined();
+    expect(updated?.coordination).toBeUndefined();
   });
 });
 

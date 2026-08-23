@@ -36,9 +36,13 @@ function scriptedThread(events: ThreadEvent[]) {
   };
 }
 
-async function collect(agent: CodexAgent, message: string) {
+async function collect(
+  agent: CodexAgent,
+  message: string,
+  providerSession: ProviderSession = session,
+) {
   const events = [];
-  for await (const event of agent.sendMessage(session, message)) {
+  for await (const event of agent.sendMessage(providerSession, message)) {
     events.push(event);
   }
   return events;
@@ -234,6 +238,118 @@ describe("CodexAgent", () => {
     await collect(new CodexAgent(), "hello");
     expect(codexCtor).toHaveBeenCalledTimes(1);
     expect(codexCtor.mock.calls[0]?.[0]).not.toHaveProperty("config");
+  });
+
+  it("mounts session-scoped MCP servers after agent-wide servers", async () => {
+    const agent = new CodexAgent({
+      mcpServers: {
+        workspace: { transport: "http", url: "https://profile.example/mcp" },
+      },
+      mcpServersForSession: (context) => ({
+        workspace: {
+          transport: "http",
+          url: `http://127.0.0.1/${context.projectId}/${context.sessionId}`,
+        },
+      }),
+    });
+    await agent.startSession({
+      projectId: "project-1",
+      userId: "user-1",
+      sandboxId: "",
+      workingDirectory: "/workspace/project",
+      sessionId: "chat-1",
+    });
+    resumeThread.mockReturnValueOnce(turnDone());
+    await collect(agent, "hello");
+    expect(codexCtor).toHaveBeenCalledWith(
+      expect.objectContaining({
+        config: {
+          mcp_servers: {
+            workspace: {
+              url: "http://127.0.0.1/project-1/chat-1",
+            },
+          },
+        },
+      }),
+    );
+  });
+
+  it("restores session-scoped MCP servers for a persisted thread", async () => {
+    const agent = new CodexAgent({
+      mcpServersForSession: (context) => ({
+        workspace: {
+          transport: "http",
+          url: `http://127.0.0.1/${context.projectId}/${context.sessionId}`,
+        },
+      }),
+    });
+    resumeThread.mockReturnValueOnce(turnDone());
+
+    await collect(agent, "hello", {
+      projectId: "persisted-project",
+      sessionId: "persisted-chat",
+      providerSessionId: "codex-thread",
+      sandboxId: "",
+      workingDirectory: "/workspace/project",
+    });
+
+    expect(codexCtor).toHaveBeenCalledWith(
+      expect.objectContaining({
+        config: {
+          mcp_servers: {
+            workspace: {
+              url: "http://127.0.0.1/persisted-project/persisted-chat",
+            },
+          },
+        },
+      }),
+    );
+  });
+
+  it("refreshes session MCP context when the host changes checkout", async () => {
+    const contexts: unknown[] = [];
+    const agent = new CodexAgent({
+      mcpServersForSession: (context) => {
+        contexts.push({ ...context });
+        return {};
+      },
+    });
+    const started = await agent.startSession({
+      projectId: "project-1",
+      userId: "user-1",
+      sandboxId: "",
+      sessionId: "chat-1",
+      workingDirectory: "/workspace/project",
+      caller: { tenantId: "tenant-1", externalUserId: "user-1" },
+    });
+    resumeThread
+      .mockReturnValueOnce(turnDone())
+      .mockReturnValueOnce(turnDone());
+
+    await collect(agent, "first", {
+      ...started,
+      providerSessionId: "codex-thread",
+    });
+    await collect(agent, "second", {
+      ...started,
+      providerSessionId: "codex-thread",
+      workingDirectory: "/workspace/worktrees/chat-1",
+    });
+
+    expect(contexts).toEqual([
+      {
+        projectId: "project-1",
+        sessionId: "chat-1",
+        workingDirectory: "/workspace/project",
+        caller: { tenantId: "tenant-1", externalUserId: "user-1" },
+      },
+      {
+        projectId: "project-1",
+        sessionId: "chat-1",
+        workingDirectory: "/workspace/worktrees/chat-1",
+        caller: { tenantId: "tenant-1", externalUserId: "user-1" },
+      },
+    ]);
   });
 });
 

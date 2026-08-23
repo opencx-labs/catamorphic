@@ -2905,6 +2905,12 @@ paths, deliberately independent:
   shared-first, isolate-on-contention, or isolation-required. The mechanics
   are identical across harnesses; Catamorphic owns top-level checkout
   selection and harnesses receive the selected directory.
+- **Required isolation is enforced at assignment and turn start.** If another
+  visible session is currently running in the same checkout, a host-executed
+  agent marked isolation-required cannot edit there. A session on the primary
+  checkout moves to a managed worktree before its harness runs; an occupied
+  managed or external worktree is rejected until the agent chooses a free one
+  or waits. Shared-first and isolate-on-contention remain agent decisions.
 - **Peer context is project-local and privacy-preserving.** Agents receive
   compact active-session summaries and may read bounded peer transcripts.
   Cross-project discovery is an explicit capability, never a default, and

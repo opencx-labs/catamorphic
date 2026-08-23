@@ -3,6 +3,7 @@ import path from "node:path";
 import { ClaudeCodeAgent } from "@catamorphic/claude-code";
 import { CodexAgent } from "@catamorphic/codex";
 import type {
+  AgentCoordinationStrategy,
   AgentDefinition,
   CodingAgentRegistry,
   RegisteredCodingAgent,
@@ -48,6 +49,7 @@ import {
   PersonaCodingAgent,
   parseProjectAgentId,
 } from "./project-agents.js";
+import type { ProjectSessionContext } from "./workspace-context-agent.js";
 import { WorkspaceContextAgent } from "./workspace-context-agent.js";
 import {
   buildWorkspaceToolkit,
@@ -76,6 +78,12 @@ export interface DesktopAgentRegistryDeps {
    * workflows. Undefined while the embedded server is still booting.
    */
   projectMcpUrl?: (projectId: string) => string | undefined;
+  /** Codex's authenticated loopback access to filtered workspace tools. */
+  workspaceMcpServer?: (
+    projectId: string,
+    sessionId: string,
+    agentId: string,
+  ) => AgentMcpServerConfig | undefined;
   /**
    * Project folder lookup for PROJECT agents (`project:<id>:<slug>`), whose
    * committed `agents/<slug>.json` definitions are read from disk here —
@@ -106,6 +114,16 @@ export interface DesktopAgentRegistryDeps {
   userSkills?: (
     profileId: string,
   ) => Array<{ name: string; description: string }>;
+  /** Same-project peer summaries, resolved live on every turn. */
+  sessionPeers?: (
+    projectId: string,
+    sessionId: string,
+  ) => Promise<ProjectSessionContext[]>;
+  /** One-shot checkout recovery warning for the next turn. */
+  checkoutNotice?: (
+    projectId: string,
+    sessionId: string,
+  ) => Promise<string | null>;
   /** E2E: every configured agent resolves to the scripted fake. */
   e2eFake?: boolean;
 }
@@ -139,6 +157,16 @@ const MUTATING_WORKSPACE_TOOLS = new Set([
   "build_app",
   "sync_project",
   "create_pull_request",
+  "set_session_activity",
+  "create_worktree",
+  "use_worktree",
+  "use_project_checkout",
+]);
+
+const HOST_CHECKOUT_TOOLS = new Set([
+  "create_worktree",
+  "use_worktree",
+  "use_project_checkout",
 ]);
 
 /** Server key of the per-project workflow-tools MCP server (session-scoped). */
@@ -651,6 +679,7 @@ export class DesktopAgentRegistry implements CodingAgentRegistry {
       model: def.model ?? "",
       effort: def.effort ?? "medium",
       ...(def.mode ? { mode: def.mode } : {}),
+      ...(def.coordination ? { coordination: def.coordination } : {}),
       ...(def.memory === true ? { memory: true } : {}),
       auth:
         source === "secret" || bindingAuth?.mode === "api-key"
@@ -690,6 +719,7 @@ export class DesktopAgentRegistry implements CodingAgentRegistry {
       // an edit reaches the next turn.
       toolPolicies: def.toolPolicies ?? null,
       memory: def.memory ?? false,
+      coordination: def.coordination ?? "shared-first",
       skills: def.skills ?? null,
       connections: def.connections ?? null,
       mcp: { servers: serverShapes(mcp.servers), plugins: mcp.plugins },
@@ -829,19 +859,19 @@ export class DesktopAgentRegistry implements CodingAgentRegistry {
     // (agent lists, switching, effort) exercise the real plumbing. The
     // error decorator stays on so tests cover the auth-failure surfacing.
     if (this.deps.e2eFake) {
+      const execution = config.harness === "ai-sdk" ? "sandbox" : "host";
+      const fake = new E2eFakeCodingAgent(
+        this.deps.sandboxProvider,
+        this.workspaceTools(config, execution),
+        this.toolPermissionHandler(config, profileId),
+      );
       return {
         id: config.id,
         provider: this.wrapErrors(
-          this.wrapSandboxAgent(
-            new E2eFakeCodingAgent(
-              this.deps.sandboxProvider,
-              this.workspaceToolkit?.tools,
-              this.toolPermissionHandler(config, profileId),
-            ),
-          ),
+          execution === "sandbox" ? this.wrapSandboxAgent(fake) : fake,
           config,
         ),
-        execution: "sandbox",
+        execution,
         defaults: { effort: config.effort },
       };
     }
@@ -855,7 +885,7 @@ export class DesktopAgentRegistry implements CodingAgentRegistry {
           modelId: this.resolvedModel(config) ?? "",
           // Mode does not apply to the sandboxed built-in agent (its edits
           // land as a reviewable draft), so its toolset is never filtered.
-          extraTools: this.workspaceToolkit?.tools,
+          extraTools: this.workspaceTools(config, "sandbox"),
           mcpServers: () => this.liveServers(config, profileId),
           // Elicitation from this agent's connectors → the front window,
           // labeled with the agent so the user knows who's asking.
@@ -918,7 +948,7 @@ export class DesktopAgentRegistry implements CodingAgentRegistry {
                 // so the flag is always passed explicitly.
                 memory: config.memory === true,
                 ...(Object.keys(env).length > 0 ? { env } : {}),
-                extraTools: this.workspaceTools(config),
+                extraTools: this.workspaceTools(config, "host"),
                 // Claude Code's own Bash runs inside the CLI where we
                 // can't see or manage it. With workspace terminals
                 // available, every command goes through tabs the user
@@ -955,8 +985,6 @@ export class DesktopAgentRegistry implements CodingAgentRegistry {
         // (or the ChatGPT sign-in the wizard runs) just works.
         return {
           id: config.id,
-          // Codex has no extra-tool hook yet, so it gets workspace
-          // awareness (the per-turn context block) without the tools.
           provider: this.wrapErrors(
             this.withWorkspace(
               new CodexAgent({
@@ -974,12 +1002,25 @@ export class DesktopAgentRegistry implements CodingAgentRegistry {
                 // overrides; the CLI owns the client connections. Policy
                 // is coarse here (disabled_tools) — Codex can't ask.
                 mcpServers: () => this.liveServers(config, profileId),
+                mcpServersForSession: (context) => {
+                  const workspaceServer = context.sessionId
+                    ? this.deps.workspaceMcpServer?.(
+                        context.projectId,
+                        context.sessionId,
+                        config.id,
+                      )
+                    : undefined;
+                  return {
+                    ...this.sessionMcpServers(context),
+                    ...(workspaceServer ? { workspace: workspaceServer } : {}),
+                  };
+                },
                 mcpPolicies: () =>
                   this.livePolicies(config, profileId).policies,
                 mcpToolAnnotations: () =>
                   this.livePolicies(config, profileId).annotations,
               }),
-              { hasTools: false, config, profileId },
+              { hasTools: true, config, profileId },
             ),
             config,
           ),
@@ -1024,8 +1065,19 @@ export class DesktopAgentRegistry implements CodingAgentRegistry {
     const bridge = this.deps.workspaceBridge;
     if (!bridge) return provider;
     const hasTools = opts.hasTools && this.workspaceToolkit !== undefined;
-    return new WorkspaceContextAgent(provider, bridge, hasTools, () =>
-      this.skillsNote(opts.config, opts.profileId, hasTools),
+    return new WorkspaceContextAgent(
+      provider,
+      bridge,
+      hasTools,
+      () => this.skillsNote(opts.config, opts.profileId, hasTools),
+      {
+        strategy: opts.config.coordination ?? "shared-first",
+        peers: (projectId, sessionId) =>
+          this.deps.sessionPeers?.(projectId, sessionId) ?? Promise.resolve([]),
+        checkoutNotice: (projectId, sessionId) =>
+          this.deps.checkoutNotice?.(projectId, sessionId) ??
+          Promise.resolve(null),
+      },
     );
   }
 
@@ -1054,11 +1106,74 @@ export class DesktopAgentRegistry implements CodingAgentRegistry {
    * loses the tools that run commands, mutate the project, or act on the
    * user's behalf — its harness-side mode alone can't govern host tools.
    */
-  private workspaceTools(config: AgentConfig): ExtraTool[] | undefined {
+  private workspaceTools(
+    config: Pick<AgentConfig, "mode">,
+    execution: "host" | "sandbox",
+  ): ExtraTool[] | undefined {
     const tools = this.workspaceToolkit?.tools;
     if (!tools) return undefined;
-    if ((config.mode ?? "edit") !== "read-only") return tools;
-    return tools.filter((tool) => !MUTATING_WORKSPACE_TOOLS.has(tool.name));
+    return tools.filter((tool) => {
+      if (execution === "sandbox" && HOST_CHECKOUT_TOOLS.has(tool.name)) {
+        return false;
+      }
+      return !(
+        (config.mode ?? "edit") === "read-only" &&
+        MUTATING_WORKSPACE_TOOLS.has(tool.name)
+      );
+    });
+  }
+
+  /** Filtered host workspace tools for a loopback, session-scoped harness. */
+  workspaceToolsForAgent(id: string): ExtraTool[] | undefined {
+    const profile = this.findConfig(id);
+    if (profile) return this.workspaceTools(profile.config, "host");
+    const project = parseProjectAgentId(id);
+    const root = project
+      ? this.deps.projectRootPath?.(project.projectId)
+      : undefined;
+    if (!project || !root) return undefined;
+    try {
+      const raw = JSON.parse(
+        fs.readFileSync(
+          path.join(root, "agents", `${project.slug}.json`),
+          "utf8",
+        ),
+      );
+      const validated = validateAgentDefinition(raw, {
+        allowE2eFake: this.deps.e2eFake,
+      });
+      if ("error" in validated) return undefined;
+      return this.workspaceTools({ mode: validated.definition.mode }, "host");
+    } catch {
+      return undefined;
+    }
+  }
+
+  /** Effective concurrent-checkout doctrine for a profile or project agent. */
+  coordinationForAgent(id: string): AgentCoordinationStrategy {
+    const profile = this.findConfig(id);
+    if (profile) return profile.config.coordination ?? "shared-first";
+    const project = parseProjectAgentId(id);
+    const root = project
+      ? this.deps.projectRootPath?.(project.projectId)
+      : undefined;
+    if (!project || !root) return "shared-first";
+    try {
+      const raw = JSON.parse(
+        fs.readFileSync(
+          path.join(root, "agents", `${project.slug}.json`),
+          "utf8",
+        ),
+      );
+      const validated = validateAgentDefinition(raw, {
+        allowE2eFake: this.deps.e2eFake,
+      });
+      return "error" in validated
+        ? "shared-first"
+        : (validated.definition.coordination ?? "shared-first");
+    } catch {
+      return "shared-first";
+    }
   }
 
   /**

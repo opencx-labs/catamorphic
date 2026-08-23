@@ -127,7 +127,7 @@ describeIf("ask_user across ClaudeCodeAgent + AgentSessionsService", () => {
         provider: unusedSandboxProvider,
         store: new DbSandboxStore(db),
       }),
-      hostProjectPath: () => rootPath,
+      hostAgentCheckout: { resolve: () => rootPath },
     });
   });
 

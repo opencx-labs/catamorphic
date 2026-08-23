@@ -7,6 +7,12 @@ export interface ServerInfo {
   hasCodingAgent: boolean;
 }
 
+export interface SessionCheckoutInfo {
+  sessionId: string;
+  kind: "managed" | "external";
+  branch: string | null;
+}
+
 export type AgentHarness = "ai-sdk" | "claude-code" | "codex";
 export type AgentEffort = "low" | "medium" | "high" | "xhigh" | "max";
 export type AgentAuthMode = "local" | "account" | "api-key";
@@ -17,6 +23,10 @@ export type AgentAuthMode = "local" | "account" | "api-key";
  * built-in harness.
  */
 export type AgentMode = "read-only" | "edit" | "full-access";
+export type AgentCoordinationStrategy =
+  | "shared-first"
+  | "isolate-on-contention"
+  | "isolation-required";
 
 /**
  * Which of the profile's MCP connections an agent gets: every current and
@@ -46,6 +56,7 @@ export interface AgentInfo {
   /** The agent's own main prompt ("" when none). */
   instructions: string;
   mode: AgentMode;
+  coordination: AgentCoordinationStrategy;
   /** Claude Code auto-memory — opt-in, default off (others ignore it). */
   memory: boolean;
   connections: AgentConnectionsSetting;
@@ -78,6 +89,8 @@ export interface ProjectAgentInfo {
   effort: AgentEffort | null;
   /** Normalized operating mode; null = the "edit" default. */
   mode: AgentMode | null;
+  /** Checkout-coordination doctrine; null means shared-first. */
+  coordination: AgentCoordinationStrategy | null;
   /** Claude Code auto-memory; null = the definition doesn't say (off). */
   memory: boolean | null;
   credentialsSource: "profile" | "secret" | "local";
@@ -122,6 +135,7 @@ export function projectAgentAsInfo(agent: ProjectAgentInfo): AgentInfo {
     accepts: harness === "codex" ? [] : ["image", "document"],
     instructions: "",
     mode: agent.mode ?? "edit",
+    coordination: agent.coordination ?? "shared-first",
     memory: agent.memory === true,
     connections: { mode: "all" },
     skills: agent.skills
@@ -141,6 +155,7 @@ export interface CreateAgentInput {
   apiKey?: string | null;
   instructions?: string;
   mode?: AgentMode;
+  coordination?: AgentCoordinationStrategy;
   memory?: boolean;
   connections?: AgentConnectionsSetting;
   skills?: AgentSkillsSetting;
@@ -157,6 +172,7 @@ export interface UpdateAgentInput {
   /** New instructions; "" clears them. */
   instructions?: string;
   mode?: AgentMode;
+  coordination?: AgentCoordinationStrategy;
   memory?: boolean;
   connections?: AgentConnectionsSetting;
   skills?: AgentSkillsSetting;
@@ -1031,6 +1047,7 @@ export interface CatamorphicDesktopApi {
   onThemeChanged: (listener: (theme: ResolvedTheme) => void) => () => void;
 
   gitOverview: (projectId: string) => Promise<GitOverview>;
+  sessionCheckouts: (projectId: string) => Promise<SessionCheckoutInfo[]>;
   gitFileDiff: (
     projectId: string,
     worktreePath: string,

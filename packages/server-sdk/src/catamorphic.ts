@@ -11,6 +11,7 @@ import type {
   ExecutionWorkerHandle,
   ExecutionWorkerOptions,
   GithubServiceConfig,
+  HostAgentCheckout,
   Identity,
   McpToolKindSpec,
   ProjectLifecycleHooks,
@@ -103,9 +104,7 @@ export interface CreateCatamorphicConfig {
    * Resolve a project's directory on the host filesystem, required for
    * registry agents with `execution: "host"` (Claude Code, Codex).
    */
-  hostProjectPathResolver?: (
-    projectId: string,
-  ) => Promise<string | undefined> | string | undefined;
+  hostAgentCheckout?: HostAgentCheckout;
   /**
    * How long finished runs are kept before they and everything hanging off
    * them are purged. Defaults to 90 days; pass `{ enabled: false }` to keep
@@ -294,7 +293,7 @@ export class Catamorphic {
       sandboxProvider: config.sandboxProvider,
       pluginResolver: config.pluginResolver,
       codingAgent: config.codingAgent,
-      hostProjectPathResolver: config.hostProjectPathResolver,
+      hostAgentCheckout: config.hostAgentCheckout,
       ...(config.retention === undefined
         ? {}
         : { retention: config.retention }),

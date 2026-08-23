@@ -109,6 +109,30 @@ export class RemoteSyncService {
     projectId: string,
     input: { title: string; body?: string },
   ): Promise<{ url: string; number: number; branch: string }> {
+    return this.createPullRequestInner(identity, projectId, input);
+  }
+
+  /**
+   * Host integration for a linked worktree. The host validates and
+   * checkpoints the checkout first; this method pushes its named ref from
+   * the repository's shared Git directory without touching the primary tree.
+   */
+  async createPullRequestFromRef(
+    identity: Identity,
+    projectId: string,
+    input: { title: string; body?: string; localRef: string },
+  ): Promise<{ url: string; number: number; branch: string }> {
+    if (!validLocalBranch(input.localRef)) {
+      throw new Error(`Invalid local branch ref '${input.localRef}'`);
+    }
+    return this.createPullRequestInner(identity, projectId, input);
+  }
+
+  private async createPullRequestInner(
+    identity: Identity,
+    projectId: string,
+    input: { title: string; body?: string; localRef?: string },
+  ): Promise<{ url: string; number: number; branch: string }> {
     const row = await this.projectRow(identity, projectId);
     const remoteUrl = row?.remote_url;
     if (!remoteUrl) throw new ProjectHasNoRemoteError(projectId);
@@ -124,16 +148,18 @@ export class RemoteSyncService {
       identity.externalUserId,
     );
     try {
-      const status = await dev.status();
-      if (status.dirty) {
-        await dev.commit(input.title, SYNC_AUTHOR);
+      if (!input.localRef) {
+        const status = await dev.status();
+        if (status.dirty) {
+          await dev.commit(input.title, SYNC_AUTHOR);
+        }
       }
       const branch = prBranchName(input.title, new Date());
       await pushToRemote({
         repoPath: dev.repoPath,
         url: remoteUrl,
         credentials,
-        ref: "HEAD",
+        ref: input.localRef ?? "HEAD",
         remoteBranch: branch,
       });
       const pr = await host.createPullRequest(identity, {
@@ -209,6 +235,17 @@ export class RemoteSyncService {
       .select(["remote_url", "remote_branch"])
       .executeTakeFirst();
   }
+}
+
+function validLocalBranch(ref: string): boolean {
+  return (
+    /^[A-Za-z0-9][A-Za-z0-9._/-]*$/.test(ref) &&
+    !ref.includes("..") &&
+    !ref.includes("//") &&
+    !ref.endsWith("/") &&
+    !ref.endsWith(".") &&
+    !ref.endsWith(".lock")
+  );
 }
 
 /** `catamorphic/<title-slug>-HHmm` — readable on the host, unique enough. */

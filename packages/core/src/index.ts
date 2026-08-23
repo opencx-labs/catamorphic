@@ -39,8 +39,10 @@ export {
 } from "./seeds.js";
 export { AgentContextService } from "./services/agent-context-service.js";
 export {
+  AGENT_COORDINATION_STRATEGIES,
   AGENT_DEFINITION_KINDS,
   AGENT_DEFINITIONS_DIR,
+  type AgentCoordinationStrategy,
   type AgentDefinition,
   type AgentDefinitionCredentials,
   AgentDefinitionCredentialsSchema,
@@ -63,9 +65,11 @@ export {
   AgentSessionClosedError,
   type AgentSessionDetail,
   AgentSessionNotFoundError,
+  type AgentSessionPeer,
   AgentSessionsService,
   AgentTurnInProgressError,
   type AgentTurnSettledEvent,
+  type HostAgentCheckout,
   SessionMirrorDivergedError,
   type SyncedFileChange,
 } from "./services/agent-sessions-service.js";

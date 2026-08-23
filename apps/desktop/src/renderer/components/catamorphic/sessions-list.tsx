@@ -2,7 +2,7 @@
 
 import { useAgentSessions } from "@catamorphic/react";
 import type { AgentSession } from "@catamorphic/react/types";
-import { MessageSquare } from "lucide-react";
+import { GitBranch, MessageSquare } from "lucide-react";
 
 export interface SessionsListProps {
   projectId: string | undefined;
@@ -10,6 +10,8 @@ export interface SessionsListProps {
   activeSessionId?: string;
   onSelect?: (session: AgentSession) => void;
   className?: string;
+  /** Host-local worktree label by session id; primary sessions are absent. */
+  checkoutLabels?: Record<string, string>;
 }
 
 /**
@@ -22,6 +24,7 @@ export function SessionsList({
   activeSessionId,
   onSelect,
   className = "",
+  checkoutLabels = {},
 }: SessionsListProps) {
   const sessionsQuery = useAgentSessions(projectId);
   const sessions = sessionsQuery.data?.items ?? [];
@@ -56,6 +59,12 @@ export function SessionsList({
           >
             <MessageSquare className="size-3.5 shrink-0" />
             <span className="truncate">{sessionLabel(session)}</span>
+            {checkoutLabels[session.id] ? (
+              <span className="ml-auto flex max-w-28 shrink-0 items-center gap-1 truncate rounded bg-bg-inset px-1.5 py-0.5 text-[10px] text-fg-faint">
+                <GitBranch className="size-2.5 shrink-0" />
+                <span className="truncate">{checkoutLabels[session.id]}</span>
+              </span>
+            ) : null}
           </button>
         </li>
       ))}

@@ -14,6 +14,7 @@ import { AgentDefinitionsService } from "./services/agent-definitions-service.js
 import {
   AgentSessionsService,
   type AgentTurnSettledEvent,
+  type HostAgentCheckout,
 } from "./services/agent-sessions-service.js";
 import type { AppBundleStore } from "./services/app-bundle-store.js";
 import { AppPoliciesService } from "./services/app-policies-service.js";
@@ -129,9 +130,7 @@ export interface CatamorphicCoreConfig {
    * Resolve a project's directory on the host filesystem, required for
    * registry agents with `execution: "host"` (Claude Code, Codex).
    */
-  hostProjectPathResolver?: (
-    projectId: string,
-  ) => Promise<string | undefined> | string | undefined;
+  hostAgentCheckout?: HostAgentCheckout;
   /**
    * How long finished runs are kept. Defaults to 90 days; set
    * `{ enabled: false }` to keep everything. Individual tenants can be given a
@@ -501,7 +500,7 @@ export class CatamorphicCore {
         projectManager: this.projectManager,
         sandboxProvider: this.sandboxProvider,
         codingAgents,
-        hostProjectPath: config.hostProjectPathResolver,
+        hostAgentCheckout: config.hostAgentCheckout,
         devSandboxes: this.devSandboxes,
         plugins: this.plugins,
         pluginResolver: this.pluginResolver,

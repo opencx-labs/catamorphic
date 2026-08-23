@@ -59,13 +59,63 @@ export type SkillReader = (
   content: string;
 } | null>;
 
+/** Desktop-local privacy decision for chat discovery and transcript reads. */
+export type SessionVisibility = (
+  projectId: string,
+  sessionId: string,
+) => Promise<boolean>;
+
 /** Remote-sync + pull-request operations; wired to core after boot (ADR 0044). */
 export interface GitBridge {
-  sync(projectId: string): Promise<{ status: string; rescueBranch?: string }>;
+  sync(
+    projectId: string,
+    sessionId: string,
+  ): Promise<{
+    status: string;
+    branch?: string | null;
+    rescueBranch?: string;
+    note?: string;
+  }>;
   createPullRequest(
     projectId: string,
+    sessionId: string,
     input: { title: string; body?: string },
   ): Promise<{ url: string; number: number; branch: string }>;
+}
+
+export interface SessionCoordinationBridge {
+  list(projectId: string, sessionId: string): Promise<unknown[]>;
+  read(
+    projectId: string,
+    ownSessionId: string,
+    peerSessionId: string,
+  ): Promise<{
+    title: string | null;
+    messages: Array<{ role: string; content: string }>;
+  } | null>;
+  setActivity(
+    projectId: string,
+    sessionId: string,
+    activity: string | null,
+  ): Promise<void>;
+}
+
+export interface CheckoutBridge {
+  current(projectId: string, sessionId: string): Promise<unknown>;
+  list(projectId: string): Promise<unknown[]>;
+  create(
+    projectId: string,
+    sessionId: string,
+  ): Promise<{ path: string; kind?: string; branch?: string | null }>;
+  use(
+    projectId: string,
+    sessionId: string,
+    checkoutPath: string,
+  ): Promise<{ path: string; kind?: string; branch?: string | null }>;
+  usePrimary(
+    projectId: string,
+    sessionId: string,
+  ): Promise<{ path: string; kind?: string; branch?: string | null }>;
 }
 
 export interface WorkspaceToolkit {
@@ -80,6 +130,9 @@ export interface WorkspaceToolkit {
   setGitBridge(git: GitBridge): void;
   /** Late-bound: skills live in core, which exists only after boot. */
   setSkillReader(reader: SkillReader): void;
+  setSessionCoordinationBridge(bridge: SessionCoordinationBridge): void;
+  setCheckoutBridge(bridge: CheckoutBridge): void;
+  setSessionVisibility(visibility: SessionVisibility): void;
 }
 
 const TRANSCRIPT_MESSAGE_CAP = 40;
@@ -93,8 +146,136 @@ export function buildWorkspaceToolkit(
   let buildApp: AppBuilder | null = null;
   let gitBridge: GitBridge | null = null;
   let readSkill: SkillReader | null = null;
+  let sessionCoordination: SessionCoordinationBridge | null = null;
+  let checkouts: CheckoutBridge | null = null;
+  let sessionVisible: SessionVisibility = async () => true;
 
   const tools: ExtraTool[] = [
+    {
+      name: "list_project_sessions",
+      description:
+        "List other active agent sessions in this project, including their current task, activity, running state, and checkout. Use this before concurrent edits so you can decide whether sharing, waiting, or using a worktree is safest.",
+      parameters: {},
+      execute: async (_input, ctx) => {
+        if (!ctx.sessionId) throw new Error("This turn has no chat session.");
+        if (!sessionCoordination) {
+          throw new Error("Session coordination is not available yet.");
+        }
+        return sessionCoordination.list(ctx.projectId, ctx.sessionId);
+      },
+    },
+    {
+      name: "read_project_session",
+      description:
+        "Read a recent, bounded transcript from another visible session in this project. Use it when the task summary is not enough to understand what the other agent is changing.",
+      parameters: {
+        session_id: z.string().min(1).describe("Peer session id"),
+      },
+      execute: async (input, ctx) => {
+        if (!ctx.sessionId) throw new Error("This turn has no chat session.");
+        if (!sessionCoordination) {
+          throw new Error("Session coordination is not available yet.");
+        }
+        const transcript = await sessionCoordination.read(
+          ctx.projectId,
+          ctx.sessionId,
+          String(input.session_id),
+        );
+        if (!transcript)
+          throw new Error("That project session is not visible.");
+        return boundedTranscript(transcript);
+      },
+    },
+    {
+      name: "set_session_activity",
+      description:
+        "Publish a short description of the files or work you are actively handling so other agents in this project can coordinate. Clear it when the activity no longer applies.",
+      parameters: {
+        activity: z
+          .string()
+          .max(500)
+          .nullable()
+          .describe("Short current activity, or null to clear it"),
+      },
+      execute: async (input, ctx) => {
+        if (!ctx.sessionId) throw new Error("This turn has no chat session.");
+        if (!sessionCoordination) {
+          throw new Error("Session coordination is not available yet.");
+        }
+        await sessionCoordination.setActivity(
+          ctx.projectId,
+          ctx.sessionId,
+          typeof input.activity === "string" ? input.activity : null,
+        );
+        return { ok: true };
+      },
+    },
+    {
+      name: "list_worktrees",
+      description:
+        "List Git worktrees already registered for this project and show the checkout currently assigned to this session.",
+      parameters: {},
+      execute: async (_input, ctx) => {
+        if (!ctx.sessionId) throw new Error("This turn has no chat session.");
+        if (!checkouts)
+          throw new Error("Worktree management is not available.");
+        return {
+          current: await checkouts.current(ctx.projectId, ctx.sessionId),
+          worktrees: await checkouts.list(ctx.projectId),
+        };
+      },
+    },
+    {
+      name: "create_worktree",
+      description:
+        "Create and assign a Catamorphic-managed Git worktree for this session. Use it only when isolation is safer than sharing the primary project folder.",
+      parameters: {},
+      execute: async (_input, ctx) => {
+        if (!ctx.sessionId) throw new Error("This turn has no chat session.");
+        if (!checkouts)
+          throw new Error("Worktree management is not available.");
+        const checkout = await checkouts.create(ctx.projectId, ctx.sessionId);
+        ctx.workingDirectory = checkout.path;
+        return checkoutResult(checkout);
+      },
+    },
+    {
+      name: "use_worktree",
+      description:
+        "Assign this session to an existing Git worktree created by Catamorphic or another harness. The path must belong to this project's Git repository.",
+      parameters: {
+        path: z.string().min(1).describe("Absolute worktree path"),
+      },
+      execute: async (input, ctx) => {
+        if (!ctx.sessionId) throw new Error("This turn has no chat session.");
+        if (!checkouts)
+          throw new Error("Worktree management is not available.");
+        const checkout = await checkouts.use(
+          ctx.projectId,
+          ctx.sessionId,
+          String(input.path),
+        );
+        ctx.workingDirectory = checkout.path;
+        return checkoutResult(checkout);
+      },
+    },
+    {
+      name: "use_project_checkout",
+      description:
+        "Return this session to the project's primary checkout. This only changes the session assignment and never removes a worktree.",
+      parameters: {},
+      execute: async (_input, ctx) => {
+        if (!ctx.sessionId) throw new Error("This turn has no chat session.");
+        if (!checkouts)
+          throw new Error("Worktree management is not available.");
+        const checkout = await checkouts.usePrimary(
+          ctx.projectId,
+          ctx.sessionId,
+        );
+        ctx.workingDirectory = checkout.path;
+        return checkoutResult(checkout);
+      },
+    },
     {
       name: "build_app",
       description:
@@ -215,7 +396,12 @@ export function buildWorkspaceToolkit(
       description:
         "See the user's live workspace: every open tab (browser pages, terminals, editors, chats) with keys and titles, which tab is active (what the user is looking at right now), the focused editor's current text selection if any, other chat conversations, and the sidebar's configured shortcuts. Start here whenever the user refers to something they can see, another conversation, 'this'/'the selected text', or 'that page/terminal'. Expand any entry with read_tab.",
       parameters: {},
-      execute: (_input, ctx) => bridge.overview(ctx.projectId),
+      execute: async (_input, ctx) =>
+        filterWorkspaceOverview(
+          await bridge.overview(ctx.projectId),
+          ctx.projectId,
+          sessionVisible,
+        ),
     },
     {
       name: "read_tab",
@@ -242,6 +428,9 @@ export function buildWorkspaceToolkit(
           };
           if (!pointer.sessionId) {
             return { kind: "chat", title: pointer.title, transcript: [] };
+          }
+          if (!(await sessionVisible(ctx.projectId, pointer.sessionId))) {
+            throw new Error("That chat is private and not visible to agents.");
           }
           const transcript = readChatTranscript
             ? await readChatTranscript(ctx.projectId, pointer.sessionId)
@@ -360,6 +549,7 @@ export function buildWorkspaceToolkit(
             ? input.terminalId
             : undefined,
           typeof input.timeoutMs === "number" ? input.timeoutMs : undefined,
+          ctx.workingDirectory,
         ),
     },
     {
@@ -433,11 +623,12 @@ export function buildWorkspaceToolkit(
     {
       name: "sync_project",
       description:
-        "Sync this project with its linked remote repository (e.g. GitHub) now: pull new remote commits, push local checkpoints. Sync also runs automatically after your turns — call this when the user asks to sync/push/pull/share changes, or when you need the freshest remote state before working. Never run raw git push/pull in a terminal for a linked project; this tool applies the safe policy. Outcomes: up-to-date, pushed, pulled, merged (histories combined cleanly), deferred (unsaved edits in the tree; retried automatically), diverged (automatic merge conflicted — local work was pushed to a rescue branch on the remote; tell the user and offer a pull request from it), no-remote (project isn't linked to a remote).",
+        "Sync this project with its linked remote repository now. On the primary checkout this applies the safe pull/push policy. An isolated worktree never pushes main implicitly; use create_pull_request to share that branch. Call this when the user asks to sync, push, pull, or share changes. Never run raw git push or pull in a terminal for a linked project.",
       parameters: {},
       execute: async (_input, ctx) => {
+        if (!ctx.sessionId) throw new Error("This turn has no chat session.");
         if (!gitBridge) throw new Error("Remote sync is not available yet.");
-        return gitBridge.sync(ctx.projectId);
+        return gitBridge.sync(ctx.projectId, ctx.sessionId);
       },
     },
     {
@@ -456,10 +647,11 @@ export function buildWorkspaceToolkit(
           .describe("PR description (markdown): what changed and why"),
       },
       execute: async (input, ctx) => {
+        if (!ctx.sessionId) throw new Error("This turn has no chat session.");
         if (!gitBridge) {
           throw new Error("Pull requests are not available yet.");
         }
-        return gitBridge.createPullRequest(ctx.projectId, {
+        return gitBridge.createPullRequest(ctx.projectId, ctx.sessionId, {
           title: String(input.title),
           ...(typeof input.body === "string" ? { body: input.body } : {}),
         });
@@ -565,6 +757,85 @@ export function buildWorkspaceToolkit(
     setSkillReader(reader) {
       readSkill = reader;
     },
+    setSessionCoordinationBridge(bridge) {
+      sessionCoordination = bridge;
+    },
+    setCheckoutBridge(bridge) {
+      checkouts = bridge;
+    },
+    setSessionVisibility(visibility) {
+      sessionVisible = visibility;
+    },
+  };
+}
+
+async function filterWorkspaceOverview(
+  overview: unknown,
+  projectId: string,
+  visible: SessionVisibility,
+): Promise<unknown> {
+  if (!overview || typeof overview !== "object") return overview;
+  const data = overview as {
+    tabs?: unknown[];
+    chats?: Array<{ key?: string; sessionId?: string | null }>;
+  };
+  if (!Array.isArray(data.chats)) return overview;
+  const visibility = await Promise.all(
+    data.chats.map(async (chat) => ({
+      chat,
+      visible: chat.sessionId ? await visible(projectId, chat.sessionId) : true,
+    })),
+  );
+  const hiddenKeys = new Set(
+    visibility
+      .filter((entry) => !entry.visible && entry.chat.key)
+      .map((entry) => entry.chat.key as string),
+  );
+  return {
+    ...data,
+    chats: visibility
+      .filter((entry) => entry.visible)
+      .map((entry) => entry.chat),
+    ...(Array.isArray(data.tabs)
+      ? {
+          tabs: data.tabs.filter((tab) => {
+            if (!tab || typeof tab !== "object") return true;
+            return !hiddenKeys.has((tab as { key?: string }).key ?? "");
+          }),
+        }
+      : {}),
+  };
+}
+
+function boundedTranscript(transcript: {
+  title: string | null;
+  messages: Array<{ role: string; content: string }>;
+}) {
+  let total = 0;
+  const recent = transcript.messages
+    .slice(-TRANSCRIPT_MESSAGE_CAP)
+    .reverse()
+    .filter((message) => {
+      total += message.content.length;
+      return total <= TRANSCRIPT_CHARS_CAP;
+    })
+    .reverse();
+  return {
+    title: transcript.title,
+    omitted: transcript.messages.length - recent.length,
+    transcript: recent,
+  };
+}
+
+function checkoutResult(result: unknown): unknown {
+  if (!result || typeof result !== "object") return result;
+  const checkout = result as { path?: unknown };
+  return {
+    ...checkout,
+    note:
+      typeof checkout.path === "string"
+        ? `Checkout assigned at ${checkout.path}. Use this absolute path for all remaining file and terminal operations in this turn. Future turns start there automatically.`
+        : "Checkout assigned. Use its path for all remaining file and terminal operations in this turn.",
   };
 }
 

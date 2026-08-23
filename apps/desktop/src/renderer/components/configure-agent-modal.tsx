@@ -10,6 +10,7 @@ import { type FormEvent, useEffect, useMemo, useState } from "react";
 import {
   type AgentAuthMode,
   type AgentConnectionsSetting,
+  type AgentCoordinationStrategy,
   type AgentEffort,
   type AgentHarness,
   type AgentInfo,
@@ -70,6 +71,28 @@ const MODE_OPTIONS: Array<{
     value: "full-access",
     label: "Full access",
     detail: "The harness's own safety checks are off. For trusted work only.",
+  },
+];
+
+const COORDINATION_OPTIONS: Array<{
+  value: AgentCoordinationStrategy;
+  label: string;
+  detail: string;
+}> = [
+  {
+    value: "shared-first",
+    label: "Share the project folder",
+    detail: "Share unless concurrent work is likely to interfere.",
+  },
+  {
+    value: "isolate-on-contention",
+    label: "Prefer a worktree when others are active",
+    detail: "Use isolation when another active session makes it safer.",
+  },
+  {
+    value: "isolation-required",
+    label: "Always isolate concurrent editing",
+    detail: "Do not share a checkout with another active editor.",
   },
 ];
 
@@ -278,6 +301,9 @@ function ProfileAgentBody({
   const [model, setModel] = useState(agent.model);
   const [effort, setEffort] = useState<AgentEffort>(agent.effort);
   const [mode, setMode] = useState<AgentMode>(agent.mode);
+  const [coordination, setCoordination] = useState<AgentCoordinationStrategy>(
+    agent.coordination,
+  );
   const [instructions, setInstructions] = useState(agent.instructions);
   const [memory, setMemory] = useState(agent.memory);
   const [auth, setAuth] = useState<AgentAuthMode>(agent.auth);
@@ -331,6 +357,7 @@ function ProfileAgentBody({
         model: model.trim(),
         effort,
         mode,
+        coordination,
         memory,
         instructions,
         auth: effectiveAuth,
@@ -555,6 +582,32 @@ function ProfileAgentBody({
 
           {tab === "capabilities" && (
             <>
+              <label className="flex flex-col gap-1 text-xs text-fg-muted">
+                Concurrent work
+                <select
+                  value={coordination}
+                  onChange={(event) =>
+                    setCoordination(
+                      event.target.value as AgentCoordinationStrategy,
+                    )
+                  }
+                  className="field h-8 px-2 text-[13px] text-fg"
+                  data-testid="agent-coordination"
+                >
+                  {COORDINATION_OPTIONS.map((option) => (
+                    <option key={option.value} value={option.value}>
+                      {option.label}
+                    </option>
+                  ))}
+                </select>
+                <span className="text-fg-faint">
+                  {
+                    COORDINATION_OPTIONS.find(
+                      (option) => option.value === coordination,
+                    )?.detail
+                  }
+                </span>
+              </label>
               {profileConnections.length > 0 && (
                 <ConnectionsAssignmentField
                   value={connections}
@@ -738,6 +791,7 @@ function ProjectAgentBody({
           {fact("Model", agent.model ?? "harness default")}
           {fact("Effort", agent.effort ?? "medium")}
           {fact("Mode", agent.mode ?? "edit")}
+          {fact("Concurrent work", agent.coordination ?? "shared-first")}
           {fact(
             "Memory",
             agent.kind === "claude-code" ? (agent.memory ? "on" : "off") : null,

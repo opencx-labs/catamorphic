@@ -348,6 +348,7 @@ export class ClaudeCodeAgent implements CodingAgentProvider {
     const toolContext: ExtraToolContext = {
       projectId: opts.projectId,
       sessionId: opts.sessionId,
+      workingDirectory: opts.workingDirectory,
       ...(opts.caller ? { caller: opts.caller } : {}),
     };
 
@@ -406,6 +407,38 @@ export class ClaudeCodeAgent implements CodingAgentProvider {
       const existing = this.sessions.get(providerSessionId);
       if (existing) existing.callerPolicies = opts.toolPolicies;
     }
+    let state = this.sessions.get(providerSessionId);
+    if (!state) {
+      state = {
+        workingDirectory: session.workingDirectory,
+        toolContext: {
+          projectId: session.projectId,
+          sessionId: session.sessionId,
+          workingDirectory: session.workingDirectory,
+        },
+        transcriptExists: true,
+      };
+      this.sessions.set(providerSessionId, state);
+    }
+    state.workingDirectory = session.workingDirectory;
+    if (state.toolContext) {
+      // Keep the same object: a parked AskUserQuestion turn may have SDK
+      // tool closures pointing at it while the host changes the checkout.
+      state.toolContext.projectId = session.projectId;
+      state.toolContext.sessionId = session.sessionId;
+      state.toolContext.workingDirectory = session.workingDirectory;
+    } else {
+      state.toolContext = {
+        projectId: session.projectId,
+        sessionId: session.sessionId,
+        workingDirectory: session.workingDirectory,
+      };
+    }
+    if (opts?.toolPolicies) {
+      // The caller's layers must survive a host restart (no stored state):
+      // a resurrected session serving a scoped caller stays narrowed.
+      state.callerPolicies = opts.toolPolicies;
+    }
     const awaiting = this.awaitingAnswers.get(providerSessionId);
     if (awaiting) {
       this.awaitingAnswers.delete(providerSessionId);
@@ -419,22 +452,7 @@ export class ClaudeCodeAgent implements CodingAgentProvider {
       yield* this.pumpTurn(providerSessionId, awaiting);
       return;
     }
-
-    let state = this.sessions.get(providerSessionId);
-    if (opts?.toolPolicies) {
-      // The caller's layers must survive a host restart (no stored state):
-      // a resurrected session serving a scoped caller stays narrowed.
-      if (!state) {
-        state = {
-          workingDirectory: session.workingDirectory,
-          transcriptExists: true,
-        };
-        this.sessions.set(providerSessionId, state);
-      }
-      state.callerPolicies = opts.toolPolicies;
-    }
-    const cwd =
-      session.workingDirectory || state?.workingDirectory || undefined;
+    const cwd = state.workingDirectory || undefined;
 
     const live = createLiveTurn(state);
     try {
@@ -634,9 +652,8 @@ export class ClaudeCodeAgent implements CodingAgentProvider {
     live: LiveTurn,
     providerSessionId?: string,
   ): Options {
-    // Sessions resumed after a host restart have no stored context to run
-    // extra tools with, so they run without the workspace server (the CLI
-    // transcript survives; the tools return once the state is known again).
+    // Resumed sessions reconstruct this context from ProviderSession before
+    // reaching here, so the host's workspace tools survive app restarts.
     const extraTools = toolContext ? (this.opts.extraTools ?? []) : [];
     const workspaceServer =
       extraTools.length > 0 && toolContext

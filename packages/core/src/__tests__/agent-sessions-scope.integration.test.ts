@@ -137,7 +137,7 @@ describeIf("scoped agent sessions (ADR 0055)", () => {
         provider: unusedSandboxProvider,
         store: new DbSandboxStore(db),
       }),
-      hostProjectPath: () => rootPath,
+      hostAgentCheckout: { resolve: () => rootPath },
       // The project's tool roster: two tools, one renamed via its trigger.
       mcpToolNames: async () =>
         new Map([

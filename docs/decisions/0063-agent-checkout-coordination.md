@@ -42,6 +42,14 @@ is `shared-first`. Worktree bindings and filesystem paths are desktop-local
 host state, not shared Catamorphic schema. External worktrees may be adopted
 but are never automatically removed.
 
+`isolation-required` is the one enforced policy. When a host-executed turn
+starts in a checkout occupied by another visible running session, the desktop
+moves a session on the primary checkout to a managed worktree before invoking
+the harness, or blocks an already-isolated session until it selects a free
+checkout. Assignment tools reject occupied primary, managed, and external
+checkouts. The other strategies remain agent judgment and never create a
+worktree merely because a session was opened.
+
 Peer discovery is project-scoped by default. Cross-project discovery requires
 an explicit host capability, and the desktop excludes incognito sessions.
 
@@ -55,7 +63,9 @@ an explicit host capability, and the desktop excludes incognito sessions.
   session using it; the product must never imply per-agent ownership there.
 - Host-execution path resolution and checkpoints become session-aware.
 - Worktree turns do not automatically sync the primary branch. Sharing from a
-  worktree is explicit through integration or pull-request flows.
+  worktree is explicit through integration or pull-request flows; pull-request
+  creation pushes the session's assigned branch rather than the primary
+  checkout branch.
 - Incorrect agent judgment can still produce ordinary last-write-wins file
   collisions. That is an accepted cost of the intentionally lightweight
   shared mode.

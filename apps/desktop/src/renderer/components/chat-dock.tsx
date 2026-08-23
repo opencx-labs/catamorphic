@@ -12,6 +12,7 @@ import {
   Columns2,
   FileCode,
   Ghost,
+  GitBranch,
   GitFork,
   Globe,
   LayoutGrid,
@@ -40,6 +41,7 @@ import {
   type AgentInfo,
   desktopApi,
   projectAgentAsInfo,
+  type SessionCheckoutInfo,
 } from "../lib/desktop-api";
 import {
   readEditorSelection,
@@ -1237,6 +1239,26 @@ export function ChatDock({
     },
   });
   const isIncognito = Boolean(entry.incognito);
+  const [checkout, setCheckout] = useState<SessionCheckoutInfo | null>(null);
+  useEffect(() => {
+    const load = () => {
+      if (!entry.sessionId) {
+        setCheckout(null);
+        return;
+      }
+      void desktopApi.sessionCheckouts(projectId).then((checkouts) => {
+        setCheckout(
+          checkouts.find(
+            (candidate) => candidate.sessionId === entry.sessionId,
+          ) ?? null,
+        );
+      });
+    };
+    load();
+    return desktopApi.onGitChanged((event) => {
+      if (event.projectId === projectId) load();
+    });
+  }, [entry.sessionId, projectId]);
   // The composer's DOM is the source of truth (see ComposerInput); these
   // mirror what it says so the rest of the dock can react — the prose
   // (slash menu, recall gate, emptiness) and how many pills are live.
@@ -2282,6 +2304,7 @@ export function ChatDock({
         data-palette-target={(paletteTargeted && !isTab) || undefined}
         data-floating-chat={entry.mode === "partial" || undefined}
         data-lurking={lurking || undefined}
+        data-chat-local-id={entry.localId}
         className={`pointer-events-auto relative flex w-full origin-bottom flex-col overflow-hidden backdrop-blur-xl transition-[max-width,height,opacity,translate,scale,background-color,border-radius,border-color] duration-250 ease-[cubic-bezier(0.2,0,0,1)] ${
           presentsAsTab
             ? "h-full max-w-full rounded-none border-0 border-transparent bg-bg"
@@ -2342,6 +2365,20 @@ export function ChatDock({
         {/* A snug pill behind the controls so they never blend into (or
             hide) timeline content scrolled beneath them. */}
         <span className="absolute right-2 top-2 z-10 flex items-center gap-0.5 rounded-lg border border-border bg-bg-raised/95 p-0.5 backdrop-blur-sm">
+          {checkout ? (
+            <span
+              className="flex max-w-32 items-center gap-1 truncate rounded-md bg-bg-inset px-1.5 py-1 text-[10px] font-medium text-fg-muted"
+              data-testid="chat-checkout-badge"
+              title={checkout.branch ?? "External worktree"}
+            >
+              <GitBranch className="size-3 shrink-0" />
+              <span className="truncate">
+                {checkout.kind === "external"
+                  ? "External"
+                  : (checkout.branch ?? "Worktree")}
+              </span>
+            </span>
+          ) : null}
           {onOpenParent && (
             <ShortcutHint label="Go to the original chat">
               <button

@@ -4,6 +4,7 @@ import type {
   AgentMcpServerConfig,
   AgentTurnUsage,
   CodingAgentProvider,
+  ExtraToolContext,
   McpServersSource,
   McpToolPolicyLayers,
   ProviderSession,
@@ -64,6 +65,10 @@ export interface CodexAgentOpts {
    * credential to the next turn without a provider rebuild.
    */
   mcpServers?: McpServersSource;
+  /** Host-owned MCP servers resolved for the current project/session. */
+  mcpServersForSession?: (
+    context: ExtraToolContext,
+  ) => Record<string, AgentMcpServerConfig>;
   /**
    * Per-server tool permissions (see @catamorphic/sandbox tool-policy).
    * Codex offers no per-call approval channel to a host (its approvals
@@ -117,6 +122,7 @@ export class CodexAgent implements CodingAgentProvider {
     string,
     Record<string, McpToolPolicyLayers>
   >();
+  private readonly sessionContexts = new Map<string, ExtraToolContext>();
   constructor(opts: CodexAgentOpts = {}) {
     this.opts = opts;
   }
@@ -140,7 +146,7 @@ export class CodexAgent implements CodingAgentProvider {
    * provider's policies narrowed by the session's caller (ADR 0055) —
    * with no provider rebuild and nothing to cache.
    */
-  private clientFor(hostSessionId: string): Codex {
+  private clientFor(session: ProviderSession): Codex {
     const own =
       typeof this.opts.mcpPolicies === "function"
         ? this.opts.mcpPolicies()
@@ -149,9 +155,21 @@ export class CodexAgent implements CodingAgentProvider {
       typeof this.opts.mcpToolAnnotations === "function"
         ? this.opts.mcpToolAnnotations()
         : this.opts.mcpToolAnnotations;
+    const context = {
+      ...this.sessionContexts.get(session.sessionId),
+      projectId: session.projectId,
+      sessionId: session.sessionId,
+      workingDirectory: session.workingDirectory,
+    };
+    // Host checkout assignments can change between turns. Preserve the
+    // caller captured at start while refreshing the live session fields.
+    this.sessionContexts.set(session.sessionId, context);
     const config = mcpServersConfig(
-      resolveMcpServers(this.opts.mcpServers),
-      mergePolicyLayers(own, this.callerPolicies.get(hostSessionId)),
+      {
+        ...resolveMcpServers(this.opts.mcpServers),
+        ...this.opts.mcpServersForSession?.(context),
+      },
+      mergePolicyLayers(own, this.callerPolicies.get(session.sessionId)),
       annotations,
     );
     return this.buildClient(config);
@@ -169,6 +187,12 @@ export class CodexAgent implements CodingAgentProvider {
     if (opts.toolPolicies) {
       this.callerPolicies.set(opts.sessionId, opts.toolPolicies);
     }
+    this.sessionContexts.set(opts.sessionId, {
+      projectId: opts.projectId,
+      sessionId: opts.sessionId,
+      workingDirectory: opts.workingDirectory,
+      ...(opts.caller ? { caller: opts.caller } : {}),
+    });
 
     // The CLI only reveals its thread id once a turn starts, so the id stays
     // null here and the first real turn reports it via a "session" event —
@@ -193,7 +217,7 @@ export class CodexAgent implements CodingAgentProvider {
     if (opts?.toolPolicies) {
       this.callerPolicies.set(session.sessionId, opts.toolPolicies);
     }
-    const client = this.clientFor(session.sessionId);
+    const client = this.clientFor(session);
     const threadOptions = this.threadOptions(session.workingDirectory, opts);
     const thread = session.providerSessionId
       ? client.resumeThread(session.providerSessionId, threadOptions)
@@ -264,6 +288,7 @@ export class CodexAgent implements CodingAgentProvider {
     // Threads live on disk under $CODEX_HOME; nothing else to release.
     this.pendingInstructions.delete(session.sessionId);
     this.callerPolicies.delete(session.sessionId);
+    this.sessionContexts.delete(session.sessionId);
   }
 
   /**

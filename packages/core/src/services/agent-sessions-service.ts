@@ -70,6 +70,10 @@ export interface AgentSession {
   icon: string | null;
   /** Session this one was forked from, if any. */
   parentSessionId: string | null;
+  /** Short agent-published description used to coordinate project peers. */
+  activity: string | null;
+  /** Runtime state in this host process; never persisted. */
+  running: boolean;
   status: "active" | "closed";
   baseCommitSha: string | null;
   createdAt: string;
@@ -88,6 +92,17 @@ export interface AgentMessage {
 
 export interface AgentSessionDetail extends AgentSession {
   messages: AgentMessage[];
+}
+
+export interface AgentSessionPeer {
+  id: string;
+  projectId: string;
+  title: string | null;
+  agentId: string | null;
+  running: boolean;
+  task: string | null;
+  activity: string | null;
+  updatedAt: string;
 }
 
 export class AgentSessionNotFoundError extends Error {
@@ -154,6 +169,17 @@ const CHECKPOINT_AUTHOR = {
   name: "Catamorphic Agent",
   email: "agent@catamorphic.dev",
 };
+
+const SESSION_TASK_SUMMARY_LIMIT = 240;
+const PEER_RECENT_WINDOW_MS = 30 * 60 * 1000;
+
+/** Compact, bounded peer context derived from a session's latest request. */
+export function summarizeSessionTask(message: string): string | null {
+  const normalized = message.replace(/\s+/g, " ").trim();
+  if (!normalized) return null;
+  if (normalized.length <= SESSION_TASK_SUMMARY_LIMIT) return normalized;
+  return `${normalized.slice(0, SESSION_TASK_SUMMARY_LIMIT - 1)}…`;
+}
 
 /** First line of the user's request, trimmed into a commit subject. */
 function checkpointMessage(userMessage: string): string {
@@ -285,6 +311,21 @@ export interface AgentTurnSettledEvent {
   messageId: string;
   status: "completed" | "failed" | "awaiting_input";
   changedFiles: string[];
+  /** Checkout in which this turn ran. Host-local and never persisted. */
+  workingDirectory: string;
+}
+
+export interface HostAgentCheckout {
+  resolve(input: {
+    projectId: string;
+    sessionId: string;
+  }): Promise<string | undefined> | string | undefined;
+  checkpoint?(input: {
+    projectId: string;
+    sessionId: string;
+    workingDirectory: string;
+    message: string;
+  }): Promise<string | null>;
 }
 
 interface AgentSessionsDeps {
@@ -297,9 +338,7 @@ interface AgentSessionsDeps {
    * execution-mode agents (Claude Code, Codex — runtimes that operate on
    * local paths). Hosts that only register sandbox agents can omit it.
    */
-  hostProjectPath?: (
-    projectId: string,
-  ) => Promise<string | undefined> | string | undefined;
+  hostAgentCheckout?: HostAgentCheckout;
   plugins?: PluginsService;
   pluginResolver?: PluginResolver;
   /**
@@ -357,7 +396,7 @@ export class AgentSessionsService {
   private readonly projectManager: ProjectManager;
   private readonly sandboxProvider: SandboxProvider;
   private readonly codingAgents: CodingAgentRegistry;
-  private readonly hostProjectPath?: AgentSessionsDeps["hostProjectPath"];
+  private readonly hostAgentCheckout?: HostAgentCheckout;
   private readonly plugins?: PluginsService;
   private readonly pluginResolver?: PluginResolver;
   private readonly devSandboxes: DevSandboxService;
@@ -389,7 +428,7 @@ export class AgentSessionsService {
     this.projectManager = deps.projectManager;
     this.sandboxProvider = deps.sandboxProvider;
     this.codingAgents = deps.codingAgents;
-    this.hostProjectPath = deps.hostProjectPath;
+    this.hostAgentCheckout = deps.hostAgentCheckout;
     this.devSandboxes = deps.devSandboxes;
     this.plugins = deps.plugins;
     this.pluginResolver = deps.pluginResolver;
@@ -435,7 +474,102 @@ export class AgentSessionsService {
       .executeTakeFirstOrThrow()
       .then((r) => Number(r.count));
 
-    return { items: rows.map(mapSession), total };
+    return {
+      items: rows.map((row) => mapSession(row, this.runningTurns.has(row.id))),
+      total,
+    };
+  }
+
+  /**
+   * Other visible conversations in this project for agent coordination.
+   * Unlike the normal personal-session list, scoped callers may see peers
+   * running an agent ref their scope covers. The project boundary and agent
+   * scope remain hard authorization boundaries.
+   */
+  async listPeers(
+    identity: Identity,
+    projectId: string,
+    ownSessionId: string,
+  ): Promise<AgentSessionPeer[]> {
+    await this.requireSession(identity, projectId, ownSessionId);
+    let query = this.db
+      .selectFrom("agent_sessions")
+      .where("project_id", "=", projectId)
+      .where("id", "!=", ownSessionId)
+      .where("status", "=", "active");
+    if (!isBuilder(identity, projectId)) {
+      const agentIds = this.coveredAgentIds(identity, projectId);
+      if (agentIds.length === 0) return [];
+      query = query.where("agent_id", "in", agentIds);
+    }
+    const runningIds = [...this.runningTurns.keys()];
+    const recentSince = new Date(Date.now() - PEER_RECENT_WINDOW_MS);
+    query = query.where((expression) =>
+      runningIds.length > 0
+        ? expression.or([
+            expression("updated_at", ">=", recentSince),
+            expression("id", "in", runningIds),
+          ])
+        : expression("updated_at", ">=", recentSince),
+    );
+    const rows = await query
+      .selectAll()
+      .orderBy("updated_at", "desc")
+      .limit(20)
+      .execute();
+    if (rows.length === 0) return [];
+
+    const latestRequests = await this.db
+      .selectFrom("agent_messages")
+      .where(
+        "session_id",
+        "in",
+        rows.map((row) => row.id),
+      )
+      .where("role", "=", "user")
+      .select(["session_id", "content", "seq"])
+      .distinctOn("session_id")
+      .orderBy("session_id")
+      .orderBy("seq", "desc")
+      .execute();
+    const taskBySession = new Map<string, string | null>();
+    for (const message of latestRequests) {
+      if (!taskBySession.has(message.session_id)) {
+        taskBySession.set(
+          message.session_id,
+          summarizeSessionTask(message.content),
+        );
+      }
+    }
+
+    return rows.map((row) => ({
+      id: row.id,
+      projectId: row.project_id,
+      title: row.title,
+      agentId: row.agent_id,
+      running: this.runningTurns.has(row.id),
+      task: taskBySession.get(row.id) ?? null,
+      activity: row.activity,
+      updatedAt: row.updated_at.toISOString(),
+    }));
+  }
+
+  async setActivity(
+    identity: Identity,
+    projectId: string,
+    sessionId: string,
+    activity: string | null,
+  ): Promise<void> {
+    await this.requireSession(identity, projectId, sessionId);
+    const normalized = activity?.replace(/\s+/g, " ").trim() || null;
+    if (normalized && normalized.length > 500) {
+      throw new Error("Session activity must be 500 characters or fewer");
+    }
+    await this.db
+      .updateTable("agent_sessions")
+      .set({ activity: normalized, updated_at: new Date() })
+      .where("id", "=", sessionId)
+      .execute();
   }
 
   async get(
@@ -451,7 +585,10 @@ export class AgentSessionsService {
       .orderBy("seq", "asc")
       .execute();
     const settled = await this.settleOrphanedTurns(sessionId, messages);
-    return { ...mapSession(row), messages: settled.map(mapMessage) };
+    return {
+      ...mapSession(row, this.runningTurns.has(row.id)),
+      messages: settled.map(mapMessage),
+    };
   }
 
   /**
@@ -1400,13 +1537,20 @@ export class AgentSessionsService {
         }
       }
 
+      const settledWorkingDirectory =
+        agent.execution === "host" && this.hostAgentCheckout
+          ? ((await this.hostAgentCheckout.resolve({ projectId, sessionId })) ??
+            anchor.providerSession.workingDirectory)
+          : anchor.providerSession.workingDirectory;
+      anchor.providerSession.workingDirectory = settledWorkingDirectory;
+
       const changedFiles = anchor.sandboxProviderId
         ? await this.syncBackChanges(
             identity,
             projectId,
             anchor.sandboxProviderId,
           )
-        : hostChangedFiles(events, anchor.providerSession.workingDirectory);
+        : hostChangedFiles(events, settledWorkingDirectory);
 
       // Ship the turn's `store/` writes as the caller (ADR 0055) before the
       // checkpoint: store paths are gitignored, so they never enter git.
@@ -1441,8 +1585,12 @@ export class AgentSessionsService {
       // Sweeps ALL dirty state (host harnesses under-report changed files);
       // failures log and never break the turn.
       const commitSha =
-        changedFiles.length > 0
-          ? await this.checkpointTurn(identity, projectId, message)
+        agent.execution === "host" || changedFiles.length > 0
+          ? await this.checkpointTurn(identity, projectId, message, {
+              sessionId,
+              workingDirectory: settledWorkingDirectory,
+              hostExecution: agent.execution === "host",
+            })
           : null;
 
       const questionEvent = [...events]
@@ -1532,6 +1680,7 @@ export class AgentSessionsService {
           messageId: assistantMessageId,
           status: metadata.status as AgentTurnSettledEvent["status"],
           changedFiles: changedFiles.map((change) => change.path),
+          workingDirectory: settledWorkingDirectory,
         };
         void Promise.resolve()
           .then(() => this.onTurnSettled?.(settled))
@@ -1679,7 +1828,10 @@ export class AgentSessionsService {
       (agent.provider.hasSession?.(session.provider_session_id) ?? true);
 
     if (agent.execution === "host") {
-      const workingDirectory = await this.resolveHostPath(projectId);
+      const workingDirectory = await this.resolveHostPath(
+        projectId,
+        session.id,
+      );
       if (anchored && session.provider_session_id) {
         return {
           providerSession: {
@@ -1817,8 +1969,14 @@ export class AgentSessionsService {
     return capped;
   }
 
-  private async resolveHostPath(projectId: string): Promise<string> {
-    const path = await this.hostProjectPath?.(projectId);
+  private async resolveHostPath(
+    projectId: string,
+    sessionId: string,
+  ): Promise<string> {
+    const path = await this.hostAgentCheckout?.resolve({
+      projectId,
+      sessionId,
+    });
     if (!path) {
       throw new Error(
         "This agent runs on the host machine, but the project has no host directory",
@@ -1993,8 +2151,21 @@ export class AgentSessionsService {
     identity: Identity,
     projectId: string,
     userMessage: string,
+    execution: {
+      sessionId: string;
+      workingDirectory: string;
+      hostExecution: boolean;
+    },
   ): Promise<string | null> {
     try {
+      if (execution.hostExecution && this.hostAgentCheckout?.checkpoint) {
+        return await this.hostAgentCheckout.checkpoint({
+          projectId,
+          sessionId: execution.sessionId,
+          workingDirectory: execution.workingDirectory,
+          message: checkpointMessage(userMessage),
+        });
+      }
       const repo = await this.projectManager.openDev(
         identity.tenantId,
         projectId,
@@ -2398,7 +2569,7 @@ function hostOf(serverUrl: string): string {
   }
 }
 
-function mapSession(row: SessionRow): AgentSession {
+function mapSession(row: SessionRow, running = false): AgentSession {
   return {
     id: row.id,
     projectId: row.project_id,
@@ -2411,6 +2582,8 @@ function mapSession(row: SessionRow): AgentSession {
     title: row.title,
     icon: row.icon,
     parentSessionId: row.parent_session_id,
+    activity: row.activity,
+    running,
     status: row.status as "active" | "closed",
     baseCommitSha: row.base_commit_sha,
     createdAt: row.created_at.toISOString(),

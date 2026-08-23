@@ -169,9 +169,14 @@ harness packages `@catamorphic/ai-sdk` (any API model),
 `@catamorphic/claude-code`, and `@catamorphic/codex`. Sessions select an
 agent, can switch mid-session, and carry a normalized `low | medium | high`
 effort. Agents execute either in the dev sandbox or directly on host paths
-(`hostProjectPathResolver`). Harnesses accept per-session MCP servers via
-`mcpServersForSession`, which is how a project's own workflow tools reach
-the agent.
+through the host-injected `hostAgentCheckout` callbacks. `resolve` chooses a
+working directory for each session and turn; `checkpoint` records a changed
+turn in that checkout. This lets a host keep ordinary sessions in one visible
+project folder while optionally binding contended sessions to Git worktrees,
+without putting desktop paths or worktree policy into the framework. Harnesses
+accept per-session MCP servers via `mcpServersForSession`, which is how a
+project's own workflow tools and host checkout-management tools reach the
+agent.
 
 **Project agent definitions** (ADR 0050) make agents work products: a
 committed `agents/<slug>.json` (harness kind, model, effort, credential

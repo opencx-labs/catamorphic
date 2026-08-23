@@ -628,6 +628,8 @@ const api = {
   // --- git + pull requests (dev surfaces) ---
   gitOverview: (projectId: string): Promise<unknown> =>
     ipcRenderer.invoke("catamorphic:git-overview", projectId),
+  sessionCheckouts: (projectId: string): Promise<unknown> =>
+    ipcRenderer.invoke("catamorphic:session-checkouts", projectId),
   gitFileDiff: (
     projectId: string,
     worktreePath: string,
