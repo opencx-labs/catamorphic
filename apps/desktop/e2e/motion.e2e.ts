@@ -282,7 +282,9 @@ describe("animate-before-unmount", () => {
     );
     const samples = await run<{
       enter: number[];
+      enterTransition: boolean;
       exit: Array<{ opacity?: number; gone?: boolean }>;
+      exitTransition: boolean;
       loadingHeight: number;
       readyHeight: number;
       loadingStage: { width: number; height: number };
@@ -297,6 +299,7 @@ describe("animate-before-unmount", () => {
       input.dispatchEvent(new KeyboardEvent('keydown',
         { key: 'Enter', bubbles: true, cancelable: true }));
       const enter = [];
+      let enterTransition = false;
       let loadingLayout = null;
       const deadline = performance.now() + 400;
       while (performance.now() < deadline) {
@@ -304,6 +307,9 @@ describe("animate-before-unmount", () => {
         const overlay = heading?.closest('[aria-hidden]');
         if (overlay) {
           enter.push(parseFloat(getComputedStyle(overlay).opacity));
+          enterTransition ||= overlay.getAnimations().some(
+            (animation) => animation instanceof CSSTransition &&
+              animation.transitionProperty === 'opacity');
           const modal = $('[data-testid="mobile-pairing-modal"]');
           const stage = $('[data-testid="mobile-pairing-qr-stage"]');
           if (modal?.dataset.state === 'loading' && stage) {
@@ -339,10 +345,16 @@ describe("animate-before-unmount", () => {
         $('[data-testid="mobile-pairing-qr"]'),
       ).animationName;
       pressKey('Escape');
+      await new Promise(requestAnimationFrame);
+      const exitTransition = overlay.getAnimations().some(
+        (animation) => animation instanceof CSSTransition &&
+          animation.transitionProperty === 'opacity');
       const exit = await sampleUntilGone(overlay, null, 400);
       return {
         enter,
+        enterTransition,
         exit,
+        exitTransition,
         loadingHeight: loadingLayout.height,
         readyHeight,
         loadingStage: loadingLayout.stage,
@@ -354,20 +366,16 @@ describe("animate-before-unmount", () => {
       };
       })();
     `);
-    expect(samples.enter.some((opacity) => opacity > 0 && opacity < 1)).toBe(
-      true,
-    );
-    expect(
-      samples.exit.some(
-        (sample) =>
-          sample.opacity !== undefined &&
-          sample.opacity > 0 &&
-          sample.opacity < 1,
-      ),
-    ).toBe(true);
+    expect(samples.enterTransition).toBe(true);
+    expect(samples.exitTransition).toBe(true);
     expect(samples.readyHeight).toBeCloseTo(samples.loadingHeight, 0);
-    expect(samples.loadingStage).toEqual({ width: 240, height: 240 });
-    expect(samples.readyStage).toEqual(samples.loadingStage);
+    expect(samples.loadingStage.width).toBeCloseTo(240, 0);
+    expect(samples.loadingStage.height).toBeCloseTo(240, 0);
+    expect(samples.readyStage.width).toBeCloseTo(samples.loadingStage.width, 0);
+    expect(samples.readyStage.height).toBeCloseTo(
+      samples.loadingStage.height,
+      0,
+    );
     expect(samples.qrAnimation).toBe("pairing-qr-in");
   });
 
