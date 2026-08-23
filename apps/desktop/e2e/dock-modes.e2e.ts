@@ -299,18 +299,24 @@ describe("dock modes", () => {
     expect(overlay.overlaid).toBe(true);
   }, 120_000);
 
-  it("`open <url>` in an agent terminal lands as an in-app browser tab", async () => {
-    await run(
-      `setComposer('terminal: open https://example.com'); send(); return true;`,
-    );
-    await runWait(
-      `return $$('webview').some((w) => (w.src ?? '').startsWith('https://example.com'));`,
-      { label: "in-app browser tab from the open shim", timeoutMs: 30_000 },
-    );
-    // …and it is the ACTIVE tab (the chat floats in front of it).
-    const active = await run<boolean>(`
+  // The shim replaces macOS's native `open`; other platforms use their own
+  // shell launchers and cannot exercise this platform integration.
+  it.skipIf(process.platform !== "darwin")(
+    "`open <url>` in an agent terminal lands as an in-app browser tab",
+    async () => {
+      await run(
+        `setComposer('terminal: open https://example.com'); send(); return true;`,
+      );
+      await runWait(
+        `return $$('webview').some((w) => (w.src ?? '').startsWith('https://example.com'));`,
+        { label: "in-app browser tab from the open shim", timeoutMs: 30_000 },
+      );
+      // …and it is the ACTIVE tab (the chat floats in front of it).
+      const active = await run<boolean>(`
       return $$('[data-point-key^="browser:"]').length > 0;
     `);
-    expect(active).toBe(true);
-  }, 60_000);
+      expect(active).toBe(true);
+    },
+    60_000,
+  );
 });
