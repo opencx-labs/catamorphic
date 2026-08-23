@@ -217,6 +217,12 @@ describe("paired motion (enter/exit mirrors)", () => {
   });
 
   it("the dock's minimized pose mirrors dock-in's starting pose", async () => {
+    await runWait(
+      `if (visibleDock()) return true;
+       pressKey('n', { metaKey: true });
+       return false;`,
+      { label: "floating dock ready for pose check" },
+    );
     const enterFrom = await run<{ translateY: number; scale: number }>(`
       const keyframes = allStyleRules().find(
         (rule) => rule instanceof CSSKeyframesRule && rule.name === 'dock-in');
@@ -276,7 +282,9 @@ describe("animate-before-unmount", () => {
     );
     const samples = await run<{
       enter: number[];
+      enterTransition: boolean;
       exit: Array<{ opacity?: number; gone?: boolean }>;
+      exitTransition: boolean;
       loadingHeight: number;
       readyHeight: number;
       loadingStage: { width: number; height: number };
@@ -291,6 +299,7 @@ describe("animate-before-unmount", () => {
       input.dispatchEvent(new KeyboardEvent('keydown',
         { key: 'Enter', bubbles: true, cancelable: true }));
       const enter = [];
+      let enterTransition = false;
       let loadingLayout = null;
       const deadline = performance.now() + 400;
       while (performance.now() < deadline) {
@@ -298,14 +307,16 @@ describe("animate-before-unmount", () => {
         const overlay = heading?.closest('[aria-hidden]');
         if (overlay) {
           enter.push(parseFloat(getComputedStyle(overlay).opacity));
+          enterTransition ||= overlay.getAnimations().some(
+            (animation) => animation instanceof CSSTransition &&
+              animation.transitionProperty === 'opacity');
           const modal = $('[data-testid="mobile-pairing-modal"]');
           const stage = $('[data-testid="mobile-pairing-qr-stage"]');
           if (modal?.dataset.state === 'loading' && stage) {
             const panel = heading.closest('[role="dialog"]');
-            const stageRect = stage.getBoundingClientRect();
             loadingLayout = {
-              height: panel.getBoundingClientRect().height,
-              stage: { width: stageRect.width, height: stageRect.height },
+              height: panel.offsetHeight,
+              stage: { width: stage.offsetWidth, height: stage.offsetHeight },
             };
           }
         }
@@ -326,40 +337,36 @@ describe("animate-before-unmount", () => {
       while (!$('[data-testid="mobile-pairing-qr"]')) {
         await new Promise(requestAnimationFrame);
       }
-      const readyStageRect = $('[data-testid="mobile-pairing-qr-stage"]')
-        .getBoundingClientRect();
-      const readyHeight = panel.getBoundingClientRect().height;
+      const readyStage = $('[data-testid="mobile-pairing-qr-stage"]');
+      const readyHeight = panel.offsetHeight;
       const qrAnimation = getComputedStyle(
         $('[data-testid="mobile-pairing-qr"]'),
       ).animationName;
       pressKey('Escape');
+      await new Promise(requestAnimationFrame);
+      const exitTransition = overlay.getAnimations().some(
+        (animation) => animation instanceof CSSTransition &&
+          animation.transitionProperty === 'opacity');
       const exit = await sampleUntilGone(overlay, null, 400);
       return {
         enter,
+        enterTransition,
         exit,
+        exitTransition,
         loadingHeight: loadingLayout.height,
         readyHeight,
         loadingStage: loadingLayout.stage,
         readyStage: {
-          width: readyStageRect.width,
-          height: readyStageRect.height,
+          width: readyStage.offsetWidth,
+          height: readyStage.offsetHeight,
         },
         qrAnimation,
       };
       })();
     `);
-    expect(samples.enter.some((opacity) => opacity > 0 && opacity < 1)).toBe(
-      true,
-    );
-    expect(
-      samples.exit.some(
-        (sample) =>
-          sample.opacity !== undefined &&
-          sample.opacity > 0 &&
-          sample.opacity < 1,
-      ),
-    ).toBe(true);
-    expect(samples.readyHeight).toBeCloseTo(samples.loadingHeight, 0);
+    expect(samples.enterTransition).toBe(true);
+    expect(samples.exitTransition).toBe(true);
+    expect(samples.readyHeight).toBe(samples.loadingHeight);
     expect(samples.loadingStage).toEqual({ width: 240, height: 240 });
     expect(samples.readyStage).toEqual(samples.loadingStage);
     expect(samples.qrAnimation).toBe("pairing-qr-in");

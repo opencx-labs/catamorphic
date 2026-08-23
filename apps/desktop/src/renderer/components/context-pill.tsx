@@ -361,6 +361,8 @@ function PillPreview({
       ref={ref}
       role="tooltip"
       data-testid="pill-preview"
+      data-open={open || undefined}
+      aria-hidden={!open}
       onMouseEnter={onMouseEnter}
       onMouseLeave={onMouseLeave}
       style={

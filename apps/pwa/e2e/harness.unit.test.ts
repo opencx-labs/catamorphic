@@ -2,7 +2,12 @@
 
 import { spawn } from "node:child_process";
 import { describe, expect, it, vi } from "vitest";
-import { chromeLaunchArgs, waitForHttp, watchChild } from "./harness.js";
+import {
+  chromeCdpStartupTimeoutMs,
+  chromeLaunchArgs,
+  waitForHttp,
+  watchChild,
+} from "./harness.js";
 
 describe("PWA E2E Chrome arguments", () => {
   it("disables the Chrome sandbox only in Linux CI", () => {
@@ -11,6 +16,11 @@ describe("PWA E2E Chrome arguments", () => {
     ]);
     expect(chromeLaunchArgs({ ci: undefined, platform: "linux" })).toEqual([]);
     expect(chromeLaunchArgs({ ci: "true", platform: "darwin" })).toEqual([]);
+  });
+
+  it("allows extra Chrome startup time on shared CI runners", () => {
+    expect(chromeCdpStartupTimeoutMs("true")).toBe(30_000);
+    expect(chromeCdpStartupTimeoutMs(undefined)).toBe(15_000);
   });
 });
 

@@ -178,6 +178,13 @@ cd packages/api-client && bun run generate
 
 Do not run `git add`, `git commit`, or `git push` unless the user explicitly asks.
 
+### 9. Keep main CI green
+
+CI runs the repository checks on every push to `main`. When you push to
+`main`, monitor that workflow to completion and treat a failure as unfinished
+work. A successful run is valid evidence for the checks it completed; keep
+`main` green before reporting the work complete.
+
 ## Design Principles
 
 Settled decisions — do not deviate without explicit user approval. ADRs in `docs/decisions/`; operational detail in `.cursor/rules/`:

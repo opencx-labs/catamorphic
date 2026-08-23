@@ -591,8 +591,8 @@ Integration tests hit the **real services** using the keys in the repo root `.en
 Unit tests run with no setup. The desktop app additionally has hidden and
 visible E2E suites that drive the real Electron binary over CDP with a
 deterministic fake agent. Run `bun run test:e2e` from `apps/desktop` for the
-interruption-free suite and `bun run test:e2e:visible` for focus and native
-window behavior.
+interruption-free suite and `bun run test:e2e:visible` for compositor, focus,
+and native window behavior.
 
 ## Tech stack
 

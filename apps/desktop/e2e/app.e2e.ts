@@ -433,14 +433,22 @@ describe("chat tab activity indicators", () => {
       ta.closest('form').requestSubmit();
       return true;
     `);
+    // Hide the chat immediately, while the deterministic slow turn still
+    // has time to run. Waiting for the spinner before changing tabs races
+    // the reply settling on a loaded renderer.
+    await run(`pressKey('t', { metaKey: true }); return true;`);
+    await runWait(
+      `return !visibleDock() &&
+        !!$$('textarea[placeholder*="Search or ask"]')
+          .find((el) => !el.closest('[inert]'));`,
+      { label: "chat hidden behind a fresh palette tab" },
+    );
     await runWait(`return ${tabSpinnerOn};`, {
       label: "tab icon spinner during the turn",
     });
   });
 
   it("finishing while the tab is hidden lands an unread dot; opening clears it", async () => {
-    // Hide the chat tab behind a fresh palette tab mid-turn.
-    await run(`pressKey('t', { metaKey: true }); return true;`);
     await runWait(`return ${tabDotOn};`, {
       timeoutMs: 30_000,
       label: "unread dot on the hidden chat tab",

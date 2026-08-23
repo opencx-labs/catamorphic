@@ -235,9 +235,15 @@ describe("dock modes", () => {
   }, 60_000);
 
   it("chips fold into an animated group chip past the threshold; the split affordance is hover-only", async () => {
-    // Three quick terminal turns after the lurk test's one → 4 total
-    // crosses SURFACE_GROUP_THRESHOLD (3) and the kind collapses.
+    // Three quick terminal turns after the lurk test's one cross
+    // SURFACE_GROUP_THRESHOLD (3). On retry the group already exists, so
+    // stop as soon as its semantic control is present instead of assuming
+    // an exact accumulated count.
     for (const label of ["two", "three", "four"]) {
+      const grouped = await run<boolean>(
+        `return !!frontDock().querySelector('button[aria-label$=" terminals"]');`,
+      );
+      if (grouped) break;
       await run(`setComposer('terminal: echo ${label}'); send(); return true;`);
       await runWait(
         `return frontDock().querySelector('[role="log"]').textContent.includes('${label}');`,
@@ -245,19 +251,19 @@ describe("dock modes", () => {
       );
     }
     await runWait(
-      `return !!frontDock().querySelector('button[aria-label="4 terminals"]');`,
+      `return !!frontDock().querySelector('button[aria-label$=" terminals"]');`,
       { timeoutMs: 15_000, label: "collapsed group chip" },
     );
     // The group chip ENTERED through the pill vocabulary (its wrapper
     // keeps the class for the element's lifetime).
     expect(
       await run<boolean>(
-        `return !!frontDock().querySelector('.animate-pill-in button[aria-label="4 terminals"]');`,
+        `return !!frontDock().querySelector('.animate-pill-in button[aria-label$=" terminals"]');`,
       ),
     ).toBe(true);
     // Its popover pops in and back out.
     await run(
-      `frontDock().querySelector('button[aria-label="4 terminals"]').click(); return true;`,
+      `frontDock().querySelector('button[aria-label$=" terminals"]').click(); return true;`,
     );
     await runWait(
       `const pop = frontDock().querySelector('.animate-pop-in');
@@ -265,7 +271,7 @@ describe("dock modes", () => {
       { label: "group popover popped in" },
     );
     await run(
-      `frontDock().querySelector('button[aria-label="4 terminals"]').click(); return true;`,
+      `frontDock().querySelector('button[aria-label$=" terminals"]').click(); return true;`,
     );
     await runWait(
       `return !!frontDock().querySelector('.animate-pop-out') ||
@@ -274,9 +280,10 @@ describe("dock modes", () => {
     );
     // Individual chips reserve no width for the split affordance: it
     // lives in an overlay that only appears under the pointer.
-    await run(
-      `setComposer('terminal: open https://example.org'); send(); return true;`,
-    );
+    // open_surface associates the browser with this chat, unlike the
+    // terminal `open` shim (covered separately below), which intentionally
+    // has no requesting chat and therefore no rail chip.
+    await run(`setComposer('show: https://example.org'); send(); return true;`);
     const overlay = await runWait<{ opacity: string; overlaid: boolean }>(
       `const chip = frontDock().querySelector('[data-testid="surface-chip"][data-kind="browser"]');
        if (!chip) return false;
@@ -292,18 +299,24 @@ describe("dock modes", () => {
     expect(overlay.overlaid).toBe(true);
   }, 120_000);
 
-  it("`open <url>` in an agent terminal lands as an in-app browser tab", async () => {
-    await run(
-      `setComposer('terminal: open https://example.com'); send(); return true;`,
-    );
-    await runWait(
-      `return $$('webview').some((w) => (w.src ?? '').startsWith('https://example.com'));`,
-      { label: "in-app browser tab from the open shim", timeoutMs: 30_000 },
-    );
-    // …and it is the ACTIVE tab (the chat floats in front of it).
-    const active = await run<boolean>(`
+  // The shim replaces macOS's native `open`; other platforms use their own
+  // shell launchers and cannot exercise this platform integration.
+  it.skipIf(process.platform !== "darwin")(
+    "`open <url>` in an agent terminal lands as an in-app browser tab",
+    async () => {
+      await run(
+        `setComposer('terminal: open https://example.com'); send(); return true;`,
+      );
+      await runWait(
+        `return $$('webview').some((w) => (w.src ?? '').startsWith('https://example.com'));`,
+        { label: "in-app browser tab from the open shim", timeoutMs: 30_000 },
+      );
+      // …and it is the ACTIVE tab (the chat floats in front of it).
+      const active = await run<boolean>(`
       return $$('[data-point-key^="browser:"]').length > 0;
     `);
-    expect(active).toBe(true);
-  }, 60_000);
+      expect(active).toBe(true);
+    },
+    60_000,
+  );
 });

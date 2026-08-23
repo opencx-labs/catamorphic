@@ -38,6 +38,10 @@ export function chromeLaunchArgs({
   return ci === "true" && platform === "linux" ? ["--no-sandbox"] : [];
 }
 
+export function chromeCdpStartupTimeoutMs(ci: string | undefined): number {
+  return ci === "true" ? 30_000 : 15_000;
+}
+
 async function freePort(): Promise<number> {
   return new Promise((resolve, reject) => {
     const server = net.createServer();
@@ -269,7 +273,12 @@ export async function launchPwa(
       },
     );
     children.push(chromeChild);
-    const ws = await connectCdp(chromeChild, cdpPort, appUrl, 15_000);
+    const ws = await connectCdp(
+      chromeChild,
+      cdpPort,
+      appUrl,
+      chromeCdpStartupTimeoutMs(process.env.CI),
+    );
     const client = await createClient(ws, (diagnostic) => {
       browserDiagnostics += `${diagnostic}\n`;
     });
