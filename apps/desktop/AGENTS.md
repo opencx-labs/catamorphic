@@ -71,8 +71,9 @@ bun run test:e2e:visible
 ```
 
 The default command keeps the real Electron window hidden so local runs do
-not steal focus. The visible command runs the focus and native-window suites
-(`skills`, `tool-permissions`, and `window-state`) with a displayed window;
+not steal focus. The visible command runs the compositor, focus, and
+native-window suites (`motion`, `skills`, `tool-permissions`, and
+`window-state`) with a displayed window;
 run both before every commit. Both commands build the app and drive the real
 Electron binary over CDP against an
 isolated temp `userData` dir with a deterministic fake agent

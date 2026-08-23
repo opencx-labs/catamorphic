@@ -217,6 +217,12 @@ describe("paired motion (enter/exit mirrors)", () => {
   });
 
   it("the dock's minimized pose mirrors dock-in's starting pose", async () => {
+    await runWait(
+      `if (visibleDock()) return true;
+       pressKey('n', { metaKey: true });
+       return false;`,
+      { label: "floating dock ready for pose check" },
+    );
     const enterFrom = await run<{ translateY: number; scale: number }>(`
       const keyframes = allStyleRules().find(
         (rule) => rule instanceof CSSKeyframesRule && rule.name === 'dock-in');
