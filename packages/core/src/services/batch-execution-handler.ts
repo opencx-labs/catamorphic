@@ -1606,8 +1606,11 @@ export class BatchExecutionHandler {
    * declared `concurrency` gets the next N pending chunks enqueued at once —
    * the per-chunk dedupe key makes re-enqueueing an already-queued chunk a
    * no-op, so every completion can top the window back up without
-   * coordination. Finalize waits for every chunk to complete, not merely for
-   * the pending set to drain, so an in-flight sibling cannot be finalized
+   * duplication. Running chunks consume slots before the pending prefix is
+   * selected; otherwise one completion could add N replacements while its
+   * N-1 siblings were still writing. Locking the state row serializes
+   * concurrent top-ups. Finalize waits for every chunk to complete, not merely
+   * for the pending set to drain, so an in-flight sibling cannot be finalized
    * over.
    */
   private async enqueueNextSinkWork(args: {
@@ -1623,7 +1626,23 @@ export class BatchExecutionHandler {
         args.context.workflowStepAttemptId,
       )
       .select("sink_concurrency")
+      .forUpdate()
       .executeTakeFirstOrThrow();
+    const active = await args.trx
+      .selectFrom("batch_sink_chunks")
+      .where("run_id", "=", args.context.runId)
+      .where(
+        "workflow_step_attempt_id",
+        "=",
+        args.context.workflowStepAttemptId,
+      )
+      .where("status", "=", "running")
+      .select((eb) => eb.fn.countAll<number>().as("count"))
+      .executeTakeFirstOrThrow();
+    const availableSlots = Math.max(
+      0,
+      state.sink_concurrency - Number(active.count),
+    );
     const next = await args.trx
       .selectFrom("batch_sink_chunks")
       .where("run_id", "=", args.context.runId)
@@ -1635,7 +1654,7 @@ export class BatchExecutionHandler {
       .where("status", "=", "pending")
       .select("id")
       .orderBy("first_order")
-      .limit(Math.max(1, state.sink_concurrency))
+      .limit(availableSlots)
       .execute();
     if (next.length > 0) {
       await this.deps.jobs.enqueueMany({
