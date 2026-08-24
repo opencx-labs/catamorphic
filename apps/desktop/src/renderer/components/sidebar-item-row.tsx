@@ -81,6 +81,9 @@ export function SidebarItemRow({
   const previewTimerRef = useRef<ReturnType<typeof setTimeout> | undefined>(
     undefined,
   );
+  const rowHoveredRef = useRef(false);
+  const rowFocusedRef = useRef(false);
+  const previewHoveredRef = useRef(false);
   const [previewAnchor, setPreviewAnchor] =
     useState<SidebarPreviewAnchor | null>(null);
   const [previewOpen, setPreviewOpen] = useState(false);
@@ -89,6 +92,19 @@ export function SidebarItemRow({
   const disarmPreview = () => {
     clearTimeout(previewTimerRef.current);
     setPreviewOpen(false);
+  };
+
+  const deferPreviewClose = () => {
+    clearTimeout(previewTimerRef.current);
+    previewTimerRef.current = setTimeout(() => {
+      if (
+        !rowHoveredRef.current &&
+        !rowFocusedRef.current &&
+        !previewHoveredRef.current
+      ) {
+        setPreviewOpen(false);
+      }
+    }, 100);
   };
 
   const armPreview = () => {
@@ -136,6 +152,23 @@ export function SidebarItemRow({
   useEffect(() => () => clearTimeout(previewTimerRef.current), []);
 
   useEffect(() => {
+    if (!previewOpen) return;
+    const dismiss = (event: Event) => {
+      if (event instanceof KeyboardEvent && event.key !== "Escape") return;
+      if (event instanceof KeyboardEvent) event.preventDefault();
+      clearTimeout(previewTimerRef.current);
+      setPreviewOpen(false);
+    };
+    window.addEventListener("keydown", dismiss);
+    // Scrolling invalidates the fixed anchor coordinates.
+    window.addEventListener("scroll", dismiss, true);
+    return () => {
+      window.removeEventListener("keydown", dismiss);
+      window.removeEventListener("scroll", dismiss, true);
+    };
+  }, [previewOpen]);
+
+  useEffect(() => {
     if (renaming || open || !previewEnabled) {
       clearTimeout(previewTimerRef.current);
       setPreviewOpen(false);
@@ -164,11 +197,23 @@ export function SidebarItemRow({
         active ? "bg-bg-overlay" : "hover:bg-bg-overlay/60"
       }`}
       data-point-key={`sidebar:${label}`}
-      onMouseEnter={armPreview}
-      onMouseLeave={disarmPreview}
-      onFocusCapture={armPreview}
+      onMouseEnter={() => {
+        rowHoveredRef.current = true;
+        armPreview();
+      }}
+      onMouseLeave={() => {
+        rowHoveredRef.current = false;
+        deferPreviewClose();
+      }}
+      onFocusCapture={() => {
+        rowFocusedRef.current = true;
+        armPreview();
+      }}
       onBlurCapture={(event) => {
-        if (!event.currentTarget.contains(event.relatedTarget)) disarmPreview();
+        if (!event.currentTarget.contains(event.relatedTarget)) {
+          rowFocusedRef.current = false;
+          deferPreviewClose();
+        }
       }}
       // Right-click = the ⋯ menu, at the cursor. Same entries, same
       // portal — two paths into one menu, never two menus.
@@ -265,6 +310,14 @@ export function SidebarItemRow({
           anchor={previewAnchor}
           preview={preview}
           fallbackTitle={label}
+          onMouseEnter={() => {
+            previewHoveredRef.current = true;
+            clearTimeout(previewTimerRef.current);
+          }}
+          onMouseLeave={() => {
+            previewHoveredRef.current = false;
+            deferPreviewClose();
+          }}
           onExited={() => setPreviewAnchor(null)}
         />
       )}

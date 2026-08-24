@@ -24,6 +24,8 @@ export function SidebarPreviewPopover({
   anchor,
   preview,
   fallbackTitle,
+  onMouseEnter,
+  onMouseLeave,
   onExited,
 }: {
   id: string;
@@ -31,6 +33,8 @@ export function SidebarPreviewPopover({
   anchor: SidebarPreviewAnchor;
   preview: SidebarPreview;
   fallbackTitle: string;
+  onMouseEnter: () => void;
+  onMouseLeave: () => void;
   onExited: () => void;
 }) {
   const ref = useRef<HTMLDivElement>(null);
@@ -62,10 +66,12 @@ export function SidebarPreviewPopover({
       role="tooltip"
       data-testid="sidebar-preview"
       style={position}
+      onMouseEnter={onMouseEnter}
+      onMouseLeave={onMouseLeave}
       onAnimationEnd={(event) => {
         if (event.animationName === "pop-out" && !open) onExited();
       }}
-      className={`pointer-events-none fixed z-[120] w-72 rounded-lg border border-border bg-bg-overlay p-2.5 shadow-2xl ${
+      className={`pointer-events-auto fixed z-[120] w-72 rounded-lg border border-border bg-bg-overlay p-2.5 shadow-2xl ${
         open ? "animate-pop-in" : "animate-pop-out"
       }`}
     >

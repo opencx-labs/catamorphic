@@ -78,4 +78,52 @@ describe("SidebarItemRow hover preview", () => {
       "Production deployments",
     );
   });
+
+  it("keeps the preview open while the pointer moves onto the card", () => {
+    vi.useFakeTimers();
+    const container = mountRow();
+    const row = container.firstElementChild as HTMLElement;
+
+    act(() =>
+      row.dispatchEvent(new MouseEvent("mouseover", { bubbles: true })),
+    );
+    act(() => vi.advanceTimersByTime(500));
+    const preview = document.querySelector('[role="tooltip"]');
+    expect(preview).not.toBeNull();
+
+    act(() => {
+      row.dispatchEvent(
+        new MouseEvent("mouseout", {
+          bubbles: true,
+          relatedTarget: document.body,
+        }),
+      );
+      preview?.dispatchEvent(
+        new MouseEvent("mouseover", {
+          bubbles: true,
+          relatedTarget: document.body,
+        }),
+      );
+      vi.advanceTimersByTime(200);
+    });
+
+    expect(preview?.classList.contains("animate-pop-in")).toBe(true);
+  });
+
+  it("dismisses a focused preview when Escape is pressed", () => {
+    vi.useFakeTimers();
+    const container = mountRow();
+    const button = container.querySelector("button");
+
+    act(() => button?.focus());
+    act(() => vi.advanceTimersByTime(500));
+    const preview = document.querySelector('[role="tooltip"]');
+    expect(preview?.classList.contains("animate-pop-in")).toBe(true);
+
+    act(() =>
+      window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" })),
+    );
+
+    expect(preview?.classList.contains("animate-pop-out")).toBe(true);
+  });
 });

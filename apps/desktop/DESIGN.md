@@ -2941,7 +2941,8 @@ paths, deliberately independent:
 - `SidebarItemRow` owns one preview interaction for built-in and configured
   items: a 500ms dwell or keyboard focus opens a portal card beside the row.
   It uses the existing overlay tokens and pop-in/pop-out motion, flips across
-  the row near the viewport edge, and never intercepts the pointer.
+  the row near the viewport edge, stays open while the pointer crosses onto
+  it, and can be dismissed with Escape without moving pointer or focus.
 - A custom `sidebar.js` item may declare
   `preview: { title, description, metadata: [{ label, value }] }`. Metadata is
   capped at four rows so a preview stays an inspector, not a second sidebar.
