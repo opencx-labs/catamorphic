@@ -1743,10 +1743,14 @@ export function App() {
         active?.mode === "partial" ||
         (active?.mode === "tab" &&
           ws.activeTabKey === chatTabKey(active.localId));
+      const activeSignals = active ? signalsByChat[active.localId] : undefined;
       if (
         activeIsVisible &&
         !active.sessionId &&
         !active.pendingMessage &&
+        !activeSignals?.working &&
+        !activeSignals?.draft &&
+        !activeSignals?.awaitingInput &&
         // A fresh plain chat doesn't satisfy "new INCOGNITO chat".
         Boolean(active.incognito) === Boolean(opts?.incognito)
       ) {
