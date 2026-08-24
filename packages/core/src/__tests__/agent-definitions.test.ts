@@ -169,16 +169,19 @@ describe("definitionHash", () => {
     ).not.toBe(definitionHash(def));
   });
 
-  it("ignores display-only fields (description, name, connections)", () => {
+  it("ignores display-only fields but covers environment access", () => {
     expect(
       definitionHash({ ...def, description: "Different words" }, "p"),
     ).toBe(definitionHash(def, "p"));
     expect(definitionHash({ ...def, name: "Renamed" }, "p")).toBe(
       definitionHash(def, "p"),
     );
-    expect(definitionHash({ ...def, connections: ["linear"] }, "p")).toBe(
+    expect(definitionHash({ ...def, connections: ["linear"] }, "p")).not.toBe(
       definitionHash(def, "p"),
     );
+    expect(
+      definitionHash({ ...def, environment: { allowed: ["restricted"] } }, "p"),
+    ).not.toBe(definitionHash(def, "p"));
   });
 
   it("covers mode (ADR 0056) — widening access re-earns consent; the narrowing knobs don't", () => {

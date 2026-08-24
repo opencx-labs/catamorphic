@@ -21,7 +21,7 @@ export interface DeleteSecretInput {
  */
 export function useDeleteProjectSecret(
   projectId: string | undefined,
-  environment: "test" | "production" = "production",
+  stage: "test" | "production" = "production",
 ): UseMutationResult<
   { deleted: boolean },
   CatamorphicError,
@@ -41,7 +41,7 @@ export function useDeleteProjectSecret(
                   projectId: projectId as string,
                   name: encodeURIComponent(name),
                 },
-                query: { environment },
+                query: { stage },
               },
             },
           );
@@ -49,7 +49,7 @@ export function useDeleteProjectSecret(
         }),
       onSuccess: () => {
         queryClient.invalidateQueries({
-          queryKey: ["cat", "project", projectId, "secrets", environment],
+          queryKey: ["cat", "project", projectId, "secrets", stage],
         });
         queryClient.invalidateQueries({
           queryKey: ["cat", "project", projectId, "plugins"],

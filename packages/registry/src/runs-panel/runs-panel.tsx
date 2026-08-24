@@ -2,6 +2,7 @@
 
 import {
   useCancelRun,
+  useEnvironments,
   usePauseRunProcessing,
   useResumeRunProcessing,
   useRun,
@@ -16,7 +17,7 @@ import type {
   Run,
   RunItemStatus,
 } from "@catamorphic/react/types";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 
 export interface RunsPanelProps {
   projectId: string;
@@ -335,6 +336,23 @@ export function RunsPanel({
 }: RunsPanelProps) {
   const runs = useRuns({ projectId, workflowName, limit });
   const trigger = useTriggerRun({ projectId, workflowName });
+  const environments = useEnvironments(projectId, { workload: "workflow" });
+  const compatibleEnvironments =
+    environments.data?.items.filter((item) => item.compatible) ?? [];
+  const [environment, setEnvironment] = useState<string>();
+  useEffect(() => {
+    if (
+      compatibleEnvironments.some((item) => item.name === environment) ||
+      compatibleEnvironments.length === 0
+    ) {
+      return;
+    }
+    setEnvironment(
+      compatibleEnvironments.find((item) => item.preferred)?.name ??
+        environments.data?.defaultEnvironment ??
+        compatibleEnvironments[0]?.name,
+    );
+  }, [compatibleEnvironments, environment, environments.data]);
   const [selectedRunId, setSelectedRunId] = useState<string>();
   const selectedId = selectedRunId ?? runs.data?.items[0]?.id;
   const [inputDraft, setInputDraft] = useState(() =>
@@ -351,7 +369,7 @@ export function RunsPanel({
       return;
     }
     setInputError(false);
-    trigger.mutate({ input: parsed });
+    trigger.mutate({ input: parsed, ...(environment ? { environment } : {}) });
   };
 
   return (
@@ -364,12 +382,30 @@ export function RunsPanel({
           <button
             type="button"
             onClick={startRun}
-            disabled={trigger.isPending}
+            disabled={trigger.isPending || !environment}
             className="rounded bg-accent px-3 py-1.5 text-xs font-medium text-accent-fg disabled:opacity-50"
           >
             {trigger.isPending ? "Starting..." : "Run"}
           </button>
         </header>
+        {compatibleEnvironments.length > 1 ? (
+          <div className="border-b border-border px-3 py-2">
+            <label className="grid gap-1 text-[10px] uppercase tracking-wider text-fg-faint">
+              Environment
+              <select
+                value={environment ?? ""}
+                onChange={(event) => setEnvironment(event.currentTarget.value)}
+                className="h-8 rounded border border-border bg-bg-inset px-2 text-xs normal-case text-fg"
+              >
+                {compatibleEnvironments.map((item) => (
+                  <option key={item.name} value={item.name}>
+                    {item.label}
+                  </option>
+                ))}
+              </select>
+            </label>
+          </div>
+        ) : null}
         <div className="border-b border-border px-3 py-2">
           <label className="grid gap-1 text-[10px] uppercase tracking-wider text-fg-faint">
             Input

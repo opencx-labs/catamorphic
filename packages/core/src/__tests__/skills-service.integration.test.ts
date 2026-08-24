@@ -7,6 +7,7 @@ import { sql } from "kysely";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { CatamorphicCore } from "../core.js";
 import type { Identity } from "../identity.js";
+import { testEnvironmentProvider } from "./test-environment.js";
 
 const connectionString = process.env.DATABASE_URL ?? "";
 const describeIf = connectionString ? describe : describe.skip;
@@ -60,6 +61,7 @@ describeIf("SkillsService host tier (ADR 0049)", () => {
     core = new CatamorphicCore({
       db,
       projectManager,
+      environmentProvider: testEnvironmentProvider(),
       // No seed skills: the project tier holds exactly what this test
       // writes, so assertions stay independent of the framework seeds.
       projectSeeds: () => ({}),

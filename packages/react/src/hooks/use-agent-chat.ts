@@ -3,7 +3,7 @@
 import { ATTACHMENT_MARKER } from "@catamorphic/sandbox/attachments";
 import { useQueryClient } from "@tanstack/react-query";
 import { useRef, useState } from "react";
-import type { CatamorphicError } from "../lib/errors.js";
+import { CatamorphicError } from "../lib/errors.js";
 import { randomId } from "../lib/random-id.js";
 import { useCatamorphic } from "../provider.js";
 import type { AgentMessage, AgentSessionDetail } from "../types.js";
@@ -30,6 +30,8 @@ export interface UseAgentChatOptions {
    * sessions are unaffected — switch those via `useUpdateAgentSession`.
    */
   agentId?: string;
+  /** Logical Environment for a lazily created session. */
+  environment?: string;
 }
 
 /** A message waiting behind the in-flight turn. */
@@ -58,6 +60,8 @@ export interface UseAgentChatResult {
    */
   isWorking: boolean;
   error: CatamorphicError | null;
+  /** Missing member credentials that blocked admission before execution. */
+  authenticationRequired: AgentAuthenticationRequired | null;
   send: (message: string, attachments?: AgentChatAttachment[]) => Promise<void>;
   /** Jump the queue: front-of-line + interrupt the in-flight turn. */
   sendNow: (
@@ -76,9 +80,20 @@ export interface UseAgentChatResult {
   holdQueued: (id: string | null) => void;
   /** Re-run the last failed turn in place (no new user message). */
   retry: () => Promise<void>;
+  /** Resume the preserved head message after the member authorizes access. */
+  resumeAfterAuthentication: () => void;
   /** Abort the in-flight turn (and any scheduled auto-retry). */
   interrupt: () => Promise<void>;
   startNewSession: () => void;
+}
+
+export interface AgentAuthenticationRequired {
+  environment: string;
+  requirements: Array<{
+    alias: string;
+    providerKind: string;
+    principalKinds: Array<"member" | "project_service" | "tenant_service">;
+  }>;
 }
 
 export interface OptimisticAgentMessage {
@@ -117,6 +132,7 @@ export function useAgentChat(
   const queueRef = useRef<QueuedAgentMessage[]>([]);
   const holdRef = useRef<string | null>(null);
   const processingRef = useRef(false);
+  const authenticationBlockedRef = useRef(false);
   const { apiClient } = useCatamorphic();
   const syncQueue = () => setQueue([...queueRef.current]);
   // A controlled-id change normally means the host switched sessions, so chat
@@ -157,6 +173,7 @@ export function useAgentChat(
     if (!refAdoptedOwnSession) {
       // Real session switch: drop the stale queue.
       queueRef.current = [];
+      authenticationBlockedRef.current = false;
     }
   }
   const sessionId =
@@ -206,9 +223,10 @@ export function useAgentChat(
     if (!projectId) return null;
     const existingSessionId = activeSessionRef.current.sessionId;
     if (existingSessionId) return existingSessionId;
-    const created = await createSession.mutateAsync(
-      agentIdRef.current ? { agentId: agentIdRef.current } : {},
-    );
+    const created = await createSession.mutateAsync({
+      ...(agentIdRef.current ? { agentId: agentIdRef.current } : {}),
+      ...(options.environment ? { environment: options.environment } : {}),
+    });
     activeSessionRef.current = {
       projectId,
       controlledSessionId,
@@ -238,7 +256,7 @@ export function useAgentChat(
   };
 
   const processQueue = async () => {
-    if (processingRef.current) return;
+    if (processingRef.current || authenticationBlockedRef.current) return;
     processingRef.current = true;
     setSendInProgress(true);
     try {
@@ -264,8 +282,20 @@ export function useAgentChat(
         setOptimisticMessages((messages) => [...messages, optimistic]);
         try {
           await performSend(head);
-        } catch {
-          // Mutation state exposes the error to consumers; continue draining.
+        } catch (error) {
+          if (
+            error instanceof CatamorphicError &&
+            error.code === "authentication_required"
+          ) {
+            // Admission happens before a session, run, or sandbox exists. Keep
+            // the exact message at the head so authorization can resume the
+            // user's original intent instead of asking them to send it again.
+            queueRef.current.unshift(head);
+            authenticationBlockedRef.current = true;
+            syncQueue();
+            break;
+          }
+          // Mutation state exposes other errors to consumers; continue.
         } finally {
           setOptimisticMessages((messages) =>
             messages.filter((message) => message.id !== head.id),
@@ -334,6 +364,9 @@ export function useAgentChat(
     return Promise.resolve();
   };
 
+  const error =
+    createSession.error ?? sendMessage.error ?? session.error ?? null;
+
   return {
     sessionId,
     session: session.data ?? null,
@@ -344,7 +377,8 @@ export function useAgentChat(
     isLoading: session.isLoading,
     isSending: isSending || retryInProgress,
     isWorking: isWorking || retryInProgress,
-    error: createSession.error ?? sendMessage.error ?? session.error ?? null,
+    error,
+    authenticationRequired: authenticationRequiredFrom(error),
     send,
     sendNow: async (message, attachments) => {
       const content = message.trim();
@@ -391,6 +425,10 @@ export function useAgentChat(
       holdRef.current = id;
     },
     retry,
+    resumeAfterAuthentication: () => {
+      authenticationBlockedRef.current = false;
+      void processQueue();
+    },
     interrupt,
     startNewSession: () => {
       if (!processingRef.current) {
@@ -402,10 +440,48 @@ export function useAgentChat(
         setActiveSession({ projectId, controlledSessionId, sessionId: null });
         setOptimisticMessages([]);
         queueRef.current = [];
+        authenticationBlockedRef.current = false;
         setQueue([]);
       }
     },
   };
+}
+
+function authenticationRequiredFrom(
+  error: CatamorphicError | null,
+): AgentAuthenticationRequired | null {
+  if (error?.code !== "authentication_required") return null;
+  const details = error.details;
+  if (details === null || typeof details !== "object") return null;
+  const record = details as Record<string, unknown>;
+  if (typeof record.environment !== "string") return null;
+  if (!Array.isArray(record.requirements)) return null;
+  const requirements: AgentAuthenticationRequired["requirements"] = [];
+  for (const raw of record.requirements) {
+    if (raw === null || typeof raw !== "object") return null;
+    const requirement = raw as Record<string, unknown>;
+    if (
+      typeof requirement.alias !== "string" ||
+      typeof requirement.providerKind !== "string" ||
+      !Array.isArray(requirement.principalKinds)
+    ) {
+      return null;
+    }
+    const principalKinds = requirement.principalKinds.filter(
+      (kind): kind is "member" | "project_service" | "tenant_service" =>
+        kind === "member" ||
+        kind === "project_service" ||
+        kind === "tenant_service",
+    );
+    if (principalKinds.length !== requirement.principalKinds.length)
+      return null;
+    requirements.push({
+      alias: requirement.alias,
+      providerKind: requirement.providerKind,
+      principalKinds,
+    });
+  }
+  return { environment: record.environment, requirements };
 }
 
 function hasPendingAssistant(messages: AgentMessage[] | undefined): boolean {

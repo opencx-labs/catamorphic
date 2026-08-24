@@ -1,4 +1,10 @@
 import {
+  AuthenticationRequiredError,
+  EnvironmentAccessDeniedError,
+  EnvironmentBindingUnavailableError,
+  EnvironmentIncompatibleError,
+  EnvironmentNotFoundError,
+  NoCompatibleEnvironmentError,
   PluginSecretsMissingError,
   ProductionDeploymentNotFoundError,
   ProjectNotFoundError,
@@ -31,6 +37,29 @@ export function replyForTriggerError(
   }
   if (err instanceof RunEnrollmentConflictError) {
     return reply.status(409).send({ error: err.message });
+  }
+  if (err instanceof AuthenticationRequiredError) {
+    return reply.status(428).send({
+      error: err.message,
+      code: "authentication_required",
+      environment: err.environment,
+      requirements: [...err.requirements],
+    });
+  }
+  if (err instanceof EnvironmentAccessDeniedError) {
+    return reply.status(403).send({ error: err.message });
+  }
+  if (err instanceof EnvironmentNotFoundError) {
+    return reply.status(404).send({ error: err.message });
+  }
+  if (err instanceof EnvironmentBindingUnavailableError) {
+    return reply.status(409).send({ error: err.message });
+  }
+  if (
+    err instanceof EnvironmentIncompatibleError ||
+    err instanceof NoCompatibleEnvironmentError
+  ) {
+    return reply.status(422).send({ error: err.message });
   }
   if (err instanceof TenantActiveRunLimitError) {
     return reply.status(429).send({ error: err.message });

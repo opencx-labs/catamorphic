@@ -20,7 +20,11 @@ import { AccessDeniedError } from "../services/artifact-scope.js";
 import type { CodingAgentRegistry } from "../services/coding-agent-registry.js";
 import { DbSandboxStore } from "../services/db-sandbox-store.js";
 import { DevSandboxService } from "../services/dev-sandbox-service.js";
+import { ExecutionAllocationsService } from "../services/execution-allocations-service.js";
+import { ExecutionEnvironmentsService } from "../services/execution-environments-service.js";
+import { ProjectEnvironmentsService } from "../services/project-environments-service.js";
 import { ProjectsService } from "../services/projects-service.js";
+import { testEnvironmentProvider } from "./test-environment.js";
 
 /**
  * ADR 0055: scoped identities may open sessions on the project agents their
@@ -101,7 +105,8 @@ describeIf("scoped agent sessions (ADR 0055)", () => {
     );
     const projects = new ProjectsService(db, projectManager);
     const rootPath = path.join(tmpDir, "brain");
-    const project = await projects.create(root, { name: "brain", rootPath });
+    await fs.mkdir(rootPath, { recursive: true });
+    const project = await projects.create(root, { name: "brain" });
     projectId = project.id;
     csmAgentId = `project:${projectId}:csm`;
     salesAgentId = `project:${projectId}:sales`;
@@ -112,15 +117,15 @@ describeIf("scoped agent sessions (ADR 0055)", () => {
     const registered = new Map([
       [
         csmAgentId,
-        { id: csmAgentId, provider: csm, execution: "host" as const },
+        { id: csmAgentId, provider: csm, topology: "native" as const },
       ],
       [
         salesAgentId,
-        { id: salesAgentId, provider: sales, execution: "host" as const },
+        { id: salesAgentId, provider: sales, topology: "native" as const },
       ],
       [
         "personal",
-        { id: "personal", provider: personal, execution: "host" as const },
+        { id: "personal", provider: personal, topology: "native" as const },
       ],
     ]);
     const registry: CodingAgentRegistry = {
@@ -128,16 +133,22 @@ describeIf("scoped agent sessions (ADR 0055)", () => {
       get: (id) => registered.get(id),
       list: () => [...registered.values()],
     };
+    const executionEnvironments = new ExecutionEnvironmentsService(
+      new ProjectEnvironmentsService(db, projectManager),
+      testEnvironmentProvider(unusedSandboxProvider),
+    );
     sessions = new AgentSessionsService(db, {
       projectManager,
       sandboxProvider: unusedSandboxProvider,
       codingAgents: registry,
+      executionEnvironments,
+      executionAllocations: new ExecutionAllocationsService(db),
       devSandboxes: new DevSandboxService({
         projectManager,
         provider: unusedSandboxProvider,
         store: new DbSandboxStore(db),
       }),
-      hostAgentCheckout: { resolve: () => rootPath },
+      nativeAgentCheckout: { resolve: () => rootPath },
       // The project's tool roster: two tools, one renamed via its trigger.
       mcpToolNames: async () =>
         new Map([
@@ -150,6 +161,7 @@ describeIf("scoped agent sessions (ADR 0055)", () => {
     viewer = {
       ...root,
       externalUserId: "csm-alice",
+      executionScope: [{ projectId, name: "local" }],
       scope: [
         {
           kind: "agent",
@@ -164,6 +176,7 @@ describeIf("scoped agent sessions (ADR 0055)", () => {
     admin = {
       ...root,
       externalUserId: "admin-bob",
+      executionScope: [{ projectId, name: "local" }],
       scope: [{ kind: "project", projectId }],
     };
   });

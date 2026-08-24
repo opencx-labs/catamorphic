@@ -14,6 +14,7 @@ import { CatamorphicCore } from "../core.js";
 import type { Identity } from "../identity.js";
 import { AccessDeniedError } from "../services/artifact-scope.js";
 import { resolveRoles } from "../services/roles-service.js";
+import { testEnvironmentProvider } from "./test-environment.js";
 
 /**
  * ADR 0055: roles are committed files read from the shared origin; the
@@ -66,7 +67,12 @@ describeIf("RolesService + MembershipsService (ADR 0055)", () => {
     );
     db = createDatabase({ connectionString, schema, poolSize: 4 });
     await migrateToLatest({ db, schema });
-    core = new CatamorphicCore({ db, projectManager, rolesCacheTtlMs: 0 });
+    core = new CatamorphicCore({
+      db,
+      projectManager,
+      environmentProvider: testEnvironmentProvider(),
+      rolesCacheTtlMs: 0,
+    });
     const project = await core.projects.create(root, { name: "brain" });
     projectId = project.id;
     admin = {

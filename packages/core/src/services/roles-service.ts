@@ -2,7 +2,12 @@ import type { DB } from "@catamorphic/db";
 import type { ProjectManager } from "@catamorphic/git";
 import type { Kysely } from "kysely";
 import { z } from "zod";
-import type { ArtifactRef, Identity } from "../identity.js";
+import type {
+  ArtifactRef,
+  ConnectionUseRef,
+  ExecutionEnvironmentRef,
+  Identity,
+} from "../identity.js";
 import { assertBuilder } from "./artifact-scope.js";
 import {
   forgetProgramFetch,
@@ -51,6 +56,12 @@ const DocumentEntrySchema = z.union([
   }),
 ]);
 
+const ConnectionEntrySchema = z.object({
+  environment: z.string().min(1),
+  alias: z.string().min(1),
+  capabilities: z.array(z.string().min(1)).optional(),
+});
+
 /** The committed `roles/<name>.json` schema, version 1. */
 export const RoleDefinitionSchema = z.object({
   version: z.literal(1),
@@ -62,6 +73,8 @@ export const RoleDefinitionSchema = z.object({
   agents: z.array(AgentEntrySchema).optional(),
   workflows: z.array(z.string().min(1)).optional(),
   apps: z.array(z.string().min(1)).optional(),
+  environments: z.array(z.string().min(1)).optional(),
+  connections: z.array(ConnectionEntrySchema).optional(),
   /** Files or `dir/**` subtrees; `access` defaults to read. */
   documents: z.array(DocumentEntrySchema).optional(),
 });
@@ -176,6 +189,43 @@ export function expandRole(
   return dedupeRefs(refs);
 }
 
+export function expandRoleEnvironments(
+  definition: RoleDefinition,
+  projectId: string,
+  grants: RoleGrants,
+): ExecutionEnvironmentRef[] {
+  return dedupeEnvironmentRefs(
+    (definition.environments ?? []).flatMap((name) =>
+      fillTemplate(name, grants).map((filled) => ({
+        projectId,
+        name: filled,
+      })),
+    ),
+  );
+}
+
+export function expandRoleConnections(
+  definition: RoleDefinition,
+  projectId: string,
+  grants: RoleGrants,
+): ConnectionUseRef[] {
+  const refs = (definition.connections ?? []).flatMap((connection) => {
+    const environments = fillTemplate(connection.environment, grants);
+    const aliases = fillTemplate(connection.alias, grants);
+    return environments.flatMap((environment) =>
+      aliases.map((alias) => ({
+        projectId,
+        environment,
+        alias,
+        ...(connection.capabilities
+          ? { capabilities: connection.capabilities }
+          : {}),
+      })),
+    );
+  });
+  return dedupeConnectionRefs(refs);
+}
+
 function dedupeRefs(refs: ArtifactRef[]): ArtifactRef[] {
   const seen = new Set<string>();
   const out: ArtifactRef[] = [];
@@ -186,6 +236,32 @@ function dedupeRefs(refs: ArtifactRef[]): ArtifactRef[] {
     out.push(ref);
   }
   return out;
+}
+
+function dedupeEnvironmentRefs(
+  refs: ExecutionEnvironmentRef[],
+): ExecutionEnvironmentRef[] {
+  const seen = new Set<string>();
+  return refs.filter((ref) => {
+    const key = `${ref.projectId}:${ref.name}`;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
+function dedupeConnectionRefs(refs: ConnectionUseRef[]): ConnectionUseRef[] {
+  const seen = new Set<string>();
+  return refs.filter((ref) => {
+    const key = `${ref.projectId}:${ref.environment}:${ref.alias}:${[
+      ...(ref.capabilities ?? []),
+    ]
+      .sort()
+      .join(",")}`;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
 }
 
 /**
@@ -269,15 +345,25 @@ export class RolesService {
     const entries = await this.load(input.tenantId, input.projectId);
     const grants = input.grants ?? {};
     const scope: ArtifactRef[] = [];
+    const executionScope: ExecutionEnvironmentRef[] = [];
+    const connectionScope: ConnectionUseRef[] = [];
     for (const slug of input.roles) {
       const entry = entries.find((e) => e.slug === slug);
       if (!entry?.definition) continue;
       scope.push(...expandRole(entry.definition, input.projectId, grants));
+      executionScope.push(
+        ...expandRoleEnvironments(entry.definition, input.projectId, grants),
+      );
+      connectionScope.push(
+        ...expandRoleConnections(entry.definition, input.projectId, grants),
+      );
     }
     return {
       tenantId: input.tenantId,
       externalUserId: input.externalUserId,
       scope: dedupeRefs(scope),
+      executionScope: dedupeEnvironmentRefs(executionScope),
+      connectionScope: dedupeConnectionRefs(connectionScope),
     };
   }
 

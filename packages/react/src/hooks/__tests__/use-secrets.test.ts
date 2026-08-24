@@ -15,10 +15,10 @@ const SECRET = {
 
 describe("useProjectSecrets", () => {
   it("returns secrets list", async () => {
-    let environment: string | null = null;
+    let stage: string | null = null;
     server.use(
       http.get(apiUrl("/api/projects/p1/secrets"), ({ request }) => {
-        environment = new URL(request.url).searchParams.get("environment");
+        stage = new URL(request.url).searchParams.get("stage");
         return HttpResponse.json([SECRET]);
       }),
     );
@@ -27,7 +27,7 @@ describe("useProjectSecrets", () => {
     );
     await waitFor(() => expect(result.current.isSuccess).toBe(true));
     expect(result.current.data?.[0]?.name).toBe(SECRET.name);
-    expect(environment).toBe("test");
+    expect(stage).toBe("test");
   });
 
   it("maps 503 to sandbox_unavailable", async () => {

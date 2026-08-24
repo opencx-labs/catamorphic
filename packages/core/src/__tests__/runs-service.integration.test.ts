@@ -25,6 +25,7 @@ import {
   RunEnrollmentConflictError,
   RunSignalNotFoundError,
 } from "../services/runs-service.js";
+import { testEnvironmentProvider } from "./test-environment.js";
 
 const connectionString = process.env.DATABASE_URL ?? "";
 const describeIf = connectionString ? describe : describe.skip;
@@ -97,11 +98,13 @@ describeIf("unified RunsService integration", () => {
       db,
       projectManager,
       sandboxProvider: providerOne,
+      environmentProvider: testEnvironmentProvider(providerOne),
     });
     secondCore = new CatamorphicCore({
       db,
       projectManager,
       sandboxProvider: providerTwo,
+      environmentProvider: testEnvironmentProvider(providerTwo),
     });
   });
 

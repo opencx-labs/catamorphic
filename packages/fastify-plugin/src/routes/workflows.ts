@@ -11,6 +11,7 @@ import { z } from "zod";
 import type { RouteContext } from "../app.js";
 import { resolveIdentity } from "../http-identity.js";
 import {
+  AuthenticationRequiredSchema,
   CallRunSchema,
   CancelRunByKeySchema,
   ErrorSchema,
@@ -113,8 +114,11 @@ export function registerWorkflowRoutes(
       response: {
         201: RunSchema,
         400: ErrorSchema,
+        403: ErrorSchema,
         404: ErrorSchema,
         409: ErrorSchema,
+        422: ErrorSchema,
+        428: AuthenticationRequiredSchema,
         429: ErrorSchema,
         503: ErrorSchema,
       },
@@ -128,6 +132,7 @@ export function registerWorkflowRoutes(
           identity,
           projectId: request.params.projectId,
           workflowName: request.params.name,
+          environment: request.body.environment,
           input: request.body.input,
           ...(request.body.correlationKey === undefined
             ? {}
@@ -152,8 +157,11 @@ export function registerWorkflowRoutes(
       response: {
         200: RunCallOutcomeSchema,
         400: ErrorSchema,
+        403: ErrorSchema,
         404: ErrorSchema,
         409: ErrorSchema,
+        422: ErrorSchema,
+        428: AuthenticationRequiredSchema,
         429: ErrorSchema,
         503: ErrorSchema,
       },
@@ -170,6 +178,7 @@ export function registerWorkflowRoutes(
           identity: resolveIdentity(request),
           projectId: request.params.projectId,
           workflowName: request.params.name,
+          environment: request.body.environment,
           input: request.body.input,
           ...(request.body.correlationKey === undefined
             ? {}

@@ -1,7 +1,10 @@
 import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
-import type { AgentCoordinationStrategy } from "@catamorphic/core";
+import type {
+  AgentCoordinationStrategy,
+  AgentEnvironmentPolicy,
+} from "@catamorphic/core";
 import type { McpToolPolicy } from "@catamorphic/sandbox";
 import { safeStorage } from "electron";
 
@@ -87,6 +90,8 @@ export interface AgentConfig {
   mode?: AgentModeSetting;
   /** Checkout doctrine; absent means "shared-first". */
   coordination?: AgentCoordinationStrategy;
+  /** Logical Environment preferences and compatibility requirements. */
+  environment?: AgentEnvironmentPolicy;
   /**
    * Claude Code auto-memory; absent means OFF — memory is opt-in
    * (ADR 0056): accumulated memories change an agent's behavior over
@@ -146,6 +151,7 @@ export interface PublicAgentConfig {
   mode: AgentModeSetting;
   /** Checkout-coordination doctrine (always materialized). */
   coordination: AgentCoordinationStrategy;
+  environment?: AgentEnvironmentPolicy;
   /** Claude Code auto-memory (always materialized; opt-in, default false). */
   memory: boolean;
   /** MCP connection assignment (always materialized; default "all"). */
@@ -195,6 +201,7 @@ export interface CreateAgentInput {
   instructions?: string;
   mode?: AgentModeSetting;
   coordination?: AgentCoordinationStrategy;
+  environment?: AgentEnvironmentPolicy;
   memory?: boolean;
   connections?: AgentConnectionsSetting;
   skills?: AgentSkillsSetting;
@@ -213,6 +220,7 @@ export interface UpdateAgentInput {
   instructions?: string;
   mode?: AgentModeSetting;
   coordination?: AgentCoordinationStrategy;
+  environment?: AgentEnvironmentPolicy;
   memory?: boolean;
   connections?: AgentConnectionsSetting;
   skills?: AgentSkillsSetting;
@@ -349,6 +357,7 @@ export class AgentsStore {
       ...(input.coordination && input.coordination !== "shared-first"
         ? { coordination: input.coordination }
         : {}),
+      ...(input.environment ? { environment: input.environment } : {}),
       ...(input.memory === true ? { memory: true } : {}),
       ...(input.connections ? { connections: input.connections } : {}),
       ...(input.skills ? { skills: input.skills } : {}),
@@ -384,6 +393,9 @@ export class AgentsStore {
     if (patch.coordination !== undefined) {
       if (patch.coordination === "shared-first") delete stored.coordination;
       else stored.coordination = patch.coordination;
+    }
+    if (patch.environment !== undefined) {
+      stored.environment = patch.environment;
     }
     if (patch.memory !== undefined) {
       if (patch.memory) stored.memory = true;

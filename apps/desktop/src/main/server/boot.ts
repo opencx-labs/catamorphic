@@ -1,7 +1,10 @@
 import { randomBytes } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
-import { ToolPermissionBroker } from "@catamorphic/core";
+import {
+  type ConnectionProvider,
+  ToolPermissionBroker,
+} from "@catamorphic/core";
 import type { DB } from "@catamorphic/db";
 import { DEFAULT_SCHEMA } from "@catamorphic/db";
 import { catamorphicPlugin } from "@catamorphic/fastify-plugin";
@@ -9,6 +12,7 @@ import { MicrosandboxSandboxProvider } from "@catamorphic/microsandbox";
 import {
   type Catamorphic,
   createCatamorphic,
+  defineStaticEnvironments,
   FsBundleStore,
 } from "@catamorphic/server-sdk";
 import { PGlite } from "@electric-sql/pglite";
@@ -19,6 +23,7 @@ import Fastify, { type FastifyInstance } from "fastify";
 import { Kysely, PGliteDialect, sql, WithSchemaPlugin } from "kysely";
 import type { WorkspaceBridge } from "../agent-bridge.js";
 import type { ConnectorsService } from "../connectors.js";
+import { DesktopCredentialVault } from "../credential-vault.js";
 import type { IncognitoSessionsStore } from "../incognito-sessions.js";
 import {
   type McpAppsService,
@@ -95,6 +100,7 @@ export async function startEmbeddedServer(
   connectors?: ConnectorsService,
   mcpApps?: McpAppsService,
   incognitoSessions?: IncognitoSessionsStore,
+  connectionProviders?: readonly ConnectionProvider[],
 ): Promise<EmbeddedServer> {
   fs.mkdirSync(paths.db, { recursive: true });
 
@@ -115,6 +121,22 @@ export async function startEmbeddedServer(
   const sandboxProvider = e2eFakeAgent
     ? new E2eLocalSandboxProvider()
     : new MicrosandboxSandboxProvider();
+  const environmentProvider = defineStaticEnvironments([
+    {
+      descriptor: {
+        id: "local",
+        label: "This Mac",
+        description: "Run on this desktop",
+        trust: "local",
+        isolation: "sandbox",
+        workloads: ["agent", "workflow"],
+        agentTopologies: ["controller", "native"],
+        capabilities: ["network.egress"],
+        resources: {},
+      },
+      sandboxProvider,
+    },
+  ]);
 
   // Desktop projects live in user-visible folders; the mapping is desktop
   // state (its own PGlite schema), injected into storage as a resolver so
@@ -256,10 +278,17 @@ export async function startEmbeddedServer(
         projectRoots.get(projectId),
     },
     sandboxProvider,
+    environmentProvider,
+    credentialVault: new DesktopCredentialVault(
+      path.join(paths.root, "credentials.json"),
+    ),
+    connectionProviders,
+    connectionMcpUrl: () =>
+      apiBaseUrl ? `${apiBaseUrl}/api/connection-mcp` : undefined,
     codingAgent: agentRegistry,
-    // Host-execution agents (Claude Code, Codex) run right in the project's
-    // user-visible folder.
-    hostAgentCheckout: {
+    // Native agents (Claude Code, Codex) run in the project's user-visible
+    // WorkerNode folder.
+    nativeAgentCheckout: {
       resolve: async (input) => {
         const current = await sessionCheckouts.describe(input);
         if (
@@ -355,11 +384,11 @@ export async function startEmbeddedServer(
       tenantId: DESKTOP_TENANT_ID,
       externalUserId: DESKTOP_USER_ID,
     };
-    for (const environment of ["production", "test"] as const) {
+    for (const stage of ["production", "test"] as const) {
       const { values } = await secrets.loadForRun({
         identity,
         projectId,
-        environment,
+        stage,
       });
       if (values[name] !== undefined && values[name] !== "") {
         return values[name];

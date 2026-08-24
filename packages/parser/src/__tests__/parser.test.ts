@@ -27,6 +27,23 @@ ${opts.body}
 }
 
 describe("parseWorkflow", () => {
+  it("rejects connection aliases that cannot be stable MCP server keys", () => {
+    const source = `
+export const myWorkflow = defineWorkflow(({ defineBoundary }) => ({
+  connections: ["google.workspace"],
+  steps: [
+    defineBoundary({
+      run: async ({ input }: BoundaryContext<Record<string, never>>) => input,
+    }),
+  ],
+}));
+`;
+
+    expect(() => parseWorkflow(source)).toThrow(
+      "must use letters, numbers, underscores, and hyphens",
+    );
+  });
+
   it("parses a simple workflow with steps", () => {
     const source = workflowSource({
       input: "{ email: string }",

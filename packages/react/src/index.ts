@@ -20,6 +20,7 @@ export {
   showRunDialogAtom,
 } from "./atoms.js";
 export {
+  type AgentAuthenticationRequired,
   type OptimisticAgentMessage,
   type QueuedAgentMessage,
   type UseAgentChatOptions,
@@ -37,6 +38,10 @@ export {
   type AttachPluginInput,
   useAttachPlugin,
 } from "./hooks/use-attach-plugin.js";
+export {
+  type AuthorizationChallenge,
+  useAuthorizeConnection,
+} from "./hooks/use-authorize-connection.js";
 export { useCheckoutBranch } from "./hooks/use-checkout-branch.js";
 export type {
   CodeEditorRevealRequest,
@@ -47,6 +52,7 @@ export {
   type CommitChangesInput,
   useCommitChanges,
 } from "./hooks/use-commit-changes.js";
+export { useCompleteConnectionAuthorization } from "./hooks/use-complete-connection-authorization.js";
 export {
   type CreateAgentSessionInput,
   useCreateAgentSession,
@@ -73,6 +79,14 @@ export {
   useDetachPlugin,
 } from "./hooks/use-detach-plugin.js";
 export { useEditorKeyboard } from "./hooks/use-editor-keyboard.js";
+export {
+  type EnvironmentConnectionBinding,
+  useEnvironmentConnections,
+} from "./hooks/use-environment-connections.js";
+export {
+  type EnvironmentList,
+  useEnvironments,
+} from "./hooks/use-environments.js";
 export {
   type ForkAgentSessionInput,
   useForkAgentSession,

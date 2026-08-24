@@ -87,6 +87,13 @@ export interface RuntimeHostCallTransition {
   args: unknown;
 }
 
+export interface RuntimeConnectionCallTransition {
+  __catamorphicDurableTransition: "connection_call";
+  alias: string;
+  action: string;
+  args: unknown;
+}
+
 export type RuntimeInvocationRequest =
   | (RuntimeInvocationRequestBase & {
       kind: "durable-boundary";

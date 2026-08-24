@@ -23,7 +23,7 @@ export interface UpsertSecretInput {
  */
 export function useUpsertProjectSecret(
   projectId: string | undefined,
-  environment: "test" | "production" = "production",
+  stage: "test" | "production" = "production",
 ): UseMutationResult<Secret, CatamorphicError, UpsertSecretInput> {
   const { apiClient } = useCatamorphic();
   const queryClient = useQueryClient();
@@ -38,7 +38,7 @@ export function useUpsertProjectSecret(
                 projectId: projectId as string,
                 name: encodeURIComponent(name),
               },
-              query: { environment },
+              query: { stage },
             },
             body: { value },
           },
@@ -47,7 +47,7 @@ export function useUpsertProjectSecret(
       }),
     onSuccess: () => {
       queryClient.invalidateQueries({
-        queryKey: ["cat", "project", projectId, "secrets", environment],
+        queryKey: ["cat", "project", projectId, "secrets", stage],
       });
       queryClient.invalidateQueries({
         queryKey: ["cat", "project", projectId, "plugins"],

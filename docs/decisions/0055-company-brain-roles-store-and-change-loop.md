@@ -2,6 +2,7 @@
 
 - **Status:** Accepted
 - **Date:** 2026-08-18
+- **Extended by:** 0065 (member and service connections)
 - **Builds on:** 0044 (checkpoints, remote sync), 0050 (project agents),
   0053 (identity scope), 0054 (tool permissions)
 - **Absorbs (parked in TODO.md):** publications, caller identity in runs,

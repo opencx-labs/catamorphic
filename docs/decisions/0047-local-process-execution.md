@@ -4,6 +4,8 @@
 
 Accepted.
 
+Provider selection per logical Environment is refined by ADR 0064.
+
 ## Context
 
 Internal-tools hosts run workflow code their own team authored and deployed.

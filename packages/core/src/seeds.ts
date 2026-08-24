@@ -452,7 +452,8 @@ Every workflow is an exported \`defineWorkflow(...)\` value whose ordered
 - **Boundaries** hold orchestration code. A single boundary is enough for most
   workflows; add more boundaries for explicit retry policies, pauses, child
   workflow calls, or host calls (\`context.documents.*\`,
-  \`context.host.<capability>.<fn>()\` — see \`durable-workflows\`).
+  \`context.host.<capability>.<fn>()\`), or brokered provider calls
+  (\`context.connections.<alias>.<action>()\`; see \`durable-workflows\`).
 - **Batches** handle persisted paged collections, bounded concurrency, physical
   batching, progress, or resumable output.
 - **\`"use step"\` functions** hold IO and business operations. They are plain
@@ -1231,6 +1232,9 @@ export const approveOrder = defineWorkflow(({ defineBoundary }) => ({
    and inline \`run\` callbacks. Keep these structural parts static.
    The same applies to \`triggers\`: an inline array of direct
    \`trigger("literal-kind", { constant: "config" })\` calls.
+   Connection requirements are also static: use an inline \`connections\`
+   array of alias strings or constant requirement objects. Credential values
+   and concrete connection ids never belong in workflow code.
 10. Workflow definitions and their boundaries use the same JSDoc metadata
     as \`"use step"\` functions. Put \`@displayname\`,
     \`@description\`, \`@icon\`, and

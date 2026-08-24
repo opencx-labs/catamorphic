@@ -1,8 +1,9 @@
-import type { DB } from "@catamorphic/db";
+import type { DB, Json } from "@catamorphic/db";
 import type { ProjectManager } from "@catamorphic/git";
 import type { PluginResolver } from "@catamorphic/plugins";
 import type {
   CodingAgentProvider,
+  EnvironmentProvider,
   SandboxProvider,
 } from "@catamorphic/sandbox";
 import { instrumentSandboxProvider } from "@catamorphic/sandbox";
@@ -14,7 +15,7 @@ import { AgentDefinitionsService } from "./services/agent-definitions-service.js
 import {
   AgentSessionsService,
   type AgentTurnSettledEvent,
-  type HostAgentCheckout,
+  type NativeAgentCheckout,
 } from "./services/agent-sessions-service.js";
 import type { AppBundleStore } from "./services/app-bundle-store.js";
 import { AppPoliciesService } from "./services/app-policies-service.js";
@@ -31,6 +32,15 @@ import {
   isCodingAgentRegistry,
   singleAgentRegistry,
 } from "./services/coding-agent-registry.js";
+import { ConnectionAdmissionService } from "./services/connection-admission.js";
+import { ConnectionBroker } from "./services/connection-broker.js";
+import { ConnectionCapabilityGrantsService } from "./services/connection-capability-grants.js";
+import {
+  type ConnectionProvider,
+  ConnectionProviderRegistry,
+} from "./services/connection-providers.js";
+import { ConnectionsService } from "./services/connections-service.js";
+import type { CredentialVault } from "./services/credential-vault.js";
 import { DbSandboxStore } from "./services/db-sandbox-store.js";
 import { DeploymentArtifactsService } from "./services/deployment-artifacts-service.js";
 import { DeploymentRuntimeService } from "./services/deployment-runtime-service.js";
@@ -41,6 +51,8 @@ import {
   type DocumentBlobStore,
   DocumentsService,
 } from "./services/documents-service.js";
+import { ExecutionAllocationsService } from "./services/execution-allocations-service.js";
+import { ExecutionEnvironmentsService } from "./services/execution-environments-service.js";
 import { ExecutionJobsService } from "./services/execution-jobs-service.js";
 import { ExecutionWorkerService } from "./services/execution-worker-service.js";
 import {
@@ -50,6 +62,7 @@ import {
 import { executeHostCall } from "./services/host-calls.js";
 import { MembershipsService } from "./services/memberships-service.js";
 import { PluginsService } from "./services/plugins-service.js";
+import { ProjectEnvironmentsService } from "./services/project-environments-service.js";
 import {
   type ProjectLifecycleHooks,
   ProjectsService,
@@ -109,6 +122,18 @@ export interface CatamorphicCoreConfig {
   db: Kysely<DB>;
   projectManager: ProjectManager;
   sandboxProvider?: SandboxProvider;
+  /** Host-owned realizations of project logical Environments. */
+  environmentProvider: EnvironmentProvider;
+  /** Opaque host-owned storage for external provider credentials. */
+  credentialVault?: CredentialVault;
+  /** Host-side external-system drivers. Requires `credentialVault`. */
+  connectionProviders?: readonly ConnectionProvider[];
+  /** Reachable control-plane endpoint for allocation-bound agent MCP grants. */
+  connectionMcpUrl?: (args: {
+    projectId: string;
+    sessionId: string;
+    alias: string;
+  }) => string | undefined;
   pluginResolver?: PluginResolver;
   /**
    * Pluggable coding agent(s). Pass a single provider (e.g. `AiSdkCodingAgent`
@@ -128,9 +153,9 @@ export interface CatamorphicCoreConfig {
   toolPermissions?: ToolPermissionBroker;
   /**
    * Resolve a project's directory on the host filesystem, required for
-   * registry agents with `execution: "host"` (Claude Code, Codex).
+   * registry agents with `topology: "native"` (Claude Code, Codex).
    */
-  hostAgentCheckout?: HostAgentCheckout;
+  nativeAgentCheckout?: NativeAgentCheckout;
   /**
    * How long finished runs are kept. Defaults to 90 days; set
    * `{ enabled: false }` to keep everything. Individual tenants can be given a
@@ -261,6 +286,13 @@ export class CatamorphicCore {
   readonly deploymentRuntime?: DeploymentRuntimeService;
   readonly skills: SkillsService;
   readonly agentDefinitions: AgentDefinitionsService;
+  readonly projectEnvironments: ProjectEnvironmentsService;
+  readonly executionEnvironments: ExecutionEnvironmentsService;
+  readonly executionAllocations: ExecutionAllocationsService;
+  readonly connections?: ConnectionsService;
+  readonly connectionAdmission?: ConnectionAdmissionService;
+  readonly connectionBroker?: ConnectionBroker;
+  readonly connectionGrants?: ConnectionCapabilityGrantsService;
   /** Committed `roles/*.json` and their expansion into identities (ADR 0055). */
   readonly roles: RolesService;
   /** Stock `user → roles + grants` per project (ADR 0055). */
@@ -354,6 +386,42 @@ export class CatamorphicCore {
       this.github ? [this.github.codeHost] : [],
     );
     this.workflows = new WorkflowsService(this.projectManager, this.projects);
+    this.projectEnvironments = new ProjectEnvironmentsService(
+      this.db,
+      this.projectManager,
+    );
+    this.executionAllocations = new ExecutionAllocationsService(this.db);
+    this.executionEnvironments = new ExecutionEnvironmentsService(
+      this.projectEnvironments,
+      config.environmentProvider,
+    );
+    const connectionProviders = config.connectionProviders ?? [];
+    const credentialVault = config.credentialVault;
+    if (connectionProviders.length > 0 && !credentialVault) {
+      throw new Error(
+        "credentialVault is required when connectionProviders are configured",
+      );
+    }
+    if (connectionProviders.length > 0 && credentialVault) {
+      const providers = new ConnectionProviderRegistry(connectionProviders);
+      this.connections = new ConnectionsService(
+        this.db,
+        credentialVault,
+        providers,
+      );
+      this.connectionAdmission = new ConnectionAdmissionService(
+        this.connections,
+      );
+      this.connectionBroker = new ConnectionBroker(
+        this.connections,
+        providers,
+        this.executionAllocations,
+      );
+      this.connectionGrants = new ConnectionCapabilityGrantsService(
+        this.db,
+        this.executionAllocations,
+      );
+    }
     this.deployment = new DeploymentService(this.projectManager);
     this.deploymentArtifacts = new DeploymentArtifactsService(this.db);
     this.deploymentRuntime = this.sandboxProvider
@@ -415,7 +483,11 @@ export class CatamorphicCore {
       runPluginsLoader: this.runPluginsLoader,
       deploymentArtifacts: this.deploymentArtifacts,
       deploymentRuntime: this.deploymentRuntime,
+      deploymentRuntimeOptions: config.deploymentRuntime,
       executionJobs,
+      executionEnvironments: this.executionEnvironments,
+      executionAllocations: this.executionAllocations,
+      connectionAdmission: this.connectionAdmission,
       executionWorker,
       runtimeEvents,
       coordinator,
@@ -426,20 +498,66 @@ export class CatamorphicCore {
       worker: executionWorker,
       rateReservations,
       tenantPolicies: this.tenantPolicies,
-      invokeRuntime: (args) => this.runs.invokeProductionRuntime(args),
+      invokeRuntime: (args) =>
+        this.runs.invokeProductionRuntime({
+          ...args,
+          allocationId: requireAllocationId(args.allocationId),
+        }),
       resolveChild: (args) => this.runs.resolveProductionWorkflow(args),
       callHost: (args) =>
         executeHostCall(
           { documents: this.documents, capabilities: this.capabilities },
           args,
         ),
+      ...(this.connectionBroker
+        ? {
+            callConnection: (args: {
+              caller: Identity;
+              allocationId: string;
+              alias: string;
+              action: string;
+              input: Json;
+            }) =>
+              this.connectionBroker!.invoke({
+                identity: args.caller,
+                allocationId: args.allocationId,
+                alias: args.alias,
+                action: args.action,
+                input: args.input,
+              }),
+            parkConnectionCall: (args: {
+              caller: Identity;
+              projectId: string;
+              workflowRunId: string;
+              workflowStepAttemptId: string;
+              executionJobId: string;
+              allocationId: string;
+              alias: string;
+              connectionId: string;
+            }) =>
+              this.connections!.parkWorkflowRequirement({
+                identity: args.caller,
+                projectId: args.projectId,
+                workflowRunId: args.workflowRunId,
+                workflowStepAttemptId: args.workflowStepAttemptId,
+                executionJobId: args.executionJobId,
+                allocationId: args.allocationId,
+                alias: args.alias,
+                connectionId: args.connectionId,
+              }),
+          }
+        : {}),
     });
     new BatchExecutionHandler(this.db, {
       coordinator,
       jobs: executionJobs,
       rateReservations,
       worker: executionWorker,
-      invokeRuntime: (args) => this.runs.invokeProductionRuntime(args),
+      invokeRuntime: (args) =>
+        this.runs.invokeProductionRuntime({
+          ...args,
+          allocationId: requireAllocationId(args.allocationId),
+        }),
     });
     this.mcpToolKinds = config.mcpToolKinds ?? [];
     const registeredKinds = new Set(
@@ -457,6 +575,8 @@ export class CatamorphicCore {
       mcpToolKinds: this.mcpToolKinds,
       projectManager: this.projectManager,
       runs: this.runs,
+      executionEnvironments: this.executionEnvironments,
+      connectionAdmission: this.connectionAdmission,
     });
 
     this.skills = new SkillsService(this.db, this.projectManager, {
@@ -500,7 +620,12 @@ export class CatamorphicCore {
         projectManager: this.projectManager,
         sandboxProvider: this.sandboxProvider,
         codingAgents,
-        hostAgentCheckout: config.hostAgentCheckout,
+        nativeAgentCheckout: config.nativeAgentCheckout,
+        executionEnvironments: this.executionEnvironments,
+        executionAllocations: this.executionAllocations,
+        connectionAdmission: this.connectionAdmission,
+        connectionGrants: this.connectionGrants,
+        connectionMcpUrl: config.connectionMcpUrl,
         devSandboxes: this.devSandboxes,
         plugins: this.plugins,
         pluginResolver: this.pluginResolver,
@@ -522,4 +647,11 @@ export function createCatamorphicCore(
   config: CatamorphicCoreConfig,
 ): CatamorphicCore {
   return new CatamorphicCore(config);
+}
+
+function requireAllocationId(allocationId: string | null): string {
+  if (!allocationId) {
+    throw new Error("Workflow execution requires an Environment Allocation");
+  }
+  return allocationId;
 }

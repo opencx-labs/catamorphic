@@ -172,7 +172,21 @@ export class ProjectManager {
       await fs.mkdir(path.dirname(manifestPath), { recursive: true });
       await fs.writeFile(
         manifestPath,
-        `${JSON.stringify({ name: projectName }, null, 2)}\n`,
+        `${JSON.stringify(
+          {
+            name: projectName,
+            environments: {
+              local: {
+                binding: "local",
+                description: "Run on this machine",
+                workloads: ["agent", "workflow"],
+              },
+            },
+            defaultEnvironment: "local",
+          },
+          null,
+          2,
+        )}\n`,
       );
     }
 

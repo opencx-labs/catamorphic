@@ -3,7 +3,7 @@ import type { RunPluginPayload } from "@catamorphic/sandbox";
 import type { Identity } from "../identity.js";
 import type { CapabilityRegistry } from "./capability-providers.js";
 import type { PluginsService } from "./plugins-service.js";
-import type { SecretEnvironment, SecretsService } from "./secrets-service.js";
+import type { RunStage, SecretsService } from "./secrets-service.js";
 
 export interface RunPluginBundle {
   plugins: RunPluginPayload[];
@@ -32,10 +32,10 @@ export class RunPluginsLoader {
   async load(opts: {
     identity: Identity;
     projectId: string;
-    environment: SecretEnvironment;
+    stage: RunStage;
     workflowName?: string;
   }): Promise<RunPluginBundle> {
-    const { identity, projectId, environment, workflowName } = opts;
+    const { identity, projectId, stage, workflowName } = opts;
     const attached = await this.plugins.loadAttachedResolved(projectId);
     const payloads = await Promise.all(
       attached.map((plugin) => this.buildPayload(plugin)),
@@ -43,14 +43,14 @@ export class RunPluginsLoader {
     const { values, missingRequired } = await this.secrets.loadForRun({
       identity,
       projectId,
-      environment,
+      stage,
     });
 
     const capabilityEnv = await this.resolveCapabilities({
       attached,
       identity,
       projectId,
-      environment,
+      stage,
       workflowName,
     });
 
@@ -69,7 +69,7 @@ export class RunPluginsLoader {
     attached: ResolvedPlugin[];
     identity: Identity;
     projectId: string;
-    environment: SecretEnvironment;
+    stage: RunStage;
     workflowName?: string;
   }): Promise<Record<string, string>> {
     if (!this.capabilities) return {};
@@ -90,7 +90,7 @@ export class RunPluginsLoader {
       tenantId: args.identity.tenantId,
       externalUserId: args.identity.externalUserId,
       projectId: args.projectId,
-      environment: args.environment,
+      stage: args.stage,
       workflowName: args.workflowName,
     });
   }

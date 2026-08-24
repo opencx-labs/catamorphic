@@ -21,8 +21,8 @@ export function PluginsSettings({ projectId }: Props) {
   const catalogQuery = usePluginCatalog();
   const attachMutation = useAttachPlugin(projectId);
   const detachMutation = useDetachPlugin(projectId);
-  const [environment, setEnvironment] = useState<"test" | "production">("test");
-  const secretsQuery = useProjectSecrets(projectId, environment);
+  const [stage, setStage] = useState<"test" | "production">("test");
+  const secretsQuery = useProjectSecrets(projectId, stage);
 
   const [picking, setPicking] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -85,9 +85,9 @@ export function PluginsSettings({ projectId }: Props) {
           <button
             key={value}
             type="button"
-            onClick={() => setEnvironment(value)}
+            onClick={() => setStage(value)}
             className={`h-8 rounded border px-3 text-xs font-medium ${
-              environment === value
+              stage === value
                 ? "border-accent bg-accent/15 text-accent"
                 : "border-border-strong text-fg-muted"
             }`}
@@ -158,7 +158,7 @@ export function PluginsSettings({ projectId }: Props) {
               key={plugin.packageName}
               projectId={projectId}
               plugin={plugin}
-              environment={environment}
+              stage={stage}
               secretValues={secretValues}
               onDetach={() => handleDetach(plugin.packageName)}
             />
@@ -172,13 +172,13 @@ export function PluginsSettings({ projectId }: Props) {
 function AttachedPluginCard({
   projectId,
   plugin,
-  environment,
+  stage,
   secretValues,
   onDetach,
 }: {
   projectId: string;
   plugin: AttachedPlugin;
-  environment: "test" | "production";
+  stage: "test" | "production";
   secretValues: Map<string, boolean>;
   onDetach: () => void | Promise<void>;
 }) {
@@ -241,7 +241,7 @@ function AttachedPluginCard({
               key={secret.name}
               projectId={projectId}
               secret={secret}
-              environment={environment}
+              stage={stage}
               hasValue={secretValues.get(secret.name) ?? false}
             />
           ))}
@@ -254,18 +254,18 @@ function AttachedPluginCard({
 function SecretField({
   projectId,
   secret,
-  environment,
+  stage,
   hasValue,
 }: {
   projectId: string;
   secret: PluginSecretDescriptor;
-  environment: "test" | "production";
+  stage: "test" | "production";
   hasValue: boolean;
 }) {
   const [value, setValue] = useState("");
   const [err, setErr] = useState<string | null>(null);
-  const upsert = useUpsertProjectSecret(projectId, environment);
-  const inputId = `secret-${projectId}-${environment}-${secret.name}`;
+  const upsert = useUpsertProjectSecret(projectId, stage);
+  const inputId = `secret-${projectId}-${stage}-${secret.name}`;
 
   const handleSave = async (e: React.FormEvent) => {
     e.preventDefault();

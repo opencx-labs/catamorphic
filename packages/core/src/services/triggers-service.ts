@@ -10,8 +10,12 @@ import {
   renderAppApiTypesModule,
 } from "@catamorphic/parser";
 import type { Kysely } from "kysely";
+import { z } from "zod";
 import { type Identity, SYSTEM_AUTHOR } from "../identity.js";
 import { PROJECT_CHECK_SCRIPT, PROJECT_CHECK_SCRIPT_PATH } from "../seeds.js";
+import type { ConnectionAdmissionService } from "./connection-admission.js";
+import type { ResolvedConnectionBinding } from "./connection-types.js";
+import type { ExecutionEnvironmentsService } from "./execution-environments-service.js";
 import type {
   EnrollmentConflictPolicy,
   RunSuspensionReason,
@@ -133,6 +137,24 @@ interface TriggersServiceDeps {
   mcpToolKinds?: readonly McpToolKindSpec[];
   projectManager: ProjectManager;
   runs: RunsService;
+  executionEnvironments: ExecutionEnvironmentsService;
+  connectionAdmission?: ConnectionAdmissionService;
+}
+
+const TriggerAuthorizationSnapshotSchema = z.array(
+  z.object({
+    bindingId: z.string().uuid(),
+    connectionId: z.string().uuid(),
+    alias: z.string(),
+    providerKind: z.string(),
+    principalKind: z.enum(["project_service", "tenant_service"]),
+    capabilities: z.array(z.string()),
+  }),
+);
+
+interface TriggerAuthorization {
+  environment: string;
+  connections: readonly ResolvedConnectionBinding[];
 }
 
 const DEFAULT_SYNC_BUDGET_MS = 30_000;
@@ -278,6 +300,7 @@ export class TriggersService {
     projectId: string;
     kind: string;
     payload: Json;
+    environment?: string;
     /** Defaults to async. */
     mode?: TriggerMode;
     /** Restrict to these bound workflows (e.g. the one tool the AI called). */
@@ -342,10 +365,13 @@ export class TriggersService {
               projectId: args.projectId,
               workflowName: binding.workflowName,
               payload: args.payload,
+              environment: args.environment,
               mode,
               correlationKey,
               onConflict: args.onConflict,
               deadline,
+              commitSha: scan.commitSha,
+              triggerKind: binding.kind,
             }),
           ),
         );
@@ -359,16 +385,38 @@ export class TriggersService {
     projectId: string;
     workflowName: string;
     payload: Json;
+    environment?: string;
     mode: TriggerMode;
     correlationKey?: string;
     onConflict?: EnrollmentConflictPolicy;
     deadline: number;
+    commitSha: string | null;
+    triggerKind: string;
   }): Promise<TriggerFireOutcome> {
-    const run = await this.deps.runs.triggerProduction({
+    const authorization = args.commitSha
+      ? await this.readAuthorization({
+          projectId: args.projectId,
+          commitSha: args.commitSha,
+          triggerKind: args.triggerKind,
+          workflowName: args.workflowName,
+        })
+      : undefined;
+    if (
+      args.environment &&
+      authorization &&
+      args.environment !== authorization.environment
+    ) {
+      throw new Error(
+        `Trigger '${args.triggerKind}' for workflow '${args.workflowName}' is configured for Environment '${authorization.environment}'`,
+      );
+    }
+    const run = await this.deps.runs.triggerUnattendedProduction({
       identity: args.identity,
       projectId: args.projectId,
       workflowName: args.workflowName,
       input: args.payload,
+      environment: authorization?.environment ?? args.environment,
+      connectionAuthorizationSnapshot: authorization?.connections,
       correlationKey: args.correlationKey,
       onConflict: args.onConflict,
     });
@@ -438,6 +486,7 @@ export class TriggersService {
 
     const memoKey = `${args.projectId}:${commitSha}`;
     const scanning = this.scanAndRecord({
+      identity: args.identity,
       projectId: args.projectId,
       commitSha,
       files,
@@ -492,6 +541,7 @@ export class TriggersService {
   }
 
   private async scanAndRecord(args: {
+    identity: Identity;
     projectId: string;
     commitSha: string;
     files: Record<string, string>;
@@ -505,8 +555,42 @@ export class TriggersService {
         error.file ? `${error.file}: ${error.message}` : error.message,
       );
     }
-    const bindings: TriggerBindingInfo[] = [];
+    const bindings: Array<
+      TriggerBindingInfo & {
+        environment?: string;
+        connectionRequirements: Json;
+        connectionAuthorizationSnapshot?: readonly ResolvedConnectionBinding[];
+      }
+    > = [];
+    const authorizations = new Map<string, TriggerAuthorization>();
     for (const workflow of parsed.workflows) {
+      let authorization = authorizations.get(workflow.functionName);
+      if (workflow.graph.triggers.length > 0 && !authorization) {
+        const environment = await this.deps.executionEnvironments.admit({
+          identity: args.identity,
+          projectId: args.projectId,
+          requirements: { workload: "workflow" },
+        });
+        const requirements = workflow.graph.connections ?? [];
+        if (requirements.length > 0 && !this.deps.connectionAdmission) {
+          throw new Error("Connection providers are not configured");
+        }
+        const connections =
+          requirements.length > 0
+            ? await this.deps.connectionAdmission!.admit({
+                identity: args.identity,
+                projectId: args.projectId,
+                environment: environment.environmentName,
+                requirements,
+                unattended: true,
+              })
+            : [];
+        authorization = {
+          environment: environment.environmentName,
+          connections,
+        };
+        authorizations.set(workflow.functionName, authorization);
+      }
       for (const binding of workflow.graph.triggers) {
         const kind = this.registry.get(binding.kind);
         if (!kind) {
@@ -548,6 +632,15 @@ export class TriggersService {
           inputParameters: workflow.graph.input.parameters,
           inputSchema: (workflow.graph.inputSchema ?? {}) as Json,
           outputSchema: (workflow.graph.outputSchema ?? {}) as Json,
+          connectionRequirements: JSON.parse(
+            JSON.stringify(workflow.graph.connections),
+          ) as Json,
+          ...(authorization
+            ? {
+                environment: authorization.environment,
+                connectionAuthorizationSnapshot: authorization.connections,
+              }
+            : {}),
         });
       }
     }
@@ -609,6 +702,14 @@ export class TriggersService {
               input_parameters: JSON.stringify(binding.inputParameters),
               input_schema: JSON.stringify(binding.inputSchema),
               output_schema: JSON.stringify(binding.outputSchema),
+              environment_name: binding.environment ?? null,
+              connection_requirements: JSON.stringify(
+                binding.connectionRequirements,
+              ),
+              connection_authorization_snapshot:
+                binding.connectionAuthorizationSnapshot === undefined
+                  ? null
+                  : JSON.stringify(binding.connectionAuthorizationSnapshot),
             })),
           )
           .onConflict((oc) =>
@@ -625,5 +726,28 @@ export class TriggersService {
       }
     });
     return bindings;
+  }
+
+  private async readAuthorization(args: {
+    projectId: string;
+    commitSha: string;
+    triggerKind: string;
+    workflowName: string;
+  }): Promise<TriggerAuthorization | undefined> {
+    const row = await this.db
+      .selectFrom("trigger_bindings")
+      .where("project_id", "=", args.projectId)
+      .where("commit_sha", "=", args.commitSha)
+      .where("trigger_kind", "=", args.triggerKind)
+      .where("workflow_name", "=", args.workflowName)
+      .select(["environment_name", "connection_authorization_snapshot"])
+      .executeTakeFirst();
+    if (!row?.environment_name) return undefined;
+    return {
+      environment: row.environment_name,
+      connections: TriggerAuthorizationSnapshotSchema.parse(
+        row.connection_authorization_snapshot ?? [],
+      ),
+    };
   }
 }

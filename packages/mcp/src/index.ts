@@ -13,6 +13,10 @@ export {
   uiResourceUri,
 } from "./client.js";
 export {
+  defineMcpConnectionProvider,
+  type McpConnectionCredential,
+} from "./connection-provider.js";
+export {
   type ElicitFormField,
   type ElicitHandler,
   type ElicitRequest,

@@ -121,7 +121,7 @@ function assistantRegistry(config: {
   const assistant: RegisteredCodingAgent = {
     id: ASSISTANT_SLUG,
     provider: config.provider,
-    execution: "sandbox",
+    topology: "controller",
     defaults,
   };
   const projectForm = /^project:[0-9a-f-]+:assistant$/;

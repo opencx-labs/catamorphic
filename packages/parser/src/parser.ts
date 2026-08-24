@@ -2448,6 +2448,7 @@ function buildDefinedWorkflowGraph(
     inputSchema,
     outputSchema,
     triggers: triggerBindings,
+    connections: parseWorkflowConnections(definition.config),
     canSuspend,
     nodes: ctx.nodes,
     edges: ctx.edges,
@@ -2455,6 +2456,113 @@ function buildDefinedWorkflowGraph(
     filePath: opts?.filePath ? normalizePath(opts.filePath) : undefined,
     projectFiles: opts?.projectFiles?.map(normalizePath),
   };
+}
+
+function parseWorkflowConnections(
+  config: ObjectLiteralExpression,
+): import("./types.js").WorkflowConnectionRequirement[] {
+  const property = config.getProperty("connections");
+  if (!property) return [];
+  if (!Node.isPropertyAssignment(property)) {
+    throw new Error("Workflow 'connections' must be a constant array property");
+  }
+  const initializer = property.getInitializer();
+  if (!initializer || !Node.isArrayLiteralExpression(initializer)) {
+    throw new Error("Workflow 'connections' must be a constant array");
+  }
+  return initializer.getElements().map((element) => {
+    const value = workflowConnectionLiteral(element);
+    if (typeof value === "string") {
+      assertWorkflowConnectionAlias(value);
+      return { alias: value };
+    }
+    if (!value || typeof value !== "object" || Array.isArray(value)) {
+      throw new Error("Workflow connection entries must be strings or objects");
+    }
+    const alias = "alias" in value ? value.alias : undefined;
+    if (typeof alias !== "string" || alias.length === 0) {
+      throw new Error("Workflow connection entries require an alias");
+    }
+    assertWorkflowConnectionAlias(alias);
+    const principal = "principal" in value ? value.principal : undefined;
+    const capabilities =
+      "capabilities" in value ? value.capabilities : undefined;
+    const optional = "optional" in value ? value.optional : undefined;
+    if (
+      principal !== undefined &&
+      !["member", "service", "either"].includes(String(principal))
+    ) {
+      throw new Error(
+        `Workflow connection '${alias}' has an invalid principal`,
+      );
+    }
+    if (
+      capabilities !== undefined &&
+      (!Array.isArray(capabilities) ||
+        capabilities.some((item) => typeof item !== "string"))
+    ) {
+      throw new Error(
+        `Workflow connection '${alias}' capabilities must be strings`,
+      );
+    }
+    if (optional !== undefined && typeof optional !== "boolean") {
+      throw new Error(
+        `Workflow connection '${alias}' optional must be boolean`,
+      );
+    }
+    return {
+      alias,
+      ...(typeof principal === "string"
+        ? {
+            principal:
+              principal as import("./types.js").WorkflowConnectionRequirement["principal"],
+          }
+        : {}),
+      ...(Array.isArray(capabilities) ? { capabilities } : {}),
+      ...(typeof optional === "boolean" ? { optional } : {}),
+    };
+  });
+}
+
+function assertWorkflowConnectionAlias(alias: string): void {
+  if (!/^[A-Za-z0-9][A-Za-z0-9_-]*$/.test(alias)) {
+    throw new Error(
+      `Workflow connection alias '${alias}' must use letters, numbers, underscores, and hyphens`,
+    );
+  }
+}
+
+function workflowConnectionLiteral(node: Node): unknown {
+  const value = unwrapExpression(node);
+  if (
+    Node.isStringLiteral(value) ||
+    Node.isNoSubstitutionTemplateLiteral(value)
+  ) {
+    return value.getLiteralValue();
+  }
+  if (Node.isTrueLiteral(value)) return true;
+  if (Node.isFalseLiteral(value)) return false;
+  if (Node.isArrayLiteralExpression(value)) {
+    return value.getElements().map(workflowConnectionLiteral);
+  }
+  if (Node.isObjectLiteralExpression(value)) {
+    return Object.fromEntries(
+      value.getProperties().map((property) => {
+        if (!Node.isPropertyAssignment(property)) {
+          throw new Error(
+            "Workflow connection metadata must use constant properties",
+          );
+        }
+        const initializer = property.getInitializer();
+        if (!initializer)
+          throw new Error("Workflow connection property is missing a value");
+        return [property.getName(), workflowConnectionLiteral(initializer)];
+      }),
+    );
+  }
+  throw new Error(
+    "Workflow connection metadata must contain constant JSON values",
+  );
 }
 
 /**

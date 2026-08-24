@@ -15,6 +15,7 @@ import type { Identity } from "../identity.js";
 import { AccessDeniedError } from "../services/artifact-scope.js";
 import { DocumentPathError } from "../services/documents-service.js";
 import { proposalBranch } from "../services/proposals-service.js";
+import { testEnvironmentProvider } from "./test-environment.js";
 
 /**
  * ADR 0055: a member proposes a program change; it lands as a branch from
@@ -57,7 +58,11 @@ describeIf("ProposalsService (ADR 0055)", () => {
     );
     db = createDatabase({ connectionString, schema, poolSize: 4 });
     await migrateToLatest({ db, schema });
-    core = new CatamorphicCore({ db, projectManager });
+    core = new CatamorphicCore({
+      db,
+      projectManager,
+      environmentProvider: testEnvironmentProvider(),
+    });
     const project = await core.projects.create(root, { name: "brain" });
     projectId = project.id;
     const repo = await projectManager.openDev(

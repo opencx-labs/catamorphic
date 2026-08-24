@@ -10,6 +10,7 @@ export type CatamorphicErrorCode =
   | "validation"
   | "rate_limited"
   | "sandbox_unavailable"
+  | "authentication_required"
   | "network"
   | "unknown";
 
@@ -55,6 +56,8 @@ function defaultMessageFor(code: CatamorphicErrorCode): string {
       return "Sandbox unavailable";
     case "network":
       return "Network error";
+    case "authentication_required":
+      return "Authentication required";
     default:
       return "Unknown error";
   }
@@ -67,6 +70,7 @@ function codeForStatus(status: number): CatamorphicErrorCode {
   if (status === 409) return "conflict";
   if (status === 400 || status === 422) return "validation";
   if (status === 429) return "rate_limited";
+  if (status === 428) return "authentication_required";
   if (status === 503) return "sandbox_unavailable";
   return "unknown";
 }

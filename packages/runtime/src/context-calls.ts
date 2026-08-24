@@ -1,5 +1,6 @@
 import {
   DOCUMENTS_CAPABILITY,
+  type RuntimeConnectionCallTransition,
   type RuntimeHostCallTransition,
 } from "./supervisor-protocol.js";
 
@@ -16,6 +17,45 @@ export function hostCallTransition(
   args: unknown,
 ): RuntimeHostCallTransition {
   return { __catamorphicDurableTransition: "host_call", capability, fn, args };
+}
+
+export function connectionCallTransition(
+  alias: string,
+  action: string,
+  args: unknown,
+): RuntimeConnectionCallTransition {
+  return {
+    __catamorphicDurableTransition: "connection_call",
+    alias,
+    action,
+    args,
+  };
+}
+
+export function connectionNamespace(path: readonly string[]): unknown {
+  return new Proxy(function target() {}, {
+    get(_target, property) {
+      if (typeof property !== "string") return undefined;
+      if (
+        property === "then" ||
+        property === "toJSON" ||
+        property === "constructor"
+      ) {
+        return undefined;
+      }
+      return connectionNamespace([...path, property]);
+    },
+    apply(_target, _this, args) {
+      const alias = path[0];
+      const action = path.slice(1).join(".");
+      if (!alias || !action) {
+        throw new Error(
+          "Connection calls need an alias and action: context.connections.<alias>.<action>(args)",
+        );
+      }
+      return connectionCallTransition(alias, action, args[0]);
+    },
+  });
 }
 
 /**

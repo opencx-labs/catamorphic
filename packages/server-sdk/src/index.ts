@@ -5,7 +5,10 @@ export type {
   BatchProgress,
   CancelRunInput,
   CatamorphicCore,
+  ConnectionProvider,
+  ConnectionRequirement,
   CreateProjectInput,
+  CredentialVault,
   DeploymentRuntimeCleanupResult,
   DeploymentRuntimeHealthResult,
   DeploymentRuntimeRetirementResult,
@@ -138,7 +141,14 @@ export {
 } from "@catamorphic/git";
 export type { PluginResolver } from "@catamorphic/plugins";
 export { LocalPluginResolver } from "@catamorphic/plugins";
-export type { SandboxProvider } from "@catamorphic/sandbox";
+export type {
+  AgentExecutionTopology,
+  EnvironmentBinding,
+  EnvironmentProvider,
+  EnvironmentRequirements,
+  EnvironmentRuntimeBinding,
+  SandboxProvider,
+} from "@catamorphic/sandbox";
 export type {
   CreateCatamorphicConfig,
   DatabaseConfig,
@@ -170,3 +180,4 @@ export type {
   WorkflowsResource,
 } from "./scoped-client.js";
 export { ScopedClient, TenantScopedClient } from "./scoped-client.js";
+export { defineStaticEnvironments } from "./static-environments.js";

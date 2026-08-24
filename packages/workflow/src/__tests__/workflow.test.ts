@@ -41,6 +41,7 @@ describe("workflow contracts", () => {
         },
         host: {} as never,
         documents: {} as never,
+        connections: {} as never,
       }),
     ).resolves.toEqual({ orderId: "order-1", status: "prepared" });
   });

@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import type { DB, JsonObject } from "@catamorphic/db";
 import type { ProjectManager } from "@catamorphic/git";
 import { getTracer, withSpan } from "@catamorphic/otel";
@@ -6,6 +7,7 @@ import {
   type AgentAttachment,
   type AgentEffort,
   type AgentEvent,
+  type AgentMcpServerConfig,
   type AttachedPluginForAgent,
   type McpToolPolicyLayers,
   messageWithAttachmentNames,
@@ -39,8 +41,13 @@ import type {
   CodingAgentRegistry,
   RegisteredCodingAgent,
 } from "./coding-agent-registry.js";
+import type { ConnectionAdmissionService } from "./connection-admission.js";
+import type { ConnectionCapabilityGrantsService } from "./connection-capability-grants.js";
+import { connectionMcpServerName } from "./connection-types.js";
 import type { DevSandboxService } from "./dev-sandbox-service.js";
 import type { DocumentsService } from "./documents-service.js";
+import type { ExecutionAllocationsService } from "./execution-allocations-service.js";
+import type { ExecutionEnvironmentsService } from "./execution-environments-service.js";
 import type { PluginsService } from "./plugins-service.js";
 import { PROGRAM_READER } from "./program-reader.js";
 import { requireTenantProject } from "./projects-service.js";
@@ -61,6 +68,8 @@ export interface AgentSession {
   provider: string;
   providerSessionId: string | null;
   sandboxId: string | null;
+  environment: string | null;
+  allocationId: string | null;
   /** Host-registry key of the agent this session runs on; null = default. */
   agentId: string | null;
   /** Per-session reasoning-effort override; null = the agent's default. */
@@ -116,6 +125,13 @@ export class AgentSessionClosedError extends Error {
   constructor(readonly sessionId: string) {
     super(`Agent session '${sessionId}' is closed`);
     this.name = "AgentSessionClosedError";
+  }
+}
+
+export class UnsupportedAgentTopologyError extends Error {
+  constructor(readonly topology: string) {
+    super(`Agent topology '${topology}' is not implemented by this host`);
+    this.name = "UnsupportedAgentTopologyError";
   }
 }
 
@@ -315,7 +331,7 @@ export interface AgentTurnSettledEvent {
   workingDirectory: string;
 }
 
-export interface HostAgentCheckout {
+export interface NativeAgentCheckout {
   resolve(input: {
     projectId: string;
     sessionId: string;
@@ -334,11 +350,20 @@ interface AgentSessionsDeps {
   codingAgents: CodingAgentRegistry;
   devSandboxes: DevSandboxService;
   /**
-   * Resolve a project's directory on the host filesystem, for `host`
-   * execution-mode agents (Claude Code, Codex — runtimes that operate on
+   * Resolve a project's directory on the WorkerNode filesystem, for `native`
+   * topology agents (Claude Code, Codex, runtimes that operate on
    * local paths). Hosts that only register sandbox agents can omit it.
    */
-  hostAgentCheckout?: HostAgentCheckout;
+  nativeAgentCheckout?: NativeAgentCheckout;
+  executionEnvironments: ExecutionEnvironmentsService;
+  executionAllocations: ExecutionAllocationsService;
+  connectionAdmission?: ConnectionAdmissionService;
+  connectionGrants?: ConnectionCapabilityGrantsService;
+  connectionMcpUrl?: (args: {
+    projectId: string;
+    sessionId: string;
+    alias: string;
+  }) => string | undefined;
   plugins?: PluginsService;
   pluginResolver?: PluginResolver;
   /**
@@ -386,9 +411,9 @@ interface AgentSessionsDeps {
  *    provider session (plus, for sandbox agents, the per-(project, user)
  *    dev sandbox) is anchored on the first turn. Switching a session to a
  *    different agent just clears the anchor; the next turn re-anchors.
- * 2. `sandbox` agents run against the dev sandbox and their changes sync
+ * 2. `controller` agents run against the dev sandbox and their changes sync
  *    back into the user's dev working copy as an uncommitted draft.
- *    `host` agents run directly in the project's host directory — their
+ *    `native` agents run directly in the project's WorkerNode directory. Their
  *    edits land in place, so no sync step and no draft.
  * 3. The conversation persists to `agent_sessions` / `agent_messages`.
  */
@@ -396,7 +421,12 @@ export class AgentSessionsService {
   private readonly projectManager: ProjectManager;
   private readonly sandboxProvider: SandboxProvider;
   private readonly codingAgents: CodingAgentRegistry;
-  private readonly hostAgentCheckout?: HostAgentCheckout;
+  private readonly nativeAgentCheckout?: NativeAgentCheckout;
+  private readonly executionEnvironments: ExecutionEnvironmentsService;
+  private readonly executionAllocations: ExecutionAllocationsService;
+  private readonly connectionAdmission?: ConnectionAdmissionService;
+  private readonly connectionGrants?: ConnectionCapabilityGrantsService;
+  private readonly connectionMcpUrl?: AgentSessionsDeps["connectionMcpUrl"];
   private readonly plugins?: PluginsService;
   private readonly pluginResolver?: PluginResolver;
   private readonly devSandboxes: DevSandboxService;
@@ -428,7 +458,12 @@ export class AgentSessionsService {
     this.projectManager = deps.projectManager;
     this.sandboxProvider = deps.sandboxProvider;
     this.codingAgents = deps.codingAgents;
-    this.hostAgentCheckout = deps.hostAgentCheckout;
+    this.nativeAgentCheckout = deps.nativeAgentCheckout;
+    this.executionEnvironments = deps.executionEnvironments;
+    this.executionAllocations = deps.executionAllocations;
+    this.connectionAdmission = deps.connectionAdmission;
+    this.connectionGrants = deps.connectionGrants;
+    this.connectionMcpUrl = deps.connectionMcpUrl;
     this.devSandboxes = deps.devSandboxes;
     this.plugins = deps.plugins;
     this.pluginResolver = deps.pluginResolver;
@@ -640,6 +675,7 @@ export class AgentSessionsService {
       systemPrompt?: string;
       agentId?: string;
       effort?: AgentEffort;
+      environment?: string;
     } = {},
   ): Promise<AgentSession> {
     return withSpan(
@@ -659,33 +695,78 @@ export class AgentSessionsService {
   private async createInner(
     identity: Identity,
     projectId: string,
-    input: { systemPrompt?: string; agentId?: string; effort?: AgentEffort },
+    input: {
+      systemPrompt?: string;
+      agentId?: string;
+      effort?: AgentEffort;
+      environment?: string;
+    },
   ): Promise<AgentSession> {
     await this.requireProject(identity, projectId);
     this.assertAgentAccess(identity, projectId, input.agentId ?? null);
     // Validate up front so a bad agent id fails at create, not first send.
     const agent = this.resolveAgent(input.agentId ?? null, projectId);
+    const sessionId = randomUUID();
+    const admitted = await this.executionEnvironments.admit({
+      identity,
+      projectId,
+      environment: input.environment,
+      allowed: agent.environment?.allowed,
+      preferred: agent.environment?.preferred,
+      requirements: {
+        ...agent.environment?.requirements,
+        workload: "agent",
+        topology: agent.topology,
+      },
+    });
+    const requirements = agent.connectionRequirements ?? [];
+    if (requirements.length > 0 && !this.connectionAdmission) {
+      throw new Error("Connection providers are not configured");
+    }
+    const connections =
+      requirements.length > 0
+        ? await this.connectionAdmission!.admit({
+            identity,
+            projectId,
+            environment: admitted.environmentName,
+            requirements,
+          })
+        : [];
 
-    // Lazy anchoring: the provider session (and, for sandbox agents, the dev
-    // sandbox) is established on the first turn. Creating a session is a
-    // metadata write — cheap, and switching agents before the first message
-    // costs nothing.
-    const row = await this.db
-      .insertInto("agent_sessions")
-      .values({
-        project_id: projectId,
-        external_user_id: identity.externalUserId,
-        provider: agent.provider.name,
-        provider_session_id: null,
-        agent_id: input.agentId ?? null,
-        model_effort: input.effort ?? null,
-        system_prompt: input.systemPrompt ?? null,
-        sandbox_id: null,
-        status: "active",
-        base_commit_sha: null,
-      })
-      .returningAll()
-      .executeTakeFirstOrThrow();
+    const row = await this.db.transaction().execute(async (transaction) => {
+      const allocation = await this.executionAllocations.create({
+        identity,
+        projectId,
+        environmentName: admitted.environmentName,
+        workloadKind: "agent",
+        rootWorkloadId: sessionId,
+        policy: {
+          binding: admitted.binding,
+          requirements: admitted.effectiveRequirements,
+          connections,
+        },
+        transaction,
+      });
+      return transaction
+        .insertInto("agent_sessions")
+        .values({
+          id: sessionId,
+          project_id: projectId,
+          external_user_id: identity.externalUserId,
+          provider: agent.provider.name,
+          provider_session_id: null,
+          agent_id: input.agentId ?? null,
+          model_effort: input.effort ?? null,
+          system_prompt: input.systemPrompt ?? null,
+          sandbox_id: null,
+          allocation_id: allocation.id,
+          environment_name: admitted.environmentName,
+          status: "active",
+          base_commit_sha: null,
+        })
+        .returningAll()
+        .executeTakeFirstOrThrow();
+    });
 
     return mapSession(row);
   }
@@ -759,6 +840,39 @@ export class AgentSessionsService {
         if (existing && this.runningTurns.has(sessionId)) {
           throw new AgentTurnInProgressError(sessionId);
         }
+        if (existing && !existing.allocation_id) {
+          throw new Error("Agent session has no Environment Allocation");
+        }
+        const mirrorAgent = existing
+          ? undefined
+          : this.resolveAgent(agentId, projectId);
+        const mirrorAdmission = mirrorAgent
+          ? await this.executionEnvironments.admit({
+              identity,
+              projectId,
+              allowed: mirrorAgent.environment?.allowed,
+              preferred: mirrorAgent.environment?.preferred,
+              requirements: {
+                ...mirrorAgent.environment?.requirements,
+                workload: "agent",
+                topology: mirrorAgent.topology,
+              },
+            })
+          : undefined;
+        const mirrorRequirements = mirrorAgent?.connectionRequirements ?? [];
+        if (mirrorRequirements.length > 0 && !this.connectionAdmission) {
+          throw new Error("Connection providers are not configured");
+        }
+        const mirrorConnections = mirrorAdmission
+          ? mirrorRequirements.length > 0
+            ? await this.connectionAdmission!.admit({
+                identity,
+                projectId,
+                environment: mirrorAdmission.environmentName,
+                requirements: mirrorRequirements,
+              })
+            : []
+          : undefined;
 
         // One transaction: the divergence check, the session upsert, and
         // the appends must not interleave with a turn starting here (the
@@ -775,6 +889,21 @@ export class AgentSessionsService {
             throw new SessionMirrorDivergedError(sessionId);
           }
 
+          const allocation = mirrorAdmission
+            ? await this.executionAllocations.create({
+                identity,
+                projectId,
+                environmentName: mirrorAdmission.environmentName,
+                workloadKind: "agent",
+                rootWorkloadId: sessionId,
+                policy: {
+                  binding: mirrorAdmission.binding,
+                  requirements: mirrorAdmission.effectiveRequirements,
+                  connections: mirrorConnections,
+                },
+                transaction: trx,
+              })
+            : undefined;
           const session = existing
             ? await trx
                 .updateTable("agent_sessions")
@@ -798,6 +927,8 @@ export class AgentSessionsService {
                   model_effort: null,
                   system_prompt: null,
                   sandbox_id: null,
+                  allocation_id: allocation!.id,
+                  environment_name: mirrorAdmission!.environmentName,
                   status: "active",
                   base_commit_sha: null,
                   title: input.title ?? null,
@@ -905,7 +1036,11 @@ export class AgentSessionsService {
     identity: Identity,
     projectId: string,
     sessionId: string,
-    patch: { agentId?: string; effort?: AgentEffort | null },
+    patch: {
+      agentId?: string;
+      effort?: AgentEffort | null;
+      environment?: string;
+    },
   ): Promise<AgentSession> {
     const session = await this.requireSession(identity, projectId, sessionId);
     if (session.status !== "active") {
@@ -920,7 +1055,11 @@ export class AgentSessionsService {
       provider: string;
       provider_session_id: null;
       model_effort: string | null;
+      allocation_id: string;
+      environment_name: string;
+      sandbox_id: null;
     }> = {};
+    let reallocatedRow: SessionRow | undefined;
 
     if (patch.agentId !== undefined && patch.agentId !== session.agent_id) {
       this.assertAgentAccess(identity, projectId, patch.agentId);
@@ -948,15 +1087,87 @@ export class AgentSessionsService {
     if (patch.effort !== undefined) {
       updates.model_effort = patch.effort;
     }
+    if (patch.environment !== undefined || updates.agent_id !== undefined) {
+      const previousAllocationId = session.allocation_id;
+      if (!previousAllocationId) {
+        throw new Error("Agent session has no Environment Allocation");
+      }
+      const nextAgent = this.resolveAgent(
+        patch.agentId ?? session.agent_id,
+        projectId,
+      );
+      const admission = await this.executionEnvironments.admit({
+        identity,
+        projectId,
+        environment: patch.environment ?? session.environment_name ?? undefined,
+        allowed: nextAgent.environment?.allowed,
+        preferred: nextAgent.environment?.preferred,
+        requirements: {
+          ...nextAgent.environment?.requirements,
+          workload: "agent",
+          topology: nextAgent.topology,
+        },
+      });
+      const requirements = nextAgent.connectionRequirements ?? [];
+      if (requirements.length > 0 && !this.connectionAdmission) {
+        throw new Error("Connection providers are not configured");
+      }
+      const connections =
+        requirements.length > 0
+          ? await this.connectionAdmission!.admit({
+              identity,
+              projectId,
+              environment: admission.environmentName,
+              requirements,
+            })
+          : [];
+      reallocatedRow = await this.db
+        .transaction()
+        .execute(async (transaction) => {
+          await this.executionAllocations.release({
+            identity,
+            allocationId: previousAllocationId,
+            transaction,
+          });
+          const allocation = await this.executionAllocations.create({
+            identity,
+            projectId,
+            environmentName: admission.environmentName,
+            workloadKind: "agent",
+            rootWorkloadId: sessionId,
+            policy: {
+              binding: admission.binding,
+              requirements: admission.effectiveRequirements,
+              connections,
+            },
+            transaction,
+          });
+          updates.allocation_id = allocation.id;
+          updates.environment_name = admission.environmentName;
+          updates.provider_session_id = null;
+          updates.sandbox_id = null;
+          return transaction
+            .updateTable("agent_sessions")
+            .set({ ...updates, updated_at: new Date() })
+            .where("id", "=", sessionId)
+            .returningAll()
+            .executeTakeFirstOrThrow();
+        });
+      await this.connectionGrants?.revokeAllocation({
+        allocationId: previousAllocationId,
+      });
+    }
 
     if (Object.keys(updates).length === 0) return mapSession(session);
 
-    const row = await this.db
-      .updateTable("agent_sessions")
-      .set({ ...updates, updated_at: new Date() })
-      .where("id", "=", sessionId)
-      .returningAll()
-      .executeTakeFirstOrThrow();
+    const row =
+      reallocatedRow ??
+      (await this.db
+        .updateTable("agent_sessions")
+        .set({ ...updates, updated_at: new Date() })
+        .where("id", "=", sessionId)
+        .returningAll()
+        .executeTakeFirstOrThrow());
 
     // Leave a marker in the transcript so the conversation shows where the
     // agent or effort changed. System rows with `metadata.marker` render as
@@ -1538,9 +1749,11 @@ export class AgentSessionsService {
       }
 
       const settledWorkingDirectory =
-        agent.execution === "host" && this.hostAgentCheckout
-          ? ((await this.hostAgentCheckout.resolve({ projectId, sessionId })) ??
-            anchor.providerSession.workingDirectory)
+        agent.topology === "native" && this.nativeAgentCheckout
+          ? ((await this.nativeAgentCheckout.resolve({
+              projectId,
+              sessionId,
+            })) ?? anchor.providerSession.workingDirectory)
           : anchor.providerSession.workingDirectory;
       anchor.providerSession.workingDirectory = settledWorkingDirectory;
 
@@ -1585,11 +1798,11 @@ export class AgentSessionsService {
       // Sweeps ALL dirty state (host harnesses under-report changed files);
       // failures log and never break the turn.
       const commitSha =
-        agent.execution === "host" || changedFiles.length > 0
+        agent.topology === "native" || changedFiles.length > 0
           ? await this.checkpointTurn(identity, projectId, message, {
               sessionId,
               workingDirectory: settledWorkingDirectory,
-              hostExecution: agent.execution === "host",
+              nativeExecution: agent.topology === "native",
             })
           : null;
 
@@ -1772,12 +1985,29 @@ export class AgentSessionsService {
         .catch(() => {});
     }
 
-    const row = await this.db
-      .updateTable("agent_sessions")
-      .set({ status: "closed", updated_at: new Date() })
-      .where("id", "=", sessionId)
-      .returningAll()
-      .executeTakeFirstOrThrow();
+    if (!session.allocation_id) {
+      throw new Error("Agent session has no Environment Allocation");
+    }
+    const allocationId = session.allocation_id;
+
+    const row = await this.db.transaction().execute(async (transaction) => {
+      const closed = await transaction
+        .updateTable("agent_sessions")
+        .set({ status: "closed", updated_at: new Date() })
+        .where("id", "=", sessionId)
+        .returningAll()
+        .executeTakeFirstOrThrow();
+      await this.executionAllocations.release({
+        identity,
+        allocationId,
+        transaction,
+      });
+      return closed;
+    });
+
+    await this.connectionGrants?.revokeAllocation({
+      allocationId,
+    });
 
     return mapSession(row);
   }
@@ -1818,6 +2048,9 @@ export class AgentSessionsService {
      */
     reanchored: boolean;
   }> {
+    if (agent.topology === "contained" || agent.topology === "external") {
+      throw new UnsupportedAgentTopologyError(agent.topology);
+    }
     const anchored =
       session.provider_session_id !== null &&
       session.provider === agent.provider.name &&
@@ -1827,8 +2060,8 @@ export class AgentSessionsService {
       // persisted transcript instead of running into a dead session.
       (agent.provider.hasSession?.(session.provider_session_id) ?? true);
 
-    if (agent.execution === "host") {
-      const workingDirectory = await this.resolveHostPath(
+    if (agent.topology === "native") {
+      const workingDirectory = await this.resolveNativePath(
         projectId,
         session.id,
       );
@@ -1856,6 +2089,7 @@ export class AgentSessionsService {
         }),
         attachedPlugins: await this.loadAttachedPlugins(projectId),
         history: await this.transcriptHistory(session.id),
+        mcpServers: await this.connectionMcpServers(identity, session),
         ...(await this.callerOpts(identity, projectId, session.agent_id)),
       });
       await this.db
@@ -1900,6 +2134,7 @@ export class AgentSessionsService {
       }),
       attachedPlugins: await this.loadAttachedPlugins(projectId),
       history: await this.transcriptHistory(session.id),
+      mcpServers: await this.connectionMcpServers(identity, session),
       ...(await this.callerOpts(identity, projectId, session.agent_id)),
     });
     await this.db
@@ -1917,6 +2152,52 @@ export class AgentSessionsService {
       sandboxProviderId: handle.providerId,
       reanchored: true,
     };
+  }
+
+  private async connectionMcpServers(
+    identity: Identity,
+    session: SessionRow,
+  ): Promise<Record<string, AgentMcpServerConfig>> {
+    if (!session.allocation_id) {
+      throw new Error("Agent session has no Environment Allocation");
+    }
+    if (!this.connectionGrants) return {};
+    const allocation = await this.executionAllocations.get({
+      identity,
+      allocationId: session.allocation_id,
+    });
+    const bindings = allocation?.policy.connections ?? [];
+    if (bindings.length === 0) return {};
+    if (!this.connectionMcpUrl) {
+      throw new Error(
+        "connectionMcpUrl is required for an agent with brokered connections",
+      );
+    }
+    const servers: Record<string, AgentMcpServerConfig> = {};
+    for (const binding of bindings) {
+      const url = this.connectionMcpUrl({
+        projectId: session.project_id,
+        sessionId: session.id,
+        alias: binding.alias,
+      });
+      if (!url) {
+        throw new Error("The connection MCP gateway is not reachable");
+      }
+      const grant = await this.connectionGrants.issue({
+        identity,
+        allocationId: session.allocation_id,
+        agentSessionId: session.id,
+        alias: binding.alias,
+        ttlSeconds: 3600,
+      });
+      const serverName = connectionMcpServerName(binding.alias);
+      servers[serverName] = {
+        transport: "http",
+        url,
+        headers: { Authorization: `Bearer ${grant.token}` },
+      };
+    }
+    return servers;
   }
 
   /**
@@ -1969,17 +2250,17 @@ export class AgentSessionsService {
     return capped;
   }
 
-  private async resolveHostPath(
+  private async resolveNativePath(
     projectId: string,
     sessionId: string,
   ): Promise<string> {
-    const path = await this.hostAgentCheckout?.resolve({
+    const path = await this.nativeAgentCheckout?.resolve({
       projectId,
       sessionId,
     });
     if (!path) {
       throw new Error(
-        "This agent runs on the host machine, but the project has no host directory",
+        "This agent uses native execution, but the Environment has no WorkerNode directory",
       );
     }
     return path;
@@ -2154,12 +2435,12 @@ export class AgentSessionsService {
     execution: {
       sessionId: string;
       workingDirectory: string;
-      hostExecution: boolean;
+      nativeExecution: boolean;
     },
   ): Promise<string | null> {
     try {
-      if (execution.hostExecution && this.hostAgentCheckout?.checkpoint) {
-        return await this.hostAgentCheckout.checkpoint({
+      if (execution.nativeExecution && this.nativeAgentCheckout?.checkpoint) {
+        return await this.nativeAgentCheckout.checkpoint({
           projectId,
           sessionId: execution.sessionId,
           workingDirectory: execution.workingDirectory,
@@ -2577,6 +2858,8 @@ function mapSession(row: SessionRow, running = false): AgentSession {
     provider: row.provider,
     providerSessionId: row.provider_session_id,
     sandboxId: row.sandbox_id,
+    environment: row.environment_name,
+    allocationId: row.allocation_id,
     agentId: row.agent_id,
     modelEffort: (row.model_effort as AgentEffort | null) ?? null,
     title: row.title,

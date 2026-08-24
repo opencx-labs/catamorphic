@@ -1440,6 +1440,1141 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/projects/{projectId}/environments": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: {
+            parameters: {
+                query: {
+                    workload: "agent" | "workflow";
+                    agentId?: string;
+                };
+                header?: never;
+                path: {
+                    projectId: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Default Response */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            items: {
+                                name: string;
+                                label: string;
+                                description?: string;
+                                available: boolean;
+                                compatible: boolean;
+                                preferred: boolean;
+                                allowed: boolean;
+                                reasons: string[];
+                                binding?: {
+                                    /** @enum {string} */
+                                    trust: "local" | "managed";
+                                    /** @enum {string} */
+                                    isolation: "none" | "process" | "sandbox";
+                                    capabilities: string[];
+                                    resources: {
+                                        [key: string]: number | boolean;
+                                    };
+                                };
+                            }[];
+                            defaultEnvironment?: string;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                503: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                        };
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/connection-providers": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Default Response */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            kind: string;
+                            displayName: string;
+                        }[];
+                    };
+                };
+                /** @description Default Response */
+                503: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                        };
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/projects/{projectId}/connections": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    projectId: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Default Response */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            /** Format: uuid */
+                            id: string;
+                            /** Format: uuid */
+                            projectId: string | null;
+                            providerKind: string;
+                            /** @enum {string} */
+                            principalKind: "member" | "project_service" | "tenant_service";
+                            ownerExternalUserId: string | null;
+                            label: string;
+                            /** @enum {string} */
+                            status: "pending" | "ready" | "expired" | "revoked";
+                            account: unknown;
+                            scopes: string[];
+                            capabilities: string[];
+                            /** Format: date-time */
+                            expiresAt: string | null;
+                            revision: number;
+                            /** Format: date-time */
+                            createdAt: string;
+                            /** Format: date-time */
+                            updatedAt: string;
+                        }[];
+                    };
+                };
+                /** @description Default Response */
+                503: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                        };
+                    };
+                };
+            };
+        };
+        put?: never;
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    projectId: string;
+                };
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": {
+                        providerKind: string;
+                        /** @enum {string} */
+                        principalKind: "project_service" | "tenant_service";
+                        label: string;
+                        credential: string;
+                        capabilities?: string[];
+                    };
+                };
+            };
+            responses: {
+                /** @description Default Response */
+                201: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            /** Format: uuid */
+                            id: string;
+                            /** Format: uuid */
+                            projectId: string | null;
+                            providerKind: string;
+                            /** @enum {string} */
+                            principalKind: "member" | "project_service" | "tenant_service";
+                            ownerExternalUserId: string | null;
+                            label: string;
+                            /** @enum {string} */
+                            status: "pending" | "ready" | "expired" | "revoked";
+                            account: unknown;
+                            scopes: string[];
+                            capabilities: string[];
+                            /** Format: date-time */
+                            expiresAt: string | null;
+                            revision: number;
+                            /** Format: date-time */
+                            createdAt: string;
+                            /** Format: date-time */
+                            updatedAt: string;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                503: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                        };
+                    };
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/projects/{projectId}/environments/{environment}/connections/{alias}/attachment": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        delete: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    projectId: string;
+                    environment: string;
+                    alias: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Default Response */
+                204: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": null;
+                    };
+                };
+                /** @description Default Response */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                503: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                        };
+                    };
+                };
+            };
+        };
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/connections/{connectionId}/credential": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    connectionId: string;
+                };
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": {
+                        credential: string;
+                    };
+                };
+            };
+            responses: {
+                /** @description Default Response */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            /** Format: uuid */
+                            id: string;
+                            /** Format: uuid */
+                            projectId: string | null;
+                            providerKind: string;
+                            /** @enum {string} */
+                            principalKind: "member" | "project_service" | "tenant_service";
+                            ownerExternalUserId: string | null;
+                            label: string;
+                            /** @enum {string} */
+                            status: "pending" | "ready" | "expired" | "revoked";
+                            account: unknown;
+                            scopes: string[];
+                            capabilities: string[];
+                            /** Format: date-time */
+                            expiresAt: string | null;
+                            revision: number;
+                            /** Format: date-time */
+                            createdAt: string;
+                            /** Format: date-time */
+                            updatedAt: string;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                409: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                503: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                        };
+                    };
+                };
+            };
+        };
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/projects/{projectId}/connection-audit": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: {
+            parameters: {
+                query?: {
+                    limit?: number;
+                };
+                header?: never;
+                path: {
+                    projectId: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Default Response */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            id: string;
+                            /** Format: uuid */
+                            projectId: string | null;
+                            /** Format: uuid */
+                            connectionId: string | null;
+                            /** Format: uuid */
+                            allocationId: string | null;
+                            actorExternalUserId: string | null;
+                            eventType: string;
+                            outcome: string;
+                            action: string | null;
+                            argumentsDigest: string | null;
+                            metadata: unknown;
+                            /** Format: date-time */
+                            createdAt: string;
+                        }[];
+                    };
+                };
+                /** @description Default Response */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                503: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                        };
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/projects/{projectId}/environments/{environment}/connections": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    projectId: string;
+                    environment: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Default Response */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            /** Format: uuid */
+                            id: string;
+                            /** Format: uuid */
+                            projectId: string;
+                            environment: string;
+                            alias: string;
+                            providerKind: string;
+                            principalKinds: ("member" | "project_service" | "tenant_service")[];
+                            /** Format: uuid */
+                            serviceConnectionId: string | null;
+                            capabilities: string[];
+                            memberConnection: {
+                                /** Format: uuid */
+                                connectionId: string | null;
+                                /** @enum {string} */
+                                principalKind: "member" | "project_service" | "tenant_service";
+                                label: string;
+                                /** @enum {string} */
+                                status: "pending" | "ready" | "expired" | "revoked";
+                                account: unknown;
+                                scopes: string[];
+                            } | null;
+                            serviceConnection: {
+                                /** Format: uuid */
+                                connectionId: string | null;
+                                /** @enum {string} */
+                                principalKind: "member" | "project_service" | "tenant_service";
+                                label: string;
+                                /** @enum {string} */
+                                status: "pending" | "ready" | "expired" | "revoked";
+                                account: unknown;
+                                scopes: string[];
+                            } | null;
+                            /** Format: date-time */
+                            createdAt: string;
+                            /** Format: date-time */
+                            updatedAt: string;
+                        }[];
+                    };
+                };
+                /** @description Default Response */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                503: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                        };
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/projects/{projectId}/environments/{environment}/connections/{alias}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    projectId: string;
+                    environment: string;
+                    alias: string;
+                };
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": {
+                        providerKind: string;
+                        principalKinds: ("member" | "project_service" | "tenant_service")[];
+                        /** Format: uuid */
+                        serviceConnectionId?: string;
+                        capabilities?: string[];
+                    };
+                };
+            };
+            responses: {
+                /** @description Default Response */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            /** Format: uuid */
+                            id: string;
+                            /** Format: uuid */
+                            projectId: string;
+                            environment: string;
+                            alias: string;
+                            providerKind: string;
+                            principalKinds: ("member" | "project_service" | "tenant_service")[];
+                            /** Format: uuid */
+                            serviceConnectionId: string | null;
+                            capabilities: string[];
+                            memberConnection: {
+                                /** Format: uuid */
+                                connectionId: string | null;
+                                /** @enum {string} */
+                                principalKind: "member" | "project_service" | "tenant_service";
+                                label: string;
+                                /** @enum {string} */
+                                status: "pending" | "ready" | "expired" | "revoked";
+                                account: unknown;
+                                scopes: string[];
+                            } | null;
+                            serviceConnection: {
+                                /** Format: uuid */
+                                connectionId: string | null;
+                                /** @enum {string} */
+                                principalKind: "member" | "project_service" | "tenant_service";
+                                label: string;
+                                /** @enum {string} */
+                                status: "pending" | "ready" | "expired" | "revoked";
+                                account: unknown;
+                                scopes: string[];
+                            } | null;
+                            /** Format: date-time */
+                            createdAt: string;
+                            /** Format: date-time */
+                            updatedAt: string;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                503: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                        };
+                    };
+                };
+            };
+        };
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/projects/{projectId}/environments/{environment}/connections/{alias}/authorize": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    projectId: string;
+                    environment: string;
+                    alias: string;
+                };
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": {
+                        /** Format: uri */
+                        redirectUri: string;
+                    };
+                };
+            };
+            responses: {
+                /** @description Default Response */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            authorizationId: string;
+                            challenge: {
+                                /** @enum {string} */
+                                kind: "url";
+                                /** Format: uri */
+                                url: string;
+                                expiresAt?: string;
+                            } | {
+                                /** @enum {string} */
+                                kind: "device";
+                                /** Format: uri */
+                                verificationUrl: string;
+                                userCode: string;
+                                expiresAt?: string;
+                            } | {
+                                /** @enum {string} */
+                                kind: "form";
+                                fields: {
+                                    name: string;
+                                    label: string;
+                                    secret: boolean;
+                                    required: boolean;
+                                }[];
+                            };
+                        };
+                    };
+                };
+                /** @description Default Response */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                409: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                503: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                        };
+                    };
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/connection-authorizations/complete": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": {
+                        state: string;
+                        callback: {
+                            [key: string]: string;
+                        };
+                    };
+                };
+            };
+            responses: {
+                /** @description Default Response */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            /** Format: uuid */
+                            id: string;
+                            /** Format: uuid */
+                            projectId: string | null;
+                            providerKind: string;
+                            /** @enum {string} */
+                            principalKind: "member" | "project_service" | "tenant_service";
+                            ownerExternalUserId: string | null;
+                            label: string;
+                            /** @enum {string} */
+                            status: "pending" | "ready" | "expired" | "revoked";
+                            account: unknown;
+                            scopes: string[];
+                            capabilities: string[];
+                            /** Format: date-time */
+                            expiresAt: string | null;
+                            revision: number;
+                            /** Format: date-time */
+                            createdAt: string;
+                            /** Format: date-time */
+                            updatedAt: string;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                409: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                503: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                        };
+                    };
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/connection-authorizations/callback": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: {
+            parameters: {
+                query: {
+                    state: string;
+                    code?: string;
+                    iss?: string;
+                    error?: string;
+                    error_description?: string;
+                };
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Default Response */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            /** Format: uuid */
+                            id: string;
+                            /** Format: uuid */
+                            projectId: string | null;
+                            providerKind: string;
+                            /** @enum {string} */
+                            principalKind: "member" | "project_service" | "tenant_service";
+                            ownerExternalUserId: string | null;
+                            label: string;
+                            /** @enum {string} */
+                            status: "pending" | "ready" | "expired" | "revoked";
+                            account: unknown;
+                            scopes: string[];
+                            capabilities: string[];
+                            /** Format: date-time */
+                            expiresAt: string | null;
+                            revision: number;
+                            /** Format: date-time */
+                            createdAt: string;
+                            /** Format: date-time */
+                            updatedAt: string;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                409: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                503: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                        };
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/connections/{connectionId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        delete: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    connectionId: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Default Response */
+                204: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": null;
+                    };
+                };
+                /** @description Default Response */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                503: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                        };
+                    };
+                };
+            };
+        };
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/connection-mcp": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Default Response */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/projects/{projectId}/workflows": {
         parameters: {
             query?: never;
@@ -1591,6 +2726,13 @@ export interface paths {
                                     file?: string;
                                 };
                             }[];
+                            connections: {
+                                alias: string;
+                                /** @enum {string} */
+                                principal?: "member" | "service" | "either";
+                                capabilities?: string[];
+                                optional?: boolean;
+                            }[];
                             canSuspend: boolean;
                             nodes: {
                                 id: string;
@@ -1735,6 +2877,9 @@ export interface paths {
                                 projectId: string;
                                 workflowName: string;
                                 correlationKey: string | null;
+                                environment: string | null;
+                                /** Format: uuid */
+                                allocationId: string | null;
                                 capabilities: {
                                     cancel: boolean;
                                     pauseProcessing: boolean;
@@ -1759,6 +2904,16 @@ export interface paths {
                                     createdAt: string;
                                     /** Format: date-time */
                                     resolvedAt: string | null;
+                                } | null;
+                                connectionActionRequired: {
+                                    /** Format: uuid */
+                                    id: string;
+                                    environment: string;
+                                    alias: string;
+                                    /** @enum {string} */
+                                    status: "pending";
+                                    /** Format: date-time */
+                                    createdAt: string;
                                 } | null;
                                 batchScopes: {
                                     /** Format: uuid */
@@ -1842,6 +2997,7 @@ export interface paths {
                 content: {
                     "application/json": {
                         input?: components["schemas"]["JsonValueInput"];
+                        environment?: string;
                         correlationKey?: string;
                         /** @enum {string} */
                         onConflict?: "ignore" | "error" | "restart";
@@ -1862,6 +3018,9 @@ export interface paths {
                             projectId: string;
                             workflowName: string;
                             correlationKey: string | null;
+                            environment: string | null;
+                            /** Format: uuid */
+                            allocationId: string | null;
                             capabilities: {
                                 cancel: boolean;
                                 pauseProcessing: boolean;
@@ -1886,6 +3045,16 @@ export interface paths {
                                 createdAt: string;
                                 /** Format: date-time */
                                 resolvedAt: string | null;
+                            } | null;
+                            connectionActionRequired: {
+                                /** Format: uuid */
+                                id: string;
+                                environment: string;
+                                alias: string;
+                                /** @enum {string} */
+                                status: "pending";
+                                /** Format: date-time */
+                                createdAt: string;
                             } | null;
                             batchScopes: {
                                 /** Format: uuid */
@@ -1940,6 +3109,17 @@ export interface paths {
                     };
                 };
                 /** @description Default Response */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                        };
+                    };
+                };
+                /** @description Default Response */
                 404: {
                     headers: {
                         [name: string]: unknown;
@@ -1958,6 +3138,36 @@ export interface paths {
                     content: {
                         "application/json": {
                             error: string;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                422: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                428: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                            /** @enum {string} */
+                            code: "authentication_required";
+                            environment: string;
+                            requirements: {
+                                alias: string;
+                                providerKind: string;
+                                principalKinds: ("member" | "project_service" | "tenant_service")[];
+                            }[];
                         };
                     };
                 };
@@ -2014,6 +3224,7 @@ export interface paths {
                 content: {
                     "application/json": {
                         input?: components["schemas"]["JsonValueInput"];
+                        environment?: string;
                         correlationKey?: string;
                         /** @enum {string} */
                         onConflict?: "ignore" | "error" | "restart";
@@ -2059,6 +3270,17 @@ export interface paths {
                     };
                 };
                 /** @description Default Response */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                        };
+                    };
+                };
+                /** @description Default Response */
                 404: {
                     headers: {
                         [name: string]: unknown;
@@ -2077,6 +3299,36 @@ export interface paths {
                     content: {
                         "application/json": {
                             error: string;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                422: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                428: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                            /** @enum {string} */
+                            code: "authentication_required";
+                            environment: string;
+                            requirements: {
+                                alias: string;
+                                providerKind: string;
+                                principalKinds: ("member" | "project_service" | "tenant_service")[];
+                            }[];
                         };
                     };
                 };
@@ -2153,6 +3405,9 @@ export interface paths {
                             projectId: string;
                             workflowName: string;
                             correlationKey: string | null;
+                            environment: string | null;
+                            /** Format: uuid */
+                            allocationId: string | null;
                             capabilities: {
                                 cancel: boolean;
                                 pauseProcessing: boolean;
@@ -2177,6 +3432,16 @@ export interface paths {
                                 createdAt: string;
                                 /** Format: date-time */
                                 resolvedAt: string | null;
+                            } | null;
+                            connectionActionRequired: {
+                                /** Format: uuid */
+                                id: string;
+                                environment: string;
+                                alias: string;
+                                /** @enum {string} */
+                                status: "pending";
+                                /** Format: date-time */
+                                createdAt: string;
                             } | null;
                             batchScopes: {
                                 /** Format: uuid */
@@ -2301,6 +3566,9 @@ export interface paths {
                             projectId: string;
                             workflowName: string;
                             correlationKey: string | null;
+                            environment: string | null;
+                            /** Format: uuid */
+                            allocationId: string | null;
                             capabilities: {
                                 cancel: boolean;
                                 pauseProcessing: boolean;
@@ -2325,6 +3593,16 @@ export interface paths {
                                 createdAt: string;
                                 /** Format: date-time */
                                 resolvedAt: string | null;
+                            } | null;
+                            connectionActionRequired: {
+                                /** Format: uuid */
+                                id: string;
+                                environment: string;
+                                alias: string;
+                                /** @enum {string} */
+                                status: "pending";
+                                /** Format: date-time */
+                                createdAt: string;
                             } | null;
                             batchScopes: {
                                 /** Format: uuid */
@@ -2532,6 +3810,25 @@ export interface paths {
                     };
                 };
                 /** @description Default Response */
+                428: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                            /** @enum {string} */
+                            code: "authentication_required";
+                            environment: string;
+                            requirements: {
+                                alias: string;
+                                providerKind: string;
+                                principalKinds: ("member" | "project_service" | "tenant_service")[];
+                            }[];
+                        };
+                    };
+                };
+                /** @description Default Response */
                 503: {
                     headers: {
                         [name: string]: unknown;
@@ -2575,6 +3872,7 @@ export interface paths {
                 content: {
                     "application/json": {
                         payload: components["schemas"]["JsonValueInput"];
+                        environment?: string;
                         /** @enum {string} */
                         mode?: "sync" | "async";
                         workflows?: string[];
@@ -2766,6 +4064,9 @@ export interface paths {
                             projectId: string;
                             workflowName: string;
                             correlationKey: string | null;
+                            environment: string | null;
+                            /** Format: uuid */
+                            allocationId: string | null;
                             capabilities: {
                                 cancel: boolean;
                                 pauseProcessing: boolean;
@@ -2790,6 +4091,16 @@ export interface paths {
                                 createdAt: string;
                                 /** Format: date-time */
                                 resolvedAt: string | null;
+                            } | null;
+                            connectionActionRequired: {
+                                /** Format: uuid */
+                                id: string;
+                                environment: string;
+                                alias: string;
+                                /** @enum {string} */
+                                status: "pending";
+                                /** Format: date-time */
+                                createdAt: string;
                             } | null;
                             batchScopes: {
                                 /** Format: uuid */
@@ -2942,6 +4253,9 @@ export interface paths {
                             projectId: string;
                             workflowName: string;
                             correlationKey: string | null;
+                            environment: string | null;
+                            /** Format: uuid */
+                            allocationId: string | null;
                             capabilities: {
                                 cancel: boolean;
                                 pauseProcessing: boolean;
@@ -2966,6 +4280,16 @@ export interface paths {
                                 createdAt: string;
                                 /** Format: date-time */
                                 resolvedAt: string | null;
+                            } | null;
+                            connectionActionRequired: {
+                                /** Format: uuid */
+                                id: string;
+                                environment: string;
+                                alias: string;
+                                /** @enum {string} */
+                                status: "pending";
+                                /** Format: date-time */
+                                createdAt: string;
                             } | null;
                             batchScopes: {
                                 /** Format: uuid */
@@ -3082,6 +4406,9 @@ export interface paths {
                             projectId: string;
                             workflowName: string;
                             correlationKey: string | null;
+                            environment: string | null;
+                            /** Format: uuid */
+                            allocationId: string | null;
                             capabilities: {
                                 cancel: boolean;
                                 pauseProcessing: boolean;
@@ -3106,6 +4433,16 @@ export interface paths {
                                 createdAt: string;
                                 /** Format: date-time */
                                 resolvedAt: string | null;
+                            } | null;
+                            connectionActionRequired: {
+                                /** Format: uuid */
+                                id: string;
+                                environment: string;
+                                alias: string;
+                                /** @enum {string} */
+                                status: "pending";
+                                /** Format: date-time */
+                                createdAt: string;
                             } | null;
                             batchScopes: {
                                 /** Format: uuid */
@@ -3222,6 +4559,9 @@ export interface paths {
                             projectId: string;
                             workflowName: string;
                             correlationKey: string | null;
+                            environment: string | null;
+                            /** Format: uuid */
+                            allocationId: string | null;
                             capabilities: {
                                 cancel: boolean;
                                 pauseProcessing: boolean;
@@ -3246,6 +4586,16 @@ export interface paths {
                                 createdAt: string;
                                 /** Format: date-time */
                                 resolvedAt: string | null;
+                            } | null;
+                            connectionActionRequired: {
+                                /** Format: uuid */
+                                id: string;
+                                environment: string;
+                                alias: string;
+                                /** @enum {string} */
+                                status: "pending";
+                                /** Format: date-time */
+                                createdAt: string;
                             } | null;
                             batchScopes: {
                                 /** Format: uuid */
@@ -3370,6 +4720,9 @@ export interface paths {
                             projectId: string;
                             workflowName: string;
                             correlationKey: string | null;
+                            environment: string | null;
+                            /** Format: uuid */
+                            allocationId: string | null;
                             capabilities: {
                                 cancel: boolean;
                                 pauseProcessing: boolean;
@@ -3394,6 +4747,16 @@ export interface paths {
                                 createdAt: string;
                                 /** Format: date-time */
                                 resolvedAt: string | null;
+                            } | null;
+                            connectionActionRequired: {
+                                /** Format: uuid */
+                                id: string;
+                                environment: string;
+                                alias: string;
+                                /** @enum {string} */
+                                status: "pending";
+                                /** Format: date-time */
+                                createdAt: string;
                             } | null;
                             batchScopes: {
                                 /** Format: uuid */
@@ -3704,6 +5067,9 @@ export interface paths {
                                 providerSessionId: string | null;
                                 /** Format: uuid */
                                 sandboxId: string | null;
+                                environment: string | null;
+                                /** Format: uuid */
+                                allocationId: string | null;
                                 agentId: string | null;
                                 /** @enum {string|null} */
                                 modelEffort: "low" | "medium" | "high" | "xhigh" | "max" | null;
@@ -3755,6 +5121,7 @@ export interface paths {
                         agentId?: string;
                         /** @enum {string} */
                         effort?: "low" | "medium" | "high" | "xhigh" | "max";
+                        environment?: string;
                     };
                 };
             };
@@ -3775,6 +5142,9 @@ export interface paths {
                             providerSessionId: string | null;
                             /** Format: uuid */
                             sandboxId: string | null;
+                            environment: string | null;
+                            /** Format: uuid */
+                            allocationId: string | null;
                             agentId: string | null;
                             /** @enum {string|null} */
                             modelEffort: "low" | "medium" | "high" | "xhigh" | "max" | null;
@@ -3806,6 +5176,21 @@ export interface paths {
                     };
                 };
                 /** @description Default Response */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                        } | {
+                            error: string;
+                            code: string;
+                            reasons?: string[];
+                        };
+                    };
+                };
+                /** @description Default Response */
                 404: {
                     headers: {
                         [name: string]: unknown;
@@ -3813,6 +5198,51 @@ export interface paths {
                     content: {
                         "application/json": {
                             error: string;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                409: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                            code: string;
+                            reasons?: string[];
+                        };
+                    };
+                };
+                /** @description Default Response */
+                422: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                            code: string;
+                            reasons?: string[];
+                        };
+                    };
+                };
+                /** @description Default Response */
+                428: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                            /** @enum {string} */
+                            code: "authentication_required";
+                            environment: string;
+                            requirements: {
+                                alias: string;
+                                providerKind: string;
+                                principalKinds: ("member" | "project_service" | "tenant_service")[];
+                            }[];
                         };
                     };
                 };
@@ -3892,6 +5322,9 @@ export interface paths {
                             providerSessionId: string | null;
                             /** Format: uuid */
                             sandboxId: string | null;
+                            environment: string | null;
+                            /** Format: uuid */
+                            allocationId: string | null;
                             agentId: string | null;
                             /** @enum {string|null} */
                             modelEffort: "low" | "medium" | "high" | "xhigh" | "max" | null;
@@ -3908,6 +5341,21 @@ export interface paths {
                             createdAt: string;
                             /** Format: date-time */
                             updatedAt: string;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                        } | {
+                            error: string;
+                            code: string;
+                            reasons?: string[];
                         };
                     };
                 };
@@ -3931,6 +5379,42 @@ export interface paths {
                         "application/json": {
                             error: string;
                             diverged: boolean;
+                        } | {
+                            error: string;
+                            code: string;
+                            reasons?: string[];
+                        };
+                    };
+                };
+                /** @description Default Response */
+                422: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                            code: string;
+                            reasons?: string[];
+                        };
+                    };
+                };
+                /** @description Default Response */
+                428: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                            /** @enum {string} */
+                            code: "authentication_required";
+                            environment: string;
+                            requirements: {
+                                alias: string;
+                                providerKind: string;
+                                principalKinds: ("member" | "project_service" | "tenant_service")[];
+                            }[];
                         };
                     };
                 };
@@ -3989,6 +5473,9 @@ export interface paths {
                             providerSessionId: string | null;
                             /** Format: uuid */
                             sandboxId: string | null;
+                            environment: string | null;
+                            /** Format: uuid */
+                            allocationId: string | null;
                             agentId: string | null;
                             /** @enum {string|null} */
                             modelEffort: "low" | "medium" | "high" | "xhigh" | "max" | null;
@@ -4077,6 +5564,9 @@ export interface paths {
                             providerSessionId: string | null;
                             /** Format: uuid */
                             sandboxId: string | null;
+                            environment: string | null;
+                            /** Format: uuid */
+                            allocationId: string | null;
                             agentId: string | null;
                             /** @enum {string|null} */
                             modelEffort: "low" | "medium" | "high" | "xhigh" | "max" | null;
@@ -4138,6 +5628,7 @@ export interface paths {
                         agentId?: string;
                         /** @enum {string|null} */
                         effort?: "low" | "medium" | "high" | "xhigh" | "max" | null;
+                        environment?: string;
                     };
                 };
             };
@@ -4158,6 +5649,9 @@ export interface paths {
                             providerSessionId: string | null;
                             /** Format: uuid */
                             sandboxId: string | null;
+                            environment: string | null;
+                            /** Format: uuid */
+                            allocationId: string | null;
                             agentId: string | null;
                             /** @enum {string|null} */
                             modelEffort: "low" | "medium" | "high" | "xhigh" | "max" | null;
@@ -4189,6 +5683,21 @@ export interface paths {
                     };
                 };
                 /** @description Default Response */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                        } | {
+                            error: string;
+                            code: string;
+                            reasons?: string[];
+                        };
+                    };
+                };
+                /** @description Default Response */
                 404: {
                     headers: {
                         [name: string]: unknown;
@@ -4207,6 +5716,38 @@ export interface paths {
                     content: {
                         "application/json": {
                             error: string;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                422: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                            code: string;
+                            reasons?: string[];
+                        };
+                    };
+                };
+                /** @description Default Response */
+                428: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                            /** @enum {string} */
+                            code: "authentication_required";
+                            environment: string;
+                            requirements: {
+                                alias: string;
+                                providerKind: string;
+                                principalKinds: ("member" | "project_service" | "tenant_service")[];
+                            }[];
                         };
                     };
                 };
@@ -4473,6 +6014,19 @@ export interface paths {
                     content: {
                         "application/json": {
                             error: string;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                422: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                            code: string;
+                            reasons?: string[];
                         };
                     };
                 };
@@ -4781,6 +6335,9 @@ export interface paths {
                             providerSessionId: string | null;
                             /** Format: uuid */
                             sandboxId: string | null;
+                            environment: string | null;
+                            /** Format: uuid */
+                            allocationId: string | null;
                             agentId: string | null;
                             /** @enum {string|null} */
                             modelEffort: "low" | "medium" | "high" | "xhigh" | "max" | null;
@@ -5001,7 +6558,13 @@ export interface paths {
                                     source: "profile" | "secret" | "local";
                                     secret?: string;
                                 };
-                                connections?: string[];
+                                connections?: (string | {
+                                    alias: string;
+                                    /** @enum {string} */
+                                    principal?: "member" | "service" | "either";
+                                    capabilities?: string[];
+                                    optional?: boolean;
+                                })[];
                                 skills?: string[];
                                 acp?: {
                                     endpoint?: string;
@@ -5093,6 +6656,12 @@ export interface paths {
                                 })[];
                                 workflows?: string[];
                                 apps?: string[];
+                                environments?: string[];
+                                connections?: {
+                                    environment: string;
+                                    alias: string;
+                                    capabilities?: string[];
+                                }[];
                                 documents?: (string | {
                                     path: string;
                                     /** @enum {string} */
@@ -6606,6 +8175,7 @@ export interface paths {
                 content: {
                     "application/json": {
                         input?: components["schemas"]["JsonValueInput"];
+                        environment?: string;
                         correlationKey?: string;
                         /** @enum {string} */
                         onConflict?: "ignore" | "error" | "restart";
@@ -6739,6 +8309,7 @@ export interface paths {
                 content: {
                     "application/json": {
                         input?: components["schemas"]["JsonValueInput"];
+                        environment?: string;
                         correlationKey?: string;
                         /** @enum {string} */
                         onConflict?: "ignore" | "error" | "restart";
@@ -6759,6 +8330,9 @@ export interface paths {
                             projectId: string;
                             workflowName: string;
                             correlationKey: string | null;
+                            environment: string | null;
+                            /** Format: uuid */
+                            allocationId: string | null;
                             capabilities: {
                                 cancel: boolean;
                                 pauseProcessing: boolean;
@@ -6783,6 +8357,16 @@ export interface paths {
                                 createdAt: string;
                                 /** Format: date-time */
                                 resolvedAt: string | null;
+                            } | null;
+                            connectionActionRequired: {
+                                /** Format: uuid */
+                                id: string;
+                                environment: string;
+                                alias: string;
+                                /** @enum {string} */
+                                status: "pending";
+                                /** Format: date-time */
+                                createdAt: string;
                             } | null;
                             batchScopes: {
                                 /** Format: uuid */
@@ -6934,6 +8518,9 @@ export interface paths {
                             projectId: string;
                             workflowName: string;
                             correlationKey: string | null;
+                            environment: string | null;
+                            /** Format: uuid */
+                            allocationId: string | null;
                             capabilities: {
                                 cancel: boolean;
                                 pauseProcessing: boolean;
@@ -6958,6 +8545,16 @@ export interface paths {
                                 createdAt: string;
                                 /** Format: date-time */
                                 resolvedAt: string | null;
+                            } | null;
+                            connectionActionRequired: {
+                                /** Format: uuid */
+                                id: string;
+                                environment: string;
+                                alias: string;
+                                /** @enum {string} */
+                                status: "pending";
+                                /** Format: date-time */
+                                createdAt: string;
                             } | null;
                             batchScopes: {
                                 /** Format: uuid */
@@ -7949,7 +9546,7 @@ export interface paths {
         get: {
             parameters: {
                 query?: {
-                    environment?: "test" | "production";
+                    stage?: "test" | "production";
                 };
                 header?: never;
                 path: {
@@ -8010,7 +9607,7 @@ export interface paths {
         put: {
             parameters: {
                 query?: {
-                    environment?: "test" | "production";
+                    stage?: "test" | "production";
                 };
                 header?: never;
                 path: {
@@ -8074,7 +9671,7 @@ export interface paths {
         delete: {
             parameters: {
                 query?: {
-                    environment?: "test" | "production";
+                    stage?: "test" | "production";
                 };
                 header?: never;
                 path: {
@@ -8236,6 +9833,13 @@ export interface paths {
                                     endColumn: number;
                                     file?: string;
                                 };
+                            }[];
+                            connections: {
+                                alias: string;
+                                /** @enum {string} */
+                                principal?: "member" | "service" | "either";
+                                capabilities?: string[];
+                                optional?: boolean;
                             }[];
                             canSuspend: boolean;
                             nodes: {

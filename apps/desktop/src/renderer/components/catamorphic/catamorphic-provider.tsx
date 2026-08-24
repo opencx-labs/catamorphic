@@ -79,7 +79,11 @@ export function CatamorphicAppProvider({
 
   return (
     <QueryClientProvider client={queryClient}>
-      <InnerProvider apiClient={apiClient} queryClient={queryClient}>
+      <InnerProvider
+        apiClient={apiClient}
+        queryClient={queryClient}
+        baseUrl={baseUrl}
+      >
         {children}
       </InnerProvider>
     </QueryClientProvider>

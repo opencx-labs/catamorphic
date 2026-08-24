@@ -8,6 +8,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { CatamorphicCore } from "../core.js";
 import type { Identity } from "../identity.js";
 import { AccessDeniedError } from "../services/artifact-scope.js";
+import { testEnvironmentProvider } from "./test-environment.js";
 
 /**
  * ADR 0055 publications: a document bound to an audience; public = an
@@ -39,7 +40,11 @@ describeIf("PublicationsService (ADR 0055)", () => {
     );
     db = createDatabase({ connectionString, schema, poolSize: 4 });
     await migrateToLatest({ db, schema });
-    core = new CatamorphicCore({ db, projectManager });
+    core = new CatamorphicCore({
+      db,
+      projectManager,
+      environmentProvider: testEnvironmentProvider(),
+    });
     projectId = (await core.projects.create(root, { name: "brain" })).id;
     admin = {
       ...root,

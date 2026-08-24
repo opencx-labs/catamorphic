@@ -2,6 +2,7 @@
 
 - **Status**: accepted
 - **Date**: 2026-08-04
+- **Topology model refined by**: 0064
 
 ## Context
 

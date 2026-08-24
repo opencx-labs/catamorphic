@@ -1,6 +1,10 @@
 import fs from "node:fs";
 import path from "node:path";
-import { type Identity, ToolPermissionBroker } from "@catamorphic/core";
+import {
+  type ConnectionProvider,
+  type Identity,
+  ToolPermissionBroker,
+} from "@catamorphic/core";
 import { type DB, DEFAULT_SCHEMA } from "@catamorphic/db";
 import {
   createApp,
@@ -11,6 +15,7 @@ import { LocalProcessSandboxProvider } from "@catamorphic/local-process";
 import {
   type Catamorphic,
   createCatamorphic,
+  defineStaticEnvironments,
   FsBundleStore,
 } from "@catamorphic/server-sdk";
 import { PGlite } from "@electric-sql/pglite";
@@ -19,6 +24,7 @@ import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import { Kysely, PGliteDialect, sql, WithSchemaPlugin } from "kysely";
 import { ASSISTANT_SLUG, buildAgentRegistry } from "./agents.js";
 import { AuthStore, type TokenRecord } from "./auth-store.js";
+import { EncryptedFileCredentialVault } from "./credential-vault.js";
 
 /**
  * The stock Catamorphic server (ADR 0059): everything on disk under one
@@ -39,6 +45,7 @@ export interface StockServerOptions {
   publicBases?: string[];
   env?: Record<string, string | undefined>;
   log?: (line: string) => void;
+  connectionProviders?: readonly ConnectionProvider[];
 }
 
 export interface StockServer {
@@ -57,6 +64,7 @@ const MEMBER_ROLE = {
   name: "Member",
   description: "Chat with the assistant; a private store folder.",
   agents: [ASSISTANT_SLUG],
+  environments: ["local"],
   documents: [{ path: "store/users/{user}/**", access: "write" as const }],
 };
 
@@ -105,6 +113,22 @@ export async function buildStockServer(
       LANG: "C.UTF-8",
     },
   });
+  const environmentProvider = defineStaticEnvironments([
+    {
+      descriptor: {
+        id: "local",
+        label: "Managed single node",
+        description: "Run on this server",
+        trust: "managed",
+        isolation: "process",
+        workloads: ["agent", "workflow"],
+        agentTopologies: ["controller"],
+        capabilities: ["network.egress"],
+        resources: {},
+      },
+      sandboxProvider,
+    },
+  ]);
 
   // Tool-permission asks park here; clients answer over HTTP (ADR 0054).
   const toolPermissions = new ToolPermissionBroker();
@@ -117,6 +141,15 @@ export async function buildStockServer(
       remotesPath: path.join(data, "remotes"),
     },
     sandboxProvider,
+    environmentProvider,
+    credentialVault: new EncryptedFileCredentialVault(
+      path.join(data, "credentials"),
+    ),
+    connectionProviders: options.connectionProviders,
+    connectionMcpUrl: () => {
+      const base = options.publicBases?.[0];
+      return base ? `${base}/api/connection-mcp` : undefined;
+    },
     ...(agents.registry ? { codingAgent: agents.registry } : {}),
     appBundleStore: new FsBundleStore(path.join(data, "app-bundles")),
     toolPermissions,

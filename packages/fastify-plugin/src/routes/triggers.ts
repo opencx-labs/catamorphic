@@ -1,4 +1,10 @@
 import {
+  AuthenticationRequiredError,
+  EnvironmentAccessDeniedError,
+  EnvironmentBindingUnavailableError,
+  EnvironmentIncompatibleError,
+  EnvironmentNotFoundError,
+  NoCompatibleEnvironmentError,
   ProductionDeploymentNotFoundError,
   ProjectNotFoundError,
   RunEnrollmentConflictError,
@@ -15,6 +21,7 @@ import { z } from "zod";
 import type { RouteContext } from "../app.js";
 import { resolveIdentity } from "../http-identity.js";
 import {
+  AuthenticationRequiredSchema,
   ErrorSchema,
   FireTriggerSchema,
   SyncTriggerTypesResultSchema,
@@ -79,6 +86,7 @@ export function registerTriggerRoutes(app: FastifyInstance, ctx: RouteContext) {
         200: TriggerBindingInfoSchema.array(),
         404: ErrorSchema,
         422: ErrorSchema,
+        428: AuthenticationRequiredSchema,
         503: ErrorSchema,
       },
     },
@@ -126,6 +134,7 @@ export function registerTriggerRoutes(app: FastifyInstance, ctx: RouteContext) {
           projectId: request.params.projectId,
           kind: request.params.kind,
           payload: request.body.payload ?? null,
+          environment: request.body.environment,
           mode: request.body.mode,
           workflows: request.body.workflows,
           correlationKey: request.body.correlationKey,
@@ -183,7 +192,7 @@ export function registerTriggerRoutes(app: FastifyInstance, ctx: RouteContext) {
 function handleTriggerError(
   err: unknown,
   reply: {
-    status(code: number): { send(body: { error: string }): unknown };
+    status(code: number): { send(body: unknown): unknown };
   },
 ): unknown {
   if (err instanceof ProjectNotFoundError) {
@@ -191,6 +200,29 @@ function handleTriggerError(
   }
   if (err instanceof ProductionDeploymentNotFoundError) {
     return reply.status(404).send({ error: err.message });
+  }
+  if (err instanceof AuthenticationRequiredError) {
+    return reply.status(428).send({
+      error: err.message,
+      code: "authentication_required",
+      environment: err.environment,
+      requirements: [...err.requirements],
+    });
+  }
+  if (err instanceof EnvironmentAccessDeniedError) {
+    return reply.status(403).send({ error: err.message });
+  }
+  if (err instanceof EnvironmentNotFoundError) {
+    return reply.status(404).send({ error: err.message });
+  }
+  if (err instanceof EnvironmentBindingUnavailableError) {
+    return reply.status(409).send({ error: err.message });
+  }
+  if (
+    err instanceof EnvironmentIncompatibleError ||
+    err instanceof NoCompatibleEnvironmentError
+  ) {
+    return reply.status(422).send({ error: err.message });
   }
   if (
     err instanceof RunInputInvalidError ||

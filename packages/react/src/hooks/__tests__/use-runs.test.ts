@@ -371,9 +371,10 @@ describe("unified run mutations", () => {
 
     const run = await trigger.result.current.mutateAsync({
       input: { value: 1 },
+      environment: "managed",
     });
     expect(run.status).toBe("pending");
-    expect(bodies).toEqual([{ input: { value: 1 } }]);
+    expect(bodies).toEqual([{ input: { value: 1 }, environment: "managed" }]);
   });
 
   it("updates detail and list caches and invalidates run item hierarchies", async () => {

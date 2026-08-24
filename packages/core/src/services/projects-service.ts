@@ -5,7 +5,7 @@ import type {
   ProjectRepo,
 } from "@catamorphic/git";
 import { getTracer, withSpan } from "@catamorphic/otel";
-import type { Kysely, Selectable } from "kysely";
+import type { Kysely, Selectable, Transaction } from "kysely";
 import { authorFor, type Identity, SYSTEM_AUTHOR } from "../identity.js";
 import { SEED_SKILLS } from "../seeds.js";
 import { assertBuilder, assertRootIdentity } from "./artifact-scope.js";
@@ -87,7 +87,7 @@ export class ProjectNotFoundError extends Error {
  * separately (assertBuilder, scope refs, …).
  */
 export async function requireTenantProject(
-  db: Kysely<DB>,
+  db: Kysely<DB> | Transaction<DB>,
   tenantId: string,
   projectId: string,
 ): Promise<void> {

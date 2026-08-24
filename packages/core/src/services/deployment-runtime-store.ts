@@ -75,24 +75,28 @@ export interface DeploymentRuntimeStore {
 }
 
 export class KyselyDeploymentRuntimeStore implements DeploymentRuntimeStore {
-  constructor(private readonly db: Kysely<DB>) {}
+  constructor(
+    private readonly db: Kysely<DB>,
+    private readonly bindingId = "default",
+  ) {}
 
   async withArtifactLock<Result>(args: {
     artifactId: string;
     operation: () => Promise<Result>;
   }): Promise<Result> {
-    const previous = artifactLocks.get(args.artifactId) ?? Promise.resolve();
+    const lockKey = `${this.bindingId}:${args.artifactId}`;
+    const previous = artifactLocks.get(lockKey) ?? Promise.resolve();
     const operation = previous.then(args.operation);
     const queued = operation.then(
       () => undefined,
       () => undefined,
     );
-    artifactLocks.set(args.artifactId, queued);
+    artifactLocks.set(lockKey, queued);
     try {
       return await operation;
     } finally {
-      if (artifactLocks.get(args.artifactId) === queued) {
-        artifactLocks.delete(args.artifactId);
+      if (artifactLocks.get(lockKey) === queued) {
+        artifactLocks.delete(lockKey);
       }
     }
   }
@@ -103,6 +107,7 @@ export class KyselyDeploymentRuntimeStore implements DeploymentRuntimeStore {
     const row = await this.db
       .selectFrom("deployment_runtimes")
       .where("artifact_id", "=", args.artifactId)
+      .where("binding_id", "=", this.bindingId)
       .where("replica_index", "=", 0)
       .where("status", "in", ["creating", "starting", "ready", "stopped"])
       .selectAll()
@@ -118,6 +123,7 @@ export class KyselyDeploymentRuntimeStore implements DeploymentRuntimeStore {
     const row = await this.db
       .selectFrom("deployment_runtimes")
       .where("artifact_id", "=", args.artifactId)
+      .where("binding_id", "=", this.bindingId)
       .where("replica_index", "=", args.replicaIndex)
       .select((eb) => eb.fn.max<number>("generation").as("generation"))
       .executeTakeFirst();
@@ -137,6 +143,7 @@ export class KyselyDeploymentRuntimeStore implements DeploymentRuntimeStore {
       .insertInto("deployment_runtimes")
       .values({
         artifact_id: args.artifactId,
+        binding_id: this.bindingId,
         sandbox_id: args.sandboxId,
         provider_id: args.providerId,
         replica_index: args.replicaIndex,
@@ -172,6 +179,7 @@ export class KyselyDeploymentRuntimeStore implements DeploymentRuntimeStore {
     const row = await this.db
       .selectFrom("deployment_runtimes")
       .where("artifact_id", "=", args.artifactId)
+      .where("binding_id", "=", this.bindingId)
       .where("status", "=", "ready")
       .select("provider_id")
       .orderBy("generation", "desc")
@@ -184,6 +192,7 @@ export class KyselyDeploymentRuntimeStore implements DeploymentRuntimeStore {
   }): Promise<DeploymentRuntimeRecord[]> {
     const rows = await this.db
       .selectFrom("deployment_runtimes")
+      .where("binding_id", "=", this.bindingId)
       .where("status", "in", ["starting", "ready"])
       .selectAll()
       .orderBy("last_heartbeat_at", "asc")
@@ -198,6 +207,7 @@ export class KyselyDeploymentRuntimeStore implements DeploymentRuntimeStore {
   }): Promise<DeploymentRuntimeRecord[]> {
     const rows = await this.db
       .selectFrom("deployment_runtimes")
+      .where("binding_id", "=", this.bindingId)
       .where("status", "=", "ready")
       .where("last_used_at", "<", args.idleBefore)
       .selectAll()
@@ -219,6 +229,7 @@ export class KyselyDeploymentRuntimeStore implements DeploymentRuntimeStore {
         "deployment_runtimes.artifact_id",
       )
       .where("deployment_artifacts.last_used_at", "<", args.lastUsedBefore)
+      .where("deployment_runtimes.binding_id", "=", this.bindingId)
       .where("deployment_runtimes.status", "in", ["ready", "stopped", "failed"])
       .selectAll("deployment_runtimes")
       .orderBy("deployment_artifacts.last_used_at", "asc")

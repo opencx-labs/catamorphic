@@ -13,6 +13,7 @@ import {
   ProjectNotFoundError,
   ProjectProvisioningError,
 } from "../services/projects-service.js";
+import { testEnvironmentProvider } from "./test-environment.js";
 
 const connectionString = process.env.DATABASE_URL ?? "";
 const describeIf = connectionString ? describe : describe.skip;
@@ -36,6 +37,7 @@ describeIf("Project lifecycle hooks (ADR 0046)", () => {
     return new CatamorphicCore({
       db,
       projectManager,
+      environmentProvider: testEnvironmentProvider(),
       projectHooks: [
         {
           onProjectCreated: ({ project }: { project: Project }) => {

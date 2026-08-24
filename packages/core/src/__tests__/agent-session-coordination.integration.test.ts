@@ -19,7 +19,11 @@ import type { Identity } from "../identity.js";
 import { AgentSessionsService } from "../services/agent-sessions-service.js";
 import { DbSandboxStore } from "../services/db-sandbox-store.js";
 import { DevSandboxService } from "../services/dev-sandbox-service.js";
+import { ExecutionAllocationsService } from "../services/execution-allocations-service.js";
+import { ExecutionEnvironmentsService } from "../services/execution-environments-service.js";
+import { ProjectEnvironmentsService } from "../services/project-environments-service.js";
 import { ProjectsService } from "../services/projects-service.js";
+import { testEnvironmentProvider } from "./test-environment.js";
 
 class DeferredProvider implements CodingAgentProvider {
   readonly name = "deferred";
@@ -126,12 +130,18 @@ describe("agent session coordination", () => {
     );
     projects = new ProjectsService(db, projectManager);
     provider = new DeferredProvider();
+    const executionEnvironments = new ExecutionEnvironmentsService(
+      new ProjectEnvironmentsService(db, projectManager),
+      testEnvironmentProvider(unusedSandbox),
+    );
     sessions = new AgentSessionsService(db, {
       projectManager,
       sandboxProvider: unusedSandbox,
+      executionEnvironments,
+      executionAllocations: new ExecutionAllocationsService(db),
       codingAgents: {
         defaultAgentId: () => "worker",
-        get: () => ({ id: "worker", provider, execution: "host" }),
+        get: () => ({ id: "worker", provider, topology: "native" }),
         list: () => [],
       },
       devSandboxes: new DevSandboxService({
@@ -139,7 +149,7 @@ describe("agent session coordination", () => {
         provider: unusedSandbox,
         store: new DbSandboxStore(db),
       }),
-      hostAgentCheckout: {
+      nativeAgentCheckout: {
         resolve: ({ projectId, sessionId }) =>
           checkoutBySession.get(sessionId) ?? path.join(tmpDir, projectId),
         checkpoint: ({ sessionId, workingDirectory }) => {

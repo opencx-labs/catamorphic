@@ -305,6 +305,7 @@ export interface WorkflowGraph {
   outputSchema: unknown;
   /** Host trigger kinds this workflow subscribes to. */
   triggers: WorkflowTriggerBinding[];
+  connections: WorkflowConnectionRequirement[];
   /**
    * Whether any execution path can leave the run waiting on the clock or the
    * queue — a pause, a retry policy, a rate limit, a batch, or a child
@@ -317,6 +318,13 @@ export interface WorkflowGraph {
   sourceCode: string;
   filePath?: string;
   projectFiles?: string[];
+}
+
+export interface WorkflowConnectionRequirement {
+  alias: string;
+  principal?: "member" | "service" | "either";
+  capabilities?: string[];
+  optional?: boolean;
 }
 
 export interface DiscoveredWorkflow {

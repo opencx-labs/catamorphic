@@ -121,6 +121,90 @@ describe("useAgentChat", () => {
     expect(result.current.sessionId).toBe(SESSION_ID);
   });
 
+  it("keeps a message queued while authorization is required and resumes it", async () => {
+    let authorized = false;
+    let creates = 0;
+    let sends = 0;
+    server.use(
+      http.post(apiUrl(`/api/projects/${PROJECT_ID}/agent/sessions`), () => {
+        creates += 1;
+        if (!authorized) {
+          return HttpResponse.json(
+            {
+              error: "Authentication required",
+              code: "authentication_required",
+              environment: "company",
+              requirements: [
+                {
+                  alias: "slack",
+                  providerKind: "mcp",
+                  principalKinds: ["member"],
+                },
+              ],
+            },
+            { status: 428 },
+          );
+        }
+        return HttpResponse.json(session, { status: 201 });
+      }),
+      http.post(
+        apiUrl(
+          `/api/projects/${PROJECT_ID}/agent/sessions/${SESSION_ID}/messages`,
+        ),
+        () => {
+          sends += 1;
+          return HttpResponse.json(
+            {
+              id: crypto.randomUUID(),
+              sessionId: SESSION_ID,
+              role: "assistant",
+              content: "Done",
+              commitSha: null,
+              metadata: null,
+              createdAt: new Date().toISOString(),
+            },
+            { status: 201 },
+          );
+        },
+      ),
+      http.get(
+        apiUrl(`/api/projects/${PROJECT_ID}/agent/sessions/${SESSION_ID}`),
+        () => HttpResponse.json({ ...session, messages: [] }),
+      ),
+    );
+    const { result } = renderHookWithProviders(() => useAgentChat(PROJECT_ID));
+
+    act(() => {
+      void result.current.send("Welcome the new teammate");
+    });
+
+    await waitFor(() => {
+      expect(result.current.authenticationRequired).toEqual({
+        environment: "company",
+        requirements: [
+          {
+            alias: "slack",
+            providerKind: "mcp",
+            principalKinds: ["member"],
+          },
+        ],
+      });
+      expect(result.current.queue).toEqual([
+        expect.objectContaining({ content: "Welcome the new teammate" }),
+      ]);
+    });
+    expect(result.current.sessionId).toBeNull();
+    expect(sends).toBe(0);
+
+    authorized = true;
+    act(() => result.current.resumeAfterAuthentication());
+
+    await waitFor(() => expect(sends).toBe(1));
+    expect(creates).toBe(2);
+    expect(result.current.queue).toEqual([]);
+    expect(result.current.sessionId).toBe(SESSION_ID);
+  });
+
   it("queues overlapping sends in one session", async () => {
     let creates = 0;
     let sends = 0;

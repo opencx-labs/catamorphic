@@ -56,14 +56,20 @@ export class ExecutionJobDeferredError extends Error {
    * pulls forward jobs that are already `pending`.
    */
   readonly parkedForPausedRunId?: string;
+  readonly parkedForConnectionRequirementId?: string;
 
   constructor(
     readonly availableAt: Date,
-    options?: { parkedForPausedRunId?: string },
+    options?: {
+      parkedForPausedRunId?: string;
+      parkedForConnectionRequirementId?: string;
+    },
   ) {
     super(`Execution job deferred until ${availableAt.toISOString()}`);
     this.name = "ExecutionJobDeferredError";
     this.parkedForPausedRunId = options?.parkedForPausedRunId;
+    this.parkedForConnectionRequirementId =
+      options?.parkedForConnectionRequirementId;
   }
 }
 
@@ -428,6 +434,8 @@ export class ExecutionWorkerService {
           leaseGeneration: args.job.leaseGeneration,
           availableAt: error.availableAt,
           parkedForPausedRunId: error.parkedForPausedRunId,
+          parkedForConnectionRequirementId:
+            error.parkedForConnectionRequirementId,
         });
         return { outcome: "deferred", availableAt: error.availableAt };
       }

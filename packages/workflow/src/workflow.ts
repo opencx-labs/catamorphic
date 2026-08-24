@@ -131,15 +131,18 @@ class WorkflowDefinitionImpl<Input, Output, Steps extends readonly unknown[]> {
   readonly steps: Steps;
   readonly controls?: WorkflowControls;
   readonly triggers?: readonly TriggerBinding<unknown>[];
+  readonly connections?: readonly (string | WorkflowConnectionRequirement)[];
 
   constructor(args: {
     steps: Steps;
     controls?: WorkflowControls;
     triggers?: readonly TriggerBinding<unknown>[];
+    connections?: readonly (string | WorkflowConnectionRequirement)[];
   }) {
     this.steps = args.steps;
     this.controls = args.controls;
     this.triggers = args.triggers;
+    this.connections = args.connections;
     Object.defineProperty(this, "kind", { value: "durable-workflow" });
   }
 }
@@ -206,6 +209,18 @@ export type HostCall<Result = unknown> = <Args>(
 /** `context.host.<capability…>.<fn>(args)`: dotted capability namespaces. */
 export interface HostNamespace {
   readonly [name: string]: HostNamespace & HostCall;
+}
+
+export interface WorkflowConnectionRequirement {
+  readonly alias: string;
+  readonly principal?: "member" | "service" | "either";
+  readonly capabilities?: readonly string[];
+  readonly optional?: boolean;
+}
+
+/** `context.connections.<alias>.<action>(args)` durable broker calls. */
+export interface ConnectionNamespace {
+  readonly [name: string]: ConnectionNamespace & HostCall;
 }
 
 export interface DocumentEntry {
@@ -277,6 +292,8 @@ export interface BoundaryContext<Input> {
   readonly host: HostNamespace;
   /** The documents surface, caller-bound (ADR 0055). */
   readonly documents: DocumentsCalls;
+  /** Brokered external-system calls. Credential material stays host-side. */
+  readonly connections: ConnectionNamespace;
 }
 
 export interface BoundaryOptions<Input, Returned> {
@@ -487,6 +504,7 @@ export function defineWorkflow<
     readonly steps: Steps;
     readonly controls?: WorkflowControls;
     readonly triggers?: Triggers;
+    readonly connections?: readonly (string | WorkflowConnectionRequirement)[];
   } & ValidateSteps<Steps> &
     ValidateTriggers<
       Triggers,
@@ -503,5 +521,6 @@ export function defineWorkflow<
     steps: definition.steps,
     controls: definition.controls,
     triggers: definition.triggers,
+    connections: definition.connections,
   });
 }

@@ -1,6 +1,7 @@
 import type {
   CapabilityContext,
   CapabilityProviderRuntime,
+  ConnectionProvider,
   HostCallFunction,
   McpToolKindSpec,
   ProjectLifecycleHooks,
@@ -53,6 +54,8 @@ export interface HostPluginDefinition {
   projectHooks?: ProjectLifecycleHooks;
   triggerKinds?: readonly TriggerKindRuntime[];
   mcpToolKinds?: readonly McpToolKindSpec[];
+  /** Host-side credential providers contributed by this plugin. */
+  connections?: readonly ConnectionProvider[];
 }
 
 /**
@@ -104,18 +107,22 @@ export function mergeHostPlugins(args: {
   projectHooks: readonly ProjectLifecycleHooks[];
   triggerKinds: readonly TriggerKindRuntime[];
   mcpToolKinds: readonly McpToolKindSpec[];
+  connectionProviders: readonly ConnectionProvider[];
 }): {
   capabilityProviders: CapabilityProviderRuntime[];
   projectHooks: ProjectLifecycleHooks[];
   triggerKinds: TriggerKindRuntime[];
   mcpToolKinds: McpToolKindSpec[];
+  connectionProviders: ConnectionProvider[];
 } {
   const capabilityProviders = [...args.capabilityProviders];
   const projectHooks = [...args.projectHooks];
   const triggerKinds = [...args.triggerKinds];
   const mcpToolKinds = [...args.mcpToolKinds];
+  const connectionProviders = [...args.connectionProviders];
   const capabilityNames = new Set(capabilityProviders.map((p) => p.name));
   const kindNames = new Set(triggerKinds.map((k) => k.name));
+  const connectionKinds = new Set(connectionProviders.map((p) => p.kind));
 
   for (const plugin of args.plugins) {
     for (const provider of plugin.capabilities ?? []) {
@@ -140,9 +147,26 @@ export function mergeHostPlugins(args: {
       kindNames.add(kind.name);
       triggerKinds.push(kind);
     }
+    for (const provider of plugin.connections ?? []) {
+      if (connectionKinds.has(provider.kind)) {
+        throw new DuplicatePluginContributionError({
+          kind: "connection provider",
+          name: provider.kind,
+          plugin: plugin.name,
+        });
+      }
+      connectionKinds.add(provider.kind);
+      connectionProviders.push(provider);
+    }
     if (plugin.projectHooks) projectHooks.push(plugin.projectHooks);
     mcpToolKinds.push(...(plugin.mcpToolKinds ?? []));
   }
 
-  return { capabilityProviders, projectHooks, triggerKinds, mcpToolKinds };
+  return {
+    capabilityProviders,
+    projectHooks,
+    triggerKinds,
+    mcpToolKinds,
+    connectionProviders,
+  };
 }

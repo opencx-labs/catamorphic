@@ -122,6 +122,10 @@ export class CodexAgent implements CodingAgentProvider {
     string,
     Record<string, McpToolPolicyLayers>
   >();
+  private readonly sessionMcpServers = new Map<
+    string,
+    Record<string, AgentMcpServerConfig>
+  >();
   private readonly sessionContexts = new Map<string, ExtraToolContext>();
   constructor(opts: CodexAgentOpts = {}) {
     this.opts = opts;
@@ -168,6 +172,7 @@ export class CodexAgent implements CodingAgentProvider {
       {
         ...resolveMcpServers(this.opts.mcpServers),
         ...this.opts.mcpServersForSession?.(context),
+        ...this.sessionMcpServers.get(session.sessionId),
       },
       mergePolicyLayers(own, this.callerPolicies.get(session.sessionId)),
       annotations,
@@ -186,6 +191,9 @@ export class CodexAgent implements CodingAgentProvider {
     }
     if (opts.toolPolicies) {
       this.callerPolicies.set(opts.sessionId, opts.toolPolicies);
+    }
+    if (opts.mcpServers) {
+      this.sessionMcpServers.set(opts.sessionId, opts.mcpServers);
     }
     this.sessionContexts.set(opts.sessionId, {
       projectId: opts.projectId,
@@ -289,6 +297,7 @@ export class CodexAgent implements CodingAgentProvider {
     this.pendingInstructions.delete(session.sessionId);
     this.callerPolicies.delete(session.sessionId);
     this.sessionContexts.delete(session.sessionId);
+    this.sessionMcpServers.delete(session.sessionId);
   }
 
   /**

@@ -13,11 +13,17 @@ export {
   type AppRef,
   type ArtifactRef,
   authorFor,
+  type ConnectionUseRef,
+  type ControlPlanePermission,
   type DocumentRef,
   documentRefCovers,
+  type ExecutionEnvironmentRef,
   type ExternalUserId,
+  hasControlPlanePermission,
   type Identity,
   identityCovers,
+  identityMayUseConnection,
+  identityMayUseEnvironment,
   isBuilder,
   isScoped,
   mayUseProject,
@@ -49,6 +55,7 @@ export {
   type AgentDefinitionKind,
   AgentDefinitionSchema,
   AgentDefinitionsService,
+  type AgentEnvironmentPolicy,
   agentDefinitionSchema,
   definitionHash,
   formatProjectAgentId,
@@ -69,9 +76,10 @@ export {
   AgentSessionsService,
   AgentTurnInProgressError,
   type AgentTurnSettledEvent,
-  type HostAgentCheckout,
+  type NativeAgentCheckout,
   SessionMirrorDivergedError,
   type SyncedFileChange,
+  UnsupportedAgentTopologyError,
 } from "./services/agent-sessions-service.js";
 export type { AppBundleStore } from "./services/app-bundle-store.js";
 export { appBundleKey, appVersionPrefix } from "./services/app-bundle-store.js";
@@ -126,12 +134,45 @@ export type {
   PullRequestSummary,
 } from "./services/code-host.js";
 export {
-  type AgentExecutionMode,
   type CodingAgentRegistry,
   isCodingAgentRegistry,
   type RegisteredCodingAgent,
   singleAgentRegistry,
 } from "./services/coding-agent-registry.js";
+export { ConnectionAdmissionService } from "./services/connection-admission.js";
+export { ConnectionBroker } from "./services/connection-broker.js";
+export { ConnectionCapabilityGrantsService } from "./services/connection-capability-grants.js";
+export {
+  type AuthorizationChallenge,
+  type ConnectionAuthorizationResult,
+  type ConnectionProvider,
+  ConnectionProviderRegistry,
+} from "./services/connection-providers.js";
+export {
+  CONNECTION_ALIAS_PATTERN,
+  type ConnectionPrincipalKind,
+  type ConnectionRecord,
+  type ConnectionRequirement,
+  type ConnectionRequirementPrincipal,
+  type ConnectionStatus,
+  connectionMcpServerName,
+  type EnvironmentConnectionBinding,
+  normalizeConnectionRequirement,
+  type ResolvedConnectionBinding,
+} from "./services/connection-types.js";
+export {
+  AuthenticationRequiredError,
+  ConnectionNotFoundError,
+  ConnectionPermissionDeniedError,
+  ConnectionsService,
+  ConnectionUnavailableError,
+} from "./services/connections-service.js";
+export {
+  type CredentialMaterial,
+  type CredentialRef,
+  type CredentialVault,
+  MemoryCredentialVault,
+} from "./services/credential-vault.js";
 export { DbSandboxStore } from "./services/db-sandbox-store.js";
 export {
   createDeploymentArtifactIdentity,
@@ -177,6 +218,21 @@ export {
   STORE_ROOT,
 } from "./services/documents-service.js";
 export {
+  type EnvironmentAllocationPolicy,
+  type ExecutionAllocation,
+  ExecutionAllocationConflictError,
+  ExecutionAllocationsService,
+} from "./services/execution-allocations-service.js";
+export {
+  EnvironmentAccessDeniedError,
+  type EnvironmentAdmission,
+  EnvironmentBindingUnavailableError,
+  EnvironmentIncompatibleError,
+  EnvironmentNotFoundError,
+  ExecutionEnvironmentsService,
+  NoCompatibleEnvironmentError,
+} from "./services/execution-environments-service.js";
+export {
   type ExecutionJob,
   type ExecutionJobKind,
   type ExecutionJobStatus,
@@ -212,6 +268,13 @@ export {
   UndeclaredSecretError,
 } from "./services/plugins-service.js";
 export { forgetProgramFetch } from "./services/program-reader.js";
+export {
+  type ProjectEnvironmentDefinition,
+  type ProjectEnvironmentEntry,
+  type ProjectEnvironmentPolicy,
+  ProjectEnvironmentsService,
+  parseProjectEnvironmentPolicy,
+} from "./services/project-environments-service.js";
 export {
   type CreateProjectInput,
   type ListProjectsInput,
@@ -267,6 +330,7 @@ export {
 } from "./services/retention-service.js";
 export {
   expandRole,
+  expandRoleEnvironments,
   fillTemplate,
   type ProjectRoleEntry,
   type ResolveRolesInput,
@@ -330,7 +394,7 @@ export {
   type WorkflowStepAttemptStatus,
 } from "./services/runs-service.js";
 export {
-  type SecretEnvironment,
+  type RunStage,
   type SecretStatus,
   SecretsService,
 } from "./services/secrets-service.js";

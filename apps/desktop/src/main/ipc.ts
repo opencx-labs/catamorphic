@@ -426,7 +426,10 @@ export function registerIpcHandlers(
       memory: definition?.memory ?? null,
       credentialsSource: source,
       secretName: definition?.credentials?.secret ?? null,
-      connections: definition?.connections ?? [],
+      connections:
+        definition?.connections?.map((connection) =>
+          typeof connection === "string" ? connection : connection.alias,
+        ) ?? [],
       skills: definition?.skills ?? null,
       promptPreview,
       consent,

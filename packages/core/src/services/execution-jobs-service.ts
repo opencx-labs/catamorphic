@@ -460,6 +460,7 @@ export class ExecutionJobsService {
      * sees the resumed status and comes back immediately.
      */
     parkedForPausedRunId?: string;
+    parkedForConnectionRequirementId?: string;
   }): Promise<boolean> {
     return this.db.transaction().execute(async (trx) => {
       let availableAt = args.availableAt;
@@ -471,6 +472,14 @@ export class ExecutionJobsService {
           .forShare()
           .executeTakeFirst();
         if (run?.status !== "paused") availableAt = new Date();
+      }
+      if (args.parkedForConnectionRequirementId) {
+        const requirement = await trx
+          .selectFrom("connection_action_requirements")
+          .where("id", "=", args.parkedForConnectionRequirementId)
+          .select("status")
+          .executeTakeFirst();
+        if (requirement?.status === "resolved") availableAt = new Date();
       }
       const result = await trx
         .updateTable("execution_jobs")

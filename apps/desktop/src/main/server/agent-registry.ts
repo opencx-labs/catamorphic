@@ -10,6 +10,7 @@ import type {
   ToolPermissionBroker,
 } from "@catamorphic/core";
 import {
+  connectionMcpServerName,
   definitionHash,
   projectAgentId,
   validateAgentDefinition,
@@ -28,7 +29,7 @@ import type {
 } from "@catamorphic/sandbox";
 import { narrowingLayer, PROJECT_TOOLS_SERVER_KEY } from "@catamorphic/sandbox";
 import type { WorkspaceBridge } from "../agent-bridge.js";
-import type { AgentConfig, AgentConnectionsSetting } from "../agents-store.js";
+import type { AgentConfig } from "../agents-store.js";
 import {
   connectionServerKeys,
   toAgentMcpServer,
@@ -204,7 +205,7 @@ export class DesktopAgentRegistry implements CodingAgentRegistry {
     {
       key: string;
       provider: RegisteredCodingAgent["provider"];
-      execution: RegisteredCodingAgent["execution"];
+      topology: RegisteredCodingAgent["topology"];
     }
   >();
   /** Per-agent resource closers (ai-sdk MCP clients), run on eviction. */
@@ -292,7 +293,8 @@ export class DesktopAgentRegistry implements CodingAgentRegistry {
       return {
         id,
         provider: cached.provider,
-        execution: cached.execution,
+        topology: cached.topology,
+        ...(config.environment ? { environment: config.environment } : {}),
         defaults,
       };
     }
@@ -312,9 +314,15 @@ export class DesktopAgentRegistry implements CodingAgentRegistry {
     this.cache.set(id, {
       key,
       provider,
-      execution: built.execution,
+      topology: built.topology,
     });
-    return { id, provider, execution: built.execution, defaults };
+    return {
+      id,
+      provider,
+      topology: built.topology,
+      ...(config.environment ? { environment: config.environment } : {}),
+      defaults,
+    };
   }
 
   /** Drop a cached provider, closing resources it holds (MCP clients). */
@@ -408,6 +416,13 @@ export class DesktopAgentRegistry implements CodingAgentRegistry {
     const workflowPolicy = config.toolPolicies?.[WORKFLOWS_SERVER_KEY];
     if (workflowPolicy) {
       policies[WORKFLOWS_SERVER_KEY] = [narrowingLayer(workflowPolicy)];
+    }
+    for (const [serverKey, policy] of Object.entries(
+      config.toolPolicies ?? {},
+    )) {
+      if (serverKey.startsWith("connection_")) {
+        policies[serverKey] = [narrowingLayer(policy)];
+      }
     }
     return { servers, plugins, policies, annotations, connectionIds };
   }
@@ -686,20 +701,26 @@ export class DesktopAgentRegistry implements CodingAgentRegistry {
           ? "api-key"
           : "local",
       apiKey: bindingAuth?.mode === "api-key" ? bindingAuth.apiKey : null,
-      // Enforced (ADR 0056, closing 0050's informational-v1 cut): named
-      // connectors resolve to the owning profile's connections by NAME;
-      // absent = the full surface, like a profile agent without a pin.
-      ...(def.connections
-        ? {
-            connections: this.connectionsByName(def.connections, profileId),
-          }
-        : {}),
+      // Project agents never inherit profile connectors. Their declared
+      // connections are admitted and mounted through the Environment broker.
+      connections: { mode: "picked", connectionIds: [] },
       ...(def.skills
         ? { skills: { mode: "picked" as const, names: def.skills } }
         : {}),
       // Keyed by connector NAME in a committed definition; resolveMcp
       // matches by name/server key as well as by id.
-      ...(def.toolPolicies ? { toolPolicies: def.toolPolicies } : {}),
+      ...(def.toolPolicies
+        ? {
+            toolPolicies: Object.fromEntries(
+              Object.entries(def.toolPolicies).map(([alias, policy]) => [
+                alias === WORKFLOWS_SERVER_KEY
+                  ? alias
+                  : connectionMcpServerName(alias),
+                policy,
+              ]),
+            ),
+          }
+        : {}),
     };
     const mcp = this.resolveMcp(config, profileId);
 
@@ -729,7 +750,9 @@ export class DesktopAgentRegistry implements CodingAgentRegistry {
       return {
         id,
         provider: cached.provider,
-        execution: cached.execution,
+        topology: cached.topology,
+        ...(def.environment ? { environment: def.environment } : {}),
+        ...(def.connections ? { connectionRequirements: def.connections } : {}),
         defaults,
       };
     }
@@ -755,8 +778,15 @@ export class DesktopAgentRegistry implements CodingAgentRegistry {
     const provider = persona
       ? new PersonaCodingAgent(registered.provider, persona)
       : registered.provider;
-    this.cache.set(id, { key, provider, execution: registered.execution });
-    return { id, provider, execution: registered.execution, defaults };
+    this.cache.set(id, { key, provider, topology: registered.topology });
+    return {
+      id,
+      provider,
+      topology: registered.topology,
+      ...(def.environment ? { environment: def.environment } : {}),
+      ...(def.connections ? { connectionRequirements: def.connections } : {}),
+      defaults,
+    };
   }
 
   /**
@@ -804,7 +834,7 @@ export class DesktopAgentRegistry implements CodingAgentRegistry {
     return {
       id,
       provider,
-      execution: def.kind === "builtin" ? "sandbox" : "host",
+      topology: def.kind === "builtin" ? "controller" : "native",
     };
   }
 
@@ -814,28 +844,9 @@ export class DesktopAgentRegistry implements CodingAgentRegistry {
     return {
       id,
       provider: new FailFastCodingAgent(message),
-      execution: "host",
+      topology: "native",
       defaults: {},
     };
-  }
-
-  /**
-   * A committed definition's connector names → the owning profile's
-   * matching connections, as a picked assignment. A name with no matching
-   * connection simply isn't there — the consent dialog already lists what
-   * the definition expects, so the gap is visible before the first turn.
-   */
-  private connectionsByName(
-    names: string[],
-    profileId: string,
-  ): AgentConnectionsSetting {
-    const wanted = new Set(names);
-    const connectionIds = this.deps.profileConfig
-      .forProfile(profileId)
-      .connections.list()
-      .filter((connection) => wanted.has(connection.name))
-      .map((connection) => connection.id);
-    return { mode: "picked", connectionIds };
   }
 
   private findConfig(
@@ -859,19 +870,19 @@ export class DesktopAgentRegistry implements CodingAgentRegistry {
     // (agent lists, switching, effort) exercise the real plumbing. The
     // error decorator stays on so tests cover the auth-failure surfacing.
     if (this.deps.e2eFake) {
-      const execution = config.harness === "ai-sdk" ? "sandbox" : "host";
+      const topology = config.harness === "ai-sdk" ? "controller" : "native";
       const fake = new E2eFakeCodingAgent(
         this.deps.sandboxProvider,
-        this.workspaceTools(config, execution),
+        this.workspaceTools(config, topology),
         this.toolPermissionHandler(config, profileId),
       );
       return {
         id: config.id,
         provider: this.wrapErrors(
-          execution === "sandbox" ? this.wrapSandboxAgent(fake) : fake,
+          topology === "controller" ? this.wrapSandboxAgent(fake) : fake,
           config,
         ),
-        execution,
+        topology,
         defaults: { effort: config.effort },
       };
     }
@@ -885,7 +896,7 @@ export class DesktopAgentRegistry implements CodingAgentRegistry {
           modelId: this.resolvedModel(config) ?? "",
           // Mode does not apply to the sandboxed built-in agent (its edits
           // land as a reviewable draft), so its toolset is never filtered.
-          extraTools: this.workspaceTools(config, "sandbox"),
+          extraTools: this.workspaceTools(config, "controller"),
           mcpServers: () => this.liveServers(config, profileId),
           // Elicitation from this agent's connectors → the front window,
           // labeled with the agent so the user knows who's asking.
@@ -918,7 +929,7 @@ export class DesktopAgentRegistry implements CodingAgentRegistry {
             }),
             config,
           ),
-          execution: "sandbox",
+          topology: "controller",
           defaults: { effort: config.effort },
         };
       }
@@ -948,7 +959,7 @@ export class DesktopAgentRegistry implements CodingAgentRegistry {
                 // so the flag is always passed explicitly.
                 memory: config.memory === true,
                 ...(Object.keys(env).length > 0 ? { env } : {}),
-                extraTools: this.workspaceTools(config, "host"),
+                extraTools: this.workspaceTools(config, "native"),
                 // Claude Code's own Bash runs inside the CLI where we
                 // can't see or manage it. With workspace terminals
                 // available, every command goes through tabs the user
@@ -973,7 +984,7 @@ export class DesktopAgentRegistry implements CodingAgentRegistry {
             ),
             config,
           ),
-          execution: "host",
+          topology: "native",
           defaults: {
             effort: config.effort,
             ...(config.model ? { model: config.model } : {}),
@@ -1024,7 +1035,7 @@ export class DesktopAgentRegistry implements CodingAgentRegistry {
             ),
             config,
           ),
-          execution: "host",
+          topology: "native",
           defaults: {
             effort: config.effort,
             ...(config.model ? { model: config.model } : {}),
@@ -1108,12 +1119,12 @@ export class DesktopAgentRegistry implements CodingAgentRegistry {
    */
   private workspaceTools(
     config: Pick<AgentConfig, "mode">,
-    execution: "host" | "sandbox",
+    topology: "native" | "controller",
   ): ExtraTool[] | undefined {
     const tools = this.workspaceToolkit?.tools;
     if (!tools) return undefined;
     return tools.filter((tool) => {
-      if (execution === "sandbox" && HOST_CHECKOUT_TOOLS.has(tool.name)) {
+      if (topology === "controller" && HOST_CHECKOUT_TOOLS.has(tool.name)) {
         return false;
       }
       return !(
@@ -1126,7 +1137,7 @@ export class DesktopAgentRegistry implements CodingAgentRegistry {
   /** Filtered host workspace tools for a loopback, session-scoped harness. */
   workspaceToolsForAgent(id: string): ExtraTool[] | undefined {
     const profile = this.findConfig(id);
-    if (profile) return this.workspaceTools(profile.config, "host");
+    if (profile) return this.workspaceTools(profile.config, "native");
     const project = parseProjectAgentId(id);
     const root = project
       ? this.deps.projectRootPath?.(project.projectId)
@@ -1143,7 +1154,7 @@ export class DesktopAgentRegistry implements CodingAgentRegistry {
         allowE2eFake: this.deps.e2eFake,
       });
       if ("error" in validated) return undefined;
-      return this.workspaceTools({ mode: validated.definition.mode }, "host");
+      return this.workspaceTools({ mode: validated.definition.mode }, "native");
     } catch {
       return undefined;
     }

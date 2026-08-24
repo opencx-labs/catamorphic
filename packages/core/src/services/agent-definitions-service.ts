@@ -1,9 +1,14 @@
 import { createHash } from "node:crypto";
 import type { DB } from "@catamorphic/db";
 import type { ProjectManager, ProjectRepo } from "@catamorphic/git";
+import type { EnvironmentRequirements } from "@catamorphic/sandbox";
 import type { Kysely } from "kysely";
 import { z } from "zod";
 import type { Identity } from "../identity.js";
+import {
+  CONNECTION_ALIAS_PATTERN,
+  type ConnectionRequirement,
+} from "./connection-types.js";
 import { requireTenantProject } from "./projects-service.js";
 
 /**
@@ -145,6 +150,59 @@ export type AgentDefinitionCredentials = z.infer<
   typeof AgentDefinitionCredentialsSchema
 >;
 
+const AgentEnvironmentPolicySchema = z
+  .object({
+    allowed: z.array(z.string().min(1)).optional(),
+    preferred: z.array(z.string().min(1)).optional(),
+    requirements: z
+      .object({
+        trust: z.enum(["local", "managed"]).optional(),
+        isolation: z.enum(["none", "process", "sandbox"]).optional(),
+        capabilities: z.array(z.string().min(1)).optional(),
+        resources: z
+          .object({
+            cpuMillis: z.number().int().positive().optional(),
+            memoryMb: z.number().int().positive().optional(),
+            storageMb: z.number().int().positive().optional(),
+            gpu: z.boolean().optional(),
+            timeoutSeconds: z.number().int().positive().optional(),
+            maxConcurrency: z.number().int().positive().optional(),
+          })
+          .optional(),
+      })
+      .optional(),
+  })
+  .superRefine((value, ctx) => {
+    for (const key of ["allowed", "preferred"] as const) {
+      const names = value[key] ?? [];
+      if (new Set(names).size !== names.length) {
+        ctx.addIssue({
+          code: "custom",
+          path: [key],
+          message: `${key} Environment names must be unique`,
+        });
+      }
+    }
+    if (value.allowed) {
+      const allowed = new Set(value.allowed);
+      for (const name of value.preferred ?? []) {
+        if (!allowed.has(name)) {
+          ctx.addIssue({
+            code: "custom",
+            path: ["preferred"],
+            message: `Preferred Environment '${name}' is not allowed`,
+          });
+        }
+      }
+    }
+  });
+
+export interface AgentEnvironmentPolicy {
+  allowed?: readonly string[];
+  preferred?: readonly string[];
+  requirements?: Omit<EnvironmentRequirements, "workload" | "topology">;
+}
+
 /**
  * The committed `agents/<slug>.json` schema, version 1. Unknown top-level
  * keys are stripped (forward compatibility inside a version); a bumped
@@ -180,13 +238,24 @@ export function agentDefinitionSchema(opts?: { allowE2eFake?: boolean }) {
     memory: z.boolean().optional(),
     description: z.string().optional(),
     credentials: AgentDefinitionCredentialsSchema.optional(),
+    environment: AgentEnvironmentPolicySchema.optional(),
     /**
-     * Connector names this agent gets, matched against the running
-     * member's profile connections by name (ADR 0056 — enforced; the
-     * informational-v1 cut of ADR 0050 is closed). Absent = every
-     * connection, like a profile agent without a pinned subset.
+     * Environment connection bindings this project agent requires. Project
+     * agents never inherit the running member's desktop profile connectors.
      */
-    connections: z.array(z.string().min(1)).optional(),
+    connections: z
+      .array(
+        z.union([
+          z.string().regex(CONNECTION_ALIAS_PATTERN),
+          z.object({
+            alias: z.string().regex(CONNECTION_ALIAS_PATTERN),
+            principal: z.enum(["member", "service", "either"]).optional(),
+            capabilities: z.array(z.string().min(1)).optional(),
+            optional: z.boolean().optional(),
+          }),
+        ]),
+      )
+      .optional(),
     /**
      * Skill names this agent is offered (any tier — project, user,
      * host). Absent = all. Narrowing only, like toolPolicies: outside
@@ -194,11 +263,8 @@ export function agentDefinitionSchema(opts?: { allowE2eFake?: boolean }) {
      */
     skills: z.array(z.string().min(1)).optional(),
     /**
-     * Per-connector tool policies, keyed by connector name (what
-     * `connections` lists — a committed definition can't know a member's
-     * local connection ids). Layered on the member's own connection
-     * policy: this can narrow what a connector allows, never widen it.
-     * The shape a hosting backend defines for its remote agents too.
+     * Per-connection tool policies keyed by binding alias. These can narrow
+     * what the Environment broker exposes, never widen it.
      */
     toolPolicies: z
       .record(
@@ -234,7 +300,8 @@ export interface AgentDefinition {
   memory?: boolean;
   description?: string;
   credentials?: AgentDefinitionCredentials;
-  connections?: string[];
+  environment?: AgentEnvironmentPolicy;
+  connections?: Array<string | ConnectionRequirement>;
   skills?: string[];
   toolPolicies?: Record<
     string,
@@ -290,13 +357,11 @@ export function validateAgentDefinition(
  * any change to a covered field makes stored consent stale, forcing
  * re-consent before the definition can touch personal credentials again.
  *
- * Deliberately NOT covered: name, description — display concerns whose
- * edits must not invalidate consent — and connections, skills, and
- * toolPolicies, which can only NARROW what the member's own profile
- * allows (assignments and policies intersect), so a change can never
- * expand what consent covers. `mode` IS covered: widening what the agent
- * may do to the member's machine (read-only → full-access) must re-earn
- * consent.
+ * Deliberately NOT covered: name and description, which are display concerns,
+ * plus skills and toolPolicies, which can only narrow what the member's own
+ * profile allows. Environment and connection requirements are covered because
+ * they select execution and brokered authority. `mode` is covered because
+ * widening what the agent may do to the member's machine must re-earn consent.
  */
 export function definitionHash(
   definition: AgentDefinition,
@@ -311,6 +376,10 @@ export function definitionHash(
       source: credentials.source,
       secret: credentials.secret ?? null,
     },
+    environment: definition.environment ?? null,
+    connections: (definition.connections ?? []).map((connection) =>
+      typeof connection === "string" ? { alias: connection } : connection,
+    ),
     acp: definition.acp
       ? {
           endpoint: definition.acp.endpoint ?? null,

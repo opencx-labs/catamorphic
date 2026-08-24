@@ -278,14 +278,17 @@ export class AiSdkCodingAgent implements CodingAgentProvider {
     // Session-scoped servers (per-project surfaces) connect fresh per
     // session and mount beside the agent-wide set; on a name clash the
     // session-scoped server wins. Closed when the session is disposed.
-    const scopedConfigs = this.opts.mcpServersForSession?.({
-      projectId: opts.projectId,
-      sessionId: opts.sessionId,
-      workingDirectory: opts.workingDirectory,
-      ...(opts.caller ? { caller: opts.caller } : {}),
-    });
+    const scopedConfigs = {
+      ...this.opts.mcpServersForSession?.({
+        projectId: opts.projectId,
+        sessionId: opts.sessionId,
+        workingDirectory: opts.workingDirectory,
+        ...(opts.caller ? { caller: opts.caller } : {}),
+      }),
+      ...opts.mcpServers,
+    };
     const scopedMcp: ConnectedMcpServer[] = [];
-    if (scopedConfigs) {
+    if (Object.keys(scopedConfigs).length > 0) {
       const scoped = new Map<string, ConnectedMcpServer>();
       await Promise.all(
         Object.entries(scopedConfigs).map(async ([name, config]) => {

@@ -312,6 +312,14 @@ export const WorkflowGraphSchema = z.object({
   inputSchema: JsonOutSchema,
   outputSchema: JsonOutSchema,
   triggers: z.array(WorkflowTriggerBindingSchema),
+  connections: z.array(
+    z.object({
+      alias: z.string(),
+      principal: z.enum(["member", "service", "either"]).optional(),
+      capabilities: z.array(z.string()).optional(),
+      optional: z.boolean().optional(),
+    }),
+  ),
   canSuspend: z.boolean(),
   nodes: z.array(WorkflowNodeSchema),
   edges: z.array(WorkflowEdgeSchema),
@@ -390,11 +398,22 @@ export const RunSchema = z.object({
   projectId: z.string().uuid(),
   workflowName: z.string(),
   correlationKey: z.string().nullable(),
+  environment: z.string().nullable(),
+  allocationId: z.string().uuid().nullable(),
   capabilities: RunCapabilitiesSchema,
   status: RunStatusSchema,
   phase: RunPhaseSchema,
   currentStepIndex: z.number().int().nonnegative().nullable(),
   activePause: RunPauseSchema.nullable(),
+  connectionActionRequired: z
+    .object({
+      id: z.string().uuid(),
+      environment: z.string(),
+      alias: z.string(),
+      status: z.literal("pending"),
+      createdAt: z.string().datetime(),
+    })
+    .nullable(),
   batchScopes: z.array(BatchProgressSchema),
   provenance: z.object({
     commitSha: z.string().optional(),
@@ -463,12 +482,126 @@ export const EnrollmentConflictPolicySchema = z.enum([
 
 export const TriggerRunSchema = z.object({
   input: JsonValueSchema.optional(),
+  environment: z.string().min(1).optional(),
   correlationKey: CorrelationKeySchema.optional(),
   onConflict: EnrollmentConflictPolicySchema.optional(),
 });
 
+export const EnvironmentListQuerySchema = z.object({
+  workload: z.enum(["agent", "workflow"]),
+  agentId: z.string().min(1).optional(),
+});
+
+export const EnvironmentListSchema = z.object({
+  items: z.array(
+    z.object({
+      name: z.string(),
+      label: z.string(),
+      description: z.string().optional(),
+      available: z.boolean(),
+      compatible: z.boolean(),
+      preferred: z.boolean(),
+      allowed: z.boolean(),
+      reasons: z.array(z.string()),
+      binding: z
+        .object({
+          trust: z.enum(["local", "managed"]),
+          isolation: z.enum(["none", "process", "sandbox"]),
+          capabilities: z.array(z.string()),
+          resources: z.record(z.string(), z.union([z.number(), z.boolean()])),
+        })
+        .optional(),
+    }),
+  ),
+  defaultEnvironment: z.string().optional(),
+});
+
+export const AuthenticationRequiredSchema = z.object({
+  error: z.string(),
+  code: z.literal("authentication_required"),
+  environment: z.string(),
+  requirements: z.array(
+    z.object({
+      alias: z.string(),
+      providerKind: z.string(),
+      principalKinds: z.array(
+        z.enum(["member", "project_service", "tenant_service"]),
+      ),
+    }),
+  ),
+});
+
+export const ConnectionRecordSchema = z.object({
+  id: z.string().uuid(),
+  projectId: z.string().uuid().nullable(),
+  providerKind: z.string(),
+  principalKind: z.enum(["member", "project_service", "tenant_service"]),
+  ownerExternalUserId: z.string().nullable(),
+  label: z.string(),
+  status: z.enum(["pending", "ready", "expired", "revoked"]),
+  account: JsonOutSchema,
+  scopes: z.array(z.string()),
+  capabilities: z.array(z.string()),
+  expiresAt: z.string().datetime().nullable(),
+  revision: z.number().int(),
+  createdAt: z.string().datetime(),
+  updatedAt: z.string().datetime(),
+});
+
+const ConnectionBindingPrincipalStatusSchema = z.object({
+  connectionId: z.string().uuid().nullable(),
+  principalKind: z.enum(["member", "project_service", "tenant_service"]),
+  label: z.string(),
+  status: z.enum(["pending", "ready", "expired", "revoked"]),
+  account: JsonOutSchema,
+  scopes: z.array(z.string()),
+});
+
+export const ConnectionBindingSchema = z.object({
+  id: z.string().uuid(),
+  projectId: z.string().uuid(),
+  environment: z.string(),
+  alias: z.string(),
+  providerKind: z.string(),
+  principalKinds: z.array(
+    z.enum(["member", "project_service", "tenant_service"]),
+  ),
+  serviceConnectionId: z.string().uuid().nullable(),
+  capabilities: z.array(z.string()),
+  memberConnection: ConnectionBindingPrincipalStatusSchema.nullable(),
+  serviceConnection: ConnectionBindingPrincipalStatusSchema.nullable(),
+  createdAt: z.string().datetime(),
+  updatedAt: z.string().datetime(),
+});
+
+export const AuthorizationChallengeSchema = z.discriminatedUnion("kind", [
+  z.object({
+    kind: z.literal("url"),
+    url: z.string().url(),
+    expiresAt: z.string().optional(),
+  }),
+  z.object({
+    kind: z.literal("device"),
+    verificationUrl: z.string().url(),
+    userCode: z.string(),
+    expiresAt: z.string().optional(),
+  }),
+  z.object({
+    kind: z.literal("form"),
+    fields: z.array(
+      z.object({
+        name: z.string(),
+        label: z.string(),
+        secret: z.boolean(),
+        required: z.boolean(),
+      }),
+    ),
+  }),
+]);
+
 export const FireTriggerSchema = z.object({
   payload: JsonValueSchema,
+  environment: z.string().min(1).optional(),
   mode: TriggerModeSchema.optional(),
   workflows: z.array(z.string().min(1)).max(100).optional(),
   correlationKey: CorrelationKeySchema.optional(),
@@ -770,6 +903,8 @@ export const AgentSessionSchema = z.object({
   provider: z.string(),
   providerSessionId: z.string().nullable(),
   sandboxId: z.string().uuid().nullable(),
+  environment: z.string().nullable(),
+  allocationId: z.string().uuid().nullable(),
   agentId: z.string().nullable(),
   modelEffort: AgentEffortSchema.nullable(),
   title: z.string().nullable(),
@@ -807,12 +942,20 @@ export const CreateAgentSessionSchema = z.object({
   /** Host-registry key of the agent to run this session on. */
   agentId: z.string().optional(),
   effort: AgentEffortSchema.optional(),
+  environment: z.string().min(1).optional(),
 });
 
 export const UpdateAgentSessionSchema = z.object({
   agentId: z.string().optional(),
   /** `null` clears the override back to the agent's default. */
   effort: AgentEffortSchema.nullable().optional(),
+  environment: z.string().min(1).optional(),
+});
+
+export const EnvironmentErrorSchema = z.object({
+  error: z.string(),
+  code: z.string(),
+  reasons: z.array(z.string()).optional(),
 });
 
 /** A transcript pushed from another backend (ADR 0061). */
@@ -987,7 +1130,19 @@ export const ProjectAgentDefinitionSchema = z.object({
       secret: z.string().optional(),
     })
     .optional(),
-  connections: z.array(z.string()).optional(),
+  connections: z
+    .array(
+      z.union([
+        z.string(),
+        z.object({
+          alias: z.string(),
+          principal: z.enum(["member", "service", "either"]).optional(),
+          capabilities: z.array(z.string()).optional(),
+          optional: z.boolean().optional(),
+        }),
+      ]),
+    )
+    .optional(),
   skills: z.array(z.string()).optional(),
   acp: z
     .object({
@@ -1228,8 +1383,8 @@ export const SecretNameParamsSchema = ProjectIdParamsSchema.extend({
   name: z.string().min(1),
 });
 
-export const SecretEnvironmentQuerySchema = z.object({
-  environment: z.enum(["test", "production"]).default("production"),
+export const RunStageQuerySchema = z.object({
+  stage: z.enum(["test", "production"]).default("production"),
 });
 
 // --- GitHub ---
@@ -1265,6 +1420,12 @@ export const GithubImportSchema = z.object({
 export const ErrorSchema = z.object({
   error: z.string(),
 });
+
+/** A 403 may be project scope denial or a structured Environment denial. */
+export const EnvironmentAccessErrorSchema = z.union([
+  ErrorSchema,
+  EnvironmentErrorSchema,
+]);
 
 export const ListSchema = <T extends z.ZodTypeAny>(item: T) =>
   z.object({

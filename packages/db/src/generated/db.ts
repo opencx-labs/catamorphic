@@ -57,8 +57,10 @@ export interface AgentMessages {
 export interface AgentSessions {
   activity: string | null;
   agent_id: string | null;
+  allocation_id: string | null;
   base_commit_sha: string | null;
   created_at: Generated<Timestamp>;
+  environment_name: string | null;
   external_user_id: string;
   icon: string | null;
   id: Generated<string>;
@@ -228,6 +230,89 @@ export interface BatchStepMembers {
   workflow_step_attempt_id: string;
 }
 
+export interface ConnectionActionRequirements {
+  alias: string;
+  allocation_id: string;
+  connection_id: string;
+  created_at: Generated<Timestamp>;
+  environment_name: string;
+  execution_job_id: string;
+  external_user_id: string;
+  id: Generated<string>;
+  project_id: string;
+  resolved_at: Timestamp | null;
+  status: Generated<string>;
+  tenant_id: string;
+  workflow_run_id: string;
+  workflow_step_attempt_id: string;
+}
+
+export interface ConnectionAuditEvents {
+  action: string | null;
+  actor_external_user_id: string | null;
+  allocation_id: string | null;
+  arguments_digest: string | null;
+  connection_id: string | null;
+  created_at: Generated<Timestamp>;
+  event_type: string;
+  id: Generated<Int8>;
+  metadata: Generated<Json>;
+  outcome: string;
+  project_id: string | null;
+  tenant_id: string;
+}
+
+export interface ConnectionAuthorizationAttempts {
+  alias: string;
+  completed_at: Timestamp | null;
+  created_at: Generated<Timestamp>;
+  environment_name: string;
+  expires_at: Timestamp;
+  external_user_id: string;
+  id: Generated<string>;
+  private_state_ref: string | null;
+  project_id: string;
+  provider_kind: string;
+  reauthorize_connection_id: string | null;
+  state_hash: string;
+  status: Generated<string>;
+  tenant_id: string;
+}
+
+export interface ConnectionCapabilityGrants {
+  agent_session_id: string | null;
+  allocation_id: string;
+  binding_id: string;
+  capabilities: Json;
+  connection_id: string;
+  created_at: Generated<Timestamp>;
+  expires_at: Timestamp;
+  id: Generated<string>;
+  project_id: string;
+  revoked_at: Timestamp | null;
+  tenant_id: string;
+  token_hash: string;
+}
+
+export interface Connections {
+  account_summary: Generated<Json>;
+  capabilities: Generated<Json>;
+  created_at: Generated<Timestamp>;
+  credential_ref: string | null;
+  expires_at: Timestamp | null;
+  id: Generated<string>;
+  label: string;
+  owner_external_user_id: string | null;
+  principal_kind: string;
+  project_id: string | null;
+  provider_kind: string;
+  revision: Generated<number>;
+  scopes: Generated<Json>;
+  status: Generated<string>;
+  tenant_id: string;
+  updated_at: Generated<Timestamp>;
+}
+
 export interface DeploymentArtifacts {
   artifact_digest: string;
   commit_sha: string;
@@ -244,6 +329,7 @@ export interface DeploymentArtifacts {
 
 export interface DeploymentRuntimes {
   artifact_id: string;
+  binding_id: Generated<string>;
   created_at: Generated<Timestamp>;
   endpoint_metadata: Json | null;
   generation: Generated<number>;
@@ -254,6 +340,35 @@ export interface DeploymentRuntimes {
   replica_index: Generated<number>;
   sandbox_id: string;
   status: Generated<string>;
+}
+
+export interface EnvironmentConnectionBindings {
+  alias: string;
+  capabilities: Generated<Json>;
+  created_at: Generated<Timestamp>;
+  environment_name: string;
+  id: Generated<string>;
+  principal_kinds: Json;
+  project_id: string;
+  provider_kind: string;
+  service_connection_id: string | null;
+  tenant_id: string;
+  updated_at: Generated<Timestamp>;
+}
+
+export interface ExecutionAllocations {
+  binding_id: string;
+  created_at: Generated<Timestamp>;
+  environment_name: string;
+  id: Generated<string>;
+  policy_snapshot: Json;
+  project_id: string;
+  released_at: Timestamp | null;
+  root_workload_id: string;
+  status: Generated<string>;
+  tenant_id: string;
+  worker_node_id: string | null;
+  workload_kind: string;
 }
 
 export interface ExecutionJobs {
@@ -281,6 +396,17 @@ export interface ExecutionJobs {
   updated_at: Generated<Timestamp>;
   workflow_run_id: string;
   workflow_step_attempt_id: string | null;
+}
+
+export interface MemberConnectionAttachments {
+  alias: string;
+  connection_id: string;
+  created_at: Generated<Timestamp>;
+  environment_name: string;
+  external_user_id: string;
+  id: Generated<string>;
+  project_id: string;
+  tenant_id: string;
 }
 
 export interface Memberships {
@@ -325,9 +451,9 @@ export interface ProjectSandboxes {
 
 export interface ProjectSecrets {
   created_at: Generated<Timestamp>;
-  environment: Generated<string>;
   name: string;
   project_id: string;
+  stage: Generated<string>;
   updated_at: Generated<Timestamp>;
   value: string;
 }
@@ -420,7 +546,10 @@ export interface TriggerBindings {
   can_suspend: boolean;
   commit_sha: string;
   config: Json;
+  connection_authorization_snapshot: Json | null;
+  connection_requirements: Generated<Json>;
   created_at: Generated<Timestamp>;
+  environment_name: string | null;
   id: Generated<string>;
   input_parameters: Json;
   input_schema: Generated<Json>;
@@ -464,7 +593,10 @@ export interface WorkflowRunEvents {
 }
 
 export interface WorkflowRuns {
+  allocation_id: string | null;
   attempt: Generated<number>;
+  caller_connection_scope: Json | null;
+  caller_execution_scope: Json | null;
   caller_scope: Json | null;
   cancel_reason: string | null;
   cancel_requested_at: Timestamp | null;
@@ -472,6 +604,7 @@ export interface WorkflowRuns {
   correlation_key: string | null;
   created_at: Generated<Timestamp>;
   deployment_artifact_id: string | null;
+  environment_name: string | null;
   error: string | null;
   external_user_id: string | null;
   id: Generated<string>;
@@ -549,9 +682,17 @@ export interface DB {
   batch_sink_chunks: BatchSinkChunks;
   batch_step_invocations: BatchStepInvocations;
   batch_step_members: BatchStepMembers;
+  connection_action_requirements: ConnectionActionRequirements;
+  connection_audit_events: ConnectionAuditEvents;
+  connection_authorization_attempts: ConnectionAuthorizationAttempts;
+  connection_capability_grants: ConnectionCapabilityGrants;
+  connections: Connections;
   deployment_artifacts: DeploymentArtifacts;
   deployment_runtimes: DeploymentRuntimes;
+  environment_connection_bindings: EnvironmentConnectionBindings;
+  execution_allocations: ExecutionAllocations;
   execution_jobs: ExecutionJobs;
+  member_connection_attachments: MemberConnectionAttachments;
   memberships: Memberships;
   project_plugins: ProjectPlugins;
   project_sandboxes: ProjectSandboxes;

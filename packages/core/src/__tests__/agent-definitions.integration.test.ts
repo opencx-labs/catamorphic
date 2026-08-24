@@ -8,6 +8,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { CatamorphicCore } from "../core.js";
 import type { Identity } from "../identity.js";
 import { ProjectNotFoundError } from "../services/projects-service.js";
+import { testEnvironmentProvider } from "./test-environment.js";
 
 const connectionString = process.env.DATABASE_URL ?? "";
 const describeIf = connectionString ? describe : describe.skip;
@@ -36,7 +37,11 @@ describeIf("AgentDefinitionsService (ADR 0050)", () => {
     );
     db = createDatabase({ connectionString, schema, poolSize: 4 });
     await migrateToLatest({ db, schema });
-    core = new CatamorphicCore({ db, projectManager });
+    core = new CatamorphicCore({
+      db,
+      projectManager,
+      environmentProvider: testEnvironmentProvider(),
+    });
 
     const project = await core.projects.create(identity, {
       name: "with-agents",

@@ -19,7 +19,7 @@ export interface SecretStatus {
   source: "project" | "plugin";
 }
 
-export type SecretEnvironment = "test" | "production";
+export type RunStage = "test" | "production";
 
 interface DeclaredSecretEntry {
   label?: string;
@@ -101,10 +101,10 @@ export class SecretsService {
   async list(opts: {
     identity: Identity;
     projectId: string;
-    environment: SecretEnvironment;
+    stage: RunStage;
   }): Promise<SecretStatus[]> {
     assertBuilder(opts.identity, opts.projectId);
-    const { identity, projectId, environment } = opts;
+    const { identity, projectId, stage } = opts;
     await requireTenantProject(this.db, identity.tenantId, projectId);
     const declared = await this.declaredSecrets({ identity, projectId });
     if (declared.size === 0) return [];
@@ -113,7 +113,7 @@ export class SecretsService {
     const rows = await this.db
       .selectFrom("project_secrets")
       .where("project_id", "=", projectId)
-      .where("environment", "=", environment)
+      .where("stage", "=", stage)
       .where("name", "in", names)
       .select(["name", "updated_at"])
       .execute();
@@ -136,12 +136,12 @@ export class SecretsService {
   async upsert(opts: {
     identity: Identity;
     projectId: string;
-    environment: SecretEnvironment;
+    stage: RunStage;
     name: string;
     value: string;
   }): Promise<SecretStatus> {
     assertBuilder(opts.identity, opts.projectId);
-    const { identity, projectId, environment, name, value } = opts;
+    const { identity, projectId, stage, name, value } = opts;
     await requireTenantProject(this.db, identity.tenantId, projectId);
     const declared = await this.declaredSecrets({ identity, projectId });
     const entry = declared.get(name);
@@ -154,13 +154,13 @@ export class SecretsService {
       .insertInto("project_secrets")
       .values({
         project_id: projectId,
-        environment,
+        stage,
         name,
         value,
         updated_at: now,
       })
       .onConflict((oc) =>
-        oc.columns(["project_id", "environment", "name"]).doUpdateSet({
+        oc.columns(["project_id", "stage", "name"]).doUpdateSet({
           value,
           updated_at: now,
         }),
@@ -181,16 +181,16 @@ export class SecretsService {
   async delete(opts: {
     identity: Identity;
     projectId: string;
-    environment: SecretEnvironment;
+    stage: RunStage;
     name: string;
   }): Promise<boolean> {
     assertBuilder(opts.identity, opts.projectId);
-    const { identity, projectId, environment, name } = opts;
+    const { identity, projectId, stage, name } = opts;
     await requireTenantProject(this.db, identity.tenantId, projectId);
     const result = await this.db
       .deleteFrom("project_secrets")
       .where("project_id", "=", projectId)
-      .where("environment", "=", environment)
+      .where("stage", "=", stage)
       .where("name", "=", name)
       .executeTakeFirst();
     return Number(result.numDeletedRows) > 0;
@@ -205,12 +205,12 @@ export class SecretsService {
   async loadForRun(opts: {
     identity: Identity;
     projectId: string;
-    environment: SecretEnvironment;
+    stage: RunStage;
   }): Promise<{
     values: Record<string, string>;
     missingRequired: string[];
   }> {
-    const { identity, projectId, environment } = opts;
+    const { identity, projectId, stage } = opts;
     const declared = await this.declaredSecrets({ identity, projectId });
     if (declared.size === 0) {
       return { values: {}, missingRequired: [] };
@@ -219,7 +219,7 @@ export class SecretsService {
     const rows = await this.db
       .selectFrom("project_secrets")
       .where("project_id", "=", projectId)
-      .where("environment", "=", environment)
+      .where("stage", "=", stage)
       .select(["name", "value"])
       .execute();
 

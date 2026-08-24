@@ -3,11 +3,13 @@
 - **Status:** Accepted
 - **Date:** 2026-07-27
 - **Expands:** 0001 (code is the source of truth), 0013 (test and production run modes)
+- **Terminology refined by:** 0064 (`RunStage`, not Environment)
+- **Provider identities refined by:** 0065 (use brokered connections)
 
 ## Context
 
 Secret storage already existed end to end: `project_secrets` is keyed by
-`(project_id, environment, name)` with separate test and production values,
+`(project_id, stage, name)` with separate test and production values,
 `SecretsService.loadForRun` resolves values and defaults, and the resolved map
 is injected into the run's process environment. Values are never read back over
 the API — only presence metadata.

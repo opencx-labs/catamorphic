@@ -12,6 +12,7 @@ import {
   DURABLE_WORKFLOW_SKILL_PATH,
   SEED_SKILLS,
 } from "../seeds.js";
+import { testEnvironmentProvider } from "./test-environment.js";
 
 const connectionString = process.env.DATABASE_URL ?? "";
 const describeIf = connectionString ? describe : describe.skip;
@@ -57,6 +58,7 @@ describeIf("doctrine hooks integration", () => {
     core = new CatamorphicCore({
       db,
       projectManager,
+      environmentProvider: testEnvironmentProvider(),
       projectSeeds: (defaults) => {
         const seeds = { ...defaults };
         delete seeds[DESIGN_SKILL_PATH];

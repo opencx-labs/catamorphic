@@ -45,6 +45,7 @@ interface BatchContext {
   workflowName: string;
   commitSha: string;
   artifactId: string;
+  allocationId: string | null;
   modulePath: string;
   exportName: string;
   stepIndex: number;
@@ -76,6 +77,7 @@ export class BatchExecutionHandler {
         workflowName: string;
         commitSha: string;
         artifactId: string;
+        allocationId: string | null;
         invocationId: string;
         kind: RuntimeInvocation["kind"];
         operation?: string;
@@ -1721,6 +1723,7 @@ export class BatchExecutionHandler {
           workflowName: args.context.workflowName,
           commitSha: args.context.commitSha,
           artifactId: args.context.artifactId,
+          allocationId: args.context.allocationId,
           invocationId: args.invocationId,
           kind: args.kind,
           operation: args.operation,
@@ -1853,6 +1856,7 @@ export class BatchExecutionHandler {
         "workflow_runs.workflow_name",
         "workflow_runs.external_user_id",
         "workflow_runs.deployment_artifact_id",
+        "workflow_runs.allocation_id",
         "workflow_runs.status",
         "workflow_runs.phase",
         "deployment_artifacts.commit_sha",
@@ -1880,6 +1884,7 @@ export class BatchExecutionHandler {
       workflowName: row.workflow_name,
       commitSha: row.commit_sha,
       artifactId: row.deployment_artifact_id,
+      allocationId: row.allocation_id,
       modulePath,
       exportName,
       stepIndex: row.step_index,

@@ -1,6 +1,6 @@
 import type { CapabilityRequirement } from "@catamorphic/plugins";
 import type { Identity } from "../identity.js";
-import type { SecretEnvironment } from "./secrets-service.js";
+import type { RunStage } from "./secrets-service.js";
 
 /**
  * What a capability provider learns about the run it is minting values for.
@@ -11,7 +11,7 @@ export interface CapabilityContext {
   tenantId: string;
   externalUserId: string;
   projectId: string;
-  environment: SecretEnvironment;
+  stage: RunStage;
   workflowName?: string;
 }
 

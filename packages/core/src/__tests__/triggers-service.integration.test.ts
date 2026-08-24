@@ -21,6 +21,7 @@ import {
   TriggerKindNotRegisteredError,
   TriggerPayloadInvalidError,
 } from "../services/triggers-service.js";
+import { testEnvironmentProvider } from "./test-environment.js";
 
 const connectionString = process.env.DATABASE_URL ?? "";
 const describeIf = connectionString ? describe : describe.skip;
@@ -217,10 +218,12 @@ describeIf("TriggersService end to end", () => {
     );
     db = createDatabase({ connectionString, schema, poolSize: 8 });
     await migrateToLatest({ db, schema });
+    const sandboxProvider = new FakeSandboxProvider();
     core = new CatamorphicCore({
       db,
       projectManager,
-      sandboxProvider: new FakeSandboxProvider(),
+      sandboxProvider,
+      environmentProvider: testEnvironmentProvider(sandboxProvider),
       triggerKinds: [ticketCreated],
     });
 
@@ -424,6 +427,7 @@ describeIf("TriggersService end to end", () => {
     const viewer = {
       ...identity,
       externalUserId: "viewer",
+      executionScope: [{ projectId, name: "local" }],
       scope: [{ kind: "workflow" as const, projectId, name: "escalateTicket" }],
     };
     const outcome = await core.runs.call({

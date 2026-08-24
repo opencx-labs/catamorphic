@@ -65,6 +65,11 @@ export interface StartSessionOpts {
    * between turns.
    */
   toolPolicies?: Record<string, McpToolPolicyLayers>;
+  /**
+   * Trusted control-plane MCP gateways minted for this session. Provider
+   * credentials never appear here; only short-lived Catamorphic grants do.
+   */
+  mcpServers?: Record<string, AgentMcpServerConfig>;
 }
 
 export interface ProviderSession {

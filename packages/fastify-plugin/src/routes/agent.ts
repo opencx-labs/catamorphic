@@ -3,11 +3,18 @@ import {
   AgentSessionClosedError,
   AgentSessionNotFoundError,
   AgentTurnInProgressError,
+  AuthenticationRequiredError,
+  EnvironmentAccessDeniedError,
+  EnvironmentBindingUnavailableError,
+  EnvironmentIncompatibleError,
+  EnvironmentNotFoundError,
   ProjectNotFoundError,
   SessionMirrorDivergedError,
+  UnsupportedAgentTopologyError,
 } from "@catamorphic/core";
 import type { FastifyInstance } from "fastify";
 import type { ZodTypeProvider } from "fastify-type-provider-zod";
+import { z } from "zod";
 import type { RouteContext } from "../app.js";
 import { resolveIdentity } from "../http-identity.js";
 import {
@@ -16,7 +23,10 @@ import {
   AgentSessionIdParamsSchema,
   AgentSessionPeerSchema,
   AgentSessionSchema,
+  AuthenticationRequiredSchema,
   CreateAgentSessionSchema,
+  EnvironmentAccessErrorSchema,
+  EnvironmentErrorSchema,
   ErrorSchema,
   ForkAgentSessionSchema,
   ListSchema,
@@ -48,6 +58,10 @@ export function registerAgentRoutes(app: FastifyInstance, ctx: RouteContext) {
         201: AgentSessionSchema,
         400: ErrorSchema,
         404: ErrorSchema,
+        403: EnvironmentAccessErrorSchema,
+        409: EnvironmentErrorSchema,
+        422: EnvironmentErrorSchema,
+        428: AuthenticationRequiredSchema,
         503: ErrorSchema,
       },
     },
@@ -64,6 +78,7 @@ export function registerAgentRoutes(app: FastifyInstance, ctx: RouteContext) {
             systemPrompt: request.body.systemPrompt,
             agentId: request.body.agentId,
             effort: request.body.effort,
+            environment: request.body.environment,
           },
         );
         return reply.status(201).send(session);
@@ -73,6 +88,42 @@ export function registerAgentRoutes(app: FastifyInstance, ctx: RouteContext) {
         }
         if (err instanceof AgentNotConfiguredError) {
           return reply.status(400).send({ error: err.message });
+        }
+        if (err instanceof AuthenticationRequiredError) {
+          return reply.status(428).send({
+            error: err.message,
+            code: "authentication_required",
+            environment: err.environment,
+            requirements: [...err.requirements],
+          });
+        }
+        if (err instanceof EnvironmentAccessDeniedError) {
+          return reply.status(403).send({
+            error: err.message,
+            code: "environment_access_denied",
+          });
+        }
+        if (
+          err instanceof EnvironmentBindingUnavailableError ||
+          err instanceof EnvironmentNotFoundError
+        ) {
+          return reply.status(409).send({
+            error: err.message,
+            code: "environment_unavailable",
+          });
+        }
+        if (err instanceof EnvironmentIncompatibleError) {
+          return reply.status(422).send({
+            error: err.message,
+            code: "environment_incompatible",
+            reasons: [...err.reasons],
+          });
+        }
+        if (err instanceof UnsupportedAgentTopologyError) {
+          return reply.status(422).send({
+            error: err.message,
+            code: "agent_topology_unsupported",
+          });
         }
         throw err;
       }
@@ -96,8 +147,11 @@ export function registerAgentRoutes(app: FastifyInstance, ctx: RouteContext) {
       body: MirrorAgentSessionSchema,
       response: {
         200: AgentSessionSchema,
+        403: EnvironmentAccessErrorSchema,
         404: ErrorSchema,
-        409: MirrorConflictSchema,
+        409: z.union([MirrorConflictSchema, EnvironmentErrorSchema]),
+        422: EnvironmentErrorSchema,
+        428: AuthenticationRequiredSchema,
         503: ErrorSchema,
       },
     },
@@ -140,6 +194,36 @@ export function registerAgentRoutes(app: FastifyInstance, ctx: RouteContext) {
             diverged: false,
           });
         }
+        if (err instanceof AuthenticationRequiredError) {
+          return reply.status(428).send({
+            error: err.message,
+            code: "authentication_required",
+            environment: err.environment,
+            requirements: [...err.requirements],
+          });
+        }
+        if (err instanceof EnvironmentAccessDeniedError) {
+          return reply.status(403).send({
+            error: err.message,
+            code: "environment_access_denied",
+          });
+        }
+        if (
+          err instanceof EnvironmentBindingUnavailableError ||
+          err instanceof EnvironmentNotFoundError
+        ) {
+          return reply.status(409).send({
+            error: err.message,
+            code: "environment_unavailable",
+          });
+        }
+        if (err instanceof EnvironmentIncompatibleError) {
+          return reply.status(422).send({
+            error: err.message,
+            code: "environment_incompatible",
+            reasons: [...err.reasons],
+          });
+        }
         throw err;
       }
     },
@@ -154,8 +238,11 @@ export function registerAgentRoutes(app: FastifyInstance, ctx: RouteContext) {
       response: {
         200: AgentSessionSchema,
         400: ErrorSchema,
+        403: EnvironmentAccessErrorSchema,
         404: ErrorSchema,
         409: ErrorSchema,
+        422: EnvironmentErrorSchema,
+        428: AuthenticationRequiredSchema,
         503: ErrorSchema,
       },
     },
@@ -182,12 +269,41 @@ export function registerAgentRoutes(app: FastifyInstance, ctx: RouteContext) {
         if (err instanceof AgentNotConfiguredError) {
           return reply.status(400).send({ error: err.message });
         }
+        if (err instanceof AuthenticationRequiredError) {
+          return reply.status(428).send({
+            error: err.message,
+            code: "authentication_required",
+            environment: err.environment,
+            requirements: [...err.requirements],
+          });
+        }
         if (err instanceof AgentSessionClosedError) {
           return reply.status(409).send({ error: "Session is closed" });
         }
         if (err instanceof AgentTurnInProgressError) {
           return reply.status(409).send({
             error: "A turn is in progress; try again when it settles",
+          });
+        }
+        if (err instanceof EnvironmentAccessDeniedError) {
+          return reply.status(403).send({
+            error: err.message,
+            code: "environment_access_denied",
+          });
+        }
+        if (
+          err instanceof EnvironmentBindingUnavailableError ||
+          err instanceof EnvironmentNotFoundError
+        ) {
+          return reply.status(409).send({
+            error: err.message,
+          });
+        }
+        if (err instanceof EnvironmentIncompatibleError) {
+          return reply.status(422).send({
+            error: err.message,
+            code: "environment_incompatible",
+            reasons: [...err.reasons],
           });
         }
         throw err;
@@ -340,6 +456,7 @@ export function registerAgentRoutes(app: FastifyInstance, ctx: RouteContext) {
         201: AgentMessageSchema,
         404: ErrorSchema,
         409: ErrorSchema,
+        422: EnvironmentErrorSchema,
         503: ErrorSchema,
       },
     },
@@ -366,6 +483,12 @@ export function registerAgentRoutes(app: FastifyInstance, ctx: RouteContext) {
         }
         if (err instanceof AgentSessionClosedError) {
           return reply.status(409).send({ error: "Session is closed" });
+        }
+        if (err instanceof UnsupportedAgentTopologyError) {
+          return reply.status(422).send({
+            error: err.message,
+            code: "agent_topology_unsupported",
+          });
         }
         throw err;
       }

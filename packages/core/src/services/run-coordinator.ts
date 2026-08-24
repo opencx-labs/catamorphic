@@ -475,6 +475,8 @@ export class RunCoordinator {
         .insertInto("workflow_runs")
         .values({
           id: childRunId,
+          allocation_id: parent.allocation_id,
+          environment_name: parent.environment_name,
           project_id: parent.project_id,
           workflow_name: args.child.workflowName,
           provenance: jsonColumn(
@@ -489,6 +491,14 @@ export class RunCoordinator {
             parent.caller_scope === null
               ? null
               : jsonColumn(parent.caller_scope),
+          caller_execution_scope:
+            parent.caller_execution_scope === null
+              ? null
+              : jsonColumn(parent.caller_execution_scope),
+          caller_connection_scope:
+            parent.caller_connection_scope === null
+              ? null
+              : jsonColumn(parent.caller_connection_scope),
           status: "pending",
           phase: phaseFor(firstStep),
           input: jsonColumn(args.child.input),
@@ -746,6 +756,15 @@ export class RunCoordinator {
         .where("id", "in", activeIds)
         .where("status", "=", "canceling")
         .execute();
+      for (const run of active) {
+        if (!run.parent_run_id && run.allocation_id) {
+          await releaseAllocation({
+            trx,
+            allocationId: run.allocation_id,
+            now,
+          });
+        }
+      }
       const artifacts = new Map(
         active.flatMap((run) =>
           run.deployment_artifact_id
@@ -933,6 +952,13 @@ export class RunCoordinator {
         .returning("id")
         .executeTakeFirst();
       if (completed) {
+        if (!run.parent_run_id && run.allocation_id) {
+          await releaseAllocation({
+            trx: args.trx,
+            allocationId: run.allocation_id,
+            now,
+          });
+        }
         await this.finishParent({
           trx: args.trx,
           childRunId: args.runId,
@@ -969,9 +995,16 @@ export class RunCoordinator {
       })
       .where("id", "=", args.runId)
       .where("status", "in", [...ACTIVE_RUN_STATUSES])
-      .returning("id")
+      .returning(["id", "parent_run_id", "allocation_id"])
       .executeTakeFirst();
     if (failed) {
+      if (!failed.parent_run_id && failed.allocation_id) {
+        await releaseAllocation({
+          trx: args.trx,
+          allocationId: failed.allocation_id,
+          now: args.now,
+        });
+      }
       await this.finishParent({
         trx: args.trx,
         childRunId: args.runId,
@@ -1623,6 +1656,25 @@ async function requireOwnedRun(args: {
     .select("workflow_runs.id")
     .executeTakeFirst();
   if (!row) throw new Error(`Run '${args.runId}' not found`);
+}
+
+async function releaseAllocation(args: {
+  trx: Transaction<DB>;
+  allocationId: string;
+  now: Date;
+}): Promise<void> {
+  await args.trx
+    .updateTable("connection_capability_grants")
+    .set({ revoked_at: args.now })
+    .where("allocation_id", "=", args.allocationId)
+    .where("revoked_at", "is", null)
+    .execute();
+  await args.trx
+    .updateTable("execution_allocations")
+    .set({ status: "released", released_at: args.now })
+    .where("id", "=", args.allocationId)
+    .where("status", "=", "active")
+    .execute();
 }
 
 async function lockRunHierarchy(args: {

@@ -240,6 +240,8 @@ interface SessionState {
    * them so a revoked grant reaches the next tool call.
    */
   callerPolicies?: Record<string, McpToolPolicyLayers>;
+  /** Session-bound Catamorphic capability gateways. */
+  mcpServers?: Record<string, AgentMcpServerConfig>;
   /**
    * False until the CLI has confirmed the session exists on disk (its init
    * message on the first real turn). Until then, queries pass `sessionId`
@@ -364,6 +366,7 @@ export class ClaudeCodeAgent implements CodingAgentProvider {
       toolContext,
       transcriptExists: false,
       ...(opts.toolPolicies ? { callerPolicies: opts.toolPolicies } : {}),
+      ...(opts.mcpServers ? { mcpServers: opts.mcpServers } : {}),
     });
 
     return {
@@ -711,6 +714,7 @@ export class ClaudeCodeAgent implements CodingAgentProvider {
       ...(toolContext
         ? this.opts.mcpServersForSession?.(toolContext)
         : undefined),
+      ...this.sessions.get(providerSessionId ?? "")?.mcpServers,
     });
 
     return {

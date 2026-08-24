@@ -4,6 +4,9 @@
 
 Accepted.
 
+Secret-bearing provider operations are refined by ADR 0065 and use the
+connection broker instead of environment-variable injection.
+
 ## Context
 
 Embedders want per-project infrastructure — the motivating case is a database

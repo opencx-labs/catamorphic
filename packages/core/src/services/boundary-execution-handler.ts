@@ -6,6 +6,7 @@ import type {
 import type { RuntimeInvocationReceipt } from "@catamorphic/sandbox";
 import type { Kysely } from "kysely";
 import type { Identity } from "../identity.js";
+import { ConnectionUnavailableError } from "./connections-service.js";
 import type { ExecutionJob } from "./execution-jobs-service.js";
 import {
   ExecutionJobDeferredError,
@@ -38,6 +39,7 @@ interface BoundaryRuntimeContext {
    */
   caller: Identity;
   runId: string;
+  allocationId: string | null;
   workflowStepAttemptId: string;
   projectId: string;
   workflowName: string;
@@ -66,6 +68,7 @@ export class BoundaryExecutionHandler {
         workflowName: string;
         commitSha: string;
         artifactId: string;
+        allocationId: string | null;
         invocationId: string;
         kind: "durable-boundary";
         modulePath: string;
@@ -97,6 +100,23 @@ export class BoundaryExecutionHandler {
         fn: string;
         args: unknown;
       }): Promise<unknown>;
+      callConnection?(args: {
+        caller: Identity;
+        allocationId: string;
+        alias: string;
+        action: string;
+        input: Json;
+      }): Promise<Json>;
+      parkConnectionCall?(args: {
+        caller: Identity;
+        projectId: string;
+        workflowRunId: string;
+        workflowStepAttemptId: string;
+        executionJobId: string;
+        allocationId: string;
+        alias: string;
+        connectionId: string;
+      }): Promise<string>;
     },
   ) {
     deps.worker.registerHandler({
@@ -280,6 +300,67 @@ export class BoundaryExecutionHandler {
       });
       return;
     }
+    if (result.type === "connection_call") {
+      const transition = jsonRecord(result.transition);
+      const alias = stringValue(transition.alias);
+      const action = stringValue(transition.action);
+      if (
+        !alias ||
+        !action ||
+        !context.allocationId ||
+        !this.deps.callConnection
+      ) {
+        await this.deps.coordinator.failStep({
+          workflowStepAttemptId: context.workflowStepAttemptId,
+          job: args.job,
+          error: "Connection call is unavailable or malformed",
+        });
+        return;
+      }
+      try {
+        const output = await this.deps.callConnection({
+          caller: context.caller,
+          allocationId: context.allocationId,
+          alias,
+          action,
+          input: toJson(transition.args),
+        });
+        await this.deps.coordinator.completeStep({
+          workflowStepAttemptId: context.workflowStepAttemptId,
+          job: args.job,
+          output,
+        });
+      } catch (error) {
+        if (
+          error instanceof ConnectionUnavailableError &&
+          error.connectionId &&
+          this.deps.parkConnectionCall
+        ) {
+          const requirementId = await this.deps.parkConnectionCall({
+            caller: context.caller,
+            projectId: context.projectId,
+            workflowRunId: context.runId,
+            workflowStepAttemptId: context.workflowStepAttemptId,
+            executionJobId: args.job.id,
+            allocationId: context.allocationId,
+            alias,
+            connectionId: error.connectionId,
+          });
+          throw new ExecutionJobDeferredError(
+            new Date(Date.now() + PAUSED_RUN_PARK_MS),
+            { parkedForConnectionRequirementId: requirementId },
+          );
+        }
+        await this.deps.coordinator.failStep({
+          workflowStepAttemptId: context.workflowStepAttemptId,
+          job: args.job,
+          error: `Connection call ${alias}.${action} failed: ${
+            error instanceof Error ? error.message : String(error)
+          }`,
+        });
+      }
+      return;
+    }
     await this.deps.coordinator.failStep({
       workflowStepAttemptId: context.workflowStepAttemptId,
       job: args.job,
@@ -383,6 +464,9 @@ export class BoundaryExecutionHandler {
         "workflow_runs.workflow_name",
         "workflow_runs.external_user_id",
         "workflow_runs.caller_scope",
+        "workflow_runs.caller_execution_scope",
+        "workflow_runs.caller_connection_scope",
+        "workflow_runs.allocation_id",
         "workflow_runs.status",
         "workflow_runs.deployment_artifact_id",
         "deployment_artifacts.commit_sha",
@@ -413,8 +497,21 @@ export class BoundaryExecutionHandler {
         ...(Array.isArray(row.caller_scope)
           ? { scope: row.caller_scope as unknown as Identity["scope"] }
           : {}),
+        ...(Array.isArray(row.caller_execution_scope)
+          ? {
+              executionScope:
+                row.caller_execution_scope as unknown as Identity["executionScope"],
+            }
+          : {}),
+        ...(Array.isArray(row.caller_connection_scope)
+          ? {
+              connectionScope:
+                row.caller_connection_scope as unknown as Identity["connectionScope"],
+            }
+          : {}),
       },
       runId: row.run_id,
+      allocationId: row.allocation_id,
       workflowStepAttemptId: row.workflow_step_attempt_id,
       projectId: row.project_id,
       workflowName: row.workflow_name,

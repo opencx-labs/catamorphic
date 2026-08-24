@@ -1,5 +1,6 @@
 import { pathToFileURL } from "node:url";
 import {
+  connectionNamespace,
   documentsCalls,
   hostCallTransition,
   hostNamespace,
@@ -225,6 +226,7 @@ async function executeInvocationTarget(args: {
         ...(caller ? { caller } : {}),
         host: hostNamespace([], hostCallTransition),
         documents,
+        connections: connectionNamespace([]),
       },
     ]);
     const safe = strictJson({
@@ -235,7 +237,8 @@ async function executeInvocationTarget(args: {
       isRecord(safe) &&
       (safe.__catamorphicDurableTransition === "pause" ||
         safe.__catamorphicDurableTransition === "child_workflow" ||
-        safe.__catamorphicDurableTransition === "host_call")
+        safe.__catamorphicDurableTransition === "host_call" ||
+        safe.__catamorphicDurableTransition === "connection_call")
     ) {
       return { type: safe.__catamorphicDurableTransition, transition: safe };
     }

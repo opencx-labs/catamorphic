@@ -604,3 +604,60 @@ retry, rate limit, batch, or child call settles inline) and `.start(input)`
 - Catamorphic uses strict schema scoping on its own DB access: connection strings get `search_path = "catamorphic"`, host-provided pools get Kysely's `WithSchemaPlugin`. Unqualified names cannot fall through to `public`.
 - Host-owned pools and Kysely instances are never destroyed by catamorphic; `catamorphic.close()` only closes what catamorphic created.
 - Stop handles returned by `catamorphic.startExecutionWorker(...)` during host shutdown. Constructing the SDK or Fastify plugin never starts workers implicitly.
+
+## Execution Environments and credential connections
+
+Hosts own physical execution and provider credentials. Projects name logical
+Environments in `.catamorphic/project.json`; the host maps each binding id to
+an actual provider with `defineStaticEnvironments`. An Environment is
+project-visible policy, a binding is its host-owned realization, and an
+Allocation is the immutable decision for one root session or workflow run.
+WorkerNode selection is a later placement concern and is never a project
+choice.
+
+Pass `credentialVault` and `connectionProviders` to `createCatamorphic` when
+external systems are enabled. The vault stores opaque bytes outside the
+Catamorphic database. Provider code runs in the control plane. Workflows call
+`context.connections.<alias>.<action>(args)` and agents use allocation-bound
+Catamorphic MCP grants. Neither receives upstream credentials.
+Connection aliases use letters, numbers, underscores, and hyphens only. Core
+does not perform lossy alias normalization, so one alias always maps to one MCP
+server and policy key.
+
+Roles grant Environments and logical connection aliases separately. Project
+builder access does not imply managed-compute or connection access. Projects
+cannot declare physical endpoints, OAuth clients, credential values, or
+service identities.
+
+Member connections use the authorization flow supported by the provider.
+Project and tenant service connections are created only by a host identity
+with `connections:manage_service`. An Environment binding chooses allowed
+principal kinds, capabilities, and any assigned service connection. A trigger
+scan is the unattended enablement boundary: it must resolve every required
+alias to an assigned service connection, then freezes those ids for dispatch.
+Member connections are never eligible for schedules or webhooks. To prevent a
+privileged service action from running in a local Environment, do not create
+that alias binding there and grant it only in the managed Environment.
+
+Long-lived API keys and service-account material use service connections, not
+project secrets. The service-credential API accepts provider-defined opaque
+text. For `defineMcpConnectionProvider`, that text is a JSON
+`McpConnectionCredential`, for example
+`{"headers":{"Authorization":"Bearer ..."}}`. The broker opens it only for
+the provider call. A workflow step that will later invoke an agent inherits the
+workflow's Environment, Allocation, and narrowed grants; it must not create a
+second credential selection path.
+
+Vault backup and rotation are host responsibilities. Back up encrypted records
+and their wrapping key together, restrict both to the server account, rotate
+service material through the connection API, and retain the old wrapping key
+until every record has been re-encrypted. Public OAuth redirects require TLS, a
+stable callback URL, and trusted proxy headers. MCP servers may support dynamic
+client registration; Slack, Google, and providers that require pre-registration
+still need deployment-owned client ids and secrets configured in the provider.
+
+OAuth registries and MCP discovery do not remove deployment setup. Slack still
+requires a Slack app with approved scopes. Google Workspace still requires a
+Google Cloud OAuth client or a service account with administrator-approved
+domain-wide delegation. Remote deployments need stable HTTPS callback URLs,
+correct proxy headers, a backed-up vault key, and a documented rotation plan.

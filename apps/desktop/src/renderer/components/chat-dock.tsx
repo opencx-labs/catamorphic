@@ -3,6 +3,7 @@ import {
   type AgentChatTextAttachment,
   messageWithAttachmentNames,
   useAgentChat,
+  useEnvironments,
 } from "@catamorphic/react";
 import {
   AppWindow,
@@ -15,6 +16,7 @@ import {
   GitBranch,
   GitFork,
   Globe,
+  KeyRound,
   LayoutGrid,
   LoaderCircle,
   Maximize2,
@@ -56,6 +58,7 @@ import {
 import { TAB_DRAG_TYPE, type TabDragPayload } from "../lib/tab-drag";
 import { classifyPastedText, selectionName, textPill } from "../lib/text-pills";
 import { AgentQuestionPanel } from "./agent-question-panel";
+import { AuthenticationRequiredCard } from "./authentication-required-card.js";
 import {
   attachmentsFromMetadata,
   ChatTimeline,
@@ -70,6 +73,8 @@ import {
   type ComposerInputHandle,
 } from "./composer-input";
 import { ContextMeter } from "./context-meter.js";
+import { EnvironmentConnections } from "./environment-connections.js";
+import { Modal } from "./modal.js";
 import { ShortcutHint } from "./shortcut-hint";
 
 export type ChatMode = "min" | "partial" | "tab";
@@ -1225,9 +1230,35 @@ export function ChatDock({
   onSessionCreated,
   onSignalsChange,
 }: ChatDockProps) {
+  const environmentQuery = useEnvironments(projectId, {
+    workload: "agent",
+    ...((entry.agentId ?? defaultAgentId)
+      ? { agentId: entry.agentId ?? defaultAgentId }
+      : {}),
+  });
+  const compatibleEnvironments =
+    environmentQuery.data?.items.filter((item) => item.compatible) ?? [];
+  const [selectedEnvironment, setSelectedEnvironment] = useState<string>();
+  const [connectionsOpen, setConnectionsOpen] = useState(false);
+  useEffect(() => {
+    if (
+      compatibleEnvironments.some(
+        (environment) => environment.name === selectedEnvironment,
+      ) ||
+      compatibleEnvironments.length === 0
+    ) {
+      return;
+    }
+    setSelectedEnvironment(
+      compatibleEnvironments.find((item) => item.preferred)?.name ??
+        environmentQuery.data?.defaultEnvironment ??
+        compatibleEnvironments[0]?.name,
+    );
+  }, [compatibleEnvironments, environmentQuery.data, selectedEnvironment]);
   const chat = useAgentChat(projectId, {
     sessionId: entry.sessionId,
     agentId: entry.agentId ?? defaultAgentId,
+    environment: selectedEnvironment,
     onSessionCreated: (sessionId) => {
       // Desktop-local privacy flag (ADR 0062): recorded the moment the
       // lazy session gets its id, well before the first turn can settle
@@ -1238,6 +1269,7 @@ export function ChatDock({
       onSessionCreated(entry.localId, sessionId);
     },
   });
+  const activeEnvironment = chat.session?.environment ?? selectedEnvironment;
   const isIncognito = Boolean(entry.incognito);
   const [checkout, setCheckout] = useState<SessionCheckoutInfo | null>(null);
   useEffect(() => {
@@ -2350,6 +2382,40 @@ export function ChatDock({
               )}
             </span>
             <span className="truncate">{title}</span>
+            {chat.session?.environment ? (
+              <span
+                className="flex shrink-0 items-center gap-1 rounded-full border border-border-strong bg-bg-inset px-1.5 py-0.5 text-[10px] font-medium text-fg-muted"
+                data-testid="chat-environment-badge"
+              >
+                <Globe className="size-3" />
+                {chat.session.environment}
+              </span>
+            ) : compatibleEnvironments.length > 1 ? (
+              <select
+                aria-label="Environment"
+                data-testid="chat-environment-select"
+                value={selectedEnvironment ?? ""}
+                onChange={(event) => setSelectedEnvironment(event.target.value)}
+                className="max-w-36 rounded-md border border-border bg-bg-inset px-1.5 py-0.5 text-[10px] font-medium text-fg-muted outline-none"
+              >
+                {compatibleEnvironments.map((environment) => (
+                  <option key={environment.name} value={environment.name}>
+                    {environment.label}
+                  </option>
+                ))}
+              </select>
+            ) : null}
+            {activeEnvironment && (
+              <button
+                type="button"
+                aria-label="Manage Environment connections"
+                title="Manage Environment connections"
+                onClick={() => setConnectionsOpen(true)}
+                className="grid size-5 shrink-0 cursor-pointer place-items-center rounded text-fg-muted hover:bg-bg-overlay hover:text-fg"
+              >
+                <KeyRound className="size-3" />
+              </button>
+            )}
             {isIncognito && (
               <span
                 className="flex shrink-0 items-center gap-1 rounded-full border border-border-strong bg-bg-inset px-1.5 py-0.5 text-[10px] font-medium text-fg-muted"
@@ -2534,6 +2600,18 @@ export function ChatDock({
                   </button>
                 </div>
               )}
+            {chat.authenticationRequired?.requirements.map((requirement) => (
+              <AuthenticationRequiredCard
+                key={`${chat.authenticationRequired?.environment}:${requirement.alias}`}
+                projectId={projectId}
+                environment={chat.authenticationRequired?.environment ?? ""}
+                requirement={requirement}
+                onOpenLink={(url) =>
+                  onLinkClick?.(url, { metaKey: true, shiftKey: false })
+                }
+                onAuthorized={chat.resumeAfterAuthentication}
+              />
+            ))}
             {questions && !chat.isSending && (
               <AgentQuestionPanel
                 questions={questions}
@@ -2645,6 +2723,41 @@ export function ChatDock({
           </div>
         </div>
       </section>
+      <Modal
+        open={connectionsOpen}
+        onClose={() => setConnectionsOpen(false)}
+        width={560}
+        labelledBy="environment-connections-title"
+      >
+        <div className="flex items-center justify-between border-b border-border px-4 py-3">
+          <div>
+            <h2
+              id="environment-connections-title"
+              className="text-sm font-semibold"
+            >
+              Environment connections
+            </h2>
+            <p className="mt-0.5 text-xs text-fg-muted">{activeEnvironment}</p>
+          </div>
+          <button
+            type="button"
+            onClick={() => setConnectionsOpen(false)}
+            className="grid size-7 cursor-pointer place-items-center rounded-md text-fg-muted hover:bg-bg-overlay hover:text-fg"
+            aria-label="Close"
+          >
+            <X className="size-4" />
+          </button>
+        </div>
+        {activeEnvironment && (
+          <EnvironmentConnections
+            projectId={projectId}
+            environment={activeEnvironment}
+            onOpenLink={(url) =>
+              onLinkClick?.(url, { metaKey: true, shiftKey: false })
+            }
+          />
+        )}
+      </Modal>
     </div>
   );
 }

@@ -5,6 +5,7 @@ import { describe, expect, it, vi } from "vitest";
 import { CatamorphicCore } from "../core.js";
 import { HOST_SKILLS, SEED_SKILLS } from "../seeds.js";
 import { parseSkillFrontmatter } from "../services/skills-service.js";
+import { testEnvironmentProvider } from "./test-environment.js";
 
 /**
  * Doctrine hooks (ADR 0049): `projectSeeds` / `standingAgentPrompt`
@@ -19,6 +20,7 @@ const dummyCore = (
   new CatamorphicCore({
     db: {} as Kysely<DB>,
     projectManager: {} as ProjectManager,
+    environmentProvider: testEnvironmentProvider(),
     ...config,
   });
 

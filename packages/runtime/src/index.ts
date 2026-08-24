@@ -1,6 +1,8 @@
 export type { BunWorkerFactoryOptions } from "./bun-worker.js";
 export { BunWorkerFactory } from "./bun-worker.js";
 export {
+  connectionCallTransition,
+  connectionNamespace,
   documentsCalls,
   hostCallTransition,
   hostNamespace,
@@ -53,6 +55,7 @@ export {
   DOCUMENTS_CAPABILITY,
   parseRuntimeInvocationRequest,
   RUNTIME_PROTOCOL_VERSION,
+  type RuntimeConnectionCallTransition,
   type RuntimeHostCallTransition,
   toProtocolJson,
 } from "./supervisor-protocol.js";

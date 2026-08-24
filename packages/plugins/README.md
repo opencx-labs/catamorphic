@@ -22,6 +22,15 @@ manifest format, DB schema, runtime plumbing, agent context injection, and the
 troubleshooting scars we've collected so far. Update this file when anything
 about the contract, the data flow, or the operational gotchas changes.
 
+External provider credentials use the connection provider seam, not plugin
+environment variables. A connection provider exposes sanitized authorization
+metadata and host-side actions. Credential bytes are opened only through the
+injected vault during a broker call. Project workflow and app code cannot read
+them. Plugins may package provider factories, but the host still owns
+endpoints, OAuth registration, callback URLs, administrator grants, and
+service-identity policy. A registry entry is discovery metadata, not portable
+authorization.
+
 ---
 
 ## Table of contents
@@ -192,6 +201,38 @@ shared by the server (route validation) and resolver (manifest parsing).
   allow arbitrary workflow code to receive host credentials.
 
 ---
+
+## Host-side connection providers
+
+Plugins may also register host-only connection drivers. This is separate from
+manifest `secrets` and capability environment injection: provider credential
+material stays in the host vault and is available only for the duration of a
+broker call.
+
+```ts
+import { definePlugin } from "@catamorphic/server-sdk";
+
+export const directoryPlugin = definePlugin({
+  name: "directory",
+  connections: [
+    {
+      kind: "acme.directory",
+      displayName: "Acme Directory",
+      async invoke({ material, action, input, capabilities }) {
+        if (!capabilities.includes(action)) throw new Error("Action denied");
+        const client = createDirectoryClient(material);
+        return client.call({ action, input });
+      },
+    },
+  ],
+});
+```
+
+Providers may implement URL, device, or form authorization, refresh, revoke,
+direct actions, and MCP-style action discovery. Their public results must be
+sanitized JSON. Workflow code, user apps, sandboxes, and coding-agent harnesses
+receive brokered actions or short-lived Catamorphic MCP grants, never
+`material`, OAuth headers, or vault references.
 
 ## Database schema
 

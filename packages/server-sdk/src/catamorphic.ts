@@ -5,15 +5,17 @@ import type {
   CatamorphicCore,
   CatamorphicCoreConfig,
   CodingAgentRegistry,
+  ConnectionProvider,
+  CredentialVault,
   DeploymentRuntimeCleanupResult,
   DeploymentRuntimeHealthResult,
   DeploymentRuntimeRetirementResult,
   ExecutionWorkerHandle,
   ExecutionWorkerOptions,
   GithubServiceConfig,
-  HostAgentCheckout,
   Identity,
   McpToolKindSpec,
+  NativeAgentCheckout,
   ProjectLifecycleHooks,
   RetentionConfig,
   TriggerKindRuntime,
@@ -33,6 +35,7 @@ import { FsBackend, FsRemoteBackend, ProjectManager } from "@catamorphic/git";
 import type { PluginResolver } from "@catamorphic/plugins";
 import type {
   CodingAgentProvider,
+  EnvironmentProvider,
   SandboxProvider,
 } from "@catamorphic/sandbox";
 import type { Kysely } from "kysely";
@@ -91,6 +94,16 @@ export interface CreateCatamorphicConfig {
    * The provider is automatically wrapped with OpenTelemetry instrumentation.
    */
   sandboxProvider?: SandboxProvider;
+  /** Host-owned realizations of project logical Environments. */
+  environmentProvider: EnvironmentProvider;
+  credentialVault?: CredentialVault;
+  connectionProviders?: readonly ConnectionProvider[];
+  /** URL resolver for the Fastify plugin's brokered `/connection-mcp` route. */
+  connectionMcpUrl?: (args: {
+    projectId: string;
+    sessionId: string;
+    alias: string;
+  }) => string | undefined;
   /** Required once the host uses plugins + secrets. */
   pluginResolver?: PluginResolver;
   /**
@@ -102,9 +115,9 @@ export interface CreateCatamorphicConfig {
   codingAgent?: CodingAgentProvider | CodingAgentRegistry;
   /**
    * Resolve a project's directory on the host filesystem, required for
-   * registry agents with `execution: "host"` (Claude Code, Codex).
+   * registry agents with `topology: "native"` (Claude Code, Codex).
    */
-  hostAgentCheckout?: HostAgentCheckout;
+  nativeAgentCheckout?: NativeAgentCheckout;
   /**
    * How long finished runs are kept before they and everything hanging off
    * them are purged. Defaults to 90 days; pass `{ enabled: false }` to keep
@@ -276,7 +289,6 @@ export class Catamorphic {
       this.ownsDb = false;
       return;
     }
-
     const { db, schema, ownsDb } = resolveDatabase(config.database);
     this.schema = schema;
     this.ownsDb = ownsDb;
@@ -286,14 +298,19 @@ export class Catamorphic {
       projectHooks: config.projectHooks ?? [],
       triggerKinds: config.triggerKinds ?? [],
       mcpToolKinds: config.mcpToolKinds ?? [],
+      connectionProviders: config.connectionProviders ?? [],
     });
     this.core = createCatamorphicCore({
       db,
       projectManager: resolveStorage(config.storage),
       sandboxProvider: config.sandboxProvider,
+      environmentProvider: config.environmentProvider,
+      credentialVault: config.credentialVault,
+      connectionProviders: contributions.connectionProviders,
+      connectionMcpUrl: config.connectionMcpUrl,
       pluginResolver: config.pluginResolver,
       codingAgent: config.codingAgent,
-      hostAgentCheckout: config.hostAgentCheckout,
+      nativeAgentCheckout: config.nativeAgentCheckout,
       ...(config.retention === undefined
         ? {}
         : { retention: config.retention }),

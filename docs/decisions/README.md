@@ -45,12 +45,12 @@ Settled design decisions live here as short Architecture Decision Records. They 
 | [0030](0030-run-retention.md) | Run retention | Accepted |
 | [0031](0031-execution-hot-path-costs.md) | Execution hot-path costs: parked deferrals, bucket round trips, heartbeat HOT updates | Accepted |
 | [0032](0032-projects-are-bun-workspaces.md) | Projects are bun workspaces holding workflows, contracts, and apps | Accepted |
-| [0033](0033-user-declared-secrets.md) | Projects declare their own secrets in code | Accepted |
+| [0033](0033-user-declared-secrets.md) | Projects declare their own secrets in code | Accepted (RunStage terminology refined by 0064) |
 | [0034](0034-batch-write-scalability-and-claim-receipts.md) | Batch admission counters, concurrent sinks, and claim receipts | Accepted |
 | [0035](0035-app-entity-and-build-pipeline.md) | App entity, build pipeline, and bundle storage | Accepted |
 | [0036](0036-app-authorization-and-audience.md) | App authorization: contract surface, frozen sets, audience identities | Accepted (audience headers superseded by 0053) |
 | [0037](0037-app-guest-runtime-and-mount.md) | App guest runtime (`@catamorphic/app`) and host mount | Accepted (mount headers + polling superseded by 0053) |
-| [0038](0038-coding-agent-registry-and-host-execution.md) | Coding-agent registry: per-session agents, host execution, effort | Accepted |
+| [0038](0038-coding-agent-registry-and-host-execution.md) | Coding-agent registry: per-session agents, host execution, effort | Accepted (topology model refined by 0064) |
 | [0039](0039-custom-trigger-kinds.md) | Custom trigger kinds: host-defined events, typed bindings, sync firing | Accepted |
 | [0040](0040-one-workflow-model.md) | One workflow model: every workflow is `defineWorkflow`, every run a deployed commit | Accepted |
 | [0041](0041-generated-projections.md) | Generated projections: schemas and types derived from code | Accepted |
@@ -59,7 +59,7 @@ Settled design decisions live here as short Architecture Decision Records. They 
 | [0044](0044-checkpoint-commits-and-remote-sync.md) | Checkpoint commits, remote sync, and the code-host seam | Accepted |
 | [0045](0045-desktop-as-dev-shell.md) | The desktop is a dev shell: harness fidelity, worktrees, diffs, PRs | Accepted |
 | [0046](0046-plugin-activation-planes.md) | Plugin activation planes: capability providers and project lifecycle hooks | Accepted |
-| [0047](0047-local-process-execution.md) | Sandboxless execution is a provider: `@catamorphic/local-process` | Accepted |
+| [0047](0047-local-process-execution.md) | Sandboxless execution is a provider: `@catamorphic/local-process` | Accepted (provider selection refined by 0064) |
 | [0048](0048-app-feel-is-the-embedders.md) | An app's feel is entirely the embedder's: neutral kit defaults, host feel tokens | Accepted |
 | [0049](0049-doctrine-is-the-embedders.md) | Doctrine is the embedder's: seed/template/standing-prompt hooks, mechanics split from design doctrine | Accepted (templates part superseded by 0051) |
 | [0050](0050-project-agent-definitions.md) | Project agent definitions: committed `agents/*.json`, consent-bound credentials | Accepted |
@@ -76,3 +76,6 @@ Settled design decisions live here as short Architecture Decision Records. They 
 | [0061](0061-session-mirroring.md) | Session mirroring: local-first chats pushed to the linked remote; fork-on-continuation | Accepted |
 | [0062](0062-session-privacy-and-fork-ux.md) | Session privacy & fork UX: incognito sessions, project policy, fork markers, admin usage | Accepted |
 | [0063](0063-agent-checkout-coordination.md) | Agent coordination and optional worktree isolation | Accepted |
+| [0064](0064-execution-environments-and-allocations.md) | Execution Environments and immutable Allocations | Accepted |
+| [0065](0065-credential-connections-and-capability-broker.md) | Credential connections and capability broker | Accepted (greenfield cutover refined by 0066) |
+| [0066](0066-greenfield-environment-and-connection-cutover.md) | Greenfield Environment and connection cutover | Accepted |

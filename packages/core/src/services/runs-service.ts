@@ -32,12 +32,18 @@ import {
   assertScopeAllowsWorkflow,
   resolveScope,
 } from "./artifact-scope.js";
+import type { ConnectionAdmissionService } from "./connection-admission.js";
+import type { ResolvedConnectionBinding } from "./connection-types.js";
 import type {
   DeploymentArtifact,
   DeploymentArtifactsService,
 } from "./deployment-artifacts-service.js";
 import type { DeploymentRuntimeService } from "./deployment-runtime-service.js";
+import { DeploymentRuntimeService as EnvironmentDeploymentRuntimeService } from "./deployment-runtime-service.js";
+import { KyselyDeploymentRuntimeStore } from "./deployment-runtime-store.js";
 import type { DevSandboxService } from "./dev-sandbox-service.js";
+import type { ExecutionAllocationsService } from "./execution-allocations-service.js";
+import type { ExecutionEnvironmentsService } from "./execution-environments-service.js";
 import type { ExecutionJobsService } from "./execution-jobs-service.js";
 import type {
   ExecutionWorkerHandle,
@@ -96,6 +102,14 @@ export interface RunPause {
   resolvedAt: string | null;
 }
 
+export interface RunConnectionActionRequired {
+  id: string;
+  environment: string;
+  alias: string;
+  status: "pending";
+  createdAt: string;
+}
+
 export interface BatchProgress {
   workflowStepAttemptId: string;
   stepIndex: number;
@@ -125,11 +139,14 @@ export interface Run {
   projectId: string;
   workflowName: string;
   correlationKey: string | null;
+  environment: string | null;
+  allocationId: string | null;
   capabilities: RunCapabilities;
   status: RunStatus;
   phase: RunPhase;
   currentStepIndex: number | null;
   activePause: RunPause | null;
+  connectionActionRequired: RunConnectionActionRequired | null;
   batchScopes: BatchProgress[];
   provenance: RunProvenance;
   artifact?: RunArtifact;
@@ -267,6 +284,7 @@ export interface TriggerProductionRunInput {
   identity: Identity;
   projectId: string;
   workflowName: string;
+  environment?: string;
   input?: Json;
   /**
    * A host-meaningful identity for the subject of this run — a contact, an
@@ -448,7 +466,14 @@ interface RunsServiceDeps {
   runPluginsLoader?: RunPluginsLoader;
   deploymentArtifacts: DeploymentArtifactsService;
   deploymentRuntime?: DeploymentRuntimeService;
+  deploymentRuntimeOptions?: {
+    maxConcurrency?: number;
+    autoStopMinutes?: number;
+  };
   executionJobs: ExecutionJobsService;
+  executionEnvironments: ExecutionEnvironmentsService;
+  executionAllocations: ExecutionAllocationsService;
+  connectionAdmission?: ConnectionAdmissionService;
   executionWorker: ExecutionWorkerService;
   runtimeEvents: RuntimeEventsService;
   coordinator: RunCoordinator;
@@ -479,6 +504,10 @@ function delay(milliseconds: number): Promise<void> {
 
 export class RunsService {
   private readonly preparedSources = new Map<string, Promise<PreparedSource>>();
+  private readonly environmentRuntimes = new Map<
+    string,
+    { provider: SandboxProvider; runtime: DeploymentRuntimeService }
+  >();
 
   constructor(
     private readonly db: Kysely<DB>,
@@ -534,49 +563,57 @@ export class RunsService {
         throw new AccessDeniedError();
       }
     }
-    const [pause, batches, steps, attempts] = await Promise.all([
-      this.db
-        .selectFrom("workflow_pauses")
-        .where("run_id", "=", args.runId)
-        .where("status", "=", "open")
-        .selectAll()
-        .executeTakeFirst(),
-      this.db
-        .selectFrom("batch_execution_states")
-        .innerJoin(
-          "workflow_step_attempts",
-          "workflow_step_attempts.id",
-          "batch_execution_states.workflow_step_attempt_id",
-        )
-        .where("batch_execution_states.run_id", "=", args.runId)
-        .selectAll("batch_execution_states")
-        .select([
-          "workflow_step_attempts.step_index",
-          "workflow_step_attempts.step_node_id",
-          "workflow_step_attempts.attempt",
-          "workflow_step_attempts.status",
-        ])
-        .orderBy("workflow_step_attempts.step_index")
-        .orderBy("workflow_step_attempts.attempt")
-        .execute(),
-      this.db
-        .selectFrom("workflow_run_steps")
-        .where("run_id", "=", args.runId)
-        .selectAll()
-        .orderBy("started_at")
-        .execute(),
-      this.db
-        .selectFrom("workflow_step_attempts")
-        .where("run_id", "=", args.runId)
-        .selectAll()
-        .orderBy("step_index")
-        .orderBy("attempt")
-        .execute(),
-    ]);
+    const [pause, connectionActionRequired, batches, steps, attempts] =
+      await Promise.all([
+        this.db
+          .selectFrom("workflow_pauses")
+          .where("run_id", "=", args.runId)
+          .where("status", "=", "open")
+          .selectAll()
+          .executeTakeFirst(),
+        this.db
+          .selectFrom("connection_action_requirements")
+          .where("workflow_run_id", "=", args.runId)
+          .where("status", "=", "pending")
+          .selectAll()
+          .executeTakeFirst(),
+        this.db
+          .selectFrom("batch_execution_states")
+          .innerJoin(
+            "workflow_step_attempts",
+            "workflow_step_attempts.id",
+            "batch_execution_states.workflow_step_attempt_id",
+          )
+          .where("batch_execution_states.run_id", "=", args.runId)
+          .selectAll("batch_execution_states")
+          .select([
+            "workflow_step_attempts.step_index",
+            "workflow_step_attempts.step_node_id",
+            "workflow_step_attempts.attempt",
+            "workflow_step_attempts.status",
+          ])
+          .orderBy("workflow_step_attempts.step_index")
+          .orderBy("workflow_step_attempts.attempt")
+          .execute(),
+        this.db
+          .selectFrom("workflow_run_steps")
+          .where("run_id", "=", args.runId)
+          .selectAll()
+          .orderBy("started_at")
+          .execute(),
+        this.db
+          .selectFrom("workflow_step_attempts")
+          .where("run_id", "=", args.runId)
+          .selectAll()
+          .orderBy("step_index")
+          .orderBy("attempt")
+          .execute(),
+      ]);
     return {
       ...mapRun({
         row,
         pause,
+        connectionActionRequired,
         batchScopes: batches.map(mapBatchProgress),
       }),
       steps: steps.map(mapStep),
@@ -746,14 +783,20 @@ export class RunsService {
         .executeTakeFirstOrThrow(),
     ]);
     const runIds = rows.map((row) => row.id);
-    const [pauses, batches] =
+    const [pauses, connectionActionRequirements, batches] =
       runIds.length === 0
-        ? [[], []]
+        ? [[], [], []]
         : await Promise.all([
             this.db
               .selectFrom("workflow_pauses")
               .where("run_id", "in", runIds)
               .where("status", "=", "open")
+              .selectAll()
+              .execute(),
+            this.db
+              .selectFrom("connection_action_requirements")
+              .where("workflow_run_id", "in", runIds)
+              .where("status", "=", "pending")
               .selectAll()
               .execute(),
             this.db
@@ -787,6 +830,9 @@ export class RunsService {
         mapRun({
           row,
           pause: pausesByRun.get(row.id),
+          connectionActionRequired: connectionActionRequirements.find(
+            (requirement) => requirement.workflow_run_id === row.id,
+          ),
           batchScopes: batchesByRun.get(row.id) ?? [],
         }),
       ),
@@ -796,6 +842,15 @@ export class RunsService {
 
   async triggerProduction(args: TriggerProductionRunInput): Promise<Run> {
     return this.trigger(args);
+  }
+
+  /** Trigger-only entry point. It accepts service connections only. */
+  async triggerUnattendedProduction(
+    args: TriggerProductionRunInput & {
+      connectionAuthorizationSnapshot?: readonly ResolvedConnectionBinding[];
+    },
+  ): Promise<Run> {
+    return this.trigger({ ...args, unattended: true });
   }
 
   /**
@@ -918,10 +973,19 @@ export class RunsService {
 
   async cancel(args: CancelRunInput): Promise<Run> {
     await this.assertBuilderForRun(args.identity, args.runId);
+    const run = await this.get(args);
+    const allocationRuntime = run.allocationId
+      ? await this.runtimeForAllocation({
+          identity: args.identity,
+          allocationId: run.allocationId,
+        }).catch(() => undefined)
+      : undefined;
     const invocations = await this.deps.coordinator.cancel(args);
+    const deploymentRuntime =
+      allocationRuntime?.runtime ?? this.deps.deploymentRuntime;
     await Promise.all(
       invocations.map((invocation) =>
-        this.deps.deploymentRuntime?.cancel(invocation).catch(() => {}),
+        deploymentRuntime?.cancel(invocation).catch(() => {}),
       ),
     );
     return this.get(args);
@@ -1196,6 +1260,7 @@ export class RunsService {
     workflowName: string;
     commitSha: string;
     artifactId: string;
+    allocationId: string;
     invocationId: string;
     kind: RuntimeInvocation["kind"];
     operation?: string;
@@ -1208,8 +1273,12 @@ export class RunsService {
     signal?: AbortSignal;
   }): Promise<RuntimeInvocationReceipt> {
     args.signal?.throwIfAborted();
-    const provider = this.deps.sandboxProvider;
-    const deploymentRuntime = this.deps.deploymentRuntime;
+    const selected = await this.runtimeForAllocation({
+      identity: args.identity,
+      allocationId: args.allocationId,
+    });
+    const provider = selected.provider;
+    const deploymentRuntime = selected.runtime;
     if (!provider?.deploymentRuntime || !deploymentRuntime) {
       throw new SandboxProviderNotConfiguredError();
     }
@@ -1336,13 +1405,54 @@ export class RunsService {
     return receipt;
   }
 
+  private async runtimeForAllocation(args: {
+    identity: Identity;
+    allocationId: string;
+  }): Promise<{
+    provider: SandboxProvider;
+    runtime: DeploymentRuntimeService;
+  }> {
+    const allocation = await this.deps.executionAllocations.get({
+      identity: args.identity,
+      allocationId: args.allocationId,
+    });
+    if (allocation?.status !== "active") {
+      throw new Error("Workflow Allocation is unavailable");
+    }
+    const existing = this.environmentRuntimes.get(allocation.bindingId);
+    if (existing) return existing;
+    const binding = await this.deps.executionEnvironments.getRuntimeBinding({
+      identity: args.identity,
+      bindingId: allocation.bindingId,
+    });
+    const provider = binding?.sandboxProvider;
+    if (!provider?.deploymentRuntime) {
+      throw new SandboxProviderNotConfiguredError();
+    }
+    const runtime = new EnvironmentDeploymentRuntimeService(
+      new KyselyDeploymentRuntimeStore(this.db, allocation.bindingId),
+      {
+        provider,
+        artifacts: this.deps.deploymentArtifacts,
+        maxConcurrency: this.deps.deploymentRuntimeOptions?.maxConcurrency,
+        autoStopMinutes: this.deps.deploymentRuntimeOptions?.autoStopMinutes,
+      },
+    );
+    const selected = { provider, runtime };
+    this.environmentRuntimes.set(allocation.bindingId, selected);
+    return selected;
+  }
+
   private async trigger(args: {
     identity: Identity;
     projectId: string;
     workflowName: string;
+    environment?: string;
     input?: Json;
     correlationKey?: string;
     onConflict?: EnrollmentConflictPolicy;
+    unattended?: boolean;
+    connectionAuthorizationSnapshot?: readonly ResolvedConnectionBinding[];
   }): Promise<Run> {
     return withSpan(
       {
@@ -1377,12 +1487,13 @@ export class RunsService {
     identity: Identity;
     projectId: string;
     workflowName: string;
+    environment?: string;
     input?: Json;
     correlationKey?: string;
     onConflict?: EnrollmentConflictPolicy;
+    unattended?: boolean;
+    connectionAuthorizationSnapshot?: readonly ResolvedConnectionBinding[];
   }): Promise<Run> {
-    const provider = this.deps.sandboxProvider;
-    if (!provider) throw new SandboxProviderNotConfiguredError();
     await this.requireProject(args.identity, args.projectId);
     const correlationKey = args.correlationKey
       ? requireCorrelationKey(args.correlationKey)
@@ -1415,6 +1526,36 @@ export class RunsService {
       throw new RunInputInvalidError(args.workflowName, inputErrors);
     }
     const runId = crypto.randomUUID();
+    const admission = await this.deps.executionEnvironments.admit({
+      identity: args.identity,
+      projectId: args.projectId,
+      environment: args.environment,
+      requirements: { workload: "workflow" },
+    });
+    const connectionRequirements = source.graph.connections ?? [];
+    if (
+      (args.connectionAuthorizationSnapshot?.length ||
+        connectionRequirements.length > 0) &&
+      !this.deps.connectionAdmission
+    ) {
+      throw new Error("Connection providers are not configured");
+    }
+    const connections = args.connectionAuthorizationSnapshot?.length
+      ? await this.deps.connectionAdmission!.admitSnapshot({
+          identity: args.identity,
+          projectId: args.projectId,
+          environment: admission.environmentName,
+          snapshot: args.connectionAuthorizationSnapshot,
+        })
+      : connectionRequirements.length > 0
+        ? await this.deps.connectionAdmission!.admit({
+            identity: args.identity,
+            projectId: args.projectId,
+            environment: admission.environmentName,
+            requirements: connectionRequirements,
+            unattended: args.unattended,
+          })
+        : [];
     if (!source.commitSha)
       throw new ProductionDeploymentNotFoundError(args.projectId);
     const provenance: RunProvenance = { commitSha: source.commitSha };
@@ -1450,10 +1591,25 @@ export class RunsService {
               tenantId: args.identity.tenantId,
             });
           }
+          const allocation = await this.deps.executionAllocations.create({
+            identity: args.identity,
+            projectId: args.projectId,
+            environmentName: admission.environmentName,
+            workloadKind: "workflow",
+            rootWorkloadId: runId,
+            policy: {
+              binding: admission.binding,
+              requirements: admission.effectiveRequirements,
+              connections,
+            },
+            transaction: trx,
+          });
           await trx
             .insertInto("workflow_runs")
             .values({
               id: runId,
+              allocation_id: allocation.id,
+              environment_name: admission.environmentName,
               project_id: args.projectId,
               workflow_name: args.workflowName,
               correlation_key: correlationKey ?? null,
@@ -1469,6 +1625,14 @@ export class RunsService {
                 args.identity.scope === undefined
                   ? null
                   : jsonColumn(toJson(args.identity.scope)),
+              caller_execution_scope:
+                args.identity.executionScope === undefined
+                  ? null
+                  : jsonColumn(toJson(args.identity.executionScope)),
+              caller_connection_scope:
+                args.identity.connectionScope === undefined
+                  ? null
+                  : jsonColumn(toJson(args.identity.connectionScope)),
               status: "pending",
               phase:
                 source.graph.execution.steps[0]?.type === "batch"
@@ -1628,7 +1792,7 @@ export class RunsService {
     const plugins = await this.deps.runPluginsLoader.load({
       identity,
       projectId,
-      environment: "production",
+      stage: "production",
       workflowName,
     });
     if (plugins.missingRequiredSecrets.length > 0) {
@@ -1711,7 +1875,7 @@ function preparedSourceKey(args: {
     args.projectId,
     args.workflowName,
     args.commitSha,
-  ].join(" ");
+  ].join("\0");
 }
 
 async function prepareSource(args: {
@@ -1757,6 +1921,9 @@ function mapRun(args: {
     active_workflow_step_attempt_id: string | null;
   };
   pause: Selectable<DB["workflow_pauses"]> | undefined;
+  connectionActionRequired:
+    | Selectable<DB["connection_action_requirements"]>
+    | undefined;
   batchScopes: BatchProgress[];
 }): Run {
   const provenance = jsonRecord(args.row.provenance);
@@ -1777,6 +1944,8 @@ function mapRun(args: {
     projectId: args.row.project_id,
     workflowName: args.row.workflow_name,
     correlationKey: args.row.correlation_key,
+    environment: args.row.environment_name,
+    allocationId: args.row.allocation_id,
     capabilities: {
       cancel: active,
       pauseProcessing:
@@ -1803,6 +1972,15 @@ function mapRun(args: {
           timeoutAt: args.pause.timeout_at?.toISOString() ?? null,
           createdAt: args.pause.created_at.toISOString(),
           resolvedAt: args.pause.resolved_at?.toISOString() ?? null,
+        }
+      : null,
+    connectionActionRequired: args.connectionActionRequired
+      ? {
+          id: args.connectionActionRequired.id,
+          environment: args.connectionActionRequired.environment_name,
+          alias: args.connectionActionRequired.alias,
+          status: "pending",
+          createdAt: args.connectionActionRequired.created_at.toISOString(),
         }
       : null,
     batchScopes: args.batchScopes,

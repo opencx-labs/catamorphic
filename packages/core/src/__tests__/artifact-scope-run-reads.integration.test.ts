@@ -9,6 +9,7 @@ import { CatamorphicCore } from "../core.js";
 import type { Identity } from "../identity.js";
 import { AccessDeniedError } from "../services/artifact-scope.js";
 import { RunNotFoundError } from "../services/runs-service.js";
+import { testEnvironmentProvider } from "./test-environment.js";
 
 /**
  * Read-side mirror of the trigger gate (ADR 0036). An app bundle polls runs
@@ -63,7 +64,11 @@ describeIf("scoped identity run reads", () => {
       new FsBackend(path.join(tempDirectory, "dev")),
       new FsRemoteBackend(path.join(tempDirectory, "remote")),
     );
-    core = new CatamorphicCore({ db, projectManager });
+    core = new CatamorphicCore({
+      db,
+      projectManager,
+      environmentProvider: testEnvironmentProvider(),
+    });
 
     await db
       .insertInto("tenants")

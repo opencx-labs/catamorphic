@@ -15,6 +15,7 @@ import { sql } from "kysely";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { CatamorphicCore } from "../core.js";
 import type { Identity } from "../identity.js";
+import { testEnvironmentProvider } from "./test-environment.js";
 
 /**
  * ADR 0055: on a hosting backend, an agent's `store/` writes in its working
@@ -87,12 +88,13 @@ describeIf("store sync around agent turns (ADR 0055)", () => {
     const agentId = "project:pending:csm"; // patched below once we know the id
     db = createDatabase({ connectionString, schema, poolSize: 4 });
     await migrateToLatest({ db, schema });
-    const registered = { id: agentId, provider, execution: "host" as const };
+    const registered = { id: agentId, provider, topology: "native" as const };
     core = new CatamorphicCore({
       db,
       projectManager,
       sandboxProvider: unusedSandboxProvider,
-      hostAgentCheckout: { resolve: () => rootPath },
+      environmentProvider: testEnvironmentProvider(unusedSandboxProvider),
+      nativeAgentCheckout: { resolve: () => rootPath },
       codingAgent: {
         defaultAgentId: () => registered.id,
         get: (id) => (id === registered.id ? registered : undefined),
@@ -108,6 +110,7 @@ describeIf("store sync around agent turns (ADR 0055)", () => {
     alice = {
       ...root,
       externalUserId: "alice",
+      executionScope: [{ projectId, name: "local" }],
       scope: [
         { kind: "agent", projectId, name: "csm" },
         {

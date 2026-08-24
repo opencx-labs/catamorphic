@@ -15,6 +15,7 @@ import { sql } from "kysely";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { CatamorphicCore } from "../core.js";
 import type { Identity } from "../identity.js";
+import { testEnvironmentProvider } from "./test-environment.js";
 
 /**
  * ADR 0055: `context.caller`, `context.documents` and `context.host.*` from
@@ -209,10 +210,12 @@ describeIf("host calls from workflows (ADR 0055)", () => {
     );
     db = createDatabase({ connectionString, schema, poolSize: 8 });
     await migrateToLatest({ db, schema });
+    const sandboxProvider = new FakeSandboxProvider();
     core = new CatamorphicCore({
       db,
       projectManager,
-      sandboxProvider: new FakeSandboxProvider(),
+      sandboxProvider,
+      environmentProvider: testEnvironmentProvider(sandboxProvider),
       capabilityProviders: [
         {
           name: "acme.crm",
@@ -261,6 +264,7 @@ describeIf("host calls from workflows (ADR 0055)", () => {
     const alice: Identity = {
       ...root,
       externalUserId: "alice",
+      executionScope: [{ projectId, name: "local" }],
       scope: [
         { kind: "workflow", projectId, name: "whoAmI" },
         { kind: "document", projectId, path: "store/customers/acme/**" },
@@ -276,7 +280,10 @@ describeIf("host calls from workflows (ADR 0055)", () => {
     expect(outcome.status).toBe("completed");
     if (outcome.status !== "completed") return;
     expect(outcome.output).toEqual({
-      caller: { externalUserId: "alice", scope: alice.scope },
+      caller: {
+        externalUserId: "alice",
+        scope: alice.scope,
+      },
     });
     // The host started it as root → no caller narrowing.
     const asRoot = await core.runs.call({
@@ -294,6 +301,7 @@ describeIf("host calls from workflows (ADR 0055)", () => {
     const alice: Identity = {
       ...root,
       externalUserId: "alice",
+      executionScope: [{ projectId, name: "local" }],
       scope: [
         { kind: "workflow", projectId, name: "briefCustomer" },
         { kind: "document", projectId, path: "store/customers/acme/**" },
@@ -341,6 +349,7 @@ describeIf("host calls from workflows (ADR 0055)", () => {
     const bob: Identity = {
       ...root,
       externalUserId: "bob",
+      executionScope: [{ projectId, name: "local" }],
       scope: [{ kind: "workflow", projectId, name: "lookupAccount" }],
     };
     const outcome = await core.runs.call({
@@ -354,7 +363,11 @@ describeIf("host calls from workflows (ADR 0055)", () => {
     if (outcome.status !== "completed") return;
     expect(outcome.output).toEqual({ name: "Account A-1", seenBy: "bob" });
     expect(crmCalls.at(-1)).toMatchObject({
-      caller: { externalUserId: "bob", scope: bob.scope },
+      caller: {
+        externalUserId: "bob",
+        scope: bob.scope,
+        executionScope: bob.executionScope,
+      },
       args: { id: "A-1" },
     });
   });

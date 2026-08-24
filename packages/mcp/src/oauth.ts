@@ -50,6 +50,12 @@ export interface McpOAuthStore {
   save(state: McpOAuthState): void;
 }
 
+interface RemoteAuthorizationState {
+  redirectUri: string;
+  oauth: McpOAuthState;
+  client?: McpOAuthClientHint;
+}
+
 /** Thrown (into the SDK's flow) when a non-interactive connect needs a
  * user; callers surface it as "authorize this connection". */
 export class McpAuthorizationRequiredError extends Error {
@@ -125,6 +131,107 @@ export function createOAuthProvider(opts: {
       if (scope === "verifier") state.codeVerifier = undefined;
       if (scope === "discovery") state.discovery = undefined;
       store.save(state);
+    },
+  };
+}
+
+/** Begin the MCP OAuth flow without owning a loopback listener. */
+export async function beginMcpAuthorization(
+  config: AgentMcpServerConfig,
+  opts: {
+    redirectUri: string;
+    state: string;
+    client?: McpOAuthClientHint;
+  },
+): Promise<{ url: string; privateState: Uint8Array }> {
+  if (config.transport === "stdio") {
+    throw new Error("Only remote MCP servers use OAuth");
+  }
+  const memory = memoryStore({
+    ...(opts.client
+      ? {
+          clientInformation: {
+            client_id: opts.client.clientId,
+            redirect_uris: [opts.redirectUri],
+            token_endpoint_auth_method: "none",
+          },
+        }
+      : {}),
+  });
+  let redirected: URL | undefined;
+  const provider = createOAuthProvider({
+    store: memory,
+    redirectUrl: opts.redirectUri,
+    state: opts.state,
+    onRedirect: (url) => {
+      redirected = url;
+    },
+  });
+  const challenge = await readAuthChallenge(config);
+  const scope = opts.client?.scopes?.join(" ") || challenge.scope;
+  const result = await auth(provider, {
+    serverUrl: config.url,
+    ...(challenge.resourceMetadataUrl
+      ? { resourceMetadataUrl: challenge.resourceMetadataUrl }
+      : {}),
+    ...(scope ? { scope } : {}),
+  });
+  if (result === "AUTHORIZED") {
+    throw new Error("MCP authorization unexpectedly completed without a user");
+  }
+  if (!redirected) throw new Error("Authorization did not produce a URL");
+  const privateState: RemoteAuthorizationState = {
+    redirectUri: opts.redirectUri,
+    oauth: memory.load(),
+    ...(opts.client ? { client: opts.client } : {}),
+  };
+  return {
+    url: String(redirected),
+    privateState: new TextEncoder().encode(JSON.stringify(privateState)),
+  };
+}
+
+/** Finish a host-routed MCP OAuth callback and return durable OAuth state. */
+export async function completeMcpAuthorization(
+  config: AgentMcpServerConfig,
+  opts: {
+    privateState: Uint8Array;
+    callback: Readonly<Record<string, string>>;
+  },
+): Promise<McpOAuthState> {
+  if (config.transport === "stdio") {
+    throw new Error("Only remote MCP servers use OAuth");
+  }
+  const saved = JSON.parse(
+    new TextDecoder().decode(opts.privateState),
+  ) as RemoteAuthorizationState;
+  const memory = memoryStore(saved.oauth);
+  const provider = createOAuthProvider({
+    store: memory,
+    redirectUrl: saved.redirectUri,
+  });
+  const challenge = await readAuthChallenge(config);
+  const finished = await auth(provider, {
+    serverUrl: config.url,
+    ...(challenge.resourceMetadataUrl
+      ? { resourceMetadataUrl: challenge.resourceMetadataUrl }
+      : {}),
+    authorizationCode: opts.callback.code ?? "",
+    ...(opts.callback.iss ? { iss: opts.callback.iss } : {}),
+  });
+  if (finished !== "AUTHORIZED") {
+    throw new Error("Authorization did not complete");
+  }
+  const state = memory.load();
+  return { ...state, codeVerifier: undefined };
+}
+
+function memoryStore(initial: McpOAuthState): McpOAuthStore {
+  let value = structuredClone(initial);
+  return {
+    load: () => structuredClone(value),
+    save: (state) => {
+      value = structuredClone(state);
     },
   };
 }

@@ -2915,3 +2915,13 @@ paths, deliberately independent:
   compact active-session summaries and may read bounded peer transcripts.
   Cross-project discovery is an explicit capability, never a default, and
   incognito sessions remain invisible to other agents.
+
+### Environments and credential connections (2026-08-23)
+
+- Sessions and workflow runs choose a project Environment before they start.
+  The UI stays quiet for one compatible choice, offers a compact selector for
+  several, and shows the allocated Environment as a read-only badge afterward.
+- Connection authorization is scoped to the Environment and labels member
+  versus service identity explicitly.
+- Missing member authorization is an action-required state, not a failed
+  workload. No session, run, or sandbox is created until admission succeeds.

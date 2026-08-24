@@ -33,6 +33,79 @@ export interface Identity {
    * An empty scope is a valid identity that may do nothing.
    */
   scope?: readonly ArtifactRef[];
+  /**
+   * Logical project Environments this identity may allocate work into.
+   * Absent together with artifact scope means the host root identity. A
+   * scoped identity requires an exact ref; project builder scope does not
+   * imply managed compute access.
+   */
+  executionScope?: readonly ExecutionEnvironmentRef[];
+  /** Environment-local connection aliases this caller may use. */
+  connectionScope?: readonly ConnectionUseRef[];
+  /** Host-issued administrative permissions, never sourced from project code. */
+  controlPlanePermissions?: readonly ControlPlanePermission[];
+}
+
+export interface ExecutionEnvironmentRef {
+  projectId: string;
+  name: string;
+}
+
+export interface ConnectionUseRef {
+  projectId: string;
+  environment: string;
+  alias: string;
+  capabilities?: readonly string[];
+}
+
+export type ControlPlanePermission =
+  | "connections:manage_service"
+  | "connections:view_audit";
+
+export function identityMayUseConnection(
+  identity: Identity,
+  projectId: string,
+  environment: string,
+  alias: string,
+): ConnectionUseRef | undefined {
+  if (
+    identity.scope === undefined &&
+    identity.executionScope === undefined &&
+    identity.connectionScope === undefined
+  ) {
+    return { projectId, environment, alias };
+  }
+  return identity.connectionScope?.find(
+    (ref) =>
+      ref.projectId === projectId &&
+      ref.environment === environment &&
+      ref.alias === alias,
+  );
+}
+
+export function hasControlPlanePermission(
+  identity: Identity,
+  permission: ControlPlanePermission,
+): boolean {
+  return (
+    (identity.scope === undefined && identity.executionScope === undefined) ||
+    identity.controlPlanePermissions?.includes(permission) === true
+  );
+}
+
+export function identityMayUseEnvironment(
+  identity: Identity,
+  projectId: string,
+  name: string,
+): boolean {
+  if (identity.scope === undefined && identity.executionScope === undefined) {
+    return true;
+  }
+  return (
+    identity.executionScope?.some(
+      (ref) => ref.projectId === projectId && ref.name === name,
+    ) ?? false
+  );
 }
 
 /**

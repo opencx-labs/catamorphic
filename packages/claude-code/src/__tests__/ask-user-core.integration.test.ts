@@ -19,6 +19,9 @@ import {
   type CodingAgentRegistry,
   DbSandboxStore,
   DevSandboxService,
+  ExecutionAllocationsService,
+  ExecutionEnvironmentsService,
+  ProjectEnvironmentsService,
   ProjectsService,
 } from "@catamorphic/core";
 import { createDatabase, migrateToLatest } from "@catamorphic/db";
@@ -102,7 +105,6 @@ describeIf("ask_user across ClaudeCodeAgent + AgentSessionsService", () => {
     const rootPath = path.join(tmpDir, "the-project");
     const project = await projects.create(identity, {
       name: "ask-user-project",
-      rootPath,
     });
     projectId = project.id;
 
@@ -110,24 +112,52 @@ describeIf("ask_user across ClaudeCodeAgent + AgentSessionsService", () => {
     const registered = {
       id: "claude-code",
       provider: agent,
-      execution: "host" as const,
+      topology: "native" as const,
     };
     const registry: CodingAgentRegistry = {
       defaultAgentId: () => registered.id,
       get: (id) => (id === registered.id ? registered : undefined),
       list: () => [registered],
     };
+    const environmentProvider = {
+      get: ({ bindingId }: { bindingId: string }) =>
+        bindingId === "local"
+          ? {
+              descriptor: {
+                id: "local",
+                label: "Test Environment",
+                trust: "local" as const,
+                isolation: "none" as const,
+                workloads: ["agent", "workflow"] as const,
+                agentTopologies: [
+                  "controller",
+                  "native",
+                  "contained",
+                  "external",
+                ] as const,
+                capabilities: [],
+                resources: {},
+              },
+            }
+          : undefined,
+    };
+    const executionEnvironments = new ExecutionEnvironmentsService(
+      new ProjectEnvironmentsService(db, projectManager),
+      environmentProvider,
+    );
 
     sessions = new AgentSessionsService(db, {
       projectManager,
       sandboxProvider: unusedSandboxProvider,
       codingAgents: registry,
+      executionEnvironments,
+      executionAllocations: new ExecutionAllocationsService(db),
       devSandboxes: new DevSandboxService({
         projectManager,
         provider: unusedSandboxProvider,
         store: new DbSandboxStore(db),
       }),
-      hostAgentCheckout: { resolve: () => rootPath },
+      nativeAgentCheckout: { resolve: () => rootPath },
     });
   });
 

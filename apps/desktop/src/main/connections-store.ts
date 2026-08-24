@@ -158,6 +158,7 @@ export class ConnectionsStore {
 
   constructor(private readonly file: string) {
     this.data = this.load();
+    this.migratePlaintext();
   }
 
   private load(): ConnectionsFile {
@@ -172,10 +173,43 @@ export class ConnectionsStore {
 
   private save(): void {
     fs.mkdirSync(path.dirname(this.file), { recursive: true });
-    fs.writeFileSync(this.file, `${JSON.stringify(this.data, null, 2)}\n`, {
+    const temporary = `${this.file}.${randomUUID()}.tmp`;
+    fs.writeFileSync(temporary, `${JSON.stringify(this.data, null, 2)}\n`, {
       mode: 0o600,
     });
+    fs.renameSync(temporary, this.file);
+    fs.chmodSync(this.file, 0o600);
     for (const listener of this.listeners) listener();
+  }
+
+  private migratePlaintext(): void {
+    const needsMigration = this.data.connections.some(
+      (connection) =>
+        connection.headersPlaintext ||
+        connection.envPlaintext ||
+        connection.oauthPlaintext,
+    );
+    if (!needsMigration) return;
+    if (!safeStorage.isEncryptionAvailable()) {
+      throw new Error(
+        "OS credential encryption is required to migrate connection secrets",
+      );
+    }
+    for (const connection of this.data.connections) {
+      if (connection.headersPlaintext) {
+        connection.headersEncrypted = encryptValue(connection.headersPlaintext);
+        connection.headersPlaintext = undefined;
+      }
+      if (connection.envPlaintext) {
+        connection.envEncrypted = encryptValue(connection.envPlaintext);
+        connection.envPlaintext = undefined;
+      }
+      if (connection.oauthPlaintext) {
+        connection.oauthEncrypted = encryptValue(connection.oauthPlaintext);
+        connection.oauthPlaintext = undefined;
+      }
+    }
+    this.save();
   }
 
   /** Fired after every mutation (agent registries key caches off this). */
@@ -336,17 +370,10 @@ function encryptMap(
   map: Record<string, string> | undefined,
 ): Partial<StoredConnection> {
   if (!map || Object.keys(map).length === 0) return {};
-  if (safeStorage.isEncryptionAvailable()) {
-    return {
-      [`${key}Encrypted`]: safeStorage
-        .encryptString(JSON.stringify(map))
-        .toString("base64"),
-    };
+  if (!safeStorage.isEncryptionAvailable()) {
+    throw new Error("OS credential encryption is unavailable");
   }
-  console.warn(
-    "[desktop] OS keychain encryption unavailable; storing connection secrets in plaintext.",
-  );
-  return { [`${key}Plaintext`]: map };
+  return { [`${key}Encrypted`]: encryptValue(map) };
 }
 
 function encryptJson<T>(
@@ -354,14 +381,14 @@ function encryptJson<T>(
   value: T | undefined,
 ): { oauthEncrypted?: string; oauthPlaintext?: T } {
   if (value === undefined) return {};
-  if (safeStorage.isEncryptionAvailable()) {
-    return {
-      [`${key}Encrypted`]: safeStorage
-        .encryptString(JSON.stringify(value))
-        .toString("base64"),
-    };
+  if (!safeStorage.isEncryptionAvailable()) {
+    throw new Error("OS credential encryption is unavailable");
   }
-  return { [`${key}Plaintext`]: value };
+  return { [`${key}Encrypted`]: encryptValue(value) };
+}
+
+function encryptValue(value: unknown): string {
+  return safeStorage.encryptString(JSON.stringify(value)).toString("base64");
 }
 
 function decryptJson<T>(

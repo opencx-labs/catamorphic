@@ -63,6 +63,19 @@ export {
   resolveMcpServers,
 } from "./coding-agent/types.js";
 export { CommandDeploymentRuntimeProvider } from "./command-deployment-runtime.js";
+export {
+  type AgentExecutionTopology,
+  type EnvironmentBinding,
+  type EnvironmentCompatibility,
+  type EnvironmentIsolation,
+  type EnvironmentProvider,
+  type EnvironmentRequirements,
+  type EnvironmentResourcePolicy,
+  type EnvironmentRuntimeBinding,
+  type EnvironmentTrust,
+  environmentSatisfies,
+  type WorkloadKind,
+} from "./execution-environment.js";
 export { instrumentSandboxProvider } from "./instrumented-provider.js";
 export {
   type PluginPayload,

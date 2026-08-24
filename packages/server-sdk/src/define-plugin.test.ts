@@ -11,6 +11,7 @@ const emptyBase = {
   projectHooks: [],
   triggerKinds: [],
   mcpToolKinds: [],
+  connectionProviders: [],
 } as const;
 
 describe("mergeHostPlugins", () => {
@@ -47,6 +48,26 @@ describe("mergeHostPlugins", () => {
     ]);
     expect(merged.triggerKinds.map((k) => k.name)).toEqual(["acme.ticket"]);
     expect(merged.projectHooks).toHaveLength(1);
+  });
+
+  it("merges connection providers and rejects duplicate kinds", () => {
+    const provider = {
+      kind: "acme.mcp",
+      displayName: "Acme MCP",
+      invoke: async () => null,
+    } as const;
+    const merged = mergeHostPlugins({
+      ...emptyBase,
+      plugins: [definePlugin({ name: "@acme/one", connections: [provider] })],
+    });
+    expect(merged.connectionProviders).toEqual([provider]);
+    expect(() =>
+      mergeHostPlugins({
+        ...emptyBase,
+        plugins: [definePlugin({ name: "@acme/one", connections: [provider] })],
+        connectionProviders: [provider],
+      }),
+    ).toThrow(DuplicatePluginContributionError);
   });
 
   it("rejects capability collisions between plugins", () => {
