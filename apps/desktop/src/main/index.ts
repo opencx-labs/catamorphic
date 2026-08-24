@@ -6,13 +6,17 @@ import {
   ipcMain,
   Menu,
   powerMonitor,
+  safeStorage,
   type WebContents,
 } from "electron";
 import { registerAgentBridge } from "./agent-bridge.js";
 import { registerBrowserSupport } from "./browser.js";
 import { toPublicConnection } from "./connections-store.js";
 import { ConnectorsService } from "./connectors.js";
-import { shouldShowWindow } from "./e2e-window-mode.js";
+import {
+  shouldShowWindow,
+  shouldUseE2ePlainTextEncryption,
+} from "./e2e-window-mode.js";
 import { IncognitoSessionsStore } from "./incognito-sessions.js";
 import { registerIpcHandlers, type ServerState } from "./ipc.js";
 import { type Keybindings, toAccelerator } from "./keybindings.js";
@@ -340,6 +344,17 @@ function applyMenuForFocusedWindow(): void {
 }
 
 app.whenReady().then(async () => {
+  // GitHub's Linux runner has no Secret Service. Electron's in-memory key
+  // keeps safeStorage-backed flows realistic inside isolated throwaway E2E
+  // profiles without weakening normal desktop profiles.
+  if (
+    shouldUseE2ePlainTextEncryption({
+      e2eDataDir,
+      platform: process.platform,
+    })
+  ) {
+    safeStorage.setUsePlainTextEncryption(true);
+  }
   // Legacy config migration first: it seeds the default profile's agent
   // roster from the old settings.json, whose key needs safeStorage (only
   // usable once the app is ready).
