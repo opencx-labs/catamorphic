@@ -117,6 +117,8 @@ export interface ChatSurface {
   info?: string[];
   /** MCP app chips: the view to open when clicked. */
   mcpApp?: McpAppRef;
+  /** The chip owns a workspace resource that can be explicitly disposed. */
+  removable?: boolean;
 }
 
 /** An MCP Apps view reachable from a chat's tool call. */
@@ -615,11 +617,13 @@ function SlashMenu({
 function SurfaceChip({
   surface,
   onOpenSurface,
+  onRemoveSurface,
   onOpenMcpApp,
   onToggleInfo,
 }: {
   surface: ChatSurface;
   onOpenSurface: (key: string, mode: "tab" | "split") => void;
+  onRemoveSurface?: (key: string) => void;
   onOpenMcpApp?: (view: McpAppRef, mode: "tab" | "split") => void;
   onToggleInfo: (key: string) => void;
 }) {
@@ -681,17 +685,29 @@ function SurfaceChip({
           left edge is a gradient into the chip background) instead of
           permanently reserving width on every chip. */}
       {!surface.info && (
-        <span className="pointer-events-none absolute inset-y-0 right-0 opacity-0 transition-opacity duration-100 group-hover/chip:pointer-events-auto group-hover/chip:opacity-100">
+        <span className="pointer-events-none absolute inset-y-0 right-0 flex items-center bg-gradient-to-l from-bg-inset from-70% to-transparent pl-3 pr-0.5 opacity-0 transition-opacity duration-100 group-hover/chip:pointer-events-auto group-hover/chip:opacity-100">
           <ShortcutHint label="Open to the right" shortcut="⌘-click">
             <button
               type="button"
               onClick={() => onOpenSurface(surface.key, "split")}
-              className="grid h-full w-8 cursor-pointer place-items-center justify-items-end bg-gradient-to-l from-bg-inset from-55% to-transparent pr-1.5 text-fg-faint transition-colors duration-100 hover:text-fg"
+              className="grid size-6 cursor-pointer place-items-center rounded text-fg-faint transition-colors duration-100 hover:text-fg"
               aria-label={`Open ${surface.label} to the right`}
             >
               <Columns2 className="size-3" />
             </button>
           </ShortcutHint>
+          {surface.removable && onRemoveSurface && (
+            <ShortcutHint label="Remove from this chat">
+              <button
+                type="button"
+                onClick={() => onRemoveSurface(surface.key)}
+                className="grid size-6 cursor-pointer place-items-center rounded text-fg-faint transition-colors duration-100 hover:text-fg"
+                aria-label={`Remove ${surface.label}`}
+              >
+                <X className="size-3" />
+              </button>
+            </ShortcutHint>
+          )}
         </span>
       )}
     </span>
@@ -765,6 +781,7 @@ function KindStrip({
   openGroup,
   onToggleGroup,
   onOpenSurface,
+  onRemoveSurface,
   onOpenMcpApp,
   onToggleInfo,
 }: {
@@ -775,6 +792,7 @@ function KindStrip({
   openGroup: ChatSurface["kind"] | null;
   onToggleGroup: (kind: ChatSurface["kind"]) => void;
   onOpenSurface: (key: string, mode: "tab" | "split") => void;
+  onRemoveSurface?: (key: string) => void;
   onOpenMcpApp?: (view: McpAppRef, mode: "tab" | "split") => void;
   onToggleInfo: (key: string) => void;
 }) {
@@ -858,6 +876,7 @@ function KindStrip({
         <SurfaceChip
           surface={item.surface}
           onOpenSurface={onOpenSurface}
+          onRemoveSurface={onRemoveSurface}
           onOpenMcpApp={onOpenMcpApp}
           onToggleInfo={onToggleInfo}
         />
@@ -883,10 +902,12 @@ function KindStrip({
 function SurfacesRail({
   surfaces,
   onOpenSurface,
+  onRemoveSurface,
   onOpenMcpApp,
 }: {
   surfaces: ChatSurface[];
   onOpenSurface: (key: string, mode: "tab" | "split") => void;
+  onRemoveSurface?: (key: string) => void;
   onOpenMcpApp?: (view: McpAppRef, mode: "tab" | "split") => void;
 }) {
   const [openGroup, setOpenGroup] = useState<ChatSurface["kind"] | null>(null);
@@ -1027,19 +1048,36 @@ function SurfacesRail({
               <span className="truncate">{surface.label}</span>
             </button>
             {!surface.info && (
-              <ShortcutHint label="Open to the right" shortcut="⌘-click">
-                <button
-                  type="button"
-                  onClick={() => {
-                    onOpenSurface(surface.key, "split");
-                    setOpenGroup(null);
-                  }}
-                  className="mr-1 grid size-6 shrink-0 cursor-pointer place-items-center rounded text-fg-faint opacity-0 transition-opacity duration-100 hover:text-fg group-hover/chip:opacity-100"
-                  aria-label={`Open ${surface.label} to the right`}
-                >
-                  <Columns2 className="size-3" />
-                </button>
-              </ShortcutHint>
+              <span className="mr-1 flex shrink-0 items-center opacity-0 transition-opacity duration-100 group-hover/chip:opacity-100">
+                <ShortcutHint label="Open to the right" shortcut="⌘-click">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      onOpenSurface(surface.key, "split");
+                      setOpenGroup(null);
+                    }}
+                    className="grid size-6 cursor-pointer place-items-center rounded text-fg-faint hover:text-fg"
+                    aria-label={`Open ${surface.label} to the right`}
+                  >
+                    <Columns2 className="size-3" />
+                  </button>
+                </ShortcutHint>
+                {surface.removable && onRemoveSurface && (
+                  <ShortcutHint label="Remove from this chat">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        onRemoveSurface(surface.key);
+                        setOpenGroup(null);
+                      }}
+                      className="grid size-6 cursor-pointer place-items-center rounded text-fg-faint hover:text-fg"
+                      aria-label={`Remove ${surface.label}`}
+                    >
+                      <X className="size-3" />
+                    </button>
+                  </ShortcutHint>
+                )}
+              </span>
             )}
           </div>
         ))}
@@ -1056,6 +1094,7 @@ function SurfacesRail({
               setOpenGroup((current) => (current === toggled ? null : toggled))
             }
             onOpenSurface={onOpenSurface}
+            onRemoveSurface={onRemoveSurface}
             onOpenMcpApp={onOpenMcpApp}
             onToggleInfo={toggleInfo}
           />
@@ -1133,6 +1172,8 @@ export interface ChatDockProps {
    * tiles it to the right of the current view.
    */
   onOpenSurface?: (key: string, mode: "tab" | "split") => void;
+  /** Permanently dispose an attached surface from its chip. */
+  onRemoveSurface?: (key: string) => void;
   /** Open an MCP Apps view (a connection tool's ui:// template) as a tab. */
   onOpenMcpApp?: (view: McpAppRef, mode: "tab" | "split") => void;
   /** Set while this tab is the unfocused pane of a split: click focuses. */
@@ -1214,6 +1255,7 @@ export function ChatDock({
   paletteTargeted,
   surfaces = [],
   onOpenSurface,
+  onRemoveSurface,
   onOpenMcpApp,
   onFocusRequest,
   pullSelectionNonce = 0,
@@ -2563,6 +2605,7 @@ export function ChatDock({
                 <SurfacesRail
                   surfaces={railSurfaces}
                   onOpenSurface={onOpenSurface}
+                  onRemoveSurface={onRemoveSurface}
                   onOpenMcpApp={onOpenMcpApp}
                 />
               </div>

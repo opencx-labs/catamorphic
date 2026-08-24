@@ -2925,3 +2925,13 @@ paths, deliberately independent:
   versus service identity explicitly.
 - Missing member authorization is an action-required state, not a failed
   workload. No session, run, or sandbox is created until admission succeeds.
+
+### Agent surface chips outlive tabs (2026-08-24)
+
+- An attached surface chip is the durable handle for a browser, editor, or
+  terminal that belongs to a chat. Closing its workspace tab only hides that
+  view; it does not remove the surface from the chat or agent context.
+- The chip's remove action is the explicit disposal boundary. It removes the
+  surface from the chat and terminates owned processes such as terminals.
+- Local PDF artifacts open in a browser surface backed by Chromium's PDF
+  viewer. Text files continue to open in the editor.

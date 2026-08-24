@@ -149,6 +149,8 @@ interface BrowserEntry {
   chatLocalId?: string;
   /** An agent is driving this page; user interaction waits on Take over. */
   agentControlled?: boolean;
+  /** Attached surface kept alive as a chip without occupying a tab. */
+  background?: boolean;
 }
 
 interface TerminalEntry {
@@ -190,6 +192,8 @@ interface EditorEntry {
   dirty: boolean;
   /** Chat this tab is attached to (its surfaces rail), if any. */
   chatLocalId?: string;
+  /** Attached surface kept as a chip without occupying a tab. */
+  background?: boolean;
 }
 
 /** Two tabs tiled side by side; the focused one is `activeTabKey`. */
@@ -294,6 +298,37 @@ const browserTabKey = (localId: string) => `browser:${localId}`;
 const terminalTabKey = (localId: string) => `terminal:${localId}`;
 const editorTabKey = (localId: string) => `editor:${localId}`;
 
+const isPdfPath = (filePath: string) => /\.pdf$/i.test(filePath);
+
+const fileNameFromPath = (filePath: string) =>
+  filePath.split(/[\\/]/).at(-1) || filePath;
+
+/** Resolve either an absolute agent path or a project-relative file path. */
+const resolveProjectFileLocation = (
+  projectRoot: string,
+  filePath: string,
+): { absolutePath: string; relativePath: string } => {
+  const slashPath = filePath.replaceAll("\\", "/");
+  const slashRoot = projectRoot.replaceAll("\\", "/").replace(/\/$/, "");
+  const absolute =
+    slashPath.startsWith("/") || /^[A-Za-z]:\//.test(slashPath)
+      ? slashPath
+      : `${slashRoot}/${slashPath}`;
+  return {
+    absolutePath: absolute,
+    relativePath: absolute.startsWith(`${slashRoot}/`)
+      ? absolute.slice(slashRoot.length + 1)
+      : slashPath,
+  };
+};
+
+/** A safely encoded local URL for Chromium's built-in PDF viewer. */
+const localFileUrl = (absolutePath: string): string => {
+  const url = new URL("file:///");
+  url.pathname = absolutePath;
+  return url.href;
+};
+
 /**
  * The restart-surviving projection of a workspace, persisted per project
  * (desktop.workspace_states) so a relaunch lands where the user left off.
@@ -318,12 +353,14 @@ const serializeWorkspace = (ws: Workspace): Workspace => {
     title: browser.title,
     faviconUrl: browser.faviconUrl,
     ...chatRef(browser.chatLocalId),
+    ...(browser.background ? { background: true } : {}),
   }));
   const editors = ws.editors.map((editor) => ({
     localId: editor.localId,
     filePath: editor.filePath,
     dirty: false,
     ...chatRef(editor.chatLocalId),
+    ...(editor.background ? { background: true } : {}),
   }));
   const tabs = ws.tabs.filter(
     (tab) => tab.kind !== "agent-setup" && tab.kind !== "mcpapp",
@@ -333,8 +370,12 @@ const serializeWorkspace = (ws: Workspace): Workspace => {
     ...chats
       .filter((chat) => chat.mode === "tab")
       .map((chat) => chatTabKey(chat.localId)),
-    ...browsers.map((browser) => browserTabKey(browser.localId)),
-    ...editors.map((editor) => editorTabKey(editor.localId)),
+    ...browsers
+      .filter((browser) => !browser.background)
+      .map((browser) => browserTabKey(browser.localId)),
+    ...editors
+      .filter((editor) => !editor.background)
+      .map((editor) => editorTabKey(editor.localId)),
   ]);
   return {
     tabs,
@@ -388,13 +429,18 @@ const hydrateWorkspace = (raw: unknown): Workspace | null => {
 };
 
 /**
- * Terminal entries that own a workspace tab. Background agent terminals
- * (chip-only) are excluded from every tab derivation — the strip, cycling,
- * splits, next-active — while their entry keeps the PTY mounted and the
- * chip alive.
+ * Surface entries that own workspace tabs. Background attached surfaces
+ * are excluded from every tab derivation while their resource and chip stay
+ * alive. The chip is the durable handle; the tab is only one view of it.
  */
+const tabbedBrowsers = (ws: Workspace) =>
+  ws.browsers.filter((browser) => !browser.background);
+
 const tabbedTerminals = (ws: Workspace) =>
   ws.terminals.filter((terminal) => !terminal.background);
+
+const tabbedEditors = (ws: Workspace) =>
+  ws.editors.filter((editor) => !editor.background);
 
 /** A chat's surface is on screen: the floating dock, or its focused tab. */
 const chatVisible = (ws: Workspace, chat: ChatDockEntry) =>
@@ -403,13 +449,13 @@ const chatVisible = (ws: Workspace, chat: ChatDockEntry) =>
 
 /** Tab keys attached to a chat, in per-kind order. */
 const attachedTabKeys = (ws: Workspace, chatLocalId: string) => [
-  ...ws.browsers
+  ...tabbedBrowsers(ws)
     .filter((browser) => browser.chatLocalId === chatLocalId)
     .map((browser) => browserTabKey(browser.localId)),
   ...tabbedTerminals(ws)
     .filter((terminal) => terminal.chatLocalId === chatLocalId)
     .map((terminal) => terminalTabKey(terminal.localId)),
-  ...ws.editors
+  ...tabbedEditors(ws)
     .filter((editor) => editor.chatLocalId === chatLocalId)
     .map((editor) => editorTabKey(editor.localId)),
 ];
@@ -431,9 +477,9 @@ const orderedTabKeys = (
   );
   const natural = [
     ...ws.tabs.map(tabKey),
-    ...ws.browsers.map((browser) => browserTabKey(browser.localId)),
+    ...tabbedBrowsers(ws).map((browser) => browserTabKey(browser.localId)),
     ...tabbedTerminals(ws).map((terminal) => terminalTabKey(terminal.localId)),
-    ...ws.editors.map((editor) => editorTabKey(editor.localId)),
+    ...tabbedEditors(ws).map((editor) => editorTabKey(editor.localId)),
     ...tabChats.map((chat) => chatTabKey(chat.localId)),
   ];
   const naturalSet = new Set(natural);
@@ -1030,7 +1076,7 @@ export function App() {
       );
 
   const browserTabs = (ws: Workspace) =>
-    ws.browsers.map(
+    tabbedBrowsers(ws).map(
       (browser): WorkspaceTab => ({
         kind: "browser",
         name: browser.localId,
@@ -1051,7 +1097,7 @@ export function App() {
     );
 
   const editorTabs = (ws: Workspace) =>
-    ws.editors.map(
+    tabbedEditors(ws).map(
       (editor): WorkspaceTab => ({
         kind: "editor",
         name: editor.localId,
@@ -1096,7 +1142,12 @@ export function App() {
   const openBrowserTab = useCallback(
     (
       url: string,
-      opts?: { background?: boolean; chatLocalId?: string; side?: boolean },
+      opts?: {
+        background?: boolean;
+        chatLocalId?: string;
+        side?: boolean;
+        title?: string;
+      },
     ) => {
       if (!activeProfile) return;
       const entry: BrowserEntry = {
@@ -1104,7 +1155,7 @@ export function App() {
         profileId: activeProfile.id,
         initialUrl: url,
         url,
-        title: url || "New Tab",
+        title: opts?.title ?? (url || "New Tab"),
         faviconUrl: null,
         chatLocalId: opts?.chatLocalId,
       };
@@ -1290,11 +1341,29 @@ export function App() {
           : ws.closedTabs;
       if (key.startsWith("browser:")) {
         const localId = key.slice("browser:".length);
-        browserNavigatorsRef.current.delete(localId);
-        browserGuestIdsRef.current.delete(localId);
         const closing = ws.browsers.find(
           (browser) => browser.localId === localId,
         );
+        // Attached pages belong to the chat's surface rail. Closing the
+        // workspace tab only detaches that view; the page and chip remain
+        // until the chip's explicit remove action disposes them.
+        if (closing?.chatLocalId && !opts?.force) {
+          const browsers = ws.browsers.map((browser) =>
+            browser.localId === localId
+              ? { ...browser, background: true }
+              : browser,
+          );
+          return {
+            ...ws,
+            browsers,
+            activeTabKey:
+              ws.activeTabKey === key
+                ? nextActiveTabKey({ ...ws, browsers }, key, ws.chats)
+                : ws.activeTabKey,
+          };
+        }
+        browserNavigatorsRef.current.delete(localId);
+        browserGuestIdsRef.current.delete(localId);
         const browsers = ws.browsers.filter(
           (browser) => browser.localId !== localId,
         );
@@ -1320,20 +1389,17 @@ export function App() {
               : ws.activeTabKey,
         };
       }
-      // Closing a terminal tab kills its shell (the screen's unmount
-      // cleanup sends the PTY kill); reopening starts a fresh shell.
+      // Closing an unattached terminal tab kills its shell (the screen's
+      // unmount cleanup sends the PTY kill); reopening starts a fresh shell.
       if (key.startsWith("terminal:")) {
         const localId = key.slice("terminal:".length);
         const closing = ws.terminals.find(
           (terminal) => terminal.localId === localId,
         );
-        // A terminal the AGENT still controls returns to the background
-        // instead of dying: the tab disappears, the PTY keeps running,
-        // and the chip stays on the chat's rail. Only a terminal the
-        // user controls (their own, or after Take control) actually
-        // closes — and the agent's own surface_control close (`force`)
-        // still removes the entry after main killed the PTY.
-        if (closing?.agentControlled && !opts?.force) {
+        // Any terminal attached to a chat returns to the background instead
+        // of dying. Taking control changes who may type, not who owns its
+        // durable chip. Explicit chip/agent removal (`force`) is final.
+        if (closing?.chatLocalId && !opts?.force) {
           const terminals = ws.terminals.map((terminal) =>
             terminal.localId === localId
               ? { ...terminal, background: true }
@@ -1374,10 +1440,26 @@ export function App() {
               : ws.activeTabKey,
         };
       }
-      // Closing an editor tab drops its unsaved drafts.
+      // Attached files mirror attached pages: tab close hides the view but
+      // preserves the editor state and chat chip. Explicit removal is final.
       if (key.startsWith("editor:")) {
         const localId = key.slice("editor:".length);
         const closing = ws.editors.find((editor) => editor.localId === localId);
+        if (closing?.chatLocalId && !opts?.force) {
+          const editors = ws.editors.map((editor) =>
+            editor.localId === localId
+              ? { ...editor, background: true }
+              : editor,
+          );
+          return {
+            ...ws,
+            editors,
+            activeTabKey:
+              ws.activeTabKey === key
+                ? nextActiveTabKey({ ...ws, editors }, key, ws.chats)
+                : ws.activeTabKey,
+          };
+        }
         const editors = ws.editors.filter(
           (editor) => editor.localId !== localId,
         );
@@ -1540,11 +1622,11 @@ export function App() {
   ): string | undefined => {
     const keys = [
       ...ws.tabs.map(tabKey),
-      ...ws.browsers.map((browser) => browserTabKey(browser.localId)),
+      ...tabbedBrowsers(ws).map((browser) => browserTabKey(browser.localId)),
       ...tabbedTerminals(ws).map((terminal) =>
         terminalTabKey(terminal.localId),
       ),
-      ...ws.editors.map((editor) => editorTabKey(editor.localId)),
+      ...tabbedEditors(ws).map((editor) => editorTabKey(editor.localId)),
       ...chats
         .filter((chat) => chat.mode === "tab")
         .map((chat) => chatTabKey(chat.localId)),
@@ -2472,6 +2554,18 @@ export function App() {
    * the tween lands.
    */
   const unsplitTimerRef = useRef<number | undefined>(undefined);
+  const removeSurface = (key: string) => {
+    if (key.startsWith("terminal:")) {
+      const localId = key.slice("terminal:".length);
+      const terminal = workspaceRef.current.terminals.find(
+        (candidate) => candidate.localId === localId,
+      );
+      const sessionId = terminal?.attachSessionId ?? terminal?.ptySessionId;
+      if (sessionId) void desktopApi.terminalKill(sessionId);
+    }
+    closeTab(key, { force: true });
+  };
+
   const openSurface = (key: string, mode: "tab" | "split") => {
     // Opening a surface answers any attention its chip was holding
     // (open_surface-in-background) — dismissal-by-interaction.
@@ -2495,6 +2589,30 @@ export function App() {
           ? ws
           : { ...ws, tabs: [...ws.tabs, { kind: "app", name }] },
       );
+    }
+    // A chip can outlive its tab. Opening it materializes the view again
+    // without creating a second page/editor or losing its live state.
+    if (key.startsWith("browser:")) {
+      const localId = key.slice("browser:".length);
+      updateWorkspace((ws) => ({
+        ...ws,
+        browsers: ws.browsers.map((browser) =>
+          browser.localId === localId && browser.background
+            ? { ...browser, background: false }
+            : browser,
+        ),
+      }));
+    }
+    if (key.startsWith("editor:")) {
+      const localId = key.slice("editor:".length);
+      updateWorkspace((ws) => ({
+        ...ws,
+        editors: ws.editors.map((editor) =>
+          editor.localId === localId && editor.background
+            ? { ...editor, background: false }
+            : editor,
+        ),
+      }));
     }
     // A background agent terminal materializes as a tab the moment the
     // user asks for it (chip click) or the agent shows it (open_surface).
@@ -2914,9 +3032,20 @@ export function App() {
             const [kind, name] = key.split(":", 2);
             return { ...base, kind, name };
           });
-          // Background agent terminals own no tab, but the agent must
-          // still see them (read_tab, run_terminal terminalId targeting)
-          // — they live on as chips, so list them after the real tabs.
+          // Chip-only surfaces own no tab, but the agent must still see
+          // them in context. List them after the visible workspace tabs.
+          for (const entry of ws.browsers) {
+            if (!entry.background) continue;
+            tabs.push({
+              key: browserTabKey(entry.localId),
+              active: false,
+              kind: "browser",
+              title: entry.title,
+              url: entry.url,
+              agentControlled: entry.agentControlled ?? false,
+              background: true,
+            });
+          }
           for (const entry of ws.terminals) {
             if (!entry.background) continue;
             tabs.push({
@@ -2928,6 +3057,16 @@ export function App() {
               terminalId: entry.attachSessionId ?? entry.ptySessionId,
               busy: entry.busy ?? false,
               agentControlled: entry.agentControlled ?? false,
+              background: true,
+            });
+          }
+          for (const entry of ws.editors) {
+            if (!entry.background) continue;
+            tabs.push({
+              key: editorTabKey(entry.localId),
+              active: false,
+              kind: "editor",
+              filePath: entry.filePath,
               background: true,
             });
           }
@@ -3150,6 +3289,40 @@ export function App() {
           if (target.startsWith("file:")) {
             const filePath = target.slice("file:".length);
             const localId = crypto.randomUUID();
+            const root = projectIdRef.current
+              ? await desktopApi.projectRoot(projectIdRef.current)
+              : null;
+            const location = root
+              ? resolveProjectFileLocation(root, filePath)
+              : null;
+            if (location && isPdfPath(location.relativePath)) {
+              if (!activeProfileRef.current) return { error: "No profile" };
+              const entry: BrowserEntry = {
+                localId,
+                profileId: activeProfileRef.current.id,
+                initialUrl: localFileUrl(location.absolutePath),
+                url: localFileUrl(location.absolutePath),
+                title: fileNameFromPath(location.relativePath),
+                faviconUrl: null,
+                chatLocalId: requester?.localId,
+              };
+              if (openInBackground(browserTabKey(localId)) && requester) {
+                updateWorkspace((current) => ({
+                  ...current,
+                  browsers: [...current.browsers, entry],
+                }));
+                return background(browserTabKey(localId));
+              }
+              updateWorkspace((current) => ({
+                ...current,
+                browsers: [...current.browsers, entry],
+                activeTabKey: browserTabKey(localId),
+                split: null,
+              }));
+              stepChatAside();
+              return { key: browserTabKey(localId), opened: "focused" };
+            }
+            const relativePath = location?.relativePath ?? filePath;
             if (openInBackground(editorTabKey(localId)) && requester) {
               updateWorkspace((current) => ({
                 ...current,
@@ -3159,7 +3332,7 @@ export function App() {
                   // the attention dot has a rail to ride.
                   {
                     localId,
-                    filePath,
+                    filePath: relativePath,
                     dirty: false,
                     chatLocalId: requester.localId,
                   },
@@ -3175,7 +3348,7 @@ export function App() {
                 // the user this file" always leaves a chip on the rail.
                 {
                   localId,
-                  filePath,
+                  filePath: relativePath,
                   dirty: false,
                   chatLocalId: requester?.localId,
                 },
@@ -3242,6 +3415,34 @@ export function App() {
               stepChatAside();
               return { key: target, opened: "focused" };
             }
+          }
+          const detachedBrowser = ws.browsers.some(
+            (browser) =>
+              browserTabKey(browser.localId) === target && browser.background,
+          );
+          const detachedEditor = ws.editors.some(
+            (editor) =>
+              editorTabKey(editor.localId) === target && editor.background,
+          );
+          if (detachedBrowser || detachedEditor) {
+            if (openInBackground(target)) return background(target);
+            updateWorkspace((current) => ({
+              ...current,
+              browsers: current.browsers.map((browser) =>
+                browserTabKey(browser.localId) === target
+                  ? { ...browser, background: false }
+                  : browser,
+              ),
+              editors: current.editors.map((editor) =>
+                editorTabKey(editor.localId) === target
+                  ? { ...editor, background: false }
+                  : editor,
+              ),
+              activeTabKey: target,
+              split: null,
+            }));
+            stepChatAside();
+            return { key: target, opened: "focused" };
           }
           // An existing tab key from workspace_overview: focus it.
           if (
@@ -3637,6 +3838,7 @@ export function App() {
           kind: "chat" as const,
           label: chatLabels[candidate.localId] ?? "Fork",
           active: Boolean(signalsByChat[candidate.localId]?.working),
+          removable: true,
         })),
       ...workspace.browsers
         .filter((browser) => browser.chatLocalId === chat.localId)
@@ -3646,6 +3848,7 @@ export function App() {
           label: browser.title || browser.url || "Page",
           faviconUrl: browser.faviconUrl,
           active: Boolean(browser.agentControlled),
+          removable: true,
         })),
       ...workspace.terminals
         .filter((terminal) => terminal.chatLocalId === chat.localId)
@@ -3656,6 +3859,7 @@ export function App() {
           // The spinner tracks the COMMAND, not the shell: busy means a
           // foreground process is actually running in there right now.
           active: terminal.busy === true,
+          removable: true,
         })),
       ...workspace.editors
         .filter((editor) => editor.chatLocalId === chat.localId)
@@ -3663,6 +3867,7 @@ export function App() {
           key: editorTabKey(editor.localId),
           kind: "editor" as const,
           label: editor.filePath?.split("/").at(-1) || "Editor",
+          removable: true,
         })),
     ];
     if (attentionKeys.length === 0) return surfaces;
@@ -4251,6 +4456,7 @@ export function App() {
                 paletteTargeted={entry.localId === targetedChat?.localId}
                 surfaces={surfacesFor(entry)}
                 onOpenSurface={openSurface}
+                onRemoveSurface={removeSurface}
                 onOpenMcpApp={(view, mode) => {
                   const name = view.toolUseId;
                   openTab(
@@ -4297,25 +4503,33 @@ export function App() {
                   }
                 }}
                 onFileClick={(path) => {
-                  // Host-agent file_edit events carry absolute paths; the
-                  // file API speaks project-relative. Relativize against
-                  // the project root, then chip onto this chat's rail.
-                  const open = (relative: string) =>
+                  if (!projectId) {
                     openEditorTab({
-                      filePath: relative,
+                      filePath: path,
                       chatLocalId: entry.localId,
                     });
-                  if (!path.startsWith("/") || !projectId) {
-                    open(path);
                     return;
                   }
                   void desktopApi.projectRoot(projectId).then((root) => {
-                    const prefix = root ? `${root}/` : null;
-                    open(
-                      prefix && path.startsWith(prefix)
-                        ? path.slice(prefix.length)
-                        : path,
-                    );
+                    if (!root) {
+                      openEditorTab({
+                        filePath: path,
+                        chatLocalId: entry.localId,
+                      });
+                      return;
+                    }
+                    const location = resolveProjectFileLocation(root, path);
+                    if (isPdfPath(location.relativePath)) {
+                      openBrowserTab(localFileUrl(location.absolutePath), {
+                        chatLocalId: entry.localId,
+                        title: fileNameFromPath(location.relativePath),
+                      });
+                      return;
+                    }
+                    openEditorTab({
+                      filePath: location.relativePath,
+                      chatLocalId: entry.localId,
+                    });
                   });
                 }}
                 onFork={(messageId) => forkChat(entry, messageId)}

@@ -885,6 +885,11 @@ export function BrowserScreen({
             src={firstUrl}
             partition={partition}
             preload={preloadPath}
+            // Chromium's built-in PDF viewer is exposed as a plugin. Local
+            // project PDFs otherwise download or render as raw bytes.
+            // Presence attribute, like allowpopups below: React otherwise
+            // sets the custom element's boolean property back to false.
+            plugins={"" as unknown as boolean}
             // Without allowpopups the guest can't request windows at all
             // and the main-process window-open handler (which reroutes
             // popups into new tabs) never fires.

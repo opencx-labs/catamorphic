@@ -1227,4 +1227,80 @@ describe("agents and profiles", () => {
       { timeoutMs: 30_000, label: "incognito absent from agent surfaces" },
     );
   });
+
+  it("opens an agent-shared PDF in a browser surface", async () => {
+    await openFreshChat("PDF artifact chat");
+    await run(`
+      const ta = visibleDock().querySelector('[data-composer-input]');
+      setReactValue(ta, 'show: file:artifact.pdf');
+      ta.closest('form').requestSubmit();
+      return true;
+    `);
+    await runWait(
+      `const chip = visibleDock()?.querySelector(
+         '[data-testid="surface-chip"][data-kind="browser"]');
+       const view = $$('webview').find((candidate) =>
+         decodeURIComponent(candidate.src ?? '').endsWith('/artifact.pdf'));
+       return !!chip && chip.textContent.includes('artifact.pdf') &&
+         !!view && view.plugins === true;`,
+      { timeoutMs: 30_000, label: "PDF opened in a browser surface" },
+    );
+  });
+
+  it("centers the surface chip actions vertically", async () => {
+    await runWait(
+      `const chip = visibleDock()?.querySelector(
+         '[data-testid="surface-chip"][data-kind="browser"]');
+       const action = chip?.querySelector('button[aria-label$="to the right"]');
+       if (!chip || !action) return false;
+       const chipRect = chip.getBoundingClientRect();
+       const actionRect = action.getBoundingClientRect();
+       return Math.abs(
+         (chipRect.top + chipRect.bottom) / 2 -
+         (actionRect.top + actionRect.bottom) / 2
+       ) < 1;`,
+      { label: "surface chip action vertically centered" },
+    );
+  });
+
+  it("keeps a surface chip when its tab closes and removes it only from the chip", async () => {
+    const key = await run<string | null>(`
+      return visibleDock()?.querySelector(
+        '[data-testid="surface-chip"][data-kind="browser"]')
+        ?.getAttribute('data-point-key')?.slice('chip:'.length) ?? null;
+    `);
+    if (!key) throw new Error("PDF surface chip has no key");
+
+    // Park the floating chat so Cmd+W closes the PDF tab, not the chat.
+    await run(`pressKey('m', { metaKey: true }); return true;`);
+    await runWait(`return !visibleDock();`, { label: "PDF chat parked" });
+    await run(`pressKey('w', { metaKey: true }); return true;`);
+    await runWait(
+      `return !$$('[role="tab"]').some((tab) =>
+         tab.getAttribute('data-point-key') === ${JSON.stringify(key)});`,
+      { label: "PDF workspace tab closed" },
+    );
+
+    await run(`pressKey('m', { metaKey: true }); return true;`);
+    await runWait(
+      `const chip = visibleDock()?.querySelector(
+         '[data-testid="surface-chip"][data-kind="browser"]');
+       return !!chip &&
+         chip.getAttribute('data-point-key') === ${JSON.stringify(`chip:${key}`)} &&
+         !!chip.querySelector('button[aria-label^="Remove "]');`,
+      { label: "closed PDF tab remains as a removable chip" },
+    );
+
+    await run(`
+      visibleDock().querySelector(
+        '[data-testid="surface-chip"][data-kind="browser"] button[aria-label^="Remove "]'
+      ).click();
+      return true;
+    `);
+    await runWait(
+      `return !visibleDock()?.querySelector(
+         '[data-testid="surface-chip"][data-kind="browser"]');`,
+      { label: "PDF chip explicitly removed" },
+    );
+  });
 });
