@@ -32,7 +32,9 @@ export default defineConfig({
     fileParallelism: true,
     // Whole-project ts-morph parses dominate these suites and slow an order
     // of magnitude when every package's tests run in parallel under turbo;
-    // the 5s default reads as flakes under that contention.
+    // the defaults read as flakes under that contention. Hooks do the same
+    // expensive repository and embedded-database setup as test bodies.
     testTimeout: 30_000,
+    hookTimeout: 30_000,
   },
 });

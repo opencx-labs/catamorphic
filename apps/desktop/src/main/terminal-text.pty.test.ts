@@ -128,17 +128,24 @@ autoload -Uz add-zsh-hook 2>/dev/null && {
 describe.skipIf(!existsSync(ZSH))(
   "run_terminal write path (real zsh PTY)",
   () => {
-    const cleanups: (() => void)[] = [];
-    afterEach(() => {
-      for (const cleanup of cleanups.splice(0)) cleanup();
+    const cleanups: (() => Promise<void>)[] = [];
+    afterEach(async () => {
+      await Promise.all(cleanups.splice(0).map((cleanup) => cleanup()));
     });
 
     async function readyHarness(): Promise<PtyHarness> {
       const zdotdir = await shimZdotdir();
       const harness = new PtyHarness(zdotdir);
-      cleanups.push(() => {
+      cleanups.push(async () => {
+        const exited = new Promise<void>((resolve) => {
+          const listener = harness.pty.onExit(() => {
+            listener.dispose();
+            resolve();
+          });
+        });
         harness.pty.kill();
-        void fs.rm(zdotdir, { recursive: true, force: true });
+        await exited;
+        await fs.rm(zdotdir, { recursive: true, force: true });
       });
       await waitForShellReady({
         running: () => true,

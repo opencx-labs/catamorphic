@@ -47,7 +47,7 @@ describe("SessionCheckouts", () => {
       projectRoot: (id) => (id === projectId ? rootPath : undefined),
     });
     await checkouts.init();
-  });
+  }, 60_000);
 
   afterEach(async () => {
     await pglite.close();
