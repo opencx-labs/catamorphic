@@ -1,5 +1,6 @@
 import { type ChildProcess, spawn } from "node:child_process";
 import fs from "node:fs";
+import { createRequire } from "node:module";
 import net from "node:net";
 import os from "node:os";
 import path from "node:path";
@@ -13,6 +14,7 @@ import { electronLaunchArgs } from "./harness-args.js";
  */
 
 const DESKTOP_DIR = path.resolve(import.meta.dirname, "..");
+const requireFromHarness = createRequire(import.meta.url);
 // Unique per-launch port: a leaked instance from an aborted run must not
 // answer the next run's CDP handshake.
 const cdpPort = () => 9300 + Math.floor(Math.random() * 400);
@@ -93,14 +95,14 @@ export async function launchApp(opts: LaunchOpts = {}): Promise<AppHandle> {
     opts.userDataDir ??
     fs.mkdtempSync(path.join(os.tmpdir(), "catamorphic-e2e-data-"));
 
-  // The real binary, not the .bin CLI wrapper — the wrapper spawns Electron
-  // as its own child, so killing the wrapper would orphan the app.
-  const electronPackage = path.join(DESKTOP_DIR, "node_modules", "electron");
-  const electronBinary = path.join(
-    electronPackage,
-    "dist",
-    fs.readFileSync(path.join(electronPackage, "path.txt"), "utf-8").trim(),
-  );
+  // Resolve the real binary through Electron's package entrypoint. Current
+  // Electron releases install their binary lazily when path.txt is absent,
+  // which is common in a brand-new worktree. The .bin CLI is not suitable:
+  // it spawns Electron as its own child, so killing it would orphan the app.
+  const electronBinary = requireFromHarness("electron");
+  if (typeof electronBinary !== "string") {
+    throw new Error("Electron did not resolve to an executable path");
+  }
   const port = await freeCdpPort();
   const child = spawn(
     electronBinary,

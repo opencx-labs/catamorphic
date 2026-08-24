@@ -186,6 +186,55 @@ describe("resolveSidebarConfig", () => {
       },
     ]);
   });
+
+  it("sanitizes custom item previews and preserves an explicit opt-out", () => {
+    const { profileDir, projectRoot, projectId } = makeLayers({
+      project: `module.exports = { sections: [{
+        type: "custom",
+        items: [
+          {
+            label: "Deployments",
+            url: "https://deployments.example.test",
+            preview: {
+              title: "Production deployments",
+              description: "Release health at a glance",
+              metadata: [
+                { label: "Owner", value: "Platform" },
+                { label: "Region", value: "eu-west-1" },
+                { label: "Status", value: "Healthy" },
+                { label: "Version", value: "2026.8.24" },
+                { label: "Ignored", value: "fifth row" },
+                { label: "Missing value" },
+              ],
+            },
+          },
+          {
+            label: "Quiet link",
+            url: "https://quiet.example.test",
+            preview: false,
+          },
+        ],
+      }] };`,
+    });
+
+    const resolved = resolveSidebarConfig({
+      profileDir,
+      projectId,
+      projectRoot,
+    });
+
+    expect(resolved.config.sections[0]?.items?.[0]?.preview).toEqual({
+      title: "Production deployments",
+      description: "Release health at a glance",
+      metadata: [
+        { label: "Owner", value: "Platform" },
+        { label: "Region", value: "eu-west-1" },
+        { label: "Status", value: "Healthy" },
+        { label: "Version", value: "2026.8.24" },
+      ],
+    });
+    expect(resolved.config.sections[0]?.items?.[1]?.preview).toBe(false);
+  });
 });
 
 describe("loadSidebarConfigFile", () => {

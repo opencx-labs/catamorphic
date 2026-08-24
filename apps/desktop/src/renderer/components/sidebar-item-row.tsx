@@ -3,13 +3,19 @@ import { MoreHorizontal } from "lucide-react";
 import {
   type ReactNode,
   useEffect,
+  useId,
   useLayoutEffect,
   useRef,
   useState,
 } from "react";
 import { createPortal } from "react-dom";
-import type { SidebarMenuEntry } from "../lib/desktop-api.js";
+import type { SidebarMenuEntry, SidebarPreview } from "../lib/desktop-api.js";
 import { ShortcutHint } from "./shortcut-hint";
+import {
+  SIDEBAR_PREVIEW_DELAY_MS,
+  type SidebarPreviewAnchor,
+  SidebarPreviewPopover,
+} from "./sidebar-preview.js";
 
 /** Optional hover hint (e.g. a bookmark's URL) in the app-standard style. */
 function TitleHint({
@@ -37,6 +43,10 @@ export function SidebarItemRow({
   title,
   icon,
   menu,
+  preview,
+  active,
+  labelContent,
+  end,
   onOpen,
   onAction,
   renaming,
@@ -49,6 +59,10 @@ export function SidebarItemRow({
   /** lucide-react icon name, or a node to render directly. */
   icon?: string | ReactNode;
   menu?: SidebarMenuEntry[];
+  preview?: SidebarPreview | false;
+  active?: boolean;
+  labelContent?: ReactNode;
+  end?: ReactNode;
   onOpen: () => void;
   onAction: (entry: SidebarMenuEntry) => void;
   /** Swap the label for an inline rename field. */
@@ -61,7 +75,37 @@ export function SidebarItemRow({
     null,
   );
   const buttonRef = useRef<HTMLButtonElement>(null);
+  const rowRef = useRef<HTMLDivElement>(null);
   const renameRef = useRef<HTMLInputElement>(null);
+  const previewId = useId();
+  const previewTimerRef = useRef<ReturnType<typeof setTimeout> | undefined>(
+    undefined,
+  );
+  const [previewAnchor, setPreviewAnchor] =
+    useState<SidebarPreviewAnchor | null>(null);
+  const [previewOpen, setPreviewOpen] = useState(false);
+  const previewEnabled = preview !== undefined && preview !== false;
+
+  const disarmPreview = () => {
+    clearTimeout(previewTimerRef.current);
+    setPreviewOpen(false);
+  };
+
+  const armPreview = () => {
+    if (!previewEnabled || renaming || open) return;
+    clearTimeout(previewTimerRef.current);
+    previewTimerRef.current = setTimeout(() => {
+      const rect = rowRef.current?.getBoundingClientRect();
+      if (!rect) return;
+      setPreviewAnchor({
+        top: rect.top,
+        right: rect.right,
+        bottom: rect.bottom,
+        left: rect.left,
+      });
+      setPreviewOpen(true);
+    }, SIDEBAR_PREVIEW_DELAY_MS);
+  };
 
   useEffect(() => {
     if (!open) return;
@@ -89,6 +133,15 @@ export function SidebarItemRow({
     };
   }, [open]);
 
+  useEffect(() => () => clearTimeout(previewTimerRef.current), []);
+
+  useEffect(() => {
+    if (renaming || open || !previewEnabled) {
+      clearTimeout(previewTimerRef.current);
+      setPreviewOpen(false);
+    }
+  }, [renaming, open, previewEnabled]);
+
   useEffect(() => {
     if (renaming) renameRef.current?.select();
   }, [renaming]);
@@ -106,14 +159,24 @@ export function SidebarItemRow({
   return (
     // biome-ignore lint/a11y/noStaticElementInteractions: right-click mirrors the row's ⋯ button, which stays keyboard-reachable
     <div
-      className="group relative flex h-7 items-center rounded-md transition-colors duration-150 hover:bg-bg-overlay/60"
+      ref={rowRef}
+      className={`group relative flex h-7 items-center rounded-md transition-colors duration-150 ${
+        active ? "bg-bg-overlay" : "hover:bg-bg-overlay/60"
+      }`}
       data-point-key={`sidebar:${label}`}
+      onMouseEnter={armPreview}
+      onMouseLeave={disarmPreview}
+      onFocusCapture={armPreview}
+      onBlurCapture={(event) => {
+        if (!event.currentTarget.contains(event.relatedTarget)) disarmPreview();
+      }}
       // Right-click = the ⋯ menu, at the cursor. Same entries, same
       // portal — two paths into one menu, never two menus.
       onContextMenu={
         menu && menu.length > 0 && !renaming
           ? (event) => {
               event.preventDefault();
+              disarmPreview();
               setPosition({ x: event.clientX, y: event.clientY });
               setOpen(true);
             }
@@ -138,18 +201,26 @@ export function SidebarItemRow({
         />
       ) : (
         <>
-          <TitleHint title={title}>
+          <TitleHint title={previewEnabled ? undefined : title}>
             <button
               type="button"
-              onClick={onOpen}
-              className="flex h-full min-w-0 flex-1 cursor-pointer items-center gap-2 px-2 text-left text-[13px] text-fg-muted hover:text-fg"
+              onClick={() => {
+                disarmPreview();
+                onOpen();
+              }}
+              className={`flex h-full min-w-0 flex-1 cursor-pointer items-center gap-2 px-2 text-left text-[13px] hover:text-fg ${
+                active ? "text-fg" : "text-fg-muted"
+              }`}
+              aria-current={active || undefined}
+              aria-describedby={previewEnabled ? previewId : undefined}
             >
               {IconComponent ? (
                 <IconComponent className="size-3.5 shrink-0 text-fg-faint" />
               ) : (
                 icon
               )}
-              <span className="truncate">{label}</span>
+              {labelContent ?? <span className="truncate">{label}</span>}
+              {end}
             </button>
           </TitleHint>
           {menu && menu.length > 0 && (
@@ -157,6 +228,7 @@ export function SidebarItemRow({
               ref={buttonRef}
               type="button"
               onClick={() => {
+                disarmPreview();
                 const rect = buttonRef.current?.getBoundingClientRect();
                 if (rect) {
                   setPosition({ x: rect.right, y: rect.bottom + 4 });
@@ -184,6 +256,16 @@ export function SidebarItemRow({
             setOpen(false);
             onAction(entry);
           }}
+        />
+      )}
+      {previewEnabled && previewAnchor && (
+        <SidebarPreviewPopover
+          id={previewId}
+          open={previewOpen}
+          anchor={previewAnchor}
+          preview={preview}
+          fallbackTitle={label}
+          onExited={() => setPreviewAnchor(null)}
         />
       )}
     </div>

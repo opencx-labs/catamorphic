@@ -2935,3 +2935,18 @@ paths, deliberately independent:
   surface from the chat and terminates owned processes such as terminals.
 - Local PDF artifacts open in a browser surface backed by Chromium's PDF
   viewer. Text files continue to open in the editor.
+
+### 2026-08-24: Sidebar rows explain themselves on hover
+
+- `SidebarItemRow` owns one preview interaction for built-in and configured
+  items: a 500ms dwell or keyboard focus opens a portal card beside the row.
+  It uses the existing overlay tokens and pop-in/pop-out motion, flips across
+  the row near the viewport edge, and never intercepts the pointer.
+- A custom `sidebar.js` item may declare
+  `preview: { title, description, metadata: [{ label, value }] }`. Metadata is
+  capped at four rows so a preview stays an inspector, not a second sidebar.
+  `preview: false` is the explicit opt-out.
+- Chat previews show the full title, resolved agent, execution environment,
+  current state, and the checkout only when one exists. The agent's short
+  activity may sit under the title. IDs, timestamps, and provider internals
+  stay out of the card unless a future use case makes them actionable.

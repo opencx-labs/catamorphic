@@ -2171,17 +2171,28 @@ export function App() {
   const [projectDefaultSlug, setProjectDefaultSlug] = useState<string | null>(
     null,
   );
+  const [projectAgentNames, setProjectAgentNames] = useState<
+    Record<string, string>
+  >({});
   // biome-ignore lint/correctness/useExhaustiveDependencies: agentsData is a deliberate refetch trigger — a defaults edit broadcasts agents-changed
   useEffect(() => {
     if (!projectId) {
       setProjectDefaultSlug(null);
+      setProjectAgentNames({});
       return;
     }
     let cancelled = false;
     void desktopApi
       .projectAgentsList(projectId)
       .then((data) => {
-        if (!cancelled) setProjectDefaultSlug(data.projectDefaultSlug);
+        if (!cancelled) {
+          setProjectDefaultSlug(data.projectDefaultSlug);
+          setProjectAgentNames(
+            Object.fromEntries(
+              data.agents.map((agent) => [agent.id, agent.name]),
+            ),
+          );
+        }
       })
       .catch(() => {});
     return () => {
@@ -4010,6 +4021,9 @@ export function App() {
                   keybindingLabel={formatBinding(
                     keybindings["new-floating-chat"],
                   )}
+                  agentsData={agentsData}
+                  defaultAgentId={effectiveDefaultAgentId}
+                  projectAgentNames={projectAgentNames}
                   onOpenTab={openTab}
                   onNewChat={() => addChat()}
                   onOpenSession={openSession}
@@ -4769,6 +4783,9 @@ function ConfiguredSection({
   activeTab,
   activeChatSessionId,
   keybindingLabel,
+  agentsData,
+  defaultAgentId,
+  projectAgentNames,
   onOpenTab,
   onNewChat,
   onOpenSession,
@@ -4784,6 +4801,9 @@ function ConfiguredSection({
   activeTab?: WorkspaceTab;
   activeChatSessionId?: string;
   keybindingLabel: string;
+  agentsData: AgentsData | null;
+  defaultAgentId: string | null;
+  projectAgentNames: Record<string, string>;
   onOpenTab: (tab: WorkspaceTab) => void;
   onNewChat: () => void;
   onOpenSession: (session: AgentSession) => void;
@@ -4864,6 +4884,9 @@ function ConfiguredSection({
             <SessionsNav
               projectId={projectId}
               activeSessionId={activeChatSessionId}
+              agentsData={agentsData}
+              defaultAgentId={defaultAgentId}
+              projectAgentNames={projectAgentNames}
               onEmptyChange={setEmpty}
               onSelect={onOpenSession}
             />
@@ -4989,6 +5012,7 @@ function CustomItems({
               title={item.url}
               icon={item.icon ?? "Globe"}
               menu={item.menu ?? section.menu ?? DEFAULT_CUSTOM_MENU}
+              preview={item.preview}
               onOpen={() => onOpenUrl(item.url, mode)}
               onAction={(entry) => {
                 switch (entry.action) {
@@ -5162,11 +5186,17 @@ function AppsNav({
 function SessionsNav({
   projectId,
   activeSessionId,
+  agentsData,
+  defaultAgentId,
+  projectAgentNames,
   onEmptyChange,
   onSelect,
 }: {
   projectId: string;
   activeSessionId?: string;
+  agentsData: AgentsData | null;
+  defaultAgentId: string | null;
+  projectAgentNames: Record<string, string>;
   onEmptyChange?: (empty: boolean) => void;
   onSelect: (session: AgentSession) => void;
 }) {
@@ -5194,37 +5224,67 @@ function SessionsNav({
   }
   return (
     <ul className="flex flex-col gap-0.5">
-      {sessions.map((session) => (
-        <li key={session.id}>
-          <button
-            type="button"
-            onClick={() => onSelect(session)}
-            className={`flex h-7 w-full cursor-pointer items-center gap-2 rounded px-2 text-left text-[13px] transition-colors duration-150 ${
-              session.id === activeSessionId
-                ? "bg-bg-overlay text-fg"
-                : "text-fg-muted hover:bg-bg-overlay/60 hover:text-fg"
-            }`}
-            aria-current={session.id === activeSessionId || undefined}
-          >
-            <ChatGlyph
-              icon={session.icon}
-              fork={Boolean(session.parentSessionId)}
-              className="size-3.5 shrink-0"
+      {sessions.map((session) => {
+        const checkout = checkoutBySession.get(session.id);
+        const agentId = session.agentId ?? defaultAgentId;
+        const agentName =
+          agentsData?.agents.find((agent) => agent.id === agentId)?.name ??
+          (agentId ? projectAgentNames[agentId] : undefined) ??
+          "Default";
+        const checkoutLabel = checkout
+          ? checkout.kind === "external"
+            ? "External"
+            : (checkout.branch ?? "Worktree")
+          : undefined;
+        return (
+          <li key={session.id}>
+            <SidebarItemRow
+              label={sessionLabel(session)}
+              icon={
+                <ChatGlyph
+                  icon={session.icon}
+                  fork={Boolean(session.parentSessionId)}
+                  className="size-3.5 shrink-0"
+                />
+              }
+              active={session.id === activeSessionId}
+              labelContent={<AnimatedTitle text={sessionLabel(session)} />}
+              preview={{
+                title: sessionLabel(session),
+                description: session.activity ?? undefined,
+                metadata: [
+                  { label: "Agent", value: agentName },
+                  {
+                    label: "Environment",
+                    value: session.environment ?? "Default",
+                  },
+                  {
+                    label: "Status",
+                    value: session.running
+                      ? "Working"
+                      : session.status === "closed"
+                        ? "Closed"
+                        : "Ready",
+                  },
+                  ...(checkoutLabel
+                    ? [{ label: "Checkout", value: checkoutLabel }]
+                    : []),
+                ],
+              }}
+              end={
+                checkoutLabel ? (
+                  <span className="ml-auto flex max-w-28 shrink-0 items-center gap-1 truncate rounded bg-bg-inset px-1.5 py-0.5 text-[10px] text-fg-faint">
+                    <GitBranch className="size-2.5 shrink-0" />
+                    <span className="truncate">{checkoutLabel}</span>
+                  </span>
+                ) : null
+              }
+              onOpen={() => onSelect(session)}
+              onAction={() => {}}
             />
-            <AnimatedTitle text={sessionLabel(session)} />
-            {checkoutBySession.get(session.id) ? (
-              <span className="ml-auto flex max-w-28 shrink-0 items-center gap-1 truncate rounded bg-bg-inset px-1.5 py-0.5 text-[10px] text-fg-faint">
-                <GitBranch className="size-2.5 shrink-0" />
-                <span className="truncate">
-                  {checkoutBySession.get(session.id)?.kind === "external"
-                    ? "External"
-                    : (checkoutBySession.get(session.id)?.branch ?? "Worktree")}
-                </span>
-              </span>
-            ) : null}
-          </button>
-        </li>
-      ))}
+          </li>
+        );
+      })}
     </ul>
   );
 }

@@ -123,6 +123,9 @@ Your own section:
 - \`open\`: \`"tab"\` (new browser tab) or \`"replace"\` (reuse the focused
   browser tab, falling back to a new tab). Set per section or per item.
 - \`icon\`: any lucide-react icon name, e.g. \`"Globe"\`, \`"FileText"\`.
+- \`preview\`: a compact hover card with optional \`title\`, \`description\`,
+  and up to four \`metadata: [{ label, value }]\` rows. Set
+  \`preview: false\` to explicitly disable it.
 - \`collapsed: true\` starts a section collapsed.
 - \`hideEmpty\`: hide the whole section (header included) while it has
   nothing to list. Defaults to true for \`workflows\` and \`apps\`, false

@@ -33,6 +33,18 @@ export interface SidebarMenuEntry {
   danger?: boolean;
 }
 
+export interface SidebarPreviewMetadata {
+  label: string;
+  value: string;
+}
+
+/** Compact, declarative content for a sidebar item's hover preview. */
+export interface SidebarPreview {
+  title?: string;
+  description?: string;
+  metadata?: SidebarPreviewMetadata[];
+}
+
 export interface SidebarItem {
   label: string;
   url: string;
@@ -41,6 +53,8 @@ export interface SidebarItem {
   open?: "tab" | "replace";
   /** Hover menu (three-dots). Omit for the section default. */
   menu?: SidebarMenuEntry[];
+  /** Hover preview content, or false to explicitly disable it. */
+  preview?: SidebarPreview | false;
 }
 
 export interface SidebarSectionConfig {
@@ -142,8 +156,11 @@ export const DEFAULT_SIDEBAR_FILE = `// Catamorphic sidebar configuration.
 //                          new tab when the focused tab isn't a browser)
 //
 // CUSTOM ITEMS
-//   { label, url, icon?, open?, menu? }
+//   { label, url, icon?, open?, menu?, preview? }
 //   icon: any lucide-react name, e.g. "Globe", "FileText", "Github".
+//   preview: { title?, description?, metadata?: [{ label, value }] }
+//            Metadata is capped at four rows to keep the card compact.
+//            Set preview: false to explicitly disable the preview.
 //
 // HOVER MENU (the ⋯ button on an item)
 //   menu: [{ label, action, danger? }]
@@ -229,6 +246,43 @@ function sanitizeMenu(raw: unknown): SidebarMenuEntry[] | undefined {
   });
 }
 
+function sanitizePreview(raw: unknown): SidebarPreview | false | undefined {
+  if (raw === false) return false;
+  if (typeof raw !== "object" || raw === null) return undefined;
+  const record = raw as Record<string, unknown>;
+  const metadata = Array.isArray(record.metadata)
+    ? record.metadata
+        .flatMap((entry): SidebarPreviewMetadata[] => {
+          if (typeof entry !== "object" || entry === null) return [];
+          const item = entry as Record<string, unknown>;
+          if (
+            typeof item.label !== "string" ||
+            typeof item.value !== "string" ||
+            item.label.length === 0 ||
+            item.value.length === 0
+          ) {
+            return [];
+          }
+          return [{ label: item.label, value: item.value }];
+        })
+        .slice(0, 4)
+    : [];
+  const title =
+    typeof record.title === "string" && record.title.length > 0
+      ? record.title
+      : undefined;
+  const description =
+    typeof record.description === "string" && record.description.length > 0
+      ? record.description
+      : undefined;
+  if (!title && !description && metadata.length === 0) return undefined;
+  return {
+    title,
+    description,
+    metadata: metadata.length > 0 ? metadata : undefined,
+  };
+}
+
 function sanitizeItems(raw: unknown): SidebarItem[] | undefined {
   if (!Array.isArray(raw)) return undefined;
   return raw.flatMap((entry): SidebarItem[] => {
@@ -245,6 +299,7 @@ function sanitizeItems(raw: unknown): SidebarItem[] | undefined {
         icon: typeof record.icon === "string" ? record.icon : undefined,
         open: asOpenMode(record.open),
         menu: sanitizeMenu(record.menu),
+        preview: sanitizePreview(record.preview),
       },
     ];
   });
