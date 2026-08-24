@@ -35,7 +35,10 @@ export function chromeLaunchArgs({
   ci: string | undefined;
   platform: NodeJS.Platform;
 }): string[] {
-  return ci === "true" && platform === "linux" ? ["--no-sandbox"] : [];
+  return [
+    "--remote-debugging-address=127.0.0.1",
+    ...(ci === "true" && platform === "linux" ? ["--no-sandbox"] : []),
+  ];
 }
 
 export function chromeCdpStartupTimeoutMs(ci: string | undefined): number {
@@ -224,7 +227,6 @@ export async function launchPwa(
       },
     );
     children.push(preview);
-    const cdpPort = await freePort();
     profileDir = fs.mkdtempSync(path.join(os.tmpdir(), "pwa-e2e-chrome-"));
     const appHost = opts.secureContext ? "127.0.0.1" : "catamorphic-pwa.test";
     const appUrl = `http://${appHost}:${previewPort}/`;
@@ -246,6 +248,10 @@ export async function launchPwa(
       timeoutMs: 10_000,
       childFailure: preview.failure,
     });
+    // Allocate CDP only after the backend and preview have bound their ports.
+    // Otherwise either still-starting child can race this probe, claim the
+    // same port, and make Chrome fall back to an IPv6-only DevTools listener.
+    const cdpPort = await freePort();
     const chromeChild = watchChild(
       spawn(
         chrome,

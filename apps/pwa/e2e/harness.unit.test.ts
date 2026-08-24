@@ -10,12 +10,17 @@ import {
 } from "./harness.js";
 
 describe("PWA E2E Chrome arguments", () => {
-  it("disables the Chrome sandbox only in Linux CI", () => {
+  it("keeps CDP on the probed IPv4 loopback address", () => {
     expect(chromeLaunchArgs({ ci: "true", platform: "linux" })).toEqual([
+      "--remote-debugging-address=127.0.0.1",
       "--no-sandbox",
     ]);
-    expect(chromeLaunchArgs({ ci: undefined, platform: "linux" })).toEqual([]);
-    expect(chromeLaunchArgs({ ci: "true", platform: "darwin" })).toEqual([]);
+    expect(chromeLaunchArgs({ ci: undefined, platform: "linux" })).toEqual([
+      "--remote-debugging-address=127.0.0.1",
+    ]);
+    expect(chromeLaunchArgs({ ci: "true", platform: "darwin" })).toEqual([
+      "--remote-debugging-address=127.0.0.1",
+    ]);
   });
 
   it("allows extra Chrome startup time on shared CI runners", () => {
