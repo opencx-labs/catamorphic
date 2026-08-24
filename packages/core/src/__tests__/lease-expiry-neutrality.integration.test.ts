@@ -172,7 +172,9 @@ describeIf("lease expiry attempt neutrality", () => {
         leaseToken: claimed.leaseToken ?? "",
         leaseGeneration: claimed.leaseGeneration,
         error: "boom",
-        retryAt: new Date(),
+        // Host and database clocks can differ slightly (notably when Postgres
+        // runs in Docker), so make the retry unambiguously due.
+        retryAt: new Date(0),
       });
       expect(status).toBe(round === 0 ? "pending" : "failed");
     }

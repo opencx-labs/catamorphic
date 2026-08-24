@@ -13,6 +13,8 @@ import { isExecutedDirectly } from "./is-main.js";
 import { getMigrationsDir } from "./migrations-dir.js";
 import { splitSqlStatements } from "./split-sql.js";
 
+const MIGRATION_LOCK_KEY = "catamorphic:migrate";
+
 export interface MigrateToLatestOptions<T> {
   /**
    * Any Kysely instance connected to the target database. Migrations run raw
@@ -46,20 +48,25 @@ export async function migrateToLatest<T>({
   const migrationsTable = `${quotedSchema}._migrations`;
   const migrationsDir = getMigrationsDir();
 
-  await sql.raw(`CREATE SCHEMA IF NOT EXISTS ${quotedSchema}`).execute(db);
-  await sql
-    .raw(`
-    CREATE TABLE IF NOT EXISTS ${migrationsTable} (
-      id SERIAL PRIMARY KEY,
-      name VARCHAR(255) NOT NULL UNIQUE,
-      applied_at TIMESTAMPTZ NOT NULL DEFAULT now()
-    )
-  `)
-    .execute(db);
   return db.transaction().execute(async (trx) => {
-    await sql`SELECT pg_advisory_xact_lock(hashtext(${`catamorphic:migrate:${schema}`}))`.execute(
+    // Some migration statements are database-global (notably CREATE
+    // EXTENSION). Postgres' IF NOT EXISTS does not make concurrent extension
+    // installation race-free, so migrations for different host schemas must
+    // share one database-wide lock. Taking it before bootstrap also protects
+    // two callers creating the same schema's tracking table together.
+    await sql`SELECT pg_advisory_xact_lock(hashtext(${MIGRATION_LOCK_KEY}))`.execute(
       trx,
     );
+    await sql.raw(`CREATE SCHEMA IF NOT EXISTS ${quotedSchema}`).execute(trx);
+    await sql
+      .raw(`
+      CREATE TABLE IF NOT EXISTS ${migrationsTable} (
+        id SERIAL PRIMARY KEY,
+        name VARCHAR(255) NOT NULL UNIQUE,
+        applied_at TIMESTAMPTZ NOT NULL DEFAULT now()
+      )
+    `)
+      .execute(trx);
     const applied = await sql<{ name: string }>`
       SELECT name FROM ${sql.raw(migrationsTable)} ORDER BY name
     `.execute(trx);
