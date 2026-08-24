@@ -172,7 +172,11 @@ describe("skills as commands", () => {
        return !!menu && !!menu.querySelector('[data-skill-name="team-notes"]');`,
       { timeoutMs: 15_000, label: "slash menu lists team-notes" },
     );
-    await run(`composerKey('Enter'); return true;`);
+    await run(
+      `const row = $('[data-testid="slash-menu"] [data-skill-name="team-notes"]');
+       row.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true }));
+       return true;`,
+    );
     await runWait(
       `return !!byText('section[aria-label] *', 'skill loaded: team-notes') &&
               !!byText('section[aria-label] *', 'source:project');`,

@@ -234,6 +234,18 @@ describe("paired motion (enter/exit mirrors)", () => {
         scale: parseFloat(/scale\\((-?[\\d.]+)\\)/.exec(transform)[1]),
       };
     `);
+    // The prior test may have opened this dock less than 250ms ago. Let its
+    // enter animation finish before reversing it, otherwise cancelling the
+    // keyframe and starting the transition in the same frame can expose the
+    // expanded pose as a false "settled" sample on a fast CI compositor.
+    await runWait(
+      `const el = visibleDock();
+       if (!el) return false;
+       const cs = getComputedStyle(el);
+       return parseFloat(cs.opacity) === 1 &&
+         el.getAnimations().every((animation) => animation.playState === 'finished');`,
+      { label: "dock enter animation settled" },
+    );
     // Draft first (its own eval so React renders before Escape) so Escape
     // minimizes instead of closing.
     await run(`
@@ -249,19 +261,14 @@ describe("paired motion (enter/exit mirrors)", () => {
       pressKey('Escape');
       return true;
     `);
-    // Settled = two consecutive polls agree, fully faded, still mounted.
+    // Settled = its collapse transition finished, fully faded, still mounted.
     const restingPose = await runWait<{ translate: string; scale: string }>(
       `const el = window.__dock;
        if (!el || !el.isConnected || !el.inert) return false;
        const cs = getComputedStyle(el);
        if (parseFloat(cs.opacity) !== 0) return false;
-       const pose = { translate: cs.translate, scale: cs.scale };
-       if (!window.__lastPose ||
-           JSON.stringify(window.__lastPose) !== JSON.stringify(pose)) {
-         window.__lastPose = pose;
-         return false;
-       }
-       return pose;`,
+       if (el.getAnimations().some((animation) => animation.playState !== 'finished')) return false;
+       return { translate: cs.translate, scale: cs.scale };`,
       { label: "dock settled into minimized pose" },
     );
     expect(restingPose.translate).toBe(`0px ${enterFrom.translateY}px`);
