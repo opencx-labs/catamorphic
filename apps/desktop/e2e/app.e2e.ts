@@ -252,6 +252,30 @@ describe("chat flows", () => {
     });
   });
 
+  it("previews a chat's agent, environment, and current state", async () => {
+    await run(`
+      const chat = byText('button', 'Quick chat');
+      chat.dispatchEvent(new MouseEvent('mouseover', { bubbles: true }));
+      return true;
+    `);
+
+    await runWait(
+      `const preview = $('[data-testid="sidebar-preview"]');
+       return !!preview && parseFloat(getComputedStyle(preview).opacity) > 0.9;`,
+      {
+        label: "chat metadata hover preview",
+      },
+    );
+    const previewText = await run<string>(
+      `return $('[data-testid="sidebar-preview"]').textContent;`,
+    );
+    expect(previewText).toContain("Fake Agent");
+    expect(previewText).toContain("Environment");
+    expect(previewText).toContain("local");
+    expect(previewText).toContain("Status");
+    expect(previewText).toContain("Ready");
+  });
+
   it("streams preambles as separate completed messages", async () => {
     await run(
       `byText('button', 'New chat')?.click() ?? pressKey('n', { metaKey: true }); return true;`,
