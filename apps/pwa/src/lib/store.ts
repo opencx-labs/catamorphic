@@ -271,11 +271,16 @@ export function updateRemoteCredentials(
   credentials: RemoteOAuthCredentials,
 ): void {
   for (const profile of state.profiles) {
-    if (!profile.connections.some((item) => item.id === connectionId)) continue;
+    const source = profile.connections.find(
+      (item) => item.id === connectionId && item.kind === "remote",
+    );
+    if (source?.kind !== "remote") continue;
     updateProfile(profile.id, (current) => ({
       ...current,
       connections: current.connections.map((connection) =>
-        connection.id === connectionId && connection.kind === "remote"
+        connection.kind === "remote" &&
+        connection.serverUrl === source.serverUrl &&
+        connection.credentials?.clientId === credentials.clientId
           ? { ...connection, credentials }
           : connection,
       ),

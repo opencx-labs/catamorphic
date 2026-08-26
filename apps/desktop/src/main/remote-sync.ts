@@ -95,6 +95,7 @@ export class RemoteAuthError extends Error {
 /** The documents client plus the two members' verbs beside it. */
 export interface RemoteProjectClient extends RemoteDocumentsClient {
   me(): Promise<RemoteMe | null>;
+  admit(input: { invitationId?: string }): Promise<void>;
   listRoles(): Promise<RemoteRole[]>;
   listMembers(): Promise<RemoteMember[]>;
   listAccessRequests(): Promise<RemoteAccessRequest[]>;
@@ -116,6 +117,44 @@ export interface RemoteProjectClient extends RemoteDocumentsClient {
     body?: string;
     changes: Array<{ path: string; content?: string; delete?: boolean }>;
   }): Promise<RemoteProposalResult>;
+}
+
+/** Builder clones own program files; remote sync may only materialize store. */
+export function storeOnlyDocumentsClient(
+  client: RemoteProjectClient,
+): RemoteDocumentsClient {
+  return {
+    ...client,
+    sources: ["store"],
+    list: async () =>
+      (await client.list()).filter((entry) => entry.source === "store"),
+  };
+}
+
+/** Sign-in identifies the user; admission separately grants project access. */
+export async function ensureRemoteProjectAccess(options: {
+  client: RemoteProjectClient;
+  projectId: string;
+  invitationId?: string;
+}): Promise<void> {
+  const before = await options.client.me();
+  if (
+    !before ||
+    before.projects.some((project) => project.projectId === options.projectId)
+  ) {
+    return;
+  }
+  await options.client.admit({
+    ...(options.invitationId ? { invitationId: options.invitationId } : {}),
+  });
+  const after = await options.client.me();
+  if (
+    !after?.projects.some((project) => project.projectId === options.projectId)
+  ) {
+    throw new Error(
+      "You signed in, but you do not have access to this project yet.",
+    );
+  }
 }
 
 /** An HTTP client for a hosting backend's documents routes. */
@@ -159,6 +198,16 @@ export function httpDocumentsClient(args: {
     );
   };
   return {
+    async admit(input) {
+      const admissionPath = input.invitationId
+        ? `/admission/invitations/${encodeURIComponent(input.invitationId)}/redeem`
+        : "/admission/join";
+      const response = await authorizedFetch(
+        `${args.serverUrl.replace(/\/+$/, "")}/projects/${encodeURIComponent(args.projectId)}${admissionPath}`,
+        { method: "POST" },
+      );
+      if (!response.ok) return fail(response, "Joining project");
+    },
     async listRoles() {
       const response = await authorizedFetch(
         `${args.serverUrl.replace(/\/+$/, "")}/projects/${encodeURIComponent(args.projectId)}/roles`,

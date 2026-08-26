@@ -124,6 +124,17 @@ const inject = (
     ...(body !== undefined ? { payload: JSON.stringify(body) } : {}),
   });
 
+const operatorInject = (url: string, token?: string, body?: unknown) =>
+  server.operatorApp.inject({
+    method: "POST",
+    url,
+    headers: {
+      ...(token ? { authorization: `Bearer ${token}` } : {}),
+      ...(body !== undefined ? { "content-type": "application/json" } : {}),
+    },
+    ...(body !== undefined ? { payload: JSON.stringify(body) } : {}),
+  });
+
 let projectId: string;
 let memberToken: string;
 let memberUserId: string;
@@ -220,8 +231,26 @@ describe("stock server", () => {
     const operatorSecret = fs
       .readFileSync(path.join(dataDir, "operator-secret"), "utf8")
       .trim();
-    const projectResponse = await inject(
+    const publicIngress = await inject(
       "POST",
+      "/_catamorphic/operator/projects",
+      operatorSecret,
+      {
+        name: "brain",
+        roles: [
+          { slug: "member", definition: MEMBER_ROLE },
+          { slug: "manager", definition: MANAGER_ROLE },
+        ],
+        admission: {
+          mode: "invitation_only",
+          defaultRole: "member",
+          approvedDomains: [],
+        },
+      },
+    );
+    expect(publicIngress.statusCode).toBe(404);
+
+    const projectResponse = await operatorInject(
       "/_catamorphic/operator/projects",
       operatorSecret,
       {
@@ -239,8 +268,7 @@ describe("stock server", () => {
     );
     expect(projectResponse.statusCode).toBe(201);
     projectId = projectResponse.json().project.id;
-    const managerResponse = await inject(
-      "POST",
+    const managerResponse = await operatorInject(
       "/_catamorphic/operator/users",
       operatorSecret,
       {

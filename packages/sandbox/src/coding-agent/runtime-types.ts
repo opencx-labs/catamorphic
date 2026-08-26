@@ -75,6 +75,8 @@ export interface ResumeAgentRuntimeSession {
   projectId: string;
   allocationId: string;
   workingDirectory: string;
+  /** Last event durably persisted by the host for this session. */
+  after: AgentEventCursor;
 }
 
 export interface StopAgentRuntimeSession {

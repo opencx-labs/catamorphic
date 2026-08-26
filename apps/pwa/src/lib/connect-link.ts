@@ -17,6 +17,19 @@ export interface ConnectLink {
   sessionId?: string;
 }
 
+/** OAuth credentials may only cross HTTPS, except on this machine. */
+export function isSecureRemoteUrl(raw: string): boolean {
+  try {
+    const url = new URL(raw);
+    return (
+      url.protocol === "https:" ||
+      (url.protocol === "http:" && isLoopbackHostname(url.hostname))
+    );
+  } catch {
+    return false;
+  }
+}
+
 export function parseConnectLink(raw: string): ConnectLink | null {
   let url: URL;
   try {
@@ -38,13 +51,7 @@ export function connectLinkFromParams(
   const serverUrl = params.get("server")?.trim();
   const remoteProjectId = params.get("project")?.trim();
   if (!serverUrl || !remoteProjectId || params.has("token")) return null;
-  try {
-    const server = new URL(serverUrl);
-    if (server.protocol !== "https:" && server.protocol !== "http:")
-      return null;
-  } catch {
-    return null;
-  }
+  if (!isSecureRemoteUrl(serverUrl)) return null;
   const name = params.get("name")?.trim();
   const invitationId = params.get("invitation")?.trim();
   const sessionId = params.get("session")?.trim();
@@ -55,4 +62,12 @@ export function connectLinkFromParams(
     ...(invitationId ? { invitationId } : {}),
     ...(sessionId ? { sessionId } : {}),
   };
+}
+
+function isLoopbackHostname(hostname: string): boolean {
+  return (
+    hostname === "localhost" ||
+    hostname === "::1" ||
+    /^127(?:\.\d{1,3}){3}$/.test(hostname)
+  );
 }

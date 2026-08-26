@@ -369,6 +369,7 @@ export interface ConnectLink {
   serverUrl: string;
   remoteProjectId: string;
   remoteProjectName?: string;
+  invitationId?: string;
 }
 export interface RemoteCapabilities {
   builder: boolean;
@@ -729,6 +730,7 @@ export interface CatamorphicDesktopApi {
   remoteConnect: (input: {
     serverUrl: string;
     remoteProjectId: string;
+    invitationId?: string;
     name: string;
     rootPath: string;
   }) => Promise<{ id: string; name: string; report: RemoteSyncReport }>;

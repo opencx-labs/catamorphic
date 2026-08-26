@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { httpDocumentsClient } from "./remote-sync.js";
+import {
+  ensureRemoteProjectAccess,
+  httpDocumentsClient,
+  storeOnlyDocumentsClient,
+} from "./remote-sync.js";
 
 /** Pins the wire shape against the plugin's documents routes (ADR 0055). */
 function fakeFetch(
@@ -218,5 +222,94 @@ describe("httpDocumentsClient", () => {
           request.headers.get("authorization") === "Bearer manager-token",
       ),
     ).toBe(true);
+  });
+
+  it("redeems an invitation through the authenticated admission surface", async () => {
+    let request: Request | undefined;
+    const client = httpDocumentsClient({
+      serverUrl: base,
+      accessToken: async () => "member-token",
+      projectId,
+      fetch: async (input, init) => {
+        request = new Request(input, init);
+        return Response.json({ ok: true });
+      },
+    });
+
+    await client.admit({ invitationId: "invite/1" });
+
+    expect(request?.method).toBe("POST");
+    expect(request?.url).toBe(
+      `${base}/projects/p-1/admission/invitations/invite%2F1/redeem`,
+    );
+    expect(request?.headers.get("authorization")).toBe("Bearer member-token");
+  });
+
+  it("filters program files out of a builder checkout sync", async () => {
+    const client = httpDocumentsClient({
+      serverUrl: base,
+      accessToken: async () => "builder-token",
+      projectId,
+      fetch: async () =>
+        Response.json([
+          {
+            path: "src/index.ts",
+            source: "program",
+            contentType: "text/plain",
+            size: 1,
+            digest: "git:1",
+          },
+          {
+            path: "store/notes.md",
+            source: "store",
+            contentType: "text/markdown",
+            size: 1,
+            version: 1,
+          },
+        ]),
+    });
+
+    const scoped = storeOnlyDocumentsClient(client);
+
+    expect(scoped.sources).toEqual(["store"]);
+    expect((await scoped.list()).map((entry) => entry.path)).toEqual([
+      "store/notes.md",
+    ]);
+  });
+
+  it("redeems admission before a first-time member reads project data", async () => {
+    const paths: string[] = [];
+    let admitted = false;
+    const client = httpDocumentsClient({
+      serverUrl: base,
+      accessToken: async () => "new-member-token",
+      projectId,
+      fetch: async (input, init) => {
+        const request = new Request(input, init);
+        paths.push(`${request.method} ${new URL(request.url).pathname}`);
+        if (request.url.endsWith("/me")) {
+          return Response.json({
+            version: 1,
+            identity: { externalUserId: "user-1", root: false },
+            projects: admitted ? [{ projectId }] : [],
+            features: {},
+          });
+        }
+        admitted = true;
+        return Response.json({ ok: true });
+      },
+    });
+
+    await ensureRemoteProjectAccess({
+      client,
+      projectId,
+      invitationId: "invite-1",
+    });
+
+    expect(paths).toEqual([
+      "GET /api/me",
+      "POST /api/projects/p-1/admission/invitations/invite-1/redeem",
+      "GET /api/me",
+    ]);
   });
 });

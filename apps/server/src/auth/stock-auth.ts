@@ -70,6 +70,10 @@ export function createStockAuth(options: {
           clientSecret: provider.clientSecret,
           scopes: provider.scopes,
           pkce: true,
+          mapProfileToUser: (profile) => {
+            assertOidcProfileAllowed(profile, provider.allowedDomains);
+            return {};
+          },
         })),
       }),
       mcp({
@@ -149,6 +153,23 @@ export function createStockAuth(options: {
     },
     close: () => options.database.close(),
   };
+}
+
+export function assertOidcProfileAllowed(
+  profile: Record<string, unknown>,
+  allowedDomains: readonly string[],
+): void {
+  if (allowedDomains.length === 0) return;
+  const email = typeof profile.email === "string" ? profile.email : "";
+  const verified =
+    profile.email_verified === true || profile.emailVerified === true;
+  if (!email || !verified) {
+    throw new Error("This identity provider requires a verified email");
+  }
+  const domain = email.split("@").at(-1)?.toLowerCase();
+  if (!domain || !allowedDomains.includes(domain)) {
+    throw new Error(`The email domain '${domain ?? "unknown"}' is not allowed`);
+  }
 }
 
 export function loadStockAuthSecret(options: {

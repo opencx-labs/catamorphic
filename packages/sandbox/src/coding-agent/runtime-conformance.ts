@@ -311,6 +311,7 @@ function resumeSession(args: {
     projectId: args.session.projectId,
     allocationId: args.session.allocationId,
     workingDirectory: args.session.workingDirectory,
+    after: { sequence: 0 },
   });
 }
 

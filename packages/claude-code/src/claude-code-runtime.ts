@@ -31,6 +31,7 @@ import type {
   ExtraToolContext,
   McpServersSource,
   McpToolPolicyLayers,
+  ResumeAgentRuntimeSession,
   StartAgentRuntimeSession,
   StartAgentTurn,
   SubscribeToAgentEvents,
@@ -226,13 +227,9 @@ export class ClaudeCodeAgentRuntime implements AgentRuntimeProvider {
     return session;
   }
 
-  async resumeSession(args: {
-    sessionId: string;
-    providerSessionId: string;
-    projectId: string;
-    allocationId: string;
-    workingDirectory: string;
-  }): Promise<AgentRuntimeSession> {
+  async resumeSession(
+    args: ResumeAgentRuntimeSession,
+  ): Promise<AgentRuntimeSession> {
     const existing = this.sessions.get(args.sessionId);
     if (existing) {
       this.publish(existing, {
@@ -252,7 +249,11 @@ export class ClaudeCodeAgentRuntime implements AgentRuntimeProvider {
       allocationId: args.allocationId,
       workingDirectory: args.workingDirectory,
     };
-    const state = this.createState({ session, transcriptExists: true });
+    const state = this.createState({
+      session,
+      transcriptExists: true,
+      sequence: args.after.sequence,
+    });
     this.sessions.set(args.sessionId, state);
     this.publish(state, {
       eventId: `claude-code:session:${args.sessionId}:resumed`,
@@ -482,6 +483,7 @@ export class ClaudeCodeAgentRuntime implements AgentRuntimeProvider {
     session: AgentRuntimeSession;
     systemPrompt?: string;
     transcriptExists: boolean;
+    sequence?: number;
   }): ClaudeRuntimeSessionState {
     return {
       session: args.session,
@@ -496,7 +498,7 @@ export class ClaudeCodeAgentRuntime implements AgentRuntimeProvider {
       backgroundTasks: new Set(),
       terminalTaskIds: new Set(),
       terminalBackgroundToolUseIds: new Set(),
-      sequence: 0,
+      sequence: args.sequence ?? 0,
       stopped: false,
     };
   }

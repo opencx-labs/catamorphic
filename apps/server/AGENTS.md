@@ -19,8 +19,9 @@ identity model. Do not reintroduce token files or privileged product users.
 - Boot prints public API, documentation, and sign-in locations, never a
   credential.
 - Local setup agents inspect the schemas under `src/setup` and call the
-  loopback `/_catamorphic/operator/*` operations using the owner-only machine
-  credential under the data directory. These operations bootstrap explicit
+  `/_catamorphic/operator/*` operations on the dedicated loopback-only setup
+  listener (port 4701 by default) using the owner-only machine credential
+  under the data directory. These operations bootstrap explicit
   roles, admission, and ordinary Better Auth users. They are not a human CLI,
   product UI, user role, or server-owner identity.
 - Project managers use their ordinary OAuth identity and committed
@@ -37,10 +38,11 @@ identity model. Do not reintroduce token files or privileged product users.
   the registry serves that id and the bare `assistant` (root callers).
 - Never expose this server multi-tenant: local-process execution gives
   processes the host filesystem and network (ADR 0047).
-- `/_catamorphic/operator/*` is machine-local setup authority and must remain
-  inaccessible through public ingress. `/healthz` and the hosted PWA are
-  public. Application administration belongs under `/api` and uses ordinary
-  project permissions.
+- `/_catamorphic/operator/*` is machine-local setup authority on a separate
+  Fastify listener bound to `127.0.0.1`. Never register those routes on the
+  public app or expose the setup port from the container. `/healthz` and the
+  hosted PWA are public. Application administration belongs under `/api` and
+  uses ordinary project permissions.
 
 ## Verify
 

@@ -49,18 +49,19 @@ describe.skipIf(!chromeBinary())("pwa against the stock server", () => {
   beforeAll(async () => {
     dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "pwa-stock-"));
     app = await launchPwa({
-      backend: (apiPort) => ({
+      backend: (apiPort, operatorPort) => ({
         command: "bun",
         args: ["src/index.ts"],
         cwd: SERVER_DIR,
         env: {
           PORT: String(apiPort),
+          CATAMORPHIC_OPERATOR_PORT: String(operatorPort),
           CATAMORPHIC_DATA_DIR: dataDir,
           CATAMORPHIC_FAKE_AGENT: "1",
           CATAMORPHIC_MDNS: "off",
         },
       }),
-      mintLink: async (apiBase) => {
+      mintLink: async (apiBase, operatorBase) => {
         const origin = apiBase.replace(/\/api$/, "");
         const operatorSecret = fs
           .readFileSync(path.join(dataDir, "operator-secret"), "utf8")
@@ -70,7 +71,7 @@ describe.skipIf(!chromeBinary())("pwa against the stock server", () => {
           "content-type": "application/json",
         };
         const projectResponse = await fetch(
-          `${origin}/_catamorphic/operator/projects`,
+          `${operatorBase}/_catamorphic/operator/projects`,
           {
             method: "POST",
             headers: operatorHeaders,
@@ -128,7 +129,7 @@ describe.skipIf(!chromeBinary())("pwa against the stock server", () => {
           },
         ]) {
           const response = await fetch(
-            `${origin}/_catamorphic/operator/users`,
+            `${operatorBase}/_catamorphic/operator/users`,
             {
               method: "POST",
               headers: operatorHeaders,

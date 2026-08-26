@@ -20,7 +20,7 @@ import {
 } from "@catamorphic/server-sdk";
 import { PGlite } from "@electric-sql/pglite";
 import { pgcrypto } from "@electric-sql/pglite/contrib/pgcrypto";
-import type { FastifyInstance } from "fastify";
+import Fastify, { type FastifyInstance } from "fastify";
 import { Kysely, PGliteDialect, sql, WithSchemaPlugin } from "kysely";
 import { StockAdmissionService } from "./admission/admission-service.js";
 import { registerStockAdmissionRoutes } from "./admission/routes.js";
@@ -70,7 +70,10 @@ export interface StockServerOptions {
 }
 
 export interface StockServer {
+  /** Public application, OAuth, PWA, and scoped Catamorphic API. */
   app: FastifyInstance;
+  /** Machine-local setup API. The host must bind this only to loopback. */
+  operatorApp: FastifyInstance;
   catamorphic: Catamorphic;
   /** Stock-host authentication and OAuth authorization server. */
   stockAuth: StockAuth;
@@ -274,43 +277,52 @@ export async function buildStockServer(
     agentSessions: Boolean(core.agentSessions),
   }));
 
-  // Machine-local setup authority. It is deliberately not an application
-  // user or role: a setup agent reads the owner-only credential from the
-  // mounted data directory and invokes this operation over loopback.
-  app.post("/_catamorphic/operator/projects", async (request, reply) => {
-    const authorization = Array.isArray(request.headers.authorization)
-      ? request.headers.authorization[0]
-      : request.headers.authorization;
-    if (!verifyStockOperatorSecret(authorization, operatorSecret)) {
-      return reply.status(401).send({ error: "Operator credential required" });
-    }
-    const parsed = ProvisionStockProjectInputSchema.safeParse(request.body);
-    if (!parsed.success) {
-      return reply.status(400).send({
-        error: "Invalid project setup input",
-        issues: parsed.error.issues,
-      });
-    }
-    try {
-      const result = await provisionStockProject({
-        services: {
-          projects: core.projects,
-          deployment: core.deployment,
-          roles: core.roles,
-          admission,
-        },
-        operatorIdentity: rootIdentity,
-        input: parsed.data,
-      });
-      return reply.status(201).send(result);
-    } catch (error) {
-      const message =
-        error instanceof Error ? error.message : "Project setup failed";
-      return reply.status(400).send({ error: message });
-    }
-  });
+  // Machine-local setup authority lives on a separate server, not merely a
+  // guarded route on the public app. Binding this app only to loopback keeps
+  // reverse proxies and other public ingress from reaching the operations.
+  // It is deliberately not an application user or role: a setup agent reads
+  // the owner-only credential from the mounted data directory and invokes it
+  // from the same machine or container.
+  const operatorApp = Fastify();
+  operatorApp.post(
+    "/_catamorphic/operator/projects",
+    async (request, reply) => {
+      const authorization = Array.isArray(request.headers.authorization)
+        ? request.headers.authorization[0]
+        : request.headers.authorization;
+      if (!verifyStockOperatorSecret(authorization, operatorSecret)) {
+        return reply
+          .status(401)
+          .send({ error: "Operator credential required" });
+      }
+      const parsed = ProvisionStockProjectInputSchema.safeParse(request.body);
+      if (!parsed.success) {
+        return reply.status(400).send({
+          error: "Invalid project setup input",
+          issues: parsed.error.issues,
+        });
+      }
+      try {
+        const result = await provisionStockProject({
+          services: {
+            projects: core.projects,
+            deployment: core.deployment,
+            roles: core.roles,
+            admission,
+          },
+          operatorIdentity: rootIdentity,
+          input: parsed.data,
+        });
+        return reply.status(201).send(result);
+      } catch (error) {
+        const message =
+          error instanceof Error ? error.message : "Project setup failed";
+        return reply.status(400).send({ error: message });
+      }
+    },
+  );
 
-  app.post("/_catamorphic/operator/users", async (request, reply) => {
+  operatorApp.post("/_catamorphic/operator/users", async (request, reply) => {
     const authorization = Array.isArray(request.headers.authorization)
       ? request.headers.authorization[0]
       : request.headers.authorization;
@@ -358,12 +370,13 @@ export async function buildStockServer(
 
   return {
     app,
+    operatorApp,
     catamorphic,
     stockAuth,
     agentsDescription: agents.description,
     shutdown: async () => {
       await worker.stop();
-      await app.close();
+      await Promise.all([app.close(), operatorApp.close()]);
       await stockAuth.close();
       // For DATABASE_URL, close() also destroys the pool it created; the
       // host-owned PGlite Kysely is ours to flush.

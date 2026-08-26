@@ -144,7 +144,8 @@ async function accessToken(options: {
     expiresAt <= (options.now ?? Date.now)() + 30_000;
   if (!shouldRefresh) return connection.credentials.accessToken;
 
-  const existing = refreshes.get(connection.id);
+  const refreshKey = `${connection.serverUrl}\0${connection.credentials.clientId}`;
+  const existing = refreshes.get(refreshKey);
   if (existing) return existing;
   const refresh = refreshRemoteCredentials({
     credentials: connection.credentials,
@@ -155,7 +156,7 @@ async function accessToken(options: {
       updateRemoteCredentials(connection.id, credentials);
       return credentials.accessToken;
     })
-    .finally(() => refreshes.delete(connection.id));
-  refreshes.set(connection.id, refresh);
+    .finally(() => refreshes.delete(refreshKey));
+  refreshes.set(refreshKey, refresh);
   return refresh;
 }

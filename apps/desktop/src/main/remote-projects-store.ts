@@ -49,7 +49,6 @@ export interface RemoteProjectInspection {
 
 interface StoredCredentials {
   credentialsEncrypted?: string;
-  credentialsPlaintext?: string;
 }
 
 interface StoreFile {
@@ -70,6 +69,14 @@ interface RemoteProjectLocatorFile {
 
 export class RemoteProjectsStore {
   private data: StoreFile;
+  private readonly sessionCredentials = new Map<
+    string,
+    RemoteOAuthCredentials
+  >();
+  private readonly refreshes = new Map<
+    string,
+    Promise<RemoteOAuthCredentials>
+  >();
 
   constructor(private readonly filePath: string) {
     this.data = this.load();
@@ -95,14 +102,16 @@ export class RemoteProjectsStore {
     if (!link) return null;
     return {
       link,
-      credentials: this.decrypt(this.data.credentials[link.connectionId]),
+      credentials:
+        this.sessionCredentials.get(link.connectionId) ??
+        this.decrypt(this.data.credentials[link.connectionId]),
     };
   }
 
   set(localProjectId: string, link: RemoteProjectLinkWithCredentials): void {
     const { credentials, ...rest } = link;
     this.data.links[localProjectId] = rest;
-    this.data.credentials[link.connectionId] = this.encrypt(credentials);
+    this.storeCredentials(link.connectionId, credentials);
     this.save();
   }
 
@@ -117,8 +126,42 @@ export class RemoteProjectsStore {
   ): void {
     const link = this.data.links[localProjectId];
     if (!link) return;
-    this.data.credentials[link.connectionId] = this.encrypt(credentials);
+    this.storeCredentials(link.connectionId, credentials);
     this.save();
+  }
+
+  /** One live token supplier shared by status, sync, ship, and mirroring. */
+  async accessToken(
+    localProjectId: string,
+    options: {
+      forceRefresh?: boolean;
+      refresh(
+        credentials: RemoteOAuthCredentials,
+      ): Promise<RemoteOAuthCredentials>;
+    },
+  ): Promise<string> {
+    const inspected = this.inspect(localProjectId);
+    if (!inspected?.credentials) {
+      throw new Error("Sign in again to reconnect this project");
+    }
+    const credentials = inspected.credentials;
+    const expiresAt = Date.parse(credentials.accessTokenExpiresAt);
+    const expired =
+      !Number.isFinite(expiresAt) || expiresAt <= Date.now() + 60_000;
+    if (!options.forceRefresh && !expired) return credentials.accessToken;
+
+    const connectionId = inspected.link.connectionId;
+    const existing = this.refreshes.get(connectionId);
+    if (existing) return (await existing).accessToken;
+    const refresh = options
+      .refresh(credentials)
+      .then((next) => {
+        this.updateCredentials(localProjectId, next);
+        return next;
+      })
+      .finally(() => this.refreshes.delete(connectionId));
+    this.refreshes.set(connectionId, refresh);
+    return (await refresh).accessToken;
   }
 
   touch(
@@ -144,6 +187,7 @@ export class RemoteProjectsStore {
       )
     ) {
       delete this.data.credentials[connectionId];
+      this.sessionCredentials.delete(connectionId);
     }
     this.save();
   }
@@ -175,10 +219,25 @@ export class RemoteProjectsStore {
 
   private save(): void {
     fs.mkdirSync(path.dirname(this.filePath), { recursive: true });
-    fs.writeFileSync(this.filePath, `${JSON.stringify(this.data, null, 2)}\n`);
+    fs.writeFileSync(this.filePath, `${JSON.stringify(this.data, null, 2)}\n`, {
+      mode: 0o600,
+    });
+    fs.chmodSync(this.filePath, 0o600);
   }
 
-  private encrypt(credentials: RemoteOAuthCredentials): StoredCredentials {
+  private storeCredentials(
+    connectionId: string,
+    credentials: RemoteOAuthCredentials,
+  ): void {
+    this.sessionCredentials.set(connectionId, credentials);
+    const encrypted = this.encrypt(credentials);
+    if (encrypted) this.data.credentials[connectionId] = encrypted;
+    else delete this.data.credentials[connectionId];
+  }
+
+  private encrypt(
+    credentials: RemoteOAuthCredentials,
+  ): StoredCredentials | null {
     const serialized = JSON.stringify(credentials);
     if (safeStorage.isEncryptionAvailable()) {
       return {
@@ -188,24 +247,23 @@ export class RemoteProjectsStore {
       };
     }
     console.warn(
-      "[desktop] OS keychain encryption unavailable; storing remote credentials in plaintext.",
+      "[desktop] OS keychain encryption unavailable; remote credentials will last only for this session.",
     );
-    return { credentialsPlaintext: serialized };
+    return null;
   }
 
   private decrypt(
     stored: StoredCredentials | undefined,
   ): RemoteOAuthCredentials | null {
     if (!stored) return null;
-    let serialized = stored.credentialsPlaintext ?? "";
-    if (stored.credentialsEncrypted) {
-      try {
-        serialized = safeStorage.decryptString(
-          Buffer.from(stored.credentialsEncrypted, "base64"),
-        );
-      } catch {
-        return null;
-      }
+    if (!stored.credentialsEncrypted) return null;
+    let serialized: string;
+    try {
+      serialized = safeStorage.decryptString(
+        Buffer.from(stored.credentialsEncrypted, "base64"),
+      );
+    } catch {
+      return null;
     }
     try {
       const parsed = JSON.parse(serialized) as Partial<RemoteOAuthCredentials>;

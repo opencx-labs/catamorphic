@@ -113,6 +113,71 @@ describe("PWA authenticated fetch", () => {
     expect(resourceRequests).toBe(2);
   });
 
+  it("single-flights and propagates rotating credentials across one server", async () => {
+    const store = await import("./store.js");
+    const { authenticatedFetch } = await import("./api.js");
+    const profile = store.activeProfile(store.getState());
+    const credentials = {
+      clientId: "shared-client",
+      accessToken: "expired-access",
+      refreshToken: "refresh-1",
+      accessTokenExpiresAt: "2026-08-26T11:00:00.000Z",
+      tokenEndpoint: "https://brain.acme.dev/api/auth/mcp/token",
+      scope: "openid offline_access",
+    };
+    const first = store.addRemoteConnection({
+      profileId: profile.id,
+      link: {
+        serverUrl: "https://brain.acme.dev/api",
+        remoteProjectId: "project-1",
+      },
+      credentials,
+    });
+    const second = store.addRemoteConnection({
+      profileId: profile.id,
+      link: {
+        serverUrl: "https://brain.acme.dev/api",
+        remoteProjectId: "project-2",
+      },
+      credentials,
+    });
+    let refreshes = 0;
+    const fetchImpl: typeof fetch = async (input, init) => {
+      const request = new Request(input, init);
+      if (new URL(request.url).pathname.endsWith("/token")) {
+        refreshes += 1;
+        return Response.json({
+          access_token: "fresh-access",
+          refresh_token: "refresh-2",
+          expires_in: 3600,
+        });
+      }
+      return Response.json({ ok: true });
+    };
+
+    await Promise.all(
+      [first, second].map((connection) =>
+        authenticatedFetch({
+          connectionId: connection.id,
+          fetch: fetchImpl,
+          now: () => Date.parse("2026-08-26T12:00:00.000Z"),
+        })(`${connection.serverUrl}/me`),
+      ),
+    );
+
+    expect(refreshes).toBe(1);
+    for (const connection of [first, second]) {
+      expect(
+        store.connectionById(store.getState(), connection.id),
+      ).toMatchObject({
+        credentials: {
+          accessToken: "fresh-access",
+          refreshToken: "refresh-2",
+        },
+      });
+    }
+  });
+
   it("uses a paired desktop device token without OAuth refresh", async () => {
     const store = await import("./store.js");
     const { authenticatedFetch } = await import("./api.js");

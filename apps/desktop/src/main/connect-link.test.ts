@@ -14,6 +14,14 @@ describe("remote project locator links", () => {
     });
   });
 
+  it("carries an invitation identifier without treating it as a credential", () => {
+    expect(
+      parseConnectLink(
+        "catamorphic://connect?server=https%3A%2F%2Fbrain.acme.com%2Fapi&project=p-1&invitation=invite-123",
+      ),
+    ).toMatchObject({ invitationId: "invite-123" });
+  });
+
   it("rejects legacy credential-bearing and unsafe links", () => {
     expect(
       parseConnectLink(
@@ -29,6 +37,16 @@ describe("remote project locator links", () => {
     expect(
       parseConnectLink("catamorphic://connect?server=ftp://x&project=z"),
     ).toBeNull();
+    expect(
+      parseConnectLink(
+        "catamorphic://connect?server=http://brain.acme.com/api&project=z",
+      ),
+    ).toBeNull();
+    expect(
+      parseConnectLink(
+        "catamorphic://connect?server=http://127.0.0.1:4700/api&project=z",
+      ),
+    ).toMatchObject({ serverUrl: "http://127.0.0.1:4700/api" });
     expect(parseConnectLink("not a url")).toBeNull();
   });
 });

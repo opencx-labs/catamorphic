@@ -79,10 +79,12 @@ import {
   writeRemoteProjectLocator,
 } from "./remote-projects-store.js";
 import {
+  ensureRemoteProjectAccess,
   httpDocumentsClient,
   localStatus,
   type RemoteMe,
   shipRemoteProject,
+  storeOnlyDocumentsClient,
   syncRemoteProject,
 } from "./remote-sync.js";
 import type { EmbeddedServer } from "./server/boot.js";
@@ -1332,17 +1334,23 @@ export function registerIpcHandlers(
   // A local folder synced from a hosting backend's scoped documents surface:
   // connect (from a link or by hand) creates the local project and pulls;
   // sync pulls; ship pushes local store edits with version checks.
-  const remoteClient = (
-    link: {
-      serverUrl: string;
-      remoteProjectId: string;
-      credentials: RemoteOAuthCredentials;
-    },
+  const remoteClient = (link: {
+    serverUrl: string;
+    remoteProjectId: string;
+    accessToken(forceRefresh?: boolean): Promise<string>;
+  }) =>
+    httpDocumentsClient({
+      serverUrl: link.serverUrl,
+      accessToken: link.accessToken,
+      projectId: link.remoteProjectId,
+    });
+  const sessionAccessToken = (
+    initial: RemoteOAuthCredentials,
     onCredentials?: (credentials: RemoteOAuthCredentials) => void,
   ) => {
-    let credentials = link.credentials;
+    let credentials = initial;
     let refresh: Promise<RemoteOAuthCredentials> | null = null;
-    const accessToken = async (forceRefresh = false) => {
+    return async (forceRefresh = false) => {
       const expiresSoon =
         Date.parse(credentials.accessTokenExpiresAt) <= Date.now() + 60_000;
       if (!forceRefresh && !expiresSoon) return credentials.accessToken;
@@ -1353,11 +1361,6 @@ export function registerIpcHandlers(
       onCredentials?.(credentials);
       return credentials.accessToken;
     };
-    return httpDocumentsClient({
-      serverUrl: link.serverUrl,
-      accessToken,
-      projectId: link.remoteProjectId,
-    });
   };
   const storedRemoteClient = (
     event: Electron.IpcMainInvokeEvent,
@@ -1366,12 +1369,16 @@ export function registerIpcHandlers(
   ) => {
     if (!link)
       throw new Error("This project is not connected to a remote server");
-    return remoteClient(link, (credentials) =>
-      storesFor(event).remoteProjects.updateCredentials(
-        localProjectId,
-        credentials,
-      ),
-    );
+    const store = storesFor(event).remoteProjects;
+    return remoteClient({
+      serverUrl: link.serverUrl,
+      remoteProjectId: link.remoteProjectId,
+      accessToken: (forceRefresh) =>
+        store.accessToken(localProjectId, {
+          ...(forceRefresh ? { forceRefresh } : {}),
+          refresh: (credentials) => refreshRemoteCredentials({ credentials }),
+        }),
+    });
   };
   // What the server says this member may do (ADR 0055): stored on the link
   // at connect and refreshed on every sync; absent on older hosts.
@@ -1478,6 +1485,7 @@ export function registerIpcHandlers(
       input: {
         serverUrl: string;
         remoteProjectId: string;
+        invitationId?: string;
         name: string;
         rootPath: string;
       },
@@ -1488,18 +1496,30 @@ export function registerIpcHandlers(
         throw new Error("rootPath must be an absolute path");
       }
       const serverUrl = input.serverUrl.replace(/\/+$/, "");
-      const credentials = await authorizeRemoteServer({
+      let credentials = await authorizeRemoteServer({
         serverUrl,
         openExternal: (url) => shell.openExternal(url),
       });
-      const client = remoteClient({ ...input, serverUrl, credentials });
+      const client = remoteClient({
+        serverUrl,
+        remoteProjectId: input.remoteProjectId,
+        accessToken: sessionAccessToken(credentials, (next) => {
+          credentials = next;
+        }),
+      });
+      await ensureRemoteProjectAccess({
+        client,
+        projectId: input.remoteProjectId,
+        ...(input.invitationId ? { invitationId: input.invitationId } : {}),
+      });
       await client.list();
       const capabilities = await introspect(client, input.remoteProjectId);
       const githubFullName = capabilities?.source?.remoteUrl
         ? repoFullNameFromUrl(capabilities.source.remoteUrl)
         : null;
+      const builderCheckout = Boolean(capabilities?.builder && githubFullName);
       let project: Project;
-      if (capabilities?.builder && githubFullName) {
+      if (builderCheckout && githubFullName) {
         await ensureGithubRepositoryAccess(server, githubFullName);
         const github = server.catamorphic.core.github;
         if (!github) throw new Error("GitHub integration not configured");
@@ -1535,13 +1555,16 @@ export function registerIpcHandlers(
         ...remoteLink,
         credentials,
       });
-      const report = await syncRemoteProject(input.rootPath, client);
+      const report = await syncRemoteProject(
+        input.rootPath,
+        builderCheckout ? storeOnlyDocumentsClient(client) : client,
+      );
       storesFor(event).remoteProjects.touch(
         project.id,
         new Date().toISOString(),
         capabilities,
       );
-      await checkpointProgramSync(project.id, report);
+      if (!builderCheckout) await checkpointProgramSync(project.id, report);
       return { id: project.id, name: project.name, report };
     },
   );
@@ -1569,12 +1592,7 @@ export function registerIpcHandlers(
         };
       }
       const link = { ...inspected.link, credentials: inspected.credentials };
-      const client = remoteClient(link, (credentials) =>
-        storesFor(event).remoteProjects.updateCredentials(
-          projectId,
-          credentials,
-        ),
-      );
+      const client = storedRemoteClient(event, projectId, link);
       return {
         ...inspected.link,
         local: localStatus(rootPath),
@@ -1592,13 +1610,19 @@ export function registerIpcHandlers(
       const link = requireLink(event, projectId);
       const rootPath = await requireRoot(projectId);
       const client = storedRemoteClient(event, projectId, link);
-      const report = await syncRemoteProject(rootPath, client);
+      const capabilities = await introspect(client, link.remoteProjectId);
+      const report = await syncRemoteProject(
+        rootPath,
+        capabilities?.builder ? storeOnlyDocumentsClient(client) : client,
+      );
       storesFor(event).remoteProjects.touch(
         projectId,
         new Date().toISOString(),
-        await introspect(client, link.remoteProjectId),
+        capabilities,
       );
-      await checkpointProgramSync(projectId, report);
+      if (!capabilities?.builder) {
+        await checkpointProgramSync(projectId, report);
+      }
       notifyGitChanged(projectId);
       return report;
     },
@@ -1748,7 +1772,10 @@ export function registerIpcHandlers(
         openExternal: (url) => shell.openExternal(url),
       });
       storesFor(event).remoteProjects.updateCredentials(projectId, credentials);
-      const client = remoteClient({ ...inspected.link, credentials });
+      const client = storedRemoteClient(event, projectId, {
+        ...inspected.link,
+        credentials,
+      });
       const connection = await probeRemoteConnection({
         remoteProjectId: inspected.link.remoteProjectId,
         me: () => client.me(),

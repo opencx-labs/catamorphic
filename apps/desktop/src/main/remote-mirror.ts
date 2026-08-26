@@ -4,10 +4,8 @@ import {
 } from "@catamorphic/core";
 import type { ProfileConfigManager } from "./profile-config.js";
 import type { ProfilesStore } from "./profiles.js";
-import {
-  type RemoteOAuthCredentials,
-  refreshRemoteCredentials,
-} from "./remote-oauth.js";
+import { refreshRemoteCredentials } from "./remote-oauth.js";
+import type { RemoteProjectsStore } from "./remote-projects-store.js";
 
 /**
  * Session mirroring (ADR 0061): local-first, synced to the linked remote.
@@ -94,20 +92,13 @@ export class RemoteSessionMirror {
       ? parseProjectAgentId(detail.agentId)
       : undefined;
     const request = async (forceRefresh = false) => {
-      const expired =
-        Date.parse(link.credentials.accessTokenExpiresAt) <=
-        Date.now() + 60_000;
-      if (forceRefresh || expired) {
-        link.credentials = await refreshRemoteCredentials({
-          credentials: link.credentials,
-        });
-        this.deps.profileConfig
-          .forProfile(link.profileId)
-          .remoteProjects.updateCredentials(
-            link.localProjectId,
-            link.credentials,
-          );
-      }
+      const accessToken = await link.remoteProjects.accessToken(
+        link.localProjectId,
+        {
+          ...(forceRefresh ? { forceRefresh } : {}),
+          refresh: (credentials) => refreshRemoteCredentials({ credentials }),
+        },
+      );
       return fetch(
         `${link.serverUrl.replace(/\/+$/, "")}/projects/${encodeURIComponent(
           link.remoteProjectId,
@@ -115,7 +106,7 @@ export class RemoteSessionMirror {
         {
           method: "PUT",
           headers: {
-            authorization: `Bearer ${link.credentials.accessToken}`,
+            authorization: `Bearer ${accessToken}`,
             "content-type": "application/json",
           },
           body: JSON.stringify({
@@ -176,11 +167,13 @@ export class RemoteSessionMirror {
         .forProfile(profile.id)
         .remoteProjects.get(projectId);
       if (link) {
+        const remoteProjects = this.deps.profileConfig.forProfile(
+          profile.id,
+        ).remoteProjects;
         return {
-          profileId: profile.id,
           serverUrl: link.serverUrl,
           remoteProjectId: link.remoteProjectId,
-          credentials: link.credentials,
+          remoteProjects,
           localProjectId: projectId,
         };
       }
@@ -190,9 +183,8 @@ export class RemoteSessionMirror {
 }
 
 interface MirrorLink {
-  profileId: string;
   serverUrl: string;
   remoteProjectId: string;
-  credentials: RemoteOAuthCredentials;
+  remoteProjects: RemoteProjectsStore;
   localProjectId: string;
 }

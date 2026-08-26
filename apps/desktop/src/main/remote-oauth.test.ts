@@ -2,6 +2,18 @@ import { describe, expect, it, vi } from "vitest";
 import { authorizeRemoteServer } from "./remote-oauth.js";
 
 describe("remote server OAuth", () => {
+  it("rejects cleartext non-loopback servers before discovery", async () => {
+    const fetchImpl = vi.fn();
+    await expect(
+      authorizeRemoteServer({
+        serverUrl: "http://brain.acme.test/api",
+        fetch: fetchImpl,
+        openExternal: vi.fn(),
+      }),
+    ).rejects.toThrow("HTTPS");
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
+
   it("discovers, registers a public client, uses S256 PKCE, and exchanges the callback", async () => {
     let registeredRedirect = "";
     let authorizeURL: URL | undefined;

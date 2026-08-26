@@ -153,18 +153,22 @@ export async function launchPwa(
   opts: {
     env?: Record<string, string>;
     /**
-     * Backend to spawn (given the API port). Default: the scripted fake
+     * Backend to spawn (given public and machine-local operator ports).
+     * Default: the scripted fake
      * (scripts/dev-server.mjs). The stock-server suite passes the real
      * apps/server here.
      */
-    backend?: (apiPort: number) => {
+    backend?: (
+      apiPort: number,
+      operatorPort: number,
+    ) => {
       command: string;
       args: string[];
       cwd: string;
       env?: Record<string, string | undefined>;
     };
     /** Redeemable connect link for the suite; default: the fake's invite. */
-    mintLink?: (apiBase: string) => Promise<string>;
+    mintLink?: (apiBase: string, operatorBase: string) => Promise<string>;
     /** Loopback is trustworthy in Chrome; false exercises phone-like LAN HTTP. */
     secureContext?: boolean;
     /** Keep this below the caller's beforeAll timeout so cleanup always runs. */
@@ -175,7 +179,8 @@ export async function launchPwa(
   if (!chrome) throw new Error("No Chrome/Chromium binary found for e2e.");
 
   const apiPort = await freePort();
-  const backend = opts.backend?.(apiPort) ?? {
+  const operatorPort = await freePort();
+  const backend = opts.backend?.(apiPort, operatorPort) ?? {
     command: "node",
     args: ["scripts/dev-server.mjs"],
     cwd: APP_DIR,
@@ -239,7 +244,7 @@ export async function launchPwa(
       childFailure: server.failure,
     });
     const connectLink =
-      (await opts.mintLink?.(apiBase)) ??
+      (await opts.mintLink?.(apiBase, `http://127.0.0.1:${operatorPort}`)) ??
       `catamorphic://connect?server=${encodeURIComponent(apiBase)}&project=11111111-1111-4111-8111-111111111111&name=Acme%20Brain`;
     // Do not give Chrome a one-shot navigation before Vite is listening.
     // Chrome keeps its network error page open instead of retrying, which

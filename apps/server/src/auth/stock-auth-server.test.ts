@@ -18,7 +18,7 @@ describe("stock auth server lifecycle", () => {
     const payload = { username: "grace", name: "Grace Hopper", password };
 
     try {
-      const denied = await server.app.inject({
+      const denied = await server.operatorApp.inject({
         method: "POST",
         url: "/_catamorphic/operator/users",
         payload,
@@ -28,7 +28,15 @@ describe("stock auth server lifecycle", () => {
       const operatorSecret = fs
         .readFileSync(path.join(dataDir, "operator-secret"), "utf8")
         .trim();
-      const provisioned = await server.app.inject({
+      const publicIngress = await server.app.inject({
+        method: "POST",
+        url: "/_catamorphic/operator/users",
+        headers: { authorization: `Bearer ${operatorSecret}` },
+        payload,
+      });
+      expect(publicIngress.statusCode).toBe(404);
+
+      const provisioned = await server.operatorApp.inject({
         method: "POST",
         url: "/_catamorphic/operator/users",
         headers: { authorization: `Bearer ${operatorSecret}` },

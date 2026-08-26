@@ -354,6 +354,7 @@ describe("AiSdkAgentRuntime conformance", () => {
           projectId: session.projectId,
           allocationId: session.allocationId,
           workingDirectory: session.workingDirectory,
+          after: { sequence: 0 },
         }),
     },
   });

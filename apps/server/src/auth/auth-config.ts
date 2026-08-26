@@ -9,7 +9,15 @@ const ProviderSchema = z.object({
   clientId: z.string().min(1),
   clientSecret: z.string().min(1),
   scopes: z.array(z.string().min(1)).default(["openid", "email", "profile"]),
-  allowedDomains: z.array(z.string().min(1)).default([]),
+  allowedDomains: z
+    .array(
+      z
+        .string()
+        .trim()
+        .toLowerCase()
+        .regex(/^[a-z0-9](?:[a-z0-9.-]*[a-z0-9])?$/),
+    )
+    .default([]),
 });
 
 const ConfigSchema = z

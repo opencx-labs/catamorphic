@@ -36,7 +36,9 @@ machine-local operations call Catamorphic services to create a project, commit
 explicit roles, configure admission, and call Better Auth's server user
 creation API before assigning an ordinary membership. They are discovered from
 source and invoked by a setup agent over loopback using an owner-only operator
-credential. They never log credentials, construct auth rows, or invent role
+credential. They run on a dedicated Fastify listener bound to loopback and are
+not registered on the public application, so a same-host reverse proxy cannot
+forward them. They never log credentials, construct auth rows, or invent role
 policy. There is no human setup CLI or first-run UI.
 
 Local stock installs keep auth data in a separate PGlite database at

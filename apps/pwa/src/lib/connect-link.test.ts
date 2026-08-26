@@ -35,6 +35,16 @@ describe("parseConnectLink", () => {
     expect(
       parseConnectLink("catamorphic://connect?server=ftp%3A%2F%2Fx&project=p"),
     ).toBeNull();
+    expect(
+      parseConnectLink(
+        "catamorphic://connect?server=http%3A%2F%2Fbrain.acme.dev%2Fapi&project=p",
+      ),
+    ).toBeNull();
+    expect(
+      parseConnectLink(
+        "catamorphic://connect?server=http%3A%2F%2Flocalhost%3A4700%2Fapi&project=p",
+      ),
+    ).toMatchObject({ serverUrl: "http://localhost:4700/api" });
     expect(parseConnectLink("not a link")).toBeNull();
   });
 

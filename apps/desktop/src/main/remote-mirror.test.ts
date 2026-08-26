@@ -83,6 +83,7 @@ function mirror(
     profileConfig: {
       forProfile: () => ({
         remoteProjects: {
+          accessToken: async () => "member-token",
           get: (projectId: string) =>
             projectId === "local-1"
               ? {

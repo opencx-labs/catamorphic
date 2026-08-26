@@ -1,5 +1,6 @@
 import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
 import http from "node:http";
+import { isSecureRemoteUrl } from "./connect-link.js";
 
 interface ProtectedResourceMetadata {
   resource: string;
@@ -68,6 +69,7 @@ export async function authorizeRemoteServer(options: {
   timeoutMs?: number;
 }): Promise<RemoteOAuthCredentials> {
   const fetchImpl = options.fetch ?? fetch;
+  assertSecureRemoteUrl(options.serverUrl);
   const server = new URL(options.serverUrl);
   const protectedResource = await fetchJson<ProtectedResourceMetadata>(
     fetchImpl,
@@ -77,12 +79,20 @@ export async function authorizeRemoteServer(options: {
   if (!authorizationServer) {
     throw new Error("The remote server published no authorization server");
   }
+  assertSecureRemoteUrl(authorizationServer);
   const metadata = await fetchJson<AuthorizationServerMetadata>(
     fetchImpl,
     new URL("/.well-known/oauth-authorization-server", authorizationServer),
   );
   if (!metadata.code_challenge_methods_supported?.includes("S256")) {
     throw new Error("The remote server does not support S256 PKCE");
+  }
+  for (const endpoint of [
+    metadata.authorization_endpoint,
+    metadata.token_endpoint,
+    metadata.registration_endpoint,
+  ]) {
+    assertSecureRemoteUrl(endpoint);
   }
 
   const callback = await openLoopbackCallback(options.timeoutMs ?? 120_000);
@@ -165,6 +175,12 @@ export async function authorizeRemoteServer(options: {
     };
   } finally {
     await callback.close();
+  }
+}
+
+function assertSecureRemoteUrl(raw: string): void {
+  if (!isSecureRemoteUrl(raw)) {
+    throw new Error("Remote authorization requires HTTPS except on loopback");
   }
 }
 

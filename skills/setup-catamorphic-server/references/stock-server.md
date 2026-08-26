@@ -21,8 +21,9 @@ before proposing commands.
 
 The running server owns its Better Auth connection and exposes small,
 machine-local operator operations for project bootstrap and local user
-provisioning. These are building blocks for an AI setup agent, not a human CLI
-or product setup flow.
+provisioning on a separate listener bound only to loopback (port 4701 by
+default). The public listener does not register these routes. These are
+building blocks for an AI setup agent, not a human CLI or product setup flow.
 
 Inspect `apps/server/src/server.ts`, the schemas under
 `apps/server/src/setup`, and the running deployment before acting. The setup
@@ -32,16 +33,17 @@ agent should:
    and first ordinary manager with the user.
 2. Read the owner-only operator credential from the mounted data directory or
    deployment secret without displaying it.
-3. Invoke the loopback-only project operation with explicit committed role
-   definitions and admission policy.
+3. Invoke the project operation on the dedicated loopback listener with
+   explicit committed role definitions and admission policy.
 4. If local username/password is selected, invoke the user operation and bind
    that stable auth user to an explicit project role.
 5. Verify sign-in, OAuth discovery, project membership, and revocation through
    the normal application paths.
 
 Adapt the transport to the deployment. An agent in a source checkout may call
-the loopback operations directly. An agent managing a container may execute a
-small request from inside the container. Do not require one shell tool, echo
+the loopback operations directly. An agent managing a container must execute a
+small request from inside the container because the operator port is not
+published. Do not require one shell tool, echo
 credentials into history, open PGlite concurrently, hash a password, or
 construct Better Auth rows.
 

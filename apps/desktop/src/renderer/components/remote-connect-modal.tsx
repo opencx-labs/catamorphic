@@ -28,6 +28,7 @@ export function RemoteConnectModal({
   const [pasted, setPasted] = useState("");
   const [serverUrl, setServerUrl] = useState("");
   const [remoteProjectId, setRemoteProjectId] = useState("");
+  const [invitationId, setInvitationId] = useState<string>();
   const [name, setName] = useState("");
   const [parentDir, setParentDir] = useState("");
   const [pending, setPending] = useState(false);
@@ -41,6 +42,7 @@ export function RemoteConnectModal({
     setError(null);
     setGithubRequired(false);
     setGithubUserCode(null);
+    setInvitationId(undefined);
     void desktopApi.defaultProjectsDir().then(setParentDir);
   }, [open]);
 
@@ -60,6 +62,7 @@ export function RemoteConnectModal({
     if (!link) return;
     setServerUrl(link.serverUrl);
     setRemoteProjectId(link.remoteProjectId);
+    setInvitationId(link.invitationId);
     if (link.remoteProjectName) setName(link.remoteProjectName);
   }, [link]);
 
@@ -69,6 +72,7 @@ export function RemoteConnectModal({
     if (!parsed) return;
     setServerUrl(parsed.serverUrl);
     setRemoteProjectId(parsed.remoteProjectId);
+    setInvitationId(parsed.invitationId);
     if (parsed.remoteProjectName) setName(parsed.remoteProjectName);
   };
 
@@ -113,6 +117,7 @@ export function RemoteConnectModal({
       const result = await desktopApi.remoteConnect({
         serverUrl: serverUrl.trim(),
         remoteProjectId: remoteProjectId.trim(),
+        ...(invitationId ? { invitationId } : {}),
         name: name.trim(),
         rootPath: targetPath,
       });

@@ -1,5 +1,5 @@
 import { sha256 } from "@noble/hashes/sha2.js";
-import type { ConnectLink } from "./connect-link.js";
+import { type ConnectLink, isSecureRemoteUrl } from "./connect-link.js";
 import type { RemoteOAuthCredentials } from "./store.js";
 
 const PENDING_KEY = "catamorphic-pwa.oauth.pending";
@@ -71,6 +71,7 @@ async function beginAuthorization(options: {
     options.target.kind === "project"
       ? options.target.link.serverUrl
       : options.target.serverUrl;
+  assertSecureRemoteUrl(serverUrl);
   const server = new URL(serverUrl);
   const resource = await fetchJson<ProtectedResourceMetadata>(
     fetchImpl,
@@ -80,12 +81,20 @@ async function beginAuthorization(options: {
   if (!authorizationServer) {
     throw new Error("The remote server published no authorization server");
   }
+  assertSecureRemoteUrl(authorizationServer);
   const metadata = await fetchJson<AuthorizationServerMetadata>(
     fetchImpl,
     new URL("/.well-known/oauth-authorization-server", authorizationServer),
   );
   if (!metadata.code_challenge_methods_supported?.includes("S256")) {
     throw new Error("The remote server does not support S256 PKCE");
+  }
+  for (const endpoint of [
+    metadata.authorization_endpoint,
+    metadata.token_endpoint,
+    metadata.registration_endpoint,
+  ]) {
+    assertSecureRemoteUrl(endpoint);
   }
   const registration = await fetchImpl(metadata.registration_endpoint, {
     method: "POST",
@@ -279,12 +288,12 @@ function validTarget(
 }
 
 function validServerUrl(value: unknown): value is string {
-  if (typeof value !== "string") return false;
-  try {
-    const url = new URL(value);
-    return url.protocol === "https:" || url.protocol === "http:";
-  } catch {
-    return false;
+  return typeof value === "string" && isSecureRemoteUrl(value);
+}
+
+function assertSecureRemoteUrl(raw: string): void {
+  if (!isSecureRemoteUrl(raw)) {
+    throw new Error("Remote authorization requires HTTPS except on loopback");
   }
 }
 

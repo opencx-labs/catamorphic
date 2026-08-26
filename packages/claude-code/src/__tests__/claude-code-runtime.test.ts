@@ -980,6 +980,30 @@ describe("ClaudeCodeAgentRuntime conformance", () => {
 });
 
 describe("ClaudeCodeAgentRuntime", () => {
+  it("continues durable event sequencing from the resume cursor", async () => {
+    const runtime = new ClaudeCodeAgentRuntime();
+    await runtime.resumeSession({
+      sessionId: "resumed-session",
+      providerSessionId: "provider-session",
+      projectId: "project-1",
+      allocationId: "allocation-1",
+      workingDirectory: "/workspace",
+      after: { sequence: 41 },
+    });
+
+    const events = await collectUntil({
+      provider: runtime,
+      sessionId: "resumed-session",
+      after: 41,
+      until: (event) => event.type === "session.resumed",
+    });
+
+    expect(events[0]).toMatchObject({
+      type: "session.resumed",
+      sequence: 42,
+    });
+  });
+
   it("maps complete native system, assistant, plan, task, background, hook, usage, result, and turn messages", async () => {
     const runtime = new ClaudeCodeAgentRuntime();
     const session = await startSession(runtime);

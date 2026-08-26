@@ -54,6 +54,19 @@ function oauthFetch(requests: Request[]): typeof fetch {
 }
 
 describe("PWA remote OAuth", () => {
+  it("rejects cleartext non-loopback servers before discovery", async () => {
+    const requests: Request[] = [];
+    await expect(
+      beginServerAuthorization({
+        serverUrl: "http://brain.acme.test/api",
+        redirectUri: "https://app.example/oauth/callback",
+        storage: sessionStorage,
+        fetch: oauthFetch(requests),
+      }),
+    ).rejects.toThrow("HTTPS");
+    expect(requests).toEqual([]);
+  });
+
   it("discovers and registers a public S256 PKCE browser client", async () => {
     const requests: Request[] = [];
 
