@@ -76,6 +76,7 @@ Settled design decisions live here as short Architecture Decision Records. They 
 | [0061](0061-session-mirroring.md) | Session mirroring: local-first chats pushed to the linked remote; fork-on-continuation | Accepted |
 | [0062](0062-session-privacy-and-fork-ux.md) | Session privacy & fork UX: incognito sessions, project policy, fork markers, admin usage | Accepted |
 | [0063](0063-agent-checkout-coordination.md) | Agent coordination and optional worktree isolation | Accepted |
-| [0064](0064-execution-environments-and-allocations.md) | Execution Environments and immutable Allocations | Accepted |
+| [0064](0064-execution-environments-and-allocations.md) | Execution Environments and immutable Allocations | Accepted (missing project policy refined by 0070) |
 | [0065](0065-credential-connections-and-capability-broker.md) | Credential connections and capability broker | Accepted (greenfield cutover refined by 0066) |
 | [0066](0066-greenfield-environment-and-connection-cutover.md) | Greenfield Environment and connection cutover | Accepted |
+| [0070](0070-default-local-environment-policy.md) | Default local Environment policy | Accepted |

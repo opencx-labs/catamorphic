@@ -37,6 +37,14 @@ describe("ProjectManager", () => {
       await repo.readFile(".catamorphic/project.json"),
     );
     expect(manifest.name).toBe("test-project");
+    expect(manifest.defaultEnvironment).toBe("local");
+    expect(manifest.environments).toEqual({
+      local: {
+        binding: "local",
+        description: "Run on this machine",
+        workloads: ["agent", "workflow"],
+      },
+    });
 
     const commits = await repo.log();
     expect(commits).toHaveLength(1);
