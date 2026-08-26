@@ -86,10 +86,19 @@ function mirror(
           get: (projectId: string) =>
             projectId === "local-1"
               ? {
+                  connectionId: "connection-1",
                   serverUrl: base,
                   remoteProjectId: "remote-1",
                   remoteProjectName: "Brain",
-                  token: "member-token",
+                  lastSyncAt: null,
+                  credentials: {
+                    clientId: "client-1",
+                    accessToken: "member-token",
+                    refreshToken: "refresh-token",
+                    accessTokenExpiresAt: "2099-01-01T00:00:00.000Z",
+                    tokenEndpoint: `${base}/auth/mcp/token`,
+                    scope: "openid offline_access",
+                  },
                 }
               : null,
         },

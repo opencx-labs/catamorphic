@@ -54,6 +54,34 @@ export interface AgentMessages {
   session_id: string;
 }
 
+export interface AgentRuntimeEvents {
+  created_at: Generated<Timestamp>;
+  event_id: string;
+  event_type: string;
+  occurred_at: Timestamp;
+  payload: Json;
+  provider_payload_ref: string | null;
+  sequence: Int8;
+  session_id: string;
+  turn_id: string | null;
+}
+
+export interface AgentRuntimeRequests {
+  created_at: Timestamp;
+  expires_at: Timestamp | null;
+  kind: string;
+  payload: Json;
+  request_id: string;
+  resolved_at: Timestamp | null;
+  resolved_by_external_user_id: string | null;
+  response: Json | null;
+  revision: Generated<number>;
+  session_id: string;
+  status: Generated<string>;
+  turn_id: string | null;
+  updated_at: Generated<Timestamp>;
+}
+
 export interface AgentSessions {
   activity: string | null;
   agent_id: string | null;
@@ -542,6 +570,40 @@ export interface Tenants {
   name: string;
 }
 
+export interface StockProjectAccessRequests {
+  decided_at: Timestamp | null;
+  decided_by_external_user_id: string | null;
+  email: string;
+  email_verified: boolean;
+  external_user_id: string;
+  id: Generated<string>;
+  project_id: string;
+  requested_at: Generated<Timestamp>;
+  status: Generated<string>;
+}
+
+export interface StockProjectAdmissionPolicies {
+  approved_domains: Generated<Json>;
+  default_role: string;
+  mode: string;
+  project_id: string;
+  updated_at: Generated<Timestamp>;
+  updated_by_external_user_id: string;
+}
+
+export interface StockProjectInvitations {
+  created_at: Generated<Timestamp>;
+  created_by_external_user_id: string;
+  expires_at: Timestamp;
+  grants: Generated<Json>;
+  id: Generated<string>;
+  invited_email: string | null;
+  project_id: string;
+  redeemed_at: Timestamp | null;
+  redeemed_by_external_user_id: string | null;
+  roles: Json;
+}
+
 export interface TriggerBindings {
   can_suspend: boolean;
   commit_sha: string;
@@ -672,6 +734,8 @@ export interface DB {
   _migrations: _Migrations;
   active_run_invocations: ActiveRunInvocations;
   agent_messages: AgentMessages;
+  agent_runtime_events: AgentRuntimeEvents;
+  agent_runtime_requests: AgentRuntimeRequests;
   agent_sessions: AgentSessions;
   app_storage: AppStorage;
   app_versions: AppVersions;
@@ -702,6 +766,9 @@ export interface DB {
   rate_reservation_buckets: RateReservationBuckets;
   store_document_versions: StoreDocumentVersions;
   store_documents: StoreDocuments;
+  stock_project_access_requests: StockProjectAccessRequests;
+  stock_project_admission_policies: StockProjectAdmissionPolicies;
+  stock_project_invitations: StockProjectInvitations;
   tenant_app_policies: TenantAppPolicies;
   tenant_execution_policies: TenantExecutionPolicies;
   tenants: Tenants;

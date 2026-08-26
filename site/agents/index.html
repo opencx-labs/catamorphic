@@ -65,13 +65,12 @@ and follow the integration guide it links.</code></div>
         <p class="agent-note">The agent reads llms.txt, pulls the skill and the integration guide, checks your dependencies, and walks you through the choices (storage, sandbox provider, auth wiring) before writing code.</p>
       </div>
       <div class="reveal">
-        <h3 style="font-size:16px; margin-bottom:4px">2 · Install the skill</h3>
-        <p style="color:#9a9aa3; font-size:14px">One command drops the embedding skill into your repo:</p>
-        <div class="agent-block"><code>mkdir -p .claude/skills/embed-catamorphic &amp;&amp; \
-curl -fsSL https://raw.githubusercontent.com/opencx-labs/\
-catamorphic/main/skills/embed-catamorphic/SKILL.md \
-  -o .claude/skills/embed-catamorphic/SKILL.md</code></div>
-        <p class="agent-note">From then on, any "let users build automations in our app" request triggers the skill automatically: dependency checklist, decision tree, quickstart, and the rules that keep integrations correct.</p>
+        <h3 style="font-size:16px; margin-bottom:4px">2 · Point to the setup skill</h3>
+        <p style="color:#9a9aa3; font-size:14px">Give the agent the entrypoint and let it load only the references your setup needs:</p>
+        <div class="agent-block"><code>Read https://raw.githubusercontent.com/opencx-labs/\
+catamorphic/main/skills/setup-catamorphic-server/SKILL.md
+and follow its linked references. Inspect this app before asking me setup questions.</code></div>
+        <p class="agent-note">The skill starts from what your app already has, asks only about unresolved choices, and routes to stock-host or custom-host guidance.</p>
       </div>
     </div>
   </div>
@@ -82,7 +81,7 @@ catamorphic/main/skills/embed-catamorphic/SKILL.md \
     <div class="section-header reveal">
       <p class="eyebrow">// for agents</p>
       <h2>If you are the agent, start here</h2>
-      <p>Read <a href="/llms.txt">/llms.txt</a>, then the <a href="https://raw.githubusercontent.com/opencx-labs/catamorphic/main/skills/embed-catamorphic/SKILL.md">embed-catamorphic skill</a>, then <a href="https://raw.githubusercontent.com/opencx-labs/catamorphic/main/INTEGRATION.md">INTEGRATION.md</a>. The whole implementation is <a href="https://github.com/opencx-labs/catamorphic">open source</a>: when the docs leave a question open, clone the repo and read the package READMEs, the ADRs, and the desktop app's own embedding. The short version:</p>
+      <p>Read <a href="/llms.txt">/llms.txt</a>, then the <a href="https://raw.githubusercontent.com/opencx-labs/catamorphic/main/skills/setup-catamorphic-server/SKILL.md">setup-catamorphic-server skill</a>, then <a href="https://raw.githubusercontent.com/opencx-labs/catamorphic/main/INTEGRATION.md">INTEGRATION.md</a>. The whole implementation is <a href="https://github.com/opencx-labs/catamorphic">open source</a>: when the docs leave a question open, clone the repo and read the package READMEs, the ADRs, and the desktop app's own embedding. The short version:</p>
     </div>
     <div class="grid">
       <div class="card reveal">

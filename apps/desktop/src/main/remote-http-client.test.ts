@@ -32,7 +32,7 @@ describe("httpDocumentsClient", () => {
     }> = [];
     const client = httpDocumentsClient({
       serverUrl: `${base}/`,
-      token: "t0k",
+      accessToken: async () => "t0k",
       projectId,
       fetch: fakeFetch(async (url, init) => {
         const headers = new Headers(init?.headers);
@@ -125,7 +125,7 @@ describe("httpDocumentsClient", () => {
   it("maps 409 to a conflict with the current version, 404 delete to notFound, other failures to errors with the server's message", async () => {
     const client = httpDocumentsClient({
       serverUrl: base,
-      token: "t",
+      accessToken: async () => "t",
       projectId,
       fetch: fakeFetch((_url, init) => {
         if (init?.method === "PUT")
@@ -148,5 +148,75 @@ describe("httpDocumentsClient", () => {
     await expect(client.list()).rejects.toThrow(
       /Listing documents failed \(403\): Not authorized/,
     );
+  });
+
+  it("uses the same authenticated client for roles, members, and invitations", async () => {
+    const requests: Request[] = [];
+    const client = httpDocumentsClient({
+      serverUrl: base,
+      accessToken: async () => "manager-token",
+      projectId,
+      fetch: async (input, init) => {
+        const request = new Request(input, init);
+        requests.push(request);
+        if (request.url.endsWith("/roles")) {
+          return Response.json([
+            { slug: "member", definition: { name: "Member" } },
+          ]);
+        }
+        if (request.url.endsWith("/admission/members")) {
+          return Response.json([
+            {
+              externalUserId: "user-1",
+              name: "Ada",
+              email: "ada@example.com",
+              roles: ["member"],
+            },
+          ]);
+        }
+        if (
+          request.method === "GET" &&
+          request.url.endsWith("/admission/requests")
+        ) {
+          return Response.json([
+            {
+              id: "request-1",
+              externalUserId: "user-2",
+              email: "grace@example.com",
+              emailVerified: true,
+              status: "pending",
+              requestedAt: "2026-08-26T00:00:00.000Z",
+            },
+          ]);
+        }
+        if (request.method === "POST") {
+          return Response.json({
+            id: "invite-1",
+            expiresAt: "2026-09-02T00:00:00.000Z",
+            connectLinks: ["catamorphic://connect?project=p-1"],
+            webLinks: [],
+          });
+        }
+        return Response.json({ ok: true });
+      },
+    });
+
+    expect((await client.listRoles())[0]?.slug).toBe("member");
+    expect((await client.listMembers())[0]?.email).toBe("ada@example.com");
+    expect((await client.listAccessRequests())[0]?.id).toBe("request-1");
+    await client.setMemberRoles("user-1", ["manager"]);
+    await client.decideAccessRequest("request-1", "approved");
+    expect(
+      await client.inviteMember({
+        email: "grace@example.com",
+        roles: ["member"],
+      }),
+    ).toMatchObject({ id: "invite-1" });
+    expect(
+      requests.every(
+        (request) =>
+          request.headers.get("authorization") === "Bearer manager-token",
+      ),
+    ).toBe(true);
   });
 });

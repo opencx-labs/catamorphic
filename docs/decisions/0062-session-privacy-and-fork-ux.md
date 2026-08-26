@@ -1,6 +1,6 @@
 # 0062 — Session privacy and the fork's UX: incognito, policy, usage
 
-Status: Accepted (2026-08-21)
+Status: Accepted (2026-08-21; stock admin-token usage route superseded by 0072)
 
 ## Context
 

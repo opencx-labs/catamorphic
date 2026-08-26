@@ -32,6 +32,34 @@ export interface RemoteProposalResult {
   pullRequest?: { url: string; number: number };
 }
 
+export interface RemoteRole {
+  slug: string;
+  definition?: { name: string };
+}
+
+export interface RemoteMember {
+  externalUserId: string;
+  name: string | null;
+  email: string | null;
+  roles: string[];
+}
+
+export interface RemoteInvitation {
+  id: string;
+  expiresAt: string;
+  connectLinks: string[];
+  webLinks: string[];
+}
+
+export interface RemoteAccessRequest {
+  id: string;
+  externalUserId: string;
+  email: string;
+  emailVerified: boolean;
+  status: string;
+  requestedAt: string;
+}
+
 /** `GET /me` on the host (ADR 0055); null when the host predates it. */
 export interface RemoteMe {
   version: number;
@@ -39,6 +67,8 @@ export interface RemoteMe {
   projects: Array<{
     projectId: string;
     builder: boolean;
+    source: { remoteUrl: string; defaultBranch: string } | null;
+    permissions: Array<"memberships:manage" | "roles:manage">;
     agents: string[];
     workflows: string[];
     apps: string[];
@@ -65,6 +95,18 @@ export class RemoteAuthError extends Error {
 /** The documents client plus the two members' verbs beside it. */
 export interface RemoteProjectClient extends RemoteDocumentsClient {
   me(): Promise<RemoteMe | null>;
+  listRoles(): Promise<RemoteRole[]>;
+  listMembers(): Promise<RemoteMember[]>;
+  listAccessRequests(): Promise<RemoteAccessRequest[]>;
+  decideAccessRequest(
+    requestId: string,
+    decision: "approved" | "denied",
+  ): Promise<void>;
+  setMemberRoles(externalUserId: string, roles: string[]): Promise<void>;
+  inviteMember(input: {
+    email?: string;
+    roles: string[];
+  }): Promise<RemoteInvitation>;
   publish(input: {
     path: string;
     audience: "public" | "members";
@@ -79,13 +121,24 @@ export interface RemoteProjectClient extends RemoteDocumentsClient {
 /** An HTTP client for a hosting backend's documents routes. */
 export function httpDocumentsClient(args: {
   serverUrl: string;
-  token: string;
+  accessToken(forceRefresh?: boolean): Promise<string>;
   projectId: string;
   fetch?: typeof fetch;
 }): RemoteProjectClient {
   const doFetch = args.fetch ?? fetch;
   const base = `${args.serverUrl.replace(/\/+$/, "")}/projects/${encodeURIComponent(args.projectId)}/documents`;
-  const headers = { authorization: `Bearer ${args.token}` };
+  const authorizedFetch = async (url: string, init: RequestInit = {}) => {
+    const request = async (forceRefresh: boolean) =>
+      doFetch(url, {
+        ...init,
+        headers: {
+          ...Object.fromEntries(new Headers(init.headers).entries()),
+          authorization: `Bearer ${await args.accessToken(forceRefresh)}`,
+        },
+      });
+    const response = await request(false);
+    return response.status === 401 ? request(true) : response;
+  };
   const q = (params: Record<string, string | number | undefined>) =>
     Object.entries(params)
       .filter(([, v]) => v !== undefined)
@@ -106,16 +159,71 @@ export function httpDocumentsClient(args: {
     );
   };
   return {
+    async listRoles() {
+      const response = await authorizedFetch(
+        `${args.serverUrl.replace(/\/+$/, "")}/projects/${encodeURIComponent(args.projectId)}/roles`,
+      );
+      if (!response.ok) return fail(response, "Listing project roles");
+      return (await response.json()) as RemoteRole[];
+    },
+    async listMembers() {
+      const response = await authorizedFetch(
+        `${args.serverUrl.replace(/\/+$/, "")}/projects/${encodeURIComponent(args.projectId)}/admission/members`,
+      );
+      if (!response.ok) return fail(response, "Listing project members");
+      return (await response.json()) as RemoteMember[];
+    },
+    async listAccessRequests() {
+      const response = await authorizedFetch(
+        `${args.serverUrl.replace(/\/+$/, "")}/projects/${encodeURIComponent(args.projectId)}/admission/requests`,
+      );
+      if (!response.ok) return fail(response, "Listing access requests");
+      return (await response.json()) as RemoteAccessRequest[];
+    },
+    async decideAccessRequest(requestId, decision) {
+      const response = await authorizedFetch(
+        `${args.serverUrl.replace(/\/+$/, "")}/projects/${encodeURIComponent(args.projectId)}/admission/requests/${encodeURIComponent(requestId)}/decision`,
+        {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ decision }),
+        },
+      );
+      if (!response.ok) return fail(response, "Deciding access request");
+    },
+    async setMemberRoles(externalUserId, roles) {
+      const response = await authorizedFetch(
+        `${args.serverUrl.replace(/\/+$/, "")}/projects/${encodeURIComponent(args.projectId)}/memberships/${encodeURIComponent(externalUserId)}`,
+        {
+          method: "PUT",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ roles }),
+        },
+      );
+      if (!response.ok) return fail(response, "Updating project member");
+    },
+    async inviteMember(input) {
+      const response = await authorizedFetch(
+        `${args.serverUrl.replace(/\/+$/, "")}/projects/${encodeURIComponent(args.projectId)}/admission/invitations`,
+        {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify(input),
+        },
+      );
+      if (!response.ok) return fail(response, "Inviting project member");
+      return (await response.json()) as RemoteInvitation;
+    },
     async list() {
-      const response = await doFetch(base, { headers });
+      const response = await authorizedFetch(base);
       if (!response.ok) return fail(response, "Listing documents");
       return (await response.json()) as RemoteDocumentEntry[];
     },
     async readBytes(relative, version) {
-      const response = await doFetch(
+      const response = await authorizedFetch(
         `${base}/raw?${q({ path: relative, version })}`,
         {
-          headers,
+          headers: {},
         },
       );
       if (!response.ok) return fail(response, `Reading ${relative}`);
@@ -137,9 +245,9 @@ export function httpDocumentsClient(args: {
       };
     },
     async write(input) {
-      const response = await doFetch(`${base}/content`, {
+      const response = await authorizedFetch(`${base}/content`, {
         method: "PUT",
-        headers: { ...headers, "content-type": "application/json" },
+        headers: { "content-type": "application/json" },
         body: JSON.stringify({
           path: input.path,
           base64: Buffer.from(input.bytes).toString("base64"),
@@ -164,9 +272,9 @@ export function httpDocumentsClient(args: {
       };
     },
     async delete(input) {
-      const response = await doFetch(
+      const response = await authorizedFetch(
         `${base}/content?${q({ path: input.path, ifVersion: input.ifVersion })}`,
-        { method: "DELETE", headers },
+        { method: "DELETE" },
       );
       if (response.status === 409) {
         const body = (await response.json()) as { currentVersion: number };
@@ -184,10 +292,10 @@ export function httpDocumentsClient(args: {
       };
     },
     async me() {
-      const response = await doFetch(
+      const response = await authorizedFetch(
         `${args.serverUrl.replace(/\/+$/, "")}/me`,
         {
-          headers,
+          headers: {},
         },
       );
       if (response.status === 404) return null;
@@ -196,11 +304,11 @@ export function httpDocumentsClient(args: {
       return body.version === 1 ? body : null;
     },
     async publish(input) {
-      const response = await doFetch(
+      const response = await authorizedFetch(
         `${args.serverUrl.replace(/\/+$/, "")}/projects/${encodeURIComponent(args.projectId)}/publications`,
         {
           method: "POST",
-          headers: { ...headers, "content-type": "application/json" },
+          headers: { "content-type": "application/json" },
           body: JSON.stringify(input),
         },
       );
@@ -208,11 +316,11 @@ export function httpDocumentsClient(args: {
       return (await response.json()) as RemotePublication;
     },
     async propose(input) {
-      const response = await doFetch(
+      const response = await authorizedFetch(
         `${args.serverUrl.replace(/\/+$/, "")}/projects/${encodeURIComponent(args.projectId)}/proposals`,
         {
           method: "POST",
-          headers: { ...headers, "content-type": "application/json" },
+          headers: { "content-type": "application/json" },
           body: JSON.stringify(input),
         },
       );
@@ -220,10 +328,10 @@ export function httpDocumentsClient(args: {
       return (await response.json()) as RemoteProposalResult;
     },
     async history(relative) {
-      const response = await doFetch(
+      const response = await authorizedFetch(
         `${base}/history?${q({ path: relative })}`,
         {
-          headers,
+          headers: {},
         },
       );
       if (!response.ok) return fail(response, `History of ${relative}`);

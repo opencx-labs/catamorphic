@@ -292,8 +292,16 @@ const api = {
     ipcRenderer.invoke("catamorphic:remote-publish", input),
   remotePropose: (input: unknown): Promise<unknown> =>
     ipcRenderer.invoke("catamorphic:remote-propose", input),
-  remoteRenew: (projectId: string): Promise<void> =>
-    ipcRenderer.invoke("catamorphic:remote-renew", projectId),
+  remoteReconnect: (projectId: string): Promise<{ ok: true }> =>
+    ipcRenderer.invoke("catamorphic:remote-reconnect", projectId),
+  remoteMembers: (projectId: string): Promise<unknown> =>
+    ipcRenderer.invoke("catamorphic:remote-members", projectId),
+  remoteAdmissionDecide: (input: unknown): Promise<void> =>
+    ipcRenderer.invoke("catamorphic:remote-admission-decide", input),
+  remoteMemberSetRoles: (input: unknown): Promise<void> =>
+    ipcRenderer.invoke("catamorphic:remote-member-set-roles", input),
+  remoteMemberInvite: (input: unknown): Promise<unknown> =>
+    ipcRenderer.invoke("catamorphic:remote-member-invite", input),
   remoteDisconnect: (projectId: string): Promise<void> =>
     ipcRenderer.invoke("catamorphic:remote-disconnect", projectId),
   remoteTakePendingLink: (): Promise<string | null> =>

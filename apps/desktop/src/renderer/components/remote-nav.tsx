@@ -1,4 +1,4 @@
-import { Clock3, Download, Link2, Upload } from "lucide-react";
+import { Clock3, Download, Link2, Upload, Users } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
 import {
   desktopApi,
@@ -11,6 +11,7 @@ import {
 export type RemoteFeatures = RemoteCapabilities["features"];
 
 import { PendingButton } from "./pending-button.js";
+import { RemoteMembersModal } from "./remote-members-modal.js";
 
 /**
  * The sidebar's Server section for a remote project (ADR 0055): where the
@@ -39,6 +40,7 @@ export function RemoteNav({
   const [status, setStatus] = useState<RemoteProjectStatus | null>(null);
   const [busy, setBusy] = useState<"sync" | "ship" | null>(null);
   const [message, setMessage] = useState<string | null>(null);
+  const [membersOpen, setMembersOpen] = useState(false);
 
   const refresh = useCallback(async () => {
     try {
@@ -90,7 +92,17 @@ export function RemoteNav({
   const features = status.capabilities?.features;
   const canPublish = features ? features.publications !== false : true;
   const canPropose = features ? features.proposals : true;
-  const expired = message !== null && /expired or was revoked/.test(message);
+  const canManageMembers =
+    status.capabilities?.permissions.includes("memberships:manage") ?? false;
+  const reconnectNeeded =
+    status.connection.state === "sign_in_required" ||
+    status.connection.state === "access_removed" ||
+    (message !== null && /expired or was revoked/.test(message));
+  const visibleMessage =
+    message ??
+    (status.connection.state === "connected"
+      ? null
+      : status.connection.message);
   const host = (() => {
     try {
       return new URL(status.serverUrl).host;
@@ -100,101 +112,119 @@ export function RemoteNav({
   })();
 
   return (
-    <div className="flex flex-col gap-1.5 px-2 pb-1">
-      <p className="truncate text-xs text-fg-muted" title={status.serverUrl}>
-        {host}
-        <span className="text-fg-faint">
-          {" · "}
-          {status.lastSyncAt
-            ? `synced ${ago(status.lastSyncAt)}`
-            : "not synced"}
-        </span>
-      </p>
-      <div className="flex items-center gap-1.5">
-        <PendingButton
-          type="button"
-          pending={busy === "sync"}
-          disabled={busy !== null}
-          onClick={() => void run("sync")}
-          data-testid="remote-sync"
-          className="flex h-7 flex-1 cursor-pointer items-center justify-center gap-1.5 rounded-md border border-border text-xs text-fg-muted transition-colors duration-150 hover:bg-bg-overlay hover:text-fg disabled:cursor-not-allowed disabled:opacity-60"
-        >
-          <Download className="size-3.5" />
-          Sync
-        </PendingButton>
-        <PendingButton
-          type="button"
-          pending={busy === "ship"}
-          disabled={busy !== null || localCount === 0}
-          onClick={() => void run("ship")}
-          data-testid="remote-ship"
-          className="flex h-7 flex-1 cursor-pointer items-center justify-center gap-1.5 rounded-md bg-accent text-xs font-medium text-accent-fg transition-opacity duration-150 hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
-        >
-          <Upload className="size-3.5" />
-          Ship{localCount > 0 ? ` ${localCount}` : ""}
-        </PendingButton>
-      </div>
-      {message && (
-        <p className="text-xs text-fg-faint" data-testid="remote-message">
-          {message}
-          {expired && status.renewUrl && (
-            <>
-              {" "}
+    <>
+      <div className="flex flex-col gap-1.5 px-2 pb-1">
+        <p className="truncate text-xs text-fg-muted" title={status.serverUrl}>
+          {host}
+          <span className="text-fg-faint">
+            {" · "}
+            {status.lastSyncAt
+              ? `synced ${ago(status.lastSyncAt)}`
+              : "not synced"}
+          </span>
+        </p>
+        <div className="flex items-center gap-1.5">
+          <PendingButton
+            type="button"
+            pending={busy === "sync"}
+            disabled={busy !== null}
+            onClick={() => void run("sync")}
+            data-testid="remote-sync"
+            className="flex h-7 flex-1 cursor-pointer items-center justify-center gap-1.5 rounded-md border border-border text-xs text-fg-muted transition-colors duration-150 hover:bg-bg-overlay hover:text-fg disabled:cursor-not-allowed disabled:opacity-60"
+          >
+            <Download className="size-3.5" />
+            Sync
+          </PendingButton>
+          <PendingButton
+            type="button"
+            pending={busy === "ship"}
+            disabled={busy !== null || localCount === 0}
+            onClick={() => void run("ship")}
+            data-testid="remote-ship"
+            className="flex h-7 flex-1 cursor-pointer items-center justify-center gap-1.5 rounded-md bg-accent text-xs font-medium text-accent-fg transition-opacity duration-150 hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            <Upload className="size-3.5" />
+            Ship{localCount > 0 ? ` ${localCount}` : ""}
+          </PendingButton>
+        </div>
+        {canManageMembers && (
+          <button
+            type="button"
+            onClick={() => setMembersOpen(true)}
+            className="flex h-7 items-center justify-center gap-1.5 rounded-md border border-border text-xs text-fg-muted hover:bg-bg-overlay hover:text-fg"
+          >
+            <Users className="size-3.5" />
+            Members and invites
+          </button>
+        )}
+        {visibleMessage && (
+          <p className="text-xs text-fg-faint" data-testid="remote-message">
+            {visibleMessage}
+            {reconnectNeeded && (
+              <>
+                {" "}
+                <button
+                  type="button"
+                  onClick={() => void desktopApi.remoteReconnect(projectId)}
+                  data-testid="remote-renew"
+                  className="cursor-pointer text-accent underline-offset-2 hover:underline"
+                >
+                  Sign in again
+                </button>
+              </>
+            )}
+          </p>
+        )}
+        {localCount > 0 && (
+          <ul className="flex flex-col gap-0.5">
+            {status.local.modified.map((path) => (
+              <ChangeRow
+                key={path}
+                path={path}
+                badge="M"
+                onOpen={() => onOpenFile(path)}
+                onHistory={() => onOpenHistory(path)}
+                {...(canPublish
+                  ? { onPublish: () => onPublish(path, features) }
+                  : {})}
+              />
+            ))}
+            {status.local.deleted.map((path) => (
+              <ChangeRow
+                key={path}
+                path={path}
+                badge="D"
+                onHistory={() => onOpenHistory(path)}
+              />
+            ))}
+          </ul>
+        )}
+        {status.local.programEdits.length > 0 && (
+          <div className="flex items-center gap-2">
+            <p className="min-w-0 flex-1 text-xs text-warning">
+              {status.local.programEdits.length} edited outside store/ won't
+              ship
+              {canPropose ? "." : ". This server takes no proposals."}
+            </p>
+            {canPropose && (
               <button
                 type="button"
-                onClick={() => void desktopApi.remoteRenew(projectId)}
-                data-testid="remote-renew"
-                className="cursor-pointer text-accent underline-offset-2 hover:underline"
+                onClick={() => onPropose(status.local.programEdits, features)}
+                data-testid="remote-propose"
+                className="h-6 shrink-0 cursor-pointer rounded-md border border-border px-2 text-xs text-fg-muted transition-colors duration-150 hover:bg-bg-overlay hover:text-fg"
               >
-                Sign in again
+                Propose…
               </button>
-            </>
-          )}
-        </p>
-      )}
-      {localCount > 0 && (
-        <ul className="flex flex-col gap-0.5">
-          {status.local.modified.map((path) => (
-            <ChangeRow
-              key={path}
-              path={path}
-              badge="M"
-              onOpen={() => onOpenFile(path)}
-              onHistory={() => onOpenHistory(path)}
-              {...(canPublish
-                ? { onPublish: () => onPublish(path, features) }
-                : {})}
-            />
-          ))}
-          {status.local.deleted.map((path) => (
-            <ChangeRow
-              key={path}
-              path={path}
-              badge="D"
-              onHistory={() => onOpenHistory(path)}
-            />
-          ))}
-        </ul>
-      )}
-      {status.local.programEdits.length > 0 && (
-        <div className="flex items-center gap-2">
-          <p className="min-w-0 flex-1 text-xs text-warning">
-            {status.local.programEdits.length} edited outside store/ won't ship
-            {canPropose ? "." : " — this server takes no proposals."}
-          </p>
-          {canPropose && (
-            <button
-              type="button"
-              onClick={() => onPropose(status.local.programEdits, features)}
-              data-testid="remote-propose"
-              className="h-6 shrink-0 cursor-pointer rounded-md border border-border px-2 text-xs text-fg-muted transition-colors duration-150 hover:bg-bg-overlay hover:text-fg"
-            >
-              Propose…
-            </button>
-          )}
-        </div>
-      )}
-    </div>
+            )}
+          </div>
+        )}
+      </div>
+      <RemoteMembersModal
+        open={membersOpen}
+        projectId={projectId}
+        onClose={() => setMembersOpen(false)}
+      />
+    </>
   );
 }
 
@@ -275,7 +305,7 @@ function describe(
   if (r.deleted.length) parts.push(`${r.deleted.length} deleted`);
   if (r.conflicts.length) {
     parts.push(
-      `${r.conflicts.length} conflicted — server copy saved beside yours`,
+      `${r.conflicts.length} conflicted: server copy saved beside yours`,
     );
   }
   if (r.notShippable.length) {

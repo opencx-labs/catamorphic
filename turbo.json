@@ -32,6 +32,7 @@
       "dependsOn": ["^build"],
       "env": [
         "CATAMORPHIC_DB_SCHEMA",
+        "CATAMORPHIC_E2E_FAKE_AGENT",
         "CF_SANDBOX_INTEGRATION",
         "CLOUDFLARE_ACCOUNT_ID",
         "CLOUDFLARE_API_TOKEN",

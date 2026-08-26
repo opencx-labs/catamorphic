@@ -230,7 +230,7 @@ const projectThemes = new Map<string, ResolvedTheme | null>();
  * case and silently falls back to the default.
  */
 export async function fetchProjectTheme(
-  connection: Pick<PwaConnection, "serverUrl" | "token">,
+  connection: Pick<PwaConnection, "id" | "serverUrl">,
   projectId: string,
 ): Promise<ResolvedTheme | null> {
   const key = `${connection.serverUrl}:${projectId}`;

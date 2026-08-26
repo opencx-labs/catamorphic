@@ -179,9 +179,8 @@ export class MobilePairingService {
 
   /**
    * The remote-origin form of this pairing, when the focused project is
-   * linked to a server (ADR 0055): the member's own token + project on
-   * the server's PWA origin — no pairing code involved, because the
-   * credentials already exist and the origin is durable.
+   * linked to a server: a credential-free locator on the server's PWA
+   * origin. The phone signs in as itself and never inherits desktop access.
    */
   private remotePairing(
     profileId: string,
@@ -191,11 +190,10 @@ export class MobilePairingService {
     const link = this.deps.profileConfig
       .forProfile(profileId)
       .remoteProjects.get(context.projectId);
-    if (!link?.token) return undefined;
+    if (!link) return undefined;
     const origin = link.serverUrl.replace(/\/+$/, "").replace(/\/api$/, "");
     const params = new URLSearchParams({
       server: link.serverUrl.replace(/\/+$/, ""),
-      token: link.token,
       project: link.remoteProjectId,
       name: link.remoteProjectName,
     });
@@ -373,16 +371,13 @@ export class MobilePairingService {
   }
 
   /**
-   * The profile's remote-project links, decrypted: projects hosted on a
-   * remote server pair straight through — the phone talks to that server
-   * directly, not through this desktop.
+   * Credential-free remote locators. The phone authenticates independently.
    */
   private remoteLinks(profileId: string) {
     const store = this.deps.profileConfig.forProfile(profileId).remoteProjects;
     const seen = new Set<string>();
     const links: Array<{
       server: string;
-      token: string;
       project: string;
       name: string;
       /** The DESKTOP project this remote mirrors — the phone uses it to
@@ -391,13 +386,12 @@ export class MobilePairingService {
     }> = [];
     for (const localProjectId of Object.keys(store.list())) {
       const link = store.get(localProjectId);
-      if (!link?.token) continue;
+      if (!link) continue;
       const key = `${link.serverUrl}:${link.remoteProjectId}`;
       if (seen.has(key)) continue;
       seen.add(key);
       links.push({
         server: link.serverUrl,
-        token: link.token,
         project: link.remoteProjectId,
         name: link.remoteProjectName,
         localProjectId,

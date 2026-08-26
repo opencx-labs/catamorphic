@@ -3,6 +3,7 @@
 - **Status:** Accepted
 - **Date:** 2026-08-18
 - **Extended by:** 0065 (connection broker policy)
+- **Enforcement transport refined by:** 0067
 - **Builds on:** 0046/0047 (capability providers), 0050 (project agents,
   consent before credentials), 0052 (agents ask for connectors), 0053
   (identity scope, remote hosts)

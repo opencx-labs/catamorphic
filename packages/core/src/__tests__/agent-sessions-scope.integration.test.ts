@@ -246,6 +246,32 @@ describeIf("scoped agent sessions (ADR 0055)", () => {
     expect((await sessions.list(other, projectId)).total).toBe(0);
   });
 
+  it("uses the same session gate for ownership and exact project-agent scope", async () => {
+    const own = await sessions.create(viewer, projectId, {
+      agentId: csmAgentId,
+    });
+    const foreign = { ...viewer, externalUserId: "csm-carol" };
+    const wrongAgent = {
+      ...viewer,
+      scope: [{ kind: "agent" as const, projectId, name: "sales" }],
+    };
+    const documentOnly = {
+      ...viewer,
+      scope: [{ kind: "document" as const, projectId, path: "notes.md" }],
+    };
+    const workflowOnly = {
+      ...viewer,
+      scope: [{ kind: "workflow" as const, projectId, name: "crm.lookup" }],
+    };
+
+    await sessions.assertSession(viewer, projectId, own.id);
+    for (const caller of [foreign, wrongAgent, documentOnly, workflowOnly]) {
+      await expect(
+        sessions.assertSession(caller, projectId, own.id),
+      ).rejects.toThrow(AccessDeniedError);
+    }
+  });
+
   it("the harness receives the caller and the caller's tool-policy layers", async () => {
     const session = await sessions.create(viewer, projectId, {
       agentId: csmAgentId,

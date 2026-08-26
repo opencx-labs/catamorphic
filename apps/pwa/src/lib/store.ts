@@ -2,20 +2,26 @@ import { useSyncExternalStore } from "react";
 import type { ConnectLink } from "./connect-link.js";
 
 /**
- * Local pwa state: profiles and their server connections. A profile
- * is a person (mirroring the desktop model: the bearer token is theirs);
- * each holds the connect links they've redeemed. Plain localStorage — the
- * MVP has no accounts of its own, and a Capacitor wrap can later swap this
- * for secure storage behind the same module surface.
+ * Local PWA state: profiles and their server connections. Remote servers use
+ * refreshable OAuth credentials; a paired desktop uses its separate local
+ * device token. Plain localStorage remains behind this module so a native
+ * wrapper can replace it with secure storage.
  */
-export interface PwaConnection {
+export interface RemoteOAuthCredentials {
+  clientId: string;
+  accessToken: string;
+  refreshToken: string;
+  accessTokenExpiresAt: string;
+  tokenEndpoint: string;
+  scope: string;
+}
+
+interface PwaConnectionBase {
   id: string;
   /** API base from the connect link (usually ending in `/api`). */
   serverUrl: string;
-  token: string;
   projectId: string;
   projectName?: string;
-  renewUrl?: string;
   /**
    * For a paired-desktop connection: which of its projects also live on
    * a remote server (the desktop's remote-project links, ADR 0055),
@@ -29,6 +35,18 @@ export interface PwaConnection {
   addedAt: string;
 }
 
+export interface RemotePwaConnection extends PwaConnectionBase {
+  kind: "remote";
+  credentials?: RemoteOAuthCredentials;
+}
+
+export interface DevicePwaConnection extends PwaConnectionBase {
+  kind: "device";
+  credentials: { accessToken: string };
+}
+
+export type PwaConnection = RemotePwaConnection | DevicePwaConnection;
+
 export interface PwaProfile {
   id: string;
   name: string;
@@ -37,6 +55,7 @@ export interface PwaProfile {
 }
 
 export interface PwaState {
+  version: 2;
   profiles: PwaProfile[];
   activeProfileId: string;
 }
@@ -51,7 +70,7 @@ export const PROFILE_COLORS = [
   "#e05656",
 ] as const;
 
-const STORAGE_KEY = "catamorphic-pwa.v1";
+const STORAGE_KEY = "catamorphic-pwa.v2";
 
 /**
  * UUID v4 backed by getRandomValues, which remains available on the local
@@ -75,7 +94,7 @@ function defaultState(): PwaState {
     color: PROFILE_COLORS[0],
     connections: [],
   };
-  return { profiles: [profile], activeProfileId: profile.id };
+  return { version: 2, profiles: [profile], activeProfileId: profile.id };
 }
 
 function load(): PwaState {
@@ -83,7 +102,11 @@ function load(): PwaState {
     const raw = localStorage.getItem(STORAGE_KEY);
     if (!raw) return defaultState();
     const parsed = JSON.parse(raw) as PwaState;
-    if (!Array.isArray(parsed.profiles) || parsed.profiles.length === 0) {
+    if (
+      parsed.version !== 2 ||
+      !Array.isArray(parsed.profiles) ||
+      parsed.profiles.length === 0
+    ) {
       return defaultState();
     }
     if (!parsed.profiles.some((p) => p.id === parsed.activeProfileId)) {
@@ -170,32 +193,35 @@ function updateProfile(
   });
 }
 
-/** Add (or refresh) a connection from a redeemed connect link. */
-export function addConnection(
-  profileId: string,
-  link: ConnectLink,
-  projectName?: string,
-  extras?: Pick<PwaConnection, "mirrors">,
-): PwaConnection {
+/** Add a remote locator, optionally completing it with OAuth credentials. */
+export function addRemoteConnection(input: {
+  profileId: string;
+  link: ConnectLink;
+  credentials?: RemoteOAuthCredentials;
+  projectName?: string;
+}): RemotePwaConnection {
   const existing = state.profiles
-    .find((p) => p.id === profileId)
+    .find((p) => p.id === input.profileId)
     ?.connections.find(
       (c) =>
-        c.serverUrl === link.serverUrl && c.projectId === link.remoteProjectId,
+        c.kind === "remote" &&
+        c.serverUrl === input.link.serverUrl &&
+        c.projectId === input.link.remoteProjectId,
     );
-  const connection: PwaConnection = {
+  const existingRemote = existing?.kind === "remote" ? existing : undefined;
+  const credentials = input.credentials ?? existingRemote?.credentials;
+  const connection: RemotePwaConnection = {
     id: existing?.id ?? randomId(),
-    serverUrl: link.serverUrl,
-    token: link.token,
-    projectId: link.remoteProjectId,
-    ...(projectName || link.remoteProjectName
-      ? { projectName: projectName ?? link.remoteProjectName }
+    kind: "remote",
+    serverUrl: input.link.serverUrl,
+    projectId: input.link.remoteProjectId,
+    ...(input.projectName || input.link.remoteProjectName
+      ? { projectName: input.projectName ?? input.link.remoteProjectName }
       : {}),
-    ...(link.renewUrl ? { renewUrl: link.renewUrl } : {}),
-    ...(extras?.mirrors ? { mirrors: extras.mirrors } : {}),
+    ...(credentials ? { credentials } : {}),
     addedAt: existing?.addedAt ?? new Date().toISOString(),
   };
-  updateProfile(profileId, (profile) => ({
+  updateProfile(input.profileId, (profile) => ({
     ...profile,
     connections: [
       ...profile.connections.filter((c) => c.id !== connection.id),
@@ -203,6 +229,59 @@ export function addConnection(
     ],
   }));
   return connection;
+}
+
+/** Add or refresh the separate local credential issued by desktop pairing. */
+export function addDeviceConnection(input: {
+  profileId: string;
+  serverUrl: string;
+  name: string;
+  accessToken: string;
+  mirrors?: NonNullable<PwaConnection["mirrors"]>;
+}): DevicePwaConnection {
+  const serverUrl = input.serverUrl.replace(/\/+$/, "");
+  const existing = state.profiles
+    .find((profile) => profile.id === input.profileId)
+    ?.connections.find(
+      (connection) =>
+        connection.kind === "device" && connection.serverUrl === serverUrl,
+    );
+  const connection: DevicePwaConnection = {
+    id: existing?.id ?? randomId(),
+    kind: "device",
+    serverUrl,
+    projectId: "",
+    projectName: input.name,
+    credentials: { accessToken: input.accessToken },
+    ...(input.mirrors ? { mirrors: input.mirrors } : {}),
+    addedAt: existing?.addedAt ?? new Date().toISOString(),
+  };
+  updateProfile(input.profileId, (profile) => ({
+    ...profile,
+    connections: [
+      ...profile.connections.filter((item) => item.id !== connection.id),
+      connection,
+    ],
+  }));
+  return connection;
+}
+
+export function updateRemoteCredentials(
+  connectionId: string,
+  credentials: RemoteOAuthCredentials,
+): void {
+  for (const profile of state.profiles) {
+    if (!profile.connections.some((item) => item.id === connectionId)) continue;
+    updateProfile(profile.id, (current) => ({
+      ...current,
+      connections: current.connections.map((connection) =>
+        connection.id === connectionId && connection.kind === "remote"
+          ? { ...connection, credentials }
+          : connection,
+      ),
+    }));
+    return;
+  }
 }
 
 export function removeConnection(profileId: string, connectionId: string) {
@@ -247,6 +326,7 @@ export function deleteProfile(profileId: string) {
   const first = profiles[0];
   if (!first) return;
   commit({
+    version: 2,
     profiles,
     activeProfileId:
       state.activeProfileId === profileId ? first.id : state.activeProfileId,

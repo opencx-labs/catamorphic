@@ -1,6 +1,7 @@
-import { CloudOff, ExternalLink } from "lucide-react";
+import { CloudOff, ExternalLink, LogIn } from "lucide-react";
 import { navigate } from "../lib/nav.js";
 import { findConnection, getState, type PwaConnection } from "../lib/store.js";
+import { stashRemoteConnection } from "../screens/connect-screen.js";
 
 /**
  * A connection failed to answer. Say WHY it probably failed in human
@@ -24,6 +25,13 @@ export function ConnectionTrouble({
   const mirrorConnection = mirror
     ? findConnection(getState(), mirror.serverUrl, mirror.projectId)
     : undefined;
+  const needsSignIn =
+    connection.kind === "remote" &&
+    (connection.credentials === undefined ||
+      /sign in|access token|\b401\b|authentication/i.test(message));
+  const mirrorNeedsSignIn =
+    mirrorConnection?.kind === "remote" &&
+    mirrorConnection.credentials === undefined;
   return (
     <div
       className="flex flex-col gap-2 rounded-xl border border-border bg-bg-raised p-4"
@@ -37,22 +45,46 @@ export function ConnectionTrouble({
             : message}
         </p>
       </div>
+      {needsSignIn && (
+        <button
+          type="button"
+          onClick={() => {
+            stashRemoteConnection(connection);
+            navigate({ kind: "connect" });
+          }}
+          className="flex h-10 cursor-pointer items-center justify-center gap-2 rounded-lg border border-accent/50 bg-accent/10 text-[14px] font-medium text-accent active:scale-[0.99]"
+          data-testid="remote-sign-in"
+        >
+          <LogIn className="size-4" />
+          Sign in to {label}
+        </button>
+      )}
       {mirror && mirrorConnection && (
         <button
           type="button"
-          onClick={() =>
+          onClick={() => {
+            if (mirrorNeedsSignIn) {
+              stashRemoteConnection(mirrorConnection);
+              navigate({ kind: "connect" });
+              return;
+            }
             navigate({
               kind: "sessions",
               connectionId: mirrorConnection.id,
               projectId: mirror.projectId,
-            })
-          }
+            });
+          }}
           className="flex h-10 cursor-pointer items-center justify-center gap-2 rounded-lg border border-accent/50 bg-accent/10 text-[14px] font-medium text-accent active:scale-[0.99]"
           data-testid="open-mirror"
         >
-          <ExternalLink className="size-4" />
-          This project also lives on {new URL(mirror.serverUrl).host}. Open
-          there
+          {mirrorNeedsSignIn ? (
+            <LogIn className="size-4" />
+          ) : (
+            <ExternalLink className="size-4" />
+          )}
+          {mirrorNeedsSignIn
+            ? `Sign in to ${new URL(mirror.serverUrl).host}`
+            : `This project also lives on ${new URL(mirror.serverUrl).host}. Open there`}
         </button>
       )}
     </div>

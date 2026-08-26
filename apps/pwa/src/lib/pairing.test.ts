@@ -10,7 +10,6 @@ const claim = (context?: PairingClaim["context"]): PairingClaim => ({
   remotes: [
     {
       server: "https://brain.acme.dev/api",
-      token: "remote-token",
       project: "p-remote",
       name: "Acme Brain",
       localProjectId: "p-local",
@@ -27,12 +26,19 @@ describe("applyPairing", () => {
     const desktop = connections.find(
       (c) => c.serverUrl === "http://192.168.1.71:4756/api",
     );
-    expect(desktop?.token).toBe("device-token");
+    expect(desktop).toMatchObject({
+      kind: "device",
+      credentials: { accessToken: "device-token" },
+    });
     const remote = connections.find(
       (c) => c.serverUrl === "https://brain.acme.dev/api",
     );
     expect(remote?.projectId).toBe("p-remote");
     expect(remote?.projectName).toBe("Acme Brain");
+    expect(remote).toMatchObject({ kind: "remote" });
+    expect(
+      remote && "credentials" in remote ? remote.credentials : undefined,
+    ).toBeUndefined();
     // The failover hint: desktop project → its remote mirror.
     expect(desktop?.mirrors).toEqual({
       "p-local": {

@@ -47,6 +47,8 @@ describe("GET /me (ADR 0055 introspection)", () => {
         {
           projectId: PROJECT_ID,
           builder: false,
+          source: null,
+          permissions: [],
           agents: ["csm"],
           workflows: ["crm.lookup"],
           apps: [],
@@ -58,6 +60,8 @@ describe("GET /me (ADR 0055 introspection)", () => {
         {
           projectId: "other",
           builder: true,
+          source: null,
+          permissions: [],
           agents: [],
           workflows: [],
           apps: [],
@@ -72,6 +76,31 @@ describe("GET /me (ADR 0055 introspection)", () => {
         agentSessions: true,
         storeUploadMaxBytes: 64 * 1024 * 1024,
       },
+    });
+  });
+
+  it("discloses repository source only to builders", async () => {
+    const builder: Identity = {
+      tenantId: "t",
+      externalUserId: "builder",
+      scope: [{ kind: "project", projectId: PROJECT_ID }],
+    };
+    const app = createApp({
+      identity: () => builder,
+      core: {
+        projects: {
+          get: async () => ({
+            remoteUrl: "https://github.com/acme/brain.git",
+            defaultBranch: "main",
+          }),
+        },
+      } as never,
+    });
+    apps.push(app);
+    const body = (await app.inject({ method: "GET", url: "/api/me" })).json();
+    expect(body.projects[0]?.source).toEqual({
+      remoteUrl: "https://github.com/acme/brain.git",
+      defaultBranch: "main",
     });
   });
 

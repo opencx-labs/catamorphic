@@ -44,22 +44,17 @@ describe("GithubApi", () => {
     });
   });
 
-  it("lists repos across installations sorted by pushed_at", async () => {
+  it("lists the authenticated user's repos sorted by pushed_at", async () => {
     const api = new GithubApi("tok", {
       fetch: fetchRouting({
-        "/user/installations/11/repositories": {
-          repositories: [REPO({ id: 1, pushed_at: "2026-01-01T00:00:00Z" })],
-        },
-        "/user/installations/22/repositories": {
-          repositories: [
-            REPO({
-              id: 2,
-              full_name: "org/newer",
-              pushed_at: "2026-06-01T00:00:00Z",
-            }),
-          ],
-        },
-        "/user/installations": { installations: [{ id: 11 }, { id: 22 }] },
+        "/user/repos": [
+          REPO({ id: 1, pushed_at: "2026-01-01T00:00:00Z" }),
+          REPO({
+            id: 2,
+            full_name: "org/newer",
+            pushed_at: "2026-06-01T00:00:00Z",
+          }),
+        ],
       }),
     });
     const repos = await api.listAccessibleRepos();

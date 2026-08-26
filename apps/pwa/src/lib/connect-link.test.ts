@@ -2,14 +2,13 @@ import { describe, expect, it } from "vitest";
 import { connectLinkFromParams, parseConnectLink } from "./connect-link.js";
 
 const BASE =
-  "server=https%3A%2F%2Fbrain.acme.dev%2Fapi&token=t0k&project=p-1&name=Acme%20Brain";
+  "server=https%3A%2F%2Fbrain.acme.dev%2Fapi&project=p-1&name=Acme%20Brain";
 
 describe("parseConnectLink", () => {
   it("parses the catamorphic:// scheme", () => {
     const link = parseConnectLink(`catamorphic://connect?${BASE}`);
     expect(link).toEqual({
       serverUrl: "https://brain.acme.dev/api",
-      token: "t0k",
       remoteProjectId: "p-1",
       remoteProjectName: "Acme Brain",
     });
@@ -18,26 +17,23 @@ describe("parseConnectLink", () => {
   it("parses an https invite URL carrying the same params", () => {
     const link = parseConnectLink(`https://pwa.acme.dev/?${BASE}`);
     expect(link?.serverUrl).toBe("https://brain.acme.dev/api");
-    expect(link?.token).toBe("t0k");
+    expect(link?.remoteProjectId).toBe("p-1");
   });
 
-  it("keeps only http(s) renew URLs", () => {
-    const good = parseConnectLink(
-      `catamorphic://connect?${BASE}&renew=https%3A%2F%2Facme.dev%2Frenew`,
+  it("carries an invitation identifier without treating it as a credential", () => {
+    const link = parseConnectLink(
+      `catamorphic://connect?${BASE}&invitation=invite-123`,
     );
-    expect(good?.renewUrl).toBe("https://acme.dev/renew");
-    const bad = parseConnectLink(
-      `catamorphic://connect?${BASE}&renew=javascript%3Aalert(1)`,
-    );
-    expect(bad?.renewUrl).toBeUndefined();
+    expect(link?.invitationId).toBe("invite-123");
   });
 
-  it("rejects missing fields, bad server schemes, and garbage", () => {
+  it("rejects credential-bearing links, missing fields, bad server schemes, and garbage", () => {
     expect(parseConnectLink("catamorphic://connect?server=x")).toBeNull();
     expect(
-      parseConnectLink(
-        "catamorphic://connect?server=ftp%3A%2F%2Fx&token=t&project=p",
-      ),
+      parseConnectLink(`catamorphic://connect?${BASE}&token=secret`),
+    ).toBeNull();
+    expect(
+      parseConnectLink("catamorphic://connect?server=ftp%3A%2F%2Fx&project=p"),
     ).toBeNull();
     expect(parseConnectLink("not a link")).toBeNull();
   });
@@ -56,7 +52,6 @@ describe("parseConnectLink", () => {
     const link = connectLinkFromParams(
       new URLSearchParams({
         server: "https://brain.acme.dev/api///",
-        token: "t",
         project: "p",
       }),
     );

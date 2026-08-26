@@ -41,7 +41,7 @@ teams whose work is checkpointed and synced without anyone seeing git.
 
 ## Integration (start here)
 
-- [Embedding skill](https://raw.githubusercontent.com/opencx-labs/catamorphic/main/skills/embed-catamorphic/SKILL.md): drop into .claude/skills/embed-catamorphic/SKILL.md; host-shape selection, boot, identity and roles, git/code hosts, project agents, apps, trigger kinds, the project MCP endpoint, feel and doctrine hooks, correctness rules
+- [Setup skill](https://raw.githubusercontent.com/opencx-labs/catamorphic/main/skills/setup-catamorphic-server/SKILL.md): use for the stock server or an existing/custom host; it inspects visible auth, database, deployment, and application structure before routing to focused references
 - [Integration guide](https://raw.githubusercontent.com/opencx-labs/catamorphic/main/INTEGRATION.md): the canonical end-to-end wiring reference: server-sdk boot, identity mapping, Fastify plugin, React hooks, UI components, plugins and capability providers, custom trigger kinds, doctrine hooks, operational notes
 - [README](https://raw.githubusercontent.com/opencx-labs/catamorphic/main/README.md): the capability map, use cases, package map, workflow code format, local development
 
@@ -67,12 +67,17 @@ teams whose work is checkpointed and synced without anyone seeing git.
 
 ## Roadmap (direction, not shipped)
 
-- A self-hostable reference server (the framework side of it shipped: roles as committed files, stock memberships, bearer identities, the per-project MCP endpoint, the project store, proposals and publications, the desktop connecting to any host that embeds Catamorphic — ADR 0055; the stock server binary itself is not built)
 - ACP harness: project agent definitions already accept kind "acp"; the Agent Client Protocol client is the planned harness behind it
 - TS defineAgent authoring layer compiling to the committed agents/*.json substrate
 - Review-mode collaboration: PR-first sync, invites, native PR review depth
 - User-connected remote blob storage for large binaries beside git-tracked text
 - Tracked honestly in [TODO.md](https://raw.githubusercontent.com/opencx-labs/catamorphic/main/TODO.md)
+
+## Stock server
+
+- `apps/server` is the self-hostable reference host: PGlite by default, PostgreSQL optional, bare git origins, local-process execution, and no required external services.
+- Better Auth provides built-in local username and password sign-in plus optional OAuth and OIDC providers. Desktop, PWA, and MCP clients use authorization code with S256 PKCE and refresh tokens.
+- Project invitations are credential-free locators. Ordinary project roles control admission, membership, and builder access. Initial users and roles are provisioned by a local setup agent through machine-local operator operations, not an admin UI or privileged product user.
 
 ## Optional
 

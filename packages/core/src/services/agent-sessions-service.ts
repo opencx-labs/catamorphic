@@ -35,6 +35,7 @@ import {
   formatProjectAgentId,
   parseProjectAgentId,
 } from "./agent-definitions-service.js";
+import { assertAgentSessionAccess } from "./agent-session-access.js";
 import type { AppPoliciesService } from "./app-policies-service.js";
 import { AccessDeniedError, resolveScope } from "./artifact-scope.js";
 import type {
@@ -2680,16 +2681,12 @@ export class AgentSessionsService {
       .selectAll()
       .executeTakeFirst();
     if (!row) throw new AgentSessionNotFoundError(sessionId);
-    if (!isBuilder(identity, projectId)) {
-      // Own conversations only, on an agent the scope still covers. One
-      // uniform denial: a viewer must not learn which session ids exist.
-      if (
-        row.external_user_id !== identity.externalUserId ||
-        !this.coveringAgentRef(identity, projectId, row.agent_id)
-      ) {
-        throw new AccessDeniedError();
-      }
-    }
+    assertAgentSessionAccess({
+      identity,
+      projectId,
+      externalUserId: row.external_user_id,
+      agentId: row.agent_id,
+    });
     return row;
   }
 }

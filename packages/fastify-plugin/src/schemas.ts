@@ -1287,6 +1287,13 @@ export const MeSchema = z.object({
     z.object({
       projectId: z.string(),
       builder: z.boolean(),
+      source: z
+        .object({
+          remoteUrl: z.string(),
+          defaultBranch: z.string(),
+        })
+        .nullable(),
+      permissions: z.array(z.enum(["memberships:manage", "roles:manage"])),
       agents: z.array(z.string()),
       workflows: z.array(z.string()),
       apps: z.array(z.string()),

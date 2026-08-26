@@ -15,6 +15,12 @@
       "bun": "./src/coding-agent/text-attachments.ts",
       "import": "./dist/attachments.js",
       "types": "./dist/coding-agent/text-attachments.d.ts"
+    },
+    "./testing": {
+      "development": "./src/coding-agent/runtime-conformance.ts",
+      "bun": "./src/coding-agent/runtime-conformance.ts",
+      "import": "./dist/testing.js",
+      "types": "./dist/coding-agent/runtime-conformance.d.ts"
     }
   },
   "scripts": {

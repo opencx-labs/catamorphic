@@ -9,7 +9,7 @@ import { type AppHandle, launchApp } from "./harness.js";
  * picks a folder, and the app materializes what the server lets them see;
  * a local edit under store/ ships back with a version check. The "server"
  * is a tiny in-test HTTP server speaking the plugin's documents routes and
- * requiring the invite's bearer token.
+ * the same OAuth discovery, PKCE, and bearer-token contract as the stock host.
  */
 
 let app: AppHandle;
@@ -50,11 +50,6 @@ const runWait = <T>(
 function startFakeServer(): Promise<void> {
   server = http.createServer((req, res) => {
     const url = new URL(req.url ?? "/", "http://localhost");
-    if (revoked || req.headers.authorization !== `Bearer ${TOKEN}`) {
-      res.writeHead(401, { "content-type": "application/json" });
-      res.end(JSON.stringify({ error: "Unauthorized" }));
-      return;
-    }
     const send = (
       status: number,
       body: unknown,
@@ -71,6 +66,51 @@ function startFakeServer(): Promise<void> {
         });
         req.on("end", () => resolve(raw ? JSON.parse(raw) : {}));
       });
+    const origin = `http://${req.headers.host}`;
+    if (
+      req.method === "GET" &&
+      url.pathname === "/.well-known/oauth-protected-resource"
+    ) {
+      return send(200, {
+        resource: `${origin}/api`,
+        authorization_servers: [origin],
+      });
+    }
+    if (
+      req.method === "GET" &&
+      url.pathname === "/.well-known/oauth-authorization-server"
+    ) {
+      return send(200, {
+        issuer: origin,
+        authorization_endpoint: `${origin}/api/auth/mcp/authorize`,
+        token_endpoint: `${origin}/api/auth/mcp/token`,
+        registration_endpoint: `${origin}/api/auth/mcp/register`,
+        code_challenge_methods_supported: ["S256"],
+      });
+    }
+    if (req.method === "POST" && url.pathname === "/api/auth/mcp/register") {
+      return send(201, { client_id: "desktop-e2e" });
+    }
+    if (req.method === "GET" && url.pathname === "/api/auth/mcp/authorize") {
+      const redirect = new URL(url.searchParams.get("redirect_uri") ?? "");
+      redirect.searchParams.set("code", "desktop-e2e-code");
+      redirect.searchParams.set("state", url.searchParams.get("state") ?? "");
+      res.writeHead(302, { location: redirect.toString() });
+      res.end();
+      return;
+    }
+    if (req.method === "POST" && url.pathname === "/api/auth/mcp/token") {
+      return send(200, {
+        access_token: TOKEN,
+        refresh_token: "desktop-refresh-token",
+        expires_in: 3600,
+        scope: "openid profile email offline_access",
+        token_type: "Bearer",
+      });
+    }
+    if (revoked || req.headers.authorization !== `Bearer ${TOKEN}`) {
+      return send(401, { error: "Unauthorized" });
+    }
     if (req.method === "GET" && url.pathname === "/api/me") {
       return send(200, {
         version: 1,
@@ -79,6 +119,8 @@ function startFakeServer(): Promise<void> {
           {
             projectId: "remote-1",
             builder: false,
+            source: null,
+            permissions: [],
             agents: ["csm"],
             workflows: [],
             apps: [],
@@ -264,7 +306,7 @@ describe("remote projects (ADR 0055)", () => {
       label: "connect modal",
     });
 
-    const link = `catamorphic://connect?server=${encodeURIComponent(serverUrl)}&token=${TOKEN}&project=remote-1&name=Acme%20brain&renew=${encodeURIComponent("https://example.test/join")}`;
+    const link = `catamorphic://connect?server=${encodeURIComponent(serverUrl)}&project=remote-1&name=Acme%20brain`;
     await run(
       `setReactValue($('[data-testid="remote-link-input"]'), ${JSON.stringify(link)}); return true;`,
     );

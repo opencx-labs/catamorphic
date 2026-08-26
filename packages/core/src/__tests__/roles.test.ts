@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   expandRole,
+  expandRolePermissions,
   fillTemplate,
   validateRoleDefinition,
 } from "../services/roles-service.js";
@@ -98,6 +99,28 @@ describe("roles as files (ADR 0055): expansion", () => {
     expect(expandRole(engineer.definition, "p1", {})).toEqual([
       { kind: "project", projectId: "p1" },
     ]);
+  });
+
+  it("expands project administration independently from builder access", () => {
+    const teamAdmin = validateRoleDefinition({
+      version: 1,
+      name: "Team admin",
+      permissions: ["memberships:manage", "roles:manage"],
+    });
+    if ("error" in teamAdmin) throw new Error(teamAdmin.error);
+    expect(expandRole(teamAdmin.definition, "p1", {})).toEqual([]);
+    expect(expandRolePermissions(teamAdmin.definition, "p1")).toEqual([
+      { projectId: "p1", permission: "memberships:manage" },
+      { projectId: "p1", permission: "roles:manage" },
+    ]);
+
+    const builder = validateRoleDefinition({
+      version: 1,
+      name: "Builder",
+      builder: true,
+    });
+    if ("error" in builder) throw new Error(builder.error);
+    expect(expandRolePermissions(builder.definition, "p1")).toEqual([]);
   });
 
   it("rejects unsupported versions and malformed files with a readable error", () => {

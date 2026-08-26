@@ -20,6 +20,7 @@ export {
   type ExecutionEnvironmentRef,
   type ExternalUserId,
   hasControlPlanePermission,
+  hasProjectPermission,
   type Identity,
   identityCovers,
   identityMayUseConnection,
@@ -28,6 +29,8 @@ export {
   isScoped,
   mayUseProject,
   narrowIdentity,
+  type ProjectPermission,
+  type ProjectPermissionRef,
   type ProjectRef,
   SYSTEM_AUTHOR,
   sameArtifact,
@@ -65,6 +68,17 @@ export {
   projectAgentId,
   validateAgentDefinition,
 } from "./services/agent-definitions-service.js";
+export {
+  AgentRuntimeEventSequenceConflictError,
+  AgentRuntimeEventsService,
+  AgentRuntimeSessionNotFoundError,
+} from "./services/agent-runtime-events-service.js";
+export {
+  AgentRequestAlreadyResolvedError,
+  AgentRuntimeRequestConflictError,
+  AgentRuntimeRequestNotFoundError,
+  AgentRuntimeRequestsService,
+} from "./services/agent-runtime-requests-service.js";
 export {
   type AgentMessage,
   AgentNotConfiguredError,
@@ -111,8 +125,10 @@ export {
 export {
   AccessDeniedError,
   assertBuilder,
+  assertMayManageRolePolicy,
   assertRootIdentity,
   assertScopeAllowsWorkflow,
+  isRolePolicyPath,
   type ResolvedScope,
   resolveScope,
 } from "./services/artifact-scope.js";

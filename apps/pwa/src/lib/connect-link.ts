@@ -1,6 +1,7 @@
 /**
- * A connect link (ADR 0055): what an invite hands a member.
- *   catamorphic://connect?server=<api base>&token=<bearer>&project=<id>&name=<display>&renew=<url>
+ * A credential-free remote locator. Authentication happens separately in
+ * the browser with OAuth authorization code plus PKCE.
+ *   catamorphic://connect?server=<api base>&project=<id>&name=<display>
  *
  * Mirrors the desktop parser (apps/desktop/src/main/connect-link.ts), plus
  * one pwa-only form: an http(s) URL carrying the same query params —
@@ -9,11 +10,9 @@
 export interface ConnectLink {
   /** API base, including the mount prefix (usually ending in `/api`). */
   serverUrl: string;
-  token: string;
   remoteProjectId: string;
   remoteProjectName?: string;
-  /** Where to send the user for a fresh link when the token stops working. */
-  renewUrl?: string;
+  invitationId?: string;
   /** Deep-link: land in this chat after connecting (a mirrored session). */
   sessionId?: string;
 }
@@ -37,9 +36,8 @@ export function connectLinkFromParams(
   params: URLSearchParams,
 ): ConnectLink | null {
   const serverUrl = params.get("server")?.trim();
-  const token = params.get("token")?.trim();
   const remoteProjectId = params.get("project")?.trim();
-  if (!serverUrl || !token || !remoteProjectId) return null;
+  if (!serverUrl || !remoteProjectId || params.has("token")) return null;
   try {
     const server = new URL(serverUrl);
     if (server.protocol !== "https:" && server.protocol !== "http:")
@@ -48,25 +46,13 @@ export function connectLinkFromParams(
     return null;
   }
   const name = params.get("name")?.trim();
-  const renew = params.get("renew")?.trim();
-  let renewUrl: string | undefined;
-  if (renew) {
-    try {
-      const parsed = new URL(renew);
-      if (parsed.protocol === "https:" || parsed.protocol === "http:") {
-        renewUrl = renew;
-      }
-    } catch {
-      renewUrl = undefined;
-    }
-  }
+  const invitationId = params.get("invitation")?.trim();
   const sessionId = params.get("session")?.trim();
   return {
     serverUrl: serverUrl.replace(/\/+$/, ""),
-    token,
     remoteProjectId,
     ...(name ? { remoteProjectName: name } : {}),
-    ...(renewUrl ? { renewUrl } : {}),
+    ...(invitationId ? { invitationId } : {}),
     ...(sessionId ? { sessionId } : {}),
   };
 }

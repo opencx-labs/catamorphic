@@ -1,6 +1,6 @@
 # 0059 — The stock server: zero-dependency, disk-backed, invite-first
 
-Status: Accepted (2026-08-21)
+Status: Accepted (2026-08-21; auth, invites, and administration superseded by 0071 and 0072)
 
 ## Context
 

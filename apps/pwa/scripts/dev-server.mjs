@@ -1,9 +1,9 @@
 /*
  * A zero-dep fake Catamorphic server for pwa development and e2e:
  * the agent-session + permission routes with a scripted agent, speaking
- * the same wire shapes as @catamorphic/fastify-plugin. Any bearer token is
- * accepted; "root-token" resolves a root identity (all projects), anything
- * else a scoped member of the one seeded project.
+ * the same wire shapes as @catamorphic/fastify-plugin. Its minimal OAuth
+ * server authorizes immediately for deterministic local development. Any
+ * issued bearer token resolves a scoped member of the seeded project.
  *
  *   node scripts/dev-server.mjs          # port 8788 (PORT= to change)
  *
@@ -214,27 +214,59 @@ const server = http.createServer(async (req, res) => {
   const url = new URL(req.url ?? "/", `http://127.0.0.1:${PORT}`);
   const path = url.pathname;
   if (req.method === "OPTIONS") return json(res, 204, {});
+  const origin = `http://127.0.0.1:${PORT}`;
+  if (path === "/.well-known/oauth-protected-resource") {
+    return json(res, 200, {
+      resource: `${origin}/api`,
+      authorization_servers: [origin],
+    });
+  }
+  if (path === "/.well-known/oauth-authorization-server") {
+    return json(res, 200, {
+      authorization_endpoint: `${origin}/api/auth/mcp/authorize`,
+      token_endpoint: `${origin}/api/auth/mcp/token`,
+      registration_endpoint: `${origin}/api/auth/mcp/register`,
+      code_challenge_methods_supported: ["S256"],
+    });
+  }
+  if (path === "/api/auth/mcp/register" && req.method === "POST") {
+    return json(res, 201, { client_id: "fake-pwa-client" });
+  }
+  if (path === "/api/auth/mcp/authorize" && req.method === "GET") {
+    const callback = new URL(url.searchParams.get("redirect_uri"));
+    callback.searchParams.set("code", "fake-code");
+    callback.searchParams.set("state", url.searchParams.get("state") ?? "");
+    res.writeHead(302, { location: callback.toString() });
+    return res.end();
+  }
+  if (path === "/api/auth/mcp/token" && req.method === "POST") {
+    return json(res, 200, {
+      access_token: "fake-access-token",
+      refresh_token: "fake-refresh-token",
+      expires_in: 3600,
+      scope: "openid profile email offline_access",
+    });
+  }
   const auth = req.headers.authorization ?? "";
   if (!auth.startsWith("Bearer ")) return json(res, 401, { error: "No token" });
-  const root = auth === "Bearer root-token";
 
   // GET /api/me
   if (path === "/api/me" && req.method === "GET") {
     return json(res, 200, {
       version: 1,
-      identity: { externalUserId: root ? "root" : "member", root },
-      projects: root
-        ? []
-        : [
-            {
-              projectId: PROJECT.id,
-              builder: false,
-              agents: ["helper"],
-              workflows: [],
-              apps: [],
-              documents: [],
-            },
-          ],
+      identity: { externalUserId: "member", root: false },
+      projects: [
+        {
+          projectId: PROJECT.id,
+          builder: false,
+          source: null,
+          permissions: [],
+          agents: ["helper"],
+          workflows: [],
+          apps: [],
+          documents: [],
+        },
+      ],
       features: {
         publications: false,
         proposals: false,
@@ -346,7 +378,7 @@ const server = http.createServer(async (req, res) => {
 });
 
 server.listen(PORT, "127.0.0.1", () => {
-  const link = `catamorphic://connect?server=${encodeURIComponent(`http://127.0.0.1:${PORT}/api`)}&token=invite-token&project=${PROJECT.id}&name=${encodeURIComponent(PROJECT.name)}`;
+  const link = `catamorphic://connect?server=${encodeURIComponent(`http://127.0.0.1:${PORT}/api`)}&project=${PROJECT.id}&name=${encodeURIComponent(PROJECT.name)}`;
   console.log(`Fake Catamorphic server on http://127.0.0.1:${PORT}/api`);
   console.log(`Connect link:\n${link}`);
 });

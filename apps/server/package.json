@@ -22,10 +22,14 @@
     "@catamorphic/sandbox": "workspace:*",
     "@catamorphic/server-sdk": "workspace:*",
     "@electric-sql/pglite": "^0.5.4",
+    "better-auth": "1.6.26",
     "fastify": "^5.10.0",
-    "kysely": "^0.29.3"
+    "kysely": "^0.29.3",
+    "pg": "8.16.3",
+    "zod": "4.4.3"
   },
   "devDependencies": {
-    "@types/node": "^26.1.1"
+    "@types/node": "^26.1.1",
+    "@types/pg": "8.15.5"
   }
 }

@@ -1,5 +1,5 @@
 import { useQueryClient } from "@tanstack/react-query";
-import { FolderOpen, Link2 } from "lucide-react";
+import { ExternalLink, FolderOpen, GitFork, Link2 } from "lucide-react";
 import { type FormEvent, useEffect, useState } from "react";
 import { type ConnectLink, desktopApi } from "../lib/desktop-api.js";
 import { Modal } from "./modal.js";
@@ -27,27 +27,39 @@ export function RemoteConnectModal({
   const queryClient = useQueryClient();
   const [pasted, setPasted] = useState("");
   const [serverUrl, setServerUrl] = useState("");
-  const [token, setToken] = useState("");
   const [remoteProjectId, setRemoteProjectId] = useState("");
   const [name, setName] = useState("");
   const [parentDir, setParentDir] = useState("");
-  const [renewUrl, setRenewUrl] = useState<string | undefined>(undefined);
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [githubRequired, setGithubRequired] = useState(false);
+  const [githubUserCode, setGithubUserCode] = useState<string | null>(null);
 
   useEffect(() => {
     if (!open) return;
     setPending(false);
     setError(null);
+    setGithubRequired(false);
+    setGithubUserCode(null);
     void desktopApi.defaultProjectsDir().then(setParentDir);
+  }, [open]);
+
+  useEffect(() => {
+    if (!open) return;
+    return desktopApi.onGithubConnected((result) => {
+      setGithubUserCode(null);
+      if (result && "error" in result) {
+        setError(result.error);
+        return;
+      }
+      setError("GitHub is connected. Connect this project again.");
+    });
   }, [open]);
 
   useEffect(() => {
     if (!link) return;
     setServerUrl(link.serverUrl);
-    setToken(link.token);
     setRemoteProjectId(link.remoteProjectId);
-    setRenewUrl(link.renewUrl);
     if (link.remoteProjectName) setName(link.remoteProjectName);
   }, [link]);
 
@@ -56,9 +68,7 @@ export function RemoteConnectModal({
     const parsed = await desktopApi.remoteParseLink(value);
     if (!parsed) return;
     setServerUrl(parsed.serverUrl);
-    setToken(parsed.token);
     setRemoteProjectId(parsed.remoteProjectId);
-    setRenewUrl(parsed.renewUrl);
     if (parsed.remoteProjectName) setName(parsed.remoteProjectName);
   };
 
@@ -89,7 +99,6 @@ export function RemoteConnectModal({
   const canSubmit =
     !pending &&
     serverUrl.trim().length > 0 &&
-    token.trim().length > 0 &&
     remoteProjectId.trim().length > 0 &&
     name.trim().length > 0 &&
     targetPath !== null;
@@ -99,21 +108,33 @@ export function RemoteConnectModal({
     if (!canSubmit || !targetPath) return;
     setPending(true);
     setError(null);
+    setGithubRequired(false);
     try {
       const result = await desktopApi.remoteConnect({
         serverUrl: serverUrl.trim(),
-        token: token.trim(),
         remoteProjectId: remoteProjectId.trim(),
         name: name.trim(),
         rootPath: targetPath,
-        ...(renewUrl ? { renewUrl } : {}),
       });
       await queryClient.invalidateQueries({ queryKey: ["cat", "projects"] });
       onConnected({ id: result.id, name: result.name });
     } catch (cause) {
-      setError(cause instanceof Error ? cause.message : String(cause));
+      const message = cause instanceof Error ? cause.message : String(cause);
+      const requiresGithub = message.includes("[github-required]");
+      setGithubRequired(requiresGithub);
+      setError(message.replace("[github-required]", "").trim());
     } finally {
       setPending(false);
+    }
+  };
+
+  const connectGithub = async () => {
+    setError(null);
+    try {
+      const grant = await desktopApi.githubConnectStart();
+      setGithubUserCode(grant.userCode);
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : String(cause));
     }
   };
 
@@ -127,7 +148,7 @@ export function RemoteConnectModal({
             </h2>
             <p className="mt-1 text-xs text-fg-muted">
               A folder here stays in sync with what your team's server lets you
-              see. Paste the link from your invite, or fill the fields.
+              see. Your browser will open so you can sign in.
             </p>
           </div>
 
@@ -138,7 +159,7 @@ export function RemoteConnectModal({
               <input
                 value={pasted}
                 onChange={(event) => void applyPasted(event.target.value)}
-                placeholder="catamorphic://connect?server=…&token=…&project=…"
+                placeholder="catamorphic://connect?server=…&project=…"
                 // biome-ignore lint/a11y/noAutofocus: modal's primary field
                 autoFocus
                 data-testid="remote-link-input"
@@ -155,6 +176,7 @@ export function RemoteConnectModal({
                 onChange={(event) => setServerUrl(event.target.value)}
                 placeholder="https://brain.example.com/api"
                 data-testid="remote-server-input"
+                required
                 className="field h-8 px-2.5 text-[13px] text-fg placeholder:text-fg-faint"
               />
             </label>
@@ -164,21 +186,11 @@ export function RemoteConnectModal({
                 value={remoteProjectId}
                 onChange={(event) => setRemoteProjectId(event.target.value)}
                 data-testid="remote-project-input"
+                required
                 className="field h-8 px-2.5 font-mono text-[12px] text-fg placeholder:text-fg-faint"
               />
             </label>
           </div>
-
-          <label className="flex flex-col gap-1.5 text-xs text-fg-muted">
-            Access token
-            <input
-              type="password"
-              value={token}
-              onChange={(event) => setToken(event.target.value)}
-              data-testid="remote-token-input"
-              className="field h-8 px-2.5 font-mono text-[12px] text-fg placeholder:text-fg-faint"
-            />
-          </label>
 
           <label className="flex flex-col gap-1.5 text-xs text-fg-muted">
             Project name
@@ -187,6 +199,7 @@ export function RemoteConnectModal({
               onChange={(event) => setName(event.target.value)}
               placeholder="Acme brain"
               data-testid="remote-name-input"
+              required
               className="field h-8 px-2.5 text-[13px] text-fg placeholder:text-fg-faint"
             />
           </label>
@@ -212,7 +225,51 @@ export function RemoteConnectModal({
               <span className="font-mono text-fg-muted">{targetPath}</span>
             </p>
           )}
-          {error && <p className="text-xs text-danger">{error}</p>}
+          {error && (
+            <p className="text-xs text-danger" role="alert" aria-live="polite">
+              {error}
+            </p>
+          )}
+          {githubRequired && (
+            <section className="flex flex-col gap-2 rounded-xl border border-border bg-bg-raised p-3">
+              <div className="flex items-start gap-2.5">
+                <span className="grid size-8 shrink-0 place-items-center rounded-lg border border-border bg-bg">
+                  <GitFork className="size-4 text-fg-muted" />
+                </span>
+                <div className="min-w-0">
+                  <p className="text-xs font-medium text-fg">
+                    Repository access
+                  </p>
+                  <p className="mt-0.5 text-xs leading-5 text-fg-muted">
+                    Builders receive the full repository. Connect GitHub or
+                    grant this app access, then connect the project again.
+                  </p>
+                </div>
+              </div>
+              {githubUserCode && (
+                <p className="rounded-lg bg-bg px-3 py-2 text-center font-mono text-sm font-semibold tracking-[0.18em] text-fg">
+                  {githubUserCode}
+                </p>
+              )}
+              <div className="flex flex-wrap gap-2">
+                <button
+                  type="button"
+                  onClick={() => void connectGithub()}
+                  className="h-8 rounded-lg bg-fg px-3 text-xs font-semibold text-bg"
+                >
+                  Connect GitHub
+                </button>
+                <button
+                  type="button"
+                  onClick={() => void desktopApi.githubManageRepos()}
+                  className="flex h-8 items-center gap-1.5 rounded-lg border border-border px-3 text-xs font-medium text-fg-muted"
+                >
+                  Grant repository access
+                  <ExternalLink className="size-3" />
+                </button>
+              </div>
+            </section>
+          )}
         </div>
 
         <footer className="flex items-center justify-end gap-2 border-t border-border px-5 py-3.5">

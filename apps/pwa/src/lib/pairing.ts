@@ -2,7 +2,8 @@ import { postJson } from "./api.js";
 import type { Route } from "./nav.js";
 import {
   activeProfile,
-  addConnection,
+  addDeviceConnection,
+  addRemoteConnection,
   type PwaConnection,
   type PwaState,
 } from "./store.js";
@@ -23,7 +24,6 @@ export interface PairingClaim {
   token: string;
   remotes: Array<{
     server: string;
-    token: string;
     project: string;
     name: string;
     /** The desktop project this remote mirrors. */
@@ -62,27 +62,21 @@ export function applyPairing(state: PwaState, claim: PairingClaim): Route {
       };
     }
   }
-  const desktop = addConnection(
-    profile.id,
-    {
-      serverUrl: claim.server.replace(/\/+$/, ""),
-      token: claim.token,
-      // A device token is root on the desktop: it covers every project, so
-      // the connection's own projectId stays "" (a stable dedupe key;
-      // re-pairing refreshes this connection instead of adding a twin).
-      // The deep-link target rides only on the returned route.
-      remoteProjectId: "",
-      remoteProjectName: claim.name,
-    },
-    claim.name,
-    Object.keys(mirrors).length > 0 ? { mirrors } : undefined,
-  );
+  const desktop = addDeviceConnection({
+    profileId: profile.id,
+    serverUrl: claim.server,
+    name: claim.name,
+    accessToken: claim.token,
+    ...(Object.keys(mirrors).length > 0 ? { mirrors } : {}),
+  });
   for (const remote of claim.remotes) {
-    addConnection(profile.id, {
-      serverUrl: remote.server.replace(/\/+$/, ""),
-      token: remote.token,
-      remoteProjectId: remote.project,
-      remoteProjectName: remote.name,
+    addRemoteConnection({
+      profileId: profile.id,
+      link: {
+        serverUrl: remote.server.replace(/\/+$/, ""),
+        remoteProjectId: remote.project,
+        remoteProjectName: remote.name,
+      },
     });
   }
   if (claim.context?.projectId) {

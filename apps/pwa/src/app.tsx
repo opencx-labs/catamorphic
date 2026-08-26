@@ -3,6 +3,7 @@ import { useEffect, useRef, useState } from "react";
 import { InstallPromotion } from "./components/install-promotion.js";
 import { connectLinkFromParams } from "./lib/connect-link.js";
 import { navigate, type Route, routeDepth, useRoute } from "./lib/nav.js";
+import { completeRemoteConnection } from "./lib/oauth-callback.js";
 import { applyPairing, claimPairing } from "./lib/pairing.js";
 import {
   activeProfile,
@@ -35,17 +36,37 @@ export function App() {
   const state = usePwaState();
   const route = useRoute();
   const profile = activeProfile(state);
-  const [pairing, setPairing] = useState(false);
+  const [startupStatus, setStartupStatus] = useState<string | null>(null);
 
-  // Two ways a URL can carry credentials, both stripped immediately:
-  // a scanned desktop QR (?pair=<code>, redeemed against this origin's
-  // /pair/claim), or an invite link's params (?server=&token=&project=).
+  // A remote OAuth callback carries a short-lived code; a desktop QR carries
+  // a short-lived pairing code. Credential-free server/project locators are
+  // safe to retain as ordinary invitation links.
   useEffect(() => {
+    if (window.location.pathname === "/oauth/callback") {
+      const callbackUrl = window.location.href;
+      window.history.replaceState(null, "", "/");
+      setStartupStatus("Finishing sign-in…");
+      void completeRemoteConnection({
+        callbackUrl,
+        profileId: activeProfile(getState()).id,
+      })
+        .then((landing) => navigate(landing, { replace: true }))
+        .catch((error: unknown) => {
+          stashConnectError(
+            error instanceof Error
+              ? error.message
+              : "Sign-in could not be completed.",
+          );
+          navigate({ kind: "connect" }, { replace: true });
+        })
+        .finally(() => setStartupStatus(null));
+      return;
+    }
     const params = new URLSearchParams(window.location.search);
     const pairCode = params.get("pair");
     if (pairCode) {
       window.history.replaceState(null, "", window.location.pathname);
-      setPairing(true);
+      setStartupStatus("Pairing…");
       void claimPairing(window.location.origin, pairCode)
         .then((claim) => {
           const landing = applyPairing(getState(), claim);
@@ -57,7 +78,7 @@ export function App() {
           );
           navigate({ kind: "connect" }, { replace: true });
         })
-        .finally(() => setPairing(false));
+        .finally(() => setStartupStatus(null));
       return;
     }
     const link = connectLinkFromParams(params);
@@ -105,10 +126,12 @@ export function App() {
     prevDepthRef.current = depth;
   }
 
-  if (pairing) {
+  if (startupStatus) {
     return (
       <div className="grid h-full place-items-center bg-bg">
-        <p className="animate-pulse text-sm text-fg-muted">Pairing…</p>
+        <p className="animate-pulse text-sm text-fg-muted" role="status">
+          {startupStatus}
+        </p>
       </div>
     );
   }
@@ -121,7 +144,9 @@ export function App() {
         animation={animation}
         hasConnections={profile.connections.length > 0}
       />
-      <InstallPromotion enabled={!pairing && profile.connections.length > 0} />
+      <InstallPromotion
+        enabled={!startupStatus && profile.connections.length > 0}
+      />
     </QueryClientProvider>
   );
 }

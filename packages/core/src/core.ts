@@ -12,6 +12,8 @@ import type { Identity } from "./identity.js";
 import { HOST_SKILLS, SEED_SKILLS } from "./seeds.js";
 import { AgentContextService } from "./services/agent-context-service.js";
 import { AgentDefinitionsService } from "./services/agent-definitions-service.js";
+import { AgentRuntimeEventsService } from "./services/agent-runtime-events-service.js";
+import { AgentRuntimeRequestsService } from "./services/agent-runtime-requests-service.js";
 import {
   AgentSessionsService,
   type AgentTurnSettledEvent,
@@ -313,6 +315,10 @@ export class CatamorphicCore {
   readonly devSandboxes?: DevSandboxService;
   readonly agentContext?: AgentContextService;
   readonly agentSessions?: AgentSessionsService;
+  /** Durable normalized provider events, independently replayable by cursor. */
+  readonly agentRuntimeEvents: AgentRuntimeEventsService;
+  /** Durable approval, question, and elicitation requests. */
+  readonly agentRuntimeRequests: AgentRuntimeRequestsService;
   readonly toolPermissions?: ToolPermissionBroker;
   readonly apps?: AppsService;
   readonly appPolicies: AppPoliciesService;
@@ -370,6 +376,8 @@ export class CatamorphicCore {
       { seedFiles: this.seedFiles },
     );
     this.appStorage = new AppStorageService(this.db);
+    this.agentRuntimeEvents = new AgentRuntimeEventsService(this.db);
+    this.agentRuntimeRequests = new AgentRuntimeRequestsService(this.db);
     this.github = config.github
       ? new GithubService(
           this.db,

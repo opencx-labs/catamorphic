@@ -178,30 +178,23 @@ export class GithubApi {
   }
 
   /**
-   * Repositories the user granted this GitHub App access to, across all of
-   * their installations (personal account + orgs), most recently pushed
-   * first. Uses the installations API rather than `/user/repos` so the list
-   * matches exactly what the app can clone.
+   * Repositories the authenticated user can access. GitHub supports this one
+   * endpoint for GitHub App user tokens, fine-grained tokens, and the OAuth
+   * token exposed by `gh`, so every credential source follows the same API.
    */
   async listAccessibleRepos(opts?: {
     perPage?: number;
   }): Promise<GithubRepo[]> {
     const perPage = opts?.perPage ?? 100;
-    const { installations } = await this.request<{
-      installations: { id: number }[];
-    }>("/user/installations");
-
     const repos: GithubRepo[] = [];
-    for (const installation of installations) {
-      let page = 1;
-      for (;;) {
-        const result = await this.request<{ repositories: RawRepo[] }>(
-          `/user/installations/${installation.id}/repositories?per_page=${perPage}&page=${page}`,
-        );
-        repos.push(...result.repositories.map(mapRepo));
-        if (result.repositories.length < perPage) break;
-        page += 1;
-      }
+    let page = 1;
+    for (;;) {
+      const result = await this.request<RawRepo[]>(
+        `/user/repos?per_page=${perPage}&page=${page}&sort=pushed&direction=desc`,
+      );
+      repos.push(...result.map(mapRepo));
+      if (result.length < perPage) break;
+      page += 1;
     }
     return repos.sort((a, b) =>
       (b.pushedAt ?? "").localeCompare(a.pushedAt ?? ""),

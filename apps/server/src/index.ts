@@ -6,11 +6,11 @@ import { buildStockServer } from "./server.js";
 
 /**
  * The stock Catamorphic server. Zero external services: everything lives
- * under the data dir (default /data — mount it as a volume).
+ * under the data dir (default /data; mount it as a volume).
  *
  *   PORT                      listen port (default 4700)
  *   CATAMORPHIC_DATA_DIR      data dir (default /data)
- *   CATAMORPHIC_PUBLIC_URL    public base for invite links (remote setups)
+ *   CATAMORPHIC_PUBLIC_URL    public base for OAuth and connection links
  *   CATAMORPHIC_MDNS          "off" disables LAN discovery; any other
  *                             value is the hostname (default catamorphic-<id>.local, unique per server)
  *   ANTHROPIC_API_KEY | OPENROUTER_API_KEY | OPENAI_API_KEY  enable chat
@@ -22,7 +22,7 @@ const dataDir = process.env.CATAMORPHIC_DATA_DIR ?? "/data";
 /**
  * The default mDNS hostname is UNIQUE per server (a persisted suffix):
  * several people running desktops/servers on one office Wi-Fi must not
- * fight over the same name — mDNS has no referee, and answers would race.
+ * fight over the same name. mDNS has no referee, and answers would race.
  * Set CATAMORPHIC_MDNS=catamorphic.local if you want the pretty name and
  * know the network is yours.
  */
@@ -64,23 +64,16 @@ const server = await buildStockServer({
 
 await server.app.listen({ port, host: "0.0.0.0" });
 const primary = bases[0] ?? `http://127.0.0.1:${port}`;
-const admin = server.auth.ensureAdmin();
 
 console.log(`
 Catamorphic server is up.
   ${server.agentsDescription}
   API:    ${bases.map((base) => `${base}/api`).join("\n          ")}
   Docs:   ${primary}/docs
+  Sign in: ${primary}/login
 
-Create a project, then an invite (connect links come back ready to send):
-
-  curl -s -X POST ${primary}/admin/projects \\
-    -H "authorization: Bearer ${admin.token}" \\
-    -H "content-type: application/json" -d '{"name":"brain"}'
-
-  curl -s -X POST ${primary}/admin/invites \\
-    -H "authorization: Bearer ${admin.token}" \\
-    -H "content-type: application/json" -d '{"projectId":"<id>","user":"sam"}'
+Point an AI setup agent at this repository or catamorphic.ai to configure
+authentication, projects, ordinary roles, and the first user.
 `);
 
 let stopping = false;

@@ -10,6 +10,11 @@ A host application runs catamorphic services in-process against its own Postgres
 
 Most hosts use 2 + 3 together: the server-sdk boots the core once, the fastify plugin exposes it to the frontend.
 
+For agent-guided setup, start with
+[`skills/setup-catamorphic-server`](skills/setup-catamorphic-server/SKILL.md).
+It inspects an existing application, auth, database, and deployment before
+asking questions, then routes to stock-host or custom-host guidance.
+
 ## Host shapes: Catamorphic runs wherever TypeScript runs
 
 Do not assume the host is a multi-tenant SaaS server. Every infrastructure
@@ -43,9 +48,10 @@ Common host shapes, composed from those axes:
   whatever an agent typed five minutes ago. Never use this provider for
   multi-tenant hosts — the only isolation is a process boundary and an
   explicit env. **This shape ships ready-made as the stock server**
-  (`apps/server`, ADR 0059): `docker run` with everything on disk, bearer
-  tokens in `auth.json`, invites over an admin API, mDNS LAN discovery,
-  `DATABASE_URL` to swap PGlite for real Postgres — read it as the
+  (`apps/server`, ADRs 0059, 0071, 0072): `docker run` with everything on
+  disk, stock Better Auth with local or configured provider sign-in,
+  OAuth/PKCE remote clients, credential-free admission links, mDNS LAN
+  discovery, and `DATABASE_URL` to swap PGlite for real Postgres. Read it as the
   reference for this shape before writing a host from scratch.
 - **Read-only embed / reporting**: `@catamorphic/db` migrations plus SQL
   joins, or the SDK without a sandbox provider.
@@ -261,13 +267,13 @@ identity: async (req) => {
 await catamorphic.core.memberships.grant({ identity: adminIdentity, projectId: BRAIN, externalUserId: "alice", roles: ["csm"], grants: { customer: ["acme"] } });
 ```
 
-The plugin serves the same as HTTP for admin UIs: `GET /projects/:id/roles`, `GET|PUT|DELETE /projects/:id/memberships[/:externalUserId]` (`PUT` body `{ roles, grants? }`). Members arriving with a token the host issued (a connect link, their own agent on the MCP endpoint) use `identityFromBearer(verify)`: the host's `verify(token)` returns the identity (typically via `memberships.identityFor`) or `null`. Every request re-resolves, so revocation is immediate.
+The plugin serves the same as HTTP for project administration: `GET /projects/:id/roles`, `GET|PUT|DELETE /projects/:id/memberships[/:externalUserId]` (`PUT` body `{ roles, grants? }`). Members arriving with a bearer credential from the host's login flow use `identityFromBearer(verify)`: the host's `verify(token)` returns the identity (typically via `memberships.identityFor`) or `null`. Every request re-resolves membership, so revocation is immediate.
 
 ### Feature switches and introspection
 
-Scope is how a host says "may not"; a few coarse switches say what the whole instance offers: `app.register(catamorphicPlugin, { …, features: { publications: "public" | "members" | false, proposals, mcp, storeUploadMaxBytes } })`. They are enforced by the routes concerned (403 / 404 / 413) *and* advertised on **`GET /me`**, together with the caller's own summary — `{ version: 1, identity: { externalUserId, root }, projects: [{ projectId, builder, agents, workflows, apps, documents: [{ path, access }] }], features: { publications, proposals, proposalsOpenPullRequests, mcp, agentSessions, storeUploadMaxBytes } }` — so a client (the desktop, a member's own agent) shows what is possible instead of discovering it by 403. Older hosts without `/me` degrade to "assume everything".
+Scope is how a host says "may not"; a few coarse switches say what the whole instance offers: `app.register(catamorphicPlugin, { …, features: { publications: "public" | "members" | false, proposals, mcp, storeUploadMaxBytes } })`. They are enforced by the routes concerned (403 / 404 / 413) *and* advertised on **`GET /me`**, together with the caller's own summary — `{ version: 1, identity: { externalUserId, root }, projects: [{ projectId, builder, source, permissions, agents, workflows, apps, documents: [{ path, access }] }], features: { publications, proposals, proposalsOpenPullRequests, mcp, agentSessions, storeUploadMaxBytes } }` — so a client (the desktop, a member's own agent) shows what is possible instead of discovering it by 403. `source` contains the Git remote and default branch for builders and is `null` for other members.
 
-**Tokens for desktop members.** The connect link is the host's login flow: the invite page signs the user in with the host's own auth, mints a bearer token, and redirects to `catamorphic://connect?server=…&token=…&project=…&name=…&renew=<host URL>`. `identityFromBearer(verify)` decides what the token means on every request, so revocation is immediate; when a token stops working (401) the desktop offers "Sign in again", which opens `renew` — the host hands back a fresh link. Long-lived revocable tokens are the pragmatic default; refresh is the host's business.
+**Remote login.** Connect links are credential-free locators: `catamorphic://connect?server=…&project=…&invitation=…`. A compatible host publishes OAuth protected-resource and authorization-server metadata. The desktop and PWA dynamically register public clients, use authorization code with S256 PKCE, keep refreshable credentials in local protected storage, and redeem admission after sign-in. A 401 changes the connection state to "Sign in again" and reruns the same OAuth path. Embedders may implement that contract with their existing identity system; Catamorphic's framework packages remain auth-neutral.
 
 ### The project MCP endpoint: bring your own agent
 

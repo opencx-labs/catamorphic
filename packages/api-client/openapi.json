@@ -78,6 +78,27 @@
                           "builder": {
                             "type": "boolean"
                           },
+                          "source": {
+                            "nullable": true,
+                            "type": "object",
+                            "properties": {
+                              "remoteUrl": {
+                                "type": "string"
+                              },
+                              "defaultBranch": {
+                                "type": "string"
+                              }
+                            },
+                            "required": ["remoteUrl", "defaultBranch"],
+                            "additionalProperties": false
+                          },
+                          "permissions": {
+                            "type": "array",
+                            "items": {
+                              "type": "string",
+                              "enum": ["memberships:manage", "roles:manage"]
+                            }
+                          },
                           "agents": {
                             "type": "array",
                             "items": {
@@ -117,6 +138,8 @@
                         "required": [
                           "projectId",
                           "builder",
+                          "source",
+                          "permissions",
                           "agents",
                           "workflows",
                           "apps",
@@ -13798,6 +13821,13 @@
                           },
                           "builder": {
                             "type": "boolean"
+                          },
+                          "permissions": {
+                            "type": "array",
+                            "items": {
+                              "type": "string",
+                              "enum": ["memberships:manage", "roles:manage"]
+                            }
                           },
                           "agents": {
                             "type": "array",

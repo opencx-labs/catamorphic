@@ -1,4 +1,5 @@
 import {
+  assertMayManageRolePolicy,
   type Project,
   ProjectFileNotFoundError,
   ProjectNotFoundError,
@@ -532,6 +533,11 @@ export function registerProjectRoutes(app: FastifyInstance, ctx: RouteContext) {
       const { projectId } = request.params;
       try {
         await ctx.core.projects.get(identity, projectId);
+        assertMayManageRolePolicy(
+          identity,
+          projectId,
+          Object.keys(request.body.files ?? {}),
+        );
         const result = await ctx.core.deployment.deploy(
           identity.tenantId,
           projectId,

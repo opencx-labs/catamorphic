@@ -1,3 +1,4 @@
+import { createHash, randomBytes } from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -13,9 +14,75 @@ import { buildStockServer, type StockServer } from "./server.js";
 
 let dataDir: string;
 let server: StockServer;
-let adminToken: string;
 
 let pwaDist: string;
+
+async function oauthAccessToken(options: {
+  username: string;
+  password: string;
+}): Promise<string> {
+  const login = await server.app.inject({
+    method: "POST",
+    url: "/api/auth/sign-in/username",
+    payload: options,
+  });
+  expect(login.statusCode).toBe(200);
+  const cookie = login.headers["set-cookie"];
+  expect(cookie).toBeTruthy();
+
+  const redirectUri = "http://127.0.0.1:49152/callback";
+  const registered = await server.app.inject({
+    method: "POST",
+    url: "/api/auth/mcp/register",
+    payload: {
+      redirect_uris: [redirectUri],
+      token_endpoint_auth_method: "none",
+      grant_types: ["authorization_code", "refresh_token"],
+      response_types: ["code"],
+      client_name: "Stock server test",
+    },
+  });
+  expect(registered.statusCode).toBe(201);
+  const clientId = registered.json().client_id as string;
+  const verifier = randomBytes(32).toString("base64url");
+  const challenge = createHash("sha256").update(verifier).digest("base64url");
+  const authorize = new URL(
+    "/api/auth/mcp/authorize",
+    "http://catamorphic.local:4700",
+  );
+  authorize.searchParams.set("client_id", clientId);
+  authorize.searchParams.set("redirect_uri", redirectUri);
+  authorize.searchParams.set("response_type", "code");
+  authorize.searchParams.set("scope", "openid profile email offline_access");
+  authorize.searchParams.set("state", "stock-server-state");
+  authorize.searchParams.set("code_challenge", challenge);
+  authorize.searchParams.set("code_challenge_method", "S256");
+  const authorized = await server.app.inject({
+    method: "GET",
+    url: `${authorize.pathname}${authorize.search}`,
+    headers: { cookie: Array.isArray(cookie) ? cookie[0] : cookie },
+  });
+  expect(authorized.statusCode).toBe(302);
+  const code = new URL(authorized.headers.location ?? "").searchParams.get(
+    "code",
+  );
+  expect(code).toBeTruthy();
+
+  const token = await server.app.inject({
+    method: "POST",
+    url: "/api/auth/mcp/token",
+    headers: { "content-type": "application/x-www-form-urlencoded" },
+    payload: new URLSearchParams({
+      grant_type: "authorization_code",
+      client_id: clientId,
+      redirect_uri: redirectUri,
+      code: code ?? "",
+      code_verifier: verifier,
+    }).toString(),
+  });
+  expect(token.statusCode).toBe(200);
+  return token.json().access_token as string;
+}
 
 beforeAll(async () => {
   dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "stock-server-"));
@@ -33,7 +100,6 @@ beforeAll(async () => {
       PATH: process.env.PATH,
     },
   });
-  adminToken = server.auth.ensureAdmin().token;
 }, 120_000);
 
 afterAll(async () => {
@@ -60,8 +126,50 @@ const inject = (
 
 let projectId: string;
 let memberToken: string;
+let memberUserId: string;
+let managerToken: string;
+
+const MEMBER_ROLE = {
+  version: 1,
+  name: "Member",
+  agents: ["assistant"],
+  environments: ["local"],
+  documents: [{ path: "store/users/{user}/**", access: "write" }],
+};
+
+const MANAGER_ROLE = {
+  version: 1,
+  name: "Manager",
+  builder: true,
+  permissions: ["memberships:manage", "roles:manage"],
+  agents: ["assistant"],
+  environments: ["local"],
+  documents: [{ path: "store/**", access: "write" }],
+};
 
 describe("stock server", () => {
+  it("publishes OAuth authorization and protected-resource discovery", async () => {
+    const authorization = await server.app.inject({
+      method: "GET",
+      url: "/.well-known/oauth-authorization-server",
+    });
+    expect(authorization.statusCode).toBe(200);
+    expect(authorization.json()).toMatchObject({
+      authorization_endpoint: expect.stringContaining(
+        "/api/auth/mcp/authorize",
+      ),
+      token_endpoint: expect.stringContaining("/api/auth/mcp/token"),
+    });
+    const resource = await server.app.inject({
+      method: "GET",
+      url: "/.well-known/oauth-protected-resource",
+    });
+    expect(resource.statusCode).toBe(200);
+    expect(resource.json()).toMatchObject({
+      resource: "http://catamorphic.local:4700/api",
+      authorization_servers: expect.any(Array),
+    });
+  });
   it("reports health and chat availability", async () => {
     const response = await inject("GET", "/healthz");
     expect(response.json()).toEqual({ ok: true, agentSessions: true });
@@ -76,47 +184,141 @@ describe("stock server", () => {
   });
 
   it("rejects unauthenticated and unknown-token API calls", async () => {
-    expect((await inject("GET", "/api/me")).statusCode).toBe(401);
-    expect((await inject("GET", "/api/me", "nope")).statusCode).toBe(401);
+    const missing = await inject("GET", "/api/me");
+    expect(missing.statusCode).toBe(401);
+    expect(missing.headers["www-authenticate"]).toContain(
+      'resource_metadata="http://catamorphic.local:4700/.well-known/oauth-protected-resource"',
+    );
+    const invalid = await inject("GET", "/api/me", "nope");
+    expect(invalid.statusCode).toBe(401);
+    expect(invalid.headers["www-authenticate"]).toContain(
+      'error="invalid_token"',
+    );
   });
 
-  it("admin creates a project (admin token = root identity)", async () => {
-    const denied = await inject("POST", "/admin/projects", undefined, {
-      name: "brain",
+  it("resolves an OAuth access token to the current authenticated user", async () => {
+    const user = await server.stockAuth.createLocalUser({
+      username: "oauthuser",
+      name: "OAuth User",
+      password: "correct horse battery staple",
     });
-    expect(denied.statusCode).toBe(401);
-    const response = await inject("POST", "/admin/projects", adminToken, {
-      name: "brain",
+    const accessToken = await oauthAccessToken({
+      username: "oauthuser",
+      password: "correct horse battery staple",
     });
-    expect(response.statusCode).toBe(201);
-    projectId = response.json().id;
-    expect(projectId).toBeTruthy();
+
+    const response = await inject("GET", "/api/me", accessToken);
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toMatchObject({
+      identity: { externalUserId: user.id, root: false },
+      projects: [],
+    });
+  });
+
+  it("a setup agent establishes the project and first ordinary manager", async () => {
+    const operatorSecret = fs
+      .readFileSync(path.join(dataDir, "operator-secret"), "utf8")
+      .trim();
+    const projectResponse = await inject(
+      "POST",
+      "/_catamorphic/operator/projects",
+      operatorSecret,
+      {
+        name: "brain",
+        roles: [
+          { slug: "member", definition: MEMBER_ROLE },
+          { slug: "manager", definition: MANAGER_ROLE },
+        ],
+        admission: {
+          mode: "invitation_only",
+          defaultRole: "member",
+          approvedDomains: [],
+        },
+      },
+    );
+    expect(projectResponse.statusCode).toBe(201);
+    projectId = projectResponse.json().project.id;
+    const managerResponse = await inject(
+      "POST",
+      "/_catamorphic/operator/users",
+      operatorSecret,
+      {
+        username: "manager",
+        name: "Project Manager",
+        password: "correct horse battery staple",
+        memberships: [{ projectId, roles: ["manager"] }],
+      },
+    );
+    expect(managerResponse.statusCode).toBe(201);
+    expect(managerResponse.json().memberships).toHaveLength(1);
+    const manager = managerResponse.json().user as { id: string };
+    expect(manager.id).toBeTruthy();
+    managerToken = await oauthAccessToken({
+      username: "manager",
+      password: "correct horse battery staple",
+    });
+
+    expect((await inject("GET", "/api/me", managerToken)).statusCode).toBe(200);
+    expect((await inject("POST", "/admin/projects")).statusCode).toBe(404);
   }, 30_000);
 
-  it("mints an invite: role file, membership, token, connect links", async () => {
-    const response = await inject("POST", "/admin/invites", adminToken, {
-      projectId,
-      user: "sam",
-    });
+  it("a manager configures admission and creates a credential-free invitation", async () => {
+    const policy = await inject(
+      "PUT",
+      `/api/projects/${projectId}/admission/policy`,
+      managerToken,
+      {
+        mode: "invitation_only",
+        defaultRole: "member",
+        approvedDomains: [],
+      },
+    );
+    expect(policy.statusCode).toBe(200);
+    const response = await inject(
+      "POST",
+      `/api/projects/${projectId}/admission/invitations`,
+      managerToken,
+      {},
+    );
     expect(response.statusCode).toBe(201);
     const invite = response.json();
-    memberToken = invite.token;
-    expect(invite.projectName).toBe("brain");
     expect(invite.connectLinks[0]).toContain(
       "catamorphic://connect?server=http%3A%2F%2Fcatamorphic.local%3A4700%2Fapi",
     );
     expect(invite.connectLinks[0]).toContain(`project=${projectId}`);
-    // The plain-URL variant opens the PWA this server serves.
+    expect(invite.connectLinks[0]).toContain(`invitation=${invite.id}`);
+    expect(invite.connectLinks[0]).not.toContain("token=");
     expect(invite.webLinks[0]).toMatch(
       /^http:\/\/catamorphic\.local:4700\/\?server=/,
     );
+
+    const member = await server.stockAuth.createLocalUser({
+      username: "memberuser",
+      name: "Sam Member",
+      password: "correct horse battery staple",
+    });
+    memberUserId = member.id;
+    memberToken = await oauthAccessToken({
+      username: "memberuser",
+      password: "correct horse battery staple",
+    });
+    const redeemed = await inject(
+      "POST",
+      `/api/projects/${projectId}/admission/invitations/${invite.id}/redeem`,
+      memberToken,
+    );
+    expect(redeemed.statusCode).toBe(200);
   }, 60_000);
 
   it("the member's /me shows the assistant and nothing more", async () => {
     const response = await inject("GET", "/api/me", memberToken);
     expect(response.statusCode).toBe(200);
     const me = response.json();
-    expect(me.identity).toEqual({ externalUserId: "sam", root: false });
+    expect(me.identity).toEqual({
+      externalUserId: memberUserId,
+      root: false,
+    });
     expect(me.projects).toHaveLength(1);
     expect(me.projects[0].projectId).toBe(projectId);
     expect(me.projects[0].builder).toBe(false);
@@ -255,33 +457,37 @@ describe("stock server", () => {
     expect(stale.json().diverged).toBe(true);
   }, 60_000);
 
-  it("admins see per-member usage, mirrored turns included (ADR 0062)", async () => {
-    const denied = await inject("GET", "/admin/usage", memberToken);
-    expect(denied.statusCode).toBe(401);
-    const response = await inject("GET", "/admin/usage", adminToken);
-    expect(response.statusCode).toBe(200);
-    const sam = response
-      .json()
-      .items.find(
-        (entry: { user: string; projectId: string }) =>
-          entry.user === "sam" && entry.projectId === projectId,
-      );
-    expect(sam).toBeTruthy();
-    expect(sam.inputTokens).toBe(100);
-    expect(sam.cachedInputTokens).toBe(40);
-    expect(sam.outputTokens).toBe(25);
-    expect(sam.costUsd).toBeCloseTo(0.012);
-    expect(sam.sessions).toBeGreaterThanOrEqual(2);
-    expect(sam.turns).toBeGreaterThanOrEqual(3);
+  it("project administration belongs to the manager role", async () => {
+    const denied = await inject(
+      "GET",
+      `/api/projects/${projectId}/memberships`,
+      memberToken,
+    );
+    expect(denied.statusCode).toBe(403);
+    const listed = await inject(
+      "GET",
+      `/api/projects/${projectId}/memberships`,
+      managerToken,
+    );
+    expect(listed.statusCode).toBe(200);
+    expect(
+      listed
+        .json()
+        .map(
+          (membership: { externalUserId: string }) => membership.externalUserId,
+        ),
+    ).toEqual(expect.arrayContaining([memberUserId]));
   });
 
-  it("revoking the invite cuts the member off instantly", async () => {
+  it("revoking membership cuts project access without invalidating sign-in", async () => {
     const revoked = await inject(
       "DELETE",
-      `/admin/invites/${memberToken}`,
-      adminToken,
+      `/api/projects/${projectId}/memberships/${encodeURIComponent(memberUserId)}`,
+      managerToken,
     );
-    expect(revoked.statusCode).toBe(200);
-    expect((await inject("GET", "/api/me", memberToken)).statusCode).toBe(401);
+    expect(revoked.statusCode).toBe(204);
+    const me = await inject("GET", "/api/me", memberToken);
+    expect(me.statusCode).toBe(200);
+    expect(me.json().projects).toEqual([]);
   });
 });

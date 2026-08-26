@@ -75,6 +75,7 @@ import {
 import { ContextMeter } from "./context-meter.js";
 import { EnvironmentConnections } from "./environment-connections.js";
 import { Modal } from "./modal.js";
+import { RemoteMessageConnectionGuard } from "./remote-message-connection-guard.js";
 import { ShortcutHint } from "./shortcut-hint";
 
 export type ChatMode = "min" | "partial" | "tab";
@@ -1313,6 +1314,14 @@ export function ChatDock({
   });
   const activeEnvironment = chat.session?.environment ?? selectedEnvironment;
   const isIncognito = Boolean(entry.incognito);
+  const [remoteCheckNonce, setRemoteCheckNonce] = useState(0);
+  const wasSendingRef = useRef(chat.isSending);
+  useEffect(() => {
+    if (chat.isSending && !wasSendingRef.current) {
+      setRemoteCheckNonce((current) => current + 1);
+    }
+    wasSendingRef.current = chat.isSending;
+  }, [chat.isSending]);
   const [checkout, setCheckout] = useState<SessionCheckoutInfo | null>(null);
   useEffect(() => {
     const load = () => {
@@ -2610,6 +2619,10 @@ export function ChatDock({
                 />
               </div>
             )}
+            <RemoteMessageConnectionGuard
+              projectId={projectId}
+              checkNonce={remoteCheckNonce}
+            />
             {/* Proactive auth banner: the session is knowably dead
                 (probe on focus/wake) — offer the re-login BEFORE a send
                 fails. Dismissible; a health change re-arms it. */}

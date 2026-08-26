@@ -2499,12 +2499,12 @@ Patterned on what best-in-class palettes converged on (Chrome omnibox
   has no GitHub access connects a folder to the hosting backend and gets
   exactly what their role covers: company docs read-only, their store
   subtrees read/write. `Connect to a server…` lives beside `New project`
-  (empty state, project switcher, palette); it takes the invite's
-  `catamorphic://connect?server=…&token=…&project=…&name=…` link (deep
-  link or pasted — the fields fill themselves) plus a location. Connect =
-  create the local project, `.gitignore` `store/` and the sync manifest,
-  first sync. Tokens live in the profile's `remote-projects.json`,
-  safeStorage-encrypted like agent keys.
+  (empty state, project switcher, palette); it takes a credential-free
+  `catamorphic://connect?server=…&project=…&name=…` locator (deep link or
+  pasted, with fields filled automatically) plus a location. OAuth discovery
+  and S256 PKCE authenticate the person before Connect creates the local
+  project, ignores `store/` and the sync manifest, and performs the first
+  sync. Refreshable credentials live in profile-local protected storage.
 - **Two verbs, no merge UI.** The sidebar's *Server* section (hidden for
   local projects) shows host + last sync, **Sync** (pull) and **Ship**
   (push, with the count of local store changes), the changed store files
@@ -2535,10 +2535,11 @@ Patterned on what best-in-class palettes converged on (Chrome omnibox
   proposals on/off and whether they open PRs) and gates the Server section
   on it: no link icon where publishing is off, no public radio on a
   members-only host, no Propose… when the host takes none, and honest
-  wording ("as a pull request" vs "as a branch"). Hosts without `/me` show
-  everything and the click discovers. A 401 becomes "Sign in again", which
-  opens the link's `renew=` URL — the host's own login hands back a fresh
-  connect link; the desktop never learns how the host authenticates.
+  wording ("as a pull request" vs "as a branch"). A 401 becomes "Sign in
+  again" and reruns OAuth discovery and S256 PKCE. Connect links contain only
+  the server and project locator; credentials stay in profile-local protected
+  storage. This supersedes the token-bearing renewal flow in the original
+  entry (ADRs 0072 and 0073).
 - Deferred: auto-sync on focus/interval (today: manual + the 15s status
   poll), a per-file "restore this version" button, revoking links from the
   desktop (today: the agent or HTTP), and MCP-served skills/agents in the
@@ -2935,3 +2936,27 @@ paths, deliberately independent:
   surface from the chat and terminates owned processes such as terminals.
 - Local PDF artifacts open in a browser surface backed by Chromium's PDF
   viewer. Text files continue to open in the editor.
+
+### Remote projects stay recognizable and recoverable (2026-08-26)
+
+- **The project selector owns connection truth.** A compact cloud indicator
+  sits beside the selected project, checks the actual server, and distinguishes
+  connected, unreachable, sign-in-required, and access-removed states. Network
+  failure preserves local work and never pretends the project was disconnected.
+- **Reconnect starts from the project, not a blank form.** Every remote working
+  copy keeps a gitignored, credential-free locator in
+  `.catamorphic/remote.json`. The server and remote project remain visible even
+  if encrypted profile credentials or app data are unavailable, so the recovery
+  action can open browser sign-in in place.
+- **Sending while remote access is broken is explicit.** The local message is
+  retained, but the chat immediately explains that remote delivery and
+  mirroring are paused and offers the action appropriate to the failure.
+- **Builders receive source, members receive their scope.** A builder project
+  backed by GitHub reuses a validated `gh` credential when possible and clones
+  through the same GitHub and git services as every other checkout. Other
+  members keep the scoped document working copy. Missing repository access is
+  resolved inside the connect modal.
+- **Project administration belongs to ordinary roles.** A caller whose
+  committed role grants `memberships:manage` sees Members and invites in the
+  server section. Role assignment and invitation creation use project APIs;
+  there is no server-owner persona or privileged desktop mode.

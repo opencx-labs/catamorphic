@@ -44,6 +44,15 @@ export interface Identity {
   connectionScope?: readonly ConnectionUseRef[];
   /** Host-issued administrative permissions, never sourced from project code. */
   controlPlanePermissions?: readonly ControlPlanePermission[];
+  /** Ordinary project administration granted by committed project roles. */
+  projectPermissions?: readonly ProjectPermissionRef[];
+}
+
+export type ProjectPermission = "memberships:manage" | "roles:manage";
+
+export interface ProjectPermissionRef {
+  projectId: string;
+  permission: ProjectPermission;
 }
 
 export interface ExecutionEnvironmentRef {
@@ -90,6 +99,19 @@ export function hasControlPlanePermission(
   return (
     (identity.scope === undefined && identity.executionScope === undefined) ||
     identity.controlPlanePermissions?.includes(permission) === true
+  );
+}
+
+export function hasProjectPermission(
+  identity: Identity,
+  projectId: string,
+  permission: ProjectPermission,
+): boolean {
+  if (identity.scope === undefined) return true;
+  return (
+    identity.projectPermissions?.some(
+      (ref) => ref.projectId === projectId && ref.permission === permission,
+    ) ?? false
   );
 }
 

@@ -1,9 +1,14 @@
-import { isBuilder } from "@catamorphic/core";
+import { isBuilder, type ProjectPermission } from "@catamorphic/core";
 import type { FastifyInstance } from "fastify";
 import type { ZodTypeProvider } from "fastify-type-provider-zod";
 import type { RouteContext } from "../app.js";
 import { resolveIdentity } from "../http-identity.js";
 import { MeSchema } from "../schemas.js";
+
+const ROOT_PROJECT_PERMISSIONS: ProjectPermission[] = [
+  "memberships:manage",
+  "roles:manage",
+];
 
 /**
  * Introspection (ADR 0055): what THIS caller may do, and what THIS host
@@ -24,30 +29,49 @@ export function registerMeRoutes(app: FastifyInstance, ctx: RouteContext) {
       const projectIds = [
         ...new Set((identity.scope ?? []).map((ref) => ref.projectId)),
       ];
-      const projects = projectIds.map((projectId) => {
-        const refs = (identity.scope ?? []).filter(
-          (ref) => ref.projectId === projectId,
-        );
-        return {
-          projectId,
-          builder: isBuilder(identity, projectId),
-          agents: refs
-            .filter((ref) => ref.kind === "agent")
-            .map((ref) => (ref as { name: string }).name),
-          workflows: refs
-            .filter((ref) => ref.kind === "workflow")
-            .map((ref) => (ref as { name: string }).name),
-          apps: refs
-            .filter((ref) => ref.kind === "app")
-            .map((ref) => (ref as { name: string }).name),
-          documents: refs
-            .filter((ref) => ref.kind === "document")
-            .map((ref) => {
-              const doc = ref as { path: string; access?: "read" | "write" };
-              return { path: doc.path, access: doc.access ?? "read" };
-            }),
-        };
-      });
+      const projects = await Promise.all(
+        projectIds.map(async (projectId) => {
+          const refs = (identity.scope ?? []).filter(
+            (ref) => ref.projectId === projectId,
+          );
+          const builder = isBuilder(identity, projectId);
+          const project =
+            builder && ctx.core?.projects
+              ? await ctx.core.projects.get(identity, projectId)
+              : null;
+          return {
+            projectId,
+            builder,
+            source: project?.remoteUrl
+              ? {
+                  remoteUrl: project.remoteUrl,
+                  defaultBranch: project.defaultBranch,
+                }
+              : null,
+            permissions:
+              identity.scope === undefined
+                ? [...ROOT_PROJECT_PERMISSIONS]
+                : (identity.projectPermissions ?? [])
+                    .filter((permission) => permission.projectId === projectId)
+                    .map((permission) => permission.permission),
+            agents: refs
+              .filter((ref) => ref.kind === "agent")
+              .map((ref) => (ref as { name: string }).name),
+            workflows: refs
+              .filter((ref) => ref.kind === "workflow")
+              .map((ref) => (ref as { name: string }).name),
+            apps: refs
+              .filter((ref) => ref.kind === "app")
+              .map((ref) => (ref as { name: string }).name),
+            documents: refs
+              .filter((ref) => ref.kind === "document")
+              .map((ref) => {
+                const doc = ref as { path: string; access?: "read" | "write" };
+                return { path: doc.path, access: doc.access ?? "read" };
+              }),
+          };
+        }),
+      );
       const features = ctx.features;
       return reply.send({
         version: 1,

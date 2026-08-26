@@ -3,6 +3,7 @@
 - **Status:** Accepted
 - **Date:** 2026-08-23
 - **Refines:** 0033, 0038, 0047
+- **Agent placement model superseded by:** 0067
 - **Missing project policy refined by:** 0070
 
 ## Context

@@ -228,8 +228,9 @@ Also worth knowing, because it's easy to miss from the package list:
   building split into mechanics (`building-apps`) and replaceable design
   doctrine (`designing-apps`). Coding agents learn Catamorphic's authoring
   model at the moment they need it. The public
-  [`skills/embed-catamorphic`](skills/embed-catamorphic/SKILL.md) skill
-  extends the same idea to integrating Catamorphic itself.
+  [`skills/setup-catamorphic-server`](skills/setup-catamorphic-server/SKILL.md)
+  skill extends the same idea to stock-server setup and integrating
+  Catamorphic into an existing app without replacing its auth or deployment.
 - **One Run model.** Boundary and batch workflows all share the same Runs
   API, hooks, and UI: capabilities, not categories. Every run executes a
   deployed commit.

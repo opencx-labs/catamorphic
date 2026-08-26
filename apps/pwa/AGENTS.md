@@ -2,19 +2,19 @@
 
 Phone-sized client for a Catamorphic server (ADR 0058): projects →
 sessions → chat. Reply, nudge (queue / send-now + interrupt), answer
-agent questions and tool-permission asks, start simple chats. Auth is a
-connect link (ADR 0055); profiles are local people on this device, each
-holding their redeemed links. Read `docs/decisions/0058-pwa-pwa.md`
+agent questions and tool-permission asks, start simple chats. Remote auth uses
+OAuth authorization code with S256 PKCE (ADR 0072); profiles are local people
+on this device, each holding refreshable server connections. Read `docs/decisions/0058-pwa-pwa.md`
 before changing architecture.
 
 ## Run
 
 - `bun run dev:pwa` (repo root) — Vite dev server with workspace
   watchers; `--host` is on, so open it from a phone on the LAN.
-- Backend for development: either the desktop app's embedded server
-  (paste a `catamorphic://connect?server=http://127.0.0.1:<port>/api&token=x&project=<id>`
-  link; any token works against the desktop's identity), or the fake:
-  `node scripts/dev-server.mjs` — it prints a redeemable connect link.
+- Backend for development: use the fake with
+  `node scripts/dev-server.mjs`; it prints a credential-free connect link and
+  serves the same OAuth discovery, authorization, refresh, and bearer shape as
+  a remote host. Use desktop QR pairing to exercise the desktop connection.
   The fake's scripted agent: `ask …` parks a tool-permission ask,
   `question …` asks a question, `fail …` fails the turn.
 

@@ -67,6 +67,7 @@ import {
   RemotePublishModal,
 } from "./components/remote-actions-modals.js";
 import { RemoteConnectModal } from "./components/remote-connect-modal.js";
+import { RemoteConnectionIndicator } from "./components/remote-connection-indicator.js";
 import { RemoteHistoryModal } from "./components/remote-history-modal.js";
 import { type RemoteFeatures, RemoteNav } from "./components/remote-nav.js";
 import { ShortcutHint } from "./components/shortcut-hint.js";
@@ -3990,6 +3991,7 @@ export function App() {
               }
               onDeleteProject={setDeletingProject}
             />
+            <RemoteConnectionIndicator projectId={projectId} />
           </div>
 
           <div className="min-h-0 flex-1 overflow-y-auto px-2">

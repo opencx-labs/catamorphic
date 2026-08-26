@@ -1,5 +1,20 @@
 # Catamorphic stock server
 
+## Authentication setup
+
+Use [`../../skills/setup-catamorphic-server/SKILL.md`](../../skills/setup-catamorphic-server/SKILL.md)
+for agent-guided stock setup or custom-host embedding. The guidance first
+inspects existing auth and deployment. The stock host uses Better Auth; a
+custom host keeps its own verified session model.
+
+The built-in local fallback is provisioned through the running server, never
+by writing auth rows. A setup agent inspects the schemas in `src/setup` and
+uses the machine-local operator operations in `src/server.ts` to create the
+project, commit explicit roles, configure admission, and create an ordinary
+local user when requested. There is no human setup command or first-run UI.
+The owner-only operational credential under `CATAMORPHIC_DATA_DIR` is machine
+authority, not a Catamorphic identity or super-admin account.
+
 ## Credential vault and provider setup
 
 The stock server creates an AES-256-GCM credential vault under

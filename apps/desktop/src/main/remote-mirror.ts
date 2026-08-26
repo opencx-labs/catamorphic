@@ -4,6 +4,10 @@ import {
 } from "@catamorphic/core";
 import type { ProfileConfigManager } from "./profile-config.js";
 import type { ProfilesStore } from "./profiles.js";
+import {
+  type RemoteOAuthCredentials,
+  refreshRemoteCredentials,
+} from "./remote-oauth.js";
 
 /**
  * Session mirroring (ADR 0061): local-first, synced to the linked remote.
@@ -89,31 +93,49 @@ export class RemoteSessionMirror {
     const projectAgent = detail.agentId
       ? parseProjectAgentId(detail.agentId)
       : undefined;
-    const response = await fetch(
-      `${link.serverUrl.replace(/\/+$/, "")}/projects/${encodeURIComponent(
-        link.remoteProjectId,
-      )}/agent/sessions/${encodeURIComponent(sessionId)}/mirror`,
-      {
-        method: "PUT",
-        headers: {
-          authorization: `Bearer ${link.token}`,
-          "content-type": "application/json",
+    const request = async (forceRefresh = false) => {
+      const expired =
+        Date.parse(link.credentials.accessTokenExpiresAt) <=
+        Date.now() + 60_000;
+      if (forceRefresh || expired) {
+        link.credentials = await refreshRemoteCredentials({
+          credentials: link.credentials,
+        });
+        this.deps.profileConfig
+          .forProfile(link.profileId)
+          .remoteProjects.updateCredentials(
+            link.localProjectId,
+            link.credentials,
+          );
+      }
+      return fetch(
+        `${link.serverUrl.replace(/\/+$/, "")}/projects/${encodeURIComponent(
+          link.remoteProjectId,
+        )}/agent/sessions/${encodeURIComponent(sessionId)}/mirror`,
+        {
+          method: "PUT",
+          headers: {
+            authorization: `Bearer ${link.credentials.accessToken}`,
+            "content-type": "application/json",
+          },
+          body: JSON.stringify({
+            title: detail.title,
+            icon: detail.icon,
+            provider: detail.provider,
+            ...(projectAgent ? { agentSlug: projectAgent.slug } : {}),
+            messages: detail.messages.map((message) => ({
+              id: message.id,
+              role: message.role,
+              content: message.content,
+              metadata: message.metadata,
+              createdAt: new Date(message.createdAt).toISOString(),
+            })),
+          }),
         },
-        body: JSON.stringify({
-          title: detail.title,
-          icon: detail.icon,
-          provider: detail.provider,
-          ...(projectAgent ? { agentSlug: projectAgent.slug } : {}),
-          messages: detail.messages.map((message) => ({
-            id: message.id,
-            role: message.role,
-            content: message.content,
-            metadata: message.metadata,
-            createdAt: new Date(message.createdAt).toISOString(),
-          })),
-        }),
-      },
-    );
+      );
+    };
+    let response = await request();
+    if (response.status === 401) response = await request(true);
     if (response.status === 409) {
       const body = (await response.json().catch(() => ({}))) as {
         diverged?: boolean;
@@ -153,11 +175,12 @@ export class RemoteSessionMirror {
       const link = this.deps.profileConfig
         .forProfile(profile.id)
         .remoteProjects.get(projectId);
-      if (link?.token) {
+      if (link) {
         return {
+          profileId: profile.id,
           serverUrl: link.serverUrl,
           remoteProjectId: link.remoteProjectId,
-          token: link.token,
+          credentials: link.credentials,
           localProjectId: projectId,
         };
       }
@@ -167,8 +190,9 @@ export class RemoteSessionMirror {
 }
 
 interface MirrorLink {
+  profileId: string;
   serverUrl: string;
   remoteProjectId: string;
-  token: string;
+  credentials: RemoteOAuthCredentials;
   localProjectId: string;
 }

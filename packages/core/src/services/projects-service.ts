@@ -8,7 +8,11 @@ import { getTracer, withSpan } from "@catamorphic/otel";
 import type { Kysely, Selectable, Transaction } from "kysely";
 import { authorFor, type Identity, SYSTEM_AUTHOR } from "../identity.js";
 import { SEED_SKILLS } from "../seeds.js";
-import { assertBuilder, assertRootIdentity } from "./artifact-scope.js";
+import {
+  assertBuilder,
+  assertMayManageRolePolicy,
+  assertRootIdentity,
+} from "./artifact-scope.js";
 
 const tracer = getTracer("@catamorphic/core");
 
@@ -433,6 +437,7 @@ export class ProjectsService {
     input: WriteFileInput,
   ): Promise<string> {
     await this.requireExists(identity, projectId);
+    assertMayManageRolePolicy(identity, projectId, [filePath]);
     return this.withDev(identity, projectId, async (repo) => {
       await repo.writeFile(filePath, input.content);
       if (input.commitMessage) {

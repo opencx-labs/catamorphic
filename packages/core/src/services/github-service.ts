@@ -172,6 +172,41 @@ export class GithubService {
   }
 
   /**
+   * Validate a host-supplied credential against the exact repository before
+   * replacing the user's stored connection. Desktop hosts use this for a
+   * `gh` CLI credential without creating a second GitHub API path.
+   */
+  async connectForRepository(
+    identity: Identity,
+    tokens: GithubTokenSet,
+    fullName: string,
+  ): Promise<{
+    connection: Extract<GithubConnectionStatus, { connected: true }>;
+    repository: GithubRepo;
+  }> {
+    const api = new GithubApi(tokens.accessToken, { fetch: this.fetch });
+    const repository = await api.getRepo(fullName);
+    const user = await api.getUser();
+    await this.store.set(identity.tenantId, identity.externalUserId, {
+      tokens,
+      githubLogin: user.login,
+      githubUserId: user.id,
+    });
+    return {
+      connection: { connected: true, login: user.login },
+      repository,
+    };
+  }
+
+  /** Verify that the currently stored credential can read one repository. */
+  async repository(identity: Identity, fullName: string): Promise<GithubRepo> {
+    const api = new GithubApi(await this.freshToken(identity), {
+      fetch: this.fetch,
+    });
+    return api.getRepo(fullName);
+  }
+
+  /**
    * Server web-flow completion: exchange the OAuth callback code for tokens
    * and store the connection. Requires the app config to include the client
    * secret.

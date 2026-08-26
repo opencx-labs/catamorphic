@@ -367,13 +367,13 @@ export interface BrowserImportResult {
 // --- Remote projects (ADR 0055) ---
 export interface ConnectLink {
   serverUrl: string;
-  token: string;
   remoteProjectId: string;
   remoteProjectName?: string;
-  renewUrl?: string;
 }
 export interface RemoteCapabilities {
   builder: boolean;
+  source: { remoteUrl: string; defaultBranch: string } | null;
+  permissions: Array<"memberships:manage" | "roles:manage">;
   agents: string[];
   documents: Array<{ path: string; access: "read" | "write" }>;
   features: {
@@ -407,8 +407,12 @@ export interface RemoteProjectStatus {
   remoteProjectId: string;
   remoteProjectName: string;
   lastSyncAt: string | null;
-  renewUrl?: string;
   capabilities?: RemoteCapabilities;
+  connection: {
+    state: "connected" | "sign_in_required" | "access_removed" | "unreachable";
+    checkedAt: string;
+    message: string;
+  };
   local: { modified: string[]; deleted: string[]; programEdits: string[] };
 }
 export interface RemoteDocumentVersion {
@@ -418,6 +422,27 @@ export interface RemoteDocumentVersion {
   size: number;
   writtenBy: string;
   writtenAt: string;
+}
+
+export interface RemoteProjectRole {
+  slug: string;
+  definition?: { name: string };
+}
+
+export interface RemoteProjectMember {
+  externalUserId: string;
+  name: string | null;
+  email: string | null;
+  roles: string[];
+}
+
+export interface RemoteProjectAccessRequest {
+  id: string;
+  externalUserId: string;
+  email: string;
+  emailVerified: boolean;
+  status: string;
+  requestedAt: string;
 }
 
 export type GithubConnectResult =
@@ -691,13 +716,36 @@ export interface CatamorphicDesktopApi {
   remoteParseLink: (link: string) => Promise<ConnectLink | null>;
   remoteConnect: (input: {
     serverUrl: string;
-    token: string;
     remoteProjectId: string;
     name: string;
     rootPath: string;
-    renewUrl?: string;
   }) => Promise<{ id: string; name: string; report: RemoteSyncReport }>;
   remoteStatus: (projectId: string) => Promise<RemoteProjectStatus | null>;
+  remoteMembers: (projectId: string) => Promise<{
+    roles: RemoteProjectRole[];
+    members: RemoteProjectMember[];
+    requests: RemoteProjectAccessRequest[];
+  }>;
+  remoteAdmissionDecide: (input: {
+    projectId: string;
+    requestId: string;
+    decision: "approved" | "denied";
+  }) => Promise<void>;
+  remoteMemberSetRoles: (input: {
+    projectId: string;
+    externalUserId: string;
+    roles: string[];
+  }) => Promise<void>;
+  remoteMemberInvite: (input: {
+    projectId: string;
+    email?: string;
+    roles: string[];
+  }) => Promise<{
+    id: string;
+    expiresAt: string;
+    connectLinks: string[];
+    webLinks: string[];
+  }>;
   remoteSync: (projectId: string) => Promise<RemoteSyncReport>;
   remoteShip: (projectId: string) => Promise<RemoteShipReport>;
   remoteHistory: (input: {
@@ -730,7 +778,7 @@ export interface CatamorphicDesktopApi {
     branch: string;
     pullRequest?: { url: string; number: number };
   }>;
-  remoteRenew: (projectId: string) => Promise<void>;
+  remoteReconnect: (projectId: string) => Promise<{ ok: true }>;
   remoteDisconnect: (projectId: string) => Promise<void>;
   remoteTakePendingLink: () => Promise<string | null>;
   onConnectLink: (listener: (link: string) => void) => () => void;

@@ -1,13 +1,15 @@
 import { useQueries } from "@tanstack/react-query";
-import { ChevronRight, FolderGit2, Plus } from "lucide-react";
+import { ChevronRight, FolderGit2, LogIn, Plus } from "lucide-react";
 import { Screen } from "../components/screen.js";
 import { clientFor, fetchMe } from "../lib/api.js";
 import { navigate } from "../lib/nav.js";
 import {
   activeProfile,
   type PwaConnection,
+  type RemotePwaConnection,
   usePwaState,
 } from "../lib/store.js";
+import { stashRemoteConnection } from "./connect-screen.js";
 
 interface ProjectRow {
   connection: PwaConnection;
@@ -29,6 +31,8 @@ export function ProjectsScreen({ animation }: { animation?: string }) {
     queries: profile.connections.map((connection) => ({
       queryKey: ["pwa", "connection-projects", connection.id],
       staleTime: 30_000,
+      enabled:
+        connection.kind === "device" || connection.credentials !== undefined,
       queryFn: async (): Promise<ProjectRow[]> => {
         const host = new URL(connection.serverUrl).host;
         const client = clientFor(connection);
@@ -63,6 +67,10 @@ export function ProjectsScreen({ animation }: { animation?: string }) {
   });
 
   const rows = results.flatMap((result) => result.data ?? []);
+  const pendingRemotes = profile.connections.filter(
+    (connection): connection is RemotePwaConnection =>
+      connection.kind === "remote" && connection.credentials === undefined,
+  );
   const loading = results.some((result) => result.isLoading);
   const failed = results.filter((result) => result.isError).length;
 
@@ -99,7 +107,7 @@ export function ProjectsScreen({ animation }: { animation?: string }) {
       }
     >
       <div className="h-full overflow-y-auto overscroll-contain">
-        {rows.length === 0 && !loading && (
+        {rows.length === 0 && pendingRemotes.length === 0 && !loading && (
           <div className="flex h-full flex-col items-center justify-center gap-3 p-8 text-center">
             <FolderGit2 className="size-8 text-fg-faint" />
             <p className="text-sm leading-6 text-fg-muted">
@@ -117,6 +125,32 @@ export function ProjectsScreen({ animation }: { animation?: string }) {
           </div>
         )}
         <ul className="flex flex-col py-1">
+          {pendingRemotes.map((connection) => (
+            <li key={connection.id}>
+              <button
+                type="button"
+                onClick={() => {
+                  stashRemoteConnection(connection);
+                  navigate({ kind: "connect" });
+                }}
+                className="row-press flex w-full cursor-pointer items-center gap-3 px-4 py-3 text-left"
+                data-testid="project-sign-in"
+              >
+                <span className="grid size-10 shrink-0 place-items-center rounded-xl border border-danger/40 bg-danger/10">
+                  <LogIn className="size-5 text-danger" />
+                </span>
+                <span className="min-w-0 flex-1">
+                  <span className="block truncate text-[15px] font-medium leading-6">
+                    {connection.projectName ?? "Remote project"}
+                  </span>
+                  <span className="block truncate text-xs leading-4 text-danger">
+                    Sign in required
+                  </span>
+                </span>
+                <ChevronRight className="size-4 shrink-0 text-fg-faint" />
+              </button>
+            </li>
+          ))}
           {rows.map((row) => (
             <li key={`${row.connection.id}:${row.projectId}`}>
               <button

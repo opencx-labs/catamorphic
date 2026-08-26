@@ -36,6 +36,11 @@ export interface paths {
                             projects: {
                                 projectId: string;
                                 builder: boolean;
+                                source: {
+                                    remoteUrl: string;
+                                    defaultBranch: string;
+                                } | null;
+                                permissions: ("memberships:manage" | "roles:manage")[];
                                 agents: string[];
                                 workflows: string[];
                                 apps: string[];
@@ -6642,6 +6647,7 @@ export interface paths {
                                 name: string;
                                 description?: string;
                                 builder?: boolean;
+                                permissions?: ("memberships:manage" | "roles:manage")[];
                                 agents?: (string | {
                                     name: string;
                                     toolPolicies?: {

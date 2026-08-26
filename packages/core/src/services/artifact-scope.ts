@@ -1,6 +1,11 @@
 import type { DB } from "@catamorphic/db";
 import type { Kysely } from "kysely";
-import { type AppRef, type Identity, isBuilder } from "../identity.js";
+import {
+  type AppRef,
+  hasProjectPermission,
+  type Identity,
+  isBuilder,
+} from "../identity.js";
 import type { AppPoliciesService } from "./app-policies-service.js";
 
 /**
@@ -35,6 +40,23 @@ export function assertRootIdentity(identity: Identity): void {
  */
 export function assertBuilder(identity: Identity, projectId: string): void {
   if (!isBuilder(identity, projectId)) throw new AccessDeniedError();
+}
+
+/** Role policy is protected even from ordinary project builders. */
+export function assertMayManageRolePolicy(
+  identity: Identity,
+  projectId: string,
+  paths: readonly string[],
+): void {
+  if (!paths.some(isRolePolicyPath)) return;
+  if (!hasProjectPermission(identity, projectId, "roles:manage")) {
+    throw new AccessDeniedError();
+  }
+}
+
+export function isRolePolicyPath(path: string): boolean {
+  const normalized = path.replaceAll("\\", "/").replace(/^\.\//, "");
+  return /^roles\/[^/]+\.json$/.test(normalized);
 }
 
 export interface ResolvedScope {

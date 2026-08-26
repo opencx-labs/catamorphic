@@ -1,6 +1,7 @@
-import { Check, Pencil, Plus, Trash2, Unlink } from "lucide-react";
+import { Check, LogIn, Pencil, Plus, Trash2, Unlink } from "lucide-react";
 import { useState } from "react";
 import { Screen } from "../components/screen.js";
+import { navigate } from "../lib/nav.js";
 import {
   activeProfile,
   createProfile,
@@ -10,6 +11,7 @@ import {
   setActiveProfile,
   usePwaState,
 } from "../lib/store.js";
+import { stashRemoteConnection } from "./connect-screen.js";
 
 /**
  * Profiles are local to this device: a person, their color, and the
@@ -136,13 +138,40 @@ export function ProfilesScreen({ animation }: { animation?: string }) {
                 <span className="block truncate text-xs text-fg-faint">
                   {new URL(connection.serverUrl).host}
                 </span>
+                <span
+                  className={`block truncate text-xs ${
+                    connection.kind === "remote" && !connection.credentials
+                      ? "text-danger"
+                      : "text-fg-faint"
+                  }`}
+                >
+                  {connection.kind === "device"
+                    ? "Paired"
+                    : connection.credentials
+                      ? "Connected"
+                      : "Sign in required"}
+                </span>
               </span>
+              {connection.kind === "remote" && !connection.credentials && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    stashRemoteConnection(connection);
+                    navigate({ kind: "connect" });
+                  }}
+                  className="grid size-10 shrink-0 cursor-pointer place-items-center text-danger active:text-accent"
+                  aria-label={`Sign in to ${connection.projectName ?? new URL(connection.serverUrl).host}`}
+                  data-testid="profile-remote-sign-in"
+                >
+                  <LogIn className="size-4" />
+                </button>
+              )}
               <button
                 type="button"
                 onClick={() => {
                   if (
                     window.confirm(
-                      "Disconnect this project? You'll need a new invite link to reconnect.",
+                      "Disconnect this project from this device? You can sign in again later.",
                     )
                   ) {
                     removeConnection(active.id, connection.id);

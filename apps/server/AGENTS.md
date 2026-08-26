@@ -1,10 +1,11 @@
 # Stock server
 
 The self-hostable Catamorphic server (ADR 0059): zero external services,
-everything under one data dir — PGlite database, bare git origins,
+everything under one data dir: PGlite database, bare git origins,
 local-process execution (the container IS the sandbox; single-tenant
-ONLY, per ADR 0047), bearer tokens in `auth.json`, invites over an admin
-API, mDNS so the LAN reaches `http://catamorphic.local:4700`.
+ONLY, per ADR 0047), and mDNS so the LAN reaches the server. The new stock
+Better Auth, OAuth, admission, and agent-driven setup path are the only remote
+identity model. Do not reintroduce token files or privileged product users.
 
 ## Run
 
@@ -15,30 +16,31 @@ API, mDNS so the LAN reaches `http://catamorphic.local:4700`.
 - Chat needs one of `ANTHROPIC_API_KEY` / `OPENROUTER_API_KEY` /
   `OPENAI_API_KEY` (`CATAMORPHIC_MODEL` overrides; anthropic defaults to
   claude-opus-5). `CATAMORPHIC_FAKE_AGENT=1` = deterministic echo agent.
-- Boot prints the admin token + ready-to-paste curl for projects/invites.
-  `POST /admin/invites` returns `connectLinks` (catamorphic:// scheme)
-  AND `webLinks` — plain URLs opening the PWA this server serves at its
-  root (`apps/pwa/dist` sibling, or `CATAMORPHIC_PWA_DIST`). Put the
-  server behind TLS and those webLinks are the durable, installable,
-  works-from-anywhere entry point for phones.
+- Boot prints public API, documentation, and sign-in locations, never a
+  credential.
+- Local setup agents inspect the schemas under `src/setup` and call the
+  loopback `/_catamorphic/operator/*` operations using the owner-only machine
+  credential under the data directory. These operations bootstrap explicit
+  roles, admission, and ordinary Better Auth users. They are not a human CLI,
+  product UI, user role, or server-owner identity.
+- Project managers use their ordinary OAuth identity and committed
+  `memberships:manage` or `roles:manage` permissions for admission and
+  membership APIs under `/api/projects/:projectId`.
 
 ## Shape rules
 
-- The invite flow is: committed `roles/member.json` deployed to origin
-  `main` (once per project) → `memberships.grant` → token in `auth.json`.
-  Access is the MEMBERSHIP's; the token only names the person — revoking
-  either cuts them off on the next request.
+- An invitation is a credential-free project admission locator. The recipient
+  signs in through OAuth with PKCE, redeems the invitation, and receives access
+  only through the resulting membership. Access tokens identify the person and
+  do not carry roles.
 - Scoped members address the agent as `project:<projectId>:assistant`;
   the registry serves that id and the bare `assistant` (root callers).
 - Never expose this server multi-tenant: local-process execution gives
   processes the host filesystem and network (ADR 0047).
-- The admin surface (`/admin/*`, `/healthz`, `/`) lives OUTSIDE `/api` on
-  purpose — `catamorphicPlugin` is encapsulated, so these routes carry
-  their own auth (admin bearer).
-- `GET /admin/usage` (ADR 0062): per member × project rollup of the
-  usage each assistant turn carries in `metadata.usage` — sessions run
-  here and sessions mirrored from desktops (ADR 0061) both count;
-  incognito sessions never arrive by design.
+- `/_catamorphic/operator/*` is machine-local setup authority and must remain
+  inaccessible through public ingress. `/healthz` and the hosted PWA are
+  public. Application administration belongs under `/api` and uses ordinary
+  project permissions.
 
 ## Verify
 
