@@ -463,7 +463,7 @@ export class ExecutionJobsService {
     parkedForConnectionRequirementId?: string;
   }): Promise<boolean> {
     return this.db.transaction().execute(async (trx) => {
-      let availableAt = args.availableAt;
+      let makeImmediatelyAvailable = false;
       if (args.parkedForPausedRunId) {
         const run = await trx
           .selectFrom("workflow_runs")
@@ -471,7 +471,7 @@ export class ExecutionJobsService {
           .select("status")
           .forShare()
           .executeTakeFirst();
-        if (run?.status !== "paused") availableAt = new Date();
+        if (run?.status !== "paused") makeImmediatelyAvailable = true;
       }
       if (args.parkedForConnectionRequirementId) {
         const requirement = await trx
@@ -479,8 +479,14 @@ export class ExecutionJobsService {
           .where("id", "=", args.parkedForConnectionRequirementId)
           .select("status")
           .executeTakeFirst();
-        if (requirement?.status === "resolved") availableAt = new Date();
+        if (requirement?.status === "resolved") makeImmediatelyAvailable = true;
       }
+      // Claims compare against database time. Using the host clock here can
+      // leave supposedly immediate work a few milliseconds in the future when
+      // Postgres runs in a container or on another machine.
+      const availableAt = makeImmediatelyAvailable
+        ? await databaseNow(trx)
+        : args.availableAt;
       const result = await trx
         .updateTable("execution_jobs")
         .set((eb) => ({
