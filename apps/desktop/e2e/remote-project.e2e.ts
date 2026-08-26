@@ -285,7 +285,9 @@ describe("remote projects (ADR 0055)", () => {
 
   beforeAll(async () => {
     await startFakeServer();
-    app = await launchApp();
+    app = await launchApp({
+      env: { CATAMORPHIC_E2E_FOLLOW_REMOTE_AUTH: "1" },
+    });
   }, 120_000);
 
   afterAll(async () => {

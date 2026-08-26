@@ -174,6 +174,24 @@ const defaultProjectsDir = () =>
     ? path.join(process.env.CATAMORPHIC_E2E_DATA_DIR, "Catamorphic")
     : path.join(app.getPath("home"), "Catamorphic");
 
+async function openRemoteAuthorization(url: string): Promise<void> {
+  if (process.env.CATAMORPHIC_E2E_FOLLOW_REMOTE_AUTH !== "1") {
+    await shell.openExternal(url);
+    return;
+  }
+  if (!process.env.CATAMORPHIC_E2E_DATA_DIR) {
+    throw new Error("Remote auth auto-follow is only available during E2E");
+  }
+  const target = new URL(url);
+  if (target.hostname !== "127.0.0.1" && target.hostname !== "localhost") {
+    throw new Error("Remote auth E2E auto-follow requires a loopback server");
+  }
+  const response = await fetch(target);
+  if (!response.ok) {
+    throw new Error(`Remote auth E2E browser failed (${response.status})`);
+  }
+}
+
 export function registerIpcHandlers(
   profileConfig: ProfileConfigManager,
   state: ServerState,
@@ -1498,7 +1516,7 @@ export function registerIpcHandlers(
       const serverUrl = input.serverUrl.replace(/\/+$/, "");
       let credentials = await authorizeRemoteServer({
         serverUrl,
-        openExternal: (url) => shell.openExternal(url),
+        openExternal: openRemoteAuthorization,
       });
       const client = remoteClient({
         serverUrl,
@@ -1769,7 +1787,7 @@ export function registerIpcHandlers(
       }
       const credentials = await authorizeRemoteServer({
         serverUrl: inspected.link.serverUrl,
-        openExternal: (url) => shell.openExternal(url),
+        openExternal: openRemoteAuthorization,
       });
       storesFor(event).remoteProjects.updateCredentials(projectId, credentials);
       const client = storedRemoteClient(event, projectId, {
