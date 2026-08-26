@@ -510,6 +510,40 @@ export interface RateReservationBuckets {
   updated_at: Generated<Timestamp>;
 }
 
+export interface StockProjectAccessRequests {
+  decided_at: Timestamp | null;
+  decided_by_external_user_id: string | null;
+  email: string;
+  email_verified: boolean;
+  external_user_id: string;
+  id: Generated<string>;
+  project_id: string;
+  requested_at: Generated<Timestamp>;
+  status: Generated<string>;
+}
+
+export interface StockProjectAdmissionPolicies {
+  approved_domains: Generated<Json>;
+  default_role: string;
+  mode: string;
+  project_id: string;
+  updated_at: Generated<Timestamp>;
+  updated_by_external_user_id: string;
+}
+
+export interface StockProjectInvitations {
+  created_at: Generated<Timestamp>;
+  created_by_external_user_id: string;
+  expires_at: Timestamp;
+  grants: Generated<Json>;
+  id: Generated<string>;
+  invited_email: string | null;
+  project_id: string;
+  redeemed_at: Timestamp | null;
+  redeemed_by_external_user_id: string | null;
+  roles: Json;
+}
+
 export interface StoreDocuments {
   blob_key: string | null;
   bytes: Buffer | null;
@@ -568,40 +602,6 @@ export interface Tenants {
   created_at: Generated<Timestamp>;
   id: Generated<string>;
   name: string;
-}
-
-export interface StockProjectAccessRequests {
-  decided_at: Timestamp | null;
-  decided_by_external_user_id: string | null;
-  email: string;
-  email_verified: boolean;
-  external_user_id: string;
-  id: Generated<string>;
-  project_id: string;
-  requested_at: Generated<Timestamp>;
-  status: Generated<string>;
-}
-
-export interface StockProjectAdmissionPolicies {
-  approved_domains: Generated<Json>;
-  default_role: string;
-  mode: string;
-  project_id: string;
-  updated_at: Generated<Timestamp>;
-  updated_by_external_user_id: string;
-}
-
-export interface StockProjectInvitations {
-  created_at: Generated<Timestamp>;
-  created_by_external_user_id: string;
-  expires_at: Timestamp;
-  grants: Generated<Json>;
-  id: Generated<string>;
-  invited_email: string | null;
-  project_id: string;
-  redeemed_at: Timestamp | null;
-  redeemed_by_external_user_id: string | null;
-  roles: Json;
 }
 
 export interface TriggerBindings {
@@ -764,11 +764,11 @@ export interface DB {
   projects: Projects;
   publications: Publications;
   rate_reservation_buckets: RateReservationBuckets;
-  store_document_versions: StoreDocumentVersions;
-  store_documents: StoreDocuments;
   stock_project_access_requests: StockProjectAccessRequests;
   stock_project_admission_policies: StockProjectAdmissionPolicies;
   stock_project_invitations: StockProjectInvitations;
+  store_document_versions: StoreDocumentVersions;
+  store_documents: StoreDocuments;
   tenant_app_policies: TenantAppPolicies;
   tenant_execution_policies: TenantExecutionPolicies;
   tenants: Tenants;
