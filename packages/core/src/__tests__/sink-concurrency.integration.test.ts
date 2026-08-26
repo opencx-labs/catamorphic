@@ -329,6 +329,38 @@ describeIf("sink write concurrency", () => {
     expect(attempt.output).toMatchObject({ artifact: { done: true } });
   }, 30_000);
 
+  it("counts in-flight chunks before topping up the concurrency window", async () => {
+    sinkSpec.hasInitialize = false;
+    sinkSpec.concurrency = 2;
+    sinkSpec.writeBatchReturnsState = false;
+    sinkCalls = [];
+    // 500 items -> 5 chunks, leaving enough pending work to expose an
+    // overfill after only one writer in the first wave completes.
+    await seedSinkReadyRun({ items: 500 });
+
+    const [start] = await claimSinkJobs();
+    expect((await runJob(start!)).error).toBeUndefined();
+
+    const firstWave = await claimSinkJobs();
+    expect(firstWave).toHaveLength(2);
+    const siblingChunkId = payloadOf(firstWave[1]!).chunkId;
+    expect(typeof siblingChunkId).toBe("string");
+    // Mirror the sibling handler having started its write while this handler
+    // completes. Its execution job and chunk both remain in flight.
+    await db
+      .updateTable("batch_sink_chunks")
+      .set({ status: "running" })
+      .where("id", "=", String(siblingChunkId))
+      .execute();
+    expect((await runJob(firstWave[0]!)).error).toBeUndefined();
+
+    // The second first-wave job still owns one slot, so completing its sibling
+    // may enqueue only one replacement.
+    const replacement = await claimSinkJobs();
+    expect(replacement).toHaveLength(1);
+    expect(payloadOf(replacement[0]!).operation).toBe("write");
+  }, 30_000);
+
   it("keeps an undeclared sink strictly serial", async () => {
     sinkSpec.hasInitialize = false;
     sinkSpec.concurrency = undefined;

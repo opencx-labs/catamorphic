@@ -579,12 +579,24 @@ export interface SidebarMenuEntry {
   danger?: boolean;
 }
 
+export interface SidebarPreviewMetadata {
+  label: string;
+  value: string;
+}
+
+export interface SidebarPreview {
+  title?: string;
+  description?: string;
+  metadata?: SidebarPreviewMetadata[];
+}
+
 export interface SidebarItem {
   label: string;
   url: string;
   icon?: string;
   open?: "tab" | "replace";
   menu?: SidebarMenuEntry[];
+  preview?: SidebarPreview | false;
 }
 
 export interface SidebarSectionConfig {
