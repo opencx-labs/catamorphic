@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -98,6 +99,54 @@ describePostgres("openStockAuthDatabase with Postgres", () => {
     } finally {
       await database.close();
       await admin.query(`DROP SCHEMA IF EXISTS "${schema}" CASCADE`);
+      await admin.end();
+    }
+  });
+
+  it("ignores unrelated schemas that disappear during auth introspection", async () => {
+    if (!databaseUrl) throw new Error("DATABASE_URL is required");
+    const suffix = randomUUID().replaceAll("-", "");
+    const authSchema = `catamorphic_auth_race_${suffix}`;
+    const unrelatedSchemas = Array.from(
+      { length: 16 },
+      (_, index) => `catamorphic_auth_noise_${suffix}_${index}`,
+    );
+    const admin = new Pool({ connectionString: databaseUrl });
+    const serialColumns = Array.from(
+      { length: 32 },
+      (_, index) => `"value_${index}" serial`,
+    ).join(", ");
+
+    for (const schema of unrelatedSchemas) {
+      await admin.query(`CREATE SCHEMA "${schema}"`);
+      await admin.query(`CREATE TABLE "${schema}"."noise" (${serialColumns})`);
+    }
+    const database = await openStockAuthDatabase({
+      dataDir: createDataDirectory(),
+      databaseUrl,
+      authSchema,
+    });
+
+    try {
+      const migration = database.migrate({
+        options: optionsFor(database.database),
+      });
+      const schemaChurn = (async () => {
+        await new Promise((resolve) => setTimeout(resolve, 10));
+        for (const schema of unrelatedSchemas) {
+          await admin.query(`DROP SCHEMA "${schema}" CASCADE`);
+        }
+      })();
+
+      await expect(
+        Promise.all([migration, schemaChurn]),
+      ).resolves.toBeDefined();
+    } finally {
+      await database.close();
+      for (const schema of unrelatedSchemas) {
+        await admin.query(`DROP SCHEMA IF EXISTS "${schema}" CASCADE`);
+      }
+      await admin.query(`DROP SCHEMA IF EXISTS "${authSchema}" CASCADE`);
       await admin.end();
     }
   });

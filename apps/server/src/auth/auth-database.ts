@@ -5,6 +5,7 @@ import type { BetterAuthOptions } from "better-auth";
 import { getMigrations } from "better-auth/db/migration";
 import { PGliteDialect } from "kysely";
 import { Pool } from "pg";
+import { SchemaScopedPostgresDialect } from "./schema-scoped-postgres-dialect.js";
 
 const AUTH_SCHEMA = "catamorphic_auth";
 
@@ -68,9 +69,13 @@ async function openPostgresAuthDatabase(
     connectionString,
     options: `-c search_path=${authSchema},public`,
   });
+  const database: NonNullable<BetterAuthOptions["database"]> = {
+    dialect: new SchemaScopedPostgresDialect({ pool, schema: authSchema }),
+    type: "postgres",
+  };
 
   return {
-    database: pool,
+    database,
     migrate: migrateBetterAuth,
     close: () => pool.end(),
   };
