@@ -130,6 +130,44 @@ describe("StockAdmissionService", () => {
     });
   });
 
+  it("finishes granting an invitation claimed by the same user before a process exit", async () => {
+    const { admission, grant } = service();
+    await admission.setPolicy({
+      identity: operatorIdentity,
+      projectId: PROJECT_ID,
+      mode: "invitation_only",
+      defaultRole: "member",
+      approvedDomains: [],
+    });
+    const invitation = await admission.createInvitation({
+      identity: operatorIdentity,
+      projectId: PROJECT_ID,
+    });
+    await db
+      .updateTable("stock_project_invitations")
+      .set({
+        redeemed_by_external_user_id: "recovering-user",
+        redeemed_at: new Date("2026-08-26T12:00:00.000Z"),
+      })
+      .where("id", "=", invitation.id)
+      .execute();
+
+    const membership = await admission.redeemInvitation({
+      projectId: PROJECT_ID,
+      invitationId: invitation.id,
+      user: {
+        id: "recovering-user",
+        email: "person@example.com",
+        emailVerified: true,
+      },
+    });
+
+    expect(membership.externalUserId).toBe("recovering-user");
+    expect(grant).toHaveBeenCalledWith(
+      expect.objectContaining({ externalUserId: "recovering-user" }),
+    );
+  });
+
   it("admits a verified approved-domain user and rejects an unverified one", async () => {
     const { admission } = service();
     await admission.setPolicy({
@@ -258,8 +296,66 @@ describe("StockAdmissionService", () => {
     });
 
     expect(decided.status).toBe("approved");
-    expect(grant).toHaveBeenCalledWith(
-      expect.objectContaining({ externalUserId: "requester" }),
-    );
+    expect(grant).not.toHaveBeenCalled();
+    await expect(
+      db
+        .selectFrom("memberships")
+        .where("project_id", "=", PROJECT_ID)
+        .where("external_user_id", "=", "requester")
+        .select(["roles", "grants"])
+        .executeTakeFirstOrThrow(),
+    ).resolves.toMatchObject({ roles: ["member"], grants: {} });
+  });
+
+  it("does not rewrite membership roles when an approved decision is retried", async () => {
+    const { admission, grant } = service();
+    await admission.setPolicy({
+      identity: operatorIdentity,
+      projectId: PROJECT_ID,
+      mode: "request",
+      defaultRole: "member",
+      approvedDomains: [],
+    });
+    const request = await admission.requestAccess({
+      projectId: PROJECT_ID,
+      user: {
+        id: "recovering-requester",
+        email: "person@example.com",
+        emailVerified: true,
+      },
+    });
+    await admission.decideRequest({
+      identity: operatorIdentity,
+      requestId: request.id,
+      decision: "approved",
+    });
+    await db
+      .updateTable("memberships")
+      .set({ roles: JSON.stringify(["custom-manager"]) })
+      .where("project_id", "=", PROJECT_ID)
+      .where("external_user_id", "=", "recovering-requester")
+      .execute();
+    await db
+      .updateTable("stock_project_admission_policies")
+      .set({ default_role: "changed-default" })
+      .where("project_id", "=", PROJECT_ID)
+      .execute();
+
+    const retried = await admission.decideRequest({
+      identity: operatorIdentity,
+      requestId: request.id,
+      decision: "approved",
+    });
+
+    expect(retried.status).toBe("approved");
+    expect(grant).not.toHaveBeenCalled();
+    await expect(
+      db
+        .selectFrom("memberships")
+        .where("project_id", "=", PROJECT_ID)
+        .where("external_user_id", "=", "recovering-requester")
+        .select("roles")
+        .executeTakeFirstOrThrow(),
+    ).resolves.toMatchObject({ roles: ["custom-manager"] });
   });
 });

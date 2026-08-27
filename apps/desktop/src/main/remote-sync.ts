@@ -60,7 +60,7 @@ export interface RemoteAccessRequest {
   requestedAt: string;
 }
 
-/** `GET /me` on the host (ADR 0055); null when the host predates it. */
+/** `GET /me` on the host (ADR 0055). */
 export interface RemoteMe {
   version: number;
   identity: { externalUserId: string; root: boolean };
@@ -94,7 +94,7 @@ export class RemoteAuthError extends Error {
 
 /** The documents client plus the two members' verbs beside it. */
 export interface RemoteProjectClient extends RemoteDocumentsClient {
-  me(): Promise<RemoteMe | null>;
+  me(): Promise<RemoteMe>;
   admit(input: { invitationId?: string }): Promise<void>;
   listRoles(): Promise<RemoteRole[]>;
   listMembers(): Promise<RemoteMember[]>;
@@ -139,7 +139,6 @@ export async function ensureRemoteProjectAccess(options: {
 }): Promise<void> {
   const before = await options.client.me();
   if (
-    !before ||
     before.projects.some((project) => project.projectId === options.projectId)
   ) {
     return;
@@ -149,7 +148,7 @@ export async function ensureRemoteProjectAccess(options: {
   });
   const after = await options.client.me();
   if (
-    !after?.projects.some((project) => project.projectId === options.projectId)
+    !after.projects.some((project) => project.projectId === options.projectId)
   ) {
     throw new Error(
       "You signed in, but you do not have access to this project yet.",
@@ -347,10 +346,12 @@ export function httpDocumentsClient(args: {
           headers: {},
         },
       );
-      if (response.status === 404) return null;
       if (!response.ok) return fail(response, "Reading your access");
       const body = (await response.json()) as RemoteMe;
-      return body.version === 1 ? body : null;
+      if (body.version !== 1) {
+        throw new Error("Reading your access returned an unsupported version");
+      }
+      return body;
     },
     async publish(input) {
       const response = await authorizedFetch(

@@ -312,4 +312,18 @@ describe("httpDocumentsClient", () => {
       "GET /api/me",
     ]);
   });
+
+  it("fails closed when the server cannot report remote capabilities", async () => {
+    const client = httpDocumentsClient({
+      serverUrl: base,
+      accessToken: async () => "member-token",
+      projectId,
+      fetch: async () =>
+        Response.json({ error: "Capabilities unavailable" }, { status: 503 }),
+    });
+
+    await expect(client.me()).rejects.toThrow(
+      "Reading your access failed (503): Capabilities unavailable",
+    );
+  });
 });

@@ -6,6 +6,7 @@ const PENDING_KEY = "catamorphic-pwa.oauth.pending";
 const OAUTH_SCOPE = "openid profile email offline_access";
 
 interface ProtectedResourceMetadata {
+  resource: string;
   authorization_servers: string[];
 }
 
@@ -77,11 +78,21 @@ async function beginAuthorization(options: {
     fetchImpl,
     new URL("/.well-known/oauth-protected-resource", server.origin),
   );
+  if (resource.resource !== serverUrl.replace(/\/+$/, "")) {
+    throw new Error(
+      "The remote server published authorization for a different requested resource",
+    );
+  }
   const authorizationServer = resource.authorization_servers[0];
   if (!authorizationServer) {
     throw new Error("The remote server published no authorization server");
   }
   assertSecureRemoteUrl(authorizationServer);
+  if (new URL(authorizationServer).origin !== server.origin) {
+    throw new Error(
+      "The remote authorization server must use the same origin as the requested server",
+    );
+  }
   const metadata = await fetchJson<AuthorizationServerMetadata>(
     fetchImpl,
     new URL("/.well-known/oauth-authorization-server", authorizationServer),
@@ -95,6 +106,11 @@ async function beginAuthorization(options: {
     metadata.registration_endpoint,
   ]) {
     assertSecureRemoteUrl(endpoint);
+    if (new URL(endpoint).origin !== server.origin) {
+      throw new Error(
+        "Remote authorization endpoints must use the same origin as the requested server",
+      );
+    }
   }
   const registration = await fetchImpl(metadata.registration_endpoint, {
     method: "POST",

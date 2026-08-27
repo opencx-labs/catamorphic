@@ -1399,13 +1399,12 @@ export function registerIpcHandlers(
     });
   };
   // What the server says this member may do (ADR 0055): stored on the link
-  // at connect and refreshed on every sync; absent on older hosts.
+  // at connect and refreshed on every sync.
   const introspect = async (
     client: ReturnType<typeof httpDocumentsClient>,
     remoteProjectId: string,
   ) => {
-    const me = await client.me().catch(() => null);
-    if (!me) return undefined;
+    const me = await client.me();
     const project = me.projects.find((p) => p.projectId === remoteProjectId);
     return {
       builder: me.identity.root || (project?.builder ?? false),
@@ -1532,10 +1531,10 @@ export function registerIpcHandlers(
       });
       await client.list();
       const capabilities = await introspect(client, input.remoteProjectId);
-      const githubFullName = capabilities?.source?.remoteUrl
+      const githubFullName = capabilities.source?.remoteUrl
         ? repoFullNameFromUrl(capabilities.source.remoteUrl)
         : null;
-      const builderCheckout = Boolean(capabilities?.builder && githubFullName);
+      const builderCheckout = Boolean(capabilities.builder && githubFullName);
       let project: Project;
       if (builderCheckout && githubFullName) {
         await ensureGithubRepositoryAccess(server, githubFullName);
@@ -1631,14 +1630,14 @@ export function registerIpcHandlers(
       const capabilities = await introspect(client, link.remoteProjectId);
       const report = await syncRemoteProject(
         rootPath,
-        capabilities?.builder ? storeOnlyDocumentsClient(client) : client,
+        capabilities.builder ? storeOnlyDocumentsClient(client) : client,
       );
       storesFor(event).remoteProjects.touch(
         projectId,
         new Date().toISOString(),
         capabilities,
       );
-      if (!capabilities?.builder) {
+      if (!capabilities.builder) {
         await checkpointProgramSync(projectId, report);
       }
       notifyGitChanged(projectId);

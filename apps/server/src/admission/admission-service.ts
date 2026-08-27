@@ -175,10 +175,16 @@ export class StockAdmissionService {
       .where("project_id", "=", input.projectId)
       .selectAll()
       .executeTakeFirst();
-    if (!invitation || invitation.redeemed_at) {
+    if (!invitation) {
       throw new Error("This invitation is no longer available");
     }
-    if (invitation.expires_at.getTime() <= Date.now()) {
+    const recoveringClaim =
+      invitation.redeemed_at !== null &&
+      invitation.redeemed_by_external_user_id === input.user.id;
+    if (invitation.redeemed_at && !recoveringClaim) {
+      throw new Error("This invitation is no longer available");
+    }
+    if (!recoveringClaim && invitation.expires_at.getTime() <= Date.now()) {
       throw new Error("This invitation has expired");
     }
     if (
@@ -194,18 +200,20 @@ export class StockAdmissionService {
       projectId: input.projectId,
       roles,
     });
-    const claimedAt = new Date();
-    const claimed = await this.services.db
-      .updateTable("stock_project_invitations")
-      .set({
-        redeemed_by_external_user_id: input.user.id,
-        redeemed_at: claimedAt,
-      })
-      .where("id", "=", input.invitationId)
-      .where("redeemed_at", "is", null)
-      .returning("id")
-      .executeTakeFirst();
-    if (!claimed) throw new Error("This invitation is no longer available");
+    const claimedAt = recoveringClaim ? invitation.redeemed_at : new Date();
+    if (!recoveringClaim) {
+      const claimed = await this.services.db
+        .updateTable("stock_project_invitations")
+        .set({
+          redeemed_by_external_user_id: input.user.id,
+          redeemed_at: claimedAt,
+        })
+        .where("id", "=", input.invitationId)
+        .where("redeemed_at", "is", null)
+        .returning("id")
+        .executeTakeFirst();
+      if (!claimed) throw new Error("This invitation is no longer available");
+    }
     try {
       return await this.grant({
         projectId: input.projectId,
@@ -214,16 +222,18 @@ export class StockAdmissionService {
         grants: grantsObject(invitation.grants),
       });
     } catch (error) {
-      await this.services.db
-        .updateTable("stock_project_invitations")
-        .set({
-          redeemed_by_external_user_id: null,
-          redeemed_at: null,
-        })
-        .where("id", "=", input.invitationId)
-        .where("redeemed_by_external_user_id", "=", input.user.id)
-        .where("redeemed_at", "=", claimedAt)
-        .execute();
+      if (!recoveringClaim) {
+        await this.services.db
+          .updateTable("stock_project_invitations")
+          .set({
+            redeemed_by_external_user_id: null,
+            redeemed_at: null,
+          })
+          .where("id", "=", input.invitationId)
+          .where("redeemed_by_external_user_id", "=", input.user.id)
+          .where("redeemed_at", "=", claimedAt)
+          .execute();
+      }
       throw error;
     }
   }
@@ -338,11 +348,16 @@ export class StockAdmissionService {
     const request = await this.services.db
       .selectFrom("stock_project_access_requests")
       .where("id", "=", input.requestId)
-      .where("status", "=", "pending")
       .selectAll()
       .executeTakeFirst();
-    if (!request) throw new Error("This access request is no longer pending");
+    if (!request) throw new Error("This access request does not exist");
     assertPermission(input.identity, request.project_id, "memberships:manage");
+    if (request.status === "approved" && input.decision === "approved") {
+      return { id: request.id, status: request.status };
+    }
+    if (request.status !== "pending") {
+      throw new Error("This access request is no longer pending");
+    }
     const policy = await this.requirePolicy(request.project_id);
     if (input.decision === "approved") {
       await this.validateRoles({
@@ -351,48 +366,35 @@ export class StockAdmissionService {
         roles: [policy.default_role],
       });
     }
-    const decidedAt = new Date();
-    const row = await this.services.db
-      .updateTable("stock_project_access_requests")
-      .set({
-        status: input.decision,
-        decided_by_external_user_id: input.identity.externalUserId,
-        decided_at: decidedAt,
-      })
-      .where("id", "=", input.requestId)
-      .where("status", "=", "pending")
-      .returning(["id", "status"])
-      .executeTakeFirst();
-    if (!row) throw new Error("This access request is no longer pending");
-    if (input.decision === "approved") {
-      try {
-        await this.grant({
-          projectId: request.project_id,
-          userId: request.external_user_id,
-          roles: [policy.default_role],
-          grants: {},
-        });
-      } catch (error) {
-        await this.services.db
-          .updateTable("stock_project_access_requests")
-          .set({
-            status: "pending",
-            decided_by_external_user_id: null,
-            decided_at: null,
+    return this.services.db.transaction().execute(async (transaction) => {
+      const row = await transaction
+        .updateTable("stock_project_access_requests")
+        .set({
+          status: input.decision,
+          decided_by_external_user_id: input.identity.externalUserId,
+          decided_at: new Date(),
+        })
+        .where("id", "=", input.requestId)
+        .where("status", "=", "pending")
+        .returning(["id", "status"])
+        .executeTakeFirst();
+      if (!row) throw new Error("This access request is no longer pending");
+      if (input.decision === "approved") {
+        await transaction
+          .insertInto("memberships")
+          .values({
+            project_id: request.project_id,
+            external_user_id: request.external_user_id,
+            roles: JSON.stringify([policy.default_role]),
+            grants: JSON.stringify({}),
           })
-          .where("id", "=", input.requestId)
-          .where("status", "=", "approved")
-          .where(
-            "decided_by_external_user_id",
-            "=",
-            input.identity.externalUserId,
+          .onConflict((conflict) =>
+            conflict.columns(["project_id", "external_user_id"]).doNothing(),
           )
-          .where("decided_at", "=", decidedAt)
           .execute();
-        throw error;
       }
-    }
-    return row;
+      return row;
+    });
   }
 
   private async requirePolicy(projectId: string) {

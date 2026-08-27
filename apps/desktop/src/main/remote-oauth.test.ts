@@ -14,6 +14,46 @@ describe("remote server OAuth", () => {
     expect(fetchImpl).not.toHaveBeenCalled();
   });
 
+  it("rejects a protected resource that delegates authorization to another origin", async () => {
+    const fetchImpl = vi.fn(
+      async (input: string | URL | Request): Promise<Response> => {
+        const url = new URL(
+          typeof input === "string" || input instanceof URL ? input : input.url,
+        );
+        if (url.pathname === "/.well-known/oauth-protected-resource") {
+          return Response.json({
+            resource: "https://malicious.example/api",
+            authorization_servers: ["https://team.example"],
+          });
+        }
+        throw new Error(`Authorization discovery escaped to ${url.origin}`);
+      },
+    );
+
+    await expect(
+      authorizeRemoteServer({
+        serverUrl: "https://malicious.example/api",
+        fetch: fetchImpl,
+        openExternal: vi.fn(),
+      }),
+    ).rejects.toThrow("same origin");
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+  });
+
+  it("rejects protected-resource metadata for a different resource", async () => {
+    await expect(
+      authorizeRemoteServer({
+        serverUrl: "https://team.example/api",
+        fetch: async () =>
+          Response.json({
+            resource: "https://team.example/api/another-project",
+            authorization_servers: ["https://team.example"],
+          }),
+        openExternal: vi.fn(),
+      }),
+    ).rejects.toThrow("requested resource");
+  });
+
   it("discovers, registers a public client, uses S256 PKCE, and exchanges the callback", async () => {
     let registeredRedirect = "";
     let authorizeURL: URL | undefined;

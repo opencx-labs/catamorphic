@@ -75,11 +75,22 @@ export async function authorizeRemoteServer(options: {
     fetchImpl,
     new URL("/.well-known/oauth-protected-resource", server.origin),
   );
+  const requestedResource = options.serverUrl.replace(/\/+$/, "");
+  if (protectedResource.resource !== requestedResource) {
+    throw new Error(
+      "The remote server published authorization for a different requested resource",
+    );
+  }
   const authorizationServer = protectedResource.authorization_servers[0];
   if (!authorizationServer) {
     throw new Error("The remote server published no authorization server");
   }
   assertSecureRemoteUrl(authorizationServer);
+  if (new URL(authorizationServer).origin !== server.origin) {
+    throw new Error(
+      "The remote authorization server must use the same origin as the requested server",
+    );
+  }
   const metadata = await fetchJson<AuthorizationServerMetadata>(
     fetchImpl,
     new URL("/.well-known/oauth-authorization-server", authorizationServer),
@@ -93,6 +104,11 @@ export async function authorizeRemoteServer(options: {
     metadata.registration_endpoint,
   ]) {
     assertSecureRemoteUrl(endpoint);
+    if (new URL(endpoint).origin !== server.origin) {
+      throw new Error(
+        "Remote authorization endpoints must use the same origin as the requested server",
+      );
+    }
   }
 
   const callback = await openLoopbackCallback(options.timeoutMs ?? 120_000);

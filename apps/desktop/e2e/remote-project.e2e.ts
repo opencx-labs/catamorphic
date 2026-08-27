@@ -25,6 +25,7 @@ const program = new Map<string, string>([
 const writes: Array<{ path: string; ifVersion?: number; text: string }> = [];
 const publications: Array<Record<string, unknown>> = [];
 let revoked = false;
+let introspectionUnavailable = false;
 const proposals: Array<Record<string, unknown>> = [];
 
 const helpers = `
@@ -112,6 +113,9 @@ function startFakeServer(): Promise<void> {
       return send(401, { error: "Unauthorized" });
     }
     if (req.method === "GET" && url.pathname === "/api/me") {
+      if (introspectionUnavailable) {
+        return send(503, { error: "Capability introspection unavailable" });
+      }
       return send(200, {
         version: 1,
         identity: { externalUserId: "member", root: false },
@@ -454,6 +458,21 @@ describe("remote projects (ADR 0055)", () => {
         },
       ],
     });
+  });
+
+  it("stops sync when capability introspection is unavailable", async () => {
+    introspectionUnavailable = true;
+    await run(`$('[data-testid="remote-sync"]').click(); return true;`);
+    await runWait(
+      `const btn = $('[data-testid="remote-sync"]'); return !!btn && !btn.disabled;`,
+      { timeoutMs: 30_000, label: "failed sync settled" },
+    );
+    const message = await run<string>(
+      `return $('[data-testid="remote-message"]')?.textContent ?? '';`,
+    );
+    introspectionUnavailable = false;
+
+    expect(message).toContain("Reading your access failed (503)");
   });
 
   it("a revoked token turns Sync into a 'Sign in again' prompt", async () => {

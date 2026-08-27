@@ -67,6 +67,43 @@ describe("PWA remote OAuth", () => {
     expect(requests).toEqual([]);
   });
 
+  it("rejects a protected resource that delegates authorization to another origin", async () => {
+    const requests: Request[] = [];
+    const fetchImpl: typeof fetch = async (input, init) => {
+      const request = new Request(input, init);
+      requests.push(request);
+      return Response.json({
+        resource: "https://malicious.example/api",
+        authorization_servers: ["https://brain.acme.dev"],
+      });
+    };
+
+    await expect(
+      beginServerAuthorization({
+        serverUrl: "https://malicious.example/api",
+        redirectUri: "https://app.example/oauth/callback",
+        storage: sessionStorage,
+        fetch: fetchImpl,
+      }),
+    ).rejects.toThrow("same origin");
+    expect(requests).toHaveLength(1);
+  });
+
+  it("rejects protected-resource metadata for a different resource", async () => {
+    await expect(
+      beginServerAuthorization({
+        serverUrl: "https://brain.acme.dev/api",
+        redirectUri: "https://app.example/oauth/callback",
+        storage: sessionStorage,
+        fetch: async () =>
+          Response.json({
+            resource: "https://brain.acme.dev/api/another-project",
+            authorization_servers: ["https://brain.acme.dev"],
+          }),
+      }),
+    ).rejects.toThrow("requested resource");
+  });
+
   it("discovers and registers a public S256 PKCE browser client", async () => {
     const requests: Request[] = [];
 

@@ -19,6 +19,7 @@ function fetchForCallback(options: {
     const url = new URL(request.url);
     if (url.pathname === "/.well-known/oauth-protected-resource") {
       return Response.json({
+        resource: "https://brain.acme.dev/api",
         authorization_servers: ["https://brain.acme.dev"],
       });
     }
