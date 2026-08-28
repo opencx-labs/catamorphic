@@ -57,6 +57,7 @@ export default defineConfig({
     env: loadDotEnv(),
     pool: "threads",
     fileParallelism: true,
+    maxWorkers: 2,
     // Whole-project ts-morph parses dominate these suites and slow an order
     // of magnitude when every package's tests run in parallel under turbo;
     // the defaults read as flakes under that contention. Hooks do the same

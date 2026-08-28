@@ -12,7 +12,7 @@ Tests run in parallel at two levels:
 
 1. **Package level** — Turbo runs each package's `test` task concurrently. `test.dependsOn` is `["^build"]` (caret prefix), meaning a package only waits for its *dependencies* to be built, not its own build. Leaf packages (`workflow`, `parser`, `git`, `runtime`, `otel`, `db`) therefore start testing immediately with no build wait. Dependent packages (`sandbox`, `core`, `fastify-plugin`, `server-sdk`, `api-client`, `react`, `ui`, `registry`) wait only for their upstream packages.
 
-2. **File level** — Within each package, Vitest runs test files concurrently using Node.js worker threads (`pool: "threads"`, `fileParallelism: true` in root `vitest.config.ts`).
+2. **File level** — Within each package, Vitest runs test files concurrently using Node.js worker threads (`pool: "threads"`, `fileParallelism: true` in root `vitest.config.ts`). Each package is capped at two Vitest workers so Turbo's two-package limit remains a real bound when multiple worktrees test concurrently.
 
 **Do not** set `test.dependsOn: ["build"]` (without the caret). That would force every package to build itself before testing, serializing the pipeline for no benefit.
 
@@ -98,8 +98,10 @@ create a disposable Postgres database and remove it after a successful run.
 infrastructure. It is not test infrastructure and must not be required by
 deterministic tests.
 
-The root test runner caps Turbo at two concurrent package tasks so two full
-runs in independent worktrees can coexist on a developer machine. Use `bun
+The root test runner caps Turbo at two concurrent package tasks and each
+package's Vitest process at two file workers, so two full runs in independent
+worktrees can coexist on a developer machine without multiplying into dozens
+of worker threads. Use `bun
 run test -- --force` when verification must bypass Turbo's cache. `--force`
 is the only supported passthrough argument; the runner rejects all others.
 The readiness line reports `test-postgres container=<name>
