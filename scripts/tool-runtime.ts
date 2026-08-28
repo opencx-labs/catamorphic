@@ -42,13 +42,21 @@ export function toolRuntime(input: {
 if (import.meta.main) {
   const rootPath = path.resolve(import.meta.dirname, "..");
   const runtime = toolRuntime({ rootPath, env: process.env });
+  const [tool, ...toolArguments] = process.argv.slice(2);
+  if (tool !== "vitest" && tool !== "turbo") {
+    throw new Error(
+      "Usage: bun scripts/tool-runtime.ts <vitest|turbo> [...arguments]",
+    );
+  }
+  const entryPoint = path.join(
+    rootPath,
+    "node_modules",
+    tool,
+    tool === "vitest" ? "vitest.mjs" : path.join("bin", "turbo"),
+  );
   const result = spawnSync(
     runtime.nodePath,
-    [
-      path.join(rootPath, "node_modules", "vitest", "vitest.mjs"),
-      "run",
-      ...process.argv.slice(2),
-    ],
+    [entryPoint, ...(tool === "vitest" ? ["run"] : []), ...toolArguments],
     {
       cwd: rootPath,
       env: runtime.env,

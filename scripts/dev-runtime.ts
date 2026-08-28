@@ -1,5 +1,5 @@
-import { randomUUID } from "node:crypto";
-import { mkdir, open, readFile, unlink } from "node:fs/promises";
+import { createHash, randomUUID } from "node:crypto";
+import { link, mkdir, open, readFile, unlink } from "node:fs/promises";
 import path from "node:path";
 
 export interface DevInstanceLock {
@@ -43,24 +43,84 @@ function processIsLive(pid: number): boolean {
   }
 }
 
+async function publishAtomicFile(input: {
+  targetPath: string;
+  content: string;
+  token: string;
+}): Promise<boolean> {
+  const candidatePath = `${input.targetPath}.candidate-${input.token}`;
+  const handle = await open(candidatePath, "wx", 0o600);
+  try {
+    try {
+      await handle.writeFile(input.content);
+      await handle.sync();
+    } finally {
+      await handle.close();
+    }
+    try {
+      await link(candidatePath, input.targetPath);
+      return true;
+    } catch (error) {
+      if (errorCode(error) === "EEXIST") return false;
+      throw error;
+    }
+  } finally {
+    await unlink(candidatePath).catch(() => undefined);
+  }
+}
+
+function contentIdentity(content: string): string {
+  return createHash("sha256").update(content).digest("hex").slice(0, 24);
+}
+
+async function claimStaleLock(input: {
+  lockPath: string;
+  staleContent: string;
+  pid: number;
+}): Promise<boolean> {
+  let generation = contentIdentity(input.staleContent);
+  while (true) {
+    const token = randomUUID();
+    const claimPath = `${input.lockPath}.reclaim-${generation}`;
+    if (
+      await publishAtomicFile({
+        targetPath: claimPath,
+        content: `${JSON.stringify({ pid: input.pid, token })}\n`,
+        token,
+      })
+    ) {
+      return true;
+    }
+
+    let claimContent: string;
+    try {
+      claimContent = await readFile(claimPath, "utf8");
+    } catch (error) {
+      if (errorCode(error) === "ENOENT") continue;
+      throw error;
+    }
+    const owner = parseLockOwner(claimContent);
+    if (owner && processIsLive(owner.pid)) return false;
+    generation = contentIdentity(`${generation}\0${claimContent}`);
+  }
+}
+
 export async function acquireDevInstanceLock(input: {
   lockPath: string;
   pid: number;
 }): Promise<DevInstanceLock> {
   await mkdir(path.dirname(input.lockPath), { recursive: true });
+  const token = randomUUID();
+  const content = `${JSON.stringify({ pid: input.pid, token })}\n`;
 
   while (true) {
-    const token = randomUUID();
-    try {
-      const handle = await open(input.lockPath, "wx");
-      try {
-        await handle.writeFile(
-          `${JSON.stringify({ pid: input.pid, token })}\n`,
-        );
-      } finally {
-        await handle.close();
-      }
-
+    if (
+      await publishAtomicFile({
+        targetPath: input.lockPath,
+        content,
+        token,
+      })
+    ) {
       let released = false;
       return {
         async release() {
@@ -81,22 +141,42 @@ export async function acquireDevInstanceLock(input: {
           }
         },
       };
-    } catch (error) {
-      if (errorCode(error) !== "EEXIST") throw error;
     }
 
-    let owner: { pid: number; token?: string } | null = null;
+    let staleContent: string;
     try {
-      owner = parseLockOwner(await readFile(input.lockPath, "utf8"));
+      staleContent = await readFile(input.lockPath, "utf8");
     } catch (error) {
       if (errorCode(error) === "ENOENT") continue;
       throw error;
     }
+    const owner = parseLockOwner(staleContent);
     if (owner && processIsLive(owner.pid)) {
       throw new Error(
         `Development instance lock ${input.lockPath} is held by live PID ${owner.pid}. Stop that process or set CATAMORPHIC_DEV_INSTANCE to use another instance.`,
       );
     }
+    if (
+      !(await claimStaleLock({
+        lockPath: input.lockPath,
+        staleContent,
+        pid: input.pid,
+      }))
+    ) {
+      await new Promise((resolve) => setTimeout(resolve, 5));
+      continue;
+    }
+
+    let currentContent: string;
+    try {
+      currentContent = await readFile(input.lockPath, "utf8");
+    } catch (error) {
+      if (errorCode(error) === "ENOENT") continue;
+      throw error;
+    }
+    if (currentContent !== staleContent) continue;
+    const currentOwner = parseLockOwner(currentContent);
+    if (currentOwner && processIsLive(currentOwner.pid)) continue;
     try {
       await unlink(input.lockPath);
     } catch (error) {
@@ -138,8 +218,16 @@ export async function stopDevProcessGroup(input: {
   signal: NodeJS.Signals;
   lock: DevInstanceLock;
 }): Promise<void> {
+  await settleDevProcessGroup(input);
+}
+
+export async function settleDevProcessGroup(input: {
+  processGroupId: number;
+  signal?: NodeJS.Signals;
+  lock: DevInstanceLock;
+}): Promise<void> {
   try {
-    signalProcessGroup(input.processGroupId, input.signal);
+    signalProcessGroup(input.processGroupId, input.signal ?? "SIGTERM");
     while (processGroupIsLive(input.processGroupId)) {
       await new Promise((resolve) => setTimeout(resolve, 20));
     }

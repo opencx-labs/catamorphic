@@ -40,9 +40,10 @@ export function createDevPlan(input: {
     .update(input.rootPath)
     .digest("hex")
     .slice(0, 8);
-  const instance = input.instanceOverride
-    ? sanitizeInstanceName(input.instanceOverride)
-    : `${sanitizeInstanceName(path.basename(input.rootPath))}-${rootHash}`;
+  const instance =
+    input.instanceOverride !== undefined
+      ? sanitizeInstanceName(input.instanceOverride)
+      : `${sanitizeInstanceName(path.basename(input.rootPath))}-${rootHash}`;
   const instanceRoot = path.join(input.tempPath, "catamorphic-dev", instance);
   const desktopDataDir = path.join(instanceRoot, "desktop");
   const serverDataDir = path.join(instanceRoot, "server");

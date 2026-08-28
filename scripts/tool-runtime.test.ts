@@ -1,5 +1,11 @@
 import { execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import {
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -70,5 +76,44 @@ describe("toolRuntime", () => {
     expect(() =>
       toolRuntime({ rootPath: repository, env: { PATH: "/usr/bin" } }),
     ).toThrow("Expected repository Node v24.13.0, received v24.12.0");
+  });
+
+  it("runs the checked-in Turbo entry point through pinned Node", () => {
+    const ambientRoot = temporaryDirectory();
+    const ambientNode = writeFakeNode({
+      rootPath: ambientRoot,
+      version: "v18.20.0",
+    });
+
+    expect(
+      execFileSync("bun", ["scripts/tool-runtime.ts", "turbo", "--version"], {
+        cwd: repositoryRoot,
+        encoding: "utf8",
+        env: {
+          ...process.env,
+          PATH: `${path.dirname(ambientNode)}${path.delimiter}${process.env.PATH ?? ""}`,
+        },
+      }).trim(),
+    ).toBe("2.10.10");
+  });
+
+  it("routes dev infrastructure Turbo through the pinned launcher", () => {
+    const packageJson: unknown = JSON.parse(
+      readFileSync(path.join(repositoryRoot, "package.json"), "utf8"),
+    );
+    if (
+      typeof packageJson !== "object" ||
+      packageJson === null ||
+      !("scripts" in packageJson) ||
+      typeof packageJson.scripts !== "object" ||
+      packageJson.scripts === null ||
+      !("dev:infra" in packageJson.scripts)
+    ) {
+      throw new Error("Root package does not define dev:infra");
+    }
+
+    expect(packageJson.scripts["dev:infra"]).toBe(
+      "docker compose up -d --wait && bun scripts/tool-runtime.ts turbo dev --filter=@catamorphic/cloudflare-sandbox-bridge",
+    );
   });
 });

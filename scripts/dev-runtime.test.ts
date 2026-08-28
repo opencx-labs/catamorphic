@@ -12,7 +12,11 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { reserveLoopbackPort } from "./dev.js";
-import { acquireDevInstanceLock, stopDevProcessGroup } from "./dev-runtime.js";
+import {
+  acquireDevInstanceLock,
+  settleDevProcessGroup,
+  stopDevProcessGroup,
+} from "./dev-runtime.js";
 
 const temporaryDirectories: string[] = [];
 const childProcesses: ChildProcess[] = [];
@@ -96,6 +100,49 @@ describe("acquireDevInstanceLock", () => {
     });
     await lock.release();
   });
+
+  it("allows only one owner during a simultaneous clean start", async () => {
+    const lockPath = temporaryLockPath();
+
+    const results = await Promise.allSettled(
+      Array.from({ length: 32 }, () =>
+        acquireDevInstanceLock({ lockPath, pid: process.pid }),
+      ),
+    );
+    const owners = results.flatMap((result) =>
+      result.status === "fulfilled" ? [result.value] : [],
+    );
+
+    expect(owners).toHaveLength(1);
+    expect(
+      results.filter((result) => result.status === "rejected"),
+    ).toHaveLength(31);
+    await owners[0]?.release();
+  });
+
+  it("allows only one owner during simultaneous stale reclaim", async () => {
+    const lockPath = temporaryLockPath();
+    mkdirSync(path.dirname(lockPath), { recursive: true });
+    writeFileSync(
+      lockPath,
+      JSON.stringify({ pid: 2_147_483_647, token: "stale-owner" }),
+    );
+
+    const results = await Promise.allSettled(
+      Array.from({ length: 32 }, () =>
+        acquireDevInstanceLock({ lockPath, pid: process.pid }),
+      ),
+    );
+    const owners = results.flatMap((result) =>
+      result.status === "fulfilled" ? [result.value] : [],
+    );
+
+    expect(owners).toHaveLength(1);
+    expect(
+      results.filter((result) => result.status === "rejected"),
+    ).toHaveLength(31);
+    await owners[0]?.release();
+  });
 });
 
 describe("reserveLoopbackPort", () => {
@@ -157,6 +204,53 @@ describe("stopDevProcessGroup", () => {
     expect(existsSync(lockPath)).toBe(true);
 
     await stopping;
+    expect(existsSync(lockPath)).toBe(false);
+  });
+
+  it("terminates a live descendant after the process-group leader exits", async () => {
+    const lockPath = temporaryLockPath();
+    const readyPath = path.join(path.dirname(lockPath), "orphan-ready");
+    const lock = await acquireDevInstanceLock({
+      lockPath,
+      pid: process.pid,
+    });
+    const descendantSource = [
+      "const fs = require('node:fs');",
+      "process.on('SIGTERM', () => setTimeout(() => process.exit(0), 250));",
+      `fs.writeFileSync(${JSON.stringify(readyPath)}, 'ready');`,
+      "setInterval(() => {}, 1000);",
+    ].join("");
+    const leaderSource = [
+      "const { spawn } = require('node:child_process');",
+      `spawn(process.execPath, ['-e', ${JSON.stringify(descendantSource)}], { stdio: 'ignore' });`,
+      "process.exit(0);",
+    ].join("");
+    const leader = spawn(process.execPath, ["-e", leaderSource], {
+      detached: true,
+      stdio: "ignore",
+    });
+    childProcesses.push(leader);
+    const leaderExit = new Promise<void>((resolve, reject) => {
+      leader.once("error", reject);
+      leader.once("exit", () => resolve());
+    });
+    await waitForFile(readyPath);
+    await leaderExit;
+    if (!leader.pid) throw new Error("Detached leader did not receive a PID");
+
+    let settled = false;
+    const settling = settleDevProcessGroup({
+      processGroupId: leader.pid,
+      lock,
+    }).then(() => {
+      settled = true;
+    });
+
+    await new Promise((resolve) => setTimeout(resolve, 75));
+    expect(settled).toBe(false);
+    expect(existsSync(lockPath)).toBe(true);
+
+    await settling;
     expect(existsSync(lockPath)).toBe(false);
   });
 });

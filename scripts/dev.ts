@@ -3,7 +3,10 @@ import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { createDevPlan, type DevTarget } from "./dev-plan.js";
-import { acquireDevInstanceLock, stopDevProcessGroup } from "./dev-runtime.js";
+import {
+  acquireDevInstanceLock,
+  settleDevProcessGroup,
+} from "./dev-runtime.js";
 import { toolRuntime } from "./tool-runtime.js";
 
 export async function reserveLoopbackPort(): Promise<number> {
@@ -70,7 +73,9 @@ if (import.meta.main) {
       lockPath: placeholderPlan.lockPath,
       pid: process.pid,
     });
-    let lockOwned = true;
+    let lockSettled = false;
+    let processGroupId: number | undefined;
+    let stopping: Promise<void> | undefined;
     try {
       const [desktopCdp, desktopVite, server, operator] = await Promise.all([
         reserveLoopbackPort(),
@@ -112,14 +117,17 @@ if (import.meta.main) {
         },
       );
       if (!child.pid) throw new Error("Turbo did not start with a process ID");
-      const processGroupId = child.pid;
-      let stopping: Promise<void> | undefined;
+      const childProcessGroupId = child.pid;
+      processGroupId = childProcessGroupId;
       let forwardedSignal: NodeJS.Signals | undefined;
       const forwardSignal = (signal: NodeJS.Signals): void => {
         if (stopping) return;
         forwardedSignal = signal;
-        stopping = stopDevProcessGroup({ processGroupId, signal, lock });
-        lockOwned = false;
+        stopping = settleDevProcessGroup({
+          processGroupId: childProcessGroupId,
+          signal,
+          lock,
+        });
       };
       const onSigint = () => forwardSignal("SIGINT");
       const onSigterm = () => forwardSignal("SIGTERM");
@@ -137,16 +145,31 @@ if (import.meta.main) {
       if (stopping) {
         await stopping;
       } else {
-        await lock.release();
-        lockOwned = false;
+        await settleDevProcessGroup({
+          processGroupId: childProcessGroupId,
+          lock,
+        });
       }
+      lockSettled = true;
       process.exitCode =
         result.code ??
         (forwardedSignal === "SIGINT" || result.signal === "SIGINT"
           ? 130
           : 143);
     } finally {
-      if (lockOwned) await lock.release();
+      if (!lockSettled) {
+        try {
+          if (stopping) {
+            await stopping;
+          } else if (processGroupId) {
+            await settleDevProcessGroup({ processGroupId, lock });
+          } else {
+            await lock.release();
+          }
+        } finally {
+          lockSettled = true;
+        }
+      }
     }
   }
 }

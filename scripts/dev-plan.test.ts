@@ -56,6 +56,18 @@ describe("createDevPlan", () => {
     );
   });
 
+  it("rejects an explicitly empty instance override", () => {
+    expect(() =>
+      createDevPlan({
+        rootPath: "/workspace/team-one/catamorphic",
+        tempPath: "/private/tmp",
+        instanceOverride: "",
+        target: "all",
+        ports,
+      }),
+    ).toThrow("Development instance name must contain a letter or number");
+  });
+
   it("builds one combined Turbo argument list for all apps", () => {
     const plan = createDevPlan({
       rootPath: "/workspace/team-one/catamorphic",
