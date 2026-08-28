@@ -624,15 +624,32 @@ describe("chat surface shortcuts", () => {
       timeoutMs: 30_000,
       label: "browser tab",
     });
-    await run(`pressKey('n', { metaKey: true }); return true;`);
+    // Hold the dock's opening frame so this covers the hidden-window race:
+    // its deferred composer autofocus must not override a newer user click.
+    await run(`
+      window.__e2eOriginalRaf = window.requestAnimationFrame;
+      window.__e2eHeldRafs = [];
+      window.requestAnimationFrame = (callback) => {
+        window.__e2eHeldRafs.push(callback);
+        return window.__e2eHeldRafs.length;
+      };
+      pressKey('n', { metaKey: true });
+      return true;
+    `);
     await runWait(`return !!floatingDock();`, { label: "floating chat open" });
     // Click into the tab's own chrome: focus leaves the dock.
-    await run(`
+    const browserKeptFocus = await run<boolean>(`
       const address = $('input[aria-label="Address and search bar"]');
       address.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true }));
       address.focus();
+      const held = window.__e2eHeldRafs;
+      window.requestAnimationFrame = window.__e2eOriginalRaf;
+      delete window.__e2eHeldRafs;
+      delete window.__e2eOriginalRaf;
+      held.forEach((callback) => callback(performance.now()));
       return document.activeElement === address;
     `);
+    expect(browserKeptFocus).toBe(true);
     await run(`pressKey('w', { metaKey: true }); return true;`);
     await runWait(
       `return !$('input[aria-label="Address and search bar"]') && !!floatingDock();`,

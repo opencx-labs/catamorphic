@@ -1660,6 +1660,9 @@ export function ChatDock({
   const [dockHovered, setDockHovered] = useState(false);
   // Starts true: the dock claims focus when it opens.
   const [dockEngaged, setDockEngaged] = useState(true);
+  // Deferred focus may run much later in a hidden/throttled window. A user
+  // pointer-down after it was scheduled owns focus, wherever they clicked.
+  const pointerInteractionRef = useRef(0);
   useEffect(() => {
     if (entry.mode !== "partial") return;
     const inDock = (target: EventTarget | null) =>
@@ -1668,8 +1671,10 @@ export function ChatDock({
       setDockEngaged(inDock(event.target));
     // Clicks on unfocusable chrome (a webview, blank pane space) never
     // fire focusin — the pointer decides too.
-    const onPointerDown = (event: PointerEvent) =>
+    const onPointerDown = (event: PointerEvent) => {
+      pointerInteractionRef.current += 1;
       setDockEngaged(inDock(event.target));
+    };
     window.addEventListener("focusin", onFocusIn);
     window.addEventListener("pointerdown", onPointerDown, true);
     return () => {
@@ -2256,7 +2261,12 @@ export function ChatDock({
   const fileInputRef = useRef<HTMLInputElement>(null);
   useEffect(() => {
     if (!expanded) return;
-    const frame = requestAnimationFrame(() => composerRef.current?.focus());
+    const pointerInteraction = pointerInteractionRef.current;
+    const frame = requestAnimationFrame(() => {
+      if (pointerInteractionRef.current === pointerInteraction) {
+        composerRef.current?.focus();
+      }
+    });
     return () => cancelAnimationFrame(frame);
   }, [expanded]);
   // Stepping down from a tab to the floating dock (Escape) keeps the
@@ -2271,7 +2281,12 @@ export function ChatDock({
     const previous = previousModeRef.current;
     previousModeRef.current = entry.mode;
     if (!(previous === "tab" && entry.mode === "partial")) return;
-    const focus = () => composerRef.current?.focus();
+    const pointerInteraction = pointerInteractionRef.current;
+    const focus = () => {
+      if (pointerInteractionRef.current === pointerInteraction) {
+        composerRef.current?.focus();
+      }
+    };
     focus();
     const frame = requestAnimationFrame(focus);
     const timer = window.setTimeout(focus, 260);
