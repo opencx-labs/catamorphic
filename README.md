@@ -539,9 +539,6 @@ and [ADR 0030](docs/decisions/0030-run-retention.md).
 ```bash
 bun install
 
-# Optional shared OTel, ClickHouse, and sandbox-bridge services
-bun run dev:infra
-
 # Only for an explicitly provisioned host database. These are not part of the
 # normal local app workflow; never point them at a database another session uses.
 DATABASE_URL="<host-owned database URL>" bun run db:migrate
@@ -553,6 +550,13 @@ bun run build
 # Regenerate the OpenAPI spec + typed api-client after route/DTO changes
 cd packages/fastify-plugin && bun run generate-spec
 cd ../api-client && bun run generate
+```
+
+Optional shared OTel, ClickHouse, and sandbox-bridge services run
+persistently. Start them in a separate terminal only when you need them:
+
+```bash
+bun run dev:infra
 ```
 
 Catamorphic itself is embed-only: in production you run a **host app** that boots it in-process. For local development, `bun run dev` starts the combined desktop and stock-server manual environment. `bun run dev:desktop` and `bun run dev:server` are focused variants of the same orchestrator, which assigns each worktree its own data directories and loopback ports. To iterate on catamorphic alongside your own host instead, link the packages via `file:` (see `.agents/skills/using-catamorphic/SKILL.md` → "Local dev linking").
