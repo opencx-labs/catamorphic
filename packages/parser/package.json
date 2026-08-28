@@ -19,7 +19,7 @@
   "scripts": {
     "build": "tsup && tsc --project tsconfig.json --noEmit false --emitDeclarationOnly",
     "dev": "tsup --watch --no-clean",
-    "test": "vitest run --config ../../vitest.config.ts",
+    "test": "node ../../node_modules/vitest/vitest.mjs run --config ../../vitest.config.ts",
     "test:watch": "vitest",
     "typecheck": "tsgo --project ./tsconfig.json"
   },
