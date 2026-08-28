@@ -105,9 +105,19 @@ if (import.meta.main) {
   const allocatorLockPath = devPortAllocatorLockPath({ tempPath });
 
   if (printOnly) {
+    const allocatorAbort = new AbortController();
+    const abortAllocator = (signal: NodeJS.Signals): void =>
+      allocatorAbort.abort(
+        new Error(`Development startup interrupted by ${signal}`),
+      );
+    const onPrintSigint = () => abortAllocator("SIGINT");
+    const onPrintSigterm = () => abortAllocator("SIGTERM");
+    process.once("SIGINT", onPrintSigint);
+    process.once("SIGTERM", onPrintSigterm);
     const allocatorLock = await acquireDevPortAllocatorLock({
       lockPath: allocatorLockPath,
       pid: process.pid,
+      signal: allocatorAbort.signal,
     });
     try {
       const ports = await reserveDevPorts({
@@ -118,6 +128,8 @@ if (import.meta.main) {
       );
     } finally {
       await allocatorLock.release();
+      process.removeListener("SIGINT", onPrintSigint);
+      process.removeListener("SIGTERM", onPrintSigterm);
     }
   } else {
     const instanceLock = await acquireDevInstanceLock({
@@ -128,9 +140,13 @@ if (import.meta.main) {
     let activeProcessGroupId: number | undefined;
     let forwardedSignal: NodeJS.Signals | undefined;
     let stopping: Promise<void> | undefined;
+    const allocatorAbort = new AbortController();
     const forwardSignal = (signal: NodeJS.Signals): void => {
       if (forwardedSignal) return;
       forwardedSignal = signal;
+      allocatorAbort.abort(
+        new Error(`Development startup interrupted by ${signal}`),
+      );
       if (activeProcessGroupId !== undefined) {
         stopping = terminateDevProcessGroup({
           processGroupId: activeProcessGroupId,
@@ -150,6 +166,7 @@ if (import.meta.main) {
           const allocatorLock = await acquireDevPortAllocatorLock({
             lockPath: allocatorLockPath,
             pid: process.pid,
+            signal: allocatorAbort.signal,
           });
           try {
             const ports = await reserveDevPorts({
@@ -158,8 +175,6 @@ if (import.meta.main) {
             });
             const allocation: DevPortAllocation = {
               ports,
-              bindProcessGroup: (processGroupId) =>
-                allocatorLock.bindProcessGroup(processGroupId),
               release: () => allocatorLock.release(),
             };
             return allocation;
@@ -217,7 +232,6 @@ if (import.meta.main) {
           activeProcessGroupId = processGroupId;
           try {
             await instanceLock.bindProcessGroup(processGroupId);
-            await allocation.bindProcessGroup(processGroupId);
             await waitForDevListeners({
               target,
               ports: allocation.ports,
@@ -228,7 +242,8 @@ if (import.meta.main) {
             if (stopping) {
               await stopping;
             } else {
-              await terminateDevProcessGroup({ processGroupId });
+              stopping = terminateDevProcessGroup({ processGroupId });
+              await stopping;
             }
             activeProcessGroupId = undefined;
             stopping = undefined;
@@ -252,17 +267,14 @@ if (import.meta.main) {
     } finally {
       process.removeListener("SIGINT", onSigint);
       process.removeListener("SIGTERM", onSigterm);
-      try {
-        if (stopping) {
-          await stopping;
-        } else if (activeProcessGroupId !== undefined) {
-          await terminateDevProcessGroup({
-            processGroupId: activeProcessGroupId,
-          });
-        }
-      } finally {
-        await instanceLock.release();
+      if (stopping) {
+        await stopping;
+      } else if (activeProcessGroupId !== undefined) {
+        await terminateDevProcessGroup({
+          processGroupId: activeProcessGroupId,
+        });
       }
+      await instanceLock.release();
     }
   }
 }

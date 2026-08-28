@@ -1,12 +1,12 @@
 import { connect } from "node:net";
 import path from "node:path";
 import type { DevPorts, DevTarget } from "./dev-plan.js";
-import type { DevInstanceLock } from "./dev-runtime.js";
 
 const PORT_ALLOCATION_LIMIT = 256;
 
-export interface DevPortAllocation extends DevInstanceLock {
+export interface DevPortAllocation {
   ports: DevPorts;
+  release(): Promise<void>;
 }
 
 export interface DevChildExit {

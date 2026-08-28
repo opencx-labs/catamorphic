@@ -121,7 +121,6 @@ describe("runDevStartupAttempts", () => {
         const allocationNumber = releases.length + 1;
         return {
           ports: allocatedPorts,
-          bindProcessGroup: async () => undefined,
           release: async () => {
             releases.push(allocationNumber);
           },
@@ -159,7 +158,6 @@ describe("runDevStartupAttempts", () => {
               excludedPorts,
               reservePort: async () => nextPort++,
             }),
-            bindProcessGroup: async () => undefined,
             release: async () => undefined,
           };
         },

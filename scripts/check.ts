@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { rm } from "node:fs/promises";
 import path from "node:path";
 import { checkCommands } from "./check-plan.js";
+import { writeCliError } from "./cli-error.js";
 import {
   createTestRunResources,
   runLoggedProcess,
@@ -65,7 +66,7 @@ async function main(): Promise<void> {
     succeeded = true;
     exitCode = 0;
   } catch (error) {
-    console.error(error instanceof Error ? error.message : error);
+    writeCliError(error);
   } finally {
     signals.close();
     if (succeeded) {

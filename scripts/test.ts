@@ -4,6 +4,7 @@ import { createWriteStream, type WriteStream } from "node:fs";
 import { mkdir, mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import { writeCliError } from "./cli-error.js";
 import {
   deterministicTestEnvironment,
   dockerTestPostgresDriver,
@@ -337,7 +338,7 @@ async function main(): Promise<void> {
       cliArguments: process.argv.slice(2),
     });
   } catch (error) {
-    console.error(error instanceof Error ? error.message : error);
+    writeCliError(error);
     process.exitCode = 1;
     return;
   }
@@ -379,7 +380,7 @@ async function main(): Promise<void> {
     succeeded = true;
     exitCode = 0;
   } catch (error) {
-    console.error(error instanceof Error ? error.message : error);
+    writeCliError(error);
   } finally {
     signals.close();
     if (succeeded) {

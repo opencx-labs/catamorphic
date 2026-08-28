@@ -11,7 +11,7 @@ import {
 import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { reserveLoopbackPort } from "./dev.js";
 import {
   acquireDevInstanceLock,
@@ -282,6 +282,117 @@ describe("acquireDevPortAllocatorLock", () => {
     expect(order).toHaveLength(8);
     expect(maximumActive).toBe(1);
   });
+
+  it("keeps allocator ownership with the launcher and recovers after launcher death", async () => {
+    if (process.platform === "win32") return;
+    const lockPath = temporaryLockPath();
+    const launcher = spawn(
+      process.execPath,
+      ["-e", "setInterval(() => {}, 1000)"],
+      {
+        detached: true,
+        stdio: "ignore",
+      },
+    );
+    const spawnedChild = spawn(
+      process.execPath,
+      ["-e", "setInterval(() => {}, 1000)"],
+      { detached: true, stdio: "ignore" },
+    );
+    childProcesses.push(launcher, spawnedChild);
+    if (!launcher.pid || !spawnedChild.pid) {
+      throw new Error("Allocator recovery fixtures did not receive PIDs");
+    }
+    const first = await acquireDevPortAllocatorLock({
+      lockPath,
+      pid: launcher.pid,
+      timeoutMs: 250,
+    });
+    expect("bindProcessGroup" in first).toBe(false);
+
+    const launcherExit = new Promise<void>((resolve) =>
+      launcher.once("exit", () => resolve()),
+    );
+    process.kill(launcher.pid, "SIGKILL");
+    await launcherExit;
+    expect(processGroupIsLive(spawnedChild.pid)).toBe(true);
+
+    const recovered = await acquireDevPortAllocatorLock({
+      lockPath,
+      pid: process.pid,
+      timeoutMs: 250,
+    });
+    await recovered.release();
+  });
+
+  it("fails actionably after a bounded allocator wait", async () => {
+    const lockPath = temporaryLockPath();
+    const owner = await acquireDevPortAllocatorLock({
+      lockPath,
+      pid: process.pid,
+      timeoutMs: 250,
+    });
+    const waiting = acquireDevPortAllocatorLock({
+      lockPath,
+      pid: process.pid,
+      timeoutMs: 25,
+    });
+
+    const outcome = await Promise.race([
+      waiting.then(
+        () => "unexpected acquisition",
+        (error: unknown) =>
+          error instanceof Error ? error.message : String(error),
+      ),
+      new Promise<string>((resolve) =>
+        setTimeout(() => resolve("allocator wait did not stop"), 100),
+      ),
+    ]);
+    await owner.release();
+    if (outcome === "allocator wait did not stop") {
+      await (await waiting).release();
+    }
+
+    expect(outcome).toBe(
+      `Timed out after 25ms waiting for global development port allocator ${lockPath}. Another development launcher may still be allocating ports; retry after it reaches readiness or exits.`,
+    );
+  });
+
+  it("aborts an allocator wait on a launcher signal", async () => {
+    const lockPath = temporaryLockPath();
+    const owner = await acquireDevPortAllocatorLock({
+      lockPath,
+      pid: process.pid,
+      timeoutMs: 250,
+    });
+    const abort = new AbortController();
+    const waiting = acquireDevPortAllocatorLock({
+      lockPath,
+      pid: process.pid,
+      signal: abort.signal,
+      timeoutMs: 250,
+    });
+    abort.abort(new Error("Development startup interrupted by SIGTERM"));
+
+    const outcome = await Promise.race([
+      waiting.then(
+        () => "unexpected acquisition",
+        (error: unknown) =>
+          error instanceof Error ? error.message : String(error),
+      ),
+      new Promise<string>((resolve) =>
+        setTimeout(() => resolve("allocator wait did not abort"), 100),
+      ),
+    ]);
+    await owner.release();
+    if (outcome === "allocator wait did not abort") {
+      await (await waiting).release();
+    }
+
+    expect(outcome).toBe(
+      `Stopped waiting for global development port allocator ${lockPath}: Development startup interrupted by SIGTERM`,
+    );
+  });
 });
 
 describe("stopDevProcessGroup", () => {
@@ -429,6 +540,66 @@ describe("stopDevProcessGroup", () => {
       if (processGroupIsLive(processGroupId)) {
         process.kill(-processGroupId, "SIGKILL");
       }
+    }
+  });
+
+  it("fails after a bounded SIGKILL wait and retains the PGID safety lock", async () => {
+    const lockPath = temporaryLockPath();
+    const processGroupId = 2_147_483_646;
+    const lock = await acquireDevInstanceLock({
+      lockPath,
+      pid: process.pid,
+    });
+    await lock.bindProcessGroup(processGroupId);
+    let groupObservable = true;
+    const signals: Array<string | number | undefined> = [];
+    const kill = vi
+      .spyOn(process, "kill")
+      .mockImplementation((_pid, signal) => {
+        signals.push(signal);
+        if (signal === 0 && !groupObservable) {
+          const error = new Error("gone") as NodeJS.ErrnoException;
+          error.code = "ESRCH";
+          throw error;
+        }
+        return true;
+      });
+
+    const stopping = settleDevProcessGroup({
+      processGroupId,
+      signal: "SIGTERM",
+      gracePeriodMs: 0,
+      killWaitMs: 25,
+      lock,
+    });
+    const outcome = await Promise.race([
+      stopping.then(
+        () => "unexpected shutdown",
+        (error: unknown) =>
+          error instanceof Error ? error.message : String(error),
+      ),
+      new Promise<string>((resolve) =>
+        setTimeout(() => resolve("shutdown did not stop"), 100),
+      ),
+    ]);
+    if (outcome === "shutdown did not stop") {
+      groupObservable = false;
+      await stopping;
+    }
+
+    try {
+      expect(outcome).toBe(
+        `Development process group ${processGroupId} remained observable after SIGKILL for 25ms. Stop it manually before retrying development; its instance lock was retained.`,
+      );
+      expect(signals).toContain("SIGTERM");
+      expect(signals).toContain("SIGKILL");
+      expect(existsSync(lockPath)).toBe(true);
+      expect(JSON.parse(readFileSync(lockPath, "utf8"))).toMatchObject({
+        processGroupId,
+      });
+    } finally {
+      kill.mockRestore();
+      await lock.release();
     }
   });
 });

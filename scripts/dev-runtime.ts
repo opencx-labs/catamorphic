@@ -15,6 +15,10 @@ export interface DevInstanceLock {
   release(): Promise<void>;
 }
 
+export interface DevPortAllocatorLock {
+  release(): Promise<void>;
+}
+
 interface LockOwner {
   pid: number;
   token?: string;
@@ -182,13 +186,64 @@ async function replaceOwnedLockContent(input: {
 export async function acquireDevPortAllocatorLock(input: {
   lockPath: string;
   pid: number;
-}): Promise<DevInstanceLock> {
+  signal?: AbortSignal;
+  timeoutMs?: number;
+}): Promise<DevPortAllocatorLock> {
+  const timeoutMs = input.timeoutMs ?? 60_000;
+  if (!Number.isFinite(timeoutMs) || timeoutMs <= 0) {
+    throw new Error("Development port allocator timeout must be positive");
+  }
+  const deadline = Date.now() + timeoutMs;
+  const aborted = (): Error => {
+    const reason = input.signal?.reason;
+    return new Error(
+      `Stopped waiting for global development port allocator ${input.lockPath}: ${
+        reason instanceof Error ? reason.message : String(reason ?? "aborted")
+      }`,
+      { cause: reason },
+    );
+  };
+  const waitForRetry = async (): Promise<void> => {
+    if (input.signal?.aborted) throw aborted();
+    const remainingMs = deadline - Date.now();
+    if (remainingMs <= 0) {
+      throw new Error(
+        `Timed out after ${timeoutMs}ms waiting for global development port allocator ${input.lockPath}. Another development launcher may still be allocating ports; retry after it reaches readiness or exits.`,
+      );
+    }
+    await new Promise<void>((resolve, reject) => {
+      const delayMs = Math.min(10, remainingMs);
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      const cleanup = (): void =>
+        input.signal?.removeEventListener("abort", onAbort);
+      const onAbort = (): void => {
+        clearTimeout(timer);
+        cleanup();
+        reject(aborted());
+      };
+      input.signal?.addEventListener("abort", onAbort, { once: true });
+      if (input.signal?.aborted) {
+        onAbort();
+        return;
+      }
+      timer = setTimeout(() => {
+        cleanup();
+        resolve();
+      }, delayMs);
+    });
+  };
   while (true) {
+    if (input.signal?.aborted) throw aborted();
     try {
-      return await acquireDevInstanceLock(input);
+      const lock = await acquireDevInstanceLock(input);
+      if (input.signal?.aborted) {
+        await lock.release();
+        throw aborted();
+      }
+      return { release: () => lock.release() };
     } catch (error) {
       if (!(error instanceof DevLockConflictError)) throw error;
-      await new Promise((resolve) => setTimeout(resolve, 10));
+      await waitForRetry();
     }
   }
 }
@@ -336,6 +391,7 @@ export async function stopDevProcessGroup(input: {
   processGroupId: number;
   signal: NodeJS.Signals;
   gracePeriodMs?: number;
+  killWaitMs?: number;
   lock: DevInstanceLock;
 }): Promise<void> {
   await settleDevProcessGroup(input);
@@ -345,6 +401,7 @@ export async function terminateDevProcessGroup(input: {
   processGroupId: number;
   signal?: NodeJS.Signals;
   gracePeriodMs?: number;
+  killWaitMs?: number;
 }): Promise<void> {
   if (!processGroupIsLive(input.processGroupId)) return;
   signalProcessGroup(input.processGroupId, input.signal ?? "SIGTERM");
@@ -355,8 +412,18 @@ export async function terminateDevProcessGroup(input: {
   if (processGroupIsLive(input.processGroupId)) {
     signalProcessGroup(input.processGroupId, "SIGKILL");
   }
-  while (processGroupIsLive(input.processGroupId)) {
+  const killWaitMs = input.killWaitMs ?? 1_000;
+  const killDeadline = Date.now() + killWaitMs;
+  while (
+    processGroupIsLive(input.processGroupId) &&
+    Date.now() < killDeadline
+  ) {
     await new Promise((resolve) => setTimeout(resolve, 20));
+  }
+  if (processGroupIsLive(input.processGroupId)) {
+    throw new Error(
+      `Development process group ${input.processGroupId} remained observable after SIGKILL for ${killWaitMs}ms. Stop it manually before retrying development; its instance lock was retained.`,
+    );
   }
 }
 
@@ -364,11 +431,9 @@ export async function settleDevProcessGroup(input: {
   processGroupId: number;
   signal?: NodeJS.Signals;
   gracePeriodMs?: number;
+  killWaitMs?: number;
   lock: DevInstanceLock;
 }): Promise<void> {
-  try {
-    await terminateDevProcessGroup(input);
-  } finally {
-    await input.lock.release();
-  }
+  await terminateDevProcessGroup(input);
+  await input.lock.release();
 }
