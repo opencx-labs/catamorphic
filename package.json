@@ -24,7 +24,7 @@
     "dev:server": "bun scripts/dev.ts server",
     "build": "turbo build",
     "test": "bun scripts/test.ts",
-    "test:scripts": "bun scripts/tool-runtime.ts vitest --config ./vitest.config.ts scripts",
+    "test:scripts": "bun scripts/tool-runtime.ts vitest --config ./vitest.config.ts --dir ./scripts",
     "test:workspace": "bun scripts/tool-runtime.ts turbo run test --no-daemon --concurrency=2",
     "test:external": "CATAMORPHIC_EXTERNAL_INTEGRATIONS=1 bun scripts/tool-runtime.ts turbo run test --no-daemon --concurrency=2 --filter=@catamorphic/daytona --filter=@catamorphic/s3 --filter=@catamorphic/cloudflare",
     "test:file": "bun scripts/tool-runtime.ts vitest",

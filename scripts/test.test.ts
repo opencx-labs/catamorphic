@@ -127,7 +127,8 @@ describe("test process orchestration", () => {
           "run",
           "--config",
           "/repo/vitest.config.ts",
-          "scripts",
+          "--dir",
+          "/repo/scripts",
         ],
         logFileName: "root-orchestration-tests.log",
       },
@@ -181,9 +182,46 @@ describe("test process orchestration", () => {
     );
 
     expect(plan[0]?.label).toBe("root orchestration tests");
-    expect(plan[0]?.args.at(-1)).toBe("scripts");
+    expect(plan[0]?.args.slice(-2)).toEqual([
+      "--dir",
+      path.join(repositoryRoot, "scripts"),
+    ]);
     expect(taskIds.length).toBeGreaterThan(0);
     expect(taskIds).not.toContain("catamorphic#test");
+  });
+
+  it("collects only root script tests when another test filename contains scripts", () => {
+    const repositoryRoot = path.resolve(import.meta.dirname, "..");
+    const scriptsRoot = path.join(repositoryRoot, "scripts");
+    const command = testRunCommands({
+      rootPath: repositoryRoot,
+      cliArguments: [],
+    })[0];
+    if (!command) throw new Error("Root orchestration command was not planned");
+    const [vitestPath, _run, ...argumentsAfterRun] = command.args;
+    if (!vitestPath) throw new Error("Vitest path was not planned");
+    const output = execFileSync(
+      command.command,
+      [
+        vitestPath,
+        "list",
+        ...argumentsAfterRun,
+        "--filesOnly",
+        "--staticParse",
+      ],
+      { cwd: repositoryRoot, encoding: "utf8" },
+    );
+    const collectedFiles = output.trim().split("\n").filter(Boolean);
+
+    expect(collectedFiles.length).toBeGreaterThan(0);
+    expect(collectedFiles).not.toContain(
+      "apps/desktop/src/main/usage-transcripts.test.ts",
+    );
+    for (const file of collectedFiles) {
+      expect(
+        path.relative(scriptsRoot, path.resolve(repositoryRoot, file)),
+      ).not.toMatch(/^\.\.(?:\/|$)/);
+    }
   });
 
   it("limits a full test run to two concurrent Turbo tasks", () => {

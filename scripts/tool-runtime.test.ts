@@ -164,7 +164,7 @@ describe("toolRuntime", () => {
     const scripts = packageScripts("package.json");
 
     expect(scripts["test:scripts"]).toBe(
-      "bun scripts/tool-runtime.ts vitest --config ./vitest.config.ts scripts",
+      "bun scripts/tool-runtime.ts vitest --config ./vitest.config.ts --dir ./scripts",
     );
     expect(scripts["typecheck:scripts"]).toBe(
       "tsgo --project ./tsconfig.scripts.json",
