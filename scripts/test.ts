@@ -139,13 +139,11 @@ export class TestSignalController {
   }
 }
 
-export async function createTestRunResources(input: {
+export async function createTestRunResources(_input: {
   pid: number;
   nonce: string;
 }): Promise<TestRunResources> {
-  const rootPath = await mkdtemp(
-    path.join(tmpdir(), `catamorphic-test-${input.pid}-${input.nonce}-`),
-  );
+  const rootPath = await mkdtemp(path.join(tmpdir(), "ct-"));
   const resources = {
     rootPath,
     tempPath: path.join(rootPath, "tmp"),

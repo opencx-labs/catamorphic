@@ -564,4 +564,16 @@ describe("test process orchestration", () => {
       ].map((directory) => access(directory)),
     );
   });
+
+  it("keeps the temp root short enough for Chromium singleton sockets", async () => {
+    const resources = await createTestRunResources({
+      pid: 123_456_789,
+      nonce: "a".repeat(128),
+    });
+    temporaryDirectories.push(resources.rootPath);
+
+    expect(path.relative(tmpdir(), resources.rootPath)).toMatch(
+      /^ct-[A-Za-z0-9]{6}$/,
+    );
+  });
 });
