@@ -24,7 +24,7 @@
   "scripts": {
     "build": "tsup && tsc --project tsconfig.json --noEmit false --emitDeclarationOnly",
     "dev": "tsup --watch --no-clean",
-    "test": "vitest run --config ../../vitest.config.ts",
+    "test": "bun ../../scripts/tool-runtime.ts vitest --tool-cwd packages/db --config ../../vitest.config.ts",
     "typecheck": "tsgo --project ./tsconfig.json",
     "db:migrate": "bun run src/cli.ts migrate",
     "db:status": "bun run src/cli.ts status",

@@ -539,13 +539,10 @@ and [ADR 0030](docs/decisions/0030-run-retention.md).
 ```bash
 bun install
 
-# Start local dev services: Postgres, plus an OTel collector (:4317/:4318)
-# backed by ClickHouse (:8124 HTTP, :19001 native) for trace storage
-docker compose up -d
-
-# Apply migrations + regenerate Kysely types (scoped to the `catamorphic` schema)
-DATABASE_URL="postgresql://catamorphic:catamorphic@localhost:5432/catamorphic" bun run db:migrate
-DATABASE_URL="postgresql://catamorphic:catamorphic@localhost:5432/catamorphic" bun run db:codegen
+# Only for an explicitly provisioned host database. These are not part of the
+# normal local app workflow; never point them at a database another session uses.
+DATABASE_URL="<host-owned database URL>" bun run db:migrate
+DATABASE_URL="<host-owned database URL>" bun run db:codegen
 
 # Build everything
 bun run build
@@ -555,45 +552,79 @@ cd packages/fastify-plugin && bun run generate-spec
 cd ../api-client && bun run generate
 ```
 
-Catamorphic itself is embed-only: in production you run a **host app** that boots it in-process. For local development, the root `bun run dev` boots the dev infra: `docker compose up -d --wait` (Postgres + OTel collector + ClickHouse) plus the Cloudflare sandbox bridge (`:8787`). The desktop app runs with `bun run dev:desktop`. To iterate on catamorphic alongside your own host instead, link the packages via `file:` (see `.agents/skills/using-catamorphic/SKILL.md` → "Local dev linking").
+Optional shared OTel, ClickHouse, and sandbox-bridge services run
+persistently. Start them in a separate terminal only when you need them:
+
+```bash
+bun run dev:infra
+```
+
+Catamorphic itself is embed-only: in production you run a **host app** that boots it in-process. For local development, `bun run dev` starts the combined desktop and stock-server manual environment. `bun run dev:desktop` and `bun run dev:server` are focused variants of the same orchestrator, which assigns each worktree its own data directories and loopback ports. To iterate on catamorphic alongside your own host instead, link the packages via `file:` (see `.agents/skills/using-catamorphic/SKILL.md` → "Local dev linking").
 
 ## Scripts
 
 ```bash
-bun run dev        # Dev infra: docker compose (Postgres, OTel, ClickHouse) + sandbox bridge
-bun run dev:desktop # Run the desktop app in dev mode
-bun run build      # Build all packages
-bun run test       # Run all tests
-bun run typecheck  # Typecheck all packages with tsgo
-bun run lint       # Lint with Biome
-bun run lint:fix   # Auto-fix lint issues
-bun run db:migrate # Apply migrations to the DB pointed at by DATABASE_URL
-bun run db:codegen # Regenerate Kysely types from the `catamorphic` schema
-bun run db:reset   # Drop + recreate the catamorphic schema (dev only)
-bun run db:status  # Show applied / pending migrations
+bun install         # Install dependencies in this worktree
+bun run dev         # Combined desktop and stock-server manual environment
+bun run dev:desktop # Desktop-focused development environment
+bun run dev:server  # Stock-server-focused development environment
+bun run dev:infra   # Optional OTel, ClickHouse, and sandbox-bridge services
+bun run build       # Build all packages
+bun run test        # Deterministic root and Postgres-complete workspace tests
+bun run test:external # Explicit opt-in for credentialed external integrations
+bun run check       # 12-phase merge gate
+bun run typecheck   # Typecheck all packages with tsgo
+bun run lint        # Lint with Biome
+bun run lint:fix    # Auto-fix lint issues
+bun run db:migrate  # Apply migrations to the DB pointed at by DATABASE_URL
+bun run db:codegen  # Regenerate Kysely types from the `catamorphic` schema
+bun run db:reset    # Drop + recreate the catamorphic schema (dev only)
+bun run db:status   # Show applied / pending migrations
 ```
 
 ## Testing
 
-Tests use **Vitest**, orchestrated by Turborepo.
+Tests use **Vitest**, orchestrated by Turborepo. Docker must be running:
+`bun run test` and `bun run check` create an isolated disposable Postgres
+database for every invocation. They do not need `bun run dev:infra`; that
+command is optional shared observability and sandbox-bridge infrastructure,
+not test infrastructure.
 
 ```bash
-bun run test                                   # everything
-bun run --filter @catamorphic/parser test      # one package
-cd packages/parser && bun run test src/__tests__/parser.test.ts  # one file
+bun run test                                   # deterministic root and Postgres-complete workspace tests
+bun run check                                  # 12 phases: lint, root/workspace types, build, migrations, root/workspace tests, and E2E
+bun run test:external                          # explicit authority for credentialed integrations
+bun run --filter @catamorphic/parser test      # one package through repository Node
+bun run --cwd packages/parser test src/__tests__/parser.test.ts  # one file through repository Node
 ```
 
-Integration tests hit the **real services** using the keys in the repo root `.env` (loaded automatically by the vitest config) and skip themselves when credentials are absent:
+Each test file uses fresh temporary state and every root test invocation gets
+its own Postgres database and temporary caches, so parallel worktrees do not
+share test output. Install dependencies in each worktree and never copy a
+credentialed `.env` wholesale. Add only the individual settings a task needs.
+Root orchestration tests under `scripts/**/*.test.ts` run before the package
+graph. Package-local Vitest commands also select the repository-pinned Node,
+including when the ambient `node` is Node 20.
 
-- **Daytona** (`packages/daytona`): runs whenever `DAYTONA_API_KEY` is set.
-- **Cloudflare Sandbox** (`packages/cloudflare`, `packages/core`): needs `CLOUDFLARE_SANDBOX_API_URL` plus the explicit opt-in `CF_SANDBOX_INTEGRATION=1` (start the bridge first: `bun run dev` in `packages/cloudflare-sandbox-bridge`).
-- **Cloudflare Artifacts** (`packages/cloudflare`): runs whenever the `CLOUDFLARE_ACCOUNT_ID` / `CLOUDFLARE_API_TOKEN` / `CLOUDFLARE_ARTIFACTS_NAMESPACE` keys are set and the account has Artifacts beta access; skips with a warning while feature-gated.
+External integration tests never run merely because credentials are present.
+They require the explicit `bun run test:external` authority, which sets
+`CATAMORPHIC_EXTERNAL_INTEGRATIONS=1`, and skip when their service-specific
+configuration is absent:
+
+- **Daytona** (`packages/daytona`): needs `DAYTONA_API_KEY`.
+- **Cloudflare Sandbox** (`packages/cloudflare`, `packages/core`): needs `CLOUDFLARE_SANDBOX_API_URL`, `CLOUDFLARE_SANDBOX_API_KEY`, and `CF_SANDBOX_INTEGRATION=1`. Start the sandbox bridge separately if the test needs it.
+- **Cloudflare Artifacts** (`packages/cloudflare`): needs `CLOUDFLARE_ACCOUNT_ID`, `CLOUDFLARE_API_TOKEN`, and `CLOUDFLARE_ARTIFACTS_NAMESPACE`; it skips with a warning while feature-gated.
+- **S3-compatible storage** (`packages/s3`): needs `S3_BUCKET`, `S3_ACCESS_KEY_ID`, and `S3_SECRET_ACCESS_KEY`. Set `S3_REGION` when the provider requires it, `S3_ENDPOINT` for R2, MinIO, or another non-AWS endpoint, and `S3_FORCE_PATH_STYLE=true` when that endpoint requires path-style requests.
 
 Unit tests run with no setup. The desktop app additionally has hidden and
 visible E2E suites that drive the real Electron binary over CDP with a
-deterministic fake agent. Run `bun run test:e2e` from `apps/desktop` for the
-interruption-free suite and `bun run test:e2e:visible` for compositor, focus,
-and native window behavior.
+deterministic fake agent. Run `bun run --cwd apps/desktop test:e2e` for the
+interruption-free suite and `bun run --cwd apps/desktop test:e2e:visible` for
+compositor, focus, and native window behavior. `bun run check` runs both as
+part of the merge gate.
+
+The local development runner uses POSIX process groups and supports macOS and
+Linux. Windows development orchestration is not supported.
 
 ## Tech stack
 

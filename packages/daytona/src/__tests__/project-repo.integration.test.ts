@@ -3,8 +3,12 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { DaytonaProjectRepo } from "../project-repo.js";
 
 const DAYTONA_API_KEY = process.env.DAYTONA_API_KEY;
+const EXTERNAL_INTEGRATIONS =
+  process.env.CATAMORPHIC_EXTERNAL_INTEGRATIONS === "1";
 
-const describeIf = DAYTONA_API_KEY ? describe : describe.skip;
+const describeIf =
+  DAYTONA_API_KEY && EXTERNAL_INTEGRATIONS ? describe : describe.skip;
+const RUN_ID = crypto.randomUUID();
 
 describeIf("DaytonaProjectRepo (integration)", () => {
   let client: Daytona;
@@ -17,7 +21,7 @@ describeIf("DaytonaProjectRepo (integration)", () => {
     const sandbox = await client.create({
       language: "typescript",
       autoStopInterval: 0,
-      labels: { test: "daytona-project-repo-integration" },
+      labels: { test: "daytona-project-repo-integration", run: RUN_ID },
     });
     sandboxId = sandbox.id;
 
@@ -30,7 +34,7 @@ describeIf("DaytonaProjectRepo (integration)", () => {
 
     repo = new DaytonaProjectRepo({
       sandboxId,
-      projectId: "test-project",
+      projectId: crypto.randomUUID(),
       repoPath,
       client,
     });

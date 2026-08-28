@@ -42,33 +42,53 @@ project's remote server when this desktop is asleep. Contract e2e:
 `bun run dev:desktop` builds `apps/pwa` before Electron starts and keeps
 a `vite build --watch` running beside it (turbo.json's
 `catamorphic-desktop#dev`): edit PWA source, scan again, get the new
-code. Building the desktop any other way (bare `electron-vite dev`,
-`test:e2e`) does not, so rebuild `apps/pwa` by hand there.
+code. Starting the desktop outside the root development runner or focused E2E
+tests does not, so rebuild `apps/pwa` by hand in those cases.
+
+## Run
+
+Run development commands from the repository root. `bun run dev` starts the
+combined desktop and stock-server manual environment; `bun run dev:desktop`
+is its desktop-focused variant. The shared orchestrator assigns this worktree
+its own data directories and loopback ports, so do not start a normal desktop
+watcher in a checkout another session is using.
 
 ## Verification Checklist
 
-Run all of these from `apps/desktop` before finalizing any major change —
+Run all of these from the repository root before finalizing any major change:
 "finalizing" means before you report the work as done, not merely before a
 commit. A change that hasn't passed the full checklist is not done:
 
 ### 1. Typecheck
 
 ```bash
-bun run typecheck
+bun run --cwd apps/desktop typecheck
 ```
 
 ### 2. Unit tests
 
 ```bash
-bun run test
+bun run --cwd apps/desktop test
 ```
 
 ### 3. End-to-end tests (required before every commit)
 
 ```bash
-bun run test:e2e
-bun run test:e2e:visible
+bun run --cwd apps/desktop test:e2e
+bun run --cwd apps/desktop test:e2e:visible
 ```
+
+Before completing engineering work, run `bun run check` from the repository
+root. It is the merge gate, including deterministic Postgres-complete
+workspace tests and both desktop E2E modes. Docker must be running so the
+test commands can create their disposable Postgres database. Run credentialed
+external integrations only when explicitly authorized with `bun run
+test:external`.
+
+The root `bun run test` command runs root orchestration tests and the
+deterministic, Postgres-complete workspace test graph. The focused desktop
+unit-test command above runs only this app's test files through the
+repository-pinned Node runtime.
 
 The default command keeps the real Electron window hidden so local runs do
 not steal focus. The visible command runs the compositor, focus, and
@@ -121,15 +141,16 @@ the app and check the change visually end to end (see `DESIGN.md` and the
 CDP driver at `scripts/drive.mjs`):
 
 ```bash
-env -u ELECTRON_RUN_AS_NODE bunx electron-vite dev -- --remote-debugging-port=9333
-node scripts/drive.mjs window maximize
-node scripts/drive.mjs shot /tmp/app.png
+bun run dev:desktop
+# Read the `CDP:` URL printed by the development orchestrator, then:
+CDP_PORT="<printed CDP port>" node apps/desktop/scripts/drive.mjs window maximize
+CDP_PORT="<printed CDP port>" node apps/desktop/scripts/drive.mjs shot /tmp/app.png
 ```
 
-`ELECTRON_RUN_AS_NODE` must be unset (IDE extension hosts export it);
-main-process changes need a full relaunch, renderer changes hot-reload.
-Maximize the window before screenshots. Rebuild changed workspace packages
-first — the desktop resolves them via `dist/`.
+The shared development runner unsets `ELECTRON_RUN_AS_NODE`. Main-process
+changes need a full relaunch; renderer changes hot-reload. Maximize the window
+before screenshots. Rebuild changed workspace packages first; the desktop
+resolves them via `dist/`.
 
 ## Design log
 

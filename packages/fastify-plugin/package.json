@@ -13,7 +13,7 @@
   },
   "scripts": {
     "build": "tsup && tsc --project tsconfig.json --noEmit false --emitDeclarationOnly",
-    "test": "vitest run --config ../../vitest.config.ts",
+    "test": "bun ../../scripts/tool-runtime.ts vitest --tool-cwd packages/fastify-plugin --config ../../vitest.config.ts",
     "typecheck": "tsgo --project ./tsconfig.json",
     "generate-spec": "bun run scripts/generate-spec.ts && biome format --write ../api-client/openapi.json"
   },

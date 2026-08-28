@@ -6,7 +6,9 @@
       "name": "catamorphic",
       "devDependencies": {
         "@biomejs/biome": "^2.5.7",
+        "@types/node": "^26.1.1",
         "@typescript/native-preview": "^7.0.0-dev.20260707.2",
+        "node": "24.13.0",
         "tsup": "^8.5.1",
         "turbo": "2.10.10",
         "typescript": "^7.0.2",
@@ -536,6 +538,7 @@
   },
   "trustedDependencies": [
     "electron",
+    "node",
   ],
   "overrides": {
     "@xmldom/xmldom": "^0.8.13",
@@ -2386,9 +2389,13 @@
 
     "negotiator": ["negotiator@1.0.0", "", {}, "sha512-8Ofs/AUQh8MaEcrlq5xOX0CQ9ypTF5dl78mjlMNfOK08fzpgTHQRQPBxcPlEtIw0yRpws+Zo/3r+5WRby7u3Gg=="],
 
+    "node": ["node@24.13.0", "", { "dependencies": { "node-bin-setup": "^1.0.0" }, "bin": { "node": "bin/node" } }, "sha512-aXcbTE5VzQS/AqA6bBBpkgsGswYAi5Mt5tfi1GgXU75bsbJEOtd2TuPi38paNLtwaGaCOFaSzkVN4T9U0Rg0vg=="],
+
     "node-abi": ["node-abi@4.33.0", "", { "dependencies": { "semver": "^7.6.3" } }, "sha512-vLBWCKb+7LWsX+TbfzWOkw0W81m377tyx3hOweBTjO43CXZnRGS1/JPWs20fr0PgZyDXk6ROYrylsEycK8raDA=="],
 
     "node-api-version": ["node-api-version@0.2.1", "", { "dependencies": { "semver": "^7.3.5" } }, "sha512-2xP/IGGMmmSQpI1+O/k72jF/ykvZ89JeuKX3TLJAYPDVLUalrshrLHkeVcCCZqG/eEa635cr8IBYzgnDvM2O8Q=="],
+
+    "node-bin-setup": ["node-bin-setup@1.1.4", "", {}, "sha512-vWNHOne0ZUavArqPP5LJta50+S8R261Fr5SvGul37HbEDcowvLjwdvd0ZeSr0r2lTSrPxl6okq9QUw8BFGiAxA=="],
 
     "node-gyp": ["node-gyp@12.4.0", "", { "dependencies": { "env-paths": "^2.2.0", "exponential-backoff": "^3.1.1", "graceful-fs": "^4.2.6", "nopt": "^9.0.0", "proc-log": "^6.0.0", "semver": "^7.3.5", "tar": "^7.5.4", "tinyglobby": "^0.2.12", "undici": "^6.25.0", "which": "^6.0.0" }, "bin": { "node-gyp": "bin/node-gyp.js" } }, "sha512-OMcPNvqTCFUnNaBlmdgq+lfNqY7gTiSmNRDjY3uAXRyudeKZEZxu3CLtjMQrx4zZxCX2b/mpNqTtwuCJgXhHkw=="],
 

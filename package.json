@@ -13,15 +13,23 @@
     "apps/*"
   ],
   "trustedDependencies": [
-    "electron"
+    "electron",
+    "node"
   ],
   "scripts": {
-    "dev": "docker compose up -d --wait && turbo dev --filter=@catamorphic/cloudflare-sandbox-bridge",
-    "dev:desktop": "turbo run dev --no-daemon --concurrency=64 --filter=catamorphic-desktop...",
+    "dev": "bun scripts/dev.ts all",
+    "dev:desktop": "bun scripts/dev.ts desktop",
+    "dev:infra": "docker compose up -d --wait && bun scripts/tool-runtime.ts turbo dev --filter=@catamorphic/cloudflare-sandbox-bridge",
     "dev:pwa": "turbo run dev --no-daemon --concurrency=64 --filter=catamorphic-pwa...",
-    "dev:server": "turbo run dev --no-daemon --concurrency=64 --filter=catamorphic-server...",
+    "dev:server": "bun scripts/dev.ts server",
     "build": "turbo build",
-    "test": "turbo test",
+    "test": "bun scripts/test.ts",
+    "test:scripts": "bun scripts/tool-runtime.ts vitest --config ./vitest.config.ts --dir ./scripts",
+    "test:workspace": "bun scripts/tool-runtime.ts turbo run test --no-daemon --concurrency=2",
+    "test:external": "CATAMORPHIC_EXTERNAL_INTEGRATIONS=1 bun scripts/tool-runtime.ts turbo run test --no-daemon --concurrency=2 --filter=@catamorphic/daytona --filter=@catamorphic/s3 --filter=@catamorphic/cloudflare",
+    "test:file": "bun scripts/tool-runtime.ts vitest",
+    "check": "bun scripts/check.ts",
+    "typecheck:scripts": "tsgo --project ./tsconfig.scripts.json",
     "typecheck": "turbo typecheck",
     "lint": "biome check .",
     "lint:fix": "biome check --write .",
@@ -33,7 +41,9 @@
   },
   "devDependencies": {
     "@biomejs/biome": "^2.5.7",
+    "@types/node": "^26.1.1",
     "@typescript/native-preview": "^7.0.0-dev.20260707.2",
+    "node": "24.13.0",
     "tsup": "^8.5.1",
     "turbo": "2.10.10",
     "typescript": "^7.0.2",

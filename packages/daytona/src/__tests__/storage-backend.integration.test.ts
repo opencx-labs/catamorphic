@@ -2,11 +2,14 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { DaytonaBackend } from "../storage-backend.js";
 
 const DAYTONA_API_KEY = process.env.DAYTONA_API_KEY;
+const EXTERNAL_INTEGRATIONS =
+  process.env.CATAMORPHIC_EXTERNAL_INTEGRATIONS === "1";
 
-const describeIf = DAYTONA_API_KEY ? describe : describe.skip;
+const describeIf =
+  DAYTONA_API_KEY && EXTERNAL_INTEGRATIONS ? describe : describe.skip;
 
-const TENANT = "a1b2c3d4-e5f6-4890-abcd-ef1234567890";
-const PROJECT = "f1e2d3c4-b5a6-4890-bcde-a12345678901";
+const TENANT = crypto.randomUUID();
+const PROJECT = crypto.randomUUID();
 
 describeIf("DaytonaBackend (integration)", () => {
   let backend: DaytonaBackend;

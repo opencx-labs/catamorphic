@@ -26,8 +26,15 @@ const ACCESS_KEY_ID = process.env.S3_ACCESS_KEY_ID ?? "";
 const SECRET_ACCESS_KEY = process.env.S3_SECRET_ACCESS_KEY ?? "";
 const ENDPOINT = process.env.S3_ENDPOINT || undefined;
 const REGION = process.env.S3_REGION || undefined;
+const EXTERNAL_INTEGRATIONS =
+  process.env.CATAMORPHIC_EXTERNAL_INTEGRATIONS === "1";
 
-const configured = !!(BUCKET && ACCESS_KEY_ID && SECRET_ACCESS_KEY);
+const configured = !!(
+  EXTERNAL_INTEGRATIONS &&
+  BUCKET &&
+  ACCESS_KEY_ID &&
+  SECRET_ACCESS_KEY
+);
 
 async function s3Accessible(): Promise<boolean> {
   if (!configured) return false;

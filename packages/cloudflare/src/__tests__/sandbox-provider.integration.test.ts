@@ -8,8 +8,13 @@ const CF_SANDBOX_KEY = process.env.CLOUDFLARE_SANDBOX_API_KEY;
 // isn't running. Set `CF_SANDBOX_INTEGRATION=1` in CI or before running
 // these tests manually.
 const CF_INTEGRATION = process.env.CF_SANDBOX_INTEGRATION === "1";
+const EXTERNAL_INTEGRATIONS =
+  process.env.CATAMORPHIC_EXTERNAL_INTEGRATIONS === "1";
 
-const describeIf = CF_SANDBOX_URL && CF_INTEGRATION ? describe : describe.skip;
+const describeIf =
+  CF_SANDBOX_URL && CF_INTEGRATION && EXTERNAL_INTEGRATIONS
+    ? describe
+    : describe.skip;
 
 describeIf("CloudflareSandboxProvider (integration)", () => {
   let provider: CloudflareSandboxProvider;

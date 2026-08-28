@@ -9,8 +9,8 @@
     "build": "bun --bun vite build",
     "preview": "bun --bun vite preview",
     "typecheck": "tsgo --project ./tsconfig.json && tsgo --project ./tsconfig.node.json",
-    "test": "node ../../node_modules/vitest/vitest.mjs run",
-    "test:e2e": "bun --bun vite build && bun --bun ../../node_modules/vitest/vitest.mjs run --config ./vitest.e2e.config.ts"
+    "test": "bun ../../scripts/tool-runtime.ts vitest --tool-cwd apps/pwa",
+    "test:e2e": "bun --bun vite build && bun ../../scripts/tool-runtime.ts vitest --tool-cwd apps/pwa --config ./vitest.e2e.config.ts"
   },
   "dependencies": {
     "@noble/hashes": "2.3.0",

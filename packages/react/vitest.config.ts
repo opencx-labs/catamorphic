@@ -8,6 +8,7 @@ export default defineConfig({
     passWithNoTests: true,
     pool: "threads",
     fileParallelism: true,
+    maxWorkers: 2,
     include: ["src/**/*.test.ts", "src/**/*.test.tsx"],
   },
 });

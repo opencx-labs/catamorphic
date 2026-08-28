@@ -15,7 +15,30 @@
     "dev": {
       "dependsOn": ["^build"],
       "cache": false,
-      "persistent": true
+      "persistent": true,
+      "passThroughEnv": [
+        "ANTHROPIC_API_KEY",
+        "BETTER_AUTH_SECRET",
+        "CATAMORPHIC_AUTH_CONFIG",
+        "CATAMORPHIC_DATA_DIR",
+        "CATAMORPHIC_DESKTOP_CDP_PORT",
+        "CATAMORPHIC_DESKTOP_DATA_DIR",
+        "CATAMORPHIC_DESKTOP_VITE_PORT",
+        "CATAMORPHIC_DEV_INSTANCE",
+        "CATAMORPHIC_EFFORT",
+        "CATAMORPHIC_FAKE_AGENT",
+        "CATAMORPHIC_GITHUB_APP_SLUG",
+        "CATAMORPHIC_GITHUB_CLIENT_ID",
+        "CATAMORPHIC_MDNS",
+        "CATAMORPHIC_MODEL",
+        "CATAMORPHIC_OPERATOR_PORT",
+        "CATAMORPHIC_OPERATOR_SECRET",
+        "CATAMORPHIC_PUBLIC_URL",
+        "CATAMORPHIC_PWA_DIST",
+        "OPENAI_API_KEY",
+        "OPENROUTER_API_KEY",
+        "PORT"
+      ]
     },
     "dev:bundle": {
       "dependsOn": ["^build"],
@@ -26,13 +49,37 @@
       "dependsOn": ["^build", "catamorphic-pwa#build"],
       "with": ["catamorphic-pwa#dev:bundle"],
       "cache": false,
-      "persistent": true
+      "persistent": true,
+      "passThroughEnv": [
+        "ANTHROPIC_API_KEY",
+        "BETTER_AUTH_SECRET",
+        "CATAMORPHIC_AUTH_CONFIG",
+        "CATAMORPHIC_DATA_DIR",
+        "CATAMORPHIC_DESKTOP_CDP_PORT",
+        "CATAMORPHIC_DESKTOP_DATA_DIR",
+        "CATAMORPHIC_DESKTOP_VITE_PORT",
+        "CATAMORPHIC_DEV_INSTANCE",
+        "CATAMORPHIC_EFFORT",
+        "CATAMORPHIC_FAKE_AGENT",
+        "CATAMORPHIC_GITHUB_APP_SLUG",
+        "CATAMORPHIC_GITHUB_CLIENT_ID",
+        "CATAMORPHIC_MDNS",
+        "CATAMORPHIC_MODEL",
+        "CATAMORPHIC_OPERATOR_PORT",
+        "CATAMORPHIC_OPERATOR_SECRET",
+        "CATAMORPHIC_PUBLIC_URL",
+        "CATAMORPHIC_PWA_DIST",
+        "OPENAI_API_KEY",
+        "OPENROUTER_API_KEY",
+        "PORT"
+      ]
     },
     "test": {
       "dependsOn": ["^build"],
       "env": [
         "CATAMORPHIC_DB_SCHEMA",
         "CATAMORPHIC_E2E_FAKE_AGENT",
+        "CATAMORPHIC_EXTERNAL_INTEGRATIONS",
         "CF_SANDBOX_INTEGRATION",
         "CLOUDFLARE_ACCOUNT_ID",
         "CLOUDFLARE_API_TOKEN",
