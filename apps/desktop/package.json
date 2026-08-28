@@ -6,7 +6,7 @@
   "type": "module",
   "main": "./out/main/index.js",
   "scripts": {
-    "dev": "env -u ELECTRON_RUN_AS_NODE bun --bun electron-vite dev -- --remote-debugging-port=9333",
+    "dev": "env -u ELECTRON_RUN_AS_NODE bun --bun electron-vite dev -- --remote-debugging-port=${CATAMORPHIC_DESKTOP_CDP_PORT:-9333}",
     "build": "bun --bun electron-vite build",
     "typecheck": "tsgo --project ./tsconfig.json && tsgo --project ./tsconfig.node.json",
     "package": "bun --bun run --cwd ../pwa build && bun --bun electron-vite build && bun --bun electron-builder",

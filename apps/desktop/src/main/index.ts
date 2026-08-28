@@ -13,6 +13,7 @@ import { registerAgentBridge } from "./agent-bridge.js";
 import { registerBrowserSupport } from "./browser.js";
 import { toPublicConnection } from "./connections-store.js";
 import { ConnectorsService } from "./connectors.js";
+import { desktopDataDirFromEnvironment } from "./development-paths.js";
 import {
   shouldShowWindow,
   shouldUseE2ePlainTextEncryption,
@@ -57,18 +58,19 @@ app.userAgentFallback = app.userAgentFallback
 // E2E runs point userData at a throwaway dir so tests never touch real
 // settings/projects/DB, and may run beside a normally-running app.
 const e2eDataDir = process.env.CATAMORPHIC_E2E_DATA_DIR;
+const isolatedDataDir = desktopDataDirFromEnvironment(process.env);
 const showWindow = shouldShowWindow({
   e2eDataDir,
   e2eWindowMode: process.env.CATAMORPHIC_E2E_WINDOW_MODE,
 });
-if (e2eDataDir) {
-  app.setPath("userData", e2eDataDir);
+if (isolatedDataDir) {
+  app.setPath("userData", isolatedDataDir);
 }
 
 // PGlite is single-writer: a second instance opening the same data dir
 // aborts deep in WASM ("Aborted(). Build with -sASSERTIONS"). Refuse to
 // start and surface the first instance's window instead.
-if (!e2eDataDir && !app.requestSingleInstanceLock()) {
+if (!isolatedDataDir && !app.requestSingleInstanceLock()) {
   app.quit();
 }
 app.on("second-instance", (_event, argv) => {

@@ -42,6 +42,7 @@ import {
   type UpdateConnectionInput,
 } from "./connections-store.js";
 import type { ConnectorsService } from "./connectors.js";
+import { defaultDesktopProjectsDir } from "./development-paths.js";
 import {
   type GitDiffMode,
   gitFileDiff,
@@ -170,9 +171,10 @@ export interface ProjectAgentsData {
 }
 
 const defaultProjectsDir = () =>
-  process.env.CATAMORPHIC_E2E_DATA_DIR
-    ? path.join(process.env.CATAMORPHIC_E2E_DATA_DIR, "Catamorphic")
-    : path.join(app.getPath("home"), "Catamorphic");
+  defaultDesktopProjectsDir({
+    env: process.env,
+    homeDir: app.getPath("home"),
+  });
 
 async function openRemoteAuthorization(url: string): Promise<void> {
   if (process.env.CATAMORPHIC_E2E_FOLLOW_REMOTE_AUTH !== "1") {
