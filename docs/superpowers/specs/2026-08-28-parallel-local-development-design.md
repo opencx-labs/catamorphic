@@ -21,8 +21,9 @@ server alive without another checkout rewriting their outputs or state.
 4. Deterministic verification never reaches paid or shared external services.
    Daytona, S3, Cloudflare Artifacts, and Cloudflare Sandbox tests require one
    explicit external-integration opt-in.
-5. Repository commands run JavaScript tooling through Bun. They do not depend
-   on whichever `node` binary happens to be first on the machine's `PATH`.
+5. Repository commands run Turbo and Vitest through the repository-pinned Node
+   24 binary. They do not depend on whichever `node` happens to be first on the
+   machine's `PATH`. Bun remains the package manager and application runtime.
 
 ## Command surface
 
@@ -47,7 +48,8 @@ not the user-facing workflow.
 
 `scripts/dev.ts` derives a stable instance name from the absolute worktree path
 unless `CATAMORPHIC_DEV_INSTANCE` overrides it. It allocates currently free
-loopback ports for the stock server, operator API, and desktop CDP endpoint,
+loopback ports for the stock server, operator API, desktop renderer, and
+desktop CDP endpoint,
 creates state under the OS temporary directory, prints the resolved resources,
 then launches exactly one `turbo run dev` process with the requested app
 filters. Turbo explicitly passes through every host/runtime variable used by
@@ -58,6 +60,14 @@ that changes Electron `userData` and the default projects directory without
 turning on E2E-only behavior. Production launches without the variable retain
 the existing single-instance, real-user-data behavior. Distinct dev data dirs
 allow separate worktrees to run desktop instances concurrently.
+
+The renderer receives `CATAMORPHIC_DESKTOP_VITE_PORT`, and electron-vite uses
+that exact loopback port with strict port binding. The launcher holds an
+exclusive lock inside its worktree-scoped state directory for the lifetime of
+the process tree. A second launcher for the same worktree fails immediately
+instead of colliding with an existing instance. The launcher owns one child
+process group so termination reaches Turbo and all of its descendants before
+the lock is released.
 
 The stock server always receives an explicit `CATAMORPHIC_DATA_DIR`, `PORT`,
 and `CATAMORPHIC_OPERATOR_PORT` from the orchestrator. Its container default of
@@ -71,6 +81,14 @@ and invokes the workspace test graph. It forwards termination signals and
 removes the container in `finally`. No persistent Docker volume is mounted.
 Each concurrent test run therefore has its own database, `public` schema,
 connection budget, and migration table.
+
+The test runner invokes the checked-in Turbo and Vitest entry points with the
+repository-pinned Node 24 binary and prefixes child `PATH` with that binary's
+directory. This is required because Vitest 4's threaded worker transport is
+not compatible with Bun's Node emulation, while older ambient Node releases
+cannot load the installed Rolldown dependencies. Every run also owns temporary
+and tool-cache directories and caps workspace concurrency so one run stays
+within its container's 300-connection budget.
 
 The runner accepts injected process and Docker operations so unit tests can
 exercise argument construction, health failures, child failures, and cleanup

@@ -11,7 +11,8 @@ repository commands still assumed one active checkout. Separate desktop and
 stock-server dev commands launched duplicate watchers over the same `dist`
 directories. Package tests could silently skip Postgres, enable shared remote
 services from `.env`, or exhaust a shared database. A fresh worktree could also
-invoke an arbitrary system Node through tool shebangs instead of Bun.
+invoke an unsupported system Node through tool shebangs. Running Vitest 4
+through Bun's Node emulation is also incompatible with its threaded workers.
 
 The repository is greenfield. There is no command compatibility burden, so the
 developer surface should express the safe architecture directly.
@@ -28,8 +29,9 @@ commands own their mutable resources:
 - `check` is the complete deterministic merge gate, including E2E;
 - external-service integrations require a separate explicit command and
   per-run remote identifiers;
-- repository JavaScript tooling is invoked through Bun rather than ambient
-  system Node.
+- Turbo and Vitest are invoked through a repository-pinned Node 24 binary
+  rather than ambient system Node or Bun's Node emulation; Bun remains the
+  package manager and application runtime.
 
 Optional shared observability and bridge infrastructure has its own
 `dev:infra` command. It is never test infrastructure. CI consumes the same

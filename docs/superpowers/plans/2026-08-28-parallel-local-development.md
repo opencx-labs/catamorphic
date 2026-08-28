@@ -6,7 +6,7 @@
 
 **Architecture:** Root Bun scripts own dev-instance planning and disposable PostgreSQL lifecycle, while Turbo remains the package graph executor. Dev processes receive worktree-scoped data directories and allocated ports through an explicit environment contract; tests receive a unique Docker Postgres URL and cannot enable external integrations accidentally. CI and agent documentation consume the same public commands.
 
-**Tech Stack:** Bun 1.3.14, TypeScript, Turborepo 2.10, Docker/PostgreSQL 17, Vitest 4, Electron/electron-vite.
+**Tech Stack:** Bun 1.3.14, repository-pinned Node 24.13.0, TypeScript, Turborepo 2.10, Docker/PostgreSQL 17, Vitest 4, Electron/electron-vite.
 
 **Spec:** `docs/superpowers/specs/2026-08-28-parallel-local-development-design.md`
 
@@ -18,7 +18,7 @@
 - Every deterministic `test` invocation owns a disposable `postgres:17` container on an ephemeral loopback port and removes it on exit or signal.
 - Deterministic tests must not contact Daytona, S3, Cloudflare Artifacts, or Cloudflare Sandbox even when `.env` contains credentials.
 - External integrations require `CATAMORPHIC_EXTERNAL_INTEGRATIONS=1` and per-run remote identifiers.
-- JavaScript tool CLIs must execute through Bun, not an ambient system `node` binary.
+- Turbo and Vitest must execute through the repository-pinned Node 24.13.0 binary, never an ambient system `node` or Bun's Node emulation.
 - No em dash or en dash may be added to user-facing strings or documentation.
 - Do not add a runtime dependency for port allocation, hashing, process control, or Docker orchestration.
 - Every production TypeScript function added by Tasks 1 and 2 must be covered by a test that was observed failing before implementation.
@@ -30,46 +30,61 @@
 **Files:**
 - Create: `scripts/dev-plan.ts`
 - Create: `scripts/dev-plan.test.ts`
+- Create: `scripts/dev-runtime.ts`
+- Create: `scripts/dev-runtime.test.ts`
+- Create: `scripts/tool-runtime.ts`
+- Create: `scripts/tool-runtime.test.ts`
 - Create: `scripts/dev.ts`
 - Create: `apps/desktop/src/main/development-paths.ts`
 - Create: `apps/desktop/src/main/development-paths.test.ts`
 - Modify: `apps/desktop/src/main/index.ts`
 - Modify: `apps/desktop/src/main/ipc.ts`
 - Modify: `apps/desktop/package.json`
+- Modify: `apps/desktop/electron.vite.config.ts`
 - Modify: `package.json`
+- Modify: `bun.lock`
 - Modify: `turbo.json`
 
 **Interfaces:**
 - Produces: `type DevTarget = "all" | "desktop" | "server"`.
 - Produces: `sanitizeInstanceName(input: string): string`.
-- Produces: `createDevPlan(input: { rootPath: string; tempPath: string; instanceOverride?: string; target: DevTarget; ports: { desktopCdp: number; server: number; operator: number } }): { instance: string; env: Record<string, string>; turboArgs: string[]; desktopDataDir: string; serverDataDir: string }`.
+- Produces: `createDevPlan(input: { rootPath: string; tempPath: string; instanceOverride?: string; target: DevTarget; ports: { desktopCdp: number; desktopVite: number; server: number; operator: number } }): { instance: string; env: Record<string, string>; turboArgs: string[]; desktopDataDir: string; serverDataDir: string; lockPath: string }`.
 - Produces: `reserveLoopbackPort(): Promise<number>` in the executable module.
+- Produces: `acquireDevInstanceLock(input: { lockPath: string; pid: number }): Promise<{ release(): Promise<void> }>`.
+- Produces: a checked-in Node 24.13.0 development dependency and `toolRuntime()` that resolves it, validates its exact version, and prefixes child `PATH`.
 - Produces: `desktopDataDirFromEnvironment(env: NodeJS.ProcessEnv): string | undefined` and `defaultDesktopProjectsDir(input: { env: NodeJS.ProcessEnv; homeDir: string }): string`.
 - Consumes: Turbo's existing `catamorphic-desktop#dev` dependency on the PWA bundle watcher.
 
-- [ ] **Step 1: Write failing dev-plan tests**
+- [ ] **Step 1: Pin Node and write failing tool-runtime and dev-plan tests**
 
-  Add literal assertions that:
+  Add exact `node@24.13.0` as a root development dependency, then write a
+  tool-runtime test proving that repository Node is selected even when a fake
+  older ambient Node comes first on `PATH`. Add literal dev-plan assertions
+  that:
 
   - two different absolute worktree paths produce different sanitized default instance names;
   - an explicit `CATAMORPHIC_DEV_INSTANCE`-style override wins and unsafe characters become single hyphens;
   - target `all` produces one `turbo run dev --no-daemon --concurrency=64` argument list containing both `--filter=catamorphic-desktop...` and `--filter=catamorphic-server...`;
   - target `desktop` and `server` each contain only their own app filter;
-  - the plan sets `CATAMORPHIC_DESKTOP_DATA_DIR`, `CATAMORPHIC_DESKTOP_CDP_PORT`, `CATAMORPHIC_DATA_DIR`, `PORT`, `CATAMORPHIC_OPERATOR_PORT`, and `CATAMORPHIC_MDNS=off` to the supplied literal paths and ports.
+  - the plan sets `CATAMORPHIC_DESKTOP_DATA_DIR`, `CATAMORPHIC_DESKTOP_CDP_PORT`, `CATAMORPHIC_DESKTOP_VITE_PORT`, `CATAMORPHIC_DATA_DIR`, `PORT`, `CATAMORPHIC_OPERATOR_PORT`, `CATAMORPHIC_PUBLIC_URL`, and `CATAMORPHIC_MDNS=off` to the supplied literal paths and ports.
 
-- [ ] **Step 2: Run dev-plan tests and verify RED**
+- [ ] **Step 2: Run tool-runtime and dev-plan tests and verify RED**
 
-  Run: `bun --bun vitest run scripts/dev-plan.test.ts`
+  Run: `node_modules/node/bin/node node_modules/vitest/vitest.mjs run scripts/tool-runtime.test.ts scripts/dev-plan.test.ts`
 
-  Expected: FAIL because `scripts/dev-plan.ts` does not exist.
+  Expected: FAIL because the production modules do not exist.
 
-- [ ] **Step 3: Implement the pure dev plan**
+- [ ] **Step 3: Implement the pinned tool runtime and pure dev plan**
 
-  Use `node:crypto` SHA-256 truncated to eight lowercase hex characters to distinguish identical worktree basenames. Store state under `<tempPath>/catamorphic-dev/<instance>/desktop` and `.../server`. Do not read process globals in the pure module.
+  Use `node:crypto` SHA-256 truncated to eight lowercase hex characters to
+  distinguish identical worktree basenames. Store state under
+  `<tempPath>/catamorphic-dev/<instance>/desktop` and `.../server`. Do not read
+  process globals in the pure module. Add private root `test:file` to invoke
+  Vitest's checked-in entry point through `toolRuntime()`.
 
 - [ ] **Step 4: Run dev-plan tests and verify GREEN**
 
-  Run: `bun --bun vitest run scripts/dev-plan.test.ts`
+  Run: `node_modules/node/bin/node node_modules/vitest/vitest.mjs run scripts/tool-runtime.test.ts scripts/dev-plan.test.ts`
 
   Expected: all dev-plan tests pass with zero warnings.
 
@@ -79,7 +94,7 @@
 
 - [ ] **Step 6: Run desktop path tests and verify RED**
 
-  Run: `bun --bun vitest run apps/desktop/src/main/development-paths.test.ts --config vitest.config.ts`
+  Run: `bun run test:file apps/desktop/src/main/development-paths.test.ts --config vitest.config.ts`
 
   Expected: FAIL because the development path module does not exist.
 
@@ -89,29 +104,54 @@
 
 - [ ] **Step 8: Run desktop path and existing E2E path tests**
 
-  Run: `bun --bun vitest run apps/desktop/src/main/development-paths.test.ts apps/desktop/src/main/e2e-window-mode.test.ts --config vitest.config.ts`
+  Run: `bun run test:file apps/desktop/src/main/development-paths.test.ts apps/desktop/src/main/e2e-window-mode.test.ts --config vitest.config.ts`
 
   Expected: all selected tests pass.
 
-- [ ] **Step 9: Implement the dev executable and command cleanup**
+- [ ] **Step 9: Write failing dev-runtime lifecycle tests**
 
-  `scripts/dev.ts` parses only `all`, `desktop`, or `server`, reserves three loopback ports, prints the instance, data directories, CDP URL, public API URL, and operator URL, then spawns `bunx turbo` with the plan arguments and inherited environment plus the plan environment. Forward `SIGINT` and `SIGTERM` to the child and exit with its status. Redefine root commands to call it; rename the old infrastructure behavior to `dev:infra`. Change the desktop package's dev command to read `CATAMORPHIC_DESKTOP_CDP_PORT`. Add explicit Turbo `passThroughEnv` entries for every desktop/server runtime variable and provider/model credential already documented by those apps.
+  Assert that one caller acquires and releases a worktree lock, a second live
+  caller gets an actionable conflict, and a stale PID lock can be reclaimed.
+  Assert process-group signal forwarding waits for descendants to exit before
+  releasing the lock.
 
-- [ ] **Step 10: Verify the runner's public dry plan**
+- [ ] **Step 10: Run dev-runtime tests and verify RED**
+
+  Run: `bun run test:file scripts/dev-runtime.test.ts`
+
+  Expected: FAIL because `scripts/dev-runtime.ts` does not exist.
+
+- [ ] **Step 11: Implement the dev executable and command cleanup**
+
+  `scripts/dev.ts` parses only `all`, `desktop`, or `server`, acquires the
+  worktree lock, reserves four loopback ports, prints the instance, data
+  directories, renderer URL, CDP URL, public API URL, and operator URL, then
+  spawns the repository-pinned Node binary with Turbo's checked-in entry point,
+  the plan arguments, and inherited environment plus the plan environment.
+  Create one process group and forward `SIGINT` and `SIGTERM` to the whole
+  group before releasing the lock. Redefine root commands to call it; rename
+  the old infrastructure behavior to `dev:infra`. Change the desktop package's
+  dev command to read `CATAMORPHIC_DESKTOP_CDP_PORT`. Configure electron-vite's
+  renderer server from `CATAMORPHIC_DESKTOP_VITE_PORT` with `strictPort: true`.
+  Add explicit Turbo `passThroughEnv` entries for every desktop/server runtime
+  variable and provider/model credential already documented by those apps.
+  Do not pass a host `DATABASE_URL` to the combined local apps.
+
+- [ ] **Step 12: Verify the runner's public dry plan**
 
   Add `--print` as a no-spawn mode whose JSON is the real `createDevPlan` result after port reservation. Run:
 
   `bun scripts/dev.ts all --print`
 
-  Expected: exit 0, two distinct app filters, three numeric ports, and worktree-scoped data directories.
+  Expected: exit 0, two distinct app filters, four numeric ports, and worktree-scoped data directories.
 
-- [ ] **Step 11: Run Task 1 checks**
+- [ ] **Step 13: Run Task 1 checks**
 
   Run: `bun run lint && bun run typecheck`
 
   Expected: zero errors and zero warnings.
 
-- [ ] **Step 12: Commit Task 1**
+- [ ] **Step 14: Commit Task 1**
 
   Commit message: `feat: isolate local dev instances by worktree`
 
@@ -145,7 +185,7 @@
 - Produces: `withDisposablePostgres<T>(input: { driver: TestPostgresDriver; pid: number; nonce: string; task(databaseUrl: string): Promise<T> }): Promise<T>` where the driver owns `run`, `inspectHealth`, and `stop` operations.
 - Produces: `deterministicTestEnvironment(source: NodeJS.ProcessEnv, databaseUrl: string): NodeJS.ProcessEnv` with external opt-ins removed.
 - Produces: `checkCommands(): readonly { label: string; command: string; args: readonly string[] }[]`.
-- Consumes: Task 1's Bun-only root command convention.
+- Consumes: Task 1's repository-pinned tool runtime convention.
 
 - [ ] **Step 1: Write failing Postgres lifecycle tests**
 
@@ -161,7 +201,7 @@
 
 - [ ] **Step 2: Run lifecycle tests and verify RED**
 
-  Run: `bun --bun vitest run scripts/test-postgres.test.ts`
+  Run: `bun run test:file scripts/test-postgres.test.ts`
 
   Expected: FAIL because the lifecycle module does not exist.
 
@@ -171,7 +211,7 @@
 
 - [ ] **Step 4: Run lifecycle tests and verify GREEN**
 
-  Run: `bun --bun vitest run scripts/test-postgres.test.ts`
+  Run: `bun run test:file scripts/test-postgres.test.ts`
 
   Expected: all lifecycle tests pass.
 
@@ -181,17 +221,29 @@
 
 - [ ] **Step 6: Run check-plan tests and verify RED**
 
-  Run: `bun --bun vitest run scripts/check-plan.test.ts`
+  Run: `bun run test:file scripts/check-plan.test.ts`
 
   Expected: FAIL because the check plan does not exist.
 
 - [ ] **Step 7: Implement test and check executables**
 
-  `scripts/test.ts` owns one disposable database and runs `bunx turbo test:workspace` with deterministic environment. `scripts/check.ts` owns one disposable database across the database and package-test phases, executes the checked plan sequentially, and exits immediately on a failed phase while still cleaning Postgres. Signal forwarding must terminate the active child before cleanup.
+  `scripts/test.ts` owns one disposable database and runs the checked-in Turbo
+  entry point with the repository Node runtime, `--no-daemon`, and bounded
+  concurrency. It gives the run private temp, Bun cache, Turbo cache, and XDG
+  cache directories and preserves diagnostic logs on failure. `scripts/check.ts`
+  owns one disposable database across the database and package-test phases,
+  executes the checked plan sequentially, and exits immediately on a failed
+  phase while still cleaning Postgres. Signal forwarding must terminate the
+  active process group before cleanup.
 
-- [ ] **Step 8: Convert all workspace Vitest scripts to Bun**
+- [ ] **Step 8: Standardize workspace tests on the pinned Node runtime**
 
-  Replace `vitest ...` and `node .../vitest.mjs ...` with `bun --bun vitest ...` or `bun --bun <absolute-workspace-relative-vitest.mjs> ...` as appropriate. Rename the Turbo task to `test:workspace`; the public root `test` command calls `scripts/test.ts`. Add `test:external` as an explicit filtered run with `CATAMORPHIC_EXTERNAL_INTEGRATIONS=1`.
+  Keep workspace `test` scripts as package-local commands so Turbo supplies the correct cwd;
+  the test runner invokes checked-in Turbo directly and prefixes `PATH` with
+  the pinned Node binary. Add root `test:workspace` as the private Turbo graph
+  command and `test:external` as an explicit filtered run with
+  `CATAMORPHIC_EXTERNAL_INTEGRATIONS=1`. Exclude nested `.claude/worktrees/**`
+  from root Vitest discovery.
 
 - [ ] **Step 9: Gate and namespace external integrations**
 
@@ -199,9 +251,9 @@
 
 - [ ] **Step 10: Run unit tests for the orchestration**
 
-  Run: `bun --bun vitest run scripts/dev-plan.test.ts scripts/test-postgres.test.ts scripts/check-plan.test.ts apps/desktop/src/main/development-paths.test.ts --config vitest.config.ts`
+  Run: `bun run test:file scripts/dev-plan.test.ts scripts/dev-runtime.test.ts scripts/test-postgres.test.ts scripts/tool-runtime.test.ts scripts/check-plan.test.ts apps/desktop/src/main/development-paths.test.ts --config vitest.config.ts`
 
-  Expected: all orchestration tests pass under Bun even when `node --version` is v20.
+  Expected: all orchestration tests pass under the pinned Node 24.13.0 runtime even when ambient `node --version` is v20.
 
 - [ ] **Step 11: Run a real deterministic package suite**
 
@@ -294,7 +346,7 @@
 
 - [ ] **Step 2: Dispatch two agents concurrently**
 
-  Agent A runs `bunx turbo test:workspace --force` only through the public
+  Agent A runs `bun run test -- --force` only through the public
   disposable-Postgres wrapper. Agent B does the same in its own worktree.
   Each records its worktree path, test container name, published port, start
   and finish time, exit status, and post-run `docker ps` cleanup check.
@@ -309,7 +361,7 @@
 - [ ] **Step 4: Exercise dev-instance separation**
 
   Run `bun scripts/dev.ts all --print` in both worktrees and confirm distinct
-  instance names, state directories, and all three ports. Boot a real focused
+  instance names, state directories, and all four ports. Boot a real focused
   stock server from one worktree, wait for `/healthz`, verify its printed data
   path and endpoints, then terminate it and confirm no child process remains.
 
@@ -337,4 +389,3 @@
 - [ ] **Step 8: Commit hardening changes if any**
 
   Commit message: `fix: harden parallel worktree verification`
-
