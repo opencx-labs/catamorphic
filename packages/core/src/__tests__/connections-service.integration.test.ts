@@ -337,7 +337,6 @@ describe("credential connections", () => {
         .createHash("sha256")
         .update(JSON.stringify(allowedInput))
         .digest("hex"),
-      metadata: {},
     });
     expect(deniedInvocation).toMatchObject({
       outcome: "denied",
@@ -345,10 +344,14 @@ describe("credential connections", () => {
         .createHash("sha256")
         .update(JSON.stringify(deniedInput))
         .digest("hex"),
-      metadata: {},
     });
+    expect(allowedInvocation?.metadata).toEqual({});
+    expect(deniedInvocation?.metadata).toEqual({});
     expect(deniedInvocation?.argumentsDigest).not.toBe(deniedInput.userId);
+    expect(allowedInvocation).not.toHaveProperty("input");
     expect(deniedInvocation).not.toHaveProperty("input");
+    expect(allowedInvocation).not.toHaveProperty("arguments");
+    expect(deniedInvocation).not.toHaveProperty("arguments");
   });
 
   it("refreshes with compare-and-swap and revokes locally when upstream fails", async () => {

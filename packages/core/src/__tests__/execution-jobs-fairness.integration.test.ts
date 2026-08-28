@@ -196,11 +196,11 @@ describeIf("execution queue fairness", () => {
     expect(claimed.map((job) => job.priority)).toEqual([100, 100]);
   });
 
-  it("bounds pending-index work by claim size and tenant count", async () => {
+  it("bounds queue relation work by claim size and tenant count", async () => {
     const runId = await createRun(busyTenant);
     const backlogDepth = 40_000;
     const claimLimit = 20;
-    const tenantCount = 1;
+    const tenantCount = 3;
     await sql`
       INSERT INTO execution_jobs
         (tenant_id, workflow_run_id, kind, payload, status, available_at)
@@ -208,6 +208,8 @@ describeIf("execution queue fairness", () => {
              'pending', clock_timestamp()
       FROM generate_series(1::bigint, ${backlogDepth}::bigint)
     `.execute(db);
+    await enqueue({ tenantId: quietTenant, count: 1 });
+    await enqueue({ tenantId: cappedTenant, count: 1 });
     // Earlier cases delete their fixture rows; remove those dead index entries
     // so this assertion measures only the claim against the seeded backlog.
     await sql`VACUUM ANALYZE execution_jobs`.execute(db);
@@ -242,6 +244,9 @@ describeIf("execution queue fairness", () => {
       limit: claimLimit,
     });
     expect(claimed).toHaveLength(claimLimit);
+    expect(new Set(claimed.map((job) => job.tenantId))).toEqual(
+      new Set([busyTenant, quietTenant, cappedTenant]),
+    );
 
     const queueRelationTupleReads =
       (await queueRelationReads()) - readsBeforeClaim;
