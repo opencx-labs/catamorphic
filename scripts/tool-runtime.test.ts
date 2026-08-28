@@ -41,6 +41,26 @@ function writeFakeNode(input: { rootPath: string; version: string }): string {
   return binaryPath;
 }
 
+function packageScripts(relativePath: string): Record<string, string> {
+  const packageJson: unknown = JSON.parse(
+    readFileSync(path.join(repositoryRoot, relativePath), "utf8"),
+  );
+  if (
+    typeof packageJson !== "object" ||
+    packageJson === null ||
+    !("scripts" in packageJson) ||
+    typeof packageJson.scripts !== "object" ||
+    packageJson.scripts === null
+  ) {
+    throw new Error(`${relativePath} does not define scripts`);
+  }
+  return Object.fromEntries(
+    Object.entries(packageJson.scripts).filter(
+      (entry): entry is [string, string] => typeof entry[1] === "string",
+    ),
+  );
+}
+
 describe("toolRuntime", () => {
   it("selects repository Node 24.13.0 ahead of an older ambient Node", () => {
     const ambientRoot = temporaryDirectory();
@@ -114,6 +134,30 @@ describe("toolRuntime", () => {
 
     expect(packageJson.scripts["dev:infra"]).toBe(
       "docker compose up -d --wait && bun scripts/tool-runtime.ts turbo dev --filter=@catamorphic/cloudflare-sandbox-bridge",
+    );
+  });
+
+  it("routes explicit external tests through pinned Turbo", () => {
+    expect(packageScripts("package.json")["test:external"]).toBe(
+      "CATAMORPHIC_EXTERNAL_INTEGRATIONS=1 bun scripts/tool-runtime.ts turbo run test --no-daemon --concurrency=4 --filter=@catamorphic/daytona --filter=@catamorphic/s3 --filter=@catamorphic/cloudflare",
+    );
+  });
+
+  it("routes every desktop and PWA E2E Vitest entry point through pinned Node", () => {
+    const desktopScripts = packageScripts("apps/desktop/package.json");
+    const pwaScripts = packageScripts("apps/pwa/package.json");
+
+    expect(desktopScripts["test:e2e"]).toBe(
+      "bun --bun electron-vite build && CATAMORPHIC_E2E_WINDOW_MODE=hidden bun ../../scripts/tool-runtime.ts vitest --tool-cwd apps/desktop --config ./vitest.e2e.config.ts",
+    );
+    expect(desktopScripts["test:e2e:visible"]).toBe(
+      "bun --bun electron-vite build && CATAMORPHIC_E2E_WINDOW_MODE=visible bun ../../scripts/tool-runtime.ts vitest --tool-cwd apps/desktop --config ./vitest.e2e.config.ts",
+    );
+    expect(desktopScripts["test:eval"]).toBe(
+      "bun --bun electron-vite build && CATAMORPHIC_E2E_WINDOW_MODE=hidden bun ../../scripts/tool-runtime.ts vitest --tool-cwd apps/desktop --config ./vitest.eval.config.ts",
+    );
+    expect(pwaScripts["test:e2e"]).toBe(
+      "bun --bun vite build && bun ../../scripts/tool-runtime.ts vitest --tool-cwd apps/pwa --config ./vitest.e2e.config.ts",
     );
   });
 });

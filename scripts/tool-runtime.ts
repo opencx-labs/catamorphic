@@ -42,10 +42,30 @@ export function toolRuntime(input: {
 if (import.meta.main) {
   const rootPath = path.resolve(import.meta.dirname, "..");
   const runtime = toolRuntime({ rootPath, env: process.env });
-  const [tool, ...toolArguments] = process.argv.slice(2);
+  const [tool, ...rawToolArguments] = process.argv.slice(2);
   if (tool !== "vitest" && tool !== "turbo") {
     throw new Error(
-      "Usage: bun scripts/tool-runtime.ts <vitest|turbo> [...arguments]",
+      "Usage: bun scripts/tool-runtime.ts <vitest|turbo> [--tool-cwd <repository-relative-path>] [...arguments]",
+    );
+  }
+  const cwdOptionIndex = rawToolArguments.indexOf("--tool-cwd");
+  let workingDirectory = rootPath;
+  let toolArguments = rawToolArguments;
+  if (cwdOptionIndex !== -1) {
+    const relativeWorkingDirectory = rawToolArguments[cwdOptionIndex + 1];
+    if (!relativeWorkingDirectory) {
+      throw new Error("--tool-cwd requires a repository-relative path");
+    }
+    workingDirectory = path.resolve(rootPath, relativeWorkingDirectory);
+    if (
+      workingDirectory !== rootPath &&
+      !workingDirectory.startsWith(`${rootPath}${path.sep}`)
+    ) {
+      throw new Error("--tool-cwd must stay inside the repository");
+    }
+    toolArguments = rawToolArguments.filter(
+      (_argument, index) =>
+        index !== cwdOptionIndex && index !== cwdOptionIndex + 1,
     );
   }
   const entryPoint = path.join(
@@ -58,7 +78,7 @@ if (import.meta.main) {
     runtime.nodePath,
     [entryPoint, ...(tool === "vitest" ? ["run"] : []), ...toolArguments],
     {
-      cwd: rootPath,
+      cwd: workingDirectory,
       env: runtime.env,
       stdio: "inherit",
     },

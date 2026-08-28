@@ -28,6 +28,11 @@ export interface ProcessResult {
   signal: NodeJS.Signals | null;
 }
 
+export interface TestSignalSource {
+  on(signal: "SIGINT" | "SIGTERM", listener: () => void): void;
+  off(signal: "SIGINT" | "SIGTERM", listener: () => void): void;
+}
+
 function errorCode(error: unknown): string | undefined {
   if (typeof error !== "object" || error === null || !("code" in error)) {
     return undefined;
@@ -85,12 +90,14 @@ async function settleProcessGroup(input: {
 export class TestSignalController {
   private activeProcessGroupId: number | undefined;
   private forwardedSignal: NodeJS.Signals | undefined;
+  private readonly source: TestSignalSource;
   private readonly onSigint = () => this.forward("SIGINT");
   private readonly onSigterm = () => this.forward("SIGTERM");
 
-  constructor() {
-    process.once("SIGINT", this.onSigint);
-    process.once("SIGTERM", this.onSigterm);
+  constructor(input: { source?: TestSignalSource } = {}) {
+    this.source = input.source ?? process;
+    this.source.on("SIGINT", this.onSigint);
+    this.source.on("SIGTERM", this.onSigterm);
   }
 
   get signal(): NodeJS.Signals | undefined {
@@ -111,8 +118,8 @@ export class TestSignalController {
   }
 
   close(): void {
-    process.removeListener("SIGINT", this.onSigint);
-    process.removeListener("SIGTERM", this.onSigterm);
+    this.source.off("SIGINT", this.onSigint);
+    this.source.off("SIGTERM", this.onSigterm);
   }
 
   private forward(signal: NodeJS.Signals): void {
@@ -203,35 +210,56 @@ export async function runLoggedProcess(input: {
     env: input.env,
     stdio: ["inherit", "pipe", "pipe"],
   });
-  if (!child.pid) {
-    await closeLog(log);
-    throw new Error(`Failed to start ${input.command} with a process ID`);
-  }
-  const processGroupId = child.pid;
-  input.signals.activate(processGroupId);
+  const completion = new Promise<{
+    code: number | null;
+    signal: NodeJS.Signals | null;
+  }>((resolve, reject) => {
+    child.once("error", reject);
+    child.once("close", (code, signal) => resolve({ code, signal }));
+  });
   mirrorOutput({ stream: child.stdout, destination: process.stdout, log });
   mirrorOutput({ stream: child.stderr, destination: process.stderr, log });
+  const processGroupId = child.pid;
+  let outcome:
+    | {
+        success: true;
+        result: { code: number | null; signal: NodeJS.Signals | null };
+      }
+    | { success: false; error: unknown }
+    | undefined;
+  let cleanupError: unknown;
   try {
-    const result = await new Promise<{
-      code: number | null;
-      signal: NodeJS.Signals | null;
-    }>((resolve, reject) => {
-      child.once("error", reject);
-      child.once("exit", (code, signal) => resolve({ code, signal }));
-    });
-    await settleProcessGroup({
-      processGroupId,
-      signal: input.signals.signal ?? "SIGTERM",
-    });
-    const signal = input.signals.signal ?? result.signal;
-    return {
-      code: result.code ?? (signal === "SIGINT" ? 130 : 143),
-      signal,
-    };
+    if (processGroupId) input.signals.activate(processGroupId);
+    outcome = { success: true, result: await completion };
+  } catch (error) {
+    outcome = { success: false, error };
   } finally {
-    input.signals.clear(processGroupId);
-    await closeLog(log);
+    if (processGroupId) {
+      try {
+        await settleProcessGroup({
+          processGroupId,
+          signal: input.signals.signal ?? "SIGTERM",
+        });
+      } catch (error) {
+        cleanupError = error;
+      } finally {
+        input.signals.clear(processGroupId);
+      }
+    }
+    try {
+      await closeLog(log);
+    } catch (error) {
+      cleanupError ??= error;
+    }
   }
+  if (!outcome) throw new Error("Test subprocess did not settle");
+  if (!outcome.success) throw outcome.error;
+  if (cleanupError !== undefined) throw cleanupError;
+  const signal = input.signals.signal ?? outcome.result.signal;
+  return {
+    code: outcome.result.code ?? (signal === "SIGINT" ? 130 : 143),
+    signal,
+  };
 }
 
 export function turboTestArguments(input: { rootPath: string }): string[] {
