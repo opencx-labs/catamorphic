@@ -90,6 +90,15 @@ export interface LaunchOpts {
   env?: Record<string, string>;
 }
 
+export function removeE2eDirectory(directory: string): void {
+  fs.rmSync(directory, {
+    recursive: true,
+    force: true,
+    maxRetries: 5,
+    retryDelay: 100,
+  });
+}
+
 export async function launchApp(opts: LaunchOpts = {}): Promise<AppHandle> {
   const userDataDir =
     opts.userDataDir ??
@@ -208,7 +217,7 @@ export async function launchApp(opts: LaunchOpts = {}): Promise<AppHandle> {
       stop: async () => {
         ws.close();
         await terminate(child);
-        fs.rmSync(userDataDir, { recursive: true, force: true });
+        removeE2eDirectory(userDataDir);
       },
       kill: async () => {
         ws.close();
