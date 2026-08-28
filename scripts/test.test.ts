@@ -7,6 +7,7 @@ import {
   runLoggedProcess,
   TestSignalController,
   testRunEnvironment,
+  turboTestArguments,
 } from "./test.js";
 import {
   type TestPostgresDriver,
@@ -114,6 +115,40 @@ function processGroupIsLive(processGroupId: number): boolean {
 }
 
 describe("test process orchestration", () => {
+  it("limits a full test run to two concurrent Turbo tasks", () => {
+    expect(turboTestArguments({ rootPath: "/repo", cliArguments: [] })).toEqual(
+      [
+        "/repo/node_modules/turbo/bin/turbo",
+        "run",
+        "test",
+        "--no-daemon",
+        "--concurrency=2",
+      ],
+    );
+  });
+
+  it("forwards the supported uncached verification argument to Turbo", () => {
+    expect(
+      turboTestArguments({ rootPath: "/repo", cliArguments: ["--force"] }),
+    ).toEqual([
+      "/repo/node_modules/turbo/bin/turbo",
+      "run",
+      "test",
+      "--no-daemon",
+      "--concurrency=2",
+      "--force",
+    ]);
+  });
+
+  it("rejects unsupported Turbo passthrough arguments", () => {
+    expect(() =>
+      turboTestArguments({
+        rootPath: "/repo",
+        cliArguments: ["--filter=@catamorphic/core"],
+      }),
+    ).toThrow("Unsupported test argument");
+  });
+
   it("runs a successful subprocess before stopping Postgres", async () => {
     const directory = await temporaryDirectory();
     const driver = new RecordingPostgresDriver();

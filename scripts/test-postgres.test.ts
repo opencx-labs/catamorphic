@@ -100,6 +100,23 @@ describe("disposable Postgres", () => {
     ).toHaveLength(1);
   });
 
+  it("reports the exact container name and published port before the task", async () => {
+    const driver = new RecordingDriver();
+    const reports: string[] = [];
+
+    await withDisposablePostgres({
+      driver,
+      pid: 42,
+      nonce: "evidence",
+      report: (message) => reports.push(message),
+      task: async () => {
+        expect(reports).toEqual([
+          "test-postgres container=catamorphic-test-42-ee8250fb76e094b3 published-port=49175",
+        ]);
+      },
+    });
+  });
+
   it("stops exactly once and rethrows the original task error", async () => {
     const driver = new RecordingDriver();
     const taskError = new Error("task failed");

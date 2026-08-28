@@ -11,7 +11,7 @@ import {
 } from "./test-postgres.js";
 import { toolRuntime } from "./tool-runtime.js";
 
-const TURBO_CONCURRENCY = 4;
+const TURBO_CONCURRENCY = 2;
 const PROCESS_GROUP_GRACE_MS = 5_000;
 
 export interface TestRunResources {
@@ -269,18 +269,38 @@ export async function runLoggedProcess(input: {
   };
 }
 
-export function turboTestArguments(input: { rootPath: string }): string[] {
+export function turboTestArguments(input: {
+  rootPath: string;
+  cliArguments: readonly string[];
+}): string[] {
+  for (const argument of input.cliArguments) {
+    if (argument !== "--force") {
+      throw new Error(`Unsupported test argument: ${JSON.stringify(argument)}`);
+    }
+  }
   return [
     path.join(input.rootPath, "node_modules", "turbo", "bin", "turbo"),
     "run",
     "test",
     "--no-daemon",
     `--concurrency=${TURBO_CONCURRENCY}`,
+    ...input.cliArguments,
   ];
 }
 
 async function main(): Promise<void> {
   const repositoryRoot = path.resolve(import.meta.dirname, "..");
+  let turboArguments: string[];
+  try {
+    turboArguments = turboTestArguments({
+      rootPath: repositoryRoot,
+      cliArguments: process.argv.slice(2),
+    });
+  } catch (error) {
+    console.error(error instanceof Error ? error.message : error);
+    process.exitCode = 1;
+    return;
+  }
   const nonce = randomUUID();
   const resources = await createTestRunResources({ pid: process.pid, nonce });
   const signals = new TestSignalController();
@@ -299,7 +319,7 @@ async function main(): Promise<void> {
         });
         const result = await runLoggedProcess({
           command: runtime.nodePath,
-          args: turboTestArguments({ rootPath: repositoryRoot }),
+          args: turboArguments,
           cwd: repositoryRoot,
           env,
           logPath: path.join(resources.logsPath, "workspace-tests.log"),

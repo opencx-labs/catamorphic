@@ -146,6 +146,7 @@ export async function withDisposablePostgres<T>(input: {
   driver: TestPostgresDriver;
   pid: number;
   nonce: string;
+  report?: (message: string) => void;
   task(databaseUrl: string): Promise<T>;
 }): Promise<T> {
   const name = testContainerName({ pid: input.pid, nonce: input.nonce });
@@ -166,6 +167,9 @@ export async function withDisposablePostgres<T>(input: {
       databaseUrl =
         `postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}` +
         `@127.0.0.1:${port}/${POSTGRES_DATABASE}`;
+      (input.report ?? console.log)(
+        `test-postgres container=${name} published-port=${port}`,
+      );
     } catch (error) {
       throw await startupError({ driver: input.driver, name, cause: error });
     }

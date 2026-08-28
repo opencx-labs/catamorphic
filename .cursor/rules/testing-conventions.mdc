@@ -97,3 +97,11 @@ create a disposable Postgres database and remove it after a successful run.
 `bun run dev:infra` is optional shared observability and sandbox-bridge
 infrastructure. It is not test infrastructure and must not be required by
 deterministic tests.
+
+The root test runner caps Turbo at two concurrent package tasks so two full
+runs in independent worktrees can coexist on a developer machine. Use `bun
+run test -- --force` when verification must bypass Turbo's cache. `--force`
+is the only supported passthrough argument; the runner rejects all others.
+The readiness line reports `test-postgres container=<name>
+published-port=<port>` so concurrent runs can record their own isolation
+evidence without inspecting Docker globally.
