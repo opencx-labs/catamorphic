@@ -539,13 +539,13 @@ and [ADR 0030](docs/decisions/0030-run-retention.md).
 ```bash
 bun install
 
-# Start local dev services: Postgres, plus an OTel collector (:4317/:4318)
-# backed by ClickHouse (:8124 HTTP, :19001 native) for trace storage
-docker compose up -d
+# Optional shared OTel, ClickHouse, and sandbox-bridge services
+bun run dev:infra
 
-# Apply migrations + regenerate Kysely types (scoped to the `catamorphic` schema)
-DATABASE_URL="postgresql://catamorphic:catamorphic@localhost:5432/catamorphic" bun run db:migrate
-DATABASE_URL="postgresql://catamorphic:catamorphic@localhost:5432/catamorphic" bun run db:codegen
+# Only for an explicitly provisioned host database. These are not part of the
+# normal local app workflow; never point them at a database another session uses.
+DATABASE_URL="<host-owned database URL>" bun run db:migrate
+DATABASE_URL="<host-owned database URL>" bun run db:codegen
 
 # Build everything
 bun run build

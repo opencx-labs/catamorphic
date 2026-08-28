@@ -42,8 +42,8 @@ project's remote server when this desktop is asleep. Contract e2e:
 `bun run dev:desktop` builds `apps/pwa` before Electron starts and keeps
 a `vite build --watch` running beside it (turbo.json's
 `catamorphic-desktop#dev`): edit PWA source, scan again, get the new
-code. Building the desktop any other way (bare `electron-vite dev`,
-`test:e2e`) does not, so rebuild `apps/pwa` by hand there.
+code. Starting the desktop outside the root development runner or focused E2E
+tests does not, so rebuild `apps/pwa` by hand in those cases.
 
 ## Run
 
@@ -140,15 +140,16 @@ the app and check the change visually end to end (see `DESIGN.md` and the
 CDP driver at `scripts/drive.mjs`):
 
 ```bash
-env -u ELECTRON_RUN_AS_NODE bunx electron-vite dev -- --remote-debugging-port=9333
-node scripts/drive.mjs window maximize
-node scripts/drive.mjs shot /tmp/app.png
+bun run dev:desktop
+# Read the `CDP:` URL printed by the development orchestrator, then:
+CDP_PORT="<printed CDP port>" node apps/desktop/scripts/drive.mjs window maximize
+CDP_PORT="<printed CDP port>" node apps/desktop/scripts/drive.mjs shot /tmp/app.png
 ```
 
-`ELECTRON_RUN_AS_NODE` must be unset (IDE extension hosts export it);
-main-process changes need a full relaunch, renderer changes hot-reload.
-Maximize the window before screenshots. Rebuild changed workspace packages
-first — the desktop resolves them via `dist/`.
+The shared development runner unsets `ELECTRON_RUN_AS_NODE`. Main-process
+changes need a full relaunch; renderer changes hot-reload. Maximize the window
+before screenshots. Rebuild changed workspace packages first; the desktop
+resolves them via `dist/`.
 
 ## Design log
 

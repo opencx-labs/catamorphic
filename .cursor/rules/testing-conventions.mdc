@@ -76,8 +76,13 @@ configuration, and otherwise skip:
 const describeIf = (condition: boolean) =>
   condition ? describe : describe.skip;
 
+const EXTERNAL_INTEGRATIONS =
+  process.env.CATAMORPHIC_EXTERNAL_INTEGRATIONS === "1";
 const DAYTONA_API_KEY = process.env.DAYTONA_API_KEY ?? "";
-describeIf(!!DAYTONA_API_KEY)("DaytonaProjectRepo (integration)", () => { … });
+describeIf(EXTERNAL_INTEGRATIONS && !!DAYTONA_API_KEY)(
+  "DaytonaProjectRepo (integration)",
+  () => { … },
+);
 ```
 
 ## File Naming
