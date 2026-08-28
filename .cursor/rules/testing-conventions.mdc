@@ -25,7 +25,8 @@ Vitest buffers output per file and flushes it atomically when the file finishes.
 
 ## Test Isolation Requirements
 
-**Unit tests** — must be fully isolated. Use `beforeEach` with a fresh temp directory per test:
+**Unit tests** must be fully isolated. Use `beforeEach` with a fresh temp
+directory per test:
 
 ```typescript
 beforeEach(async () => {
@@ -34,7 +35,16 @@ beforeEach(async () => {
 });
 ```
 
-This allows parallel execution without any shared state.
+This allows parallel execution without any shared state. Do not reuse a temp
+directory across files, and do not write test output to a fixed path in the
+repository or another worktree.
+
+**Workspace test runs** use one disposable Postgres database per invocation.
+Treat `DATABASE_URL` as invocation-scoped test state, never a shared local
+database. The root runner also places temporary files and Bun, Turbo, and XDG
+caches under its invocation-specific temp root. New tests and helpers must
+preserve that worktree-local output safety rather than adding shared cache,
+log, data, or port paths.
 
 **Integration tests** — may share a single external resource (e.g., one Daytona sandbox) set up once in `beforeAll` for efficiency. Because subsequent tests depend on the side effects of earlier ones, tests within the file run sequentially by Vitest's default. Do **not** mark these `concurrent` — the sequential ordering is intentional and load-bearing.
 
@@ -52,9 +62,15 @@ describe("DaytonaProjectRepo (integration)", () => {
 });
 ```
 
-## Skip Pattern for Optional Integrations
+## Optional external integrations
 
-Integration tests that require external credentials should be skipped when the key is absent, not fail:
+External integrations are opt-in, even when credentials are present. The
+default `bun run test` and merge-gate `bun run check` runs are deterministic
+and must not contact Daytona, Cloudflare, S3, or another credentialed service.
+Run `bun run test:external` only with explicit authority to use those
+services. Integration tests must require
+`CATAMORPHIC_EXTERNAL_INTEGRATIONS=1` as well as their service-specific
+configuration, and otherwise skip:
 
 ```typescript
 const describeIf = (condition: boolean) =>
@@ -67,4 +83,12 @@ describeIf(!!DAYTONA_API_KEY)("DaytonaProjectRepo (integration)", () => { … })
 ## File Naming
 
 - `*.test.ts` — unit tests, run in CI always.
-- `*.integration.test.ts` — integration tests, may be slow or require credentials.
+- `*.integration.test.ts`: integration tests run only with explicit external authority when they contact a service.
+
+## Running tests
+
+Docker must be running before `bun run test` or `bun run check`; the runners
+create a disposable Postgres database and remove it after a successful run.
+`bun run dev:infra` is optional shared observability and sandbox-bridge
+infrastructure. It is not test infrastructure and must not be required by
+deterministic tests.

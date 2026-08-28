@@ -9,9 +9,11 @@ identity model. Do not reintroduce token files or privileged product users.
 
 ## Run
 
-- `bun run dev:server` (repo root) — watchers + `bun --watch src/index.ts`
-  with `CATAMORPHIC_DATA_DIR` defaulting to `/data` (set it to a local
-  path: `CATAMORPHIC_DATA_DIR=/tmp/cata-dev bun run dev:server`).
+- From the repository root, `bun run dev` starts the combined desktop and
+  stock-server manual environment. `bun run dev:server` is the stock-server
+  focused variant of the same development orchestrator. The orchestrator
+  assigns worktree-local data directories and loopback ports; do not set
+  `CATAMORPHIC_DATA_DIR` manually for development.
 - Docker: see `Dockerfile` header. `--network host` for mDNS on Linux.
 - Chat needs one of `ANTHROPIC_API_KEY` / `OPENROUTER_API_KEY` /
   `OPENAI_API_KEY` (`CATAMORPHIC_MODEL` overrides; anthropic defaults to
@@ -46,8 +48,13 @@ identity model. Do not reintroduce token files or privileged product users.
 
 ## Verify
 
-- `bun run typecheck && bun run test` — includes the full inject-driven
-  loop (boot → project → invite → scoped chat → revocation).
-- The cross-app proof lives in the pwa:
-  `cd ../pwa && bun x vitest run e2e/stock-server.e2e.ts --config ./vitest.e2e.config.ts`
-  boots THIS server and drives the phone UI against it.
+- `bun run test` from the repository root runs deterministic,
+  Postgres-complete workspace tests, including the inject-driven loop
+  (boot, project, invite, scoped chat, and revocation). Docker must be
+  running so the test runner can create its disposable database.
+- `bun run check` from the repository root is the merge gate. It includes
+  typechecking, builds, migration and generated-type checks, deterministic
+  workspace tests, and PWA and desktop E2E coverage.
+- Run external integrations only with explicit authority through `bun run
+  test:external`; the standard test and check commands do not contact
+  credentialed external services.

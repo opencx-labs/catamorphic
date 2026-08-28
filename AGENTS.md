@@ -26,7 +26,7 @@ sandboxes (or local processes, ADR 0047) using **Bun**.
 
 ### Embeddable framework positioning (READ THIS FIRST)
 
-**Catamorphic ships as libraries a host application mounts in-process.** There is no standalone product and no default identity. The host provides auth, user/org model, database, and the deployment surface. The root `bun run dev` is a dev convenience only: it boots the dev infra (docker-compose, sandbox bridge); libraries must never depend on that script. The in-repo reference host is the desktop app (`apps/desktop`, embedded server in `src/main/server/boot.ts`). The old web playground host was removed 2026-08 (severely out of date; will be rewritten from scratch if revisited).
+**Catamorphic ships as libraries a host application mounts in-process.** There is no standalone product and no default identity. The host provides auth, user/org model, database, and the deployment surface. The root `bun run dev` is a development convenience only: it starts the combined desktop and stock-server manual environment; libraries must never depend on that script. The in-repo reference host is the desktop app (`apps/desktop`, embedded server in `src/main/server/boot.ts`). The old web playground host was removed 2026-08 (severely out of date; will be rewritten from scratch if revisited).
 
 Concrete implications for any change you make:
 
@@ -118,9 +118,41 @@ Per-project seed skills that ship to every user project live in
 `writing-workflows`, `batch-workflows`, `durable-workflows`,
 `building-apps` (mechanics), `designing-apps` (replaceable doctrine).
 
+## Parallel development
+
+Engineering work happens in a dedicated git worktree. Install dependencies in
+that worktree with `bun install`; do not rely on another checkout's
+`node_modules`. Never run build, test, or watch commands in a checkout used by
+another active session. Never copy a credentialed `.env` wholesale between
+worktrees. Add only the individual credentials or settings a task explicitly
+needs.
+
+Run the public commands from the worktree root:
+
+```bash
+bun run dev          # Combined desktop and stock-server manual environment
+bun run dev:desktop  # Desktop-focused variant of the same orchestrator
+bun run dev:server   # Stock-server-focused variant of the same orchestrator
+bun run dev:infra    # Optional shared observability and sandbox-bridge services
+bun run test         # Deterministic, Postgres-complete workspace tests
+bun run test:external # Explicit opt-in for credentialed external integrations
+bun run check        # Merge gate
+```
+
+The development orchestrator assigns each worktree its own data directories
+and loopback ports. Do not override those paths or select a stock-server data
+directory manually. `bun run test` creates one disposable Postgres database
+per invocation and is the default test command. External integrations run
+only when explicitly authorized with `bun run test:external`; credentials in
+the environment are not authority to contact external services. Run `bun run
+check` before completing engineering work. It is the merge gate and includes
+the deterministic workspace, PWA, and desktop checks. Docker must be running
+for `bun run test` and `bun run check` so they can create disposable Postgres
+databases.
+
 ## Verification Checklist
 
-After **every** change, run all applicable checks before considering it complete. Do not skip any step.
+After **every** change, run all applicable checks before considering it complete. `bun run check` is required before completion; use the focused checks below while iterating.
 
 ### 1. Lint
 
@@ -151,11 +183,12 @@ desktop build or e2e run, or your changes silently don't ship.
 ### 4. Tests
 
 ```bash
-bun run test # all packages from root via Turbo
+bun run test # deterministic, Postgres-complete workspace tests
 ```
 
-All existing tests must pass. Desktop changes additionally require the
-desktop checklist (`apps/desktop/AGENTS.md`), including `bun run test:e2e`.
+All existing tests must pass. `bun run check` runs the merge-gate E2E suites;
+desktop changes additionally require the desktop checklist
+(`apps/desktop/AGENTS.md`) while iterating.
 
 ### 5. Browser verification (after UI/integration changes)
 

@@ -45,30 +45,49 @@ a `vite build --watch` running beside it (turbo.json's
 code. Building the desktop any other way (bare `electron-vite dev`,
 `test:e2e`) does not, so rebuild `apps/pwa` by hand there.
 
+## Run
+
+Run development commands from the repository root. `bun run dev` starts the
+combined desktop and stock-server manual environment; `bun run dev:desktop`
+is its desktop-focused variant. The shared orchestrator assigns this worktree
+its own data directories and loopback ports, so do not start a normal desktop
+watcher in a checkout another session is using.
+
 ## Verification Checklist
 
-Run all of these from `apps/desktop` before finalizing any major change —
+Run all of these from the repository root before finalizing any major change:
 "finalizing" means before you report the work as done, not merely before a
 commit. A change that hasn't passed the full checklist is not done:
 
 ### 1. Typecheck
 
 ```bash
-bun run typecheck
+bun run --cwd apps/desktop typecheck
 ```
 
 ### 2. Unit tests
 
 ```bash
-bun run test
+bun run --cwd apps/desktop test
 ```
 
 ### 3. End-to-end tests (required before every commit)
 
 ```bash
-bun run test:e2e
-bun run test:e2e:visible
+bun run --cwd apps/desktop test:e2e
+bun run --cwd apps/desktop test:e2e:visible
 ```
+
+Before completing engineering work, run `bun run check` from the repository
+root. It is the merge gate, including deterministic Postgres-complete
+workspace tests and both desktop E2E modes. Docker must be running so the
+test commands can create their disposable Postgres database. Run credentialed
+external integrations only when explicitly authorized with `bun run
+test:external`.
+
+The root `bun run test` command is the deterministic, Postgres-complete
+workspace test command. The focused desktop unit-test command above runs only
+this app's test files.
 
 The default command keeps the real Electron window hidden so local runs do
 not steal focus. The visible command runs the compositor, focus, and
