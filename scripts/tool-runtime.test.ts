@@ -139,8 +139,18 @@ describe("toolRuntime", () => {
 
   it("routes explicit external tests through pinned Turbo", () => {
     expect(packageScripts("package.json")["test:external"]).toBe(
-      "CATAMORPHIC_EXTERNAL_INTEGRATIONS=1 bun scripts/tool-runtime.ts turbo run test --no-daemon --concurrency=4 --filter=@catamorphic/daytona --filter=@catamorphic/s3 --filter=@catamorphic/cloudflare",
+      "CATAMORPHIC_EXTERNAL_INTEGRATIONS=1 bun scripts/tool-runtime.ts turbo run test --no-daemon --concurrency=2 --filter=@catamorphic/daytona --filter=@catamorphic/s3 --filter=@catamorphic/cloudflare",
     );
+  });
+
+  it("bounds every package-script test graph to two Turbo tasks", () => {
+    const scripts = packageScripts("package.json");
+
+    expect(
+      ["test:workspace", "test:external"].map((name) =>
+        scripts[name]?.match(/--concurrency=[0-9]+/)?.at(0),
+      ),
+    ).toEqual(["--concurrency=2", "--concurrency=2"]);
   });
 
   it("routes every desktop and PWA E2E Vitest entry point through pinned Node", () => {
