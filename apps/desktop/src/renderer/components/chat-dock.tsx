@@ -34,6 +34,7 @@ import {
   type ReactNode,
   useCallback,
   useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -1660,11 +1661,12 @@ export function ChatDock({
   const [dockHovered, setDockHovered] = useState(false);
   // Starts true: the dock claims focus when it opens.
   const [dockEngaged, setDockEngaged] = useState(true);
-  // Deferred focus may run much later in a hidden/throttled window. A user
-  // pointer-down after it was scheduled owns focus, wherever they clicked.
-  const pointerInteractionRef = useRef(0);
-  useEffect(() => {
-    if (entry.mode !== "partial") return;
+  // Deferred focus may run much later in a hidden/throttled window. Explicit
+  // pointer or keyboard input after it was scheduled owns focus; focus events
+  // alone do not, because app-driven focus changes are not user authority.
+  const userInteractionRef = useRef(0);
+  useLayoutEffect(() => {
+    if (!frontSurface) return;
     const inDock = (target: EventTarget | null) =>
       target instanceof Node && sectionRef.current?.contains(target) === true;
     const onFocusIn = (event: FocusEvent) =>
@@ -1672,16 +1674,21 @@ export function ChatDock({
     // Clicks on unfocusable chrome (a webview, blank pane space) never
     // fire focusin — the pointer decides too.
     const onPointerDown = (event: PointerEvent) => {
-      pointerInteractionRef.current += 1;
+      userInteractionRef.current += 1;
       setDockEngaged(inDock(event.target));
+    };
+    const onKeyDown = () => {
+      userInteractionRef.current += 1;
     };
     window.addEventListener("focusin", onFocusIn);
     window.addEventListener("pointerdown", onPointerDown, true);
+    window.addEventListener("keydown", onKeyDown, true);
     return () => {
       window.removeEventListener("focusin", onFocusIn);
       window.removeEventListener("pointerdown", onPointerDown, true);
+      window.removeEventListener("keydown", onKeyDown, true);
     };
-  }, [entry.mode]);
+  }, [frontSurface]);
 
   // Proactive auth health (t3-code-inspired): probed while this chat is
   // the front surface — on agent change, window focus, and OS wake — so
@@ -2261,9 +2268,9 @@ export function ChatDock({
   const fileInputRef = useRef<HTMLInputElement>(null);
   useEffect(() => {
     if (!expanded) return;
-    const pointerInteraction = pointerInteractionRef.current;
+    const userInteraction = userInteractionRef.current;
     const frame = requestAnimationFrame(() => {
-      if (pointerInteractionRef.current === pointerInteraction) {
+      if (userInteractionRef.current === userInteraction) {
         composerRef.current?.focus();
       }
     });
@@ -2281,9 +2288,9 @@ export function ChatDock({
     const previous = previousModeRef.current;
     previousModeRef.current = entry.mode;
     if (!(previous === "tab" && entry.mode === "partial")) return;
-    const pointerInteraction = pointerInteractionRef.current;
+    const userInteraction = userInteractionRef.current;
     const focus = () => {
-      if (pointerInteractionRef.current === pointerInteraction) {
+      if (userInteractionRef.current === userInteraction) {
         composerRef.current?.focus();
       }
     };

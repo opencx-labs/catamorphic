@@ -64,6 +64,71 @@ const runWait = <T>(
   opts?: { timeoutMs?: number; label?: string },
 ) => app.waitFor<T>(`(() => { ${helpers}\n${body} })()`, opts);
 
+const holdAnimationFrames = () =>
+  run(`
+    if (window.__e2eAnimationFrameHold) {
+      throw new Error('animation frames are already held');
+    }
+    const callbacks = new Map();
+    const originalRequest = window.requestAnimationFrame;
+    const originalCancel = window.cancelAnimationFrame;
+    let nextId = 2_000_000_000;
+    window.__e2eAnimationFrameHold = {
+      callbacks,
+      originalRequest,
+      originalCancel,
+    };
+    window.requestAnimationFrame = (callback) => {
+      const id = nextId++;
+      callbacks.set(id, callback);
+      return id;
+    };
+    window.cancelAnimationFrame = (id) => {
+      if (!callbacks.delete(id)) originalCancel(id);
+    };
+    return true;
+  `);
+
+const releaseAnimationFrames = () =>
+  run<number>(`
+    const hold = window.__e2eAnimationFrameHold;
+    if (!hold) return 0;
+    const callbacks = [...hold.callbacks.values()];
+    try {
+      window.requestAnimationFrame = hold.originalRequest;
+      window.cancelAnimationFrame = hold.originalCancel;
+      delete window.__e2eAnimationFrameHold;
+      callbacks.forEach((callback) => callback(performance.now()));
+      return callbacks.length;
+    } finally {
+      window.requestAnimationFrame = hold.originalRequest;
+      window.cancelAnimationFrame = hold.originalCancel;
+      delete window.__e2eAnimationFrameHold;
+    }
+  `);
+
+const restoreAnimationFrames = () =>
+  run(`
+    const hold = window.__e2eAnimationFrameHold;
+    if (!hold) return false;
+    window.requestAnimationFrame = hold.originalRequest;
+    window.cancelAnimationFrame = hold.originalCancel;
+    delete window.__e2eAnimationFrameHold;
+    return true;
+  `);
+
+const waitForHeldAnimationFrame = () =>
+  runWait(`return (window.__e2eAnimationFrameHold?.callbacks.size ?? 0) > 0;`, {
+    label: "deferred autofocus frame held",
+  });
+
+const settleAnimationFrame = () =>
+  run(`
+    return new Promise((resolve) =>
+      requestAnimationFrame(() => resolve(true))
+    );
+  `);
+
 describe("first launch", () => {
   it("boots to the empty state with no projects", async () => {
     await runWait(`return !!byText('button', 'New project');`, {
@@ -624,32 +689,87 @@ describe("chat surface shortcuts", () => {
       timeoutMs: 30_000,
       label: "browser tab",
     });
-    // Hold the dock's opening frame so this covers the hidden-window race:
-    // its deferred composer autofocus must not override a newer user click.
-    await run(`
-      window.__e2eOriginalRaf = window.requestAnimationFrame;
-      window.__e2eHeldRafs = [];
-      window.requestAnimationFrame = (callback) => {
-        window.__e2eHeldRafs.push(callback);
-        return window.__e2eHeldRafs.length;
-      };
-      pressKey('n', { metaKey: true });
-      return true;
-    `);
-    await runWait(`return !!floatingDock();`, { label: "floating chat open" });
-    // Click into the tab's own chrome: focus leaves the dock.
-    const browserKeptFocus = await run<boolean>(`
-      const address = $('input[aria-label="Address and search bar"]');
-      address.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true }));
-      address.focus();
-      const held = window.__e2eHeldRafs;
-      window.requestAnimationFrame = window.__e2eOriginalRaf;
-      delete window.__e2eHeldRafs;
-      delete window.__e2eOriginalRaf;
-      held.forEach((callback) => callback(performance.now()));
-      return document.activeElement === address;
-    `);
-    expect(browserKeptFocus).toBe(true);
+    try {
+      await settleAnimationFrame();
+      // Positive branch: with no newer user input, opening the dock still
+      // lands in its composer when the delayed frame is finally delivered.
+      await holdAnimationFrames();
+      await run(`pressKey('n', { metaKey: true }); return true;`);
+      await runWait(`return !!floatingDock();`, {
+        label: "floating chat open",
+      });
+      await waitForHeldAnimationFrame();
+      await releaseAnimationFrames();
+      const composerAutofocused = await run<boolean>(`
+        return document.activeElement ===
+          floatingDock().querySelector('[data-composer-input]');
+      `);
+      expect(composerAutofocused).toBe(true);
+
+      // Keyboard branch: a real Tab after the focus frame was scheduled
+      // makes the newly focused browser control authoritative.
+      await run(`pressKey('m', { metaKey: true }); return true;`);
+      await runWait(`return !floatingDock();`, { label: "chat minimized" });
+      await run(`
+        const address = $('input[aria-label="Address and search bar"]');
+        const origin = document.createElement('button');
+        origin.dataset.e2eKeyboardOrigin = 'true';
+        origin.textContent = 'keyboard focus origin';
+        const target = document.createElement('button');
+        target.dataset.e2eKeyboardFocus = 'true';
+        target.textContent = 'keyboard focus target';
+        address.insertAdjacentElement('afterend', origin);
+        origin.insertAdjacentElement('afterend', target);
+        origin.focus();
+        return true;
+      `);
+      await holdAnimationFrames();
+      await run(`pressKey('m', { metaKey: true }); return true;`);
+      await runWait(`return !!floatingDock();`, { label: "chat restored" });
+      await waitForHeldAnimationFrame();
+      await app.press("Tab");
+      const tabMovedFocus = await run<boolean>(`
+        return document.activeElement?.dataset.e2eKeyboardFocus === 'true';
+      `);
+      expect(tabMovedFocus).toBe(true);
+      await releaseAnimationFrames();
+      const keyboardFocusPreserved = await run<string>(`
+        const active = document.activeElement;
+        if (active?.dataset.e2eKeyboardFocus === 'true') return 'keyboard-target';
+        if (active?.closest?.('[data-floating-chat]')) return 'floating-chat';
+        return active?.outerHTML?.slice(0, 240) ?? String(active);
+      `);
+      expect(keyboardFocusPreserved).toBe("keyboard-target");
+
+      // Pointer branch: clicking into the tab's own chrome after a restore
+      // likewise wins over the dock's pending autofocus.
+      await run(`pressKey('m', { metaKey: true }); return true;`);
+      await runWait(`return !floatingDock();`, { label: "chat minimized" });
+      await holdAnimationFrames();
+      await run(`pressKey('m', { metaKey: true }); return true;`);
+      await runWait(`return !!floatingDock();`, { label: "chat restored" });
+      await waitForHeldAnimationFrame();
+      const addressFocused = await run<boolean>(`
+        const address = $('input[aria-label="Address and search bar"]');
+        address.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true }));
+        address.focus();
+        return document.activeElement === address;
+      `);
+      expect(addressFocused).toBe(true);
+      await releaseAnimationFrames();
+      const browserKeptFocus = await run<boolean>(`
+        return document.activeElement ===
+          $('input[aria-label="Address and search bar"]');
+      `);
+      expect(browserKeptFocus).toBe(true);
+    } finally {
+      await restoreAnimationFrames();
+      await run(`
+        $('[data-e2e-keyboard-origin]')?.remove();
+        $('[data-e2e-keyboard-focus]')?.remove();
+        return true;
+      `);
+    }
     await run(`pressKey('w', { metaKey: true }); return true;`);
     await runWait(
       `return !$('input[aria-label="Address and search bar"]') && !!floatingDock();`,
