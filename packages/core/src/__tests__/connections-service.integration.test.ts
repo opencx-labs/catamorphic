@@ -24,7 +24,9 @@ const db = new Kysely<DB>({
   plugins: [new WithSchemaPlugin(DEFAULT_SCHEMA)],
 });
 const tenantId = crypto.randomUUID();
-const projectId = crypto.randomUUID();
+// Deliberately contains the sensitive fixture value so assertions cannot scan
+// unrelated identifiers for that substring.
+const projectId = "a1b2c3d4-e5f6-4890-abcd-ef1234567890";
 const otherTenantId = crypto.randomUUID();
 
 const admin: Identity = { tenantId, externalUserId: "admin" };
@@ -246,6 +248,8 @@ describe("credential connections", () => {
   });
 
   it("brokers by immutable allocation and stores only grant hashes", async () => {
+    const deniedInput = { userId: "123" };
+    const allowedInput = { page: 1 };
     const [resolved] = await connections.resolve({
       identity: member,
       projectId,
@@ -281,7 +285,7 @@ describe("credential connections", () => {
         allocationId: allocation.id,
         alias: "directory",
         action: "users.disable",
-        input: { userId: "123" },
+        input: deniedInput,
       }),
     ).rejects.toThrow("not permitted");
     await expect(
@@ -290,7 +294,7 @@ describe("credential connections", () => {
         allocationId: allocation.id,
         alias: "directory",
         action: "users.list",
-        input: { page: 1 },
+        input: allowedInput,
       }),
     ).resolves.toEqual({ action: "users.list", ok: true });
     expect(decodedMaterials.at(-1)).toBe("service-token");
@@ -317,20 +321,34 @@ describe("credential connections", () => {
       identity: admin,
       projectId,
     });
-    const invocation = audit.find(
+    const allowedInvocation = audit.find(
       (event) =>
         event.eventType === "connection.invoked" &&
         event.action === "users.list",
     );
-    expect(invocation?.argumentsDigest).toMatch(/^[a-f0-9]{64}$/);
-    expect(JSON.stringify(invocation)).not.toContain("123");
-    expect(audit).toContainEqual(
-      expect.objectContaining({
-        eventType: "connection.invoked",
-        outcome: "denied",
-        action: "users.disable",
-      }),
+    const deniedInvocation = audit.find(
+      (event) =>
+        event.eventType === "connection.invoked" &&
+        event.action === "users.disable",
     );
+    expect(allowedInvocation).toMatchObject({
+      outcome: "allowed",
+      argumentsDigest: crypto
+        .createHash("sha256")
+        .update(JSON.stringify(allowedInput))
+        .digest("hex"),
+      metadata: {},
+    });
+    expect(deniedInvocation).toMatchObject({
+      outcome: "denied",
+      argumentsDigest: crypto
+        .createHash("sha256")
+        .update(JSON.stringify(deniedInput))
+        .digest("hex"),
+      metadata: {},
+    });
+    expect(deniedInvocation?.argumentsDigest).not.toBe(deniedInput.userId);
+    expect(deniedInvocation).not.toHaveProperty("input");
   });
 
   it("refreshes with compare-and-swap and revokes locally when upstream fails", async () => {

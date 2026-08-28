@@ -9,7 +9,7 @@ const describeIf = connectionString ? describe : describe.skip;
 const schema = `catamorphic_queue_fairness_${crypto
   .randomUUID()
   .replaceAll("-", "")}`;
-const db = createDatabase({ connectionString, schema, poolSize: 8 });
+const db = createDatabase({ connectionString, schema, poolSize: 1 });
 const jobs = new ExecutionJobsService(db);
 const policies = new TenantPoliciesService(db);
 
@@ -196,52 +196,63 @@ describeIf("execution queue fairness", () => {
     expect(claimed.map((job) => job.priority)).toEqual([100, 100]);
   });
 
-  it("claims at a cost set by tenant count, not backlog depth", async () => {
+  it("bounds pending-index work by claim size and tenant count", async () => {
     const runId = await createRun(busyTenant);
-    async function seed(count: number): Promise<void> {
-      await sql`
-        INSERT INTO execution_jobs
-          (tenant_id, workflow_run_id, kind, payload, status, available_at)
-        SELECT ${busyTenant}::uuid, ${runId}::uuid, 'durable_boundary', '{}'::jsonb,
-               'pending', clock_timestamp()
-        FROM generate_series(1::bigint, ${count}::bigint)
+    const backlogDepth = 40_000;
+    const claimLimit = 20;
+    const tenantCount = 1;
+    await sql`
+      INSERT INTO execution_jobs
+        (tenant_id, workflow_run_id, kind, payload, status, available_at)
+      SELECT ${busyTenant}::uuid, ${runId}::uuid, 'durable_boundary', '{}'::jsonb,
+             'pending', clock_timestamp()
+      FROM generate_series(1::bigint, ${backlogDepth}::bigint)
+    `.execute(db);
+    // Earlier cases delete their fixture rows; remove those dead index entries
+    // so this assertion measures only the claim against the seeded backlog.
+    await sql`VACUUM ANALYZE execution_jobs`.execute(db);
+
+    async function queueRelationReads(): Promise<number> {
+      await sql`SELECT pg_stat_force_next_flush()`.execute(db);
+      const result = await sql<{
+        idx_tup_read: string;
+        seq_tup_read: string;
+      }>`
+        SELECT
+          stats.seq_tup_read,
+          (
+            SELECT COALESCE(sum(index.idx_tup_read), 0)
+            FROM pg_stat_user_indexes AS index
+            WHERE index.schemaname = ${schema}
+              AND index.relname = 'execution_jobs'
+          ) AS idx_tup_read
+        FROM pg_stat_user_tables AS stats
+        WHERE stats.schemaname = ${schema}
+          AND stats.relname = 'execution_jobs'
       `.execute(db);
-      await sql`ANALYZE execution_jobs`.execute(db);
+      const row = result.rows[0];
+      return Number(row?.idx_tup_read ?? -1) + Number(row?.seq_tup_read ?? -1);
     }
 
-    async function medianClaimMs(): Promise<number> {
-      const samples: number[] = [];
-      for (let index = 0; index < 5; index += 1) {
-        const startedAt = performance.now();
-        await db
-          .transaction()
-          .execute((trx) =>
-            sql`SELECT id FROM execution_jobs WHERE status = 'pending' LIMIT 1`.execute(
-              trx,
-            ),
-          );
-        const baseline = performance.now() - startedAt;
-        const claimStartedAt = performance.now();
-        const claimed = await jobs.claim({
-          workerId: `probe-${index}`,
-          kinds: ["durable_boundary"],
-          limit: 20,
-        });
-        expect(claimed).toHaveLength(20);
-        samples.push(performance.now() - claimStartedAt - baseline);
-      }
-      return samples.sort((a, b) => a - b)[2] ?? 0;
-    }
+    const readsBeforeClaim = await queueRelationReads();
 
-    await seed(2_000);
-    const shallow = await medianClaimMs();
-    await seed(40_000);
-    const deep = await medianClaimMs();
+    const claimed = await jobs.claim({
+      workerId: "work-probe",
+      kinds: ["durable_boundary"],
+      limit: claimLimit,
+    });
+    expect(claimed).toHaveLength(claimLimit);
 
-    // A whole-set ranking sorts every pending row per poll, so this ratio grows
-    // linearly with the backlog — 20x the rows measured ~20x the latency before
-    // the LATERAL rewrite. Bounded selection keeps it roughly flat; the margin
-    // is wide so ordinary CI noise cannot trip it.
-    expect(deep).toBeLessThan(Math.max(shallow, 1) * 8);
+    const queueRelationTupleReads =
+      (await queueRelationReads()) - readsBeforeClaim;
+
+    // The skip-scan visits each tenant and LATERAL reads only that tenant's
+    // claim-sized slice. Count every index and sequential table read so a
+    // whole-set regression cannot hide behind a different query plan. The
+    // fixed per-operation allowance covers supported Postgres versions while
+    // remaining over 60x below the 40,000 reads a whole-set scan would perform.
+    const boundedReads = claimLimit * 32 + tenantCount * 8;
+    expect(queueRelationTupleReads).toBeGreaterThanOrEqual(claimLimit);
+    expect(queueRelationTupleReads).toBeLessThanOrEqual(boundedReads);
   }, 120_000);
 });
