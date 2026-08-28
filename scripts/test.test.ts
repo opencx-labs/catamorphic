@@ -104,6 +104,15 @@ function processIsLive(pid: number): boolean {
   }
 }
 
+function processGroupIsLive(processGroupId: number): boolean {
+  try {
+    process.kill(-processGroupId, 0);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 describe("test process orchestration", () => {
   it("runs a successful subprocess before stopping Postgres", async () => {
     const directory = await temporaryDirectory();
@@ -179,6 +188,78 @@ describe("test process orchestration", () => {
       ]);
     } finally {
       signals.close();
+    }
+  });
+
+  it("terminates pipe-holding descendants after leader exit before stopping Postgres", async () => {
+    if (process.platform === "win32") return;
+    const directory = await temporaryDirectory();
+    const markerPath = path.join(directory, "orphan.txt");
+    const readyPath = path.join(directory, "orphan-ready.txt");
+    const terminatedPath = path.join(directory, "orphan-terminated.txt");
+    const signals = new TestSignalController();
+    let processGroupId = 0;
+    const driver = new RecordingPostgresDriver(async () => {
+      await access(terminatedPath);
+      expect(processGroupIsLive(processGroupId)).toBe(false);
+    });
+    const descendantCode =
+      `process.on("SIGTERM",()=>{require("node:fs").writeFileSync(${JSON.stringify(terminatedPath)},"terminated");process.exit(0)});` +
+      `require("node:fs").writeFileSync(${JSON.stringify(readyPath)},String(process.pid));setInterval(()=>{},1000)`;
+
+    const operation = withDisposablePostgres({
+      driver,
+      pid: process.pid,
+      nonce: "orphan-descendant",
+      task: async () => {
+        const result = await runLoggedProcess({
+          command: "/bin/sh",
+          args: [
+            "-c",
+            `${process.execPath} -e '${descendantCode}' & while [ ! -f "${readyPath}" ]; do sleep 0.01; done; printf '%s' "$$" > "${markerPath}"; exit 0`,
+          ],
+          cwd: directory,
+          env: process.env,
+          logPath: path.join(directory, "orphan.log"),
+          signals,
+        });
+        driver.events.push("process:complete");
+        return result;
+      },
+    });
+    const operationOutcome = operation.then(
+      (value) => ({ success: true as const, value }),
+      (error: unknown) => ({ success: false as const, error }),
+    );
+
+    processGroupId = Number(await waitForFile(markerPath));
+    let forcedCleanup = false;
+    const fallback = setTimeout(() => {
+      forcedCleanup = true;
+      try {
+        process.kill(-processGroupId, "SIGTERM");
+      } catch {
+        // Correct orchestration already terminated the process group.
+      }
+    }, 500);
+
+    try {
+      const outcome = await operationOutcome;
+      if (!outcome.success) throw outcome.error;
+      expect(outcome.value).toEqual({ code: 0, signal: null });
+      expect(forcedCleanup).toBe(false);
+      expect(await readFile(terminatedPath, "utf8")).toBe("terminated");
+      expect(processGroupIsLive(processGroupId)).toBe(false);
+      expect(driver.events.slice(-2)).toEqual([
+        "process:complete",
+        "postgres:stop",
+      ]);
+    } finally {
+      clearTimeout(fallback);
+      signals.close();
+      if (processGroupIsLive(processGroupId)) {
+        process.kill(-processGroupId, "SIGKILL");
+      }
     }
   });
 

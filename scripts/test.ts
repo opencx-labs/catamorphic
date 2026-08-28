@@ -210,12 +210,20 @@ export async function runLoggedProcess(input: {
     env: input.env,
     stdio: ["inherit", "pipe", "pipe"],
   });
-  const completion = new Promise<{
-    code: number | null;
-    signal: NodeJS.Signals | null;
-  }>((resolve, reject) => {
-    child.once("error", reject);
-    child.once("close", (code, signal) => resolve({ code, signal }));
+  const exitCompletion = new Promise<
+    | {
+        success: true;
+        result: { code: number | null; signal: NodeJS.Signals | null };
+      }
+    | { success: false; error: unknown }
+  >((resolve) => {
+    child.once("error", (error) => resolve({ success: false, error }));
+    child.once("exit", (code, signal) =>
+      resolve({ success: true, result: { code, signal } }),
+    );
+  });
+  const closeCompletion = new Promise<void>((resolve) => {
+    child.once("close", () => resolve());
   });
   mirrorOutput({ stream: child.stdout, destination: process.stdout, log });
   mirrorOutput({ stream: child.stderr, destination: process.stderr, log });
@@ -230,9 +238,7 @@ export async function runLoggedProcess(input: {
   let cleanupError: unknown;
   try {
     if (processGroupId) input.signals.activate(processGroupId);
-    outcome = { success: true, result: await completion };
-  } catch (error) {
-    outcome = { success: false, error };
+    outcome = await exitCompletion;
   } finally {
     if (processGroupId) {
       try {
@@ -246,6 +252,7 @@ export async function runLoggedProcess(input: {
         input.signals.clear(processGroupId);
       }
     }
+    await closeCompletion;
     try {
       await closeLog(log);
     } catch (error) {
