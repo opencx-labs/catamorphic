@@ -1,3 +1,4 @@
+import { execFileSync } from "node:child_process";
 import { access, mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -6,6 +7,7 @@ import {
   createTestRunResources,
   runLoggedProcess,
   TestSignalController,
+  testRunCommands,
   testRunEnvironment,
   turboTestArguments,
 } from "./test.js";
@@ -115,6 +117,75 @@ function processGroupIsLive(processGroupId: number): boolean {
 }
 
 describe("test process orchestration", () => {
+  it("plans root script tests before the non-recursive workspace Turbo graph", () => {
+    expect(testRunCommands({ rootPath: "/repo", cliArguments: [] })).toEqual([
+      {
+        label: "root orchestration tests",
+        command: "/repo/node_modules/node/bin/node",
+        args: [
+          "/repo/node_modules/vitest/vitest.mjs",
+          "run",
+          "--config",
+          "/repo/vitest.config.ts",
+          "scripts",
+        ],
+        logFileName: "root-orchestration-tests.log",
+      },
+      {
+        label: "workspace tests",
+        command: "/repo/node_modules/node/bin/node",
+        args: [
+          "/repo/node_modules/turbo/bin/turbo",
+          "run",
+          "test",
+          "--no-daemon",
+          "--concurrency=2",
+        ],
+        logFileName: "workspace-tests.log",
+      },
+    ]);
+  });
+
+  it("keeps root script tests beside a Turbo dry graph that excludes the root runner", () => {
+    const repositoryRoot = path.resolve(import.meta.dirname, "..");
+    const plan = testRunCommands({
+      rootPath: repositoryRoot,
+      cliArguments: [],
+    });
+    const rawGraph = execFileSync(
+      path.join(repositoryRoot, "node_modules", "node", "bin", "node"),
+      [
+        path.join(repositoryRoot, "node_modules", "turbo", "bin", "turbo"),
+        "run",
+        "test",
+        "--dry=json",
+      ],
+      { cwd: repositoryRoot, encoding: "utf8" },
+    );
+    const graph: unknown = JSON.parse(rawGraph);
+    if (
+      typeof graph !== "object" ||
+      graph === null ||
+      !("tasks" in graph) ||
+      !Array.isArray(graph.tasks)
+    ) {
+      throw new Error("Turbo dry graph did not contain tasks");
+    }
+    const taskIds = graph.tasks.flatMap((task) =>
+      typeof task === "object" &&
+      task !== null &&
+      "taskId" in task &&
+      typeof task.taskId === "string"
+        ? [task.taskId]
+        : [],
+    );
+
+    expect(plan[0]?.label).toBe("root orchestration tests");
+    expect(plan[0]?.args.at(-1)).toBe("scripts");
+    expect(taskIds.length).toBeGreaterThan(0);
+    expect(taskIds).not.toContain("catamorphic#test");
+  });
+
   it("limits a full test run to two concurrent Turbo tasks", () => {
     expect(turboTestArguments({ rootPath: "/repo", cliArguments: [] })).toEqual(
       [
@@ -351,9 +422,9 @@ describe("test process orchestration", () => {
     if (!installed) throw new Error("SIGTERM handler was not installed");
 
     try {
-      installed();
+      installed("SIGTERM");
       expect(process.rawListeners("SIGTERM")).toContain(installed);
-      installed();
+      installed("SIGTERM");
       expect(process.rawListeners("SIGTERM")).toContain(installed);
     } finally {
       signals.close();

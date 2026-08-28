@@ -10,7 +10,7 @@
     "build": "bun --bun electron-vite build",
     "typecheck": "tsgo --project ./tsconfig.json && tsgo --project ./tsconfig.node.json",
     "package": "bun --bun run --cwd ../pwa build && bun --bun electron-vite build && bun --bun electron-builder",
-    "test": "node ../../node_modules/vitest/vitest.mjs run --config ../../vitest.config.ts",
+    "test": "bun ../../scripts/tool-runtime.ts vitest --tool-cwd apps/desktop --config ../../vitest.config.ts",
     "test:e2e": "bun --bun electron-vite build && CATAMORPHIC_E2E_WINDOW_MODE=hidden bun ../../scripts/tool-runtime.ts vitest --tool-cwd apps/desktop --config ./vitest.e2e.config.ts",
     "test:e2e:visible": "bun --bun electron-vite build && CATAMORPHIC_E2E_WINDOW_MODE=visible bun ../../scripts/tool-runtime.ts vitest --tool-cwd apps/desktop --config ./vitest.e2e.config.ts",
     "test:eval": "bun --bun electron-vite build && CATAMORPHIC_E2E_WINDOW_MODE=hidden bun ../../scripts/tool-runtime.ts vitest --tool-cwd apps/desktop --config ./vitest.eval.config.ts"

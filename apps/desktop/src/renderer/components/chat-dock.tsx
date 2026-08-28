@@ -1662,15 +1662,20 @@ export function ChatDock({
   // Starts true: the dock claims focus when it opens.
   const [dockEngaged, setDockEngaged] = useState(true);
   // Deferred focus may run much later in a hidden/throttled window. Explicit
-  // pointer or keyboard input after it was scheduled owns focus; focus events
-  // alone do not, because app-driven focus changes are not user authority.
+  // input and external focus changes after it was scheduled own focus. Only
+  // this dock's known autofocus calls are excluded from that authority.
   const userInteractionRef = useRef(0);
+  const internalAutofocusDepthRef = useRef(0);
   useLayoutEffect(() => {
     if (!frontSurface) return;
     const inDock = (target: EventTarget | null) =>
       target instanceof Node && sectionRef.current?.contains(target) === true;
-    const onFocusIn = (event: FocusEvent) =>
+    const onFocusIn = (event: FocusEvent) => {
+      if (internalAutofocusDepthRef.current === 0) {
+        userInteractionRef.current += 1;
+      }
       setDockEngaged(inDock(event.target));
+    };
     // Clicks on unfocusable chrome (a webview, blank pane space) never
     // fire focusin — the pointer decides too.
     const onPointerDown = (event: PointerEvent) => {
@@ -2266,16 +2271,24 @@ export function ChatDock({
   // rAF waits out the `inert` removal — focus() is a no-op on inert subtrees.
   // The composer's attach button opens this hidden picker.
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const focusComposerInternally = useCallback(() => {
+    internalAutofocusDepthRef.current += 1;
+    try {
+      composerRef.current?.focus();
+    } finally {
+      internalAutofocusDepthRef.current -= 1;
+    }
+  }, []);
   useEffect(() => {
     if (!expanded) return;
     const userInteraction = userInteractionRef.current;
     const frame = requestAnimationFrame(() => {
       if (userInteractionRef.current === userInteraction) {
-        composerRef.current?.focus();
+        focusComposerInternally();
       }
     });
     return () => cancelAnimationFrame(frame);
-  }, [expanded]);
+  }, [expanded, focusComposerInternally]);
   // Stepping down from a tab to the floating dock (Escape) keeps the
   // user IN the chat: the tab that surfaces behind it (a New Tab palette
   // autofocuses its input) must not steal focus — Cmd+W right after
@@ -2291,7 +2304,7 @@ export function ChatDock({
     const userInteraction = userInteractionRef.current;
     const focus = () => {
       if (userInteractionRef.current === userInteraction) {
-        composerRef.current?.focus();
+        focusComposerInternally();
       }
     };
     focus();
@@ -2301,7 +2314,7 @@ export function ChatDock({
       cancelAnimationFrame(frame);
       window.clearTimeout(timer);
     };
-  }, [entry.mode]);
+  }, [entry.mode, focusComposerInternally]);
 
   // Window-level so Escape works regardless of what has focus. Escape steps
   // the chat down one size: full tab → floating dock → bubble. At most one

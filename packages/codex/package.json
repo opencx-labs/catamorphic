@@ -15,7 +15,7 @@
   "scripts": {
     "build": "tsup && tsc --project tsconfig.json --noEmit false --emitDeclarationOnly",
     "dev": "tsup --watch --no-clean",
-    "test": "node ../../node_modules/vitest/vitest.mjs run --config ../../vitest.config.ts",
+    "test": "bun ../../scripts/tool-runtime.ts vitest --tool-cwd packages/codex --config ../../vitest.config.ts",
     "typecheck": "tsgo --project ./tsconfig.json"
   },
   "dependencies": {

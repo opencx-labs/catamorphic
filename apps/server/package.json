@@ -8,7 +8,7 @@
     "start": "bun src/index.ts",
     "build": "tsc --project tsconfig.json --noEmit",
     "typecheck": "tsgo --project ./tsconfig.json",
-    "test": "node ../../node_modules/vitest/vitest.mjs run --config ../../vitest.config.ts"
+    "test": "bun ../../scripts/tool-runtime.ts vitest --tool-cwd apps/server --config ../../vitest.config.ts"
   },
   "dependencies": {
     "@ai-sdk/anthropic": "^4.0.18",

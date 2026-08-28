@@ -32,9 +32,9 @@ server alive without another checkout rewriting their outputs or state.
   focused work. They are not independent hand-written Turbo graphs.
 - `bun run dev:infra` owns the optional shared Postgres, ClickHouse, OTel, and
   Cloudflare bridge stack used for exploratory development.
-- `bun run test` starts disposable Postgres, runs every package test with
-  `DATABASE_URL` set, and always removes the container on success, failure, or
-  interruption.
+- `bun run test` starts disposable Postgres, runs every root orchestration test
+  and package test with `DATABASE_URL` set, and always removes the container on
+  success, failure, or interruption.
 - `bun run test:external` is the explicit real-service suite. It is separate
   from deterministic verification and uses per-run remote identifiers.
 - `bun run check` is the complete local merge gate: lint, typecheck, build,
@@ -84,7 +84,8 @@ connection budget, and migration table.
 
 The test runner invokes the checked-in Turbo and Vitest entry points with the
 repository-pinned Node 24 binary and prefixes child `PATH` with that binary's
-directory. This is required because Vitest 4's threaded worker transport is
+directory. Package-local Vitest scripts use the same launcher and an explicit
+package working directory. This is required because Vitest 4's threaded worker transport is
 not compatible with Bun's Node emulation, while older ambient Node releases
 cannot load the installed Rolldown dependencies. Every run also owns temporary
 and tool-cache directories and caps workspace concurrency so one run stays
@@ -103,11 +104,13 @@ credentials.
 
 ## Complete verification
 
-`scripts/check.ts` runs the merge-gate phases sequentially inside its worktree
+`scripts/check.ts` runs 12 merge-gate phases sequentially inside its worktree
 so generated outputs and Electron/PWA build directories are never written by
 two phases at once. Separate worktrees may run the command concurrently. The
 database/codegen phase uses the same disposable Postgres instance contract as
-tests and fails when tracked generated database types change.
+tests and fails when tracked generated database types change. Dedicated root
+phases typecheck and test every `scripts/**/*.ts` orchestration source outside
+Turbo's non-recursive workspace graph.
 
 CI invokes `bun run check` instead of maintaining a second handwritten list of
 verification commands. The model-in-the-loop eval remains an explicit optional

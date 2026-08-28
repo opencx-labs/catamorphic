@@ -741,6 +741,30 @@ describe("chat surface shortcuts", () => {
       `);
       expect(keyboardFocusPreserved).toBe("keyboard-target");
 
+      // Assistive technology may move focus without a preceding DOM keyboard
+      // or pointer event. That external focusin is still authoritative.
+      await run(`pressKey('m', { metaKey: true }); return true;`);
+      await runWait(`return !floatingDock();`, { label: "chat minimized" });
+      await holdAnimationFrames();
+      await run(`pressKey('m', { metaKey: true }); return true;`);
+      await runWait(`return !!floatingDock();`, { label: "chat restored" });
+      await waitForHeldAnimationFrame();
+      const assistiveFocusMoved = await run<boolean>(`
+        const address = $('input[aria-label="Address and search bar"]');
+        const target = document.createElement('button');
+        target.dataset.e2eAssistiveFocus = 'true';
+        target.textContent = 'assistive technology focus target';
+        address.insertAdjacentElement('afterend', target);
+        target.focus();
+        return document.activeElement === target;
+      `);
+      expect(assistiveFocusMoved).toBe(true);
+      await releaseAnimationFrames();
+      const assistiveFocusPreserved = await run<boolean>(`
+        return document.activeElement?.dataset.e2eAssistiveFocus === 'true';
+      `);
+      expect(assistiveFocusPreserved).toBe(true);
+
       // Pointer branch: clicking into the tab's own chrome after a restore
       // likewise wins over the dock's pending autofocus.
       await run(`pressKey('m', { metaKey: true }); return true;`);
@@ -767,6 +791,7 @@ describe("chat surface shortcuts", () => {
       await run(`
         $('[data-e2e-keyboard-origin]')?.remove();
         $('[data-e2e-keyboard-focus]')?.remove();
+        $('[data-e2e-assistive-focus]')?.remove();
         return true;
       `);
     }

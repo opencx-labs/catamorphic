@@ -217,7 +217,11 @@
 
 - [ ] **Step 5: Write failing check-plan tests**
 
-  Assert the literal phase order: lint, typecheck, build, database migration, database codegen, generated-type diff check, deterministic workspace tests, PWA E2E, desktop visible E2E, desktop hidden E2E. Assert no phase contains `test:external` or `test:eval`.
+  Assert the literal 12-phase order: lint, root orchestration typecheck,
+  workspace typecheck, build, database migration, database codegen,
+  generated-type diff check, root orchestration tests, deterministic workspace
+  tests, PWA E2E, desktop visible E2E, desktop hidden E2E. Assert no phase
+  contains `test:external` or `test:eval`.
 
 - [ ] **Step 6: Run check-plan tests and verify RED**
 
@@ -240,8 +244,9 @@
 
   Keep workspace `test` scripts as package-local commands so Turbo supplies the correct cwd;
   the test runner invokes checked-in Turbo directly and prefixes `PATH` with
-  the pinned Node binary. Add root `test:workspace` as the private Turbo graph
-  command and `test:external` as an explicit filtered run with
+  the pinned Node binary. Add root `test:scripts` and `typecheck:scripts` for
+  the orchestration code, plus `test:workspace` as the private, non-recursive
+  Turbo graph command and `test:external` as an explicit filtered run with
   `CATAMORPHIC_EXTERNAL_INTEGRATIONS=1`. Exclude nested `.claude/worktrees/**`
   from root Vitest discovery.
 

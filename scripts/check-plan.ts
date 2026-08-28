@@ -7,7 +7,16 @@ export interface CheckCommand {
 export function checkCommands(): readonly CheckCommand[] {
   return [
     { label: "lint", command: "bun", args: ["run", "lint"] },
-    { label: "typecheck", command: "bun", args: ["run", "typecheck"] },
+    {
+      label: "root orchestration typecheck",
+      command: "bun",
+      args: ["run", "typecheck:scripts"],
+    },
+    {
+      label: "workspace typecheck",
+      command: "bun",
+      args: ["run", "typecheck"],
+    },
     { label: "build", command: "bun", args: ["run", "build"] },
     {
       label: "database migration",
@@ -23,6 +32,11 @@ export function checkCommands(): readonly CheckCommand[] {
       label: "generated-type diff check",
       command: "git",
       args: ["diff", "--exit-code", "--", "packages/db/src/generated/db.ts"],
+    },
+    {
+      label: "root orchestration tests",
+      command: "bun",
+      args: ["run", "test:scripts"],
     },
     {
       label: "deterministic workspace tests",

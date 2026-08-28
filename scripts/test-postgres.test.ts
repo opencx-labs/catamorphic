@@ -13,6 +13,7 @@ class RecordingDriver implements TestPostgresDriver {
   runError?: Error;
   healthResults: Array<"healthy" | "starting" | "unhealthy"> = ["healthy"];
   healthError?: Error;
+  stopError?: Error;
   portOutput = "127.0.0.1:49175\n";
   logsOutput = "postgres startup log";
 
@@ -41,6 +42,7 @@ class RecordingDriver implements TestPostgresDriver {
 
   async stop(input: { name: string }): Promise<void> {
     this.calls.push(`stop:${input.name}`);
+    if (this.stopError) throw this.stopError;
   }
 }
 
@@ -65,6 +67,12 @@ describe("disposable Postgres", () => {
     expect(args).toContain("max_connections=300");
     expect(args.some((argument) => argument.includes("volume"))).toBe(false);
     expect(args).not.toContain("-v");
+    const labelIndex = args.indexOf("--label");
+    expect(args.slice(labelIndex, labelIndex + 2)).toEqual([
+      "--label",
+      "catamorphic.test-run",
+    ]);
+    expect(args.filter((argument) => argument === "--label")).toHaveLength(1);
   });
 
   it("parses an ephemeral IPv4 loopback Docker port", () => {
@@ -131,6 +139,36 @@ describe("disposable Postgres", () => {
     });
 
     await expect(operation).rejects.toBe(taskError);
+    expect(
+      driver.calls.filter((call) => call.startsWith("stop:")),
+    ).toHaveLength(1);
+  });
+
+  it("surfaces both task and cleanup failures while stopping exactly once", async () => {
+    const driver = new RecordingDriver();
+    const taskError = new Error("task failed");
+    const cleanupError = new Error("cleanup failed");
+    driver.stopError = cleanupError;
+
+    let failure: unknown;
+    try {
+      await withDisposablePostgres({
+        driver,
+        pid: 42,
+        nonce: "dual-error",
+        task: async () => {
+          throw taskError;
+        },
+      });
+    } catch (error) {
+      failure = error;
+    }
+
+    expect(failure).toBeInstanceOf(AggregateError);
+    expect(failure).toMatchObject({
+      message: "Disposable Postgres task and cleanup both failed",
+      errors: [taskError, cleanupError],
+    });
     expect(
       driver.calls.filter((call) => call.startsWith("stop:")),
     ).toHaveLength(1);

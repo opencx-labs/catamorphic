@@ -570,9 +570,9 @@ bun run dev:desktop # Desktop-focused development environment
 bun run dev:server  # Stock-server-focused development environment
 bun run dev:infra   # Optional OTel, ClickHouse, and sandbox-bridge services
 bun run build       # Build all packages
-bun run test        # Deterministic, Postgres-complete workspace tests
+bun run test        # Deterministic root and Postgres-complete workspace tests
 bun run test:external # Explicit opt-in for credentialed external integrations
-bun run check       # Merge gate
+bun run check       # 12-phase merge gate
 bun run typecheck   # Typecheck all packages with tsgo
 bun run lint        # Lint with Biome
 bun run lint:fix    # Auto-fix lint issues
@@ -591,17 +591,20 @@ command is optional shared observability and sandbox-bridge infrastructure,
 not test infrastructure.
 
 ```bash
-bun run test                                   # deterministic, Postgres-complete workspace tests
-bun run check                                  # merge gate: lint, types, build, migrations, tests, and E2E
+bun run test                                   # deterministic root and Postgres-complete workspace tests
+bun run check                                  # 12 phases: lint, root/workspace types, build, migrations, root/workspace tests, and E2E
 bun run test:external                          # explicit authority for credentialed integrations
-bun run --filter @catamorphic/parser test      # one package
-cd packages/parser && bun run test src/__tests__/parser.test.ts  # one file
+bun run --filter @catamorphic/parser test      # one package through repository Node
+bun run --cwd packages/parser test src/__tests__/parser.test.ts  # one file through repository Node
 ```
 
 Each test file uses fresh temporary state and every root test invocation gets
 its own Postgres database and temporary caches, so parallel worktrees do not
 share test output. Install dependencies in each worktree and never copy a
 credentialed `.env` wholesale. Add only the individual settings a task needs.
+Root orchestration tests under `scripts/**/*.test.ts` run before the package
+graph. Package-local Vitest commands also select the repository-pinned Node,
+including when the ambient `node` is Node 20.
 
 External integration tests never run merely because credentials are present.
 They require the explicit `bun run test:external` authority, which sets
@@ -611,6 +614,7 @@ configuration is absent:
 - **Daytona** (`packages/daytona`): needs `DAYTONA_API_KEY`.
 - **Cloudflare Sandbox** (`packages/cloudflare`, `packages/core`): needs `CLOUDFLARE_SANDBOX_API_URL`, `CLOUDFLARE_SANDBOX_API_KEY`, and `CF_SANDBOX_INTEGRATION=1`. Start the sandbox bridge separately if the test needs it.
 - **Cloudflare Artifacts** (`packages/cloudflare`): needs `CLOUDFLARE_ACCOUNT_ID`, `CLOUDFLARE_API_TOKEN`, and `CLOUDFLARE_ARTIFACTS_NAMESPACE`; it skips with a warning while feature-gated.
+- **S3-compatible storage** (`packages/s3`): needs `S3_BUCKET`, `S3_ACCESS_KEY_ID`, and `S3_SECRET_ACCESS_KEY`. Set `S3_REGION` when the provider requires it, `S3_ENDPOINT` for R2, MinIO, or another non-AWS endpoint, and `S3_FORCE_PATH_STYLE=true` when that endpoint requires path-style requests.
 
 Unit tests run with no setup. The desktop app additionally has hidden and
 visible E2E suites that drive the real Electron binary over CDP with a
@@ -618,6 +622,9 @@ deterministic fake agent. Run `bun run --cwd apps/desktop test:e2e` for the
 interruption-free suite and `bun run --cwd apps/desktop test:e2e:visible` for
 compositor, focus, and native window behavior. `bun run check` runs both as
 part of the merge gate.
+
+The local development runner uses POSIX process groups and supports macOS and
+Linux. Windows development orchestration is not supported.
 
 ## Tech stack
 

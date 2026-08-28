@@ -3,6 +3,13 @@ import path from "node:path";
 
 export type DevTarget = "all" | "desktop" | "server";
 
+export interface DevPorts {
+  desktopCdp: number;
+  desktopVite: number;
+  server: number;
+  operator: number;
+}
+
 export function sanitizeInstanceName(input: string): string {
   const sanitized = input
     .trim()
@@ -22,12 +29,7 @@ export function createDevPlan(input: {
   tempPath: string;
   instanceOverride?: string;
   target: DevTarget;
-  ports: {
-    desktopCdp: number;
-    desktopVite: number;
-    server: number;
-    operator: number;
-  };
+  ports: DevPorts;
 }): {
   instance: string;
   env: Record<string, string>;

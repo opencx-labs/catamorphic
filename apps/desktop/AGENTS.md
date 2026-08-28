@@ -85,9 +85,10 @@ test commands can create their disposable Postgres database. Run credentialed
 external integrations only when explicitly authorized with `bun run
 test:external`.
 
-The root `bun run test` command is the deterministic, Postgres-complete
-workspace test command. The focused desktop unit-test command above runs only
-this app's test files.
+The root `bun run test` command runs root orchestration tests and the
+deterministic, Postgres-complete workspace test graph. The focused desktop
+unit-test command above runs only this app's test files through the
+repository-pinned Node runtime.
 
 The default command keeps the real Electron window hidden so local runs do
 not steal focus. The visible command runs the compositor, focus, and

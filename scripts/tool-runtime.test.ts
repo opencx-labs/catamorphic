@@ -2,6 +2,7 @@ import { execFileSync } from "node:child_process";
 import {
   mkdirSync,
   mkdtempSync,
+  readdirSync,
   readFileSync,
   rmSync,
   writeFileSync,
@@ -58,6 +59,22 @@ function packageScripts(relativePath: string): Record<string, string> {
     Object.entries(packageJson.scripts).filter(
       (entry): entry is [string, string] => typeof entry[1] === "string",
     ),
+  );
+}
+
+function workspacePackagePaths(): string[] {
+  return ["apps", "packages"].flatMap((parent) =>
+    readdirSync(path.join(repositoryRoot, parent), { withFileTypes: true })
+      .filter((entry) => entry.isDirectory())
+      .flatMap((entry) => {
+        const relativePath = `${parent}/${entry.name}`;
+        return readFileSync(
+          path.join(repositoryRoot, relativePath, "package.json"),
+          "utf8",
+        )
+          ? [relativePath]
+          : [];
+      }),
   );
 }
 
@@ -143,6 +160,17 @@ describe("toolRuntime", () => {
     );
   });
 
+  it("defines dedicated root script test and typecheck commands", () => {
+    const scripts = packageScripts("package.json");
+
+    expect(scripts["test:scripts"]).toBe(
+      "bun scripts/tool-runtime.ts vitest --config ./vitest.config.ts scripts",
+    );
+    expect(scripts["typecheck:scripts"]).toBe(
+      "tsgo --project ./tsconfig.scripts.json",
+    );
+  });
+
   it("bounds every package-script test graph to two Turbo tasks", () => {
     const scripts = packageScripts("package.json");
 
@@ -169,5 +197,26 @@ describe("toolRuntime", () => {
     expect(pwaScripts["test:e2e"]).toBe(
       "bun --bun vite build && bun ../../scripts/tool-runtime.ts vitest --tool-cwd apps/pwa --config ./vitest.e2e.config.ts",
     );
+  });
+
+  it("routes every workspace-local Vitest command through the pinned launcher and its package cwd", () => {
+    const vitestCommands = workspacePackagePaths().flatMap((packagePath) =>
+      Object.entries(packageScripts(`${packagePath}/package.json`)).flatMap(
+        ([scriptName, command]) =>
+          command.includes("vitest")
+            ? [{ packagePath, scriptName, command }]
+            : [],
+      ),
+    );
+
+    expect(vitestCommands.length).toBeGreaterThan(0);
+    for (const command of vitestCommands) {
+      expect(
+        command.command,
+        `${command.packagePath} ${command.scriptName}`,
+      ).toContain(
+        `bun ../../scripts/tool-runtime.ts vitest --tool-cwd ${command.packagePath}`,
+      );
+    }
   });
 });

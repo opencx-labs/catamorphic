@@ -1,10 +1,27 @@
 import { createHash, randomUUID } from "node:crypto";
-import { link, mkdir, open, readFile, unlink } from "node:fs/promises";
+import {
+  chmod,
+  link,
+  mkdir,
+  open,
+  readFile,
+  rename,
+  unlink,
+} from "node:fs/promises";
 import path from "node:path";
 
 export interface DevInstanceLock {
+  bindProcessGroup(processGroupId: number): Promise<void>;
   release(): Promise<void>;
 }
+
+interface LockOwner {
+  pid: number;
+  token?: string;
+  processGroupId?: number;
+}
+
+class DevLockConflictError extends Error {}
 
 function errorCode(error: unknown): string | undefined {
   if (typeof error !== "object" || error === null || !("code" in error)) {
@@ -13,7 +30,7 @@ function errorCode(error: unknown): string | undefined {
   return typeof error.code === "string" ? error.code : undefined;
 }
 
-function parseLockOwner(raw: string): { pid: number; token?: string } | null {
+function parseLockOwner(raw: string): LockOwner | null {
   try {
     const value: unknown = JSON.parse(raw);
     if (typeof value !== "object" || value === null || !("pid" in value)) {
@@ -23,12 +40,32 @@ function parseLockOwner(raw: string): { pid: number; token?: string } | null {
       return null;
     }
     const token = "token" in value ? value.token : undefined;
-    return typeof token === "string"
-      ? { pid: value.pid, token }
-      : { pid: value.pid };
+    const processGroupId =
+      "processGroupId" in value ? value.processGroupId : undefined;
+    if (
+      processGroupId !== undefined &&
+      (typeof processGroupId !== "number" ||
+        !Number.isInteger(processGroupId) ||
+        processGroupId <= 0)
+    ) {
+      return null;
+    }
+    return {
+      pid: value.pid,
+      ...(typeof token === "string" ? { token } : {}),
+      ...(typeof processGroupId === "number" ? { processGroupId } : {}),
+    };
   } catch {
     return null;
   }
+}
+
+function lockOwnerIsLive(owner: LockOwner): boolean {
+  return (
+    processIsLive(owner.pid) ||
+    (owner.processGroupId !== undefined &&
+      processGroupIsLive(owner.processGroupId))
+  );
 }
 
 function processIsLive(pid: number): boolean {
@@ -100,8 +137,59 @@ async function claimStaleLock(input: {
       throw error;
     }
     const owner = parseLockOwner(claimContent);
-    if (owner && processIsLive(owner.pid)) return false;
+    if (owner && lockOwnerIsLive(owner)) return false;
     generation = contentIdentity(`${generation}\0${claimContent}`);
+  }
+}
+
+async function replaceOwnedLockContent(input: {
+  lockPath: string;
+  pid: number;
+  token: string;
+  content: string;
+}): Promise<void> {
+  const candidatePath = `${input.lockPath}.update-${randomUUID()}`;
+  const handle = await open(candidatePath, "wx", 0o600);
+  try {
+    try {
+      await handle.writeFile(input.content);
+      await handle.sync();
+    } finally {
+      await handle.close();
+    }
+    let owner: LockOwner | null;
+    try {
+      owner = parseLockOwner(await readFile(input.lockPath, "utf8"));
+    } catch (error) {
+      if (errorCode(error) === "ENOENT") {
+        throw new Error(
+          `Development lock ${input.lockPath} no longer owns its token`,
+        );
+      }
+      throw error;
+    }
+    if (owner?.pid !== input.pid || owner.token !== input.token) {
+      throw new Error(
+        `Development lock ${input.lockPath} no longer owns its token`,
+      );
+    }
+    await rename(candidatePath, input.lockPath);
+  } finally {
+    await unlink(candidatePath).catch(() => undefined);
+  }
+}
+
+export async function acquireDevPortAllocatorLock(input: {
+  lockPath: string;
+  pid: number;
+}): Promise<DevInstanceLock> {
+  while (true) {
+    try {
+      return await acquireDevInstanceLock(input);
+    } catch (error) {
+      if (!(error instanceof DevLockConflictError)) throw error;
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
   }
 }
 
@@ -109,7 +197,9 @@ export async function acquireDevInstanceLock(input: {
   lockPath: string;
   pid: number;
 }): Promise<DevInstanceLock> {
-  await mkdir(path.dirname(input.lockPath), { recursive: true });
+  const stateRoot = path.dirname(input.lockPath);
+  await mkdir(stateRoot, { recursive: true, mode: 0o700 });
+  await chmod(stateRoot, 0o700);
   const token = randomUUID();
   const content = `${JSON.stringify({ pid: input.pid, token })}\n`;
 
@@ -123,10 +213,30 @@ export async function acquireDevInstanceLock(input: {
     ) {
       let released = false;
       return {
+        async bindProcessGroup(processGroupId) {
+          if (released) {
+            throw new Error(
+              `Development lock ${input.lockPath} no longer owns its token`,
+            );
+          }
+          if (!Number.isInteger(processGroupId) || processGroupId <= 0) {
+            throw new Error("Development process group ID must be positive");
+          }
+          await replaceOwnedLockContent({
+            lockPath: input.lockPath,
+            pid: input.pid,
+            token,
+            content: `${JSON.stringify({
+              pid: input.pid,
+              token,
+              processGroupId,
+            })}\n`,
+          });
+        },
         async release() {
           if (released) return;
           released = true;
-          let owner: { pid: number; token?: string } | null;
+          let owner: LockOwner | null;
           try {
             owner = parseLockOwner(await readFile(input.lockPath, "utf8"));
           } catch (error) {
@@ -151,8 +261,17 @@ export async function acquireDevInstanceLock(input: {
       throw error;
     }
     const owner = parseLockOwner(staleContent);
-    if (owner && processIsLive(owner.pid)) {
-      throw new Error(
+    if (owner && lockOwnerIsLive(owner)) {
+      if (
+        !processIsLive(owner.pid) &&
+        owner.processGroupId !== undefined &&
+        processGroupIsLive(owner.processGroupId)
+      ) {
+        throw new DevLockConflictError(
+          `Development instance lock ${input.lockPath} is held by live process group ${owner.processGroupId} after launcher PID ${owner.pid} exited. Stop that process group or set CATAMORPHIC_DEV_INSTANCE to use another instance.`,
+        );
+      }
+      throw new DevLockConflictError(
         `Development instance lock ${input.lockPath} is held by live PID ${owner.pid}. Stop that process or set CATAMORPHIC_DEV_INSTANCE to use another instance.`,
       );
     }
@@ -176,7 +295,7 @@ export async function acquireDevInstanceLock(input: {
     }
     if (currentContent !== staleContent) continue;
     const currentOwner = parseLockOwner(currentContent);
-    if (currentOwner && processIsLive(currentOwner.pid)) continue;
+    if (currentOwner && lockOwnerIsLive(currentOwner)) continue;
     try {
       await unlink(input.lockPath);
     } catch (error) {
@@ -216,21 +335,39 @@ function signalProcessGroup(
 export async function stopDevProcessGroup(input: {
   processGroupId: number;
   signal: NodeJS.Signals;
+  gracePeriodMs?: number;
   lock: DevInstanceLock;
 }): Promise<void> {
   await settleDevProcessGroup(input);
 }
 
+export async function terminateDevProcessGroup(input: {
+  processGroupId: number;
+  signal?: NodeJS.Signals;
+  gracePeriodMs?: number;
+}): Promise<void> {
+  if (!processGroupIsLive(input.processGroupId)) return;
+  signalProcessGroup(input.processGroupId, input.signal ?? "SIGTERM");
+  const deadline = Date.now() + (input.gracePeriodMs ?? 5_000);
+  while (processGroupIsLive(input.processGroupId) && Date.now() < deadline) {
+    await new Promise((resolve) => setTimeout(resolve, 20));
+  }
+  if (processGroupIsLive(input.processGroupId)) {
+    signalProcessGroup(input.processGroupId, "SIGKILL");
+  }
+  while (processGroupIsLive(input.processGroupId)) {
+    await new Promise((resolve) => setTimeout(resolve, 20));
+  }
+}
+
 export async function settleDevProcessGroup(input: {
   processGroupId: number;
   signal?: NodeJS.Signals;
+  gracePeriodMs?: number;
   lock: DevInstanceLock;
 }): Promise<void> {
   try {
-    signalProcessGroup(input.processGroupId, input.signal ?? "SIGTERM");
-    while (processGroupIsLive(input.processGroupId)) {
-      await new Promise((resolve) => setTimeout(resolve, 20));
-    }
+    await terminateDevProcessGroup(input);
   } finally {
     await input.lock.release();
   }

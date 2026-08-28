@@ -28,6 +28,13 @@ export interface ProcessResult {
   signal: NodeJS.Signals | null;
 }
 
+export interface TestRunCommand {
+  label: string;
+  command: string;
+  args: readonly string[];
+  logFileName: string;
+}
+
 export interface TestSignalSource {
   on(signal: "SIGINT" | "SIGTERM", listener: () => void): void;
   off(signal: "SIGINT" | "SIGTERM", listener: () => void): void;
@@ -288,11 +295,44 @@ export function turboTestArguments(input: {
   ];
 }
 
+export function testRunCommands(input: {
+  rootPath: string;
+  cliArguments: readonly string[];
+}): TestRunCommand[] {
+  const nodePath = path.join(
+    input.rootPath,
+    "node_modules",
+    "node",
+    "bin",
+    "node",
+  );
+  return [
+    {
+      label: "root orchestration tests",
+      command: nodePath,
+      args: [
+        path.join(input.rootPath, "node_modules", "vitest", "vitest.mjs"),
+        "run",
+        "--config",
+        path.join(input.rootPath, "vitest.config.ts"),
+        "scripts",
+      ],
+      logFileName: "root-orchestration-tests.log",
+    },
+    {
+      label: "workspace tests",
+      command: nodePath,
+      args: turboTestArguments(input),
+      logFileName: "workspace-tests.log",
+    },
+  ];
+}
+
 async function main(): Promise<void> {
   const repositoryRoot = path.resolve(import.meta.dirname, "..");
-  let turboArguments: string[];
+  let commands: TestRunCommand[];
   try {
-    turboArguments = turboTestArguments({
+    commands = testRunCommands({
       rootPath: repositoryRoot,
       cliArguments: process.argv.slice(2),
     });
@@ -317,17 +357,22 @@ async function main(): Promise<void> {
           source: deterministicTestEnvironment(runtime.env, databaseUrl),
           resources,
         });
-        const result = await runLoggedProcess({
-          command: runtime.nodePath,
-          args: turboArguments,
-          cwd: repositoryRoot,
-          env,
-          logPath: path.join(resources.logsPath, "workspace-tests.log"),
-          signals,
-        });
-        exitCode = result.code;
-        if (result.code !== 0) {
-          throw new Error(`Workspace tests exited with code ${result.code}`);
+        for (const [index, command] of commands.entries()) {
+          console.log(
+            `\n[test ${index + 1}/${commands.length}] ${command.label}`,
+          );
+          const result = await runLoggedProcess({
+            command: command.command,
+            args: command.args,
+            cwd: repositoryRoot,
+            env,
+            logPath: path.join(resources.logsPath, command.logFileName),
+            signals,
+          });
+          exitCode = result.code;
+          if (result.code !== 0) {
+            throw new Error(`${command.label} exited with code ${result.code}`);
+          }
         }
       },
     });

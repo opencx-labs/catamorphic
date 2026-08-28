@@ -134,9 +134,9 @@ bun run dev          # Combined desktop and stock-server manual environment
 bun run dev:desktop  # Desktop-focused variant of the same orchestrator
 bun run dev:server   # Stock-server-focused variant of the same orchestrator
 bun run dev:infra    # Optional shared observability and sandbox-bridge services
-bun run test         # Deterministic, Postgres-complete workspace tests
+bun run test         # Deterministic root and Postgres-complete workspace tests
 bun run test:external # Explicit opt-in for credentialed external integrations
-bun run check        # Merge gate
+bun run check        # 12-phase merge gate
 ```
 
 The development orchestrator assigns each worktree its own data directories
@@ -145,10 +145,10 @@ directory manually. `bun run test` creates one disposable Postgres database
 per invocation and is the default test command. External integrations run
 only when explicitly authorized with `bun run test:external`; credentials in
 the environment are not authority to contact external services. Run `bun run
-check` before completing engineering work. It is the merge gate and includes
-the deterministic workspace, PWA, and desktop checks. Docker must be running
-for `bun run test` and `bun run check` so they can create disposable Postgres
-databases.
+check` before completing engineering work. Its 12 phases include root and
+workspace typechecks and tests, plus the PWA and desktop checks. Docker must
+be running for `bun run test` and `bun run check` so they can create disposable
+Postgres databases.
 
 ## Verification Checklist
 
@@ -167,6 +167,7 @@ Zero errors and zero warnings. Use `bunx biome check --write --unsafe .` for uns
 
 ```bash
 bun run typecheck # all packages from root via Turbo
+bun run typecheck:scripts # root production and test orchestration scripts
 ```
 
 Every `.ts`/`.tsx` change must pass with zero errors.
@@ -183,7 +184,7 @@ desktop build or e2e run, or your changes silently don't ship.
 ### 4. Tests
 
 ```bash
-bun run test # deterministic, Postgres-complete workspace tests
+bun run test # deterministic root and Postgres-complete workspace tests
 ```
 
 All existing tests must pass. `bun run check` runs the merge-gate E2E suites;

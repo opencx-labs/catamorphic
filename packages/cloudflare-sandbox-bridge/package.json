@@ -10,7 +10,7 @@
     "start": "wrangler dev",
     "typecheck": "tsgo --project ./tsconfig.json",
     "cf-typegen": "wrangler types",
-    "test": "node ../../node_modules/vitest/vitest.mjs run --config ../../vitest.config.ts"
+    "test": "bun ../../scripts/tool-runtime.ts vitest --tool-cwd packages/cloudflare-sandbox-bridge --config ../../vitest.config.ts"
   },
   "dependencies": {
     "@cloudflare/sandbox": "^0.12.3",

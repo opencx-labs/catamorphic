@@ -5,6 +5,7 @@ import {
   mkdtempSync,
   readFileSync,
   rmSync,
+  statSync,
   writeFileSync,
 } from "node:fs";
 import { createServer } from "node:net";
@@ -14,6 +15,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { reserveLoopbackPort } from "./dev.js";
 import {
   acquireDevInstanceLock,
+  acquireDevPortAllocatorLock,
   settleDevProcessGroup,
   stopDevProcessGroup,
 } from "./dev-runtime.js";
@@ -52,6 +54,15 @@ async function waitForFile(filePath: string): Promise<void> {
   }
 }
 
+function processGroupIsLive(processGroupId: number): boolean {
+  try {
+    process.kill(-processGroupId, 0);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 describe("acquireDevInstanceLock", () => {
   it("acquires and releases a worktree instance lock", async () => {
     const lockPath = temporaryLockPath();
@@ -64,8 +75,21 @@ describe("acquireDevInstanceLock", () => {
     expect(JSON.parse(readFileSync(lockPath, "utf8"))).toMatchObject({
       pid: process.pid,
     });
+    expect(statSync(path.dirname(lockPath)).mode & 0o777).toBe(0o700);
     await lock.release();
     expect(existsSync(lockPath)).toBe(false);
+  });
+
+  it("tightens an existing development state root to mode 0700", async () => {
+    const lockPath = temporaryLockPath();
+    mkdirSync(path.dirname(lockPath), { recursive: true, mode: 0o755 });
+    const lock = await acquireDevInstanceLock({
+      lockPath,
+      pid: process.pid,
+    });
+
+    expect(statSync(path.dirname(lockPath)).mode & 0o777).toBe(0o700);
+    await lock.release();
   });
 
   it("reports an actionable conflict for a live owner", async () => {
@@ -143,6 +167,77 @@ describe("acquireDevInstanceLock", () => {
     ).toHaveLength(31);
     await owners[0]?.release();
   });
+
+  it("persists the child process group and refuses reclaim after launcher death", async () => {
+    if (process.platform === "win32") return;
+    const lockPath = temporaryLockPath();
+    const readyPath = path.join(path.dirname(lockPath), "group-ready");
+    mkdirSync(path.dirname(lockPath), { recursive: true });
+    const descendantSource = [
+      "const fs = require('node:fs');",
+      `fs.writeFileSync(${JSON.stringify(readyPath)}, String(process.pid));`,
+      "setInterval(() => {}, 1000);",
+    ].join("");
+    const launcherSource = [
+      "const { spawn } = require('node:child_process');",
+      `spawn(process.execPath, ['-e', ${JSON.stringify(descendantSource)}], { stdio: 'ignore' });`,
+      "setInterval(() => {}, 1000);",
+    ].join("");
+    const launcher = spawn(process.execPath, ["-e", launcherSource], {
+      detached: true,
+      stdio: "ignore",
+    });
+    childProcesses.push(launcher);
+    await waitForFile(readyPath);
+    if (!launcher.pid) throw new Error("Launcher did not receive a PID");
+    const processGroupId = launcher.pid;
+    const lock = await acquireDevInstanceLock({
+      lockPath,
+      pid: launcher.pid,
+    });
+    await lock.bindProcessGroup(processGroupId);
+    expect(JSON.parse(readFileSync(lockPath, "utf8"))).toMatchObject({
+      pid: launcher.pid,
+      processGroupId,
+    });
+
+    const launcherExit = new Promise<void>((resolve) =>
+      launcher.once("exit", () => resolve()),
+    );
+    process.kill(launcher.pid, "SIGKILL");
+    await launcherExit;
+    expect(processGroupIsLive(processGroupId)).toBe(true);
+
+    try {
+      await expect(
+        acquireDevInstanceLock({ lockPath, pid: process.pid }),
+      ).rejects.toThrow(`live process group ${processGroupId}`);
+    } finally {
+      process.kill(-processGroupId, "SIGKILL");
+      await lock.release();
+    }
+  });
+
+  it("does not let a released owner overwrite a replacement lock", async () => {
+    const lockPath = temporaryLockPath();
+    const first = await acquireDevInstanceLock({
+      lockPath,
+      pid: process.pid,
+    });
+    await first.release();
+    const replacement = await acquireDevInstanceLock({
+      lockPath,
+      pid: process.pid,
+    });
+
+    await expect(first.bindProcessGroup(12345)).rejects.toThrow(
+      "no longer owns",
+    );
+    expect(JSON.parse(readFileSync(lockPath, "utf8"))).not.toHaveProperty(
+      "processGroupId",
+    );
+    await replacement.release();
+  });
 });
 
 describe("reserveLoopbackPort", () => {
@@ -159,6 +254,33 @@ describe("reserveLoopbackPort", () => {
     await new Promise<void>((resolve, reject) => {
       server.close((error) => (error ? reject(error) : resolve()));
     });
+  });
+});
+
+describe("acquireDevPortAllocatorLock", () => {
+  it("serializes concurrent allocators through one global critical section", async () => {
+    const lockPath = temporaryLockPath();
+    let active = 0;
+    let maximumActive = 0;
+    const order: number[] = [];
+
+    await Promise.all(
+      Array.from({ length: 8 }, async (_value, index) => {
+        const lock = await acquireDevPortAllocatorLock({
+          lockPath,
+          pid: process.pid,
+        });
+        active += 1;
+        maximumActive = Math.max(maximumActive, active);
+        order.push(index);
+        await new Promise((resolve) => setTimeout(resolve, 2));
+        active -= 1;
+        await lock.release();
+      }),
+    );
+
+    expect(order).toHaveLength(8);
+    expect(maximumActive).toBe(1);
   });
 });
 
@@ -252,5 +374,61 @@ describe("stopDevProcessGroup", () => {
 
     await settling;
     expect(existsSync(lockPath)).toBe(false);
+  });
+
+  it("escalates to SIGKILL when a descendant ignores SIGTERM", async () => {
+    if (process.platform === "win32") return;
+    const lockPath = temporaryLockPath();
+    const readyPath = path.join(path.dirname(lockPath), "stubborn-ready");
+    const lock = await acquireDevInstanceLock({
+      lockPath,
+      pid: process.pid,
+    });
+    const descendantSource = [
+      "const fs = require('node:fs');",
+      "process.on('SIGTERM', () => {});",
+      `fs.writeFileSync(${JSON.stringify(readyPath)}, 'ready');`,
+      "setInterval(() => {}, 1000);",
+    ].join("");
+    const leaderSource = [
+      "const { spawn } = require('node:child_process');",
+      `spawn(process.execPath, ['-e', ${JSON.stringify(descendantSource)}], { stdio: 'ignore' });`,
+      "process.on('SIGTERM', () => process.exit(0));",
+      "setInterval(() => {}, 1000);",
+    ].join("");
+    const leader = spawn(process.execPath, ["-e", leaderSource], {
+      detached: true,
+      stdio: "ignore",
+    });
+    childProcesses.push(leader);
+    await waitForFile(readyPath);
+    if (!leader.pid) throw new Error("Detached leader did not receive a PID");
+    const processGroupId = leader.pid;
+    let fallbackUsed = false;
+    const fallback = setTimeout(() => {
+      fallbackUsed = true;
+      try {
+        process.kill(-processGroupId, "SIGKILL");
+      } catch {
+        // The bounded escalation already terminated the group.
+      }
+    }, 300);
+
+    try {
+      await stopDevProcessGroup({
+        processGroupId,
+        signal: "SIGTERM",
+        gracePeriodMs: 50,
+        lock,
+      });
+      expect(fallbackUsed).toBe(false);
+      expect(processGroupIsLive(processGroupId)).toBe(false);
+      expect(existsSync(lockPath)).toBe(false);
+    } finally {
+      clearTimeout(fallback);
+      if (processGroupIsLive(processGroupId)) {
+        process.kill(-processGroupId, "SIGKILL");
+      }
+    }
   });
 });

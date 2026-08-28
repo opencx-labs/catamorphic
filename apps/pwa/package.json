@@ -9,7 +9,7 @@
     "build": "bun --bun vite build",
     "preview": "bun --bun vite preview",
     "typecheck": "tsgo --project ./tsconfig.json && tsgo --project ./tsconfig.node.json",
-    "test": "node ../../node_modules/vitest/vitest.mjs run",
+    "test": "bun ../../scripts/tool-runtime.ts vitest --tool-cwd apps/pwa",
     "test:e2e": "bun --bun vite build && bun ../../scripts/tool-runtime.ts vitest --tool-cwd apps/pwa --config ./vitest.e2e.config.ts"
   },
   "dependencies": {

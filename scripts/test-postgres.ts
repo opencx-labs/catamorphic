@@ -57,6 +57,8 @@ export function dockerPostgresRunArgs(input: { name: string }): string[] {
     "--rm",
     "--name",
     input.name,
+    "--label",
+    "catamorphic.test-run",
     "--publish",
     "127.0.0.1::5432",
     "--env",
@@ -92,7 +94,10 @@ export function deterministicTestEnvironment(
   source: NodeJS.ProcessEnv,
   databaseUrl: string,
 ): NodeJS.ProcessEnv {
-  const environment = { ...source, DATABASE_URL: databaseUrl };
+  const environment: NodeJS.ProcessEnv = {
+    ...source,
+    DATABASE_URL: databaseUrl,
+  };
   delete environment.CATAMORPHIC_DB_SCHEMA;
   for (const variable of EXTERNAL_TEST_VARIABLES) {
     delete environment[variable];
@@ -184,7 +189,15 @@ export async function withDisposablePostgres<T>(input: {
     }
   }
   if (!outcome) throw new Error("Disposable Postgres task did not settle");
-  if (!outcome.success) throw outcome.error;
+  if (!outcome.success) {
+    if (cleanupError !== undefined) {
+      throw new AggregateError(
+        [outcome.error, cleanupError],
+        "Disposable Postgres task and cleanup both failed",
+      );
+    }
+    throw outcome.error;
+  }
   if (cleanupError !== undefined) throw cleanupError;
   return outcome.value;
 }
