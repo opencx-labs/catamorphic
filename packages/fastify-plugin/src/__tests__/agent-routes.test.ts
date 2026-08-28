@@ -121,6 +121,41 @@ describe("agent routes", () => {
     });
   });
 
+  describe("watcher lifecycle routes", () => {
+    it("registers list and stop routes", async () => {
+      const app = await buildApp();
+      const list = await app.inject({
+        method: "GET",
+        url: `/api/projects/${PROJECT_ID}/agent/sessions/${SESSION_ID}/watchers`,
+      });
+      const stop = await app.inject({
+        method: "DELETE",
+        url: `/api/projects/${PROJECT_ID}/agent/sessions/${SESSION_ID}/watchers/${SESSION_ID}`,
+      });
+      expect(list.statusCode).toBe(503);
+      expect(stop.statusCode).toBe(503);
+      await app.close();
+    });
+  });
+
+  describe("cross-host session mailbox routes", () => {
+    it("registers list and acknowledgement routes", async () => {
+      const app = await buildApp();
+      const list = await app.inject({
+        method: "GET",
+        url: `/api/projects/${PROJECT_ID}/session-mailboxes?destinationHostId=desktop:test`,
+      });
+      const acknowledge = await app.inject({
+        method: "POST",
+        url: `/api/projects/${PROJECT_ID}/session-mailboxes/${SESSION_ID}/acknowledge`,
+        payload: { destinationHostId: "desktop:test" },
+      });
+      expect(list.statusCode).toBe(503);
+      expect(acknowledge.statusCode).toBe(503);
+      await app.close();
+    });
+  });
+
   describe("DELETE /api/projects/:projectId/agent/sessions/:sessionId", () => {
     it("responds 503 when no coding agent is configured", async () => {
       const app = await buildApp();

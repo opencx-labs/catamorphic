@@ -59,6 +59,7 @@ export function surfaceTools(
   identity: Identity,
   projectId: string,
   features: SurfaceFeatures = { publications: "public", proposals: true },
+  currentSessionId?: string,
 ): SurfaceTool[] {
   const tools: SurfaceTool[] = [];
   const guarded =
@@ -486,6 +487,247 @@ export function surfaceTools(
         return { sessionId, reply: reply.content };
       }),
     });
+
+    tools.push({
+      definition: {
+        name: "send_agent_message",
+        description:
+          "Deliver an attributed message from your current session to this or another agent session. message_only records it without waking the agent; next_turn wakes an idle session or queues behind its active turn; interrupt stops the active turn and runs this next. Use interrupt only when delay would make the work wrong.",
+        inputSchema: {
+          type: "object",
+          properties: {
+            fromSessionId: { type: "string" },
+            toSessionId: { type: "string" },
+            message: { type: "string" },
+            mode: {
+              type: "string",
+              enum: ["message_only", "next_turn", "interrupt"],
+            },
+            idempotencyKey: { type: "string" },
+          },
+          required: ["toSessionId", "message", "mode"],
+        },
+      },
+      call: guarded(async (args) => {
+        const fromSessionId = str(args.fromSessionId) ?? currentSessionId;
+        const toSessionId = str(args.toSessionId);
+        const message = str(args.message);
+        const mode = args.mode;
+        if (
+          !fromSessionId ||
+          !toSessionId ||
+          !message ||
+          (mode !== "message_only" &&
+            mode !== "next_turn" &&
+            mode !== "interrupt")
+        ) {
+          throw new Error(
+            "fromSessionId, toSessionId, message, and a valid mode are required",
+          );
+        }
+        const source = await sessions.get(identity, projectId, fromSessionId);
+        return sessions.deliver(identity, projectId, toSessionId, {
+          content: message,
+          author: {
+            kind: "agent",
+            sessionId: fromSessionId,
+            agentId: source.agentId,
+          },
+          mode,
+          ...(str(args.idempotencyKey)
+            ? { idempotencyKey: str(args.idempotencyKey) }
+            : {}),
+        });
+      }),
+    });
+
+    if (core.watchers) {
+      const watchers = core.watchers;
+      tools.push(
+        {
+          definition: {
+            name: "create_watcher",
+            description:
+              'Create a temporary TypeScript watcher workflow for future normalized project events already supplied by this host. The source must export the named defineWorkflow and receives { watcherId, event } as input. To notify or wake a session, return context.host["catamorphic.sessions"].deliver({ sessionId, content, mode, idempotencyKey }) from a boundary. The workflow is committed to an isolated catamorphic/watchers/<id> ref, pinned, and never merged into the project main branch.',
+            inputSchema: {
+              type: "object",
+              properties: {
+                sessionId: { type: "string" },
+                workflowName: { type: "string" },
+                source: { type: "string" },
+                eventKinds: {
+                  type: "array",
+                  items: { type: "string" },
+                  description:
+                    "Exact normalized event kinds supplied by a project event source.",
+                },
+                environment: { type: "string" },
+                expiresInSeconds: { type: "integer", minimum: 60 },
+              },
+              required: ["workflowName", "source", "eventKinds"],
+            },
+          },
+          call: guarded(async (args) => {
+            const sessionId = str(args.sessionId) ?? currentSessionId;
+            const workflowName = str(args.workflowName);
+            const source = str(args.source);
+            const eventKinds = Array.isArray(args.eventKinds)
+              ? args.eventKinds.filter(
+                  (kind): kind is string => typeof kind === "string",
+                )
+              : [];
+            if (
+              !sessionId ||
+              !workflowName ||
+              !source ||
+              eventKinds.length === 0
+            ) {
+              throw new Error(
+                "sessionId, workflowName, source, and eventKinds are required",
+              );
+            }
+            return watchers.create({
+              identity,
+              projectId,
+              sessionId,
+              workflowName,
+              source,
+              eventKinds,
+              ...(str(args.environment)
+                ? { environment: str(args.environment) }
+                : {}),
+              ...(int(args.expiresInSeconds) !== undefined
+                ? { expiresInSeconds: int(args.expiresInSeconds) }
+                : {}),
+            });
+          }),
+        },
+        {
+          definition: {
+            name: "list_watchers",
+            description:
+              "List temporary watchers owned by the current session, including pinned commit, expiry, status, and last error.",
+            inputSchema: {
+              type: "object",
+              properties: { sessionId: { type: "string" } },
+            },
+            annotations: READ_ONLY,
+          },
+          call: guarded(async (args) => {
+            const sessionId = str(args.sessionId) ?? currentSessionId;
+            if (!sessionId) throw new Error("sessionId is required");
+            return watchers.list({
+              identity,
+              projectId,
+              sessionId,
+            });
+          }),
+        },
+        {
+          definition: {
+            name: "stop_watcher",
+            description: "Stop a temporary watcher owned by a session.",
+            inputSchema: {
+              type: "object",
+              properties: {
+                sessionId: { type: "string" },
+                watcherId: { type: "string" },
+              },
+              required: ["watcherId"],
+            },
+          },
+          call: guarded(async (args) => {
+            const sessionId = str(args.sessionId) ?? currentSessionId;
+            const watcherId = str(args.watcherId);
+            if (!sessionId || !watcherId) {
+              throw new Error("sessionId and watcherId are required");
+            }
+            return {
+              stopped: await watchers.stop({
+                identity,
+                projectId,
+                sessionId,
+                watcherId,
+              }),
+            };
+          }),
+        },
+      );
+
+      if (core.github) {
+        tools.push({
+          definition: {
+            name: "create_github_watcher",
+            description:
+              "Create a temporary TypeScript watcher for future GitHub repository events. Catamorphic verifies the current user's repository access and starts the appropriate local or remote GitHub monitor. The workflow uses the same source contract as create_watcher.",
+            inputSchema: {
+              type: "object",
+              properties: {
+                sessionId: { type: "string" },
+                workflowName: { type: "string" },
+                source: { type: "string" },
+                eventKinds: {
+                  type: "array",
+                  items: { type: "string" },
+                  description:
+                    "Normalized kinds such as github.pull_request, github.pull_request_review, github.check_run, github.check_suite, or github.workflow_run.",
+                },
+                environment: { type: "string" },
+                placement: {
+                  type: "string",
+                  enum: ["local", "remote", "any"],
+                },
+                expiresInSeconds: { type: "integer", minimum: 60 },
+                pollIntervalSeconds: { type: "integer", minimum: 5 },
+              },
+              required: ["workflowName", "source", "eventKinds"],
+            },
+          },
+          call: guarded(async (args) => {
+            const sessionId = str(args.sessionId) ?? currentSessionId;
+            const workflowName = str(args.workflowName);
+            const source = str(args.source);
+            const eventKinds = Array.isArray(args.eventKinds)
+              ? args.eventKinds.filter(
+                  (kind): kind is string => typeof kind === "string",
+                )
+              : [];
+            if (
+              !sessionId ||
+              !workflowName ||
+              !source ||
+              eventKinds.length === 0
+            ) {
+              throw new Error(
+                "sessionId, workflowName, source, and eventKinds are required",
+              );
+            }
+            return watchers.createGithub({
+              identity,
+              projectId,
+              sessionId,
+              workflowName,
+              source,
+              eventKinds,
+              ...(str(args.environment)
+                ? { environment: str(args.environment) }
+                : {}),
+              ...(args.placement === "local" ||
+              args.placement === "remote" ||
+              args.placement === "any"
+                ? { placement: args.placement }
+                : {}),
+              ...(int(args.expiresInSeconds) !== undefined
+                ? { expiresInSeconds: int(args.expiresInSeconds) }
+                : {}),
+              ...(int(args.pollIntervalSeconds) !== undefined
+                ? { pollIntervalSeconds: int(args.pollIntervalSeconds) }
+                : {}),
+            });
+          }),
+        });
+      }
+    }
   }
 
   return tools;

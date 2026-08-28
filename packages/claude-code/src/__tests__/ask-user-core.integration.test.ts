@@ -147,6 +147,7 @@ describeIf("ask_user across ClaudeCodeAgent + AgentSessionsService", () => {
     );
 
     sessions = new AgentSessionsService(db, {
+      hostId: "ask-user-test-host",
       projectManager,
       sandboxProvider: unusedSandboxProvider,
       codingAgents: registry,

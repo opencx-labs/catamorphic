@@ -86,4 +86,5 @@ Settled design decisions live here as short Architecture Decision Records. They 
 | [0071](0071-stock-auth-and-agent-driven-setup.md) | Stock auth and agent-driven setup | Accepted |
 | [0072](0072-remote-oauth-admission-and-project-administration.md) | Remote OAuth, admission, and project administration | Accepted |
 | [0073](0073-recoverable-project-remotes-and-builder-checkout.md) | Recoverable project remotes and builder checkout | Accepted |
+| [0074](0074-temporary-watchers-and-session-delivery.md) | Temporary Watchers and durable session delivery | Accepted |
 | [0075](0075-parallel-local-development-isolation.md) | Parallel local development isolation | Accepted |

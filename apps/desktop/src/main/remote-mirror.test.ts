@@ -10,16 +10,37 @@ import { RemoteSessionMirror } from "./remote-mirror.js";
 
 interface Captured {
   url: string;
-  body: { title: string | null; messages: Array<{ id: string }> };
+  body: {
+    authority: { hostId: string; revision: number };
+    title: string | null;
+    messages: Array<{ id: string }>;
+  };
 }
 
 let server: http.Server;
 let base: string;
 const captured: Captured[] = [];
 let respondDiverged = false;
+let mailboxItems: Array<Record<string, unknown>> = [];
+let mailboxAcknowledgements = 0;
 
 beforeAll(async () => {
   server = http.createServer((request, response) => {
+    if (
+      request.method === "GET" &&
+      request.url?.includes("session-mailboxes")
+    ) {
+      response.writeHead(200, { "content-type": "application/json" });
+      response.end(JSON.stringify({ items: mailboxItems }));
+      return;
+    }
+    if (request.url?.endsWith("/acknowledge")) {
+      mailboxAcknowledgements += 1;
+      mailboxItems = [];
+      response.writeHead(200, { "content-type": "application/json" });
+      response.end(JSON.stringify({ ok: true }));
+      return;
+    }
     let data = "";
     request.on("data", (chunk) => {
       data += chunk;
@@ -49,6 +70,7 @@ afterAll(() => {
 
 const forkMarks: Array<{ sessionId: string; serverUrl: string }> = [];
 const incognitoMarks: string[] = [];
+const importedMailboxIds: string[] = [];
 
 function mirror(
   overrides: {
@@ -68,6 +90,8 @@ function mirror(
     provider: "ai-sdk",
     agentId: overrides.agentId ?? null,
     parentSessionId: overrides.parentSessionId ?? null,
+    authorityHostId: "desktop:test-host",
+    authorityRevision: 1,
     messages: [
       {
         id: "m1",
@@ -79,6 +103,7 @@ function mirror(
     ],
   };
   return new RemoteSessionMirror({
+    hostId: "desktop:test-host",
     profiles: { list: () => ({ profiles: [{ id: "prof-1" }] }) } as never,
     profileConfig: {
       forProfile: () => ({
@@ -102,6 +127,15 @@ function mirror(
                   },
                 }
               : null,
+          list: () => ({
+            "local-1": {
+              connectionId: "connection-1",
+              serverUrl: base,
+              remoteProjectId: "remote-1",
+              remoteProjectName: "Brain",
+              lastSyncAt: null,
+            },
+          }),
         },
       }),
     } as never,
@@ -113,6 +147,9 @@ function mirror(
     sessionDetail: async () => detail as never,
     markFork: async (_projectId, sessionId, fork) => {
       forkMarks.push({ sessionId, serverUrl: fork.serverUrl });
+    },
+    importMailbox: async (_projectId, item) => {
+      importedMailboxIds.push(item.id);
     },
   });
 }
@@ -129,6 +166,10 @@ describe("RemoteSessionMirror", () => {
       "/api/projects/remote-1/agent/sessions/s1/mirror",
     );
     expect(captured[0]?.body.title).toBe("Desk chat");
+    expect(captured[0]?.body.authority).toEqual({
+      hostId: "desktop:test-host",
+      revision: 1,
+    });
     expect(captured[0]?.body.messages.map((m) => m.id)).toEqual(["m1"]);
   });
 
@@ -176,5 +217,29 @@ describe("RemoteSessionMirror", () => {
     // The fork now lives on the server: no further pushes for s1.
     pusher.mirrorInBackground("local-1", "s1");
     expect(captured).toHaveLength(3);
+  });
+
+  it("imports and acknowledges messages addressed to this desktop host", async () => {
+    mailboxItems = [
+      {
+        id: "mailbox-1",
+        projectId: "remote-1",
+        sessionId: "s1",
+        sourceHostId: "server:test-host",
+        destinationHostId: "desktop:test-host",
+        authorityRevision: 1,
+        messageId: "message-1",
+        content: "PR checks passed",
+        author: { kind: "watcher", watcherId: "watcher-1" },
+        mode: "next_turn",
+        idempotencyKey: "delivery-1",
+        metadata: null,
+        createdAt: new Date().toISOString(),
+      },
+    ];
+    const pusher = mirror();
+    pusher.syncMailboxesInBackground();
+    await vi.waitFor(() => expect(importedMailboxIds).toContain("mailbox-1"));
+    await vi.waitFor(() => expect(mailboxAcknowledgements).toBe(1));
   });
 });

@@ -424,10 +424,17 @@ app.whenReady().then(async () => {
   // "Continue on mobile": the LAN listener that serves the PWA and
   // proxies /api with device-token auth. Auto-listens when phones are
   // already paired, so they reconnect after a desktop restart.
+  const e2eMobilePairingAddress =
+    process.env.CATAMORPHIC_E2E_MOBILE_PAIRING_ADDRESS;
   const mobilePairing = new MobilePairingService({
     file: path.join(paths.root, "..", "mobile-pairing.json"),
     profileConfig,
     serverUrl: () => state.current?.url ?? null,
+    ...(e2eMobilePairingAddress && e2eDataDir
+      ? {
+          lanAddresses: () => [e2eMobilePairingAddress],
+        }
+      : {}),
   });
   if (mobilePairing.hasDevices()) {
     mobilePairing.ensureListening().catch((error) => {
@@ -485,7 +492,11 @@ app.whenReady().then(async () => {
     // wake; releasing before the freeze parks the job cleanly and resume
     // picks it back up within a poll interval.
     powerMonitor.on("suspend", () => void server?.suspendExecution());
-    powerMonitor.on("resume", () => server?.resumeExecution());
+    powerMonitor.on("resume", () => {
+      server?.resumeExecution();
+      server?.syncSessionMailboxes();
+    });
+    app.on("browser-window-focus", () => server?.syncSessionMailboxes());
     // OAuth-backed connections hand their token to harnesses as a plain
     // header, so the app keeps it fresh: at boot, after sleep, and on a
     // slow tick (refresh only fires when a token is near expiry).

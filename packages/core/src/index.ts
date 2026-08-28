@@ -95,6 +95,16 @@ export {
   type SyncedFileChange,
   UnsupportedAgentTopologyError,
 } from "./services/agent-sessions-service.js";
+export {
+  type AgentTurn,
+  type AgentTurnStatus,
+  AgentTurnsService,
+  type PendingSessionTurn,
+  parseSessionMessageAuthor,
+  type SessionDeliveryMode,
+  type SessionDeliveryReceipt,
+  type SessionMessageAuthor,
+} from "./services/agent-turns-service.js";
 export type { AppBundleStore } from "./services/app-bundle-store.js";
 export { appBundleKey, appVersionPrefix } from "./services/app-bundle-store.js";
 export {
@@ -261,12 +271,14 @@ export {
   type ExecutionWorkerOptions,
   ExecutionWorkerService,
 } from "./services/execution-worker-service.js";
+export { GithubProjectEventSource } from "./services/github-event-source.js";
 export {
   type GithubConnectionStatus,
   GithubNotConnectedError,
   GithubService,
   type GithubServiceConfig,
   GithubTokenExpiredError,
+  githubEventKind,
   type ImportGithubRepoInput,
   ProjectNotLinkedToGithubError,
 } from "./services/github-service.js";
@@ -291,6 +303,17 @@ export {
   ProjectEnvironmentsService,
   parseProjectEnvironmentPolicy,
 } from "./services/project-environments-service.js";
+export {
+  type EventSourcePlacement,
+  type ProjectEventMonitor,
+  ProjectEventMonitorsService,
+  type ProjectEventSourceProvider,
+  startProjectEventMonitorWorker,
+} from "./services/project-event-monitors-service.js";
+export {
+  type ProjectEvent,
+  ProjectEventsService,
+} from "./services/project-events-service.js";
 export {
   type CreateProjectInput,
   type ListProjectsInput,
@@ -405,6 +428,7 @@ export {
   RunsService,
   SandboxProviderNotConfiguredError,
   type StepStatus,
+  type TriggerPinnedRunInput,
   type TriggerProductionRunInput,
   type WorkflowStepAttempt,
   type WorkflowStepAttemptStatus,
@@ -414,6 +438,13 @@ export {
   type SecretStatus,
   SecretsService,
 } from "./services/secrets-service.js";
+export {
+  type SessionAuthority,
+  SessionAuthorityMismatchError,
+  SessionMailboxesService,
+  type SessionMailboxItem,
+  SessionMailboxNotFoundError,
+} from "./services/session-mailboxes-service.js";
 export {
   humanizeSkillName,
   type ProjectSkill,
@@ -474,6 +505,11 @@ export {
   type TriggerSuspensionReason,
   TriggersService,
 } from "./services/triggers-service.js";
+export {
+  startWatcherDispatcher,
+  type Watcher,
+  WatchersService,
+} from "./services/watchers-service.js";
 export {
   type WorkflowDetail,
   WorkflowNotFoundError,

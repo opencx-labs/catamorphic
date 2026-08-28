@@ -36,6 +36,13 @@ import {
   parseProjectAgentId,
 } from "./agent-definitions-service.js";
 import { assertAgentSessionAccess } from "./agent-session-access.js";
+import {
+  AgentTurnsService,
+  type PendingSessionTurn,
+  type SessionDeliveryMode,
+  type SessionDeliveryReceipt,
+  type SessionMessageAuthor,
+} from "./agent-turns-service.js";
 import type { AppPoliciesService } from "./app-policies-service.js";
 import { AccessDeniedError, resolveScope } from "./artifact-scope.js";
 import type {
@@ -53,6 +60,10 @@ import type { PluginsService } from "./plugins-service.js";
 import { PROGRAM_READER } from "./program-reader.js";
 import { requireTenantProject } from "./projects-service.js";
 import { type SyncedFileChange, syncSandboxChanges } from "./sandbox-sync.js";
+import {
+  SessionMailboxesService,
+  type SessionMailboxItem,
+} from "./session-mailboxes-service.js";
 import {
   documentsClientFor,
   shipRemoteProject,
@@ -82,6 +93,10 @@ export interface AgentSession {
   parentSessionId: string | null;
   /** Short agent-published description used to coordinate project peers. */
   activity: string | null;
+  /** Host currently responsible for executing this session's turns. */
+  authorityHostId: string;
+  /** Monotonic fencing token for cross-host delivery. */
+  authorityRevision: number;
   /** Runtime state in this host process; never persisted. */
   running: boolean;
   status: "active" | "closed";
@@ -97,11 +112,15 @@ export interface AgentMessage {
   content: string;
   commitSha: string | null;
   metadata: Record<string, unknown> | null;
+  author: SessionMessageAuthor;
+  deliveryMode: SessionDeliveryMode;
+  idempotencyKey: string | null;
   createdAt: string;
 }
 
 export interface AgentSessionDetail extends AgentSession {
   messages: AgentMessage[];
+  pendingTurns: PendingSessionTurn[];
 }
 
 export interface AgentSessionPeer {
@@ -346,6 +365,8 @@ export interface NativeAgentCheckout {
 }
 
 interface AgentSessionsDeps {
+  /** Stable, host-owned identity used to fence cross-host session delivery. */
+  hostId: string;
   projectManager: ProjectManager;
   sandboxProvider: SandboxProvider;
   codingAgents: CodingAgentRegistry;
@@ -419,6 +440,9 @@ interface AgentSessionsDeps {
  * 3. The conversation persists to `agent_sessions` / `agent_messages`.
  */
 export class AgentSessionsService {
+  readonly turns: AgentTurnsService;
+  readonly mailboxes: SessionMailboxesService;
+  readonly hostId: string;
   private readonly projectManager: ProjectManager;
   private readonly sandboxProvider: SandboxProvider;
   private readonly codingAgents: CodingAgentRegistry;
@@ -451,11 +475,16 @@ export class AgentSessionsService {
     string,
     { timer: ReturnType<typeof setTimeout>; attempt: number }
   >();
+  private readonly drainers = new Map<string, Promise<void>>();
+  private readonly turnWorkerId = `agent-sessions:${randomUUID()}`;
 
   constructor(
     private readonly db: Kysely<DB>,
     deps: AgentSessionsDeps,
   ) {
+    this.turns = new AgentTurnsService(db);
+    this.hostId = deps.hostId;
+    this.mailboxes = new SessionMailboxesService(db, deps.hostId);
     this.projectManager = deps.projectManager;
     this.sandboxProvider = deps.sandboxProvider;
     this.codingAgents = deps.codingAgents;
@@ -624,7 +653,51 @@ export class AgentSessionsService {
     return {
       ...mapSession(row, this.runningTurns.has(row.id)),
       messages: settled.map(mapMessage),
+      pendingTurns: await this.turns.listPendingMessages({ sessionId }),
     };
+  }
+
+  async updateQueuedTurn(
+    identity: Identity,
+    projectId: string,
+    sessionId: string,
+    turnId: string,
+    input: { content?: string; metadata?: JsonObject; held?: boolean },
+  ): Promise<boolean> {
+    await this.requireSession(identity, projectId, sessionId);
+    const updated = await this.turns.updateQueued({
+      turnId,
+      sessionId,
+      ...input,
+    });
+    if (updated && input.held === false) {
+      void this.scheduleDrain(identity, projectId, sessionId).catch(() => {});
+    }
+    return updated;
+  }
+
+  async cancelQueuedTurn(
+    identity: Identity,
+    projectId: string,
+    sessionId: string,
+    turnId: string,
+  ): Promise<boolean> {
+    await this.requireSession(identity, projectId, sessionId);
+    return this.turns.cancelQueued({ turnId, sessionId });
+  }
+
+  async promoteQueuedTurn(
+    identity: Identity,
+    projectId: string,
+    sessionId: string,
+    turnId: string,
+  ): Promise<boolean> {
+    await this.requireSession(identity, projectId, sessionId);
+    const promoted = await this.turns.promoteQueued({ turnId, sessionId });
+    if (!promoted) return false;
+    await this.interrupt(identity, projectId, sessionId);
+    void this.scheduleDrain(identity, projectId, sessionId).catch(() => {});
+    return true;
   }
 
   /**
@@ -644,6 +717,22 @@ export class AgentSessionsService {
         (message.metadata as JsonObject | null)?.status === "in_progress",
     );
     if (orphaned.length === 0) return messages;
+
+    await this.db
+      .updateTable("agent_turns")
+      .set({
+        status: "failed",
+        error: "The host stopped while this turn was running",
+        completed_at: new Date(),
+        lease_owner: null,
+        lease_token: null,
+        lease_expires_at: null,
+        updated_at: new Date(),
+      })
+      .where("session_id", "=", sessionId)
+      .where("status", "=", "running")
+      .where("lease_owner", "!=", this.turnWorkerId)
+      .execute();
 
     const updated = new Map<string, MessageRow>();
     for (const message of orphaned) {
@@ -764,6 +853,8 @@ export class AgentSessionsService {
           environment_name: admitted.environmentName,
           status: "active",
           base_commit_sha: null,
+          authority_host_id: this.hostId,
+          authority_revision: 1,
         })
         .returningAll()
         .executeTakeFirstOrThrow();
@@ -799,11 +890,15 @@ export class AgentSessionsService {
        * it), the fork continues on the SAME agent instead of the default.
        */
       agentSlug?: string;
+      authority: { hostId: string; revision: number };
       messages: Array<{
         id: string;
         role: "user" | "assistant" | "system";
         content: string;
         metadata: Record<string, unknown> | null;
+        author: SessionMessageAuthor;
+        deliveryMode: SessionDeliveryMode;
+        idempotencyKey: string | null;
         createdAt: string;
       }>;
     },
@@ -840,6 +935,14 @@ export class AgentSessionsService {
         }
         if (existing && this.runningTurns.has(sessionId)) {
           throw new AgentTurnInProgressError(sessionId);
+        }
+        if (
+          existing &&
+          existing.authority_host_id !== "unassigned" &&
+          (existing.authority_host_id !== input.authority.hostId ||
+            Number(existing.authority_revision) > input.authority.revision)
+        ) {
+          throw new SessionMirrorDivergedError(sessionId);
         }
         if (existing && !existing.allocation_id) {
           throw new Error("Agent session has no Environment Allocation");
@@ -912,6 +1015,8 @@ export class AgentSessionsService {
                   title: input.title ?? existing.title,
                   icon: input.icon ?? existing.icon,
                   updated_at: new Date(),
+                  authority_host_id: input.authority.hostId,
+                  authority_revision: input.authority.revision,
                 })
                 .where("id", "=", sessionId)
                 .returningAll()
@@ -934,6 +1039,8 @@ export class AgentSessionsService {
                   base_commit_sha: null,
                   title: input.title ?? null,
                   icon: input.icon ?? null,
+                  authority_host_id: input.authority.hostId,
+                  authority_revision: input.authority.revision,
                 })
                 .returningAll()
                 .executeTakeFirstOrThrow();
@@ -950,6 +1057,10 @@ export class AgentSessionsService {
               role: message.role,
               content: message.content,
               metadata: message.metadata as JsonObject | null,
+              author_kind: message.author.kind,
+              author_payload: JSON.parse(JSON.stringify(message.author)),
+              delivery_mode: message.deliveryMode,
+              idempotency_key: message.idempotencyKey,
               commit_sha: null,
               created_at: new Date(message.createdAt),
             }));
@@ -1014,6 +1125,9 @@ export class AgentSessionsService {
         session_id: sessionId,
         role: "system",
         content: `Continued on ${host}. This copy is history now.`,
+        author_kind: "system",
+        author_payload: { kind: "system", code: "mirror_fork" },
+        delivery_mode: "message_only",
         metadata: {
           marker: {
             kind: "mirror_fork",
@@ -1193,6 +1307,9 @@ export class AgentSessionsService {
           session_id: sessionId,
           role: "system",
           content: entry.content,
+          author_kind: "system",
+          author_payload: { kind: "system", code: "session_configuration" },
+          delivery_mode: "message_only",
           metadata: { marker: entry.marker },
         })
         .execute();
@@ -1289,6 +1406,8 @@ export class AgentSessionsService {
           icon: session.icon,
           parent_session_id: sessionId,
           title: forkTitle,
+          authority_host_id: this.hostId,
+          authority_revision: 1,
         })
         .returningAll()
         .executeTakeFirstOrThrow();
@@ -1301,6 +1420,10 @@ export class AgentSessionsService {
             content: message.content,
             commit_sha: message.commit_sha,
             metadata: message.metadata,
+            author_kind: message.author_kind,
+            author_payload: message.author_payload,
+            delivery_mode: message.delivery_mode,
+            idempotency_key: message.idempotency_key,
           })
           .execute();
       }
@@ -1314,6 +1437,9 @@ export class AgentSessionsService {
           content: session.title
             ? `Forked from "${session.title}"`
             : "Forked from another conversation",
+          author_kind: "system",
+          author_payload: { kind: "system", code: "session_fork" },
+          delivery_mode: "message_only",
           metadata: {
             marker: { kind: "fork", parentSessionId: sessionId },
           },
@@ -1329,7 +1455,10 @@ export class AgentSessionsService {
     projectId: string,
     sessionId: string,
     message: string,
-    input: { attachments?: AgentAttachment[] } = {},
+    input: {
+      attachments?: AgentAttachment[];
+      deliveryMode?: Exclude<SessionDeliveryMode, "message_only">;
+    } = {},
   ): Promise<AgentMessage> {
     return withSpan(
       {
@@ -1350,24 +1479,248 @@ export class AgentSessionsService {
     projectId: string,
     sessionId: string,
     message: string,
-    input: { attachments?: AgentAttachment[] } = {},
+    input: {
+      attachments?: AgentAttachment[];
+      deliveryMode?: Exclude<SessionDeliveryMode, "message_only">;
+    } = {},
   ): Promise<AgentMessage> {
+    const receipt = await this.enqueueMessage(
+      identity,
+      projectId,
+      sessionId,
+      message,
+      input,
+    );
+    if (!receipt.turnId) throw new Error("A queued send must create a turn");
+    await this.scheduleDrain(identity, projectId, sessionId);
+    const turn = await this.db
+      .selectFrom("agent_turns")
+      .innerJoin(
+        "agent_messages",
+        "agent_messages.id",
+        "agent_turns.result_message_id",
+      )
+      .selectAll("agent_messages")
+      .where("agent_turns.id", "=", receipt.turnId)
+      .executeTakeFirstOrThrow();
+    return mapMessage(turn);
+  }
+
+  /**
+   * Accept a human message into the durable session inbox and return as soon
+   * as it is persisted. Execution is owned by the session drainer, not the
+   * HTTP request or renderer that submitted it.
+   */
+  async enqueueMessage(
+    identity: Identity,
+    projectId: string,
+    sessionId: string,
+    message: string,
+    input: {
+      attachments?: AgentAttachment[];
+      deliveryMode?: Exclude<SessionDeliveryMode, "message_only">;
+      idempotencyKey?: string;
+    } = {},
+  ): Promise<SessionDeliveryReceipt> {
     const session = await this.requireSession(identity, projectId, sessionId);
     if (session.status !== "active") {
       throw new AgentSessionClosedError(sessionId);
     }
-    // A fresh user message supersedes any scheduled automatic retry.
+    await this.claimLocalAuthority(session);
     this.cancelAutoRetry(sessionId);
-    // Marked running BEFORE the placeholder row exists, so a concurrent
-    // get() can never mistake this turn's placeholder for an orphan.
-    this.runningTurns.add(sessionId);
-    try {
-      return await this.runTurn(identity, projectId, sessionId, message, {
-        session,
-        attachments: input.attachments,
+    if (input.deliveryMode === "interrupt") {
+      await this.interrupt(identity, projectId, sessionId);
+    }
+    const receipt = await this.turns.deliver({
+      sessionId,
+      content: message,
+      author: { kind: "user", externalUserId: identity.externalUserId },
+      mode: input.deliveryMode ?? "next_turn",
+      idempotencyKey: input.idempotencyKey,
+      metadata: input.attachments?.length
+        ? {
+            attachments: JSON.parse(JSON.stringify(input.attachments)),
+          }
+        : undefined,
+    });
+    if (!receipt.turnId) throw new Error("A queued send must create a turn");
+    void this.scheduleDrain(identity, projectId, sessionId).catch(() => {
+      // The accepted turn remains durably failed or queued for inspection.
+    });
+    return receipt;
+  }
+
+  /** Deliver an attributed inbox message and optionally schedule an agent turn. */
+  async deliver(
+    identity: Identity,
+    projectId: string,
+    sessionId: string,
+    input: {
+      content: string;
+      author: SessionMessageAuthor;
+      mode: SessionDeliveryMode;
+      idempotencyKey?: string;
+      metadata?: JsonObject;
+    },
+  ): Promise<SessionDeliveryReceipt> {
+    const session = await this.requireSession(identity, projectId, sessionId);
+    if (session.status !== "active") {
+      throw new AgentSessionClosedError(sessionId);
+    }
+    if (
+      session.authority_host_id !== "unassigned" &&
+      session.authority_host_id !== this.hostId
+    ) {
+      return this.mailboxes.enqueue(identity, projectId, sessionId, {
+        destination: {
+          hostId: session.authority_host_id,
+          revision: Number(session.authority_revision),
+        },
+        ...input,
       });
-    } finally {
-      this.runningTurns.delete(sessionId);
+    }
+    if (input.mode === "interrupt") {
+      await this.interrupt(identity, projectId, sessionId);
+    }
+    const receipt = await this.turns.deliver({ sessionId, ...input });
+    if (receipt.turnId) {
+      void this.scheduleDrain(identity, projectId, sessionId).catch(() => {
+        // The durable row remains queued or failed and is visible to operators.
+      });
+    }
+    return receipt;
+  }
+
+  /** Import one item fetched by this authoritative host, idempotently. */
+  async importMailbox(
+    identity: Identity,
+    projectId: string,
+    item: SessionMailboxItem,
+  ): Promise<SessionDeliveryReceipt> {
+    const session = await this.requireSession(
+      identity,
+      projectId,
+      item.sessionId,
+    );
+    if (session.status !== "active") {
+      throw new AgentSessionClosedError(item.sessionId);
+    }
+    if (
+      session.authority_host_id !== this.hostId ||
+      Number(session.authority_revision) !== item.authorityRevision ||
+      item.destinationHostId !== this.hostId
+    ) {
+      throw new SessionMirrorDivergedError(item.sessionId);
+    }
+    if (item.mode === "interrupt") {
+      await this.interrupt(identity, projectId, item.sessionId);
+    }
+    const receipt = await this.turns.deliver({
+      sessionId: item.sessionId,
+      content: item.content,
+      author: item.author,
+      mode: item.mode,
+      idempotencyKey: `mailbox:${item.sourceHostId}:${item.id}`,
+      ...(item.metadata ? { metadata: item.metadata } : {}),
+    });
+    if (receipt.turnId) {
+      void this.scheduleDrain(identity, projectId, item.sessionId).catch(
+        () => {},
+      );
+    }
+    return receipt;
+  }
+
+  private async claimLocalAuthority(session: SessionRow): Promise<void> {
+    if (session.authority_host_id === this.hostId) return;
+    const claimed = await this.db
+      .updateTable("agent_sessions")
+      .set({
+        authority_host_id: this.hostId,
+        authority_revision:
+          session.authority_host_id === "unassigned"
+            ? Number(session.authority_revision)
+            : Number(session.authority_revision) + 1,
+        updated_at: new Date(),
+      })
+      .where("id", "=", session.id)
+      .where("authority_host_id", "=", session.authority_host_id)
+      .where("authority_revision", "=", session.authority_revision)
+      .returning("id")
+      .executeTakeFirst();
+    if (claimed) return;
+    const current = await this.db
+      .selectFrom("agent_sessions")
+      .selectAll()
+      .where("id", "=", session.id)
+      .executeTakeFirstOrThrow();
+    await this.claimLocalAuthority(current);
+  }
+
+  private scheduleDrain(
+    identity: Identity,
+    projectId: string,
+    sessionId: string,
+  ): Promise<void> {
+    const previous = this.drainers.get(sessionId) ?? Promise.resolve();
+    const current = previous
+      .catch(() => {})
+      .then(() => this.drainSession(identity, projectId, sessionId));
+    this.drainers.set(sessionId, current);
+    void current.finally(() => {
+      if (this.drainers.get(sessionId) === current) {
+        this.drainers.delete(sessionId);
+      }
+    });
+    return current;
+  }
+
+  private async drainSession(
+    identity: Identity,
+    projectId: string,
+    sessionId: string,
+  ): Promise<void> {
+    await this.turns.requeueExpired();
+    while (true) {
+      const turn = await this.turns.claimNextForSession({
+        workerId: this.turnWorkerId,
+        sessionId,
+      });
+      if (!turn) return;
+      if (!turn.leaseToken) throw new Error("Claimed turn has no lease token");
+      const message = await this.turns.messageForTurn({ turnId: turn.id });
+      const attachments = message.metadata?.attachments as
+        | AgentAttachment[]
+        | undefined;
+      const session = await this.requireSession(identity, projectId, sessionId);
+      this.runningTurns.add(sessionId);
+      try {
+        const result = await this.runTurn(
+          identity,
+          projectId,
+          sessionId,
+          modelVisibleDelivery(message.content, message.author),
+          {
+            session,
+            attachments,
+            persistedUserMessageId: turn.messageId,
+          },
+        );
+        await this.turns.complete({
+          turnId: turn.id,
+          leaseToken: turn.leaseToken,
+          resultMessageId: result.id,
+        });
+      } catch (error) {
+        await this.turns.fail({
+          turnId: turn.id,
+          leaseToken: turn.leaseToken,
+          error: error instanceof Error ? error.message : String(error),
+        });
+        throw error;
+      } finally {
+        this.runningTurns.delete(sessionId);
+      }
     }
   }
 
@@ -1511,6 +1864,8 @@ export class AgentSessionsService {
       sanitizeReasoning?: boolean;
       /** Set on automatic retries; drives the next backoff step. */
       autoAttempt?: number;
+      /** Durable inbox message already persisted by AgentTurnsService. */
+      persistedUserMessageId?: string;
     },
   ): Promise<AgentMessage> {
     // Note: no stale-flag clearing needed here — interrupt() only sets the
@@ -1551,29 +1906,44 @@ export class AgentSessionsService {
         .execute();
     } else {
       assistantMessageId = await this.db.transaction().execute(async (trx) => {
-        await trx
-          .insertInto("agent_messages")
-          .values({
-            session_id: sessionId,
-            role: "user",
-            content: message,
-            ...(attachments
-              ? {
-                  metadata: {
-                    attachments: JSON.parse(
-                      JSON.stringify(attachments),
-                    ) as JsonObject[],
-                  },
-                }
-              : {}),
-          })
-          .execute();
+        if (!extras.persistedUserMessageId) {
+          await trx
+            .insertInto("agent_messages")
+            .values({
+              session_id: sessionId,
+              role: "user",
+              content: message,
+              author_kind: "user",
+              author_payload: {
+                kind: "user",
+                externalUserId: identity.externalUserId,
+              },
+              delivery_mode: "next_turn",
+              ...(attachments
+                ? {
+                    metadata: {
+                      attachments: JSON.parse(
+                        JSON.stringify(attachments),
+                      ) as JsonObject[],
+                    },
+                  }
+                : {}),
+            })
+            .execute();
+        }
         const assistant = await trx
           .insertInto("agent_messages")
           .values({
             session_id: sessionId,
             role: "assistant",
             content: "Thinking...",
+            author_kind: "agent",
+            author_payload: {
+              kind: "agent",
+              sessionId,
+              agentId: session.agent_id,
+            },
+            delivery_mode: "message_only",
             metadata: progressMetadata([]),
           })
           .returning("id")
@@ -1615,6 +1985,13 @@ export class AgentSessionsService {
             session_id: sessionId,
             role: "assistant",
             content: "Thinking...",
+            author_kind: "agent",
+            author_payload: {
+              kind: "agent",
+              sessionId,
+              agentId: session.agent_id,
+            },
+            delivery_mode: "message_only",
             metadata: progressMetadata([]),
           })
           .returning("id")
@@ -2863,6 +3240,8 @@ function mapSession(row: SessionRow, running = false): AgentSession {
     icon: row.icon,
     parentSessionId: row.parent_session_id,
     activity: row.activity,
+    authorityHostId: row.authority_host_id,
+    authorityRevision: Number(row.authority_revision),
     running,
     status: row.status as "active" | "closed",
     baseCommitSha: row.base_commit_sha,
@@ -2879,6 +3258,88 @@ function mapMessage(row: MessageRow): AgentMessage {
     content: row.content,
     commitSha: row.commit_sha,
     metadata: row.metadata as Record<string, unknown> | null,
+    author: parseMessageAuthor(row),
+    deliveryMode: parseMessageDeliveryMode(row.delivery_mode),
+    idempotencyKey: row.idempotency_key,
     createdAt: row.created_at.toISOString(),
   };
+}
+
+export function modelVisibleDelivery(
+  content: string,
+  author: SessionMessageAuthor,
+): string {
+  switch (author.kind) {
+    case "user":
+      return content;
+    case "agent":
+      return `[Catamorphic agent message from session ${author.sessionId}${author.agentId ? ` using ${author.agentId}` : ""}. This message was not written by the user.]\n\n${content}`;
+    case "workflow":
+      return `[Catamorphic workflow message from ${author.workflowName}, run ${author.runId}. This message was not written by the user.]\n\n${content}`;
+    case "watcher":
+      return `[Catamorphic watcher message from ${author.watcherId}${author.runId ? `, run ${author.runId}` : ""}. This message was not written by the user.]\n\n${content}`;
+    case "system":
+      return `[Catamorphic system message: ${author.code}. This message was not written by the user.]\n\n${content}`;
+  }
+}
+
+function parseMessageDeliveryMode(value: string): SessionDeliveryMode {
+  if (
+    value !== "message_only" &&
+    value !== "next_turn" &&
+    value !== "interrupt"
+  ) {
+    throw new Error(`Invalid agent message delivery mode '${value}'`);
+  }
+  return value;
+}
+
+function parseMessageAuthor(row: MessageRow): SessionMessageAuthor {
+  const payload = row.author_payload;
+  if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
+    throw new Error(`Agent message '${row.id}' has an invalid author payload`);
+  }
+  if (
+    row.author_kind === "user" &&
+    typeof payload.externalUserId === "string"
+  ) {
+    return { kind: "user", externalUserId: payload.externalUserId };
+  }
+  if (
+    row.author_kind === "agent" &&
+    typeof payload.sessionId === "string" &&
+    (typeof payload.agentId === "string" || payload.agentId === null)
+  ) {
+    return {
+      kind: "agent",
+      sessionId: payload.sessionId,
+      agentId: payload.agentId,
+    };
+  }
+  if (
+    row.author_kind === "workflow" &&
+    typeof payload.runId === "string" &&
+    typeof payload.workflowName === "string"
+  ) {
+    return {
+      kind: "workflow",
+      runId: payload.runId,
+      workflowName: payload.workflowName,
+    };
+  }
+  if (
+    row.author_kind === "watcher" &&
+    typeof payload.watcherId === "string" &&
+    (payload.runId === undefined || typeof payload.runId === "string")
+  ) {
+    return {
+      kind: "watcher",
+      watcherId: payload.watcherId,
+      ...(typeof payload.runId === "string" ? { runId: payload.runId } : {}),
+    };
+  }
+  if (row.author_kind === "system" && typeof payload.code === "string") {
+    return { kind: "system", code: payload.code };
+  }
+  throw new Error(`Agent message '${row.id}' has an invalid author payload`);
 }

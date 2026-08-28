@@ -1,6 +1,7 @@
 import {
   type AgentSessionDetail,
   parseProjectAgentId,
+  type SessionMailboxItem,
 } from "@catamorphic/core";
 import type { ProfileConfigManager } from "./profile-config.js";
 import type { ProfilesStore } from "./profiles.js";
@@ -23,9 +24,11 @@ import type { RemoteProjectsStore } from "./remote-projects-store.js";
 export class RemoteSessionMirror {
   private readonly diverged = new Set<string>();
   private readonly inflight = new Set<string>();
+  private mailboxSyncRunning = false;
 
   constructor(
     private readonly deps: {
+      hostId: string;
       profiles: ProfilesStore;
       profileConfig: ProfileConfigManager;
       /** Desktop-local privacy flag (ADR 0062): skip these entirely. */
@@ -47,8 +50,28 @@ export class RemoteSessionMirror {
         sessionId: string,
         fork: { serverUrl: string; remoteProjectId: string },
       ) => Promise<void>;
+      importMailbox: (
+        projectId: string,
+        item: SessionMailboxItem,
+      ) => Promise<unknown>;
     },
   ) {}
+
+  /** Poll every linked authority outbox. Coalesced for timer/focus/resume. */
+  syncMailboxesInBackground(): void {
+    if (this.mailboxSyncRunning) return;
+    this.mailboxSyncRunning = true;
+    void this.syncMailboxes()
+      .catch((cause) => {
+        console.warn(
+          "[desktop] session mailbox sync failed:",
+          cause instanceof Error ? cause.message : cause,
+        );
+      })
+      .finally(() => {
+        this.mailboxSyncRunning = false;
+      });
+  }
 
   /** Fire-and-forget from the turn-settled hook; never throws. */
   mirrorInBackground(projectId: string, sessionId: string): void {
@@ -110,6 +133,10 @@ export class RemoteSessionMirror {
             "content-type": "application/json",
           },
           body: JSON.stringify({
+            authority: {
+              hostId: detail.authorityHostId,
+              revision: detail.authorityRevision,
+            },
             title: detail.title,
             icon: detail.icon,
             provider: detail.provider,
@@ -119,6 +146,9 @@ export class RemoteSessionMirror {
               role: message.role,
               content: message.content,
               metadata: message.metadata,
+              author: message.author,
+              deliveryMode: message.deliveryMode,
+              idempotencyKey: message.idempotencyKey,
               createdAt: new Date(message.createdAt).toISOString(),
             })),
           }),
@@ -157,6 +187,78 @@ export class RemoteSessionMirror {
     if (!response.ok) {
       throw new Error(`mirror ${response.status}`);
     }
+  }
+
+  private async syncMailboxes(): Promise<void> {
+    for (const profile of this.deps.profiles.list().profiles) {
+      const remoteProjects = this.deps.profileConfig.forProfile(
+        profile.id,
+      ).remoteProjects;
+      for (const [localProjectId, link] of Object.entries(
+        remoteProjects.list(),
+      )) {
+        const response = await this.mailboxRequest({
+          remoteProjects,
+          localProjectId,
+          url: `${link.serverUrl.replace(/\/+$/, "")}/projects/${encodeURIComponent(
+            link.remoteProjectId,
+          )}/session-mailboxes?destinationHostId=${encodeURIComponent(
+            this.deps.hostId,
+          )}`,
+          method: "GET",
+        });
+        if (!response.ok) {
+          if (response.status === 404 || response.status === 503) continue;
+          throw new Error(`mailbox list ${response.status}`);
+        }
+        const body = (await response.json()) as { items: SessionMailboxItem[] };
+        for (const item of body.items) {
+          if (this.deps.isIncognito(item.sessionId)) continue;
+          await this.deps.importMailbox(localProjectId, item);
+          const acknowledged = await this.mailboxRequest({
+            remoteProjects,
+            localProjectId,
+            url: `${link.serverUrl.replace(/\/+$/, "")}/projects/${encodeURIComponent(
+              link.remoteProjectId,
+            )}/session-mailboxes/${encodeURIComponent(item.id)}/acknowledge`,
+            method: "POST",
+            body: JSON.stringify({ destinationHostId: this.deps.hostId }),
+          });
+          if (!acknowledged.ok && acknowledged.status !== 404) {
+            throw new Error(`mailbox acknowledge ${acknowledged.status}`);
+          }
+        }
+      }
+    }
+  }
+
+  private async mailboxRequest(input: {
+    remoteProjects: RemoteProjectsStore;
+    localProjectId: string;
+    url: string;
+    method: "GET" | "POST";
+    body?: string;
+  }): Promise<Response> {
+    const request = async (forceRefresh = false) => {
+      const accessToken = await input.remoteProjects.accessToken(
+        input.localProjectId,
+        {
+          ...(forceRefresh ? { forceRefresh } : {}),
+          refresh: (credentials) => refreshRemoteCredentials({ credentials }),
+        },
+      );
+      return fetch(input.url, {
+        method: input.method,
+        headers: {
+          authorization: `Bearer ${accessToken}`,
+          ...(input.body ? { "content-type": "application/json" } : {}),
+        },
+        ...(input.body ? { body: input.body } : {}),
+      });
+    };
+    let response = await request();
+    if (response.status === 401) response = await request(true);
+    return response;
   }
 
   /** The first profile link for this LOCAL project (tokens are per person;

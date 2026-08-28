@@ -22,6 +22,7 @@ export interface ChatTimelineMessage {
   id: string;
   role: "user" | "assistant" | "system";
   content: string;
+  author?: AgentMessage["author"];
   metadata?: unknown;
 }
 
@@ -193,16 +194,20 @@ function Message({
     };
   }, []);
 
+  const humanUserMessage =
+    message.role === "user" &&
+    (!message.author || message.author.kind === "user");
+
   return (
     <article
       // transition-[opacity,translate], not transform: Tailwind v4's
       // translate-y-* sets the individual `translate` property, which a
       // `transform` transition does not cover — the slide half of the
       // entrance would snap while only opacity faded.
-      className={`max-w-[85%] text-sm motion-safe:transition-[opacity,translate] motion-safe:duration-200 motion-safe:ease-[cubic-bezier(0.2,0,0,1)] ${entered ? "motion-safe:translate-y-0 motion-safe:opacity-100" : "motion-safe:translate-y-1 motion-safe:opacity-0"} ${message.role === "user" ? "ml-auto rounded-xl rounded-br-sm border border-info/30 bg-info/10 px-3 py-2" : "mr-auto"}`}
+      className={`max-w-[85%] text-sm motion-safe:transition-[opacity,translate] motion-safe:duration-200 motion-safe:ease-[cubic-bezier(0.2,0,0,1)] ${entered ? "motion-safe:translate-y-0 motion-safe:opacity-100" : "motion-safe:translate-y-1 motion-safe:opacity-0"} ${humanUserMessage ? "ml-auto rounded-xl rounded-br-sm border border-info/30 bg-info/10 px-3 py-2" : message.role === "user" ? "mr-auto rounded-xl rounded-bl-sm border border-border bg-bg-raised px-3 py-2" : "mr-auto"}`}
     >
       <div className="mb-1 text-[10px] font-semibold uppercase tracking-wider text-fg-faint">
-        {message.role === "user" ? "You" : "Agent"}
+        {deliveryAuthorLabel(message)}
       </div>
       {message.role === "assistant" && (
         <TurnSteps
@@ -669,6 +674,23 @@ function changedFiles(message: ChatTimelineMessage): string[] {
     const entry = asRecord(change);
     return typeof entry?.path === "string" ? [entry.path] : [];
   });
+}
+
+function deliveryAuthorLabel(message: ChatTimelineMessage): string {
+  if (message.role === "assistant") return "Agent";
+  if (message.role === "system") return "System";
+  switch (message.author?.kind) {
+    case "agent":
+      return "Agent message";
+    case "workflow":
+      return `Workflow · ${message.author.workflowName}`;
+    case "watcher":
+      return "Watcher";
+    case "system":
+      return "System";
+    default:
+      return "You";
+  }
 }
 
 function asRecord(value: unknown): Record<string, unknown> | undefined {

@@ -21,7 +21,12 @@ beforeAll(async () => {
     path.join(stubDist, "index.html"),
     "<!doctype html><title>pwa-stub</title>",
   );
-  app = await launchApp({ env: { CATAMORPHIC_PWA_DIST: stubDist } });
+  app = await launchApp({
+    env: {
+      CATAMORPHIC_E2E_MOBILE_PAIRING_ADDRESS: "127.0.0.1",
+      CATAMORPHIC_PWA_DIST: stubDist,
+    },
+  });
 }, 180_000);
 
 afterAll(async () => {

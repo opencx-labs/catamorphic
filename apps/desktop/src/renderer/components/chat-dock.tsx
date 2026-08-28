@@ -4,6 +4,7 @@ import {
   messageWithAttachmentNames,
   useAgentChat,
   useEnvironments,
+  useWatchers,
 } from "@catamorphic/react";
 import {
   AppWindow,
@@ -1313,6 +1314,11 @@ export function ChatDock({
       onSessionCreated(entry.localId, sessionId);
     },
   });
+  const watcherQuery = useWatchers(
+    projectId,
+    chat.sessionId ?? entry.sessionId ?? undefined,
+  );
+  const visibleWatchers = watcherQuery.data?.items ?? [];
   const activeEnvironment = chat.session?.environment ?? selectedEnvironment;
   const isIncognito = Boolean(entry.incognito);
   const [remoteCheckNonce, setRemoteCheckNonce] = useState(0);
@@ -2590,6 +2596,46 @@ export function ChatDock({
             isTab ? "" : "mx-auto max-w-3xl"
           }`}
         >
+          {visibleWatchers.length > 0 && (
+            <div
+              className={`flex shrink-0 flex-wrap gap-1 border-b border-border-subtle px-3 py-2 ${
+                isTab ? "mx-auto w-full max-w-4xl" : ""
+              }`}
+              data-testid="chat-watchers"
+            >
+              {visibleWatchers.map((watcher) => (
+                <span
+                  key={watcher.id}
+                  className="inline-flex min-w-0 items-center gap-1.5 rounded-md bg-bg-overlay px-2 py-1 text-[11px] text-fg-muted"
+                  title={`${watcher.eventKinds.join(", ")} · ${watcher.environment ?? "Default environment"}`}
+                >
+                  <Radio
+                    className={`size-3 shrink-0 ${
+                      watcher.status === "active"
+                        ? "text-accent"
+                        : "text-fg-faint"
+                    }`}
+                  />
+                  <span className="max-w-48 truncate">
+                    {watcher.workflowName}
+                  </span>
+                  <span className="text-fg-faint">{watcher.status}</span>
+                  {(watcher.status === "active" ||
+                    watcher.status === "paused") && (
+                    <button
+                      type="button"
+                      className="ml-0.5 grid size-4 cursor-pointer place-items-center rounded text-fg-faint hover:bg-bg-muted hover:text-fg"
+                      aria-label={`Stop watcher ${watcher.workflowName}`}
+                      disabled={watcherQuery.stop.isPending}
+                      onClick={() => watcherQuery.stop.mutate(watcher.id)}
+                    >
+                      <X className="size-3" />
+                    </button>
+                  )}
+                </span>
+              ))}
+            </div>
+          )}
           <ChatTimeline
             className="min-h-0 flex-1"
             contentClassName={isTab ? "mx-auto w-full max-w-4xl" : ""}

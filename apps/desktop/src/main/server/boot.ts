@@ -1,8 +1,10 @@
-import { randomBytes } from "node:crypto";
+import { randomBytes, randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import {
   type ConnectionProvider,
+  startProjectEventMonitorWorker,
+  startWatcherDispatcher,
   ToolPermissionBroker,
 } from "@catamorphic/core";
 import type { DB } from "@catamorphic/db";
@@ -89,6 +91,8 @@ export interface EmbeddedServer {
   suspendExecution: () => Promise<void>;
   /** Restart the execution worker after OS resume. No-op while running. */
   resumeExecution: () => void;
+  /** Poll linked remote hosts for messages addressed to local sessions. */
+  syncSessionMailboxes: () => void;
   shutdown: () => Promise<void>;
 }
 
@@ -103,6 +107,7 @@ export async function startEmbeddedServer(
   connectionProviders?: readonly ConnectionProvider[],
 ): Promise<EmbeddedServer> {
   fs.mkdirSync(paths.db, { recursive: true });
+  const hostId = loadOrCreateHostId(path.join(paths.root, "host-id"));
 
   const pglite = new PGlite(paths.db, { extensions: { pgcrypto } });
   const db = new Kysely<DB>({
@@ -193,6 +198,7 @@ export async function startEmbeddedServer(
   // Session mirroring to ADR 0055 remote links (late-bound: reads core
   // through the closure after createCatamorphic returns).
   const sessionMirror = new RemoteSessionMirror({
+    hostId,
     profiles,
     profileConfig,
     // Desktop-local privacy flag (ADR 0062): never crosses core.
@@ -215,6 +221,14 @@ export async function startEmbeddedServer(
             fork,
           )
         : Promise.resolve(),
+    importMailbox: (projectId, item) =>
+      catamorphic.core.agentSessions
+        ? catamorphic.core.agentSessions.importMailbox(
+            { tenantId: DESKTOP_TENANT_ID, externalUserId: DESKTOP_USER_ID },
+            projectId,
+            item,
+          )
+        : Promise.reject(new Error("agent sessions unavailable")),
   });
   const agentRegistry = new DesktopAgentRegistry({
     profiles,
@@ -229,8 +243,10 @@ export async function startEmbeddedServer(
     // agents can call ai.tool-call workflows like any other MCP tool. The
     // embedded server defaults desktop identity headers, so no auth rides
     // the URL.
-    projectMcpUrl: (projectId) =>
-      apiBaseUrl ? `${apiBaseUrl}/api/projects/${projectId}/mcp` : undefined,
+    projectMcpUrl: (projectId, sessionId) =>
+      apiBaseUrl
+        ? `${apiBaseUrl}/api/projects/${projectId}/mcp?sessionId=${encodeURIComponent(sessionId)}`
+        : undefined,
     workspaceMcpServer: (projectId, sessionId, agentId) =>
       apiBaseUrl
         ? {
@@ -269,6 +285,7 @@ export async function startEmbeddedServer(
   }
 
   const catamorphic = createCatamorphic({
+    hostId,
     toolPermissions,
     database: { db },
     storage: {
@@ -810,6 +827,14 @@ export async function startEmbeddedServer(
   const startWorker = () =>
     catamorphic.startExecutionWorker({ name: "desktop", concurrency: 1 });
   let worker: ReturnType<typeof startWorker> | null = startWorker();
+  const projectEventWorker = startProjectEventMonitorWorker({
+    monitors: catamorphic.core.projectEventMonitors,
+    providers: catamorphic.core.projectEventSources,
+    placement: "local",
+  });
+  const watcherDispatcher = catamorphic.core.watchers
+    ? startWatcherDispatcher({ watchers: catamorphic.core.watchers })
+    : null;
   const suspendExecution = async () => {
     const current = worker;
     worker = null;
@@ -845,10 +870,18 @@ export async function startEmbeddedServer(
     () => void syncAllRemotes().catch(() => {}),
     10 * 60 * 1000,
   );
+  sessionMirror.syncMailboxesInBackground();
+  const sessionMailboxTimer = setInterval(
+    () => sessionMirror.syncMailboxesInBackground(),
+    5_000,
+  );
 
   const shutdown = () => {
     shutdownDone ??= (async () => {
       clearInterval(remoteSyncTimer);
+      clearInterval(sessionMailboxTimer);
+      projectEventWorker.stop();
+      watcherDispatcher?.stop();
       await suspendExecution();
       await app.close().catch(() => {});
       await catamorphic.close().catch(() => {});
@@ -872,6 +905,20 @@ export async function startEmbeddedServer(
     },
     suspendExecution,
     resumeExecution,
+    syncSessionMailboxes: () => sessionMirror.syncMailboxesInBackground(),
     shutdown,
   };
+}
+
+function loadOrCreateHostId(file: string): string {
+  try {
+    const existing = fs.readFileSync(file, "utf8").trim();
+    if (existing) return existing;
+  } catch {
+    // First boot creates a stable identity below.
+  }
+  const hostId = `desktop:${randomUUID()}`;
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  fs.writeFileSync(file, `${hostId}\n`, { mode: 0o600 });
+  return hostId;
 }

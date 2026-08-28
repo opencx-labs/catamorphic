@@ -23,6 +23,7 @@ import {
   AgentSessionIdParamsSchema,
   AgentSessionPeerSchema,
   AgentSessionSchema,
+  AgentTurnIdParamsSchema,
   AuthenticationRequiredSchema,
   CreateAgentSessionSchema,
   EnvironmentAccessErrorSchema,
@@ -38,11 +39,13 @@ import {
   ProjectAgentEntrySchema,
   ProjectIdParamsSchema,
   SendMessageSchema,
+  SessionDeliveryReceiptSchema,
   SkillSchema,
   ToolPermissionDecisionSchema,
   ToolPermissionIdParamsSchema,
   UpdateAgentSessionActivitySchema,
   UpdateAgentSessionSchema,
+  UpdateQueuedAgentTurnSchema,
 } from "../schemas.js";
 
 export function registerAgentRoutes(app: FastifyInstance, ctx: RouteContext) {
@@ -166,6 +169,7 @@ export function registerAgentRoutes(app: FastifyInstance, ctx: RouteContext) {
           request.params.projectId,
           request.params.sessionId,
           {
+            authority: request.body.authority,
             title: request.body.title ?? null,
             icon: request.body.icon ?? null,
             ...(request.body.provider
@@ -453,7 +457,7 @@ export function registerAgentRoutes(app: FastifyInstance, ctx: RouteContext) {
       params: AgentSessionIdParamsSchema,
       body: SendMessageSchema,
       response: {
-        201: AgentMessageSchema,
+        202: SessionDeliveryReceiptSchema,
         404: ErrorSchema,
         409: ErrorSchema,
         422: EnvironmentErrorSchema,
@@ -466,14 +470,17 @@ export function registerAgentRoutes(app: FastifyInstance, ctx: RouteContext) {
         return reply.status(503).send({ error: "Coding agent not configured" });
       const identity = resolveIdentity(request);
       try {
-        const message = await agentSessions.sendMessage(
+        const receipt = await agentSessions.enqueueMessage(
           identity,
           request.params.projectId,
           request.params.sessionId,
           request.body.message,
-          { attachments: request.body.attachments },
+          {
+            attachments: request.body.attachments,
+            deliveryMode: request.body.deliveryMode,
+          },
         );
-        return reply.status(201).send(message);
+        return reply.status(202).send(receipt);
       } catch (err) {
         if (
           err instanceof ProjectNotFoundError ||
@@ -659,6 +666,128 @@ export function registerAgentRoutes(app: FastifyInstance, ctx: RouteContext) {
           return reply.status(404).send({ error: "Session not found" });
         }
         throw err;
+      }
+    },
+  });
+
+  typed.route({
+    method: "PATCH",
+    url: "/projects/:projectId/agent/sessions/:sessionId/turns/:turnId",
+    schema: {
+      params: AgentTurnIdParamsSchema,
+      body: UpdateQueuedAgentTurnSchema,
+      response: {
+        200: OkSchema,
+        404: ErrorSchema,
+        409: ErrorSchema,
+        503: ErrorSchema,
+      },
+    },
+    handler: async (request, reply) => {
+      const agentSessions = ctx.core?.agentSessions;
+      if (!agentSessions)
+        return reply.status(503).send({ error: "Coding agent not configured" });
+      try {
+        const updated = await agentSessions.updateQueuedTurn(
+          resolveIdentity(request),
+          request.params.projectId,
+          request.params.sessionId,
+          request.params.turnId,
+          {
+            content: request.body.content,
+            metadata: request.body.metadata
+              ? JSON.parse(JSON.stringify(request.body.metadata))
+              : undefined,
+            held: request.body.held,
+          },
+        );
+        return updated
+          ? reply.send({ ok: true })
+          : reply.status(409).send({ error: "Turn is no longer queued" });
+      } catch (error) {
+        if (
+          error instanceof ProjectNotFoundError ||
+          error instanceof AgentSessionNotFoundError
+        ) {
+          return reply.status(404).send({ error: "Session not found" });
+        }
+        throw error;
+      }
+    },
+  });
+
+  typed.route({
+    method: "DELETE",
+    url: "/projects/:projectId/agent/sessions/:sessionId/turns/:turnId",
+    schema: {
+      params: AgentTurnIdParamsSchema,
+      response: {
+        200: OkSchema,
+        404: ErrorSchema,
+        409: ErrorSchema,
+        503: ErrorSchema,
+      },
+    },
+    handler: async (request, reply) => {
+      const agentSessions = ctx.core?.agentSessions;
+      if (!agentSessions)
+        return reply.status(503).send({ error: "Coding agent not configured" });
+      try {
+        const cancelled = await agentSessions.cancelQueuedTurn(
+          resolveIdentity(request),
+          request.params.projectId,
+          request.params.sessionId,
+          request.params.turnId,
+        );
+        return cancelled
+          ? reply.send({ ok: true })
+          : reply.status(409).send({ error: "Turn is no longer queued" });
+      } catch (error) {
+        if (
+          error instanceof ProjectNotFoundError ||
+          error instanceof AgentSessionNotFoundError
+        ) {
+          return reply.status(404).send({ error: "Session not found" });
+        }
+        throw error;
+      }
+    },
+  });
+
+  typed.route({
+    method: "POST",
+    url: "/projects/:projectId/agent/sessions/:sessionId/turns/:turnId/send-now",
+    schema: {
+      params: AgentTurnIdParamsSchema,
+      response: {
+        200: OkSchema,
+        404: ErrorSchema,
+        409: ErrorSchema,
+        503: ErrorSchema,
+      },
+    },
+    handler: async (request, reply) => {
+      const agentSessions = ctx.core?.agentSessions;
+      if (!agentSessions)
+        return reply.status(503).send({ error: "Coding agent not configured" });
+      try {
+        const promoted = await agentSessions.promoteQueuedTurn(
+          resolveIdentity(request),
+          request.params.projectId,
+          request.params.sessionId,
+          request.params.turnId,
+        );
+        return promoted
+          ? reply.send({ ok: true })
+          : reply.status(409).send({ error: "Turn is no longer queued" });
+      } catch (error) {
+        if (
+          error instanceof ProjectNotFoundError ||
+          error instanceof AgentSessionNotFoundError
+        ) {
+          return reply.status(404).send({ error: "Session not found" });
+        }
+        throw error;
       }
     },
   });

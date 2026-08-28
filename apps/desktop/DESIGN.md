@@ -2976,3 +2976,12 @@ paths, deliberately independent:
   committed role grants `memberships:manage` sees Members and invites in the
   server section. Role assignment and invitation creation use project APIs;
   there is no server-owner persona or privileged desktop mode.
+
+### Durable session inboxes and watcher attribution (2026-08-28)
+
+- The server owns the session inbox and its ordering. Queue controls mutate
+  durable turns directly; React renders that state and never maintains a
+  second authoritative queue.
+- Messages delivered by agents, workflows, watchers, and the system remain
+  visibly distinct from human messages. They use a quiet source label and the
+  incoming side of the timeline instead of the human message treatment.

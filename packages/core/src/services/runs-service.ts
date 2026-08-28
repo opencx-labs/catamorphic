@@ -297,6 +297,12 @@ export interface TriggerProductionRunInput {
   onConflict?: EnrollmentConflictPolicy;
 }
 
+export interface TriggerPinnedRunInput extends TriggerProductionRunInput {
+  commitSha: string;
+  /** Remote branch/ref that makes the pinned commit fetchable. */
+  remoteBranch: string;
+}
+
 export type RunSuspensionReason =
   | "pause"
   | "child"
@@ -844,6 +850,11 @@ export class RunsService {
     return this.trigger(args);
   }
 
+  /** Run an immutable non-production commit, used by temporary watchers. */
+  async triggerAtCommit(args: TriggerPinnedRunInput): Promise<Run> {
+    return this.trigger(args);
+  }
+
   /** Trigger-only entry point. It accepts service connections only. */
   async triggerUnattendedProduction(
     args: TriggerProductionRunInput & {
@@ -1192,6 +1203,34 @@ export class RunsService {
     });
   }
 
+  async resolveArtifactAtCommit(args: {
+    identity: Identity;
+    projectId: string;
+    workflowName: string;
+    commitSha: string;
+    remoteBranch: string;
+  }): Promise<DeploymentArtifact> {
+    await this.requireProject(args.identity, args.projectId);
+    const source = await this.prepareProductionSource(args);
+    if (!source.commitSha)
+      throw new ProductionDeploymentNotFoundError(args.projectId);
+    const plugins = await this.loadPlugins(
+      args.identity,
+      args.projectId,
+      args.workflowName,
+    );
+    return this.deps.deploymentArtifacts.ensure({
+      tenantId: args.identity.tenantId,
+      projectId: args.projectId,
+      commitSha: source.commitSha,
+      files: source.files,
+      plugins: runtimePackages({
+        plugins: plugins?.plugins,
+        workflowPackage: source.workflowPackage,
+      }),
+    });
+  }
+
   async resolveProductionExecution(args: {
     identity: Identity;
     projectId: string;
@@ -1453,6 +1492,8 @@ export class RunsService {
     onConflict?: EnrollmentConflictPolicy;
     unattended?: boolean;
     connectionAuthorizationSnapshot?: readonly ResolvedConnectionBinding[];
+    commitSha?: string;
+    remoteBranch?: string;
   }): Promise<Run> {
     return withSpan(
       {
@@ -1493,6 +1534,8 @@ export class RunsService {
     onConflict?: EnrollmentConflictPolicy;
     unattended?: boolean;
     connectionAuthorizationSnapshot?: readonly ResolvedConnectionBinding[];
+    commitSha?: string;
+    remoteBranch?: string;
   }): Promise<Run> {
     await this.requireProject(args.identity, args.projectId);
     const correlationKey = args.correlationKey
@@ -1670,6 +1713,7 @@ export class RunsService {
     projectId: string;
     workflowName: string;
     commitSha?: string;
+    remoteBranch?: string;
   }): Promise<PreparedSource> {
     const remote = this.deps.projectManager.remoteBackend;
     if (!remote) throw new ProductionDeploymentNotFoundError(args.projectId);
@@ -1719,6 +1763,7 @@ export class RunsService {
     projectId: string;
     workflowName: string;
     commitSha?: string;
+    remoteBranch?: string;
     remote: NonNullable<ProjectManager["remoteBackend"]>;
   }): Promise<PreparedSource> {
     const load = (async () => {
@@ -1733,7 +1778,7 @@ export class RunsService {
           remote: args.remote,
           tenantId: args.identity.tenantId,
           projectId: args.projectId,
-          remoteBranch: "main",
+          remoteBranch: args.remoteBranch ?? "main",
         });
         const commitSha =
           args.commitSha ??

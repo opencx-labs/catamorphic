@@ -26,7 +26,9 @@ import { registerProjectMcpRoutes } from "./routes/project-mcp.js";
 import { registerProjectRoutes } from "./routes/projects.js";
 import { registerPublicationRoutes } from "./routes/publications.js";
 import { registerRunRoutes } from "./routes/runs.js";
+import { registerSessionMailboxRoutes } from "./routes/session-mailboxes.js";
 import { registerTriggerRoutes } from "./routes/triggers.js";
+import { registerWatcherRoutes } from "./routes/watchers.js";
 import { registerWorkflowRoutes } from "./routes/workflows.js";
 
 export interface CatamorphicPluginOptions {
@@ -170,6 +172,8 @@ export const catamorphicPlugin: FastifyPluginAsync<
   registerTriggerRoutes(app, ctx);
   registerRunRoutes(app, ctx);
   registerAgentRoutes(app, ctx);
+  registerSessionMailboxRoutes(app, ctx);
+  registerWatcherRoutes(app, ctx);
   registerMembershipRoutes(app, ctx);
   registerDocumentRoutes(app, ctx);
   registerPublicationRoutes(app, ctx);

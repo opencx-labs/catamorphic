@@ -57,6 +57,7 @@ import { ExecutionAllocationsService } from "./services/execution-allocations-se
 import { ExecutionEnvironmentsService } from "./services/execution-environments-service.js";
 import { ExecutionJobsService } from "./services/execution-jobs-service.js";
 import { ExecutionWorkerService } from "./services/execution-worker-service.js";
+import { GithubProjectEventSource } from "./services/github-event-source.js";
 import {
   GithubService,
   type GithubServiceConfig,
@@ -65,6 +66,8 @@ import { executeHostCall } from "./services/host-calls.js";
 import { MembershipsService } from "./services/memberships-service.js";
 import { PluginsService } from "./services/plugins-service.js";
 import { ProjectEnvironmentsService } from "./services/project-environments-service.js";
+import { ProjectEventMonitorsService } from "./services/project-event-monitors-service.js";
+import { ProjectEventsService } from "./services/project-events-service.js";
 import {
   type ProjectLifecycleHooks,
   ProjectsService,
@@ -83,6 +86,7 @@ import { RunPluginsLoader } from "./services/run-plugins-loader.js";
 import { RunsService } from "./services/runs-service.js";
 import { RuntimeEventsService } from "./services/runtime-events-service.js";
 import { SecretsService } from "./services/secrets-service.js";
+import type { SessionMailboxesService } from "./services/session-mailboxes-service.js";
 import { SkillsService } from "./services/skills-service.js";
 import { TenantPoliciesService } from "./services/tenant-policies-service.js";
 import type { ToolPermissionBroker } from "./services/tool-permission-broker.js";
@@ -91,9 +95,12 @@ import type {
   TriggerKindRuntime,
 } from "./services/trigger-kinds.js";
 import { TriggersService } from "./services/triggers-service.js";
+import { WatchersService } from "./services/watchers-service.js";
 import { WorkflowsService } from "./services/workflows-service.js";
 
 export interface CatamorphicCoreConfig {
+  /** Stable host identity. Required when `codingAgent` enables sessions. */
+  hostId?: string;
   /**
    * How long a project's parsed `roles/*.json` set is trusted before it is
    * re-read from the shared origin (ADR 0055). Role *definitions* may lag
@@ -280,6 +287,9 @@ export class CatamorphicCore {
   readonly pluginResolver?: PluginResolver;
 
   readonly projects: ProjectsService;
+  readonly projectEvents: ProjectEventsService;
+  readonly projectEventMonitors: ProjectEventMonitorsService;
+  readonly projectEventSources: readonly GithubProjectEventSource[];
   readonly workflows: WorkflowsService;
   readonly runs: RunsService;
   readonly triggers: TriggersService;
@@ -315,6 +325,8 @@ export class CatamorphicCore {
   readonly devSandboxes?: DevSandboxService;
   readonly agentContext?: AgentContextService;
   readonly agentSessions?: AgentSessionsService;
+  readonly sessionMailboxes?: SessionMailboxesService;
+  readonly watchers?: WatchersService;
   /** Durable normalized provider events, independently replayable by cursor. */
   readonly agentRuntimeEvents: AgentRuntimeEventsService;
   /** Durable approval, question, and elicitation requests. */
@@ -368,13 +380,66 @@ export class CatamorphicCore {
           })
         : undefined;
 
-    this.capabilities = new CapabilityRegistry(config.capabilityProviders);
+    const sessionDeliveryCapability: CapabilityProviderRuntime = {
+      name: "catamorphic.sessions",
+      description: "Deliver attributed messages to agent sessions",
+      calls: {
+        deliver: async (context, args) => {
+          if (!this.agentSessions) {
+            throw new Error("Coding agents are not configured");
+          }
+          const input = sessionDeliveryArgs(args);
+          const watcher = await this.db
+            .selectFrom("watcher_runs")
+            .select("watcher_id")
+            .where("run_id", "=", context.runId)
+            .executeTakeFirst();
+          const run = watcher
+            ? null
+            : await this.db
+                .selectFrom("workflow_runs")
+                .select("correlation_key")
+                .where("id", "=", context.runId)
+                .executeTakeFirst();
+          const watcherId =
+            watcher?.watcher_id ??
+            run?.correlation_key?.match(/^watcher:([0-9a-f-]{36}):event:/)?.[1];
+          return this.agentSessions.deliver(
+            context.caller,
+            context.projectId,
+            input.sessionId,
+            {
+              content: input.content,
+              author: watcherId
+                ? {
+                    kind: "watcher",
+                    watcherId,
+                    runId: context.runId,
+                  }
+                : {
+                    kind: "workflow",
+                    runId: context.runId,
+                    workflowName: context.workflowName,
+                  },
+              mode: input.mode,
+              idempotencyKey: input.idempotencyKey,
+            },
+          );
+        },
+      },
+    };
+    this.capabilities = new CapabilityRegistry([
+      sessionDeliveryCapability,
+      ...(config.capabilityProviders ?? []),
+    ]);
     this.projects = new ProjectsService(
       this.db,
       this.projectManager,
       config.projectHooks,
       { seedFiles: this.seedFiles },
     );
+    this.projectEvents = new ProjectEventsService(this.db);
+    this.projectEventMonitors = new ProjectEventMonitorsService(this.db);
     this.appStorage = new AppStorageService(this.db);
     this.agentRuntimeEvents = new AgentRuntimeEventsService(this.db);
     this.agentRuntimeRequests = new AgentRuntimeRequestsService(this.db);
@@ -384,8 +449,12 @@ export class CatamorphicCore {
           this.projectManager,
           this.projects,
           config.github,
+          this.projectEvents,
         )
       : undefined;
+    this.projectEventSources = this.github
+      ? [new GithubProjectEventSource(this.github)]
+      : [];
     // Provider-agnostic remote sync (ADR 0044); code hosts contribute
     // credentials/capabilities through the CodeHost seam.
     this.remoteSync = new RemoteSyncService(
@@ -621,10 +690,14 @@ export class CatamorphicCore {
     );
 
     if (config.codingAgent && this.sandboxProvider && this.devSandboxes) {
+      if (!config.hostId) {
+        throw new Error("hostId is required when codingAgent is configured");
+      }
       const codingAgents = isCodingAgentRegistry(config.codingAgent)
         ? config.codingAgent
         : singleAgentRegistry(config.codingAgent);
       this.agentSessions = new AgentSessionsService(this.db, {
+        hostId: config.hostId,
         projectManager: this.projectManager,
         sandboxProvider: this.sandboxProvider,
         codingAgents,
@@ -647,6 +720,15 @@ export class CatamorphicCore {
           ? {}
           : { storeSync: { documents: this.documents } }),
       });
+      this.sessionMailboxes = this.agentSessions.mailboxes;
+      this.watchers = new WatchersService(this.db, {
+        projectManager: this.projectManager,
+        runs: this.runs,
+        events: this.projectEvents,
+        monitors: this.projectEventMonitors,
+        sessions: this.agentSessions,
+        github: this.github,
+      });
     }
   }
 }
@@ -662,4 +744,43 @@ function requireAllocationId(allocationId: string | null): string {
     throw new Error("Workflow execution requires an Environment Allocation");
   }
   return allocationId;
+}
+
+function sessionDeliveryArgs(value: unknown): {
+  sessionId: string;
+  content: string;
+  mode: "message_only" | "next_turn" | "interrupt";
+  idempotencyKey?: string;
+} {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error("catamorphic.sessions.deliver expects an object");
+  }
+  const input = value as Record<string, unknown>;
+  if (typeof input.sessionId !== "string" || !input.sessionId) {
+    throw new Error("sessionId must be a non-empty string");
+  }
+  if (typeof input.content !== "string" || !input.content.trim()) {
+    throw new Error("content must be a non-empty string");
+  }
+  if (
+    input.mode !== "message_only" &&
+    input.mode !== "next_turn" &&
+    input.mode !== "interrupt"
+  ) {
+    throw new Error("mode must be message_only, next_turn, or interrupt");
+  }
+  if (
+    input.idempotencyKey !== undefined &&
+    typeof input.idempotencyKey !== "string"
+  ) {
+    throw new Error("idempotencyKey must be a string");
+  }
+  return {
+    sessionId: input.sessionId,
+    content: input.content,
+    mode: input.mode,
+    ...(typeof input.idempotencyKey === "string"
+      ? { idempotencyKey: input.idempotencyKey }
+      : {}),
+  };
 }

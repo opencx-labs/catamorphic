@@ -22,7 +22,7 @@ export {
 export {
   type AgentAuthenticationRequired,
   type OptimisticAgentMessage,
-  type QueuedAgentMessage,
+  type PendingAgentTurn,
   type UseAgentChatOptions,
   type UseAgentChatResult,
   useAgentChat,
@@ -196,6 +196,7 @@ export {
   type UpsertSecretInput,
   useUpsertProjectSecret,
 } from "./hooks/use-upsert-project-secret.js";
+export { useWatchers, watcherKeys } from "./hooks/use-watchers.js";
 export {
   type UseWorkflowOptions,
   useWorkflow,
@@ -284,11 +285,12 @@ export type {
   RunsList,
   Secret,
   SecretStatus,
-  SentAgentMessage,
+  SessionDeliveryReceipt,
   SignalRunInput,
   SubmitRunInput,
   TriggeredRun,
   TriggerRunInput,
+  Watcher,
   WorkflowCapabilities,
   WorkflowStepAttempt,
 } from "./types.js";

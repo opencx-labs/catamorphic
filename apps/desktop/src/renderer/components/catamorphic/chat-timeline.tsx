@@ -1,6 +1,6 @@
 "use client";
 
-import type { AgentMessage, QueuedAgentMessage } from "@catamorphic/react";
+import type { AgentMessage, PendingAgentTurn } from "@catamorphic/react";
 import {
   ArrowDown,
   ArrowUp,
@@ -66,6 +66,7 @@ export interface ChatTimelineMessage {
   id: string;
   role: "user" | "assistant" | "system";
   content: string;
+  author?: AgentMessage["author"];
   metadata?: unknown;
   attachments?: ChatAttachmentView[];
 }
@@ -98,7 +99,7 @@ export interface ChatTimelineProps {
   /** @deprecated superseded by `queue`; kept for simple hosts. */
   queuedCount?: number;
   /** Messages waiting behind the in-flight turn (editable until sent). */
-  queue?: QueuedAgentMessage[];
+  queue?: PendingAgentTurn[];
   onUpdateQueued?: (id: string, content: string) => void;
   onRemoveQueued?: (id: string) => void;
   /** Promote a queued message: front of the line + interrupt the turn. */
@@ -361,6 +362,22 @@ function contentHash(message: ChatTimelineMessage): string {
   return result;
 }
 
+function deliveryAuthorLabel(message: ChatTimelineMessage): string | null {
+  if (message.role !== "user") return null;
+  switch (message.author?.kind) {
+    case "agent":
+      return "Agent message";
+    case "workflow":
+      return `Workflow · ${message.author.workflowName}`;
+    case "watcher":
+      return "Watcher";
+    case "system":
+      return "System";
+    default:
+      return null;
+  }
+}
+
 /** One pass over the list; duplicate contents get occurrence suffixes. */
 function timelineKeys(messages: ChatTimelineMessage[]): string[] {
   const seen = new Map<string, number>();
@@ -471,6 +488,10 @@ function MessageImpl({
       ? attachments.slice(inlineMarkerCount(message.content, attachments))
       : attachments;
   const failed = metadata?.status === "failed";
+  const humanUserMessage =
+    message.role === "user" &&
+    (!message.author || message.author.kind === "user");
+  const deliveryAuthor = deliveryAuthorLabel(message);
   const enterClasses = `motion-safe:transition-[opacity,translate] motion-safe:duration-200 motion-safe:ease-[cubic-bezier(0.2,0,0,1)] ${entered ? "motion-safe:translate-y-0 motion-safe:opacity-100" : "motion-safe:translate-y-1 motion-safe:opacity-0"}`;
 
   // Failed turns render as an error card with recovery actions (the
@@ -509,9 +530,14 @@ function MessageImpl({
 
   return (
     <article
-      data-user-message={message.role === "user" || undefined}
-      className={`group/msg relative max-w-[85%] text-sm ${enterClasses} ${message.role === "user" ? "ml-auto rounded-xl rounded-br-sm border border-info/30 bg-info/10 px-3 py-2" : "mr-auto"}`}
+      data-user-message={humanUserMessage || undefined}
+      className={`group/msg relative max-w-[85%] text-sm ${enterClasses} ${humanUserMessage ? "ml-auto rounded-xl rounded-br-sm border border-info/30 bg-info/10 px-3 py-2" : message.role === "user" ? "mr-auto rounded-xl rounded-bl-sm border border-border bg-bg-raised px-3 py-2" : "mr-auto"}`}
     >
+      {deliveryAuthor && (
+        <div className="mb-1 text-[10px] font-semibold uppercase tracking-wider text-fg-faint">
+          {deliveryAuthor}
+        </div>
+      )}
       {stripAttachments.length > 0 && (
         <AttachmentStrip attachments={stripAttachments} />
       )}
@@ -1050,7 +1076,7 @@ function QueueList({
   onSendNow,
   onHold,
 }: {
-  queue: QueuedAgentMessage[];
+  queue: PendingAgentTurn[];
   onUpdate?: (id: string, content: string) => void;
   onRemove?: (id: string) => void;
   onSendNow?: (id: string) => void;
@@ -1097,7 +1123,7 @@ function QueuedBubble({
   onSendNow,
   onHold,
 }: {
-  queued: QueuedAgentMessage;
+  queued: PendingAgentTurn;
   onUpdate?: (id: string, content: string) => void;
   onRemove?: (id: string) => void;
   onSendNow?: (id: string) => void;
@@ -1143,8 +1169,9 @@ function QueuedBubble({
     const content = draft.trim();
     if (content && content !== queued.content) {
       onUpdate?.(queued.id, content);
+    } else {
+      onHold?.(null);
     }
-    onHold?.(null);
   };
   const remove = () => {
     // Animate out, then actually delete.

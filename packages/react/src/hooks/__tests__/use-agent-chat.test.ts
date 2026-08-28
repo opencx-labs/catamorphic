@@ -5,6 +5,7 @@ import { apiUrl, HttpResponse, http } from "../../test/handlers.js";
 import { renderHookWithProviders } from "../../test/render.js";
 import { server } from "../../test/server.js";
 import { useAgentChat } from "../use-agent-chat.js";
+import { useAgentSessions } from "../use-agent-sessions.js";
 
 const PROJECT_ID = "00000000-0000-4000-8000-000000000001";
 const OTHER_PROJECT_ID = "00000000-0000-4000-8000-000000000002";
@@ -121,7 +122,7 @@ describe("useAgentChat", () => {
     expect(result.current.sessionId).toBe(SESSION_ID);
   });
 
-  it("keeps a message queued while authorization is required and resumes it", async () => {
+  it("retains a rejected pre-admission intent and resumes it", async () => {
     let authorized = false;
     let creates = 0;
     let sends = 0;
@@ -189,9 +190,7 @@ describe("useAgentChat", () => {
           },
         ],
       });
-      expect(result.current.queue).toEqual([
-        expect.objectContaining({ content: "Welcome the new teammate" }),
-      ]);
+      expect(result.current.queue).toEqual([]);
     });
     expect(result.current.sessionId).toBeNull();
     expect(sends).toBe(0);
@@ -255,6 +254,8 @@ describe("useAgentChat", () => {
 
   it("exposes the pending user message immediately", async () => {
     let finishSend: (() => void) | undefined;
+    let persisted = false;
+    const userMessageId = "00000000-0000-4000-8000-000000000005";
     server.use(
       http.post(apiUrl(`/api/projects/${PROJECT_ID}/agent/sessions`), () =>
         HttpResponse.json(session, { status: 201 }),
@@ -269,24 +270,40 @@ describe("useAgentChat", () => {
           });
           return HttpResponse.json(
             {
-              id: crypto.randomUUID(),
-              sessionId: SESSION_ID,
-              role: "assistant",
-              content: "Done",
-              commitSha: null,
-              metadata: null,
-              createdAt: new Date().toISOString(),
+              messageId: userMessageId,
+              turnId: "00000000-0000-4000-8000-000000000006",
+              mode: "next_turn",
+              created: true,
             },
-            { status: 201 },
+            { status: 202 },
           );
         },
       ),
       http.get(
         apiUrl(`/api/projects/${PROJECT_ID}/agent/sessions/${SESSION_ID}`),
-        () => HttpResponse.json({ ...session, messages: [] }),
+        () =>
+          HttpResponse.json({
+            ...session,
+            messages: persisted
+              ? [
+                  {
+                    id: userMessageId,
+                    sessionId: SESSION_ID,
+                    role: "user",
+                    content: "Update the workflow",
+                    commitSha: null,
+                    metadata: null,
+                    createdAt: new Date().toISOString(),
+                  },
+                ]
+              : [],
+            pendingTurns: [],
+          }),
       ),
     );
-    const { result } = renderHookWithProviders(() => useAgentChat(PROJECT_ID));
+    const { result, queryClient } = renderHookWithProviders(() =>
+      useAgentChat(PROJECT_ID),
+    );
 
     act(() => {
       void result.current.send("Update the workflow");
@@ -299,12 +316,27 @@ describe("useAgentChat", () => {
     });
     finishSend?.();
     await waitFor(() => expect(result.current.isSending).toBe(false));
-    expect(result.current.optimisticMessages).toEqual([]);
+    expect(result.current.optimisticMessages).toEqual([
+      expect.objectContaining({
+        id: userMessageId,
+        content: "Update the workflow",
+      }),
+    ]);
+
+    persisted = true;
+    await queryClient.invalidateQueries({
+      queryKey: ["cat", "project", PROJECT_ID, "agent", "session", SESSION_ID],
+    });
+    await waitFor(() => expect(result.current.optimisticMessages).toEqual([]));
+    expect(result.current.messages).toEqual([
+      expect.objectContaining({ id: userMessageId }),
+    ]);
   });
 
-  it("reconciles duplicate optimistic messages one persisted copy at a time", async () => {
-    let finishFirst: (() => void) | undefined;
+  it("renders queued messages from the server-owned inbox", async () => {
     let sends = 0;
+    const firstMessageId = "00000000-0000-4000-8000-00000000000a";
+    const secondMessageId = "00000000-0000-4000-8000-00000000000c";
     server.use(
       http.post(apiUrl(`/api/projects/${PROJECT_ID}/agent/sessions`), () =>
         HttpResponse.json(session, { status: 201 }),
@@ -313,24 +345,19 @@ describe("useAgentChat", () => {
         apiUrl(
           `/api/projects/${PROJECT_ID}/agent/sessions/${SESSION_ID}/messages`,
         ),
-        async () => {
+        () => {
           sends += 1;
-          if (sends === 1) {
-            await new Promise<void>((resolve) => {
-              finishFirst = resolve;
-            });
-          }
           return HttpResponse.json(
             {
-              id: crypto.randomUUID(),
-              sessionId: SESSION_ID,
-              role: "assistant",
-              content: "Done",
-              commitSha: null,
-              metadata: null,
-              createdAt: new Date().toISOString(),
+              messageId: sends === 1 ? firstMessageId : secondMessageId,
+              turnId:
+                sends === 1
+                  ? "00000000-0000-4000-8000-000000000009"
+                  : "00000000-0000-4000-8000-00000000000b",
+              mode: "next_turn",
+              created: true,
             },
-            { status: 201 },
+            { status: 202 },
           );
         },
       ),
@@ -341,12 +368,32 @@ describe("useAgentChat", () => {
             ...session,
             messages: [
               {
-                id: crypto.randomUUID(),
+                id: firstMessageId,
                 sessionId: SESSION_ID,
                 role: "user",
                 content: "Repeat",
                 commitSha: null,
                 metadata: null,
+                createdAt: new Date().toISOString(),
+              },
+              {
+                id: secondMessageId,
+                sessionId: SESSION_ID,
+                role: "user",
+                content: "Repeat",
+                commitSha: null,
+                metadata: null,
+                createdAt: new Date().toISOString(),
+              },
+            ],
+            pendingTurns: [
+              {
+                id: "00000000-0000-4000-8000-00000000000b",
+                messageId: secondMessageId,
+                content: "Repeat",
+                metadata: null,
+                deliveryMode: "next_turn",
+                status: "queued",
                 createdAt: new Date().toISOString(),
               },
             ],
@@ -360,19 +407,32 @@ describe("useAgentChat", () => {
       void result.current.send("Repeat");
     });
     await waitFor(() => expect(result.current.sessionId).toBe(SESSION_ID));
-    // The in-flight copy reconciles against the one persisted "Repeat";
-    // the duplicate is NOT swallowed with it — it waits in the queue.
+    // Accepted queue state comes from the session snapshot, not local refs.
     await waitFor(() =>
       expect(result.current.optimisticMessages).toHaveLength(0),
     );
     expect(result.current.queue).toHaveLength(1);
     expect(result.current.queue[0]?.content).toBe("Repeat");
-    finishFirst?.();
-    await waitFor(() => expect(sends).toBe(2));
+    expect(sends).toBe(2);
   });
 
   it("reflows attachment markers to the end when an edit desyncs them", async () => {
     let finishFirst: (() => void) | undefined;
+    let queuedContent = `see ${ATTACHMENT_MARKER} and ${ATTACHMENT_MARKER}`;
+    const attachments = [
+      {
+        kind: "text" as const,
+        name: "a.md",
+        text: "a",
+        source: { type: "paste" as const },
+      },
+      {
+        kind: "text" as const,
+        name: "b.md",
+        text: "b",
+        source: { type: "paste" as const },
+      },
+    ];
     server.use(
       http.post(apiUrl(`/api/projects/${PROJECT_ID}/agent/sessions`), () =>
         HttpResponse.json(session, { status: 201 }),
@@ -401,24 +461,35 @@ describe("useAgentChat", () => {
       ),
       http.get(
         apiUrl(`/api/projects/${PROJECT_ID}/agent/sessions/${SESSION_ID}`),
-        () => HttpResponse.json({ ...session, messages: [] }),
+        () =>
+          HttpResponse.json({
+            ...session,
+            messages: [],
+            pendingTurns: [
+              {
+                id: "00000000-0000-4000-8000-00000000000d",
+                messageId: "00000000-0000-4000-8000-00000000000e",
+                content: queuedContent,
+                metadata: { attachments },
+                deliveryMode: "next_turn",
+                status: "queued",
+                createdAt: new Date().toISOString(),
+              },
+            ],
+          }),
+      ),
+      http.patch(
+        apiUrl(
+          `/api/projects/${PROJECT_ID}/agent/sessions/${SESSION_ID}/turns/00000000-0000-4000-8000-00000000000d`,
+        ),
+        async ({ request }) => {
+          const body = (await request.json()) as { content: string };
+          queuedContent = body.content;
+          return HttpResponse.json({ ok: true });
+        },
       ),
     );
     const { result } = renderHookWithProviders(() => useAgentChat(PROJECT_ID));
-    const attachments = [
-      {
-        kind: "text" as const,
-        name: "a.md",
-        text: "a",
-        source: { type: "paste" as const },
-      },
-      {
-        kind: "text" as const,
-        name: "b.md",
-        text: "b",
-        source: { type: "paste" as const },
-      },
-    ];
 
     act(() => {
       void result.current.send("First");
@@ -437,16 +508,20 @@ describe("useAgentChat", () => {
         `look at ${ATTACHMENT_MARKER} then ${ATTACHMENT_MARKER}`,
       ),
     );
-    expect(result.current.queue[0]?.content).toBe(
-      `look at ${ATTACHMENT_MARKER} then ${ATTACHMENT_MARKER}`,
+    await waitFor(() =>
+      expect(result.current.queue[0]?.content).toBe(
+        `look at ${ATTACHMENT_MARKER} then ${ATTACHMENT_MARKER}`,
+      ),
     );
 
     // A marker was deleted: all pills reflow to the end, none remapped.
     act(() =>
       result.current.updateQueued(queuedId, `only ${ATTACHMENT_MARKER} left`),
     );
-    expect(result.current.queue[0]?.content).toBe(
-      `only  left${ATTACHMENT_MARKER}${ATTACHMENT_MARKER}`,
+    await waitFor(() =>
+      expect(result.current.queue[0]?.content).toBe(
+        `only  left${ATTACHMENT_MARKER}${ATTACHMENT_MARKER}`,
+      ),
     );
     expect(result.current.queue[0]?.attachments).toHaveLength(2);
     finishFirst?.();
@@ -454,12 +529,24 @@ describe("useAgentChat", () => {
 
   it("reports isWorking while the server has an in-progress turn, without a local send", async () => {
     let status = "in_progress";
+    let title: string | null = null;
+    let running = true;
+    let listRequests = 0;
     server.use(
+      http.get(apiUrl(`/api/projects/${PROJECT_ID}/agent/sessions`), () => {
+        listRequests += 1;
+        return HttpResponse.json({
+          items: [{ ...session, title, running }],
+          total: 1,
+        });
+      }),
       http.get(
         apiUrl(`/api/projects/${PROJECT_ID}/agent/sessions/${SESSION_ID}`),
         () =>
           HttpResponse.json({
             ...session,
+            title,
+            running,
             messages: [
               {
                 id: "00000000-0000-4000-8000-00000000000a",
@@ -474,16 +561,26 @@ describe("useAgentChat", () => {
           }),
       ),
     );
-    const { result } = renderHookWithProviders(() =>
-      useAgentChat(PROJECT_ID, { sessionId: SESSION_ID }),
-    );
+    const { result } = renderHookWithProviders(() => ({
+      chat: useAgentChat(PROJECT_ID, { sessionId: SESSION_ID }),
+      sessions: useAgentSessions(PROJECT_ID),
+    }));
 
-    await waitFor(() => expect(result.current.isWorking).toBe(true));
-    expect(result.current.isSending).toBe(false);
+    await waitFor(() => expect(result.current.chat.isWorking).toBe(true));
+    expect(result.current.chat.isSending).toBe(false);
+    await waitFor(() => expect(listRequests).toBe(1));
 
     // The turn settles server-side (e.g. finished or marked interrupted).
     status = "completed";
-    await waitFor(() => expect(result.current.isWorking).toBe(false));
+    title = "Settled title";
+    running = false;
+    await waitFor(() => expect(result.current.chat.isWorking).toBe(false));
+    await waitFor(() => expect(listRequests).toBeGreaterThan(1));
+    await waitFor(() =>
+      expect(result.current.sessions.data?.items[0]?.title).toBe(
+        "Settled title",
+      ),
+    );
   });
 
   it("opens a controlled session and resets when it changes", async () => {

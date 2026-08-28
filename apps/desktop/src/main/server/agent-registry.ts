@@ -78,7 +78,7 @@ export interface DesktopAgentRegistryDeps {
    * mounted per chat session so agents can call the project's ai.tool-call
    * workflows. Undefined while the embedded server is still booting.
    */
-  projectMcpUrl?: (projectId: string) => string | undefined;
+  projectMcpUrl?: (projectId: string, sessionId: string) => string | undefined;
   /** Codex's authenticated loopback access to filtered workspace tools. */
   workspaceMcpServer?: (
     projectId: string,
@@ -538,7 +538,10 @@ export class DesktopAgentRegistry implements CodingAgentRegistry {
   private sessionMcpServers(
     context: ExtraToolContext,
   ): Record<string, AgentMcpServerConfig> {
-    const url = this.deps.projectMcpUrl?.(context.projectId);
+    const url = this.deps.projectMcpUrl?.(
+      context.projectId,
+      context.sessionId ?? "",
+    );
     return url ? { [WORKFLOWS_SERVER_KEY]: { transport: "http", url } } : {};
   }
 

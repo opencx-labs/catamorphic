@@ -80,8 +80,15 @@ export function registerProjectMcpRoutes(
         .send({ error: "MCP is turned off on this server" });
     }
     const { projectId } = request.params as { projectId: string };
+    const { sessionId } = request.query as { sessionId?: string };
     const identity = resolveIdentity(request);
-    const surface = surfaceTools(core, identity, projectId, ctx.features);
+    const surface = surfaceTools(
+      core,
+      identity,
+      projectId,
+      ctx.features,
+      sessionId,
+    );
 
     return handleMcpPost(reply, request.body, async (method, params) => {
       switch (method) {

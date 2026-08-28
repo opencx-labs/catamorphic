@@ -87,6 +87,8 @@ export type StorageConfig =
   | { projectManager: ProjectManager };
 
 export interface CreateCatamorphicConfig {
+  /** Stable host identity. Required when `codingAgent` enables sessions. */
+  hostId?: string;
   database: DatabaseConfig;
   storage: StorageConfig;
   /**
@@ -301,6 +303,7 @@ export class Catamorphic {
       connectionProviders: config.connectionProviders ?? [],
     });
     this.core = createCatamorphicCore({
+      hostId: config.hostId,
       db,
       projectManager: resolveStorage(config.storage),
       sandboxProvider: config.sandboxProvider,

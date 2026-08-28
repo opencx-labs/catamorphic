@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import {
@@ -90,6 +91,7 @@ export async function buildStockServer(
   for (const dir of ["db", "projects", "remotes", "app-bundles", "sandboxes"]) {
     fs.mkdirSync(path.join(data, dir), { recursive: true });
   }
+  const hostId = loadOrCreateHostId(path.join(data, "host-id"));
 
   // --- database: PGlite on disk, or DATABASE_URL for teams ------------
   // PGlite is the zero-dependency default (one serialized connection);
@@ -148,6 +150,7 @@ export async function buildStockServer(
   const agents = buildAgentRegistry({ sandboxProvider, toolPermissions, env });
 
   const catamorphic = createCatamorphic({
+    hostId,
     database: databaseConfig,
     storage: {
       projectsPath: path.join(data, "projects"),
@@ -384,6 +387,18 @@ export async function buildStockServer(
       await ownDb?.destroy();
     },
   };
+}
+
+function loadOrCreateHostId(file: string): string {
+  try {
+    const existing = fs.readFileSync(file, "utf8").trim();
+    if (existing) return existing;
+  } catch {
+    // First boot creates a stable identity below.
+  }
+  const hostId = `server:${randomUUID()}`;
+  fs.writeFileSync(file, `${hostId}\n`, { mode: 0o600 });
+  return hostId;
 }
 
 const LANDING_PAGE = `<!doctype html>

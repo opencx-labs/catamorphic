@@ -44,10 +44,14 @@ export interface ActiveRunInvocations {
 }
 
 export interface AgentMessages {
+  author_kind: Generated<string>;
+  author_payload: Generated<Json>;
   commit_sha: string | null;
   content: string;
   created_at: Generated<Timestamp>;
+  delivery_mode: Generated<string>;
   id: Generated<string>;
+  idempotency_key: string | null;
   metadata: Json | null;
   role: string;
   seq: Generated<Int8>;
@@ -86,6 +90,8 @@ export interface AgentSessions {
   activity: string | null;
   agent_id: string | null;
   allocation_id: string | null;
+  authority_host_id: Generated<string>;
+  authority_revision: Generated<Int8>;
   base_commit_sha: string | null;
   created_at: Generated<Timestamp>;
   environment_name: string | null;
@@ -101,6 +107,26 @@ export interface AgentSessions {
   status: Generated<string>;
   system_prompt: string | null;
   title: string | null;
+  updated_at: Generated<Timestamp>;
+}
+
+export interface AgentTurns {
+  attempt: Generated<number>;
+  available_at: Generated<Timestamp>;
+  completed_at: Timestamp | null;
+  created_at: Generated<Timestamp>;
+  delivery_mode: string;
+  error: string | null;
+  id: Generated<string>;
+  lease_expires_at: Timestamp | null;
+  lease_owner: string | null;
+  lease_token: string | null;
+  message_id: string;
+  priority: Generated<number>;
+  result_message_id: string | null;
+  session_id: string;
+  started_at: Timestamp | null;
+  status: Generated<string>;
   updated_at: Generated<Timestamp>;
 }
 
@@ -446,6 +472,38 @@ export interface Memberships {
   updated_at: Generated<Timestamp>;
 }
 
+export interface ProjectEventMonitors {
+  config: Generated<Json>;
+  created_at: Generated<Timestamp>;
+  cursor: Json | null;
+  id: Generated<string>;
+  last_error: string | null;
+  lease_expires_at: Timestamp | null;
+  lease_owner: string | null;
+  lease_token: string | null;
+  next_poll_at: Generated<Timestamp>;
+  owner_external_user_id: string;
+  placement: string;
+  poll_interval_seconds: Generated<number>;
+  project_id: string;
+  source_key: string;
+  source_kind: string;
+  status: Generated<string>;
+  updated_at: Generated<Timestamp>;
+}
+
+export interface ProjectEvents {
+  external_id: string;
+  id: Generated<string>;
+  kind: string;
+  occurred_at: Timestamp;
+  payload: Json;
+  project_id: string;
+  received_at: Generated<Timestamp>;
+  sequence: Generated<Int8>;
+  source: string;
+}
+
 export interface ProjectPlugins {
   created_at: Generated<Timestamp>;
   package_name: string;
@@ -508,6 +566,25 @@ export interface RateReservationBuckets {
   tenant_id: string;
   tokens: Numeric;
   updated_at: Generated<Timestamp>;
+}
+
+export interface SessionMailboxItems {
+  acknowledged_at: Timestamp | null;
+  author_kind: string;
+  author_payload: Json;
+  authority_revision: Int8;
+  content: string;
+  created_at: Generated<Timestamp>;
+  delivery_mode: string;
+  destination_host_id: string;
+  id: Generated<string>;
+  idempotency_key: string | null;
+  message_id: Generated<string>;
+  metadata: Json | null;
+  project_id: string;
+  session_id: string;
+  source_host_id: string;
+  status: Generated<string>;
 }
 
 export interface StockProjectAccessRequests {
@@ -627,6 +704,35 @@ export interface TriggerBindingScans {
   scanned_at: Generated<Timestamp>;
 }
 
+export interface WatcherRuns {
+  created_at: Generated<Timestamp>;
+  event_id: string;
+  run_id: string;
+  watcher_id: string;
+}
+
+export interface Watchers {
+  commit_sha: string;
+  created_at: Generated<Timestamp>;
+  cursor_sequence: Generated<Int8>;
+  deployment_artifact_id: string;
+  environment_name: string | null;
+  event_kinds: Json;
+  expires_at: Timestamp | null;
+  id: Generated<string>;
+  last_error: string | null;
+  monitor_id: string | null;
+  owner_external_user_id: string;
+  owner_identity: Json;
+  project_id: string;
+  remote_branch: string;
+  session_id: string;
+  source_path: string;
+  status: Generated<string>;
+  updated_at: Generated<Timestamp>;
+  workflow_name: string;
+}
+
 export interface WorkflowPauses {
   created_at: Generated<Timestamp>;
   id: Generated<string>;
@@ -737,6 +843,7 @@ export interface DB {
   agent_runtime_events: AgentRuntimeEvents;
   agent_runtime_requests: AgentRuntimeRequests;
   agent_sessions: AgentSessions;
+  agent_turns: AgentTurns;
   app_storage: AppStorage;
   app_versions: AppVersions;
   apps: Apps;
@@ -758,12 +865,15 @@ export interface DB {
   execution_jobs: ExecutionJobs;
   member_connection_attachments: MemberConnectionAttachments;
   memberships: Memberships;
+  project_event_monitors: ProjectEventMonitors;
+  project_events: ProjectEvents;
   project_plugins: ProjectPlugins;
   project_sandboxes: ProjectSandboxes;
   project_secrets: ProjectSecrets;
   projects: Projects;
   publications: Publications;
   rate_reservation_buckets: RateReservationBuckets;
+  session_mailbox_items: SessionMailboxItems;
   stock_project_access_requests: StockProjectAccessRequests;
   stock_project_admission_policies: StockProjectAdmissionPolicies;
   stock_project_invitations: StockProjectInvitations;
@@ -774,6 +884,8 @@ export interface DB {
   tenants: Tenants;
   trigger_binding_scans: TriggerBindingScans;
   trigger_bindings: TriggerBindings;
+  watcher_runs: WatcherRuns;
+  watchers: Watchers;
   workflow_pauses: WorkflowPauses;
   workflow_run_events: WorkflowRunEvents;
   workflow_run_states: WorkflowRunStates;

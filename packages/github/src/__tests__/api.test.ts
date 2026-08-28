@@ -67,6 +67,103 @@ describe("GithubApi", () => {
     await expect(api.getUser()).rejects.toMatchObject({ status: 404 });
     await expect(api.getUser()).rejects.toThrow(GithubApiError);
   });
+
+  it("lists repository events without discarding provider payload", async () => {
+    const api = new GithubApi("tok", {
+      fetch: fetchRouting({
+        "/repos/octo/hello/events": [
+          {
+            id: "123",
+            type: "PullRequestEvent",
+            actor: { login: "octo" },
+            created_at: "2026-08-28T10:00:00Z",
+            payload: { action: "synchronize", number: 42 },
+          },
+        ],
+      }),
+    });
+
+    expect(await api.listRepositoryEvents("octo/hello")).toEqual([
+      {
+        id: "123",
+        type: "PullRequestEvent",
+        actor: "octo",
+        createdAt: "2026-08-28T10:00:00Z",
+        payload: { action: "synchronize", number: 42 },
+      },
+    ]);
+  });
+
+  it("merges pull request, review, check, suite, and workflow state for watchers", async () => {
+    const api = new GithubApi("tok", {
+      fetch: fetchRouting({
+        "/repos/octo/hello/events": [],
+        "/repos/octo/hello/pulls?": [
+          {
+            id: 42,
+            number: 7,
+            updated_at: "2026-08-28T10:00:00Z",
+            user: { login: "octo" },
+            head: { sha: "abc123" },
+          },
+        ],
+        "/repos/octo/hello/actions/runs": {
+          workflow_runs: [
+            {
+              id: 51,
+              run_attempt: 1,
+              status: "completed",
+              conclusion: "success",
+              updated_at: "2026-08-28T10:04:00Z",
+              actor: { login: "octo" },
+            },
+          ],
+        },
+        "/repos/octo/hello/pulls/7/reviews": [
+          {
+            id: 61,
+            state: "approved",
+            submitted_at: "2026-08-28T10:01:00Z",
+            user: { login: "reviewer" },
+          },
+        ],
+        "/repos/octo/hello/commits/abc123/check-runs": {
+          check_runs: [
+            {
+              id: 71,
+              status: "completed",
+              conclusion: "success",
+              updated_at: "2026-08-28T10:02:00Z",
+              app: { slug: "ci" },
+            },
+          ],
+        },
+        "/repos/octo/hello/commits/abc123/check-suites": {
+          check_suites: [
+            {
+              id: 81,
+              status: "completed",
+              conclusion: "success",
+              updated_at: "2026-08-28T10:03:00Z",
+              app: { slug: "ci" },
+            },
+          ],
+        },
+      }),
+    });
+
+    expect(
+      (await api.listRepositoryWatchEvents("octo/hello")).map(
+        (event) => event.type,
+      ),
+    ).toEqual([
+      "WorkflowRunEvent",
+      "CheckSuiteEvent",
+      "CheckRunEvent",
+      "PullRequestReviewEvent",
+      "PullRequestEvent",
+    ]);
+  });
 });
 
 describe("gitCredentialsFor", () => {

@@ -912,6 +912,8 @@ export const AgentSessionSchema = z.object({
   parentSessionId: z.string().uuid().nullable(),
   status: z.enum(["active", "closed"]),
   activity: z.string().nullable(),
+  authorityHostId: z.string().min(1),
+  authorityRevision: z.number().int().positive(),
   running: z.boolean(),
   baseCommitSha: z.string().length(40).nullable(),
   createdAt: z.string().datetime(),
@@ -958,8 +960,38 @@ export const EnvironmentErrorSchema = z.object({
   reasons: z.array(z.string()).optional(),
 });
 
+export const SessionDeliveryModeSchema = z.enum([
+  "message_only",
+  "next_turn",
+  "interrupt",
+]);
+
+export const SessionMessageAuthorSchema = z.discriminatedUnion("kind", [
+  z.object({ kind: z.literal("user"), externalUserId: z.string() }),
+  z.object({
+    kind: z.literal("agent"),
+    sessionId: z.string().uuid(),
+    agentId: z.string().nullable(),
+  }),
+  z.object({
+    kind: z.literal("workflow"),
+    runId: z.string().uuid(),
+    workflowName: z.string(),
+  }),
+  z.object({
+    kind: z.literal("watcher"),
+    watcherId: z.string().uuid(),
+    runId: z.string().uuid().optional(),
+  }),
+  z.object({ kind: z.literal("system"), code: z.string() }),
+]);
+
 /** A transcript pushed from another backend (ADR 0061). */
 export const MirrorAgentSessionSchema = z.object({
+  authority: z.object({
+    hostId: z.string().min(1).max(255),
+    revision: z.number().int().positive(),
+  }),
   title: z.string().max(500).nullable().optional(),
   icon: z.string().max(100).nullable().optional(),
   /** The source's provider name, kept for provenance. */
@@ -974,6 +1006,9 @@ export const MirrorAgentSessionSchema = z.object({
         role: z.enum(["user", "assistant", "system"]),
         content: z.string().max(1_000_000),
         metadata: z.record(z.string(), z.unknown()).nullable().optional(),
+        author: SessionMessageAuthorSchema,
+        deliveryMode: SessionDeliveryModeSchema,
+        idempotencyKey: z.string().max(500).nullable(),
         createdAt: z.string().datetime(),
       }),
     )
@@ -1001,8 +1036,101 @@ export const AgentMessageSchema = z.object({
   content: z.string(),
   commitSha: z.string().length(40).nullable(),
   metadata: z.record(z.string(), z.unknown()).nullable(),
+  author: SessionMessageAuthorSchema,
+  deliveryMode: SessionDeliveryModeSchema,
+  idempotencyKey: z.string().nullable(),
   createdAt: z.string().datetime(),
 });
+
+export const PendingSessionTurnSchema = z.object({
+  id: z.string().uuid(),
+  messageId: z.string().uuid(),
+  content: z.string(),
+  metadata: z.record(z.string(), z.unknown()).nullable(),
+  deliveryMode: z.enum(["next_turn", "interrupt"]),
+  status: z.enum(["queued", "held", "running"]),
+  createdAt: z.string().datetime(),
+});
+
+export const SessionDeliveryReceiptSchema = z.object({
+  messageId: z.string().uuid(),
+  turnId: z.string().uuid().nullable(),
+  mode: SessionDeliveryModeSchema,
+  created: z.boolean(),
+});
+
+export const SessionMailboxItemSchema = z.object({
+  id: z.string().uuid(),
+  projectId: z.string().uuid(),
+  sessionId: z.string().uuid(),
+  sourceHostId: z.string(),
+  destinationHostId: z.string(),
+  authorityRevision: z.number().int().positive(),
+  messageId: z.string().uuid(),
+  content: z.string(),
+  author: SessionMessageAuthorSchema,
+  mode: SessionDeliveryModeSchema,
+  idempotencyKey: z.string().nullable(),
+  metadata: z.record(z.string(), z.unknown()).nullable(),
+  createdAt: z.string().datetime(),
+});
+
+export const SessionMailboxListQuerySchema = z.object({
+  destinationHostId: z.string().min(1).max(255),
+  limit: z.coerce.number().int().min(1).max(500).optional(),
+});
+export const SessionMailboxListSchema = z.object({
+  items: z.array(SessionMailboxItemSchema),
+});
+
+export const SessionMailboxIdParamsSchema = ProjectIdParamsSchema.extend({
+  mailboxId: z.string().uuid(),
+});
+
+export const AcknowledgeSessionMailboxSchema = z.object({
+  destinationHostId: z.string().min(1).max(255),
+});
+
+export const WatcherSchema = z.object({
+  id: z.string().uuid(),
+  projectId: z.string().uuid(),
+  sessionId: z.string().uuid(),
+  monitorId: z.string().uuid().nullable(),
+  workflowName: z.string(),
+  sourcePath: z.string(),
+  remoteBranch: z.string(),
+  commitSha: z.string().length(40),
+  deploymentArtifactId: z.string().uuid(),
+  environment: z.string().nullable(),
+  eventKinds: z.array(z.string()),
+  cursorSequence: z.number().int().nonnegative(),
+  status: z.enum(["active", "paused", "stopped", "expired"]),
+  expiresAt: z.string().datetime().nullable(),
+  lastError: z.string().nullable(),
+  createdAt: z.string().datetime(),
+});
+
+export const WatcherIdParamsSchema = AgentSessionIdParamsSchema.extend({
+  watcherId: z.string().uuid(),
+});
+
+export const AgentTurnIdParamsSchema = AgentSessionIdParamsSchema.extend({
+  turnId: z.string().uuid(),
+});
+
+export const UpdateQueuedAgentTurnSchema = z
+  .object({
+    content: z.string().min(1).max(200_000).optional(),
+    metadata: z.record(z.string(), z.unknown()).optional(),
+    held: z.boolean().optional(),
+  })
+  .refine(
+    (input) =>
+      input.content !== undefined ||
+      input.metadata !== undefined ||
+      input.held !== undefined,
+    { message: "Provide content, metadata, or held." },
+  );
 
 export const OkSchema = z.object({ ok: z.literal(true) });
 
@@ -1090,6 +1218,7 @@ export const SendMessageSchema = z
     // this" with just a pill); rejected only when BOTH are empty.
     message: z.string().max(200_000),
     attachments: z.array(AgentAttachmentSchema).max(32).optional(),
+    deliveryMode: z.enum(["next_turn", "interrupt"]).optional(),
   })
   .refine(
     (body) =>
@@ -1099,6 +1228,7 @@ export const SendMessageSchema = z
 
 export const AgentSessionDetailSchema = AgentSessionSchema.extend({
   messages: z.array(AgentMessageSchema),
+  pendingTurns: z.array(PendingSessionTurnSchema),
 });
 
 // --- Skills ---

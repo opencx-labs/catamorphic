@@ -4,6 +4,7 @@ import {
   type GithubPullRequest,
   type GithubPullRequestFile,
   type GithubRepo,
+  type GithubRepositoryEvent,
   type GithubUser,
 } from "./types.js";
 
@@ -24,6 +25,51 @@ interface RawRepo {
   clone_url: string;
   description: string | null;
   pushed_at: string | null;
+}
+
+interface RawWatchPull {
+  id: number;
+  number: number;
+  updated_at: string;
+  user: { login: string } | null;
+  head: { sha: string };
+  [key: string]: unknown;
+}
+
+interface RawPullReview {
+  id: number;
+  state: string;
+  submitted_at: string;
+  user: { login: string } | null;
+  [key: string]: unknown;
+}
+
+interface RawWorkflowRun {
+  id: number;
+  run_attempt: number;
+  status: string;
+  conclusion: string | null;
+  updated_at: string;
+  actor: { login: string } | null;
+  [key: string]: unknown;
+}
+
+interface RawCheckRun {
+  id: number;
+  status: string;
+  conclusion: string | null;
+  updated_at: string;
+  app: { slug: string } | null;
+  [key: string]: unknown;
+}
+
+interface RawCheckSuite {
+  id: number;
+  status: string;
+  conclusion: string | null;
+  updated_at: string;
+  app: { slug: string } | null;
+  [key: string]: unknown;
 }
 
 /** Minimal REST client bound to one user access token. */
@@ -175,6 +221,144 @@ export class GithubApi {
         ? { previousPath: file.previous_filename }
         : {}),
     }));
+  }
+
+  /** Repository activity available to the connected user. */
+  async listRepositoryEvents(
+    fullName: string,
+  ): Promise<GithubRepositoryEvent[]> {
+    if (!/^[\w.-]+\/[\w.-]+$/.test(fullName)) {
+      throw new GithubApiError(400, `Invalid repository name: ${fullName}`);
+    }
+    const raw = await this.request<
+      Array<{
+        id: string;
+        type: string;
+        actor: { login: string } | null;
+        created_at: string;
+        payload: unknown;
+      }>
+    >(`/repos/${fullName}/events?per_page=100`);
+    return raw.map((event) => ({
+      id: event.id,
+      type: event.type,
+      actor: event.actor?.login ?? null,
+      createdAt: event.created_at,
+      payload: event.payload,
+    }));
+  }
+
+  /**
+   * Complete polling surface for desktop Watchers. The repository Events API
+   * omits some check and Actions transitions, so merge state-stamped snapshots
+   * from the dedicated APIs. Unsupported permission slices degrade to the
+   * events the connected user can read instead of disabling the monitor.
+   */
+  async listRepositoryWatchEvents(
+    fullName: string,
+  ): Promise<GithubRepositoryEvent[]> {
+    if (!/^[\w.-]+\/[\w.-]+$/.test(fullName)) {
+      throw new GithubApiError(400, `Invalid repository name: ${fullName}`);
+    }
+    const [events, pulls, workflowRuns] = await Promise.all([
+      this.listRepositoryEvents(fullName),
+      this.optionalRequest<RawWatchPull[]>(
+        `/repos/${fullName}/pulls?state=all&sort=updated&direction=desc&per_page=25`,
+        [],
+      ),
+      this.optionalRequest<{ workflow_runs: RawWorkflowRun[] }>(
+        `/repos/${fullName}/actions/runs?per_page=100`,
+        { workflow_runs: [] },
+      ),
+    ]);
+    const recentPulls = pulls.slice(0, 3);
+    const pullDetails = await Promise.all(
+      recentPulls.map(async (pull) => {
+        const [reviews, runs, suites] = await Promise.all([
+          this.optionalRequest<RawPullReview[]>(
+            `/repos/${fullName}/pulls/${pull.number}/reviews?per_page=100`,
+            [],
+          ),
+          this.optionalRequest<{ check_runs: RawCheckRun[] }>(
+            `/repos/${fullName}/commits/${pull.head.sha}/check-runs?filter=all&per_page=100`,
+            { check_runs: [] },
+          ),
+          this.optionalRequest<{ check_suites: RawCheckSuite[] }>(
+            `/repos/${fullName}/commits/${pull.head.sha}/check-suites?per_page=100`,
+            { check_suites: [] },
+          ),
+        ]);
+        return {
+          pull,
+          reviews,
+          runs: runs.check_runs,
+          suites: suites.check_suites,
+        };
+      }),
+    );
+    const snapshots: GithubRepositoryEvent[] = [
+      ...pulls.map((pull) => ({
+        id: `pull_request:${pull.id}:${pull.updated_at}`,
+        type: "PullRequestEvent",
+        actor: pull.user?.login ?? null,
+        createdAt: pull.updated_at,
+        payload: { action: "updated", number: pull.number, pull_request: pull },
+      })),
+      ...workflowRuns.workflow_runs.map((run) => ({
+        id: `workflow_run:${run.id}:${run.run_attempt}:${run.updated_at}:${run.status}:${run.conclusion ?? ""}`,
+        type: "WorkflowRunEvent",
+        actor: run.actor?.login ?? null,
+        createdAt: run.updated_at,
+        payload: { action: run.status, workflow_run: run },
+      })),
+      ...pullDetails.flatMap(({ pull, reviews, runs, suites }) => [
+        ...reviews.map((review) => ({
+          id: `pull_request_review:${review.id}:${review.submitted_at}:${review.state}`,
+          type: "PullRequestReviewEvent",
+          actor: review.user?.login ?? null,
+          createdAt: review.submitted_at,
+          payload: { action: "submitted", review, pull_request: pull },
+        })),
+        ...runs.map((run) => ({
+          id: `check_run:${run.id}:${run.updated_at}:${run.status}:${run.conclusion ?? ""}`,
+          type: "CheckRunEvent",
+          actor: run.app?.slug ?? null,
+          createdAt: run.updated_at,
+          payload: { action: run.status, check_run: run, pull_request: pull },
+        })),
+        ...suites.map((suite) => ({
+          id: `check_suite:${suite.id}:${suite.updated_at}:${suite.status}:${suite.conclusion ?? ""}`,
+          type: "CheckSuiteEvent",
+          actor: suite.app?.slug ?? null,
+          createdAt: suite.updated_at,
+          payload: {
+            action: suite.status,
+            check_suite: suite,
+            pull_request: pull,
+          },
+        })),
+      ]),
+    ];
+    return [...events, ...snapshots]
+      .filter(
+        (event, index, all) =>
+          all.findIndex((candidate) => candidate.id === event.id) === index,
+      )
+      .sort((left, right) => right.createdAt.localeCompare(left.createdAt));
+  }
+
+  private async optionalRequest<T>(path: string, fallback: T): Promise<T> {
+    try {
+      return await this.request<T>(path);
+    } catch (error) {
+      if (
+        error instanceof GithubApiError &&
+        (error.status === 403 || error.status === 404)
+      ) {
+        return fallback;
+      }
+      throw error;
+    }
   }
 
   /**

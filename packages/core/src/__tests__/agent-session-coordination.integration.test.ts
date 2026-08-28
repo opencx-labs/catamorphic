@@ -135,6 +135,7 @@ describe("agent session coordination", () => {
       testEnvironmentProvider(unusedSandbox),
     );
     sessions = new AgentSessionsService(db, {
+      hostId: "coordination-test-host",
       projectManager,
       sandboxProvider: unusedSandbox,
       executionEnvironments,

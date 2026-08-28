@@ -74,6 +74,17 @@
   a self-scoped store subtree (`store/users/{user}/**` via a role grant,
   0055 machinery) — the stock server's member role (ADR 0059) already
   grants exactly that subtree.
+- **Personal agents and agent-to-agent communication.** Give personal and
+  project agents a durable, policy-controlled way to send attributed messages
+  to other visible sessions. Messages must remain distinguishable from user
+  messages and support message-only delivery, queueing the next turn (waking
+  an idle or older session), or interrupting the current turn before delivery.
+  Move queue authority out of the React client into a persisted session inbox
+  with idempotency, provenance, per-agent send/receive and delivery-mode
+  policy, privacy/incognito enforcement, and explicit cross-project limits.
+  Cross-host delivery must follow the authoritative session through a durable
+  mailbox rather than treating transcript mirroring or a direct desktop
+  callback as message transport.
 - **Agent channel integrations: Slack, code review.** The per-agent
   schema (capabilities + tool policies + mode) is the substrate; what's
   missing is the *binding* of an agent to a channel. Slack: a

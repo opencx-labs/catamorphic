@@ -124,6 +124,32 @@ const inject = (
     ...(body !== undefined ? { payload: JSON.stringify(body) } : {}),
   });
 
+async function waitForSessionContents({
+  sessionId,
+  token,
+  includes,
+}: {
+  sessionId: string;
+  token: string;
+  includes: string;
+}): Promise<string[]> {
+  const deadline = Date.now() + 15_000;
+  while (Date.now() < deadline) {
+    const detail = await inject(
+      "GET",
+      `/api/projects/${projectId}/agent/sessions/${sessionId}`,
+      token,
+    );
+    expect(detail.statusCode).toBe(200);
+    const contents = detail
+      .json()
+      .messages.map((message: { content: string }) => message.content);
+    if (contents.includes(includes)) return contents;
+    await new Promise((resolve) => setTimeout(resolve, 20));
+  }
+  throw new Error(`Timed out waiting for session message: ${includes}`);
+}
+
 const operatorInject = (url: string, token?: string, body?: unknown) =>
   server.operatorApp.inject({
     method: "POST",
@@ -393,15 +419,12 @@ describe("stock server", () => {
       memberToken,
       { message: "hello server" },
     );
-    expect(sent.statusCode).toBe(201);
-    const detail = await inject(
-      "GET",
-      `/api/projects/${projectId}/agent/sessions/${sessionId}`,
-      memberToken,
-    );
-    const contents = detail
-      .json()
-      .messages.map((message: { content: string }) => message.content);
+    expect(sent.statusCode).toBe(202);
+    const contents = await waitForSessionContents({
+      sessionId,
+      token: memberToken,
+      includes: "Echo: hello server",
+    });
     expect(contents).toContain("hello server");
     expect(contents).toContain("Echo: hello server");
   }, 60_000);
@@ -414,6 +437,9 @@ describe("stock server", () => {
         role: "user",
         content: "hello from the desktop",
         metadata: null,
+        author: { kind: "user", externalUserId: memberUserId },
+        deliveryMode: "next_turn",
+        idempotencyKey: null,
         createdAt: new Date().toISOString(),
       },
       {
@@ -431,11 +457,19 @@ describe("stock server", () => {
             model: "claude-opus-5",
           },
         },
+        author: {
+          kind: "agent",
+          sessionId,
+          agentId: projectAssistantId(projectId),
+        },
+        deliveryMode: "message_only",
+        idempotencyKey: null,
         createdAt: new Date().toISOString(),
       },
     ];
     const mirrorUrl = `/api/projects/${projectId}/agent/sessions/${sessionId}/mirror`;
     const first = await inject("PUT", mirrorUrl, memberToken, {
+      authority: { hostId: "desktop:test-host", revision: 1 },
       title: "Desktop chat",
       icon: "sparkles:orange",
       provider: "ai-sdk",
@@ -444,7 +478,12 @@ describe("stock server", () => {
     expect(first.statusCode).toBe(200);
     // Idempotent re-push: same payload, no duplicates.
     expect(
-      (await inject("PUT", mirrorUrl, memberToken, { messages })).statusCode,
+      (
+        await inject("PUT", mirrorUrl, memberToken, {
+          authority: { hostId: "desktop:test-host", revision: 1 },
+          messages,
+        })
+      ).statusCode,
     ).toBe(200);
 
     const list = await inject(
@@ -463,15 +502,12 @@ describe("stock server", () => {
       memberToken,
       { message: "continue here" },
     );
-    expect(sent.statusCode).toBe(201);
-    const detail = await inject(
-      "GET",
-      `/api/projects/${projectId}/agent/sessions/${sessionId}`,
-      memberToken,
-    );
-    const contents = detail
-      .json()
-      .messages.map((m: { content: string }) => m.content);
+    expect(sent.statusCode).toBe(202);
+    const contents = await waitForSessionContents({
+      sessionId,
+      token: memberToken,
+      includes: "Echo: continue here",
+    });
     expect(contents).toEqual([
       "hello from the desktop",
       "desktop assistant reply",
@@ -480,7 +516,10 @@ describe("stock server", () => {
     ]);
 
     // The desktop pushes again without the server-side turns → diverged.
-    const stale = await inject("PUT", mirrorUrl, memberToken, { messages });
+    const stale = await inject("PUT", mirrorUrl, memberToken, {
+      authority: { hostId: "desktop:test-host", revision: 1 },
+      messages,
+    });
     expect(stale.statusCode).toBe(409);
     expect(stale.json().diverged).toBe(true);
   }, 60_000);

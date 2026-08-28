@@ -413,6 +413,7 @@ describe("project MCP surface (ADR 0055): documents, skills, ask_agent", () => {
       "revoke_publication",
       "list_publications",
       "ask_agent",
+      "send_agent_message",
     ]);
     expect(tools.find((t) => t.name === "documents_read")?.annotations).toEqual(
       { readOnlyHint: true },
@@ -509,6 +510,59 @@ describe("project MCP surface (ADR 0055): documents, skills, ask_agent", () => {
           agentId: `project:${PROJECT_ID}:csm-assistant`,
         }),
       ]),
+    });
+  });
+
+  it("offers GitHub watcher lifecycle tools when the host configured them", async () => {
+    const { core, calls } = surfaceCore();
+    Object.assign(core, {
+      github: {},
+      watchers: {
+        create: async (args: unknown) => {
+          calls.push({ op: "watchers.create", args });
+          return { id: "watcher-1", status: "active" };
+        },
+        createGithub: async (args: unknown) => {
+          calls.push({ op: "watchers.createGithub", args });
+          return { id: "watcher-1", status: "active" };
+        },
+        list: async () => [],
+        stop: async () => true,
+      },
+    });
+    const app = createTestApp({ core: core as never });
+    apps.push(app);
+    const listed = await rpc(app, "tools/list");
+    const listedTools = listed.result?.tools ?? [];
+    const names = (listedTools as Array<{ name: string }>).map(
+      (tool) => tool.name,
+    );
+    expect(names).toEqual(
+      expect.arrayContaining([
+        "create_watcher",
+        "create_github_watcher",
+        "list_watchers",
+        "stop_watcher",
+      ]),
+    );
+
+    await rpc(app, "tools/call", {
+      name: "create_github_watcher",
+      arguments: {
+        sessionId: "session-1",
+        workflowName: "watchPullRequest",
+        source:
+          "export const watchPullRequest = defineWorkflow(() => ({ steps: [] }))",
+        eventKinds: ["github.pull_request"],
+      },
+    });
+    expect(calls.at(-1)).toMatchObject({
+      op: "watchers.createGithub",
+      args: expect.objectContaining({
+        projectId: PROJECT_ID,
+        sessionId: "session-1",
+        eventKinds: ["github.pull_request"],
+      }),
     });
   });
 

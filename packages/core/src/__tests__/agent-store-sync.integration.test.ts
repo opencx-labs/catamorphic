@@ -90,6 +90,7 @@ describeIf("store sync around agent turns (ADR 0055)", () => {
     await migrateToLatest({ db, schema });
     const registered = { id: agentId, provider, topology: "native" as const };
     core = new CatamorphicCore({
+      hostId: "store-sync-test-host",
       db,
       projectManager,
       sandboxProvider: unusedSandboxProvider,

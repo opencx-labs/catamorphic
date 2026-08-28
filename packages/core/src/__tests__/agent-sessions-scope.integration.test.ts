@@ -138,6 +138,7 @@ describeIf("scoped agent sessions (ADR 0055)", () => {
       testEnvironmentProvider(unusedSandboxProvider),
     );
     sessions = new AgentSessionsService(db, {
+      hostId: "scope-test-host",
       projectManager,
       sandboxProvider: unusedSandboxProvider,
       codingAgents: registry,
