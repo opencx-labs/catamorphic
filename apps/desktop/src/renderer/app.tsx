@@ -4510,6 +4510,10 @@ export function App() {
                 entry={entry}
                 title={chatLabels[entry.localId] ?? "AI assistant"}
                 tabActive={Boolean(viewSlots[chatTabKey(entry.localId)])}
+                refreshWhileIdle={
+                  entry.localId === workspace.activeChatId &&
+                  chatVisible(workspace, entry)
+                }
                 slot={viewSlots[chatTabKey(entry.localId)] ?? "full"}
                 splitRatio={splitRatio}
                 splitResizing={dividerDragging}

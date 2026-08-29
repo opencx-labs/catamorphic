@@ -76,6 +76,7 @@ function Chat({
     : me.data?.projects.find((p) => p.projectId === projectId)?.agents[0];
   const chat = useAgentChat(projectId, {
     sessionId: sessionId ?? undefined,
+    idleRefetchIntervalMs: 3_000,
     ...(scopedAgent ? { agentId: `project:${projectId}:${scopedAgent}` } : {}),
     onSessionCreated: (created) =>
       // Adopt the lazily created session into the URL without growing the

@@ -32,6 +32,11 @@ export interface UseAgentChatOptions {
   agentId?: string;
   /** Logical Environment for a lazily created session. */
   environment?: string;
+  /**
+   * Optional quiet polling cadence while the session is idle. Hosts should
+   * enable this only for a visible chat that can be changed by another client.
+   */
+  idleRefetchIntervalMs?: number | false;
 }
 
 /** A message waiting behind the in-flight turn. */
@@ -181,12 +186,9 @@ export function useAgentChat(
   // Read at send time so the host's latest default applies to lazy creation.
   const agentIdRef = useRef(options.agentId);
   agentIdRef.current = options.agentId;
-  // Poll while a send is in flight OR the server still reports an
-  // in-progress assistant turn. The latter covers sends that end in an HTTP
-  // error: the server persists the terminal (failed) message, and without a
-  // final refetch the cached snapshot would show a spinning placeholder
-  // forever. Auto-retries also need the poll: their countdown and re-run
-  // happen entirely server-side.
+  // Poll quickly while a turn is active. Hosts may keep a quieter cadence for
+  // the one visible chat when another client can write to the same session;
+  // hidden mounted chats stay dormant.
   const session = useAgentSession(projectId, sessionId ?? undefined, {
     refetchInterval: (data) =>
       sendInProgress > 0 ||
@@ -194,7 +196,7 @@ export function useAgentChat(
       (data?.pendingTurns?.length ?? 0) > 0 ||
       hasScheduledAutoRetry(data?.messages)
         ? 500
-        : false,
+        : (options.idleRefetchIntervalMs ?? false),
   });
   const sessionListSnapshotRef = useRef<string | null>(null);
   useEffect(() => {

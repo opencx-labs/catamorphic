@@ -73,6 +73,27 @@ describe("ProfileSettingsScreen", () => {
     Reflect.set(globalThis, "IS_REACT_ACT_ENVIRONMENT", false);
   });
 
+  it("owns vertical scrolling inside its workspace pane", async () => {
+    await act(async () => {
+      root.render(
+        <ProfileSettingsScreen
+          profileId={profile.id}
+          activeProfileId={profile.id}
+          data={{ profiles: [profile], defaultProfileId: profile.id }}
+          projects={[project]}
+          onClose={() => undefined}
+        />,
+      );
+    });
+
+    const screen = container.querySelector(
+      '[data-testid="profile-settings-screen"]',
+    );
+    expect(screen?.classList.contains("h-full")).toBe(true);
+    expect(screen?.classList.contains("min-h-0")).toBe(true);
+    expect(screen?.classList.contains("overflow-y-auto")).toBe(true);
+  });
+
   it("edits profile details and guards the final profile from deletion", async () => {
     await act(async () => {
       root.render(

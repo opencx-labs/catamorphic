@@ -3056,3 +3056,16 @@ paths, deliberately independent:
   and username. Results use the shared as-you-type list motion, while editor,
   reveal, confirmation, and copy feedback use the standard curve and honor
   reduced-motion preferences.
+
+### Dev replacement and mobile continuity (2026-08-29)
+
+- A manually launched root development command replaces the existing dev
+  process group for the same worktree instance. The instance lock is the scope:
+  focused E2E apps and agent tests are separate processes and stay alive.
+- The visible chat keeps a quiet refresh cadence when idle so messages written by a
+  paired phone appear on desktop without requiring a focus change or local
+  send. Active turns retain the faster refresh cadence.
+- Installing the PWA from a desktop pairing carries a short-lived, one-time
+  bootstrap in the manifest start URL. Standalone launch restores the same
+  paired-device record and chat context even when the browser does not transfer
+  its local storage into the installed app (ADR 0080).

@@ -135,6 +135,7 @@ if (import.meta.main) {
     const instanceLock = await acquireDevInstanceLock({
       lockPath: placeholderPlan.lockPath,
       pid: process.pid,
+      replaceExisting: true,
     });
     const runtime = toolRuntime({ rootPath, env: process.env });
     let activeProcessGroupId: number | undefined;

@@ -1149,6 +1149,8 @@ export interface ChatDockProps {
   placeholder?: string;
   /** Whether this chat's workspace tab occupies a view slot (tab mode). */
   tabActive: boolean;
+  /** Keep this visible chat fresh when another client writes while it is idle. */
+  refreshWhileIdle?: boolean;
   /**
    * Where the tab sits in the content view: the full area, or one half
    * of a split. Floating/minimized modes ignore it.
@@ -1258,6 +1260,7 @@ export function ChatDock({
   title,
   placeholder = "Describe what you want to build…",
   tabActive,
+  refreshWhileIdle = false,
   slot = "full",
   splitRatio = 0.5,
   splitResizing = false,
@@ -1313,6 +1316,7 @@ export function ChatDock({
     sessionId: entry.sessionId,
     agentId: entry.agentId ?? defaultAgentId,
     environment: selectedEnvironment,
+    idleRefetchIntervalMs: refreshWhileIdle ? 3_000 : false,
     onSessionCreated: (sessionId) => {
       // Desktop-local privacy flag (ADR 0062): recorded the moment the
       // lazy session gets its id, well before the first turn can settle

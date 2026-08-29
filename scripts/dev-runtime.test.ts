@@ -218,6 +218,43 @@ describe("acquireDevInstanceLock", () => {
     }
   });
 
+  it("replaces only the process group recorded by the dev lock", async () => {
+    if (process.platform === "win32") return;
+    const lockPath = temporaryLockPath();
+    const oldDev = spawn(
+      process.execPath,
+      ["-e", "setInterval(() => {}, 1000)"],
+      { detached: true, stdio: "ignore" },
+    );
+    const unrelatedE2e = spawn(
+      process.execPath,
+      ["-e", "setInterval(() => {}, 1000)"],
+      { detached: true, stdio: "ignore" },
+    );
+    childProcesses.push(oldDev, unrelatedE2e);
+    if (!oldDev.pid || !unrelatedE2e.pid) {
+      throw new Error("Dev replacement fixtures did not receive PIDs");
+    }
+    const oldLock = await acquireDevInstanceLock({
+      lockPath,
+      pid: oldDev.pid,
+    });
+    await oldLock.bindProcessGroup(oldDev.pid);
+
+    const replacement = await acquireDevInstanceLock({
+      lockPath,
+      pid: process.pid,
+      replaceExisting: true,
+    });
+
+    expect(processGroupIsLive(oldDev.pid)).toBe(false);
+    expect(processGroupIsLive(unrelatedE2e.pid)).toBe(true);
+    expect(JSON.parse(readFileSync(lockPath, "utf8"))).toMatchObject({
+      pid: process.pid,
+    });
+    await replacement.release();
+  });
+
   it("does not let a released owner overwrite a replacement lock", async () => {
     const lockPath = temporaryLockPath();
     const first = await acquireDevInstanceLock({

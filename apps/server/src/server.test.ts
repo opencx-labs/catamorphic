@@ -91,6 +91,10 @@ beforeAll(async () => {
     path.join(pwaDist, "index.html"),
     "<!doctype html><title>pwa-stub</title>",
   );
+  fs.writeFileSync(
+    path.join(pwaDist, "manifest.webmanifest"),
+    JSON.stringify({ name: "Catamorphic", start_url: "/" }),
+  );
   server = await buildStockServer({
     dataDir,
     publicBases: ["http://catamorphic.local:4700"],
@@ -218,6 +222,17 @@ describe("stock server", () => {
     expect(root.body).toContain("pwa-stub");
     const deep = await inject("GET", "/anything/else");
     expect(deep.body).toContain("pwa-stub");
+    const launch = "/?server=https%3A%2F%2Fexample.test%2Fapi&project=p-1";
+    const manifest = await inject(
+      "GET",
+      `/manifest.webmanifest?launch=${encodeURIComponent(launch)}`,
+    );
+    expect(manifest.json()).toMatchObject({ start_url: launch });
+    const externalManifest = await inject(
+      "GET",
+      "/manifest.webmanifest?launch=https%3A%2F%2Fevil.example%2F",
+    );
+    expect(externalManifest.json()).toMatchObject({ start_url: "/" });
   });
 
   it("rejects unauthenticated and unknown-token API calls", async () => {
