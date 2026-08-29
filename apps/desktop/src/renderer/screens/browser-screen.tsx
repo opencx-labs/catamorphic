@@ -14,6 +14,8 @@ import { ShortcutHint } from "../components/shortcut-hint.js";
 import {
   type Bookmark,
   type BookmarksData,
+  type BrowserCredentialFillOffer,
+  type BrowserCredentialSaveOffer,
   desktopApi,
   type SavedCredential,
 } from "../lib/desktop-api.js";
@@ -72,12 +74,6 @@ interface Suggestion {
   detail?: string;
   /** What navigating this suggestion loads. */
   target: string;
-}
-
-interface SaveOffer {
-  origin: string;
-  username: string;
-  password: string;
 }
 
 /** Matches the `tab-in` keyframe duration in styles.css. */
@@ -179,8 +175,12 @@ export function BrowserScreen({
   const [inputValue, setInputValue] = useState(initialUrl);
   const [suggestions, setSuggestions] = useState<Suggestion[]>([]);
   const [selectedIndex, setSelectedIndex] = useState(0);
-  const [saveOffer, setSaveOffer] = useState<SaveOffer | null>(null);
-  const [fillOffer, setFillOffer] = useState<SavedCredential[] | null>(null);
+  const [saveOffer, setSaveOffer] = useState<BrowserCredentialSaveOffer | null>(
+    null,
+  );
+  const [fillOffer, setFillOffer] = useState<BrowserCredentialFillOffer | null>(
+    null,
+  );
   // Bookmarks for this project+profile, so the star reflects real state
   // (Chrome: filled = saved, click again removes) instead of firing a
   // one-way "add" that silently duplicates on every press.
@@ -397,28 +397,26 @@ export function BrowserScreen({
         const { favicons } = event as unknown as { favicons: string[] };
         report({ faviconUrl: favicons[0] ?? null });
       }) as EventListener);
-
-      // Guest preload messages (login form detection, submitted creds).
-      view.addEventListener("ipc-message", ((event: CustomEvent) => {
-        const { channel, args } = event as unknown as {
-          channel: string;
-          args: unknown[];
-        };
-        if (channel === "catamorphic:credentials-submitted") {
-          const payload = args[0] as SaveOffer;
-          if (payload.password) setSaveOffer(payload);
-        } else if (channel === "catamorphic:login-form-detected") {
-          const payload = args[0] as { origin: string };
-          void desktopApi
-            .vaultList({ profileId, origin: payload.origin })
-            .then((saved) => {
-              if (saved.length > 0) setFillOffer(saved);
-            });
-        }
-      }) as EventListener);
     },
     [profileId, remountWebview],
   );
+
+  useEffect(() => {
+    const stopSave = desktopApi.onBrowserCredentialSaveOffer((offer) => {
+      if (webviewRef.current?.getWebContentsId() === offer.guestId) {
+        setSaveOffer(offer);
+      }
+    });
+    const stopFill = desktopApi.onBrowserCredentialFillOffer((offer) => {
+      if (webviewRef.current?.getWebContentsId() === offer.guestId) {
+        setFillOffer(offer);
+      }
+    });
+    return () => {
+      stopSave();
+      stopFill();
+    };
+  }, []);
 
   const navigate = useCallback(
     (raw: string) => {
@@ -643,21 +641,31 @@ export function BrowserScreen({
 
   const saveCredentials = async () => {
     if (!saveOffer) return;
-    await desktopApi.vaultSave({ profileId, ...saveOffer });
+    await desktopApi.browserCredentialAccept({
+      profileId,
+      pendingId: saveOffer.pendingId,
+    });
+    setSaveOffer(null);
+  };
+
+  const dismissSaveOffer = () => {
+    if (saveOffer) {
+      void desktopApi.browserCredentialDismiss({
+        pendingId: saveOffer.pendingId,
+      });
+    }
     setSaveOffer(null);
   };
 
   const fillCredential = async (credential: SavedCredential) => {
-    const revealed = await desktopApi.vaultReveal({
+    if (!fillOffer) return;
+    await desktopApi.browserCredentialFill({
       profileId,
-      id: credential.id,
+      guestId: fillOffer.guestId,
+      credentialId: credential.id,
+      formId: fillOffer.formId,
+      origin: fillOffer.origin,
     });
-    if (revealed) {
-      webviewRef.current?.send("catamorphic:fill-credentials", {
-        username: revealed.username,
-        password: revealed.password,
-      });
-    }
     setFillOffer(null);
   };
 
@@ -852,7 +860,7 @@ export function BrowserScreen({
               primary: true,
               onClick: () => void saveCredentials(),
             },
-            { label: "Never", onClick: () => setSaveOffer(null) },
+            { label: "Not now", onClick: dismissSaveOffer },
           ]}
         />
       )}
@@ -861,7 +869,7 @@ export function BrowserScreen({
           icon={<KeyRound className="size-3.5 text-fg-muted" />}
           text="Fill saved password?"
           actions={[
-            ...fillOffer.slice(0, 2).map((credential) => ({
+            ...fillOffer.credentials.slice(0, 2).map((credential) => ({
               label: credential.username || "(no username)",
               primary: true,
               onClick: () => void fillCredential(credential),

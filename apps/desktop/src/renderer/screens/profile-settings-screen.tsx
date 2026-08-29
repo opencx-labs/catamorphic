@@ -1,6 +1,8 @@
 import type { ProjectSummary } from "@catamorphic/react/types";
 import { Check, Star, Trash2, X } from "lucide-react";
 import { useEffect, useState } from "react";
+import { BrowserImport } from "../components/browser-import";
+import { PasswordManager } from "../components/password-manager";
 import { PendingButton } from "../components/pending-button";
 import {
   desktopApi,
@@ -122,7 +124,7 @@ function ProfileSettingsForm({
   const canDelete = data.profiles.length > 1 && !active;
   return (
     <div
-      className="mx-auto w-full max-w-lg px-6 py-4"
+      className="mx-auto w-full max-w-2xl px-6 py-4"
       data-testid="profile-settings-screen"
     >
       <header className="mb-6 flex items-center justify-between">
@@ -228,6 +230,10 @@ function ProfileSettingsForm({
           </button>
         </div>
       </section>
+
+      <PasswordManager profileId={profile.id} />
+
+      <BrowserImport />
 
       <section className="mt-4 rounded-lg border border-danger/30 p-4">
         <h2 className="text-sm font-semibold text-fg">Delete profile</h2>

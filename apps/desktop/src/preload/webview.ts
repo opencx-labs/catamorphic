@@ -2,8 +2,9 @@ import { contextBridge, ipcRenderer } from "electron";
 
 /**
  * Guest preload for browser-tab webviews. Runs inside untrusted pages with
- * context isolation — talks ONLY to the embedding renderer via sendToHost
- * (never straight to main). Jobs, all Chrome-like:
+ * context isolation. Credential secrets travel directly between this guest
+ * and the trusted main process; the embedding renderer receives metadata
+ * and status only. Jobs, all Chrome-like:
  *  - present Chrome's client-hint brands to JS (see below),
  *  - detect login forms and report submissions (offer-to-save),
  *  - fill credentials into the current login form on command.
@@ -142,30 +143,48 @@ ipcRenderer.on(
 );
 
 interface LoginForm {
+  id: string;
   form: HTMLFormElement | null;
   username: HTMLInputElement | null;
   password: HTMLInputElement;
 }
+
+const formIds = new WeakMap<HTMLInputElement, string>();
+let nextFormId = 1;
 
 function visible(el: HTMLElement): boolean {
   const rect = el.getBoundingClientRect();
   return rect.width > 0 && rect.height > 0;
 }
 
-function findLoginForms(): LoginForm[] {
+function findLoginForms(includeNewPassword = false): LoginForm[] {
   const passwords = [
-    ...document.querySelectorAll<HTMLInputElement>('input[type="password"]'),
-  ].filter(visible);
+    ...document.querySelectorAll<HTMLInputElement>(
+      'input[type="password"], input[autocomplete="current-password"]',
+    ),
+  ].filter(
+    (input) =>
+      visible(input) &&
+      (includeNewPassword ||
+        input.autocomplete.toLowerCase() !== "new-password") &&
+      !input.disabled &&
+      !input.readOnly,
+  );
   return passwords.map((password) => {
+    let id = formIds.get(password);
+    if (!id) {
+      id = `login-form-${nextFormId++}`;
+      formIds.set(password, id);
+    }
     const form = password.closest("form");
     const scope: ParentNode = form ?? document;
     const username =
       [
         ...scope.querySelectorAll<HTMLInputElement>(
-          'input[type="email"], input[autocomplete="username"], input[autocomplete="email"], input[type="text"], input[type="tel"]',
+          'input[autocomplete="username"], input[autocomplete="email"], input[type="email"], input[type="text"], input[type="tel"]',
         ),
       ]
-        .filter(visible)
+        .filter((input) => visible(input) && !input.disabled && !input.readOnly)
         // The username field is the closest eligible input above the
         // password field in DOM order.
         .filter(
@@ -174,15 +193,16 @@ function findLoginForms(): LoginForm[] {
             Node.DOCUMENT_POSITION_FOLLOWING,
         )
         .at(-1) ?? null;
-    return { form, username, password };
+    return { id, form, username, password };
   });
 }
 
 function announceForms(): void {
   const forms = findLoginForms();
   if (forms.length > 0) {
-    ipcRenderer.sendToHost("catamorphic:login-form-detected", {
+    ipcRenderer.send("catamorphic:browser-login-forms", {
       origin: location.origin,
+      forms: forms.map((form) => ({ id: form.id })),
     });
   }
 }
@@ -205,9 +225,9 @@ window.addEventListener("DOMContentLoaded", () => {
 // Offer-to-save: capture submitted credentials. Capture phase on the
 // window sees submissions even when the page cancels the event later.
 function captureSubmission(): void {
-  for (const { username, password } of findLoginForms()) {
+  for (const { username, password } of findLoginForms(true)) {
     if (password.value) {
-      ipcRenderer.sendToHost("catamorphic:credentials-submitted", {
+      ipcRenderer.send("catamorphic:browser-credentials-submitted", {
         origin: location.origin,
         username: username?.value ?? "",
         password: password.value,
@@ -217,6 +237,24 @@ function captureSubmission(): void {
   }
 }
 window.addEventListener("submit", captureSubmission, { capture: true });
+window.addEventListener(
+  "focusin",
+  (event) => {
+    const input = event.target;
+    if (!(input instanceof HTMLInputElement) || input.type !== "password") {
+      return;
+    }
+    const form = findLoginForms(true).find(
+      (candidate) => candidate.password === input,
+    );
+    if (!form) return;
+    ipcRenderer.send("catamorphic:browser-login-form-focused", {
+      origin: location.origin,
+      formId: form.id,
+    });
+  },
+  { capture: true },
+);
 // Many SPAs sign in from a button click without a submit event.
 window.addEventListener(
   "click",
@@ -244,8 +282,12 @@ function setNativeValue(input: HTMLInputElement, value: string): void {
 
 ipcRenderer.on(
   "catamorphic:fill-credentials",
-  (_event, payload: { username: string; password: string }) => {
-    const target = findLoginForms()[0];
+  (
+    _event,
+    payload: { formId?: string; username: string; password: string },
+  ) => {
+    const forms = findLoginForms(true);
+    const target = forms.find((form) => form.id === payload.formId) ?? forms[0];
     if (!target) return;
     if (target.username && payload.username) {
       setNativeValue(target.username, payload.username);

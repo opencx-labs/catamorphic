@@ -209,6 +209,8 @@ const api = {
     ipcRenderer.invoke("catamorphic:browser-import-list"),
   browserImportRun: (input: unknown): Promise<unknown> =>
     ipcRenderer.invoke("catamorphic:browser-import-run", input),
+  browserImportPasswords: (): Promise<unknown> =>
+    ipcRenderer.invoke("catamorphic:browser-import-passwords"),
 
   devWindow: (action: string, width?: number, height?: number) =>
     ipcRenderer.invoke("catamorphic:dev-window", action, width, height),
@@ -456,6 +458,30 @@ const api = {
     return () =>
       ipcRenderer.removeListener("catamorphic:browser-guest-key", handler);
   },
+  onBrowserCredentialSaveOffer: (listener: (offer: unknown) => void) => {
+    const handler = (_event: unknown, offer: unknown) => listener(offer);
+    ipcRenderer.on("catamorphic:browser-credential-save-offer", handler);
+    return () =>
+      ipcRenderer.removeListener(
+        "catamorphic:browser-credential-save-offer",
+        handler,
+      );
+  },
+  onBrowserCredentialFillOffer: (listener: (offer: unknown) => void) => {
+    const handler = (_event: unknown, offer: unknown) => listener(offer);
+    ipcRenderer.on("catamorphic:browser-credential-fill-offer", handler);
+    return () =>
+      ipcRenderer.removeListener(
+        "catamorphic:browser-credential-fill-offer",
+        handler,
+      );
+  },
+  browserCredentialAccept: (input: unknown): Promise<boolean> =>
+    ipcRenderer.invoke("catamorphic:browser-credential-accept", input),
+  browserCredentialDismiss: (input: unknown): Promise<void> =>
+    ipcRenderer.invoke("catamorphic:browser-credential-dismiss", input),
+  browserCredentialFill: (input: unknown): Promise<unknown> =>
+    ipcRenderer.invoke("catamorphic:browser-credential-fill", input),
 
   // --- terminal tabs (PTY sessions live in main; see main/terminal.ts) ---
   terminalCreate: (input: {
@@ -581,8 +607,27 @@ const api = {
     username: string;
     password: string;
   }): Promise<unknown> => ipcRenderer.invoke("catamorphic:vault-save", input),
+  vaultUpdate: (input: {
+    profileId: string;
+    id: string;
+    origin: string;
+    username: string;
+    password?: string;
+  }): Promise<unknown> => ipcRenderer.invoke("catamorphic:vault-update", input),
   vaultRemove: (input: { profileId: string; id: string }): Promise<void> =>
     ipcRenderer.invoke("catamorphic:vault-remove", input),
+  vaultCopyPassword: (input: {
+    profileId: string;
+    id: string;
+  }): Promise<boolean> =>
+    ipcRenderer.invoke("catamorphic:vault-copy-password", input),
+  onVaultChanged: (listener: (profileId: string) => void): (() => void) => {
+    const handler = (_event: unknown, payload: { profileId: string }) =>
+      listener(payload.profileId);
+    ipcRenderer.on("catamorphic:vault-changed", handler);
+    return () =>
+      ipcRenderer.removeListener("catamorphic:vault-changed", handler);
+  },
   deviceAuthAvailable: (): Promise<boolean> =>
     ipcRenderer.invoke("catamorphic:device-auth-available"),
 

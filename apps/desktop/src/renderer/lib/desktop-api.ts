@@ -474,6 +474,20 @@ export interface CredentialWithSecret extends SavedCredential {
   password: string;
 }
 
+export interface BrowserCredentialSaveOffer {
+  pendingId: string;
+  guestId: number;
+  origin: string;
+  username: string;
+}
+
+export interface BrowserCredentialFillOffer {
+  guestId: number;
+  formId?: string;
+  origin: string;
+  credentials: SavedCredential[];
+}
+
 export interface BrowserSuggestions {
   matches: { url: string; title: string }[];
   inline: string | null;
@@ -922,6 +936,10 @@ export interface CatamorphicDesktopApi {
   browserImportRun: (
     input: BrowserImportRequest,
   ) => Promise<BrowserImportResult>;
+  browserImportPasswords: () => Promise<{
+    imported: number;
+    cancelled: boolean;
+  }>;
   onCloseSurface: (listener: () => void) => () => void;
   getPrefs: () => Promise<AppPrefs>;
   setPrefs: (patch: Partial<AppPrefs>) => Promise<AppPrefs>;
@@ -1027,6 +1045,24 @@ export interface CatamorphicDesktopApi {
       shift: boolean;
     }) => void,
   ) => () => void;
+  onBrowserCredentialSaveOffer: (
+    listener: (offer: BrowserCredentialSaveOffer) => void,
+  ) => () => void;
+  onBrowserCredentialFillOffer: (
+    listener: (offer: BrowserCredentialFillOffer) => void,
+  ) => () => void;
+  browserCredentialAccept: (input: {
+    profileId: string;
+    pendingId: string;
+  }) => Promise<boolean>;
+  browserCredentialDismiss: (input: { pendingId: string }) => Promise<void>;
+  browserCredentialFill: (input: {
+    profileId: string;
+    guestId: number;
+    credentialId: string;
+    formId?: string;
+    origin: string;
+  }) => Promise<"filled" | "cancelled" | "origin-changed">;
 
   profilesList: () => Promise<ProfilesData>;
   profilesCreate: (name: string) => Promise<Profile>;
@@ -1055,7 +1091,19 @@ export interface CatamorphicDesktopApi {
     username: string;
     password: string;
   }) => Promise<SavedCredential>;
+  vaultUpdate: (input: {
+    profileId: string;
+    id: string;
+    origin: string;
+    username: string;
+    password?: string;
+  }) => Promise<SavedCredential | null>;
   vaultRemove: (input: { profileId: string; id: string }) => Promise<void>;
+  vaultCopyPassword: (input: {
+    profileId: string;
+    id: string;
+  }) => Promise<boolean>;
+  onVaultChanged: (listener: (profileId: string) => void) => () => void;
   deviceAuthAvailable: () => Promise<boolean>;
 
   bookmarksGet: (input: {
