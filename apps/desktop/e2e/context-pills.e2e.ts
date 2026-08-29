@@ -61,6 +61,8 @@ const helpers = `
     composer().dispatchEvent(ev);
     return ev.defaultPrevented;
   };
+  const settleFrames = () => new Promise((resolve) =>
+    requestAnimationFrame(() => requestAnimationFrame(() => resolve(true))));
   ${setReactValueJs}
   const pressKey = (key, mods = {}) =>
     window.dispatchEvent(new KeyboardEvent('keydown', {
@@ -119,7 +121,20 @@ describe("context pills", () => {
   }, 180_000);
 
   it("short text pastes as plain text at the caret; big text, URLs and paths become inline pills", async () => {
-    await run(`composer().focus(); return true;`);
+    // Vitest retries a test inside the same Electron instance. A late
+    // assertion used to leave this test's three pills in the composer, so
+    // the retry failed at its first zero-pill assertion and hid the original
+    // caret race. Start this stateful test at its declared boundary.
+    await run(`
+      const c = composer();
+      c.replaceChildren();
+      c.dispatchEvent(new InputEvent('input', { bubbles: true }));
+      c.focus();
+      return true;
+    `);
+    await runWait(`return pills().length === 0 && composerText() === '';`, {
+      label: "clean composer boundary",
+    });
     // Every paste aimed at the composer is ours (rich clipboards land as
     // plain text), so defaultPrevented is always true; the difference is
     // what lands: text or a pill.
@@ -130,6 +145,10 @@ describe("context pills", () => {
     expect(await run<string>(`return composerText();`)).toBe(
       "just a short note ",
     );
+    // Let any autofocus frame queued while the dock opened run. The paste
+    // is now authoritative interaction, so that stale frame must not move
+    // the caret back to offset zero before the next paste.
+    await run<boolean>(`return settleFrames();`);
     expect(await run<boolean>(`return paste(${JSON.stringify(BIG)});`)).toBe(
       true,
     );

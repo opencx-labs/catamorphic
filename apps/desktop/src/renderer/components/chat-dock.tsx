@@ -247,6 +247,12 @@ function tabPillFromDrag(
   }
 }
 
+/** Whether a drag carries something the composer can attach. */
+function isComposerTransfer(data: DataTransfer | null): boolean {
+  const types = [...(data?.types ?? [])];
+  return types.includes("Files") || types.includes(TAB_DRAG_TYPE);
+}
+
 /** The media kind a file would ship as, or null for unsupported types. */
 function mediaKindOf(file: File): "image" | "document" | null {
   return file.type.startsWith("image/")
@@ -1757,13 +1763,25 @@ export function ChatDock({
     const onKeyDown = () => {
       userInteractionRef.current += 1;
     };
+    // Paste and drop can be the first interaction when invoked through a
+    // context menu, accessibility tooling, or automation, so there is no
+    // preceding keydown/pointerdown for the autofocus guard to observe.
+    // Count the transfer itself before a delayed frame can reclaim focus
+    // and reset the contenteditable caret to the start of the draft.
+    const onTransfer = () => {
+      userInteractionRef.current += 1;
+    };
     window.addEventListener("focusin", onFocusIn);
     window.addEventListener("pointerdown", onPointerDown, true);
     window.addEventListener("keydown", onKeyDown, true);
+    window.addEventListener("paste", onTransfer, true);
+    window.addEventListener("drop", onTransfer, true);
     return () => {
       window.removeEventListener("focusin", onFocusIn);
       window.removeEventListener("pointerdown", onPointerDown, true);
       window.removeEventListener("keydown", onKeyDown, true);
+      window.removeEventListener("paste", onTransfer, true);
+      window.removeEventListener("drop", onTransfer, true);
     };
   }, [frontSurface]);
 
@@ -2455,16 +2473,13 @@ export function ChatDock({
         onMouseLeave={() => setDockHovered(false)}
         onMouseDownCapture={onFocusRequest}
         onDragEnter={(event) => {
-          const types = [...(event.dataTransfer?.types ?? [])];
-          const droppable =
-            types.includes("Files") || types.includes(TAB_DRAG_TYPE);
-          if (!droppable) return;
+          if (!isComposerTransfer(event.dataTransfer)) return;
           event.preventDefault();
           dragDepthRef.current += 1;
           setDropActive(true);
         }}
         onDragOver={(event) => {
-          if (!dropActive) return;
+          if (!isComposerTransfer(event.dataTransfer)) return;
           event.preventDefault();
         }}
         onDragLeave={() => {
@@ -2472,7 +2487,10 @@ export function ChatDock({
           if (dragDepthRef.current === 0) setDropActive(false);
         }}
         onDrop={(event) => {
-          if (!dropActive) return;
+          // Acceptance follows the transfer itself, not dropActive: that
+          // state only paints the cue and may not have committed yet when a
+          // quick dragenter → drop sequence completes in one browser turn.
+          if (!isComposerTransfer(event.dataTransfer)) return;
           event.preventDefault();
           dragDepthRef.current = 0;
           setDropActive(false);
