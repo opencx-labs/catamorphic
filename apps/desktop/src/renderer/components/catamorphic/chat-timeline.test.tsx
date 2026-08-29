@@ -79,4 +79,44 @@ describe("ChatTimeline queue editing", () => {
     );
     expect(holds).toEqual(["queued-1"]);
   });
+
+  it("keeps partial prose separate from a failed turn's recovery card", async () => {
+    await act(async () => {
+      root.render(
+        <ChatTimeline
+          messages={[
+            {
+              id: "user-1",
+              role: "user",
+              content: "Finish the task.",
+            },
+            {
+              id: "failed-1",
+              role: "assistant",
+              content: "Provider connection closed",
+              metadata: {
+                status: "failed",
+                partialContent: "I finished the useful part.",
+              },
+            },
+          ]}
+          activity=""
+          onRetry={() => undefined}
+        />,
+      );
+    });
+
+    expect(
+      container.querySelector('[data-testid="chat-partial-response"]')
+        ?.textContent,
+    ).toContain("I finished the useful part.");
+    const errorCard = container.querySelector(
+      '[data-testid="chat-error-card"]',
+    );
+    expect(errorCard?.textContent).toContain("Provider connection closed");
+    expect(errorCard?.textContent).not.toContain("I finished the useful part.");
+    expect(
+      container.querySelector('[data-testid="chat-retry"]'),
+    ).not.toBeNull();
+  });
 });

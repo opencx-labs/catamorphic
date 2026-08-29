@@ -14,6 +14,7 @@ import {
   Search,
   Settings as SettingsIcon,
   SquareTerminal,
+  UserCog,
   Workflow as WorkflowIcon,
   X,
 } from "lucide-react";
@@ -140,6 +141,7 @@ export type WorkspaceTab = (
       faviconUrl?: string | null;
     }
   | { kind: "settings"; name: string; label?: string }
+  | { kind: "profile-settings"; name: string; label?: string }
   | { kind: "usage"; name: string; label?: string }
   | { kind: "palette"; name: string; label?: string }
   | { kind: "agent-setup"; name: string; label?: string }
@@ -173,6 +175,7 @@ const TAB_ICONS = {
   chat: MessageSquare,
   browser: Globe,
   settings: SettingsIcon,
+  "profile-settings": UserCog,
   usage: ChartColumn,
   palette: Search,
   "agent-setup": Bot,

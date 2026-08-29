@@ -523,21 +523,51 @@ kbd {
   animation: question-in 260ms cubic-bezier(0.2, 0, 0, 1);
 }
 
-/* Composer history recall (↑/↓): the recalled text settles in with a
-   quick fade + drop, so the swap reads as an arrival, not a glitch. */
-@keyframes input-recall {
+/* Composer history recall (↑/↓): motion follows navigation direction and
+   never changes opacity, so rapid swaps cannot flash the input background. */
+@keyframes input-recall-up-a {
   from {
-    opacity: 0.25;
     translate: 0 -3px;
   }
   to {
-    opacity: 1;
     translate: 0 0;
   }
 }
-
-.animate-input-recall {
-  animation: input-recall 150ms cubic-bezier(0.2, 0, 0, 1);
+@keyframes input-recall-up-b {
+  from {
+    translate: 0 -3px;
+  }
+  to {
+    translate: 0 0;
+  }
+}
+@keyframes input-recall-down-a {
+  from {
+    translate: 0 3px;
+  }
+  to {
+    translate: 0 0;
+  }
+}
+@keyframes input-recall-down-b {
+  from {
+    translate: 0 3px;
+  }
+  to {
+    translate: 0 0;
+  }
+}
+.animate-input-recall-up-a {
+  animation: input-recall-up-a 150ms cubic-bezier(0.2, 0, 0, 1);
+}
+.animate-input-recall-up-b {
+  animation: input-recall-up-b 150ms cubic-bezier(0.2, 0, 0, 1);
+}
+.animate-input-recall-down-a {
+  animation: input-recall-down-a 150ms cubic-bezier(0.2, 0, 0, 1);
+}
+.animate-input-recall-down-b {
+  animation: input-recall-down-b 150ms cubic-bezier(0.2, 0, 0, 1);
 }
 
 /* Agent question arrival: the asking chat's bubble nudges — a one-shot

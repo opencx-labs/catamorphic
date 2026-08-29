@@ -339,6 +339,7 @@ export interface AgentEvent {
     | "session"
     | "subagent"
     | "background"
+    | "diagnostic"
     | "usage"
     | "error"
     | "done";

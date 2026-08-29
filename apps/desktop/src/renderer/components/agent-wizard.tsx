@@ -535,9 +535,9 @@ export function AgentWizard({
                   Codex is already signed in on this machine
                 </h2>
                 <p className="mt-2 text-[13px] text-fg-muted">
-                  Catamorphic can use that sign-in directly. Nothing else to
-                  configure. Or sign in with a different ChatGPT account, kept
-                  separate for this agent.
+                  Catamorphic can use the Codex sign-in already stored on this
+                  computer. Choose another account only if you want this agent
+                  kept separate from your current ChatGPT account.
                 </p>
                 <div className="mt-3">{nameField("Codex")}</div>
                 {connectionsField}
@@ -548,9 +548,9 @@ export function AgentWizard({
                     pendingLabel="Adding…"
                     disabled={busy}
                     onClick={() => void addExistingSetup("codex")}
-                    className="h-8 cursor-pointer rounded-md bg-accent px-4 text-[13px] font-medium text-accent-fg transition-opacity duration-150 hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
+                    className="h-8 cursor-pointer rounded-md bg-accent px-3 text-[12px] font-medium text-accent-fg transition-opacity duration-150 hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
                   >
-                    Use my existing sign-in
+                    Use existing sign-in
                   </PendingButton>
                   <PendingButton
                     type="button"
@@ -558,9 +558,9 @@ export function AgentWizard({
                     pendingLabel="Opening…"
                     disabled={busy}
                     onClick={() => void startBrowserSignIn("codex-account")}
-                    className="h-8 cursor-pointer rounded-md px-3 text-[13px] text-fg-muted transition-colors duration-150 hover:bg-bg-overlay hover:text-fg disabled:cursor-not-allowed disabled:opacity-50"
+                    className="h-8 cursor-pointer rounded-md px-3 text-[12px] text-fg-muted transition-colors duration-150 hover:bg-bg-overlay hover:text-fg disabled:cursor-not-allowed disabled:opacity-50"
                   >
-                    Sign in with a different ChatGPT account
+                    Use another account
                   </PendingButton>
                 </div>
                 {waitingFlow === "codex-account" && (

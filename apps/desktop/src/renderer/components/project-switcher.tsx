@@ -1,14 +1,8 @@
 import type { ProjectSummary } from "@catamorphic/react/types";
-import {
-  Box,
-  Check,
-  ChevronsUpDown,
-  FolderPlus,
-  Link2,
-  Trash2,
-} from "lucide-react";
+import { Box, Check, ChevronsUpDown, FolderPlus, Link2 } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
-import { ShortcutHint } from "./shortcut-hint.js";
+import { ProjectInspector } from "./project-inspector";
+import { ResourceInspector } from "./resource-inspector";
 
 export interface ProjectSwitcherProps {
   projects: ProjectSummary[];
@@ -34,7 +28,15 @@ export function ProjectSwitcher({
   useEffect(() => {
     if (!open) return;
     const onPointerDown = (event: MouseEvent) => {
-      if (!rootRef.current?.contains(event.target as Node)) setOpen(false);
+      const target = event.target;
+      const insideRoot =
+        target instanceof Node && Boolean(rootRef.current?.contains(target));
+      const insideInspector =
+        target instanceof Element &&
+        Boolean(target.closest("[data-resource-inspector]"));
+      if (!insideRoot && !insideInspector) {
+        setOpen(false);
+      }
     };
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key === "Escape") {
@@ -53,20 +55,36 @@ export function ProjectSwitcher({
 
   return (
     <div ref={rootRef} className="relative min-w-0 flex-1">
-      <button
-        type="button"
-        onClick={() => setOpen((value) => !value)}
-        className="app-no-drag flex h-8 w-full cursor-pointer items-center gap-2 rounded-md border border-border bg-bg-inset px-2.5 text-left transition-colors duration-150 hover:border-border-strong"
-        aria-haspopup="listbox"
-        aria-expanded={open}
-        aria-label="Switch project"
+      <ResourceInspector
+        label={`${active?.name ?? "Project"} details`}
+        content={
+          active ? (
+            <ProjectInspector
+              project={active}
+              current
+              onDelete={() => onDeleteProject(active)}
+            />
+          ) : null
+        }
       >
-        <Box className="size-3.5 shrink-0 text-accent" />
-        <span className="min-w-0 flex-1 truncate text-[13px] font-medium text-fg">
-          {active?.name ?? "No projects"}
-        </span>
-        <ChevronsUpDown className="size-3.5 shrink-0 text-fg-faint" />
-      </button>
+        {(inspectorProps) => (
+          <button
+            {...inspectorProps}
+            type="button"
+            onClick={() => setOpen((value) => !value)}
+            className="app-no-drag flex h-8 w-full cursor-pointer items-center gap-2 rounded-md border border-border bg-bg-inset px-2.5 text-left transition-colors duration-150 hover:border-border-strong"
+            aria-haspopup="listbox"
+            aria-expanded={open}
+            aria-label="Switch project"
+          >
+            <Box className="size-3.5 shrink-0 text-accent" />
+            <span className="min-w-0 flex-1 truncate text-[13px] font-medium text-fg">
+              {active?.name ?? "No projects"}
+            </span>
+            <ChevronsUpDown className="size-3.5 shrink-0 text-fg-faint" />
+          </button>
+        )}
+      </ResourceInspector>
 
       <div
         className={`absolute inset-x-0 top-full z-50 mt-1 origin-top rounded-lg border border-border bg-bg-overlay p-1 shadow-2xl transition-[opacity,scale] duration-150 ease-[cubic-bezier(0.2,0,0,1)] ${
@@ -82,43 +100,41 @@ export function ProjectSwitcher({
           {projects.map((project) => {
             const isActive = project.id === activeProjectId;
             return (
-              <div
+              <ResourceInspector
                 key={project.id}
-                className={`group flex h-8 w-full items-center rounded-md transition-colors duration-150 ${
-                  isActive ? "text-fg" : "text-fg-muted hover:bg-bg-raised"
-                }`}
-              >
-                <button
-                  type="button"
-                  role="option"
-                  aria-selected={isActive}
-                  onClick={() => {
-                    onSelect(project.id);
-                    setOpen(false);
-                  }}
-                  className="flex h-full min-w-0 flex-1 cursor-pointer items-center gap-2 px-2 text-left text-[13px] hover:text-fg"
-                >
-                  <span className="min-w-0 flex-1 truncate">
-                    {project.name}
-                  </span>
-                  {isActive && (
-                    <Check className="size-3.5 shrink-0 text-accent" />
-                  )}
-                </button>
-                <ShortcutHint label="Delete project">
-                  <button
-                    type="button"
-                    onClick={() => {
+                label={`${project.name} details`}
+                content={
+                  <ProjectInspector
+                    project={project}
+                    current={isActive}
+                    onDelete={() => {
                       onDeleteProject(project);
                       setOpen(false);
                     }}
-                    className="mr-1 hidden size-6 shrink-0 cursor-pointer place-items-center rounded text-fg-faint transition-colors duration-150 hover:text-danger group-hover:grid"
-                    aria-label={`Delete ${project.name}`}
+                  />
+                }
+              >
+                {(inspectorProps) => (
+                  <button
+                    {...inspectorProps}
+                    type="button"
+                    role="option"
+                    aria-selected={isActive}
+                    onClick={() => {
+                      onSelect(project.id);
+                      setOpen(false);
+                    }}
+                    className={`flex h-8 w-full cursor-pointer items-center gap-2 rounded-md px-2 text-left text-[13px] transition-colors duration-150 ${isActive ? "text-fg" : "text-fg-muted hover:bg-bg-raised hover:text-fg"}`}
                   >
-                    <Trash2 className="size-3.5" />
+                    <span className="min-w-0 flex-1 truncate">
+                      {project.name}
+                    </span>
+                    {isActive && (
+                      <Check className="size-3.5 shrink-0 text-accent" />
+                    )}
                   </button>
-                </ShortcutHint>
-              </div>
+                )}
+              </ResourceInspector>
             );
           })}
           {projects.length === 0 && (

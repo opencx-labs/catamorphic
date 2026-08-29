@@ -37,15 +37,15 @@ export function PendingButton({
       aria-busy={pending || undefined}
       className={className}
     >
-      <span className="grid place-items-center">
+      <span className="grid min-w-max shrink-0 place-items-center whitespace-nowrap">
         <span
-          className={`col-start-1 row-start-1 ${showIdle ? "" : "invisible"}`}
+          className={`col-start-1 row-start-1 whitespace-nowrap ${showIdle ? "" : "invisible"}`}
         >
           {children}
         </span>
         <span
           aria-hidden={!pending}
-          className={`col-start-1 row-start-1 grid place-items-center ${pending ? "" : "invisible"}`}
+          className={`col-start-1 row-start-1 grid place-items-center whitespace-nowrap ${pending ? "" : "invisible"}`}
         >
           {pendingLabel ?? (
             <Loader2 className="size-3.5 animate-spin" aria-label="Working…" />
@@ -54,7 +54,7 @@ export function PendingButton({
         {doneLabel !== undefined && (
           <span
             aria-hidden={!done}
-            className={`col-start-1 row-start-1 ${done ? "" : "invisible"}`}
+            className={`col-start-1 row-start-1 whitespace-nowrap ${done ? "" : "invisible"}`}
           >
             {doneLabel}
           </span>

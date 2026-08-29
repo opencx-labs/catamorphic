@@ -93,13 +93,13 @@ describe("agent-first onboarding", () => {
     await app?.stop();
   });
 
-  it("creates a collision-safe Default project and opens the agent wizard", async () => {
+  it("creates a collision-safe Default Project and opens the agent wizard", async () => {
     const projectsDir = path.join(app.userDataDir, "Catamorphic");
     const occupiedDir = path.join(projectsDir, "default-project");
     fs.mkdirSync(occupiedDir, { recursive: true });
     fs.writeFileSync(path.join(occupiedDir, "KEEP.txt"), "leave me alone\n");
 
-    await runWait(`return !!byText('button', 'New project');`, {
+    await runWait(`return !!$('[data-testid="empty-start-agent"]');`, {
       timeoutMs: 60_000,
       label: "empty project state",
     });
@@ -111,7 +111,7 @@ describe("agent-first onboarding", () => {
       `const wizard = $$('[data-testid="agent-wizard"]')
          .find((el) => !el.closest('[inert]'));
        return !!wizard &&
-              !!byText('button', 'Default project') &&
+              !!byText('button', 'Default Project') &&
               !byText('[role="tab"], button', 'Set up agent');`,
       { timeoutMs: 60_000, label: "agent wizard over the default workspace" },
     );
@@ -123,7 +123,7 @@ describe("agent-first onboarding", () => {
         "utf-8",
       ),
     ) as { name: string };
-    expect(manifest.name).toBe("Default project");
+    expect(manifest.name).toBe("Default Project");
     expect(fs.readFileSync(path.join(occupiedDir, "KEEP.txt"), "utf-8")).toBe(
       "leave me alone\n",
     );
@@ -137,11 +137,11 @@ describe("agent-first onboarding", () => {
     await runWait(
       `return !$$('[data-testid="agent-wizard"]')
          .some((el) => !el.closest('[inert]')) &&
-              !!byText('button', 'Default project') &&
+              !!byText('button', 'Default Project') &&
               !visibleDock();`,
       {
         timeoutMs: 15_000,
-        label: "wizard closes into Default project without opening chat",
+        label: "wizard closes into Default Project without opening chat",
       },
     );
   });

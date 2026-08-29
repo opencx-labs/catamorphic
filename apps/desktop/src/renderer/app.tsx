@@ -109,6 +109,7 @@ import {
   BrowserScreen,
 } from "./screens/browser-screen.js";
 import { McpAppScreen } from "./screens/mcp-app-screen.js";
+import { ProfileSettingsScreen } from "./screens/profile-settings-screen.js";
 import { SettingsScreen } from "./screens/settings-screen.js";
 import { TerminalScreen } from "./screens/terminal-screen.js";
 
@@ -749,6 +750,30 @@ export function App() {
   const activeProfile: Profile | undefined =
     profilesData?.profiles.find((profile) => profile.id === activeProfileId) ??
     profilesData?.profiles[0];
+
+  // Profile settings tabs are live views. Keep their strip labels in sync
+  // with renames broadcast from this or another window.
+  useEffect(() => {
+    if (!profilesData) return;
+    const names = new Map(
+      profilesData.profiles.map((profile) => [profile.id, profile.name]),
+    );
+    setWorkspaces((current) =>
+      Object.fromEntries(
+        Object.entries(current).map(([id, workspace]) => [
+          id,
+          {
+            ...workspace,
+            tabs: workspace.tabs.map((tab) =>
+              tab.kind === "profile-settings" && names.has(tab.name)
+                ? { ...tab, label: names.get(tab.name) }
+                : tab,
+            ),
+          },
+        ]),
+      ),
+    );
+  }, [profilesData]);
 
   // The active profile's AI agents (per-profile agents.json).
   const [agentsData, setAgentsData] = useState<AgentsData | null>(null);
@@ -4046,8 +4071,19 @@ export function App() {
             {profilesData && activeProfile && (
               <ProfileBar
                 data={profilesData}
+                projects={allProjects}
                 activeProfileId={activeProfile.id}
                 onSwitch={switchProfile}
+                onOpenSettings={(profileId) =>
+                  openTab({
+                    kind: "profile-settings",
+                    name: profileId,
+                    label:
+                      profilesData.profiles.find(
+                        (profile) => profile.id === profileId,
+                      )?.name ?? "Profile",
+                  })
+                }
               />
             )}
             <div className="flex items-center gap-1">
@@ -4200,6 +4236,16 @@ export function App() {
                         onAddAgent={() => setWizardModalOpen(true)}
                         onConfigureAgent={openConfigureAgent}
                         onManageConnectors={() => setConnectorsModalOpen(true)}
+                      />
+                    ) : tab.kind === "profile-settings" && profilesData ? (
+                      <ProfileSettingsScreen
+                        profileId={tab.name}
+                        activeProfileId={
+                          activeProfile?.id ?? profilesData.defaultProfileId
+                        }
+                        data={profilesData}
+                        projects={allProjects}
+                        onClose={() => closeTab(tabKey(tab))}
                       />
                     ) : tab.kind === "usage" ? (
                       <Suspense fallback={<div className="flex-1 bg-bg" />}>

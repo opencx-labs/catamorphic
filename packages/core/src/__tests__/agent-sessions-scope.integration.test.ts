@@ -78,6 +78,12 @@ class RecordingProvider implements CodingAgentProvider {
     opts?: TurnOptions,
   ): AsyncIterable<AgentEvent> {
     this.turns.push(opts);
+    if (message === "partial then fail") {
+      yield { type: "text", content: "I finished the useful part." };
+      yield { type: "error", content: "Provider connection closed" };
+      yield { type: "done" };
+      return;
+    }
     yield { type: "text", content: `echo: ${message}` };
     yield { type: "done" };
   }
@@ -306,6 +312,27 @@ describeIf("scoped agent sessions (ADR 0055)", () => {
     // An EMPTY map, not none: it replaces whatever a previous caller left.
     expect(start?.toolPolicies).toEqual({});
     expect(sales.turns.at(-1)?.toolPolicies).toEqual({});
+  });
+
+  it("keeps partial assistant prose separate from a fatal provider error", async () => {
+    const session = await sessions.create(admin, projectId, {
+      agentId: salesAgentId,
+    });
+
+    const failed = await sessions.sendMessage(
+      admin,
+      projectId,
+      session.id,
+      "partial then fail",
+    );
+
+    expect(failed.content).toBe("Provider connection closed");
+    expect(failed.metadata).toEqual(
+      expect.objectContaining({
+        status: "failed",
+        partialContent: "I finished the useful part.",
+      }),
+    );
   });
 
   it("revoking the agent from the scope closes the door mid-conversation", async () => {

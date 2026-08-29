@@ -559,7 +559,9 @@ function mapItemEvent(item: ThreadItem): AgentEvent[] {
         },
       ];
     case "error":
-      return [{ type: "error", content: item.message }];
+      // The SDK defines an error item as a non-fatal diagnostic. Only the
+      // stream's top-level error and turn.failed events fail the turn.
+      return [{ type: "diagnostic", content: item.message }];
     default:
       return [];
   }

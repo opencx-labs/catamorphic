@@ -1,6 +1,7 @@
 import { useLayoutEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import type { SidebarPreview } from "../lib/desktop-api.js";
+import { computeInspectorPosition } from "./resource-inspector";
 
 export const SIDEBAR_PREVIEW_DELAY_MS = 500;
 
@@ -48,15 +49,14 @@ export function SidebarPreviewPopover({
     if (!card) return;
     const width = card.offsetWidth;
     const height = card.offsetHeight;
-    const left =
-      anchor.right + 8 + width <= window.innerWidth - 8
-        ? anchor.right + 8
-        : Math.max(8, anchor.left - width - 8);
-    const top = Math.max(
-      8,
-      Math.min(anchor.top, window.innerHeight - height - 8),
-    );
-    setPosition({ left, top });
+    const next = computeInspectorPosition({
+      anchor,
+      width,
+      height,
+      viewportWidth: window.innerWidth,
+      viewportHeight: window.innerHeight,
+    });
+    setPosition({ left: next.left, top: next.top });
   }, [anchor]);
 
   return createPortal(

@@ -94,6 +94,10 @@ Low-chroma so run states don't scream: `--color-success`, `--color-warning`,
   ("Cloning…"). Use `done` + `doneLabel` ("Installed") for the state after
   the action — never swap the button for a text span, that reflows the row.
   Never swap a button's child text on `pending ?` directly.
+- Fixed-height button labels never wrap or flex-shrink. The shell's stacked
+  label and `@catamorphic/app/ui`'s `.cat-btn-stack` reserve max-content width;
+  app-kit buttons are non-shrinking flex items by default. Containers must
+  wrap or choose shorter copy instead of crushing a control into two lines.
 - Pending (and done) buttons are disabled (PendingButton enforces this).
 - **Every icon-only button gets a `ShortcutHint` tooltip.** A button whose
   meaning isn't carried by visible text must be wrapped in
@@ -154,7 +158,7 @@ the animation is wrong, not the test.
 | `question-in` (ask_user panel) | 260ms | — |
 | `pane-in-left` / `pane-in-right` (keyboard tab cycling) | 200ms | — (content-changed signal on a persistent wrapper; no exit to pair) |
 | `bubble-ask` (agent question arrival) | 280ms | — (one-shot nudge on a persistent bubble; no exit to pair) |
-| `input-recall` (composer ↑/↓ history) | 150ms | — (content-changed signal on the persistent textarea) |
+| `input-recall-{up,down}-{a,b}` (composer ↑/↓ history) | 150ms | — (transform-only directional content signal; paired names replay rapid same-direction recalls without a classless frame) |
 | `title-change` (rename flash) | 1200ms | **sanctioned exception** — the
   one decorative-adjacent signal (see design log 2026-07-31); allowlisted in
   the test's `DURATION_EXCEPTIONS` |
@@ -766,7 +770,7 @@ Patterned on what best-in-class palettes converged on (Chrome omnibox
   which is the point: work-me and home-me are different people. Legacy
   root-level config files migrate into the default profile once; the
   default profile is named "Default Profile" and is renameable like any
-  other (pencil in the profile menu).
+  other from its profile settings workspace.
 - **Switching follows workspace occupancy.** An empty workspace (no tabs,
   no browsers, no chats) switches the window in place under a full-window
   veil — `profile-veil-in`/`-out`, 200ms exact mirrors; the veil is opaque
@@ -2985,3 +2989,24 @@ paths, deliberately independent:
 - Messages delivered by agents, workflows, watchers, and the system remain
   visibly distinct from human messages. They use a quiet source label and the
   incoming side of the timeline instead of the human message treatment.
+
+### Resource inspectors and agent failure semantics (2026-08-29)
+
+- Project and profile switchers share an interactive inspector foundation.
+  A 400ms pointer dwell or keyboard focus opens a portal beside the trigger;
+  it flips at viewport edges, tolerates the pointer crossing the gap, keeps
+  interactive content open, exits before unmount, and dismisses with Escape.
+- A project inspector is the extensible status surface for location,
+  worktrees, uncommitted changes, open pull requests, and remote health.
+  Inspecting another project also shows all ongoing session state; the current
+  project's sessions stay in the sidebar and are not duplicated. Destructive
+  project actions live behind the inspector's three-dot control, never inline
+  in the switcher.
+- Profile switcher rows expose only passive current/default markers. Their
+  inspector summarizes startup and project membership, and its three-dot
+  action opens a profile settings workspace for name, color, defaults, and
+  deletion. Inline hover pencils and mutable default-star actions are gone.
+- A completed harness diagnostic is not a failed turn. When a real failure
+  follows partial assistant prose, core stores the provider error as message
+  content and the prose as `metadata.partialContent`; timelines render the
+  prose normally before the actionable error card.

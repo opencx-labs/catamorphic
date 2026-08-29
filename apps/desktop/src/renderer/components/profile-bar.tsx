@@ -1,34 +1,35 @@
-import { Check, Pencil, Plus, Star } from "lucide-react";
+import type { ProjectSummary } from "@catamorphic/react/types";
+import { Check, Plus, Star } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import type { Profile, ProfilesData } from "../lib/desktop-api.js";
 import { desktopApi } from "../lib/desktop-api.js";
-import { ShortcutHint } from "./shortcut-hint.js";
+import { ProfileInspector } from "./profile-inspector";
+import { ResourceInspector } from "./resource-inspector";
 
 /**
  * Chrome-style profile switcher, docked at the bottom of the sidebar.
  * Click the active profile → a menu of profiles pops up; each profile is
- * a color-dot identity. The star marks the default profile (the one the
- * app opens into); starring is an explicit action, like Chrome's
- * "default browser profile".
+ * a color-dot identity. The star passively marks the default profile (the one
+ * the app opens into); profile mutations live in the settings workspace.
  */
 export function ProfileBar({
   data,
+  projects,
   activeProfileId,
   onSwitch,
+  onOpenSettings,
 }: {
   data: ProfilesData;
+  projects: ProjectSummary[];
   activeProfileId: string;
   onSwitch: (profile: Profile) => void;
+  onOpenSettings: (profileId: string) => void;
 }) {
   const [open, setOpen] = useState(false);
   const [creating, setCreating] = useState(false);
   const [newName, setNewName] = useState("");
-  // Inline rename (every profile is renameable, "Default Profile" included).
-  const [renamingId, setRenamingId] = useState<string | null>(null);
-  const [renameValue, setRenameValue] = useState("");
   const containerRef = useRef<HTMLDivElement | null>(null);
   const createInputRef = useRef<HTMLInputElement | null>(null);
-  const renameInputRef = useRef<HTMLInputElement | null>(null);
 
   const active: Profile | undefined =
     data.profiles.find((profile) => profile.id === activeProfileId) ??
@@ -37,7 +38,14 @@ export function ProfileBar({
   useEffect(() => {
     if (!open) return;
     const onPointerDown = (event: PointerEvent) => {
-      if (!containerRef.current?.contains(event.target as Node)) {
+      const target = event.target;
+      const insideRoot =
+        target instanceof Node &&
+        Boolean(containerRef.current?.contains(target));
+      const insideInspector =
+        target instanceof Element &&
+        Boolean(target.closest("[data-resource-inspector]"));
+      if (!insideRoot && !insideInspector) {
         setOpen(false);
         setCreating(false);
       }
@@ -56,20 +64,7 @@ export function ProfileBar({
     if (open) return;
     setCreating(false);
     setNewName("");
-    setRenamingId(null);
   }, [open]);
-
-  useEffect(() => {
-    if (renamingId) renameInputRef.current?.select();
-  }, [renamingId]);
-
-  const commitRename = async () => {
-    const id = renamingId;
-    const name = renameValue.trim();
-    setRenamingId(null);
-    if (!id || !name) return;
-    await desktopApi.profilesUpdate(id, { name });
-  };
 
   const create = async () => {
     const name = newName.trim();
@@ -104,83 +99,51 @@ export function ProfileBar({
           const isActive = profile.id === active.id;
           const isDefault = profile.id === data.defaultProfileId;
           return (
-            <div
+            <ResourceInspector
               key={profile.id}
-              className={`group flex h-8 items-center rounded-md transition-colors duration-150 ${
-                isActive ? "text-fg" : "text-fg-muted hover:bg-bg-raised"
-              }`}
-            >
-              {renamingId === profile.id ? (
-                <input
-                  ref={renameInputRef}
-                  value={renameValue}
-                  onChange={(event) => setRenameValue(event.target.value)}
-                  onKeyDown={(event) => {
-                    if (event.key === "Enter") void commitRename();
-                    if (event.key === "Escape") setRenamingId(null);
+              label={`${profile.name} profile details`}
+              content={
+                <ProfileInspector
+                  profile={profile}
+                  data={data}
+                  projects={projects}
+                  current={isActive}
+                  onOpenSettings={() => {
+                    setOpen(false);
+                    onOpenSettings(profile.id);
                   }}
-                  onBlur={() => void commitRename()}
-                  aria-label={`Rename ${profile.name}`}
-                  className="field mx-1 h-7 min-w-0 flex-1 rounded-md px-2 text-[13px] text-fg"
                 />
-              ) : (
+              }
+            >
+              {(inspectorProps) => (
                 <button
+                  {...inspectorProps}
                   type="button"
                   onClick={() => {
                     setOpen(false);
                     if (!isActive) onSwitch(profile);
                   }}
-                  className="flex h-full min-w-0 flex-1 cursor-pointer items-center gap-2 px-2 text-left text-[13px]"
+                  className={`flex h-8 w-full cursor-pointer items-center gap-2 rounded-md px-2 text-left text-[13px] transition-colors duration-150 ${isActive ? "text-fg" : "text-fg-muted hover:bg-bg-raised hover:text-fg"}`}
                 >
                   <span
                     className="size-2.5 shrink-0 rounded-full"
                     style={{ backgroundColor: profile.color }}
                   />
-                  <span className="truncate">{profile.name}</span>
+                  <span className="min-w-0 flex-1 truncate">
+                    {profile.name}
+                  </span>
+                  {isDefault && (
+                    <Star
+                      className="size-3 shrink-0 fill-current text-fg-faint"
+                      aria-label="Default profile"
+                    />
+                  )}
                   {isActive && (
-                    <Check className="ml-auto size-3.5 shrink-0 text-fg-muted" />
+                    <Check className="size-3.5 shrink-0 text-accent" />
                   )}
                 </button>
               )}
-              <ShortcutHint side="top" label="Rename profile">
-                <button
-                  type="button"
-                  onClick={() => {
-                    setRenamingId(profile.id);
-                    setRenameValue(profile.name);
-                  }}
-                  className="grid size-6 shrink-0 cursor-pointer place-items-center rounded text-fg-faint opacity-0 transition-colors duration-150 hover:text-fg group-hover:opacity-100"
-                  aria-label={`Rename ${profile.name}`}
-                >
-                  <Pencil className="size-3" />
-                </button>
-              </ShortcutHint>
-              <ShortcutHint
-                side="top"
-                label={
-                  isDefault
-                    ? "Default profile. The app opens here."
-                    : "Make default. The app will open here."
-                }
-              >
-                <button
-                  type="button"
-                  onClick={() => void desktopApi.profilesSetDefault(profile.id)}
-                  className={`mr-1 grid size-6 shrink-0 cursor-pointer place-items-center rounded text-fg-faint transition-colors duration-150 hover:text-fg ${
-                    isDefault ? "" : "opacity-0 group-hover:opacity-100"
-                  }`}
-                  aria-label={
-                    isDefault
-                      ? `${profile.name} is the default profile`
-                      : `Make ${profile.name} the default profile`
-                  }
-                >
-                  <Star
-                    className={`size-3 ${isDefault ? "fill-current text-fg-muted" : ""}`}
-                  />
-                </button>
-              </ShortcutHint>
-            </div>
+            </ResourceInspector>
           );
         })}
         <div className="mx-1 my-1 border-t border-border" />
@@ -212,23 +175,39 @@ export function ProfileBar({
         )}
       </div>
 
-      <button
-        type="button"
-        onClick={() => setOpen((value) => !value)}
-        className={`flex h-7 w-full cursor-pointer items-center gap-2 rounded-md px-2 text-[13px] transition-colors duration-150 ${
-          open
-            ? "bg-bg-overlay text-fg"
-            : "text-fg-muted hover:bg-bg-overlay hover:text-fg"
-        }`}
-        aria-haspopup="menu"
-        aria-expanded={open}
+      <ResourceInspector
+        label={`${active.name} profile details`}
+        content={
+          <ProfileInspector
+            profile={active}
+            data={data}
+            projects={projects}
+            current
+            onOpenSettings={() => onOpenSettings(active.id)}
+          />
+        }
       >
-        <span
-          className="size-2.5 shrink-0 rounded-full"
-          style={{ backgroundColor: active.color }}
-        />
-        <span className="truncate">{active.name}</span>
-      </button>
+        {(inspectorProps) => (
+          <button
+            {...inspectorProps}
+            type="button"
+            onClick={() => setOpen((value) => !value)}
+            className={`flex h-7 w-full cursor-pointer items-center gap-2 rounded-md px-2 text-[13px] transition-colors duration-150 ${
+              open
+                ? "bg-bg-overlay text-fg"
+                : "text-fg-muted hover:bg-bg-overlay hover:text-fg"
+            }`}
+            aria-haspopup="menu"
+            aria-expanded={open}
+          >
+            <span
+              className="size-2.5 shrink-0 rounded-full"
+              style={{ backgroundColor: active.color }}
+            />
+            <span className="truncate">{active.name}</span>
+          </button>
+        )}
+      </ResourceInspector>
     </div>
   );
 }

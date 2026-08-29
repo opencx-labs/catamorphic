@@ -8,6 +8,7 @@ import {
   LoaderCircle,
   Pencil,
   Radio,
+  RotateCcw,
   SquareTerminal,
   Wrench,
 } from "lucide-react";
@@ -44,6 +45,8 @@ export interface ChatTimelineProps {
   activity?: string;
   /** Number of queued messages beyond the in-flight one. */
   queuedCount?: number;
+  /** Re-run the last failed turn in place. */
+  onRetry?: () => void;
   error?: string | null;
   emptyState?: string;
   className?: string;
@@ -84,6 +87,7 @@ export function ChatTimeline({
   messages,
   activity,
   queuedCount = 0,
+  onRetry,
   error,
   emptyState = "Ask the agent to build or change your project.",
   className = "",
@@ -92,6 +96,10 @@ export function ChatTimeline({
   onFileClick,
   resolveToolIcon,
 }: ChatTimelineProps) {
+  const lastConversationId = [...messages]
+    .reverse()
+    .find((message) => message.role !== "system")?.id;
+  const hasRetryableTurn = messages.some((message) => message.role === "user");
   return (
     <StickToBottom
       className={`relative overflow-hidden ${className}`}
@@ -114,6 +122,8 @@ export function ChatTimeline({
             onLinkClick={onLinkClick}
             onFileClick={onFileClick}
             resolveToolIcon={resolveToolIcon}
+            actionable={message.id === lastConversationId}
+            onRetry={hasRetryableTurn ? onRetry : undefined}
           />
         ))}
         {activity && (
@@ -164,6 +174,8 @@ function Message({
   onLinkClick,
   onFileClick,
   resolveToolIcon,
+  actionable,
+  onRetry,
 }: {
   message: ChatTimelineMessage;
   onLinkClick?: (
@@ -172,8 +184,11 @@ function Message({
   ) => void;
   onFileClick?: (path: string) => void;
   resolveToolIcon?: (toolName: string) => string | undefined;
+  actionable: boolean;
+  onRetry?: () => void;
 }) {
   const files = changedFiles(message);
+  const metadata = asRecord(message.metadata);
   const [entered, setEntered] = useState(false);
 
   // Double rAF: the first frame aligns with the commit, the second
@@ -192,6 +207,47 @@ function Message({
       if (second !== undefined) cancelAnimationFrame(second);
     };
   }, []);
+
+  if (message.role === "assistant" && metadata?.status === "failed") {
+    const partialContent =
+      typeof metadata.partialContent === "string"
+        ? metadata.partialContent.trim()
+        : "";
+    return (
+      <div className="flex flex-col gap-2">
+        {partialContent && (
+          <article
+            className="mr-auto max-w-[85%] text-sm"
+            data-testid="chat-partial-response"
+          >
+            <div className="cat-markdown min-w-0 break-words leading-6">
+              <Markdown remarkPlugins={REMARK_PLUGINS}>
+                {partialContent}
+              </Markdown>
+            </div>
+          </article>
+        )}
+        <article
+          className="mr-auto max-w-[85%] rounded-xl border border-danger/40 bg-danger/5 px-3 py-2.5 text-sm"
+          data-testid="chat-error-card"
+        >
+          <div className="whitespace-pre-wrap break-words leading-6 text-fg">
+            {message.content}
+          </div>
+          {actionable && onRetry && (
+            <button
+              type="button"
+              onClick={onRetry}
+              className="mt-2 flex cursor-pointer items-center gap-1.5 rounded-md border border-border bg-bg-raised px-2.5 py-1 text-xs font-medium text-fg"
+              data-testid="chat-retry"
+            >
+              <RotateCcw className="size-3" /> Retry
+            </button>
+          )}
+        </article>
+      </div>
+    );
+  }
 
   return (
     <article

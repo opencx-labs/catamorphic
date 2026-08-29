@@ -73,6 +73,43 @@ describe("CodexAgent", () => {
     codexCtor.mockReset();
   });
 
+  it("keeps completed SDK error items non-fatal", async () => {
+    resumeThread.mockReturnValueOnce(
+      scriptedThread([
+        {
+          type: "item.completed",
+          item: {
+            id: "diagnostic-1",
+            type: "error",
+            message: "A recoverable tool result could not be decoded",
+          },
+        },
+        {
+          type: "item.completed",
+          item: {
+            id: "answer-1",
+            type: "agent_message",
+            text: "The useful answer still completed.",
+          },
+        },
+        { type: "turn.completed", usage: dummyUsage() },
+      ]),
+    );
+
+    const events = await collect(new CodexAgent(), "continue");
+
+    expect(events).toContainEqual({
+      type: "diagnostic",
+      content: "A recoverable tool result could not be decoded",
+    });
+    expect(events).toContainEqual({
+      type: "text",
+      content: "The useful answer still completed.",
+    });
+    expect(events.some((event) => event.type === "error")).toBe(false);
+    expect(events.at(-1)).toEqual({ type: "done" });
+  });
+
   it("flags daemonizing commands as detected background processes", async () => {
     resumeThread.mockReturnValueOnce(
       scriptedThread([

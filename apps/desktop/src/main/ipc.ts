@@ -1314,7 +1314,7 @@ export function registerIpcHandlers(
       slug: "default-project",
       create: (rootPath) =>
         server.catamorphic.core.projects.create(identity, {
-          name: "Default project",
+          name: "Default Project",
           rootPath,
         }),
       provision: async ({ project, rootPath }) => {

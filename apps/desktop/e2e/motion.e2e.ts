@@ -137,6 +137,30 @@ describe("setup", () => {
 });
 
 describe("design-system bounds (static sweep)", () => {
+  it("composer recall moves by direction without fading", async () => {
+    const keyframes = await run<Array<{ name: string; css: string }>>(`
+      return allStyleRules()
+        .filter((rule) => rule instanceof CSSKeyframesRule &&
+          rule.name.startsWith('input-recall-'))
+        .map((rule) => ({ name: rule.name, css: rule.cssText }));
+    `);
+    expect(keyframes.map((entry) => entry.name).sort()).toEqual([
+      "input-recall-down-a",
+      "input-recall-down-b",
+      "input-recall-up-a",
+      "input-recall-up-b",
+    ]);
+    for (const keyframe of keyframes) {
+      expect(keyframe.css, keyframe.name).not.toContain("opacity");
+    }
+    expect(
+      keyframes.find((entry) => entry.name === "input-recall-up-a")?.css,
+    ).toContain("translate: 0px -3px");
+    expect(
+      keyframes.find((entry) => entry.name === "input-recall-down-a")?.css,
+    ).toContain("translate: 0px 3px");
+  });
+
   it("every app animation uses the standard easing and sanctioned duration", async () => {
     const rules = await collectAnimationRules();
     expect(rules.length).toBeGreaterThan(5);

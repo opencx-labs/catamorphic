@@ -516,15 +516,32 @@ function MessageImpl({
         </div>
       );
     }
+    const partialContent =
+      typeof metadata?.partialContent === "string"
+        ? metadata.partialContent.trim()
+        : "";
     return (
-      <ErrorCard
-        message={message}
-        actionable={isLast}
-        onRetry={onRetry}
-        onReauth={onReauth}
-        reauthLabel={reauthLabel}
-        className={enterClasses}
-      />
+      <div className={`flex flex-col gap-2 ${enterClasses}`}>
+        {partialContent && (
+          <article
+            className="mr-auto max-w-[85%] text-sm"
+            data-testid="chat-partial-response"
+          >
+            <div className="cat-markdown min-w-0 break-words leading-6">
+              <Markdown remarkPlugins={REMARK_PLUGINS}>
+                {partialContent}
+              </Markdown>
+            </div>
+          </article>
+        )}
+        <ErrorCard
+          message={message}
+          actionable={isLast}
+          onRetry={onRetry}
+          onReauth={onReauth}
+          reauthLabel={reauthLabel}
+        />
+      </div>
     );
   }
 

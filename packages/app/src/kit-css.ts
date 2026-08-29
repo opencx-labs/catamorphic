@@ -38,7 +38,7 @@ export const APP_KIT_CSS = `
 .cat-btn{
   appearance:none;display:inline-flex;align-items:center;justify-content:center;
   gap:6px;border:1px solid transparent;border-radius:var(--radius-md);
-  font:inherit;font-weight:500;white-space:nowrap;cursor:pointer;
+  font:inherit;font-weight:500;flex:none;white-space:nowrap;cursor:pointer;
   user-select:none;background:transparent;color:var(--color-fg);
   transition:background-color var(--cat-motion-fast) var(--ease-standard),
     border-color var(--cat-motion-fast) var(--ease-standard),
@@ -76,7 +76,9 @@ export const APP_KIT_CSS = `
 }
 /* Idle and pending labels stack in one grid cell so the button reserves the
    width of the widest one — entering the loading state never reflows. */
-.cat-btn-stack{display:grid;place-items:center}
+.cat-btn-stack{
+  display:grid;place-items:center;min-width:max-content;white-space:nowrap;
+}
 .cat-btn-stack>span{grid-area:1/1;display:inline-flex;align-items:center;gap:6px}
 .cat-btn-stack>span[data-hidden="true"]{visibility:hidden}
 

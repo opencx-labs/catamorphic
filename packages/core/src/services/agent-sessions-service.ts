@@ -2203,16 +2203,18 @@ export class AgentSessionsService {
         segmentEvents = [...settleFlushed.events, ...segmentEvents];
       }
 
+      const interrupted = this.interruptedTurns.delete(sessionId);
+      const providerError = events
+        .filter((event) => event.type === "error")
+        .map((event) => event.content)
+        .filter((content): content is string => Boolean(content))
+        .join("\n");
       const content = settleFlushed
         ? undefined
-        : (heldText ??
-          (events
-            .filter((event) => event.type === "error")
-            .map((event) => event.content)
-            .join("\n") ||
-            (questionEvent ? "" : "(no response)")));
-
-      const interrupted = this.interruptedTurns.delete(sessionId);
+        : failed && !interrupted
+          ? providerError || "Agent failed"
+          : (heldText ??
+            (providerError || (questionEvent ? "" : "(no response)")));
       const errorKind = interrupted
         ? undefined
         : [...events]
@@ -2243,6 +2245,9 @@ export class AgentSessionsService {
         ...(storeSync ? { storeSync } : {}),
         ...(errorKind ? { errorKind } : {}),
         ...(interrupted && failed ? { interrupted: true } : {}),
+        ...(failed && !interrupted && heldText
+          ? { partialContent: heldText }
+          : {}),
         ...(questionEvent?.questions
           ? {
               questions: JSON.parse(

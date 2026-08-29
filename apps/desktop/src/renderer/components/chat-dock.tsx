@@ -1546,30 +1546,39 @@ export function ChatDock({
   const [recall, setRecall] = useState<{ index: number; stash: string } | null>(
     null,
   );
-  // One-shot recall animation, re-armed per step: drop the class for a
-  // frame, then re-apply so the keyframe replays (same dance as the
-  // pane-motion nudge in app.tsx).
-  const [recallAnimating, setRecallAnimating] = useState(false);
-  const flashRecall = () => {
-    setRecallAnimating(false);
-    requestAnimationFrame(() => setRecallAnimating(true));
+  // Each direction has two identical animation names. Alternating the name
+  // restarts rapid same-direction recalls without dropping the class for a
+  // frame, which previously exposed a flicker between text rewrites.
+  const [recallMotion, setRecallMotion] = useState<{
+    direction: "up" | "down";
+    sequence: number;
+  } | null>(null);
+  const flashRecall = (direction: "up" | "down") => {
+    setRecallMotion((current) => ({
+      direction,
+      sequence: (current?.sequence ?? 0) + 1,
+    }));
   };
-  const applyRecall = (index: number, stash: string) => {
+  const applyRecall = (
+    index: number,
+    stash: string,
+    direction: "up" | "down",
+  ) => {
     const content = sentHistory[index];
     if (content === undefined) return;
     setRecall({ index, stash });
     rewriteText(content);
-    flashRecall();
+    flashRecall(direction);
   };
   const recallUp = (): boolean => {
     if (sentHistory.length === 0) return false;
     if (recall === null) {
       if (draft.trim() !== "") return false;
-      applyRecall(sentHistory.length - 1, draft);
+      applyRecall(sentHistory.length - 1, draft, "up");
       return true;
     }
     if (recall.index === 0) return true; // at the oldest — swallow the key
-    applyRecall(recall.index - 1, recall.stash);
+    applyRecall(recall.index - 1, recall.stash, "up");
     return true;
   };
   const recallDown = (): boolean => {
@@ -1577,10 +1586,10 @@ export function ChatDock({
     if (recall.index >= sentHistory.length - 1) {
       rewriteText(recall.stash);
       setRecall(null);
-      flashRecall();
+      flashRecall("down");
       return true;
     }
-    applyRecall(recall.index + 1, recall.stash);
+    applyRecall(recall.index + 1, recall.stash, "down");
     return true;
   };
 
@@ -2802,13 +2811,21 @@ export function ChatDock({
                 <ComposerInput
                   ref={composerRef}
                   onAnimationEnd={(event) => {
-                    if (event.animationName === "input-recall") {
-                      setRecallAnimating(false);
+                    if (event.animationName.startsWith("input-recall-")) {
+                      setRecallMotion((current) =>
+                        current &&
+                        event.animationName ===
+                          `input-recall-${current.direction}-${current.sequence % 2 === 0 ? "b" : "a"}`
+                          ? null
+                          : current,
+                      );
                     }
                   }}
                   wrapperClassName="min-w-0 flex-1"
                   className={`max-h-24 min-h-9 overflow-y-auto px-2.5 py-1.5 text-sm leading-6 ${
-                    recallAnimating ? "animate-input-recall" : ""
+                    recallMotion
+                      ? `animate-input-recall-${recallMotion.direction}-${recallMotion.sequence % 2 === 0 ? "b" : "a"}`
+                      : ""
                   }`}
                   onChange={(state) => {
                     setPillCount(state.pillCount);

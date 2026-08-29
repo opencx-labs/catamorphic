@@ -156,7 +156,7 @@ describe("toolRuntime", () => {
 
   it("routes explicit external tests through pinned Turbo", () => {
     expect(packageScripts("package.json")["test:external"]).toBe(
-      "CATAMORPHIC_EXTERNAL_INTEGRATIONS=1 bun scripts/tool-runtime.ts turbo run test --no-daemon --concurrency=2 --filter=@catamorphic/daytona --filter=@catamorphic/s3 --filter=@catamorphic/cloudflare",
+      "CATAMORPHIC_EXTERNAL_INTEGRATIONS=1 bun scripts/tool-runtime.ts turbo run test --no-daemon --concurrency=2 --filter=@catamorphic/daytona --filter=@catamorphic/s3 --filter=@catamorphic/cloudflare --filter=@catamorphic/codex",
     );
   });
 
