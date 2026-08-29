@@ -10659,6 +10659,36 @@
                       "nullable": true,
                       "type": "string"
                     },
+                    "todos": {
+                      "maxItems": 50,
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "id": {
+                            "type": "string",
+                            "format": "uuid",
+                            "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                          },
+                          "title": {
+                            "type": "string",
+                            "minLength": 1,
+                            "maxLength": 200
+                          },
+                          "description": {
+                            "type": "string",
+                            "minLength": 1,
+                            "maxLength": 4000
+                          },
+                          "status": {
+                            "type": "string",
+                            "enum": ["pending", "in_progress", "completed"]
+                          }
+                        },
+                        "required": ["id", "title", "description", "status"],
+                        "additionalProperties": false
+                      }
+                    },
                     "authorityHostId": {
                       "type": "string",
                       "minLength": 1
@@ -10733,6 +10763,7 @@
                     "parentSessionId",
                     "status",
                     "activity",
+                    "todos",
                     "authorityHostId",
                     "authorityRevision",
                     "authoritySeenAt",
@@ -11062,6 +11093,45 @@
                             "nullable": true,
                             "type": "string"
                           },
+                          "todos": {
+                            "maxItems": 50,
+                            "type": "array",
+                            "items": {
+                              "type": "object",
+                              "properties": {
+                                "id": {
+                                  "type": "string",
+                                  "format": "uuid",
+                                  "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                                },
+                                "title": {
+                                  "type": "string",
+                                  "minLength": 1,
+                                  "maxLength": 200
+                                },
+                                "description": {
+                                  "type": "string",
+                                  "minLength": 1,
+                                  "maxLength": 4000
+                                },
+                                "status": {
+                                  "type": "string",
+                                  "enum": [
+                                    "pending",
+                                    "in_progress",
+                                    "completed"
+                                  ]
+                                }
+                              },
+                              "required": [
+                                "id",
+                                "title",
+                                "description",
+                                "status"
+                              ],
+                              "additionalProperties": false
+                            }
+                          },
                           "authorityHostId": {
                             "type": "string",
                             "minLength": 1
@@ -11136,6 +11206,7 @@
                           "parentSessionId",
                           "status",
                           "activity",
+                          "todos",
                           "authorityHostId",
                           "authorityRevision",
                           "authoritySeenAt",
@@ -11221,6 +11292,35 @@
                   "provider": {
                     "type": "string",
                     "maxLength": 100
+                  },
+                  "todos": {
+                    "maxItems": 50,
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "properties": {
+                        "id": {
+                          "type": "string",
+                          "format": "uuid",
+                          "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                        },
+                        "title": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 200
+                        },
+                        "description": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 4000
+                        },
+                        "status": {
+                          "type": "string",
+                          "enum": ["pending", "in_progress", "completed"]
+                        }
+                      },
+                      "required": ["id", "title", "description", "status"]
+                    }
                   },
                   "agentSlug": {
                     "type": "string",
@@ -11364,7 +11464,7 @@
                     }
                   }
                 },
-                "required": ["authority", "messages"]
+                "required": ["authority", "todos", "messages"]
               }
             }
           }
@@ -11466,6 +11566,36 @@
                       "nullable": true,
                       "type": "string"
                     },
+                    "todos": {
+                      "maxItems": 50,
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "id": {
+                            "type": "string",
+                            "format": "uuid",
+                            "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                          },
+                          "title": {
+                            "type": "string",
+                            "minLength": 1,
+                            "maxLength": 200
+                          },
+                          "description": {
+                            "type": "string",
+                            "minLength": 1,
+                            "maxLength": 4000
+                          },
+                          "status": {
+                            "type": "string",
+                            "enum": ["pending", "in_progress", "completed"]
+                          }
+                        },
+                        "required": ["id", "title", "description", "status"],
+                        "additionalProperties": false
+                      }
+                    },
                     "authorityHostId": {
                       "type": "string",
                       "minLength": 1
@@ -11540,6 +11670,7 @@
                     "parentSessionId",
                     "status",
                     "activity",
+                    "todos",
                     "authorityHostId",
                     "authorityRevision",
                     "authoritySeenAt",
@@ -11873,6 +12004,36 @@
                       "nullable": true,
                       "type": "string"
                     },
+                    "todos": {
+                      "maxItems": 50,
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "id": {
+                            "type": "string",
+                            "format": "uuid",
+                            "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                          },
+                          "title": {
+                            "type": "string",
+                            "minLength": 1,
+                            "maxLength": 200
+                          },
+                          "description": {
+                            "type": "string",
+                            "minLength": 1,
+                            "maxLength": 4000
+                          },
+                          "status": {
+                            "type": "string",
+                            "enum": ["pending", "in_progress", "completed"]
+                          }
+                        },
+                        "required": ["id", "title", "description", "status"],
+                        "additionalProperties": false
+                      }
+                    },
                     "authorityHostId": {
                       "type": "string",
                       "minLength": 1
@@ -11947,6 +12108,7 @@
                     "parentSessionId",
                     "status",
                     "activity",
+                    "todos",
                     "authorityHostId",
                     "authorityRevision",
                     "authoritySeenAt",
@@ -12142,6 +12304,36 @@
                       "nullable": true,
                       "type": "string"
                     },
+                    "todos": {
+                      "maxItems": 50,
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "id": {
+                            "type": "string",
+                            "format": "uuid",
+                            "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                          },
+                          "title": {
+                            "type": "string",
+                            "minLength": 1,
+                            "maxLength": 200
+                          },
+                          "description": {
+                            "type": "string",
+                            "minLength": 1,
+                            "maxLength": 4000
+                          },
+                          "status": {
+                            "type": "string",
+                            "enum": ["pending", "in_progress", "completed"]
+                          }
+                        },
+                        "required": ["id", "title", "description", "status"],
+                        "additionalProperties": false
+                      }
+                    },
                     "authorityHostId": {
                       "type": "string",
                       "minLength": 1
@@ -12216,6 +12408,7 @@
                     "parentSessionId",
                     "status",
                     "activity",
+                    "todos",
                     "authorityHostId",
                     "authorityRevision",
                     "authoritySeenAt",
@@ -12519,6 +12712,36 @@
                       "nullable": true,
                       "type": "string"
                     },
+                    "todos": {
+                      "maxItems": 50,
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "id": {
+                            "type": "string",
+                            "format": "uuid",
+                            "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                          },
+                          "title": {
+                            "type": "string",
+                            "minLength": 1,
+                            "maxLength": 200
+                          },
+                          "description": {
+                            "type": "string",
+                            "minLength": 1,
+                            "maxLength": 4000
+                          },
+                          "status": {
+                            "type": "string",
+                            "enum": ["pending", "in_progress", "completed"]
+                          }
+                        },
+                        "required": ["id", "title", "description", "status"],
+                        "additionalProperties": false
+                      }
+                    },
                     "authorityHostId": {
                       "type": "string",
                       "minLength": 1
@@ -12796,6 +13019,7 @@
                     "parentSessionId",
                     "status",
                     "activity",
+                    "todos",
                     "authorityHostId",
                     "authorityRevision",
                     "authoritySeenAt",
@@ -12950,6 +13174,36 @@
                       "nullable": true,
                       "type": "string"
                     },
+                    "todos": {
+                      "maxItems": 50,
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "id": {
+                            "type": "string",
+                            "format": "uuid",
+                            "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                          },
+                          "title": {
+                            "type": "string",
+                            "minLength": 1,
+                            "maxLength": 200
+                          },
+                          "description": {
+                            "type": "string",
+                            "minLength": 1,
+                            "maxLength": 4000
+                          },
+                          "status": {
+                            "type": "string",
+                            "enum": ["pending", "in_progress", "completed"]
+                          }
+                        },
+                        "required": ["id", "title", "description", "status"],
+                        "additionalProperties": false
+                      }
+                    },
                     "authorityHostId": {
                       "type": "string",
                       "minLength": 1
@@ -13024,6 +13278,7 @@
                     "parentSessionId",
                     "status",
                     "activity",
+                    "todos",
                     "authorityHostId",
                     "authorityRevision",
                     "authoritySeenAt",
@@ -14236,6 +14491,36 @@
                       "nullable": true,
                       "type": "string"
                     },
+                    "todos": {
+                      "maxItems": 50,
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "id": {
+                            "type": "string",
+                            "format": "uuid",
+                            "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                          },
+                          "title": {
+                            "type": "string",
+                            "minLength": 1,
+                            "maxLength": 200
+                          },
+                          "description": {
+                            "type": "string",
+                            "minLength": 1,
+                            "maxLength": 4000
+                          },
+                          "status": {
+                            "type": "string",
+                            "enum": ["pending", "in_progress", "completed"]
+                          }
+                        },
+                        "required": ["id", "title", "description", "status"],
+                        "additionalProperties": false
+                      }
+                    },
                     "authorityHostId": {
                       "type": "string",
                       "minLength": 1
@@ -14310,6 +14595,7 @@
                     "parentSessionId",
                     "status",
                     "activity",
+                    "todos",
                     "authorityHostId",
                     "authorityRevision",
                     "authoritySeenAt",

@@ -175,6 +175,7 @@ export function registerAgentRoutes(app: FastifyInstance, ctx: RouteContext) {
             authority: request.body.authority,
             title: request.body.title ?? null,
             icon: request.body.icon ?? null,
+            todos: request.body.todos,
             ...(request.body.provider
               ? { provider: request.body.provider }
               : {}),

@@ -9,6 +9,56 @@ const context: ExtraToolContext = {
 };
 
 describe("workspace coordination tools", () => {
+  it("reads and atomically replaces the session todo list", async () => {
+    const toolkit = buildWorkspaceToolkit({} as WorkspaceBridge);
+    const stored = [
+      {
+        id: "7bea6ee8-f61c-4c4d-9dda-0ac77f6ed973",
+        title: "Review the project",
+        description: "Inspect the current implementation before editing.",
+        status: "pending" as const,
+      },
+    ];
+    const replacements: unknown[] = [];
+    toolkit.setTodoListBridge({
+      read: async () => stored,
+      replace: async (_projectId, _sessionId, items) => {
+        replacements.push(items);
+        return items.map((item, index) => ({
+          ...item,
+          id: item.id ?? `00000000-0000-4000-8000-00000000000${index}`,
+        }));
+      },
+    });
+
+    const read = toolkit.tools.find((tool) => tool.name === "read_todo_list");
+    const update = toolkit.tools.find(
+      (tool) => tool.name === "update_todo_list",
+    );
+    expect(await read?.execute({}, context)).toEqual({ items: stored });
+    expect(
+      await update?.execute(
+        {
+          items: [
+            {
+              id: stored[0]?.id,
+              title: "Review the project",
+              description: "The existing implementation has been reviewed.",
+              status: "completed",
+            },
+            {
+              title: "Run checks",
+              description: "Run focused tests and the repository merge gate.",
+              status: "in_progress",
+            },
+          ],
+        },
+        context,
+      ),
+    ).toMatchObject({ completed: 1, total: 2 });
+    expect(replacements).toHaveLength(1);
+  });
+
   it("reads peers and bounded transcripts through the coordination bridge", async () => {
     const toolkit = buildWorkspaceToolkit({} as WorkspaceBridge);
     toolkit.setSessionCoordinationBridge({

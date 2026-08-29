@@ -111,6 +111,7 @@ export interface AgentSessions {
   status: Generated<string>;
   system_prompt: string | null;
   title: string | null;
+  todos: Generated<Json>;
   updated_at: Generated<Timestamp>;
 }
 

@@ -3023,3 +3023,17 @@ paths, deliberately independent:
 - A phone uses the ordinary chats list as the action surface. Sessions whose
   source host lease expired are marked **Paused · Tap to resume** in that one
   list. Push opens the list directly; the PWA has no notification inbox.
+
+### Agent-owned progress lists (2026-08-29)
+
+- A todo list belongs to one chat and has one author: the agent. The user can
+  inspect progress and expand item detail, but cannot edit, reorder, or mark
+  items directly. This keeps the list an honest account of what the agent is
+  doing instead of a second task manager.
+- Every harness uses the same session-bound todo tools and persisted snapshot.
+  Harness-native plan surfaces are not product state because their semantics
+  and detail vary by provider.
+- Progress stays compact beside the chat control bar: a circular completion
+  ring and `done/total` counter. Clicking opens a calm popover with status
+  icons; descriptions are collapsed by default so the list scans quickly and
+  reveals important task detail on demand.

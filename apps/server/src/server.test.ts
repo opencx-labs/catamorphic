@@ -467,12 +467,22 @@ describe("stock server", () => {
         createdAt: new Date().toISOString(),
       },
     ];
+    const todos = [
+      {
+        id: "33333333-cccc-4ccc-8ccc-cccccccccccc",
+        title: "Continue on the server",
+        description:
+          "Verify that the mirrored task can continue on another host.",
+        status: "in_progress" as const,
+      },
+    ];
     const mirrorUrl = `/api/projects/${projectId}/agent/sessions/${sessionId}/mirror`;
     const first = await inject("PUT", mirrorUrl, memberToken, {
       authority: { hostId: "desktop:test-host", revision: 1 },
       title: "Desktop chat",
       icon: "sparkles:orange",
       provider: "ai-sdk",
+      todos,
       messages,
     });
     expect(first.statusCode).toBe(200);
@@ -481,6 +491,7 @@ describe("stock server", () => {
       (
         await inject("PUT", mirrorUrl, memberToken, {
           authority: { hostId: "desktop:test-host", revision: 1 },
+          todos,
           messages,
         })
       ).statusCode,
@@ -491,9 +502,10 @@ describe("stock server", () => {
       `/api/projects/${projectId}/agent/sessions`,
       memberToken,
     );
-    expect(list.json().items.map((s: { id: string }) => s.id)).toContain(
-      sessionId,
-    );
+    const mirroredSession = list
+      .json()
+      .items.find((session: { id: string }) => session.id === sessionId);
+    expect(mirroredSession?.todos).toEqual(todos);
 
     // Continuing is explicit: claim authority first, then send. The mirrored
     // transcript seeds the server-side anchor.
@@ -527,6 +539,7 @@ describe("stock server", () => {
     // The desktop pushes again without the server-side turns → diverged.
     const stale = await inject("PUT", mirrorUrl, memberToken, {
       authority: { hostId: "desktop:test-host", revision: 1 },
+      todos,
       messages,
     });
     expect(stale.statusCode).toBe(409);

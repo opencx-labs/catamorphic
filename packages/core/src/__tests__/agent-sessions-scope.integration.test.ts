@@ -253,6 +253,52 @@ describeIf("scoped agent sessions (ADR 0055)", () => {
     expect((await sessions.list(other, projectId)).total).toBe(0);
   });
 
+  it("persists an agent-owned todo snapshot with stable item ids", async () => {
+    const session = await sessions.create(viewer, projectId, {
+      agentId: csmAgentId,
+    });
+    const created = await sessions.replaceTodos(viewer, projectId, session.id, [
+      {
+        title: "Inspect the project",
+        description: "Find the existing implementation and its tests.",
+        status: "completed",
+      },
+      {
+        title: "Implement the change",
+        description: "Keep the public API and generated client in sync.",
+        status: "in_progress",
+      },
+    ]);
+    expect(created).toMatchObject([
+      { title: "Inspect the project", status: "completed" },
+      { title: "Implement the change", status: "in_progress" },
+    ]);
+    expect(created.every((todo) => todo.id.length > 0)).toBe(true);
+
+    const updated = await sessions.replaceTodos(viewer, projectId, session.id, [
+      {
+        ...created[1]!,
+        description: "Implementation is ready; run focused verification.",
+        status: "completed",
+      },
+    ]);
+    expect(updated).toEqual([
+      {
+        ...created[1],
+        description: "Implementation is ready; run focused verification.",
+        status: "completed",
+      },
+    ]);
+    expect((await sessions.get(viewer, projectId, session.id)).todos).toEqual(
+      updated,
+    );
+
+    const foreign = { ...viewer, externalUserId: "csm-carol" };
+    await expect(
+      sessions.replaceTodos(foreign, projectId, session.id, []),
+    ).rejects.toThrow(AccessDeniedError);
+  });
+
   it("uses the same session gate for ownership and exact project-agent scope", async () => {
     const own = await sessions.create(viewer, projectId, {
       agentId: csmAgentId,

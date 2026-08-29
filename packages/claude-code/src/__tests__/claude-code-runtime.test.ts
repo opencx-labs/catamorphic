@@ -980,6 +980,28 @@ describe("ClaudeCodeAgentRuntime conformance", () => {
 });
 
 describe("ClaudeCodeAgentRuntime", () => {
+  it("replaces Claude Code's private todo tool with the shared host list", async () => {
+    const runtime = new ClaudeCodeAgentRuntime({
+      extraTools: [
+        {
+          name: "update_todo_list",
+          description: "Replace the session todo list",
+          parameters: {},
+          execute: async () => "ok",
+        },
+      ],
+    });
+    queryMock.mockReturnValueOnce(scriptedQuery([successResult]));
+    const session = await startSession(runtime);
+
+    await runtime.startTurn({
+      sessionId: session.sessionId,
+      message: { role: "user", content: "Track this work." },
+    });
+
+    expect(optionsFromLastQuery().disallowedTools).toContain("TodoWrite");
+  });
+
   it("continues durable event sequencing from the resume cursor", async () => {
     const runtime = new ClaudeCodeAgentRuntime();
     await runtime.resumeSession({

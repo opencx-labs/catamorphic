@@ -69,6 +69,7 @@ import {
   QUESTIONS_DISMISSED_MESSAGE,
   toTimeline,
 } from "./catamorphic/chat-timeline";
+import { TodoProgress } from "./catamorphic/todo-progress.js";
 import { ChatGlyph } from "./chat-icon";
 import type { ChatSignals } from "./chat-signals";
 import {
@@ -2585,131 +2586,134 @@ export function ChatDock({
             )}
           </span>
         </header>
-        {/* A snug pill behind the controls so they never blend into (or
-            hide) timeline content scrolled beneath them. */}
-        <span className="absolute right-2 top-2 z-10 flex items-center gap-0.5 rounded-lg border border-border bg-bg-raised/95 p-0.5 backdrop-blur-sm">
-          {checkout ? (
-            <span
-              className="flex max-w-32 items-center gap-1 truncate rounded-md bg-bg-inset px-1.5 py-1 text-[10px] font-medium text-fg-muted"
-              data-testid="chat-checkout-badge"
-              title={checkout.branch ?? "External worktree"}
-            >
-              <GitBranch className="size-3 shrink-0" />
-              <span className="truncate">
-                {checkout.kind === "external"
-                  ? "External"
-                  : (checkout.branch ?? "Worktree")}
+        {/* Agent progress sits immediately left of the chat control bar;
+            both stay above timeline content scrolled beneath them. */}
+        <div className="absolute right-2 top-2 z-10 flex items-start gap-1">
+          <TodoProgress todos={chat.session?.todos ?? []} />
+          <span className="flex items-center gap-0.5 rounded-lg border border-border bg-bg-raised/95 p-0.5 backdrop-blur-sm">
+            {checkout ? (
+              <span
+                className="flex max-w-32 items-center gap-1 truncate rounded-md bg-bg-inset px-1.5 py-1 text-[10px] font-medium text-fg-muted"
+                data-testid="chat-checkout-badge"
+                title={checkout.branch ?? "External worktree"}
+              >
+                <GitBranch className="size-3 shrink-0" />
+                <span className="truncate">
+                  {checkout.kind === "external"
+                    ? "External"
+                    : (checkout.branch ?? "Worktree")}
+                </span>
               </span>
+            ) : null}
+            <span id={moveDescriptionId} className="sr-only">
+              {moveHintLabel}
             </span>
-          ) : null}
-          <span id={moveDescriptionId} className="sr-only">
-            {moveHintLabel}
-          </span>
-          <ShortcutHint label={moveHintLabel}>
-            <button
-              type="button"
-              aria-label="Move to server"
-              aria-describedby={
-                moveState.reason || moveState.moving
-                  ? moveDescriptionId
-                  : undefined
-              }
-              aria-disabled={!moveState.canMove || moveState.moving}
-              data-testid="chat-move-to-server"
-              className={`grid size-7 place-items-center rounded-md transition-colors duration-150 ${
-                moveState.canMove && !moveState.moving
-                  ? "cursor-pointer text-fg-muted hover:bg-bg-overlay hover:text-fg"
-                  : "cursor-not-allowed text-fg-faint opacity-45"
-              }`}
-              onClick={() => {
-                if (
-                  !activeSessionId ||
-                  !moveState.canMove ||
-                  moveState.moving
-                ) {
-                  return;
+            <ShortcutHint label={moveHintLabel}>
+              <button
+                type="button"
+                aria-label="Move to server"
+                aria-describedby={
+                  moveState.reason || moveState.moving
+                    ? moveDescriptionId
+                    : undefined
                 }
-                setMoveState((current) => ({ ...current, moving: true }));
-                void desktopApi
-                  .sessionMoveToServer(projectId, activeSessionId)
-                  .then(() =>
-                    setMoveState({
-                      canMove: false,
-                      reason: "This session now runs on the server",
-                      moving: false,
-                    }),
-                  )
-                  .catch((error) =>
-                    setMoveState({
-                      canMove: true,
-                      reason:
-                        error instanceof Error
-                          ? error.message
-                          : "The session could not be moved",
-                      moving: false,
-                    }),
-                  );
-              }}
+                aria-disabled={!moveState.canMove || moveState.moving}
+                data-testid="chat-move-to-server"
+                className={`grid size-7 place-items-center rounded-md transition-colors duration-150 ${
+                  moveState.canMove && !moveState.moving
+                    ? "cursor-pointer text-fg-muted hover:bg-bg-overlay hover:text-fg"
+                    : "cursor-not-allowed text-fg-faint opacity-45"
+                }`}
+                onClick={() => {
+                  if (
+                    !activeSessionId ||
+                    !moveState.canMove ||
+                    moveState.moving
+                  ) {
+                    return;
+                  }
+                  setMoveState((current) => ({ ...current, moving: true }));
+                  void desktopApi
+                    .sessionMoveToServer(projectId, activeSessionId)
+                    .then(() =>
+                      setMoveState({
+                        canMove: false,
+                        reason: "This session now runs on the server",
+                        moving: false,
+                      }),
+                    )
+                    .catch((error) =>
+                      setMoveState({
+                        canMove: true,
+                        reason:
+                          error instanceof Error
+                            ? error.message
+                            : "The session could not be moved",
+                        moving: false,
+                      }),
+                    );
+                }}
+              >
+                {moveState.moving ? (
+                  <LoaderCircle className="size-3.5 animate-spin" />
+                ) : (
+                  <Server className="size-3.5" />
+                )}
+              </button>
+            </ShortcutHint>
+            {onOpenParent && (
+              <ShortcutHint label="Go to the original chat">
+                <button
+                  type="button"
+                  className="grid size-7 cursor-pointer place-items-center rounded-md text-fg-muted transition-colors duration-150 hover:bg-bg-overlay hover:text-fg"
+                  onClick={onOpenParent}
+                  aria-label="Go to the original chat"
+                  data-testid="chat-open-parent"
+                >
+                  <GitFork className="size-3.5" />
+                </button>
+              </ShortcutHint>
+            )}
+            {isTab && onUnsplit && (
+              <ShortcutHint label="Full width">
+                <button
+                  type="button"
+                  className="grid size-7 cursor-pointer place-items-center rounded-md text-fg-muted transition-colors duration-150 hover:bg-bg-overlay hover:text-fg"
+                  onClick={onUnsplit}
+                  aria-label="Full width"
+                >
+                  <Columns2 className="size-3.5" />
+                </button>
+              </ShortcutHint>
+            )}
+            <ShortcutHint
+              label={isTab ? "Pop out to floating chat" : "Open as tab"}
             >
-              {moveState.moving ? (
-                <LoaderCircle className="size-3.5 animate-spin" />
-              ) : (
-                <Server className="size-3.5" />
-              )}
-            </button>
-          </ShortcutHint>
-          {onOpenParent && (
-            <ShortcutHint label="Go to the original chat">
               <button
                 type="button"
                 className="grid size-7 cursor-pointer place-items-center rounded-md text-fg-muted transition-colors duration-150 hover:bg-bg-overlay hover:text-fg"
-                onClick={onOpenParent}
-                aria-label="Go to the original chat"
-                data-testid="chat-open-parent"
+                onClick={() => setMode(isTab ? "partial" : "tab")}
+                aria-label={isTab ? "Pop out to floating chat" : "Open as tab"}
               >
-                <GitFork className="size-3.5" />
+                {isTab ? (
+                  <PictureInPicture2 className="size-3.5" />
+                ) : (
+                  <Maximize2 className="size-3.5" />
+                )}
               </button>
             </ShortcutHint>
-          )}
-          {isTab && onUnsplit && (
-            <ShortcutHint label="Full width">
+            <ShortcutHint label={isEmpty ? "Close chat" : "Minimize to bubble"}>
               <button
                 type="button"
                 className="grid size-7 cursor-pointer place-items-center rounded-md text-fg-muted transition-colors duration-150 hover:bg-bg-overlay hover:text-fg"
-                onClick={onUnsplit}
-                aria-label="Full width"
+                onClick={dismiss}
+                aria-label={isEmpty ? "Close chat" : "Minimize chat to bubble"}
               >
-                <Columns2 className="size-3.5" />
+                <Minus className="size-3.5" />
               </button>
             </ShortcutHint>
-          )}
-          <ShortcutHint
-            label={isTab ? "Pop out to floating chat" : "Open as tab"}
-          >
-            <button
-              type="button"
-              className="grid size-7 cursor-pointer place-items-center rounded-md text-fg-muted transition-colors duration-150 hover:bg-bg-overlay hover:text-fg"
-              onClick={() => setMode(isTab ? "partial" : "tab")}
-              aria-label={isTab ? "Pop out to floating chat" : "Open as tab"}
-            >
-              {isTab ? (
-                <PictureInPicture2 className="size-3.5" />
-              ) : (
-                <Maximize2 className="size-3.5" />
-              )}
-            </button>
-          </ShortcutHint>
-          <ShortcutHint label={isEmpty ? "Close chat" : "Minimize to bubble"}>
-            <button
-              type="button"
-              className="grid size-7 cursor-pointer place-items-center rounded-md text-fg-muted transition-colors duration-150 hover:bg-bg-overlay hover:text-fg"
-              onClick={dismiss}
-              aria-label={isEmpty ? "Close chat" : "Minimize chat to bubble"}
-            >
-              <Minus className="size-3.5" />
-            </button>
-          </ShortcutHint>
-        </span>
+          </span>
+        </div>
         {/* In tab mode the scroller spans the full tab (scrollbar at the
             edge) while the content column stays centered and readable. */}
         <div

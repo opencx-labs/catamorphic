@@ -896,6 +896,19 @@ export const AgentEffortSchema = z.enum([
   "max",
 ]);
 
+export const AgentTodoStatusSchema = z.enum([
+  "pending",
+  "in_progress",
+  "completed",
+]);
+
+export const AgentTodoSchema = z.object({
+  id: z.string().uuid(),
+  title: z.string().min(1).max(200),
+  description: z.string().min(1).max(4_000),
+  status: AgentTodoStatusSchema,
+});
+
 export const AgentSessionSchema = z.object({
   id: z.string().uuid(),
   projectId: z.string().uuid(),
@@ -912,6 +925,7 @@ export const AgentSessionSchema = z.object({
   parentSessionId: z.string().uuid().nullable(),
   status: z.enum(["active", "closed"]),
   activity: z.string().nullable(),
+  todos: z.array(AgentTodoSchema).max(50),
   authorityHostId: z.string().min(1),
   authorityRevision: z.number().int().positive(),
   authoritySeenAt: z.string().datetime().nullable(),
@@ -1002,6 +1016,7 @@ export const MirrorAgentSessionSchema = z.object({
   icon: z.string().max(100).nullable().optional(),
   /** The source's provider name, kept for provenance. */
   provider: z.string().max(100).optional(),
+  todos: z.array(AgentTodoSchema).max(50),
   /** The source session's project-agent slug: same agent here when
    * available and covered (ADR 0062), else the registry default. */
   agentSlug: z.string().max(200).optional(),

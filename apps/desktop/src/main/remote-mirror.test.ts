@@ -13,6 +13,7 @@ interface Captured {
   body: {
     authority: { hostId: string; revision: number };
     title: string | null;
+    todos: Array<{ id: string }>;
     messages: Array<{ id: string }>;
   };
 }
@@ -141,6 +142,14 @@ function mirror(
     status: "active",
     running: false,
     pendingTurns: [],
+    todos: [
+      {
+        id: "5f14412c-e594-4b56-bbf1-894bcd68014c",
+        title: "Mirror progress",
+        description: "Keep remote session progress in sync.",
+        status: "in_progress",
+      },
+    ],
     messages: [
       {
         id: "m1",

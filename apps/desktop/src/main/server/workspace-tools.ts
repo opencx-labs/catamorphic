@@ -100,6 +100,29 @@ export interface SessionCoordinationBridge {
   ): Promise<void>;
 }
 
+export type AgentTodoStatus = "pending" | "in_progress" | "completed";
+
+export interface AgentTodoItem {
+  id: string;
+  title: string;
+  description: string;
+  status: AgentTodoStatus;
+}
+
+export interface TodoListBridge {
+  read(projectId: string, sessionId: string): Promise<AgentTodoItem[]>;
+  replace(
+    projectId: string,
+    sessionId: string,
+    items: Array<{
+      id?: string;
+      title: string;
+      description: string;
+      status: AgentTodoStatus;
+    }>,
+  ): Promise<AgentTodoItem[]>;
+}
+
 export interface CheckoutBridge {
   current(projectId: string, sessionId: string): Promise<unknown>;
   list(projectId: string): Promise<unknown[]>;
@@ -131,6 +154,7 @@ export interface WorkspaceToolkit {
   /** Late-bound: skills live in core, which exists only after boot. */
   setSkillReader(reader: SkillReader): void;
   setSessionCoordinationBridge(bridge: SessionCoordinationBridge): void;
+  setTodoListBridge(bridge: TodoListBridge): void;
   setCheckoutBridge(bridge: CheckoutBridge): void;
   setSessionVisibility(visibility: SessionVisibility): void;
 }
@@ -147,6 +171,7 @@ export function buildWorkspaceToolkit(
   let gitBridge: GitBridge | null = null;
   let readSkill: SkillReader | null = null;
   let sessionCoordination: SessionCoordinationBridge | null = null;
+  let todoList: TodoListBridge | null = null;
   let checkouts: CheckoutBridge | null = null;
   let sessionVisible: SessionVisibility = async () => true;
 
@@ -208,6 +233,51 @@ export function buildWorkspaceToolkit(
           typeof input.activity === "string" ? input.activity : null,
         );
         return { ok: true };
+      },
+    },
+    {
+      name: "read_todo_list",
+      description:
+        "Read this chat's current agent-owned todo list. Use this before changing an existing list when its latest item ids or state are not already in your context.",
+      parameters: {},
+      execute: async (_input, ctx) => {
+        if (!ctx.sessionId) throw new Error("This turn has no chat session.");
+        if (!todoList) throw new Error("Todo lists are not available yet.");
+        return { items: await todoList.read(ctx.projectId, ctx.sessionId) };
+      },
+    },
+    {
+      name: "update_todo_list",
+      description:
+        "Replace this chat's complete todo list so the user can track progress. Use it for multi-step work, update it as steps progress, and clear it with an empty items array when no list is useful. Every item needs a short action title, a detailed description with important task specifics, and a status. Echo an existing item's id when editing, completing, reordering, or retaining it; omit id only for a new item. Omitting an existing item removes it.",
+      parameters: {
+        items: z
+          .array(
+            z.object({
+              id: z.string().uuid().optional(),
+              title: z.string().min(1).max(200),
+              description: z.string().min(1).max(4_000),
+              status: z.enum(["pending", "in_progress", "completed"]),
+            }),
+          )
+          .max(50)
+          .describe("The complete desired todo list, in display order"),
+      },
+      execute: async (input, ctx) => {
+        if (!ctx.sessionId) throw new Error("This turn has no chat session.");
+        if (!todoList) throw new Error("Todo lists are not available yet.");
+        const items = todoInputSchema.parse(input.items);
+        const updated = await todoList.replace(
+          ctx.projectId,
+          ctx.sessionId,
+          items,
+        );
+        return {
+          items: updated,
+          completed: updated.filter((item) => item.status === "completed")
+            .length,
+          total: updated.length,
+        };
       },
     },
     {
@@ -760,6 +830,9 @@ export function buildWorkspaceToolkit(
     setSessionCoordinationBridge(bridge) {
       sessionCoordination = bridge;
     },
+    setTodoListBridge(bridge) {
+      todoList = bridge;
+    },
     setCheckoutBridge(bridge) {
       checkouts = bridge;
     },
@@ -768,6 +841,17 @@ export function buildWorkspaceToolkit(
     },
   };
 }
+
+const todoInputSchema = z
+  .array(
+    z.object({
+      id: z.string().uuid().optional(),
+      title: z.string().min(1).max(200),
+      description: z.string().min(1).max(4_000),
+      status: z.enum(["pending", "in_progress", "completed"]),
+    }),
+  )
+  .max(50);
 
 async function filterWorkspaceOverview(
   overview: unknown,

@@ -312,6 +312,27 @@ describe("ClaudeCodeAgent", () => {
     );
   });
 
+  it("replaces Claude Code's private todo tool with the shared host list", async () => {
+    const agent = new ClaudeCodeAgent({
+      extraTools: [
+        {
+          name: "update_todo_list",
+          description: "Replace the session todo list",
+          parameters: {},
+          execute: async () => "ok",
+        },
+      ],
+    });
+    queryMock.mockReturnValueOnce(scriptedQuery([successResult]));
+
+    await collect(agent, "Track this work");
+
+    const options = lastQueryOptions();
+    expect(options.allowedTools).toContain("mcp__workspace__update_todo_list");
+    expect(options.allowedTools).not.toContain("TodoWrite");
+    expect(options.disallowedTools).toContain("TodoWrite");
+  });
+
   it("refreshes workspace context when the host changes checkout", async () => {
     const contexts: unknown[] = [];
     const agent = new ClaudeCodeAgent({

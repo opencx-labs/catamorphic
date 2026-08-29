@@ -336,6 +336,43 @@ export class E2eFakeCodingAgent implements CodingAgentProvider {
       return;
     }
 
+    if (prompt.includes("todo list")) {
+      const updateTodos = this.workspaceTools.find(
+        (candidate) => candidate.name === "update_todo_list",
+      );
+      if (!updateTodos) {
+        yield { type: "error", content: "todo tools unavailable" };
+        yield { type: "done" };
+        return;
+      }
+      const input = {
+        items: [
+          {
+            title: "Inspect the project",
+            description:
+              "Read the existing implementation and identify the right extension points.",
+            status: "completed",
+          },
+          {
+            title: "Verify the result",
+            description:
+              "Run the focused tests and confirm the user-facing behavior.",
+            status: "in_progress",
+          },
+        ],
+      };
+      const result = await updateTodos.execute(input, state.toolContext);
+      yield {
+        type: "tool_call",
+        toolName: "update_todo_list",
+        toolInput: input,
+        toolResult: result,
+      };
+      yield { type: "text", content: "I added a progress list to this chat." };
+      yield { type: "done" };
+      return;
+    }
+
     if (prompt.includes("ask me") && prompt.includes("question")) {
       state.askedQuestion = true;
       yield { type: "title", content: "Getting to know you" };

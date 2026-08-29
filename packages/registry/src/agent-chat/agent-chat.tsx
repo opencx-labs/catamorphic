@@ -4,6 +4,7 @@ import { useAgentChat, useToolPermissions } from "@catamorphic/react";
 import { ArrowUp, Bot, Maximize2, Minimize2, Plus } from "lucide-react";
 import { type FormEvent, type KeyboardEvent, useState } from "react";
 import { ChatTimeline, toTimeline } from "../chat-timeline/chat-timeline.js";
+import { TodoProgress } from "../todo-progress/todo-progress.js";
 import { ToolPermissionCard } from "../tool-permission-card/tool-permission-card.js";
 
 export interface AgentChatProps {
@@ -160,6 +161,7 @@ export function AgentChat({
         className={`flex min-h-16 items-center gap-2 border border-border bg-bg-raised/95 p-2 backdrop-blur-xl ${expanded ? "rounded-b-2xl" : "rounded-2xl"}`}
         onSubmit={submit}
       >
+        <TodoProgress todos={chat.session?.todos ?? []} />
         <textarea
           className="field-sizing-content max-h-24 min-h-10 min-w-0 flex-1 resize-none bg-transparent px-3 py-2 text-sm outline-none placeholder:text-fg-faint"
           value={draft}

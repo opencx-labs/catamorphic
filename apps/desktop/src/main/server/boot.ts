@@ -575,6 +575,22 @@ export async function startEmbeddedServer(
       );
     },
   });
+  agentRegistry.workspaceToolkit?.setTodoListBridge({
+    read: async (projectId, sessionId) => {
+      const detail = await catamorphic.core.agentSessions?.get(
+        desktopIdentity,
+        projectId,
+        sessionId,
+      );
+      if (!detail) throw new Error("Agent sessions are not configured");
+      return detail.todos;
+    },
+    replace: async (projectId, sessionId, items) => {
+      const service = catamorphic.core.agentSessions;
+      if (!service) throw new Error("Agent sessions are not configured");
+      return service.replaceTodos(desktopIdentity, projectId, sessionId, items);
+    },
+  });
   agentRegistry.workspaceToolkit?.setCheckoutBridge({
     current: (projectId, sessionId) =>
       sessionCheckouts.describe({ projectId, sessionId }),

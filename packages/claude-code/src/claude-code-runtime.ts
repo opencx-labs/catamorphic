@@ -685,6 +685,15 @@ export class ClaudeCodeAgentRuntime implements AgentRuntimeProvider {
             ),
           })
         : undefined;
+    const hostOwnsTodos = extraTools.some(
+      (tool) => tool.name === "update_todo_list",
+    );
+    const disallowedTools = [
+      ...(this.opts.disableBash && workspaceServer
+        ? ["Bash", "PowerShell", "Monitor"]
+        : []),
+      ...(hostOwnsTodos ? ["TodoWrite"] : []),
+    ];
     const externalServers = mapMcpServers({
       ...resolveMcpServers(this.opts.mcpServers),
       ...this.opts.mcpServersForSession?.(toolContext),
@@ -726,9 +735,7 @@ export class ClaudeCodeAgentRuntime implements AgentRuntimeProvider {
             })),
           }
         : {}),
-      ...(this.opts.disableBash && workspaceServer
-        ? { disallowedTools: ["Bash", "PowerShell", "Monitor"] }
-        : {}),
+      ...(disallowedTools.length > 0 ? { disallowedTools } : {}),
       canUseTool: (toolName, toolInput, callback) =>
         this.canUseTool({
           state,

@@ -203,6 +203,9 @@ const ALLOWED_TOOLS = [
  */
 const SHELL_EXECUTION_TOOLS = new Set(["Bash", "PowerShell", "Monitor"]);
 
+/** The shared host list replaces Claude Code's private plan when mounted. */
+const NATIVE_TODO_TOOL = "TodoWrite";
+
 /** Tool names whose invocations are surfaced as `file_edit` events. */
 const FILE_EDIT_TOOLS = new Set(["Edit", "Write", "MultiEdit", "NotebookEdit"]);
 
@@ -705,6 +708,13 @@ export class ClaudeCodeAgent implements CodingAgentProvider {
     // agent with no way to run commands at all is broken, not safe.
     const shellToolsDisabled =
       Boolean(this.opts.disableBash) && workspaceServer !== undefined;
+    const hostOwnsTodos =
+      workspaceServer !== undefined &&
+      extraTools.some((tool) => tool.name === "update_todo_list");
+    const disallowedTools = [
+      ...(shellToolsDisabled ? SHELL_EXECUTION_TOOLS : []),
+      ...(hostOwnsTodos ? [NATIVE_TODO_TOOL] : []),
+    ];
 
     // Session-scoped servers win a name clash with the agent-wide set:
     // the host owns both maps and picks the session keys, so a collision
@@ -762,7 +772,9 @@ export class ClaudeCodeAgent implements CodingAgentProvider {
         : {}),
       allowedTools: [
         ...ALLOWED_TOOLS.filter(
-          (name) => !(shellToolsDisabled && SHELL_EXECUTION_TOOLS.has(name)),
+          (name) =>
+            !(shellToolsDisabled && SHELL_EXECUTION_TOOLS.has(name)) &&
+            !(hostOwnsTodos && name === NATIVE_TODO_TOOL),
         ),
         ...(workspaceServer
           ? extraTools.map((def) => `mcp__workspace__${def.name}`)
@@ -774,12 +786,10 @@ export class ClaudeCodeAgent implements CodingAgentProvider {
           .filter((name) => !this.currentPolicies(providerSessionId)?.[name])
           .map((name) => `mcp__${name}`),
       ],
-      // Removing (not merely denying) the built-in shell tools takes them
-      // out of the model's context — otherwise the CLI's own system prompt
-      // keeps steering the model toward a Bash it can see but never use.
-      ...(shellToolsDisabled
-        ? { disallowedTools: [...SHELL_EXECUTION_TOOLS] }
-        : {}),
+      // Removing (not merely denying) replaced built-ins takes them out of
+      // model context, so the CLI prompt cannot steer toward a private shell
+      // or todo surface when the host owns the shared replacement.
+      ...(disallowedTools.length > 0 ? { disallowedTools } : {}),
       // AskUserQuestion is the CLI's native ask_user: the tool's own
       // permission check always routes through here, and the permission
       // result's updatedInput is how the answers reach it (the tool reads

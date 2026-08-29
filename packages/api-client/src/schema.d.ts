@@ -5085,6 +5085,14 @@ export interface paths {
                                 /** @enum {string} */
                                 status: "active" | "closed";
                                 activity: string | null;
+                                todos: {
+                                    /** Format: uuid */
+                                    id: string;
+                                    title: string;
+                                    description: string;
+                                    /** @enum {string} */
+                                    status: "pending" | "in_progress" | "completed";
+                                }[];
                                 authorityHostId: string;
                                 authorityRevision: number;
                                 /** Format: date-time */
@@ -5171,6 +5179,14 @@ export interface paths {
                             /** @enum {string} */
                             status: "active" | "closed";
                             activity: string | null;
+                            todos: {
+                                /** Format: uuid */
+                                id: string;
+                                title: string;
+                                description: string;
+                                /** @enum {string} */
+                                status: "pending" | "in_progress" | "completed";
+                            }[];
                             authorityHostId: string;
                             authorityRevision: number;
                             /** Format: date-time */
@@ -5320,6 +5336,14 @@ export interface paths {
                         title?: string | null;
                         icon?: string | null;
                         provider?: string;
+                        todos: {
+                            /** Format: uuid */
+                            id: string;
+                            title: string;
+                            description: string;
+                            /** @enum {string} */
+                            status: "pending" | "in_progress" | "completed";
+                        }[];
                         agentSlug?: string;
                         messages: {
                             /** Format: uuid */
@@ -5397,6 +5421,14 @@ export interface paths {
                             /** @enum {string} */
                             status: "active" | "closed";
                             activity: string | null;
+                            todos: {
+                                /** Format: uuid */
+                                id: string;
+                                title: string;
+                                description: string;
+                                /** @enum {string} */
+                                status: "pending" | "in_progress" | "completed";
+                            }[];
                             authorityHostId: string;
                             authorityRevision: number;
                             /** Format: date-time */
@@ -5567,6 +5599,14 @@ export interface paths {
                             /** @enum {string} */
                             status: "active" | "closed";
                             activity: string | null;
+                            todos: {
+                                /** Format: uuid */
+                                id: string;
+                                title: string;
+                                description: string;
+                                /** @enum {string} */
+                                status: "pending" | "in_progress" | "completed";
+                            }[];
                             authorityHostId: string;
                             authorityRevision: number;
                             /** Format: date-time */
@@ -5676,6 +5716,14 @@ export interface paths {
                             /** @enum {string} */
                             status: "active" | "closed";
                             activity: string | null;
+                            todos: {
+                                /** Format: uuid */
+                                id: string;
+                                title: string;
+                                description: string;
+                                /** @enum {string} */
+                                status: "pending" | "in_progress" | "completed";
+                            }[];
                             authorityHostId: string;
                             authorityRevision: number;
                             /** Format: date-time */
@@ -5825,6 +5873,14 @@ export interface paths {
                             /** @enum {string} */
                             status: "active" | "closed";
                             activity: string | null;
+                            todos: {
+                                /** Format: uuid */
+                                id: string;
+                                title: string;
+                                description: string;
+                                /** @enum {string} */
+                                status: "pending" | "in_progress" | "completed";
+                            }[];
                             authorityHostId: string;
                             authorityRevision: number;
                             /** Format: date-time */
@@ -5921,6 +5977,14 @@ export interface paths {
                             /** @enum {string} */
                             status: "active" | "closed";
                             activity: string | null;
+                            todos: {
+                                /** Format: uuid */
+                                id: string;
+                                title: string;
+                                description: string;
+                                /** @enum {string} */
+                                status: "pending" | "in_progress" | "completed";
+                            }[];
                             authorityHostId: string;
                             authorityRevision: number;
                             /** Format: date-time */
@@ -6645,6 +6709,14 @@ export interface paths {
                             /** @enum {string} */
                             status: "active" | "closed";
                             activity: string | null;
+                            todos: {
+                                /** Format: uuid */
+                                id: string;
+                                title: string;
+                                description: string;
+                                /** @enum {string} */
+                                status: "pending" | "in_progress" | "completed";
+                            }[];
                             authorityHostId: string;
                             authorityRevision: number;
                             /** Format: date-time */

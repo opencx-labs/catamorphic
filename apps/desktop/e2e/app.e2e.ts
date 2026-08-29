@@ -341,6 +341,53 @@ describe("chat flows", () => {
     expect(previewText).toContain("Ready");
   });
 
+  it("shows an agent-managed todo progress popover", async () => {
+    await run(`
+      const dock = visibleDock();
+      const input = dock.querySelector('[data-composer-input]');
+      setReactValue(input, 'make a todo list for this task');
+      input.closest('form').requestSubmit();
+      return true;
+    `);
+    await runWait(
+      `const trigger = visibleDock()?.querySelector('[data-testid="todo-progress-trigger"]');
+       return trigger?.textContent.trim() === '1/2';`,
+      { timeoutMs: 30_000, label: "todo progress indicator" },
+    );
+    await run(`
+      visibleDock().querySelector('[data-testid="todo-progress-trigger"]').click();
+      return true;
+    `);
+    await runWait(
+      `const panel = visibleDock()?.querySelector('[data-testid="todo-progress-popover"]');
+       return !!panel && panel.textContent.includes('Verify the result');`,
+      { label: "todo popover" },
+    );
+    const collapsed = await run<boolean>(`
+      const panel = visibleDock().querySelector('[data-testid="todo-progress-popover"]');
+      const item = [...panel.querySelectorAll('button')]
+        .find((button) => button.textContent.includes('Verify the result'));
+      return item?.getAttribute('aria-expanded') === 'false' &&
+        item?.nextElementSibling?.getAttribute('aria-hidden') === 'true';
+    `);
+    expect(collapsed).toBe(true);
+    await run(`
+      const panel = visibleDock().querySelector('[data-testid="todo-progress-popover"]');
+      [...panel.querySelectorAll('button')]
+        .find((button) => button.textContent.includes('Verify the result')).click();
+      return true;
+    `);
+    await runWait(
+      `const panel = visibleDock()?.querySelector('[data-testid="todo-progress-popover"]');
+       const item = [...panel.querySelectorAll('button')]
+         .find((button) => button.textContent.includes('Verify the result'));
+       return item?.getAttribute('aria-expanded') === 'true' &&
+         panel.textContent.includes('Run the focused tests') &&
+         parseFloat(getComputedStyle(panel).opacity) > 0.9;`,
+      { label: "expanded todo description" },
+    );
+  });
+
   it("streams preambles as separate completed messages", async () => {
     await run(
       `byText('button', 'New chat')?.click() ?? pressKey('n', { metaKey: true }); return true;`,
