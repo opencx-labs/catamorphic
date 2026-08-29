@@ -575,6 +575,19 @@ See [ADR 0027](docs/decisions/0027-correlation-keys-and-external-signals.md),
 [ADR 0028](docs/decisions/0028-shared-rate-budgets-and-tenant-execution-policy.md),
 and [ADR 0030](docs/decisions/0030-run-retention.md).
 
+## Contributing
+
+Catamorphic is issue-first. If you do not have repository write access, open a
+[GitHub issue](https://github.com/opencx-labs/catamorphic/issues/new/choose)
+with the problem, concrete use case, constraints, and desired outcome. Public
+pull request creation is restricted to the core team and collaborators with
+write access.
+
+AI makes producing code cheap, but it does not make a large generated change
+cheap to review. We review the compact source of intent first, then maintainers
+own the implementation with the repository's full context. Read
+[CONTRIBUTING.md](CONTRIBUTING.md) for the reasoning and issue guidance.
+
 ## Local development
 
 ```bash
