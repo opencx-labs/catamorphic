@@ -97,6 +97,17 @@ export interface AgentSession {
   authorityHostId: string;
   /** Monotonic fencing token for cross-host delivery. */
   authorityRevision: number;
+  /** Last time this host observed the current authority's stable snapshot. */
+  authoritySeenAt: string;
+  /** Number of transcript messages imported with the current mirror. */
+  mirrorMessageCount: number;
+  /** A coordinated move blocks local sends while remote authority is claimed. */
+  handoffStatus: "none" | "pending";
+  handoffDestinationHostId: string | null;
+  /** True only on a non-authority host with an expired source lease. */
+  resumable: boolean;
+  /** When the source lease expired, or null while the session is not paused. */
+  pausedAt: string | null;
   /** Runtime state in this host process; never persisted. */
   running: boolean;
   status: "active" | "closed";
@@ -145,6 +156,24 @@ export class AgentSessionClosedError extends Error {
   constructor(readonly sessionId: string) {
     super(`Agent session '${sessionId}' is closed`);
     this.name = "AgentSessionClosedError";
+  }
+}
+
+export class AgentSessionAuthorityRequiredError extends Error {
+  constructor(
+    readonly sessionId: string,
+    readonly authorityHostId: string,
+    readonly authorityRevision: number,
+  ) {
+    super(`Agent session '${sessionId}' must be resumed on this host first`);
+    this.name = "AgentSessionAuthorityRequiredError";
+  }
+}
+
+export class AgentSessionHandoffPendingError extends Error {
+  constructor(readonly sessionId: string) {
+    super(`Agent session '${sessionId}' is moving to another server`);
+    this.name = "AgentSessionHandoffPendingError";
   }
 }
 
@@ -367,6 +396,8 @@ export interface NativeAgentCheckout {
 interface AgentSessionsDeps {
   /** Stable, host-owned identity used to fence cross-host session delivery. */
   hostId: string;
+  /** Source-host presence window before a mirrored session is shown paused. */
+  authorityLeaseMs?: number;
   projectManager: ProjectManager;
   sandboxProvider: SandboxProvider;
   codingAgents: CodingAgentRegistry;
@@ -443,6 +474,7 @@ export class AgentSessionsService {
   readonly turns: AgentTurnsService;
   readonly mailboxes: SessionMailboxesService;
   readonly hostId: string;
+  readonly authorityLeaseMs: number;
   private readonly projectManager: ProjectManager;
   private readonly sandboxProvider: SandboxProvider;
   private readonly codingAgents: CodingAgentRegistry;
@@ -484,6 +516,7 @@ export class AgentSessionsService {
   ) {
     this.turns = new AgentTurnsService(db);
     this.hostId = deps.hostId;
+    this.authorityLeaseMs = deps.authorityLeaseMs ?? 90_000;
     this.mailboxes = new SessionMailboxesService(db, deps.hostId);
     this.projectManager = deps.projectManager;
     this.sandboxProvider = deps.sandboxProvider;
@@ -540,7 +573,14 @@ export class AgentSessionsService {
       .then((r) => Number(r.count));
 
     return {
-      items: rows.map((row) => mapSession(row, this.runningTurns.has(row.id))),
+      items: rows.map((row) =>
+        mapSession(
+          row,
+          this.runningTurns.has(row.id),
+          this.hostId,
+          this.authorityLeaseMs,
+        ),
+      ),
       total,
     };
   }
@@ -651,7 +691,12 @@ export class AgentSessionsService {
       .execute();
     const settled = await this.settleOrphanedTurns(sessionId, messages);
     return {
-      ...mapSession(row, this.runningTurns.has(row.id)),
+      ...mapSession(
+        row,
+        this.runningTurns.has(row.id),
+        this.hostId,
+        this.authorityLeaseMs,
+      ),
       messages: settled.map(mapMessage),
       pendingTurns: await this.turns.listPendingMessages({ sessionId }),
     };
@@ -860,7 +905,7 @@ export class AgentSessionsService {
         .executeTakeFirstOrThrow();
     });
 
-    return mapSession(row);
+    return mapSession(row, false, this.hostId, this.authorityLeaseMs);
   }
 
   /**
@@ -982,6 +1027,30 @@ export class AgentSessionsService {
         // the appends must not interleave with a turn starting here (the
         // append order IS the transcript order, via `seq`).
         const row = await this.db.transaction().execute(async (trx) => {
+          const current = await trx
+            .selectFrom("agent_sessions")
+            .selectAll()
+            .where("id", "=", sessionId)
+            .forUpdate()
+            .executeTakeFirst();
+          if (
+            current &&
+            (current.project_id !== projectId ||
+              current.external_user_id !== identity.externalUserId)
+          ) {
+            throw new AccessDeniedError();
+          }
+          if (
+            current &&
+            current.authority_host_id !== "unassigned" &&
+            (current.authority_host_id !== input.authority.hostId ||
+              Number(current.authority_revision) > input.authority.revision)
+          ) {
+            throw new SessionMirrorDivergedError(sessionId);
+          }
+          if (current && !current.allocation_id) {
+            throw new Error("Agent session has no Environment Allocation");
+          }
           const held = await trx
             .selectFrom("agent_messages")
             .select(["id"])
@@ -993,30 +1062,33 @@ export class AgentSessionsService {
             throw new SessionMirrorDivergedError(sessionId);
           }
 
-          const allocation = mirrorAdmission
-            ? await this.executionAllocations.create({
-                identity,
-                projectId,
-                environmentName: mirrorAdmission.environmentName,
-                workloadKind: "agent",
-                rootWorkloadId: sessionId,
-                policy: {
-                  binding: mirrorAdmission.binding,
-                  requirements: mirrorAdmission.effectiveRequirements,
-                  connections: mirrorConnections,
-                },
-                transaction: trx,
-              })
-            : undefined;
-          const session = existing
+          const allocation =
+            !current && mirrorAdmission
+              ? await this.executionAllocations.create({
+                  identity,
+                  projectId,
+                  environmentName: mirrorAdmission.environmentName,
+                  workloadKind: "agent",
+                  rootWorkloadId: sessionId,
+                  policy: {
+                    binding: mirrorAdmission.binding,
+                    requirements: mirrorAdmission.effectiveRequirements,
+                    connections: mirrorConnections,
+                  },
+                  transaction: trx,
+                })
+              : undefined;
+          const session = current
             ? await trx
                 .updateTable("agent_sessions")
                 .set({
-                  title: input.title ?? existing.title,
-                  icon: input.icon ?? existing.icon,
+                  title: input.title ?? current.title,
+                  icon: input.icon ?? current.icon,
                   updated_at: new Date(),
                   authority_host_id: input.authority.hostId,
                   authority_revision: input.authority.revision,
+                  authority_seen_at: new Date(),
+                  mirror_message_count: input.messages.length,
                 })
                 .where("id", "=", sessionId)
                 .returningAll()
@@ -1041,6 +1113,8 @@ export class AgentSessionsService {
                   icon: input.icon ?? null,
                   authority_host_id: input.authority.hostId,
                   authority_revision: input.authority.revision,
+                  authority_seen_at: new Date(),
+                  mirror_message_count: input.messages.length,
                 })
                 .returningAll()
                 .executeTakeFirstOrThrow();
@@ -1069,7 +1143,7 @@ export class AgentSessionsService {
           }
           return session;
         });
-        return mapSession(row);
+        return mapSession(row, false, this.hostId, this.authorityLeaseMs);
       },
     );
   }
@@ -1273,7 +1347,8 @@ export class AgentSessionsService {
       });
     }
 
-    if (Object.keys(updates).length === 0) return mapSession(session);
+    if (Object.keys(updates).length === 0)
+      return mapSession(session, false, this.hostId, this.authorityLeaseMs);
 
     const row =
       reallocatedRow ??
@@ -1314,7 +1389,7 @@ export class AgentSessionsService {
         })
         .execute();
     }
-    return mapSession(row);
+    return mapSession(row, false, this.hostId, this.authorityLeaseMs);
   }
 
   /**
@@ -1335,7 +1410,7 @@ export class AgentSessionsService {
       .where("id", "=", sessionId)
       .returningAll()
       .executeTakeFirstOrThrow();
-    return mapSession(row);
+    return mapSession(row, false, this.hostId, this.authorityLeaseMs);
   }
 
   /**
@@ -1447,7 +1522,7 @@ export class AgentSessionsService {
         .execute();
       return fork;
     });
-    return mapSession(row);
+    return mapSession(row, false, this.hostId, this.authorityLeaseMs);
   }
 
   async sendMessage(
@@ -1526,22 +1601,57 @@ export class AgentSessionsService {
     if (session.status !== "active") {
       throw new AgentSessionClosedError(sessionId);
     }
+    if (session.handoff_status === "pending") {
+      throw new AgentSessionHandoffPendingError(sessionId);
+    }
+    if (
+      session.authority_host_id !== "unassigned" &&
+      session.authority_host_id !== this.hostId
+    ) {
+      throw new AgentSessionAuthorityRequiredError(
+        sessionId,
+        session.authority_host_id,
+        Number(session.authority_revision),
+      );
+    }
     await this.claimLocalAuthority(session);
     this.cancelAutoRetry(sessionId);
     if (input.deliveryMode === "interrupt") {
       await this.interrupt(identity, projectId, sessionId);
     }
-    const receipt = await this.turns.deliver({
-      sessionId,
-      content: message,
-      author: { kind: "user", externalUserId: identity.externalUserId },
-      mode: input.deliveryMode ?? "next_turn",
-      idempotencyKey: input.idempotencyKey,
-      metadata: input.attachments?.length
-        ? {
-            attachments: JSON.parse(JSON.stringify(input.attachments)),
-          }
-        : undefined,
+    const receipt = await this.db.transaction().execute(async (transaction) => {
+      const current = await transaction
+        .selectFrom("agent_sessions")
+        .selectAll()
+        .where("id", "=", sessionId)
+        .forUpdate()
+        .executeTakeFirstOrThrow();
+      if (current.status !== "active") {
+        throw new AgentSessionClosedError(sessionId);
+      }
+      if (current.handoff_status === "pending") {
+        throw new AgentSessionHandoffPendingError(sessionId);
+      }
+      if (current.authority_host_id !== this.hostId) {
+        throw new AgentSessionAuthorityRequiredError(
+          sessionId,
+          current.authority_host_id,
+          Number(current.authority_revision),
+        );
+      }
+      return this.turns.deliver({
+        sessionId,
+        content: message,
+        author: { kind: "user", externalUserId: identity.externalUserId },
+        mode: input.deliveryMode ?? "next_turn",
+        idempotencyKey: input.idempotencyKey,
+        metadata: input.attachments?.length
+          ? {
+              attachments: JSON.parse(JSON.stringify(input.attachments)),
+            }
+          : undefined,
+        transaction,
+      });
     });
     if (!receipt.turnId) throw new Error("A queued send must create a turn");
     void this.scheduleDrain(identity, projectId, sessionId).catch(() => {
@@ -1631,6 +1741,149 @@ export class AgentSessionsService {
     return receipt;
   }
 
+  /** Explicitly claim a mirrored session for this host with a fencing CAS. */
+  async resume(
+    identity: Identity,
+    projectId: string,
+    sessionId: string,
+    input: { expectedAuthorityRevision: number },
+  ): Promise<AgentSession> {
+    const session = await this.requireSession(identity, projectId, sessionId);
+    if (session.status !== "active") {
+      throw new AgentSessionClosedError(sessionId);
+    }
+    if (session.authority_host_id === this.hostId) {
+      return mapSession(session, false, this.hostId, this.authorityLeaseMs);
+    }
+    if (
+      Number(session.authority_revision) !== input.expectedAuthorityRevision
+    ) {
+      throw new SessionMirrorDivergedError(sessionId);
+    }
+    await this.claimLocalAuthority(session);
+    const claimed = await this.requireSession(identity, projectId, sessionId);
+    return mapSession(claimed, false, this.hostId, this.authorityLeaseMs);
+  }
+
+  /** Persist the local send barrier before a coordinated desktop handoff. */
+  async beginHandoff(
+    identity: Identity,
+    projectId: string,
+    sessionId: string,
+    input: { destinationHostId: string },
+  ): Promise<AgentSession> {
+    await this.requireSession(identity, projectId, sessionId);
+    const row = await this.db.transaction().execute(async (transaction) => {
+      const session = await transaction
+        .selectFrom("agent_sessions")
+        .selectAll()
+        .where("id", "=", sessionId)
+        .forUpdate()
+        .executeTakeFirstOrThrow();
+      if (session.status !== "active") {
+        throw new AgentSessionClosedError(sessionId);
+      }
+      if (session.authority_host_id !== this.hostId) {
+        throw new AgentSessionAuthorityRequiredError(
+          sessionId,
+          session.authority_host_id,
+          Number(session.authority_revision),
+        );
+      }
+      if (this.runningTurns.has(sessionId)) {
+        throw new AgentTurnInProgressError(sessionId);
+      }
+      const pending = await transaction
+        .selectFrom("agent_turns")
+        .select("id")
+        .where("session_id", "=", sessionId)
+        .where("status", "in", ["queued", "held", "running"])
+        .executeTakeFirst();
+      if (pending) throw new AgentTurnInProgressError(sessionId);
+      return transaction
+        .updateTable("agent_sessions")
+        .set({
+          handoff_status: "pending",
+          handoff_destination_host_id: input.destinationHostId,
+          updated_at: new Date(),
+        })
+        .where("id", "=", sessionId)
+        .returningAll()
+        .executeTakeFirstOrThrow();
+    });
+    return mapSession(row, false, this.hostId, this.authorityLeaseMs);
+  }
+
+  async cancelHandoff(
+    identity: Identity,
+    projectId: string,
+    sessionId: string,
+  ): Promise<AgentSession> {
+    const session = await this.requireSession(identity, projectId, sessionId);
+    if (session.handoff_status === "none") {
+      return mapSession(session, false, this.hostId, this.authorityLeaseMs);
+    }
+    if (session.authority_host_id !== this.hostId) {
+      throw new SessionMirrorDivergedError(sessionId);
+    }
+    const row = await this.db
+      .updateTable("agent_sessions")
+      .set({
+        handoff_status: "none",
+        handoff_destination_host_id: null,
+        updated_at: new Date(),
+      })
+      .where("id", "=", session.id)
+      .where("authority_host_id", "=", this.hostId)
+      .where("authority_revision", "=", session.authority_revision)
+      .where("handoff_status", "=", "pending")
+      .returningAll()
+      .executeTakeFirst();
+    if (!row) throw new SessionMirrorDivergedError(sessionId);
+    return mapSession(row, false, this.hostId, this.authorityLeaseMs);
+  }
+
+  /** Record a successful remote claim; replay is idempotent after a crash. */
+  async completeHandoff(
+    identity: Identity,
+    projectId: string,
+    sessionId: string,
+    input: { destinationHostId: string; authorityRevision: number },
+  ): Promise<AgentSession> {
+    const session = await this.requireSession(identity, projectId, sessionId);
+    if (
+      session.authority_host_id === input.destinationHostId &&
+      Number(session.authority_revision) === input.authorityRevision
+    ) {
+      return mapSession(session, false, this.hostId, this.authorityLeaseMs);
+    }
+    if (
+      session.handoff_status !== "pending" ||
+      session.authority_host_id !== this.hostId ||
+      input.authorityRevision <= Number(session.authority_revision)
+    ) {
+      throw new SessionMirrorDivergedError(sessionId);
+    }
+    const row = await this.db
+      .updateTable("agent_sessions")
+      .set({
+        authority_host_id: input.destinationHostId,
+        authority_revision: input.authorityRevision,
+        authority_seen_at: new Date(),
+        handoff_status: "none",
+        handoff_destination_host_id: null,
+        updated_at: new Date(),
+      })
+      .where("id", "=", session.id)
+      .where("authority_host_id", "=", this.hostId)
+      .where("authority_revision", "=", session.authority_revision)
+      .where("handoff_status", "=", "pending")
+      .returningAll()
+      .executeTakeFirst();
+    if (!row) throw new SessionMirrorDivergedError(sessionId);
+    return mapSession(row, false, this.hostId, this.authorityLeaseMs);
+  }
+
   private async claimLocalAuthority(session: SessionRow): Promise<void> {
     if (session.authority_host_id === this.hostId) return;
     const claimed = await this.db
@@ -1641,6 +1894,9 @@ export class AgentSessionsService {
           session.authority_host_id === "unassigned"
             ? Number(session.authority_revision)
             : Number(session.authority_revision) + 1,
+        authority_seen_at: new Date(),
+        handoff_status: "none",
+        handoff_destination_host_id: null,
         updated_at: new Date(),
       })
       .where("id", "=", session.id)
@@ -1654,7 +1910,8 @@ export class AgentSessionsService {
       .selectAll()
       .where("id", "=", session.id)
       .executeTakeFirstOrThrow();
-    await this.claimLocalAuthority(current);
+    if (current.authority_host_id === this.hostId) return;
+    throw new SessionMirrorDivergedError(session.id);
   }
 
   private scheduleDrain(
@@ -2392,7 +2649,7 @@ export class AgentSessionsService {
       allocationId,
     });
 
-    return mapSession(row);
+    return mapSession(row, false, this.hostId, this.authorityLeaseMs);
   }
 
   // --- Agent resolution & anchoring ---
@@ -3229,7 +3486,23 @@ function hostOf(serverUrl: string): string {
   }
 }
 
-function mapSession(row: SessionRow, running = false): AgentSession {
+function mapSession(
+  row: SessionRow,
+  running = false,
+  hostId?: string,
+  authorityLeaseMs = 90_000,
+): AgentSession {
+  const leaseExpiresAt = new Date(
+    row.authority_seen_at.getTime() + authorityLeaseMs,
+  );
+  const resumable =
+    hostId !== undefined &&
+    row.status === "active" &&
+    row.handoff_status === "none" &&
+    row.authority_host_id !== "unassigned" &&
+    row.authority_host_id !== hostId &&
+    row.mirror_message_count > 0 &&
+    leaseExpiresAt.getTime() <= Date.now();
   return {
     id: row.id,
     projectId: row.project_id,
@@ -3247,12 +3520,23 @@ function mapSession(row: SessionRow, running = false): AgentSession {
     activity: row.activity,
     authorityHostId: row.authority_host_id,
     authorityRevision: Number(row.authority_revision),
+    authoritySeenAt: row.authority_seen_at.toISOString(),
+    mirrorMessageCount: row.mirror_message_count,
+    handoffStatus: parseHandoffStatus(row.handoff_status),
+    handoffDestinationHostId: row.handoff_destination_host_id,
+    resumable,
+    pausedAt: resumable ? leaseExpiresAt.toISOString() : null,
     running,
     status: row.status as "active" | "closed",
     baseCommitSha: row.base_commit_sha,
     createdAt: row.created_at.toISOString(),
     updatedAt: row.updated_at.toISOString(),
   };
+}
+
+function parseHandoffStatus(value: string): AgentSession["handoffStatus"] {
+  if (value === "none" || value === "pending") return value;
+  throw new Error(`Invalid agent session handoff status '${value}'`);
 }
 
 function mapMessage(row: MessageRow): AgentMessage {

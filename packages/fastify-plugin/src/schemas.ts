@@ -914,6 +914,12 @@ export const AgentSessionSchema = z.object({
   activity: z.string().nullable(),
   authorityHostId: z.string().min(1),
   authorityRevision: z.number().int().positive(),
+  authoritySeenAt: z.string().datetime().nullable(),
+  mirrorMessageCount: z.number().int().nonnegative(),
+  handoffStatus: z.enum(["none", "pending"]),
+  handoffDestinationHostId: z.string().nullable(),
+  resumable: z.boolean(),
+  pausedAt: z.string().datetime().nullable(),
   running: z.boolean(),
   baseCommitSha: z.string().length(40).nullable(),
   createdAt: z.string().datetime(),
@@ -1019,6 +1025,10 @@ export const MirrorConflictSchema = z.object({
   error: z.string(),
   /** True: this server holds messages the source doesn't — stop pushing. */
   diverged: z.boolean(),
+});
+
+export const ResumeAgentSessionSchema = z.object({
+  expectedAuthorityRevision: z.number().int().positive(),
 });
 
 export const ForkAgentSessionSchema = z.object({

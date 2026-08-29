@@ -25,6 +25,7 @@ import {
   Paperclip,
   PictureInPicture2,
   Radio,
+  Server,
   SquareTerminal,
   X,
 } from "lucide-react";
@@ -35,6 +36,7 @@ import {
   type ReactNode,
   useCallback,
   useEffect,
+  useId,
   useLayoutEffect,
   useMemo,
   useRef,
@@ -1330,6 +1332,60 @@ export function ChatDock({
     wasSendingRef.current = chat.isSending;
   }, [chat.isSending]);
   const [checkout, setCheckout] = useState<SessionCheckoutInfo | null>(null);
+  const activeSessionId = chat.sessionId ?? entry.sessionId;
+  const [moveState, setMoveState] = useState<{
+    canMove: boolean;
+    reason: string | null;
+    moving: boolean;
+  }>({
+    canMove: false,
+    reason: "Start the session before moving it",
+    moving: false,
+  });
+  const moveDescriptionId = useId();
+  const moveHintLabel = moveState.moving
+    ? "Moving session to server…"
+    : moveState.canMove
+      ? moveState.reason
+        ? `${moveState.reason}. Try again`
+        : "Move to server"
+      : (moveState.reason ?? "Session cannot move to a server");
+  useEffect(() => {
+    if (chat.isSending) {
+      setMoveState({
+        canMove: false,
+        reason: "Wait for the current work to finish",
+        moving: false,
+      });
+      return;
+    }
+    if (!activeSessionId) {
+      setMoveState({
+        canMove: false,
+        reason: "Start the session before moving it",
+        moving: false,
+      });
+      return;
+    }
+    let cancelled = false;
+    void desktopApi
+      .sessionMoveEligibility(projectId, activeSessionId)
+      .then((eligibility) => {
+        if (!cancelled) setMoveState({ ...eligibility, moving: false });
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setMoveState({
+            canMove: false,
+            reason: "Could not check the linked server",
+            moving: false,
+          });
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [activeSessionId, chat.isSending, projectId]);
   useEffect(() => {
     const load = () => {
       if (!entry.sessionId) {
@@ -2546,6 +2602,62 @@ export function ChatDock({
               </span>
             </span>
           ) : null}
+          <span id={moveDescriptionId} className="sr-only">
+            {moveHintLabel}
+          </span>
+          <ShortcutHint label={moveHintLabel}>
+            <button
+              type="button"
+              aria-label="Move to server"
+              aria-describedby={
+                moveState.reason || moveState.moving
+                  ? moveDescriptionId
+                  : undefined
+              }
+              aria-disabled={!moveState.canMove || moveState.moving}
+              data-testid="chat-move-to-server"
+              className={`grid size-7 place-items-center rounded-md transition-colors duration-150 ${
+                moveState.canMove && !moveState.moving
+                  ? "cursor-pointer text-fg-muted hover:bg-bg-overlay hover:text-fg"
+                  : "cursor-not-allowed text-fg-faint opacity-45"
+              }`}
+              onClick={() => {
+                if (
+                  !activeSessionId ||
+                  !moveState.canMove ||
+                  moveState.moving
+                ) {
+                  return;
+                }
+                setMoveState((current) => ({ ...current, moving: true }));
+                void desktopApi
+                  .sessionMoveToServer(projectId, activeSessionId)
+                  .then(() =>
+                    setMoveState({
+                      canMove: false,
+                      reason: "This session now runs on the server",
+                      moving: false,
+                    }),
+                  )
+                  .catch((error) =>
+                    setMoveState({
+                      canMove: true,
+                      reason:
+                        error instanceof Error
+                          ? error.message
+                          : "The session could not be moved",
+                      moving: false,
+                    }),
+                  );
+              }}
+            >
+              {moveState.moving ? (
+                <LoaderCircle className="size-3.5 animate-spin" />
+              ) : (
+                <Server className="size-3.5" />
+              )}
+            </button>
+          </ShortcutHint>
           {onOpenParent && (
             <ShortcutHint label="Go to the original chat">
               <button

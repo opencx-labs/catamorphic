@@ -3010,3 +3010,16 @@ paths, deliberately independent:
   follows partial assistant prose, core stores the provider error as message
   content and the prose as `metadata.partialContent`; timelines render the
   prose normally before the actionable error card.
+
+### Explicit session movement and paused chats (2026-08-29)
+
+- The chat toolbar always carries a focusable **Move to server** action. It is
+  enabled only after the linked host is reachable, the session is settled,
+  and the privacy policy permits mirroring. Otherwise its standard hint names
+  the concrete blocker on hover or keyboard focus.
+- Movement is a deliberate authority transfer, never an automatic failover.
+  Local sending is fenced while the transcript is durably acknowledged by the
+  server; the server then claims the session through a revision check.
+- A phone uses the ordinary chats list as the action surface. Sessions whose
+  source host lease expired are marked **Paused · Tap to resume** in that one
+  list. Push opens the list directly; the PWA has no notification inbox.

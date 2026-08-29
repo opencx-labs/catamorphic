@@ -60,6 +60,18 @@ export function ShortcutHint({
     }, delay);
   };
 
+  const showFromFocus = () => {
+    clearTimeout(timerRef.current);
+    const anchor = anchorRef.current;
+    if (!anchor) return;
+    const rect = anchor.getBoundingClientRect();
+    setPosition({
+      x: rect.x + rect.width / 2,
+      y: side === "bottom" ? rect.bottom + 7 : rect.top - 7,
+    });
+    requestAnimationFrame(() => setVisible(true));
+  };
+
   const hide = () => {
     clearTimeout(timerRef.current);
     setVisible(false);
@@ -72,6 +84,11 @@ export function ShortcutHint({
       className="inline-flex"
       onMouseEnter={show}
       onMouseLeave={hide}
+      onFocusCapture={showFromFocus}
+      onBlurCapture={hide}
+      onKeyDownCapture={(event) => {
+        if (event.key === "Escape") hide();
+      }}
       // Clicking the wrapped control usually changes state; drop the hint.
       onClickCapture={hide}
     >

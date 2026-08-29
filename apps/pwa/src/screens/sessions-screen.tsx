@@ -4,11 +4,12 @@ import {
   useProject,
 } from "@catamorphic/react";
 import type { QueryClient } from "@tanstack/react-query";
-import { MessageSquarePlus } from "lucide-react";
+import { CirclePause, MessageSquarePlus } from "lucide-react";
+import { useState } from "react";
 import { ChatGlyph } from "../components/chat-glyph.js";
 import { ConnectionTrouble } from "../components/connection-trouble.js";
 import { Screen } from "../components/screen.js";
-import { clientFor } from "../lib/api.js";
+import { authenticatedFetch, clientFor } from "../lib/api.js";
 import { navigate } from "../lib/nav.js";
 import type { PwaConnection } from "../lib/store.js";
 
@@ -53,6 +54,11 @@ function SessionsList({
 }) {
   const sessions = useAgentSessions(projectId, { limit: 100 });
   const project = useProject(projectId);
+  const [resumingId, setResumingId] = useState<string | null>(null);
+  const [resumeError, setResumeError] = useState<{
+    sessionId: string;
+    message: string;
+  } | null>(null);
   const title = project.data?.name ?? projectName;
   const items = [...(sessions.data?.items ?? [])].sort((a, b) =>
     b.updatedAt.localeCompare(a.updatedAt),
@@ -65,6 +71,47 @@ function SessionsList({
       projectId,
       sessionId,
     });
+
+  const openOrResume = async (session: (typeof items)[number]) => {
+    if (!session.resumable) {
+      openChat(session.id);
+      return;
+    }
+    if (resumingId) return;
+    setResumeError(null);
+    setResumingId(session.id);
+    try {
+      const base = connection.serverUrl.replace(/\/+$/, "");
+      const response = await authenticatedFetch({
+        connectionId: connection.id,
+      })(`${base}/projects/${projectId}/agent/sessions/${session.id}/resume`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          expectedAuthorityRevision: session.authorityRevision,
+        }),
+      });
+      if (!response.ok) {
+        throw new Error(
+          response.status === 409
+            ? "This session changed on another machine. Refresh and try again."
+            : `The server said ${response.status}.`,
+        );
+      }
+      await sessions.refetch();
+      openChat(session.id);
+    } catch (error) {
+      setResumeError({
+        sessionId: session.id,
+        message:
+          error instanceof Error
+            ? error.message
+            : "This session could not be resumed.",
+      });
+    } finally {
+      setResumingId(null);
+    }
+  };
 
   return (
     <Screen
@@ -99,7 +146,8 @@ function SessionsList({
               <li key={session.id}>
                 <button
                   type="button"
-                  onClick={() => openChat(session.id)}
+                  onClick={() => void openOrResume(session)}
+                  aria-busy={resumingId === session.id}
                   className="row-press flex w-full cursor-pointer items-center gap-3 px-4 py-3 text-left"
                   data-testid="session-row"
                 >
@@ -117,9 +165,28 @@ function SessionsList({
                       {session.title ?? fallbackTitle(session.createdAt)}
                     </span>
                     <span className="flex items-center gap-1 truncate text-xs leading-4 text-fg-faint">
-                      {relativeTime(session.updatedAt)}
-                      {session.status === "closed" ? " · closed" : ""}
+                      {session.resumable ? (
+                        <span className="inline-flex items-center gap-1 font-medium text-accent">
+                          <CirclePause className="size-3" aria-hidden="true" />
+                          {resumingId === session.id
+                            ? "Resuming…"
+                            : "Paused · Tap to resume"}
+                        </span>
+                      ) : (
+                        <>
+                          {relativeTime(session.updatedAt)}
+                          {session.status === "closed" ? " · closed" : ""}
+                        </>
+                      )}
                     </span>
+                    {resumeError?.sessionId === session.id && (
+                      <span
+                        className="mt-1 block text-xs leading-4 text-danger"
+                        role="alert"
+                      >
+                        {resumeError.message}
+                      </span>
+                    )}
                   </span>
                 </button>
               </li>

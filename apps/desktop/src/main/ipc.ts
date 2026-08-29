@@ -238,6 +238,25 @@ export function registerIpcHandlers(
     },
   );
 
+  ipcMain.handle(
+    "catamorphic:session-move-eligibility",
+    async (_event, projectId: string, sessionId: string) => {
+      const server = state.current;
+      if (!server)
+        return { canMove: false, reason: "The local server is starting" };
+      return server.sessionMoveEligibility(projectId, sessionId);
+    },
+  );
+
+  ipcMain.handle(
+    "catamorphic:session-move-to-server",
+    async (_event, projectId: string, sessionId: string) => {
+      const server = state.current;
+      if (!server) throw new Error("The local server is starting");
+      return server.moveSessionToServer(projectId, sessionId);
+    },
+  );
+
   ipcMain.handle("catamorphic:mobile-pairing-devices", (event) =>
     mobilePairing
       ? mobilePairing.listDevices(windows.profileFor(event.sender))

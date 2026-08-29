@@ -54,6 +54,12 @@ export interface TriggerBindingInfo {
   outputSchema: Json;
 }
 
+export interface StoredTriggerBinding extends TriggerBindingInfo {
+  id: string;
+  commitSha: string;
+  environment: string | null;
+}
+
 export type TriggerSuspensionReason = RunSuspensionReason;
 
 export type TriggerFireOutcome =
@@ -315,6 +321,35 @@ export class TriggersService {
         (!args.kind || binding.kind === args.kind) &&
         (!args.workflowName || binding.workflowName === args.workflowName),
     );
+  }
+
+  /** Production binding rows for host-owned durable trigger dispatchers. */
+  async storedProductionBindings(args: {
+    identity: Identity;
+    projectId: string;
+    kind: string;
+  }): Promise<StoredTriggerBinding[]> {
+    const scan = await this.ensureScan(args);
+    if (!scan.commitSha) return [];
+    const rows = await this.db
+      .selectFrom("trigger_bindings")
+      .selectAll()
+      .where("project_id", "=", args.projectId)
+      .where("commit_sha", "=", scan.commitSha)
+      .where("trigger_kind", "=", args.kind)
+      .execute();
+    return rows.map((row) => ({
+      id: row.id,
+      commitSha: row.commit_sha,
+      environment: row.environment_name,
+      workflowName: row.workflow_name,
+      kind: row.trigger_kind,
+      config: row.config,
+      canSuspend: row.can_suspend,
+      inputParameters: row.input_parameters as unknown as ParameterInfo[],
+      inputSchema: row.input_schema,
+      outputSchema: row.output_schema,
+    }));
   }
 
   /**

@@ -715,6 +715,14 @@ export interface CatamorphicDesktopApi {
   sessionSetIncognito: (sessionId: string, incognito: boolean) => Promise<void>;
   /** Project policy (ADR 0062): may members open incognito chats here? */
   projectAllowIncognito: (projectId: string) => Promise<boolean>;
+  sessionMoveEligibility: (
+    projectId: string,
+    sessionId: string,
+  ) => Promise<{ canMove: boolean; reason: string | null }>;
+  sessionMoveToServer: (
+    projectId: string,
+    sessionId: string,
+  ) => Promise<{ ok: true; serverUrl: string; remoteProjectId: string }>;
   /** This profile's paired phones (for the management list). */
   mobilePairingDevices: () => Promise<
     Array<{

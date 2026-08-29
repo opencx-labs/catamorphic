@@ -495,7 +495,16 @@ describe("stock server", () => {
       sessionId,
     );
 
-    // Continue ON THE SERVER: the mirrored transcript seeds the anchor.
+    // Continuing is explicit: claim authority first, then send. The mirrored
+    // transcript seeds the server-side anchor.
+    const resumed = await inject(
+      "POST",
+      `/api/projects/${projectId}/agent/sessions/${sessionId}/resume`,
+      memberToken,
+      { expectedAuthorityRevision: 1 },
+    );
+    expect(resumed.statusCode).toBe(200);
+    expect(resumed.json().authorityRevision).toBe(2);
     const sent = await inject(
       "POST",
       `/api/projects/${projectId}/agent/sessions/${sessionId}/messages`,

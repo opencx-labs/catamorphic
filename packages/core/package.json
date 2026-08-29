@@ -28,6 +28,7 @@
     "@catamorphic/plugins": "workspace:*",
     "@catamorphic/sandbox": "workspace:*",
     "@catamorphic/workflow": "workspace:*",
+    "croner": "^10.0.1",
     "kysely": "^0.29.3",
     "zod": "^4.4.3"
   },

@@ -8,6 +8,7 @@ import {
   GITHUB_PROJECT_EVENT_TRIGGER_KINDS,
   hole,
   mcpToolKind,
+  schedule,
 } from "@catamorphic/server-sdk";
 import { z } from "zod";
 import { DESKTOP_TENANT_ID, DESKTOP_USER_ID } from "./boot.js";
@@ -75,6 +76,7 @@ export const DESKTOP_TRIGGER_KINDS = [
   chatTurnCompleted,
   terminalIdle,
   aiToolCall,
+  schedule,
   ...GITHUB_PROJECT_EVENT_TRIGGER_KINDS,
 ];
 

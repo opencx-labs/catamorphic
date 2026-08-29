@@ -18,6 +18,7 @@ import {
   createCatamorphic,
   defineStaticEnvironments,
   FsBundleStore,
+  schedule,
 } from "@catamorphic/server-sdk";
 import { PGlite } from "@electric-sql/pglite";
 import { pgcrypto } from "@electric-sql/pglite/contrib/pgcrypto";
@@ -35,6 +36,7 @@ import {
   type StockAuth,
 } from "./auth/stock-auth.js";
 import { EncryptedFileCredentialVault } from "./credential-vault.js";
+import { createPushTransport } from "./push-notifications.js";
 import {
   loadStockOperatorSecret,
   verifyStockOperatorSecret,
@@ -169,6 +171,11 @@ export async function buildStockServer(
     ...(agents.registry ? { codingAgent: agents.registry } : {}),
     appBundleStore: new FsBundleStore(path.join(data, "app-bundles")),
     toolPermissions,
+    triggerKinds: [schedule],
+    pushNotifications: createPushTransport({
+      dataDir: data,
+      subject: env.CATAMORPHIC_WEB_PUSH_SUBJECT,
+    }),
   });
   await catamorphic.migrate();
 
@@ -205,6 +212,44 @@ export async function buildStockServer(
     concurrency: workerConcurrency,
   });
   const core = catamorphic.core;
+  const rootIdentity: Identity = {
+    tenantId: SERVER_TENANT_ID,
+    externalUserId: SETUP_AGENT_USER,
+  };
+  const notificationWorkerId = `stock-notifications:${hostId}`;
+  const notificationTimer = setInterval(() => {
+    void core.notifications
+      .publishPausedSessions({ authorityHostId: hostId })
+      .then(() => core.notifications.drain(notificationWorkerId))
+      .catch((error) => {
+        log(
+          `Notification delivery failed: ${
+            error instanceof Error ? error.message : String(error)
+          }`,
+        );
+      });
+  }, 15_000);
+  notificationTimer.unref();
+  const scheduleTimer = setInterval(() => {
+    void core.projects
+      .list(rootIdentity, { limit: 1_000 })
+      .then(async ({ items }) => {
+        for (const project of items) {
+          await core.schedules.tick({
+            identity: rootIdentity,
+            projectId: project.id,
+          });
+        }
+      })
+      .catch((error) =>
+        log(
+          `Schedule dispatch failed: ${
+            error instanceof Error ? error.message : String(error)
+          }`,
+        ),
+      );
+  }, 15_000);
+  scheduleTimer.unref();
 
   const operatorSecret = loadStockOperatorSecret({
     dataDir: data,
@@ -212,11 +257,6 @@ export async function buildStockServer(
       ? { configuredSecret: env.CATAMORPHIC_OPERATOR_SECRET }
       : {}),
   });
-  const rootIdentity: Identity = {
-    tenantId: SERVER_TENANT_ID,
-    externalUserId: SETUP_AGENT_USER,
-  };
-
   // --- HTTP: the standard API app + the server's own routes -----------
   const publicBase = options.publicBases?.[0] ?? "http://127.0.0.1:4700";
   const app = createApp({
@@ -378,6 +418,8 @@ export async function buildStockServer(
     stockAuth,
     agentsDescription: agents.description,
     shutdown: async () => {
+      clearInterval(notificationTimer);
+      clearInterval(scheduleTimer);
       await worker.stop();
       await Promise.all([app.close(), operatorApp.close()]);
       await stockAuth.close();

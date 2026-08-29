@@ -85,8 +85,10 @@ import { RunCoordinator } from "./services/run-coordinator.js";
 import { RunPluginsLoader } from "./services/run-plugins-loader.js";
 import { RunsService } from "./services/runs-service.js";
 import { RuntimeEventsService } from "./services/runtime-events-service.js";
+import { SchedulesService } from "./services/schedules-service.js";
 import { SecretsService } from "./services/secrets-service.js";
 import type { SessionMailboxesService } from "./services/session-mailboxes-service.js";
+import { SessionSyncService } from "./services/session-sync-service.js";
 import { SkillsService } from "./services/skills-service.js";
 import { TenantPoliciesService } from "./services/tenant-policies-service.js";
 import type { ToolPermissionBroker } from "./services/tool-permission-broker.js";
@@ -95,6 +97,10 @@ import type {
   TriggerKindRuntime,
 } from "./services/trigger-kinds.js";
 import { TriggersService } from "./services/triggers-service.js";
+import {
+  type PushNotificationTransport,
+  UserNotificationsService,
+} from "./services/user-notifications-service.js";
 import { WatchersService } from "./services/watchers-service.js";
 import { WorkflowsService } from "./services/workflows-service.js";
 
@@ -224,6 +230,8 @@ export interface CatamorphicCoreConfig {
    * kind. Exceptions are swallowed and never delay the turn.
    */
   onAgentTurnSettled?: (event: AgentTurnSettledEvent) => void | Promise<void>;
+  /** Optional host-owned Web Push transport. Events remain durable without it. */
+  pushNotifications?: PushNotificationTransport;
   /**
    * Host-side capability providers (ADR 0046): named fulfillers for plugin
    * `requires` declarations, resolved at run launch into env values that
@@ -293,6 +301,7 @@ export class CatamorphicCore {
   readonly workflows: WorkflowsService;
   readonly runs: RunsService;
   readonly triggers: TriggersService;
+  readonly schedules: SchedulesService;
   readonly deployment: DeploymentService;
   readonly deploymentArtifacts: DeploymentArtifactsService;
   readonly deploymentRuntime?: DeploymentRuntimeService;
@@ -326,6 +335,8 @@ export class CatamorphicCore {
   readonly agentContext?: AgentContextService;
   readonly agentSessions?: AgentSessionsService;
   readonly sessionMailboxes?: SessionMailboxesService;
+  /** Durable transcript replication outbox, drained by the embedding host. */
+  readonly sessionSync?: SessionSyncService;
   readonly watchers?: WatchersService;
   /** Durable normalized provider events, independently replayable by cursor. */
   readonly agentRuntimeEvents: AgentRuntimeEventsService;
@@ -336,6 +347,7 @@ export class CatamorphicCore {
   readonly appPolicies: AppPoliciesService;
   readonly github?: GithubService;
   readonly remoteSync: RemoteSyncService;
+  readonly notifications: UserNotificationsService;
   readonly appStorage: AppStorageService;
   /** Tool-kind declarations behind the per-project MCP endpoint. */
   readonly mcpToolKinds: readonly McpToolKindSpec[];
@@ -349,6 +361,10 @@ export class CatamorphicCore {
   constructor(config: CatamorphicCoreConfig) {
     this.toolPermissions = config.toolPermissions;
     this.db = config.db;
+    this.notifications = new UserNotificationsService(
+      this.db,
+      config.pushNotifications,
+    );
     this.projectManager = config.projectManager;
     // Doctrine resolves ONCE, at boot: every consumer below (project
     // creation, skill restore) sees the same host-final set (ADR 0049).
@@ -655,6 +671,7 @@ export class CatamorphicCore {
       executionEnvironments: this.executionEnvironments,
       connectionAdmission: this.connectionAdmission,
     });
+    this.schedules = new SchedulesService(this.db, this.triggers);
 
     this.skills = new SkillsService(this.db, this.projectManager, {
       hostSkills: this.hostSkillFiles,
@@ -710,7 +727,38 @@ export class CatamorphicCore {
         devSandboxes: this.devSandboxes,
         plugins: this.plugins,
         pluginResolver: this.pluginResolver,
-        onTurnSettled: config.onAgentTurnSettled,
+        onTurnSettled: async (event) => {
+          if (
+            event.status === "completed" ||
+            event.status === "awaiting_input"
+          ) {
+            await this.notifications
+              .publish({
+                identity: event.identity,
+                projectId: event.projectId,
+                sessionId: event.sessionId,
+                kind:
+                  event.status === "awaiting_input"
+                    ? "agent_question"
+                    : "agent_completed",
+                title:
+                  event.status === "awaiting_input"
+                    ? "An agent needs your input"
+                    : "An agent finished",
+                body:
+                  event.status === "awaiting_input"
+                    ? "Open the chat to answer the question."
+                    : "Open the chat to see the result.",
+                route: `/?project=${encodeURIComponent(event.projectId)}&session=${encodeURIComponent(event.sessionId)}`,
+                collapseKey: `agent-turn:${event.messageId}`,
+              })
+              .catch(() => {
+                // Notification delivery is additive. A transient failure must
+                // never suppress the host's existing settled-turn hook.
+              });
+          }
+          await config.onAgentTurnSettled?.(event);
+        },
         seedFiles: this.seedFiles,
         standingAgentPrompt: config.standingAgentPrompt,
         mcpToolNames: (identity, projectId) =>
@@ -721,6 +769,7 @@ export class CatamorphicCore {
           : { storeSync: { documents: this.documents } }),
       });
       this.sessionMailboxes = this.agentSessions.mailboxes;
+      this.sessionSync = new SessionSyncService(this.db);
       this.watchers = new WatchersService(this.db, {
         projectManager: this.projectManager,
         runs: this.runs,

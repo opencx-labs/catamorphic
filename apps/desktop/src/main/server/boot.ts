@@ -93,6 +93,14 @@ export interface EmbeddedServer {
   resumeExecution: () => void;
   /** Poll linked remote hosts for messages addressed to local sessions. */
   syncSessionMailboxes: () => void;
+  sessionMoveEligibility: (
+    projectId: string,
+    sessionId: string,
+  ) => Promise<{ canMove: boolean; reason: string | null }>;
+  moveSessionToServer: (
+    projectId: string,
+    sessionId: string,
+  ) => Promise<{ ok: true; serverUrl: string; remoteProjectId: string }>;
   shutdown: () => Promise<void>;
 }
 
@@ -199,6 +207,11 @@ export async function startEmbeddedServer(
   // through the closure after createCatamorphic returns).
   const sessionMirror = new RemoteSessionMirror({
     hostId,
+    identity: {
+      tenantId: DESKTOP_TENANT_ID,
+      externalUserId: DESKTOP_USER_ID,
+    },
+    getSessionSync: () => catamorphic.core.sessionSync,
     profiles,
     profileConfig,
     // Desktop-local privacy flag (ADR 0062): never crosses core.
@@ -210,6 +223,59 @@ export async function startEmbeddedServer(
             { tenantId: DESKTOP_TENANT_ID, externalUserId: DESKTOP_USER_ID },
             projectId,
             sessionId,
+          )
+        : Promise.reject(new Error("agent sessions unavailable")),
+    listSessions: async (projectId) =>
+      catamorphic.core.agentSessions
+        ? (
+            await catamorphic.core.agentSessions.list(
+              {
+                tenantId: DESKTOP_TENANT_ID,
+                externalUserId: DESKTOP_USER_ID,
+              },
+              projectId,
+              { limit: 1_000 },
+            )
+          ).items
+        : [],
+    beginHandoff: (projectId, sessionId, destinationHostId) =>
+      catamorphic.core.agentSessions
+        ? catamorphic.core.agentSessions.beginHandoff(
+            {
+              tenantId: DESKTOP_TENANT_ID,
+              externalUserId: DESKTOP_USER_ID,
+            },
+            projectId,
+            sessionId,
+            { destinationHostId },
+          )
+        : Promise.reject(new Error("agent sessions unavailable")),
+    cancelHandoff: (projectId, sessionId) =>
+      catamorphic.core.agentSessions
+        ? catamorphic.core.agentSessions.cancelHandoff(
+            {
+              tenantId: DESKTOP_TENANT_ID,
+              externalUserId: DESKTOP_USER_ID,
+            },
+            projectId,
+            sessionId,
+          )
+        : Promise.reject(new Error("agent sessions unavailable")),
+    completeHandoff: (
+      projectId,
+      sessionId,
+      destinationHostId,
+      authorityRevision,
+    ) =>
+      catamorphic.core.agentSessions
+        ? catamorphic.core.agentSessions.completeHandoff(
+            {
+              tenantId: DESKTOP_TENANT_ID,
+              externalUserId: DESKTOP_USER_ID,
+            },
+            projectId,
+            sessionId,
+            { destinationHostId, authorityRevision },
           )
         : Promise.reject(new Error("agent sessions unavailable")),
     markFork: (projectId, sessionId, fork) =>
@@ -870,16 +936,45 @@ export async function startEmbeddedServer(
     () => void syncAllRemotes().catch(() => {}),
     10 * 60 * 1000,
   );
+  const tickSchedules = async () => {
+    const { items } = await catamorphic.core.projects.list(identity, {
+      limit: 1_000,
+    });
+    for (const project of items) {
+      const remoteProjects = profileConfig.forProfile(
+        profiles.profileForProject(project.id).id,
+      ).remoteProjects;
+      // A linked project's canonical hosting server owns its schedules.
+      // This desktop does not shadow-run them or become an implicit fallback.
+      if (remoteProjects.get(project.id)) continue;
+      await catamorphic.core.schedules.tick({
+        identity,
+        projectId: project.id,
+      });
+    }
+  };
+  void tickSchedules().catch(() => {});
+  const scheduleTimer = setInterval(
+    () => void tickSchedules().catch(() => {}),
+    15_000,
+  );
   sessionMirror.syncMailboxesInBackground();
   const sessionMailboxTimer = setInterval(
     () => sessionMirror.syncMailboxesInBackground(),
     5_000,
+  );
+  sessionMirror.syncMirrorsInBackground();
+  const sessionMirrorTimer = setInterval(
+    () => sessionMirror.syncMirrorsInBackground(),
+    30_000,
   );
 
   const shutdown = () => {
     shutdownDone ??= (async () => {
       clearInterval(remoteSyncTimer);
       clearInterval(sessionMailboxTimer);
+      clearInterval(sessionMirrorTimer);
+      clearInterval(scheduleTimer);
       projectEventWorker.stop();
       watcherDispatcher?.stop();
       await suspendExecution();
@@ -906,6 +1001,10 @@ export async function startEmbeddedServer(
     suspendExecution,
     resumeExecution,
     syncSessionMailboxes: () => sessionMirror.syncMailboxesInBackground(),
+    sessionMoveEligibility: (projectId, sessionId) =>
+      sessionMirror.eligibility(projectId, sessionId),
+    moveSessionToServer: (projectId, sessionId) =>
+      sessionMirror.moveToServer(projectId, sessionId),
     shutdown,
   };
 }

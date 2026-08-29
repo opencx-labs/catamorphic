@@ -176,6 +176,7 @@ export {
   githubPullRequestReview,
   githubWorkflowRun,
 } from "./github-trigger-kinds.js";
+export { schedule } from "./schedule-trigger-kind.js";
 export type {
   FilesResource,
   GithubResource,

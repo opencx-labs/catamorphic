@@ -1,7 +1,8 @@
-import { Check, LogIn, Pencil, Plus, Trash2, Unlink } from "lucide-react";
+import { Bell, Check, LogIn, Pencil, Plus, Trash2, Unlink } from "lucide-react";
 import { useState } from "react";
 import { Screen } from "../components/screen.js";
 import { navigate } from "../lib/nav.js";
+import { enablePushForConnections, supportsPush } from "../lib/push.js";
 import {
   activeProfile,
   createProfile,
@@ -23,6 +24,7 @@ export function ProfilesScreen({ animation }: { animation?: string }) {
   const active = activeProfile(state);
   const [renaming, setRenaming] = useState<string | null>(null);
   const [draft, setDraft] = useState("");
+  const [pushStatus, setPushStatus] = useState<string | null>(null);
 
   const commitRename = () => {
     if (renaming) renameProfile(renaming, draft);
@@ -32,6 +34,47 @@ export function ProfilesScreen({ animation }: { animation?: string }) {
   return (
     <Screen title="Profiles" back animation={animation}>
       <div className="h-full overflow-y-auto overscroll-contain">
+        {supportsPush() && active.connections.length > 0 && (
+          <div className="border-b border-border px-4 py-3">
+            <button
+              type="button"
+              onClick={() => {
+                setPushStatus("Enabling notifications…");
+                void enablePushForConnections(active.connections)
+                  .then((count) =>
+                    setPushStatus(
+                      `Notifications enabled for ${count === 1 ? "this server" : `${count} servers`}.`,
+                    ),
+                  )
+                  .catch((error) =>
+                    setPushStatus(
+                      error instanceof Error
+                        ? error.message
+                        : "Notifications could not be enabled.",
+                    ),
+                  );
+              }}
+              className="row-press flex w-full cursor-pointer items-center gap-3 rounded-xl px-2 py-2 text-left"
+            >
+              <span className="grid size-9 place-items-center rounded-full bg-bg-raised text-accent">
+                <Bell className="size-4" />
+              </span>
+              <span className="min-w-0 flex-1">
+                <span className="block text-sm font-medium">
+                  Enable notifications
+                </span>
+                <span className="block text-xs leading-5 text-fg-faint">
+                  Agent replies, questions, and paused sessions
+                </span>
+              </span>
+            </button>
+            {pushStatus && (
+              <p className="px-2 pt-1 text-xs text-fg-muted" role="status">
+                {pushStatus}
+              </p>
+            )}
+          </div>
+        )}
         <ul className="flex flex-col py-1">
           {state.profiles.map((profile) => {
             const isActive = profile.id === state.activeProfileId;

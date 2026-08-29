@@ -92,12 +92,16 @@ export interface AgentSessions {
   allocation_id: string | null;
   authority_host_id: Generated<string>;
   authority_revision: Generated<Int8>;
+  authority_seen_at: Generated<Timestamp>;
   base_commit_sha: string | null;
   created_at: Generated<Timestamp>;
   environment_name: string | null;
   external_user_id: string;
+  handoff_destination_host_id: string | null;
+  handoff_status: Generated<string>;
   icon: string | null;
   id: Generated<string>;
+  mirror_message_count: Generated<number>;
   model_effort: string | null;
   parent_session_id: string | null;
   project_id: string;
@@ -472,6 +476,20 @@ export interface Memberships {
   updated_at: Generated<Timestamp>;
 }
 
+export interface NotificationDeliveries {
+  attempt_count: Generated<number>;
+  created_at: Generated<Timestamp>;
+  delivered_at: Timestamp | null;
+  event_id: string;
+  last_error: string | null;
+  lease_expires_at: Timestamp | null;
+  lease_owner: string | null;
+  next_attempt_at: Generated<Timestamp>;
+  status: Generated<string>;
+  subscription_id: string;
+  updated_at: Generated<Timestamp>;
+}
+
 export interface ProjectEventMonitors {
   config: Generated<Json>;
   created_at: Generated<Timestamp>;
@@ -555,6 +573,21 @@ export interface Publications {
   slug: string;
 }
 
+export interface PushSubscriptions {
+  auth_secret: string;
+  created_at: Generated<Timestamp>;
+  endpoint: string;
+  endpoint_hash: string;
+  expires_at: Timestamp | null;
+  external_user_id: string;
+  id: Generated<string>;
+  p256dh: string;
+  retired_at: Timestamp | null;
+  tenant_id: string;
+  updated_at: Generated<Timestamp>;
+  user_agent: string | null;
+}
+
 export interface RateReservationBuckets {
   blocked_until: Timestamp | null;
   capacity: Numeric;
@@ -565,6 +598,31 @@ export interface RateReservationBuckets {
   refilled_at: Generated<Timestamp>;
   tenant_id: string;
   tokens: Numeric;
+  updated_at: Generated<Timestamp>;
+}
+
+export interface ScheduleBindings {
+  binding_id: string;
+  created_at: Generated<Timestamp>;
+  cron_expression: string;
+  last_scheduled_for: Timestamp | null;
+  next_fire_at: Timestamp;
+  timezone: string;
+  updated_at: Generated<Timestamp>;
+}
+
+export interface ScheduleOccurrences {
+  attempt_count: Generated<number>;
+  binding_id: string;
+  completed_at: Timestamp | null;
+  created_at: Generated<Timestamp>;
+  error: string | null;
+  lease_expires_at: Timestamp | null;
+  lease_owner: string | null;
+  next_attempt_at: Generated<Timestamp>;
+  run_ids: Generated<Json>;
+  scheduled_for: Timestamp;
+  status: Generated<string>;
   updated_at: Generated<Timestamp>;
 }
 
@@ -585,6 +643,25 @@ export interface SessionMailboxItems {
   session_id: string;
   source_host_id: string;
   status: Generated<string>;
+}
+
+export interface SessionSyncIntents {
+  acknowledged_authority_revision: Int8 | null;
+  acknowledged_message_count: number | null;
+  attempt_count: Generated<number>;
+  created_at: Generated<Timestamp>;
+  desired_authority_revision: Int8;
+  desired_message_count: number;
+  destination_key: string;
+  id: Generated<string>;
+  last_error: string | null;
+  lease_expires_at: Timestamp | null;
+  lease_owner: string | null;
+  next_attempt_at: Generated<Timestamp>;
+  project_id: string;
+  session_id: string;
+  status: Generated<string>;
+  updated_at: Generated<Timestamp>;
 }
 
 export interface StockProjectAccessRequests {
@@ -702,6 +779,20 @@ export interface TriggerBindingScans {
   commit_sha: string;
   project_id: string;
   scanned_at: Generated<Timestamp>;
+}
+
+export interface UserNotificationEvents {
+  body: string;
+  collapse_key: string;
+  created_at: Generated<Timestamp>;
+  external_user_id: string;
+  id: Generated<string>;
+  kind: string;
+  project_id: string | null;
+  route: string;
+  session_id: string | null;
+  tenant_id: string;
+  title: string;
 }
 
 export interface WatcherRuns {
@@ -864,6 +955,7 @@ export interface DB {
   execution_jobs: ExecutionJobs;
   member_connection_attachments: MemberConnectionAttachments;
   memberships: Memberships;
+  notification_deliveries: NotificationDeliveries;
   project_event_monitors: ProjectEventMonitors;
   project_events: ProjectEvents;
   project_plugins: ProjectPlugins;
@@ -871,8 +963,12 @@ export interface DB {
   project_secrets: ProjectSecrets;
   projects: Projects;
   publications: Publications;
+  push_subscriptions: PushSubscriptions;
   rate_reservation_buckets: RateReservationBuckets;
+  schedule_bindings: ScheduleBindings;
+  schedule_occurrences: ScheduleOccurrences;
   session_mailbox_items: SessionMailboxItems;
+  session_sync_intents: SessionSyncIntents;
   stock_project_access_requests: StockProjectAccessRequests;
   stock_project_admission_policies: StockProjectAdmissionPolicies;
   stock_project_invitations: StockProjectInvitations;
@@ -883,6 +979,7 @@ export interface DB {
   tenants: Tenants;
   trigger_binding_scans: TriggerBindingScans;
   trigger_bindings: TriggerBindings;
+  user_notification_events: UserNotificationEvents;
   watcher_runs: WatcherRuns;
   watchers: Watchers;
   workflow_pauses: WorkflowPauses;

@@ -269,6 +269,24 @@ const api = {
     ),
   projectAllowIncognito: (projectId: string): Promise<unknown> =>
     ipcRenderer.invoke("catamorphic:project-allow-incognito", projectId),
+  sessionMoveEligibility: (
+    projectId: string,
+    sessionId: string,
+  ): Promise<unknown> =>
+    ipcRenderer.invoke(
+      "catamorphic:session-move-eligibility",
+      projectId,
+      sessionId,
+    ),
+  sessionMoveToServer: (
+    projectId: string,
+    sessionId: string,
+  ): Promise<unknown> =>
+    ipcRenderer.invoke(
+      "catamorphic:session-move-to-server",
+      projectId,
+      sessionId,
+    ),
   mobilePairingDevices: (): Promise<unknown> =>
     ipcRenderer.invoke("catamorphic:mobile-pairing-devices"),
   mobilePairingRevoke: (deviceId: string): Promise<unknown> =>

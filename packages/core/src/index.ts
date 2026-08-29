@@ -83,8 +83,10 @@ export {
   type AgentMessage,
   AgentNotConfiguredError,
   type AgentSession,
+  AgentSessionAuthorityRequiredError,
   AgentSessionClosedError,
   type AgentSessionDetail,
+  AgentSessionHandoffPendingError,
   AgentSessionNotFoundError,
   type AgentSessionPeer,
   AgentSessionsService,
@@ -433,6 +435,7 @@ export {
   type WorkflowStepAttempt,
   type WorkflowStepAttemptStatus,
 } from "./services/runs-service.js";
+export { SchedulesService } from "./services/schedules-service.js";
 export {
   type RunStage,
   type SecretStatus,
@@ -445,6 +448,13 @@ export {
   type SessionMailboxItem,
   SessionMailboxNotFoundError,
 } from "./services/session-mailboxes-service.js";
+export {
+  type SessionSyncIntent,
+  SessionSyncLeaseError,
+  SessionSyncService,
+  type SessionSyncStatus,
+  SessionSyncWatermarkError,
+} from "./services/session-sync-service.js";
 export {
   humanizeSkillName,
   type ProjectSkill,
@@ -495,6 +505,7 @@ export {
   triggerKindInfo,
 } from "./services/trigger-kinds.js";
 export {
+  type StoredTriggerBinding,
   type TriggerBindingInfo,
   TriggerBindingsInvalidError,
   type TriggerFireOutcome,
@@ -505,6 +516,12 @@ export {
   type TriggerSuspensionReason,
   TriggersService,
 } from "./services/triggers-service.js";
+export {
+  type NotificationDelivery,
+  type PushNotificationTransport,
+  type PushSubscriptionInput,
+  UserNotificationsService,
+} from "./services/user-notifications-service.js";
 export {
   startWatcherDispatcher,
   type Watcher,

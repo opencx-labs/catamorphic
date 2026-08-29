@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import type { DB, JsonObject } from "@catamorphic/db";
 import { getTracer, withSpan } from "@catamorphic/otel";
-import { type Kysely, sql } from "kysely";
+import { type Kysely, sql, type Transaction } from "kysely";
 
 export type SessionDeliveryMode = "message_only" | "next_turn" | "interrupt";
 
@@ -123,6 +123,7 @@ export class AgentTurnsService {
     mode: SessionDeliveryMode;
     idempotencyKey?: string;
     metadata?: JsonObject;
+    transaction?: Transaction<DB>;
   }): Promise<SessionDeliveryReceipt> {
     return withSpan(
       {
@@ -145,10 +146,11 @@ export class AgentTurnsService {
     mode: SessionDeliveryMode;
     idempotencyKey?: string;
     metadata?: JsonObject;
+    transaction?: Transaction<DB>;
   }): Promise<SessionDeliveryReceipt> {
     if (!input.content.trim())
       throw new Error("Session message cannot be empty");
-    return this.db.transaction().execute(async (trx) => {
+    const deliver = async (trx: Transaction<DB>) => {
       if (input.idempotencyKey) {
         const existing = await trx
           .selectFrom("agent_messages")
@@ -249,7 +251,10 @@ export class AgentTurnsService {
         mode: input.mode,
         created: true,
       };
-    });
+    };
+    return input.transaction
+      ? deliver(input.transaction)
+      : this.db.transaction().execute(deliver);
   }
 
   async listPending(input: { sessionId: string }): Promise<AgentTurn[]> {

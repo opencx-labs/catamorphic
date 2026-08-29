@@ -25,6 +25,7 @@
     "@catamorphic/github": "workspace:*",
     "@catamorphic/plugins": "workspace:*",
     "@catamorphic/sandbox": "workspace:*",
+    "croner": "^10.0.1",
     "kysely": "^0.29.3",
     "pg": "^8.22.0",
     "zod": "^4.4.3"

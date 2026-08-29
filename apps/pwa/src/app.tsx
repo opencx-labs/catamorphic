@@ -82,7 +82,29 @@ export function App() {
       return;
     }
     const link = connectLinkFromParams(params);
-    if (!link) return;
+    if (!link) {
+      const projectId = params.get("project");
+      if (!projectId) return;
+      const sessionId = params.get("session");
+      const connection = getState()
+        .profiles.flatMap((candidate) => candidate.connections)
+        .find((candidate) => candidate.projectId === projectId);
+      window.history.replaceState(null, "", window.location.pathname);
+      if (connection) {
+        navigate(
+          sessionId
+            ? {
+                kind: "chat",
+                connectionId: connection.id,
+                projectId,
+                sessionId,
+              }
+            : { kind: "sessions", connectionId: connection.id, projectId },
+          { replace: true },
+        );
+      }
+      return;
+    }
     stashPendingLink(link);
     window.history.replaceState(null, "", window.location.pathname);
     navigate({ kind: "connect" }, { replace: true });

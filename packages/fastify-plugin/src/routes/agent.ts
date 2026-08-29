@@ -1,6 +1,8 @@
 import {
   AgentNotConfiguredError,
+  AgentSessionAuthorityRequiredError,
   AgentSessionClosedError,
+  AgentSessionHandoffPendingError,
   AgentSessionNotFoundError,
   AgentTurnInProgressError,
   AuthenticationRequiredError,
@@ -38,6 +40,7 @@ import {
   PendingToolPermissionsSchema,
   ProjectAgentEntrySchema,
   ProjectIdParamsSchema,
+  ResumeAgentSessionSchema,
   SendMessageSchema,
   SessionDeliveryReceiptSchema,
   SkillSchema,
@@ -234,6 +237,51 @@ export function registerAgentRoutes(app: FastifyInstance, ctx: RouteContext) {
   });
 
   typed.route({
+    method: "POST",
+    url: "/projects/:projectId/agent/sessions/:sessionId/resume",
+    schema: {
+      params: AgentSessionIdParamsSchema,
+      body: ResumeAgentSessionSchema,
+      response: {
+        200: AgentSessionSchema,
+        404: ErrorSchema,
+        409: ErrorSchema,
+        503: ErrorSchema,
+      },
+    },
+    handler: async (request, reply) => {
+      const agentSessions = ctx.core?.agentSessions;
+      if (!agentSessions) {
+        return reply.status(503).send({ error: "Coding agent not configured" });
+      }
+      try {
+        return reply.send(
+          await agentSessions.resume(
+            resolveIdentity(request),
+            request.params.projectId,
+            request.params.sessionId,
+            request.body,
+          ),
+        );
+      } catch (error) {
+        if (
+          error instanceof ProjectNotFoundError ||
+          error instanceof AgentSessionNotFoundError
+        ) {
+          return reply.status(404).send({ error: "Session not found" });
+        }
+        if (
+          error instanceof AgentSessionClosedError ||
+          error instanceof SessionMirrorDivergedError
+        ) {
+          return reply.status(409).send({ error: error.message });
+        }
+        throw error;
+      }
+    },
+  });
+
+  typed.route({
     method: "PATCH",
     url: "/projects/:projectId/agent/sessions/:sessionId",
     schema: {
@@ -283,6 +331,12 @@ export function registerAgentRoutes(app: FastifyInstance, ctx: RouteContext) {
         }
         if (err instanceof AgentSessionClosedError) {
           return reply.status(409).send({ error: "Session is closed" });
+        }
+        if (
+          err instanceof AgentSessionAuthorityRequiredError ||
+          err instanceof AgentSessionHandoffPendingError
+        ) {
+          return reply.status(409).send({ error: err.message });
         }
         if (err instanceof AgentTurnInProgressError) {
           return reply.status(409).send({
@@ -490,6 +544,12 @@ export function registerAgentRoutes(app: FastifyInstance, ctx: RouteContext) {
         }
         if (err instanceof AgentSessionClosedError) {
           return reply.status(409).send({ error: "Session is closed" });
+        }
+        if (
+          err instanceof AgentSessionAuthorityRequiredError ||
+          err instanceof AgentSessionHandoffPendingError
+        ) {
+          return reply.status(409).send({ error: err.message });
         }
         if (err instanceof UnsupportedAgentTopologyError) {
           return reply.status(422).send({

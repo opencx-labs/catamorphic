@@ -35,11 +35,13 @@ before changing architecture.
 - `components/catamorphic/*` are copies of `packages/registry` sources
   (the intended shadcn-style reuse); diff against the registry when
   updating.
-- The service worker (`public/sw.js`) serves the offline shell ONLY.
-  App logic (queues, reconnection, polling) lives in app code — a
-  Capacitor wrap must be able to drop the SW without losing behavior.
-- No Web Push here: notifications are the future native wrap's job
-  (APNs/FCM); don't engineer around iOS Web Push.
+- The service worker (`public/sw.js`) serves the offline shell, displays Web
+  Push, and opens notification routes. App logic (queues, reconnection,
+  polling, resumable state) lives in app code. A Capacitor wrap must be able
+  to replace the SW transport without losing behavior.
+- Web Push is the installed PWA transport (ADR 0077). Events and subscriptions
+  stay behind the server API so a native wrap can substitute APNs/FCM. Do not
+  add an in-app notification center.
 - Keep every fetch behind `lib/api.ts` (bearer wrapper) and storage
   behind `lib/store.ts` (a wrap swaps in secure storage there).
 - Composer inputs stay ≥16px font-size (iOS zoom) and the page never

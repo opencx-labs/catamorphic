@@ -89,3 +89,4 @@ Settled design decisions live here as short Architecture Decision Records. They 
 | [0074](0074-temporary-watchers-and-session-delivery.md) | Temporary Watchers and durable session delivery | Accepted (Watcher trigger model superseded by 0076) |
 | [0075](0075-parallel-local-development-isolation.md) | Parallel local development isolation | Accepted |
 | [0076](0076-watchers-are-workflow-enablement.md) | Watchers are temporary workflow enablements | Accepted |
+| [0077](0077-explicit-session-handoff-push-and-schedules.md) | Explicit session handoff, durable push, and schedule triggers | Accepted |

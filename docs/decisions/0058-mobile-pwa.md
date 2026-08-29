@@ -76,9 +76,10 @@ surfaces, one answer.
 - `apps/pwa/scripts/dev-server.mjs` is a scripted fake of the
   agent-session surface (turns, asks, questions) — the PWA's e2e
   backend and a reference for the routes' wire shapes.
-- The Capacitor wrap stays cheap by construction: notifications aren't
-  implemented yet (Web Push would be throwaway; APNs/FCM is the wrap's
-  job), the service worker is disposable, and auth is origin-agnostic.
+- The Capacitor wrap stays cheap by construction: notification events and
+  subscriptions are server-owned, while Web Push is only the installed PWA
+  transport (superseded by ADR 0077). A native wrap can substitute APNs/FCM;
+  auth remains origin-agnostic.
 - Real remote servers still need a host that issues connect links
   (unchanged: an invite is `memberships.grant` plus whatever link the
   host sends).

@@ -17,6 +17,7 @@ import type {
   McpToolKindSpec,
   NativeAgentCheckout,
   ProjectLifecycleHooks,
+  PushNotificationTransport,
   RetentionConfig,
   TriggerKindRuntime,
 } from "@catamorphic/core";
@@ -167,6 +168,8 @@ export interface CreateCatamorphicConfig {
    * a chat trigger kind. Exceptions are swallowed and never delay the turn.
    */
   onAgentTurnSettled?: (event: AgentTurnSettledEvent) => void | Promise<void>;
+  /** Optional host-owned delivery transport for durable user notifications. */
+  pushNotifications?: PushNotificationTransport;
   /**
    * Boot-registered plugin host halves (ADR 0046), built with
    * `definePlugin`. Each contributes capability providers, project
@@ -326,6 +329,7 @@ export class Catamorphic {
       triggerKinds: contributions.triggerKinds,
       mcpToolKinds: contributions.mcpToolKinds,
       onAgentTurnSettled: config.onAgentTurnSettled,
+      pushNotifications: config.pushNotifications,
       capabilityProviders: contributions.capabilityProviders,
       projectHooks: contributions.projectHooks,
       projectSeeds: config.projectSeeds,
