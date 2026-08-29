@@ -3052,3 +3052,7 @@ paths, deliberately independent:
   Installed Chrome and Firefox profiles expose bookmark counts and import into
   the current profile. Saved-password CSV exports from either browser import
   into the same encrypted vault and normalize entries to HTTP origins.
+- Password search matches every typed term across website address, hostname,
+  and username. Results use the shared as-you-type list motion, while editor,
+  reveal, confirmation, and copy feedback use the standard curve and honor
+  reduced-motion preferences.

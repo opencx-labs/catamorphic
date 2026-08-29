@@ -131,14 +131,14 @@ function ProfileSettingsForm({
         <div>
           <h1 className="text-base font-semibold">Profile settings</h1>
           <p className="mt-0.5 text-xs text-fg-muted">
-            Identity, startup behavior, and project membership for this
-            workspace.
+            Manage this profile's identity, projects, passwords, and browser
+            data.
           </p>
         </div>
         <button
           type="button"
           onClick={onClose}
-          className="grid size-7 cursor-pointer place-items-center rounded-md text-fg-muted hover:bg-bg-overlay hover:text-fg"
+          className="grid size-7 cursor-pointer place-items-center rounded-md text-fg-muted transition-colors duration-150 hover:bg-bg-overlay hover:text-fg"
           aria-label="Close profile settings"
         >
           <X className="size-4" />

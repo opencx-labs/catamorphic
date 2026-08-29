@@ -87,8 +87,7 @@ export function BrowserImport() {
             <Download className="size-4 text-fg-muted" /> Import browser data
           </h2>
           <p className="mt-1 text-xs leading-5 text-fg-muted">
-            Bring bookmarks from Chrome-family browsers or Firefox into this
-            profile.
+            Bring bookmarks and saved logins into this profile.
           </p>
         </div>
         <ShortcutHint label="Scan again">
@@ -96,31 +95,33 @@ export function BrowserImport() {
             type="button"
             onClick={() => void discover()}
             aria-label="Scan for browsers again"
-            className="grid size-7 shrink-0 cursor-pointer place-items-center rounded-md text-fg-muted hover:bg-bg-overlay hover:text-fg"
+            className="grid size-7 shrink-0 cursor-pointer place-items-center rounded-md text-fg-muted transition-colors duration-150 hover:bg-bg-overlay hover:text-fg"
           >
             <RefreshCw
-              className={`size-3.5 ${loading ? "animate-spin" : ""}`}
+              className={`size-3.5 ${loading ? "animate-spin motion-reduce:animate-none" : ""}`}
             />
           </button>
         </ShortcutHint>
       </div>
       <div className="mt-3 flex items-center justify-between gap-3 rounded-md border border-border bg-bg px-3 py-2.5">
         <div>
-          <p className="text-[13px] font-medium text-fg">Saved passwords</p>
+          <p className="text-[13px] font-medium text-fg">
+            Passwords from Chrome or Firefox
+          </p>
           <p className="mt-0.5 text-xs text-fg-muted">
-            Select a password CSV exported by Chrome or Firefox.
+            Choose a password CSV exported by either browser.
           </p>
           <p className="mt-0.5 text-[11px] text-fg-faint">
-            Browser exports are unencrypted. Remove the CSV when finished.
+            The export is not encrypted. Delete it after the import finishes.
           </p>
         </div>
         <PendingButton
           pending={importingPasswords}
           pendingLabel="Importing…"
           onClick={() => void importPasswords()}
-          className="h-8 shrink-0 rounded-md border border-border px-2.5 text-xs text-fg"
+          className="h-8 shrink-0 rounded-md border border-border px-2.5 text-xs text-fg transition-colors duration-150 hover:border-border-strong hover:bg-bg-overlay"
         >
-          Choose CSV
+          Import CSV
         </PendingButton>
       </div>
 
@@ -161,7 +162,7 @@ export function BrowserImport() {
                     pendingLabel="Importing…"
                     disabled={profile.bookmarkCount === 0 || importing !== null}
                     onClick={() => void run(browser, profile)}
-                    className="h-8 rounded-md border border-border px-2.5 text-xs text-fg disabled:opacity-50"
+                    className="h-8 rounded-md border border-border px-2.5 text-xs text-fg transition-colors duration-150 hover:border-border-strong hover:bg-bg-overlay disabled:opacity-50"
                   >
                     Import
                   </PendingButton>
