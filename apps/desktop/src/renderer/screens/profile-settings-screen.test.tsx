@@ -11,6 +11,20 @@ vi.mock("../lib/desktop-api", () => ({
     profilesUpdate: vi.fn().mockResolvedValue(undefined),
     profilesSetDefault: vi.fn().mockResolvedValue(undefined),
     profilesRemove: vi.fn().mockResolvedValue(true),
+    vaultList: vi.fn().mockResolvedValue([]),
+    vaultReveal: vi.fn().mockResolvedValue(null),
+    vaultSave: vi.fn().mockResolvedValue(undefined),
+    vaultUpdate: vi.fn().mockResolvedValue(undefined),
+    vaultRemove: vi.fn().mockResolvedValue(undefined),
+    vaultCopyPassword: vi.fn().mockResolvedValue(true),
+    onVaultChanged: vi.fn().mockReturnValue(() => undefined),
+    browserImportList: vi.fn().mockResolvedValue([]),
+    browserImportRun: vi
+      .fn()
+      .mockResolvedValue({ bookmarksImported: 0, profilesCreated: [] }),
+    browserImportPasswords: vi
+      .fn()
+      .mockResolvedValue({ imported: 0, cancelled: true }),
   },
 }));
 
@@ -98,5 +112,37 @@ describe("ProfileSettingsScreen", () => {
       );
     });
     expect(container.textContent).toContain("Profile not found");
+  });
+
+  it("opens password management from profile settings", async () => {
+    await act(async () => {
+      root.render(
+        <ProfileSettingsScreen
+          profileId={profile.id}
+          activeProfileId={profile.id}
+          data={{ profiles: [profile], defaultProfileId: profile.id }}
+          projects={[project]}
+          onClose={() => undefined}
+        />,
+      );
+    });
+    const add = [...container.querySelectorAll("button")].find((button) =>
+      button.textContent?.includes("Add password"),
+    );
+    await act(async () => add?.click());
+    const editor = container.querySelector('[data-testid="password-editor"]');
+    expect(editor).not.toBeNull();
+    expect(
+      editor?.querySelector('[aria-label="Password website"]'),
+    ).not.toBeNull();
+    expect(
+      editor?.querySelector('[aria-label="Password username"]'),
+    ).not.toBeNull();
+    expect(
+      editor?.querySelector('[aria-label="Password value"]'),
+    ).not.toBeNull();
+    expect(desktopApi.vaultList).toHaveBeenCalledWith({
+      profileId: profile.id,
+    });
   });
 });

@@ -1,13 +1,18 @@
+import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import {
   app,
   BrowserWindow,
+  clipboard,
+  dialog,
   ipcMain,
+  Menu,
   type Session,
   session,
   systemPreferences,
   type WebContents,
+  webContents,
 } from "electron";
 import { BookmarksStore } from "./bookmarks.js";
 import { BrowserHistoryStore } from "./browser-history.js";
@@ -15,6 +20,7 @@ import {
   listImportableBrowsers,
   readBrowserBookmarks,
 } from "./browser-import/index.js";
+import { parsePasswordCsv } from "./browser-import/password-csv.js";
 import { PasswordVault } from "./browser-vault.js";
 import type { WindowProfileRegistry } from "./index.js";
 import type { ProfileConfigManager } from "./profile-config.js";
@@ -155,9 +161,148 @@ export function registerBrowserSupport(
   const vault = new PasswordVault(profilesDir);
   const bookmarks = new BookmarksStore(path.join(userData, "bookmarks.json"));
 
+  interface PendingCredential {
+    id: string;
+    guestId: number;
+    hostId: number;
+    profileId: string;
+    origin: string;
+    username: string;
+    password: string;
+    expiresAt: number;
+  }
+
+  const pendingCredentials = new Map<string, PendingCredential>();
+  const focusedLoginForms = new Map<number, string>();
+  const pendingLifetimeMs = 2 * 60 * 1000;
+
+  const httpOrigin = (raw: string): string | null => {
+    try {
+      const url = new URL(raw);
+      return url.protocol === "http:" || url.protocol === "https:"
+        ? url.origin
+        : null;
+    } catch {
+      return null;
+    }
+  };
+
+  const guestContext = (
+    guest: WebContents,
+  ): { host: WebContents; profileId: string; origin: string } | null => {
+    if (guest.getType() !== "webview") return null;
+    const host = guest.hostWebContents;
+    const origin = httpOrigin(guest.getURL());
+    if (!host || host.isDestroyed() || !origin) return null;
+    return { host, profileId: windows.profileFor(host), origin };
+  };
+
+  const rendererOwnsGuest = (
+    renderer: WebContents,
+    guestId: number,
+    profileId: string,
+  ): WebContents | null => {
+    const guest = webContents.fromId(guestId);
+    if (!guest || guest.isDestroyed() || guest.hostWebContents !== renderer) {
+      return null;
+    }
+    if (windows.profileFor(renderer) !== profileId) return null;
+    return guest;
+  };
+
+  const onLoginForms = async (
+    event: Electron.IpcMainEvent,
+    payload: { origin?: string; forms?: Array<{ id?: string }> },
+  ) => {
+    const context = guestContext(event.sender);
+    if (!context || payload.origin !== context.origin) return;
+    const credentials = await vault.list(context.profileId, context.origin);
+    if (
+      credentials.length === 0 ||
+      event.sender.isDestroyed() ||
+      guestContext(event.sender)?.origin !== context.origin
+    ) {
+      return;
+    }
+    const formId = payload.forms?.find((form) => form.id)?.id;
+    context.host.send("catamorphic:browser-credential-fill-offer", {
+      guestId: event.sender.id,
+      formId,
+      origin: context.origin,
+      credentials,
+    });
+  };
+
+  const onSubmittedCredentials = (
+    event: Electron.IpcMainEvent,
+    payload: {
+      origin?: string;
+      username?: string;
+      password?: string;
+    },
+  ) => {
+    const context = guestContext(event.sender);
+    if (
+      !context ||
+      payload.origin !== context.origin ||
+      typeof payload.username !== "string" ||
+      typeof payload.password !== "string" ||
+      payload.password.length === 0
+    ) {
+      return;
+    }
+    const id = randomUUID();
+    const pending: PendingCredential = {
+      id,
+      guestId: event.sender.id,
+      hostId: context.host.id,
+      profileId: context.profileId,
+      origin: context.origin,
+      username: payload.username,
+      password: payload.password,
+      expiresAt: Date.now() + pendingLifetimeMs,
+    };
+    pendingCredentials.set(id, pending);
+    context.host.send("catamorphic:browser-credential-save-offer", {
+      pendingId: id,
+      guestId: event.sender.id,
+      origin: context.origin,
+      username: payload.username,
+    });
+    setTimeout(() => pendingCredentials.delete(id), pendingLifetimeMs).unref();
+  };
+
+  const onLoginFormFocused = (
+    event: Electron.IpcMainEvent,
+    payload: { origin?: string; formId?: string },
+  ) => {
+    const context = guestContext(event.sender);
+    if (
+      !context ||
+      payload.origin !== context.origin ||
+      typeof payload.formId !== "string"
+    ) {
+      return;
+    }
+    focusedLoginForms.set(event.sender.id, payload.formId);
+  };
+
+  ipcMain.on("catamorphic:browser-login-forms", onLoginForms);
+  ipcMain.on(
+    "catamorphic:browser-credentials-submitted",
+    onSubmittedCredentials,
+  );
+  ipcMain.on("catamorphic:browser-login-form-focused", onLoginFormFocused);
+
   const broadcast = (channel: string, payload: unknown) => {
     for (const window of BrowserWindow.getAllWindows()) {
       if (!window.isDestroyed()) window.webContents.send(channel, payload);
+    }
+  };
+
+  const vaultChanged = (profileId: string) => {
+    for (const window of windows.windowsFor(profileId)) {
+      window.webContents.send("catamorphic:vault-changed", { profileId });
     }
   };
 
@@ -201,6 +346,53 @@ export function registerBrowserSupport(
         shift: input.shift,
       });
     });
+
+    contents.on("context-menu", (_event, params) => {
+      if (params.formControlType !== "input-password") return;
+      const context = guestContext(contents);
+      if (!context) return;
+      void vault.list(context.profileId, context.origin).then((credentials) => {
+        if (contents.isDestroyed()) return;
+        const formId = focusedLoginForms.get(contents.id);
+        const template: Electron.MenuItemConstructorOptions[] = credentials.map(
+          (credential) => ({
+            label: credential.username || "Saved password",
+            click: () => {
+              void vault
+                .reveal(context.profileId, credential.id)
+                .then((revealed) => {
+                  if (!revealed || contents.isDestroyed()) return;
+                  if (httpOrigin(contents.getURL()) !== context.origin) return;
+                  contents.send("catamorphic:fill-credentials", {
+                    formId,
+                    username: revealed.username,
+                    password: revealed.password,
+                  });
+                });
+            },
+          }),
+        );
+        if (template.length > 0) template.push({ type: "separator" });
+        template.push({
+          label: "Suggest strong password",
+          click: () => {
+            if (
+              contents.isDestroyed() ||
+              httpOrigin(contents.getURL()) !== context.origin
+            ) {
+              return;
+            }
+            contents.send("catamorphic:fill-credentials", {
+              formId,
+              username: "",
+              password: `${randomUUID().replaceAll("-", "")}!aA1`,
+            });
+          },
+        });
+        Menu.buildFromTemplate(template).popup();
+      });
+    });
+    contents.once("destroyed", () => focusedLoginForms.delete(contents.id));
   });
 
   ipcMain.handle(
@@ -298,8 +490,29 @@ export function registerBrowserSupport(
       vault.reveal(input.profileId, input.id),
   );
   ipcMain.handle(
+    "catamorphic:vault-update",
+    async (
+      _event,
+      input: {
+        profileId: string;
+        id: string;
+        origin: string;
+        username: string;
+        password?: string;
+      },
+    ) => {
+      const updated = await vault.update(input.profileId, input.id, {
+        origin: input.origin,
+        username: input.username,
+        password: input.password,
+      });
+      if (updated) vaultChanged(input.profileId);
+      return updated;
+    },
+  );
+  ipcMain.handle(
     "catamorphic:vault-save",
-    (
+    async (
       _event,
       input: {
         profileId: string;
@@ -307,17 +520,111 @@ export function registerBrowserSupport(
         username: string;
         password: string;
       },
-    ) =>
-      vault.save(input.profileId, {
+    ) => {
+      const saved = await vault.save(input.profileId, {
         origin: input.origin,
         username: input.username,
         password: input.password,
-      }),
+      });
+      vaultChanged(input.profileId);
+      return saved;
+    },
+  );
+  ipcMain.handle(
+    "catamorphic:vault-copy-password",
+    async (_event, input: { profileId: string; id: string }) => {
+      const credential = await vault.reveal(input.profileId, input.id);
+      if (!credential) return false;
+      clipboard.writeText(credential.password);
+      setTimeout(() => {
+        if (clipboard.readText() === credential.password) clipboard.clear();
+      }, 30_000).unref();
+      return true;
+    },
+  );
+  ipcMain.handle(
+    "catamorphic:browser-credential-accept",
+    async (event, input: { profileId: string; pendingId: string }) => {
+      const pending = pendingCredentials.get(input.pendingId);
+      pendingCredentials.delete(input.pendingId);
+      if (
+        !pending ||
+        pending.expiresAt < Date.now() ||
+        pending.profileId !== input.profileId ||
+        pending.hostId !== event.sender.id ||
+        httpOrigin(
+          rendererOwnsGuest(
+            event.sender,
+            pending.guestId,
+            input.profileId,
+          )?.getURL() ?? "",
+        ) !== pending.origin
+      ) {
+        return false;
+      }
+      await vault.save(input.profileId, pending);
+      vaultChanged(input.profileId);
+      return true;
+    },
+  );
+  ipcMain.handle(
+    "catamorphic:browser-credential-dismiss",
+    (event, input: { pendingId: string }) => {
+      const pending = pendingCredentials.get(input.pendingId);
+      if (pending?.hostId === event.sender.id) {
+        pendingCredentials.delete(input.pendingId);
+      }
+    },
+  );
+  ipcMain.handle(
+    "catamorphic:browser-credential-fill",
+    async (
+      event,
+      input: {
+        profileId: string;
+        guestId: number;
+        credentialId: string;
+        formId?: string;
+        origin: string;
+      },
+    ) => {
+      const guest = rendererOwnsGuest(
+        event.sender,
+        input.guestId,
+        input.profileId,
+      );
+      if (!guest || httpOrigin(guest.getURL()) !== input.origin) {
+        return "origin-changed" as const;
+      }
+      const credential = await vault.reveal(
+        input.profileId,
+        input.credentialId,
+      );
+      if (!credential || credential.origin !== input.origin) {
+        return "cancelled" as const;
+      }
+      if (
+        guest.isDestroyed() ||
+        guest.hostWebContents !== event.sender ||
+        windows.profileFor(event.sender) !== input.profileId ||
+        httpOrigin(guest.getURL()) !== input.origin
+      ) {
+        return "origin-changed" as const;
+      }
+      guest.send("catamorphic:fill-credentials", {
+        formId: input.formId,
+        username: credential.username,
+        password: credential.password,
+      });
+      return "filled" as const;
+    },
   );
   ipcMain.handle(
     "catamorphic:vault-remove",
-    (_event, input: { profileId: string; id: string }) =>
-      vault.remove(input.profileId, input.id),
+    async (_event, input: { profileId: string; id: string }) => {
+      await vault.remove(input.profileId, input.id);
+      vaultChanged(input.profileId);
+    },
   );
   ipcMain.handle("catamorphic:device-auth-available", () =>
     process.platform === "darwin"
@@ -520,9 +827,39 @@ export function registerBrowserSupport(
     },
   );
 
+  ipcMain.handle("catamorphic:browser-import-passwords", async (event) => {
+    const window = BrowserWindow.fromWebContents(event.sender);
+    if (!window) return { imported: 0, cancelled: true };
+    const picked = await dialog.showOpenDialog(window, {
+      title: "Import passwords from Chrome or Firefox",
+      properties: ["openFile"],
+      filters: [{ name: "Password CSV", extensions: ["csv"] }],
+    });
+    const file = picked.filePaths[0];
+    if (picked.canceled || !file) return { imported: 0, cancelled: true };
+    const profileId = windows.profileFor(event.sender);
+    const imported = parsePasswordCsv(fs.readFileSync(file, "utf-8"));
+    for (const credential of imported) {
+      await vault.save(profileId, credential);
+    }
+    if (imported.length > 0) vaultChanged(profileId);
+    return { imported: imported.length, cancelled: false };
+  });
+
   return {
     history,
     dispose: () => {
+      ipcMain.removeListener("catamorphic:browser-login-forms", onLoginForms);
+      ipcMain.removeListener(
+        "catamorphic:browser-credentials-submitted",
+        onSubmittedCredentials,
+      );
+      ipcMain.removeListener(
+        "catamorphic:browser-login-form-focused",
+        onLoginFormFocused,
+      );
+      pendingCredentials.clear();
+      focusedLoginForms.clear();
       history.dispose();
     },
   };

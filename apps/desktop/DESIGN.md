@@ -3037,3 +3037,18 @@ paths, deliberately independent:
   ring and `done/total` counter. Clicking opens a calm popover with status
   icons; descriptions are collapsed by default so the list scans quickly and
   reveals important task detail on demand.
+
+### Profile passwords and browser import (2026-08-29)
+
+- Passwords are profile resources. Profile settings owns their searchable list
+  and add, edit, reveal, copy, and delete actions alongside profile identity and
+  startup behavior. Reveal and copy are deliberate authenticated actions;
+  ordinary browsing keeps plaintext outside React.
+- Browser pages exchange credential secrets only with the main-process broker.
+  Save and fill bars receive usernames, origins, and opaque IDs. The broker
+  validates the owning window, profile, guest, current URL, and exact origin
+  before saving or filling.
+- Import is part of profile settings rather than a one-time onboarding modal.
+  Installed Chrome and Firefox profiles expose bookmark counts and import into
+  the current profile. Saved-password CSV exports from either browser import
+  into the same encrypted vault and normalize entries to HTTP origins.

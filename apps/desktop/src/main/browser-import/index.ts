@@ -1,4 +1,5 @@
 import { chromiumImporter } from "./chromium.js";
+import { firefoxImporter } from "./firefox.js";
 import type {
   BrowserImporter,
   ImportableBrowser,
@@ -7,6 +8,7 @@ import type {
 
 export type { ChromiumImporterOptions } from "./chromium.js";
 export { chromiumImporter } from "./chromium.js";
+export { firefoxImporter } from "./firefox.js";
 export type {
   BrowserImporter,
   ImportableBrowser,
@@ -50,6 +52,7 @@ export const BROWSER_IMPORTERS: BrowserImporter[] = [
     linuxDir: ".config/chromium",
     win32Dir: "AppData/Local/Chromium/User Data",
   }),
+  firefoxImporter(),
 ];
 
 /**
