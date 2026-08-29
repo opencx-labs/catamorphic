@@ -5,42 +5,108 @@
 # Catamorphic
 
 **A really good place to get work done.** Catamorphic puts everything you
-need for real work in one place: browser, terminals, editors, notes, and
-agents that help on the same surfaces. It is free, open source, and
-local-first: your projects, notes, config, and agent state are files and
-databases you own, on your disk.
+need for real work in one place: projects, documents, browser tabs, terminals,
+editors, apps, automations, and agents that work on those same surfaces. It is
+free, open source, and local-first. Your work is made of files, git history,
+and databases you control.
 
-Catamorphic is one vision with two surfaces:
+Use Catamorphic as a personal brain on your Mac, run a shared brain on your own
+server, or embed the same foundations in a product you already operate.
 
-1. **The desktop app** ([`apps/desktop`](apps/desktop)): a local-first
-   workspace where AI agents (Claude Code, Codex, or any API model: bring
-   your own, side by side) do real work on surfaces you can *watch*: browser
-   tabs, terminals, editors. You can take over any surface at any moment,
-   and anything an agent produces (code, prose, config) is **inspectable
-   on demand**: diffs and track-changes when a change deserves your eyes,
-   trust when it doesn't. Projects are plain folders; every agent turn is a
-   git checkpoint; sync rides on git. The app is also the framework's
-   **reference implementation**: a working demo of what embedders can build
-   with the packages below. Read the product philosophy and decision log in
-   [`apps/desktop/DESIGN.md`](apps/desktop/DESIGN.md).
-2. **The embeddable framework** (everything under [`packages/`](packages)):
-   the engine underneath, also usable standalone: embed AI-built work
-   environments inside your own product. Projects that hold any kind of
-   work, git-native work tracking, multi-harness coding agents, durable
-   TypeScript workflows, sandboxed user-built apps, and the copilot
-   plumbing (durable agent sessions, agent registry, drop-in chat
-   components) that lets any product ship a real companion agent with the
-   host's own skills and tools plugged in. See
-   [`INTEGRATION.md`](INTEGRATION.md).
+## Install the desktop alpha
+
+The first public desktop line supports Apple silicon Macs running macOS 12 or
+newer.
+
+```bash
+brew install --cask opencx-labs/tap/catamorphic
+```
+
+You can also download the signed and notarized DMG from
+[GitHub Releases](https://github.com/opencx-labs/catamorphic/releases) and drag
+Catamorphic into Applications.
+
+> Catamorphic is in alpha. Project files and git history are durable, but app
+> state and APIs may change between prereleases. Back up important projects
+> and read the release notes before upgrading.
+
+## One system, three ways to use it
+
+### Desktop app
+
+The desktop app ([`apps/desktop`](apps/desktop)) is a local-first workspace and
+the framework's reference implementation. Claude Code, Codex, and API models
+can work side by side in durable sessions. Agents use the browser, terminals,
+editors, project files, apps, and connectors you can also use yourself. You can
+take over a surface at any moment, inspect diffs when a change deserves your
+eyes, or trust routine work to continue.
+
+Projects are ordinary folders and git repositories. Every agent turn that
+changes files creates a checkpoint commit. Local execution uses an embedded
+database and local sandboxes, so the desktop does not depend on a hosted
+Catamorphic service.
+
+### Self-hosted server
+
+The stock server ([`apps/server`](apps/server)) gives a personal or company
+brain an always-on home. It serves the mobile PWA, remote agents, project apps,
+and MCP endpoints. Desktop and mobile clients sign in through OAuth with PKCE;
+the stock host supports local credentials and configured OAuth or OIDC
+providers. Invitations grant admission after sign-in, and committed project
+roles decide what each member and agent may do.
+
+The zero-service setup keeps PGlite, git origins, credentials, and project data
+under one data directory. A deployment can opt into real Postgres as it grows.
+The stock host is single-tenant because its local-process execution can access
+the host machine. Run one trusted organization or household per deployment.
+See [the server guide](apps/server/README.md) or give an agent
+[`skills/setup-catamorphic-server`](skills/setup-catamorphic-server/SKILL.md)
+to provision it.
+
+### Embeddable framework
+
+The packages under [`packages/`](packages) let a host application mount
+Catamorphic in-process without adopting Catamorphic's identity, deployment, or
+design choices. A host supplies auth, users and organizations, database,
+storage, execution providers, credentials, telemetry, skills, and doctrine.
+The framework supplies general-purpose projects, git-native work tracking,
+multi-harness coding agents, durable TypeScript workflows, sandboxed
+user-built apps, generated API clients, headless React state, and composable
+UI. See [`INTEGRATION.md`](INTEGRATION.md).
+
+## Personal and company brains
+
+- **A personal brain.** Keep notes, research, code, recurring work, and small
+  tools in projects on your Mac. Add a stock server when you want the same
+  projects and conversations from your phone or while the Mac is asleep.
+- **A company brain.** Put shared knowledge, automations, apps, and tuned agent
+  roles in one reviewable project program. Members sign in with their own
+  identity and receive only the roles and project store paths they need. The
+  same brain is available from desktop, the hosted PWA, an MCP client, or an
+  embedded product surface.
+- **A daily-driver dev shell.** Import a monorepo with its existing agent
+  instructions. Worktrees, terminals, browser tabs, diffs, pull requests, and
+  multiple coding harnesses live in one window.
+- **An embedded copilot.** Mount the libraries in a SaaS backend, add the
+  React surfaces you want, and give the agent the host's skills, tools,
+  trigger kinds, look, and doctrine.
+- **Per-customer tools over MCP.** Give each customer a project where agents
+  build typed workflows and apps, then serve the approved tools to the MCP
+  client they already use.
+
+Desktop and server are designed to compose. A linked project's files sync over
+git after settled turns. Desktop conversations mirror to the server, so the
+mobile PWA can open the same chat and continue with the server's always-on
+agent. If someone continues remotely, the server owns that conversation fork
+instead of pretending two writers have one history. Incognito desktop chats
+stay local and are never mirrored.
 
 **Code is the source of truth.** Everything is stored as plain files
 (TypeScript, markdown, whatever the work is) in a git repository, never a
 proprietary DSL or an opaque store. When a project holds workflows, the
 parser renders the workflow code as an intuitive visual graph for
 non-technical users, while technical users and AI agents work directly with
-the code. A *project* is just a git repo.
-
-> **Greenfield: no production users yet.** Nothing here is deployed to real users, so there is no installed base to preserve. Prefer the correct design over a compatible one: change schemas, rename APIs, and delete dead paths outright rather than adding migrations-on-migrations, compatibility shims, deprecation aliases, or feature flags to protect callers that do not exist. Breaking changes are cheap right now and get expensive the day we ship. Spend that budget while it is free. (This does not license skipping tests or leaving things half-finished; it is about not paying for backwards compatibility nobody needs.)
+the code. A project is just a git repo.
 
 ---
 
@@ -164,32 +230,6 @@ real defaults.
 (ADRs [0048](docs/decisions/0048-app-feel-is-the-embedders.md),
 [0049](docs/decisions/0049-doctrine-is-the-embedders.md))
 
-# Use cases
-
-- **The company brain.** One shared project holds the team's docs, data,
-  and automations. Admins edit the program; everyone else uses it through
-  agents by role — roles are committed files, the project store keeps
-  audience-specific data (customer notes, contracts, decks) out of git,
-  members reach it from the desktop, their own agent over MCP, or the
-  host's product, and propose program changes as pull requests on their
-  behalf. Committed project agents give everyone the same tuned personas;
-  apps become the internal tools; git carries the history.
-- **A daily-driver dev shell.** Import your monorepo. Your CLAUDE.md and
-  `.claude/` conventions load as-is, PRs and diffs are a sidebar click
-  away, and worktrees, terminals, and the browser live in one window.
-- **An embedded copilot inside a SaaS.** Mount the framework in your
-  backend, drop in the chat components, plug in your skills, tools, and
-  trigger kinds. Your users get an agent that does real work in your
-  product, with your look and your doctrine.
-- **AI-built per-customer tools over MCP.** One project per customer;
-  agents build the workflows and apps; each customer's tools are served
-  over the project's MCP endpoint to whatever client they use.
-- **Docs-first teams that never see git.** Projects full of notes and
-  plans, checkpointed and synced automatically, with plain-language
-  reporting from the agents. Nobody types a git command.
-
----
-
 # The framework
 
 Catamorphic's engine ships as libraries a host application mounts
@@ -201,7 +241,8 @@ integration flow.
 
 ## Runs anywhere
 
-Durable agent-and-workflow infrastructure that does **not** assume a server.
+Durable agent-and-workflow infrastructure that does **not** assume an external
+server.
 Every dependency is an axis with a heavy and a light end. Pick per axis:
 
 | Axis | Heavy end | Light end |
@@ -213,7 +254,7 @@ Every dependency is an axis with a heavy and a light end. Pick per axis:
 | Surface | HTTP API + React UI | In-process SDK calls, or migrations-only |
 
 **The desktop app is the proof**: it runs the lightest column end to end
-(pglite, local sandboxes, filesystem storage, no server) by design
+(pglite, local sandboxes, filesystem storage, no external server) by design
 ([`apps/desktop/src/main/server/boot.ts`](apps/desktop/src/main/server/boot.ts)).
 No durable-execution vendor can run entirely inside a desktop app; this one
 does, and the same substrate is what offline-first agents need. Full matrix
@@ -559,7 +600,15 @@ persistently. Start them in a separate terminal only when you need them:
 bun run dev:infra
 ```
 
-Catamorphic itself is embed-only: in production you run a **host app** that boots it in-process. For local development, `bun run dev` starts the combined desktop and stock-server manual environment. `bun run dev:desktop` and `bun run dev:server` are focused variants of the same orchestrator, which assigns each worktree its own data directories and loopback ports. To iterate on catamorphic alongside your own host instead, link the packages via `file:` (see `.agents/skills/using-catamorphic/SKILL.md` → "Local dev linking").
+The framework packages are embed-only. In production, run either the stock
+server host or an application that boots Catamorphic in-process. For local
+development, `bun run dev` starts the combined desktop and stock-server manual
+environment. `bun run dev:desktop` and `bun run dev:server` are focused
+variants of the same orchestrator, which assigns each worktree its own data
+directories and loopback ports. To iterate on Catamorphic alongside your own
+host, link the packages via `file:` (see
+`.agents/skills/using-catamorphic/SKILL.md` and its "Local dev linking"
+section).
 
 ## Scripts
 
@@ -644,10 +693,8 @@ Linux. Windows development orchestration is not supported.
 
 Direction, not shipped. Tracked in [`TODO.md`](TODO.md):
 
-- **A self-hostable reference server**: a stock Catamorphic server people run
-  on their own infra, with remote agents and MCP endpoints, users and roles,
-  and internal + external users. The desktop would connect to it and call
-  workflows/MCPs remotely.
+- **Desktop distribution after the first alpha**: automatic updates, Intel
+  Mac validation, then signed Windows and Linux packages.
 - **ACP harness**: project agent definitions already accept `kind: "acp"`;
   the Agent Client Protocol client (local command and remote endpoint
   transports) is the planned harness behind it.

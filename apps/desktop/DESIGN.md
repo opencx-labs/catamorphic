@@ -3037,3 +3037,15 @@ paths, deliberately independent:
   ring and `done/total` counter. Clicking opens a calm popover with status
   icons; descriptions are collapsed by default so the list scans quickly and
   reveals important task detail on demand.
+
+### The public app wears the canonical mark (2026-08-29)
+
+- The installed app icon uses the banana-bracket C without adding a second
+  logo treatment. Catamorphic orange sits on the standard raised dark surface,
+  with the existing strong border as the only depth cue.
+- The macOS installer is the familiar drag-to-Applications DMG. Its job is to
+  make installation obvious, not to introduce a marketing surface that drifts
+  from the desktop or website.
+- Packaged identity is a product contract. The Catamorphic name, icon, bundle
+  id, and connect-link scheme stay consistent across the DMG, Applications,
+  Homebrew, Gatekeeper, and remote invitations.
