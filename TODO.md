@@ -85,6 +85,12 @@
   Cross-host delivery must follow the authoritative session through a durable
   mailbox rather than treating transcript mirroring or a direct desktop
   callback as message transport.
+- **Profile-scoped agent workflows.** After per-agent, per-project workflows
+  are established, add private workflows owned by a profile-scoped personal
+  agent and usable across projects without entering project git history.
+  Define their local source storage, project access boundaries, lifecycle,
+  and optional profile sync before implementation. This is intentionally
+  deferred from temporary project Watchers.
 - **Agent channel integrations: Slack, code review.** The per-agent
   schema (capabilities + tool policies + mode) is the substrate; what's
   missing is the *binding* of an agent to a channel. Slack: a

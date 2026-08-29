@@ -2,7 +2,10 @@
 
 ## Status
 
-Approved in conversation on 2026-08-28 and recorded by ADR 0074.
+Approved in conversation on 2026-08-28 and recorded by ADR 0074. The Watcher
+trigger model in section 3 was simplified and superseded by ADR 0076 and the
+2026-08-29 Watcher trigger unification design. Session delivery, Monitors,
+placement, policy, and observability remain current.
 
 ## Purpose
 
@@ -80,17 +83,21 @@ emit `github.pull_request`, `github.pull_request_review`,
 
 ## 3. Temporary Watcher deployments
 
-An agent writes a normal workflow file in its checkout, then calls
-`watchers.create` with the source path, exported workflow name, subscriptions,
-target Environment, expiry, limits, and allowed session-delivery ceiling.
+An agent supplies normal workflow TypeScript, then calls `watchers.create`
+with the exported workflow name, source, target Environment, expiry, limits,
+and allowed session-delivery ceiling. Subscriptions exist only as ordinary
+inline `trigger()` declarations in that source. They are never a separate API
+or database input.
 Creation performs the following transaction boundary:
 
 1. read and parse the checkout at its current checkpoint;
-2. validate the selected export and event input schema;
+2. scan the selected export through `TriggersService`, validate its ordinary
+   trigger bindings and event input schema;
 3. create a commit and push `catamorphic/watchers/<watcher-id>`;
 4. create or verify the deployment artifact for that exact commit;
 5. admit the Environment and exact connections;
-6. persist the Watcher, subscriptions, capability ceiling, and expiry.
+6. persist the Watcher lifecycle, pinned revision, capability ceiling, and
+   expiry while reusing the frozen per-commit trigger projection.
 
 The source ref is lifecycle plumbing, not a second workflow model. Runs use
 the existing canonical `workflow_runs` state machine with Watcher provenance.

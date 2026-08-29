@@ -548,42 +548,26 @@ export function surfaceTools(
           definition: {
             name: "create_watcher",
             description:
-              'Create a temporary TypeScript watcher workflow for future normalized project events already supplied by this host. The source must export the named defineWorkflow and receives { watcherId, event } as input. To notify or wake a session, return context.host["catamorphic.sessions"].deliver({ sessionId, content, mode, idempotencyKey }) from a boundary. The workflow is committed to an isolated catamorphic/watchers/<id> ref, pinned, and never merged into the project main branch.',
+              'Temporarily enable an ordinary TypeScript workflow for future normalized Project Events already supplied by this host. The source must export the named defineWorkflow and declare one or more inline triggers, for example triggers: [trigger("issue.changed")]. The normalized Project Event envelope is the workflow input. To notify or wake a session, return context.host["catamorphic.sessions"].deliver({ sessionId, content, mode, idempotencyKey }) from a boundary. The workflow is committed to an isolated catamorphic/watchers/<id> ref, pinned, and never merged into project main.',
             inputSchema: {
               type: "object",
               properties: {
                 sessionId: { type: "string" },
                 workflowName: { type: "string" },
                 source: { type: "string" },
-                eventKinds: {
-                  type: "array",
-                  items: { type: "string" },
-                  description:
-                    "Exact normalized event kinds supplied by a project event source.",
-                },
                 environment: { type: "string" },
                 expiresInSeconds: { type: "integer", minimum: 60 },
               },
-              required: ["workflowName", "source", "eventKinds"],
+              required: ["workflowName", "source"],
             },
           },
           call: guarded(async (args) => {
             const sessionId = str(args.sessionId) ?? currentSessionId;
             const workflowName = str(args.workflowName);
             const source = str(args.source);
-            const eventKinds = Array.isArray(args.eventKinds)
-              ? args.eventKinds.filter(
-                  (kind): kind is string => typeof kind === "string",
-                )
-              : [];
-            if (
-              !sessionId ||
-              !workflowName ||
-              !source ||
-              eventKinds.length === 0
-            ) {
+            if (!sessionId || !workflowName || !source) {
               throw new Error(
-                "sessionId, workflowName, source, and eventKinds are required",
+                "sessionId, workflowName, and source are required",
               );
             }
             return watchers.create({
@@ -592,7 +576,6 @@ export function surfaceTools(
               sessionId,
               workflowName,
               source,
-              eventKinds,
               ...(str(args.environment)
                 ? { environment: str(args.environment) }
                 : {}),
@@ -659,19 +642,13 @@ export function surfaceTools(
           definition: {
             name: "create_github_watcher",
             description:
-              "Create a temporary TypeScript watcher for future GitHub repository events. Catamorphic verifies the current user's repository access and starts the appropriate local or remote GitHub monitor. The workflow uses the same source contract as create_watcher.",
+              'Temporarily enable an ordinary TypeScript workflow for future GitHub repository events. Catamorphic verifies the current user\'s repository access and starts the appropriate local or remote GitHub monitor. Declare GitHub subscriptions inline with trigger(), such as triggers: [trigger("github.pull_request")]. Supported kinds are github.pull_request, github.pull_request_review, github.check_run, github.check_suite, and github.workflow_run.',
             inputSchema: {
               type: "object",
               properties: {
                 sessionId: { type: "string" },
                 workflowName: { type: "string" },
                 source: { type: "string" },
-                eventKinds: {
-                  type: "array",
-                  items: { type: "string" },
-                  description:
-                    "Normalized kinds such as github.pull_request, github.pull_request_review, github.check_run, github.check_suite, or github.workflow_run.",
-                },
                 environment: { type: "string" },
                 placement: {
                   type: "string",
@@ -680,26 +657,16 @@ export function surfaceTools(
                 expiresInSeconds: { type: "integer", minimum: 60 },
                 pollIntervalSeconds: { type: "integer", minimum: 5 },
               },
-              required: ["workflowName", "source", "eventKinds"],
+              required: ["workflowName", "source"],
             },
           },
           call: guarded(async (args) => {
             const sessionId = str(args.sessionId) ?? currentSessionId;
             const workflowName = str(args.workflowName);
             const source = str(args.source);
-            const eventKinds = Array.isArray(args.eventKinds)
-              ? args.eventKinds.filter(
-                  (kind): kind is string => typeof kind === "string",
-                )
-              : [];
-            if (
-              !sessionId ||
-              !workflowName ||
-              !source ||
-              eventKinds.length === 0
-            ) {
+            if (!sessionId || !workflowName || !source) {
               throw new Error(
-                "sessionId, workflowName, source, and eventKinds are required",
+                "sessionId, workflowName, and source are required",
               );
             }
             return watchers.createGithub({
@@ -708,7 +675,6 @@ export function surfaceTools(
               sessionId,
               workflowName,
               source,
-              eventKinds,
               ...(str(args.environment)
                 ? { environment: str(args.environment) }
                 : {}),

@@ -24,6 +24,13 @@ edit, and intuitive to render. User workflows run like **regular apps** —
 full IO, real npm dependencies, no restricted JS runtime — executed in
 sandboxes (or local processes, ADR 0047) using **Bun**.
 
+Catamorphic is a greenfield project. When starting a feature, first look for
+an existing primitive that already expresses it and simplify toward that
+single model. Prefer a clean breaking change over compatibility code, parallel
+abstractions, or legacy preservation. If a genuinely new abstraction or a
+non-obvious design choice is required, surface it for explicit approval and
+record the accepted decision in an ADR before implementing it.
+
 ### Embeddable framework positioning (READ THIS FIRST)
 
 **Catamorphic ships as libraries a host application mounts in-process.** There is no standalone product and no default identity. The host provides auth, user/org model, database, and the deployment surface. The root `bun run dev` is a development convenience only: it starts the combined desktop and stock-server manual environment; libraries must never depend on that script. The in-repo reference host is the desktop app (`apps/desktop`, embedded server in `src/main/server/boot.ts`). The old web playground host was removed 2026-08 (severely out of date; will be rewritten from scratch if revisited).

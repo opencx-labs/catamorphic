@@ -717,7 +717,6 @@ export interface Watchers {
   cursor_sequence: Generated<Int8>;
   deployment_artifact_id: string;
   environment_name: string | null;
-  event_kinds: Json;
   expires_at: Timestamp | null;
   id: Generated<string>;
   last_error: string | null;

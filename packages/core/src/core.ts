@@ -724,6 +724,7 @@ export class CatamorphicCore {
       this.watchers = new WatchersService(this.db, {
         projectManager: this.projectManager,
         runs: this.runs,
+        triggers: this.triggers,
         events: this.projectEvents,
         monitors: this.projectEventMonitors,
         sessions: this.agentSessions,

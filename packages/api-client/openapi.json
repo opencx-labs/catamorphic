@@ -14980,7 +14980,7 @@
                             "nullable": true,
                             "type": "string"
                           },
-                          "eventKinds": {
+                          "triggerKinds": {
                             "type": "array",
                             "items": {
                               "type": "string"
@@ -15022,7 +15022,7 @@
                           "commitSha",
                           "deploymentArtifactId",
                           "environment",
-                          "eventKinds",
+                          "triggerKinds",
                           "cursorSequence",
                           "status",
                           "expiresAt",

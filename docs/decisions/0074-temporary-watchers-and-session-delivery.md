@@ -1,6 +1,6 @@
 # 0074: Temporary Watchers and durable session delivery
 
-- **Status:** Accepted
+- **Status:** Accepted (Watcher trigger model superseded by 0076)
 - **Date:** 2026-08-28
 - **Refines:** 0039, 0061, 0067
 - **Supersedes in part:** 0068, 0069

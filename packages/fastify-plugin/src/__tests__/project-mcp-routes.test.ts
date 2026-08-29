@@ -545,6 +545,15 @@ describe("project MCP surface (ADR 0055): documents, skills, ask_agent", () => {
         "stop_watcher",
       ]),
     );
+    const createGithubTool = (
+      listedTools as Array<{
+        name: string;
+        inputSchema?: { properties?: Record<string, unknown> };
+      }>
+    ).find((tool) => tool.name === "create_github_watcher");
+    expect(createGithubTool?.inputSchema?.properties).not.toHaveProperty(
+      "eventKinds",
+    );
 
     await rpc(app, "tools/call", {
       name: "create_github_watcher",
@@ -552,8 +561,7 @@ describe("project MCP surface (ADR 0055): documents, skills, ask_agent", () => {
         sessionId: "session-1",
         workflowName: "watchPullRequest",
         source:
-          "export const watchPullRequest = defineWorkflow(() => ({ steps: [] }))",
-        eventKinds: ["github.pull_request"],
+          'export const watchPullRequest = defineWorkflow(() => ({ triggers: [trigger("github.pull_request")], steps: [] }))',
       },
     });
     expect(calls.at(-1)).toMatchObject({
@@ -561,9 +569,10 @@ describe("project MCP surface (ADR 0055): documents, skills, ask_agent", () => {
       args: expect.objectContaining({
         projectId: PROJECT_ID,
         sessionId: "session-1",
-        eventKinds: ["github.pull_request"],
+        workflowName: "watchPullRequest",
       }),
     });
+    expect(calls.at(-1)?.args).not.toHaveProperty("eventKinds");
   });
 
   it("scoped callers see only their workflows on the roster", async () => {

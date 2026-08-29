@@ -855,6 +855,15 @@ export class RunsService {
     return this.trigger(args);
   }
 
+  /** Trigger-only entry point for an immutable non-production commit. */
+  async triggerUnattendedAtCommit(
+    args: TriggerPinnedRunInput & {
+      connectionAuthorizationSnapshot?: readonly ResolvedConnectionBinding[];
+    },
+  ): Promise<Run> {
+    return this.trigger({ ...args, unattended: true });
+  }
+
   /** Trigger-only entry point. It accepts service connections only. */
   async triggerUnattendedProduction(
     args: TriggerProductionRunInput & {

@@ -7170,7 +7170,7 @@ export interface paths {
                                 /** Format: uuid */
                                 deploymentArtifactId: string;
                                 environment: string | null;
-                                eventKinds: string[];
+                                triggerKinds: string[];
                                 cursorSequence: number;
                                 /** @enum {string} */
                                 status: "active" | "paused" | "stopped" | "expired";

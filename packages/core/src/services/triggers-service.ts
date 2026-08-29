@@ -131,6 +131,24 @@ interface ScanResult {
   bindings: TriggerBindingInfo[];
 }
 
+interface PinnedRevision {
+  commitSha: string;
+  remoteBranch: string;
+}
+
+interface FireArgs {
+  identity: Identity;
+  projectId: string;
+  kind: string;
+  payload: Json;
+  environment?: string;
+  mode?: TriggerMode;
+  workflows?: readonly string[];
+  correlationKey?: string;
+  onConflict?: EnrollmentConflictPolicy;
+  budgetMs?: number;
+}
+
 interface TriggersServiceDeps {
   kinds: readonly TriggerKindRuntime[];
   /** Tool-kind declarations; scan validates effective tool-name uniqueness. */
@@ -273,6 +291,33 @@ export class TriggersService {
   }
 
   /**
+   * Lists frozen bindings from an explicit immutable revision. Temporary
+   * workflow enablements use the same parser, registry, and authorization
+   * projection as the production commit.
+   */
+  async listAtCommit(args: {
+    identity: Identity;
+    projectId: string;
+    commitSha: string;
+    remoteBranch: string;
+    environment?: string;
+    kind?: string;
+    workflowName?: string;
+  }): Promise<TriggerBindingInfo[]> {
+    if (args.kind && !this.registry.has(args.kind)) {
+      throw new TriggerKindNotRegisteredError(args.kind, [
+        ...this.registry.keys(),
+      ]);
+    }
+    const bindings = await this.ensureScanAtCommit(args);
+    return bindings.filter(
+      (binding) =>
+        (!args.kind || binding.kind === args.kind) &&
+        (!args.workflowName || binding.workflowName === args.workflowName),
+    );
+  }
+
+  /**
    * The project's MCP tool roster at its production commit: effective tool
    * name → workflow name, for every binding of a registered tool kind. The
    * same naming the deploy scan validates and the MCP endpoint serves.
@@ -295,21 +340,29 @@ export class TriggersService {
     return names;
   }
 
-  async fire(args: {
-    identity: Identity;
-    projectId: string;
-    kind: string;
-    payload: Json;
-    environment?: string;
-    /** Defaults to async. */
-    mode?: TriggerMode;
-    /** Restrict to these bound workflows (e.g. the one tool the AI called). */
-    workflows?: readonly string[];
-    correlationKey?: string;
-    onConflict?: EnrollmentConflictPolicy;
-    /** Sync only: wall-clock budget before detaching. Defaults to 30s. */
-    budgetMs?: number;
-  }): Promise<TriggerFireResult> {
+  async fire(args: FireArgs): Promise<TriggerFireResult> {
+    return this.fireFromScan(args, () => this.ensureScan(args));
+  }
+
+  /** Fire ordinary trigger bindings from an explicit immutable revision. */
+  async fireAtCommit(
+    args: FireArgs & PinnedRevision,
+  ): Promise<TriggerFireResult> {
+    return this.fireFromScan(
+      args,
+      async () => ({
+        commitSha: args.commitSha,
+        bindings: await this.ensureScanAtCommit(args),
+      }),
+      { commitSha: args.commitSha, remoteBranch: args.remoteBranch },
+    );
+  }
+
+  private async fireFromScan(
+    args: FireArgs,
+    scan: () => Promise<ScanResult>,
+    pinned?: PinnedRevision,
+  ): Promise<TriggerFireResult> {
     const kind = this.registry.get(args.kind);
     if (!kind) {
       throw new TriggerKindNotRegisteredError(args.kind, [
@@ -340,8 +393,8 @@ export class TriggersService {
         },
       },
       async (span) => {
-        const scan = await this.ensureScan(args);
-        let targets = scan.bindings.filter(
+        const scanned = await scan();
+        let targets = scanned.bindings.filter(
           (binding) => binding.kind === kind.name,
         );
         if (args.workflows) {
@@ -370,12 +423,13 @@ export class TriggersService {
               correlationKey,
               onConflict: args.onConflict,
               deadline,
-              commitSha: scan.commitSha,
+              commitSha: scanned.commitSha,
               triggerKind: binding.kind,
+              pinned,
             }),
           ),
         );
-        return { kind: kind.name, mode, commitSha: scan.commitSha, runs };
+        return { kind: kind.name, mode, commitSha: scanned.commitSha, runs };
       },
     );
   }
@@ -392,6 +446,7 @@ export class TriggersService {
     deadline: number;
     commitSha: string | null;
     triggerKind: string;
+    pinned?: PinnedRevision;
   }): Promise<TriggerFireOutcome> {
     const authorization = args.commitSha
       ? await this.readAuthorization({
@@ -410,7 +465,7 @@ export class TriggersService {
         `Trigger '${args.triggerKind}' for workflow '${args.workflowName}' is configured for Environment '${authorization.environment}'`,
       );
     }
-    const run = await this.deps.runs.triggerUnattendedProduction({
+    const runArgs = {
       identity: args.identity,
       projectId: args.projectId,
       workflowName: args.workflowName,
@@ -419,7 +474,14 @@ export class TriggersService {
       connectionAuthorizationSnapshot: authorization?.connections,
       correlationKey: args.correlationKey,
       onConflict: args.onConflict,
-    });
+    };
+    const run = args.pinned
+      ? await this.deps.runs.triggerUnattendedAtCommit({
+          ...runArgs,
+          commitSha: args.pinned.commitSha,
+          remoteBranch: args.pinned.remoteBranch,
+        })
+      : await this.deps.runs.triggerUnattendedProduction(runArgs);
     if (args.mode === "async") {
       return {
         workflowName: args.workflowName,
@@ -501,6 +563,71 @@ export class TriggersService {
     }
   }
 
+  private async ensureScanAtCommit(args: {
+    identity: Identity;
+    projectId: string;
+    commitSha: string;
+    remoteBranch: string;
+    environment?: string;
+  }): Promise<TriggerBindingInfo[]> {
+    const memoKey = `${args.projectId}:${args.commitSha}`;
+    const memoized = this.scans.get(memoKey);
+    if (memoized) return memoized;
+    const recorded = await this.readRecordedScan(args);
+    if (recorded) {
+      this.scans.set(memoKey, Promise.resolve(recorded));
+      this.capScanMemo();
+      return recorded;
+    }
+
+    const remote = this.deps.projectManager.remoteBackend;
+    if (!remote) {
+      throw new Error("Trigger revisions require durable project storage");
+    }
+    const repo = await this.deps.projectManager.openDev(
+      args.identity.tenantId,
+      args.projectId,
+      `trigger-scan-${args.commitSha}`,
+    );
+    let files: Record<string, string>;
+    try {
+      await fetchRemote({
+        dev: repo,
+        remote,
+        tenantId: args.identity.tenantId,
+        projectId: args.projectId,
+        remoteBranch: args.remoteBranch,
+      });
+      const fetchedCommit = await repo
+        .resolveRef(`refs/remotes/origin/${args.remoteBranch}`)
+        .catch(() => null);
+      if (fetchedCommit !== args.commitSha) {
+        throw new Error(
+          `Trigger revision ${args.commitSha} is not available at '${args.remoteBranch}'`,
+        );
+      }
+      files = await repo.readAllFilesAtRef(args.commitSha);
+    } finally {
+      await repo.dispose();
+    }
+
+    const scanning = this.scanAndRecord({
+      identity: args.identity,
+      projectId: args.projectId,
+      commitSha: args.commitSha,
+      files,
+      environment: args.environment,
+    });
+    this.scans.set(memoKey, scanning);
+    this.capScanMemo();
+    try {
+      return await scanning;
+    } catch (error) {
+      this.scans.delete(memoKey);
+      throw error;
+    }
+  }
+
   private capScanMemo(): void {
     // Each deploy strands its predecessor's entry; keep the map bounded.
     while (this.scans.size > 256) {
@@ -545,6 +672,7 @@ export class TriggersService {
     projectId: string;
     commitSha: string;
     files: Record<string, string>;
+    environment?: string;
   }): Promise<TriggerBindingInfo[]> {
     const parsed = parseProject(args.files);
     const errors: string[] = [];
@@ -569,6 +697,7 @@ export class TriggersService {
         const environment = await this.deps.executionEnvironments.admit({
           identity: args.identity,
           projectId: args.projectId,
+          environment: args.environment,
           requirements: { workload: "workflow" },
         });
         const requirements = workflow.graph.connections ?? [];

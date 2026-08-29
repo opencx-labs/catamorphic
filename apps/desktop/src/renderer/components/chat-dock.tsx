@@ -2607,7 +2607,7 @@ export function ChatDock({
                 <span
                   key={watcher.id}
                   className="inline-flex min-w-0 items-center gap-1.5 rounded-md bg-bg-overlay px-2 py-1 text-[11px] text-fg-muted"
-                  title={`${watcher.eventKinds.join(", ")} · ${watcher.environment ?? "Default environment"}`}
+                  title={`${watcher.triggerKinds.join(", ")} · ${watcher.environment ?? "Default environment"}`}
                 >
                   <Radio
                     className={`size-3 shrink-0 ${

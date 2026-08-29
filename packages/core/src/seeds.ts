@@ -564,15 +564,17 @@ workflow subscribed to that kind runs with the payload as input.
 When the project MCP surface offers \`create_github_watcher\`, use it for
 session-scoped monitoring instead of adding permanent trigger configuration.
 The tool accepts ordinary TypeScript source exporting one \`defineWorkflow\`.
-Its first boundary receives \`{ watcherId, event }\`; inspect the normalized
-\`event.kind\` and provider payload, then optionally deliver to a session:
+Declare subscriptions in that workflow with the same inline \`trigger()\`
+calls as any committed workflow. The boundary input is the normalized Project
+Event envelope; inspect \`input.kind\` and \`input.payload\`, then optionally
+deliver to a session:
 
 \`\`\`typescript
 return context.host["catamorphic.sessions"].deliver({
   sessionId: "the session to notify or wake",
   content: "Checks failed on PR #42. Investigate and repair them.",
   mode: "next_turn", // message_only | next_turn | interrupt
-  idempotencyKey: \`checks-failed:\${input.event.id}\`,
+  idempotencyKey: \`checks-failed:\${input.id}\`,
 });
 \`\`\`
 

@@ -1102,7 +1102,7 @@ export const WatcherSchema = z.object({
   commitSha: z.string().length(40),
   deploymentArtifactId: z.string().uuid(),
   environment: z.string().nullable(),
-  eventKinds: z.array(z.string()),
+  triggerKinds: z.array(z.string()),
   cursorSequence: z.number().int().nonnegative(),
   status: z.enum(["active", "paused", "stopped", "expired"]),
   expiresAt: z.string().datetime().nullable(),

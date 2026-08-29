@@ -11,9 +11,12 @@ import { Kysely, PGliteDialect, sql, WithSchemaPlugin } from "kysely";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import type { Identity } from "../identity.js";
 import type { AgentSessionsService } from "../services/agent-sessions-service.js";
+import type { ExecutionEnvironmentsService } from "../services/execution-environments-service.js";
 import type { ProjectEventMonitorsService } from "../services/project-event-monitors-service.js";
 import { ProjectEventsService } from "../services/project-events-service.js";
 import type { RunsService } from "../services/runs-service.js";
+import type { TriggerKindRuntime } from "../services/trigger-kinds.js";
+import { TriggersService } from "../services/triggers-service.js";
 import { WatchersService } from "../services/watchers-service.js";
 
 const pglite = new PGlite({ extensions: { pgcrypto } });
@@ -34,6 +37,27 @@ describe("temporary watchers", () => {
   const triggered: Array<Record<string, unknown>> = [];
   const attemptedEventIds: string[] = [];
   let failingEventId: string | null = null;
+  const bindingKinds = new Map([
+    ["watchIssue", "issue.changed"],
+    ["watchRegression", "regression.changed"],
+    ["watchScope", "scope.changed"],
+  ]);
+  const triggerKinds: TriggerKindRuntime[] = [...bindingKinds.values()].map(
+    (name) => ({
+      name,
+      payloadJsonSchema: { type: "object" },
+      configJsonSchema: {
+        type: "object",
+        properties: {},
+        additionalProperties: false,
+      },
+      validatePayload: () => ({ ok: true }),
+      validateConfig: (value) =>
+        value && typeof value === "object" && !Array.isArray(value)
+          ? { ok: true }
+          : { ok: false, errors: ["Expected an object"] },
+    }),
+  );
 
   beforeAll(async () => {
     await migrateToLatest({ db, schema });
@@ -83,27 +107,41 @@ describe("temporary watchers", () => {
           .execute();
         return { id };
       }),
-      triggerAtCommit: vi.fn(async (input: Record<string, unknown>) => {
-        triggered.push(input);
-        const eventId = String(
-          (input.input as { event?: { id?: string } } | undefined)?.event?.id,
-        );
-        attemptedEventIds.push(eventId);
-        if (eventId === failingEventId) throw new Error("temporary failure");
-        const id = crypto.randomUUID();
-        await db
-          .insertInto("workflow_runs")
-          .values({
-            id,
-            project_id: projectId,
-            workflow_name: String(input.workflowName),
-            external_user_id: identity.externalUserId,
-            provenance: {},
-          })
-          .execute();
-        return { id };
-      }),
+      triggerUnattendedAtCommit: vi.fn(
+        async (input: Record<string, unknown>) => {
+          triggered.push(input);
+          const eventId = String(
+            (input.input as { id?: string } | undefined)?.id,
+          );
+          const workflowName = String(input.workflowName);
+          attemptedEventIds.push(eventId);
+          if (eventId === failingEventId) throw new Error("temporary failure");
+          const id = crypto.randomUUID();
+          await db
+            .insertInto("workflow_runs")
+            .values({
+              id,
+              project_id: projectId,
+              workflow_name: workflowName,
+              external_user_id: identity.externalUserId,
+              provenance: {},
+            })
+            .execute();
+          return { id };
+        },
+      ),
     } as unknown as RunsService;
+    const executionEnvironments = {
+      admit: vi.fn(async (input: { environment?: string }) => ({
+        environmentName: input.environment ?? "local",
+      })),
+    } as unknown as ExecutionEnvironmentsService;
+    const triggers = new TriggersService(db, {
+      kinds: triggerKinds,
+      projectManager,
+      runs,
+      executionEnvironments,
+    });
     const sessions = {
       assertSession: vi.fn(async () => undefined),
     } as unknown as AgentSessionsService;
@@ -111,6 +149,7 @@ describe("temporary watchers", () => {
     watchers = new WatchersService(db, {
       projectManager,
       runs,
+      triggers,
       events,
       monitors,
       sessions,
@@ -137,11 +176,12 @@ describe("temporary watchers", () => {
       projectId,
       sessionId,
       workflowName: "watchIssue",
-      eventKinds: ["issue.changed"],
+      environment: "edge",
       source: `
-        import { defineWorkflow } from "@catamorphic/workflow";
+        import { defineWorkflow, trigger } from "@catamorphic/workflow";
 
         export const watchIssue = defineWorkflow(({ defineBoundary }) => ({
+          triggers: [trigger("issue.changed")],
           steps: [
             defineBoundary({
               run: async ({ input }) => input,
@@ -155,7 +195,8 @@ describe("temporary watchers", () => {
       sessionId,
       monitorId: null,
       status: "active",
-      eventKinds: ["issue.changed"],
+      triggerKinds: ["issue.changed"],
+      environment: "edge",
     });
     expect(watcher.remoteBranch).toBe(`catamorphic/watchers/${watcher.id}`);
     expect(watcher.commitSha).toMatch(/^[0-9a-f]{40}$/);
@@ -176,8 +217,31 @@ describe("temporary watchers", () => {
         commitSha: watcher.commitSha,
         remoteBranch: watcher.remoteBranch,
         correlationKey: `watcher:${watcher.id}:event:${appended.event.id}`,
+        input: appended.event,
+        workflowName: "watchIssue",
+        environment: "edge",
       }),
     ]);
+  });
+
+  it("rejects a workflow without an ordinary inline trigger binding", async () => {
+    await expect(
+      watchers.create({
+        identity,
+        projectId,
+        sessionId,
+        workflowName: "noTrigger",
+        source: `
+          import { defineWorkflow } from "@catamorphic/workflow";
+
+          export const noTrigger = defineWorkflow(({ defineBoundary }) => ({
+            steps: [defineBoundary({ run: async ({ input }) => input })],
+          }));
+        `,
+      }),
+    ).rejects.toThrow(
+      "Watcher workflow 'noTrigger' must declare at least one trigger",
+    );
   });
 
   it("never moves its cursor backward when a later event fails", async () => {
@@ -186,11 +250,11 @@ describe("temporary watchers", () => {
       projectId,
       sessionId,
       workflowName: "watchRegression",
-      eventKinds: ["regression.changed"],
       source: `
-        import { defineWorkflow } from "@catamorphic/workflow";
+        import { defineWorkflow, trigger } from "@catamorphic/workflow";
 
         export const watchRegression = defineWorkflow(({ defineBoundary }) => ({
+          triggers: [trigger("regression.changed")],
           steps: [
             defineBoundary({
               run: async ({ input }) => input,
@@ -244,11 +308,11 @@ describe("temporary watchers", () => {
       projectId,
       sessionId,
       workflowName: "watchScope",
-      eventKinds: ["scope.changed"],
       source: `
-        import { defineWorkflow } from "@catamorphic/workflow";
+        import { defineWorkflow, trigger } from "@catamorphic/workflow";
 
         export const watchScope = defineWorkflow(({ defineBoundary }) => ({
+          triggers: [trigger("scope.changed")],
           steps: [
             defineBoundary({
               run: async ({ input }) => input,

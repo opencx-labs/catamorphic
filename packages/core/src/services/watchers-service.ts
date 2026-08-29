@@ -10,6 +10,7 @@ import type { GithubService } from "./github-service.js";
 import type { ProjectEventMonitorsService } from "./project-event-monitors-service.js";
 import type { ProjectEventsService } from "./project-events-service.js";
 import type { RunsService } from "./runs-service.js";
+import type { TriggersService } from "./triggers-service.js";
 
 type WatcherRow = Selectable<DB["watchers"]>;
 
@@ -24,7 +25,7 @@ export interface Watcher {
   commitSha: string;
   deploymentArtifactId: string;
   environment: string | null;
-  eventKinds: string[];
+  triggerKinds: string[];
   cursorSequence: number;
   status: "active" | "paused" | "stopped" | "expired";
   expiresAt: string | null;
@@ -35,6 +36,7 @@ export interface Watcher {
 interface WatchersDeps {
   projectManager: ProjectManager;
   runs: RunsService;
+  triggers: TriggersService;
   events: ProjectEventsService;
   monitors: ProjectEventMonitorsService;
   sessions: AgentSessionsService;
@@ -59,7 +61,6 @@ export class WatchersService {
     sessionId: string;
     workflowName: string;
     source: string;
-    eventKinds: string[];
     environment?: string;
     expiresInSeconds?: number;
   }): Promise<Watcher> {
@@ -68,9 +69,6 @@ export class WatchersService {
       input.projectId,
       input.sessionId,
     );
-    if (input.eventKinds.length === 0) {
-      throw new Error("A watcher needs at least one event kind");
-    }
     return this.createPinned({
       ...input,
       monitorId: null,
@@ -84,7 +82,6 @@ export class WatchersService {
     sessionId: string;
     workflowName: string;
     source: string;
-    eventKinds: string[];
     environment?: string;
     placement?: "local" | "remote" | "any";
     expiresInSeconds?: number;
@@ -96,12 +93,6 @@ export class WatchersService {
       input.sessionId,
     );
     if (!this.deps.github) throw new Error("GitHub is not configured");
-    if (input.eventKinds.length === 0) {
-      throw new Error("A watcher needs at least one event kind");
-    }
-    if (!input.eventKinds.every((kind) => kind.startsWith("github."))) {
-      throw new Error("The built-in watcher source accepts github.* events");
-    }
 
     // Verify the caller's current GitHub credential can read the linked repo,
     // seed the provider cursor, and make pre-existing activity invisible to
@@ -128,13 +119,13 @@ export class WatchersService {
       sessionId: input.sessionId,
       workflowName: input.workflowName,
       source: input.source,
-      eventKinds: input.eventKinds,
       ...(input.environment ? { environment: input.environment } : {}),
       ...(input.expiresInSeconds !== undefined
         ? { expiresInSeconds: input.expiresInSeconds }
         : {}),
       monitorId: monitor.id,
       cursorSequence: await this.latestProjectSequence(input.projectId),
+      requiredTriggerPrefix: "github.",
     });
   }
 
@@ -144,11 +135,11 @@ export class WatchersService {
     sessionId: string;
     workflowName: string;
     source: string;
-    eventKinds: string[];
     environment?: string;
     expiresInSeconds?: number;
     monitorId: string | null;
     cursorSequence: number;
+    requiredTriggerPrefix?: string;
   }): Promise<Watcher> {
     return withSpan(
       {
@@ -170,11 +161,11 @@ export class WatchersService {
     sessionId: string;
     workflowName: string;
     source: string;
-    eventKinds: string[];
     environment?: string;
     expiresInSeconds?: number;
     monitorId: string | null;
     cursorSequence: number;
+    requiredTriggerPrefix?: string;
   }): Promise<Watcher> {
     const watcherId = randomUUID();
     const sourcePath = `workflows/src/watchers/${watcherId}.ts`;
@@ -222,6 +213,31 @@ export class WatchersService {
       await repo.dispose();
     }
 
+    const bindings = await this.deps.triggers.listAtCommit({
+      identity: input.identity,
+      projectId: input.projectId,
+      workflowName: input.workflowName,
+      commitSha,
+      remoteBranch,
+      environment: input.environment,
+    });
+    if (bindings.length === 0) {
+      throw new Error(
+        `Watcher workflow '${input.workflowName}' must declare at least one trigger`,
+      );
+    }
+    const requiredTriggerPrefix = input.requiredTriggerPrefix;
+    if (
+      requiredTriggerPrefix &&
+      !bindings.some((binding) =>
+        binding.kind.startsWith(requiredTriggerPrefix),
+      )
+    ) {
+      throw new Error(
+        `Watcher workflow '${input.workflowName}' must declare at least one ${requiredTriggerPrefix} trigger`,
+      );
+    }
+    const triggerKinds = [...new Set(bindings.map((binding) => binding.kind))];
     const artifact = await this.deps.runs.resolveArtifactAtCommit({
       identity: input.identity,
       projectId: input.projectId,
@@ -248,13 +264,12 @@ export class WatchersService {
         commit_sha: commitSha,
         deployment_artifact_id: artifact.id,
         environment_name: input.environment ?? null,
-        event_kinds: input.eventKinds,
         cursor_sequence: String(input.cursorSequence),
         expires_at: new Date(Date.now() + expiresInSeconds * 1_000),
       })
       .returningAll()
       .executeTakeFirstOrThrow();
-    return mapWatcher(row);
+    return mapWatcher(row, triggerKinds);
   }
 
   async list(input: {
@@ -274,7 +289,20 @@ export class WatchersService {
       .where("session_id", "=", input.sessionId)
       .orderBy("created_at", "desc")
       .execute();
-    return rows.map(mapWatcher);
+    return Promise.all(
+      rows.map(async (row) => {
+        const bindings = await this.deps.triggers.listAtCommit({
+          identity: input.identity,
+          projectId: input.projectId,
+          workflowName: row.workflow_name,
+          commitSha: row.commit_sha,
+          remoteBranch: row.remote_branch,
+        });
+        return mapWatcher(row, [
+          ...new Set(bindings.map((binding) => binding.kind)),
+        ]);
+      }),
+    );
   }
 
   async stop(input: {
@@ -327,7 +355,19 @@ export class WatchersService {
           .execute();
         continue;
       }
-      const kinds = stringArray(row.event_kinds);
+      const identity = persistedIdentity(
+        row.owner_identity,
+        row.tenant_id,
+        row.owner_external_user_id,
+      );
+      const bindings = await this.deps.triggers.listAtCommit({
+        identity,
+        projectId: row.project_id,
+        workflowName: row.workflow_name,
+        commitSha: row.commit_sha,
+        remoteBranch: row.remote_branch,
+      });
+      const kinds = [...new Set(bindings.map((binding) => binding.kind))];
       const events = await this.deps.events.list({
         projectId: row.project_id,
         afterSequence: Number(row.cursor_sequence),
@@ -336,30 +376,40 @@ export class WatchersService {
       });
       for (const event of events) {
         try {
-          const run = await this.deps.runs.triggerAtCommit({
-            identity: persistedIdentity(
-              row.owner_identity,
-              row.tenant_id,
-              row.owner_external_user_id,
-            ),
+          const result = await this.deps.triggers.fireAtCommit({
+            identity,
             projectId: row.project_id,
-            workflowName: row.workflow_name,
             commitSha: row.commit_sha,
             remoteBranch: row.remote_branch,
             environment: row.environment_name ?? undefined,
-            input: JSON.parse(JSON.stringify({ watcherId: row.id, event })),
+            kind: event.kind,
+            payload: JSON.parse(JSON.stringify(event)),
+            workflows: [row.workflow_name],
+            mode: "async",
             correlationKey: `watcher:${row.id}:event:${event.id}`,
             onConflict: "ignore",
           });
-          await this.db
-            .insertInto("watcher_runs")
-            .values({ watcher_id: row.id, event_id: event.id, run_id: run.id })
-            .onConflict((conflict) =>
-              conflict.columns(["watcher_id", "event_id"]).doNothing(),
-            )
-            .execute();
+          if (result.runs.length > 1) {
+            throw new Error(
+              "A Watcher event matched more than one workflow run",
+            );
+          }
+          const run = result.runs[0];
+          if (run) {
+            await this.db
+              .insertInto("watcher_runs")
+              .values({
+                watcher_id: row.id,
+                event_id: event.id,
+                run_id: run.runId,
+              })
+              .onConflict((conflict) =>
+                conflict.columns(["watcher_id", "event_id"]).doNothing(),
+              )
+              .execute();
+          }
           await this.advance(row.id, event.sequence, null);
-          dispatched += 1;
+          dispatched += result.runs.length;
         } catch (error) {
           await this.recordFailure(
             row.id,
@@ -428,16 +478,6 @@ export function startWatcherDispatcher(input: {
   };
 }
 
-function stringArray(value: Json): string[] {
-  if (
-    !Array.isArray(value) ||
-    !value.every((item) => typeof item === "string")
-  ) {
-    throw new Error("Watcher event kinds are invalid");
-  }
-  return value;
-}
-
 function watcherStatus(value: string): Watcher["status"] {
   if (
     value !== "active" &&
@@ -450,7 +490,7 @@ function watcherStatus(value: string): Watcher["status"] {
   return value;
 }
 
-function mapWatcher(row: WatcherRow): Watcher {
+function mapWatcher(row: WatcherRow, triggerKinds: string[]): Watcher {
   return {
     id: row.id,
     projectId: row.project_id,
@@ -462,7 +502,7 @@ function mapWatcher(row: WatcherRow): Watcher {
     commitSha: row.commit_sha,
     deploymentArtifactId: row.deployment_artifact_id,
     environment: row.environment_name,
-    eventKinds: stringArray(row.event_kinds),
+    triggerKinds,
     cursorSequence: Number(row.cursor_sequence),
     status: watcherStatus(row.status),
     expiresAt: row.expires_at?.toISOString() ?? null,

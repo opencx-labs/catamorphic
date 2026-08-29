@@ -168,6 +168,14 @@ export {
   mcpToolKind,
 } from "./define-trigger-kind.js";
 export { FsBundleStore } from "./fs-bundle-store.js";
+export {
+  GITHUB_PROJECT_EVENT_TRIGGER_KINDS,
+  githubCheckRun,
+  githubCheckSuite,
+  githubPullRequest,
+  githubPullRequestReview,
+  githubWorkflowRun,
+} from "./github-trigger-kinds.js";
 export type {
   FilesResource,
   GithubResource,

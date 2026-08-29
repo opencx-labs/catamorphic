@@ -3,7 +3,12 @@ import type {
   Catamorphic,
   ScopedClient,
 } from "@catamorphic/server-sdk";
-import { defineTriggerKind, hole, mcpToolKind } from "@catamorphic/server-sdk";
+import {
+  defineTriggerKind,
+  GITHUB_PROJECT_EVENT_TRIGGER_KINDS,
+  hole,
+  mcpToolKind,
+} from "@catamorphic/server-sdk";
 import { z } from "zod";
 import { DESKTOP_TENANT_ID, DESKTOP_USER_ID } from "./boot.js";
 
@@ -70,6 +75,7 @@ export const DESKTOP_TRIGGER_KINDS = [
   chatTurnCompleted,
   terminalIdle,
   aiToolCall,
+  ...GITHUB_PROJECT_EVENT_TRIGGER_KINDS,
 ];
 
 /** Tool-kind roster behind the desktop's per-project MCP endpoint. */
