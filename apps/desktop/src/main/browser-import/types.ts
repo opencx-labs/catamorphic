@@ -18,15 +18,20 @@ export interface ImportableProfile {
   bookmarkCount: number; // total bookmarks found (0 if none)
 }
 
-/** A bookmark read from another browser, folder path flattened to one level. */
+/** A bookmark read from another browser with its full folder ancestry. */
 export interface ImportedBookmark {
   label: string;
   url: string;
-  folder?: string;
+  folderPath?: string[];
+}
+
+export interface ImportedFolder {
+  /** Root-to-leaf labels. Paths, rather than source ids, cross browsers. */
+  path: string[];
 }
 
 export interface ImportedBookmarks {
-  folders: string[]; // unique folder labels, in first-seen order
+  folders: ImportedFolder[];
   bookmarks: ImportedBookmark[];
 }
 

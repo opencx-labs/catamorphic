@@ -1,5 +1,5 @@
 import * as icons from "lucide-react";
-import { MoreHorizontal } from "lucide-react";
+import { ChevronRight, MoreHorizontal } from "lucide-react";
 import {
   type ReactNode,
   useEffect,
@@ -47,6 +47,7 @@ export function SidebarItemRow({
   active,
   labelContent,
   end,
+  disclosure,
   onOpen,
   onAction,
   renaming,
@@ -63,6 +64,7 @@ export function SidebarItemRow({
   active?: boolean;
   labelContent?: ReactNode;
   end?: ReactNode;
+  disclosure?: { open: boolean; onToggle: () => void };
   onOpen: () => void;
   onAction: (entry: SidebarMenuEntry) => void;
   /** Swap the label for an inline rename field. */
@@ -246,6 +248,19 @@ export function SidebarItemRow({
         />
       ) : (
         <>
+          {disclosure && (
+            <button
+              type="button"
+              onClick={disclosure.onToggle}
+              className="ml-1 grid size-6 shrink-0 cursor-pointer place-items-center rounded text-fg-faint hover:text-fg"
+              aria-label={`${disclosure.open ? "Collapse" : "Expand"} ${label}`}
+              aria-expanded={disclosure.open}
+            >
+              <ChevronRight
+                className={`size-3 transition-transform duration-150 ${disclosure.open ? "rotate-90" : ""}`}
+              />
+            </button>
+          )}
           <TitleHint title={previewEnabled ? undefined : title}>
             <button
               type="button"
@@ -253,7 +268,7 @@ export function SidebarItemRow({
                 disarmPreview();
                 onOpen();
               }}
-              className={`flex h-full min-w-0 flex-1 cursor-pointer items-center gap-2 px-2 text-left text-[13px] hover:text-fg ${
+              className={`flex h-full min-w-0 flex-1 cursor-pointer items-center gap-2 ${disclosure ? "pr-2" : "px-2"} text-left text-[13px] hover:text-fg ${
                 active ? "text-fg" : "text-fg-muted"
               }`}
               aria-current={active || undefined}

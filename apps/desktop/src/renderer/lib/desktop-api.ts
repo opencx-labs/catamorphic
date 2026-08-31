@@ -498,11 +498,13 @@ export interface Bookmark {
   label: string;
   url: string;
   folderId?: string;
+  faviconUrl?: string;
 }
 
 export interface BookmarkFolder {
   id: string;
   label: string;
+  parentId?: string;
 }
 
 export interface ProjectBookmarks {
@@ -512,7 +514,7 @@ export interface ProjectBookmarks {
 
 export interface BookmarksData {
   project: ProjectBookmarks;
-  pinned: Bookmark[];
+  pinned: ProjectBookmarks;
 }
 
 export interface BookmarksChange {
@@ -520,7 +522,7 @@ export interface BookmarksChange {
   projectId: string | null;
   project: ProjectBookmarks | null;
   profileId: string;
-  pinned: Bookmark[];
+  pinned: ProjectBookmarks;
 }
 
 /** Mirror of main/git-view.ts shapes (the renderer never imports main). */
@@ -607,11 +609,13 @@ export interface SidebarPreview {
 
 export interface SidebarItem {
   label: string;
-  url: string;
+  url?: string;
   icon?: string;
   open?: "tab" | "replace";
   menu?: SidebarMenuEntry[];
   preview?: SidebarPreview | false;
+  items?: SidebarItem[];
+  collapsed?: boolean;
 }
 
 export interface SidebarSectionConfig {
@@ -1021,10 +1025,15 @@ export interface CatamorphicDesktopApi {
     url: string;
     title: string;
   }) => Promise<void>;
+  browserSetHistoryFavicon: (input: {
+    profileId: string;
+    url: string;
+    faviconUrl: string;
+  }) => Promise<void>;
   browserRecentHistory: (input: {
     profileId: string;
     limit?: number;
-  }) => Promise<{ url: string; title: string }[]>;
+  }) => Promise<{ url: string; title: string; faviconUrl?: string }[]>;
   browserSuggest: (input: {
     profileId: string;
     query: string;
@@ -1116,11 +1125,13 @@ export interface CatamorphicDesktopApi {
     label: string;
     url: string;
     folderId?: string;
+    faviconUrl?: string;
   }) => Promise<Bookmark>;
   bookmarksAddFolder: (input: {
     projectId: string;
     profileId: string;
     label: string;
+    parentId?: string;
   }) => Promise<BookmarkFolder>;
   bookmarksUpdate: (input: {
     projectId: string;

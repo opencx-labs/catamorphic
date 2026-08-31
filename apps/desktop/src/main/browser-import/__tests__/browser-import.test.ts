@@ -135,14 +135,14 @@ describe("chromiumImporter.readBookmarks", () => {
   const importer = makeImporter(makeFixture());
   const result = importer.readBookmarks("Default");
 
-  it("flattens 3-level nesting to the nearest ancestor folder", () => {
+  it("retains complete folder ancestry at any depth", () => {
     const byLabel = new Map(result.bookmarks.map((b) => [b.label, b]));
-    expect(byLabel.get("Root Link")?.folder).toBeUndefined();
-    expect(byLabel.get("GitHub")?.folder).toBe("Dev");
-    expect(byLabel.get("Vite")?.folder).toBe("Tools");
-    expect(byLabel.get("Bun")?.folder).toBe("CLI"); // 3 levels deep
-    expect(byLabel.get("Docs")?.folder).toBeUndefined(); // root of "other"
-    expect(byLabel.get("News")?.folder).toBe("Mobile"); // under "synced"
+    expect(byLabel.get("Root Link")?.folderPath).toBeUndefined();
+    expect(byLabel.get("GitHub")?.folderPath).toEqual(["Dev"]);
+    expect(byLabel.get("Vite")?.folderPath).toEqual(["Dev", "Tools"]);
+    expect(byLabel.get("Bun")?.folderPath).toEqual(["Dev", "Tools", "CLI"]);
+    expect(byLabel.get("Docs")?.folderPath).toBeUndefined();
+    expect(byLabel.get("News")?.folderPath).toEqual(["Mobile"]);
   });
 
   it("skips non-http(s) URLs", () => {
@@ -151,15 +151,20 @@ describe("chromiumImporter.readBookmarks", () => {
     expect(urls.some((u) => u.startsWith("javascript:"))).toBe(false);
   });
 
-  it("dedupes exact (url, label, folder) triples", () => {
+  it("dedupes exact (url, label, folder path) triples", () => {
     const rootLinks = result.bookmarks.filter(
       (b) => b.url === "https://root.example.com",
     );
     expect(rootLinks).toHaveLength(1);
   });
 
-  it("lists unique folder labels in first-seen order", () => {
-    expect(result.folders).toEqual(["Dev", "Tools", "CLI", "Mobile"]);
+  it("lists unique folder paths in first-seen order", () => {
+    expect(result.folders).toEqual([
+      { path: ["Dev"] },
+      { path: ["Dev", "Tools"] },
+      { path: ["Dev", "Tools", "CLI"] },
+      { path: ["Mobile"] },
+    ]);
   });
 
   it("returns 6 bookmarks total for the fixture", () => {
@@ -225,8 +230,9 @@ describe("firefoxImporter", () => {
       INSERT INTO moz_bookmarks VALUES
         (1, 2, NULL, 0, 0, 'Bookmarks Toolbar', 'toolbar_____'),
         (2, 2, NULL, 1, 0, 'Research', 'folder______'),
-        (3, 1, 10, 2, 0, 'Example', 'example_____'),
-        (4, 1, 11, 1, 1, 'Local', 'local_______');
+        (3, 1, 10, 5, 0, 'Example', 'example_____'),
+        (4, 1, 11, 1, 1, 'Local', 'local_______'),
+        (5, 2, NULL, 2, 0, 'AI', 'ai__________');
       INSERT INTO moz_places VALUES
         (10, 'https://example.com/path'),
         (11, 'http://localhost:3000');
@@ -246,12 +252,12 @@ describe("firefoxImporter", () => {
       ],
     });
     expect(importer.readBookmarks("Profiles/work.default-release")).toEqual({
-      folders: ["Research"],
+      folders: [{ path: ["Research"] }, { path: ["Research", "AI"] }],
       bookmarks: [
         {
           label: "Example",
           url: "https://example.com/path",
-          folder: "Research",
+          folderPath: ["Research", "AI"],
         },
         { label: "Local", url: "http://localhost:3000" },
       ],

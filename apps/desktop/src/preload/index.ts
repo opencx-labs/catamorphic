@@ -405,10 +405,16 @@ const api = {
     title: string;
   }): Promise<void> =>
     ipcRenderer.invoke("catamorphic:browser-history-retitle", input),
+  browserSetHistoryFavicon: (input: {
+    profileId: string;
+    url: string;
+    faviconUrl: string;
+  }): Promise<void> =>
+    ipcRenderer.invoke("catamorphic:browser-history-favicon", input),
   browserRecentHistory: (input: {
     profileId: string;
     limit?: number;
-  }): Promise<{ url: string; title: string }[]> =>
+  }): Promise<{ url: string; title: string; faviconUrl?: string }[]> =>
     ipcRenderer.invoke("catamorphic:browser-history-recent", input),
   browserSuggest: (input: {
     profileId: string;
@@ -643,12 +649,14 @@ const api = {
     label: string;
     url: string;
     folderId?: string;
+    faviconUrl?: string;
   }): Promise<unknown> =>
     ipcRenderer.invoke("catamorphic:bookmarks-add", input),
   bookmarksAddFolder: (input: {
     projectId: string;
     profileId: string;
     label: string;
+    parentId?: string;
   }): Promise<unknown> =>
     ipcRenderer.invoke("catamorphic:bookmarks-add-folder", input),
   bookmarksUpdate: (input: {

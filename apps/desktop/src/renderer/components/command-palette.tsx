@@ -39,6 +39,7 @@ import {
 import {
   Fragment,
   type KeyboardEvent,
+  type ReactNode,
   useCallback,
   useEffect,
   useLayoutEffect,
@@ -63,6 +64,7 @@ import {
   type Profile,
   type ProjectAgentInfo,
   type SidebarConfig,
+  type SidebarItem,
 } from "../lib/desktop-api.js";
 import { formatBinding, useKeybindings } from "../lib/keybindings.js";
 import { useListMotion } from "../lib/list-motion.js";
@@ -70,6 +72,7 @@ import { useProjectSkills } from "../lib/skills.js";
 import { useApps } from "../screens/app-screen.js";
 import { resolveInput } from "../screens/browser-screen.js";
 import { PILL_SURFACE } from "./context-pill.js";
+import { SiteFavicon } from "./site-favicon.js";
 import type { WorkspaceTab } from "./workspace-tabs.js";
 
 /**
@@ -254,6 +257,7 @@ const EFFORT_LEVELS: Array<{
 interface PaletteItem {
   id: string;
   icon: LucideIcon;
+  iconNode?: ReactNode;
   label: string;
   /** Muted inline text, e.g. a URL host or the item's type. */
   detail?: string;
@@ -266,6 +270,8 @@ interface PaletteItem {
    * unfiltered picker list pins it first (normal ranking while searching).
    */
   current?: boolean;
+  /** Web rows saved as bookmarks carry a star at the right edge. */
+  bookmarked?: boolean;
   /**
    * Scope label rendered above this row when the previous row carries a
    * different group (e.g. "Project agents" in the agent pickers).
@@ -377,12 +383,18 @@ const NEW_TAB_HINT_ACTIONS: KeybindingAction[] = [
 
 function NewTabShortcutHints({
   keybindings,
+  actionAvailability,
 }: {
   keybindings: Record<KeybindingAction, string>;
+  actionAvailability?: Partial<Record<ActionId, boolean>>;
 }) {
+  const visibleActions = NEW_TAB_HINT_ACTIONS.filter(
+    (action) => actionAvailability?.[action] !== false,
+  );
+  if (visibleActions.length === 0) return null;
   return (
     <div className="mt-10 grid shrink-0 grid-cols-2 gap-x-12 gap-y-2.5">
-      {NEW_TAB_HINT_ACTIONS.map((action) => {
+      {visibleActions.map((action) => {
         const definition = BUILTIN_ACTIONS.find((entry) => entry.id === action);
         if (!definition) return null;
         return (
@@ -448,6 +460,7 @@ export function CommandPalette({
   onSendToAgent,
   onRunSkill,
   actionHandlers,
+  actionAvailability,
   agents,
   defaultAgentId,
   focusedChat,
@@ -491,6 +504,8 @@ export function CommandPalette({
   onRunSkill: (name: string, mode: "float" | "tab") => void;
   /** One handler per registry action — the same map the shortcuts use. */
   actionHandlers: Record<ActionId, (mode?: "side") => void>;
+  /** False means the command cannot change the current workspace state. */
+  actionAvailability?: Partial<Record<ActionId, boolean>>;
   /** The profile's configured agents (for the agent/effort pickers). */
   agents: AgentInfo[];
   defaultAgentId: string | null;
@@ -678,7 +693,7 @@ export function CommandPalette({
     let cancelled = false;
     void desktopApi.bookmarksGet({ projectId, profileId }).then((data) => {
       if (!cancelled) {
-        setBookmarks([...data.pinned, ...data.project.bookmarks]);
+        setBookmarks([...data.pinned.bookmarks, ...data.project.bookmarks]);
       }
     });
     const unsubscribe = desktopApi.onBookmarksChanged((change) => {
@@ -687,12 +702,12 @@ export function CommandPalette({
       // no project scope attached — refetch the combined view.
       if (change.projectId === null) {
         void desktopApi.bookmarksGet({ projectId, profileId }).then((data) => {
-          setBookmarks([...data.pinned, ...data.project.bookmarks]);
+          setBookmarks([...data.pinned.bookmarks, ...data.project.bookmarks]);
         });
         return;
       }
       if (change.projectId === projectId && change.project) {
-        setBookmarks([...change.pinned, ...change.project.bookmarks]);
+        setBookmarks([...change.pinned.bookmarks, ...change.project.bookmarks]);
       }
     });
     return () => {
@@ -703,7 +718,9 @@ export function CommandPalette({
 
   // Refetched on every open — the overlay stays mounted while closed, so
   // a mount-only fetch would serve stale history forever.
-  const [history, setHistory] = useState<{ url: string; title: string }[]>([]);
+  const [history, setHistory] = useState<
+    { url: string; title: string; faviconUrl?: string }[]
+  >([]);
   useEffect(() => {
     if (!profileId || !open) return;
     let cancelled = false;
@@ -768,6 +785,7 @@ export function CommandPalette({
     const available = BUILTIN_ACTIONS.filter(
       (action: ActionDefinition) =>
         !action.hiddenInPalette &&
+        actionAvailability?.[action.id as ActionId] !== false &&
         // Session-scoped: only offered while a chat is focused.
         (action.id !== "switch-agent" || hasFocusedChat) &&
         // Project policy (ADR 0062): incognito may be disabled here.
@@ -809,7 +827,13 @@ export function CommandPalette({
               ),
       };
     });
-  }, [keybindings, hasFocusedChat, enterPicker, incognitoAllowed]);
+  }, [
+    keybindings,
+    hasFocusedChat,
+    enterPicker,
+    incognitoAllowed,
+    actionAvailability,
+  ]);
 
   // Skills as commands (ADR 0052): a row is just a message send — into the
   // focused chat when one exists (an action, chat highlighted like other
@@ -916,7 +940,14 @@ export function CommandPalette({
     for (const bookmark of bookmarks) {
       items.push({
         id: `bookmark:${bookmark.id}`,
-        icon: Star,
+        icon: Globe,
+        iconNode: (
+          <SiteFavicon
+            url={bookmark.url}
+            faviconUrl={bookmark.faviconUrl}
+            className="size-4"
+          />
+        ),
         label: bookmark.label,
         detail: hostOf(bookmark.url),
         keywords: [
@@ -926,22 +957,33 @@ export function CommandPalette({
           "bookmark",
         ],
         kind: "navigate",
+        bookmarked: true,
         run: (mode) => onOpenUrl(bookmark.url, mode),
       });
     }
+    const addCustomItems = (customItems: SidebarItem[] | undefined) => {
+      for (const item of customItems ?? []) {
+        if (item.url) {
+          const url = item.url;
+          items.push({
+            id: `custom:${item.label}:${url}`,
+            icon: lucideIcon(item.icon),
+            iconNode: item.icon ? undefined : (
+              <SiteFavicon url={url} className="size-4" />
+            ),
+            label: item.label,
+            detail: hostOf(url),
+            keywords: [item.label, hostOf(url), bareUrl(url), "link"],
+            kind: "navigate",
+            run: (mode) => onOpenUrl(url, mode),
+          });
+        }
+        addCustomItems(item.items);
+      }
+    };
     for (const section of sidebarConfig?.sections ?? []) {
       if (section.type !== "custom") continue;
-      for (const item of section.items ?? []) {
-        items.push({
-          id: `custom:${item.label}:${item.url}`,
-          icon: lucideIcon(item.icon),
-          label: item.label,
-          detail: hostOf(item.url),
-          keywords: [item.label, hostOf(item.url), bareUrl(item.url), "link"],
-          kind: "navigate",
-          run: (mode) => onOpenUrl(item.url, mode),
-        });
-      }
+      addCustomItems(section.items);
     }
     items.push({
       id: "tab:settings",
@@ -974,19 +1016,28 @@ export function CommandPalette({
     onOpenUrl,
   ]);
 
-  const historyItems = useMemo<PaletteItem[]>(
-    () =>
-      history.map((entry) => ({
-        id: `history:${entry.url}`,
-        icon: Globe,
-        label: entry.title || entry.url,
-        detail: hostOf(entry.url),
-        keywords: [entry.title, hostOf(entry.url), bareUrl(entry.url)],
-        kind: "navigate" as const,
-        run: (mode) => onOpenUrl(entry.url, mode),
-      })),
-    [history, onOpenUrl],
-  );
+  const historyItems = useMemo<PaletteItem[]>(() => {
+    const bookmarkedUrls = new Set(
+      bookmarks.map((bookmark) => bookmark.url.replace(/\/$/, "")),
+    );
+    return history.map((entry) => ({
+      id: `history:${entry.url}`,
+      icon: Globe,
+      iconNode: (
+        <SiteFavicon
+          url={entry.url}
+          faviconUrl={entry.faviconUrl}
+          className="size-4"
+        />
+      ),
+      label: entry.title || entry.url,
+      detail: hostOf(entry.url),
+      keywords: [entry.title, hostOf(entry.url), bareUrl(entry.url)],
+      kind: "navigate" as const,
+      bookmarked: bookmarkedUrls.has(entry.url.replace(/\/$/, "")),
+      run: (mode) => onOpenUrl(entry.url, mode),
+    }));
+  }, [history, bookmarks, onOpenUrl]);
 
   const trimmed = query.trim();
   const results = useMemo<PaletteItem[]>(() => {
@@ -1758,26 +1809,38 @@ export function CommandPalette({
                       : "cursor-pointer"
                   } ${isSelected ? "bg-bg-overlay text-fg" : "text-fg-muted"}`}
                 >
-                  <Icon className="size-4 shrink-0 text-fg-faint" />
+                  {item.iconNode ?? (
+                    <Icon className="size-4 shrink-0 text-fg-faint" />
+                  )}
                   <span className="truncate">{item.label}</span>
                   {item.detail && (
                     <span className="min-w-0 truncate text-[12px] text-fg-faint">
                       {item.detail}
                     </span>
                   )}
-                  {item.current && (
-                    <span
-                      className="ml-auto flex shrink-0 items-center gap-1 text-[11px] text-fg-faint"
-                      data-testid="palette-current"
-                    >
-                      <Check className="size-3.5" />
-                      current
+                  {(item.bookmarked || item.current || item.shortcut) && (
+                    <span className="ml-auto flex shrink-0 items-center gap-2 text-[11px] text-fg-faint">
+                      {item.bookmarked && (
+                        <Star
+                          className="size-3.5 fill-current"
+                          aria-label="Bookmarked"
+                        />
+                      )}
+                      {item.current && (
+                        <span
+                          className="flex items-center gap-1"
+                          data-testid="palette-current"
+                        >
+                          <Check className="size-3.5" />
+                          current
+                        </span>
+                      )}
+                      {item.shortcut && (
+                        <kbd className="rounded border border-border bg-bg-inset px-1.5 py-0.5 text-[11px] text-fg-faint">
+                          {item.shortcut}
+                        </kbd>
+                      )}
                     </span>
-                  )}
-                  {item.shortcut && (
-                    <kbd className="ml-auto shrink-0 rounded border border-border bg-bg-inset px-1.5 py-0.5 text-[11px] text-fg-faint">
-                      {item.shortcut}
-                    </kbd>
                   )}
                 </button>
               </Fragment>
@@ -1833,7 +1896,10 @@ export function CommandPalette({
         }}
       >
         {panel}
-        <NewTabShortcutHints keybindings={keybindings} />
+        <NewTabShortcutHints
+          keybindings={keybindings}
+          actionAvailability={actionAvailability}
+        />
       </div>
     );
   }

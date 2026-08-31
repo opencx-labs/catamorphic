@@ -133,9 +133,31 @@ describe("agents and profiles", () => {
     );
     await runWait(
       `return !!byText('[role="tab"], button', 'New Tab') &&
-              !!$('textarea[placeholder*="Search or ask"]');`,
+              !!$('textarea[placeholder*="Search or ask"]') &&
+              !wizardVisible() &&
+              !byText('[role="tab"], button', 'Set up agent');`,
       { timeoutMs: 60_000, label: "palette New Tab after project creation" },
     );
+  });
+
+  it("hides palette actions that cannot affect the empty workspace", async () => {
+    await ensurePalette();
+    await resetPalette();
+    await run(`setReactValue(paletteInput(), '>'); return true;`);
+    await runWait(
+      `const text = paletteRows().map((row) => row.textContent).join('\\n');
+       return text.includes('New browser tab') &&
+              !text.includes('Minimize/restore chat') &&
+              !text.includes('Open chat as tab') &&
+              !text.includes('Previous chat') &&
+              !text.includes('Next chat') &&
+              !text.includes('Previous tab') &&
+              !text.includes('Next tab') &&
+              !text.includes('Split with previous tab') &&
+              !text.includes('Reopen closed tab');`,
+      { label: "only actionable commands shown" },
+    );
+    await run(paletteEscape);
   });
 
   it("changes the default agent through the palette picker", async () => {

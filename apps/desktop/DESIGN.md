@@ -475,8 +475,8 @@ memory of *why* the app is the way it is.
   `"replace"` (default for bookmarks/links) = reuse the focused browser
   tab, **falling back to a new tab when the focused tab isn't a browser
   tab**. Verified both modes.
-- **Bookmarks are per project** (with one level of folders — deliberately
-  shallow), saved via the address-bar star. **Pinning is the one
+- **Bookmarks are per project** (the original one-level folder limit was
+  superseded by ADR 0081), saved via the address-bar star. **Pinning is the one
   cross-project mechanism**: pinning *moves* a bookmark from the project
   scope to a profile-wide pinned list shown at the top of the Bookmarks
   section. Considered making sections/items generally pinnable and
@@ -826,8 +826,8 @@ Patterned on what best-in-class palettes converged on (Chrome omnibox
   Chromium importer (Chrome, Edge, Brave, Arc, Chromium) reads Local
   State profiles + Bookmarks files; Settings lets each source profile
   import into the current profile or become a new Catamorphic profile.
-  Bookmarks land as pinned bookmarks (folders flatten — pinned is the
-  bookmarks-bar analog); re-import is idempotent by URL.
+  Bookmarks land as pinned bookmarks (the original flattened import was
+  superseded by ADR 0081); re-import is idempotent by URL.
 
 ### 2026-08-05 — Terminal and editor tabs (libghostty in the workspace)
 - Two new tab kinds join the workspace: **terminal** and **editor**. Both
@@ -3069,3 +3069,19 @@ paths, deliberately independent:
   bootstrap in the manifest start URL. Standalone launch restores the same
   paired-device record and chat context even when the browser does not transfer
   its local storage into the installed app (ADR 0080).
+
+### Recursive sidebar trees and web identity (2026-08-31)
+
+- `sidebar.js` custom items are recursively composable. A node can be a link,
+  a folder, or a collapsible link with children, and every level retains icon,
+  open mode, preview, menu, and initial collapse controls. Agent-authored
+  sections use the same detailed row and disclosure behavior as built-ins.
+- Project and profile-wide bookmarks share one recursive folder model. Chrome
+  and Firefox import preserves full folder ancestry, including empty folders,
+  while existing flat profile bookmark data migrates without loss.
+- Web destinations identify themselves with the page favicon in the sidebar
+  and palette. A star at the palette row's right edge marks saved pages; the
+  star is state, not the page's primary icon.
+- Palette commands are contextual inventory, not disabled promises. Commands
+  that cannot change the current workspace are absent until their target or
+  required state exists.

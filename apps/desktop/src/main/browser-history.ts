@@ -10,11 +10,13 @@ export interface HistoryEntry {
   title: string;
   visitCount: number;
   lastVisitAt: number;
+  faviconUrl?: string;
 }
 
 export interface HistorySuggestion {
   url: string;
   title: string;
+  faviconUrl?: string;
 }
 
 const MAX_ENTRIES = 2000;
@@ -102,6 +104,18 @@ export class BrowserHistoryStore {
     }
   }
 
+  /** Persist the browser-selected favicon once the page reports it. */
+  setFavicon(profileId: string, url: string, faviconUrl: string): void {
+    if (!faviconUrl) return;
+    const entry = this.load(profileId).find(
+      (candidate) => candidate.url === url,
+    );
+    if (entry && entry.faviconUrl !== faviconUrl) {
+      entry.faviconUrl = faviconUrl;
+      this.scheduleWrite(profileId);
+    }
+  }
+
   /**
    * Chrome-style frecency: matches on URL or title, ranked by visit count
    * weighted with recency. The renderer composes the final suggestion rows
@@ -127,7 +141,11 @@ export class BrowserHistoryStore {
       })
       .sort((a, b) => b.score - a.score)
       .slice(0, limit)
-      .map(({ entry }) => ({ url: entry.url, title: entry.title }));
+      .map(({ entry }) => ({
+        url: entry.url,
+        title: entry.title,
+        faviconUrl: entry.faviconUrl,
+      }));
   }
 
   /** Most recently visited pages, newest first. */
@@ -135,7 +153,11 @@ export class BrowserHistoryStore {
     return [...this.load(profileId)]
       .sort((a, b) => b.lastVisitAt - a.lastVisitAt)
       .slice(0, limit)
-      .map((entry) => ({ url: entry.url, title: entry.title }));
+      .map((entry) => ({
+        url: entry.url,
+        title: entry.title,
+        faviconUrl: entry.faviconUrl,
+      }));
   }
 
   /** Best URL whose bare form starts with the input (inline autocomplete). */

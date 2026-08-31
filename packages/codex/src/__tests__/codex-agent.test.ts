@@ -286,6 +286,7 @@ describe("CodexAgent", () => {
         workspace: {
           transport: "http",
           url: `http://127.0.0.1/${context.projectId}/${context.sessionId}`,
+          defaultToolsApprovalMode: "approve",
         },
       }),
     });
@@ -304,6 +305,7 @@ describe("CodexAgent", () => {
           mcp_servers: {
             workspace: {
               url: "http://127.0.0.1/project-1/chat-1",
+              default_tools_approval_mode: "approve",
             },
           },
         },

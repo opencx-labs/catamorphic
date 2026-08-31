@@ -1,17 +1,14 @@
-import {
-  Bookmark as BookmarkIcon,
-  ChevronRight,
-  Folder,
-  Pin,
-} from "lucide-react";
+import { ChevronRight, Folder } from "lucide-react";
 import { useEffect, useState } from "react";
 import {
   type Bookmark,
   type BookmarksData,
   desktopApi,
+  type ProjectBookmarks,
   type SidebarMenuEntry,
 } from "../lib/desktop-api.js";
 import { SidebarItemRow } from "./sidebar-item-row.js";
+import { SiteFavicon } from "./site-favicon.js";
 
 /** Fallbacks when sidebar.js doesn't override the section's menu. */
 const PROJECT_MENU: SidebarMenuEntry[] = [
@@ -31,9 +28,9 @@ const PINNED_MENU: SidebarMenuEntry[] = [
 ];
 
 /**
- * Per-project bookmarks with one level of folders, plus the profile-wide
- * "pinned" group on top. Rows are the shared SidebarItemRow, so a
- * bookmark and a config-defined custom item behave identically.
+ * Project and profile-wide bookmark trees. Rows are the shared
+ * SidebarItemRow, so a bookmark and a config-defined custom item behave
+ * identically.
  */
 export function BookmarksNav({
   projectId,
@@ -54,7 +51,8 @@ export function BookmarksNav({
   const [renamingId, setRenamingId] = useState<string | null>(null);
   const isEmpty =
     !data ||
-    (data.pinned.length === 0 &&
+    (data.pinned.bookmarks.length === 0 &&
+      data.pinned.folders.length === 0 &&
       data.project.bookmarks.length === 0 &&
       data.project.folders.length === 0);
   useEffect(() => {
@@ -87,7 +85,8 @@ export function BookmarksNav({
   const { project, pinned } = data;
 
   if (
-    pinned.length === 0 &&
+    pinned.bookmarks.length === 0 &&
+    pinned.folders.length === 0 &&
     project.bookmarks.length === 0 &&
     project.folders.length === 0
   ) {
@@ -140,11 +139,7 @@ export function BookmarksNav({
         label={bookmark.label}
         title={bookmark.url}
         icon={
-          isPinned ? (
-            <Pin className="size-3.5 shrink-0 text-fg-faint" />
-          ) : (
-            <BookmarkIcon className="size-3.5 shrink-0 text-fg-faint" />
-          )
+          <SiteFavicon url={bookmark.url} faviconUrl={bookmark.faviconUrl} />
         }
         menu={menuOverride ?? (isPinned ? PINNED_MENU : PROJECT_MENU)}
         onOpen={() => onOpen(bookmark.url)}
@@ -166,21 +161,38 @@ export function BookmarksNav({
     </li>
   );
 
-  const rootBookmarks = project.bookmarks.filter(
-    (bookmark) => !bookmark.folderId,
-  );
+  const renderScope = (scope: ProjectBookmarks, isPinned: boolean) => {
+    const renderFolder = (folderId: string): React.ReactNode => {
+      const folder = scope.folders.find((entry) => entry.id === folderId);
+      if (!folder) return null;
+      return (
+        <BookmarkFolderRow key={folder.id} label={folder.label}>
+          {scope.bookmarks
+            .filter((bookmark) => bookmark.folderId === folder.id)
+            .map((bookmark) => row(bookmark, isPinned))}
+          {scope.folders
+            .filter((candidate) => candidate.parentId === folder.id)
+            .map((candidate) => renderFolder(candidate.id))}
+        </BookmarkFolderRow>
+      );
+    };
+
+    return (
+      <>
+        {scope.bookmarks
+          .filter((bookmark) => !bookmark.folderId)
+          .map((bookmark) => row(bookmark, isPinned))}
+        {scope.folders
+          .filter((folder) => !folder.parentId)
+          .map((folder) => renderFolder(folder.id))}
+      </>
+    );
+  };
 
   return (
     <ul className="flex flex-col gap-0.5">
-      {pinned.map((bookmark) => row(bookmark, true))}
-      {rootBookmarks.map((bookmark) => row(bookmark, false))}
-      {project.folders.map((folder) => (
-        <BookmarkFolderRow key={folder.id} label={folder.label}>
-          {project.bookmarks
-            .filter((bookmark) => bookmark.folderId === folder.id)
-            .map((bookmark) => row(bookmark, false))}
-        </BookmarkFolderRow>
-      ))}
+      {renderScope(pinned, true)}
+      {renderScope(project, false)}
     </ul>
   );
 }
@@ -192,7 +204,7 @@ function BookmarkFolderRow({
   label: string;
   children: React.ReactNode;
 }) {
-  const [open, setOpen] = useState(false);
+  const [open, setOpen] = useState(true);
   return (
     <li>
       <button
@@ -207,7 +219,17 @@ function BookmarkFolderRow({
         <Folder className="size-3.5 shrink-0 text-fg-faint" />
         <span className="truncate">{label}</span>
       </button>
-      {open && <ul className="ml-5 flex flex-col gap-0.5">{children}</ul>}
+      <div
+        className="grid transition-[grid-template-rows,opacity] duration-150"
+        style={{
+          gridTemplateRows: open ? "1fr" : "0fr",
+          opacity: open ? 1 : 0,
+        }}
+      >
+        <div className="overflow-hidden">
+          <ul className="ml-5 flex flex-col gap-0.5">{children}</ul>
+        </div>
+      </div>
     </li>
   );
 }

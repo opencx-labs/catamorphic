@@ -416,6 +416,12 @@ export function registerBrowserSupport(
       history.retitle(input.profileId, input.url, input.title);
     },
   );
+  ipcMain.handle(
+    "catamorphic:browser-history-favicon",
+    (_event, input: { profileId: string; url: string; faviconUrl: string }) => {
+      history.setFavicon(input.profileId, input.url, input.faviconUrl);
+    },
+  );
 
   ipcMain.handle(
     "catamorphic:browser-history-recent",
@@ -658,6 +664,7 @@ export function registerBrowserSupport(
         label: string;
         url: string;
         folderId?: string;
+        faviconUrl?: string;
       },
     ) => {
       const bookmark = bookmarks.addBookmark(input.projectId, input);
@@ -669,9 +676,18 @@ export function registerBrowserSupport(
     "catamorphic:bookmarks-add-folder",
     (
       _event,
-      input: { projectId: string; profileId: string; label: string },
+      input: {
+        projectId: string;
+        profileId: string;
+        label: string;
+        parentId?: string;
+      },
     ) => {
-      const folder = bookmarks.addFolder(input.projectId, input.label);
+      const folder = bookmarks.addFolder(
+        input.projectId,
+        input.label,
+        input.parentId,
+      );
       bookmarksChanged(input.projectId, input.profileId);
       return folder;
     },
@@ -806,10 +822,7 @@ export function registerBrowserSupport(
           profilesCreated.push(profile.id);
           targetProfileId = profile.id;
         }
-        bookmarksImported += bookmarks.importPinned(
-          targetProfileId,
-          imported.bookmarks,
-        );
+        bookmarksImported += bookmarks.importPinned(targetProfileId, imported);
         if (targetProfileId === currentProfileId) {
           broadcast("catamorphic:bookmarks-changed", {
             projectId: null,

@@ -78,13 +78,13 @@ function queryBookmarks(file: string): ImportedBookmarks {
     database = new DatabaseSync(file, { readOnly: true });
     const rows = database
       .prepare(`
-        SELECT b.title AS title, p.url AS url,
-               parent.title AS folder, parent.guid AS parent_guid
+        SELECT b.id AS id, b.type AS type, b.parent AS parent,
+               b.title AS title, b.guid AS guid, p.url AS url
         FROM moz_bookmarks AS b
-        JOIN moz_places AS p ON p.id = b.fk
-        LEFT JOIN moz_bookmarks AS parent ON parent.id = b.parent
-        WHERE b.type = 1
-          AND (p.url LIKE 'http://%' OR p.url LIKE 'https://%')
+        LEFT JOIN moz_places AS p ON p.id = b.fk
+        WHERE b.type = 2
+           OR (b.type = 1 AND
+               (p.url LIKE 'http://%' OR p.url LIKE 'https://%'))
         ORDER BY b.id
       `)
       .all() as Array<Record<string, unknown>>;
@@ -95,34 +95,54 @@ function queryBookmarks(file: string): ImportedBookmarks {
       "unfiled_____",
       "mobile______",
     ]);
+    const byId = new Map<number, Record<string, unknown>>();
+    for (const row of rows) {
+      if (typeof row.id === "number") byId.set(row.id, row);
+    }
+    const folderPath = (parentId: unknown): string[] => {
+      const path: string[] = [];
+      const seen = new Set<number>();
+      let id = typeof parentId === "number" ? parentId : undefined;
+      while (id !== undefined && !seen.has(id)) {
+        seen.add(id);
+        const folder = byId.get(id);
+        if (!folder) break;
+        if (rootGuids.has(String(folder.guid))) break;
+        if (typeof folder.title === "string" && folder.title.trim()) {
+          path.unshift(folder.title.trim());
+        }
+        id = typeof folder.parent === "number" ? folder.parent : undefined;
+      }
+      return path;
+    };
+    const folders = rows
+      .filter(
+        (row) =>
+          row.type === 2 &&
+          !rootGuids.has(String(row.guid)) &&
+          typeof row.title === "string" &&
+          row.title.trim(),
+      )
+      .map((row) => ({
+        path: [...folderPath(row.parent), String(row.title).trim()],
+      }));
     const bookmarks: ImportedBookmark[] = [];
-    const folders: string[] = [];
-    const folderSeen = new Set<string>();
     const bookmarkSeen = new Set<string>();
     for (const row of rows) {
-      if (typeof row.url !== "string") continue;
+      if (row.type !== 1 || typeof row.url !== "string") continue;
       const title =
         typeof row.title === "string" && row.title.trim()
           ? row.title.trim()
           : row.url;
-      const folder =
-        typeof row.folder === "string" &&
-        row.folder.trim() &&
-        !rootGuids.has(String(row.parent_guid))
-          ? row.folder.trim()
-          : undefined;
-      const key = `${row.url}\n${title}\n${folder ?? ""}`;
+      const path = folderPath(row.parent);
+      const key = `${row.url}\n${title}\n${JSON.stringify(path)}`;
       if (bookmarkSeen.has(key)) continue;
       bookmarkSeen.add(key);
       bookmarks.push({
         label: title,
         url: row.url,
-        ...(folder ? { folder } : {}),
+        ...(path.length > 0 ? { folderPath: path } : {}),
       });
-      if (folder && !folderSeen.has(folder)) {
-        folderSeen.add(folder);
-        folders.push(folder);
-      }
     }
     return { folders, bookmarks };
   } catch {

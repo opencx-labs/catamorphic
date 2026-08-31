@@ -137,6 +137,7 @@ export function BrowserScreen({
   // navigation (src is load-time-only), address bar focused.
   const [firstUrl, setFirstUrl] = useState(initialUrl || null);
   const [pageUrl, setPageUrl] = useState(initialUrl);
+  const [faviconUrl, setFaviconUrl] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   // A main-frame load failed (DNS, connection, TLS…): the pane shows an
   // error card with a retry instead of sitting silently white forever.
@@ -395,7 +396,16 @@ export function BrowserScreen({
       }) as EventListener);
       view.addEventListener("page-favicon-updated", ((event: CustomEvent) => {
         const { favicons } = event as unknown as { favicons: string[] };
-        report({ faviconUrl: favicons[0] ?? null });
+        const nextFavicon = favicons[0] ?? null;
+        setFaviconUrl(nextFavicon);
+        report({ faviconUrl: nextFavicon });
+        if (nextFavicon) {
+          void desktopApi.browserSetHistoryFavicon({
+            profileId,
+            url: view.getURL(),
+            faviconUrl: nextFavicon,
+          });
+        }
       }) as EventListener);
     },
     [profileId, remountWebview],
@@ -544,7 +554,7 @@ export function BrowserScreen({
   // too, so starring a pinned page doesn't create a project duplicate.
   const currentBookmark: (Bookmark & { pinned: boolean }) | undefined = (() => {
     if (!bookmarks) return undefined;
-    const pinned = bookmarks.pinned.find((entry) =>
+    const pinned = bookmarks.pinned.bookmarks.find((entry) =>
       sameUrl(entry.url, pageUrl),
     );
     if (pinned) return { ...pinned, pinned: true };
@@ -561,6 +571,7 @@ export function BrowserScreen({
         profileId,
         label: pageTitleRef.current || pageUrl,
         url: pageUrl,
+        faviconUrl: faviconUrl ?? undefined,
       });
       return;
     }

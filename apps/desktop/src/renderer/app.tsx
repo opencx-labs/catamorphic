@@ -9,6 +9,7 @@ import type { AgentSession, ProjectSummary } from "@catamorphic/react/types";
 import {
   ChevronRight,
   Columns2,
+  Folder,
   FolderPlus,
   GitBranch,
   LayoutGrid,
@@ -72,6 +73,7 @@ import { RemoteHistoryModal } from "./components/remote-history-modal.js";
 import { type RemoteFeatures, RemoteNav } from "./components/remote-nav.js";
 import { ShortcutHint } from "./components/shortcut-hint.js";
 import { SidebarItemRow } from "./components/sidebar-item-row.js";
+import { SiteFavicon } from "./components/site-favicon.js";
 import {
   type PendingToolPermission,
   ToolPermissionModal,
@@ -92,6 +94,7 @@ import {
   type ProjectAgentInfo,
   type SessionCheckoutInfo,
   type SidebarConfig,
+  type SidebarItem,
   type SidebarMenuEntry,
   type SidebarSectionConfig,
 } from "./lib/desktop-api.js";
@@ -405,7 +408,11 @@ const hydrateWorkspace = (raw: unknown): Workspace | null => {
   if (typeof raw !== "object" || raw === null) return null;
   const snapshot = raw as Partial<Workspace>;
   const ws: Workspace = {
-    tabs: Array.isArray(snapshot.tabs) ? snapshot.tabs : [],
+    tabs: Array.isArray(snapshot.tabs)
+      ? snapshot.tabs.filter(
+          (tab) => tab.kind !== "agent-setup" && tab.kind !== "mcpapp",
+        )
+      : [],
     chats: Array.isArray(snapshot.chats) ? snapshot.chats : [],
     browsers: Array.isArray(snapshot.browsers) ? snapshot.browsers : [],
     terminals: [],
@@ -1855,6 +1862,25 @@ export function App() {
       return { ...ws, tabs: [...ws.tabs, tab], activeTabKey: key };
     });
   }, [projectId, agentsData, hasAgents, activeProfileId, updateWorkspace]);
+
+  // Agent discovery is asynchronous at launch. If a persisted setup tab is
+  // restored, or the first empty response races the real agents payload,
+  // reconcile it away as soon as an existing agent is known.
+  useEffect(() => {
+    if (!hasAgents) return;
+    setWizardModalOpen(false);
+    updateWorkspace((ws) => {
+      const tabs = ws.tabs.filter((tab) => tab.kind !== "agent-setup");
+      if (tabs.length === ws.tabs.length) return ws;
+      const lastTab = tabs.at(-1);
+      const activeTabKey = tabs.some((tab) => tabKey(tab) === ws.activeTabKey)
+        ? ws.activeTabKey
+        : lastTab
+          ? tabKey(lastTab)
+          : undefined;
+      return { ...ws, tabs, activeTabKey };
+    });
+  }, [hasAgents, updateWorkspace]);
 
   const minimizeFloatingChats = () =>
     updateWorkspace((ws) => ({
@@ -3929,6 +3955,56 @@ export function App() {
 
   // Everything the palette searches and acts on, shared by both hosts
   // (the Cmd+P overlay and palette "New Tab" tabs).
+  const paletteTargetChat = actionChat(workspace);
+  const paletteTabKeys = orderedTabKeys(workspace);
+  const paletteFloatingChats = workspace.chats.filter(
+    (chat) => chat.mode !== "tab",
+  );
+  const paletteTargetAgentId =
+    focusedSession?.agentId ?? focusedChat?.agentId ?? effectiveDefaultAgentId;
+  const paletteSwitchableAgentIds = new Set([
+    ...(agentsData?.agents.map((agent) => agent.id) ?? []),
+    ...Object.keys(projectAgentNames),
+  ]);
+  if (paletteTargetAgentId) {
+    paletteSwitchableAgentIds.delete(paletteTargetAgentId);
+  }
+  const paletteActionAvailability: Partial<Record<ActionId, boolean>> = {
+    "reopen-tab": workspace.closedTabs.length > 0,
+    "toggle-chat-minimized": paletteTargetChat !== undefined,
+    "chat-to-tab":
+      paletteTargetChat !== undefined &&
+      (paletteTargetChat.mode !== "tab" ||
+        workspace.activeTabKey !== chatTabKey(paletteTargetChat.localId)),
+    "prev-chat":
+      paletteFloatingChats.length > 1 ||
+      (paletteFloatingChats.length === 1 &&
+        paletteFloatingChats[0]?.mode !== "partial"),
+    "next-chat":
+      paletteFloatingChats.length > 1 ||
+      (paletteFloatingChats.length === 1 &&
+        paletteFloatingChats[0]?.mode !== "partial"),
+    "prev-tab": paletteTabKeys.length > 1,
+    "next-tab": paletteTabKeys.length > 1,
+    "split-view": workspace.split !== null || paletteTabKeys.length > 1,
+    "close-tab":
+      workspace.activeTabKey !== null ||
+      workspace.chats.some((chat) => chat.mode === "partial"),
+    "default-agent":
+      (agentsData?.agents.length ?? 0) > 0 ||
+      Object.keys(projectAgentNames).length > 0,
+    "configure-agent":
+      (agentsData?.agents.length ?? 0) > 0 ||
+      Object.keys(projectAgentNames).length > 0,
+    "switch-agent":
+      focusedChat !== undefined && paletteSwitchableAgentIds.size > 0,
+    // Project-agent models are committed in their project definition, so
+    // the mutable model picker only applies to configured profile agents.
+    "switch-model":
+      agentsData?.agents.some((agent) => agent.id === paletteTargetAgentId) ===
+      true,
+    "change-effort": paletteTargetAgentId != null,
+  };
   const paletteProps = projectId
     ? {
         projectId,
@@ -3946,6 +4022,7 @@ export function App() {
         onSendToAgent: sendToAgent,
         onRunSkill: runSkill,
         actionHandlers,
+        actionAvailability: paletteActionAvailability,
         agents: agentsData?.agents ?? [],
         defaultAgentId: effectiveDefaultAgentId,
         focusedChat: focusedChat
@@ -5055,42 +5132,102 @@ function CustomItems({
   }
   return (
     <ul className="flex flex-col gap-0.5">
-      {items.map((item) => {
-        const mode = item.open ?? section.open ?? "replace";
-        return (
-          <li key={`${item.label}:${item.url}`}>
-            <SidebarItemRow
-              label={item.label}
-              title={item.url}
-              icon={item.icon ?? "Globe"}
-              menu={item.menu ?? section.menu ?? DEFAULT_CUSTOM_MENU}
-              preview={item.preview}
-              onOpen={() => onOpenUrl(item.url, mode)}
-              onAction={(entry) => {
-                switch (entry.action) {
-                  case "open":
-                    onOpenUrl(item.url, mode);
-                    break;
-                  case "open-tab":
-                    onOpenUrl(item.url, "tab");
-                    break;
-                  case "open-here":
-                    onOpenUrl(item.url, "replace");
-                    break;
-                  case "copy-url":
-                    void navigator.clipboard.writeText(item.url);
-                    break;
-                  // pin/unpin/rename/remove are bookmark-only; a config
-                  // may list them, but there's nothing to act on here.
-                  default:
-                    break;
-                }
-              }}
-            />
-          </li>
-        );
-      })}
+      {items.map((item) => (
+        <CustomItem
+          key={JSON.stringify(item)}
+          item={item}
+          section={section}
+          onOpenUrl={onOpenUrl}
+        />
+      ))}
     </ul>
+  );
+}
+
+function CustomItem({
+  item,
+  section,
+  onOpenUrl,
+}: {
+  item: SidebarItem;
+  section: SidebarSectionConfig;
+  onOpenUrl: (url: string, mode: "tab" | "replace") => void;
+}) {
+  const [open, setOpen] = useState(item.collapsed !== true);
+  const children = item.items ?? [];
+  const mode = item.open ?? section.open ?? "replace";
+  const openItem = () => {
+    if (item.url) onOpenUrl(item.url, mode);
+    else if (children.length > 0) setOpen((value) => !value);
+  };
+  return (
+    <li>
+      <SidebarItemRow
+        label={item.label}
+        title={item.url}
+        icon={
+          item.icon ??
+          (item.url ? (
+            <SiteFavicon url={item.url} />
+          ) : (
+            <Folder className="size-3.5 shrink-0 text-fg-faint" />
+          ))
+        }
+        menu={
+          item.url
+            ? (item.menu ?? section.menu ?? DEFAULT_CUSTOM_MENU)
+            : (item.menu ?? [])
+        }
+        preview={item.preview}
+        disclosure={
+          children.length > 0
+            ? { open, onToggle: () => setOpen((value) => !value) }
+            : undefined
+        }
+        onOpen={openItem}
+        onAction={(entry) => {
+          if (!item.url) return;
+          switch (entry.action) {
+            case "open":
+              onOpenUrl(item.url, mode);
+              break;
+            case "open-tab":
+              onOpenUrl(item.url, "tab");
+              break;
+            case "open-here":
+              onOpenUrl(item.url, "replace");
+              break;
+            case "copy-url":
+              void navigator.clipboard.writeText(item.url);
+              break;
+            default:
+              break;
+          }
+        }}
+      />
+      {children.length > 0 && (
+        <div
+          className="grid transition-[grid-template-rows,opacity] duration-150"
+          style={{
+            gridTemplateRows: open ? "1fr" : "0fr",
+            opacity: open ? 1 : 0,
+          }}
+        >
+          <div className="overflow-hidden">
+            <ul className="ml-5 flex flex-col gap-0.5">
+              {children.map((child) => (
+                <CustomItem
+                  key={JSON.stringify(child)}
+                  item={child}
+                  section={section}
+                  onOpenUrl={onOpenUrl}
+                />
+              ))}
+            </ul>
+          </div>
+        </div>
+      )}
+    </li>
   );
 }
 
