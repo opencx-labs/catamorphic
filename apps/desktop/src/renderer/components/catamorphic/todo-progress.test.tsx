@@ -20,6 +20,11 @@ const todos = [
   },
 ];
 
+const settlePresence = () =>
+  new Promise<void>((resolve) =>
+    requestAnimationFrame(() => requestAnimationFrame(() => resolve())),
+  );
+
 describe("TodoProgress", () => {
   let container: HTMLDivElement;
   let root: Root;
@@ -44,7 +49,7 @@ describe("TodoProgress", () => {
     );
     expect(trigger?.textContent).toContain("1/2");
     await act(async () => trigger?.click());
-    await act(async () => new Promise(requestAnimationFrame));
+    await act(settlePresence);
 
     const panel = container.querySelector(
       '[data-testid="todo-progress-popover"]',
@@ -62,5 +67,47 @@ describe("TodoProgress", () => {
     expect(item?.nextElementSibling?.textContent).toContain(
       "without duplicating state",
     );
+  });
+
+  it("pairs the progress bar and popover entrances with animated exits", async () => {
+    await act(async () => root.render(<TodoProgress todos={todos} />));
+    const bar = container.querySelector<HTMLElement>(
+      '[data-testid="todo-progress"]',
+    );
+    expect(bar?.className).toContain("opacity-0");
+    await act(settlePresence);
+    expect(bar?.className).toContain("opacity-100");
+
+    const trigger = container.querySelector<HTMLButtonElement>(
+      '[data-testid="todo-progress-trigger"]',
+    );
+    await act(async () => trigger?.click());
+    await act(settlePresence);
+    const popover = container.querySelector<HTMLElement>(
+      '[data-testid="todo-progress-popover"]',
+    );
+    expect(popover?.className).toContain("opacity-100");
+
+    await act(async () => trigger?.click());
+    expect(popover?.className).toContain("opacity-0");
+    expect(popover?.isConnected).toBe(true);
+    await act(async () => {
+      const event = new Event("transitionend", { bubbles: true });
+      Object.defineProperty(event, "propertyName", { value: "opacity" });
+      popover?.dispatchEvent(event);
+    });
+    expect(
+      container.querySelector('[data-testid="todo-progress-popover"]'),
+    ).toBeNull();
+
+    await act(async () => root.render(<TodoProgress todos={[]} />));
+    expect(bar?.className).toContain("opacity-0");
+    expect(bar?.isConnected).toBe(true);
+    await act(async () => {
+      const event = new Event("transitionend", { bubbles: true });
+      Object.defineProperty(event, "propertyName", { value: "opacity" });
+      bar?.dispatchEvent(event);
+    });
+    expect(container.querySelector('[data-testid="todo-progress"]')).toBeNull();
   });
 });

@@ -457,6 +457,39 @@ describe("animate-before-unmount", () => {
     expect(samples.at(-1)?.gone).toBe(true);
   });
 
+  it("tab hover cards fade out before unmounting", async () => {
+    await run(`
+      const tab = $('[data-point-key]');
+      const body = [...tab.querySelectorAll('button')]
+        .find((button) => !button.getAttribute('aria-label')?.startsWith('Close'));
+      body.dispatchEvent(new MouseEvent('mouseover', { bubbles: true }));
+      return true;
+    `);
+    await runWait(
+      `const card = $('[role="tooltip"].animate-fade-in');
+       return !!card && getComputedStyle(card).opacity === '1';`,
+      { label: "tab hover card entered" },
+    );
+    const samples = await run<
+      { t: number; exiting?: boolean; gone?: boolean }[]
+    >(`
+      const tab = $('[data-point-key]');
+      const body = [...tab.querySelectorAll('button')]
+        .find((button) => !button.getAttribute('aria-label')?.startsWith('Close'));
+      const card = $('[role="tooltip"]');
+      body.dispatchEvent(new MouseEvent('mouseout', {
+        bubbles: true,
+        relatedTarget: document.body,
+      }));
+      return sampleUntilGone(card, 'animate-fade-out', 1000);
+    `);
+    expect(
+      samples.some((sample) => sample.exiting),
+      `samples: ${JSON.stringify(samples)}`,
+    ).toBe(true);
+    expect(samples.at(-1)?.gone).toBe(true);
+  });
+
   it("chat messages tween in on every arrival path", async () => {
     // The "preamble" script lands messages on all arrival paths: the
     // optimistic user echo, flushed mid-turn preambles, and the final

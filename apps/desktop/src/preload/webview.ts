@@ -95,6 +95,25 @@ function alignClientHintBrands(): void {
 }
 alignClientHintBrands();
 
+// Electron's BrowserWindow `app-command` event covers browser mouse buttons
+// on Windows/Linux. macOS delivers the auxiliary buttons to the guest page,
+// so forward them to the trusted host instead of leaving them inert.
+if (process.platform === "darwin") {
+  window.addEventListener(
+    "mouseup",
+    (event) => {
+      const direction =
+        event.button === 3 ? "back" : event.button === 4 ? "forward" : null;
+      if (!direction) return;
+      event.preventDefault();
+      ipcRenderer.sendToHost("catamorphic:browser-mouse-history", {
+        direction,
+      });
+    },
+    { capture: true },
+  );
+}
+
 /**
  * Background-tab visibility, Chrome-style: hidden tabs stay mounted (so
  * they keep loading and never reload on switch), but the PAGE must know

@@ -1054,6 +1054,12 @@ export interface CatamorphicDesktopApi {
       shift: boolean;
     }) => void,
   ) => () => void;
+  onBrowserNavigate: (
+    listener: (command: {
+      webContentsId: number | null;
+      direction: "back" | "forward";
+    }) => void,
+  ) => () => void;
   onBrowserCredentialSaveOffer: (
     listener: (offer: BrowserCredentialSaveOffer) => void,
   ) => () => void;

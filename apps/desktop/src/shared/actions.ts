@@ -59,6 +59,20 @@ export const BUILTIN_ACTIONS = [
     keywords: ["browser", "web", "page", "open"],
   },
   {
+    id: "browser-back",
+    label: "Go back",
+    description: "go back in the focused browser tab",
+    defaultBinding: "Cmd+ArrowLeft",
+    keywords: ["browser", "history", "previous", "page", "left"],
+  },
+  {
+    id: "browser-forward",
+    label: "Go forward",
+    description: "go forward in the focused browser tab",
+    defaultBinding: "Cmd+ArrowRight",
+    keywords: ["browser", "history", "next", "page", "right"],
+  },
+  {
     id: "reopen-tab",
     label: "Reopen closed tab",
     description:

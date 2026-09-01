@@ -464,6 +464,20 @@ const api = {
     return () =>
       ipcRenderer.removeListener("catamorphic:browser-guest-key", handler);
   },
+  onBrowserNavigate: (
+    listener: (command: {
+      webContentsId: number | null;
+      direction: "back" | "forward";
+    }) => void,
+  ): (() => void) => {
+    const handler = (
+      _event: unknown,
+      payload: Parameters<typeof listener>[0],
+    ) => listener(payload);
+    ipcRenderer.on("catamorphic:browser-navigate", handler);
+    return () =>
+      ipcRenderer.removeListener("catamorphic:browser-navigate", handler);
+  },
   onBrowserCredentialSaveOffer: (listener: (offer: unknown) => void) => {
     const handler = (_event: unknown, offer: unknown) => listener(offer);
     ipcRenderer.on("catamorphic:browser-credential-save-offer", handler);

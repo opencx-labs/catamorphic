@@ -19,6 +19,7 @@ import {
   desktopApi,
   type SavedCredential,
 } from "../lib/desktop-api.js";
+import { formatBinding, useKeybindings } from "../lib/keybindings.js";
 
 /**
  * A browser page inside a workspace tab: address bar (with Chrome-style
@@ -106,6 +107,7 @@ export function BrowserScreen({
   keepAwake = false,
   onStateChange,
   registerNavigate,
+  registerHistoryNavigate,
   registerGuest,
   onUnsplit,
 }: {
@@ -126,9 +128,14 @@ export function BrowserScreen({
   onUnsplit?: () => void;
   /** Hands the host a navigate(url) for "open in current tab" flows. */
   registerNavigate?: (navigate: (url: string) => void) => void;
+  /** Hands the host back/forward navigation for actions and mouse buttons. */
+  registerHistoryNavigate?: (
+    navigate: (direction: "back" | "forward") => void,
+  ) => void;
   /** Reports the webview guest's WebContents id (null when unmounted). */
   registerGuest?: (guestId: number | null) => void;
 }) {
+  const keybindings = useKeybindings();
   const webviewRef = useRef<WebviewElement | null>(null);
   const inputRef = useRef<HTMLInputElement | null>(null);
   const [partition, setPartition] = useState<string>();
@@ -330,6 +337,16 @@ export function BrowserScreen({
           });
         }
       });
+      view.addEventListener("ipc-message", ((event: CustomEvent) => {
+        const message = event as unknown as {
+          channel: string;
+          args: Array<{ direction?: "back" | "forward" }>;
+        };
+        if (message.channel !== "catamorphic:browser-mouse-history") return;
+        const direction = message.args[0]?.direction;
+        if (direction === "back" && view.canGoBack()) view.goBack();
+        if (direction === "forward" && view.canGoForward()) view.goForward();
+      }) as EventListener);
 
       const sync = () => {
         setCanGoBack(view.canGoBack());
@@ -482,6 +499,34 @@ export function BrowserScreen({
     if (hard) view.reloadIgnoringCache();
     else view.reload();
   }, []);
+
+  const navigateHistory = useCallback((direction: "back" | "forward") => {
+    const view = webviewRef.current;
+    if (!view) return;
+    if (direction === "back" && view.canGoBack()) view.goBack();
+    if (direction === "forward" && view.canGoForward()) view.goForward();
+  }, []);
+
+  const registerHistoryNavigateRef = useRef(registerHistoryNavigate);
+  registerHistoryNavigateRef.current = registerHistoryNavigate;
+  useEffect(() => {
+    registerHistoryNavigateRef.current?.(navigateHistory);
+  }, [navigateHistory]);
+
+  useEffect(() => {
+    return desktopApi.onBrowserNavigate((command) => {
+      const view = webviewRef.current;
+      if (!view) return;
+      if (
+        command.webContentsId !== null &&
+        view.getWebContentsId() !== command.webContentsId
+      ) {
+        return;
+      }
+      if (command.webContentsId === null && !active) return;
+      navigateHistory(command.direction);
+    });
+  }, [active, navigateHistory]);
 
   useEffect(() => {
     if (!active) return;
@@ -721,7 +766,10 @@ export function BrowserScreen({
     <div className="flex min-h-0 flex-1 flex-col">
       {/* Toolbar: back/forward/reload + address bar, scoped to this tab. */}
       <div className="relative flex h-10 shrink-0 items-center gap-1 border-b border-border bg-bg px-2">
-        <ShortcutHint label="Back">
+        <ShortcutHint
+          label="Back"
+          shortcut={formatBinding(keybindings["browser-back"])}
+        >
           <button
             type="button"
             onClick={() => webviewRef.current?.goBack()}
@@ -732,7 +780,10 @@ export function BrowserScreen({
             <ArrowLeft className="size-4" />
           </button>
         </ShortcutHint>
-        <ShortcutHint label="Forward">
+        <ShortcutHint
+          label="Forward"
+          shortcut={formatBinding(keybindings["browser-forward"])}
+        >
           <button
             type="button"
             onClick={() => webviewRef.current?.goForward()}

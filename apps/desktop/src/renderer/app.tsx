@@ -635,25 +635,31 @@ function PaneUnsplitButton({ onClick }: { onClick: () => void }) {
   );
 }
 
-/** Whether the floating chat dock is where the user is working right now. */
-let lastPointerDownInFloatingChat = false;
+/** The floating chat dock where the user's last pointer interaction landed. */
+let lastPointerDownInFloatingChatId: string | undefined;
 if (typeof window !== "undefined") {
   window.addEventListener(
     "pointerdown",
     (event) => {
-      lastPointerDownInFloatingChat =
-        event.target instanceof Element &&
-        event.target.closest("[data-floating-chat]") !== null;
+      const floating =
+        event.target instanceof Element
+          ? event.target.closest<HTMLElement>("[data-floating-chat]")
+          : null;
+      lastPointerDownInFloatingChatId =
+        floating?.dataset.chatLocalId || undefined;
     },
     { capture: true },
   );
 }
-function floatingChatHasFocus(): boolean {
+function focusedChatSurfaceId(): string | undefined {
   const active = document.activeElement;
   if (active && active !== document.body) {
-    return active.closest("[data-floating-chat]") !== null;
+    return (
+      active.closest<HTMLElement>("[data-chat-local-id]")?.dataset
+        .chatLocalId || undefined
+    );
   }
-  return lastPointerDownInFloatingChat;
+  return lastPointerDownInFloatingChatId;
 }
 
 export function App() {
@@ -1316,6 +1322,9 @@ export function App() {
   // navigate(url) handles per live browser tab, for "open in current tab"
   // (bookmarks/links with open:"replace").
   const browserNavigatorsRef = useRef(new Map<string, (url: string) => void>());
+  const browserHistoryNavigatorsRef = useRef(
+    new Map<string, (direction: "back" | "forward") => void>(),
+  );
 
   // Animated close per chat dock — external closers (Cmd+W) must play the
   // same 250ms collapse Escape does, not unmount the dock mid-frame.
@@ -1396,6 +1405,7 @@ export function App() {
           };
         }
         browserNavigatorsRef.current.delete(localId);
+        browserHistoryNavigatorsRef.current.delete(localId);
         browserGuestIdsRef.current.delete(localId);
         const browsers = ws.browsers.filter(
           (browser) => browser.localId !== localId,
@@ -2033,6 +2043,35 @@ export function App() {
   closeChatRef.current = closeChat;
   const closeTabRef = useRef(closeTab);
   closeTabRef.current = closeTab;
+  const closeDispatchPendingRef = useRef(false);
+  const lastChatStepDownRef = useRef<
+    | {
+        localId: string;
+        at: number;
+      }
+    | undefined
+  >(undefined);
+  useEffect(() => {
+    const cancelStepDownHandoff = (event: PointerEvent) => {
+      const pending = lastChatStepDownRef.current;
+      if (!pending) return;
+      const targetChatId =
+        event.target instanceof Element
+          ? event.target.closest<HTMLElement>("[data-chat-local-id]")?.dataset
+              .chatLocalId
+          : undefined;
+      if (targetChatId !== pending.localId) {
+        lastChatStepDownRef.current = undefined;
+      }
+    };
+    window.addEventListener("pointerdown", cancelStepDownHandoff, {
+      capture: true,
+    });
+    return () =>
+      window.removeEventListener("pointerdown", cancelStepDownHandoff, {
+        capture: true,
+      });
+  }, []);
   // An OAuth consent tab has done its job once the loopback callback was
   // served: close it (with the tab's exit motion) instead of leaving a
   // "you can close this tab" page behind. The tab may still be mid-redirect
@@ -2058,22 +2097,46 @@ export function App() {
     });
   }, []);
   const closeActiveSurface = useCallback(() => {
-    const ws = workspaceRef.current;
-    const floating = ws.chats.find((chat) => chat.mode === "partial");
-    // The floating chat only owns Cmd+W while the user is IN it. Focus is
-    // the tell (its composer takes focus on open); when nothing focusable
-    // holds focus (a click on a pane's blank chrome, a webview whose guest
-    // swallowed the click), the last pointer-down decides. Clicking into
-    // the tab behind the dock and pressing Cmd+W closes the tab.
-    if (floating && (!ws.activeTabKey || floatingChatHasFocus())) {
-      // Through the dock's animated close (same collapse as Escape);
-      // straight removal only if the dock never registered one.
-      const animated = chatClosersRef.current.get(floating.localId);
-      if (animated) animated();
-      else closeChatRef.current(floating.localId);
-      return;
-    }
-    if (ws.activeTabKey) closeTabRef.current(ws.activeTabKey);
+    // A guest-focused key can arrive through both Electron's menu and the
+    // webview relay. Decide once after those deliveries and any preceding
+    // surface transition (for example Escape: tab → floating) have settled.
+    if (closeDispatchPendingRef.current) return;
+    closeDispatchPendingRef.current = true;
+    const steppedDown = lastChatStepDownRef.current;
+    const requestedChatId =
+      steppedDown && performance.now() - steppedDown.at < 500
+        ? steppedDown.localId
+        : focusedChatSurfaceId();
+    lastChatStepDownRef.current = undefined;
+    window.setTimeout(() => {
+      closeDispatchPendingRef.current = false;
+      const ws = workspaceRef.current;
+      const focusedChat = ws.chats.find(
+        (chat) => chat.localId === requestedChatId,
+      );
+      const floating =
+        (focusedChat?.mode === "partial" ? focusedChat : undefined) ??
+        ws.chats.find((chat) => chat.mode === "partial");
+      // The floating chat only owns Cmd+W while the user is IN it. Focus is
+      // the tell (its composer takes focus on open); when nothing focusable
+      // holds focus (a click on a pane's blank chrome, a webview whose guest
+      // swallowed the click), the last pointer-down decides. Clicking into
+      // the tab behind the dock and pressing Cmd+W closes the tab.
+      if (
+        floating &&
+        (!ws.activeTabKey ||
+          focusedChat?.mode === "partial" ||
+          focusedChat?.mode === "min")
+      ) {
+        // Through the dock's animated close (same collapse as Escape);
+        // straight removal only if the dock never registered one.
+        const animated = chatClosersRef.current.get(floating.localId);
+        if (animated) animated();
+        else closeChatRef.current(floating.localId);
+        return;
+      }
+      if (ws.activeTabKey) closeTabRef.current(ws.activeTabKey);
+    }, 25);
   }, []);
   useEffect(() => {
     return desktopApi.onCloseSurface(closeActiveSurface);
@@ -2087,6 +2150,13 @@ export function App() {
     (chat) =>
       chat.localId === workspace.activeChatId && chatVisible(workspace, chat),
   );
+  const navigateFocusedBrowserHistory = (direction: "back" | "forward") => {
+    const activeKey = workspaceRef.current.activeTabKey;
+    if (!activeKey?.startsWith("browser:")) return;
+    browserHistoryNavigatorsRef.current.get(
+      activeKey.slice("browser:".length),
+    )?.(direction);
+  };
   const focusedSession = focusedChat?.sessionId
     ? sessionsById.get(focusedChat.sessionId)
     : undefined;
@@ -2839,6 +2909,8 @@ export function App() {
     "split-view": toggleSplit,
     "new-browser-tab": (mode) =>
       openBrowserTab("", mode === "side" ? { side: true } : undefined),
+    "browser-back": () => navigateFocusedBrowserHistory("back"),
+    "browser-forward": () => navigateFocusedBrowserHistory("forward"),
     "reopen-tab": reopenTab,
     "new-terminal-tab": (mode) =>
       openTerminalTab(mode === "side" ? { side: true } : undefined),
@@ -3986,6 +4058,8 @@ export function App() {
         paletteFloatingChats[0]?.mode !== "partial"),
     "prev-tab": paletteTabKeys.length > 1,
     "next-tab": paletteTabKeys.length > 1,
+    "browser-back": workspace.activeTabKey?.startsWith("browser:") === true,
+    "browser-forward": workspace.activeTabKey?.startsWith("browser:") === true,
     "split-view": workspace.split !== null || paletteTabKeys.length > 1,
     "close-tab":
       workspace.activeTabKey !== null ||
@@ -4380,6 +4454,12 @@ export function App() {
                         navigate,
                       )
                     }
+                    registerHistoryNavigate={(navigate) =>
+                      browserHistoryNavigatorsRef.current.set(
+                        browser.localId,
+                        navigate,
+                      )
+                    }
                     registerGuest={(guestId) => {
                       if (guestId === null) {
                         browserGuestIdsRef.current.delete(browser.localId);
@@ -4720,6 +4800,12 @@ export function App() {
                     ),
                   }))
                 }
+                onEscapeToFloating={(localId) => {
+                  lastChatStepDownRef.current = {
+                    localId,
+                    at: performance.now(),
+                  };
+                }}
                 onClose={closeChat}
                 registerClose={(close) =>
                   chatClosersRef.current.set(entry.localId, close)

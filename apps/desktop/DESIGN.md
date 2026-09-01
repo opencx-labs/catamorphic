@@ -3085,3 +3085,23 @@ paths, deliberately independent:
 - Palette commands are contextual inventory, not disabled promises. Commands
   that cannot change the current workspace are absent until their target or
   required state exists.
+
+### Chat progress and browser navigation polish (2026-08-31)
+
+- Agent progress is temporary chat chrome. The agent may clear its list with
+  an empty update when it no longer helps; the compact progress control and
+  its popover both mirror their entrance on exit and remain mounted until the
+  exit finishes. The user still inspects but does not edit agent-owned items.
+- Desktop-owned tool calls narrate actions and results in plain language.
+  Todo updates show status-marked task rows and descriptions; other workspace
+  tools use readable field labels. Raw JSON remains a fallback for unknown or
+  connector-owned tools whose schema the desktop does not control.
+- Empty-chat copy is one stable pair per chat: a short invitation in the
+  timeline and a complementary, charismatic composer prompt. The two lines
+  should move the user forward without repeating each other.
+- Tab hover cards use the same paired fade lifecycle as other overlays and
+  animate before unmounting. Browser back and forward are configurable actions
+  with Cmd+Left and Cmd+Right defaults, and native browser mouse commands route
+  to the focused webview. Guest-focused Cmd+W can arrive through both the
+  application menu and the webview relay, so close dispatches coalesce within
+  one physical keypress and mutate exactly one surface.

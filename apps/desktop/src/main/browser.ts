@@ -160,6 +160,42 @@ export function registerBrowserSupport(
   const history = new BrowserHistoryStore(profilesDir);
   const vault = new PasswordVault(profilesDir);
   const bookmarks = new BookmarksStore(path.join(userData, "bookmarks.json"));
+  const appCommandListeners = new Map<
+    BrowserWindow,
+    (event: Electron.Event, command: string) => void
+  >();
+
+  const attachBrowserCommands = (
+    _event: Electron.Event | null,
+    window: BrowserWindow,
+  ) => {
+    const listener = (_commandEvent: Electron.Event, command: string) => {
+      const direction =
+        command === "browser-backward"
+          ? "back"
+          : command === "browser-forward"
+            ? "forward"
+            : null;
+      if (!direction) return;
+      const focused = webContents.getFocusedWebContents();
+      const guestId =
+        focused?.getType() === "webview" &&
+        focused.hostWebContents === window.webContents
+          ? focused.id
+          : null;
+      window.webContents.send("catamorphic:browser-navigate", {
+        webContentsId: guestId,
+        direction,
+      });
+    };
+    appCommandListeners.set(window, listener);
+    window.on("app-command", listener);
+    window.once("closed", () => appCommandListeners.delete(window));
+  };
+  app.on("browser-window-created", attachBrowserCommands);
+  for (const window of BrowserWindow.getAllWindows()) {
+    attachBrowserCommands(null, window);
+  }
 
   interface PendingCredential {
     id: string;
@@ -324,8 +360,29 @@ export function registerBrowserSupport(
     // keys and forward Cmd-combos for the renderer to match against its
     // (user-configurable) bindings. Cmd+L is special-cased to the address
     // bar of the owning tab.
-    contents.on("before-input-event", (_e, input) => {
-      if (input.type !== "keyDown" || !input.meta) return;
+    contents.on("before-input-event", (event, input) => {
+      if (input.type !== "keyDown") return;
+      const browserDirection =
+        input.key === "BrowserBack"
+          ? "back"
+          : input.key === "BrowserForward"
+            ? "forward"
+            : null;
+      if (
+        browserDirection &&
+        !input.meta &&
+        !input.control &&
+        !input.alt &&
+        !input.shift
+      ) {
+        event.preventDefault();
+        contents.hostWebContents?.send("catamorphic:browser-navigate", {
+          webContentsId: contents.id,
+          direction: browserDirection,
+        });
+        return;
+      }
+      if (!input.meta) return;
       if (
         !input.control &&
         !input.alt &&
@@ -862,6 +919,12 @@ export function registerBrowserSupport(
   return {
     history,
     dispose: () => {
+      app.removeListener("browser-window-created", attachBrowserCommands);
+      for (const [window, listener] of appCommandListeners) {
+        if (!window.isDestroyed())
+          window.removeListener("app-command", listener);
+      }
+      appCommandListeners.clear();
       ipcMain.removeListener("catamorphic:browser-login-forms", onLoginForms);
       ipcMain.removeListener(
         "catamorphic:browser-credentials-submitted",

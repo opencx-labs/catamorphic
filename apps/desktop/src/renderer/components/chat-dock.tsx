@@ -161,23 +161,23 @@ const SURFACE_ICONS = {
   mcpapp: AppWindow,
 } as const;
 
-/** Short, charismatic empty-state openers; one is picked per chat. */
-const EMPTY_STATE_PHRASES = [
-  "Ready when you are.",
-  "Where are we headed?",
-  "What are we building?",
-  "Let's make something.",
-  "Your move.",
-  "What's on your mind?",
-  "Big or small, bring it.",
-  "Let's get into it.",
-  "What's next?",
-  "Say the word.",
-  "Blank canvas. Go.",
-  "What should exist?",
-  "Start anywhere.",
-  "I'm all ears.",
-  "Let's build.",
+/** Stable, complementary empty-state and composer copy for each chat. */
+const EMPTY_CHAT_PROMPTS = [
+  { empty: "Ready when you are.", composer: "Give me the first move…" },
+  { empty: "Where are we headed?", composer: "Name the destination…" },
+  { empty: "What are we building?", composer: "Describe the first piece…" },
+  { empty: "Let's make something.", composer: "Sketch the idea…" },
+  { empty: "Your move.", composer: "Tell me where to start…" },
+  { empty: "What's on your mind?", composer: "Drop it here…" },
+  { empty: "Big or small, bring it.", composer: "Name the thing to tackle…" },
+  { empty: "Let's get into it.", composer: "Point me at the problem…" },
+  { empty: "What's next?", composer: "Set the next move…" },
+  { empty: "Say the word.", composer: "Give me the word…" },
+  { empty: "Blank canvas. Go.", composer: "Draw the first line…" },
+  { empty: "What should exist?", composer: "Describe what you want…" },
+  { empty: "Start anywhere.", composer: "Give me one thread…" },
+  { empty: "I'm all ears.", composer: "Talk me through it…" },
+  { empty: "Let's build.", composer: "What comes first?…" },
 ] as const;
 
 /** Document types the composer accepts as pasted/attached files. */
@@ -482,14 +482,14 @@ function activityChips(
 }
 
 /** Stable per-chat pick: hash the id so re-renders don't re-roll. */
-const emptyStateFor = (localId: string): string => {
+const emptyChatPromptFor = (localId: string) => {
   let hash = 0;
   for (let i = 0; i < localId.length; i += 1) {
     hash = (hash * 31 + localId.charCodeAt(i)) | 0;
   }
   return (
-    EMPTY_STATE_PHRASES[Math.abs(hash) % EMPTY_STATE_PHRASES.length] ??
-    EMPTY_STATE_PHRASES[0]
+    EMPTY_CHAT_PROMPTS[Math.abs(hash) % EMPTY_CHAT_PROMPTS.length] ??
+    EMPTY_CHAT_PROMPTS[0]
   );
 };
 
@@ -1217,6 +1217,8 @@ export interface ChatDockProps {
   /** Set on forked chats: reveal the parent conversation. */
   onOpenParent?: () => void;
   onEntryChange: (entry: ChatDockEntry) => void;
+  /** Records the tab → floating Escape handoff for an immediate Cmd+W. */
+  onEscapeToFloating?: (localId: string) => void;
   /** Close the chat entirely (dismissing an empty chat removes it). */
   onClose: (localId: string) => void;
   /**
@@ -1258,7 +1260,7 @@ export function ChatDock({
   projectId,
   entry,
   title,
-  placeholder = "Describe what you want to build…",
+  placeholder,
   tabActive,
   refreshWhileIdle = false,
   slot = "full",
@@ -1280,6 +1282,7 @@ export function ChatDock({
   onFork,
   onOpenParent,
   onEntryChange,
+  onEscapeToFloating,
   onClose,
   registerClose,
   registerMinimize,
@@ -1287,6 +1290,8 @@ export function ChatDock({
   onSessionCreated,
   onSignalsChange,
 }: ChatDockProps) {
+  const emptyPrompt = emptyChatPromptFor(entry.localId);
+  const composerPlaceholder = placeholder ?? emptyPrompt.composer;
   const environmentQuery = useEnvironments(projectId, {
     workload: "agent",
     ...((entry.agentId ?? defaultAgentId)
@@ -1917,6 +1922,8 @@ export function ChatDock({
   entryRef.current = entry;
   const onEntryChangeRef = useRef(onEntryChange);
   onEntryChangeRef.current = onEntryChange;
+  const onEscapeToFloatingRef = useRef(onEscapeToFloating);
+  onEscapeToFloatingRef.current = onEscapeToFloating;
 
   // Palette "Send to agent": the entry arrives with the message attached;
   // fire it once on mount and strip it so remounts don't re-send.
@@ -2424,6 +2431,12 @@ export function ChatDock({
       if (minimizingRef.current) return;
       event.preventDefault();
       if (entryRef.current.mode === "tab") {
+        // Claim focus before the workspace mode flip. The floating pose can
+        // commit before the effect below runs; without this synchronous
+        // handoff, a Cmd+W in that frame may be attributed to the tab that
+        // just surfaced behind the chat.
+        focusComposerInternally();
+        onEscapeToFloatingRef.current?.(entryRef.current.localId);
         onEntryChangeRef.current({ ...entryRef.current, mode: "partial" });
       } else if (isEmptyRef.current) {
         // Escaping an untouched floating chat closes it — no empty bubble.
@@ -2434,7 +2447,7 @@ export function ChatDock({
     };
     window.addEventListener("keydown", onWindowKeyDown);
     return () => window.removeEventListener("keydown", onWindowKeyDown);
-  }, [escapeTarget]);
+  }, [escapeTarget, focusComposerInternally]);
 
   // In a split, a tabbed chat occupies only its (ratio-sized) share of
   // the view; floating chats always overlay the full area.
@@ -2800,7 +2813,7 @@ export function ChatDock({
               roster.agents.find((agent) => agent.id === agentId)?.name
             }
             error={chat.error?.message ?? null}
-            emptyState={emptyStateFor(entry.localId)}
+            emptyState={emptyPrompt.empty}
             onLinkClick={onLinkClick}
             onFileClick={onFileClick}
             resolveToolIcon={resolveToolIcon}
@@ -2989,8 +3002,8 @@ export function ChatDock({
                   maxPills={MAX_ATTACHMENTS}
                   placeholder={
                     accepts.length > 0
-                      ? placeholder
-                      : `${placeholder.replace(/…$/, "")} (text only)…`
+                      ? composerPlaceholder
+                      : `${composerPlaceholder.replace(/…$/, "")} (text only)…`
                   }
                   ariaLabel="Message the assistant"
                 />

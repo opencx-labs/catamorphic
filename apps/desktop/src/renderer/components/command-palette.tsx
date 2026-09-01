@@ -2,6 +2,7 @@ import { useAgentSessions, useWorkflows } from "@catamorphic/react";
 import type { AgentSession, ProjectSummary } from "@catamorphic/react/types";
 import * as lucide from "lucide-react";
 import {
+  ArrowLeft,
   ArrowRight,
   Bot,
   ChartColumn,
@@ -110,6 +111,8 @@ const ACTION_ICONS: Partial<Record<ActionId, LucideIcon>> = {
   "next-tab": ChevronRight,
   "split-view": Columns2,
   "new-browser-tab": Globe,
+  "browser-back": ArrowLeft,
+  "browser-forward": ArrowRight,
   "reopen-tab": History,
   "new-terminal-tab": SquareTerminal,
   "new-editor-tab": FileCode,
