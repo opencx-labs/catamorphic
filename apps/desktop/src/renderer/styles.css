@@ -396,7 +396,10 @@ kbd {
   }
 }
 
-/* Chat dock rise-in, matching its collapse transition in reverse */
+/* Chat dock rise-in and collapse. The explicit exit keyframe keeps the
+   interpolation observable even when it interrupts the entrance animation;
+   relying on a transition after removing dock-in can skip directly to the
+   resting pose in Chromium. */
 @keyframes dock-in {
   from {
     transform: translateY(16px) scale(0.985);
@@ -412,6 +415,23 @@ kbd {
    and same 16px/0.985 resting pose), so open and minimize feel identical. */
 .animate-dock-in {
   animation: dock-in 250ms cubic-bezier(0.2, 0, 0, 1);
+}
+
+@keyframes dock-out {
+  from {
+    translate: 0 0;
+    scale: 1;
+    opacity: 1;
+  }
+  to {
+    translate: 0 16px;
+    scale: 0.985;
+    opacity: 0;
+  }
+}
+
+.animate-dock-out {
+  animation: dock-out 250ms cubic-bezier(0.2, 0, 0, 1) forwards;
 }
 
 /* Text fields (inputs, selects, folder pickers, composer wrappers): one

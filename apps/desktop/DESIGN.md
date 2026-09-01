@@ -1936,7 +1936,8 @@ Patterned on what best-in-class palettes converged on (Chrome omnibox
   dock's collapse to the floating hidden pose while the entry is still
   mode "tab" (`presentsAsTab` drives the visual pose), then flips the
   mode — tab-out, bubble-in, and the tab switch land after the tween.
-  The floating dock keeps its direct flip; nothing competes with it.
+  Floating docks now stage the same way so every minimize path completes the
+  paired dock-out motion before the bubble appears.
 - **Retry is never a dead button.** After an auth failure + reconnect,
   the credential change rebuilds the provider, so the retry re-anchored
   a fresh harness session from the settled transcript — which excludes
@@ -3105,3 +3106,6 @@ paths, deliberately independent:
   to the focused webview. Guest-focused Cmd+W can arrive through both the
   application menu and the webview relay, so close dispatches coalesce within
   one physical keypress and mutate exactly one surface.
+- Floating chat exit uses an explicit dock-out keyframe paired with dock-in.
+  Close and minimize stage their state change until it finishes, which keeps
+  Chromium from skipping the exit when an entrance animation is interrupted.

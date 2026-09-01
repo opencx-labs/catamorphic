@@ -1941,16 +1941,14 @@ export function ChatDock({
     });
   }, []);
 
-  // Closing an empty chat plays the same 250ms collapse as minimizing —
-  // `closing` drops the expanded classes first, the unmount follows.
+  // Closing an empty chat plays the same 250ms collapse as minimizing.
+  // Both use an explicit exit keyframe so interrupting dock-in cannot make
+  // Chromium skip the collapse transition before the delayed unmount.
   const [closing, setClosing] = useState(false);
-  // Minimizing a chat TAB stages the same way (the registered-close
-  // pattern): the collapse tween plays first while the workspace is
-  // still untouched, and only then does the mode flip to "min" — the
-  // tab switch, strip tab-out, and bubble-in land AFTER the tween.
-  // Flipping the mode first made that whole workspace re-render (next
-  // tab's content included) stall the first ~100ms of a 250ms tween,
-  // which read as "the collapse doesn't animate".
+  // Minimizing a chat stages the same way as registered close: the collapse
+  // plays first, then the mode flips to "min". For a tab this also keeps the
+  // workspace re-render, tab switch, strip tab-out, and bubble-in out of the
+  // tween's critical path.
   const [minimizing, setMinimizing] = useState(false);
   const minimizingRef = useRef(false);
   const expanded =
@@ -2010,12 +2008,7 @@ export function ChatDock({
 
   const dismiss = () => {
     if (isEmpty) animatedClose();
-    // From a fullscreen tab, animate the collapse BEFORE the mode flip
-    // (see animatedMinimize); the floating dock keeps the direct flip —
-    // its collapse is the expanded-class transition, and no workspace
-    // tab switch competes with it.
-    else if (isTab && tabActive) animatedMinimize();
-    else setMode("min");
+    else animatedMinimize();
   };
 
   const takeComposer = (): {
@@ -2442,7 +2435,7 @@ export function ChatDock({
         // Escaping an untouched floating chat closes it — no empty bubble.
         animatedCloseRef.current();
       } else {
-        onEntryChangeRef.current({ ...entryRef.current, mode: "min" });
+        animatedMinimizeRef.current();
       }
     };
     window.addEventListener("keydown", onWindowKeyDown);
@@ -2539,9 +2532,11 @@ export function ChatDock({
                 paletteTargeted && !isTab ? "border-accent" : "border-border"
               }`
         } ${
-          expanded
-            ? "translate-y-0 scale-100 opacity-100 animate-dock-in"
-            : "pointer-events-none translate-y-4 scale-[0.985] opacity-0"
+          closing || minimizing
+            ? "pointer-events-none translate-y-4 scale-[0.985] opacity-0 animate-dock-out"
+            : expanded
+              ? "translate-y-0 scale-100 opacity-100 animate-dock-in"
+              : "pointer-events-none translate-y-4 scale-[0.985] opacity-0"
         }`}
         aria-label={title}
         aria-hidden={!expanded}

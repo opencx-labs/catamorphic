@@ -226,18 +226,14 @@ describe("paired motion (enter/exit mirrors)", () => {
     ).toBeLessThanOrEqual(50);
   });
 
-  it("dock open animation matches the dock's collapse transition", async () => {
-    await run(`pressKey('n', { metaKey: true }); return true;`);
-    await runWait(`return !!visibleDock();`, { label: "floating dock open" });
-    const timing = await run<{ animationMs: number; transitionMs: number }>(`
-      const cs = getComputedStyle(visibleDock());
-      return {
-        animationMs: toMs(cs.animationDuration.split(',')[0]),
-        transitionMs: toMs(cs.transitionDuration.split(',')[0]),
-      };
-    `);
-    // Open (dock-in keyframe) and minimize (transition) must be one system.
-    expect(timing.animationMs).toBe(timing.transitionMs);
+  it("dock-in and dock-out match in duration and easing", async () => {
+    const rules = await collectAnimationRules();
+    const enter = rules.find((rule) => rule.selector === "animate-dock-in");
+    const exit = rules.find((rule) => rule.selector === "animate-dock-out");
+    expect(enter).toBeDefined();
+    expect(exit).toBeDefined();
+    expect(exit?.durationMs).toBe(enter?.durationMs);
+    expect(exit?.easing).toBe(enter?.easing);
   });
 
   it("the dock's minimized pose mirrors dock-in's starting pose", async () => {
