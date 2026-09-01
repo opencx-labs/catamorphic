@@ -20,10 +20,9 @@ protocols:
     schemes:
       - catamorphic
 publish:
-  provider: github
-  owner: opencx-labs
-  repo: catamorphic
-  publishAutoUpdate: false
+  provider: generic
+  url: https://raw.githubusercontent.com/opencx-labs/homebrew-tap/main/updates
+  publishAutoUpdate: true
 # Packages that load assets or native code from disk at runtime must escape
 # the asar archive: pglite (wasm), microsandbox (NAPI addon + platform
 # binaries), catamorphic db migrations (.sql read via fs), and the runtime

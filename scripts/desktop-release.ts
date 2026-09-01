@@ -1,10 +1,12 @@
-import { mkdirSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 
 const DESKTOP_TAG_PREFIX = "desktop-v";
 const PRERELEASE_VERSION =
   /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)-[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*$/;
 const SHA256 = /^[a-f0-9]{64}$/;
+const RELEASE_DOWNLOAD_ROOT =
+  "https://github.com/opencx-labs/catamorphic/releases/download";
 
 export function verifyDesktopRelease(input: {
   tag: string;
@@ -52,6 +54,7 @@ export function renderHomebrewCask(input: {
   name "Catamorphic"
   desc "Local-first workspace for projects, agents, workflows, and apps"
   homepage "https://github.com/opencx-labs/catamorphic"
+  auto_updates true
 
   depends_on arch: :arm64
   depends_on macos: ">= :monterey"
@@ -66,6 +69,36 @@ export function renderHomebrewCask(input: {
   ]
 end
 `;
+}
+
+export function desktopUpdateMetadataName(version: string): string {
+  if (!PRERELEASE_VERSION.test(version)) {
+    throw new Error(
+      `Desktop update version must be a SemVer prerelease: ${version}`,
+    );
+  }
+  const prerelease = version.split("-")[1];
+  const channel = prerelease?.split(".")[0];
+  if (!channel)
+    throw new Error(`Desktop update channel is missing: ${version}`);
+  return `${channel}-mac.yml`;
+}
+
+export function rewriteDesktopUpdateMetadata(input: {
+  version: string;
+  content: string;
+}): string {
+  const metadataName = desktopUpdateMetadataName(input.version);
+  let content = input.content;
+  for (const extension of ["dmg", "zip"] as const) {
+    const artifact = `Catamorphic-${input.version}-arm64.${extension}`;
+    if (!content.includes(artifact)) {
+      throw new Error(`${metadataName} does not reference ${artifact}`);
+    }
+    const url = `${RELEASE_DOWNLOAD_ROOT}/desktop-v${input.version}/${artifact}`;
+    content = content.replaceAll(artifact, url);
+  }
+  return content;
 }
 
 function option(name: string): string {
@@ -95,7 +128,22 @@ function main(): void {
     writeFileSync(output, cask, "utf8");
     return;
   }
-  throw new Error("Usage: desktop-release.ts <verify|write-cask> [options]");
+  if (command === "update-metadata-name") {
+    process.stdout.write(`${desktopUpdateMetadataName(option("--version"))}\n`);
+    return;
+  }
+  if (command === "prepare-update-metadata") {
+    const input = option("--input");
+    const content = rewriteDesktopUpdateMetadata({
+      version: option("--version"),
+      content: readFileSync(input, "utf8"),
+    });
+    writeFileSync(input, content, "utf8");
+    return;
+  }
+  throw new Error(
+    "Usage: desktop-release.ts <verify|write-cask|update-metadata-name|prepare-update-metadata> [options]",
+  );
 }
 
 if (import.meta.main) main();

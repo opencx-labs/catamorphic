@@ -1,6 +1,6 @@
 # 0079: Desktop prerelease distribution
 
-- **Status:** Accepted
+- **Status:** Accepted; update policy superseded by [0080](0080-desktop-updates-and-migration-backups.md)
 - **Date:** 2026-08-29
 
 ## Context

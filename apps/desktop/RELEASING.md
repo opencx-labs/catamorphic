@@ -1,9 +1,11 @@
 # Releasing the desktop app
 
 The desktop release contract is recorded in
-[ADR 0079](../../docs/decisions/0079-desktop-prerelease-distribution.md).
+[ADR 0079](../../docs/decisions/0079-desktop-prerelease-distribution.md) and
+[ADR 0080](../../docs/decisions/0080-desktop-updates-and-migration-backups.md).
 GitHub Releases is the canonical binary source. The Homebrew cask installs the
-same notarized DMG.
+same notarized DMG, and the tap carries the small metadata file packaged apps
+use to discover updates.
 
 ## One-time setup
 
@@ -13,7 +15,8 @@ same notarized DMG.
 2. Create an App Store Connect API key with access to notarization. Download
    the P8 private key and record its key id and issuer id.
 3. Create the public `opencx-labs/homebrew-tap` repository with `main` as its
-   default branch and a `Casks` directory.
+   default branch. The workflow maintains its `Casks` and `updates`
+   directories.
 4. Create a `desktop-release` GitHub environment in this repository. Protect
    it with required reviewers if release publication should require a manual
    approval.
@@ -40,8 +43,8 @@ Never commit certificates, keys, passwords, or encoded credentials.
 
 Run the `Desktop prerelease` workflow manually from the intended commit. A
 manual dispatch builds, signs, notarizes, and verifies the app, then retains
-the DMG, ZIP, and checksum file as workflow artifacts. It does not create a
-GitHub release or change the Homebrew tap.
+the DMG, ZIP, blockmaps, update metadata, and checksum file as workflow
+artifacts. It does not create a GitHub release or change the Homebrew tap.
 
 Install the DMG from the workflow artifact on a clean Apple silicon Mac user
 account. Verify:
@@ -56,6 +59,8 @@ account. Verify:
   the hosted PWA.
 - `LICENSE.txt`, `NOTICE.txt`, and the bundled PWA are present in the app
   resources.
+- Help > Check for Updates reports that the installed dry run is current or
+  finds the expected newer alpha channel release.
 
 ## Publish a prerelease
 
@@ -70,12 +75,16 @@ desktop package version. It then:
 2. Signs the app with Developer ID and submits it to Apple's notary service.
 3. Verifies the signature, Gatekeeper assessment, stapled ticket, bundle id,
    URL scheme, DMG, and ZIP.
-4. Creates or updates the GitHub prerelease and uploads SHA-256 checksums.
-5. Generates `Casks/catamorphic.rb` from the released DMG checksum, validates
-   its Ruby syntax and Homebrew style, and pushes it to the Homebrew tap.
+4. Rewrites generated update metadata to the tagged GitHub asset URLs.
+5. Creates or updates the GitHub prerelease and uploads the DMG, ZIP,
+   blockmaps, update metadata, and SHA-256 checksums.
+6. Generates `Casks/catamorphic.rb` from the released DMG checksum, validates
+   its Ruby syntax and Homebrew style, then advances the cask and
+   `updates/alpha-mac.yml` together in the Homebrew tap.
 
 The publication steps are rerunnable. Existing release assets are replaced,
-and an unchanged cask produces no tap commit.
+and an unchanged cask and feed produce no tap commit. GitHub assets are always
+published before the feed points clients to them.
 
 ## User install and upgrade
 
@@ -84,5 +93,14 @@ brew install --cask opencx-labs/tap/catamorphic
 brew upgrade --cask opencx-labs/tap/catamorphic
 ```
 
-DMG users install a newer Catamorphic app over the existing copy in
-Applications. The first alpha line has no in-app updater.
+Installed builds also check the alpha channel shortly after launch, every six
+hours, and after wake. The app asks before downloading and again before
+restarting. It never restarts while an agent or terminal is active. Help >
+Check for Updates runs the same check on demand. DMG users can still install a
+newer Catamorphic app over the existing copy in Applications.
+
+Before a packaged version first opens an existing PGlite database, it creates
+a copy under `data/migration-backups` in the Catamorphic application-support
+directory. Startup fails rather than migrating without a backup. The app keeps
+the two newest pre-migration copies and records success only after the
+embedded server has started.

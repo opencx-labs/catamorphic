@@ -1,6 +1,7 @@
+import type { DesktopUpdateState } from "../../shared/update.js";
 import type { UsageSummary } from "../../shared/usage.js";
 
-export type { UsageSummary };
+export type { DesktopUpdateState, UsageSummary };
 
 export interface ServerInfo {
   url: string | null;
@@ -806,6 +807,13 @@ export interface CatamorphicDesktopApi {
   onConnectLink: (listener: (link: string) => void) => () => void;
   getServerState: () => Promise<ServerInfo>;
   onServerChanged: (listener: (info: ServerInfo) => void) => () => void;
+  updateState: () => Promise<DesktopUpdateState>;
+  updateCheck: () => Promise<void>;
+  updateDownload: () => Promise<void>;
+  updateInstall: () => Promise<void>;
+  onUpdateStateChanged: (
+    listener: (state: DesktopUpdateState) => void,
+  ) => () => void;
 
   windowProfile: () => Promise<string>;
   windowSetProfile: (profileId: string) => Promise<string>;

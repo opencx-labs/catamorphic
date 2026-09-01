@@ -23,12 +23,17 @@ import { registerIpcHandlers, type ServerState } from "./ipc.js";
 import { type Keybindings, toAccelerator } from "./keybindings.js";
 import { McpAppsService } from "./mcp-apps.js";
 import { MobilePairingService } from "./mobile-pairing.js";
+import { prepareVersionBackup } from "./pre-migration-backup.js";
 import { ProfileConfigManager } from "./profile-config.js";
 import { ProfilesStore } from "./profiles.js";
 import { type EmbeddedServer, startEmbeddedServer } from "./server/boot.js";
 import { resolveDataPaths } from "./server/paths.js";
 import { registerTerminalSupport } from "./terminal.js";
 import { windowBackgroundColor } from "./theme.js";
+import {
+  type DesktopUpdaterService,
+  registerDesktopUpdater,
+} from "./updater.js";
 import { WindowStateStore } from "./window-state.js";
 
 // macOS 26.x + Apple Silicon: V8's background compiler threads race the
@@ -330,6 +335,15 @@ function buildMenu(bindings: Keybindings): Menu {
           : [{ role: "close" } as const]),
       ],
     },
+    {
+      role: "help",
+      submenu: [
+        {
+          label: "Check for Updates…",
+          click: () => void desktopUpdater?.check(true),
+        },
+      ],
+    },
   ]);
 }
 
@@ -361,6 +375,13 @@ app.whenReady().then(async () => {
   // roster from the old settings.json, whose key needs safeStorage (only
   // usable once the app is ready).
   profileConfig.migrate();
+  desktopUpdater = registerDesktopUpdater({
+    broadcast: state.broadcast,
+    beforeInstall: async () => {
+      await server?.shutdown();
+      quitting = true;
+    },
+  });
   applyMenuForFocusedWindow();
   // Live-reload: agents and users edit the per-profile config files
   // directly. Changes fan out only to that profile's windows.
@@ -474,6 +495,17 @@ app.whenReady().then(async () => {
   const window = createWindow();
 
   try {
+    const versionBackup = prepareVersionBackup({
+      appVersion: app.getVersion(),
+      packaged: app.isPackaged,
+      dataRoot: paths.root,
+      dbDir: paths.db,
+    });
+    if (versionBackup.backupPath) {
+      console.log(
+        `[desktop] Backed up the pre-migration database to ${versionBackup.backupPath}`,
+      );
+    }
     server = await startEmbeddedServer(
       paths,
       profilesStore,
@@ -483,6 +515,7 @@ app.whenReady().then(async () => {
       mcpApps,
       incognitoSessions,
     );
+    versionBackup.markBootSuccessful();
     state.broadcast("catamorphic:server-changed", {
       url: server.url,
       hasCodingAgent: server.hasCodingAgent,
@@ -533,6 +566,7 @@ app.whenReady().then(async () => {
 let browserSupport: ReturnType<typeof registerBrowserSupport> | null = null;
 let terminalSupport: ReturnType<typeof registerTerminalSupport> | null = null;
 let agentBridge: ReturnType<typeof registerAgentBridge> | null = null;
+let desktopUpdater: DesktopUpdaterService | null = null;
 
 let quitting = false;
 app.on("before-quit", (event) => {
@@ -540,6 +574,7 @@ app.on("before-quit", (event) => {
   browserSupport?.dispose();
   terminalSupport?.dispose();
   agentBridge?.dispose();
+  desktopUpdater?.dispose();
   if (quitting || !server) return;
   event.preventDefault();
   quitting = true;

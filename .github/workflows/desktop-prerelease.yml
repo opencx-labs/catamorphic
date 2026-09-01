@@ -22,6 +22,7 @@ jobs:
     outputs:
       version: ${{ steps.release.outputs.version }}
       tag: ${{ steps.release.outputs.tag }}
+      update_metadata: ${{ steps.release.outputs.update_metadata }}
     steps:
       - uses: actions/checkout@v4
       - uses: oven-sh/setup-bun@v2
@@ -43,8 +44,12 @@ jobs:
             release_tag="desktop-v${package_version}"
           fi
           version="$(bun scripts/desktop-release.ts verify --tag "${release_tag}" --package-version "${package_version}")"
-          echo "version=${version}" >> "${GITHUB_OUTPUT}"
-          echo "tag=${release_tag}" >> "${GITHUB_OUTPUT}"
+          update_metadata="$(bun scripts/desktop-release.ts update-metadata-name --version "${version}")"
+          {
+            echo "version=${version}"
+            echo "tag=${release_tag}"
+            echo "update_metadata=${update_metadata}"
+          } >> "${GITHUB_OUTPUT}"
 
       - name: Prepare signing and notarization credentials
         shell: bash
@@ -75,17 +80,31 @@ jobs:
           bun run build
           bun run --cwd apps/desktop package
 
+      - name: Prepare update metadata
+        env:
+          VERSION: ${{ steps.release.outputs.version }}
+          UPDATE_METADATA: ${{ steps.release.outputs.update_metadata }}
+        run: |
+          bun scripts/desktop-release.ts prepare-update-metadata --version "${VERSION}" --input "apps/desktop/release/${UPDATE_METADATA}"
+
       - name: Verify packaged application
         shell: bash
         env:
           VERSION: ${{ steps.release.outputs.version }}
+          UPDATE_METADATA: ${{ steps.release.outputs.update_metadata }}
         run: |
           app="apps/desktop/release/mac-arm64/Catamorphic.app"
           dmg="apps/desktop/release/Catamorphic-${VERSION}-arm64.dmg"
           zip="apps/desktop/release/Catamorphic-${VERSION}-arm64.zip"
+          dmg_blockmap="${dmg}.blockmap"
+          zip_blockmap="${zip}.blockmap"
+          update_metadata="apps/desktop/release/${UPDATE_METADATA}"
           test -d "${app}"
           test -f "${dmg}"
           test -f "${zip}"
+          test -f "${dmg_blockmap}"
+          test -f "${zip_blockmap}"
+          test -f "${update_metadata}"
           codesign --verify --deep --strict --verbose=2 "${app}"
           signature="$(codesign --display --verbose=4 "${app}" 2>&1)"
           grep -q '^Authority=Developer ID Application:' <<< "${signature}"
@@ -100,7 +119,12 @@ jobs:
           test "${scheme}" = "catamorphic"
           (
             cd apps/desktop/release
-            shasum -a 256 "Catamorphic-${VERSION}-arm64.dmg" "Catamorphic-${VERSION}-arm64.zip" > SHA256SUMS.txt
+            shasum -a 256 \
+              "Catamorphic-${VERSION}-arm64.dmg" \
+              "Catamorphic-${VERSION}-arm64.dmg.blockmap" \
+              "Catamorphic-${VERSION}-arm64.zip" \
+              "Catamorphic-${VERSION}-arm64.zip.blockmap" \
+              "${UPDATE_METADATA}" > SHA256SUMS.txt
           )
 
       - uses: actions/upload-artifact@v4
@@ -110,7 +134,10 @@ jobs:
           retention-days: 14
           path: |
             apps/desktop/release/Catamorphic-${{ steps.release.outputs.version }}-arm64.dmg
+            apps/desktop/release/Catamorphic-${{ steps.release.outputs.version }}-arm64.dmg.blockmap
             apps/desktop/release/Catamorphic-${{ steps.release.outputs.version }}-arm64.zip
+            apps/desktop/release/Catamorphic-${{ steps.release.outputs.version }}-arm64.zip.blockmap
+            apps/desktop/release/${{ steps.release.outputs.update_metadata }}
             apps/desktop/release/SHA256SUMS.txt
 
       - name: Publish GitHub prerelease
@@ -120,10 +147,14 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ steps.release.outputs.tag }}
           VERSION: ${{ steps.release.outputs.version }}
+          UPDATE_METADATA: ${{ steps.release.outputs.update_metadata }}
         run: |
           assets=(
             "apps/desktop/release/Catamorphic-${VERSION}-arm64.dmg"
+            "apps/desktop/release/Catamorphic-${VERSION}-arm64.dmg.blockmap"
             "apps/desktop/release/Catamorphic-${VERSION}-arm64.zip"
+            "apps/desktop/release/Catamorphic-${VERSION}-arm64.zip.blockmap"
+            "apps/desktop/release/${UPDATE_METADATA}"
             "apps/desktop/release/SHA256SUMS.txt"
           )
           if gh release view "${TAG}" >/dev/null 2>&1; then
@@ -139,6 +170,7 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
           VERSION: ${{ steps.release.outputs.version }}
+          UPDATE_METADATA: ${{ steps.release.outputs.update_metadata }}
         run: |
           test -n "${GH_TOKEN}" || { echo "HOMEBREW_TAP_TOKEN is not configured" >&2; exit 1; }
           sha256="$(awk '/\.dmg$/ { print $1 }' apps/desktop/release/SHA256SUMS.txt)"
@@ -147,11 +179,13 @@ jobs:
           gh auth setup-git
           gh repo clone opencx-labs/homebrew-tap "${tap_path}"
           bun scripts/desktop-release.ts write-cask --version "${VERSION}" --sha256 "${sha256}" --output "${tap_path}/Casks/catamorphic.rb"
+          mkdir -p "${tap_path}/updates"
+          cp "apps/desktop/release/${UPDATE_METADATA}" "${tap_path}/updates/${UPDATE_METADATA}"
           ruby -c "${tap_path}/Casks/catamorphic.rb"
           brew style --cask "${tap_path}/Casks/catamorphic.rb"
           git -C "${tap_path}" config user.name "github-actions[bot]"
           git -C "${tap_path}" config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git -C "${tap_path}" add Casks/catamorphic.rb
+          git -C "${tap_path}" add Casks/catamorphic.rb "updates/${UPDATE_METADATA}"
           if ! git -C "${tap_path}" diff --cached --quiet; then
             git -C "${tap_path}" commit -m "catamorphic ${VERSION}"
             git -C "${tap_path}" push origin HEAD:main

@@ -26,6 +26,16 @@ You can also download the signed and notarized DMG from
 [GitHub Releases](https://github.com/opencx-labs/catamorphic/releases) and drag
 Catamorphic into Applications.
 
+Installed builds check for new alpha releases and let you choose when to
+download and restart. Homebrew users can also update explicitly with:
+
+```bash
+brew upgrade --cask opencx-labs/tap/catamorphic
+```
+
+Before a new packaged version first opens the local database, Catamorphic
+keeps a pre-migration backup of it.
+
 > Catamorphic is in alpha. Project files and git history are durable, but app
 > state and APIs may change between prereleases. Back up important projects
 > and read the release notes before upgrading.

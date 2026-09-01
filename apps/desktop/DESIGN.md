@@ -3049,3 +3049,17 @@ paths, deliberately independent:
 - Packaged identity is a product contract. The Catamorphic name, icon, bundle
   id, and connect-link scheme stay consistent across the DMG, Applications,
   Homebrew, Gatekeeper, and remote invitations.
+
+### Updates wait for the user's work (2026-09-02)
+
+- Update checks are quiet until there is a useful action. An available release
+  appears as a compact card inside the workspace, not an operating-system
+  modal that interrupts the current task.
+- Download and restart are separate user decisions. Work can continue during
+  download, and restart stays unavailable while an agent or terminal is
+  active so an update never cuts through live work.
+- GitHub Releases owns the signed artifacts. The Homebrew tap carries the cask
+  and update-channel pointer, keeping direct and Homebrew installs on one
+  release line without duplicating binaries.
+- Before a new packaged version starts migrations, the desktop makes a bounded
+  local database copy. Upgrade convenience does not remove the recovery point.
