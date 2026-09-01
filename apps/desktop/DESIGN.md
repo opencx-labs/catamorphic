@@ -134,8 +134,8 @@ the animation is wrong, not the test.
 4. **Paired motion mirrors.** A surface's exit is its enter reversed: same
    duration (±50ms when an exit is deliberately snappier, like `tab-out`),
    same easing, and the exit's resting pose equals the enter's starting pose.
-   When open uses a keyframe and close uses a transition (the chat dock),
-   their durations must be equal — one system, two mechanisms.
+   When open and close use separate keyframes (the chat dock), their durations
+   must be equal.
 5. **Animate before unmount.** Nothing that animated in may vanish
    instantly. Exit pattern: keep the element mounted with an `animate-*-out`
    class (or a transition to the hidden pose), remove it on
@@ -149,7 +149,7 @@ the animation is wrong, not the test.
 
 | Animation | Duration | Pairs with |
 |---|---|---|
-| `dock-in` (chat dock open) | 250ms | dock collapse transition (250ms) |
+| `dock-in` / `dock-out` | 250ms | each other |
 | `bubble-in` / `bubble-out` | 200ms | each other |
 | `tab-in` / `tab-out` | 200ms / 180ms | each other (exit snappier) |
 | `fade-in` / `fade-out` (modal section swap; agent-control overlay) | 200ms | each other (exact mirror; `fade-out` holds its final frame for removal on animationend) |
@@ -3109,3 +3109,6 @@ paths, deliberately independent:
 - Floating chat exit uses an explicit dock-out keyframe paired with dock-in.
   Close and minimize stage their state change until it finishes, which keeps
   Chromium from skipping the exit when an entrance animation is interrupted.
+- Tab exits remove on `animationend` in visible windows and keep a short clock
+  fallback after the animation duration. Occluded Chromium may pause CSS
+  animation events; it must not leave a closed tab's ghost in the strip.

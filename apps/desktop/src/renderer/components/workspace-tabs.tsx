@@ -60,6 +60,7 @@ function tabStatusLine(tab: WorkspaceTab): string | null {
 }
 
 const HOVER_CARD_DELAY_MS = 500;
+const TAB_EXIT_FALLBACK_MS = 280;
 
 /**
  * Chrome-style tab hover card: the FULL title (the strip truncates at
@@ -348,6 +349,28 @@ export function WorkspaceTabBar({
     setRendered((previous) =>
       previous.filter((entry) => !(entry.exiting && tabKey(entry.tab) === key)),
     );
+  // Hidden or occluded Chromium windows can pause CSS animations and omit
+  // animationend. Keep the event as the precise visible-window path, with a
+  // clock fallback beyond tab-out's 180ms duration so ghost tabs cannot stay
+  // mounted forever after their underlying surface has closed.
+  const exitingKeys = JSON.stringify(
+    rendered.filter((entry) => entry.exiting).map((entry) => tabKey(entry.tab)),
+  );
+  useEffect(() => {
+    const keys: string[] = JSON.parse(exitingKeys);
+    if (keys.length === 0) return;
+    const exiting = new Set(keys);
+    const timer = window.setTimeout(
+      () =>
+        setRendered((previous) =>
+          previous.filter(
+            (entry) => !(entry.exiting && exiting.has(tabKey(entry.tab))),
+          ),
+        ),
+      TAB_EXIT_FALLBACK_MS,
+    );
+    return () => window.clearTimeout(timer);
+  }, [exitingKeys]);
 
   if (rendered.length === 0 && !onNew) return null;
   return (

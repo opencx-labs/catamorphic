@@ -259,6 +259,16 @@ describe("browser tabs", () => {
       pressKey('w', { metaKey: true });
       return true;
     `);
+    // Occluded Chromium can pause CSS animations and omit animationend.
+    // Freeze this exit deliberately: the clock fallback must still clear
+    // exactly the one closed tab from the rendered strip.
+    await runWait(
+      `const exiting = $('.animate-tab-out');
+       if (!exiting) return false;
+       exiting.getAnimations().forEach((animation) => animation.pause());
+       return true;`,
+      { label: "outgoing browser tab staged" },
+    );
     const afterClose = await run<{
       webviews: number;
       tabLabels: string[];
