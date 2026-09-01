@@ -68,10 +68,17 @@ const MOD_SYMBOLS: Record<string, string> = {
   Shift: "⇧",
 };
 
+const KEY_SYMBOLS: Record<string, string> = {
+  ArrowLeft: "←",
+  ArrowRight: "→",
+  ArrowUp: "↑",
+  ArrowDown: "↓",
+};
+
 /** "Cmd+Shift+T" → "⌘⇧T" for ShortcutHint display. */
 export function formatBinding(binding: string): string {
   return binding
     .split("+")
-    .map((part) => MOD_SYMBOLS[part] ?? part.toUpperCase())
+    .map((part) => MOD_SYMBOLS[part] ?? KEY_SYMBOLS[part] ?? part.toUpperCase())
     .join("");
 }

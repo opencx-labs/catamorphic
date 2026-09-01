@@ -134,8 +134,8 @@ the animation is wrong, not the test.
 4. **Paired motion mirrors.** A surface's exit is its enter reversed: same
    duration (±50ms when an exit is deliberately snappier, like `tab-out`),
    same easing, and the exit's resting pose equals the enter's starting pose.
-   When open uses a keyframe and close uses a transition (the chat dock),
-   their durations must be equal — one system, two mechanisms.
+   When open and close use separate keyframes (the chat dock), their durations
+   must be equal.
 5. **Animate before unmount.** Nothing that animated in may vanish
    instantly. Exit pattern: keep the element mounted with an `animate-*-out`
    class (or a transition to the hidden pose), remove it on
@@ -149,7 +149,7 @@ the animation is wrong, not the test.
 
 | Animation | Duration | Pairs with |
 |---|---|---|
-| `dock-in` (chat dock open) | 250ms | dock collapse transition (250ms) |
+| `dock-in` / `dock-out` | 250ms | each other |
 | `bubble-in` / `bubble-out` | 200ms | each other |
 | `tab-in` / `tab-out` | 200ms / 180ms | each other (exit snappier) |
 | `fade-in` / `fade-out` (modal section swap; agent-control overlay) | 200ms | each other (exact mirror; `fade-out` holds its final frame for removal on animationend) |
@@ -475,8 +475,8 @@ memory of *why* the app is the way it is.
   `"replace"` (default for bookmarks/links) = reuse the focused browser
   tab, **falling back to a new tab when the focused tab isn't a browser
   tab**. Verified both modes.
-- **Bookmarks are per project** (with one level of folders — deliberately
-  shallow), saved via the address-bar star. **Pinning is the one
+- **Bookmarks are per project** (the original one-level folder limit was
+  superseded by ADR 0081), saved via the address-bar star. **Pinning is the one
   cross-project mechanism**: pinning *moves* a bookmark from the project
   scope to a profile-wide pinned list shown at the top of the Bookmarks
   section. Considered making sections/items generally pinnable and
@@ -826,8 +826,8 @@ Patterned on what best-in-class palettes converged on (Chrome omnibox
   Chromium importer (Chrome, Edge, Brave, Arc, Chromium) reads Local
   State profiles + Bookmarks files; Settings lets each source profile
   import into the current profile or become a new Catamorphic profile.
-  Bookmarks land as pinned bookmarks (folders flatten — pinned is the
-  bookmarks-bar analog); re-import is idempotent by URL.
+  Bookmarks land as pinned bookmarks (the original flattened import was
+  superseded by ADR 0081); re-import is idempotent by URL.
 
 ### 2026-08-05 — Terminal and editor tabs (libghostty in the workspace)
 - Two new tab kinds join the workspace: **terminal** and **editor**. Both
@@ -1936,7 +1936,8 @@ Patterned on what best-in-class palettes converged on (Chrome omnibox
   dock's collapse to the floating hidden pose while the entry is still
   mode "tab" (`presentsAsTab` drives the visual pose), then flips the
   mode — tab-out, bubble-in, and the tab switch land after the tween.
-  The floating dock keeps its direct flip; nothing competes with it.
+  Floating docks now stage the same way so every minimize path completes the
+  paired dock-out motion before the bubble appears.
 - **Retry is never a dead button.** After an auth failure + reconnect,
   the credential change rebuilds the provider, so the retry re-anchored
   a fresh harness session from the settled transcript — which excludes
@@ -3049,6 +3050,80 @@ paths, deliberately independent:
 - Packaged identity is a product contract. The Catamorphic name, icon, bundle
   id, and connect-link scheme stay consistent across the DMG, Applications,
   Homebrew, Gatekeeper, and remote invitations.
+
+### Profile passwords and browser import (2026-08-29)
+
+- Passwords are profile resources. Profile settings owns their searchable list
+  and add, edit, reveal, copy, and delete actions alongside profile identity and
+  startup behavior. Reveal and copy are deliberate authenticated actions;
+  ordinary browsing keeps plaintext outside React.
+- Browser pages exchange credential secrets only with the main-process broker.
+  Save and fill bars receive usernames, origins, and opaque IDs. The broker
+  validates the owning window, profile, guest, current URL, and exact origin
+  before saving or filling.
+- Import is part of profile settings rather than a one-time onboarding modal.
+  Installed Chrome and Firefox profiles expose bookmark counts and import into
+  the current profile. Saved-password CSV exports from either browser import
+  into the same encrypted vault and normalize entries to HTTP origins.
+- Password search matches every typed term across website address, hostname,
+  and username. Results use the shared as-you-type list motion, while editor,
+  reveal, confirmation, and copy feedback use the standard curve and honor
+  reduced-motion preferences.
+
+### Dev replacement and mobile continuity (2026-08-29)
+
+- A manually launched root development command replaces the existing dev
+  process group for the same worktree instance. The instance lock is the scope:
+  focused E2E apps and agent tests are separate processes and stay alive.
+- The visible chat keeps a quiet refresh cadence when idle so messages written by a
+  paired phone appear on desktop without requiring a focus change or local
+  send. Active turns retain the faster refresh cadence.
+- Installing the PWA from a desktop pairing carries a short-lived, one-time
+  bootstrap in the manifest start URL. Standalone launch restores the same
+  paired-device record and chat context even when the browser does not transfer
+  its local storage into the installed app (ADR 0080).
+
+### Recursive sidebar trees and web identity (2026-08-31)
+
+- `sidebar.js` custom items are recursively composable. A node can be a link,
+  a folder, or a collapsible link with children, and every level retains icon,
+  open mode, preview, menu, and initial collapse controls. Agent-authored
+  sections use the same detailed row and disclosure behavior as built-ins.
+- Project and profile-wide bookmarks share one recursive folder model. Chrome
+  and Firefox import preserves full folder ancestry, including empty folders,
+  while existing flat profile bookmark data migrates without loss.
+- Web destinations identify themselves with the page favicon in the sidebar
+  and palette. A star at the palette row's right edge marks saved pages; the
+  star is state, not the page's primary icon.
+- Palette commands are contextual inventory, not disabled promises. Commands
+  that cannot change the current workspace are absent until their target or
+  required state exists.
+
+### Chat progress and browser navigation polish (2026-08-31)
+
+- Agent progress is temporary chat chrome. The agent may clear its list with
+  an empty update when it no longer helps; the compact progress control and
+  its popover both mirror their entrance on exit and remain mounted until the
+  exit finishes. The user still inspects but does not edit agent-owned items.
+- Desktop-owned tool calls narrate actions and results in plain language.
+  Todo updates show status-marked task rows and descriptions; other workspace
+  tools use readable field labels. Raw JSON remains a fallback for unknown or
+  connector-owned tools whose schema the desktop does not control.
+- Empty-chat copy is one stable pair per chat: a short invitation in the
+  timeline and a complementary, charismatic composer prompt. The two lines
+  should move the user forward without repeating each other.
+- Tab hover cards use the same paired fade lifecycle as other overlays and
+  animate before unmounting. Browser back and forward are configurable actions
+  with Cmd+Left and Cmd+Right defaults, and native browser mouse commands route
+  to the focused webview. Guest-focused Cmd+W can arrive through both the
+  application menu and the webview relay, so close dispatches coalesce within
+  one physical keypress and mutate exactly one surface.
+- Floating chat exit uses an explicit dock-out keyframe paired with dock-in.
+  Close and minimize stage their state change until it finishes, which keeps
+  Chromium from skipping the exit when an entrance animation is interrupted.
+- Tab exits remove on `animationend` in visible windows and keep a short clock
+  fallback after the animation duration. Occluded Chromium may pause CSS
+  animation events; it must not leave a closed tab's ghost in the strip.
 
 ### Updates wait for the user's work (2026-09-02)
 

@@ -318,6 +318,11 @@ export async function startEmbeddedServer(
         ? {
             transport: "http",
             url: `${apiBaseUrl}/desktop/workspace-mcp/${encodeURIComponent(projectId)}/${encodeURIComponent(sessionId)}/${encodeURIComponent(agentId)}`,
+            // This endpoint is already capability-bound to the exact
+            // agent, project, and session. Codex has no interactive MCP
+            // approval bridge, so authorize these host-owned tools at the
+            // server boundary instead of letting the CLI cancel them.
+            defaultToolsApprovalMode: "approve",
             headers: {
               Authorization: `Bearer ${workspaceMcpCapability({
                 secret: workspaceMcpSecret,

@@ -60,6 +60,7 @@ function tabStatusLine(tab: WorkspaceTab): string | null {
 }
 
 const HOVER_CARD_DELAY_MS = 500;
+const TAB_EXIT_FALLBACK_MS = 280;
 
 /**
  * Chrome-style tab hover card: the FULL title (the strip truncates at
@@ -70,9 +71,13 @@ const HOVER_CARD_DELAY_MS = 500;
 function TabHoverCard({
   tab,
   anchor,
+  exiting,
+  onExited,
 }: {
   tab: WorkspaceTab;
   anchor: { x: number; y: number };
+  exiting: boolean;
+  onExited: () => void;
 }) {
   const status = tabStatusLine(tab);
   const left = Math.max(8, Math.min(anchor.x, window.innerWidth - 296));
@@ -80,7 +85,10 @@ function TabHoverCard({
     <div
       role="tooltip"
       style={{ left, top: anchor.y }}
-      className="pointer-events-none fixed z-50 w-72 animate-fade-in rounded-lg border border-border bg-bg-overlay p-2.5 shadow-2xl"
+      onAnimationEnd={(event) => {
+        if (event.animationName === "fade-out" && exiting) onExited();
+      }}
+      className={`pointer-events-none fixed z-50 w-72 rounded-lg border border-border bg-bg-overlay p-2.5 shadow-2xl ${exiting ? "animate-fade-out" : "animate-fade-in"}`}
     >
       <p className="break-words text-[12px] font-medium leading-4 text-fg">
         {tab.label ?? tab.name}
@@ -311,6 +319,7 @@ export function WorkspaceTabBar({
     key: string;
     x: number;
     y: number;
+    exiting: boolean;
   } | null>(null);
   const hoverTimerRef = useRef<ReturnType<typeof setTimeout> | undefined>(
     undefined,
@@ -320,12 +329,12 @@ export function WorkspaceTabBar({
     clearTimeout(hoverTimerRef.current);
     hoverTimerRef.current = setTimeout(() => {
       const rect = element.getBoundingClientRect();
-      setHoverCard({ key, x: rect.left, y: rect.bottom + 8 });
+      setHoverCard({ key, x: rect.left, y: rect.bottom + 8, exiting: false });
     }, HOVER_CARD_DELAY_MS);
   };
   const disarmHoverCard = () => {
     clearTimeout(hoverTimerRef.current);
-    setHoverCard(null);
+    setHoverCard((current) => (current ? { ...current, exiting: true } : null));
   };
   const groupByParent = new Map(
     groups.map((group) => [group.parentKey, group]),
@@ -340,6 +349,28 @@ export function WorkspaceTabBar({
     setRendered((previous) =>
       previous.filter((entry) => !(entry.exiting && tabKey(entry.tab) === key)),
     );
+  // Hidden or occluded Chromium windows can pause CSS animations and omit
+  // animationend. Keep the event as the precise visible-window path, with a
+  // clock fallback beyond tab-out's 180ms duration so ghost tabs cannot stay
+  // mounted forever after their underlying surface has closed.
+  const exitingKeys = JSON.stringify(
+    rendered.filter((entry) => entry.exiting).map((entry) => tabKey(entry.tab)),
+  );
+  useEffect(() => {
+    const keys: string[] = JSON.parse(exitingKeys);
+    if (keys.length === 0) return;
+    const exiting = new Set(keys);
+    const timer = window.setTimeout(
+      () =>
+        setRendered((previous) =>
+          previous.filter(
+            (entry) => !(entry.exiting && exiting.has(tabKey(entry.tab))),
+          ),
+        ),
+      TAB_EXIT_FALLBACK_MS,
+    );
+    return () => window.clearTimeout(timer);
+  }, [exitingKeys]);
 
   if (rendered.length === 0 && !onNew) return null;
   return (
@@ -579,7 +610,18 @@ export function WorkspaceTabBar({
             )
           : null;
         return hovered && hoverCard ? (
-          <TabHoverCard tab={hovered.tab} anchor={hoverCard} />
+          <TabHoverCard
+            tab={hovered.tab}
+            anchor={hoverCard}
+            exiting={hoverCard.exiting}
+            onExited={() =>
+              setHoverCard((current) =>
+                current?.exiting && current.key === hoverCard.key
+                  ? null
+                  : current,
+              )
+            }
+          />
         ) : null;
       })()}
       {onNew && (

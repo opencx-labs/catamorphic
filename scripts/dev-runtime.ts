@@ -251,6 +251,8 @@ export async function acquireDevPortAllocatorLock(input: {
 export async function acquireDevInstanceLock(input: {
   lockPath: string;
   pid: number;
+  /** Replace only the dev launcher/process group recorded by this lock. */
+  replaceExisting?: boolean;
 }): Promise<DevInstanceLock> {
   const stateRoot = path.dirname(input.lockPath);
   await mkdir(stateRoot, { recursive: true, mode: 0o700 });
@@ -317,6 +319,30 @@ export async function acquireDevInstanceLock(input: {
     }
     const owner = parseLockOwner(staleContent);
     if (owner && lockOwnerIsLive(owner)) {
+      if (
+        input.replaceExisting &&
+        owner.pid !== input.pid &&
+        owner.processGroupId !== undefined &&
+        processGroupIsLive(owner.processGroupId)
+      ) {
+        await terminateDevProcessGroup({
+          processGroupId: owner.processGroupId,
+        });
+        // A normal launcher exits when its detached Turbo group exits and
+        // releases the lock in `finally`. Never signal an arbitrary PID here:
+        // the recorded process group is the boundary that distinguishes these
+        // dev servers from E2E apps and every other process in the worktree.
+        const gracefulDeadline = Date.now() + 2_000;
+        while (processIsLive(owner.pid) && Date.now() < gracefulDeadline) {
+          await new Promise((resolve) => setTimeout(resolve, 20));
+        }
+        if (processIsLive(owner.pid)) {
+          throw new DevLockConflictError(
+            `Development servers in process group ${owner.processGroupId} stopped, but launcher PID ${owner.pid} did not exit. Stop that launcher before retrying development.`,
+          );
+        }
+        continue;
+      }
       if (
         !processIsLive(owner.pid) &&
         owner.processGroupId !== undefined &&

@@ -120,12 +120,16 @@ export type AgentMcpServerConfig =
       url: string;
       /** Sent verbatim on every request (auth tokens ride here). */
       headers?: Record<string, string>;
+      /** Harness hint for servers whose tools are already host-authorized. */
+      defaultToolsApprovalMode?: "auto" | "prompt" | "writes" | "approve";
     }
   | {
       transport: "stdio";
       command: string;
       args?: string[];
       env?: Record<string, string>;
+      /** Harness hint for servers whose tools are already host-authorized. */
+      defaultToolsApprovalMode?: "auto" | "prompt" | "writes" | "approve";
     };
 
 /**

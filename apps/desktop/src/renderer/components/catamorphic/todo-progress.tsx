@@ -18,21 +18,49 @@ export function TodoProgress({
   className?: string;
 }) {
   const [open, setOpen] = useState(false);
-  const [mounted, setMounted] = useState(false);
-  const [visible, setVisible] = useState(false);
+  const [panelMounted, setPanelMounted] = useState(false);
+  const [panelVisible, setPanelVisible] = useState(false);
+  const [barMounted, setBarMounted] = useState(todos.length > 0);
+  const [barVisible, setBarVisible] = useState(false);
+  const [renderedTodos, setRenderedTodos] = useState(todos);
   const [expanded, setExpanded] = useState<Set<string>>(() => new Set());
   const rootRef = useRef<HTMLDivElement>(null);
   const panelId = useId();
-  const completed = todos.filter((todo) => todo.status === "completed").length;
+  const panelFrameRef = useRef(0);
+  const barFrameRef = useRef(0);
+  const hasTodos = todos.length > 0;
 
   useEffect(() => {
     if (open) {
-      setMounted(true);
-      const frame = requestAnimationFrame(() => setVisible(true));
-      return () => cancelAnimationFrame(frame);
+      setPanelMounted(true);
+      const firstFrame = requestAnimationFrame(() => {
+        const secondFrame = requestAnimationFrame(() => setPanelVisible(true));
+        panelFrameRef.current = secondFrame;
+      });
+      panelFrameRef.current = firstFrame;
+      return () => cancelAnimationFrame(panelFrameRef.current);
     }
-    setVisible(false);
+    setPanelVisible(false);
   }, [open]);
+
+  useEffect(() => {
+    if (hasTodos) setRenderedTodos(todos);
+  }, [hasTodos, todos]);
+
+  useEffect(() => {
+    if (!hasTodos) {
+      setOpen(false);
+      setBarVisible(false);
+      return;
+    }
+    setBarMounted(true);
+    const firstFrame = requestAnimationFrame(() => {
+      const secondFrame = requestAnimationFrame(() => setBarVisible(true));
+      barFrameRef.current = secondFrame;
+    });
+    barFrameRef.current = firstFrame;
+    return () => cancelAnimationFrame(barFrameRef.current);
+  }, [hasTodos]);
 
   useEffect(() => {
     if (!open) return;
@@ -59,68 +87,91 @@ export function TodoProgress({
   }, [open]);
 
   useEffect(() => {
-    const ids = new Set(todos.map((todo) => todo.id));
+    const ids = new Set(renderedTodos.map((todo) => todo.id));
     setExpanded((current) => {
       const next = new Set([...current].filter((id) => ids.has(id)));
       return next.size === current.size ? current : next;
     });
-    if (todos.length === 0) setOpen(false);
-  }, [todos]);
+  }, [renderedTodos]);
 
-  if (todos.length === 0) return null;
-  const fraction = completed / todos.length;
+  if (!barMounted || renderedTodos.length === 0) return null;
+  const renderedCompleted = renderedTodos.filter(
+    (todo) => todo.status === "completed",
+  ).length;
+  const fraction = renderedCompleted / renderedTodos.length;
   const radius = 6;
   const circumference = 2 * Math.PI * radius;
 
   return (
-    <div ref={rootRef} className={`relative shrink-0 ${className}`}>
-      <button
-        type="button"
-        onClick={() => setOpen((value) => !value)}
-        className={`flex h-8 cursor-pointer items-center gap-1.5 rounded-lg border px-2 text-[11px] font-medium transition-colors duration-150 ${
-          open
-            ? "border-border-strong bg-bg-overlay text-fg"
-            : "border-border bg-bg-raised/95 text-fg-muted hover:bg-bg-overlay hover:text-fg"
-        }`}
-        aria-label={`${completed} of ${todos.length} todo items completed`}
-        aria-haspopup="dialog"
-        aria-expanded={open}
-        aria-controls={panelId}
-        data-testid="todo-progress-trigger"
-      >
-        <svg
-          width="16"
-          height="16"
-          viewBox="0 0 16 16"
-          className="-rotate-90"
-          aria-hidden="true"
+    <div
+      ref={rootRef}
+      data-testid="todo-progress"
+      onTransitionEnd={(event) => {
+        if (
+          event.target === event.currentTarget &&
+          event.propertyName === "opacity" &&
+          !barVisible &&
+          !hasTodos
+        ) {
+          setBarMounted(false);
+          setRenderedTodos([]);
+        }
+      }}
+      className={`relative shrink-0 transition-[opacity,translate,scale] duration-200 ease-[cubic-bezier(0.2,0,0,1)] motion-reduce:translate-none motion-reduce:scale-100 motion-reduce:duration-100 ${
+        barVisible
+          ? "translate-y-0 scale-100 opacity-100"
+          : "pointer-events-none -translate-y-1 scale-[0.98] opacity-0"
+      } ${className}`}
+    >
+      <div className="overflow-hidden rounded-lg">
+        <button
+          type="button"
+          onClick={() => setOpen((value) => !value)}
+          className={`flex h-8 cursor-pointer items-center gap-1.5 rounded-lg border px-2 text-[11px] font-medium transition-colors duration-150 ${
+            open
+              ? "border-border-strong bg-bg-overlay text-fg"
+              : "border-border bg-bg-raised/95 text-fg-muted hover:bg-bg-overlay hover:text-fg"
+          }`}
+          aria-label={`${renderedCompleted} of ${renderedTodos.length} todo items completed`}
+          aria-haspopup="dialog"
+          aria-expanded={open}
+          aria-controls={panelId}
+          data-testid="todo-progress-trigger"
         >
-          <circle
-            cx="8"
-            cy="8"
-            r={radius}
-            fill="none"
-            stroke="var(--color-border-strong)"
-            strokeWidth="2"
-          />
-          <circle
-            cx="8"
-            cy="8"
-            r={radius}
-            fill="none"
-            stroke="var(--color-accent)"
-            strokeWidth="2"
-            strokeLinecap="round"
-            strokeDasharray={circumference}
-            strokeDashoffset={circumference * (1 - fraction)}
-            className="transition-[stroke-dashoffset] duration-200 ease-[cubic-bezier(0.2,0,0,1)] motion-reduce:duration-100"
-          />
-        </svg>
-        <span className="tabular-nums">
-          {completed}/{todos.length}
-        </span>
-      </button>
-      {mounted && (
+          <svg
+            width="16"
+            height="16"
+            viewBox="0 0 16 16"
+            className="-rotate-90"
+            aria-hidden="true"
+          >
+            <circle
+              cx="8"
+              cy="8"
+              r={radius}
+              fill="none"
+              stroke="var(--color-border-strong)"
+              strokeWidth="2"
+            />
+            <circle
+              cx="8"
+              cy="8"
+              r={radius}
+              fill="none"
+              stroke="var(--color-accent)"
+              strokeWidth="2"
+              strokeLinecap="round"
+              strokeDasharray={circumference}
+              strokeDashoffset={circumference * (1 - fraction)}
+              className="transition-[stroke-dashoffset] duration-200 ease-[cubic-bezier(0.2,0,0,1)] motion-reduce:duration-100"
+            />
+          </svg>
+          <span className="tabular-nums">
+            {renderedCompleted}/{renderedTodos.length}
+          </span>
+        </button>
+      </div>
+      {panelMounted && (
         <div
           id={panelId}
           role="dialog"
@@ -130,13 +181,13 @@ export function TodoProgress({
             if (
               event.target === event.currentTarget &&
               event.propertyName === "opacity" &&
-              !visible
+              !panelVisible
             ) {
-              setMounted(false);
+              setPanelMounted(false);
             }
           }}
-          className={`absolute right-0 top-full z-30 mt-1.5 w-80 origin-top-right rounded-lg border border-border bg-bg-raised/95 p-1.5 shadow-2xl backdrop-blur-xl transition-[opacity,transform] duration-150 ease-[cubic-bezier(0.2,0,0,1)] motion-reduce:transform-none motion-reduce:duration-100 ${
-            visible
+          className={`absolute right-0 top-full z-30 mt-1.5 w-80 origin-top-right rounded-lg border border-border bg-bg-raised/95 p-1.5 shadow-2xl backdrop-blur-xl transition-[opacity,translate,scale] duration-150 ease-[cubic-bezier(0.2,0,0,1)] motion-reduce:translate-none motion-reduce:scale-100 motion-reduce:duration-100 ${
+            panelVisible
               ? "translate-y-0 scale-100 opacity-100"
               : "pointer-events-none -translate-y-1 scale-[0.98] opacity-0"
           }`}
@@ -144,11 +195,11 @@ export function TodoProgress({
           <div className="flex items-baseline justify-between px-2 py-1.5">
             <span className="text-xs font-semibold text-fg">Todo list</span>
             <span className="text-[11px] tabular-nums text-fg-faint">
-              {completed} of {todos.length} done
+              {renderedCompleted} of {renderedTodos.length} done
             </span>
           </div>
           <ul className="max-h-80 list-none overflow-y-auto p-0">
-            {todos.map((todo) => {
+            {renderedTodos.map((todo) => {
               const itemOpen = expanded.has(todo.id);
               const StatusIcon =
                 todo.status === "completed"

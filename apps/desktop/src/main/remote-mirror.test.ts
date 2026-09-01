@@ -160,15 +160,17 @@ function mirror(
       },
     ],
   };
+  let enqueued = false;
   let claimed = false;
   let acknowledged = false;
   let diverged = false;
   const sync = {
     enqueue: vi.fn(async () => {
       durableEnqueues += 1;
+      enqueued = true;
     }),
     claimDue: vi.fn(async () => {
-      if (claimed) return [];
+      if (!enqueued || claimed) return [];
       claimed = true;
       return [
         {

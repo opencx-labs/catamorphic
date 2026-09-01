@@ -372,6 +372,11 @@ function mcpServersConfig(
       ...(filter.disabled_tools
         ? { disabled_tools: filter.disabled_tools }
         : {}),
+      ...(config.defaultToolsApprovalMode
+        ? {
+            default_tools_approval_mode: config.defaultToolsApprovalMode,
+          }
+        : {}),
     };
   }
   return { mcp_servers: mcpServers };

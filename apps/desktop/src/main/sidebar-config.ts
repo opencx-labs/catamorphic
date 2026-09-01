@@ -47,7 +47,8 @@ export interface SidebarPreview {
 
 export interface SidebarItem {
   label: string;
-  url: string;
+  /** Optional for a folder-only item. */
+  url?: string;
   /** Icon name from lucide-react, e.g. "Globe", "FileText". */
   icon?: string;
   open?: "tab" | "replace";
@@ -55,6 +56,10 @@ export interface SidebarItem {
   menu?: SidebarMenuEntry[];
   /** Hover preview content, or false to explicitly disable it. */
   preview?: SidebarPreview | false;
+  /** Nested items use the same complete item model, at any depth. */
+  items?: SidebarItem[];
+  /** Start this item's children collapsed (default open). */
+  collapsed?: boolean;
 }
 
 export interface SidebarSectionConfig {
@@ -156,8 +161,11 @@ export const DEFAULT_SIDEBAR_FILE = `// Catamorphic sidebar configuration.
 //                          new tab when the focused tab isn't a browser)
 //
 // CUSTOM ITEMS
-//   { label, url, icon?, open?, menu?, preview? }
+//   { label, url?, icon?, open?, menu?, preview?, items?, collapsed? }
 //   icon: any lucide-react name, e.g. "Globe", "FileText", "Github".
+//   items: nested items using this same shape. Omit url for a folder-only
+//          item, or include it to make a collapsible link.
+//   collapsed: start nested items collapsed (default open).
 //   preview: { title?, description?, metadata?: [{ label, value }] }
 //            Metadata is capped at four rows to keep the card compact.
 //            Set preview: false to explicitly disable the preview.
@@ -283,23 +291,27 @@ function sanitizePreview(raw: unknown): SidebarPreview | false | undefined {
   };
 }
 
-function sanitizeItems(raw: unknown): SidebarItem[] | undefined {
-  if (!Array.isArray(raw)) return undefined;
+function sanitizeItems(raw: unknown, depth = 0): SidebarItem[] | undefined {
+  if (!Array.isArray(raw) || depth > 20) return undefined;
   return raw.flatMap((entry): SidebarItem[] => {
     if (typeof entry !== "object" || entry === null) return [];
     const record = entry as Record<string, unknown>;
-    if (typeof record.url !== "string") return [];
+    const url = typeof record.url === "string" ? record.url : undefined;
+    const items = sanitizeItems(record.items, depth + 1);
+    if (!url && (!items || items.length === 0)) return [];
     return [
       {
         label:
           typeof record.label === "string" && record.label
             ? record.label
-            : record.url,
-        url: record.url,
+            : (url ?? "Folder"),
+        url,
         icon: typeof record.icon === "string" ? record.icon : undefined,
         open: asOpenMode(record.open),
         menu: sanitizeMenu(record.menu),
         preview: sanitizePreview(record.preview),
+        items,
+        collapsed: record.collapsed === true,
       },
     ];
   });

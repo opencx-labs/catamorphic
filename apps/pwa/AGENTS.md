@@ -58,6 +58,15 @@ keeps that bundle current for you (a watch build runs alongside the
 desktop); anywhere else, run `bun run build` here after UI changes or
 the QR flow ships a stale app.
 
+Pairing also prepares a ten-minute, single-use install bootstrap in the web
+app manifest (ADR 0080). An installed app may have a separate storage container
+from the browser that scanned the QR; `/?install=...` redeems a second
+credential on the same paired-device record and restores the pairing and chat
+context without exposing the long-lived bearer token in install metadata.
+Remote-server installs preserve only the credential-free project and session
+locator in the manifest and restart OAuth on first launch, then return to the
+same chat.
+
 Failover semantics (troubleshooting "the desktop is asleep"): the claim
 also carries a mirror map (desktop projectId → its remote server), kept
 on the desktop connection (`mirrors`). Desktop and remote are SEPARATE

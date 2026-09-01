@@ -336,6 +336,28 @@ export class E2eFakeCodingAgent implements CodingAgentProvider {
       return;
     }
 
+    if (prompt.includes("clear todo list")) {
+      const updateTodos = this.workspaceTools.find(
+        (candidate) => candidate.name === "update_todo_list",
+      );
+      if (!updateTodos) {
+        yield { type: "error", content: "todo tools unavailable" };
+        yield { type: "done" };
+        return;
+      }
+      const input = { items: [] };
+      const result = await updateTodos.execute(input, state.toolContext);
+      yield {
+        type: "tool_call",
+        toolName: "update_todo_list",
+        toolInput: input,
+        toolResult: result,
+      };
+      yield { type: "text", content: "I cleared the progress list." };
+      yield { type: "done" };
+      return;
+    }
+
     if (prompt.includes("todo list")) {
       const updateTodos = this.workspaceTools.find(
         (candidate) => candidate.name === "update_todo_list",

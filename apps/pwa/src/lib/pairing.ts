@@ -8,6 +8,8 @@ import {
   type PwaState,
 } from "./store.js";
 
+const INSTALL_BOOTSTRAP_KEY = "catamorphic-pwa.install-bootstrap.v1";
+
 /**
  * Redeem a desktop QR pairing (`/?pair=<code>`, served by the desktop's
  * LAN listener): exchange the single-use code for a device token, store
@@ -22,6 +24,8 @@ export interface PairingClaim {
   /** The desktop's API base, on the address the phone actually used. */
   server: string;
   token: string;
+  /** One-time recovery carried by the installed app's manifest start URL. */
+  installCode?: string;
   remotes: Array<{
     server: string;
     project: string;
@@ -47,8 +51,47 @@ export async function claimPairing(
   return (await response.json()) as PairingClaim;
 }
 
+/** Recover a paired connection in an installed app with isolated storage. */
+export async function claimPairingInstall(
+  origin: string,
+  code: string,
+): Promise<PairingClaim> {
+  const response = await postJson(origin, "/pair/install", { code });
+  if (!response.ok) {
+    throw new Error(
+      response.status === 410
+        ? "That install link expired. Scan a fresh QR on the desktop."
+        : `Installed app setup failed (${response.status}).`,
+    );
+  }
+  return (await response.json()) as PairingClaim;
+}
+
+/**
+ * Point Add to Home Screen at a one-time bootstrap URL. Some mobile browsers
+ * launch the installed app in a storage container that does not contain the
+ * pairing page's localStorage, so the start URL must be able to restore it.
+ */
+export function preparePairingInstall(installCode?: string): void {
+  let code = installCode;
+  try {
+    code ??= localStorage.getItem(INSTALL_BOOTSTRAP_KEY) ?? undefined;
+    if (installCode) localStorage.setItem(INSTALL_BOOTSTRAP_KEY, installCode);
+  } catch {
+    // Storage can be unavailable in private mode. The current document can
+    // still point its manifest at a newly issued bootstrap.
+  }
+  if (!code) return;
+  const manifest = document.querySelector<HTMLLinkElement>(
+    'link[rel="manifest"]',
+  );
+  if (!manifest) return;
+  manifest.href = `/manifest.webmanifest?install=${encodeURIComponent(code)}`;
+}
+
 /** Store every connection the claim carries; the route to land on. */
 export function applyPairing(state: PwaState, claim: PairingClaim): Route {
+  preparePairingInstall(claim.installCode);
   const profile = activeProfile(state);
   // Desktop projects that also live on a remote server, keyed by the
   // desktop's project id — the failover hint when the desktop is asleep.

@@ -161,23 +161,23 @@ const SURFACE_ICONS = {
   mcpapp: AppWindow,
 } as const;
 
-/** Short, charismatic empty-state openers; one is picked per chat. */
-const EMPTY_STATE_PHRASES = [
-  "Ready when you are.",
-  "Where are we headed?",
-  "What are we building?",
-  "Let's make something.",
-  "Your move.",
-  "What's on your mind?",
-  "Big or small, bring it.",
-  "Let's get into it.",
-  "What's next?",
-  "Say the word.",
-  "Blank canvas. Go.",
-  "What should exist?",
-  "Start anywhere.",
-  "I'm all ears.",
-  "Let's build.",
+/** Stable, complementary empty-state and composer copy for each chat. */
+const EMPTY_CHAT_PROMPTS = [
+  { empty: "Ready when you are.", composer: "Give me the first move…" },
+  { empty: "Where are we headed?", composer: "Name the destination…" },
+  { empty: "What are we building?", composer: "Describe the first piece…" },
+  { empty: "Let's make something.", composer: "Sketch the idea…" },
+  { empty: "Your move.", composer: "Tell me where to start…" },
+  { empty: "What's on your mind?", composer: "Drop it here…" },
+  { empty: "Big or small, bring it.", composer: "Name the thing to tackle…" },
+  { empty: "Let's get into it.", composer: "Point me at the problem…" },
+  { empty: "What's next?", composer: "Set the next move…" },
+  { empty: "Say the word.", composer: "Give me the word…" },
+  { empty: "Blank canvas. Go.", composer: "Draw the first line…" },
+  { empty: "What should exist?", composer: "Describe what you want…" },
+  { empty: "Start anywhere.", composer: "Give me one thread…" },
+  { empty: "I'm all ears.", composer: "Talk me through it…" },
+  { empty: "Let's build.", composer: "What comes first?…" },
 ] as const;
 
 /** Document types the composer accepts as pasted/attached files. */
@@ -245,6 +245,12 @@ function tabPillFromDrag(
   } catch {
     return null;
   }
+}
+
+/** Whether a drag carries something the composer can attach. */
+function isComposerTransfer(data: DataTransfer | null): boolean {
+  const types = [...(data?.types ?? [])];
+  return types.includes("Files") || types.includes(TAB_DRAG_TYPE);
 }
 
 /** The media kind a file would ship as, or null for unsupported types. */
@@ -476,14 +482,14 @@ function activityChips(
 }
 
 /** Stable per-chat pick: hash the id so re-renders don't re-roll. */
-const emptyStateFor = (localId: string): string => {
+const emptyChatPromptFor = (localId: string) => {
   let hash = 0;
   for (let i = 0; i < localId.length; i += 1) {
     hash = (hash * 31 + localId.charCodeAt(i)) | 0;
   }
   return (
-    EMPTY_STATE_PHRASES[Math.abs(hash) % EMPTY_STATE_PHRASES.length] ??
-    EMPTY_STATE_PHRASES[0]
+    EMPTY_CHAT_PROMPTS[Math.abs(hash) % EMPTY_CHAT_PROMPTS.length] ??
+    EMPTY_CHAT_PROMPTS[0]
   );
 };
 
@@ -1143,6 +1149,8 @@ export interface ChatDockProps {
   placeholder?: string;
   /** Whether this chat's workspace tab occupies a view slot (tab mode). */
   tabActive: boolean;
+  /** Keep this visible chat fresh when another client writes while it is idle. */
+  refreshWhileIdle?: boolean;
   /**
    * Where the tab sits in the content view: the full area, or one half
    * of a split. Floating/minimized modes ignore it.
@@ -1209,6 +1217,8 @@ export interface ChatDockProps {
   /** Set on forked chats: reveal the parent conversation. */
   onOpenParent?: () => void;
   onEntryChange: (entry: ChatDockEntry) => void;
+  /** Records the tab → floating Escape handoff for an immediate Cmd+W. */
+  onEscapeToFloating?: (localId: string) => void;
   /** Close the chat entirely (dismissing an empty chat removes it). */
   onClose: (localId: string) => void;
   /**
@@ -1250,8 +1260,9 @@ export function ChatDock({
   projectId,
   entry,
   title,
-  placeholder = "Describe what you want to build…",
+  placeholder,
   tabActive,
+  refreshWhileIdle = false,
   slot = "full",
   splitRatio = 0.5,
   splitResizing = false,
@@ -1271,6 +1282,7 @@ export function ChatDock({
   onFork,
   onOpenParent,
   onEntryChange,
+  onEscapeToFloating,
   onClose,
   registerClose,
   registerMinimize,
@@ -1278,6 +1290,8 @@ export function ChatDock({
   onSessionCreated,
   onSignalsChange,
 }: ChatDockProps) {
+  const emptyPrompt = emptyChatPromptFor(entry.localId);
+  const composerPlaceholder = placeholder ?? emptyPrompt.composer;
   const environmentQuery = useEnvironments(projectId, {
     workload: "agent",
     ...((entry.agentId ?? defaultAgentId)
@@ -1307,6 +1321,7 @@ export function ChatDock({
     sessionId: entry.sessionId,
     agentId: entry.agentId ?? defaultAgentId,
     environment: selectedEnvironment,
+    idleRefetchIntervalMs: refreshWhileIdle ? 3_000 : false,
     onSessionCreated: (sessionId) => {
       // Desktop-local privacy flag (ADR 0062): recorded the moment the
       // lazy session gets its id, well before the first turn can settle
@@ -1757,13 +1772,25 @@ export function ChatDock({
     const onKeyDown = () => {
       userInteractionRef.current += 1;
     };
+    // Paste and drop can be the first interaction when invoked through a
+    // context menu, accessibility tooling, or automation, so there is no
+    // preceding keydown/pointerdown for the autofocus guard to observe.
+    // Count the transfer itself before a delayed frame can reclaim focus
+    // and reset the contenteditable caret to the start of the draft.
+    const onTransfer = () => {
+      userInteractionRef.current += 1;
+    };
     window.addEventListener("focusin", onFocusIn);
     window.addEventListener("pointerdown", onPointerDown, true);
     window.addEventListener("keydown", onKeyDown, true);
+    window.addEventListener("paste", onTransfer, true);
+    window.addEventListener("drop", onTransfer, true);
     return () => {
       window.removeEventListener("focusin", onFocusIn);
       window.removeEventListener("pointerdown", onPointerDown, true);
       window.removeEventListener("keydown", onKeyDown, true);
+      window.removeEventListener("paste", onTransfer, true);
+      window.removeEventListener("drop", onTransfer, true);
     };
   }, [frontSurface]);
 
@@ -1895,6 +1922,8 @@ export function ChatDock({
   entryRef.current = entry;
   const onEntryChangeRef = useRef(onEntryChange);
   onEntryChangeRef.current = onEntryChange;
+  const onEscapeToFloatingRef = useRef(onEscapeToFloating);
+  onEscapeToFloatingRef.current = onEscapeToFloating;
 
   // Palette "Send to agent": the entry arrives with the message attached;
   // fire it once on mount and strip it so remounts don't re-send.
@@ -1912,16 +1941,14 @@ export function ChatDock({
     });
   }, []);
 
-  // Closing an empty chat plays the same 250ms collapse as minimizing —
-  // `closing` drops the expanded classes first, the unmount follows.
+  // Closing an empty chat plays the same 250ms collapse as minimizing.
+  // Both use an explicit exit keyframe so interrupting dock-in cannot make
+  // Chromium skip the collapse transition before the delayed unmount.
   const [closing, setClosing] = useState(false);
-  // Minimizing a chat TAB stages the same way (the registered-close
-  // pattern): the collapse tween plays first while the workspace is
-  // still untouched, and only then does the mode flip to "min" — the
-  // tab switch, strip tab-out, and bubble-in land AFTER the tween.
-  // Flipping the mode first made that whole workspace re-render (next
-  // tab's content included) stall the first ~100ms of a 250ms tween,
-  // which read as "the collapse doesn't animate".
+  // Minimizing a chat stages the same way as registered close: the collapse
+  // plays first, then the mode flips to "min". For a tab this also keeps the
+  // workspace re-render, tab switch, strip tab-out, and bubble-in out of the
+  // tween's critical path.
   const [minimizing, setMinimizing] = useState(false);
   const minimizingRef = useRef(false);
   const expanded =
@@ -1981,12 +2008,7 @@ export function ChatDock({
 
   const dismiss = () => {
     if (isEmpty) animatedClose();
-    // From a fullscreen tab, animate the collapse BEFORE the mode flip
-    // (see animatedMinimize); the floating dock keeps the direct flip —
-    // its collapse is the expanded-class transition, and no workspace
-    // tab switch competes with it.
-    else if (isTab && tabActive) animatedMinimize();
-    else setMode("min");
+    else animatedMinimize();
   };
 
   const takeComposer = (): {
@@ -2402,17 +2424,23 @@ export function ChatDock({
       if (minimizingRef.current) return;
       event.preventDefault();
       if (entryRef.current.mode === "tab") {
+        // Claim focus before the workspace mode flip. The floating pose can
+        // commit before the effect below runs; without this synchronous
+        // handoff, a Cmd+W in that frame may be attributed to the tab that
+        // just surfaced behind the chat.
+        focusComposerInternally();
+        onEscapeToFloatingRef.current?.(entryRef.current.localId);
         onEntryChangeRef.current({ ...entryRef.current, mode: "partial" });
       } else if (isEmptyRef.current) {
         // Escaping an untouched floating chat closes it — no empty bubble.
         animatedCloseRef.current();
       } else {
-        onEntryChangeRef.current({ ...entryRef.current, mode: "min" });
+        animatedMinimizeRef.current();
       }
     };
     window.addEventListener("keydown", onWindowKeyDown);
     return () => window.removeEventListener("keydown", onWindowKeyDown);
-  }, [escapeTarget]);
+  }, [escapeTarget, focusComposerInternally]);
 
   // In a split, a tabbed chat occupies only its (ratio-sized) share of
   // the view; floating chats always overlay the full area.
@@ -2455,16 +2483,13 @@ export function ChatDock({
         onMouseLeave={() => setDockHovered(false)}
         onMouseDownCapture={onFocusRequest}
         onDragEnter={(event) => {
-          const types = [...(event.dataTransfer?.types ?? [])];
-          const droppable =
-            types.includes("Files") || types.includes(TAB_DRAG_TYPE);
-          if (!droppable) return;
+          if (!isComposerTransfer(event.dataTransfer)) return;
           event.preventDefault();
           dragDepthRef.current += 1;
           setDropActive(true);
         }}
         onDragOver={(event) => {
-          if (!dropActive) return;
+          if (!isComposerTransfer(event.dataTransfer)) return;
           event.preventDefault();
         }}
         onDragLeave={() => {
@@ -2472,7 +2497,10 @@ export function ChatDock({
           if (dragDepthRef.current === 0) setDropActive(false);
         }}
         onDrop={(event) => {
-          if (!dropActive) return;
+          // Acceptance follows the transfer itself, not dropActive: that
+          // state only paints the cue and may not have committed yet when a
+          // quick dragenter → drop sequence completes in one browser turn.
+          if (!isComposerTransfer(event.dataTransfer)) return;
           event.preventDefault();
           dragDepthRef.current = 0;
           setDropActive(false);
@@ -2504,9 +2532,11 @@ export function ChatDock({
                 paletteTargeted && !isTab ? "border-accent" : "border-border"
               }`
         } ${
-          expanded
-            ? "translate-y-0 scale-100 opacity-100 animate-dock-in"
-            : "pointer-events-none translate-y-4 scale-[0.985] opacity-0"
+          closing || minimizing
+            ? "pointer-events-none translate-y-4 scale-[0.985] opacity-0 animate-dock-out"
+            : expanded
+              ? "translate-y-0 scale-100 opacity-100 animate-dock-in"
+              : "pointer-events-none translate-y-4 scale-[0.985] opacity-0"
         }`}
         aria-label={title}
         aria-hidden={!expanded}
@@ -2778,7 +2808,7 @@ export function ChatDock({
               roster.agents.find((agent) => agent.id === agentId)?.name
             }
             error={chat.error?.message ?? null}
-            emptyState={emptyStateFor(entry.localId)}
+            emptyState={emptyPrompt.empty}
             onLinkClick={onLinkClick}
             onFileClick={onFileClick}
             resolveToolIcon={resolveToolIcon}
@@ -2967,8 +2997,8 @@ export function ChatDock({
                   maxPills={MAX_ATTACHMENTS}
                   placeholder={
                     accepts.length > 0
-                      ? placeholder
-                      : `${placeholder.replace(/…$/, "")} (text only)…`
+                      ? composerPlaceholder
+                      : `${composerPlaceholder.replace(/…$/, "")} (text only)…`
                   }
                   ariaLabel="Message the assistant"
                 />

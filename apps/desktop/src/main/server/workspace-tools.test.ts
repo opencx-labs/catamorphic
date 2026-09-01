@@ -56,7 +56,12 @@ describe("workspace coordination tools", () => {
         context,
       ),
     ).toMatchObject({ completed: 1, total: 2 });
-    expect(replacements).toHaveLength(1);
+    expect(await update?.execute({ items: [] }, context)).toEqual({
+      items: [],
+      completed: 0,
+      total: 0,
+    });
+    expect(replacements).toEqual([expect.any(Array), []]);
   });
 
   it("reads peers and bounded transcripts through the coordination bridge", async () => {

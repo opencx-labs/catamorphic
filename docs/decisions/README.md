@@ -91,5 +91,8 @@ Settled design decisions live here as short Architecture Decision Records. They 
 | [0076](0076-watchers-are-workflow-enablement.md) | Watchers are temporary workflow enablements | Accepted |
 | [0077](0077-explicit-session-handoff-push-and-schedules.md) | Explicit session handoff, durable push, and schedule triggers | Accepted |
 | [0078](0078-agent-owned-session-todos.md) | Agent-owned session todo lists | Accepted |
-| [0079](0079-desktop-prerelease-distribution.md) | Desktop prerelease distribution | Accepted; update policy superseded by 0080 |
-| [0080](0080-desktop-updates-and-migration-backups.md) | Desktop updates and migration backups | Accepted |
+| [0079](0079-desktop-browser-credential-broker.md) | Desktop browser credential broker | Accepted |
+| [0080](0080-installed-pairing-bootstrap.md) | Installed pairing uses a one-time start URL bootstrap | Accepted |
+| [0081](0081-recursive-agent-configurable-sidebar-trees.md) | Recursive, agent-configurable sidebar trees | Accepted |
+| [0082](0082-desktop-prerelease-distribution.md) | Desktop prerelease distribution | Accepted; update policy superseded by 0083 |
+| [0083](0083-desktop-updates-and-migration-backups.md) | Desktop updates and migration backups | Accepted |

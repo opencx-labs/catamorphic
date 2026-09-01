@@ -176,15 +176,46 @@ describe("resolveSidebarConfig", () => {
       type: "workflows",
       collapsed: true,
     });
-    expect(resolved.config.sections[1]?.items).toEqual([
-      {
-        label: "MDN",
-        url: "https://developer.mozilla.org",
-        icon: undefined,
-        open: undefined,
-        menu: undefined,
-      },
-    ]);
+    expect(resolved.config.sections[1]?.items).toHaveLength(1);
+    expect(resolved.config.sections[1]?.items?.[0]).toMatchObject({
+      label: "MDN",
+      url: "https://developer.mozilla.org",
+    });
+  });
+
+  it("retains recursive custom items and folder-only nodes", () => {
+    const { profileDir, projectRoot, projectId } = makeLayers({
+      project: `module.exports = { sections: [{
+        type: "custom",
+        title: "Knowledge",
+        items: [{
+          label: "Engineering",
+          icon: "Folder",
+          collapsed: true,
+          items: [{
+            label: "Platform",
+            items: [{ label: "Runbook", url: "https://example.test/runbook" }],
+          }],
+        }],
+      }] };`,
+    });
+
+    const item = resolveSidebarConfig({
+      profileDir,
+      projectId,
+      projectRoot,
+    }).config.sections[0]?.items?.[0];
+    expect(item).toMatchObject({
+      label: "Engineering",
+      icon: "Folder",
+      collapsed: true,
+      items: [
+        {
+          label: "Platform",
+          items: [{ label: "Runbook", url: "https://example.test/runbook" }],
+        },
+      ],
+    });
   });
 
   it("sanitizes custom item previews and preserves an explicit opt-out", () => {

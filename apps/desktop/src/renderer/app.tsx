@@ -9,6 +9,7 @@ import type { AgentSession, ProjectSummary } from "@catamorphic/react/types";
 import {
   ChevronRight,
   Columns2,
+  Folder,
   FolderPlus,
   GitBranch,
   LayoutGrid,
@@ -72,6 +73,7 @@ import { RemoteHistoryModal } from "./components/remote-history-modal.js";
 import { type RemoteFeatures, RemoteNav } from "./components/remote-nav.js";
 import { ShortcutHint } from "./components/shortcut-hint.js";
 import { SidebarItemRow } from "./components/sidebar-item-row.js";
+import { SiteFavicon } from "./components/site-favicon.js";
 import {
   type PendingToolPermission,
   ToolPermissionModal,
@@ -93,6 +95,7 @@ import {
   type ProjectAgentInfo,
   type SessionCheckoutInfo,
   type SidebarConfig,
+  type SidebarItem,
   type SidebarMenuEntry,
   type SidebarSectionConfig,
 } from "./lib/desktop-api.js";
@@ -406,7 +409,11 @@ const hydrateWorkspace = (raw: unknown): Workspace | null => {
   if (typeof raw !== "object" || raw === null) return null;
   const snapshot = raw as Partial<Workspace>;
   const ws: Workspace = {
-    tabs: Array.isArray(snapshot.tabs) ? snapshot.tabs : [],
+    tabs: Array.isArray(snapshot.tabs)
+      ? snapshot.tabs.filter(
+          (tab) => tab.kind !== "agent-setup" && tab.kind !== "mcpapp",
+        )
+      : [],
     chats: Array.isArray(snapshot.chats) ? snapshot.chats : [],
     browsers: Array.isArray(snapshot.browsers) ? snapshot.browsers : [],
     terminals: [],
@@ -629,25 +636,31 @@ function PaneUnsplitButton({ onClick }: { onClick: () => void }) {
   );
 }
 
-/** Whether the floating chat dock is where the user is working right now. */
-let lastPointerDownInFloatingChat = false;
+/** The floating chat dock where the user's last pointer interaction landed. */
+let lastPointerDownInFloatingChatId: string | undefined;
 if (typeof window !== "undefined") {
   window.addEventListener(
     "pointerdown",
     (event) => {
-      lastPointerDownInFloatingChat =
-        event.target instanceof Element &&
-        event.target.closest("[data-floating-chat]") !== null;
+      const floating =
+        event.target instanceof Element
+          ? event.target.closest<HTMLElement>("[data-floating-chat]")
+          : null;
+      lastPointerDownInFloatingChatId =
+        floating?.dataset.chatLocalId || undefined;
     },
     { capture: true },
   );
 }
-function floatingChatHasFocus(): boolean {
+function focusedChatSurfaceId(): string | undefined {
   const active = document.activeElement;
   if (active && active !== document.body) {
-    return active.closest("[data-floating-chat]") !== null;
+    return (
+      active.closest<HTMLElement>("[data-chat-local-id]")?.dataset
+        .chatLocalId || undefined
+    );
   }
-  return lastPointerDownInFloatingChat;
+  return lastPointerDownInFloatingChatId;
 }
 
 export function App() {
@@ -1310,6 +1323,9 @@ export function App() {
   // navigate(url) handles per live browser tab, for "open in current tab"
   // (bookmarks/links with open:"replace").
   const browserNavigatorsRef = useRef(new Map<string, (url: string) => void>());
+  const browserHistoryNavigatorsRef = useRef(
+    new Map<string, (direction: "back" | "forward") => void>(),
+  );
 
   // Animated close per chat dock — external closers (Cmd+W) must play the
   // same 250ms collapse Escape does, not unmount the dock mid-frame.
@@ -1390,6 +1406,7 @@ export function App() {
           };
         }
         browserNavigatorsRef.current.delete(localId);
+        browserHistoryNavigatorsRef.current.delete(localId);
         browserGuestIdsRef.current.delete(localId);
         const browsers = ws.browsers.filter(
           (browser) => browser.localId !== localId,
@@ -1857,6 +1874,25 @@ export function App() {
     });
   }, [projectId, agentsData, hasAgents, activeProfileId, updateWorkspace]);
 
+  // Agent discovery is asynchronous at launch. If a persisted setup tab is
+  // restored, or the first empty response races the real agents payload,
+  // reconcile it away as soon as an existing agent is known.
+  useEffect(() => {
+    if (!hasAgents) return;
+    setWizardModalOpen(false);
+    updateWorkspace((ws) => {
+      const tabs = ws.tabs.filter((tab) => tab.kind !== "agent-setup");
+      if (tabs.length === ws.tabs.length) return ws;
+      const lastTab = tabs.at(-1);
+      const activeTabKey = tabs.some((tab) => tabKey(tab) === ws.activeTabKey)
+        ? ws.activeTabKey
+        : lastTab
+          ? tabKey(lastTab)
+          : undefined;
+      return { ...ws, tabs, activeTabKey };
+    });
+  }, [hasAgents, updateWorkspace]);
+
   const minimizeFloatingChats = () =>
     updateWorkspace((ws) => ({
       ...ws,
@@ -2008,6 +2044,35 @@ export function App() {
   closeChatRef.current = closeChat;
   const closeTabRef = useRef(closeTab);
   closeTabRef.current = closeTab;
+  const closeDispatchPendingRef = useRef(false);
+  const lastChatStepDownRef = useRef<
+    | {
+        localId: string;
+        at: number;
+      }
+    | undefined
+  >(undefined);
+  useEffect(() => {
+    const cancelStepDownHandoff = (event: PointerEvent) => {
+      const pending = lastChatStepDownRef.current;
+      if (!pending) return;
+      const targetChatId =
+        event.target instanceof Element
+          ? event.target.closest<HTMLElement>("[data-chat-local-id]")?.dataset
+              .chatLocalId
+          : undefined;
+      if (targetChatId !== pending.localId) {
+        lastChatStepDownRef.current = undefined;
+      }
+    };
+    window.addEventListener("pointerdown", cancelStepDownHandoff, {
+      capture: true,
+    });
+    return () =>
+      window.removeEventListener("pointerdown", cancelStepDownHandoff, {
+        capture: true,
+      });
+  }, []);
   // An OAuth consent tab has done its job once the loopback callback was
   // served: close it (with the tab's exit motion) instead of leaving a
   // "you can close this tab" page behind. The tab may still be mid-redirect
@@ -2033,22 +2098,46 @@ export function App() {
     });
   }, []);
   const closeActiveSurface = useCallback(() => {
-    const ws = workspaceRef.current;
-    const floating = ws.chats.find((chat) => chat.mode === "partial");
-    // The floating chat only owns Cmd+W while the user is IN it. Focus is
-    // the tell (its composer takes focus on open); when nothing focusable
-    // holds focus (a click on a pane's blank chrome, a webview whose guest
-    // swallowed the click), the last pointer-down decides. Clicking into
-    // the tab behind the dock and pressing Cmd+W closes the tab.
-    if (floating && (!ws.activeTabKey || floatingChatHasFocus())) {
-      // Through the dock's animated close (same collapse as Escape);
-      // straight removal only if the dock never registered one.
-      const animated = chatClosersRef.current.get(floating.localId);
-      if (animated) animated();
-      else closeChatRef.current(floating.localId);
-      return;
-    }
-    if (ws.activeTabKey) closeTabRef.current(ws.activeTabKey);
+    // A guest-focused key can arrive through both Electron's menu and the
+    // webview relay. Decide once after those deliveries and any preceding
+    // surface transition (for example Escape: tab → floating) have settled.
+    if (closeDispatchPendingRef.current) return;
+    closeDispatchPendingRef.current = true;
+    const steppedDown = lastChatStepDownRef.current;
+    const requestedChatId =
+      steppedDown && performance.now() - steppedDown.at < 500
+        ? steppedDown.localId
+        : focusedChatSurfaceId();
+    lastChatStepDownRef.current = undefined;
+    window.setTimeout(() => {
+      closeDispatchPendingRef.current = false;
+      const ws = workspaceRef.current;
+      const focusedChat = ws.chats.find(
+        (chat) => chat.localId === requestedChatId,
+      );
+      const floating =
+        (focusedChat?.mode === "partial" ? focusedChat : undefined) ??
+        ws.chats.find((chat) => chat.mode === "partial");
+      // The floating chat only owns Cmd+W while the user is IN it. Focus is
+      // the tell (its composer takes focus on open); when nothing focusable
+      // holds focus (a click on a pane's blank chrome, a webview whose guest
+      // swallowed the click), the last pointer-down decides. Clicking into
+      // the tab behind the dock and pressing Cmd+W closes the tab.
+      if (
+        floating &&
+        (!ws.activeTabKey ||
+          focusedChat?.mode === "partial" ||
+          focusedChat?.mode === "min")
+      ) {
+        // Through the dock's animated close (same collapse as Escape);
+        // straight removal only if the dock never registered one.
+        const animated = chatClosersRef.current.get(floating.localId);
+        if (animated) animated();
+        else closeChatRef.current(floating.localId);
+        return;
+      }
+      if (ws.activeTabKey) closeTabRef.current(ws.activeTabKey);
+    }, 25);
   }, []);
   useEffect(() => {
     return desktopApi.onCloseSurface(closeActiveSurface);
@@ -2062,6 +2151,13 @@ export function App() {
     (chat) =>
       chat.localId === workspace.activeChatId && chatVisible(workspace, chat),
   );
+  const navigateFocusedBrowserHistory = (direction: "back" | "forward") => {
+    const activeKey = workspaceRef.current.activeTabKey;
+    if (!activeKey?.startsWith("browser:")) return;
+    browserHistoryNavigatorsRef.current.get(
+      activeKey.slice("browser:".length),
+    )?.(direction);
+  };
   const focusedSession = focusedChat?.sessionId
     ? sessionsById.get(focusedChat.sessionId)
     : undefined;
@@ -2814,6 +2910,8 @@ export function App() {
     "split-view": toggleSplit,
     "new-browser-tab": (mode) =>
       openBrowserTab("", mode === "side" ? { side: true } : undefined),
+    "browser-back": () => navigateFocusedBrowserHistory("back"),
+    "browser-forward": () => navigateFocusedBrowserHistory("forward"),
     "reopen-tab": reopenTab,
     "new-terminal-tab": (mode) =>
       openTerminalTab(mode === "side" ? { side: true } : undefined),
@@ -3930,6 +4028,58 @@ export function App() {
 
   // Everything the palette searches and acts on, shared by both hosts
   // (the Cmd+P overlay and palette "New Tab" tabs).
+  const paletteTargetChat = actionChat(workspace);
+  const paletteTabKeys = orderedTabKeys(workspace);
+  const paletteFloatingChats = workspace.chats.filter(
+    (chat) => chat.mode !== "tab",
+  );
+  const paletteTargetAgentId =
+    focusedSession?.agentId ?? focusedChat?.agentId ?? effectiveDefaultAgentId;
+  const paletteSwitchableAgentIds = new Set([
+    ...(agentsData?.agents.map((agent) => agent.id) ?? []),
+    ...Object.keys(projectAgentNames),
+  ]);
+  if (paletteTargetAgentId) {
+    paletteSwitchableAgentIds.delete(paletteTargetAgentId);
+  }
+  const paletteActionAvailability: Partial<Record<ActionId, boolean>> = {
+    "reopen-tab": workspace.closedTabs.length > 0,
+    "toggle-chat-minimized": paletteTargetChat !== undefined,
+    "chat-to-tab":
+      paletteTargetChat !== undefined &&
+      (paletteTargetChat.mode !== "tab" ||
+        workspace.activeTabKey !== chatTabKey(paletteTargetChat.localId)),
+    "prev-chat":
+      paletteFloatingChats.length > 1 ||
+      (paletteFloatingChats.length === 1 &&
+        paletteFloatingChats[0]?.mode !== "partial"),
+    "next-chat":
+      paletteFloatingChats.length > 1 ||
+      (paletteFloatingChats.length === 1 &&
+        paletteFloatingChats[0]?.mode !== "partial"),
+    "prev-tab": paletteTabKeys.length > 1,
+    "next-tab": paletteTabKeys.length > 1,
+    "browser-back": workspace.activeTabKey?.startsWith("browser:") === true,
+    "browser-forward": workspace.activeTabKey?.startsWith("browser:") === true,
+    "split-view": workspace.split !== null || paletteTabKeys.length > 1,
+    "close-tab":
+      workspace.activeTabKey !== null ||
+      workspace.chats.some((chat) => chat.mode === "partial"),
+    "default-agent":
+      (agentsData?.agents.length ?? 0) > 0 ||
+      Object.keys(projectAgentNames).length > 0,
+    "configure-agent":
+      (agentsData?.agents.length ?? 0) > 0 ||
+      Object.keys(projectAgentNames).length > 0,
+    "switch-agent":
+      focusedChat !== undefined && paletteSwitchableAgentIds.size > 0,
+    // Project-agent models are committed in their project definition, so
+    // the mutable model picker only applies to configured profile agents.
+    "switch-model":
+      agentsData?.agents.some((agent) => agent.id === paletteTargetAgentId) ===
+      true,
+    "change-effort": paletteTargetAgentId != null,
+  };
   const paletteProps = projectId
     ? {
         projectId,
@@ -3947,6 +4097,7 @@ export function App() {
         onSendToAgent: sendToAgent,
         onRunSkill: runSkill,
         actionHandlers,
+        actionAvailability: paletteActionAvailability,
         agents: agentsData?.agents ?? [],
         defaultAgentId: effectiveDefaultAgentId,
         focusedChat: focusedChat
@@ -4314,6 +4465,12 @@ export function App() {
                         navigate,
                       )
                     }
+                    registerHistoryNavigate={(navigate) =>
+                      browserHistoryNavigatorsRef.current.set(
+                        browser.localId,
+                        navigate,
+                      )
+                    }
                     registerGuest={(guestId) => {
                       if (guestId === null) {
                         browserGuestIdsRef.current.delete(browser.localId);
@@ -4521,6 +4678,10 @@ export function App() {
                 entry={entry}
                 title={chatLabels[entry.localId] ?? "AI assistant"}
                 tabActive={Boolean(viewSlots[chatTabKey(entry.localId)])}
+                refreshWhileIdle={
+                  entry.localId === workspace.activeChatId &&
+                  chatVisible(workspace, entry)
+                }
                 slot={viewSlots[chatTabKey(entry.localId)] ?? "full"}
                 splitRatio={splitRatio}
                 splitResizing={dividerDragging}
@@ -4650,6 +4811,12 @@ export function App() {
                     ),
                   }))
                 }
+                onEscapeToFloating={(localId) => {
+                  lastChatStepDownRef.current = {
+                    localId,
+                    at: performance.now(),
+                  };
+                }}
                 onClose={closeChat}
                 registerClose={(close) =>
                   chatClosersRef.current.set(entry.localId, close)
@@ -5062,42 +5229,102 @@ function CustomItems({
   }
   return (
     <ul className="flex flex-col gap-0.5">
-      {items.map((item) => {
-        const mode = item.open ?? section.open ?? "replace";
-        return (
-          <li key={`${item.label}:${item.url}`}>
-            <SidebarItemRow
-              label={item.label}
-              title={item.url}
-              icon={item.icon ?? "Globe"}
-              menu={item.menu ?? section.menu ?? DEFAULT_CUSTOM_MENU}
-              preview={item.preview}
-              onOpen={() => onOpenUrl(item.url, mode)}
-              onAction={(entry) => {
-                switch (entry.action) {
-                  case "open":
-                    onOpenUrl(item.url, mode);
-                    break;
-                  case "open-tab":
-                    onOpenUrl(item.url, "tab");
-                    break;
-                  case "open-here":
-                    onOpenUrl(item.url, "replace");
-                    break;
-                  case "copy-url":
-                    void navigator.clipboard.writeText(item.url);
-                    break;
-                  // pin/unpin/rename/remove are bookmark-only; a config
-                  // may list them, but there's nothing to act on here.
-                  default:
-                    break;
-                }
-              }}
-            />
-          </li>
-        );
-      })}
+      {items.map((item) => (
+        <CustomItem
+          key={JSON.stringify(item)}
+          item={item}
+          section={section}
+          onOpenUrl={onOpenUrl}
+        />
+      ))}
     </ul>
+  );
+}
+
+function CustomItem({
+  item,
+  section,
+  onOpenUrl,
+}: {
+  item: SidebarItem;
+  section: SidebarSectionConfig;
+  onOpenUrl: (url: string, mode: "tab" | "replace") => void;
+}) {
+  const [open, setOpen] = useState(item.collapsed !== true);
+  const children = item.items ?? [];
+  const mode = item.open ?? section.open ?? "replace";
+  const openItem = () => {
+    if (item.url) onOpenUrl(item.url, mode);
+    else if (children.length > 0) setOpen((value) => !value);
+  };
+  return (
+    <li>
+      <SidebarItemRow
+        label={item.label}
+        title={item.url}
+        icon={
+          item.icon ??
+          (item.url ? (
+            <SiteFavicon url={item.url} />
+          ) : (
+            <Folder className="size-3.5 shrink-0 text-fg-faint" />
+          ))
+        }
+        menu={
+          item.url
+            ? (item.menu ?? section.menu ?? DEFAULT_CUSTOM_MENU)
+            : (item.menu ?? [])
+        }
+        preview={item.preview}
+        disclosure={
+          children.length > 0
+            ? { open, onToggle: () => setOpen((value) => !value) }
+            : undefined
+        }
+        onOpen={openItem}
+        onAction={(entry) => {
+          if (!item.url) return;
+          switch (entry.action) {
+            case "open":
+              onOpenUrl(item.url, mode);
+              break;
+            case "open-tab":
+              onOpenUrl(item.url, "tab");
+              break;
+            case "open-here":
+              onOpenUrl(item.url, "replace");
+              break;
+            case "copy-url":
+              void navigator.clipboard.writeText(item.url);
+              break;
+            default:
+              break;
+          }
+        }}
+      />
+      {children.length > 0 && (
+        <div
+          className="grid transition-[grid-template-rows,opacity] duration-150"
+          style={{
+            gridTemplateRows: open ? "1fr" : "0fr",
+            opacity: open ? 1 : 0,
+          }}
+        >
+          <div className="overflow-hidden">
+            <ul className="ml-5 flex flex-col gap-0.5">
+              {children.map((child) => (
+                <CustomItem
+                  key={JSON.stringify(child)}
+                  item={child}
+                  section={section}
+                  onOpenUrl={onOpenUrl}
+                />
+              ))}
+            </ul>
+          </div>
+        </div>
+      )}
+    </li>
   );
 }
 

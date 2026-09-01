@@ -184,6 +184,105 @@ describe("browser tabs", () => {
     });
   });
 
+  it("navigates browser history with Cmd+Left and Cmd+Right", async () => {
+    await run(`
+      const input = $('input[aria-label="Address and search bar"]');
+      input.focus();
+      setReactValue(input, 'data:text/html,<title>Second E2E Page</title><h1>second</h1>');
+      input.dispatchEvent(new KeyboardEvent('keydown',
+        { key: 'Enter', bubbles: true, cancelable: true }));
+      return true;
+    `);
+    await runWait(`return !!byText('button', 'Second E2E Page');`, {
+      timeoutMs: 30_000,
+      label: "second browser history entry",
+    });
+
+    await run(`pressKey('ArrowLeft', { metaKey: true }); return true;`);
+    await runWait(`return !!byText('button', 'E2E Page');`, {
+      timeoutMs: 30_000,
+      label: "browser history moved back",
+    });
+    await run(`pressKey('ArrowRight', { metaKey: true }); return true;`);
+    await runWait(`return !!byText('button', 'Second E2E Page');`, {
+      timeoutMs: 30_000,
+      label: "browser history moved forward",
+    });
+
+    const isMac = await run<boolean>(
+      `return navigator.platform.toLowerCase().startsWith('mac');`,
+    );
+    if (isMac) {
+      await run(`
+        void $('webview').executeJavaScript(
+          "window.dispatchEvent(new MouseEvent('mouseup', { button: 3, bubbles: true, cancelable: true }))",
+        );
+        return true;
+      `);
+      await runWait(`return !!byText('button', 'E2E Page');`, {
+        timeoutMs: 30_000,
+        label: "browser mouse button moved back",
+      });
+      await run(`
+        void $('webview').executeJavaScript(
+          "window.dispatchEvent(new MouseEvent('mouseup', { button: 4, bubbles: true, cancelable: true }))",
+        );
+        return true;
+      `);
+      await runWait(`return !!byText('button', 'Second E2E Page');`, {
+        timeoutMs: 30_000,
+        label: "browser mouse button moved forward",
+      });
+    }
+  });
+
+  it("coalesces duplicate Cmd+W dispatches into one closed tab", async () => {
+    await run(`pressKey('t', { metaKey: true, altKey: true }); return true;`);
+    await runWait(
+      `return $$('input[aria-label="Address and search bar"]').length === 2;`,
+      { label: "second browser tab" },
+    );
+    await run(`
+      const input = $$('input[aria-label="Address and search bar"]').at(-1);
+      input.focus();
+      setReactValue(input, 'data:text/html,<title>Close Target</title><h1>close me</h1>');
+      input.dispatchEvent(new KeyboardEvent('keydown',
+        { key: 'Enter', bubbles: true, cancelable: true }));
+      return true;
+    `);
+    await runWait(`return !!byText('button', 'Close Target');`, {
+      timeoutMs: 30_000,
+      label: "second browser tab navigated",
+    });
+    await run(`
+      pressKey('w', { metaKey: true });
+      pressKey('w', { metaKey: true });
+      return true;
+    `);
+    // Occluded Chromium can pause CSS animations and omit animationend.
+    // Freeze this exit deliberately: the clock fallback must still clear
+    // exactly the one closed tab from the rendered strip.
+    await runWait(
+      `const exiting = $('.animate-tab-out');
+       if (!exiting) return false;
+       exiting.getAnimations().forEach((animation) => animation.pause());
+       return true;`,
+      { label: "outgoing browser tab staged" },
+    );
+    const afterClose = await run<{
+      webviews: number;
+      tabLabels: string[];
+    }>(`
+      return new Promise((resolve) => setTimeout(() => resolve({
+        webviews: $$('webview').length,
+        tabLabels: $$('[data-point-key] button').map((button) =>
+          button.textContent.trim()),
+      }), 800));
+    `);
+    expect(afterClose.webviews).toBe(1);
+    expect(afterClose.tabLabels.join(" ")).not.toContain("Close Target");
+  });
+
   it("closes the browser tab with the close-tab shortcut", async () => {
     await run(`pressKey('w', { metaKey: true }); return true;`);
     await runWait(`return !$('input[aria-label="Address and search bar"]');`, {
@@ -193,11 +292,18 @@ describe("browser tabs", () => {
 
   it("Cmd+Shift+T reopens the closed browser tab at its URL", async () => {
     await run(`pressKey('T', { metaKey: true, shiftKey: true }); return true;`);
-    await runWait(
-      `return !!$('input[aria-label="Address and search bar"]') &&
-              !!byText('button', 'E2E Page');`,
-      { timeoutMs: 30_000, label: "browser tab restored" },
-    );
+    const restored = await run<{
+      inputCount: number;
+      tabLabels: string[];
+    }>(`
+      return new Promise((resolve) => setTimeout(() => resolve({
+        inputCount: $$('input[aria-label="Address and search bar"]').length,
+        tabLabels: $$('[data-point-key] button').map((button) =>
+          button.textContent.trim()),
+      }), 2000));
+    `);
+    expect(restored.inputCount).toBe(1);
+    expect(restored.tabLabels.join(" ")).toContain("E2E Page");
     // Close it again so later groups start from the same slate as before.
     await run(`pressKey('w', { metaKey: true }); return true;`);
     await runWait(`return !$('input[aria-label="Address and search bar"]');`, {
@@ -385,6 +491,34 @@ describe("chat flows", () => {
          panel.textContent.includes('Run the focused tests') &&
          parseFloat(getComputedStyle(panel).opacity) > 0.9;`,
       { label: "expanded todo description" },
+    );
+
+    await runWait(
+      `const toggle = $$('[data-testid="chat-turn-steps-toggle"]').at(-1);
+       if (!toggle) return false;
+       if (toggle.getAttribute('aria-expanded') !== 'true') toggle.click();
+       const step = [...visibleDock().querySelectorAll('[data-testid="chat-step"] button')]
+         .find((button) => button.textContent.includes('Updated the todo list'));
+       if (!step) return false;
+       if (step.getAttribute('aria-expanded') !== 'true') step.click();
+       const detail = step.parentElement.querySelector('[data-testid="chat-step-detail"]');
+       return detail?.textContent.includes('✓ Inspect the project') &&
+         detail.textContent.includes('● Verify the result') &&
+         !detail.textContent.includes('"items"');`,
+      { label: "readable todo tool step" },
+    );
+
+    await run(`
+      const input = visibleDock().querySelector('[data-composer-input]');
+      setReactValue(input, 'clear todo list');
+      input.closest('form').requestSubmit();
+      return true;
+    `);
+    await runWait(
+      `return timelineMessages().some((message) =>
+         message.text.includes('I cleared the progress list.')) &&
+         !visibleDock()?.querySelector('[data-testid="todo-progress"]');`,
+      { timeoutMs: 30_000, label: "cleared todo progress leaves the UI" },
     );
   });
 
@@ -601,8 +735,19 @@ describe("chat tab activity indicators", () => {
     );
     await runWait(`return !(${tabDotOn});`, { label: "dot cleared on open" });
     // Leave a clean slate: close the chat tab and the extra palette tab.
+    const tabsBeforeClose = await run<number>(
+      `return $$('[data-point-key]').length;`,
+    );
     await run(`pressKey('w', { metaKey: true }); return true;`);
+    await runWait(
+      `return $$('[data-point-key]').length === ${tabsBeforeClose - 1};`,
+      { label: "chat tab closed before the next close" },
+    );
     await run(`pressKey('w', { metaKey: true }); return true;`);
+    await runWait(
+      `return $$('[data-point-key]').length === ${tabsBeforeClose - 2};`,
+      { label: "extra palette tab closed" },
+    );
   });
 
   it("closing a chat mid-turn clears its activity", async () => {
@@ -748,8 +893,8 @@ describe("chat surface shortcuts", () => {
       await waitForHeldAnimationFrame();
       await releaseAnimationFrames();
       const composerAutofocused = await run<boolean>(`
-        return document.activeElement ===
-          floatingDock().querySelector('[data-composer-input]');
+        return document.activeElement?.matches?.('[data-composer-input]') &&
+          document.activeElement.closest('[data-floating-chat]') !== null;
       `);
       expect(composerAutofocused).toBe(true);
 

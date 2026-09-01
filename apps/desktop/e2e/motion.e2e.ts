@@ -226,18 +226,14 @@ describe("paired motion (enter/exit mirrors)", () => {
     ).toBeLessThanOrEqual(50);
   });
 
-  it("dock open animation matches the dock's collapse transition", async () => {
-    await run(`pressKey('n', { metaKey: true }); return true;`);
-    await runWait(`return !!visibleDock();`, { label: "floating dock open" });
-    const timing = await run<{ animationMs: number; transitionMs: number }>(`
-      const cs = getComputedStyle(visibleDock());
-      return {
-        animationMs: toMs(cs.animationDuration.split(',')[0]),
-        transitionMs: toMs(cs.transitionDuration.split(',')[0]),
-      };
-    `);
-    // Open (dock-in keyframe) and minimize (transition) must be one system.
-    expect(timing.animationMs).toBe(timing.transitionMs);
+  it("dock-in and dock-out match in duration and easing", async () => {
+    const rules = await collectAnimationRules();
+    const enter = rules.find((rule) => rule.selector === "animate-dock-in");
+    const exit = rules.find((rule) => rule.selector === "animate-dock-out");
+    expect(enter).toBeDefined();
+    expect(exit).toBeDefined();
+    expect(exit?.durationMs).toBe(enter?.durationMs);
+    expect(exit?.easing).toBe(enter?.easing);
   });
 
   it("the dock's minimized pose mirrors dock-in's starting pose", async () => {
@@ -449,6 +445,39 @@ describe("animate-before-unmount", () => {
       const tab = button.closest('.animate-tab-in');
       button.click();
       return sampleUntilGone(tab, 'animate-tab-out', 1500);
+    `);
+    expect(
+      samples.some((sample) => sample.exiting),
+      `samples: ${JSON.stringify(samples)}`,
+    ).toBe(true);
+    expect(samples.at(-1)?.gone).toBe(true);
+  });
+
+  it("tab hover cards fade out before unmounting", async () => {
+    await run(`
+      const tab = $('[data-point-key]');
+      const body = [...tab.querySelectorAll('button')]
+        .find((button) => !button.getAttribute('aria-label')?.startsWith('Close'));
+      body.dispatchEvent(new MouseEvent('mouseover', { bubbles: true }));
+      return true;
+    `);
+    await runWait(
+      `const card = $('[role="tooltip"].animate-fade-in');
+       return !!card && getComputedStyle(card).opacity === '1';`,
+      { label: "tab hover card entered" },
+    );
+    const samples = await run<
+      { t: number; exiting?: boolean; gone?: boolean }[]
+    >(`
+      const tab = $('[data-point-key]');
+      const body = [...tab.querySelectorAll('button')]
+        .find((button) => !button.getAttribute('aria-label')?.startsWith('Close'));
+      const card = $('[role="tooltip"]');
+      body.dispatchEvent(new MouseEvent('mouseout', {
+        bubbles: true,
+        relatedTarget: document.body,
+      }));
+      return sampleUntilGone(card, 'animate-fade-out', 1000);
     `);
     expect(
       samples.some((sample) => sample.exiting),

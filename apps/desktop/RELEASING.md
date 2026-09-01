@@ -1,8 +1,8 @@
 # Releasing the desktop app
 
 The desktop release contract is recorded in
-[ADR 0079](../../docs/decisions/0079-desktop-prerelease-distribution.md) and
-[ADR 0080](../../docs/decisions/0080-desktop-updates-and-migration-backups.md).
+[ADR 0082](../../docs/decisions/0082-desktop-prerelease-distribution.md) and
+[ADR 0083](../../docs/decisions/0083-desktop-updates-and-migration-backups.md).
 GitHub Releases is the canonical binary source. The Homebrew cask installs the
 same notarized DMG, and the tap carries the small metadata file packaged apps
 use to discover updates.

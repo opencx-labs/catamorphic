@@ -3,7 +3,10 @@ import dgram from "node:dgram";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { serveSpaDist } from "@catamorphic/fastify-plugin";
+import {
+  pwaManifestWithLaunch,
+  serveSpaDist,
+} from "@catamorphic/fastify-plugin";
 import { app as electronApp } from "electron";
 import Fastify, { type FastifyInstance } from "fastify";
 import type { ProfileConfigManager } from "./profile-config.js";
@@ -29,6 +32,7 @@ import type { ProfileConfigManager } from "./profile-config.js";
  */
 
 const PAIRING_CODE_TTL_MS = 2 * 60_000;
+const INSTALL_CODE_TTL_MS = 10 * 60_000;
 const DEFAULT_PORT = 4756;
 const LOCAL_NETWORK_PROBE_TIMEOUT_MS = 60_000;
 
@@ -55,6 +59,8 @@ export interface PairingInfo {
 export interface PairedDevice {
   id: string;
   tokenHash: string;
+  /** Additional credentials for isolated installed-app storage containers. */
+  additionalTokenHashes?: string[];
   profileId: string;
   /** Best-effort from the claiming request's user agent ("iPhone", …). */
   label: string;
@@ -73,9 +79,18 @@ export interface PairedDeviceInfo {
 interface PairingFile {
   port?: number;
   devices?: PairedDevice[];
+  installs?: PendingInstall[];
 }
 
 interface PendingPairing {
+  profileId: string;
+  context?: PairingContext;
+  expiresAt: number;
+}
+
+interface PendingInstall {
+  codeHash: string;
+  deviceId: string;
   profileId: string;
   context?: PairingContext;
   expiresAt: number;
@@ -102,6 +117,7 @@ export class MobilePairingService {
   private listening = false;
   private port: number;
   private devices: PairedDevice[];
+  private installs: PendingInstall[];
   private readonly pending = new Map<string, PendingPairing>();
 
   constructor(private readonly deps: MobilePairingDeps) {
@@ -111,6 +127,9 @@ export class MobilePairingService {
       ...device,
       label: device.label ?? "Device",
     }));
+    this.installs = (stored.installs ?? []).filter(
+      (install) => install.expiresAt > Date.now(),
+    );
   }
 
   /** Auto-start at boot when phones are already paired — they reconnect. */
@@ -135,6 +154,9 @@ export class MobilePairingService {
     const before = this.devices.length;
     this.devices = this.devices.filter((device) => device.id !== deviceId);
     if (this.devices.length === before) return false;
+    this.installs = this.installs.filter(
+      (install) => install.deviceId !== deviceId,
+    );
     this.save();
     return true;
   }
@@ -238,26 +260,68 @@ export class MobilePairingService {
           .send({ error: "This code expired — scan a fresh QR." });
       }
       this.pending.delete(body.code as string);
-      const token = randomBytes(32).toString("base64url");
-      this.devices.push({
-        id: randomUUID(),
-        tokenHash: hashToken(token),
-        profileId: entry.profileId,
-        label: deviceLabel(request.headers["user-agent"]),
-        createdAt: new Date().toISOString(),
-      });
-      this.save();
-      // The phone talks to whichever address it scanned; build the API
-      // base from the Host it actually used.
-      const server = `http://${request.headers.host}/api`;
-      return reply.send({
-        version: 1,
-        name: os.hostname(),
-        server,
-        token,
-        remotes: this.remoteLinks(entry.profileId),
-        ...(entry.context ? { context: entry.context } : {}),
-      });
+      return reply.send(
+        this.issueClaim({
+          entry,
+          host: request.headers.host,
+          userAgent: request.headers["user-agent"],
+        }),
+      );
+    });
+
+    app.post("/pair/install", async (request, reply) => {
+      const body = (request.body ?? {}) as { code?: string };
+      const codeHash =
+        typeof body.code === "string" ? hashToken(body.code) : "";
+      const index = this.installs.findIndex(
+        (install) =>
+          install.codeHash === codeHash && install.expiresAt >= Date.now(),
+      );
+      if (index < 0) {
+        return reply
+          .status(410)
+          .send({ error: "This install link expired. Scan a fresh QR." });
+      }
+      const [entry] = this.installs.splice(index, 1);
+      if (
+        !entry ||
+        !this.devices.some((device) => device.id === entry.deviceId)
+      ) {
+        this.save();
+        return reply.status(410).send({ error: "Pairing revoked" });
+      }
+      return reply.send(
+        this.issueClaim({
+          entry,
+          host: request.headers.host,
+          userAgent: request.headers["user-agent"],
+        }),
+      );
+    });
+
+    app.get("/manifest.webmanifest", async (request, reply) => {
+      const query = request.query as { install?: string; launch?: string };
+      const installCode =
+        typeof query.install === "string" ? query.install : undefined;
+      if (installCode && !this.installIsLive(installCode)) {
+        return reply.status(410).send({ error: "Install expired" });
+      }
+      const file = path.join(this.pwaDist(), "manifest.webmanifest");
+      const manifest = JSON.parse(fs.readFileSync(file, "utf8")) as Record<
+        string,
+        unknown
+      >;
+      return reply
+        .header("cache-control", "no-store")
+        .type("application/manifest+json")
+        .send(
+          installCode
+            ? {
+                ...manifest,
+                start_url: `/?install=${encodeURIComponent(installCode)}`,
+              }
+            : pwaManifestWithLaunch(manifest, query.launch),
+        );
     });
 
     // The API surface lives in its own plugin scope so its raw-body
@@ -357,7 +421,10 @@ export class MobilePairingService {
     const match = raw ? /^Bearer\s+(\S+)$/i.exec(raw.trim()) : null;
     if (!match?.[1]) return false;
     const hash = hashToken(match[1]);
-    const device = this.devices.find((entry) => entry.tokenHash === hash);
+    const device = this.devices.find(
+      (entry) =>
+        entry.tokenHash === hash || entry.additionalTokenHashes?.includes(hash),
+    );
     if (!device) return false;
     // lastSeen keeps the device list honest; persist at most once a minute
     // (the phone polls every 500ms while a turn runs).
@@ -368,6 +435,73 @@ export class MobilePairingService {
       this.save();
     }
     return true;
+  }
+
+  private issueClaim(input: {
+    entry: {
+      profileId: string;
+      context?: PairingContext;
+      deviceId?: string;
+    };
+    host: string | undefined;
+    userAgent: string | string[] | undefined;
+  }) {
+    if (!input.host) throw new Error("Pairing request did not include a host");
+    const token = randomBytes(32).toString("base64url");
+    const tokenHash = hashToken(token);
+    let device = input.entry.deviceId
+      ? this.devices.find((candidate) => candidate.id === input.entry.deviceId)
+      : undefined;
+    if (device) {
+      device.additionalTokenHashes = [
+        ...(device.additionalTokenHashes ?? []),
+        tokenHash,
+      ];
+      if (device.label === "Device")
+        device.label = deviceLabel(input.userAgent);
+    } else if (!input.entry.deviceId) {
+      device = {
+        id: randomUUID(),
+        tokenHash,
+        profileId: input.entry.profileId,
+        label: deviceLabel(input.userAgent),
+        createdAt: new Date().toISOString(),
+      };
+      this.devices.push(device);
+    } else {
+      throw new Error("Paired device no longer exists");
+    }
+    const installCode = randomBytes(32).toString("base64url");
+    this.installs = this.installs.filter(
+      (install) => install.expiresAt > Date.now(),
+    );
+    this.installs.push({
+      codeHash: hashToken(installCode),
+      deviceId: device.id,
+      profileId: input.entry.profileId,
+      ...(input.entry.context ? { context: input.entry.context } : {}),
+      expiresAt: Date.now() + INSTALL_CODE_TTL_MS,
+    });
+    this.save();
+    // The phone talks to whichever address it scanned; build the API base
+    // from the Host it actually used.
+    return {
+      version: 1,
+      name: os.hostname(),
+      server: `http://${input.host}/api`,
+      token,
+      installCode,
+      remotes: this.remoteLinks(input.entry.profileId),
+      ...(input.entry.context ? { context: input.entry.context } : {}),
+    };
+  }
+
+  private installIsLive(code: string): boolean {
+    const codeHash = hashToken(code);
+    return this.installs.some(
+      (install) =>
+        install.codeHash === codeHash && install.expiresAt >= Date.now(),
+    );
   }
 
   /**
@@ -471,10 +605,21 @@ export class MobilePairingService {
   }
 
   private save(): void {
+    this.installs = this.installs.filter(
+      (install) => install.expiresAt > Date.now(),
+    );
     fs.mkdirSync(path.dirname(this.deps.file), { recursive: true });
     fs.writeFileSync(
       this.deps.file,
-      `${JSON.stringify({ port: this.port, devices: this.devices }, null, 2)}\n`,
+      `${JSON.stringify(
+        {
+          port: this.port,
+          devices: this.devices,
+          ...(this.installs.length > 0 ? { installs: this.installs } : {}),
+        },
+        null,
+        2,
+      )}\n`,
       { mode: 0o600 },
     );
   }

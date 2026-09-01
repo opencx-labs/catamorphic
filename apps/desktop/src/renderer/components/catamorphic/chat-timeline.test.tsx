@@ -119,4 +119,62 @@ describe("ChatTimeline queue editing", () => {
       container.querySelector('[data-testid="chat-retry"]'),
     ).not.toBeNull();
   });
+
+  it("renders desktop todo tools as readable progress instead of JSON", async () => {
+    await act(async () => {
+      root.render(
+        <ChatTimeline
+          messages={[
+            {
+              id: "assistant-1",
+              role: "assistant",
+              content: "I updated the plan.",
+              metadata: {
+                events: [
+                  {
+                    type: "tool_call",
+                    toolName: "update_todo_list",
+                    toolInput: {
+                      items: [
+                        {
+                          title: "Inspect the project",
+                          description: "Find the right extension points.",
+                          status: "completed",
+                        },
+                        {
+                          title: "Verify the result",
+                          description: "Run the focused checks.",
+                          status: "in_progress",
+                        },
+                      ],
+                    },
+                    toolResult: { completed: 1, total: 2 },
+                  },
+                ],
+              },
+            },
+          ]}
+        />,
+      );
+    });
+
+    await act(async () => {
+      container
+        .querySelector<HTMLButtonElement>(
+          '[data-testid="chat-turn-steps-toggle"]',
+        )
+        ?.click();
+    });
+    const step = container.querySelector<HTMLButtonElement>(
+      '[data-testid="chat-step"] button',
+    );
+    expect(step?.textContent).toContain("Updated the todo list");
+    await act(async () => step?.click());
+    const detail = container.querySelector('[data-testid="chat-step-detail"]');
+    expect(detail?.textContent).toContain("✓ Inspect the project");
+    expect(detail?.textContent).toContain("● Verify the result");
+    expect(detail?.textContent).toContain("1 of 2 complete");
+    expect(detail?.textContent).not.toContain('"items"');
+    expect(detail?.className).toContain("font-sans");
+  });
 });

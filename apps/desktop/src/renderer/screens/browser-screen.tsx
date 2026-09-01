@@ -14,9 +14,12 @@ import { ShortcutHint } from "../components/shortcut-hint.js";
 import {
   type Bookmark,
   type BookmarksData,
+  type BrowserCredentialFillOffer,
+  type BrowserCredentialSaveOffer,
   desktopApi,
   type SavedCredential,
 } from "../lib/desktop-api.js";
+import { formatBinding, useKeybindings } from "../lib/keybindings.js";
 
 /**
  * A browser page inside a workspace tab: address bar (with Chrome-style
@@ -74,12 +77,6 @@ interface Suggestion {
   target: string;
 }
 
-interface SaveOffer {
-  origin: string;
-  username: string;
-  password: string;
-}
-
 /** Matches the `tab-in` keyframe duration in styles.css. */
 const TAB_OPEN_ANIMATION_MS = 200;
 
@@ -110,6 +107,7 @@ export function BrowserScreen({
   keepAwake = false,
   onStateChange,
   registerNavigate,
+  registerHistoryNavigate,
   registerGuest,
   onUnsplit,
 }: {
@@ -130,9 +128,14 @@ export function BrowserScreen({
   onUnsplit?: () => void;
   /** Hands the host a navigate(url) for "open in current tab" flows. */
   registerNavigate?: (navigate: (url: string) => void) => void;
+  /** Hands the host back/forward navigation for actions and mouse buttons. */
+  registerHistoryNavigate?: (
+    navigate: (direction: "back" | "forward") => void,
+  ) => void;
   /** Reports the webview guest's WebContents id (null when unmounted). */
   registerGuest?: (guestId: number | null) => void;
 }) {
+  const keybindings = useKeybindings();
   const webviewRef = useRef<WebviewElement | null>(null);
   const inputRef = useRef<HTMLInputElement | null>(null);
   const [partition, setPartition] = useState<string>();
@@ -141,6 +144,7 @@ export function BrowserScreen({
   // navigation (src is load-time-only), address bar focused.
   const [firstUrl, setFirstUrl] = useState(initialUrl || null);
   const [pageUrl, setPageUrl] = useState(initialUrl);
+  const [faviconUrl, setFaviconUrl] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   // A main-frame load failed (DNS, connection, TLS…): the pane shows an
   // error card with a retry instead of sitting silently white forever.
@@ -179,8 +183,12 @@ export function BrowserScreen({
   const [inputValue, setInputValue] = useState(initialUrl);
   const [suggestions, setSuggestions] = useState<Suggestion[]>([]);
   const [selectedIndex, setSelectedIndex] = useState(0);
-  const [saveOffer, setSaveOffer] = useState<SaveOffer | null>(null);
-  const [fillOffer, setFillOffer] = useState<SavedCredential[] | null>(null);
+  const [saveOffer, setSaveOffer] = useState<BrowserCredentialSaveOffer | null>(
+    null,
+  );
+  const [fillOffer, setFillOffer] = useState<BrowserCredentialFillOffer | null>(
+    null,
+  );
   // Bookmarks for this project+profile, so the star reflects real state
   // (Chrome: filled = saved, click again removes) instead of firing a
   // one-way "add" that silently duplicates on every press.
@@ -329,6 +337,16 @@ export function BrowserScreen({
           });
         }
       });
+      view.addEventListener("ipc-message", ((event: CustomEvent) => {
+        const message = event as unknown as {
+          channel: string;
+          args: Array<{ direction?: "back" | "forward" }>;
+        };
+        if (message.channel !== "catamorphic:browser-mouse-history") return;
+        const direction = message.args[0]?.direction;
+        if (direction === "back" && view.canGoBack()) view.goBack();
+        if (direction === "forward" && view.canGoForward()) view.goForward();
+      }) as EventListener);
 
       const sync = () => {
         setCanGoBack(view.canGoBack());
@@ -395,30 +413,37 @@ export function BrowserScreen({
       }) as EventListener);
       view.addEventListener("page-favicon-updated", ((event: CustomEvent) => {
         const { favicons } = event as unknown as { favicons: string[] };
-        report({ faviconUrl: favicons[0] ?? null });
-      }) as EventListener);
-
-      // Guest preload messages (login form detection, submitted creds).
-      view.addEventListener("ipc-message", ((event: CustomEvent) => {
-        const { channel, args } = event as unknown as {
-          channel: string;
-          args: unknown[];
-        };
-        if (channel === "catamorphic:credentials-submitted") {
-          const payload = args[0] as SaveOffer;
-          if (payload.password) setSaveOffer(payload);
-        } else if (channel === "catamorphic:login-form-detected") {
-          const payload = args[0] as { origin: string };
-          void desktopApi
-            .vaultList({ profileId, origin: payload.origin })
-            .then((saved) => {
-              if (saved.length > 0) setFillOffer(saved);
-            });
+        const nextFavicon = favicons[0] ?? null;
+        setFaviconUrl(nextFavicon);
+        report({ faviconUrl: nextFavicon });
+        if (nextFavicon) {
+          void desktopApi.browserSetHistoryFavicon({
+            profileId,
+            url: view.getURL(),
+            faviconUrl: nextFavicon,
+          });
         }
       }) as EventListener);
     },
     [profileId, remountWebview],
   );
+
+  useEffect(() => {
+    const stopSave = desktopApi.onBrowserCredentialSaveOffer((offer) => {
+      if (webviewRef.current?.getWebContentsId() === offer.guestId) {
+        setSaveOffer(offer);
+      }
+    });
+    const stopFill = desktopApi.onBrowserCredentialFillOffer((offer) => {
+      if (webviewRef.current?.getWebContentsId() === offer.guestId) {
+        setFillOffer(offer);
+      }
+    });
+    return () => {
+      stopSave();
+      stopFill();
+    };
+  }, []);
 
   const navigate = useCallback(
     (raw: string) => {
@@ -474,6 +499,34 @@ export function BrowserScreen({
     if (hard) view.reloadIgnoringCache();
     else view.reload();
   }, []);
+
+  const navigateHistory = useCallback((direction: "back" | "forward") => {
+    const view = webviewRef.current;
+    if (!view) return;
+    if (direction === "back" && view.canGoBack()) view.goBack();
+    if (direction === "forward" && view.canGoForward()) view.goForward();
+  }, []);
+
+  const registerHistoryNavigateRef = useRef(registerHistoryNavigate);
+  registerHistoryNavigateRef.current = registerHistoryNavigate;
+  useEffect(() => {
+    registerHistoryNavigateRef.current?.(navigateHistory);
+  }, [navigateHistory]);
+
+  useEffect(() => {
+    return desktopApi.onBrowserNavigate((command) => {
+      const view = webviewRef.current;
+      if (!view) return;
+      if (
+        command.webContentsId !== null &&
+        view.getWebContentsId() !== command.webContentsId
+      ) {
+        return;
+      }
+      if (command.webContentsId === null && !active) return;
+      navigateHistory(command.direction);
+    });
+  }, [active, navigateHistory]);
 
   useEffect(() => {
     if (!active) return;
@@ -546,7 +599,7 @@ export function BrowserScreen({
   // too, so starring a pinned page doesn't create a project duplicate.
   const currentBookmark: (Bookmark & { pinned: boolean }) | undefined = (() => {
     if (!bookmarks) return undefined;
-    const pinned = bookmarks.pinned.find((entry) =>
+    const pinned = bookmarks.pinned.bookmarks.find((entry) =>
       sameUrl(entry.url, pageUrl),
     );
     if (pinned) return { ...pinned, pinned: true };
@@ -563,6 +616,7 @@ export function BrowserScreen({
         profileId,
         label: pageTitleRef.current || pageUrl,
         url: pageUrl,
+        faviconUrl: faviconUrl ?? undefined,
       });
       return;
     }
@@ -643,21 +697,31 @@ export function BrowserScreen({
 
   const saveCredentials = async () => {
     if (!saveOffer) return;
-    await desktopApi.vaultSave({ profileId, ...saveOffer });
+    await desktopApi.browserCredentialAccept({
+      profileId,
+      pendingId: saveOffer.pendingId,
+    });
+    setSaveOffer(null);
+  };
+
+  const dismissSaveOffer = () => {
+    if (saveOffer) {
+      void desktopApi.browserCredentialDismiss({
+        pendingId: saveOffer.pendingId,
+      });
+    }
     setSaveOffer(null);
   };
 
   const fillCredential = async (credential: SavedCredential) => {
-    const revealed = await desktopApi.vaultReveal({
+    if (!fillOffer) return;
+    await desktopApi.browserCredentialFill({
       profileId,
-      id: credential.id,
+      guestId: fillOffer.guestId,
+      credentialId: credential.id,
+      formId: fillOffer.formId,
+      origin: fillOffer.origin,
     });
-    if (revealed) {
-      webviewRef.current?.send("catamorphic:fill-credentials", {
-        username: revealed.username,
-        password: revealed.password,
-      });
-    }
     setFillOffer(null);
   };
 
@@ -702,7 +766,10 @@ export function BrowserScreen({
     <div className="flex min-h-0 flex-1 flex-col">
       {/* Toolbar: back/forward/reload + address bar, scoped to this tab. */}
       <div className="relative flex h-10 shrink-0 items-center gap-1 border-b border-border bg-bg px-2">
-        <ShortcutHint label="Back">
+        <ShortcutHint
+          label="Back"
+          shortcut={formatBinding(keybindings["browser-back"])}
+        >
           <button
             type="button"
             onClick={() => webviewRef.current?.goBack()}
@@ -713,7 +780,10 @@ export function BrowserScreen({
             <ArrowLeft className="size-4" />
           </button>
         </ShortcutHint>
-        <ShortcutHint label="Forward">
+        <ShortcutHint
+          label="Forward"
+          shortcut={formatBinding(keybindings["browser-forward"])}
+        >
           <button
             type="button"
             onClick={() => webviewRef.current?.goForward()}
@@ -852,7 +922,7 @@ export function BrowserScreen({
               primary: true,
               onClick: () => void saveCredentials(),
             },
-            { label: "Never", onClick: () => setSaveOffer(null) },
+            { label: "Not now", onClick: dismissSaveOffer },
           ]}
         />
       )}
@@ -861,7 +931,7 @@ export function BrowserScreen({
           icon={<KeyRound className="size-3.5 text-fg-muted" />}
           text="Fill saved password?"
           actions={[
-            ...fillOffer.slice(0, 2).map((credential) => ({
+            ...fillOffer.credentials.slice(0, 2).map((credential) => ({
               label: credential.username || "(no username)",
               primary: true,
               onClick: () => void fillCredential(credential),

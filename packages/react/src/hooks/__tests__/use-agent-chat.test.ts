@@ -26,6 +26,53 @@ const session = {
 };
 
 describe("useAgentChat", () => {
+  it("refreshes an idle open chat after another client writes to it", async () => {
+    let externalMessage = false;
+    let requests = 0;
+    server.use(
+      http.get(
+        apiUrl(`/api/projects/${PROJECT_ID}/agent/sessions/${SESSION_ID}`),
+        () => {
+          requests += 1;
+          return HttpResponse.json({
+            ...session,
+            messages: externalMessage
+              ? [
+                  {
+                    id: "00000000-0000-4000-8000-000000000009",
+                    sessionId: SESSION_ID,
+                    role: "assistant",
+                    content: "Written from the phone",
+                    commitSha: null,
+                    metadata: null,
+                    createdAt: new Date().toISOString(),
+                  },
+                ]
+              : [],
+          });
+        },
+      ),
+    );
+    const { result } = renderHookWithProviders(() =>
+      useAgentChat(PROJECT_ID, {
+        sessionId: SESSION_ID,
+        idleRefetchIntervalMs: 50,
+      }),
+    );
+    await waitFor(() => expect(requests).toBe(1));
+
+    externalMessage = true;
+
+    await waitFor(
+      () =>
+        expect(result.current.messages[0]?.content).toBe(
+          "Written from the phone",
+        ),
+      { timeout: 1_000 },
+    );
+    expect(requests).toBeGreaterThan(1);
+  });
+
   it("sends on plain-HTTP origins where crypto.randomUUID is unavailable", async () => {
     const descriptor = Object.getOwnPropertyDescriptor(crypto, "randomUUID");
     Object.defineProperty(crypto, "randomUUID", {

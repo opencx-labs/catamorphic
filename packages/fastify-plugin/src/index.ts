@@ -8,4 +8,4 @@ export {
 } from "./http-identity.js";
 export type { CatamorphicPluginOptions, RouteContext } from "./plugin.js";
 export { catamorphicPlugin } from "./plugin.js";
-export { serveSpaDist } from "./spa.js";
+export { pwaManifestWithLaunch, serveSpaDist } from "./spa.js";
