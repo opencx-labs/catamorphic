@@ -47,6 +47,7 @@ import {
   type ChatSurface,
 } from "./components/chat-dock.js";
 import { ChatGlyph } from "./components/chat-icon.js";
+import { SignalBadge } from "./components/chat-signals.js";
 import { CommandPalette } from "./components/command-palette.js";
 import { ConfigureAgentModal } from "./components/configure-agent-modal.js";
 import { ConnectorsModal } from "./components/connectors-modal.js";
@@ -84,6 +85,11 @@ import {
   type WorkspaceTab,
   WorkspaceTabBar,
 } from "./components/workspace-tabs.js";
+import {
+  type ChatSessionAction,
+  type ChatSessionMenuEntry,
+  chatSessionMenu,
+} from "./lib/chat-session-actions.js";
 import {
   type AgentEffort,
   type AgentsData,
@@ -720,7 +726,6 @@ export function App() {
   const [signalsByChat, setSignalsByChat] = useState<
     Record<string, ChatLiveSignals>
   >({});
-  const [unreadByChat, setUnreadByChat] = useState<Record<string, boolean>>({});
   // Surfaces an agent opened in the BACKGROUND (open_surface while the
   // user was on another tab): chat localId → surface keys whose chip
   // carries the attention indicator. Cleared when the user opens that
@@ -743,6 +748,54 @@ export function App() {
   }, []);
   const prefsRef = useRef(prefs);
   prefsRef.current = prefs;
+
+  const setSessionListPreference = useCallback(
+    (
+      key: "archivedSessionIds" | "unreadSessionIds",
+      sessionIds: readonly string[],
+      included: boolean,
+    ) => {
+      const current = prefsRef.current;
+      if (!current || sessionIds.length === 0) return;
+      const changedIds = new Set(sessionIds);
+      const currentIds = current[key];
+      const nextIds = included
+        ? [...new Set([...currentIds, ...sessionIds])]
+        : currentIds.filter((id) => !changedIds.has(id));
+      if (
+        nextIds.length === currentIds.length &&
+        nextIds.every((id, index) => id === currentIds[index])
+      ) {
+        return;
+      }
+      const patch: Partial<AppPrefs> =
+        key === "archivedSessionIds"
+          ? { archivedSessionIds: nextIds }
+          : { unreadSessionIds: nextIds };
+      const next = { ...current, ...patch };
+      prefsRef.current = next;
+      setPrefs(next);
+      void desktopApi.setPrefs(patch);
+    },
+    [],
+  );
+
+  const applySessionAction = (sessionId: string, action: ChatSessionAction) => {
+    switch (action) {
+      case "mark-read":
+        setSessionListPreference("unreadSessionIds", [sessionId], false);
+        break;
+      case "mark-unread":
+        setSessionListPreference("unreadSessionIds", [sessionId], true);
+        break;
+      case "archive":
+        setSessionListPreference("archivedSessionIds", [sessionId], true);
+        break;
+      case "unarchive":
+        setSessionListPreference("archivedSessionIds", [sessionId], false);
+        break;
+    }
+  };
 
   // Profiles own the whole environment: session partition, projects,
   // theme/keys/sidebar, and the AI agent roster. Each window is born on a
@@ -1002,6 +1055,29 @@ export function App() {
   const workspace: Workspace = projectId
     ? (workspaces[projectId] ?? defaultWorkspaceFor(projectId))
     : emptyWorkspace();
+  const archivedSessionIds = new Set(prefs?.archivedSessionIds ?? []);
+  const unreadSessionIds = new Set(prefs?.unreadSessionIds ?? []);
+  const unreadByChat: Record<string, boolean> = Object.fromEntries(
+    workspace.chats.map((chat) => [
+      chat.localId,
+      Boolean(chat.sessionId && unreadSessionIds.has(chat.sessionId)),
+    ]),
+  );
+  const chatMenus: Record<string, ChatSessionMenuEntry[]> = Object.fromEntries(
+    workspace.chats.flatMap((chat) =>
+      chat.sessionId
+        ? [
+            [
+              chat.localId,
+              chatSessionMenu({
+                unread: unreadSessionIds.has(chat.sessionId),
+                archived: archivedSessionIds.has(chat.sessionId),
+              }),
+            ],
+          ]
+        : [],
+    ),
+  );
 
   const updateWorkspace = useCallback(
     (updater: (workspace: Workspace) => Workspace) => {
@@ -2010,7 +2086,9 @@ export function App() {
       // Response landed while the chat was hidden (minimized bubble or a
       // background tab) → unread dot.
       if (before.working && !next.working && chat && !chatVisible(ws, chat)) {
-        setUnreadByChat((unread) => ({ ...unread, [localId]: true }));
+        if (chat.sessionId) {
+          setSessionListPreference("unreadSessionIds", [chat.sessionId], true);
+        }
       }
       // Notify only on live transitions — the first report for a chat is
       // its mount snapshot (a reopened session with an old question must
@@ -2021,22 +2099,25 @@ export function App() {
         notifySettled(localId, "question");
       }
     },
-    [notifySettled],
+    [notifySettled, setSessionListPreference],
   );
 
-  // Bringing a chat's surface on screen marks it read.
+  // A hidden -> visible transition marks a session read. A manual "Mark as
+  // unread" while the chat is already visible therefore sticks until the
+  // user leaves and opens it again.
+  const visibleSessionIdsRef = useRef(new Set<string>());
   useEffect(() => {
-    const readIds = workspace.chats
-      .filter((chat) => chatVisible(workspace, chat))
-      .map((chat) => chat.localId);
-    if (readIds.some((id) => unreadByChat[id])) {
-      setUnreadByChat((current) => {
-        const next = { ...current };
-        for (const id of readIds) delete next[id];
-        return next;
-      });
-    }
-  }, [workspace, unreadByChat]);
+    const visibleIds = new Set(
+      workspace.chats
+        .filter((chat) => chatVisible(workspace, chat))
+        .flatMap((chat) => (chat.sessionId ? [chat.sessionId] : [])),
+    );
+    const newlyVisible = [...visibleIds].filter(
+      (id) => !visibleSessionIdsRef.current.has(id),
+    );
+    visibleSessionIdsRef.current = visibleIds;
+    setSessionListPreference("unreadSessionIds", newlyVisible, false);
+  }, [workspace, setSessionListPreference]);
 
   // Cmd+W (via the app menu) closes the most specific surface in focus:
   // the floating chat if one is open, else the active workspace tab.
@@ -4213,9 +4294,12 @@ export function App() {
                   agentsData={agentsData}
                   defaultAgentId={effectiveDefaultAgentId}
                   projectAgentNames={projectAgentNames}
+                  archivedSessionIds={archivedSessionIds}
+                  unreadSessionIds={unreadSessionIds}
                   onOpenTab={openTab}
                   onNewChat={() => addChat()}
                   onOpenSession={openSession}
+                  onSessionAction={applySessionAction}
                   onOpenUrl={openUrl}
                   onOpenFile={(filePath) => openEditorTab({ filePath })}
                   onOpenHistory={setRemoteHistoryPath}
@@ -4839,11 +4923,18 @@ export function App() {
               forks={chatForks}
               signals={signalsByChat}
               unread={unreadByChat}
+              menus={chatMenus}
               activeLocalId={workspace.activeChatId}
               autoCollapse={activeChatTabId !== undefined}
               onCollapsedChange={setBubblesCollapsed}
               onToggle={toggleChat}
               onClose={closeChat}
+              onMenuAction={(localId, entry) => {
+                const sessionId = workspace.chats.find(
+                  (chat) => chat.localId === localId,
+                )?.sessionId;
+                if (sessionId) applySessionAction(sessionId, entry.action);
+              }}
               onNewChat={() => addChat()}
               onCollapse={minimizeFloatingChats}
             />
@@ -5012,9 +5103,12 @@ function ConfiguredSection({
   agentsData,
   defaultAgentId,
   projectAgentNames,
+  archivedSessionIds,
+  unreadSessionIds,
   onOpenTab,
   onNewChat,
   onOpenSession,
+  onSessionAction,
   onOpenUrl,
   onOpenFile,
   onOpenHistory,
@@ -5030,9 +5124,12 @@ function ConfiguredSection({
   agentsData: AgentsData | null;
   defaultAgentId: string | null;
   projectAgentNames: Record<string, string>;
+  archivedSessionIds: ReadonlySet<string>;
+  unreadSessionIds: ReadonlySet<string>;
   onOpenTab: (tab: WorkspaceTab) => void;
   onNewChat: () => void;
   onOpenSession: (session: AgentSession) => void;
+  onSessionAction: (sessionId: string, action: ChatSessionAction) => void;
   onOpenUrl: (url: string, mode: "tab" | "replace") => void;
   onOpenFile: (filePath: string) => void;
   onOpenHistory: (filePath: string) => void;
@@ -5113,8 +5210,11 @@ function ConfiguredSection({
               agentsData={agentsData}
               defaultAgentId={defaultAgentId}
               projectAgentNames={projectAgentNames}
+              archivedSessionIds={archivedSessionIds}
+              unreadSessionIds={unreadSessionIds}
               onEmptyChange={setEmpty}
               onSelect={onOpenSession}
+              onSessionAction={onSessionAction}
             />
           </SidebarSection>
         );
@@ -5475,19 +5575,27 @@ function SessionsNav({
   agentsData,
   defaultAgentId,
   projectAgentNames,
+  archivedSessionIds,
+  unreadSessionIds,
   onEmptyChange,
   onSelect,
+  onSessionAction,
 }: {
   projectId: string;
   activeSessionId?: string;
   agentsData: AgentsData | null;
   defaultAgentId: string | null;
   projectAgentNames: Record<string, string>;
+  archivedSessionIds: ReadonlySet<string>;
+  unreadSessionIds: ReadonlySet<string>;
   onEmptyChange?: (empty: boolean) => void;
   onSelect: (session: AgentSession) => void;
+  onSessionAction: (sessionId: string, action: ChatSessionAction) => void;
 }) {
   const sessionsQuery = useAgentSessions(projectId);
-  const sessions = sessionsQuery.data?.items ?? [];
+  const sessions = (sessionsQuery.data?.items ?? []).filter(
+    (session) => !archivedSessionIds.has(session.id),
+  );
   const [checkouts, setCheckouts] = useState<SessionCheckoutInfo[]>([]);
   useEffect(() => {
     const load = () => {
@@ -5523,7 +5631,7 @@ function SessionsNav({
             : (checkout.branch ?? "Worktree")
           : undefined;
         return (
-          <li key={session.id}>
+          <li key={session.id} data-session-id={session.id}>
             <SidebarItemRow
               label={sessionLabel(session)}
               icon={
@@ -5534,7 +5642,18 @@ function SessionsNav({
                 />
               }
               active={session.id === activeSessionId}
-              labelContent={<AnimatedTitle text={sessionLabel(session)} />}
+              labelContent={
+                <>
+                  <AnimatedTitle text={sessionLabel(session)} />
+                  {unreadSessionIds.has(session.id) && (
+                    <span className="sr-only">Unread</span>
+                  )}
+                </>
+              }
+              menu={chatSessionMenu({
+                unread: unreadSessionIds.has(session.id),
+                archived: false,
+              })}
               preview={{
                 title: sessionLabel(session),
                 description: session.activity ?? undefined,
@@ -5558,15 +5677,26 @@ function SessionsNav({
                 ],
               }}
               end={
-                checkoutLabel ? (
-                  <span className="ml-auto flex max-w-28 shrink-0 items-center gap-1 truncate rounded bg-bg-inset px-1.5 py-0.5 text-[10px] text-fg-faint">
-                    <GitBranch className="size-2.5 shrink-0" />
-                    <span className="truncate">{checkoutLabel}</span>
-                  </span>
-                ) : null
+                <>
+                  {unreadSessionIds.has(session.id) && (
+                    <span
+                      data-testid="session-unread"
+                      className="grid size-3 shrink-0 place-items-center"
+                      aria-hidden="true"
+                    >
+                      <SignalBadge signals={{ unread: true }} size="sm" />
+                    </span>
+                  )}
+                  {checkoutLabel ? (
+                    <span className="ml-auto flex max-w-28 shrink-0 items-center gap-1 truncate rounded bg-bg-inset px-1.5 py-0.5 text-[10px] text-fg-faint">
+                      <GitBranch className="size-2.5 shrink-0" />
+                      <span className="truncate">{checkoutLabel}</span>
+                    </span>
+                  ) : null}
+                </>
               }
               onOpen={() => onSelect(session)}
-              onAction={() => {}}
+              onAction={(entry) => onSessionAction(session.id, entry.action)}
             />
           </li>
         );

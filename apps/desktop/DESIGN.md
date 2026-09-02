@@ -3162,3 +3162,21 @@ paths, deliberately independent:
 - Startup does not inspect or move root-level configuration from an earlier
   development model. Catamorphic is greenfield, so obsolete local formats are
   removed together with the tests that preserve them.
+
+### Chat archive and unread are one profile-local menu (2026-09-02)
+
+- A session's right-click menu is identical in the Chats sidebar and on its
+  dock bubble. It offers Mark as unread or Mark as read plus Archive or
+  Unarchive; both entry points use the existing viewport-safe menu portal.
+- The shared menu uses the app's pop-in/pop-out vocabulary. It stays mounted
+  with a frozen action snapshot through its reverse exit, and reduced-motion
+  profiles get the same fade without translate or scale.
+- Archive is presentation state, not execution state. It hides the session
+  from this profile's sidebar without closing the conversation or changing the
+  server-owned session, so an already-open chat keeps working and palette
+  search remains a path back to it.
+- Unread state is keyed by session rather than by an open dock instance and is
+  persisted with the profile. Automatic background replies and manual marks
+  use the same accent dot. A hidden-to-visible transition clears it; manually
+  marking the chat already on screen unread sticks until the user leaves and
+  opens it again.

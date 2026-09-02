@@ -695,6 +695,8 @@ export interface AppPrefs {
   desktopNotifications: boolean;
   sidebarOpen: boolean;
   lastProjectId?: string;
+  archivedSessionIds: string[];
+  unreadSessionIds: string[];
 }
 
 export interface ResolvedTheme extends ThemeConfig {
