@@ -78,6 +78,7 @@ import {
   type PendingToolPermission,
   ToolPermissionModal,
 } from "./components/tool-permission-modal";
+import { UpdateBanner } from "./components/update-banner.js";
 import {
   tabKey,
   type WorkspaceTab,
@@ -1773,7 +1774,7 @@ export function App() {
   };
 
   // Cmd+T and the tab-strip + always open a full chat tab (Chrome muscle
-  // memory); the sidebar +, bubble +, and Cmd+E open the floating aside.
+  // memory); the sidebar +, bubble +, and Cmd+N open the floating aside.
   const addChat = (forceMode?: "tab", opts?: { incognito?: boolean }) => {
     if (!requireAgents()) return;
     updateWorkspace((ws) => {
@@ -4121,6 +4122,12 @@ export function App() {
       }
     : null;
 
+  const hasActiveWork =
+    Object.values(signalsByChat).some((signals) => signals.working) ||
+    Object.values(workspaces).some((candidate) =>
+      candidate.terminals.some((terminal) => terminal.busy),
+    );
+
   return (
     <div className="flex h-full">
       {/* Agent pointers: glow + scroll on data-point-key elements. The
@@ -4140,6 +4147,10 @@ export function App() {
       <ToolPermissionModal
         pending={toolPermissions[0] ?? null}
         queued={Math.max(0, toolPermissions.length - 1)}
+      />
+      <UpdateBanner
+        hasActiveWork={hasActiveWork}
+        onOpenRelease={(url) => openBrowserTab(url)}
       />
       <MobilePairingModal
         open={mobilePairing.open}

@@ -1,7 +1,15 @@
 {
   "name": "catamorphic-desktop",
   "productName": "Catamorphic",
-  "version": "0.0.1",
+  "version": "0.1.0-alpha.1",
+  "description": "A local-first workspace for projects, agents, workflows, and apps",
+  "author": "The Catamorphic Authors",
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/opencx-labs/catamorphic.git",
+    "directory": "apps/desktop"
+  },
   "private": true,
   "type": "module",
   "main": "./out/main/index.js",
@@ -9,7 +17,7 @@
     "dev": "env -u ELECTRON_RUN_AS_NODE bun --bun electron-vite dev -- --remote-debugging-port=${CATAMORPHIC_DESKTOP_CDP_PORT:-9333}",
     "build": "bun --bun electron-vite build",
     "typecheck": "tsgo --project ./tsconfig.json && tsgo --project ./tsconfig.node.json",
-    "package": "bun --bun run --cwd ../pwa build && bun --bun electron-vite build && bun --bun electron-builder",
+    "package": "bun --bun run --cwd ../pwa build && bun --bun electron-vite build && bun --bun electron-builder --publish never",
     "test": "bun ../../scripts/tool-runtime.ts vitest --tool-cwd apps/desktop --config ../../vitest.config.ts",
     "test:e2e": "bun --bun electron-vite build && CATAMORPHIC_E2E_WINDOW_MODE=hidden bun ../../scripts/tool-runtime.ts vitest --tool-cwd apps/desktop --config ./vitest.e2e.config.ts",
     "test:e2e:visible": "bun --bun electron-vite build && CATAMORPHIC_E2E_WINDOW_MODE=visible bun ../../scripts/tool-runtime.ts vitest --tool-cwd apps/desktop --config ./vitest.e2e.config.ts",
@@ -50,6 +58,7 @@
     "@tiptap/markdown": "3.30.1",
     "@tiptap/pm": "3.30.1",
     "@tiptap/starter-kit": "3.30.1",
+    "electron-updater": "^6.8.3",
     "fastify": "^5.10.0",
     "ghostty-web": "0.4.0-next.20.g1858a59",
     "hash-wasm": "^4.12.0",

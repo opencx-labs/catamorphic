@@ -2,7 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 
 /**
- * User-level theme, stored as plain JSON at `<userData>/theme.json` so the
+ * Per-profile theme, stored at `<userData>/profiles/<id>/theme.json` so the
  * Settings UI, outside agents, and the user in a text editor can all edit
  * it. The file is watched and changes apply live — no restart.
  *

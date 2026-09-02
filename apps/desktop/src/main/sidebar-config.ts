@@ -4,11 +4,11 @@ import vm from "node:vm";
 
 /**
  * User-customizable sidebar. The config is a real JS file at
- * `<userData>/sidebar.js` (same philosophy as keybindings.json: plain,
- * user-visible, agent-editable, file-watched, applies live). The file
- * evaluates in an isolated vm context — no require/process/fs — and
- * exports an ordered list of sections. Removing a section from the list
- * hides it; adding a `custom` section invents a new one.
+ * `<userData>/profiles/<id>/sidebar.js` (same philosophy as keybindings.json:
+ * plain, user-visible, agent-editable, file-watched, applies live). The file
+ * evaluates in an isolated vm context with no require/process/fs and exports
+ * an ordered list of sections. Removing a section from the list hides it;
+ * adding a `custom` section invents a new one.
  *
  * Everything crossing into the renderer is DATA: the config is evaluated
  * in the main process and sent over IPC, so menu entries name a declared

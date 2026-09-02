@@ -27,20 +27,42 @@ afterAll(async () => {
   await db.destroy();
 });
 
-// PGlite is wasm: instance boot plus 35 migrations can exceed the default 5s
-// timeout when the whole monorepo test suite runs in parallel.
+// PGlite is wasm: instance boot plus the full schema baseline can exceed the
+// default 5s timeout when the whole monorepo suite runs in parallel.
 const PGLITE_TIMEOUT = 60_000;
 
 describe("PGlite migrations", () => {
-  it("applies every migration on an in-memory PGlite", {
+  it("applies the schema baseline on an in-memory PGlite", {
     timeout: PGLITE_TIMEOUT,
   }, async () => {
     const result = await migrateToLatest({ db });
     expect(result.schema).toBe(DEFAULT_SCHEMA);
-    expect(result.applied.length).toBeGreaterThan(30);
+    expect(result.applied).toEqual(["001_initial.sql"]);
 
     const rerun = await migrateToLatest({ db });
     expect(rerun.applied).toEqual([]);
+  });
+
+  it("accepts a fully migrated pre-baseline ledger", {
+    timeout: PGLITE_TIMEOUT,
+  }, async () => {
+    await migrateToLatest({ db });
+    await sql`
+      INSERT INTO catamorphic._migrations (name)
+      VALUES ('070_agent_session_todos.sql')
+      ON CONFLICT (name) DO NOTHING
+    `.execute(db);
+
+    const result = await migrateToLatest({ db });
+    expect(result.applied).toEqual([]);
+
+    const tables = await sql<{ count: number }>`
+      SELECT COUNT(*)::int AS count
+      FROM information_schema.tables
+      WHERE table_schema = ${DEFAULT_SCHEMA}
+        AND table_type = 'BASE TABLE'
+    `.execute(db);
+    expect(tables.rows[0]?.count).toBe(61);
   });
 
   it("supports the runtime primitives core relies on", {

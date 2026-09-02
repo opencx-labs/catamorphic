@@ -106,8 +106,8 @@ streamed preamble messages, and the ask_user question panel.
 - Suites: `e2e/app.e2e.ts` (user flows), `e2e/motion.e2e.ts` (the motion
   contract from `DESIGN.md` — easing/duration bounds, enter/exit pairing,
   animate-before-unmount), `e2e/onboarding.e2e.ts`, `e2e/agents.e2e.ts`,
-  `e2e/project-agents.e2e.ts` (committed agent definitions + consent),
-  `e2e/recovery.e2e.ts`, and `e2e/legacy-seed.e2e.ts`. Harness:
+  `e2e/project-agents.e2e.ts` (committed agent definitions + consent), and
+  `e2e/recovery.e2e.ts`. Harness:
   `e2e/harness.ts`, config: `vitest.e2e.config.ts`. A separate
   model-in-the-loop eval (`bun run test:eval`, `e2e/agent-build.eval.ts`)
   exercises real agent app-building and is not part of the required

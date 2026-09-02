@@ -211,8 +211,8 @@ that friction is intentional.
   `src/main/theme.ts` (the source of truth for palettes), in the `:root` +
   `[data-theme=light]` blocks in `styles.css` (the pre-JS first paint), and
   documented here — then used via Tailwind (`bg-bg-raised`, `text-fg-muted`, …).
-- The active theme lives in `<userData>/theme.json`
-  (`{ preset, overrides }`) — user-global, file-watched, agent-editable.
+- The active theme lives in `<userData>/profiles/<id>/theme.json`
+  (`{ preset, overrides }`) — profile-local, file-watched, agent-editable.
   ThemeProvider writes each resolved color as an inline CSS variable on
   `<html>`, sets `color-scheme`, and mirrors the appearance to
   `data-theme` for anything keyed on it.
@@ -378,8 +378,8 @@ memory of *why* the app is the way it is.
   (main + renderer mirror) and a label in the Settings map.
 
 ### 2026-07-31 — User-global keybindings + agent-configurable app settings
-- Keyboard shortcuts live in `<userData>/keybindings.json` — plain JSON,
-  user-global (not per project), file-watched: edits from the Settings
+- Keyboard shortcuts live in `<userData>/profiles/<id>/keybindings.json` — plain JSON,
+  profile-level (not per project), file-watched: edits from the Settings
   UI, a text editor, or an agent all apply live (menu rebuild + broadcast
   to renderers). Actions: new-chat, toggle-sidebar, close-tab. Binding
   format "Cmd+Shift+T"; invalid entries fall back to defaults.
@@ -465,7 +465,7 @@ memory of *why* the app is the way it is.
   crosses, over the guest's isolated IPC.
 
 ### 2026-08-01 — Customizable sidebar (sidebar.js) + bookmarks
-- The sidebar layout is user-owned: **`<userData>/sidebar.js`**, a real
+- The sidebar layout is user-owned: **`<userData>/profiles/<id>/sidebar.js`**, a real
   JS file (same philosophy as keybindings.json — plain, agent-editable,
   file-watched, applies live). It evaluates in an isolated `vm` context
   (no require/fs, 250ms timeout) and exports ordered sections. Types:
@@ -620,9 +620,9 @@ memory of *why* the app is the way it is.
   CDP target to see real pixels.
 
 ### 2026-08-01 — Themes: every color is a user decision
-- The palette became data: **`<userData>/theme.json`** holds
+- The palette became data: **`<userData>/profiles/<id>/theme.json`** holds
   `{ preset, overrides }`, following the keybindings/sidebar pattern —
-  plain JSON, user-global, file-watched, applies live, and staged as an
+  plain JSON, profile-local, file-watched, applies live, and staged as an
   agent mirror file (`.catamorphic/desktop/theme.json`) so "make the
   accent purple" is a chat request.
 - Four presets ship in `src/main/theme.ts`: **Catamorphic Dark**
@@ -3039,6 +3039,18 @@ paths, deliberately independent:
   icons; descriptions are collapsed by default so the list scans quickly and
   reveals important task detail on demand.
 
+### The public app wears the canonical mark (2026-08-29)
+
+- The installed app icon uses the banana-bracket C without adding a second
+  logo treatment. Catamorphic orange sits on the standard raised dark surface,
+  with the existing strong border as the only depth cue.
+- The macOS installer is the familiar drag-to-Applications DMG. Its job is to
+  make installation obvious, not to introduce a marketing surface that drifts
+  from the desktop or website.
+- Packaged identity is a product contract. The Catamorphic name, icon, bundle
+  id, and connect-link scheme stay consistent across the DMG, Applications,
+  Homebrew, Gatekeeper, and remote invitations.
+
 ### Profile passwords and browser import (2026-08-29)
 
 - Passwords are profile resources. Profile settings owns their searchable list
@@ -3112,3 +3124,41 @@ paths, deliberately independent:
 - Tab exits remove on `animationend` in visible windows and keep a short clock
   fallback after the animation duration. Occluded Chromium may pause CSS
   animation events; it must not leave a closed tab's ghost in the strip.
+
+### Updates wait for the user's work (2026-09-02)
+
+- Update checks are quiet until there is a useful action. An available release
+  appears as a compact card inside the workspace, not an operating-system
+  modal that interrupts the current task.
+- Download and restart are separate user decisions. Work can continue during
+  download, and restart stays unavailable while an agent or terminal is
+  active so an update never cuts through live work.
+- GitHub Releases owns the signed artifacts. The Homebrew tap carries the cask
+  and update-channel pointer, keeping direct and Homebrew installs on one
+  release line without duplicating binaries.
+- Before a new packaged version starts migrations, the desktop makes a bounded
+  local database copy. Upgrade convenience does not remove the recovery point.
+
+### Stable and Preview are a trust choice (2026-09-02)
+
+- Stable and Preview describe how much release risk a user wants to accept.
+  Stable receives only normal releases. Preview receives intentional alpha
+  releases and the next newer Stable release.
+- The choice lives in a native **Help > Update Channel** radio menu. Stable
+  builds default to Stable and alpha builds default to Preview, while the
+  user's later choice persists for the whole desktop installation.
+- A channel change checks immediately but never downgrades the application.
+  Someone leaving Preview may need to wait until Stable passes their installed
+  alpha version.
+- Nightly is reserved for a future unattended build of main. It should not be
+  used as a friendlier name for releases that are deliberately prepared,
+  signed, notarized, and published.
+
+### Profiles start profile-first (2026-09-02)
+
+- The desktop has no pre-profile configuration format. Theme, keybindings,
+  sidebar configuration, agents, and their credentials begin in the active
+  profile's directory.
+- Startup does not inspect or move root-level configuration from an earlier
+  development model. Catamorphic is greenfield, so obsolete local formats are
+  removed together with the tests that preserve them.
