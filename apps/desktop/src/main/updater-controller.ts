@@ -1,4 +1,7 @@
-import type { DesktopUpdateState } from "../shared/update.js";
+import type {
+  DesktopUpdateChannel,
+  DesktopUpdateState,
+} from "../shared/update.js";
 
 export interface UpdateInfoLike {
   version: string;
@@ -13,6 +16,8 @@ export interface UpdaterAdapter {
   autoDownload: boolean;
   autoInstallOnAppQuit: boolean;
   allowPrerelease: boolean;
+  allowDowngrade: boolean;
+  channel: string | null;
   fullChangelog: boolean;
   on(event: "checking-for-update", listener: () => void): this;
   on(event: "update-available", listener: (info: UpdateInfoLike) => void): this;
@@ -36,6 +41,7 @@ export interface UpdaterAdapter {
 
 export interface DesktopUpdaterControllerOptions {
   currentVersion: string;
+  channel: DesktopUpdateChannel;
   supported: boolean;
   updater: UpdaterAdapter | null;
   broadcast: (state: DesktopUpdateState) => void;
@@ -63,6 +69,7 @@ export class DesktopUpdaterController {
     this.state = {
       phase: "idle",
       currentVersion: options.currentVersion,
+      channel: options.channel,
       manual: false,
     };
     const updater = options.updater;
@@ -70,12 +77,13 @@ export class DesktopUpdaterController {
 
     updater.autoDownload = false;
     updater.autoInstallOnAppQuit = false;
-    updater.allowPrerelease = options.currentVersion.includes("-");
+    this.configureChannel(options.channel);
     updater.fullChangelog = false;
     updater.on("checking-for-update", () => {
       this.setState({
         phase: "checking",
         currentVersion: options.currentVersion,
+        channel: this.state.channel,
         manual: this.state.manual,
       });
     });
@@ -86,6 +94,7 @@ export class DesktopUpdaterController {
       this.setState({
         phase: this.state.manual ? "up-to-date" : "idle",
         currentVersion: options.currentVersion,
+        channel: this.state.channel,
         manual: this.state.manual,
       });
     });
@@ -107,11 +116,30 @@ export class DesktopUpdaterController {
     return this.state;
   }
 
+  setChannel(channel: DesktopUpdateChannel): boolean {
+    if (
+      this.state.phase === "downloading" ||
+      this.state.phase === "downloaded"
+    ) {
+      return false;
+    }
+    if (channel === this.state.channel) return true;
+    this.configureChannel(channel);
+    this.setState({
+      phase: "idle",
+      currentVersion: this.options.currentVersion,
+      channel,
+      manual: false,
+    });
+    return true;
+  }
+
   async check(manual: boolean): Promise<void> {
     if (!this.options.supported || !this.options.updater) {
       this.setState({
         phase: "unsupported",
         currentVersion: this.options.currentVersion,
+        channel: this.state.channel,
         manual,
         message: "Updates are checked by installed macOS builds.",
       });
@@ -134,6 +162,7 @@ export class DesktopUpdaterController {
     this.setState({
       phase: "checking",
       currentVersion: this.options.currentVersion,
+      channel: this.state.channel,
       manual,
     });
     this.checking = this.options.updater
@@ -182,6 +211,7 @@ export class DesktopUpdaterController {
     this.setState({
       phase,
       currentVersion: this.options.currentVersion,
+      channel: this.state.channel,
       manual: true,
       version: info.version,
       ...(info.releaseName ? { releaseName: info.releaseName } : {}),
@@ -203,6 +233,7 @@ export class DesktopUpdaterController {
         : {
             phase: "idle",
             currentVersion: this.options.currentVersion,
+            channel: this.state.channel,
             manual: false,
           },
     );
@@ -211,5 +242,16 @@ export class DesktopUpdaterController {
   private setState(state: DesktopUpdateState): void {
     this.state = state;
     this.options.broadcast(state);
+  }
+
+  private configureChannel(channel: DesktopUpdateChannel): void {
+    const updater = this.options.updater;
+    if (!updater) return;
+    updater.channel = channel === "stable" ? "latest" : "alpha";
+    updater.allowPrerelease = channel === "preview";
+    // Setting electron-updater's channel enables downgrades implicitly. A
+    // channel switch waits for a newer matching build instead of replacing a
+    // user's app with an older release.
+    updater.allowDowngrade = false;
   }
 }

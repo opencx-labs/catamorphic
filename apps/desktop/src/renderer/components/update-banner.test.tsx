@@ -48,6 +48,7 @@ describe("UpdateBanner", () => {
     const container = await mount({
       phase: "available",
       currentVersion: "0.1.0-alpha.1",
+      channel: "preview",
       manual: true,
       version: "0.1.0-alpha.2",
       releaseUrl:
@@ -69,6 +70,7 @@ describe("UpdateBanner", () => {
       {
         phase: "downloaded",
         currentVersion: "0.1.0-alpha.1",
+        channel: "preview",
         manual: true,
         version: "0.1.0-alpha.2",
       },

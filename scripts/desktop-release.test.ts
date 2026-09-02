@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  desktopReleaseKind,
   desktopUpdateMetadataName,
   renderHomebrewCask,
   rewriteDesktopUpdateMetadata,
@@ -13,10 +14,19 @@ describe("verifyDesktopRelease", () => {
         tag: "desktop-v0.1.0-alpha.1",
         packageVersion: "0.1.0-alpha.1",
       }),
-    ).toEqual({ version: "0.1.0-alpha.1" });
+    ).toEqual({ version: "0.1.0-alpha.1", kind: "preview" });
   });
 
-  it("rejects stable, unrelated, and mismatched tags", () => {
+  it("accepts a matching stable desktop tag", () => {
+    expect(
+      verifyDesktopRelease({
+        tag: "desktop-v1.0.0",
+        packageVersion: "1.0.0",
+      }),
+    ).toEqual({ version: "1.0.0", kind: "stable" });
+  });
+
+  it("rejects unrelated, unsupported-channel, and mismatched tags", () => {
     expect(() =>
       verifyDesktopRelease({
         tag: "v0.1.0-alpha.1",
@@ -25,10 +35,10 @@ describe("verifyDesktopRelease", () => {
     ).toThrow("must start with desktop-v");
     expect(() =>
       verifyDesktopRelease({
-        tag: "desktop-v0.1.0",
-        packageVersion: "0.1.0",
+        tag: "desktop-v0.1.0-nightly.1",
+        packageVersion: "0.1.0-nightly.1",
       }),
-    ).toThrow("must be a SemVer prerelease");
+    ).toThrow("must use the alpha prerelease channel");
     expect(() =>
       verifyDesktopRelease({
         tag: "desktop-v0.1.0-alpha.2",
@@ -39,12 +49,14 @@ describe("verifyDesktopRelease", () => {
 });
 
 describe("renderHomebrewCask", () => {
-  it("points the Apple silicon cask at the tagged GitHub DMG", () => {
+  it("renders the preview cask for the tagged GitHub DMG", () => {
     const cask = renderHomebrewCask({
       version: "0.1.0-alpha.1",
       sha256: "a".repeat(64),
+      channel: "preview",
     });
 
+    expect(cask).toContain('cask "catamorphic@alpha"');
     expect(cask).toContain('version "0.1.0-alpha.1"');
     expect(cask).toContain(`sha256 "${"a".repeat(64)}"`);
     expect(cask).toContain(
@@ -52,7 +64,25 @@ describe("renderHomebrewCask", () => {
     );
     expect(cask).toContain("depends_on arch: :arm64");
     expect(cask).toContain("auto_updates true");
+    expect(cask).toContain('conflicts_with cask: "catamorphic"');
     expect(cask).toContain('app "Catamorphic.app"');
+  });
+
+  it("can point both stable and preview casks at a stable release", () => {
+    const stable = renderHomebrewCask({
+      version: "1.0.0",
+      sha256: "b".repeat(64),
+      channel: "stable",
+    });
+    const preview = renderHomebrewCask({
+      version: "1.0.0",
+      sha256: "b".repeat(64),
+      channel: "preview",
+    });
+
+    expect(stable).toContain('cask "catamorphic"');
+    expect(stable).toContain('conflicts_with cask: "catamorphic@alpha"');
+    expect(preview).toContain('cask "catamorphic@alpha"');
   });
 
   it("rejects an invalid checksum", () => {
@@ -60,6 +90,7 @@ describe("renderHomebrewCask", () => {
       renderHomebrewCask({
         version: "0.1.0-alpha.1",
         sha256: "not-a-checksum",
+        channel: "preview",
       }),
     ).toThrow("SHA-256");
   });
@@ -83,6 +114,12 @@ describe("desktop update metadata", () => {
     );
     expect(metadata).toContain("sha512: zip-sha");
     expect(metadata).toContain("sha512: dmg-sha");
+  });
+
+  it("uses latest metadata for stable releases", () => {
+    expect(desktopReleaseKind("1.0.0")).toBe("stable");
+    expect(desktopReleaseKind("1.1.0-alpha.4")).toBe("preview");
+    expect(desktopUpdateMetadataName("1.0.0")).toBe("latest-mac.yml");
   });
 
   it("rejects incomplete generated metadata", () => {

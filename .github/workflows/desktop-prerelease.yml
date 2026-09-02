@@ -1,4 +1,4 @@
-name: Desktop prerelease
+name: Desktop release
 
 on:
   push:
@@ -22,6 +22,7 @@ jobs:
     outputs:
       version: ${{ steps.release.outputs.version }}
       tag: ${{ steps.release.outputs.tag }}
+      release_kind: ${{ steps.release.outputs.release_kind }}
       update_metadata: ${{ steps.release.outputs.update_metadata }}
     steps:
       - uses: actions/checkout@v7
@@ -44,10 +45,12 @@ jobs:
             release_tag="desktop-v${package_version}"
           fi
           version="$(bun scripts/desktop-release.ts verify --tag "${release_tag}" --package-version "${package_version}")"
+          release_kind="$(bun scripts/desktop-release.ts release-kind --version "${version}")"
           update_metadata="$(bun scripts/desktop-release.ts update-metadata-name --version "${version}")"
           {
             echo "version=${version}"
             echo "tag=${release_tag}"
+            echo "release_kind=${release_kind}"
             echo "update_metadata=${update_metadata}"
           } >> "${GITHUB_OUTPUT}"
 
@@ -147,6 +150,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ steps.release.outputs.tag }}
           VERSION: ${{ steps.release.outputs.version }}
+          RELEASE_KIND: ${{ steps.release.outputs.release_kind }}
           UPDATE_METADATA: ${{ steps.release.outputs.update_metadata }}
         run: |
           assets=(
@@ -159,9 +163,19 @@ jobs:
           )
           if gh release view "${TAG}" >/dev/null 2>&1; then
             gh release upload "${TAG}" "${assets[@]}" --clobber
-            gh release edit "${TAG}" --prerelease --latest=false --title "Catamorphic ${VERSION} for macOS"
+            if [[ "${RELEASE_KIND}" == "preview" ]]; then
+              gh release edit "${TAG}" --prerelease --latest=false --title "Catamorphic ${VERSION} for macOS"
+            else
+              gh release edit "${TAG}" --prerelease=false --latest=true --title "Catamorphic ${VERSION} for macOS"
+            fi
           else
-            gh release create "${TAG}" "${assets[@]}" --verify-tag --prerelease --latest=false --generate-notes --notes "Apple silicon prerelease for macOS 12 or newer. Install the DMG directly or use the Homebrew command in the README. This is prerelease software, so back up important projects before upgrading." --title "Catamorphic ${VERSION} for macOS"
+            release_flags=(--verify-tag --generate-notes --title "Catamorphic ${VERSION} for macOS")
+            if [[ "${RELEASE_KIND}" == "preview" ]]; then
+              release_flags+=(--prerelease --latest=false --notes "Apple silicon Preview release for macOS 12 or newer. Preview builds may contain regressions, so back up important projects before upgrading.")
+            else
+              release_flags+=(--latest=true --notes "Apple silicon Stable release for macOS 12 or newer.")
+            fi
+            gh release create "${TAG}" "${assets[@]}" "${release_flags[@]}"
           fi
 
       - name: Update Homebrew cask
@@ -170,6 +184,7 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
           VERSION: ${{ steps.release.outputs.version }}
+          RELEASE_KIND: ${{ steps.release.outputs.release_kind }}
           UPDATE_METADATA: ${{ steps.release.outputs.update_metadata }}
         run: |
           test -n "${GH_TOKEN}" || { echo "HOMEBREW_TAP_TOKEN is not configured" >&2; exit 1; }
@@ -178,14 +193,37 @@ jobs:
           mkdir -p "$(dirname "${tap_path}")"
           gh auth setup-git
           gh repo clone opencx-labs/homebrew-tap "${tap_path}"
-          bun scripts/desktop-release.ts write-cask --version "${VERSION}" --sha256 "${sha256}" --output "${tap_path}/Casks/catamorphic.rb"
+          cask_files=("catamorphic@alpha.rb")
+          if [[ "${RELEASE_KIND}" == "stable" ]]; then
+            cask_files=("catamorphic.rb" "catamorphic@alpha.rb")
+          fi
+          for cask_file in "${cask_files[@]}"; do
+            if [[ "${cask_file}" == "catamorphic.rb" ]]; then
+              cask_channel="stable"
+            else
+              cask_channel="preview"
+            fi
+            bun scripts/desktop-release.ts write-cask --version "${VERSION}" --sha256 "${sha256}" --channel "${cask_channel}" --output "${tap_path}/Casks/${cask_file}"
+          done
           mkdir -p "${tap_path}/updates"
           cp "apps/desktop/release/${UPDATE_METADATA}" "${tap_path}/updates/${UPDATE_METADATA}"
-          ruby -c "${tap_path}/Casks/catamorphic.rb"
-          brew style --cask "${tap_path}/Casks/catamorphic.rb"
+          update_files=("${UPDATE_METADATA}")
+          if [[ "${RELEASE_KIND}" == "stable" ]]; then
+            cp "apps/desktop/release/${UPDATE_METADATA}" "${tap_path}/updates/alpha-mac.yml"
+            update_files+=("alpha-mac.yml")
+          fi
+          for cask_file in "${cask_files[@]}"; do
+            ruby -c "${tap_path}/Casks/${cask_file}"
+            brew style --cask "${tap_path}/Casks/${cask_file}"
+          done
           git -C "${tap_path}" config user.name "github-actions[bot]"
           git -C "${tap_path}" config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git -C "${tap_path}" add Casks/catamorphic.rb "updates/${UPDATE_METADATA}"
+          for cask_file in "${cask_files[@]}"; do
+            git -C "${tap_path}" add "Casks/${cask_file}"
+          done
+          for update_file in "${update_files[@]}"; do
+            git -C "${tap_path}" add "updates/${update_file}"
+          done
           if ! git -C "${tap_path}" diff --cached --quiet; then
             git -C "${tap_path}" commit -m "catamorphic ${VERSION}"
             git -C "${tap_path}" push origin HEAD:main

@@ -132,11 +132,12 @@ function updateContent(
   hasActiveWork: boolean,
 ): { title: string; description: string } | null {
   if (!state) return null;
+  const channel = state.channel === "preview" ? "Preview" : "Stable";
   switch (state.phase) {
     case "checking":
       return {
         title: "Checking for updates",
-        description: `You are using Catamorphic ${state.currentVersion}.`,
+        description: `You are using Catamorphic ${state.currentVersion} on the ${channel} channel.`,
       };
     case "available":
       return {
@@ -158,7 +159,7 @@ function updateContent(
     case "up-to-date":
       return {
         title: "Catamorphic is up to date",
-        description: `Version ${state.currentVersion} is the newest available update.`,
+        description: `Version ${state.currentVersion} is the newest ${channel} update.`,
       };
     case "error":
       return {

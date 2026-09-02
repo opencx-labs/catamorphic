@@ -3138,3 +3138,18 @@ paths, deliberately independent:
   release line without duplicating binaries.
 - Before a new packaged version starts migrations, the desktop makes a bounded
   local database copy. Upgrade convenience does not remove the recovery point.
+
+### Stable and Preview are a trust choice (2026-09-02)
+
+- Stable and Preview describe how much release risk a user wants to accept.
+  Stable receives only normal releases. Preview receives intentional alpha
+  releases and the next newer Stable release.
+- The choice lives in a native **Help > Update Channel** radio menu. Stable
+  builds default to Stable and alpha builds default to Preview, while the
+  user's later choice persists for the whole desktop installation.
+- A channel change checks immediately but never downgrades the application.
+  Someone leaving Preview may need to wait until Stable passes their installed
+  alpha version.
+- Nightly is reserved for a future unattended build of main. It should not be
+  used as a friendlier name for releases that are deliberately prepared,
+  signed, notarized, and published.

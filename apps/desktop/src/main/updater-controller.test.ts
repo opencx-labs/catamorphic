@@ -19,6 +19,8 @@ class FakeUpdater implements UpdaterAdapter {
   autoDownload = true;
   autoInstallOnAppQuit = true;
   allowPrerelease = false;
+  allowDowngrade = true;
+  channel: string | null = null;
   fullChangelog = true;
   readonly checkForUpdates = vi.fn(async () => undefined);
   readonly downloadUpdate = vi.fn(async () => undefined);
@@ -88,6 +90,7 @@ function setup() {
   const beforeInstall = vi.fn(async () => undefined);
   const controller = new DesktopUpdaterController({
     currentVersion: "0.1.0-alpha.1",
+    channel: "preview",
     supported: true,
     updater,
     broadcast: (state) => states.push(state),
@@ -104,6 +107,8 @@ describe("DesktopUpdaterController", () => {
     expect(updater.autoDownload).toBe(false);
     expect(updater.autoInstallOnAppQuit).toBe(false);
     expect(updater.allowPrerelease).toBe(true);
+    expect(updater.allowDowngrade).toBe(false);
+    expect(updater.channel).toBe("alpha");
     expect(updater.fullChangelog).toBe(false);
   });
 
@@ -118,8 +123,37 @@ describe("DesktopUpdaterController", () => {
     expect(controller.current()).toEqual({
       phase: "idle",
       currentVersion: "0.1.0-alpha.1",
+      channel: "preview",
       manual: false,
     });
+  });
+
+  it("switches channels without allowing an implicit downgrade", () => {
+    const { controller, updater } = setup();
+
+    expect(controller.setChannel("stable")).toBe(true);
+    expect(updater.channel).toBe("latest");
+    expect(updater.allowPrerelease).toBe(false);
+    expect(updater.allowDowngrade).toBe(false);
+    expect(controller.current()).toEqual({
+      phase: "idle",
+      currentVersion: "0.1.0-alpha.1",
+      channel: "stable",
+      manual: false,
+    });
+  });
+
+  it("holds the channel while a downloaded update is waiting", async () => {
+    const { controller, updater } = setup();
+    const checking = controller.check(true);
+    updater.available("0.1.0-alpha.2");
+    await checking;
+    const downloading = controller.download();
+    updater.downloaded("0.1.0-alpha.2");
+    await downloading;
+
+    expect(controller.setChannel("stable")).toBe(false);
+    expect(controller.current().channel).toBe("preview");
   });
 
   it("preserves an actionable update across later background checks", async () => {

@@ -1,6 +1,14 @@
+import path from "node:path";
 import { app, ipcMain, powerMonitor } from "electron";
 import electronUpdater from "electron-updater";
-import type { DesktopUpdateState } from "../shared/update.js";
+import type {
+  DesktopUpdateChannel,
+  DesktopUpdateState,
+} from "../shared/update.js";
+import {
+  defaultDesktopUpdateChannel,
+  UpdatePreferencesStore,
+} from "./update-preferences.js";
 import { DesktopUpdaterController } from "./updater-controller.js";
 
 const INITIAL_CHECK_DELAY_MS = 30_000;
@@ -8,6 +16,8 @@ const CHECK_INTERVAL_MS = 6 * 60 * 60_000;
 
 export interface DesktopUpdaterService {
   check(manual: boolean): Promise<void>;
+  channel(): DesktopUpdateChannel;
+  setChannel(channel: DesktopUpdateChannel): Promise<boolean>;
   dispose(): void;
 }
 
@@ -17,8 +27,15 @@ export function registerDesktopUpdater(options: {
 }): DesktopUpdaterService {
   const { autoUpdater } = electronUpdater;
   autoUpdater.logger = console;
+  const preferences = new UpdatePreferencesStore(
+    path.join(app.getPath("userData"), "updates.json"),
+  );
+  const channel = preferences.load(
+    defaultDesktopUpdateChannel(app.getVersion()),
+  );
   const controller = new DesktopUpdaterController({
     currentVersion: app.getVersion(),
+    channel,
     supported: app.isPackaged && process.platform === "darwin",
     updater: autoUpdater,
     broadcast: (state) =>
@@ -45,6 +62,13 @@ export function registerDesktopUpdater(options: {
 
   return {
     check: (manual) => controller.check(manual),
+    channel: () => controller.current().channel,
+    async setChannel(nextChannel) {
+      if (!controller.setChannel(nextChannel)) return false;
+      preferences.save(nextChannel);
+      await controller.check(true);
+      return true;
+    },
     dispose() {
       if (initialTimer) clearTimeout(initialTimer);
       if (interval) clearInterval(interval);

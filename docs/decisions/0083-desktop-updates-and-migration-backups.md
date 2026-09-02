@@ -1,6 +1,6 @@
 # 0083: Desktop updates and migration backups
 
-- **Status:** Accepted
+- **Status:** Accepted; channel policy updated by [0085](0085-desktop-stable-and-preview-channels.md)
 - **Date:** 2026-09-02
 
 ## Context

@@ -13,24 +13,34 @@ and databases you control.
 Use Catamorphic as a personal brain on your Mac, run a shared brain on your own
 server, or embed the same foundations in a product you already operate.
 
-## Install the desktop alpha
+## Install the desktop app
 
 The first public desktop line supports Apple silicon Macs running macOS 12 or
-newer.
+newer. Choose Stable for vetted releases or Preview for frequent alpha builds.
+
+Stable:
 
 ```bash
 brew install --cask opencx-labs/tap/catamorphic
+```
+
+Preview:
+
+```bash
+brew install --cask opencx-labs/tap/catamorphic@alpha
 ```
 
 You can also download the signed and notarized DMG from
 [GitHub Releases](https://github.com/opencx-labs/catamorphic/releases) and drag
 Catamorphic into Applications.
 
-Installed builds check for new alpha releases and let you choose when to
-download and restart. Homebrew users can also update explicitly with:
+Installed builds check their selected channel and let you choose when to
+download and restart. Switch channels under **Help > Update Channel**.
+Homebrew users can also update explicitly with the same cask they installed:
 
 ```bash
 brew upgrade --cask opencx-labs/tap/catamorphic
+brew upgrade --cask opencx-labs/tap/catamorphic@alpha
 ```
 
 Before a new packaged version first opens the local database, Catamorphic
@@ -716,8 +726,8 @@ Linux. Windows development orchestration is not supported.
 
 Direction, not shipped. Tracked in [`TODO.md`](TODO.md):
 
-- **Desktop distribution after the first alpha**: automatic updates, Intel
-  Mac validation, then signed Windows and Linux packages.
+- **More desktop platforms**: Intel Mac validation, then signed Windows and
+  Linux packages.
 - **ACP harness**: project agent definitions already accept `kind: "acp"`;
   the Agent Client Protocol client (local command and remote endpoint
   transports) is the planned harness behind it.

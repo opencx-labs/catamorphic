@@ -9,6 +9,7 @@ import {
   safeStorage,
   type WebContents,
 } from "electron";
+import type { DesktopUpdateChannel } from "../shared/update.js";
 import { registerAgentBridge } from "./agent-bridge.js";
 import { registerBrowserSupport } from "./browser.js";
 import { toPublicConnection } from "./connections-store.js";
@@ -280,6 +281,12 @@ function createWindow(profileId?: string): BrowserWindow {
 // the command palette, and toggle-sidebar are window-level shortcuts handled
 // in the renderer.
 function buildMenu(bindings: Keybindings): Menu {
+  const selectedUpdateChannel = desktopUpdater?.channel() ?? "stable";
+  const chooseUpdateChannel = (channel: DesktopUpdateChannel) => {
+    void desktopUpdater?.setChannel(channel).finally(() => {
+      applyMenuForFocusedWindow();
+    });
+  };
   return Menu.buildFromTemplate([
     ...(process.platform === "darwin" ? [{ role: "appMenu" } as const] : []),
     {
@@ -341,6 +348,24 @@ function buildMenu(bindings: Keybindings): Menu {
         {
           label: "Check for Updates…",
           click: () => void desktopUpdater?.check(true),
+        },
+        { type: "separator" },
+        {
+          label: "Update Channel",
+          submenu: [
+            {
+              label: "Stable",
+              type: "radio",
+              checked: selectedUpdateChannel === "stable",
+              click: () => chooseUpdateChannel("stable"),
+            },
+            {
+              label: "Preview",
+              type: "radio",
+              checked: selectedUpdateChannel === "preview",
+              click: () => chooseUpdateChannel("preview"),
+            },
+          ],
         },
       ],
     },
