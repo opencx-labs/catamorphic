@@ -1951,6 +1951,7 @@ export function ChatDock({
   // tween's critical path.
   const [minimizing, setMinimizing] = useState(false);
   const minimizingRef = useRef(false);
+  const closingRef = useRef(false);
   const expanded =
     !closing &&
     !minimizing &&
@@ -1966,12 +1967,16 @@ export function ChatDock({
     if (minimizingRef.current) return;
     minimizingRef.current = true;
     setMinimizing(true);
-    window.setTimeout(() => {
-      minimizingRef.current = false;
-      setMinimizing(false);
-      onEntryChangeRef.current({ ...entryRef.current, mode: "min" });
-    }, 250);
   };
+
+  const finishMinimize = () => {
+    if (!minimizingRef.current) return;
+    minimizingRef.current = false;
+    setMinimizing(false);
+    onEntryChangeRef.current({ ...entryRef.current, mode: "min" });
+  };
+  const finishMinimizeRef = useRef(finishMinimize);
+  finishMinimizeRef.current = finishMinimize;
 
   // An untouched chat has nothing worth keeping — dismissing it (Escape
   // or the minimize button) closes it instead of parking an empty bubble.
@@ -1988,9 +1993,17 @@ export function ChatDock({
   onCloseRef.current = onClose;
 
   const animatedClose = () => {
+    if (closingRef.current) return;
+    closingRef.current = true;
     setClosing(true);
-    window.setTimeout(() => onCloseRef.current(entryRef.current.localId), 250);
   };
+  const finishClose = () => {
+    if (!closingRef.current) return;
+    closingRef.current = false;
+    onCloseRef.current(entryRef.current.localId);
+  };
+  const finishCloseRef = useRef(finishClose);
+  finishCloseRef.current = finishClose;
   const animatedCloseRef = useRef(animatedClose);
   animatedCloseRef.current = animatedClose;
   const animatedMinimizeRef = useRef(animatedMinimize);
@@ -2005,6 +2018,18 @@ export function ChatDock({
   useEffect(() => {
     registerSend?.((message) => void sendRef.current(message));
   }, [registerSend]);
+
+  // Complete the mode change from the animation event instead of starting
+  // an unmount timer before React has committed the exit pose. The fallback
+  // starts after that commit and only covers a suppressed animation event.
+  useEffect(() => {
+    if (!closing && !minimizing) return;
+    const fallback = window.setTimeout(() => {
+      if (closing) finishCloseRef.current();
+      else finishMinimizeRef.current();
+    }, 500);
+    return () => window.clearTimeout(fallback);
+  }, [closing, minimizing]);
 
   const dismiss = () => {
     if (isEmpty) animatedClose();
@@ -2523,6 +2548,16 @@ export function ChatDock({
         data-floating-chat={entry.mode === "partial" || undefined}
         data-lurking={lurking || undefined}
         data-chat-local-id={entry.localId}
+        onAnimationEnd={(event) => {
+          if (
+            event.target !== event.currentTarget ||
+            event.animationName !== "dock-out"
+          ) {
+            return;
+          }
+          if (closing) finishCloseRef.current();
+          else if (minimizing) finishMinimizeRef.current();
+        }}
         className={`pointer-events-auto relative flex w-full origin-bottom flex-col overflow-hidden backdrop-blur-xl transition-[max-width,height,opacity,translate,scale,background-color,border-radius,border-color] duration-250 ease-[cubic-bezier(0.2,0,0,1)] ${
           presentsAsTab
             ? "h-full max-w-full rounded-none border-0 border-transparent bg-bg"
