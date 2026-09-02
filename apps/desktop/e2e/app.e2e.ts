@@ -762,19 +762,20 @@ describe("chat tab activity indicators", () => {
     await runWait(`return spinnersOn() > 0;`, {
       label: "spinner during the turn",
     });
-    const mountedChatCount = await run<number>(`
-      return $$('section[aria-label]')
-        .filter((el) => el.querySelector('[data-composer-input]')).length;
+    const closingChatId = await run<string>(`
+      const dock = visibleDock();
+      const composer = dock.querySelector('[data-composer-input]');
+      composer.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true }));
+      composer.focus();
+      return dock.dataset.chatLocalId;
     `);
     // Close the chat while the agent is still working: no orphaned
     // activity indicator may stay behind anywhere.
     await run(`pressKey('w', { metaKey: true }); return true;`);
-    await runWait(
-      `return $$('section[aria-label]')
-        .filter((el) => el.querySelector('[data-composer-input]')).length
-        === ${mountedChatCount - 1};`,
-      { timeoutMs: 10_000, label: "chat unmounted after the close animation" },
-    );
+    await runWait(`return !$('[data-chat-local-id="${closingChatId}"]');`, {
+      timeoutMs: 10_000,
+      label: "chat unmounted after the close animation",
+    });
     // A hidden renderer pauses the exiting bubble's CSS animation, so its
     // snapshot can remain until the window is visible again. It is not live
     // activity; every live chat/tab/aggregate spinner must already be gone.
