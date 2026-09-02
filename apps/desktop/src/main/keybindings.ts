@@ -16,11 +16,11 @@ export {
 };
 
 /**
- * User-level keyboard shortcuts, stored as plain JSON at
- * `<userData>/keybindings.json` so both the Settings UI and outside agents
- * (or the user in a text editor) can edit them. The file is watched and
- * changes apply live — no restart. Actions and their defaults come from
- * the shared registry (shared/actions.ts).
+ * Per-profile keyboard shortcuts, stored as plain JSON at
+ * `<userData>/profiles/<id>/keybindings.json` so both the Settings UI and
+ * outside agents (or the user in a text editor) can edit them. The file is
+ * watched and changes apply live. Actions and their defaults come from the
+ * shared registry (shared/actions.ts).
  *
  * Binding format: modifiers `Cmd`, `Ctrl`, `Alt`, `Shift` joined with `+`,
  * ending in a key name ("Cmd+T", "Ctrl+Shift+P", "Alt+Escape").

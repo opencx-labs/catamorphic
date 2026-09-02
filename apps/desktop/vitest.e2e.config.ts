@@ -25,9 +25,10 @@ export default defineConfig({
     // A shared Electron launch failure otherwise consumes one hook timeout
     // per file and obscures the first useful startup diagnostic in CI.
     bail: process.env.CI === "true" ? 1 : 0,
-    // Motion tests sample computed styles on a 25ms cadence; a loaded
-    // machine (cold build in the same run) can starve the sampler past
-    // an animation. One retry absorbs that without hiding real breaks.
-    retry: 1,
+    // Visible motion tests sample computed styles on a 25ms cadence; a loaded
+    // machine can starve the sampler past an animation. Hidden suites are
+    // stateful within each file, so retrying one test without recreating the
+    // app produces misleading results instead of an independent attempt.
+    retry: visibleMode ? 1 : 0,
   },
 });

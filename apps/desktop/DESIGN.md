@@ -211,8 +211,8 @@ that friction is intentional.
   `src/main/theme.ts` (the source of truth for palettes), in the `:root` +
   `[data-theme=light]` blocks in `styles.css` (the pre-JS first paint), and
   documented here — then used via Tailwind (`bg-bg-raised`, `text-fg-muted`, …).
-- The active theme lives in `<userData>/theme.json`
-  (`{ preset, overrides }`) — user-global, file-watched, agent-editable.
+- The active theme lives in `<userData>/profiles/<id>/theme.json`
+  (`{ preset, overrides }`) — profile-local, file-watched, agent-editable.
   ThemeProvider writes each resolved color as an inline CSS variable on
   `<html>`, sets `color-scheme`, and mirrors the appearance to
   `data-theme` for anything keyed on it.
@@ -378,8 +378,8 @@ memory of *why* the app is the way it is.
   (main + renderer mirror) and a label in the Settings map.
 
 ### 2026-07-31 — User-global keybindings + agent-configurable app settings
-- Keyboard shortcuts live in `<userData>/keybindings.json` — plain JSON,
-  user-global (not per project), file-watched: edits from the Settings
+- Keyboard shortcuts live in `<userData>/profiles/<id>/keybindings.json` — plain JSON,
+  profile-level (not per project), file-watched: edits from the Settings
   UI, a text editor, or an agent all apply live (menu rebuild + broadcast
   to renderers). Actions: new-chat, toggle-sidebar, close-tab. Binding
   format "Cmd+Shift+T"; invalid entries fall back to defaults.
@@ -465,7 +465,7 @@ memory of *why* the app is the way it is.
   crosses, over the guest's isolated IPC.
 
 ### 2026-08-01 — Customizable sidebar (sidebar.js) + bookmarks
-- The sidebar layout is user-owned: **`<userData>/sidebar.js`**, a real
+- The sidebar layout is user-owned: **`<userData>/profiles/<id>/sidebar.js`**, a real
   JS file (same philosophy as keybindings.json — plain, agent-editable,
   file-watched, applies live). It evaluates in an isolated `vm` context
   (no require/fs, 250ms timeout) and exports ordered sections. Types:
@@ -620,9 +620,9 @@ memory of *why* the app is the way it is.
   CDP target to see real pixels.
 
 ### 2026-08-01 — Themes: every color is a user decision
-- The palette became data: **`<userData>/theme.json`** holds
+- The palette became data: **`<userData>/profiles/<id>/theme.json`** holds
   `{ preset, overrides }`, following the keybindings/sidebar pattern —
-  plain JSON, user-global, file-watched, applies live, and staged as an
+  plain JSON, profile-local, file-watched, applies live, and staged as an
   agent mirror file (`.catamorphic/desktop/theme.json`) so "make the
   accent purple" is a chat request.
 - Four presets ship in `src/main/theme.ts`: **Catamorphic Dark**
@@ -3153,3 +3153,12 @@ paths, deliberately independent:
 - Nightly is reserved for a future unattended build of main. It should not be
   used as a friendlier name for releases that are deliberately prepared,
   signed, notarized, and published.
+
+### Profiles start profile-first (2026-09-02)
+
+- The desktop has no pre-profile configuration format. Theme, keybindings,
+  sidebar configuration, agents, and their credentials begin in the active
+  profile's directory.
+- Startup does not inspect or move root-level configuration from an earlier
+  development model. Catamorphic is greenfield, so obsolete local formats are
+  removed together with the tests that preserve them.

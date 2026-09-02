@@ -999,12 +999,21 @@ describe("chat surface shortcuts", () => {
       ta.focus(); return true;
     `);
     await run(`pressKey('w', { metaKey: true }); return true;`);
-    await runWait(`return !floatingDock();`, { label: "floating chat closed" });
+    await runWait(`return !$('[data-floating-chat]');`, {
+      label: "floating chat unmounted",
+    });
   });
 });
 
 describe("navigation shortcuts", () => {
   it("Cmd+. / Cmd+, cycle the floating dock through chats", async () => {
+    // Establish the surface behind the floating dock explicitly. Cmd+N opens
+    // a full chat tab when the workspace is empty, so inheriting the prior
+    // test's last open tab made this test depend on unrelated teardown timing.
+    await run(`pressKey('t', { metaKey: true }); return true;`);
+    await runWait(`return !!$('textarea[placeholder*="Search or ask"]');`, {
+      label: "background New Tab open",
+    });
     // Fresh empty chat ("New chat") joins the titled chats from earlier
     // groups — cycling must swap which chat the dock shows.
     await run(`pressKey('n', { metaKey: true }); return true;`);

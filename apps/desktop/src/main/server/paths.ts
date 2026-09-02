@@ -11,18 +11,10 @@ export interface DataPaths {
   remotes: string;
   /** FsBundleStore app bundles. */
   appBundles: string;
-  /** Legacy pre-profile settings.json (seeds the default profile's agents). */
-  settingsFile: string;
-  /** GitHub connection (safeStorage-encrypted), beside settings.json. */
+  /** GitHub connection encrypted through safeStorage. */
   githubFile: string;
-  /** Legacy pre-profile keybindings.json (migrated into the default profile). */
-  keybindingsFile: string;
   /** Chrome-style profiles (plain JSON). */
   profilesFile: string;
-  /** Legacy pre-profile sidebar.js (migrated into the default profile). */
-  sidebarFile: string;
-  /** Legacy pre-profile theme.json (migrated into the default profile). */
-  themeFile: string;
   /**
    * Per-profile home: `profiles/<id>/` holds that profile's theme.json,
    * keybindings.json, sidebar.js, agents.json — plus the browser state that
@@ -52,12 +44,8 @@ export function resolveDataPaths(): DataPaths {
     projects: path.join(root, "projects"),
     remotes: path.join(root, "remotes"),
     appBundles: path.join(root, "app-bundles"),
-    settingsFile: path.join(userData, "settings.json"),
     githubFile: path.join(userData, "github.json"),
-    keybindingsFile: path.join(userData, "keybindings.json"),
     profilesFile: path.join(userData, "profiles.json"),
-    sidebarFile: path.join(userData, "sidebar.js"),
-    themeFile: path.join(userData, "theme.json"),
     profilesDir: path.join(userData, "profiles"),
     agentHomesDir: path.join(userData, "agent-homes"),
     hostSkillsDir: path.join(userData, "host-skills"),

@@ -396,10 +396,6 @@ app.whenReady().then(async () => {
   ) {
     safeStorage.setUsePlainTextEncryption(true);
   }
-  // Legacy config migration first: it seeds the default profile's agent
-  // roster from the old settings.json, whose key needs safeStorage (only
-  // usable once the app is ready).
-  profileConfig.migrate();
   desktopUpdater = registerDesktopUpdater({
     broadcast: state.broadcast,
     beforeInstall: async () => {

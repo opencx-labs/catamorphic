@@ -1774,7 +1774,7 @@ export function App() {
   };
 
   // Cmd+T and the tab-strip + always open a full chat tab (Chrome muscle
-  // memory); the sidebar +, bubble +, and Cmd+E open the floating aside.
+  // memory); the sidebar +, bubble +, and Cmd+N open the floating aside.
   const addChat = (forceMode?: "tab", opts?: { incognito?: boolean }) => {
     if (!requireAgents()) return;
     updateWorkspace((ws) => {
