@@ -143,13 +143,14 @@ describe("context pills", () => {
     expect(await run<string>(`return composerText();`)).toBe(
       "just a short note ",
     );
-    // Let any autofocus frame queued while the dock opened run. The paste
-    // is now authoritative interaction, so that stale frame must not move
-    // the caret back to offset zero before the next paste.
+    // Let any autofocus frame queued while the dock opened run. A synthetic
+    // clipboard event has no native insertion point, and Linux Chromium does
+    // not preserve contenteditable selection across CDP evaluations. Set the
+    // intended caret in the same renderer task as the paste.
     await run<boolean>(`return settleFrames();`);
-    expect(await run<boolean>(`return paste(${JSON.stringify(BIG)});`)).toBe(
-      true,
-    );
+    expect(
+      await run<boolean>(`caretToEnd(); return paste(${JSON.stringify(BIG)});`),
+    ).toBe(true);
     await runWait(
       `return pills().length === 1 && composerText() ===
         'just a short note Pasted line 1 — lorem ipsum dolor sit amet ';`,

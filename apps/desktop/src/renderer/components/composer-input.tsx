@@ -403,29 +403,7 @@ export const ComposerInput = forwardRef<
   useImperativeHandle(
     ref,
     () => ({
-      focus: () => {
-        const root = rootRef.current;
-        if (!root) return;
-        const selection = window.getSelection();
-        const savedRange =
-          selection?.rangeCount &&
-          selection.anchorNode &&
-          root.contains(selection.anchorNode)
-            ? selection.getRangeAt(0).cloneRange()
-            : null;
-        root.focus();
-        if (savedRange && selection) {
-          try {
-            selection.removeAllRanges();
-            selection.addRange(savedRange);
-            return;
-          } catch {
-            // The DOM changed between capture and focus. Fall through to the
-            // stable insertion point instead of letting Chromium choose zero.
-          }
-        }
-        caretToEnd(root);
-      },
+      focus: () => rootRef.current?.focus(),
       element: () => rootRef.current,
       insertPills,
       insertText,
