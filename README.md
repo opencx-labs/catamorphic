@@ -16,18 +16,19 @@ server, or embed the same foundations in a product you already operate.
 ## Install the desktop app
 
 The first public desktop line supports Apple silicon Macs running macOS 12 or
-newer. Choose Stable for vetted releases or Preview for frequent alpha builds.
-
-Stable:
-
-```bash
-brew install --cask opencx-labs/tap/catamorphic
-```
+newer. The initial releases use the Preview channel for frequent alpha builds.
+The Stable channel begins with the first vetted non-prerelease build.
 
 Preview:
 
 ```bash
 brew install --cask opencx-labs/tap/catamorphic@alpha
+```
+
+Stable, after the first stable release is published:
+
+```bash
+brew install --cask opencx-labs/tap/catamorphic
 ```
 
 You can also download the signed and notarized DMG from

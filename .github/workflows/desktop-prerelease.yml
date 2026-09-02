@@ -73,6 +73,15 @@ jobs:
           chmod 600 "${key_path}"
           echo "APPLE_API_KEY=${key_path}" >> "${GITHUB_ENV}"
 
+      - name: Verify Homebrew publication access
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+        run: |
+          test -n "${GH_TOKEN}" || { echo "HOMEBREW_TAP_TOKEN is not configured" >&2; exit 1; }
+          can_push="$(gh api repos/opencx-labs/homebrew-tap --jq '.permissions.push')"
+          test "${can_push}" = "true" || { echo "HOMEBREW_TAP_TOKEN cannot push to opencx-labs/homebrew-tap" >&2; exit 1; }
+
       - name: Build signed and notarized application
         env:
           CSC_LINK: ${{ secrets.MACOS_CERTIFICATE_P12_BASE64 }}
