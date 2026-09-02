@@ -96,3 +96,4 @@ Settled design decisions live here as short Architecture Decision Records. They 
 | [0081](0081-recursive-agent-configurable-sidebar-trees.md) | Recursive, agent-configurable sidebar trees | Accepted |
 | [0082](0082-desktop-prerelease-distribution.md) | Desktop prerelease distribution | Accepted; update policy superseded by 0083 |
 | [0083](0083-desktop-updates-and-migration-backups.md) | Desktop updates and migration backups | Accepted |
+| [0084](0084-first-release-database-baseline.md) | First-release database schema baseline | Accepted |

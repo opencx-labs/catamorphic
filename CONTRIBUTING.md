@@ -44,3 +44,7 @@ Pull requests remain the core team's integration and review surface. They
 should normally trace back to an accepted issue, design discussion, or explicit
 maintainer task. Repository contributors must still follow `AGENTS.md`, the
 accepted ADRs, and the required `bun run check` merge gate.
+
+Pull request CI verifies repository permission before starting the full merge
+gate. Authors with write, maintain, or admin access receive the complete check;
+other pull requests are directed back to the issue-first contribution path.
