@@ -88,6 +88,7 @@ export function SidebarItemRow<
   const buttonRef = useRef<HTMLButtonElement>(null);
   const rowRef = useRef<HTMLDivElement>(null);
   const renameRef = useRef<HTMLInputElement>(null);
+  const pendingActionRef = useRef<TMenuEntry | null>(null);
   const previewId = useId();
   const previewTimerRef = useRef<ReturnType<typeof setTimeout> | undefined>(
     undefined,
@@ -138,7 +139,16 @@ export function SidebarItemRow<
     if (!open) return;
     const dismiss = (event: Event) => {
       // Clicks inside the portal menu handle themselves.
-      if ((event.target as HTMLElement)?.closest?.("[data-sidebar-menu]")) {
+      if (
+        event.target instanceof Element &&
+        event.target.closest("[data-sidebar-menu]")
+      ) {
+        return;
+      }
+      if (
+        event.target instanceof Node &&
+        buttonRef.current?.contains(event.target)
+      ) {
         return;
       }
       setOpen(false);
@@ -232,6 +242,7 @@ export function SidebarItemRow<
         menu && menu.length > 0 && !renaming
           ? (event) => {
               event.preventDefault();
+              if (pendingActionRef.current) return;
               disarmPreview();
               setPosition({ x: event.clientX, y: event.clientY });
               setOpen(true);
@@ -274,6 +285,7 @@ export function SidebarItemRow<
             <button
               type="button"
               onClick={() => {
+                if (pendingActionRef.current) return;
                 disarmPreview();
                 onOpen();
               }}
@@ -297,6 +309,7 @@ export function SidebarItemRow<
               ref={buttonRef}
               type="button"
               onClick={() => {
+                if (pendingActionRef.current) return;
                 disarmPreview();
                 const rect = buttonRef.current?.getBoundingClientRect();
                 if (rect) {
@@ -317,13 +330,20 @@ export function SidebarItemRow<
         </>
       )}
 
-      {open && position && menu && (
+      {position && menu && (
         <MenuPortal
+          open={open}
           position={position}
           entries={menu}
           onPick={(entry) => {
+            pendingActionRef.current = entry;
             setOpen(false);
-            onAction(entry);
+          }}
+          onExited={() => {
+            setPosition(null);
+            const pendingAction = pendingActionRef.current;
+            pendingActionRef.current = null;
+            if (pendingAction) onAction(pendingAction);
           }}
         />
       )}
@@ -355,20 +375,43 @@ export function SidebarItemRow<
  * Shared with other sidebar rows and dock bubbles that need the same menu.
  */
 export function MenuPortal<TMenuEntry extends ContextMenuEntry>({
+  open,
   position,
   entries,
   onPick,
+  onExited,
 }: {
+  open: boolean;
   position: { x: number; y: number };
   entries: readonly TMenuEntry[];
   onPick: (entry: TMenuEntry) => void;
+  onExited: () => void;
 }) {
   const ref = useRef<HTMLDivElement>(null);
+  const frozenEntriesRef = useRef(entries);
   const [adjusted, setAdjusted] = useState(position);
+  if (open) frozenEntriesRef.current = entries;
+  const visibleEntries = open ? entries : frozenEntriesRef.current;
 
   useEffect(() => {
-    menuButtons(ref)[0]?.focus();
-  }, []);
+    if (open) {
+      menuButtons(ref)[0]?.focus();
+      return;
+    }
+    const activeElement = document.activeElement;
+    if (
+      activeElement instanceof HTMLElement &&
+      ref.current?.contains(activeElement)
+    ) {
+      activeElement.blur();
+    }
+  }, [open]);
+
+  useEffect(() => {
+    if (open) return;
+    const timer = window.setTimeout(onExited, 180);
+    return () => window.clearTimeout(timer);
+  }, [open, onExited]);
 
   // Flip above / pull inside the viewport when near an edge.
   useLayoutEffect(() => {
@@ -411,23 +454,33 @@ export function MenuPortal<TMenuEntry extends ContextMenuEntry>({
         }
       }}
       style={{ left: adjusted.x, top: adjusted.y }}
-      className="fixed z-[140] min-w-44 -translate-x-full rounded-lg border border-border bg-bg-overlay p-1 shadow-2xl"
+      className={`fixed z-[140] min-w-44 -translate-x-full ${open ? "" : "pointer-events-none"}`}
     >
-      {entries.map((entry) => (
-        <button
-          key={`${entry.action}:${entry.label}`}
-          type="button"
-          role="menuitem"
-          onClick={() => onPick(entry)}
-          className={`flex h-7 w-full cursor-pointer items-center rounded-md px-2 text-left text-[13px] transition-colors duration-150 ${
-            entry.danger
-              ? "text-danger hover:bg-danger/10"
-              : "text-fg-muted hover:bg-bg-raised hover:text-fg"
-          }`}
-        >
-          {entry.label}
-        </button>
-      ))}
+      <div
+        onAnimationEnd={(event) => {
+          if (event.animationName === "pop-out" && !open) onExited();
+        }}
+        className={`w-full origin-top-right rounded-lg border border-border bg-bg-overlay p-1 shadow-2xl ${
+          open ? "animate-pop-in" : "animate-pop-out"
+        }`}
+      >
+        {visibleEntries.map((entry) => (
+          <button
+            key={`${entry.action}:${entry.label}`}
+            type="button"
+            role="menuitem"
+            tabIndex={open ? 0 : -1}
+            onClick={() => onPick(entry)}
+            className={`flex h-7 w-full cursor-pointer items-center rounded-md px-2 text-left text-[13px] transition-colors duration-150 ${
+              entry.danger
+                ? "text-danger hover:bg-danger/10"
+                : "text-fg-muted hover:bg-bg-raised hover:text-fg"
+            }`}
+          >
+            {entry.label}
+          </button>
+        ))}
+      </div>
     </div>,
     document.body,
   );

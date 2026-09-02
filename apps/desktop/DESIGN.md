@@ -3168,6 +3168,9 @@ paths, deliberately independent:
 - A session's right-click menu is identical in the Chats sidebar and on its
   dock bubble. It offers Mark as unread or Mark as read plus Archive or
   Unarchive; both entry points use the existing viewport-safe menu portal.
+- The shared menu uses the app's pop-in/pop-out vocabulary. It stays mounted
+  with a frozen action snapshot through its reverse exit, and reduced-motion
+  profiles get the same fade without translate or scale.
 - Archive is presentation state, not execution state. It hides the session
   from this profile's sidebar without closing the conversation or changing the
   server-owned session, so an already-open chat keeps working and palette

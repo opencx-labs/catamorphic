@@ -89,13 +89,14 @@ function Bubble({
 }) {
   const [asking, setAsking] = useState(false);
   const [menuAt, setMenuAt] = useState<{ x: number; y: number } | null>(null);
+  const [menuOpen, setMenuOpen] = useState(false);
   const prevAwaitingRef = useRef(signals.awaitingInput ?? false);
   if (prevAwaitingRef.current !== (signals.awaitingInput ?? false)) {
     prevAwaitingRef.current = signals.awaitingInput ?? false;
     if (signals.awaitingInput) setAsking(true);
   }
   useEffect(() => {
-    if (!menuAt) return;
+    if (!menuOpen) return;
     const dismiss = (event: Event) => {
       if (
         event.target instanceof Element &&
@@ -103,12 +104,12 @@ function Bubble({
       ) {
         return;
       }
-      setMenuAt(null);
+      setMenuOpen(false);
     };
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key === "Escape") {
         event.preventDefault();
-        setMenuAt(null);
+        setMenuOpen(false);
       }
     };
     window.addEventListener("pointerdown", dismiss);
@@ -119,7 +120,7 @@ function Bubble({
       window.removeEventListener("keydown", onKeyDown);
       window.removeEventListener("scroll", dismiss, true);
     };
-  }, [menuAt]);
+  }, [menuOpen]);
   return (
     <div
       data-session-id={entry.sessionId}
@@ -144,6 +145,7 @@ function Bubble({
               ? (event) => {
                   event.preventDefault();
                   setMenuAt({ x: event.clientX, y: event.clientY });
+                  setMenuOpen(true);
                 }
               : undefined
           }
@@ -177,12 +179,14 @@ function Bubble({
       )}
       {menuAt && menu && (
         <MenuPortal
+          open={menuOpen}
           position={menuAt}
           entries={menu}
           onPick={(action) => {
-            setMenuAt(null);
+            setMenuOpen(false);
             onMenuAction(entry.localId, action);
           }}
+          onExited={() => setMenuAt(null)}
         />
       )}
     </div>
