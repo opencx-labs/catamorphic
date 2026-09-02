@@ -864,6 +864,13 @@ export class E2eFakeCodingAgent implements CodingAgentProvider {
       return;
     }
 
+    if (prompt.includes("session menu")) {
+      yield { type: "title", content: "Session menu" };
+      yield { type: "text", content: "The session menu is ready." };
+      yield { type: "done" };
+      return;
+    }
+
     yield { type: "title", content: "Quick chat" };
     yield { type: "text", content: `You said: ${message}` };
     yield { type: "done" };

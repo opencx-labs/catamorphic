@@ -2,6 +2,7 @@ import * as icons from "lucide-react";
 import { ChevronRight, MoreHorizontal } from "lucide-react";
 import {
   type ReactNode,
+  type RefObject,
   useEffect,
   useId,
   useLayoutEffect,
@@ -16,6 +17,12 @@ import {
   type SidebarPreviewAnchor,
   SidebarPreviewPopover,
 } from "./sidebar-preview.js";
+
+export interface ContextMenuEntry {
+  label: string;
+  action: string;
+  danger?: boolean;
+}
 
 /** Optional hover hint (e.g. a bookmark's URL) in the app-standard style. */
 function TitleHint({
@@ -38,7 +45,9 @@ function TitleHint({
  * generic, so custom config-defined items and built-in bookmarks share
  * exactly the same interaction.
  */
-export function SidebarItemRow({
+export function SidebarItemRow<
+  TMenuEntry extends ContextMenuEntry = SidebarMenuEntry,
+>({
   label,
   title,
   icon,
@@ -59,14 +68,14 @@ export function SidebarItemRow({
   title?: string;
   /** lucide-react icon name, or a node to render directly. */
   icon?: string | ReactNode;
-  menu?: SidebarMenuEntry[];
+  menu?: readonly TMenuEntry[];
   preview?: SidebarPreview | false;
   active?: boolean;
   labelContent?: ReactNode;
   end?: ReactNode;
   disclosure?: { open: boolean; onToggle: () => void };
   onOpen: () => void;
-  onAction: (entry: SidebarMenuEntry) => void;
+  onAction: (entry: TMenuEntry) => void;
   /** Swap the label for an inline rename field. */
   renaming?: boolean;
   onRenameSubmit?: (label: string) => void;
@@ -343,19 +352,23 @@ export function SidebarItemRow({
 /**
  * Portal-rendered so the sidebar's scroll container can't clip it — the
  * same lesson ShortcutHint learned (DOM checks pass while pixels clip).
- * Shared with other sidebar rows (PRs) that need the same ⋯ menu.
+ * Shared with other sidebar rows and dock bubbles that need the same menu.
  */
-export function MenuPortal({
+export function MenuPortal<TMenuEntry extends ContextMenuEntry>({
   position,
   entries,
   onPick,
 }: {
   position: { x: number; y: number };
-  entries: SidebarMenuEntry[];
-  onPick: (entry: SidebarMenuEntry) => void;
+  entries: readonly TMenuEntry[];
+  onPick: (entry: TMenuEntry) => void;
 }) {
   const ref = useRef<HTMLDivElement>(null);
   const [adjusted, setAdjusted] = useState(position);
+
+  useEffect(() => {
+    menuButtons(ref)[0]?.focus();
+  }, []);
 
   // Flip above / pull inside the viewport when near an edge.
   useLayoutEffect(() => {
@@ -376,8 +389,29 @@ export function MenuPortal({
       ref={ref}
       data-sidebar-menu
       role="menu"
+      onKeyDown={(event) => {
+        const buttons = menuButtons(ref);
+        const activeElement = document.activeElement;
+        const current =
+          activeElement instanceof HTMLButtonElement
+            ? buttons.indexOf(activeElement)
+            : -1;
+        const moveTo = (index: number) => {
+          event.preventDefault();
+          buttons[index]?.focus();
+        };
+        if (event.key === "ArrowDown") {
+          moveTo((current + 1) % buttons.length);
+        } else if (event.key === "ArrowUp") {
+          moveTo((current - 1 + buttons.length) % buttons.length);
+        } else if (event.key === "Home") {
+          moveTo(0);
+        } else if (event.key === "End") {
+          moveTo(buttons.length - 1);
+        }
+      }}
       style={{ left: adjusted.x, top: adjusted.y }}
-      className="fixed z-[60] min-w-44 -translate-x-full rounded-lg border border-border bg-bg-overlay p-1 shadow-2xl"
+      className="fixed z-[140] min-w-44 -translate-x-full rounded-lg border border-border bg-bg-overlay p-1 shadow-2xl"
     >
       {entries.map((entry) => (
         <button
@@ -397,4 +431,13 @@ export function MenuPortal({
     </div>,
     document.body,
   );
+}
+
+function menuButtons(
+  ref: RefObject<HTMLDivElement | null>,
+): HTMLButtonElement[] {
+  return [
+    ...(ref.current?.querySelectorAll<HTMLButtonElement>("[role=menuitem]") ??
+      []),
+  ];
 }
