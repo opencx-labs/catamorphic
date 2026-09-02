@@ -161,7 +161,7 @@ jobs:
             gh release upload "${TAG}" "${assets[@]}" --clobber
             gh release edit "${TAG}" --prerelease --latest=false --title "Catamorphic ${VERSION} for macOS"
           else
-            gh release create "${TAG}" "${assets[@]}" --verify-tag --prerelease --latest=false --generate-notes --notes "First macOS alpha for Apple silicon on macOS 12 or newer. Install the DMG directly or use the Homebrew command in the README. This is prerelease software, so back up important projects before upgrading." --title "Catamorphic ${VERSION} for macOS"
+            gh release create "${TAG}" "${assets[@]}" --verify-tag --prerelease --latest=false --generate-notes --notes "Apple silicon prerelease for macOS 12 or newer. Install the DMG directly or use the Homebrew command in the README. This is prerelease software, so back up important projects before upgrading." --title "Catamorphic ${VERSION} for macOS"
           fi
 
       - name: Update Homebrew cask

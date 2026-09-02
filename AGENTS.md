@@ -117,6 +117,7 @@ How the three connect (setting up / troubleshooting, read in this order):
   [Agent Skills](https://agentskills.io) layout. `.cursor/skills` is a
   compatibility symlink to this directory.
 - `.agents/skills/plugin-e2e-integration/SKILL.md` — business-agnostic end-to-end plugin integration flow
+- `.agents/skills/desktop-release/SKILL.md` — prepare, dry-run, publish, recover, and verify macOS desktop prereleases
 - `.agents/skills/using-catamorphic/SKILL.md` — embedding catamorphic in a host app (local dev linking)
 - `.agents/skills/embedding-guide/SKILL.md`, `.agents/skills/api-type-safety/SKILL.md`, `.agents/skills/code-first-architecture/SKILL.md`, `.agents/skills/database-conventions/SKILL.md`, `.agents/skills/sandbox-agent-integration/SKILL.md`, `.agents/skills/workflow-code-conventions/SKILL.md`
 
