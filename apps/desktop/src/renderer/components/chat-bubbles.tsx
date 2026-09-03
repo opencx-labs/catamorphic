@@ -24,6 +24,8 @@ export interface ChatBubblesProps {
   signals: Record<string, ChatSignals>;
   /** Response arrived while the chat was minimized; shown as a dot. */
   unread: Record<string, boolean>;
+  /** A workflow asked the user to open this session; shown as a pulse. */
+  attention: Record<string, boolean>;
   /** Session actions shared verbatim with the matching sidebar row. */
   menus: Record<string, ChatSessionMenuEntry[]>;
   activeLocalId?: string;
@@ -206,6 +208,7 @@ export function ChatBubbles({
   forks,
   signals,
   unread,
+  attention,
   menus,
   activeLocalId,
   autoCollapse,
@@ -310,10 +313,12 @@ export function ChatBubbles({
   const signalsFor = (localId: string): ChatSignals => ({
     ...(signals[localId] ?? {}),
     unread: unread[localId] ?? false,
+    attention: attention[localId] ?? false,
   });
   const aggregate: ChatSignals = {
     working: entries.some((entry) => signals[entry.localId]?.working),
     unread: entries.some((entry) => unread[entry.localId]),
+    attention: entries.some((entry) => attention[entry.localId]),
     draft: entries.some((entry) => signals[entry.localId]?.draft),
     awaitingInput: entries.some(
       (entry) => signals[entry.localId]?.awaitingInput,

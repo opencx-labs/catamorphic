@@ -90,6 +90,7 @@ export {
   AgentSessionNotFoundError,
   type AgentSessionPeer,
   AgentSessionsService,
+  type AgentSessionWakeReceipt,
   type AgentTodo,
   type AgentTodoInput,
   type AgentTodoStatus,

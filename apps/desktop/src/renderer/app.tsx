@@ -1,4 +1,5 @@
 import {
+  useAcknowledgeAgentSessionAttention,
   useAgentSessions,
   useForkAgentSession,
   useProjects,
@@ -1036,6 +1037,8 @@ export function App() {
 
   // Shared with SessionsNav via the query cache; titles feed tab labels.
   const sessionsQuery = useAgentSessions(projectId);
+  const acknowledgeSessionAttention =
+    useAcknowledgeAgentSessionAttention(projectId);
   const sessionsById = new Map(
     (sessionsQuery.data?.items ?? []).map((session) => [session.id, session]),
   );
@@ -1061,6 +1064,14 @@ export function App() {
     workspace.chats.map((chat) => [
       chat.localId,
       Boolean(chat.sessionId && unreadSessionIds.has(chat.sessionId)),
+    ]),
+  );
+  const attentionByChat: Record<string, boolean> = Object.fromEntries(
+    workspace.chats.map((chat) => [
+      chat.localId,
+      Boolean(
+        chat.sessionId && sessionsById.get(chat.sessionId)?.attentionRequired,
+      ),
     ]),
   );
   const chatMenus: Record<string, ChatSessionMenuEntry[]> = Object.fromEntries(
@@ -1098,7 +1109,12 @@ export function App() {
   // are debounced and gated until that restore attempt settles, so the
   // boot-time empty workspace can never clobber the saved one.
   const workspaceRestoreRef = useRef(new Set<string>());
-  const workspacePersistReadyRef = useRef(new Set<string>());
+  const [workspaceReadyProjectIds, setWorkspaceReadyProjectIds] = useState(
+    new Set<string>(),
+  );
+  const workspaceReady = Boolean(
+    projectId && workspaceReadyProjectIds.has(projectId),
+  );
   useEffect(() => {
     if (!projectId || workspaceRestoreRef.current.has(projectId)) return;
     workspaceRestoreRef.current.add(projectId);
@@ -1116,11 +1132,13 @@ export function App() {
       })
       .catch(() => {})
       .finally(() => {
-        workspacePersistReadyRef.current.add(projectId);
+        setWorkspaceReadyProjectIds(
+          (current) => new Set([...current, projectId]),
+        );
       });
   }, [projectId]);
   useEffect(() => {
-    if (!projectId || !workspacePersistReadyRef.current.has(projectId)) return;
+    if (!projectId || !workspaceReady) return;
     const snapshot = workspaces[projectId];
     if (!snapshot) return;
     const timer = window.setTimeout(() => {
@@ -1129,7 +1147,40 @@ export function App() {
         .catch(() => {});
     }, 500);
     return () => window.clearTimeout(timer);
-  }, [workspaces, projectId]);
+  }, [workspaces, projectId, workspaceReady]);
+
+  // A workflow-created session is a notification surface in its own right.
+  // Once its turn settles, materialize it as a minimized dock bubble without
+  // stealing focus. One bubble is created per attention revision; closing it
+  // does not hide the matching pulsing row in the sidebar.
+  const surfacedAttentionRef = useRef(new Map<string, number>());
+  useEffect(() => {
+    if (!projectId || !workspaceReady) return;
+    const attentionSessions = (sessionsQuery.data?.items ?? []).filter(
+      (session) => session.attentionRequired,
+    );
+    if (attentionSessions.length === 0) return;
+    updateWorkspace((ws) => {
+      const additions: ChatDockEntry[] = [];
+      for (const session of attentionSessions) {
+        const key = `${projectId}:${session.id}`;
+        const surfaced = surfacedAttentionRef.current.get(key) ?? 0;
+        if (ws.chats.some((chat) => chat.sessionId === session.id)) {
+          surfacedAttentionRef.current.set(key, session.attentionRevision);
+          continue;
+        }
+        if (surfaced >= session.attentionRevision) continue;
+        surfacedAttentionRef.current.set(key, session.attentionRevision);
+        additions.push({
+          ...newChatEntry("min"),
+          sessionId: session.id,
+        });
+      }
+      return additions.length > 0
+        ? { ...ws, chats: [...ws.chats, ...additions] }
+        : ws;
+    });
+  }, [projectId, sessionsQuery.data, updateWorkspace, workspaceReady]);
 
   const openTab = (tab: WorkspaceTab, mode?: "side") =>
     updateWorkspace((ws) => {
@@ -1186,6 +1237,7 @@ export function App() {
           // pencil for an unsent draft, "?" for a waiting question.
           working: signalsByChat[chat.localId]?.working ?? false,
           unread: unreadByChat[chat.localId] ?? false,
+          attention: attentionByChat[chat.localId] ?? false,
           draft: signalsByChat[chat.localId]?.draft ?? false,
           awaitingInput: signalsByChat[chat.localId]?.awaitingInput ?? false,
         }),
@@ -2118,6 +2170,28 @@ export function App() {
     visibleSessionIdsRef.current = visibleIds;
     setSessionListPreference("unreadSessionIds", newlyVisible, false);
   }, [workspace, setSessionListPreference]);
+
+  const acknowledgingAttentionRef = useRef(new Set<string>());
+  useEffect(() => {
+    for (const chat of workspace.chats.filter((candidate) =>
+      chatVisible(workspace, candidate),
+    )) {
+      const sessionId = chat.sessionId;
+      if (
+        !sessionId ||
+        !sessionsById.get(sessionId)?.attentionRequired ||
+        acknowledgingAttentionRef.current.has(sessionId)
+      ) {
+        continue;
+      }
+      acknowledgingAttentionRef.current.add(sessionId);
+      acknowledgeSessionAttention.mutate(sessionId, {
+        onSettled: () => {
+          acknowledgingAttentionRef.current.delete(sessionId);
+        },
+      });
+    }
+  }, [workspace, sessionsById, acknowledgeSessionAttention]);
 
   // Cmd+W (via the app menu) closes the most specific surface in focus:
   // the floating chat if one is open, else the active workspace tab.
@@ -4923,6 +4997,7 @@ export function App() {
               forks={chatForks}
               signals={signalsByChat}
               unread={unreadByChat}
+              attention={attentionByChat}
               menus={chatMenus}
               activeLocalId={workspace.activeChatId}
               autoCollapse={activeChatTabId !== undefined}
@@ -5645,9 +5720,11 @@ function SessionsNav({
               labelContent={
                 <>
                   <AnimatedTitle text={sessionLabel(session)} />
-                  {unreadSessionIds.has(session.id) && (
+                  {session.attentionRequired ? (
+                    <span className="sr-only">Ready for you</span>
+                  ) : unreadSessionIds.has(session.id) ? (
                     <span className="sr-only">Unread</span>
-                  )}
+                  ) : null}
                 </>
               }
               menu={chatSessionMenu({
@@ -5678,13 +5755,24 @@ function SessionsNav({
               }}
               end={
                 <>
-                  {unreadSessionIds.has(session.id) && (
+                  {(session.attentionRequired ||
+                    unreadSessionIds.has(session.id)) && (
                     <span
-                      data-testid="session-unread"
+                      data-testid={
+                        session.attentionRequired
+                          ? "session-attention"
+                          : "session-unread"
+                      }
                       className="grid size-3 shrink-0 place-items-center"
                       aria-hidden="true"
                     >
-                      <SignalBadge signals={{ unread: true }} size="sm" />
+                      <SignalBadge
+                        signals={{
+                          attention: session.attentionRequired,
+                          unread: unreadSessionIds.has(session.id),
+                        }}
+                        size="sm"
+                      />
                     </span>
                   )}
                   {checkoutLabel ? (

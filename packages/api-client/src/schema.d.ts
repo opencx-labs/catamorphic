@@ -6025,6 +6025,9 @@ export interface paths {
                                 /** Format: date-time */
                                 pausedAt: string | null;
                                 running: boolean;
+                                attentionRevision: number;
+                                attentionSeenRevision: number;
+                                attentionRequired: boolean;
                                 baseCommitSha: string | null;
                                 /** Format: date-time */
                                 createdAt: string;
@@ -6119,6 +6122,9 @@ export interface paths {
                             /** Format: date-time */
                             pausedAt: string | null;
                             running: boolean;
+                            attentionRevision: number;
+                            attentionSeenRevision: number;
+                            attentionRequired: boolean;
                             baseCommitSha: string | null;
                             /** Format: date-time */
                             createdAt: string;
@@ -6361,6 +6367,9 @@ export interface paths {
                             /** Format: date-time */
                             pausedAt: string | null;
                             running: boolean;
+                            attentionRevision: number;
+                            attentionSeenRevision: number;
+                            attentionRequired: boolean;
                             baseCommitSha: string | null;
                             /** Format: date-time */
                             createdAt: string;
@@ -6539,6 +6548,9 @@ export interface paths {
                             /** Format: date-time */
                             pausedAt: string | null;
                             running: boolean;
+                            attentionRevision: number;
+                            attentionSeenRevision: number;
+                            attentionRequired: boolean;
                             baseCommitSha: string | null;
                             /** Format: date-time */
                             createdAt: string;
@@ -6656,6 +6668,9 @@ export interface paths {
                             /** Format: date-time */
                             pausedAt: string | null;
                             running: boolean;
+                            attentionRevision: number;
+                            attentionSeenRevision: number;
+                            attentionRequired: boolean;
                             baseCommitSha: string | null;
                             /** Format: date-time */
                             createdAt: string;
@@ -6813,6 +6828,9 @@ export interface paths {
                             /** Format: date-time */
                             pausedAt: string | null;
                             running: boolean;
+                            attentionRevision: number;
+                            attentionSeenRevision: number;
+                            attentionRequired: boolean;
                             baseCommitSha: string | null;
                             /** Format: date-time */
                             createdAt: string;
@@ -6917,6 +6935,9 @@ export interface paths {
                             /** Format: date-time */
                             pausedAt: string | null;
                             running: boolean;
+                            attentionRevision: number;
+                            attentionSeenRevision: number;
+                            attentionRequired: boolean;
                             baseCommitSha: string | null;
                             /** Format: date-time */
                             createdAt: string;
@@ -7018,6 +7039,117 @@ export interface paths {
                 };
             };
         };
+        trace?: never;
+    };
+    "/api/projects/{projectId}/agent/sessions/{sessionId}/attention/acknowledge": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    projectId: string;
+                    sessionId: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Default Response */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            /** Format: uuid */
+                            id: string;
+                            /** Format: uuid */
+                            projectId: string;
+                            externalUserId: string;
+                            provider: string;
+                            providerSessionId: string | null;
+                            /** Format: uuid */
+                            sandboxId: string | null;
+                            environment: string | null;
+                            /** Format: uuid */
+                            allocationId: string | null;
+                            agentId: string | null;
+                            /** @enum {string|null} */
+                            modelEffort: "low" | "medium" | "high" | "xhigh" | "max" | null;
+                            title: string | null;
+                            icon: string | null;
+                            /** Format: uuid */
+                            parentSessionId: string | null;
+                            /** @enum {string} */
+                            status: "active" | "closed";
+                            activity: string | null;
+                            todos: {
+                                /** Format: uuid */
+                                id: string;
+                                title: string;
+                                description: string;
+                                /** @enum {string} */
+                                status: "pending" | "in_progress" | "completed";
+                            }[];
+                            authorityHostId: string;
+                            authorityRevision: number;
+                            /** Format: date-time */
+                            authoritySeenAt: string | null;
+                            mirrorMessageCount: number;
+                            /** @enum {string} */
+                            handoffStatus: "none" | "pending";
+                            handoffDestinationHostId: string | null;
+                            resumable: boolean;
+                            /** Format: date-time */
+                            pausedAt: string | null;
+                            running: boolean;
+                            attentionRevision: number;
+                            attentionSeenRevision: number;
+                            attentionRequired: boolean;
+                            baseCommitSha: string | null;
+                            /** Format: date-time */
+                            createdAt: string;
+                            /** Format: date-time */
+                            updatedAt: string;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                503: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                        };
+                    };
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
         trace?: never;
     };
     "/api/projects/{projectId}/agent/sessions/{sessionId}/peers": {
@@ -7649,6 +7781,9 @@ export interface paths {
                             /** Format: date-time */
                             pausedAt: string | null;
                             running: boolean;
+                            attentionRevision: number;
+                            attentionSeenRevision: number;
+                            attentionRequired: boolean;
                             baseCommitSha: string | null;
                             /** Format: date-time */
                             createdAt: string;

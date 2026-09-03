@@ -15,6 +15,8 @@ export type AgentSessionsList =
 export interface UseAgentSessionsOptions {
   limit?: number;
   offset?: number;
+  /** Polling cadence for sessions created by workflows or another client. */
+  refetchInterval?: number | false;
 }
 
 /**
@@ -25,7 +27,7 @@ export function useAgentSessions(
   options: UseAgentSessionsOptions = {},
 ): UseQueryResult<AgentSessionsList, CatamorphicError> {
   const { apiClient } = useCatamorphic();
-  const { limit, offset } = options;
+  const { limit, offset, refetchInterval = 2_000 } = options;
   return useQuery<AgentSessionsList, CatamorphicError>({
     queryKey: [
       "cat",
@@ -49,5 +51,6 @@ export function useAgentSessions(
         return assertApiOk(result, "Agent sessions response empty");
       }),
     enabled: Boolean(projectId),
+    refetchInterval,
   });
 }

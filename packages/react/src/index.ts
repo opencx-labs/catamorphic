@@ -19,6 +19,7 @@ export {
   selectedNodeIdAtom,
   showRunDialogAtom,
 } from "./atoms.js";
+export { useAcknowledgeAgentSessionAttention } from "./hooks/use-acknowledge-agent-session-attention.js";
 export {
   type AgentAuthenticationRequired,
   type OptimisticAgentMessage,

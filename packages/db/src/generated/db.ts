@@ -90,6 +90,8 @@ export interface AgentSessions {
   activity: string | null;
   agent_id: string | null;
   allocation_id: string | null;
+  attention_revision: Generated<Int8>;
+  attention_seen_revision: Generated<Int8>;
   authority_host_id: Generated<string>;
   authority_revision: Generated<Int8>;
   authority_seen_at: Generated<Timestamp>;
@@ -113,6 +115,7 @@ export interface AgentSessions {
   title: string | null;
   todos: Generated<Json>;
   updated_at: Generated<Timestamp>;
+  wake_key: string | null;
 }
 
 export interface AgentTurns {

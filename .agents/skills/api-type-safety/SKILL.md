@@ -35,6 +35,13 @@ const { data, error } = await client.GET("/api/projects/{projectId}", {
 // data is fully typed
 ```
 
+Session notification state is part of the ordinary `AgentSessionSchema`:
+`attentionRevision`, `attentionSeenRevision`, and derived
+`attentionRequired`. User interaction acknowledges the current revision with
+`POST /api/projects/:projectId/agent/sessions/:sessionId/attention/acknowledge`;
+React clients should use `useAcknowledgeAgentSessionAttention` rather than
+hand-writing a fetch.
+
 ## Key Packages
 
 - **zod** — schema definition (single source of truth)

@@ -3193,3 +3193,16 @@ paths, deliberately independent:
   adopted into the encrypted workflow connection broker under their existing
   aliases, so the same authenticated MCP account can power agent tools and
   workflow steps without exposing its credentials to renderer code.
+
+### Workflow-woken session attention (2026-09-03)
+
+- A workflow result returns as a real conversation, not a separate
+  notification object. A stable workflow key reuses the member's session so
+  recurring summaries keep their context and do not flood the Chats list.
+- A settled workflow-woken turn gives the session a server-owned attention
+  revision. Its pulsing dot is deliberately distinct from the solid,
+  profile-local unread dot. Opening the conversation acknowledges the latest
+  revision on every client.
+- The desktop adds an unacknowledged session to the dock as a minimized bubble
+  and to the ordinary sidebar list without moving focus. The PWA shows the
+  same pulse, and Web Push is only a delivery path back to that session.

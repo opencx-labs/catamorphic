@@ -40,6 +40,7 @@ describe("PGlite migrations", () => {
     expect(result.applied).toEqual([
       "001_initial.sql",
       "002_workflow_enablements.sql",
+      "003_agent_session_attention.sql",
     ]);
 
     const rerun = await migrateToLatest({ db });

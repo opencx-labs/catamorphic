@@ -410,8 +410,49 @@ export class CatamorphicCore {
 
     const sessionDeliveryCapability: CapabilityProviderRuntime = {
       name: "catamorphic.sessions",
-      description: "Deliver attributed messages to agent sessions",
+      description:
+        "Deliver to an existing agent session or wake a stable member session",
       calls: {
+        wake: async (context, args) => {
+          if (!this.agentSessions) {
+            throw new Error("Coding agents are not configured");
+          }
+          const input = sessionWakeArgs(args);
+          let enabledEnvironment: string | undefined;
+          const run = await this.db
+            .selectFrom("workflow_runs")
+            .select("workflow_enablement_id")
+            .where("id", "=", context.runId)
+            .executeTakeFirst();
+          if (run?.workflow_enablement_id) {
+            const enablement = await this.db
+              .selectFrom("workflow_enablements")
+              .select([
+                "owner_kind",
+                "owner_external_user_id",
+                "environment_name",
+              ])
+              .where("id", "=", run.workflow_enablement_id)
+              .executeTakeFirstOrThrow();
+            if (
+              enablement.owner_kind !== "member" ||
+              enablement.owner_external_user_id !==
+                context.caller.externalUserId
+            ) {
+              throw new Error(
+                "catamorphic.sessions.wake requires a member-owned workflow enablement",
+              );
+            }
+            enabledEnvironment = enablement.environment_name;
+          }
+          return this.agentSessions.wake(context.caller, context.projectId, {
+            ...input,
+            wakeKey: JSON.stringify([context.workflowName, input.key]),
+            environment: enabledEnvironment ?? input.environment,
+            workflowName: context.workflowName,
+            runId: context.runId,
+          });
+        },
         deliver: async (context, args) => {
           if (!this.agentSessions) {
             throw new Error("Coding agents are not configured");
@@ -783,7 +824,8 @@ export class CatamorphicCore {
         onTurnSettled: async (event) => {
           if (
             event.status === "completed" ||
-            event.status === "awaiting_input"
+            event.status === "awaiting_input" ||
+            event.notification
           ) {
             await this.notifications
               .publish({
@@ -793,15 +835,22 @@ export class CatamorphicCore {
                 kind:
                   event.status === "awaiting_input"
                     ? "agent_question"
-                    : "agent_completed",
+                    : event.status === "failed"
+                      ? "agent_failed"
+                      : "agent_completed",
                 title:
                   event.status === "awaiting_input"
                     ? "An agent needs your input"
-                    : "An agent finished",
+                    : event.status === "failed"
+                      ? "An agent run failed"
+                      : (event.notification?.title ?? "An agent finished"),
                 body:
                   event.status === "awaiting_input"
                     ? "Open the chat to answer the question."
-                    : "Open the chat to see the result.",
+                    : event.status === "failed"
+                      ? "Open the chat to see what went wrong."
+                      : (event.notification?.body ??
+                        "Open the chat to see the result."),
                 route: `/?project=${encodeURIComponent(event.projectId)}&session=${encodeURIComponent(event.sessionId)}`,
                 collapseKey: `agent-turn:${event.messageId}`,
               })
@@ -885,6 +934,87 @@ function sessionDeliveryArgs(value: unknown): {
     mode: input.mode,
     ...(typeof input.idempotencyKey === "string"
       ? { idempotencyKey: input.idempotencyKey }
+      : {}),
+  };
+}
+
+function sessionWakeArgs(value: unknown): {
+  key: string;
+  content: string;
+  agentSlug?: string;
+  environment?: string;
+  title?: string;
+  mode?: "next_turn" | "interrupt";
+  notification?: { title?: string; body?: string };
+} {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error("catamorphic.sessions.wake expects an object");
+  }
+  const input = value as Record<string, unknown>;
+  const requiredString = (name: "key" | "content") => {
+    const item = input[name];
+    if (typeof item !== "string" || !item.trim()) {
+      throw new Error(`${name} must be a non-empty string`);
+    }
+    return item.trim();
+  };
+  const optionalString = (name: string, max: number) => {
+    const item = input[name];
+    if (item === undefined) return undefined;
+    if (typeof item !== "string" || !item.trim() || item.length > max) {
+      throw new Error(
+        `${name} must be a non-empty string up to ${max} characters`,
+      );
+    }
+    return item.trim();
+  };
+  const key = requiredString("key");
+  if (key.length > 200) throw new Error("key must be 200 characters or fewer");
+  const mode = input.mode;
+  if (mode !== undefined && mode !== "next_turn" && mode !== "interrupt") {
+    throw new Error("mode must be next_turn or interrupt");
+  }
+  const notification = input.notification;
+  if (
+    notification !== undefined &&
+    (!notification ||
+      typeof notification !== "object" ||
+      Array.isArray(notification))
+  ) {
+    throw new Error("notification must be an object");
+  }
+  const notificationRecord = notification as
+    | Record<string, unknown>
+    | undefined;
+  const notificationString = (name: "title" | "body", max: number) => {
+    const item = notificationRecord?.[name];
+    if (item === undefined) return undefined;
+    if (typeof item !== "string" || !item.trim() || item.length > max) {
+      throw new Error(
+        `notification.${name} must be a non-empty string up to ${max} characters`,
+      );
+    }
+    return item.trim();
+  };
+  const notificationTitle = notificationString("title", 200);
+  const notificationBody = notificationString("body", 500);
+  const agentSlug = optionalString("agentSlug", 255);
+  const environment = optionalString("environment", 255);
+  const title = optionalString("title", 500);
+  return {
+    key,
+    content: requiredString("content"),
+    ...(agentSlug ? { agentSlug } : {}),
+    ...(environment ? { environment } : {}),
+    ...(title ? { title } : {}),
+    ...(mode ? { mode } : {}),
+    ...(notificationTitle || notificationBody
+      ? {
+          notification: {
+            ...(notificationTitle ? { title: notificationTitle } : {}),
+            ...(notificationBody ? { body: notificationBody } : {}),
+          },
+        }
       : {}),
   };
 }

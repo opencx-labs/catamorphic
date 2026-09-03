@@ -82,4 +82,15 @@ The HTTP API, `scoped.runs`, React `useRun*` hooks, history, and Runs panel are
 shared. Capabilities determine available controls; there is no public stage or
 separate Run family.
 
+## Session attention in host UIs
+
+`useAgentSessions(projectId)` polls for sessions that workflows or other
+clients created. A session with `attentionRequired: true` is the durable
+notification record and should be presented as needing interaction, distinct
+from any client-local unread marker. When the user opens it, call
+`useAcknowledgeAgentSessionAttention(projectId)` with the session id. Web Push
+deep-links to the same session and must not create a parallel notification
+inbox. Desktop-like hosts may also add the session to a dock without moving
+focus.
+
 See [`INTEGRATION.md`](../../../INTEGRATION.md) for the end-to-end wiring example.

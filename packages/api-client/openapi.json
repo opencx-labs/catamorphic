@@ -13000,6 +13000,19 @@
                     "running": {
                       "type": "boolean"
                     },
+                    "attentionRevision": {
+                      "type": "integer",
+                      "minimum": 0,
+                      "maximum": 9007199254740991
+                    },
+                    "attentionSeenRevision": {
+                      "type": "integer",
+                      "minimum": 0,
+                      "maximum": 9007199254740991
+                    },
+                    "attentionRequired": {
+                      "type": "boolean"
+                    },
                     "baseCommitSha": {
                       "nullable": true,
                       "type": "string",
@@ -13043,6 +13056,9 @@
                     "resumable",
                     "pausedAt",
                     "running",
+                    "attentionRevision",
+                    "attentionSeenRevision",
+                    "attentionRequired",
                     "baseCommitSha",
                     "createdAt",
                     "updatedAt"
@@ -13443,6 +13459,19 @@
                           "running": {
                             "type": "boolean"
                           },
+                          "attentionRevision": {
+                            "type": "integer",
+                            "minimum": 0,
+                            "maximum": 9007199254740991
+                          },
+                          "attentionSeenRevision": {
+                            "type": "integer",
+                            "minimum": 0,
+                            "maximum": 9007199254740991
+                          },
+                          "attentionRequired": {
+                            "type": "boolean"
+                          },
                           "baseCommitSha": {
                             "nullable": true,
                             "type": "string",
@@ -13486,6 +13515,9 @@
                           "resumable",
                           "pausedAt",
                           "running",
+                          "attentionRevision",
+                          "attentionSeenRevision",
+                          "attentionRequired",
                           "baseCommitSha",
                           "createdAt",
                           "updatedAt"
@@ -13907,6 +13939,19 @@
                     "running": {
                       "type": "boolean"
                     },
+                    "attentionRevision": {
+                      "type": "integer",
+                      "minimum": 0,
+                      "maximum": 9007199254740991
+                    },
+                    "attentionSeenRevision": {
+                      "type": "integer",
+                      "minimum": 0,
+                      "maximum": 9007199254740991
+                    },
+                    "attentionRequired": {
+                      "type": "boolean"
+                    },
                     "baseCommitSha": {
                       "nullable": true,
                       "type": "string",
@@ -13950,6 +13995,9 @@
                     "resumable",
                     "pausedAt",
                     "running",
+                    "attentionRevision",
+                    "attentionSeenRevision",
+                    "attentionRequired",
                     "baseCommitSha",
                     "createdAt",
                     "updatedAt"
@@ -14345,6 +14393,19 @@
                     "running": {
                       "type": "boolean"
                     },
+                    "attentionRevision": {
+                      "type": "integer",
+                      "minimum": 0,
+                      "maximum": 9007199254740991
+                    },
+                    "attentionSeenRevision": {
+                      "type": "integer",
+                      "minimum": 0,
+                      "maximum": 9007199254740991
+                    },
+                    "attentionRequired": {
+                      "type": "boolean"
+                    },
                     "baseCommitSha": {
                       "nullable": true,
                       "type": "string",
@@ -14388,6 +14449,9 @@
                     "resumable",
                     "pausedAt",
                     "running",
+                    "attentionRevision",
+                    "attentionSeenRevision",
+                    "attentionRequired",
                     "baseCommitSha",
                     "createdAt",
                     "updatedAt"
@@ -14645,6 +14709,19 @@
                     "running": {
                       "type": "boolean"
                     },
+                    "attentionRevision": {
+                      "type": "integer",
+                      "minimum": 0,
+                      "maximum": 9007199254740991
+                    },
+                    "attentionSeenRevision": {
+                      "type": "integer",
+                      "minimum": 0,
+                      "maximum": 9007199254740991
+                    },
+                    "attentionRequired": {
+                      "type": "boolean"
+                    },
                     "baseCommitSha": {
                       "nullable": true,
                       "type": "string",
@@ -14688,6 +14765,9 @@
                     "resumable",
                     "pausedAt",
                     "running",
+                    "attentionRevision",
+                    "attentionSeenRevision",
+                    "attentionRequired",
                     "baseCommitSha",
                     "createdAt",
                     "updatedAt"
@@ -15053,6 +15133,19 @@
                     "running": {
                       "type": "boolean"
                     },
+                    "attentionRevision": {
+                      "type": "integer",
+                      "minimum": 0,
+                      "maximum": 9007199254740991
+                    },
+                    "attentionSeenRevision": {
+                      "type": "integer",
+                      "minimum": 0,
+                      "maximum": 9007199254740991
+                    },
+                    "attentionRequired": {
+                      "type": "boolean"
+                    },
                     "baseCommitSha": {
                       "nullable": true,
                       "type": "string",
@@ -15299,6 +15392,9 @@
                     "resumable",
                     "pausedAt",
                     "running",
+                    "attentionRevision",
+                    "attentionSeenRevision",
+                    "attentionRequired",
                     "baseCommitSha",
                     "createdAt",
                     "updatedAt",
@@ -15515,6 +15611,19 @@
                     "running": {
                       "type": "boolean"
                     },
+                    "attentionRevision": {
+                      "type": "integer",
+                      "minimum": 0,
+                      "maximum": 9007199254740991
+                    },
+                    "attentionSeenRevision": {
+                      "type": "integer",
+                      "minimum": 0,
+                      "maximum": 9007199254740991
+                    },
+                    "attentionRequired": {
+                      "type": "boolean"
+                    },
                     "baseCommitSha": {
                       "nullable": true,
                       "type": "string",
@@ -15558,6 +15667,284 @@
                     "resumable",
                     "pausedAt",
                     "running",
+                    "attentionRevision",
+                    "attentionSeenRevision",
+                    "attentionRequired",
+                    "baseCommitSha",
+                    "createdAt",
+                    "updatedAt"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["error"],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["error"],
+                  "additionalProperties": false
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/projects/{projectId}/agent/sessions/{sessionId}/attention/acknowledge": {
+      "post": {
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+            },
+            "in": "path",
+            "name": "projectId",
+            "required": true
+          },
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+            },
+            "in": "path",
+            "name": "sessionId",
+            "required": true
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "id": {
+                      "type": "string",
+                      "format": "uuid",
+                      "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                    },
+                    "projectId": {
+                      "type": "string",
+                      "format": "uuid",
+                      "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                    },
+                    "externalUserId": {
+                      "type": "string"
+                    },
+                    "provider": {
+                      "type": "string"
+                    },
+                    "providerSessionId": {
+                      "nullable": true,
+                      "type": "string"
+                    },
+                    "sandboxId": {
+                      "nullable": true,
+                      "type": "string",
+                      "format": "uuid",
+                      "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                    },
+                    "environment": {
+                      "nullable": true,
+                      "type": "string"
+                    },
+                    "allocationId": {
+                      "nullable": true,
+                      "type": "string",
+                      "format": "uuid",
+                      "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                    },
+                    "agentId": {
+                      "nullable": true,
+                      "type": "string"
+                    },
+                    "modelEffort": {
+                      "nullable": true,
+                      "type": "string",
+                      "enum": ["low", "medium", "high", "xhigh", "max"]
+                    },
+                    "title": {
+                      "nullable": true,
+                      "type": "string"
+                    },
+                    "icon": {
+                      "nullable": true,
+                      "type": "string"
+                    },
+                    "parentSessionId": {
+                      "nullable": true,
+                      "type": "string",
+                      "format": "uuid",
+                      "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                    },
+                    "status": {
+                      "type": "string",
+                      "enum": ["active", "closed"]
+                    },
+                    "activity": {
+                      "nullable": true,
+                      "type": "string"
+                    },
+                    "todos": {
+                      "maxItems": 50,
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "id": {
+                            "type": "string",
+                            "format": "uuid",
+                            "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                          },
+                          "title": {
+                            "type": "string",
+                            "minLength": 1,
+                            "maxLength": 200
+                          },
+                          "description": {
+                            "type": "string",
+                            "minLength": 1,
+                            "maxLength": 4000
+                          },
+                          "status": {
+                            "type": "string",
+                            "enum": ["pending", "in_progress", "completed"]
+                          }
+                        },
+                        "required": ["id", "title", "description", "status"],
+                        "additionalProperties": false
+                      }
+                    },
+                    "authorityHostId": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "authorityRevision": {
+                      "type": "integer",
+                      "minimum": 0,
+                      "exclusiveMinimum": true,
+                      "maximum": 9007199254740991
+                    },
+                    "authoritySeenAt": {
+                      "nullable": true,
+                      "type": "string",
+                      "format": "date-time",
+                      "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z))$"
+                    },
+                    "mirrorMessageCount": {
+                      "type": "integer",
+                      "minimum": 0,
+                      "maximum": 9007199254740991
+                    },
+                    "handoffStatus": {
+                      "type": "string",
+                      "enum": ["none", "pending"]
+                    },
+                    "handoffDestinationHostId": {
+                      "nullable": true,
+                      "type": "string"
+                    },
+                    "resumable": {
+                      "type": "boolean"
+                    },
+                    "pausedAt": {
+                      "nullable": true,
+                      "type": "string",
+                      "format": "date-time",
+                      "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z))$"
+                    },
+                    "running": {
+                      "type": "boolean"
+                    },
+                    "attentionRevision": {
+                      "type": "integer",
+                      "minimum": 0,
+                      "maximum": 9007199254740991
+                    },
+                    "attentionSeenRevision": {
+                      "type": "integer",
+                      "minimum": 0,
+                      "maximum": 9007199254740991
+                    },
+                    "attentionRequired": {
+                      "type": "boolean"
+                    },
+                    "baseCommitSha": {
+                      "nullable": true,
+                      "type": "string",
+                      "minLength": 40,
+                      "maxLength": 40
+                    },
+                    "createdAt": {
+                      "type": "string",
+                      "format": "date-time",
+                      "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z))$"
+                    },
+                    "updatedAt": {
+                      "type": "string",
+                      "format": "date-time",
+                      "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z))$"
+                    }
+                  },
+                  "required": [
+                    "id",
+                    "projectId",
+                    "externalUserId",
+                    "provider",
+                    "providerSessionId",
+                    "sandboxId",
+                    "environment",
+                    "allocationId",
+                    "agentId",
+                    "modelEffort",
+                    "title",
+                    "icon",
+                    "parentSessionId",
+                    "status",
+                    "activity",
+                    "todos",
+                    "authorityHostId",
+                    "authorityRevision",
+                    "authoritySeenAt",
+                    "mirrorMessageCount",
+                    "handoffStatus",
+                    "handoffDestinationHostId",
+                    "resumable",
+                    "pausedAt",
+                    "running",
+                    "attentionRevision",
+                    "attentionSeenRevision",
+                    "attentionRequired",
                     "baseCommitSha",
                     "createdAt",
                     "updatedAt"
@@ -16832,6 +17219,19 @@
                     "running": {
                       "type": "boolean"
                     },
+                    "attentionRevision": {
+                      "type": "integer",
+                      "minimum": 0,
+                      "maximum": 9007199254740991
+                    },
+                    "attentionSeenRevision": {
+                      "type": "integer",
+                      "minimum": 0,
+                      "maximum": 9007199254740991
+                    },
+                    "attentionRequired": {
+                      "type": "boolean"
+                    },
                     "baseCommitSha": {
                       "nullable": true,
                       "type": "string",
@@ -16875,6 +17275,9 @@
                     "resumable",
                     "pausedAt",
                     "running",
+                    "attentionRevision",
+                    "attentionSeenRevision",
+                    "attentionRequired",
                     "baseCommitSha",
                     "createdAt",
                     "updatedAt"

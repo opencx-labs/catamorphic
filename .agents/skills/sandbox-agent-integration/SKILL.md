@@ -112,6 +112,21 @@ const agent = new AiSdkCodingAgent({
 
 Per-project skills live in the project repo under `.agents/skills/<name>/SKILL.md` (Agent Skills layout, `docs/decisions/0010`); the agent reads relevant skills from the sandbox checkout with its filesystem tools. `core.skills.list(...)` / `GET /api/projects/:id/skills` enumerate them.
 
+Project agents may declare provider-neutral connection requirements in
+`agents/<slug>.json`. A workflow that wakes that agent should also declare the
+same aliases in its own `connections` array so the member reviews and
+authenticates everything needed before enabling unattended execution. MCP
+credentials use the same connection broker and are sufficient when the server
+exposes the required actions.
+
+`catamorphic.sessions.wake` creates or reuses a stable member-owned session,
+then queues a normal agent turn through `AgentSessionsService`; it does not run
+an agent inside the workflow sandbox. The session still receives ordinary
+Environment admission, allocation, connection admission, tool-policy
+narrowing, serialized turn delivery, and checkpointing. A settled requested
+turn increments server-owned attention state. Opening it calls
+`POST /api/projects/:projectId/agent/sessions/:sessionId/attention/acknowledge`.
+
 ## Runtime Harness
 
 The plain-workflow test harness runs inside a disposable directory in the dev
@@ -151,6 +166,7 @@ host `external_user_id`; there is no Catamorphic users table.
 - `/api/runs/:runId/*` — Capability-driven cancel, processing pause/resume,
   input submission, and batch-scope item inspection
 - `POST/GET/DELETE /api/projects/:projectId/agent/sessions[...]` — Agent sessions + messages (503 when no `codingAgent` configured)
+- `POST /api/projects/:projectId/agent/sessions/:sessionId/attention/acknowledge` — Clear the current workflow-requested attention revision
 - `GET /api/projects/:projectId/skills` — List per-project agent skills
 
 ## Adding a New Coding Agent Provider

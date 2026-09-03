@@ -1,5 +1,6 @@
 import {
   CatamorphicProvider,
+  useAcknowledgeAgentSessionAttention,
   useAgentSessions,
   useProject,
 } from "@catamorphic/react";
@@ -53,6 +54,7 @@ function SessionsList({
   animation?: string;
 }) {
   const sessions = useAgentSessions(projectId, { limit: 100 });
+  const acknowledgeAttention = useAcknowledgeAgentSessionAttention(projectId);
   const project = useProject(projectId);
   const [resumingId, setResumingId] = useState<string | null>(null);
   const [resumeError, setResumeError] = useState<{
@@ -74,6 +76,9 @@ function SessionsList({
 
   const openOrResume = async (session: (typeof items)[number]) => {
     if (!session.resumable) {
+      if (session.attentionRequired) {
+        void acknowledgeAttention.mutateAsync(session.id).catch(() => {});
+      }
       openChat(session.id);
       return;
     }
@@ -99,6 +104,9 @@ function SessionsList({
         );
       }
       await sessions.refetch();
+      if (session.attentionRequired) {
+        await acknowledgeAttention.mutateAsync(session.id).catch(() => {});
+      }
       openChat(session.id);
     } catch (error) {
       setResumeError({
@@ -151,13 +159,23 @@ function SessionsList({
                   className="row-press flex w-full cursor-pointer items-center gap-3 px-4 py-3 text-left"
                   data-testid="session-row"
                 >
-                  <span className="grid size-10 shrink-0 place-items-center rounded-full border border-border bg-bg-raised">
+                  <span className="relative grid size-10 shrink-0 place-items-center rounded-full border border-border bg-bg-raised">
                     <ChatGlyph
                       icon={session.icon}
                       fork={session.parentSessionId !== null}
                       className="size-4.5"
                     />
+                    {session.attentionRequired && (
+                      <span
+                        className="absolute right-0 top-0 size-2 animate-pulse rounded-full bg-accent"
+                        aria-hidden="true"
+                        data-testid="session-attention"
+                      />
+                    )}
                   </span>
+                  {session.attentionRequired && (
+                    <span className="sr-only">Ready for you</span>
+                  )}
                   <span className="min-w-0 flex-1">
                     <span
                       className={`block truncate text-[15px] leading-6 ${session.status === "closed" ? "text-fg-muted" : "font-medium"}`}
