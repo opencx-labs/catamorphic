@@ -84,6 +84,7 @@ function TabHoverCard({
   return createPortal(
     <div
       role="tooltip"
+      data-testid="tab-hover-card"
       style={{ left, top: anchor.y }}
       onAnimationEnd={(event) => {
         if (event.animationName === "fade-out" && exiting) onExited();
