@@ -1,6 +1,6 @@
 import { useQueryClient } from "@tanstack/react-query";
 import { ExternalLink, FolderOpen, GitFork, Link2 } from "lucide-react";
-import { type FormEvent, useEffect, useState } from "react";
+import { type FormEvent, useEffect, useRef, useState } from "react";
 import { type ConnectLink, desktopApi } from "../lib/desktop-api.js";
 import { Modal } from "./modal.js";
 import { PendingButton } from "./pending-button.js";
@@ -25,11 +25,9 @@ export function RemoteConnectModal({
   onConnected: (project: { id: string; name: string }) => void;
 }) {
   const queryClient = useQueryClient();
+  const parseRevision = useRef(0);
   const [pasted, setPasted] = useState("");
-  const [serverUrl, setServerUrl] = useState("");
-  const [remoteProjectId, setRemoteProjectId] = useState("");
-  const [invitationId, setInvitationId] = useState<string>();
-  const [name, setName] = useState("");
+  const [parsedLink, setParsedLink] = useState<ConnectLink | null>(null);
   const [parentDir, setParentDir] = useState("");
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -42,7 +40,9 @@ export function RemoteConnectModal({
     setError(null);
     setGithubRequired(false);
     setGithubUserCode(null);
-    setInvitationId(undefined);
+    setPasted("");
+    setParsedLink(null);
+    parseRevision.current += 1;
     void desktopApi.defaultProjectsDir().then(setParentDir);
   }, [open]);
 
@@ -59,21 +59,20 @@ export function RemoteConnectModal({
   }, [open]);
 
   useEffect(() => {
-    if (!link) return;
-    setServerUrl(link.serverUrl);
-    setRemoteProjectId(link.remoteProjectId);
-    setInvitationId(link.invitationId);
-    if (link.remoteProjectName) setName(link.remoteProjectName);
-  }, [link]);
+    if (!open || !link) return;
+    parseRevision.current += 1;
+    setPasted(formatConnectLink(link));
+    setParsedLink(link);
+  }, [link, open]);
 
   const applyPasted = async (value: string) => {
+    const revision = ++parseRevision.current;
     setPasted(value);
+    setParsedLink(null);
+    setError(null);
     const parsed = await desktopApi.remoteParseLink(value);
-    if (!parsed) return;
-    setServerUrl(parsed.serverUrl);
-    setRemoteProjectId(parsed.remoteProjectId);
-    setInvitationId(parsed.invitationId);
-    if (parsed.remoteProjectName) setName(parsed.remoteProjectName);
+    if (!parsed || revision !== parseRevision.current) return;
+    setParsedLink(parsed);
   };
 
   const browseParent = async () => {
@@ -86,13 +85,15 @@ export function RemoteConnectModal({
 
   // Folder names are ASCII-safe slugs; a name with no ASCII (a non-Latin
   // project name) falls back to the remote id so Connect never dead-ends.
+  const projectName =
+    parsedLink?.remoteProjectName?.trim() || parsedLink?.remoteProjectId || "";
   const folderName =
-    name
+    projectName
       .trim()
       .toLowerCase()
       .replace(/[^a-z0-9._-]+/g, "-")
       .replace(/^-+|-+$/g, "") ||
-    remoteProjectId
+    parsedLink?.remoteProjectId
       .trim()
       .toLowerCase()
       .replace(/[^a-z0-9._-]+/g, "-")
@@ -100,25 +101,27 @@ export function RemoteConnectModal({
     "remote-project";
   const targetPath =
     parentDir && folderName ? `${parentDir}/${folderName}` : null;
-  const canSubmit =
-    !pending &&
-    serverUrl.trim().length > 0 &&
-    remoteProjectId.trim().length > 0 &&
-    name.trim().length > 0 &&
-    targetPath !== null;
-
   const submit = async (event: FormEvent) => {
     event.preventDefault();
-    if (!canSubmit || !targetPath) return;
+    if (!parsedLink) {
+      setError("Paste the complete Catamorphic invitation link.");
+      return;
+    }
+    if (!targetPath) {
+      setError("Choose where to create the project folder.");
+      return;
+    }
     setPending(true);
     setError(null);
     setGithubRequired(false);
     try {
       const result = await desktopApi.remoteConnect({
-        serverUrl: serverUrl.trim(),
-        remoteProjectId: remoteProjectId.trim(),
-        ...(invitationId ? { invitationId } : {}),
-        name: name.trim(),
+        serverUrl: parsedLink.serverUrl,
+        remoteProjectId: parsedLink.remoteProjectId,
+        ...(parsedLink.invitationId
+          ? { invitationId: parsedLink.invitationId }
+          : {}),
+        name: projectName,
         rootPath: targetPath,
       });
       await queryClient.invalidateQueries({ queryKey: ["cat", "projects"] });
@@ -157,57 +160,48 @@ export function RemoteConnectModal({
             </p>
           </div>
 
-          <label className="flex flex-col gap-1.5 text-xs text-fg-muted">
-            Connect link
+          <label
+            htmlFor="remote-invitation-link"
+            className="flex flex-col gap-1.5 text-xs text-fg-muted"
+          >
+            Invitation link
             <div className="field flex h-8 items-center gap-2 px-2.5">
               <Link2 className="size-3.5 shrink-0 text-fg-faint" />
               <input
+                id="remote-invitation-link"
+                name="invitationLink"
                 value={pasted}
                 onChange={(event) => void applyPasted(event.target.value)}
                 placeholder="catamorphic://connect?server=…&project=…"
+                required
+                aria-describedby="remote-link-help"
+                autoCapitalize="none"
+                autoCorrect="off"
+                spellCheck={false}
                 // biome-ignore lint/a11y/noAutofocus: modal's primary field
                 autoFocus
                 data-testid="remote-link-input"
                 className="min-w-0 flex-1 bg-transparent text-[13px] text-fg outline-none placeholder:text-fg-faint"
               />
             </div>
+            <span id="remote-link-help" className="text-[11px] text-fg-faint">
+              Paste the link your teammate shared. It already identifies the
+              server and project.
+            </span>
           </label>
 
-          <div className="grid grid-cols-2 gap-3">
-            <label className="flex flex-col gap-1.5 text-xs text-fg-muted">
-              Server
-              <input
-                value={serverUrl}
-                onChange={(event) => setServerUrl(event.target.value)}
-                placeholder="https://brain.example.com/api"
-                data-testid="remote-server-input"
-                required
-                className="field h-8 px-2.5 text-[13px] text-fg placeholder:text-fg-faint"
-              />
-            </label>
-            <label className="flex flex-col gap-1.5 text-xs text-fg-muted">
-              Project id
-              <input
-                value={remoteProjectId}
-                onChange={(event) => setRemoteProjectId(event.target.value)}
-                data-testid="remote-project-input"
-                required
-                className="field h-8 px-2.5 font-mono text-[12px] text-fg placeholder:text-fg-faint"
-              />
-            </label>
-          </div>
-
-          <label className="flex flex-col gap-1.5 text-xs text-fg-muted">
-            Project name
-            <input
-              value={name}
-              onChange={(event) => setName(event.target.value)}
-              placeholder="Acme brain"
-              data-testid="remote-name-input"
-              required
-              className="field h-8 px-2.5 text-[13px] text-fg placeholder:text-fg-faint"
-            />
-          </label>
+          {parsedLink && (
+            <div
+              role="status"
+              data-testid="remote-link-summary"
+              className="rounded-lg border border-border bg-bg-raised px-3 py-2"
+            >
+              <p className="text-xs font-medium text-fg">{projectName}</p>
+              <p className="mt-0.5 text-[11px] text-fg-faint">
+                {new URL(parsedLink.serverUrl).host}
+              </p>
+            </div>
+          )}
 
           <label className="flex flex-col gap-1.5 text-xs text-fg-muted">
             Location
@@ -289,7 +283,7 @@ export function RemoteConnectModal({
             type="submit"
             pending={pending}
             pendingLabel="Connecting…"
-            disabled={!canSubmit}
+            disabled={pending}
             data-testid="remote-connect-submit"
             className="h-8 cursor-pointer rounded-md bg-accent px-3 text-[13px] font-medium text-accent-fg transition-opacity duration-150 hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
           >
@@ -299,4 +293,14 @@ export function RemoteConnectModal({
       </form>
     </Modal>
   );
+}
+
+function formatConnectLink(link: ConnectLink): string {
+  const url = new URL("catamorphic://connect");
+  url.searchParams.set("server", link.serverUrl);
+  url.searchParams.set("project", link.remoteProjectId);
+  if (link.remoteProjectName)
+    url.searchParams.set("name", link.remoteProjectName);
+  if (link.invitationId) url.searchParams.set("invitation", link.invitationId);
+  return url.toString();
 }

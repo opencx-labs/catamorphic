@@ -2506,7 +2506,7 @@ Patterned on what best-in-class palettes converged on (Chrome omnibox
   subtrees read/write. `Connect to a server…` lives beside `New project`
   (empty state, project switcher, palette); it takes a credential-free
   `catamorphic://connect?server=…&project=…&name=…` locator (deep link or
-  pasted, with fields filled automatically) plus a location. OAuth discovery
+  pasted, with its details resolved automatically) plus a location. OAuth discovery
   and S256 PKCE authenticate the person before Connect creates the local
   project, ignores `store/` and the sync manifest, and performs the first
   sync. Refreshable credentials live in profile-local protected storage.
@@ -3206,3 +3206,13 @@ paths, deliberately independent:
 - The desktop adds an unacknowledged session to the dock as a minimized bubble
   and to the ordinary sidebar list without moving focus. The PWA shows the
   same pulse, and Web Push is only a delivery path back to that session.
+
+### One invitation, one connection input (2026-09-03)
+
+- Connecting a remote project asks for the invitation link once. The link is
+  the credential-free locator for the server and project, so exposing those
+  parsed values as editable inputs creates ambiguity without adding capability.
+- The desktop shows the resolved project and server as confirmation, derives
+  the local project name from the link, and only leaves the local folder
+  location as a separate choice. A deep link uses the exact same path as a
+  pasted invitation.

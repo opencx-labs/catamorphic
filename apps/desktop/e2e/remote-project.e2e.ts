@@ -317,9 +317,9 @@ describe("remote projects (ADR 0055)", () => {
       `setReactValue($('[data-testid="remote-link-input"]'), ${JSON.stringify(link)}); return true;`,
     );
     await runWait(
-      `return $('[data-testid="remote-server-input"]').value.length > 0 && $('[data-testid="remote-name-input"]').value === 'Acme brain';`,
+      `return $('[data-testid="remote-link-summary"]')?.innerText.includes('Acme brain') && !document.querySelector('[data-testid="remote-server-input"]') && !document.querySelector('[data-testid="remote-project-input"]');`,
       {
-        label: "link parsed into fields",
+        label: "link parsed without duplicate fields",
       },
     );
     await runWait(

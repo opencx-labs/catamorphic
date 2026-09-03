@@ -681,7 +681,7 @@ export function App() {
   const [activeProjectId, setActiveProjectId] = useState<string>();
   const [workspaces, setWorkspaces] = useState<Record<string, Workspace>>({});
   const [projectModalOpen, setProjectModalOpen] = useState(false);
-  // Remote projects (ADR 0055): connect from a link or by hand; per-file
+  // Remote projects (ADR 0055): connect from an invitation link; per-file
   // store history for the current project.
   const [remoteConnect, setRemoteConnect] = useState<{
     open: boolean;
