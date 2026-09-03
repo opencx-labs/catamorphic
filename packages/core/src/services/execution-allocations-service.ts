@@ -49,12 +49,14 @@ const AllocationPolicySchema = z.object({
       }),
     )
     .optional(),
+  workflowEnablementId: z.string().uuid().optional(),
 });
 
 export interface EnvironmentAllocationPolicy {
   binding: EnvironmentBinding;
   requirements: EnvironmentRequirements;
   connections?: readonly ResolvedConnectionBinding[];
+  workflowEnablementId?: string;
 }
 
 export interface ExecutionAllocation {

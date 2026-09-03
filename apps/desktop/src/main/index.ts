@@ -36,6 +36,7 @@ import {
   registerDesktopUpdater,
 } from "./updater.js";
 import { WindowStateStore } from "./window-state.js";
+import { desktopProfileMcpProvider } from "./workflow-mcp-connections.js";
 
 // macOS 26.x + Apple Silicon: V8's background compiler threads race the
 // OS's MAP_JIT write-protection and SIGTRAP in ThreadIsolation::
@@ -535,6 +536,7 @@ app.whenReady().then(async () => {
       connectors,
       mcpApps,
       incognitoSessions,
+      [desktopProfileMcpProvider],
     );
     versionBackup.markBootSuccessful();
     state.broadcast("catamorphic:server-changed", {

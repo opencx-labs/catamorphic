@@ -3180,3 +3180,16 @@ paths, deliberately independent:
   use the same accent dot. A hidden-to-visible transition clears it; manually
   marking the chat already on screen unread sticks until the user leaves and
   opens it again.
+
+### Member workflow enablement (2026-09-03)
+
+- A deployed workflow's toolbar exposes one **Automate** surface. It reviews
+  the exact Environment, revision, connections, actions, and trigger count
+  before storing consent for unattended execution.
+- Enablements belong to the individual member by default. Missing connections
+  reuse the standard authentication card, suspended access can be checked
+  again, and a newer deployment remains opt-in through a fresh review.
+- Connection language stays provider-neutral. Enabled profile MCP servers are
+  adopted into the encrypted workflow connection broker under their existing
+  aliases, so the same authenticated MCP account can power agent tools and
+  workflow steps without exposing its credentials to renderer code.

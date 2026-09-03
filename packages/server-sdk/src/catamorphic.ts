@@ -16,6 +16,7 @@ import type {
   Identity,
   McpToolKindSpec,
   NativeAgentCheckout,
+  ProjectEventSourceProvider,
   ProjectLifecycleHooks,
   PushNotificationTransport,
   RetentionConfig,
@@ -101,6 +102,8 @@ export interface CreateCatamorphicConfig {
   environmentProvider: EnvironmentProvider;
   credentialVault?: CredentialVault;
   connectionProviders?: readonly ConnectionProvider[];
+  /** Re-resolve current member authority before unattended dispatch. */
+  resolveMemberIdentity?: CatamorphicCoreConfig["resolveMemberIdentity"];
   /** URL resolver for the Fastify plugin's brokered `/connection-mcp` route. */
   connectionMcpUrl?: (args: {
     projectId: string;
@@ -157,6 +160,8 @@ export interface CreateCatamorphicConfig {
    * kind through `scoped.triggers.fire` runs every subscribed workflow.
    */
   triggerKinds?: readonly TriggerKindRuntime[];
+  /** Generic host-owned event sources that feed normalized project events. */
+  projectEventSources?: readonly ProjectEventSourceProvider[];
   /**
    * Which trigger kinds are AI-callable tools, built with `mcpToolKind`.
    * Powers the per-project MCP endpoint: one tool per binding of each
@@ -313,6 +318,7 @@ export class Catamorphic {
       environmentProvider: config.environmentProvider,
       credentialVault: config.credentialVault,
       connectionProviders: contributions.connectionProviders,
+      resolveMemberIdentity: config.resolveMemberIdentity,
       connectionMcpUrl: config.connectionMcpUrl,
       pluginResolver: config.pluginResolver,
       codingAgent: config.codingAgent,
@@ -327,6 +333,7 @@ export class Catamorphic {
       maxAppBundleBytes: config.maxAppBundleBytes,
       github: config.github,
       triggerKinds: contributions.triggerKinds,
+      projectEventSources: config.projectEventSources,
       mcpToolKinds: contributions.mcpToolKinds,
       onAgentTurnSettled: config.onAgentTurnSettled,
       pushNotifications: config.pushNotifications,

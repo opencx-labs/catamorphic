@@ -37,7 +37,10 @@ describe("PGlite migrations", () => {
   }, async () => {
     const result = await migrateToLatest({ db });
     expect(result.schema).toBe(DEFAULT_SCHEMA);
-    expect(result.applied).toEqual(["001_initial.sql"]);
+    expect(result.applied).toEqual([
+      "001_initial.sql",
+      "002_workflow_enablements.sql",
+    ]);
 
     const rerun = await migrateToLatest({ db });
     expect(rerun.applied).toEqual([]);
@@ -62,7 +65,7 @@ describe("PGlite migrations", () => {
       WHERE table_schema = ${DEFAULT_SCHEMA}
         AND table_type = 'BASE TABLE'
     `.execute(db);
-    expect(tables.rows[0]?.count).toBe(61);
+    expect(tables.rows[0]?.count).toBe(65);
   });
 
   it("supports the runtime primitives core relies on", {

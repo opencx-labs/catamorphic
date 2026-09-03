@@ -36,6 +36,7 @@ import type { ProfileConfigManager } from "../profile-config.js";
 import type { ProfilesStore } from "../profiles.js";
 import { RemoteSessionMirror } from "../remote-mirror.js";
 import { userSkillFiles, userSkillInfos } from "../user-skills.js";
+import { syncProfileMcpWorkflowConnections } from "../workflow-mcp-connections.js";
 import { DesktopAgentRegistry } from "./agent-registry.js";
 import { E2eLocalSandboxProvider } from "./e2e-fakes.js";
 import { FileGithubTokenStore, GITHUB_APP } from "./github.js";
@@ -199,6 +200,8 @@ export async function startEmbeddedServer(
     projectId: string,
     sessionId: string,
   ) => Promise<string[]> = async () => [];
+  let syncWorkflowConnections: (profileId?: string) => Promise<void> =
+    async () => {};
   // Tool-permission asks (ADR 0054) park on this broker so REMOTE clients
   // (the companion app) can list and answer them over HTTP; the registry
   // races it against the desktop's own consent modal — first answer wins.
@@ -423,6 +426,11 @@ export async function startEmbeddedServer(
     },
     triggerKinds: DESKTOP_TRIGGER_KINDS,
     mcpToolKinds: DESKTOP_MCP_TOOL_KINDS,
+    projectHooks: [
+      {
+        onProjectCreated: async () => syncWorkflowConnections(),
+      },
+    ],
     // The user's personal skill tier (ADR 0056): profile-local files,
     // listed and readable beside project and host skills, never shared.
     userSkills: (_identity, projectId) =>
@@ -494,6 +502,24 @@ export async function startEmbeddedServer(
     tenantId: DESKTOP_TENANT_ID,
     externalUserId: DESKTOP_USER_ID,
   };
+  syncWorkflowConnections = (profileId?: string) =>
+    syncProfileMcpWorkflowConnections({
+      core: catamorphic.core,
+      profiles,
+      profileConfig,
+      identity: desktopIdentity,
+      profileId,
+    }).catch((error) =>
+      console.warn(
+        `[desktop] workflow connection sync failed: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      ),
+    );
+  await syncWorkflowConnections();
+  profileConfig.onConnectionsChanged((profileId) => {
+    void syncWorkflowConnections(profileId);
+  });
   isolationConflictPeers = async (projectId, sessionId) => {
     const detail = await catamorphic.core.agentSessions?.get(
       desktopIdentity,

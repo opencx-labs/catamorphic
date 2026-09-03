@@ -23,6 +23,7 @@ import type { AppBundleStore } from "./services/app-bundle-store.js";
 import { AppPoliciesService } from "./services/app-policies-service.js";
 import { AppStorageService } from "./services/app-storage-service.js";
 import { AppsService } from "./services/apps-service.js";
+import { assertScopeAllowsWorkflow } from "./services/artifact-scope.js";
 import { BatchExecutionHandler } from "./services/batch-execution-handler.js";
 import { BoundaryExecutionHandler } from "./services/boundary-execution-handler.js";
 import {
@@ -66,6 +67,7 @@ import { executeHostCall } from "./services/host-calls.js";
 import { MembershipsService } from "./services/memberships-service.js";
 import { PluginsService } from "./services/plugins-service.js";
 import { ProjectEnvironmentsService } from "./services/project-environments-service.js";
+import type { ProjectEventSourceProvider } from "./services/project-event-monitors-service.js";
 import { ProjectEventMonitorsService } from "./services/project-event-monitors-service.js";
 import { ProjectEventsService } from "./services/project-events-service.js";
 import {
@@ -102,6 +104,7 @@ import {
   UserNotificationsService,
 } from "./services/user-notifications-service.js";
 import { WatchersService } from "./services/watchers-service.js";
+import { WorkflowEnablementsService } from "./services/workflow-enablements-service.js";
 import { WorkflowsService } from "./services/workflows-service.js";
 
 export interface CatamorphicCoreConfig {
@@ -143,6 +146,12 @@ export interface CatamorphicCoreConfig {
   credentialVault?: CredentialVault;
   /** Host-side external-system drivers. Requires `credentialVault`. */
   connectionProviders?: readonly ConnectionProvider[];
+  /** Re-resolve current member authority for unattended workflow dispatch. */
+  resolveMemberIdentity?: (args: {
+    tenantId: string;
+    projectId: string;
+    externalUserId: string;
+  }) => Promise<Identity | null>;
   /** Reachable control-plane endpoint for allocation-bound agent MCP grants. */
   connectionMcpUrl?: (args: {
     projectId: string;
@@ -217,6 +226,8 @@ export interface CatamorphicCoreConfig {
    * `defineTriggerKind` from `@catamorphic/server-sdk`.
    */
   triggerKinds?: readonly TriggerKindRuntime[];
+  /** Generic external event sources that feed normalized Project Events. */
+  projectEventSources?: readonly ProjectEventSourceProvider[];
   /**
    * Which trigger kinds are AI-callable tools, and how to project a
    * binding's config into MCP tool metadata. Powers the per-project MCP
@@ -297,10 +308,11 @@ export class CatamorphicCore {
   readonly projects: ProjectsService;
   readonly projectEvents: ProjectEventsService;
   readonly projectEventMonitors: ProjectEventMonitorsService;
-  readonly projectEventSources: readonly GithubProjectEventSource[];
+  readonly projectEventSources: readonly ProjectEventSourceProvider[];
   readonly workflows: WorkflowsService;
   readonly runs: RunsService;
   readonly triggers: TriggersService;
+  readonly workflowEnablements: WorkflowEnablementsService;
   readonly schedules: SchedulesService;
   readonly deployment: DeploymentService;
   readonly deploymentArtifacts: DeploymentArtifactsService;
@@ -468,9 +480,10 @@ export class CatamorphicCore {
           this.projectEvents,
         )
       : undefined;
-    this.projectEventSources = this.github
-      ? [new GithubProjectEventSource(this.github)]
-      : [];
+    this.projectEventSources = [
+      ...(this.github ? [new GithubProjectEventSource(this.github)] : []),
+      ...(config.projectEventSources ?? []),
+    ];
     // Provider-agnostic remote sync (ADR 0044); code hosts contribute
     // credentials/capabilities through the CodeHost seam.
     this.remoteSync = new RemoteSyncService(
@@ -501,6 +514,21 @@ export class CatamorphicCore {
         this.db,
         credentialVault,
         providers,
+        async (identity) => {
+          if (this.workflowEnablements) {
+            await this.workflowEnablements.reenableEligibleForMember({
+              identity,
+            });
+          }
+        },
+        async ({ identity, connectionId }) => {
+          if (this.workflowEnablements) {
+            await this.workflowEnablements.suspendForConnection({
+              identity,
+              connectionId,
+            });
+          }
+        },
       );
       this.connectionAdmission = new ConnectionAdmissionService(
         this.connections,
@@ -509,6 +537,7 @@ export class CatamorphicCore {
         this.connections,
         providers,
         this.executionAllocations,
+        () => this.workflowEnablements,
       );
       this.connectionGrants = new ConnectionCapabilityGrantsService(
         this.db,
@@ -585,6 +614,7 @@ export class CatamorphicCore {
       runtimeEvents,
       coordinator,
       tenantPolicies: this.tenantPolicies,
+      workflowEnablements: () => this.workflowEnablements,
     });
     new BoundaryExecutionHandler(this.db, {
       coordinator,
@@ -668,8 +698,31 @@ export class CatamorphicCore {
       mcpToolKinds: this.mcpToolKinds,
       projectManager: this.projectManager,
       runs: this.runs,
+      workflowEnablements: () => this.workflowEnablements,
+    });
+    this.workflowEnablements = new WorkflowEnablementsService(this.db, {
       executionEnvironments: this.executionEnvironments,
       connectionAdmission: this.connectionAdmission,
+      resolveTarget: (args) => this.runs.resolveEnablementTarget(args),
+      ensureTriggerDefinitions: async (args) => {
+        await this.triggers.listAtCommit({
+          identity: args.identity,
+          projectId: args.projectId,
+          workflowName: args.workflowName,
+          commitSha: args.commitSha,
+          remoteBranch: args.remoteBranch,
+          environment: args.environment,
+        });
+      },
+      assertWorkflowAccess: (args) =>
+        assertScopeAllowsWorkflow({
+          db: this.db,
+          policies: this.appPolicies,
+          ...args,
+        }),
+      resolveMemberIdentity:
+        config.resolveMemberIdentity ??
+        ((args) => this.memberships.identityFor(args)),
     });
     this.schedules = new SchedulesService(this.db, this.triggers);
 
@@ -774,6 +827,7 @@ export class CatamorphicCore {
         projectManager: this.projectManager,
         runs: this.runs,
         triggers: this.triggers,
+        workflowEnablements: this.workflowEnablements,
         events: this.projectEvents,
         monitors: this.projectEventMonitors,
         sessions: this.agentSessions,

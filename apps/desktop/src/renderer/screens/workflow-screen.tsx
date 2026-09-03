@@ -17,6 +17,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { MonacoCodeEditor } from "../components/catamorphic/monaco-editor.js";
 import "../lib/monaco-setup.js";
 import { PendingButton } from "../components/pending-button.js";
+import { WorkflowEnablementPanel } from "../components/workflow-enablement-panel.js";
 import { useTheme } from "../lib/theme.js";
 
 export function WorkflowScreen({
@@ -93,6 +94,7 @@ function WorkflowScreenInner({
   const [saveState, setSaveState] = useState<"idle" | "saving" | "saved">(
     "idle",
   );
+  const [enablementOpen, setEnablementOpen] = useState(false);
 
   const handleSave = useCallback(async () => {
     setSaveState("saving");
@@ -128,8 +130,15 @@ function WorkflowScreenInner({
   return (
     <WorkflowEditorScope>
       <GraphWiring code={code} onParse={onParse} />
-      <div className="flex min-h-0 flex-1 flex-col">
-        <div className="flex h-10 shrink-0 items-center justify-end border-b border-border px-3">
+      <div className="relative flex min-h-0 flex-1 flex-col">
+        <div className="flex h-10 shrink-0 items-center justify-end gap-2 border-b border-border px-3">
+          <button
+            type="button"
+            onClick={() => setEnablementOpen(true)}
+            className="h-7 cursor-pointer rounded-md border border-border px-3 text-xs font-medium hover:bg-bg-overlay"
+          >
+            Automate
+          </button>
           <PendingButton
             type="button"
             pending={saveState === "saving"}
@@ -159,6 +168,13 @@ function WorkflowScreenInner({
             )}
           />
         </div>
+        {enablementOpen && (
+          <WorkflowEnablementPanel
+            projectId={projectId}
+            workflowName={workflowName}
+            onClose={() => setEnablementOpen(false)}
+          />
+        )}
       </div>
     </WorkflowEditorScope>
   );

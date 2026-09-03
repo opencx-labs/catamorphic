@@ -201,6 +201,16 @@ export {
   type UseWorkflowOptions,
   useWorkflow,
 } from "./hooks/use-workflow.js";
+export {
+  useCreateWorkflowEnablement,
+  usePreviewWorkflowEnablement,
+  useUpdateWorkflowEnablement,
+  useWorkflowEnablements,
+  type WorkflowEnablement,
+  type WorkflowEnablementInput,
+  type WorkflowEnablementPreview,
+  workflowEnablementKeys,
+} from "./hooks/use-workflow-enablements.js";
 // Canvas / graph state
 export type {
   OnParseCallback,

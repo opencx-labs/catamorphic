@@ -84,6 +84,13 @@ export class ConnectionsService {
     private readonly db: Kysely<DB>,
     private readonly vault: CredentialVault,
     private readonly providers: ConnectionProviderRegistry,
+    private readonly onMemberConnectionReady?: (
+      identity: Identity,
+    ) => Promise<void>,
+    private readonly onConnectionUnavailable?: (input: {
+      identity: Identity;
+      connectionId: string;
+    }) => Promise<void>,
   ) {}
 
   providerCatalog(): Array<{ kind: string; displayName: string }> {
@@ -306,6 +313,7 @@ export class ConnectionsService {
         ref: { id: attempt.private_state_ref },
       });
     }
+    await this.onMemberConnectionReady?.(args.identity);
     return connection;
   }
 
@@ -482,6 +490,70 @@ export class ConnectionsService {
       eventType: "connection.rotated",
       outcome: "allowed",
     });
+    return mapConnection(row);
+  }
+
+  /** Host-side adoption/refresh of an already authenticated member account. */
+  async replaceMemberCredential(args: {
+    identity: Identity;
+    connectionId: string;
+    material: Uint8Array;
+    account?: Json;
+    scopes?: readonly string[];
+    capabilities?: readonly string[];
+    expiresAt?: Date;
+  }): Promise<ConnectionRecord> {
+    const current = await this.requireConnection(
+      args.identity,
+      args.connectionId,
+    );
+    if (
+      current.principal_kind !== "member" ||
+      current.owner_external_user_id !== args.identity.externalUserId
+    ) {
+      throw new ConnectionPermissionDeniedError();
+    }
+    const nextRef = await this.vault.put({
+      tenantId: args.identity.tenantId,
+      material: args.material,
+    });
+    const row = await this.db
+      .updateTable("connections")
+      .set({
+        credential_ref: nextRef.id,
+        account_summary: toJson(args.account ?? {}),
+        scopes: toJson(args.scopes ?? []),
+        capabilities: toJson(args.capabilities ?? []),
+        expires_at: args.expiresAt ?? null,
+        status: "ready",
+        revision: current.revision + 1,
+        updated_at: new Date(),
+      })
+      .where("id", "=", current.id)
+      .where("revision", "=", current.revision)
+      .returningAll()
+      .executeTakeFirst();
+    if (!row) {
+      await this.vault.delete({
+        tenantId: args.identity.tenantId,
+        ref: nextRef,
+      });
+      throw new ConnectionUnavailableError(
+        current.id,
+        "Credential update raced",
+      );
+    }
+    if (current.credential_ref) {
+      await this.vault.delete({
+        tenantId: args.identity.tenantId,
+        ref: { id: current.credential_ref },
+      });
+    }
+    await this.resolveWorkflowRequirementsForConnection({
+      tenantId: args.identity.tenantId,
+      connectionId: current.id,
+    });
+    await this.onMemberConnectionReady?.(args.identity);
     return mapConnection(row);
   }
 
@@ -700,6 +772,15 @@ export class ConnectionsService {
     ) {
       throw new ConnectionPermissionDeniedError();
     }
+    const attachment = await this.db
+      .selectFrom("member_connection_attachments")
+      .select("connection_id")
+      .where("tenant_id", "=", args.identity.tenantId)
+      .where("project_id", "=", args.projectId)
+      .where("environment_name", "=", args.environment)
+      .where("alias", "=", args.alias)
+      .where("external_user_id", "=", args.identity.externalUserId)
+      .executeTakeFirst();
     await this.db
       .deleteFrom("member_connection_attachments")
       .where("tenant_id", "=", args.identity.tenantId)
@@ -708,6 +789,12 @@ export class ConnectionsService {
       .where("alias", "=", args.alias)
       .where("external_user_id", "=", args.identity.externalUserId)
       .execute();
+    if (attachment) {
+      await this.onConnectionUnavailable?.({
+        identity: args.identity,
+        connectionId: attachment.connection_id,
+      });
+    }
   }
 
   async resolve(args: {
@@ -890,13 +977,28 @@ export class ConnectionsService {
         ]);
       }
       if (selected.principalKind === "member") {
-        throw new ConnectionUnavailableError(
-          selected.alias,
-          "Unattended work requires a service connection",
-          selected.connectionId,
-        );
-      }
-      if (binding.service_connection_id !== selected.connectionId) {
+        const attachment = await this.db
+          .selectFrom("member_connection_attachments")
+          .where("tenant_id", "=", args.identity.tenantId)
+          .where("project_id", "=", args.projectId)
+          .where("environment_name", "=", args.environment)
+          .where("alias", "=", selected.alias)
+          .where("external_user_id", "=", args.identity.externalUserId)
+          .where("connection_id", "=", selected.connectionId)
+          .select("id")
+          .executeTakeFirst();
+        if (
+          !attachment ||
+          connection.principal_kind !== "member" ||
+          connection.owner_external_user_id !== args.identity.externalUserId
+        ) {
+          throw new ConnectionUnavailableError(
+            selected.alias,
+            "The member connection attachment changed",
+            selected.connectionId,
+          );
+        }
+      } else if (binding.service_connection_id !== selected.connectionId) {
         throw new ConnectionUnavailableError(
           selected.alias,
           "Assigned service connection changed",
@@ -956,6 +1058,10 @@ export class ConnectionsService {
         .where("id", "=", args.connectionId)
         .where("tenant_id", "=", args.identity.tenantId)
         .execute();
+    });
+    await this.onConnectionUnavailable?.({
+      identity: args.identity,
+      connectionId: args.connectionId,
     });
     let revokeFailed = false;
     const provider = this.providers.get(connection.provider_kind);

@@ -106,6 +106,7 @@ export type {
   CapabilityProviderRuntime,
   DocumentRef,
   Identity,
+  ProjectEventSourceProvider,
   ProjectLifecycleHooks,
   RunCallOutcome,
   RunSuspensionReason,
@@ -117,6 +118,9 @@ export type {
   TriggerKindRuntime,
   TriggerMode,
   TriggerSuspensionReason,
+  WorkflowEnablement,
+  WorkflowEnablementOwner,
+  WorkflowEnablementPreview,
   WorkflowRef,
 } from "@catamorphic/core";
 export {
@@ -185,6 +189,7 @@ export type {
   TriggerKindRef,
   TriggersResource,
   WorkflowDetail,
+  WorkflowEnablementsResource,
   WorkflowSummary,
   WorkflowsResource,
 } from "./scoped-client.js";

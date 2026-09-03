@@ -515,6 +515,7 @@ export {
   type TriggerFireResult,
   TriggerKindNotRegisteredError,
   TriggerModeNotAllowedError,
+  TriggerNotEnabledError,
   TriggerPayloadInvalidError,
   type TriggerSuspensionReason,
   TriggersService,
@@ -530,6 +531,24 @@ export {
   type Watcher,
   WatchersService,
 } from "./services/watchers-service.js";
+export { workflowEnablementConsentDigest } from "./services/workflow-enablement-consent.js";
+export type {
+  RevalidatedWorkflowEnablement,
+  WorkflowEnablement,
+  WorkflowEnablementConnection,
+  WorkflowEnablementOwner,
+  WorkflowEnablementPreview,
+  WorkflowEnablementStatus,
+  WorkflowEnablementSuspensionReason,
+  WorkflowEnablementTrigger,
+} from "./services/workflow-enablement-types.js";
+export {
+  WorkflowEnablementConflictError,
+  WorkflowEnablementConsentRequiredError,
+  WorkflowEnablementNotFoundError,
+  WorkflowEnablementSuspendedError,
+  WorkflowEnablementsService,
+} from "./services/workflow-enablements-service.js";
 export {
   type WorkflowDetail,
   WorkflowNotFoundError,

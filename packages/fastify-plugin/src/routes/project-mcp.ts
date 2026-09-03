@@ -254,6 +254,7 @@ async function callTool(
       // Always sync: a tool call wants its answer inline. A kind that
       // disallows sync fails loudly here rather than silently degrading.
       mode: "sync",
+      interactive: true,
       workflows: [tool.binding.workflowName],
       budgetMs: TOOL_SYNC_BUDGET_MS,
     });
