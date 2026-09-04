@@ -4761,7 +4761,6 @@ export function App() {
                     agentsData={agentsData}
                     defaultAgentId={effectiveDefaultAgentId}
                     projectAgentNames={projectAgentNames}
-                    archivedSessionIds={archivedSessionIds}
                     unreadSessionIds={unreadSessionIds}
                     onOpenTab={openTab}
                     onNewChat={() => addChat()}
@@ -6347,7 +6346,7 @@ function SessionsNav({
                 },
                 ...(checkoutLabel
                   ? [{ label: "Checkout", value: checkoutLabel }]
-                : []),
+                  : []),
               ],
             }}
             previewContent={
