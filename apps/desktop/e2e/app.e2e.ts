@@ -591,7 +591,7 @@ describe("chat flows", () => {
     `);
     await runWait(
       `const labels = $$('[role="menuitem"]').map((item) => item.textContent.trim());
-       return labels.join('|') === 'Mark as unread|Archive';`,
+       return labels.join('|') === 'New subsession|Mark as unread|Archive';`,
       { label: "dock session menu" },
     );
     await run(
@@ -616,7 +616,7 @@ describe("chat flows", () => {
     `);
     await runWait(
       `const labels = $$('[role="menuitem"]').map((item) => item.textContent.trim());
-       return labels.join('|') === 'Mark as read|Archive';`,
+       return labels.join('|') === 'New subsession|Mark as read|Archive';`,
       { label: "sidebar session menu matches the dock" },
     );
     await run(
@@ -629,8 +629,9 @@ describe("chat flows", () => {
       { label: "session marked read" },
     );
 
-    // Archive hides the sidebar entry without closing the open dock. The
-    // surviving dock menu provides the way to unarchive it.
+    // Archive removes the chat from the sidebar and dock. The palette keeps
+    // the archived chat searchable and visibly marked, and reopening it
+    // provides the way to unarchive it.
     await run(`
       const bubble = [...document.querySelectorAll('div[data-session-id]')]
         .find((row) => !row.closest('aside') && row.querySelector('button[aria-label*="Session menu"]'));
@@ -646,11 +647,44 @@ describe("chat flows", () => {
     await runWait(
       `return ![...document.querySelectorAll('aside li[data-session-id]')]
         .some((row) => row.textContent.includes('Session menu')) &&
-        !![...document.querySelectorAll('div[data-session-id]')]
-          .find((row) => !row.closest('aside') && row.querySelector('button[aria-label*="Session menu"]'));`,
-      { label: "archived chat hidden from the sidebar but still open" },
+        ![...document.querySelectorAll('div[data-session-id]')]
+          .some((row) => !row.closest('aside') && row.querySelector('button[aria-label*="Session menu"]'));`,
+      { label: "archived chat removed from the visible workspace" },
     );
 
+    await run(`
+      pressKey('p', { metaKey: true });
+      return true;
+    `);
+    await runWait(
+      `
+      const input = $$('textarea[aria-label="Search commands, pages, and more"]')
+        .find((el) => !el.closest('[inert]'));
+      if (!input) return false;
+      setReactValue(input, 'Session menu');
+      return true;
+    `,
+      { label: "archive search in the palette" },
+    );
+    await runWait(
+      `
+      const option = $$('[role="option"]')
+        .find((el) => !el.closest('[inert]') && el.textContent.includes('Session menu'));
+      return !!option && option.textContent.includes('Archived chat');
+    `,
+      { label: "archived chat marked in the palette" },
+    );
+    await run(`
+      const option = $$('[role="option"]')
+        .find((el) => !el.closest('[inert]') && el.textContent.includes('Session menu'));
+      option.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true }));
+      return true;
+    `);
+    await runWait(
+      `return !![...document.querySelectorAll('div[data-session-id]')]
+      .find((row) => !row.closest('aside') && row.querySelector('button[aria-label*="Session menu"]'));`,
+      { label: "archived chat reopened from the palette" },
+    );
     await run(`
       const bubble = [...document.querySelectorAll('div[data-session-id]')]
         .find((row) => !row.closest('aside') && row.querySelector('button[aria-label*="Session menu"]'));

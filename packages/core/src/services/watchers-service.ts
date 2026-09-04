@@ -361,6 +361,30 @@ export class WatchersService {
     return result.numUpdatedRows === 1n;
   }
 
+  /** Stop every Watcher owned by a session tree before it is archived. */
+  async stopForSessions(input: {
+    identity: Identity;
+    projectId: string;
+    sessionIds: readonly string[];
+  }): Promise<void> {
+    if (input.sessionIds.length === 0) return;
+    const rows = await this.db
+      .selectFrom("watchers")
+      .select(["id", "session_id"])
+      .where("project_id", "=", input.projectId)
+      .where("session_id", "in", [...input.sessionIds])
+      .where("status", "in", ["active", "paused"])
+      .execute();
+    for (const row of rows) {
+      await this.stop({
+        identity: input.identity,
+        projectId: input.projectId,
+        sessionId: row.session_id,
+        watcherId: row.id,
+      });
+    }
+  }
+
   async dispatchPending(input: { limit?: number } = {}): Promise<number> {
     return withSpan({ tracer, name: "watcher.dispatch" }, () =>
       this.dispatchPendingInner(input),

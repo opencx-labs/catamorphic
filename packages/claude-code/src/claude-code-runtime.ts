@@ -688,11 +688,15 @@ export class ClaudeCodeAgentRuntime implements AgentRuntimeProvider {
     const hostOwnsTodos = extraTools.some(
       (tool) => tool.name === "update_todo_list",
     );
+    const hostOwnsSubagents = extraTools.some(
+      (tool) => tool.name === "spawn_subsession",
+    );
     const disallowedTools = [
       ...(this.opts.disableBash && workspaceServer
         ? ["Bash", "PowerShell", "Monitor"]
         : []),
       ...(hostOwnsTodos ? ["TodoWrite"] : []),
+      ...(hostOwnsSubagents ? ["Task", "Agent"] : []),
     ];
     const externalServers = mapMcpServers({
       ...resolveMcpServers(this.opts.mcpServers),

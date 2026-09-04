@@ -27,11 +27,9 @@ describe("PrefsStore", () => {
   it("normalizes and deduplicates persisted session ids", () => {
     expect(
       normalizePrefs({
-        archivedSessionIds: ["archived", "archived", 1],
         unreadSessionIds: ["unread", null, "unread"],
       }),
     ).toMatchObject({
-      archivedSessionIds: ["archived"],
       unreadSessionIds: ["unread"],
     });
   });
@@ -41,13 +39,11 @@ describe("PrefsStore", () => {
     fs.writeFileSync(file, '{"futureSetting":true}\n');
 
     value.save({
-      archivedSessionIds: ["session-a"],
       unreadSessionIds: ["session-b"],
     });
 
     expect(JSON.parse(fs.readFileSync(file, "utf8"))).toMatchObject({
       futureSetting: true,
-      archivedSessionIds: ["session-a"],
       unreadSessionIds: ["session-b"],
     });
   });

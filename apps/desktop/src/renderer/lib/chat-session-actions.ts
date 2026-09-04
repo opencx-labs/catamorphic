@@ -1,6 +1,7 @@
 import type { ContextMenuEntry } from "../components/sidebar-item-row.js";
 
 export type ChatSessionAction =
+  | "new-subsession"
   | "mark-read"
   | "mark-unread"
   | "archive"
@@ -16,6 +17,14 @@ export function chatSessionMenu(args: {
   archived: boolean;
 }): ChatSessionMenuEntry[] {
   return [
+    ...(args.archived
+      ? []
+      : [
+          {
+            label: "New subsession",
+            action: "new-subsession" as const,
+          },
+        ]),
     {
       label: args.unread ? "Mark as read" : "Mark as unread",
       action: args.unread ? "mark-read" : "mark-unread",

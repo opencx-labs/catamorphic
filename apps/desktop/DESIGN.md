@@ -3185,6 +3185,26 @@ paths, deliberately independent:
   marking the chat already on screen unread sticks until the user leaves and
   opens it again.
 
+### Subsessions are quiet until they need the user (2026-09-04)
+
+- A subagent works in a real child session. While latent it appears as an
+  activity chip above its parent's composer, not as sidebar clutter. Sending it
+  a user message or receiving its explicit attention request promotes it into
+  the recursively collapsible Chats tree.
+- A child chip follows the workspace surface grammar: click opens it and
+  Command-click or its split affordance opens it to the right. A child chat's
+  back button returns to its immediate parent, focusing an already-open parent
+  pane when possible.
+- Session rows and nested groups use the standard 200ms structural motion and
+  remain mounted through reverse exit. Collapse changes presentation only; it
+  never pauses work.
+- Archive is now durable session state rather than a profile-local filter. It
+  recursively stops the selected session and every descendant, including live
+  turns and attached processes. The confirmation dialog appears only when work
+  would actually be interrupted. Archived sessions remain palette-searchable
+  and agent-readable, open with a visible Archived marker, and restore only by
+  an explicit user action.
+
 ### Member workflow enablement (2026-09-03)
 
 - A deployed workflow's toolbar exposes one **Automate** surface. It reviews

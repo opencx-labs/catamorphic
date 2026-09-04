@@ -882,6 +882,11 @@ export class CatamorphicCore {
         sessions: this.agentSessions,
         github: this.github,
       });
+      this.agentSessions.setArchiveResourcesHandler({
+        impact: async () => ({ activeProcessCount: 0 }),
+        stop: (input) =>
+          this.watchers?.stopForSessions(input) ?? Promise.resolve(),
+      });
     }
   }
 }

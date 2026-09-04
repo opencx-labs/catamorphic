@@ -1,4 +1,5 @@
-import { describe, expect, it } from "vitest";
+import { AgentNotConfiguredError } from "@catamorphic/core";
+import { describe, expect, it, vi } from "vitest";
 import { createTestApp } from "./test-app.js";
 
 const PROJECT_ID = "a1b2c3d4-e5f6-4890-abcd-ef1234567890";
@@ -112,6 +113,29 @@ describe("agent routes", () => {
         payload: { activity: "x".repeat(501) },
       });
       expect(response.statusCode).toBe(400);
+      await app.close();
+    });
+
+    it("reports an unavailable subsession agent as a client error", async () => {
+      const app = createTestApp({
+        core: {
+          agentSessions: {
+            createSubsession: vi.fn(async () => {
+              throw new AgentNotConfiguredError("retired-agent");
+            }),
+          },
+        } as never,
+      });
+      await app.ready();
+      const response = await app.inject({
+        method: "POST",
+        url: `/api/projects/${PROJECT_ID}/agent/sessions/${SESSION_ID}/subsessions`,
+        payload: { task: "Review the release" },
+      });
+      expect(response.statusCode).toBe(400);
+      expect(response.json()).toEqual({
+        error: "Coding agent 'retired-agent' is not configured",
+      });
       await app.close();
     });
   });

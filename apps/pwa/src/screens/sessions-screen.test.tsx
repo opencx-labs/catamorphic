@@ -25,6 +25,7 @@ vi.mock("@catamorphic/react", () => ({
           title: "From the laptop",
           icon: null,
           parentSessionId: null,
+          visibility: "promoted",
           status: "active",
           resumable: true,
           attentionRequired: true,

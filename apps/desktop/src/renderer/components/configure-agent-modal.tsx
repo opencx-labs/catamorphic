@@ -11,6 +11,7 @@ import {
   type AgentAuthMode,
   type AgentConnectionsSetting,
   type AgentCoordinationStrategy,
+  type AgentDelegationPolicy,
   type AgentEffort,
   type AgentHarness,
   type AgentInfo,
@@ -316,6 +317,9 @@ function ProfileAgentBody({
   const [toolPolicies, setToolPolicies] = useState<
     Record<string, McpToolPolicy>
   >(agent.toolPolicies ?? {});
+  const [delegation, setDelegation] = useState<AgentDelegationPolicy>(
+    agent.delegation,
+  );
   const [profileConnections, setProfileConnections] = useState<
     ConnectionInfo[]
   >([]);
@@ -364,6 +368,7 @@ function ProfileAgentBody({
         connections,
         skills,
         toolPolicies,
+        delegation,
       };
       if (harness === "ai-sdk") patch.provider = provider;
       if (clearKey) patch.apiKey = null;
@@ -582,6 +587,131 @@ function ProfileAgentBody({
 
           {tab === "capabilities" && (
             <>
+              <fieldset className="rounded-lg border border-border bg-bg-inset/40 p-3">
+                <legend className="px-1 text-xs font-medium text-fg-muted">
+                  Delegation
+                </legend>
+                <label className="flex items-start gap-2 text-xs text-fg-muted">
+                  <input
+                    type="checkbox"
+                    checked={delegation.enabled}
+                    onChange={(event) =>
+                      setDelegation((current) => ({
+                        ...current,
+                        enabled: event.target.checked,
+                      }))
+                    }
+                    className="mt-0.5"
+                  />
+                  <span>
+                    <span className="block text-fg">Allow subsessions</span>
+                    <span className="block text-[11px] text-fg-faint">
+                      This agent may delegate work only through the routes
+                      below.
+                    </span>
+                  </span>
+                </label>
+                {delegation.enabled ? (
+                  <div className="mt-3 flex flex-col gap-2">
+                    <label className="flex items-center justify-between gap-3 text-xs text-fg-muted">
+                      Maximum active children
+                      <input
+                        type="number"
+                        min={1}
+                        max={100}
+                        value={delegation.maxConcurrentChildren}
+                        onChange={(event) =>
+                          setDelegation((current) => ({
+                            ...current,
+                            maxConcurrentChildren: Math.min(
+                              100,
+                              Math.max(1, Number(event.target.value) || 1),
+                            ),
+                          }))
+                        }
+                        className="field h-8 w-20 px-2 text-[13px] text-fg"
+                      />
+                    </label>
+                    <p className="text-[11px] text-fg-faint">
+                      Allowed agents. Onward delegation is controlled per route.
+                    </p>
+                    {[
+                      { id: "same-agent", target: "self", name: "Same agent" },
+                      ...(data?.agents ?? [])
+                        .filter((candidate) => candidate.id !== agent.id)
+                        .map((candidate) => ({
+                          id: `agent:${candidate.id}`,
+                          target: candidate.id,
+                          name: candidate.name,
+                        })),
+                      {
+                        id: "any-agent",
+                        target: "*",
+                        name: "Any configured agent",
+                      },
+                    ].map((choice) => {
+                      const route = delegation.routes.find(
+                        (candidate) => candidate.id === choice.id,
+                      );
+                      return (
+                        <div
+                          key={choice.id}
+                          className="flex items-center gap-2 rounded-md border border-border px-2.5 py-1.5"
+                        >
+                          <label className="flex min-w-0 flex-1 items-center gap-2 text-xs text-fg-muted">
+                            <input
+                              type="checkbox"
+                              checked={Boolean(route)}
+                              onChange={(event) =>
+                                setDelegation((current) => ({
+                                  ...current,
+                                  routes: event.target.checked
+                                    ? [
+                                        ...current.routes,
+                                        {
+                                          id: choice.id,
+                                          target: choice.target,
+                                          allowFurtherDelegation: true,
+                                        },
+                                      ]
+                                    : current.routes.filter(
+                                        (candidate) =>
+                                          candidate.id !== choice.id,
+                                      ),
+                                }))
+                              }
+                            />
+                            <span className="truncate">{choice.name}</span>
+                          </label>
+                          {route ? (
+                            <label className="flex shrink-0 items-center gap-1.5 text-[11px] text-fg-faint">
+                              <input
+                                type="checkbox"
+                                checked={route.allowFurtherDelegation}
+                                onChange={(event) =>
+                                  setDelegation((current) => ({
+                                    ...current,
+                                    routes: current.routes.map((candidate) =>
+                                      candidate.id === choice.id
+                                        ? {
+                                            ...candidate,
+                                            allowFurtherDelegation:
+                                              event.target.checked,
+                                          }
+                                        : candidate,
+                                    ),
+                                  }))
+                                }
+                              />
+                              Can delegate
+                            </label>
+                          ) : null}
+                        </div>
+                      );
+                    })}
+                  </div>
+                ) : null}
+              </fieldset>
               <label className="flex flex-col gap-1 text-xs text-fg-muted">
                 Concurrent work
                 <select
@@ -809,6 +939,14 @@ function ProjectAgentBody({
             agent.connections.length > 0 ? agent.connections.join(", ") : "all",
           )}
           {fact("Skills", agent.skills ? agent.skills.join(", ") : "all")}
+          {fact(
+            "Delegation",
+            agent.delegation
+              ? agent.delegation.enabled
+                ? `${agent.delegation.maxConcurrentChildren} max, ${agent.delegation.routes.length} routes`
+                : "disabled"
+              : "10 max, same agent",
+          )}
           {agent.promptPreview && (
             <div className="mt-1 border-t border-border pt-2">
               <p className="mb-1 text-[11px] text-fg-faint">Persona</p>

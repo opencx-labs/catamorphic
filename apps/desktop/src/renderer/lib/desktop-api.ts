@@ -42,6 +42,19 @@ export type AgentSkillsSetting =
   | { mode: "all" }
   | { mode: "picked"; names: string[] };
 
+export interface AgentDelegationRoute {
+  id: string;
+  target: string;
+  description?: string;
+  allowFurtherDelegation: boolean;
+}
+
+export interface AgentDelegationPolicy {
+  enabled: boolean;
+  maxConcurrentChildren: number;
+  routes: AgentDelegationRoute[];
+}
+
 export interface AgentInfo {
   id: string;
   name: string;
@@ -64,6 +77,7 @@ export interface AgentInfo {
   skills: AgentSkillsSetting;
   /** Per-connection tool policies layered on the profile's (by id). */
   toolPolicies: Record<string, McpToolPolicy>;
+  delegation: AgentDelegationPolicy;
 }
 
 export interface AgentsData {
@@ -100,6 +114,7 @@ export interface ProjectAgentInfo {
   connections: string[];
   /** Picked skill names; null = every skill. */
   skills: string[] | null;
+  delegation: AgentDelegationPolicy | null;
   promptPreview: string | null;
   consent: "not-required" | "none" | "stale" | "ok";
   invalid: string | null;
@@ -143,6 +158,17 @@ export function projectAgentAsInfo(agent: ProjectAgentInfo): AgentInfo {
       ? { mode: "picked", names: agent.skills }
       : { mode: "all" },
     toolPolicies: {},
+    delegation: agent.delegation ?? {
+      enabled: true,
+      maxConcurrentChildren: 10,
+      routes: [
+        {
+          id: "same-agent",
+          target: "self",
+          allowFurtherDelegation: true,
+        },
+      ],
+    },
   };
 }
 
@@ -160,6 +186,7 @@ export interface CreateAgentInput {
   memory?: boolean;
   connections?: AgentConnectionsSetting;
   skills?: AgentSkillsSetting;
+  delegation?: AgentDelegationPolicy;
 }
 
 export interface UpdateAgentInput {
@@ -179,6 +206,7 @@ export interface UpdateAgentInput {
   skills?: AgentSkillsSetting;
   /** Per-connection tool policies (null clears). */
   toolPolicies?: Record<string, McpToolPolicy> | null;
+  delegation?: AgentDelegationPolicy;
 }
 
 /** A profile MCP connection as the renderer sees it (no secret values). */
@@ -696,7 +724,6 @@ export interface AppPrefs {
   desktopNotifications: boolean;
   sidebarOpen: boolean;
   lastProjectId?: string;
-  archivedSessionIds: string[];
   unreadSessionIds: string[];
 }
 

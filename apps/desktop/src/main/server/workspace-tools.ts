@@ -93,6 +93,36 @@ export interface SessionCoordinationBridge {
     title: string | null;
     messages: Array<{ role: string; content: string }>;
   } | null>;
+  send(
+    projectId: string,
+    ownSessionId: string,
+    peerSessionId: string,
+    content: string,
+    mode: "message_only" | "next_turn" | "interrupt",
+  ): Promise<unknown>;
+  spawn(
+    projectId: string,
+    sessionId: string,
+    input: {
+      routeId?: string;
+      agentId?: string;
+      task: string;
+      contextMode?: "fresh" | "inherit";
+      title?: string;
+    },
+  ): Promise<unknown>;
+  listSubsessions(projectId: string, sessionId: string): Promise<unknown[]>;
+  waitForSubsessions(
+    projectId: string,
+    sessionId: string,
+    input: { sessionIds?: string[]; timeoutMs?: number },
+  ): Promise<unknown[]>;
+  interruptSubsession(
+    projectId: string,
+    sessionId: string,
+    childSessionId: string,
+  ): Promise<void>;
+  requestAttention(projectId: string, sessionId: string): Promise<unknown>;
   setActivity(
     projectId: string,
     sessionId: string,
@@ -179,7 +209,7 @@ export function buildWorkspaceToolkit(
     {
       name: "list_project_sessions",
       description:
-        "List other active agent sessions in this project, including their current task, activity, running state, and checkout. Use this before concurrent edits so you can decide whether sharing, waiting, or using a worktree is safest.",
+        "List other agent sessions in this project, including subsessions and archived sessions, with their hierarchy, visibility, current task, activity, running state, and checkout.",
       parameters: {},
       execute: async (_input, ctx) => {
         if (!ctx.sessionId) throw new Error("This turn has no chat session.");
@@ -192,7 +222,7 @@ export function buildWorkspaceToolkit(
     {
       name: "read_project_session",
       description:
-        "Read a recent, bounded transcript from another visible session in this project. Use it when the task summary is not enough to understand what the other agent is changing.",
+        "Read a recent, bounded transcript from another session in this project, including an archived session. Use it when the summary is not enough to understand its work.",
       parameters: {
         session_id: z.string().min(1).describe("Peer session id"),
       },
@@ -209,6 +239,137 @@ export function buildWorkspaceToolkit(
         if (!transcript)
           throw new Error("That project session is not visible.");
         return boundedTranscript(transcript);
+      },
+    },
+    {
+      name: "send_project_session_message",
+      description:
+        "Send a message to another session in this project. Use message_only for context that should not start work, next_turn to queue work, or interrupt only when the other agent must change course immediately.",
+      parameters: {
+        session_id: z.string().min(1).describe("Target session id"),
+        message: z.string().min(1).describe("Message to send"),
+        delivery_mode: z
+          .enum(["message_only", "next_turn", "interrupt"])
+          .default("message_only"),
+      },
+      execute: async (input, ctx) => {
+        if (!ctx.sessionId) throw new Error("This turn has no chat session.");
+        if (!sessionCoordination) {
+          throw new Error("Session coordination is not available yet.");
+        }
+        return sessionCoordination.send(
+          ctx.projectId,
+          ctx.sessionId,
+          String(input.session_id),
+          String(input.message),
+          input.delivery_mode as "message_only" | "next_turn" | "interrupt",
+        );
+      },
+    },
+    {
+      name: "spawn_subsession",
+      description:
+        "Delegate one bounded task to a child session using an allowed delegation route. The child runs independently and reports its settled result back to this session.",
+      parameters: {
+        task: z.string().min(1).describe("Concrete task for the child"),
+        route_id: z.string().min(1).optional().describe("Allowed route id"),
+        agent_id: z
+          .string()
+          .min(1)
+          .optional()
+          .describe("Agent choice when the route allows it"),
+        context_mode: z.enum(["fresh", "inherit"]).default("fresh"),
+        title: z.string().min(1).max(500).optional(),
+      },
+      execute: async (input, ctx) => {
+        if (!ctx.sessionId) throw new Error("This turn has no chat session.");
+        if (!sessionCoordination) {
+          throw new Error("Session coordination is not available yet.");
+        }
+        return sessionCoordination.spawn(ctx.projectId, ctx.sessionId, {
+          task: String(input.task),
+          ...(input.route_id ? { routeId: String(input.route_id) } : {}),
+          ...(input.agent_id ? { agentId: String(input.agent_id) } : {}),
+          contextMode: input.context_mode as "fresh" | "inherit",
+          ...(input.title ? { title: String(input.title) } : {}),
+        });
+      },
+    },
+    {
+      name: "list_subsessions",
+      description:
+        "List direct child sessions created by this session, including their task, state, and session metadata.",
+      parameters: {},
+      execute: async (_input, ctx) => {
+        if (!ctx.sessionId) throw new Error("This turn has no chat session.");
+        if (!sessionCoordination) {
+          throw new Error("Session coordination is not available yet.");
+        }
+        return sessionCoordination.listSubsessions(
+          ctx.projectId,
+          ctx.sessionId,
+        );
+      },
+    },
+    {
+      name: "wait_for_subsessions",
+      description:
+        "Wait until at least one selected child session settles, or until the timeout. Use this when your work depends on delegated results.",
+      parameters: {
+        session_ids: z.array(z.string().min(1)).max(100).optional(),
+        timeout_ms: z.number().int().min(0).max(60_000).default(30_000),
+      },
+      execute: async (input, ctx) => {
+        if (!ctx.sessionId) throw new Error("This turn has no chat session.");
+        if (!sessionCoordination) {
+          throw new Error("Session coordination is not available yet.");
+        }
+        return sessionCoordination.waitForSubsessions(
+          ctx.projectId,
+          ctx.sessionId,
+          {
+            ...(input.session_ids
+              ? { sessionIds: input.session_ids as string[] }
+              : {}),
+            timeoutMs: Number(input.timeout_ms),
+          },
+        );
+      },
+    },
+    {
+      name: "interrupt_subsession",
+      description:
+        "Stop a direct child session that this session spawned. Its delegation is marked interrupted.",
+      parameters: {
+        session_id: z.string().min(1).describe("Child session id"),
+      },
+      execute: async (input, ctx) => {
+        if (!ctx.sessionId) throw new Error("This turn has no chat session.");
+        if (!sessionCoordination) {
+          throw new Error("Session coordination is not available yet.");
+        }
+        await sessionCoordination.interruptSubsession(
+          ctx.projectId,
+          ctx.sessionId,
+          String(input.session_id),
+        );
+        return { ok: true };
+      },
+    },
+    {
+      name: "request_user_attention",
+      description:
+        "Promote this session into the user's sidebar and mark it as needing attention. Use only for a result or decision the user should see, such as a merged pull request or required input.",
+      parameters: {},
+      execute: async (_input, ctx) => {
+        if (!ctx.sessionId) throw new Error("This turn has no chat session.");
+        if (!sessionCoordination) {
+          throw new Error("Session coordination is not available yet.");
+        }
+        return sessionCoordination.requestAttention(
+          ctx.projectId,
+          ctx.sessionId,
+        );
       },
     },
     {
