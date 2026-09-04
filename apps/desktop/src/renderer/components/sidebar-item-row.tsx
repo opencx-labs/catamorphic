@@ -53,6 +53,7 @@ export function SidebarItemRow<
   icon,
   menu,
   preview,
+  previewContent,
   active,
   labelContent,
   end,
@@ -70,6 +71,8 @@ export function SidebarItemRow<
   icon?: string | ReactNode;
   menu?: readonly TMenuEntry[];
   preview?: SidebarPreview | false;
+  /** Rich inspector body for built-in resources; uses the same hover shell. */
+  previewContent?: ReactNode;
   active?: boolean;
   labelContent?: ReactNode;
   end?: ReactNode;
@@ -99,7 +102,9 @@ export function SidebarItemRow<
   const [previewAnchor, setPreviewAnchor] =
     useState<SidebarPreviewAnchor | null>(null);
   const [previewOpen, setPreviewOpen] = useState(false);
-  const previewEnabled = preview !== undefined && preview !== false;
+  const previewEnabled =
+    previewContent !== undefined ||
+    (preview !== undefined && preview !== false);
 
   const disarmPreview = () => {
     clearTimeout(previewTimerRef.current);
@@ -352,7 +357,8 @@ export function SidebarItemRow<
           id={previewId}
           open={previewOpen}
           anchor={previewAnchor}
-          preview={preview}
+          preview={preview === false ? undefined : preview}
+          content={previewContent}
           fallbackTitle={label}
           onMouseEnter={() => {
             previewHoveredRef.current = true;

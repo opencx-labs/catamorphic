@@ -1201,10 +1201,14 @@ describe("agents and profiles", () => {
         label: "same-turn worktree edit checkpointed before next turn",
       },
     );
+    await run(
+      `visibleDock().querySelector('[data-testid="session-inspector-trigger"]').click(); return true;`,
+    );
     await runWait(
-      `const badge = visibleDock()?.querySelector('[data-testid="chat-checkout-badge"]');
-       return badge?.textContent.includes('catamorphic/');`,
-      { label: "active chat isolated branch badge" },
+      `const inspector = $('[data-testid="session-inspector-content"]');
+       return inspector?.textContent.includes('Checkout') &&
+         inspector.textContent.includes('catamorphic/');`,
+      { label: "active chat isolated checkout in session status" },
     );
   });
 

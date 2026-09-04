@@ -19,6 +19,7 @@ import {
   PanelLeft,
   Plus,
   Settings as SettingsIcon,
+  Share2,
   Sparkles,
   Wand2,
   Workflow as WorkflowIcon,
@@ -57,6 +58,7 @@ import {
   ElicitationModal,
   type PendingElicitation,
 } from "./components/elicitation-modal.js";
+import { FilesNav } from "./components/files-nav.js";
 import { GitNav } from "./components/git-nav.js";
 import { MobilePairingModal } from "./components/mobile-pairing-modal.js";
 import { PendingButton } from "./components/pending-button.js";
@@ -73,6 +75,7 @@ import { RemoteConnectModal } from "./components/remote-connect-modal.js";
 import { RemoteConnectionIndicator } from "./components/remote-connection-indicator.js";
 import { RemoteHistoryModal } from "./components/remote-history-modal.js";
 import { type RemoteFeatures, RemoteNav } from "./components/remote-nav.js";
+import { SessionInspectorContent } from "./components/session-inspector.js";
 import { ShortcutHint } from "./components/shortcut-hint.js";
 import { SidebarItemRow } from "./components/sidebar-item-row.js";
 import { SiteFavicon } from "./components/site-favicon.js";
@@ -100,6 +103,7 @@ import {
   type Profile,
   type ProfilesData,
   type ProjectAgentInfo,
+  type RemoteProjectStatus,
   type SessionCheckoutInfo,
   type SidebarConfig,
   type SidebarItem,
@@ -719,6 +723,11 @@ export function App() {
     files: string[];
     features: RemoteFeatures | undefined;
   } | null>(null);
+  const [remoteSurfaceState, setRemoteSurfaceState] = useState<{
+    projectId: string;
+    status: RemoteProjectStatus | null;
+  } | null>(null);
+  const syncingRemoteProjectsRef = useRef(new Set<string>());
   useEffect(() => {
     // Pull the pending link on mount (cold launch from an invite) and
     // whenever main nudges; main clears it once taken.
@@ -927,6 +936,68 @@ export function App() {
     ) ??
     projects[0];
   const projectId = activeProject?.id;
+  const remoteSurfaceResolved = Boolean(
+    projectId && remoteSurfaceState?.projectId === projectId,
+  );
+  const remoteSurfaceStatus = remoteSurfaceResolved
+    ? (remoteSurfaceState?.status ?? null)
+    : null;
+  const memberShell = !remoteSurfaceResolved
+    ? true
+    : remoteSurfaceStatus !== null &&
+      remoteSurfaceStatus.capabilities?.builder !== true;
+
+  useEffect(() => {
+    if (!projectId) {
+      setRemoteSurfaceState(null);
+      return;
+    }
+    let cancelled = false;
+    const refresh = (sync = false) => {
+      void desktopApi
+        .remoteStatus(projectId)
+        .then((status) => {
+          if (cancelled) return;
+          setRemoteSurfaceState({ projectId, status });
+          if (
+            sync &&
+            status?.connection.state === "connected" &&
+            !syncingRemoteProjectsRef.current.has(projectId)
+          ) {
+            syncingRemoteProjectsRef.current.add(projectId);
+            void (async () => {
+              if (status.local.modified.length || status.local.deleted.length) {
+                const shipped = await desktopApi.remoteShip(projectId);
+                if (shipped.conflicts.length || shipped.failed.length) return;
+              }
+              await desktopApi.remoteSync(projectId);
+              const nextStatus = await desktopApi.remoteStatus(projectId);
+              if (!cancelled) {
+                setRemoteSurfaceState({ projectId, status: nextStatus });
+              }
+            })()
+              .catch(() => undefined)
+              .finally(() => {
+                syncingRemoteProjectsRef.current.delete(projectId);
+              });
+          }
+        })
+        .catch(() => {
+          if (!cancelled) setRemoteSurfaceState({ projectId, status: null });
+        });
+    };
+    refresh(true);
+    const unsubscribe = desktopApi.onGitChanged((event) => {
+      if (event.projectId === projectId) refresh(true);
+    });
+    const syncOnFocus = () => refresh(true);
+    window.addEventListener("focus", syncOnFocus);
+    return () => {
+      cancelled = true;
+      unsubscribe();
+      window.removeEventListener("focus", syncOnFocus);
+    };
+  }, [projectId]);
 
   const startWithAgent = async (): Promise<void> => {
     const project = await desktopApi.createDefaultProject();
@@ -943,15 +1014,27 @@ export function App() {
   // Project policy (ADR 0062): the committed manifest may disable
   // incognito sessions for this project's members.
   const [incognitoAllowed, setIncognitoAllowed] = useState(true);
+  const [startingActions, setStartingActions] = useState<
+    Array<{ label: string; prompt: string; agentId?: string }>
+  >([]);
   useEffect(() => {
-    if (!projectId) return;
+    if (!projectId) {
+      setStartingActions([]);
+      return;
+    }
+    setStartingActions([]);
+    setIncognitoAllowed(true);
     let cancelled = false;
-    void desktopApi
-      .projectAllowIncognito(projectId)
-      .then((allowed) => {
-        if (!cancelled) setIncognitoAllowed(allowed);
-      })
-      .catch(() => {});
+    void Promise.allSettled([
+      desktopApi.projectAllowIncognito(projectId),
+      desktopApi.projectStartingActions(projectId),
+    ]).then(([allowed, actions]) => {
+      if (cancelled) return;
+      setIncognitoAllowed(
+        allowed.status === "fulfilled" ? allowed.value : true,
+      );
+      setStartingActions(actions.status === "fulfilled" ? actions.value : []);
+    });
     return () => {
       cancelled = true;
     };
@@ -1497,6 +1580,7 @@ export function App() {
   // (skill palette rows, post-auth continuations) speaks into an already
   // open chat. Sends queue behind an in-flight turn like composer sends.
   const chatSendersRef = useRef(new Map<string, (message: string) => void>());
+  const editorShareHandlersRef = useRef(new Map<string, () => Promise<void>>());
 
   // Webview guest WebContents ids per browser tab — the agent bridge
   // drives pages from the main process by guest id.
@@ -1986,12 +2070,17 @@ export function App() {
 
   // Palette "Send to agent": a new chat born with its first message
   // attached; ChatDock auto-sends it on mount.
-  const sendToAgent = (message: string, mode: "float" | "tab") => {
+  const sendToAgent = (
+    message: string,
+    mode: "float" | "tab",
+    agentId?: string,
+  ) => {
     if (!requireAgents()) return;
     updateWorkspace((ws) => {
       const entry: ChatDockEntry = {
         ...newChatEntry(mode === "tab" ? "tab" : "partial"),
         pendingMessage: message,
+        ...(agentId ? { agentId } : {}),
       };
       return {
         ...ws,
@@ -2359,13 +2448,16 @@ export function App() {
 
   const updateSession = useUpdateAgentSession(projectId);
   const forkSession = useForkAgentSession(projectId);
+  const [sessionInspectRequests, setSessionInspectRequests] = useState<
+    Record<string, number>
+  >({});
 
   /**
    * Fork a chat from one of its assistant messages: the server copies the
    * transcript into a new session (same agent, parent recorded); the fork
    * opens tiled beside the current view and chips onto the parent's rail.
    */
-  const forkChat = (parent: ChatDockEntry, messageId: string) => {
+  const forkChat = (parent: ChatDockEntry, messageId?: string) => {
     if (!parent.sessionId || forkSession.isPending) return;
     forkSession.mutate(
       { sessionId: parent.sessionId, messageId },
@@ -3105,6 +3197,15 @@ export function App() {
     "close-tab": closeActiveSurface,
     "setup-agent": () => setWizardModalOpen(true),
     "default-agent": () => openPalettePicker("default-agent"),
+    "session-status": () => {
+      const chat = actionChat(workspaceRef.current);
+      if (!chat) return;
+      revealChat(chat.localId);
+      setSessionInspectRequests((current) => ({
+        ...current,
+        [chat.localId]: (current[chat.localId] ?? 0) + 1,
+      }));
+    },
     "switch-agent": () => openPalettePicker("switch-agent"),
     "configure-agent": () => openPalettePicker("configure-agent"),
     "change-effort": () => openPalettePicker("effort"),
@@ -4253,6 +4354,7 @@ export function App() {
       Object.keys(projectAgentNames).length > 0,
     "switch-agent":
       focusedChat !== undefined && paletteSwitchableAgentIds.size > 0,
+    "session-status": focusedChat !== undefined,
     // Project-agent models are committed in their project definition, so
     // the mutable model picker only applies to configured profile agents.
     "switch-model":
@@ -4275,6 +4377,7 @@ export function App() {
         onSelectProject: selectProject,
         onSwitchProfile: switchProfile,
         onSendToAgent: sendToAgent,
+        startingActions,
         onRunSkill: runSkill,
         actionHandlers,
         actionAvailability: paletteActionAvailability,
@@ -4374,42 +4477,49 @@ export function App() {
 
           <div className="min-h-0 flex-1 overflow-y-auto px-2">
             {projectId &&
-              (sidebarConfig?.sections ?? []).map((section, index) => (
-                <ConfiguredSection
-                  // biome-ignore lint/suspicious/noArrayIndexKey: sections have no id; the same type may appear twice, and order IS identity here
-                  key={`${section.type}:${index}`}
-                  section={section}
-                  projectId={projectId}
-                  profileId={activeProfile?.id}
-                  activeTab={activeTab}
-                  activeChatSessionId={
-                    workspace.chats.find(
-                      (chat) => chat.localId === workspace.activeChatId,
-                    )?.sessionId
-                  }
-                  keybindingLabel={formatBinding(
-                    keybindings["new-floating-chat"],
-                  )}
-                  agentsData={agentsData}
-                  defaultAgentId={effectiveDefaultAgentId}
-                  projectAgentNames={projectAgentNames}
-                  archivedSessionIds={archivedSessionIds}
-                  unreadSessionIds={unreadSessionIds}
-                  onOpenTab={openTab}
-                  onNewChat={() => addChat()}
-                  onOpenSession={openSession}
-                  onSessionAction={applySessionAction}
-                  onOpenUrl={openUrl}
-                  onOpenFile={(filePath) => openEditorTab({ filePath })}
-                  onOpenHistory={setRemoteHistoryPath}
-                  onPublish={(path, features) =>
-                    setRemotePublish({ path, features })
-                  }
-                  onPropose={(files, features) =>
-                    setRemotePropose({ files, features })
-                  }
-                />
-              ))}
+              (sidebarConfig?.sections ?? [])
+                .filter(
+                  (section) =>
+                    !memberShell ||
+                    !["git", "prs", "remote"].includes(section.type),
+                )
+                .map((section, index) => (
+                  <ConfiguredSection
+                    // biome-ignore lint/suspicious/noArrayIndexKey: sections have no id; the same type may appear twice, and order IS identity here
+                    key={`${section.type}:${index}`}
+                    section={section}
+                    memberShell={memberShell}
+                    projectId={projectId}
+                    profileId={activeProfile?.id}
+                    activeTab={activeTab}
+                    activeChatSessionId={
+                      workspace.chats.find(
+                        (chat) => chat.localId === workspace.activeChatId,
+                      )?.sessionId
+                    }
+                    keybindingLabel={formatBinding(
+                      keybindings["new-floating-chat"],
+                    )}
+                    agentsData={agentsData}
+                    defaultAgentId={effectiveDefaultAgentId}
+                    projectAgentNames={projectAgentNames}
+                    archivedSessionIds={archivedSessionIds}
+                    unreadSessionIds={unreadSessionIds}
+                    onOpenTab={openTab}
+                    onNewChat={() => addChat()}
+                    onOpenSession={openSession}
+                    onSessionAction={applySessionAction}
+                    onOpenUrl={openUrl}
+                    onOpenFile={(filePath) => openEditorTab({ filePath })}
+                    onOpenHistory={setRemoteHistoryPath}
+                    onPublish={(path, features) =>
+                      setRemotePublish({ path, features })
+                    }
+                    onPropose={(files, features) =>
+                      setRemotePropose({ files, features })
+                    }
+                  />
+                ))}
           </div>
 
           <footer className="border-t border-border p-2">
@@ -4521,6 +4631,41 @@ export function App() {
               }}
             />
           )}
+          {(() => {
+            const editorId = workspace.activeTabKey?.startsWith("editor:")
+              ? workspace.activeTabKey.slice("editor:".length)
+              : undefined;
+            const editor = editorId
+              ? workspace.editors.find(
+                  (candidate) => candidate.localId === editorId,
+                )
+              : undefined;
+            if (
+              !editor?.filePath?.startsWith("store/") ||
+              !remoteSurfaceStatus ||
+              remoteSurfaceStatus.capabilities?.features.publications === false
+            ) {
+              return null;
+            }
+            return (
+              <ShortcutHint label="Share this file">
+                <button
+                  type="button"
+                  onClick={() => {
+                    const share = editorShareHandlersRef.current.get(
+                      editor.localId,
+                    );
+                    if (share) void share().catch(() => undefined);
+                  }}
+                  className="app-no-drag grid size-7 shrink-0 cursor-pointer place-items-center rounded-md text-fg-muted transition-colors hover:bg-bg-overlay hover:text-fg"
+                  aria-label="Share this file"
+                  data-testid="surface-share"
+                >
+                  <Share2 className="size-3.5" />
+                </button>
+              </ShortcutHint>
+            );
+          })()}
         </div>
 
         {projectId ? (
@@ -4782,6 +4927,26 @@ export function App() {
                       onDirtyChange={(dirty) =>
                         onEditorState(editor.localId, { dirty })
                       }
+                      registerShare={(share) => {
+                        editorShareHandlersRef.current.set(
+                          editor.localId,
+                          share,
+                        );
+                      }}
+                      onShare={(path) =>
+                        setRemotePublish({
+                          path,
+                          features: remoteSurfaceStatus?.capabilities?.features,
+                        })
+                      }
+                      onSaved={async (path) => {
+                        if (
+                          path.startsWith("store/") &&
+                          remoteSurfaceStatus?.connection.state === "connected"
+                        ) {
+                          await desktopApi.remoteShip(projectId);
+                        }
+                      }}
                     />
                   </Suspense>
                 </div>
@@ -4954,6 +5119,22 @@ export function App() {
                   });
                 }}
                 onFork={(messageId) => forkChat(entry, messageId)}
+                onForkCurrent={() => forkChat(entry)}
+                archived={Boolean(
+                  entry.sessionId && archivedSessionIds.has(entry.sessionId),
+                )}
+                onArchive={
+                  entry.sessionId
+                    ? () =>
+                        applySessionAction(
+                          entry.sessionId!,
+                          archivedSessionIds.has(entry.sessionId!)
+                            ? "unarchive"
+                            : "archive",
+                        )
+                    : undefined
+                }
+                inspectRequestNonce={sessionInspectRequests[entry.localId]}
                 onOpenParent={
                   chatForks[entry.localId]
                     ? () => openParentChat(entry)
@@ -5233,6 +5414,7 @@ export function App() {
 /** One sidebar section, shaped by the user's sidebar.js config. */
 function ConfiguredSection({
   section,
+  memberShell,
   projectId,
   profileId,
   activeTab,
@@ -5254,6 +5436,7 @@ function ConfiguredSection({
   onPropose,
 }: {
   section: SidebarSectionConfig;
+  memberShell: boolean;
   projectId: string;
   profileId?: string;
   activeTab?: WorkspaceTab;
@@ -5321,6 +5504,23 @@ function ConfiguredSection({
               active={activeTab?.kind === "app" ? activeTab.name : undefined}
               onEmptyChange={setEmpty}
               onSelect={(appName) => onOpenTab({ kind: "app", name: appName })}
+            />
+          </SidebarSection>
+        );
+      case "files":
+        return (
+          <SidebarSection
+            title={section.title ?? "Files"}
+            defaultOpen={defaultOpen}
+          >
+            <FilesNav
+              projectId={projectId}
+              contentOnly={memberShell}
+              activePath={
+                activeTab?.kind === "editor" ? activeTab.name : undefined
+              }
+              onEmptyChange={setEmpty}
+              onOpen={onOpenFile}
             />
           </SidebarSection>
         );
@@ -5816,6 +6016,15 @@ function SessionsNav({
                     : []),
                 ],
               }}
+              previewContent={
+                <SessionInspectorContent
+                  session={session}
+                  fallbackTitle={sessionLabel(session)}
+                  agentName={agentName}
+                  checkout={checkout ?? null}
+                  incognito={false}
+                />
+              }
               end={
                 <>
                   {(session.attentionRequired ||

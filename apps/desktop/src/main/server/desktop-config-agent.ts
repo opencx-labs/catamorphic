@@ -100,9 +100,11 @@ layer that is in effect. A change meant for teammates too belongs in the
 shared \`.catamorphic/sidebar.js\`; "just for me" / "just in this
 project" belongs in \`sidebar.local.js\`.
 
-Built-in section types: \`workflows\`, \`apps\`, \`chats\`, \`bookmarks\`,
-\`git\` (uncommitted changes per git worktree; clicking a file opens its
-diff), \`prs\` (the project's open pull requests).
+Built-in section types: \`workflows\`, \`apps\`, \`chats\`, \`files\`,
+\`bookmarks\`, \`git\` (uncommitted changes per git worktree; clicking a
+file opens its diff), \`prs\` (the project's open pull requests), and the
+legacy manual \`remote\` controls. Member views automatically omit
+\`git\`, \`prs\`, and \`remote\`; builder views retain them.
 Bookmarks are real browser bookmarks: the user creates them with the
 star in the address bar; you never hand-write bookmark data here, you
 only control how the section is presented.
@@ -151,6 +153,30 @@ It is evaluated in a sandbox: no \`require\`, no I/O, no async. An invalid
 file falls back to the default sidebar, so verify your edit is syntactically
 correct. Preserve the user's existing sections unless they asked otherwise,
 and keep the explanatory comments at the top intact.
+
+## Project New Tab actions
+
+A project may add up to six small starting actions to the ordinary New Tab
+palette through \`.catamorphic/project.json\`. They are absent when the
+project does not configure them. Preserve the rest of the manifest:
+
+\`\`\`json
+{
+  "startingActions": [
+    {
+      "label": "Prepare customer briefing",
+      "prompt": "Prepare the customer briefing from the company context.",
+      "agent": "csm",
+      "segments": ["member"]
+    }
+  ]
+}
+\`\`\`
+
+\`agent\` is an optional project-agent slug. \`segments\` is optional and
+may contain \`"member"\`, \`"builder"\`, or \`"all"\`; omitting it shows the
+action to both roles. Keep labels short and prompts complete enough to run
+without another setup step.
 
 ## Color theme
 

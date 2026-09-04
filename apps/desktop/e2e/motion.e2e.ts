@@ -1,3 +1,6 @@
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { type AppHandle, launchApp, setReactValueJs } from "./harness.js";
 
@@ -29,13 +32,31 @@ const DURATION_EXCEPTIONS: Record<string, number> = {
 };
 
 let app: AppHandle;
+let pairingDist: string;
 
 beforeAll(async () => {
-  app = await launchApp();
+  pairingDist = fs.mkdtempSync(path.join(os.tmpdir(), "motion-pwa-stub-"));
+  fs.writeFileSync(
+    path.join(pairingDist, "index.html"),
+    "<!doctype html><title>motion-pwa-stub</title>",
+  );
+  fs.writeFileSync(
+    path.join(pairingDist, "manifest.webmanifest"),
+    JSON.stringify({ name: "Catamorphic", start_url: "/" }),
+  );
+  app = await launchApp({
+    // Motion verification must not block on the host's macOS local-network
+    // permission prompt. The HTTP pairing contract has its own E2E suite.
+    env: {
+      CATAMORPHIC_E2E_MOBILE_PAIRING_ADDRESS: "127.0.0.1",
+      CATAMORPHIC_PWA_DIST: pairingDist,
+    },
+  });
 });
 
 afterAll(async () => {
   await app?.stop();
+  fs.rmSync(pairingDist, { recursive: true, force: true });
 });
 
 const helpers = `

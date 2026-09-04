@@ -19,6 +19,8 @@ export interface CreateAgentSessionInput {
   agentId?: string;
   effort?: "low" | "medium" | "high" | "xhigh" | "max";
   environment?: string;
+  /** Surface creating the session. Provenance only; never grants access. */
+  source?: AgentSession["source"];
 }
 
 /**

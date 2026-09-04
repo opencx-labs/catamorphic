@@ -85,6 +85,7 @@ export function registerAgentRoutes(app: FastifyInstance, ctx: RouteContext) {
             agentId: request.body.agentId,
             effort: request.body.effort,
             environment: request.body.environment,
+            source: request.body.source,
           },
         );
         return reply.status(201).send(session);
@@ -179,6 +180,7 @@ export function registerAgentRoutes(app: FastifyInstance, ctx: RouteContext) {
             ...(request.body.provider
               ? { provider: request.body.provider }
               : {}),
+            ...(request.body.source ? { source: request.body.source } : {}),
             ...(request.body.agentSlug
               ? { agentSlug: request.body.agentSlug }
               : {}),

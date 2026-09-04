@@ -209,8 +209,10 @@ describeIf("scoped agent sessions (ADR 0055)", () => {
     ).rejects.toThrow(AccessDeniedError);
     const session = await sessions.create(viewer, projectId, {
       agentId: csmAgentId,
+      source: "slack",
     });
     expect(session.agentId).toBe(csmAgentId);
+    expect(session.source).toBe("slack");
     // ...and cannot switch it to an agent outside the scope.
     await expect(
       sessions.update(viewer, projectId, session.id, { agentId: salesAgentId }),

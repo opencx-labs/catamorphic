@@ -9,6 +9,7 @@ import {
   Check,
   ChevronLeft,
   ChevronRight,
+  CircleDot,
   Columns2,
   Cpu,
   FileCode,
@@ -100,6 +101,7 @@ type CommitMode = "replace" | "tab" | "side";
  * to Zap.
  */
 const ACTION_ICONS: Partial<Record<ActionId, LucideIcon>> = {
+  "session-status": CircleDot,
   "continue-on-mobile": Smartphone,
   "new-incognito-chat": Ghost,
   "new-floating-chat": MessageSquarePlus,
@@ -461,6 +463,7 @@ export function CommandPalette({
   onSelectProject,
   onSwitchProfile,
   onSendToAgent,
+  startingActions,
   onRunSkill,
   actionHandlers,
   actionAvailability,
@@ -499,7 +502,13 @@ export function CommandPalette({
   onOpenSession: (session: AgentSession) => void;
   onSelectProject: (id: string) => void;
   onSwitchProfile: (profile: Profile) => void;
-  onSendToAgent: (message: string, mode: "float" | "tab") => void;
+  onSendToAgent: (
+    message: string,
+    mode: "float" | "tab",
+    agentId?: string,
+  ) => void;
+  /** Project-authored, caller-resolved zero-state actions. Empty means no UI. */
+  startingActions: Array<{ label: string; prompt: string; agentId?: string }>;
   /**
    * A skill row was committed: send its invocation message to an agent —
    * into the focused chat when one exists, else a new chat in `mode`.
@@ -837,6 +846,27 @@ export function CommandPalette({
     incognitoAllowed,
     actionAvailability,
   ]);
+
+  const startingActionItems = useMemo<PaletteItem[]>(
+    () =>
+      startingActions.map(
+        (action, index): PaletteItem => ({
+          id: `starter:${index}:${action.label}`,
+          icon: Sparkles,
+          label: action.label,
+          detail: "Start with your project agent",
+          keywords: [action.label, "start", "project", "agent"],
+          kind: "navigate",
+          run: (mode) =>
+            onSendToAgent(
+              action.prompt,
+              mode === "tab" ? "tab" : "float",
+              action.agentId,
+            ),
+        }),
+      ),
+    [startingActions, onSendToAgent],
+  );
 
   // Skills as commands (ADR 0052): a row is just a message send — into the
   // focused chat when one exists (an action, chat highlighted like other
@@ -1441,6 +1471,7 @@ export function CommandPalette({
 
     if (!trimmed) {
       return [
+        ...startingActionItems,
         ...actionItems,
         ...skillItems,
         ...projectItems,
@@ -1451,6 +1482,7 @@ export function CommandPalette({
     }
 
     const scored = [
+      ...startingActionItems,
       ...actionItems,
       ...skillItems,
       ...projectItems,
@@ -1513,6 +1545,7 @@ export function CommandPalette({
     focusedChat,
     enterMode,
     actionItems,
+    startingActionItems,
     skillItems,
     projectItems,
     profileItems,

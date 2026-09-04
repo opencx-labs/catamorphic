@@ -6008,6 +6008,8 @@ export interface paths {
                                 projectId: string;
                                 externalUserId: string;
                                 provider: string;
+                                /** @enum {string} */
+                                source: "desktop" | "mobile" | "slack" | "claude" | "mcp" | "api";
                                 providerSessionId: string | null;
                                 /** Format: uuid */
                                 sandboxId: string | null;
@@ -6088,6 +6090,8 @@ export interface paths {
                         /** @enum {string} */
                         effort?: "low" | "medium" | "high" | "xhigh" | "max";
                         environment?: string;
+                        /** @enum {string} */
+                        source?: "desktop" | "mobile" | "slack" | "claude" | "mcp" | "api";
                     };
                 };
             };
@@ -6105,6 +6109,8 @@ export interface paths {
                             projectId: string;
                             externalUserId: string;
                             provider: string;
+                            /** @enum {string} */
+                            source: "desktop" | "mobile" | "slack" | "claude" | "mcp" | "api";
                             providerSessionId: string | null;
                             /** Format: uuid */
                             sandboxId: string | null;
@@ -6281,6 +6287,8 @@ export interface paths {
                         title?: string | null;
                         icon?: string | null;
                         provider?: string;
+                        /** @enum {string} */
+                        source?: "desktop" | "mobile" | "slack" | "claude" | "mcp" | "api";
                         todos: {
                             /** Format: uuid */
                             id: string;
@@ -6350,6 +6358,8 @@ export interface paths {
                             projectId: string;
                             externalUserId: string;
                             provider: string;
+                            /** @enum {string} */
+                            source: "desktop" | "mobile" | "slack" | "claude" | "mcp" | "api";
                             providerSessionId: string | null;
                             /** Format: uuid */
                             sandboxId: string | null;
@@ -6531,6 +6541,8 @@ export interface paths {
                             projectId: string;
                             externalUserId: string;
                             provider: string;
+                            /** @enum {string} */
+                            source: "desktop" | "mobile" | "slack" | "claude" | "mcp" | "api";
                             providerSessionId: string | null;
                             /** Format: uuid */
                             sandboxId: string | null;
@@ -6651,6 +6663,8 @@ export interface paths {
                             projectId: string;
                             externalUserId: string;
                             provider: string;
+                            /** @enum {string} */
+                            source: "desktop" | "mobile" | "slack" | "claude" | "mcp" | "api";
                             providerSessionId: string | null;
                             /** Format: uuid */
                             sandboxId: string | null;
@@ -6811,6 +6825,8 @@ export interface paths {
                             projectId: string;
                             externalUserId: string;
                             provider: string;
+                            /** @enum {string} */
+                            source: "desktop" | "mobile" | "slack" | "claude" | "mcp" | "api";
                             providerSessionId: string | null;
                             /** Format: uuid */
                             sandboxId: string | null;
@@ -6918,6 +6934,8 @@ export interface paths {
                             projectId: string;
                             externalUserId: string;
                             provider: string;
+                            /** @enum {string} */
+                            source: "desktop" | "mobile" | "slack" | "claude" | "mcp" | "api";
                             providerSessionId: string | null;
                             /** Format: uuid */
                             sandboxId: string | null;
@@ -7094,6 +7112,8 @@ export interface paths {
                             projectId: string;
                             externalUserId: string;
                             provider: string;
+                            /** @enum {string} */
+                            source: "desktop" | "mobile" | "slack" | "claude" | "mcp" | "api";
                             providerSessionId: string | null;
                             /** Format: uuid */
                             sandboxId: string | null;
@@ -7764,6 +7784,8 @@ export interface paths {
                             projectId: string;
                             externalUserId: string;
                             provider: string;
+                            /** @enum {string} */
+                            source: "desktop" | "mobile" | "slack" | "claude" | "mcp" | "api";
                             providerSessionId: string | null;
                             /** Format: uuid */
                             sandboxId: string | null;

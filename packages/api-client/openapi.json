@@ -12887,6 +12887,17 @@
                   "environment": {
                     "type": "string",
                     "minLength": 1
+                  },
+                  "source": {
+                    "type": "string",
+                    "enum": [
+                      "desktop",
+                      "mobile",
+                      "slack",
+                      "claude",
+                      "mcp",
+                      "api"
+                    ]
                   }
                 }
               }
@@ -12928,6 +12939,17 @@
                     },
                     "provider": {
                       "type": "string"
+                    },
+                    "source": {
+                      "type": "string",
+                      "enum": [
+                        "desktop",
+                        "mobile",
+                        "slack",
+                        "claude",
+                        "mcp",
+                        "api"
+                      ]
                     },
                     "providerSessionId": {
                       "nullable": true,
@@ -13086,6 +13108,7 @@
                     "projectId",
                     "externalUserId",
                     "provider",
+                    "source",
                     "providerSessionId",
                     "sandboxId",
                     "environment",
@@ -13379,6 +13402,17 @@
                           "provider": {
                             "type": "string"
                           },
+                          "source": {
+                            "type": "string",
+                            "enum": [
+                              "desktop",
+                              "mobile",
+                              "slack",
+                              "claude",
+                              "mcp",
+                              "api"
+                            ]
+                          },
                           "providerSessionId": {
                             "nullable": true,
                             "type": "string"
@@ -13545,6 +13579,7 @@
                           "projectId",
                           "externalUserId",
                           "provider",
+                          "source",
                           "providerSessionId",
                           "sandboxId",
                           "environment",
@@ -13645,6 +13680,17 @@
                   "provider": {
                     "type": "string",
                     "maxLength": 100
+                  },
+                  "source": {
+                    "type": "string",
+                    "enum": [
+                      "desktop",
+                      "mobile",
+                      "slack",
+                      "claude",
+                      "mcp",
+                      "api"
+                    ]
                   },
                   "todos": {
                     "maxItems": 50,
@@ -13868,6 +13914,17 @@
                     "provider": {
                       "type": "string"
                     },
+                    "source": {
+                      "type": "string",
+                      "enum": [
+                        "desktop",
+                        "mobile",
+                        "slack",
+                        "claude",
+                        "mcp",
+                        "api"
+                      ]
+                    },
                     "providerSessionId": {
                       "nullable": true,
                       "type": "string"
@@ -14025,6 +14082,7 @@
                     "projectId",
                     "externalUserId",
                     "provider",
+                    "source",
                     "providerSessionId",
                     "sandboxId",
                     "environment",
@@ -14322,6 +14380,17 @@
                     "provider": {
                       "type": "string"
                     },
+                    "source": {
+                      "type": "string",
+                      "enum": [
+                        "desktop",
+                        "mobile",
+                        "slack",
+                        "claude",
+                        "mcp",
+                        "api"
+                      ]
+                    },
                     "providerSessionId": {
                       "nullable": true,
                       "type": "string"
@@ -14479,6 +14548,7 @@
                     "projectId",
                     "externalUserId",
                     "provider",
+                    "source",
                     "providerSessionId",
                     "sandboxId",
                     "environment",
@@ -14638,6 +14708,17 @@
                     "provider": {
                       "type": "string"
                     },
+                    "source": {
+                      "type": "string",
+                      "enum": [
+                        "desktop",
+                        "mobile",
+                        "slack",
+                        "claude",
+                        "mcp",
+                        "api"
+                      ]
+                    },
                     "providerSessionId": {
                       "nullable": true,
                       "type": "string"
@@ -14795,6 +14876,7 @@
                     "projectId",
                     "externalUserId",
                     "provider",
+                    "source",
                     "providerSessionId",
                     "sandboxId",
                     "environment",
@@ -15061,6 +15143,17 @@
                     },
                     "provider": {
                       "type": "string"
+                    },
+                    "source": {
+                      "type": "string",
+                      "enum": [
+                        "desktop",
+                        "mobile",
+                        "slack",
+                        "claude",
+                        "mcp",
+                        "api"
+                      ]
                     },
                     "providerSessionId": {
                       "nullable": true,
@@ -15422,6 +15515,7 @@
                     "projectId",
                     "externalUserId",
                     "provider",
+                    "source",
                     "providerSessionId",
                     "sandboxId",
                     "environment",
@@ -15540,6 +15634,17 @@
                     "provider": {
                       "type": "string"
                     },
+                    "source": {
+                      "type": "string",
+                      "enum": [
+                        "desktop",
+                        "mobile",
+                        "slack",
+                        "claude",
+                        "mcp",
+                        "api"
+                      ]
+                    },
                     "providerSessionId": {
                       "nullable": true,
                       "type": "string"
@@ -15697,6 +15802,7 @@
                     "projectId",
                     "externalUserId",
                     "provider",
+                    "source",
                     "providerSessionId",
                     "sandboxId",
                     "environment",
@@ -15815,6 +15921,17 @@
                     "provider": {
                       "type": "string"
                     },
+                    "source": {
+                      "type": "string",
+                      "enum": [
+                        "desktop",
+                        "mobile",
+                        "slack",
+                        "claude",
+                        "mcp",
+                        "api"
+                      ]
+                    },
                     "providerSessionId": {
                       "nullable": true,
                       "type": "string"
@@ -15972,6 +16089,7 @@
                     "projectId",
                     "externalUserId",
                     "provider",
+                    "source",
                     "providerSessionId",
                     "sandboxId",
                     "environment",
@@ -17148,6 +17266,17 @@
                     "provider": {
                       "type": "string"
                     },
+                    "source": {
+                      "type": "string",
+                      "enum": [
+                        "desktop",
+                        "mobile",
+                        "slack",
+                        "claude",
+                        "mcp",
+                        "api"
+                      ]
+                    },
                     "providerSessionId": {
                       "nullable": true,
                       "type": "string"
@@ -17305,6 +17434,7 @@
                     "projectId",
                     "externalUserId",
                     "provider",
+                    "source",
                     "providerSessionId",
                     "sandboxId",
                     "environment",

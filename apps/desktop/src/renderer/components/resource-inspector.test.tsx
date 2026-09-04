@@ -80,6 +80,38 @@ describe("ResourceInspector", () => {
     expect(dialog?.className).toContain("animate-pop-in");
   });
 
+  it("pins on click and dismisses on an outside pointer", async () => {
+    await act(async () => {
+      root.render(
+        <ResourceInspector
+          label="Session details"
+          content={<button type="button">Archive</button>}
+          pinOnClick
+        >
+          {(props) => (
+            <button type="button" {...props}>
+              Status
+            </button>
+          )}
+        </ResourceInspector>,
+      );
+    });
+    const trigger = container.querySelector("button");
+    await act(async () => trigger?.click());
+    expect(document.querySelector('[role="dialog"]')?.className).toContain(
+      "animate-pop-in",
+    );
+
+    await act(async () =>
+      document.body.dispatchEvent(
+        new MouseEvent("pointerdown", { bubbles: true }),
+      ),
+    );
+    expect(document.querySelector('[role="dialog"]')?.className).toContain(
+      "animate-pop-out",
+    );
+  });
+
   it("flips left and clamps vertically at viewport edges", () => {
     expect(
       computeInspectorPosition({

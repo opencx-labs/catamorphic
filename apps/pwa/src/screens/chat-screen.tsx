@@ -76,6 +76,7 @@ function Chat({
     ? undefined
     : me.data?.projects.find((p) => p.projectId === projectId)?.agents[0];
   const chat = useAgentChat(projectId, {
+    source: "mobile",
     sessionId: sessionId ?? undefined,
     idleRefetchIntervalMs: 3_000,
     ...(scopedAgent ? { agentId: `project:${projectId}:${scopedAgent}` } : {}),

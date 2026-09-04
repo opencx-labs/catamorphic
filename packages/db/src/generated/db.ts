@@ -110,6 +110,7 @@ export interface AgentSessions {
   provider: string;
   provider_session_id: string | null;
   sandbox_id: string | null;
+  source: Generated<string>;
   status: Generated<string>;
   system_prompt: string | null;
   title: string | null;

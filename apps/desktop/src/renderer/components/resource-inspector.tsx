@@ -1,6 +1,7 @@
 import {
   type ReactNode,
   type RefObject,
+  useCallback,
   useEffect,
   useId,
   useLayoutEffect,
@@ -54,6 +55,7 @@ export interface ResourceInspectorTriggerProps {
   onPointerEnter: () => void;
   onPointerLeave: () => void;
   onPointerDown: () => void;
+  onClick: () => void;
   onFocus: () => void;
   onBlur: (event: React.FocusEvent<HTMLButtonElement>) => void;
   "aria-details"?: string;
@@ -69,11 +71,17 @@ export function ResourceInspector({
   children,
   content,
   delayMs = RESOURCE_INSPECTOR_DELAY_MS,
+  pinOnClick = false,
+  openRequest,
 }: {
   label: string;
   children: (props: ResourceInspectorTriggerProps) => ReactNode;
   content: ReactNode;
   delayMs?: number;
+  /** Keep the inspector open after clicking its trigger. */
+  pinOnClick?: boolean;
+  /** Changing this value opens and pins the inspector (palette/status use). */
+  openRequest?: number;
 }) {
   const id = useId();
   const triggerRef = useRef<HTMLButtonElement>(null);
@@ -86,11 +94,12 @@ export function ResourceInspector({
   const triggerInterested = useRef(false);
   const panelInterested = useRef(false);
   const pointerFocus = useRef(false);
+  const pinned = useRef(false);
   const [anchor, setAnchor] = useState<InspectorAnchor | null>(null);
   const [open, setOpen] = useState(false);
   const [mounted, setMounted] = useState(false);
 
-  const show = () => {
+  const show = useCallback(() => {
     const rect = triggerRef.current?.getBoundingClientRect();
     if (!rect) return;
     setAnchor({
@@ -101,7 +110,7 @@ export function ResourceInspector({
     });
     setMounted(true);
     setOpen(true);
-  };
+  }, []);
   const scheduleOpen = (immediate = false) => {
     clearTimeout(closeTimer.current);
     clearTimeout(openTimer.current);
@@ -112,7 +121,11 @@ export function ResourceInspector({
     clearTimeout(openTimer.current);
     clearTimeout(closeTimer.current);
     closeTimer.current = setTimeout(() => {
-      if (!triggerInterested.current && !panelInterested.current)
+      if (
+        !pinned.current &&
+        !triggerInterested.current &&
+        !panelInterested.current
+      )
         setOpen(false);
     }, CLOSE_GRACE_MS);
   };
@@ -122,6 +135,7 @@ export function ResourceInspector({
     const dismiss = (event: KeyboardEvent) => {
       if (event.key !== "Escape") return;
       event.preventDefault();
+      pinned.current = false;
       triggerInterested.current = false;
       panelInterested.current = false;
       setOpen(false);
@@ -134,17 +148,40 @@ export function ResourceInspector({
       ) {
         return;
       }
+      pinned.current = false;
+      triggerInterested.current = false;
+      panelInterested.current = false;
+      setOpen(false);
+    };
+    const dismissForPointer = (event: PointerEvent) => {
+      if (
+        (event.target instanceof Node &&
+          triggerRef.current?.contains(event.target)) ||
+        (event.target instanceof Element &&
+          event.target.closest("[data-resource-inspector]"))
+      ) {
+        return;
+      }
+      pinned.current = false;
       triggerInterested.current = false;
       panelInterested.current = false;
       setOpen(false);
     };
     window.addEventListener("keydown", dismiss);
     window.addEventListener("scroll", dismissForScroll, true);
+    window.addEventListener("pointerdown", dismissForPointer);
     return () => {
       window.removeEventListener("keydown", dismiss);
       window.removeEventListener("scroll", dismissForScroll, true);
+      window.removeEventListener("pointerdown", dismissForPointer);
     };
   }, [open]);
+
+  useEffect(() => {
+    if (openRequest === undefined || openRequest === 0) return;
+    pinned.current = true;
+    show();
+  }, [openRequest, show]);
 
   useEffect(
     () => () => {
@@ -171,6 +208,12 @@ export function ResourceInspector({
           queueMicrotask(() => {
             pointerFocus.current = false;
           });
+        },
+        onClick: () => {
+          if (!pinOnClick) return;
+          pinned.current = !pinned.current;
+          if (pinned.current) show();
+          else setOpen(false);
         },
         onFocus: () => {
           triggerInterested.current = true;

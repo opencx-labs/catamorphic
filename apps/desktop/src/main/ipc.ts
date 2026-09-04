@@ -9,6 +9,7 @@ import {
 } from "@catamorphic/claude-code";
 import {
   definitionHash,
+  formatProjectAgentId,
   type Project,
   type ProjectAgentEntry,
 } from "@catamorphic/core";
@@ -72,6 +73,7 @@ import type { ProfilesStore } from "./profiles.js";
 import {
   projectAllowsIncognito,
   projectDefaultAgentSlug,
+  projectStartingActions,
   setProjectDefaultAgentSlug,
 } from "./project-manifest.js";
 import { createReservedProject } from "./project-path.js";
@@ -261,6 +263,26 @@ export function registerIpcHandlers(
     async (_event, projectId: string) => {
       const root = await state.current?.projectRoots.get(projectId);
       return root ? projectAllowsIncognito(root) : true;
+    },
+  );
+
+  ipcMain.handle(
+    "catamorphic:project-starting-actions",
+    async (event, projectId: string) => {
+      const root = await state.current?.projectRoots.get(projectId);
+      if (!root) return [];
+      const remote = storesFor(event).remoteProjects.inspect(projectId);
+      const segment =
+        remote && remote.link.capabilities?.builder !== true
+          ? "member"
+          : "builder";
+      return projectStartingActions(root, segment).map((action) => ({
+        label: action.label,
+        prompt: action.prompt,
+        ...(action.agent
+          ? { agentId: formatProjectAgentId(projectId, action.agent) }
+          : {}),
+      }));
     },
   );
 
@@ -1711,6 +1733,7 @@ export function registerIpcHandlers(
         projectId,
         new Date().toISOString(),
       );
+      notifyGitChanged(projectId);
       return report;
     },
   );
@@ -1974,6 +1997,24 @@ export function registerIpcHandlers(
   ipcMain.handle("catamorphic:reveal-folder", (_event, folderPath: string) => {
     if (path.isAbsolute(folderPath)) shell.openPath(folderPath);
   });
+
+  ipcMain.handle(
+    "catamorphic:project-open-file",
+    async (_event, projectId: string, filePath: string) => {
+      const rootPath = await requireRoot(projectId);
+      const root = fs.realpathSync(rootPath);
+      const absolute = fs.realpathSync(path.resolve(root, filePath));
+      const relative = path.relative(root, absolute);
+      if (relative.startsWith("..") || path.isAbsolute(relative)) {
+        throw new Error("File must be inside the project");
+      }
+      if (!fs.statSync(absolute).isFile()) {
+        throw new Error("Project path is not a file");
+      }
+      const error = await shell.openPath(absolute);
+      if (error) throw new Error(error);
+    },
+  );
 
   // --- git + pull requests (the dev-grade surfaces: Changes, PRs, diffs) ---
 
