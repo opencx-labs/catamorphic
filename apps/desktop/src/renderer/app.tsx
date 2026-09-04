@@ -6277,124 +6277,121 @@ function SessionsNav({
             exiting ? "animate-session-row-out" : "animate-session-row-in"
           }
         >
-          <div style={{ paddingLeft: depth * 14 }}>
-            <SidebarItemRow
-              label={sessionLabel(session)}
-              icon={
-                <span className="flex items-center gap-0.5">
-                  {children.length > 0 ? (
-                    <button
-                      type="button"
-                      aria-label={
-                        collapsed
-                          ? "Expand subsessions"
-                          : "Collapse subsessions"
-                      }
-                      onClick={(event) => {
-                        event.stopPropagation();
-                        setCollapsedParents((current) => {
-                          const next = new Set(current);
-                          if (next.has(session.id)) next.delete(session.id);
-                          else next.add(session.id);
-                          return next;
-                        });
-                      }}
-                      className="grid size-3.5 place-items-center rounded hover:bg-bg-overlay"
-                    >
-                      <ChevronRight
-                        className={`size-3 transition-transform duration-150 motion-reduce:transition-none ${collapsed ? "" : "rotate-90"}`}
-                      />
-                    </button>
-                  ) : (
-                    <span className="size-3.5" />
-                  )}
-                  <ChatGlyph
-                    icon={session.icon}
-                    fork={Boolean(session.forkedFromSessionId)}
-                    className="size-3.5 shrink-0"
-                  />
-                </span>
-              }
-              active={session.id === activeSessionId}
-              labelContent={
-                <>
-                  <AnimatedTitle text={sessionLabel(session)} />
-                  {session.attentionRequired ? (
-                    <span className="sr-only">Ready for you</span>
-                  ) : unreadSessionIds.has(session.id) ? (
-                    <span className="sr-only">Unread</span>
-                  ) : null}
-                </>
-              }
-              menu={chatSessionMenu({
-                unread: unreadSessionIds.has(session.id),
-                archived: false,
-              })}
-              preview={{
-                title: sessionLabel(session),
-                description: session.activity ?? undefined,
-                metadata: [
-                  { label: "Agent", value: agentName },
-                  {
-                    label: "Environment",
-                    value: session.environment ?? "Default",
-                  },
-                  {
-                    label: "Status",
-                    value: session.running
-                      ? "Working"
-                      : session.status === "closed"
-                        ? "Closed"
-                        : "Ready",
-                  },
-                  ...(checkoutLabel
-                    ? [{ label: "Checkout", value: checkoutLabel }]
-                    : []),
-                ],
-              }}
-              previewContent={
-                <SessionInspectorContent
-                  session={session}
-                  fallbackTitle={sessionLabel(session)}
-                  agentName={agentName}
-                  checkout={checkout ?? null}
-                  incognito={false}
+          <SidebarItemRow
+            style={{ marginLeft: depth * 14 }}
+            label={sessionLabel(session)}
+            icon={
+              <span className="flex items-center gap-0.5">
+                {children.length > 0 ? (
+                  <button
+                    type="button"
+                    aria-label={
+                      collapsed ? "Expand subsessions" : "Collapse subsessions"
+                    }
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      setCollapsedParents((current) => {
+                        const next = new Set(current);
+                        if (next.has(session.id)) next.delete(session.id);
+                        else next.add(session.id);
+                        return next;
+                      });
+                    }}
+                    className="grid size-3.5 place-items-center rounded hover:bg-bg-overlay"
+                  >
+                    <ChevronRight
+                      className={`size-3 transition-transform duration-150 motion-reduce:transition-none ${collapsed ? "" : "rotate-90"}`}
+                    />
+                  </button>
+                ) : (
+                  <span className="size-3.5" />
+                )}
+                <ChatGlyph
+                  icon={session.icon}
+                  fork={Boolean(session.forkedFromSessionId)}
+                  className="size-3.5 shrink-0"
                 />
-              }
-              end={
-                <>
-                  {(session.attentionRequired ||
-                    unreadSessionIds.has(session.id)) && (
-                    <span
-                      data-testid={
-                        session.attentionRequired
-                          ? "session-attention"
-                          : "session-unread"
-                      }
-                      className="grid size-3 shrink-0 place-items-center"
-                      aria-hidden="true"
-                    >
-                      <SignalBadge
-                        signals={{
-                          attention: session.attentionRequired,
-                          unread: unreadSessionIds.has(session.id),
-                        }}
-                        size="sm"
-                      />
-                    </span>
-                  )}
-                  {checkoutLabel ? (
-                    <span className="ml-auto flex max-w-28 shrink-0 items-center gap-1 truncate rounded bg-bg-inset px-1.5 py-0.5 text-[10px] text-fg-faint">
-                      <GitBranch className="size-2.5 shrink-0" />
-                      <span className="truncate">{checkoutLabel}</span>
-                    </span>
-                  ) : null}
-                </>
-              }
-              onOpen={() => onSelect(session)}
-              onAction={(entry) => onSessionAction(session.id, entry.action)}
-            />
-          </div>
+              </span>
+            }
+            active={session.id === activeSessionId}
+            labelContent={
+              <>
+                <AnimatedTitle text={sessionLabel(session)} />
+                {session.attentionRequired ? (
+                  <span className="sr-only">Ready for you</span>
+                ) : unreadSessionIds.has(session.id) ? (
+                  <span className="sr-only">Unread</span>
+                ) : null}
+              </>
+            }
+            menu={chatSessionMenu({
+              unread: unreadSessionIds.has(session.id),
+              archived: false,
+            })}
+            preview={{
+              title: sessionLabel(session),
+              description: session.activity ?? undefined,
+              metadata: [
+                { label: "Agent", value: agentName },
+                {
+                  label: "Environment",
+                  value: session.environment ?? "Default",
+                },
+                {
+                  label: "Status",
+                  value: session.running
+                    ? "Working"
+                    : session.status === "closed"
+                      ? "Closed"
+                      : "Ready",
+                },
+                ...(checkoutLabel
+                  ? [{ label: "Checkout", value: checkoutLabel }]
+                : []),
+              ],
+            }}
+            previewContent={
+              <SessionInspectorContent
+                session={session}
+                fallbackTitle={sessionLabel(session)}
+                agentName={agentName}
+                checkout={checkout ?? null}
+                incognito={false}
+              />
+            }
+            end={
+              <>
+                {(session.attentionRequired ||
+                  unreadSessionIds.has(session.id)) && (
+                  <span
+                    data-testid={
+                      session.attentionRequired
+                        ? "session-attention"
+                        : "session-unread"
+                    }
+                    className="grid size-3 shrink-0 place-items-center"
+                    aria-hidden="true"
+                  >
+                    <SignalBadge
+                      signals={{
+                        attention: session.attentionRequired,
+                        unread: unreadSessionIds.has(session.id),
+                      }}
+                      size="sm"
+                    />
+                  </span>
+                )}
+                {checkoutLabel ? (
+                  <span className="ml-auto flex max-w-28 shrink-0 items-center gap-1 truncate rounded bg-bg-inset px-1.5 py-0.5 text-[10px] text-fg-faint">
+                    <GitBranch className="size-2.5 shrink-0" />
+                    <span className="truncate">{checkoutLabel}</span>
+                  </span>
+                ) : null}
+              </>
+            }
+            onOpen={() => onSelect(session)}
+            onAction={(entry) => onSessionAction(session.id, entry.action)}
+          />
           {!collapsed && children.length > 0 ? (
             <ul>{renderBranch(session.id, depth + 1)}</ul>
           ) : null}
