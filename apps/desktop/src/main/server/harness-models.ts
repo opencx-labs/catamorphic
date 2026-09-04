@@ -1,6 +1,5 @@
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
-import { listClaudeCodeModels } from "@catamorphic/claude-code";
 import type { AgentConfig } from "../agents-store.js";
 
 const execFileAsync = promisify(execFile);
@@ -63,7 +62,8 @@ async function fetchModels(
   },
 ): Promise<HarnessModel[]> {
   switch (config.harness) {
-    case "claude-code":
+    case "claude-code": {
+      const { listClaudeCodeModels } = await import("@catamorphic/claude-code");
       return listClaudeCodeModels({
         env: {
           ...(config.auth === "account"
@@ -74,6 +74,7 @@ async function fetchModels(
             : {}),
         },
       });
+    }
     case "codex":
       return codexModels(config, deps);
     case "ai-sdk":

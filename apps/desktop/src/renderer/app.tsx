@@ -114,10 +114,16 @@ import {
 import { McpAppScreen } from "./screens/mcp-app-screen.js";
 import { ProfileSettingsScreen } from "./screens/profile-settings-screen.js";
 import { SettingsScreen } from "./screens/settings-screen.js";
-import { TerminalScreen } from "./screens/terminal-screen.js";
 
-// Monaco rides in these two screens (~half the renderer bundle); lazy
-// chunks keep it off the startup parse path entirely.
+// Heavy workspace surfaces stay out of the startup parse path. They remain
+// mounted after first use so editor state and terminal sessions survive tab
+// switches, but a session that never opens them never initializes their
+// workers/WASM runtimes.
+const TerminalScreen = lazy(() =>
+  import("./screens/terminal-screen.js").then((module) => ({
+    default: module.TerminalScreen,
+  })),
+);
 const EditorScreen = lazy(() =>
   import("./screens/editor-screen.js").then((module) => ({
     default: module.EditorScreen,
@@ -3043,18 +3049,6 @@ export function App() {
     return () => window.clearTimeout(timer);
   }, [bootReady, bootRevealed]);
 
-  // Warm the Monaco chunk (half the renderer bundle) while idle after
-  // boot — the FIRST diff or editor open should not pay a multi-hundred-
-  // millisecond parse in front of the user.
-  useEffect(() => {
-    if (!bootReady) return;
-    const timer = window.setTimeout(() => {
-      void import("./screens/diff-screen.js");
-      void import("./screens/editor-screen.js");
-    }, 1_500);
-    return () => window.clearTimeout(timer);
-  }, [bootReady]);
-
   // --- agent workspace bridge -------------------------------------------
   // Agents' workspace tools land here from main: discovery (overview /
   // readTab), agent-spawned surfaces (browser tabs, terminals), and the
@@ -4512,42 +4506,44 @@ export function App() {
                         }
                       />
                     )}
-                  <TerminalScreen
-                    projectId={projectId}
-                    active={terminal.localId === activeTerminalTabId}
-                    attachSessionId={terminal.attachSessionId}
-                    restoreSessionId={terminal.restoreSessionId}
-                    readOnly={Boolean(terminal.agentControlled)}
-                    onTitle={(title) =>
-                      onTerminalTitle(terminal.localId, title)
-                    }
-                    onSession={(ptySessionId) =>
-                      updateWorkspace((ws) => ({
-                        ...ws,
-                        terminals: ws.terminals.map((t) =>
-                          t.localId === terminal.localId
-                            ? { ...t, ptySessionId }
-                            : t,
-                        ),
-                      }))
-                    }
-                    onExit={() => {
-                      // Agent terminals stay open to read; the activity
-                      // indicator stops. User terminals close as before.
-                      if (terminal.attachSessionId) {
+                  <Suspense fallback={<div className="flex-1 bg-bg" />}>
+                    <TerminalScreen
+                      projectId={projectId}
+                      active={terminal.localId === activeTerminalTabId}
+                      attachSessionId={terminal.attachSessionId}
+                      restoreSessionId={terminal.restoreSessionId}
+                      readOnly={Boolean(terminal.agentControlled)}
+                      onTitle={(title) =>
+                        onTerminalTitle(terminal.localId, title)
+                      }
+                      onSession={(ptySessionId) =>
                         updateWorkspace((ws) => ({
                           ...ws,
                           terminals: ws.terminals.map((t) =>
                             t.localId === terminal.localId
-                              ? { ...t, running: false }
+                              ? { ...t, ptySessionId }
                               : t,
                           ),
-                        }));
-                      } else {
-                        closeTab(terminalTabKey(terminal.localId));
+                        }))
                       }
-                    }}
-                  />
+                      onExit={() => {
+                        // Agent terminals stay open to read; the activity
+                        // indicator stops. User terminals close as before.
+                        if (terminal.attachSessionId) {
+                          updateWorkspace((ws) => ({
+                            ...ws,
+                            terminals: ws.terminals.map((t) =>
+                              t.localId === terminal.localId
+                                ? { ...t, running: false }
+                                : t,
+                            ),
+                          }));
+                        } else {
+                          closeTab(terminalTabKey(terminal.localId));
+                        }
+                      }}
+                    />
+                  </Suspense>
                   <AgentControlOverlay
                     kind="terminal"
                     active={Boolean(terminal.agentControlled)}

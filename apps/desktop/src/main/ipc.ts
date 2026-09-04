@@ -3,10 +3,7 @@ import fs from "node:fs";
 import { createRequire } from "node:module";
 import path from "node:path";
 import { promisify } from "node:util";
-import {
-  type ClaudeSlashCommand,
-  listClaudeSlashCommands,
-} from "@catamorphic/claude-code";
+import type { ClaudeSlashCommand } from "@catamorphic/claude-code";
 import {
   definitionHash,
   type Project,
@@ -1062,6 +1059,9 @@ export function registerIpcHandlers(
       if (cached && Date.now() - cached.at < 5 * 60_000) {
         return cached.commands;
       }
+      const { listClaudeSlashCommands } = await import(
+        "@catamorphic/claude-code"
+      );
       const probe = listClaudeSlashCommands({
         workingDirectory: root,
         ...(agent.auth === "account"

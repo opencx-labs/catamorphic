@@ -156,6 +156,16 @@ describe("first launch", () => {
       { timeoutMs: 60_000, label: "palette New Tab after project creation" },
     );
   });
+
+  it("does not load editor or terminal runtimes before first use", async () => {
+    const resources = await run<string[]>(`
+      return performance.getEntriesByType('resource').map((entry) => entry.name);
+    `);
+    expect(
+      resources.some((url) => /monaco|editor\.api|ts\.worker/.test(url)),
+    ).toBe(false);
+    expect(resources.some((url) => /terminal-screen/.test(url))).toBe(false);
+  });
 });
 
 describe("browser tabs", () => {
