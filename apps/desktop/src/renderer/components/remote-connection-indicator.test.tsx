@@ -59,7 +59,7 @@ describe("RemoteConnectionIndicator", () => {
     expect(desktopApi.remoteReconnect).toHaveBeenCalledWith("local-1");
   });
 
-  it("surfaces pending files and syncs them from the single status control", async () => {
+  it("surfaces and ships pending files without starting a duplicate pull", async () => {
     const status: RemoteProjectStatus = {
       serverUrl: "https://brain.acme.dev/api",
       remoteProjectId: "remote-1",
@@ -107,6 +107,6 @@ describe("RemoteConnectionIndicator", () => {
     );
     await act(async () => button?.click());
     expect(desktopApi.remoteShip).toHaveBeenCalledWith("local-1");
-    expect(desktopApi.remoteSync).toHaveBeenCalledWith("local-1");
+    expect(desktopApi.remoteSync).not.toHaveBeenCalled();
   });
 });

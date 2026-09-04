@@ -45,6 +45,11 @@ describe("project manifest startingActions", () => {
             prompt: "Review the working tree",
             segments: ["builder"],
           },
+          {
+            label: "Malformed targeting",
+            prompt: "This must not leak into every segment",
+            segments: "member",
+          },
           { label: "Broken" },
         ],
       })}\n`,

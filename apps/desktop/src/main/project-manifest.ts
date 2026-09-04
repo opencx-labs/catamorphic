@@ -59,6 +59,18 @@ export function projectStartingActions(
         return [];
       }
       if (
+        action.segments !== undefined &&
+        (!Array.isArray(action.segments) ||
+          action.segments.some(
+            (candidate) =>
+              candidate !== "member" &&
+              candidate !== "builder" &&
+              candidate !== "all",
+          ))
+      ) {
+        return [];
+      }
+      if (
         Array.isArray(action.segments) &&
         !action.segments.includes(segment) &&
         !action.segments.includes("all")

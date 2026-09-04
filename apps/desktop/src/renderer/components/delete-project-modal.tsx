@@ -17,7 +17,7 @@ export function DeleteProjectModal({
   const queryClient = useQueryClient();
   const [rootPath, setRootPath] = useState<string | null>(null);
   const [alsoTrash, setAlsoTrash] = useState(false);
-  const [remoteMember, setRemoteMember] = useState(false);
+  const [remoteMember, setRemoteMember] = useState<boolean | null>(null);
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -27,7 +27,7 @@ export function DeleteProjectModal({
     setAlsoTrash(false);
     setError(null);
     setRootPath(null);
-    setRemoteMember(false);
+    setRemoteMember(null);
     if (projectId) {
       void desktopApi.projectRoot(projectId).then((root) => {
         if (!cancelled) setRootPath(root);
@@ -41,7 +41,9 @@ export function DeleteProjectModal({
           setRemoteMember(member);
           if (member) setAlsoTrash(true);
         })
-        .catch(() => undefined);
+        .catch(() => {
+          if (!cancelled) setRemoteMember(false);
+        });
     }
     return () => {
       cancelled = true;
@@ -49,7 +51,7 @@ export function DeleteProjectModal({
   }, [projectId]);
 
   const confirm = async () => {
-    if (!project) return;
+    if (!project || remoteMember === null) return;
     setPending(true);
     setError(null);
     try {
@@ -70,15 +72,16 @@ export function DeleteProjectModal({
     <Modal open={project !== null} onClose={onClose} width={440}>
       <div className="px-5 pt-5">
         <h2 className="text-sm font-semibold text-fg">
-          {remoteMember ? "Remove" : "Delete"} {project?.name ?? "project"}?
+          {remoteMember === false ? "Delete" : "Remove"}{" "}
+          {project?.name ?? "project"}?
         </h2>
         <p className="mt-2 text-[13px] leading-relaxed text-fg-muted">
-          {remoteMember
+          {remoteMember !== false
             ? "This removes the local copy from Catamorphic and moves its folder to the Trash. The shared project and its server history stay available to the team."
             : `The project is removed from Catamorphic. Its chats, workflows, and run history are deleted.${rootPath ? " The folder on disk is kept unless you say otherwise." : ""}`}
         </p>
 
-        {rootPath && !remoteMember && (
+        {rootPath && remoteMember === false && (
           <label className="mt-4 flex cursor-pointer items-start gap-2.5 rounded-lg border border-border bg-bg-inset p-3">
             <input
               type="checkbox"
@@ -114,11 +117,12 @@ export function DeleteProjectModal({
           type="button"
           onClick={confirm}
           pending={pending}
+          disabled={remoteMember === null}
           pendingLabel={remoteMember ? "Removing…" : "Deleting…"}
           data-testid="delete-confirm"
           className="h-8 cursor-pointer rounded-md border border-danger/40 bg-danger/10 px-3 text-[13px] font-medium text-danger transition-colors duration-150 hover:bg-danger/20 disabled:cursor-not-allowed disabled:opacity-50"
         >
-          {remoteMember
+          {remoteMember !== false
             ? "Remove from this device"
             : alsoTrash
               ? "Delete and trash folder"

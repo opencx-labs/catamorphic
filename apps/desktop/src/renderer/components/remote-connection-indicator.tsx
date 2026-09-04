@@ -69,6 +69,10 @@ export function RemoteConnectionIndicator({
             await refresh();
             return;
           }
+          // Shipping emits the shared project-change event. App owns the
+          // resulting pull so automatic and manual paths share its guard.
+          await refresh();
+          return;
         }
         await desktopApi.remoteSync(projectId);
       }
