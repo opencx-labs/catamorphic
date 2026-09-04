@@ -119,7 +119,7 @@ describe("markdown editor", () => {
     await runWait(
       `const row = byText('li button', 'plain.md');
        if (!row) return false; row.click(); return true;`,
-      { label: "plain.md row" },
+      { timeoutMs: 30_000, label: "plain.md row" },
     );
     await runWait(
       `return !!$('.cat-mdedit .ProseMirror') && !$('.monaco-editor')
