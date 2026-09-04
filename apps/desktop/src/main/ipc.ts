@@ -21,7 +21,14 @@ import {
 } from "@catamorphic/github";
 import { probeMcpServer } from "@catamorphic/mcp";
 import type { McpToolPolicy } from "@catamorphic/sandbox";
-import { app, BrowserWindow, dialog, ipcMain, shell } from "electron";
+import {
+  app,
+  BrowserWindow,
+  dialog,
+  ipcMain,
+  shell,
+  type WebContents,
+} from "electron";
 import type { UsageSummary, UsageWindowDays } from "../shared/usage.js";
 import type { BindingAuth } from "./agent-bindings-store.js";
 import {
@@ -176,9 +183,29 @@ const defaultProjectsDir = () =>
     homeDir: app.getPath("home"),
   });
 
-async function openRemoteAuthorization(url: string): Promise<void> {
+function openWorkspaceUrl(sender: WebContents, url: string): void {
+  const protocol = new URL(url).protocol;
+  if (protocol !== "http:" && protocol !== "https:") {
+    throw new Error("Only web links can open in a workspace browser tab");
+  }
+  if (sender.isDestroyed()) {
+    throw new Error("The requesting workspace window is no longer open");
+  }
+  sender.send("catamorphic:browser-open-url", { url });
+}
+
+function closeWorkspaceCallback(sender: WebContents, origin: string): void {
+  if (!sender.isDestroyed()) {
+    sender.send("catamorphic:browser-close-url", { prefix: origin });
+  }
+}
+
+async function openRemoteAuthorization(
+  sender: WebContents,
+  url: string,
+): Promise<void> {
   if (process.env.CATAMORPHIC_E2E_FOLLOW_REMOTE_AUTH !== "1") {
-    await shell.openExternal(url);
+    openWorkspaceUrl(sender, url);
     return;
   }
   if (!process.env.CATAMORPHIC_E2E_DATA_DIR) {
@@ -1159,7 +1186,11 @@ export function registerIpcHandlers(
       if (agent.provider !== "openrouter") {
         return { started: false, error: "This provider uses an API key" };
       }
-      void openRouterPkceLogin((url) => void shell.openExternal(url))
+      const sender = event.sender;
+      void openRouterPkceLogin(
+        (url) => openWorkspaceUrl(sender, url),
+        (origin) => closeWorkspaceCallback(sender, origin),
+      )
         .then((key) => {
           store.update(id, { apiKey: key });
           agentsChanged(event, store);
@@ -1199,7 +1230,7 @@ export function registerIpcHandlers(
         const match = /https:\/\/\S+/.exec(chunk.toString());
         if (match && !opened) {
           opened = true;
-          void shell.openExternal(match[0]);
+          openWorkspaceUrl(event.sender, match[0]);
         }
       };
       child.stdout.on("data", watchForUrl);
@@ -1534,9 +1565,11 @@ export function registerIpcHandlers(
         throw new Error("rootPath must be an absolute path");
       }
       const serverUrl = input.serverUrl.replace(/\/+$/, "");
+      const sender = event.sender;
       let credentials = await authorizeRemoteServer({
         serverUrl,
-        openExternal: openRemoteAuthorization,
+        openUrl: (url) => openRemoteAuthorization(sender, url),
+        onCallbackServed: (origin) => closeWorkspaceCallback(sender, origin),
       });
       const client = remoteClient({
         serverUrl,
@@ -1805,9 +1838,11 @@ export function registerIpcHandlers(
       if (!inspected) {
         throw new Error("This project is not connected to a remote server");
       }
+      const sender = event.sender;
       const credentials = await authorizeRemoteServer({
         serverUrl: inspected.link.serverUrl,
-        openExternal: openRemoteAuthorization,
+        openUrl: (url) => openRemoteAuthorization(sender, url),
+        onCallbackServed: (origin) => closeWorkspaceCallback(sender, origin),
       });
       storesFor(event).remoteProjects.updateCredentials(projectId, credentials);
       const client = storedRemoteClient(event, projectId, {
@@ -2023,16 +2058,16 @@ export function registerIpcHandlers(
   );
 
   // --- GitHub device flow ---
-  // The flow lives in the main process: it opens the system browser and
+  // The flow lives in the main process: it opens a workspace browser tab and
   // polls GitHub, while the renderer only ever sees the short user code and
   // the final connected/failed state. Tokens go straight into the embedded
   // server's GithubService (encrypted via safeStorage before touching disk).
   let deviceFlowGeneration = 0;
 
-  ipcMain.handle("catamorphic:github-connect-start", async () => {
+  ipcMain.handle("catamorphic:github-connect-start", async (event) => {
     const grant = await requestDeviceCode(GITHUB_APP);
     const generation = ++deviceFlowGeneration;
-    void shell.openExternal(grant.verificationUri);
+    openWorkspaceUrl(event.sender, grant.verificationUri);
 
     const poll = async (): Promise<void> => {
       const started = Date.now();
@@ -2079,8 +2114,8 @@ export function registerIpcHandlers(
   // Repo access is granted by *installing* the GitHub App, not by the OAuth
   // authorization itself — send users to the installation page where GitHub
   // shows the repository picker.
-  ipcMain.handle("catamorphic:github-manage-repos", () => {
-    void shell.openExternal(buildInstallationUrl(GITHUB_APP));
+  ipcMain.handle("catamorphic:github-manage-repos", (event) => {
+    openWorkspaceUrl(event.sender, buildInstallationUrl(GITHUB_APP));
   });
 
   ipcMain.handle("catamorphic:github-disconnect", async () => {

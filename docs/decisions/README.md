@@ -100,3 +100,4 @@ Settled design decisions live here as short Architecture Decision Records. They 
 | [0085](0085-desktop-stable-and-preview-channels.md) | Desktop Stable and Preview release channels | Accepted |
 | [0086](0086-provider-neutral-workflow-enablement-connections.md) | Provider-neutral workflow enablement connections | Accepted |
 | [0087](0087-workflow-woken-session-attention.md) | Workflow-woken sessions are the notification record | Accepted |
+| [0088](0088-desktop-web-links-stay-in-workspace.md) | Desktop web links stay in the workspace | Accepted |

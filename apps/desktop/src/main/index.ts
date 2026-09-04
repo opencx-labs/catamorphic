@@ -235,6 +235,15 @@ function createWindow(profileId?: string): BrowserWindow {
       backgroundThrottling: e2eDataDir === undefined,
     },
   });
+  // Renderer links must stay inside the workspace. Feature-specific flows can
+  // open tabs through IPC, while this boundary catches plain window.open calls
+  // from current and future renderer components.
+  window.webContents.setWindowOpenHandler(({ url }) => {
+    if (/^https?:/.test(url)) {
+      window.webContents.send("catamorphic:browser-open-url", { url });
+    }
+    return { action: "deny" };
+  });
   if (saved.maximized) window.maximize();
   // A connect link that arrived before any window could take it (cold
   // launch from the link) is delivered once the renderer is up.

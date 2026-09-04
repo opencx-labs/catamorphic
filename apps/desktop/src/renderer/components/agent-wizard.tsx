@@ -235,19 +235,24 @@ export function AgentWizard({
     setBusyFlow(flow);
     try {
       const id = await ensureAgent(flow);
+      waitingRef.current = { agentId: id, flow };
+      setWaitingFlow(flow);
       const result = await desktopApi.agentLogin(id);
-      if (result.started) {
-        waitingRef.current = { agentId: id, flow };
-        setWaitingFlow(flow);
-      } else if (result.error) {
+      if (!result.started && result.error) {
+        waitingRef.current = null;
+        setWaitingFlow(null);
         setBusy(false);
         setBusyFlow(null);
         setError(result.error);
-      } else {
+      } else if (!result.started) {
         // Nothing to start: the harness is already signed in.
+        waitingRef.current = null;
+        setWaitingFlow(null);
         onDone();
       }
     } catch (cause) {
+      waitingRef.current = null;
+      setWaitingFlow(null);
       setBusy(false);
       setBusyFlow(null);
       setError(cause instanceof Error ? cause.message : String(cause));
@@ -668,7 +673,7 @@ export function AgentWizard({
 
   if (variant === "modal") {
     return (
-      <Modal open={open === true} onClose={onClose}>
+      <Modal open={open === true && waitingFlow === null} onClose={onClose}>
         <div data-testid="agent-wizard" className="px-5 py-5">
           {content}
         </div>

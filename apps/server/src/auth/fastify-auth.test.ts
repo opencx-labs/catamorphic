@@ -86,6 +86,24 @@ describe("stock Fastify OAuth bridge", () => {
         new URL(prompted.headers.location ?? "").search,
     });
     expect(loginPage.body).toContain('action="/login/local?');
+    expect(loginPage.body).toContain('<html lang="en">');
+    expect(loginPage.body).toContain("--accent: #f95225");
+    expect(loginPage.body).toContain('autocomplete="username"');
+    expect(loginPage.body).toContain('autocomplete="current-password"');
+    expect(loginPage.body).toContain('id="toggle-password"');
+    expect(loginPage.headers["content-security-policy"]).toContain(
+      "frame-ancestors 'none'",
+    );
+
+    const consent = await app.inject({
+      method: "GET",
+      url: "/oauth/consent?consent_code=one&client_id=desktop-client&scope=openid%20offline_access",
+    });
+    expect(consent.statusCode).toBe(200);
+    expect(consent.body).toContain("Allow this connection?");
+    expect(consent.body).toContain("desktop-client");
+    expect(consent.body).toContain("offline access");
+    expect(consent.body).toContain("Allow access");
 
     const promptCookie = prompted.headers["set-cookie"];
     const login = await app.inject({

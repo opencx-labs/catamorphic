@@ -3216,3 +3216,17 @@ paths, deliberately independent:
   the local project name from the link, and only leaves the local folder
   location as a separate choice. A deep link uses the exact same path as a
   pasted invitation.
+
+### Authentication stays in the workspace (2026-09-04)
+
+- A web destination initiated by the desktop opens as a workspace browser tab,
+  including remote-server sign-in, agent OAuth, and GitHub authorization. The
+  system browser is no longer a second navigation surface for desktop work.
+- Authorization callbacks close their temporary workspace tab when the flow is
+  complete. Remote-project connection steps aside while authentication is in
+  progress and returns with an actionable error if the flow fails.
+- The stock server's sign-in and consent pages use the desktop's canonical dark
+  tokens, banana-bracket mark, compact typography, and orange focus and action
+  language. They remain semantic HTML forms with password-manager metadata,
+  visible keyboard focus, responsive layout, reduced-motion handling, and a
+  restrictive per-response content security policy.

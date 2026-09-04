@@ -349,8 +349,9 @@ export function registerBrowserSupport(
 
     // target=_blank / window.open → new workspace browser tab.
     contents.setWindowOpenHandler(({ url }) => {
-      if (/^https?:/.test(url)) {
-        broadcast("catamorphic:browser-open-url", { url });
+      const host = contents.hostWebContents;
+      if (/^https?:/.test(url) && host && !host.isDestroyed()) {
+        host.send("catamorphic:browser-open-url", { url });
       }
       return { action: "deny" };
     });

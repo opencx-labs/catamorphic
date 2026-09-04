@@ -8,7 +8,7 @@ describe("remote server OAuth", () => {
       authorizeRemoteServer({
         serverUrl: "http://brain.acme.test/api",
         fetch: fetchImpl,
-        openExternal: vi.fn(),
+        openUrl: vi.fn(),
       }),
     ).rejects.toThrow("HTTPS");
     expect(fetchImpl).not.toHaveBeenCalled();
@@ -34,7 +34,7 @@ describe("remote server OAuth", () => {
       authorizeRemoteServer({
         serverUrl: "https://malicious.example/api",
         fetch: fetchImpl,
-        openExternal: vi.fn(),
+        openUrl: vi.fn(),
       }),
     ).rejects.toThrow("same origin");
     expect(fetchImpl).toHaveBeenCalledTimes(1);
@@ -49,7 +49,7 @@ describe("remote server OAuth", () => {
             resource: "https://team.example/api/another-project",
             authorization_servers: ["https://team.example"],
           }),
-        openExternal: vi.fn(),
+        openUrl: vi.fn(),
       }),
     ).rejects.toThrow("requested resource");
   });
@@ -102,7 +102,7 @@ describe("remote server OAuth", () => {
         throw new Error(`Unexpected fetch ${url}`);
       },
     );
-    const openExternal = vi.fn(async (url: string) => {
+    const openUrl = vi.fn(async (url: string) => {
       authorizeURL = new URL(url);
       expect(authorizeURL.searchParams.get("code_challenge_method")).toBe(
         "S256",
@@ -116,10 +116,12 @@ describe("remote server OAuth", () => {
       await fetch(callback);
     });
 
+    const onCallbackServed = vi.fn();
     const result = await authorizeRemoteServer({
       serverUrl: "https://team.example/api",
       fetch: fetchImpl,
-      openExternal,
+      openUrl,
+      onCallbackServed,
     });
     expect(result).toMatchObject({
       clientId: "desktop-client",
@@ -128,5 +130,9 @@ describe("remote server OAuth", () => {
       tokenEndpoint: "https://team.example/api/auth/mcp/token",
     });
     expect(authorizeURL?.searchParams.get("scope")).toContain("offline_access");
+    expect(onCallbackServed).toHaveBeenCalledTimes(1);
+    expect(onCallbackServed).toHaveBeenCalledWith(
+      new URL(registeredRedirect).origin,
+    );
   });
 });

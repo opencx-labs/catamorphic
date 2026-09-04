@@ -306,6 +306,22 @@ const emptyWorkspace = (): Workspace => {
   };
 };
 
+/**
+ * Profile-local, non-persisted browser surface used before a first project
+ * exists. Remote sign-in still belongs in the app, even though there is not
+ * yet a project workspace to own its temporary tab.
+ */
+const emptyUtilityWorkspace = (): Workspace => ({
+  tabs: [],
+  chats: [],
+  browsers: [],
+  terminals: [],
+  editors: [],
+  split: null,
+  tabOrder: [],
+  closedTabs: [],
+});
+
 const chatTabKey = (localId: string) => `chat:${localId}`;
 const browserTabKey = (localId: string) => `browser:${localId}`;
 const terminalTabKey = (localId: string) => `terminal:${localId}`;
@@ -1055,9 +1071,15 @@ export function App() {
     return created;
   }, []);
 
+  const utilityWorkspaceKey = activeProfile
+    ? `profile:${activeProfile.id}:utility`
+    : null;
+  const workspaceKey = projectId ?? utilityWorkspaceKey;
   const workspace: Workspace = projectId
     ? (workspaces[projectId] ?? defaultWorkspaceFor(projectId))
-    : emptyWorkspace();
+    : utilityWorkspaceKey
+      ? (workspaces[utilityWorkspaceKey] ?? emptyUtilityWorkspace())
+      : emptyUtilityWorkspace();
   const archivedSessionIds = new Set(prefs?.archivedSessionIds ?? []);
   const unreadSessionIds = new Set(prefs?.unreadSessionIds ?? []);
   const unreadByChat: Record<string, boolean> = Object.fromEntries(
@@ -1092,15 +1114,18 @@ export function App() {
 
   const updateWorkspace = useCallback(
     (updater: (workspace: Workspace) => Workspace) => {
-      if (!projectId) return;
+      if (!workspaceKey) return;
       setWorkspaces((current) => ({
         ...current,
-        [projectId]: updater(
-          current[projectId] ?? defaultWorkspaceFor(projectId),
+        [workspaceKey]: updater(
+          current[workspaceKey] ??
+            (projectId
+              ? defaultWorkspaceFor(projectId)
+              : emptyUtilityWorkspace()),
         ),
       }));
     },
-    [projectId, defaultWorkspaceFor],
+    [projectId, workspaceKey, defaultWorkspaceFor],
   );
 
   // --- workspace persistence --------------------------------------------
@@ -4478,7 +4503,7 @@ export function App() {
               </button>
             </ShortcutHint>
           </span>
-          {projectId && (
+          {(projectId || workspace.browsers.length > 0) && (
             <WorkspaceTabBar
               tabs={allTabs}
               activeKey={workspace.activeTabKey}
@@ -5013,6 +5038,44 @@ export function App() {
               onNewChat={() => addChat()}
               onCollapse={minimizeFloatingChats}
             />
+          </div>
+        ) : workspace.browsers.length > 0 ? (
+          <div className="relative flex min-h-0 flex-1 flex-col">
+            {workspace.browsers.map((browser) => (
+              <div
+                key={browser.localId}
+                className={paneClass(browserTabKey(browser.localId))}
+                style={paneStyle(browserTabKey(browser.localId))}
+                {...paneFocusProps(browserTabKey(browser.localId))}
+              >
+                <BrowserScreen
+                  profileId={browser.profileId}
+                  projectId={null}
+                  initialUrl={browser.url || browser.initialUrl}
+                  active={browser.localId === activeBrowserTabId}
+                  visible={Boolean(viewSlots[browserTabKey(browser.localId)])}
+                  onStateChange={(state) =>
+                    onBrowserState(browser.localId, state)
+                  }
+                  registerNavigate={(navigate) =>
+                    browserNavigatorsRef.current.set(browser.localId, navigate)
+                  }
+                  registerHistoryNavigate={(navigate) =>
+                    browserHistoryNavigatorsRef.current.set(
+                      browser.localId,
+                      navigate,
+                    )
+                  }
+                  registerGuest={(guestId) => {
+                    if (guestId === null) {
+                      browserGuestIdsRef.current.delete(browser.localId);
+                    } else {
+                      browserGuestIdsRef.current.set(browser.localId, guestId);
+                    }
+                  }}
+                />
+              </div>
+            ))}
           </div>
         ) : (
           <EmptyState

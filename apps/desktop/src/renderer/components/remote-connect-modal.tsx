@@ -30,6 +30,7 @@ export function RemoteConnectModal({
   const [parsedLink, setParsedLink] = useState<ConnectLink | null>(null);
   const [parentDir, setParentDir] = useState("");
   const [pending, setPending] = useState(false);
+  const [authInProgress, setAuthInProgress] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [githubRequired, setGithubRequired] = useState(false);
   const [githubUserCode, setGithubUserCode] = useState<string | null>(null);
@@ -37,6 +38,7 @@ export function RemoteConnectModal({
   useEffect(() => {
     if (!open) return;
     setPending(false);
+    setAuthInProgress(false);
     setError(null);
     setGithubRequired(false);
     setGithubUserCode(null);
@@ -44,6 +46,11 @@ export function RemoteConnectModal({
     setParsedLink(null);
     parseRevision.current += 1;
     void desktopApi.defaultProjectsDir().then(setParentDir);
+  }, [open]);
+
+  useEffect(() => {
+    if (!open) return;
+    return desktopApi.onBrowserCloseUrl(() => setAuthInProgress(false));
   }, [open]);
 
   useEffect(() => {
@@ -112,6 +119,7 @@ export function RemoteConnectModal({
       return;
     }
     setPending(true);
+    setAuthInProgress(true);
     setError(null);
     setGithubRequired(false);
     try {
@@ -132,6 +140,7 @@ export function RemoteConnectModal({
       setGithubRequired(requiresGithub);
       setError(message.replace("[github-required]", "").trim());
     } finally {
+      setAuthInProgress(false);
       setPending(false);
     }
   };
@@ -147,7 +156,7 @@ export function RemoteConnectModal({
   };
 
   return (
-    <Modal open={open} onClose={onClose}>
+    <Modal open={open && !authInProgress} onClose={onClose}>
       <form onSubmit={submit}>
         <div className="flex flex-col gap-4 px-5 pt-5 pb-4">
           <div>
@@ -156,7 +165,7 @@ export function RemoteConnectModal({
             </h2>
             <p className="mt-1 text-xs text-fg-muted">
               A folder here stays in sync with what your team's server lets you
-              see. Your browser will open so you can sign in.
+              see. A browser tab will open here so you can sign in.
             </p>
           </div>
 
