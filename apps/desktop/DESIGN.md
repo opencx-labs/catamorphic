@@ -3129,6 +3129,26 @@ paths, deliberately independent:
   fallback after the animation duration. Occluded Chromium may pause CSS
   animation events; it must not leave a closed tab's ghost in the strip.
 
+### Heavy tools cost nothing until first use (2026-09-04)
+
+- Monaco, Ghostty, and coding-harness runtimes load only when a user opens
+  the corresponding editor, terminal, or starts a turn with that harness.
+  Idle-time prefetch is not neutral in a long-lived desktop app: it converts
+  optional capability into permanent memory pressure for the rest of the
+  process lifetime.
+- After first use, workspace surfaces remain mounted where continuity requires
+  it. Editors keep drafts and undo history, terminals keep their PTY session,
+  and provider instances keep resumable conversations. Lazy initialization is
+  a startup and non-user optimization, not permission to discard live work.
+- Live discovery also follows demand. Provider catalogs and CLI metadata are
+  fetched only after a configured agent or picker needs them, not as ambient
+  launch work.
+- Claude Code and Codex platform executables are optional components, not base
+  app payload. First use installs the app-release-pinned npm artifact after
+  integrity verification, then reuses it offline. Catamorphic's adapters and
+  the SDK JavaScript remain inside the signed app; the main process never
+  imports remotely downloaded JavaScript (ADR 0091).
+
 ### Updates wait for the user's work (2026-09-02)
 
 - Update checks are quiet until there is a useful action. An available release

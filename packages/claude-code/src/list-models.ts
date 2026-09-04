@@ -17,6 +17,8 @@ export interface ClaudeCodeModel {
 export async function listClaudeCodeModels(opts?: {
   /** Merged over process.env (e.g. CLAUDE_CONFIG_DIR, ANTHROPIC_API_KEY). */
   env?: Record<string, string>;
+  /** Host-provided CLI path, including an on-demand desktop component. */
+  pathToClaudeCodeExecutable?: string;
 }): Promise<ClaudeCodeModel[]> {
   const abort = new AbortController();
   let release = () => {};
@@ -35,6 +37,7 @@ export async function listClaudeCodeModels(opts?: {
       abortController: abort,
       maxTurns: 1,
       env: { ...processEnv(), ...opts?.env },
+      pathToClaudeCodeExecutable: opts?.pathToClaudeCodeExecutable,
     },
   });
   try {

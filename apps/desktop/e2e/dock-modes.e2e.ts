@@ -172,7 +172,10 @@ describe("dock modes", () => {
     // Focus stays in the composer right after sending — the dock stays
     // expanded until attention moves away.
     await runWait(`return dockH() > 400;`, { label: "expanded while focused" });
-    await run(`clickOutside(); return true;`);
+    // Xvfb can leave its virtual pointer over the centered dock even though
+    // this test never moved it there. Clear hover as well as focus so this
+    // assertion exercises the intended fully disengaged state.
+    await run(`unhoverDock(); clickOutside(); return true;`);
     await runWait(
       `return frontDock().hasAttribute('data-lurking') && dockH() < 220;`,
       { label: "shrunk after focusing outside", timeoutMs: 10_000 },

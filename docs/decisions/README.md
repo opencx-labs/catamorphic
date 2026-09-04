@@ -103,3 +103,4 @@ Settled design decisions live here as short Architecture Decision Records. They 
 | [0088](0088-desktop-web-links-stay-in-workspace.md) | Desktop web links stay in the workspace | Accepted |
 | [0089](0089-project-shaped-member-shell.md) | Project-shaped member shell and durable session provenance | Accepted |
 | [0090](0090-first-class-subsessions-and-delegation.md) | First-class subsessions and explicit delegation grants | Accepted |
+| [0091](0091-on-demand-desktop-harness-components.md) | Desktop coding harnesses use verified on-demand components | Accepted |
