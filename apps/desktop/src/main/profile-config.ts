@@ -16,7 +16,11 @@ import {
   SidebarConfigStore,
   watchSidebarLayerFile,
 } from "./sidebar-config.js";
-import { type ResolvedTheme, ThemeStore } from "./theme.js";
+import {
+  type ResolvedTheme,
+  type ThemeAppearance,
+  ThemeStore,
+} from "./theme.js";
 
 /** Everything a profile owns beyond browser state: look, keys, agents. */
 export interface ProfileStores {
@@ -64,6 +68,7 @@ export class ProfileConfigManager {
   constructor(
     private readonly paths: DataPaths,
     private readonly profiles: ProfilesStore,
+    private readonly systemAppearance: () => ThemeAppearance = () => "dark",
   ) {}
 
   forProfile(profileId: string): ProfileStores {
@@ -73,7 +78,10 @@ export class ProfileConfigManager {
     const dir = path.join(this.paths.profilesDir, profileId);
     fs.mkdirSync(dir, { recursive: true });
     const stores: ProfileStores = {
-      theme: new ThemeStore(path.join(dir, "theme.json")),
+      theme: new ThemeStore(
+        path.join(dir, "theme.json"),
+        this.systemAppearance,
+      ),
       keybindings: new KeybindingsStore(path.join(dir, "keybindings.json")),
       sidebar: new SidebarConfigStore(path.join(dir, "sidebar.js")),
       agents: new AgentsStore(path.join(dir, "agents.json")),
@@ -192,6 +200,15 @@ export class ProfileConfigManager {
     listener: (profileId: string, theme: ResolvedTheme) => void,
   ): void {
     this.themeListeners.add(listener);
+  }
+
+  /** Re-resolve system-following profiles after the OS appearance changes. */
+  systemAppearanceChanged(): void {
+    for (const [profileId, stores] of this.stores) {
+      if (stores.theme.load().selection !== "system") continue;
+      const theme = stores.theme.resolved();
+      for (const listener of this.themeListeners) listener(profileId, theme);
+    }
   }
 
   onKeybindingsChanged(

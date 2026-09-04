@@ -2,57 +2,48 @@
 
 /*
  * Catamorphic Desktop design tokens. See DESIGN.md for the rules.
- * Dark-first: :root is the dark theme; light lives behind [data-theme=light].
+ * Before profile config loads, :root follows the operating system. The
+ * resolved profile theme is then applied as inline tokens by ThemeProvider.
  */
 :root {
+  color-scheme: light dark;
+
   /* Surfaces */
-  --color-bg: #0a0a0b;
-  --color-bg-raised: #101012;
-  --color-bg-overlay: #16161a;
-  --color-bg-inset: #060607;
+  --color-bg: light-dark(#f7f7f5, #0a0a0b);
+  --color-bg-raised: light-dark(#ffffff, #101012);
+  --color-bg-overlay: light-dark(#efefec, #16161a);
+  --color-bg-inset: light-dark(#ececea, #060607);
 
   /* Borders */
-  --color-border: #232329;
-  --color-border-strong: #33333b;
+  --color-border: light-dark(#dcdcd7, #232329);
+  --color-border-strong: light-dark(#c4c4bd, #33333b);
 
   /* Text */
-  --color-fg: #e6e6e9;
-  --color-fg-muted: #9a9aa3;
-  --color-fg-faint: #5c5c66;
+  --color-fg: light-dark(#1c1c1f, #e6e6e9);
+  --color-fg-muted: light-dark(#5f5f66, #9a9aa3);
+  --color-fg-faint: light-dark(#9a9aa0, #5c5c66);
 
   /* Accent: Catamorphic orange */
-  --color-accent: #f95225;
-  --color-accent-fg: #1a0a05;
+  --color-accent: light-dark(#d63c0c, #f95225);
+  --color-accent-fg: light-dark(#ffffff, #1a0a05);
 
   /* Status (low chroma) */
-  --color-success: #7fb069;
-  --color-warning: #f95225;
-  --color-danger: #c46d6d;
-  --color-info: #6d9ec4;
+  --color-success: light-dark(#4d7a3a, #7fb069);
+  --color-warning: light-dark(#d63c0c, #f95225);
+  --color-danger: light-dark(#a04848, #c46d6d);
+  --color-info: light-dark(#3a6ea0, #6d9ec4);
 
   /* Message tints */
-  --color-user-tint: #14202e;
-  --color-agent-tint: #101012;
+  --color-user-tint: light-dark(#e3edf7, #14202e);
+  --color-agent-tint: light-dark(#ffffff, #101012);
 }
 
 [data-theme="light"] {
-  --color-bg: #f7f7f5;
-  --color-bg-raised: #ffffff;
-  --color-bg-overlay: #efefec;
-  --color-bg-inset: #ececea;
-  --color-border: #dcdcd7;
-  --color-border-strong: #c4c4bd;
-  --color-fg: #1c1c1f;
-  --color-fg-muted: #5f5f66;
-  --color-fg-faint: #9a9aa0;
-  --color-accent: #d63c0c;
-  --color-accent-fg: #ffffff;
-  --color-success: #4d7a3a;
-  --color-warning: #d63c0c;
-  --color-danger: #a04848;
-  --color-info: #3a6ea0;
-  --color-user-tint: #e3edf7;
-  --color-agent-tint: #ffffff;
+  color-scheme: light;
+}
+
+[data-theme="dark"] {
+  color-scheme: dark;
 }
 
 @theme inline {

@@ -103,7 +103,6 @@ import type { DataPaths } from "./server/paths.js";
 import {
   normalizeTheme,
   type ResolvedTheme,
-  resolveTheme,
   THEME_PRESETS,
   windowBackgroundColor,
 } from "./theme.js";
@@ -342,7 +341,7 @@ export function registerIpcHandlers(
       const store = storesFor(event).theme;
       const next = normalizeTheme(input);
       store.save(next);
-      const resolved = resolveTheme(next);
+      const resolved = store.resolved();
       // Apply to the calling window synchronously so the UI can't flash
       // between the click and the watcher's debounce.
       const window = BrowserWindow.fromWebContents(event.sender);

@@ -5,6 +5,7 @@ import {
   dialog,
   ipcMain,
   Menu,
+  nativeTheme,
   powerMonitor,
   safeStorage,
   type WebContents,
@@ -126,7 +127,9 @@ const paths = resolveDataPaths();
 const profilesStore = new ProfilesStore(paths.profilesFile);
 // Per-profile config (theme, keybindings, sidebar, agents) — one manager
 // shared by IPC, the window layer, and the chat agent's config mirror.
-const profileConfig = new ProfileConfigManager(paths, profilesStore);
+const profileConfig = new ProfileConfigManager(paths, profilesStore, () =>
+  nativeTheme.shouldUseDarkColors ? "dark" : "light",
+);
 
 let server: EmbeddedServer | null = null;
 
@@ -426,6 +429,7 @@ app.whenReady().then(async () => {
       window.webContents.send("catamorphic:theme-changed", theme);
     }
   });
+  nativeTheme.on("updated", () => profileConfig.systemAppearanceChanged());
   profileConfig.onSidebarChanged((profileId) => {
     // No payload: the resolved config depends on each window's active
     // project (layered resolution), so the renderer refetches instead.

@@ -685,7 +685,7 @@ export interface ThemePreset {
 }
 
 export interface ThemeConfig {
-  preset: string;
+  selection: string;
   overrides: Partial<ThemeColors>;
 }
 
@@ -700,6 +700,7 @@ export interface AppPrefs {
 }
 
 export interface ResolvedTheme extends ThemeConfig {
+  preset: string;
   colors: ThemeColors;
   appearance: "dark" | "light";
 }

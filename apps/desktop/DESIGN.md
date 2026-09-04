@@ -25,8 +25,9 @@ entry for how this rule was recovered.
 
 ## Principles
 
-1. **Dark-first.** `:root` *is* the dark theme. Light mode is an override behind
-   `[data-theme="light"]`, never the default.
+1. **System-first.** New profiles follow the operating system, resolving to
+   Catamorphic Light or Catamorphic Dark. An explicit theme selection stays
+   fixed until the user changes it.
 2. **Flat depth.** Hierarchy comes from surface steps and 1px borders, not drop
    shadows. Shadows are reserved for true overlays (menus, dialogs).
 3. **One accent.** A single Catamorphic orange. If something needs to stand
@@ -208,16 +209,19 @@ that friction is intentional.
 ## Theming rules
 
 - New colors enter as a semantic token in **every preset** in
-  `src/main/theme.ts` (the source of truth for palettes), in the `:root` +
-  `[data-theme=light]` blocks in `styles.css` (the pre-JS first paint), and
+  `src/main/theme.ts` (the source of truth for palettes), in the paired
+  `light-dark()` values in `styles.css` (the pre-JS first paint), and
   documented here — then used via Tailwind (`bg-bg-raised`, `text-fg-muted`, …).
 - The active theme lives in `<userData>/profiles/<id>/theme.json`
-  (`{ preset, overrides }`) — profile-local, file-watched, agent-editable.
+  (`{ selection, overrides }`) — profile-local, file-watched, agent-editable.
+  `selection: "system"` resolves to the Catamorphic Light or Dark preset and
+  follows operating-system changes live.
   ThemeProvider writes each resolved color as an inline CSS variable on
   `<html>`, sets `color-scheme`, and mirrors the appearance to
   `data-theme` for anything keyed on it.
-- The `dark` preset in `theme.ts` and the `:root` block in `styles.css`
-  must stay identical — `:root` is what paints before JS runs.
+- The Catamorphic Light and Dark presets in `theme.ts` and the paired
+  `light-dark()` values in `styles.css` must stay identical. `:root` follows
+  the operating system for the pre-JS first paint.
 - Tokens are mapped into Tailwind 4 via `@theme inline` so utilities and
   registry components pick them up without a config file.
 
@@ -3230,3 +3234,17 @@ paths, deliberately independent:
   language. They remain semantic HTML forms with password-manager metadata,
   visible keyboard focus, responsive layout, reduced-motion handling, and a
   restrictive per-response content security policy.
+
+### System appearance is the theme default (2026-09-04)
+
+- A new profile stores `selection: "system"` and resolves it through Electron's
+  native appearance to Catamorphic Light or Catamorphic Dark. Operating-system
+  changes re-resolve every system-following profile and update all of its open
+  windows without changing the stored selection.
+- Settings presents System default as a first-class choice above the explicit
+  preset cards. Choosing Light, Dark, Midnight, or Paper pins that selection;
+  choosing System default resumes following the device.
+- The renderer declares both supported color schemes before JavaScript runs.
+  Its paired `light-dark()` fallback tokens keep the first paint aligned with
+  the operating system, while the resolved profile palette remains the source
+  of truth after startup.

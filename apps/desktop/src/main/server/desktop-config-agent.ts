@@ -159,17 +159,18 @@ turn). Format:
 
 \`\`\`json
 {
-  "preset": "dark",
+  "selection": "system",
   "overrides": { "accent": "#7c5cff" }
 }
 \`\`\`
 
-Presets: ${THEME_PRESETS.map((preset) => `\`${preset.id}\` (${preset.label})`).join(", ")}.
+Selections: \`system\` (follows the operating system with Catamorphic Light
+and Catamorphic Dark), ${THEME_PRESETS.map((preset) => `\`${preset.id}\` (${preset.label})`).join(", ")}.
 \`overrides\` replaces individual colors on top of the preset, and any CSS
 color works. Tokens:
 ${THEME_TOKENS.map((token) => `\`${token}\``).join(", ")}.
 
-Unknown presets, tokens, or invalid colors are ignored. Keep overrides
+Unknown selections, tokens, or invalid colors are ignored. Keep overrides
 minimal (prefer picking the closest preset); when changing surface colors,
 keep enough contrast with the text tokens.
 
