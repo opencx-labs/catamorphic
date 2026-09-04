@@ -94,10 +94,10 @@ export function CreateSubsessionDialog({
           <PendingButton
             type="submit"
             pending={pending}
-            pendingLabel="Creating…"
+            pendingLabel="Starting…"
             className="h-8 rounded-md bg-accent px-3 text-[13px] font-medium text-accent-fg disabled:opacity-50"
           >
-            Create subsession
+            Start subsession
           </PendingButton>
         </footer>
       </form>
