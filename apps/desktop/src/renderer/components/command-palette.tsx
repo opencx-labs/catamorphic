@@ -681,7 +681,8 @@ export function CommandPalette({
 
   const workflows = useWorkflows(projectId).data ?? [];
   const apps = useApps(projectId).data ?? [];
-  const sessions = useAgentSessions(projectId).data?.items ?? [];
+  const sessions =
+    useAgentSessions(projectId, { limit: 100 }).data?.items ?? [];
   // Fresh on every open, like history below: skills are files an agent or
   // collaborator may have just written. The tab variant is always "open",
   // so a new query session (empty → typing) is its refresh moment.
@@ -959,13 +960,23 @@ export function CommandPalette({
       });
     }
     for (const session of sessions) {
-      if (!session.title) continue;
+      if (session.visibility === "latent") continue;
+      const created = new Date(session.createdAt);
+      const label =
+        session.title ??
+        `Chat ${created.toLocaleDateString()} ${created.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}`;
       items.push({
         id: `session:${session.id}`,
         icon: MessageSquare,
-        label: session.title,
-        detail: "Chat",
-        keywords: [session.title, "chat", "session", "conversation"],
+        label,
+        detail: session.visibility === "archived" ? "Archived chat" : "Chat",
+        keywords: [
+          label,
+          "chat",
+          "session",
+          "conversation",
+          ...(session.visibility === "archived" ? ["archived"] : []),
+        ],
         kind: "navigate",
         run: () => onOpenSession(session),
       });

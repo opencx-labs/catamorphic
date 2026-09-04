@@ -55,6 +55,8 @@ export interface CodexAgentOpts {
   sandboxMode?: "read-only" | "workspace-write" | "danger-full-access";
   /** Allow network access inside the workspace-write sandbox (default true). */
   networkAccessEnabled?: boolean;
+  /** Use the host's first-class subsessions instead of Codex's private agents. */
+  disableNativeSubagents?: boolean;
   /**
    * External MCP servers for this agent. Codex has no programmatic MCP
    * option, but its CLI accepts arbitrary `--config` overrides — the SDK
@@ -127,6 +129,7 @@ export class CodexAgent implements CodingAgentProvider {
     Record<string, AgentMcpServerConfig>
   >();
   private readonly sessionContexts = new Map<string, ExtraToolContext>();
+  private readonly turnAbortControllers = new Map<string, AbortController>();
   constructor(opts: CodexAgentOpts = {}) {
     this.opts = opts;
   }
@@ -168,7 +171,7 @@ export class CodexAgent implements CodingAgentProvider {
     // Host checkout assignments can change between turns. Preserve the
     // caller captured at start while refreshing the live session fields.
     this.sessionContexts.set(session.sessionId, context);
-    const config = mcpServersConfig(
+    const mcpConfig = mcpServersConfig(
       {
         ...resolveMcpServers(this.opts.mcpServers),
         ...this.opts.mcpServersForSession?.(context),
@@ -177,6 +180,9 @@ export class CodexAgent implements CodingAgentProvider {
       mergePolicyLayers(own, this.callerPolicies.get(session.sessionId)),
       annotations,
     );
+    const config = this.opts.disableNativeSubagents
+      ? { ...mcpConfig, features: { multi_agent: false } }
+      : mcpConfig;
     return this.buildClient(config);
   }
 
@@ -240,11 +246,19 @@ export class CodexAgent implements CodingAgentProvider {
     const input = session.providerSessionId
       ? prose
       : this.withInstructions(session.sessionId, prose);
+    const abortController = new AbortController();
+    this.turnAbortControllers.set(session.sessionId, abortController);
+    if (session.providerSessionId) {
+      this.turnAbortControllers.set(session.providerSessionId, abortController);
+    }
 
     let stream: AsyncIterable<ThreadEvent>;
     try {
-      stream = (await thread.runStreamed(input)).events;
+      stream = (
+        await thread.runStreamed(input, { signal: abortController.signal })
+      ).events;
     } catch (error) {
+      this.clearAbortController(abortController);
       yield { type: "error", content: describeError(error) };
       yield { type: "done" };
       return;
@@ -259,6 +273,7 @@ export class CodexAgent implements CodingAgentProvider {
       for await (const event of stream) {
         if (event.type === "thread.started" && !session.providerSessionId) {
           this.pendingInstructions.delete(session.sessionId);
+          this.turnAbortControllers.set(event.thread_id, abortController);
           yield { type: "session", providerSessionId: event.thread_id };
         }
         if (event.type === "item.started" || event.type === "item.updated") {
@@ -289,15 +304,28 @@ export class CodexAgent implements CodingAgentProvider {
     } catch (error) {
       yield { type: "error", content: describeError(error) };
       yield { type: "done" };
+    } finally {
+      this.clearAbortController(abortController);
     }
+  }
+
+  interrupt(providerSessionId: string): void {
+    this.turnAbortControllers.get(providerSessionId)?.abort();
   }
 
   async dispose(session: ProviderSession): Promise<void> {
     // Threads live on disk under $CODEX_HOME; nothing else to release.
+    this.interrupt(session.providerSessionId ?? session.sessionId);
     this.pendingInstructions.delete(session.sessionId);
     this.callerPolicies.delete(session.sessionId);
     this.sessionContexts.delete(session.sessionId);
     this.sessionMcpServers.delete(session.sessionId);
+  }
+
+  private clearAbortController(controller: AbortController): void {
+    for (const [key, current] of this.turnAbortControllers) {
+      if (current === controller) this.turnAbortControllers.delete(key);
+    }
   }
 
   /**

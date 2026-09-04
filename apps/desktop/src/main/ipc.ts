@@ -157,6 +157,7 @@ export interface ProjectAgentInfo {
   connections: string[];
   /** Picked skill names; null = every skill. */
   skills: string[] | null;
+  delegation: import("@catamorphic/core").AgentDelegationPolicy | null;
   /** First lines of the persona file, for the consent dialog. */
   promptPreview: string | null;
   /**
@@ -540,6 +541,7 @@ export function registerIpcHandlers(
           typeof connection === "string" ? connection : connection.alias,
         ) ?? [],
       skills: definition?.skills ?? null,
+      delegation: definition?.delegation ?? null,
       promptPreview,
       consent,
       invalid: entry.invalid?.error ?? null,

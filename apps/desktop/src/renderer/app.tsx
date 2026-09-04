@@ -1,8 +1,11 @@
 import {
   useAcknowledgeAgentSessionAttention,
   useAgentSessions,
+  useArchiveAgentSession,
+  useCreateAgentSession,
   useForkAgentSession,
   useProjects,
+  useUnarchiveAgentSession,
   useUpdateAgentSession,
   useWorkflows,
 } from "@catamorphic/react";
@@ -31,6 +34,7 @@ import {
   Suspense,
   useCallback,
   useEffect,
+  useMemo,
   useRef,
   useState,
 } from "react";
@@ -76,6 +80,10 @@ import { RemoteConnectionIndicator } from "./components/remote-connection-indica
 import { RemoteHistoryModal } from "./components/remote-history-modal.js";
 import { type RemoteFeatures, RemoteNav } from "./components/remote-nav.js";
 import { SessionInspectorContent } from "./components/session-inspector.js";
+import {
+  ArchiveSessionDialog,
+  CreateSubsessionDialog,
+} from "./components/session-lifecycle-dialogs.js";
 import { ShortcutHint } from "./components/shortcut-hint.js";
 import { SidebarItemRow } from "./components/sidebar-item-row.js";
 import { SiteFavicon } from "./components/site-favicon.js";
@@ -783,7 +791,7 @@ export function App() {
 
   const setSessionListPreference = useCallback(
     (
-      key: "archivedSessionIds" | "unreadSessionIds",
+      key: "unreadSessionIds",
       sessionIds: readonly string[],
       included: boolean,
     ) => {
@@ -800,10 +808,7 @@ export function App() {
       ) {
         return;
       }
-      const patch: Partial<AppPrefs> =
-        key === "archivedSessionIds"
-          ? { archivedSessionIds: nextIds }
-          : { unreadSessionIds: nextIds };
+      const patch: Partial<AppPrefs> = { unreadSessionIds: nextIds };
       const next = { ...current, ...patch };
       prefsRef.current = next;
       setPrefs(next);
@@ -811,23 +816,6 @@ export function App() {
     },
     [],
   );
-
-  const applySessionAction = (sessionId: string, action: ChatSessionAction) => {
-    switch (action) {
-      case "mark-read":
-        setSessionListPreference("unreadSessionIds", [sessionId], false);
-        break;
-      case "mark-unread":
-        setSessionListPreference("unreadSessionIds", [sessionId], true);
-        break;
-      case "archive":
-        setSessionListPreference("archivedSessionIds", [sessionId], true);
-        break;
-      case "unarchive":
-        setSessionListPreference("archivedSessionIds", [sessionId], false);
-        break;
-    }
-  };
 
   // Profiles own the whole environment: session partition, projects,
   // theme/keys/sidebar, and the AI agent roster. Each window is born on a
@@ -1141,12 +1129,199 @@ export function App() {
   }, [profileVeil]);
 
   // Shared with SessionsNav via the query cache; titles feed tab labels.
-  const sessionsQuery = useAgentSessions(projectId);
+  const sessionsQuery = useAgentSessions(projectId, { limit: 100 });
   const acknowledgeSessionAttention =
     useAcknowledgeAgentSessionAttention(projectId);
   const sessionsById = new Map(
     (sessionsQuery.data?.items ?? []).map((session) => [session.id, session]),
   );
+  const archiveSession = useArchiveAgentSession(projectId);
+  const unarchiveSession = useUnarchiveAgentSession(projectId);
+  const createSubsession = useCreateAgentSession(projectId);
+  const [subsessionParent, setSubsessionParent] = useState<AgentSession | null>(
+    null,
+  );
+  const [subsessionError, setSubsessionError] = useState<string | null>(null);
+  const [archiveRequest, setArchiveRequest] = useState<{
+    session: AgentSession;
+    sessionIds: string[];
+    terminalSessionIds: string[];
+    processCount: number;
+    runningCount: number;
+    watcherCount: number;
+  } | null>(null);
+  const [archiveError, setArchiveError] = useState<string | null>(null);
+
+  const descendantIds = (rootId: string): string[] => {
+    const found = new Set([rootId]);
+    let changed = true;
+    while (changed) {
+      changed = false;
+      for (const session of sessionsById.values()) {
+        if (
+          session.parentSessionId &&
+          found.has(session.parentSessionId) &&
+          !found.has(session.id)
+        ) {
+          found.add(session.id);
+          changed = true;
+        }
+      }
+    }
+    return [...found];
+  };
+
+  const terminalSessionsFor = (sessionIds: readonly string[]): string[] => {
+    const ids = new Set(sessionIds);
+    const chatIds = new Set(
+      workspace.chats
+        .filter((chat) => chat.sessionId && ids.has(chat.sessionId))
+        .map((chat) => chat.localId),
+    );
+    return [
+      ...new Set(
+        workspace.terminals
+          .filter((terminal) =>
+            terminal.chatLocalId ? chatIds.has(terminal.chatLocalId) : false,
+          )
+          .flatMap((terminal) =>
+            terminal.ptySessionId ? [terminal.ptySessionId] : [],
+          ),
+      ),
+    ];
+  };
+
+  const removeArchivedWorkspace = (sessionIds: readonly string[]) => {
+    const ids = new Set(sessionIds);
+    updateWorkspace((current) => {
+      const removedChats = new Set(
+        current.chats
+          .filter((chat) => chat.sessionId && ids.has(chat.sessionId))
+          .map((chat) => chat.localId),
+      );
+      const chats = current.chats.filter(
+        (chat) => !removedChats.has(chat.localId),
+      );
+      const browsers = current.browsers.filter(
+        (browser) =>
+          !browser.chatLocalId || !removedChats.has(browser.chatLocalId),
+      );
+      const terminals = current.terminals.filter(
+        (terminal) =>
+          !terminal.chatLocalId || !removedChats.has(terminal.chatLocalId),
+      );
+      const editors = current.editors.filter(
+        (editor) =>
+          !editor.chatLocalId || !removedChats.has(editor.chatLocalId),
+      );
+      const candidate = { ...current, chats, browsers, terminals, editors };
+      return {
+        ...candidate,
+        activeChatId: chats.some(
+          (chat) => chat.localId === current.activeChatId,
+        )
+          ? current.activeChatId
+          : chats.at(-1)?.localId,
+        activeTabKey: orderedTabKeys(candidate).includes(
+          current.activeTabKey ?? "",
+        )
+          ? current.activeTabKey
+          : orderedTabKeys(candidate).at(-1),
+      };
+    });
+  };
+
+  const finishArchive = async (request: NonNullable<typeof archiveRequest>) => {
+    setArchiveError(null);
+    try {
+      await Promise.all(
+        request.terminalSessionIds.map((sessionId) =>
+          desktopApi.terminalKill(sessionId),
+        ),
+      );
+      const result = await archiveSession.mutateAsync({
+        sessionId: request.session.id,
+        confirmStop: true,
+      });
+      removeArchivedWorkspace(result.impact.sessionIds);
+      setArchiveRequest(null);
+    } catch (cause) {
+      setArchiveError(cause instanceof Error ? cause.message : String(cause));
+    }
+  };
+
+  const beginArchive = async (session: AgentSession) => {
+    const sessionIds = descendantIds(session.id);
+    const terminalSessionIds = terminalSessionsFor(sessionIds);
+    if (terminalSessionIds.length > 0) {
+      setArchiveError(null);
+      setArchiveRequest({
+        session,
+        sessionIds,
+        terminalSessionIds,
+        processCount: terminalSessionIds.length,
+        runningCount: sessionIds.filter((id) => sessionsById.get(id)?.running)
+          .length,
+        watcherCount: 0,
+      });
+      return;
+    }
+    try {
+      const result = await archiveSession.mutateAsync({
+        sessionId: session.id,
+      });
+      removeArchivedWorkspace(result.impact.sessionIds);
+    } catch (cause) {
+      const details =
+        cause && typeof cause === "object" && "details" in cause
+          ? (cause.details as {
+              impact?: {
+                sessionIds?: string[];
+                runningSessionIds?: string[];
+                activeWatcherCount?: number;
+                activeProcessCount?: number;
+              };
+            })
+          : undefined;
+      if (details?.impact) {
+        setArchiveError(null);
+        setArchiveRequest({
+          session,
+          sessionIds: details.impact.sessionIds ?? sessionIds,
+          terminalSessionIds,
+          processCount: details.impact.activeProcessCount ?? 0,
+          runningCount: details.impact.runningSessionIds?.length ?? 0,
+          watcherCount: details.impact.activeWatcherCount ?? 0,
+        });
+        return;
+      }
+      setArchiveError(cause instanceof Error ? cause.message : String(cause));
+    }
+  };
+
+  const applySessionAction = (sessionId: string, action: ChatSessionAction) => {
+    const session = sessionsById.get(sessionId);
+    switch (action) {
+      case "new-subsession":
+        if (session) {
+          setSubsessionError(null);
+          setSubsessionParent(session);
+        }
+        break;
+      case "mark-read":
+        setSessionListPreference("unreadSessionIds", [sessionId], false);
+        break;
+      case "mark-unread":
+        setSessionListPreference("unreadSessionIds", [sessionId], true);
+        break;
+      case "archive":
+        if (session) void beginArchive(session);
+        break;
+      case "unarchive":
+        void unarchiveSession.mutateAsync(sessionId);
+        break;
+    }
+  };
 
   // Stable per-project default so pre-first-write renders and the first
   // state update agree on the initial chat's localId.
@@ -1169,7 +1344,11 @@ export function App() {
     : utilityWorkspaceKey
       ? (workspaces[utilityWorkspaceKey] ?? emptyUtilityWorkspace())
       : emptyUtilityWorkspace();
-  const archivedSessionIds = new Set(prefs?.archivedSessionIds ?? []);
+  const archivedSessionIds = new Set(
+    [...sessionsById.values()]
+      .filter((session) => session.visibility === "archived")
+      .map((session) => session.id),
+  );
   const unreadSessionIds = new Set(prefs?.unreadSessionIds ?? []);
   const unreadByChat: Record<string, boolean> = Object.fromEntries(
     workspace.chats.map((chat) => [
@@ -2149,7 +2328,7 @@ export function App() {
       ),
     }));
 
-  const openSession = (session: AgentSession) =>
+  const openSession = (session: AgentSession, placement?: "tab" | "split") =>
     updateWorkspace((ws) => {
       const existing = ws.chats.find((chat) => chat.sessionId === session.id);
       // Already-tabbed chats stay tabs; everything else opens as the
@@ -2162,13 +2341,25 @@ export function App() {
         ws.editors.length === 0 &&
         ws.chats.every((chat) => chat.mode !== "tab");
       const mode =
-        existing?.mode === "tab" || noTabsOpen
+        placement || existing?.mode === "tab" || noTabsOpen
           ? ("tab" as const)
           : ("partial" as const);
+      const parentLocalId = session.parentSessionId
+        ? ws.chats.find((chat) => chat.sessionId === session.parentSessionId)
+            ?.localId
+        : undefined;
       const entry = existing ?? {
         ...newChatEntry(mode),
         sessionId: session.id,
+        parentLocalId,
       };
+      const key = chatTabKey(entry.localId);
+      const split =
+        placement === "split" && ws.activeTabKey && ws.activeTabKey !== key
+          ? { leftKey: ws.activeTabKey, rightKey: key, ratio: 0.5 }
+          : placement === "tab"
+            ? null
+            : ws.split;
       return {
         ...ws,
         chats: [
@@ -2182,8 +2373,8 @@ export function App() {
           { ...entry, mode },
         ],
         activeChatId: entry.localId,
-        activeTabKey:
-          mode === "tab" ? chatTabKey(entry.localId) : ws.activeTabKey,
+        activeTabKey: mode === "tab" ? key : ws.activeTabKey,
+        split,
       };
     });
 
@@ -2996,6 +3187,11 @@ export function App() {
         ]),
       );
     });
+    if (key.startsWith("session:")) {
+      const session = sessionsById.get(key.slice("session:".length));
+      if (session) openSession(session, mode);
+      return;
+    }
     // App chips point at the app by name — materialize its tab if the
     // user hasn't opened it yet (the key doubles as the tab key).
     if (key.startsWith("app:")) {
@@ -4245,16 +4441,30 @@ export function App() {
   const surfacesFor = (chat: ChatDockEntry): ChatSurface[] => {
     const attentionKeys = chipAttention[chat.localId] ?? [];
     const surfaces: ChatSurface[] = [
-      // Conversations forked from this one ride the rail as chips too.
-      ...workspace.chats
-        .filter((candidate) => candidate.parentLocalId === chat.localId)
-        .map((candidate) => ({
-          key: chatTabKey(candidate.localId),
-          kind: "chat" as const,
-          label: chatLabels[candidate.localId] ?? "Fork",
-          active: Boolean(signalsByChat[candidate.localId]?.working),
-          removable: true,
-        })),
+      // Every first-class child lives on the parent's rail. Latent children
+      // stay here until the user messages them or they request attention.
+      ...[...sessionsById.values()]
+        .filter(
+          (session) =>
+            session.parentSessionId === chat.sessionId &&
+            session.visibility !== "archived",
+        )
+        .map((session) => {
+          const open = workspace.chats.find(
+            (candidate) => candidate.sessionId === session.id,
+          );
+          return {
+            key: open ? chatTabKey(open.localId) : `session:${session.id}`,
+            kind: session.forkedFromSessionId
+              ? ("chat" as const)
+              : ("subagent" as const),
+            label: sessionLabel(session),
+            active: open
+              ? Boolean(signalsByChat[open.localId]?.working)
+              : session.running,
+            attention: session.attentionRequired,
+          };
+        }),
       ...workspace.browsers
         .filter((browser) => browser.chatLocalId === chat.localId)
         .map((browser) => ({
@@ -4445,6 +4655,54 @@ export function App() {
           applyProjectAgent(agent, target);
         }}
       />
+      <CreateSubsessionDialog
+        parent={subsessionParent}
+        agents={[
+          ...(agentsData?.agents.map((agent) => ({
+            id: agent.id,
+            name: agent.name,
+          })) ?? []),
+          ...Object.entries(projectAgentNames).map(([id, name]) => ({
+            id,
+            name,
+          })),
+        ]}
+        defaultAgentId={effectiveDefaultAgentId}
+        pending={createSubsession.isPending}
+        error={subsessionError}
+        onClose={() => setSubsessionParent(null)}
+        onCreate={(input) => {
+          if (!subsessionParent) return;
+          setSubsessionError(null);
+          void createSubsession
+            .mutateAsync({
+              parentSessionId: subsessionParent.id,
+              ...input,
+            })
+            .then((session) => {
+              setSubsessionParent(null);
+              openSession(session);
+            })
+            .catch((cause) => {
+              setSubsessionError(
+                cause instanceof Error ? cause.message : String(cause),
+              );
+            });
+        }}
+      />
+      <ArchiveSessionDialog
+        session={archiveRequest?.session ?? null}
+        sessionCount={archiveRequest?.sessionIds.length ?? 0}
+        runningCount={archiveRequest?.runningCount ?? 0}
+        watcherCount={archiveRequest?.watcherCount ?? 0}
+        processCount={archiveRequest?.processCount ?? 0}
+        pending={archiveSession.isPending}
+        error={archiveError}
+        onClose={() => setArchiveRequest(null)}
+        onConfirm={() => {
+          if (archiveRequest) void finishArchive(archiveRequest);
+        }}
+      />
       <aside
         className={`flex shrink-0 flex-col overflow-hidden border-r border-border bg-bg-raised transition-[width] duration-200 ease-[cubic-bezier(0.2,0,0,1)] ${
           sidebarOpen ? "w-[260px]" : "w-0 border-r-0"
@@ -4497,7 +4755,6 @@ export function App() {
                     agentsData={agentsData}
                     defaultAgentId={effectiveDefaultAgentId}
                     projectAgentNames={projectAgentNames}
-                    archivedSessionIds={archivedSessionIds}
                     unreadSessionIds={unreadSessionIds}
                     onOpenTab={openTab}
                     onNewChat={() => addChat()}
@@ -5419,7 +5676,6 @@ function ConfiguredSection({
   agentsData,
   defaultAgentId,
   projectAgentNames,
-  archivedSessionIds,
   unreadSessionIds,
   onOpenTab,
   onNewChat,
@@ -5441,7 +5697,6 @@ function ConfiguredSection({
   agentsData: AgentsData | null;
   defaultAgentId: string | null;
   projectAgentNames: Record<string, string>;
-  archivedSessionIds: ReadonlySet<string>;
   unreadSessionIds: ReadonlySet<string>;
   onOpenTab: (tab: WorkspaceTab) => void;
   onNewChat: () => void;
@@ -5544,7 +5799,6 @@ function ConfiguredSection({
               agentsData={agentsData}
               defaultAgentId={defaultAgentId}
               projectAgentNames={projectAgentNames}
-              archivedSessionIds={archivedSessionIds}
               unreadSessionIds={unreadSessionIds}
               onEmptyChange={setEmpty}
               onSelect={onOpenSession}
@@ -5909,7 +6163,6 @@ function SessionsNav({
   agentsData,
   defaultAgentId,
   projectAgentNames,
-  archivedSessionIds,
   unreadSessionIds,
   onEmptyChange,
   onSelect,
@@ -5920,15 +6173,47 @@ function SessionsNav({
   agentsData: AgentsData | null;
   defaultAgentId: string | null;
   projectAgentNames: Record<string, string>;
-  archivedSessionIds: ReadonlySet<string>;
   unreadSessionIds: ReadonlySet<string>;
   onEmptyChange?: (empty: boolean) => void;
   onSelect: (session: AgentSession) => void;
   onSessionAction: (sessionId: string, action: ChatSessionAction) => void;
 }) {
-  const sessionsQuery = useAgentSessions(projectId);
-  const sessions = (sessionsQuery.data?.items ?? []).filter(
-    (session) => !archivedSessionIds.has(session.id),
+  const sessionsQuery = useAgentSessions(projectId, { limit: 100 });
+  const sessions = useMemo(
+    () =>
+      (sessionsQuery.data?.items ?? []).filter(
+        (session) => session.visibility === "promoted",
+      ),
+    [sessionsQuery.data?.items],
+  );
+  const [renderedSessions, setRenderedSessions] = useState<
+    Array<{ session: AgentSession; exiting: boolean }>
+  >([]);
+  useEffect(() => {
+    const currentById = new Map(
+      sessions.map((session) => [session.id, session]),
+    );
+    setRenderedSessions((current) => {
+      const currentIds = new Set(current.map((entry) => entry.session.id));
+      return [
+        ...current.map((entry) => ({
+          session: currentById.get(entry.session.id) ?? entry.session,
+          exiting: !currentById.has(entry.session.id),
+        })),
+        ...sessions
+          .filter((session) => !currentIds.has(session.id))
+          .map((session) => ({ session, exiting: false })),
+      ];
+    });
+    const timer = window.setTimeout(() => {
+      setRenderedSessions((current) =>
+        current.filter((entry) => currentById.has(entry.session.id)),
+      );
+    }, 180);
+    return () => window.clearTimeout(timer);
+  }, [sessions]);
+  const [collapsedParents, setCollapsedParents] = useState<Set<string>>(
+    () => new Set(),
   );
   const [checkouts, setCheckouts] = useState<SessionCheckoutInfo[]>([]);
   useEffect(() => {
@@ -5947,118 +6232,168 @@ function SessionsNav({
   useEffect(() => {
     onEmptyChange?.(isEmpty);
   }, [isEmpty, onEmptyChange]);
-  if (sessions.length === 0) {
+  if (sessions.length === 0 && renderedSessions.length === 0) {
     return <p className="px-2 py-1 text-xs text-fg-faint">No chats yet.</p>;
   }
-  return (
-    <ul className="flex flex-col gap-0.5">
-      {sessions.map((session) => {
-        const checkout = checkoutBySession.get(session.id);
-        const agentId = session.agentId ?? defaultAgentId;
-        const agentName =
-          agentsData?.agents.find((agent) => agent.id === agentId)?.name ??
-          (agentId ? projectAgentNames[agentId] : undefined) ??
-          "Default";
-        const checkoutLabel = checkout
-          ? checkout.kind === "external"
-            ? "External"
-            : (checkout.branch ?? "Worktree")
-          : undefined;
-        return (
-          <li key={session.id} data-session-id={session.id}>
-            <SidebarItemRow
-              label={sessionLabel(session)}
-              icon={
+  const renderedByParent = new Map<string | null, typeof renderedSessions>();
+  const renderedIds = new Set(
+    renderedSessions.map((entry) => entry.session.id),
+  );
+  for (const entry of renderedSessions) {
+    const parentId =
+      entry.session.parentSessionId &&
+      renderedIds.has(entry.session.parentSessionId)
+        ? entry.session.parentSessionId
+        : null;
+    const siblings = renderedByParent.get(parentId) ?? [];
+    siblings.push(entry);
+    renderedByParent.set(parentId, siblings);
+  }
+  const renderBranch = (parentId: string | null, depth: number): ReactNode =>
+    (renderedByParent.get(parentId) ?? []).map(({ session, exiting }) => {
+      const checkout = checkoutBySession.get(session.id);
+      const children = renderedByParent.get(session.id) ?? [];
+      const collapsed = collapsedParents.has(session.id);
+      const agentId = session.agentId ?? defaultAgentId;
+      const agentName =
+        agentsData?.agents.find((agent) => agent.id === agentId)?.name ??
+        (agentId ? projectAgentNames[agentId] : undefined) ??
+        "Default";
+      const checkoutLabel = checkout
+        ? checkout.kind === "external"
+          ? "External"
+          : (checkout.branch ?? "Worktree")
+        : undefined;
+      return (
+        <li
+          key={session.id}
+          data-session-id={session.id}
+          className={
+            exiting ? "animate-session-row-out" : "animate-session-row-in"
+          }
+        >
+          <SidebarItemRow
+            style={{ marginLeft: depth * 14 }}
+            label={sessionLabel(session)}
+            icon={
+              <span className="flex items-center gap-0.5">
+                {children.length > 0 ? (
+                  <button
+                    type="button"
+                    aria-label={
+                      collapsed ? "Expand subsessions" : "Collapse subsessions"
+                    }
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      setCollapsedParents((current) => {
+                        const next = new Set(current);
+                        if (next.has(session.id)) next.delete(session.id);
+                        else next.add(session.id);
+                        return next;
+                      });
+                    }}
+                    className="grid size-3.5 place-items-center rounded hover:bg-bg-overlay"
+                  >
+                    <ChevronRight
+                      className={`size-3 transition-transform duration-150 motion-reduce:transition-none ${collapsed ? "" : "rotate-90"}`}
+                    />
+                  </button>
+                ) : (
+                  <span className="size-3.5" />
+                )}
                 <ChatGlyph
                   icon={session.icon}
-                  fork={Boolean(session.parentSessionId)}
+                  fork={Boolean(session.forkedFromSessionId)}
                   className="size-3.5 shrink-0"
                 />
-              }
-              active={session.id === activeSessionId}
-              labelContent={
-                <>
-                  <AnimatedTitle text={sessionLabel(session)} />
-                  {session.attentionRequired ? (
-                    <span className="sr-only">Ready for you</span>
-                  ) : unreadSessionIds.has(session.id) ? (
-                    <span className="sr-only">Unread</span>
-                  ) : null}
-                </>
-              }
-              menu={chatSessionMenu({
-                unread: unreadSessionIds.has(session.id),
-                archived: false,
-              })}
-              preview={{
-                title: sessionLabel(session),
-                description: session.activity ?? undefined,
-                metadata: [
-                  { label: "Agent", value: agentName },
-                  {
-                    label: "Environment",
-                    value: session.environment ?? "Default",
-                  },
-                  {
-                    label: "Status",
-                    value: session.running
-                      ? "Working"
-                      : session.status === "closed"
-                        ? "Closed"
-                        : "Ready",
-                  },
-                  ...(checkoutLabel
-                    ? [{ label: "Checkout", value: checkoutLabel }]
-                    : []),
-                ],
-              }}
-              previewContent={
-                <SessionInspectorContent
-                  session={session}
-                  fallbackTitle={sessionLabel(session)}
-                  agentName={agentName}
-                  checkout={checkout ?? null}
-                  incognito={false}
-                />
-              }
-              end={
-                <>
-                  {(session.attentionRequired ||
-                    unreadSessionIds.has(session.id)) && (
-                    <span
-                      data-testid={
-                        session.attentionRequired
-                          ? "session-attention"
-                          : "session-unread"
-                      }
-                      className="grid size-3 shrink-0 place-items-center"
-                      aria-hidden="true"
-                    >
-                      <SignalBadge
-                        signals={{
-                          attention: session.attentionRequired,
-                          unread: unreadSessionIds.has(session.id),
-                        }}
-                        size="sm"
-                      />
-                    </span>
-                  )}
-                  {checkoutLabel ? (
-                    <span className="ml-auto flex max-w-28 shrink-0 items-center gap-1 truncate rounded bg-bg-inset px-1.5 py-0.5 text-[10px] text-fg-faint">
-                      <GitBranch className="size-2.5 shrink-0" />
-                      <span className="truncate">{checkoutLabel}</span>
-                    </span>
-                  ) : null}
-                </>
-              }
-              onOpen={() => onSelect(session)}
-              onAction={(entry) => onSessionAction(session.id, entry.action)}
-            />
-          </li>
-        );
-      })}
-    </ul>
-  );
+              </span>
+            }
+            active={session.id === activeSessionId}
+            labelContent={
+              <>
+                <AnimatedTitle text={sessionLabel(session)} />
+                {session.attentionRequired ? (
+                  <span className="sr-only">Ready for you</span>
+                ) : unreadSessionIds.has(session.id) ? (
+                  <span className="sr-only">Unread</span>
+                ) : null}
+              </>
+            }
+            menu={chatSessionMenu({
+              unread: unreadSessionIds.has(session.id),
+              archived: false,
+            })}
+            preview={{
+              title: sessionLabel(session),
+              description: session.activity ?? undefined,
+              metadata: [
+                { label: "Agent", value: agentName },
+                {
+                  label: "Environment",
+                  value: session.environment ?? "Default",
+                },
+                {
+                  label: "Status",
+                  value: session.running
+                    ? "Working"
+                    : session.status === "closed"
+                      ? "Closed"
+                      : "Ready",
+                },
+                ...(checkoutLabel
+                  ? [{ label: "Checkout", value: checkoutLabel }]
+                  : []),
+              ],
+            }}
+            previewContent={
+              <SessionInspectorContent
+                session={session}
+                fallbackTitle={sessionLabel(session)}
+                agentName={agentName}
+                checkout={checkout ?? null}
+                incognito={false}
+              />
+            }
+            end={
+              <>
+                {(session.attentionRequired ||
+                  unreadSessionIds.has(session.id)) && (
+                  <span
+                    data-testid={
+                      session.attentionRequired
+                        ? "session-attention"
+                        : "session-unread"
+                    }
+                    className="grid size-3 shrink-0 place-items-center"
+                    aria-hidden="true"
+                  >
+                    <SignalBadge
+                      signals={{
+                        attention: session.attentionRequired,
+                        unread: unreadSessionIds.has(session.id),
+                      }}
+                      size="sm"
+                    />
+                  </span>
+                )}
+                {checkoutLabel ? (
+                  <span className="ml-auto flex max-w-28 shrink-0 items-center gap-1 truncate rounded bg-bg-inset px-1.5 py-0.5 text-[10px] text-fg-faint">
+                    <GitBranch className="size-2.5 shrink-0" />
+                    <span className="truncate">{checkoutLabel}</span>
+                  </span>
+                ) : null}
+              </>
+            }
+            onOpen={() => onSelect(session)}
+            onAction={(entry) => onSessionAction(session.id, entry.action)}
+          />
+          {!collapsed && children.length > 0 ? (
+            <ul>{renderBranch(session.id, depth + 1)}</ul>
+          ) : null}
+        </li>
+      );
+    });
+  return <ul className="flex flex-col gap-0.5">{renderBranch(null, 0)}</ul>;
 }
 
 function sessionLabel(session: AgentSession): string {

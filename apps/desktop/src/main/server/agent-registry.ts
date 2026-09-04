@@ -3,6 +3,7 @@ import path from "node:path";
 import type {
   AgentCoordinationStrategy,
   AgentDefinition,
+  AgentDelegationPolicy,
   CodingAgentRegistry,
   RegisteredCodingAgent,
   ToolPermissionBroker,
@@ -134,6 +135,25 @@ export interface DesktopAgentRegistryDeps {
   e2eFake?: boolean;
 }
 
+function resolveProjectDelegation(
+  policy: AgentDelegationPolicy | undefined,
+  projectId: string,
+): AgentDelegationPolicy | undefined {
+  if (!policy) return undefined;
+  return {
+    ...policy,
+    routes: policy.routes.map((route) => {
+      const relative = route.target.match(/^project:([^:]+)$/);
+      return relative
+        ? {
+            ...route,
+            target: projectAgentId(projectId, relative[1] ?? ""),
+          }
+        : route;
+    }),
+  };
+}
+
 /**
  * Per-harness mapping of the normalized operating mode (ADR 0056).
  * "edit" is each harness's designed unattended default.
@@ -211,6 +231,7 @@ export class DesktopAgentRegistry implements CodingAgentRegistry {
       key: string;
       provider: RegisteredCodingAgent["provider"];
       topology: RegisteredCodingAgent["topology"];
+      privilege: RegisteredCodingAgent["privilege"];
     }
   >();
   /** Per-agent resource closers (ai-sdk MCP clients), run on eviction. */
@@ -323,8 +344,10 @@ export class DesktopAgentRegistry implements CodingAgentRegistry {
         id,
         provider: cached.provider,
         topology: cached.topology,
+        privilege: config.mode ?? "edit",
         ...(config.environment ? { environment: config.environment } : {}),
         defaults,
+        delegation: config.delegation,
       };
     }
 
@@ -344,13 +367,16 @@ export class DesktopAgentRegistry implements CodingAgentRegistry {
       key,
       provider,
       topology: built.topology,
+      privilege: config.mode ?? "edit",
     });
     return {
       id,
       provider,
       topology: built.topology,
+      privilege: config.mode ?? "edit",
       ...(config.environment ? { environment: config.environment } : {}),
       defaults,
+      delegation: config.delegation,
     };
   }
 
@@ -753,6 +779,7 @@ export class DesktopAgentRegistry implements CodingAgentRegistry {
             ),
           }
         : {}),
+      ...(def.delegation ? { delegation: def.delegation } : {}),
     };
     const mcp = this.resolveMcp(config, profileId);
 
@@ -783,9 +810,11 @@ export class DesktopAgentRegistry implements CodingAgentRegistry {
         id,
         provider: cached.provider,
         topology: cached.topology,
+        privilege: def.mode ?? "edit",
         ...(def.environment ? { environment: def.environment } : {}),
         ...(def.connections ? { connectionRequirements: def.connections } : {}),
         defaults,
+        delegation: resolveProjectDelegation(def.delegation, projectId),
       };
     }
 
@@ -810,14 +839,21 @@ export class DesktopAgentRegistry implements CodingAgentRegistry {
     const provider = persona
       ? new PersonaCodingAgent(registered.provider, persona)
       : registered.provider;
-    this.cache.set(id, { key, provider, topology: registered.topology });
+    this.cache.set(id, {
+      key,
+      provider,
+      topology: registered.topology,
+      privilege: def.mode ?? "edit",
+    });
     return {
       id,
       provider,
       topology: registered.topology,
+      privilege: def.mode ?? "edit",
       ...(def.environment ? { environment: def.environment } : {}),
       ...(def.connections ? { connectionRequirements: def.connections } : {}),
       defaults,
+      delegation: resolveProjectDelegation(def.delegation, projectId),
     };
   }
 
@@ -1052,6 +1088,7 @@ export class DesktopAgentRegistry implements CodingAgentRegistry {
                 new CodexAgent({
                   model: config.model || undefined,
                   effort: config.effort,
+                  disableNativeSubagents: true,
                   sandboxMode: CODEX_SANDBOX_MODES[config.mode ?? "edit"],
                   ...(config.auth === "api-key" && config.apiKey
                     ? { apiKey: config.apiKey }

@@ -711,9 +711,13 @@ export class ClaudeCodeAgent implements CodingAgentProvider {
     const hostOwnsTodos =
       workspaceServer !== undefined &&
       extraTools.some((tool) => tool.name === "update_todo_list");
+    const hostOwnsSubagents =
+      workspaceServer !== undefined &&
+      extraTools.some((tool) => tool.name === "spawn_subsession");
     const disallowedTools = [
       ...(shellToolsDisabled ? SHELL_EXECUTION_TOOLS : []),
       ...(hostOwnsTodos ? [NATIVE_TODO_TOOL] : []),
+      ...(hostOwnsSubagents ? SUBAGENT_TOOLS : []),
     ];
 
     // Session-scoped servers win a name clash with the agent-wide set:
@@ -774,7 +778,8 @@ export class ClaudeCodeAgent implements CodingAgentProvider {
         ...ALLOWED_TOOLS.filter(
           (name) =>
             !(shellToolsDisabled && SHELL_EXECUTION_TOOLS.has(name)) &&
-            !(hostOwnsTodos && name === NATIVE_TODO_TOOL),
+            !(hostOwnsTodos && name === NATIVE_TODO_TOOL) &&
+            !(hostOwnsSubagents && SUBAGENT_TOOLS.has(name)),
         ),
         ...(workspaceServer
           ? extraTools.map((def) => `mcp__workspace__${def.name}`)

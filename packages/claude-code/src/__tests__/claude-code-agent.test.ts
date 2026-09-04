@@ -333,6 +333,30 @@ describe("ClaudeCodeAgent", () => {
     expect(options.disallowedTools).toContain("TodoWrite");
   });
 
+  it("replaces Claude Code's private subagents with host subsessions", async () => {
+    const agent = new ClaudeCodeAgent({
+      extraTools: [
+        {
+          name: "spawn_subsession",
+          description: "Create a host-owned child session",
+          parameters: {},
+          execute: async () => "ok",
+        },
+      ],
+    });
+    queryMock.mockReturnValueOnce(scriptedQuery([successResult]));
+
+    await collect(agent, "Delegate this review");
+
+    const options = lastQueryOptions();
+    expect(options.allowedTools).toContain("mcp__workspace__spawn_subsession");
+    expect(options.allowedTools).not.toContain("Agent");
+    expect(options.allowedTools).not.toContain("Task");
+    expect(options.disallowedTools).toEqual(
+      expect.arrayContaining(["Agent", "Task"]),
+    );
+  });
+
   it("refreshes workspace context when the host changes checkout", async () => {
     const contexts: unknown[] = [];
     const agent = new ClaudeCodeAgent({

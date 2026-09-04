@@ -1,6 +1,7 @@
 import * as icons from "lucide-react";
 import { ChevronRight, MoreHorizontal } from "lucide-react";
 import {
+  type CSSProperties,
   type ReactNode,
   type RefObject,
   useEffect,
@@ -61,6 +62,7 @@ export function SidebarItemRow<
   onOpen,
   onAction,
   renaming,
+  style,
   onRenameSubmit,
   onRenameCancel,
 }: {
@@ -81,6 +83,7 @@ export function SidebarItemRow<
   onAction: (entry: TMenuEntry) => void;
   /** Swap the label for an inline rename field. */
   renaming?: boolean;
+  style?: CSSProperties;
   onRenameSubmit?: (label: string) => void;
   onRenameCancel?: () => void;
 }) {
@@ -219,6 +222,7 @@ export function SidebarItemRow<
     // biome-ignore lint/a11y/noStaticElementInteractions: right-click mirrors the row's ⋯ button, which stays keyboard-reachable
     <div
       ref={rowRef}
+      style={style}
       className={`group relative flex h-7 items-center rounded-md transition-colors duration-150 ${
         active ? "bg-bg-overlay" : "hover:bg-bg-overlay/60"
       }`}

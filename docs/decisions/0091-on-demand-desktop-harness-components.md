@@ -1,4 +1,4 @@
-# 0090: Desktop coding harnesses use verified on-demand components
+# 0091: Desktop coding harnesses use verified on-demand components
 
 - **Status:** Accepted
 - **Date:** 2026-09-04

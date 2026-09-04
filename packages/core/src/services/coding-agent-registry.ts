@@ -3,7 +3,10 @@ import type {
   CodingAgentProvider,
   TurnOptions,
 } from "@catamorphic/sandbox";
-import type { AgentEnvironmentPolicy } from "./agent-definitions-service.js";
+import type {
+  AgentDelegationPolicy,
+  AgentEnvironmentPolicy,
+} from "./agent-definitions-service.js";
 import type { ConnectionRequirement } from "./connection-types.js";
 
 export interface RegisteredCodingAgent {
@@ -11,12 +14,16 @@ export interface RegisteredCodingAgent {
   id: string;
   provider: CodingAgentProvider;
   topology: AgentExecutionTopology;
+  /** Coarse execution ceiling used to prevent wildcard privilege escalation. */
+  privilege?: "read-only" | "edit" | "full-access";
   /** Additional compatibility requirements for profile-defined agents. */
   environment?: AgentEnvironmentPolicy;
   /** Brokered connection aliases required before this agent can start. */
   connectionRequirements?: readonly (string | ConnectionRequirement)[];
   /** Per-turn defaults applied when the session carries no override. */
   defaults?: TurnOptions;
+  /** Explicit source-to-target grants for first-class subsessions. */
+  delegation?: AgentDelegationPolicy;
 }
 
 /**

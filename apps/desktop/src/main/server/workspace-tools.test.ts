@@ -75,6 +75,12 @@ describe("workspace coordination tools", () => {
           content: `message ${index}`,
         })),
       }),
+      send: async () => ({}),
+      spawn: async () => ({}),
+      listSubsessions: async () => [],
+      waitForSubsessions: async () => [],
+      interruptSubsession: async () => {},
+      requestAttention: async () => ({}),
       setActivity: async () => {},
     });
     const list = toolkit.tools.find(
@@ -89,6 +95,81 @@ describe("workspace coordination tools", () => {
     expect(await read?.execute({ session_id: "peer" }, context)).toMatchObject({
       omitted: 10,
     });
+  });
+
+  it("delegates and controls child sessions through the coordination bridge", async () => {
+    const toolkit = buildWorkspaceToolkit({} as WorkspaceBridge);
+    const calls: unknown[] = [];
+    toolkit.setSessionCoordinationBridge({
+      list: async () => [],
+      read: async () => null,
+      send: async (...args) => {
+        calls.push(["send", ...args]);
+        return { queued: true };
+      },
+      spawn: async (...args) => {
+        calls.push(["spawn", ...args]);
+        return { delegationId: "delegation", session: { id: "child" } };
+      },
+      listSubsessions: async (...args) => {
+        calls.push(["list", ...args]);
+        return [{ session: { id: "child" }, status: "running" }];
+      },
+      waitForSubsessions: async (...args) => {
+        calls.push(["wait", ...args]);
+        return [{ session: { id: "child" }, status: "completed" }];
+      },
+      interruptSubsession: async (...args) => {
+        calls.push(["interrupt", ...args]);
+      },
+      requestAttention: async (...args) => {
+        calls.push(["attention", ...args]);
+        return { attentionRequired: true };
+      },
+      setActivity: async () => {},
+    });
+
+    const execute = (name: string, input: Record<string, unknown> = {}) =>
+      toolkit.tools.find((tool) => tool.name === name)?.execute(input, context);
+    await execute("send_project_session_message", {
+      session_id: "peer",
+      message: "Context",
+      delivery_mode: "message_only",
+    });
+    await execute("spawn_subsession", {
+      task: "Review the API",
+      route_id: "reviewer",
+      agent_id: "agent-small",
+      context_mode: "fresh",
+      title: "API review",
+    });
+    await execute("list_subsessions");
+    await execute("wait_for_subsessions", {
+      session_ids: ["child"],
+      timeout_ms: 25,
+    });
+    await execute("interrupt_subsession", { session_id: "child" });
+    await execute("request_user_attention");
+
+    expect(calls).toEqual([
+      ["send", "project", "session", "peer", "Context", "message_only"],
+      [
+        "spawn",
+        "project",
+        "session",
+        {
+          task: "Review the API",
+          routeId: "reviewer",
+          agentId: "agent-small",
+          contextMode: "fresh",
+          title: "API review",
+        },
+      ],
+      ["list", "project", "session"],
+      ["wait", "project", "session", { sessionIds: ["child"], timeoutMs: 25 }],
+      ["interrupt", "project", "session", "child"],
+      ["attention", "project", "session"],
+    ]);
   });
 
   it("changes checkout only through explicit tools", async () => {

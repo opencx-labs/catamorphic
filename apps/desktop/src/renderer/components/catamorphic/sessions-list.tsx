@@ -26,8 +26,10 @@ export function SessionsList({
   className = "",
   checkoutLabels = {},
 }: SessionsListProps) {
-  const sessionsQuery = useAgentSessions(projectId);
-  const sessions = sessionsQuery.data?.items ?? [];
+  const sessionsQuery = useAgentSessions(projectId, { limit: 100 });
+  const sessions = (sessionsQuery.data?.items ?? []).filter(
+    (session) => session.visibility === "promoted",
+  );
 
   if (sessionsQuery.isLoading) {
     return <p className="px-2 py-1 text-xs text-fg-muted">Loading…</p>;

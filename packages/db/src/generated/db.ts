@@ -43,6 +43,23 @@ export interface ActiveRunInvocations {
   workflow_step_attempt_id: string | null;
 }
 
+export interface AgentDelegations {
+  allow_further_delegation: Generated<boolean>;
+  completed_at: Timestamp | null;
+  context_mode: Generated<string>;
+  created_at: Generated<Timestamp>;
+  id: Generated<string>;
+  interrupted_by_external_user_id: string | null;
+  project_id: string;
+  result_message_id: string | null;
+  route_id: string;
+  source_session_id: string;
+  status: Generated<string>;
+  target_session_id: string;
+  task: string;
+  tenant_id: string;
+}
+
 export interface AgentMessages {
   author_kind: Generated<string>;
   author_payload: Generated<Json>;
@@ -99,6 +116,7 @@ export interface AgentSessions {
   created_at: Generated<Timestamp>;
   environment_name: string | null;
   external_user_id: string;
+  forked_from_session_id: string | null;
   handoff_destination_host_id: string | null;
   handoff_status: Generated<string>;
   icon: string | null;
@@ -117,6 +135,16 @@ export interface AgentSessions {
   todos: Generated<Json>;
   updated_at: Generated<Timestamp>;
   wake_key: string | null;
+}
+
+export interface AgentSessionViews {
+  archived_at: Timestamp | null;
+  external_user_id: string;
+  previous_visibility: Generated<string>;
+  session_id: string;
+  tenant_id: string;
+  updated_at: Generated<Timestamp>;
+  visibility: Generated<string>;
 }
 
 export interface AgentTurns {
@@ -993,9 +1021,11 @@ export interface WorkflowStepAttempts {
 export interface DB {
   _migrations: _Migrations;
   active_run_invocations: ActiveRunInvocations;
+  agent_delegations: AgentDelegations;
   agent_messages: AgentMessages;
   agent_runtime_events: AgentRuntimeEvents;
   agent_runtime_requests: AgentRuntimeRequests;
+  agent_session_views: AgentSessionViews;
   agent_sessions: AgentSessions;
   agent_turns: AgentTurns;
   app_storage: AppStorage;
