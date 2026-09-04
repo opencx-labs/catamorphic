@@ -33,6 +33,19 @@ TypeScript code is the single source of truth for workflow definitions. There is
 There is no public stage construct. All definitions remain exported TypeScript
 and the parser never executes author code.
 
+Top-level `connections` and inline `triggers` are also authored in the
+TypeScript definition and parsed as constant metadata. They describe what a
+workflow needs and what can wake it, not who is authorized. Committed
+`roles/*.json` grant workflow, agent, Environment, and connection refs;
+server-owned workflow enablements record each member's consent to an exact
+deployment. Do not encode either policy layer into a generated graph or a new
+workflow DSL.
+
+`context.host["catamorphic.sessions"].wake(...)` is a durable host transition,
+not a step-side effect. Its stable key selects a reusable member session; the
+agent's work proceeds through the normal session queue after the workflow call
+returns.
+
 ## AST-to-Graph Mapping
 
 | TypeScript Construct | Graph Node |

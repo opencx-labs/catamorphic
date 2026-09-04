@@ -46,6 +46,8 @@ export function RemoteConnectionIndicator({
   if (!projectId || !status) return null;
 
   const connection = status.connection;
+  const pendingChanges =
+    status.local.modified.length + status.local.deleted.length;
   const reconnect =
     connection.state === "sign_in_required" ||
     connection.state === "access_removed";
@@ -53,7 +55,27 @@ export function RemoteConnectionIndicator({
   const act = async () => {
     setBusy(true);
     try {
-      if (reconnect) await desktopApi.remoteReconnect(projectId);
+      if (reconnect) {
+        await desktopApi.remoteReconnect(projectId);
+      } else if (connection.state === "connected") {
+        const latest = await desktopApi.remoteStatus(projectId);
+        if (latest?.connection.state !== "connected") {
+          setStatus(latest);
+          return;
+        }
+        if (latest.local.modified.length || latest.local.deleted.length) {
+          const shipped = await desktopApi.remoteShip(projectId);
+          if (shipped.conflicts.length || shipped.failed.length) {
+            await refresh();
+            return;
+          }
+          // Shipping emits the shared project-change event. App owns the
+          // resulting pull so automatic and manual paths share its guard.
+          await refresh();
+          return;
+        }
+        await desktopApi.remoteSync(projectId);
+      }
       await refresh();
     } finally {
       setBusy(false);
@@ -68,7 +90,7 @@ export function RemoteConnectionIndicator({
         onClick={() => void act()}
         aria-label={label}
         data-testid="remote-connection-status"
-        className={`app-no-drag grid size-8 shrink-0 cursor-pointer place-items-center rounded-md border transition-colors duration-150 ${statusClasses(connection.state)}`}
+        className={`app-no-drag grid size-8 shrink-0 cursor-pointer place-items-center rounded-md border transition-colors duration-150 ${statusClasses(connection.state, pendingChanges > 0)}`}
       >
         {statusIcon(connection.state)}
       </PendingButton>
@@ -80,7 +102,12 @@ function statusLabel(status: RemoteProjectStatus): string {
   const host = safeHost(status.serverUrl);
   switch (status.connection.state) {
     case "connected":
-      return `Connected to ${host}. Click to check now.`;
+      if (status.local.modified.length || status.local.deleted.length) {
+        const count =
+          status.local.modified.length + status.local.deleted.length;
+        return `${count} ${count === 1 ? "change" : "changes"} waiting to sync with ${host}. Click to sync now.`;
+      }
+      return `Connected to ${host}. Click to sync now.`;
     case "sign_in_required":
       return `Sign in again to ${host}.`;
     case "access_removed":
@@ -105,7 +132,11 @@ function statusIcon(state: RemoteProjectStatus["connection"]["state"]) {
 
 function statusClasses(
   state: RemoteProjectStatus["connection"]["state"],
+  pendingChanges: boolean,
 ): string {
+  if (state === "connected" && pendingChanges) {
+    return "border-warning/40 bg-warning/10 text-warning hover:bg-warning/15";
+  }
   switch (state) {
     case "connected":
       return "border-success/35 bg-success/10 text-success hover:bg-success/15";

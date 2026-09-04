@@ -1,4 +1,5 @@
 import { contextBridge, ipcRenderer, webUtils } from "electron";
+import type { DesktopUpdateState } from "../shared/update.js";
 
 export interface ServerInfo {
   url: string | null;
@@ -8,6 +9,23 @@ export interface ServerInfo {
 const api = {
   getServerState: (): Promise<ServerInfo> =>
     ipcRenderer.invoke("catamorphic:server-state"),
+  updateState: (): Promise<DesktopUpdateState> =>
+    ipcRenderer.invoke("catamorphic:update-state"),
+  updateCheck: (): Promise<void> =>
+    ipcRenderer.invoke("catamorphic:update-check"),
+  updateDownload: (): Promise<void> =>
+    ipcRenderer.invoke("catamorphic:update-download"),
+  updateInstall: (): Promise<void> =>
+    ipcRenderer.invoke("catamorphic:update-install"),
+  onUpdateStateChanged: (
+    listener: (state: DesktopUpdateState) => void,
+  ): (() => void) => {
+    const handler = (_event: unknown, state: DesktopUpdateState) =>
+      listener(state);
+    ipcRenderer.on("catamorphic:update-state-changed", handler);
+    return () =>
+      ipcRenderer.removeListener("catamorphic:update-state-changed", handler);
+  },
 
   /**
    * Absolute filesystem path of a pasted/dropped File, "" when it has none
@@ -237,6 +255,8 @@ const api = {
     ipcRenderer.invoke("catamorphic:project-root", projectId),
   revealFolder: (folderPath: string): Promise<void> =>
     ipcRenderer.invoke("catamorphic:reveal-folder", folderPath),
+  projectOpenFile: (projectId: string, filePath: string): Promise<void> =>
+    ipcRenderer.invoke("catamorphic:project-open-file", projectId, filePath),
   githubConnectStart: (): Promise<{
     userCode: string;
     verificationUri: string;
@@ -271,6 +291,8 @@ const api = {
     ),
   projectAllowIncognito: (projectId: string): Promise<unknown> =>
     ipcRenderer.invoke("catamorphic:project-allow-incognito", projectId),
+  projectStartingActions: (projectId: string): Promise<unknown> =>
+    ipcRenderer.invoke("catamorphic:project-starting-actions", projectId),
   sessionMoveEligibility: (
     projectId: string,
     sessionId: string,

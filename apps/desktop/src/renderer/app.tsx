@@ -1,4 +1,5 @@
 import {
+  useAcknowledgeAgentSessionAttention,
   useAgentSessions,
   useForkAgentSession,
   useProjects,
@@ -18,6 +19,7 @@ import {
   PanelLeft,
   Plus,
   Settings as SettingsIcon,
+  Share2,
   Sparkles,
   Wand2,
   Workflow as WorkflowIcon,
@@ -47,6 +49,7 @@ import {
   type ChatSurface,
 } from "./components/chat-dock.js";
 import { ChatGlyph } from "./components/chat-icon.js";
+import { SignalBadge } from "./components/chat-signals.js";
 import { CommandPalette } from "./components/command-palette.js";
 import { ConfigureAgentModal } from "./components/configure-agent-modal.js";
 import { ConnectorsModal } from "./components/connectors-modal.js";
@@ -55,6 +58,7 @@ import {
   ElicitationModal,
   type PendingElicitation,
 } from "./components/elicitation-modal.js";
+import { FilesNav } from "./components/files-nav.js";
 import { GitNav } from "./components/git-nav.js";
 import { MobilePairingModal } from "./components/mobile-pairing-modal.js";
 import { PendingButton } from "./components/pending-button.js";
@@ -71,6 +75,7 @@ import { RemoteConnectModal } from "./components/remote-connect-modal.js";
 import { RemoteConnectionIndicator } from "./components/remote-connection-indicator.js";
 import { RemoteHistoryModal } from "./components/remote-history-modal.js";
 import { type RemoteFeatures, RemoteNav } from "./components/remote-nav.js";
+import { SessionInspectorContent } from "./components/session-inspector.js";
 import { ShortcutHint } from "./components/shortcut-hint.js";
 import { SidebarItemRow } from "./components/sidebar-item-row.js";
 import { SiteFavicon } from "./components/site-favicon.js";
@@ -78,11 +83,17 @@ import {
   type PendingToolPermission,
   ToolPermissionModal,
 } from "./components/tool-permission-modal";
+import { UpdateBanner } from "./components/update-banner.js";
 import {
   tabKey,
   type WorkspaceTab,
   WorkspaceTabBar,
 } from "./components/workspace-tabs.js";
+import {
+  type ChatSessionAction,
+  type ChatSessionMenuEntry,
+  chatSessionMenu,
+} from "./lib/chat-session-actions.js";
 import {
   type AgentEffort,
   type AgentsData,
@@ -92,6 +103,7 @@ import {
   type Profile,
   type ProfilesData,
   type ProjectAgentInfo,
+  type RemoteProjectStatus,
   type SessionCheckoutInfo,
   type SidebarConfig,
   type SidebarItem,
@@ -303,6 +315,22 @@ const emptyWorkspace = (): Workspace => {
     closedTabs: [],
   };
 };
+
+/**
+ * Profile-local, non-persisted browser surface used before a first project
+ * exists. Remote sign-in still belongs in the app, even though there is not
+ * yet a project workspace to own its temporary tab.
+ */
+const emptyUtilityWorkspace = (): Workspace => ({
+  tabs: [],
+  chats: [],
+  browsers: [],
+  terminals: [],
+  editors: [],
+  split: null,
+  tabOrder: [],
+  closedTabs: [],
+});
 
 const chatTabKey = (localId: string) => `chat:${localId}`;
 const browserTabKey = (localId: string) => `browser:${localId}`;
@@ -679,7 +707,7 @@ export function App() {
   const [activeProjectId, setActiveProjectId] = useState<string>();
   const [workspaces, setWorkspaces] = useState<Record<string, Workspace>>({});
   const [projectModalOpen, setProjectModalOpen] = useState(false);
-  // Remote projects (ADR 0055): connect from a link or by hand; per-file
+  // Remote projects (ADR 0055): connect from an invitation link; per-file
   // store history for the current project.
   const [remoteConnect, setRemoteConnect] = useState<{
     open: boolean;
@@ -701,6 +729,11 @@ export function App() {
     files: string[];
     features: RemoteFeatures | undefined;
   } | null>(null);
+  const [remoteSurfaceState, setRemoteSurfaceState] = useState<{
+    projectId: string;
+    status: RemoteProjectStatus | null;
+  } | null>(null);
+  const syncingRemoteProjectsRef = useRef(new Set<string>());
   useEffect(() => {
     // Pull the pending link on mount (cold launch from an invite) and
     // whenever main nudges; main clears it once taken.
@@ -725,7 +758,6 @@ export function App() {
   const [signalsByChat, setSignalsByChat] = useState<
     Record<string, ChatLiveSignals>
   >({});
-  const [unreadByChat, setUnreadByChat] = useState<Record<string, boolean>>({});
   // Surfaces an agent opened in the BACKGROUND (open_surface while the
   // user was on another tab): chat localId → surface keys whose chip
   // carries the attention indicator. Cleared when the user opens that
@@ -748,6 +780,54 @@ export function App() {
   }, []);
   const prefsRef = useRef(prefs);
   prefsRef.current = prefs;
+
+  const setSessionListPreference = useCallback(
+    (
+      key: "archivedSessionIds" | "unreadSessionIds",
+      sessionIds: readonly string[],
+      included: boolean,
+    ) => {
+      const current = prefsRef.current;
+      if (!current || sessionIds.length === 0) return;
+      const changedIds = new Set(sessionIds);
+      const currentIds = current[key];
+      const nextIds = included
+        ? [...new Set([...currentIds, ...sessionIds])]
+        : currentIds.filter((id) => !changedIds.has(id));
+      if (
+        nextIds.length === currentIds.length &&
+        nextIds.every((id, index) => id === currentIds[index])
+      ) {
+        return;
+      }
+      const patch: Partial<AppPrefs> =
+        key === "archivedSessionIds"
+          ? { archivedSessionIds: nextIds }
+          : { unreadSessionIds: nextIds };
+      const next = { ...current, ...patch };
+      prefsRef.current = next;
+      setPrefs(next);
+      void desktopApi.setPrefs(patch);
+    },
+    [],
+  );
+
+  const applySessionAction = (sessionId: string, action: ChatSessionAction) => {
+    switch (action) {
+      case "mark-read":
+        setSessionListPreference("unreadSessionIds", [sessionId], false);
+        break;
+      case "mark-unread":
+        setSessionListPreference("unreadSessionIds", [sessionId], true);
+        break;
+      case "archive":
+        setSessionListPreference("archivedSessionIds", [sessionId], true);
+        break;
+      case "unarchive":
+        setSessionListPreference("archivedSessionIds", [sessionId], false);
+        break;
+    }
+  };
 
   // Profiles own the whole environment: session partition, projects,
   // theme/keys/sidebar, and the AI agent roster. Each window is born on a
@@ -862,6 +942,68 @@ export function App() {
     ) ??
     projects[0];
   const projectId = activeProject?.id;
+  const remoteSurfaceResolved = Boolean(
+    projectId && remoteSurfaceState?.projectId === projectId,
+  );
+  const remoteSurfaceStatus = remoteSurfaceResolved
+    ? (remoteSurfaceState?.status ?? null)
+    : null;
+  const memberShell = !remoteSurfaceResolved
+    ? true
+    : remoteSurfaceStatus !== null &&
+      remoteSurfaceStatus.capabilities?.builder !== true;
+
+  useEffect(() => {
+    if (!projectId) {
+      setRemoteSurfaceState(null);
+      return;
+    }
+    let cancelled = false;
+    const refresh = (sync = false) => {
+      void desktopApi
+        .remoteStatus(projectId)
+        .then((status) => {
+          if (cancelled) return;
+          setRemoteSurfaceState({ projectId, status });
+          if (
+            sync &&
+            status?.connection.state === "connected" &&
+            !syncingRemoteProjectsRef.current.has(projectId)
+          ) {
+            syncingRemoteProjectsRef.current.add(projectId);
+            void (async () => {
+              if (status.local.modified.length || status.local.deleted.length) {
+                const shipped = await desktopApi.remoteShip(projectId);
+                if (shipped.conflicts.length || shipped.failed.length) return;
+              }
+              await desktopApi.remoteSync(projectId);
+              const nextStatus = await desktopApi.remoteStatus(projectId);
+              if (!cancelled) {
+                setRemoteSurfaceState({ projectId, status: nextStatus });
+              }
+            })()
+              .catch(() => undefined)
+              .finally(() => {
+                syncingRemoteProjectsRef.current.delete(projectId);
+              });
+          }
+        })
+        .catch(() => {
+          if (!cancelled) setRemoteSurfaceState({ projectId, status: null });
+        });
+    };
+    refresh(true);
+    const unsubscribe = desktopApi.onGitChanged((event) => {
+      if (event.projectId === projectId) refresh(true);
+    });
+    const syncOnFocus = () => refresh(true);
+    window.addEventListener("focus", syncOnFocus);
+    return () => {
+      cancelled = true;
+      unsubscribe();
+      window.removeEventListener("focus", syncOnFocus);
+    };
+  }, [projectId]);
 
   const startWithAgent = async (): Promise<void> => {
     const project = await desktopApi.createDefaultProject();
@@ -878,15 +1020,27 @@ export function App() {
   // Project policy (ADR 0062): the committed manifest may disable
   // incognito sessions for this project's members.
   const [incognitoAllowed, setIncognitoAllowed] = useState(true);
+  const [startingActions, setStartingActions] = useState<
+    Array<{ label: string; prompt: string; agentId?: string }>
+  >([]);
   useEffect(() => {
-    if (!projectId) return;
+    if (!projectId) {
+      setStartingActions([]);
+      return;
+    }
+    setStartingActions([]);
+    setIncognitoAllowed(true);
     let cancelled = false;
-    void desktopApi
-      .projectAllowIncognito(projectId)
-      .then((allowed) => {
-        if (!cancelled) setIncognitoAllowed(allowed);
-      })
-      .catch(() => {});
+    void Promise.allSettled([
+      desktopApi.projectAllowIncognito(projectId),
+      desktopApi.projectStartingActions(projectId),
+    ]).then(([allowed, actions]) => {
+      if (cancelled) return;
+      setIncognitoAllowed(
+        allowed.status === "fulfilled" ? allowed.value : true,
+      );
+      setStartingActions(actions.status === "fulfilled" ? actions.value : []);
+    });
     return () => {
       cancelled = true;
     };
@@ -988,6 +1142,8 @@ export function App() {
 
   // Shared with SessionsNav via the query cache; titles feed tab labels.
   const sessionsQuery = useAgentSessions(projectId);
+  const acknowledgeSessionAttention =
+    useAcknowledgeAgentSessionAttention(projectId);
   const sessionsById = new Map(
     (sessionsQuery.data?.items ?? []).map((session) => [session.id, session]),
   );
@@ -1004,21 +1160,61 @@ export function App() {
     return created;
   }, []);
 
+  const utilityWorkspaceKey = activeProfile
+    ? `profile:${activeProfile.id}:utility`
+    : null;
+  const workspaceKey = projectId ?? utilityWorkspaceKey;
   const workspace: Workspace = projectId
     ? (workspaces[projectId] ?? defaultWorkspaceFor(projectId))
-    : emptyWorkspace();
+    : utilityWorkspaceKey
+      ? (workspaces[utilityWorkspaceKey] ?? emptyUtilityWorkspace())
+      : emptyUtilityWorkspace();
+  const archivedSessionIds = new Set(prefs?.archivedSessionIds ?? []);
+  const unreadSessionIds = new Set(prefs?.unreadSessionIds ?? []);
+  const unreadByChat: Record<string, boolean> = Object.fromEntries(
+    workspace.chats.map((chat) => [
+      chat.localId,
+      Boolean(chat.sessionId && unreadSessionIds.has(chat.sessionId)),
+    ]),
+  );
+  const attentionByChat: Record<string, boolean> = Object.fromEntries(
+    workspace.chats.map((chat) => [
+      chat.localId,
+      Boolean(
+        chat.sessionId && sessionsById.get(chat.sessionId)?.attentionRequired,
+      ),
+    ]),
+  );
+  const chatMenus: Record<string, ChatSessionMenuEntry[]> = Object.fromEntries(
+    workspace.chats.flatMap((chat) =>
+      chat.sessionId
+        ? [
+            [
+              chat.localId,
+              chatSessionMenu({
+                unread: unreadSessionIds.has(chat.sessionId),
+                archived: archivedSessionIds.has(chat.sessionId),
+              }),
+            ],
+          ]
+        : [],
+    ),
+  );
 
   const updateWorkspace = useCallback(
     (updater: (workspace: Workspace) => Workspace) => {
-      if (!projectId) return;
+      if (!workspaceKey) return;
       setWorkspaces((current) => ({
         ...current,
-        [projectId]: updater(
-          current[projectId] ?? defaultWorkspaceFor(projectId),
+        [workspaceKey]: updater(
+          current[workspaceKey] ??
+            (projectId
+              ? defaultWorkspaceFor(projectId)
+              : emptyUtilityWorkspace()),
         ),
       }));
     },
-    [projectId, defaultWorkspaceFor],
+    [projectId, workspaceKey, defaultWorkspaceFor],
   );
 
   // --- workspace persistence --------------------------------------------
@@ -1027,7 +1223,12 @@ export function App() {
   // are debounced and gated until that restore attempt settles, so the
   // boot-time empty workspace can never clobber the saved one.
   const workspaceRestoreRef = useRef(new Set<string>());
-  const workspacePersistReadyRef = useRef(new Set<string>());
+  const [workspaceReadyProjectIds, setWorkspaceReadyProjectIds] = useState(
+    new Set<string>(),
+  );
+  const workspaceReady = Boolean(
+    projectId && workspaceReadyProjectIds.has(projectId),
+  );
   useEffect(() => {
     if (!projectId || workspaceRestoreRef.current.has(projectId)) return;
     workspaceRestoreRef.current.add(projectId);
@@ -1045,11 +1246,13 @@ export function App() {
       })
       .catch(() => {})
       .finally(() => {
-        workspacePersistReadyRef.current.add(projectId);
+        setWorkspaceReadyProjectIds(
+          (current) => new Set([...current, projectId]),
+        );
       });
   }, [projectId]);
   useEffect(() => {
-    if (!projectId || !workspacePersistReadyRef.current.has(projectId)) return;
+    if (!projectId || !workspaceReady) return;
     const snapshot = workspaces[projectId];
     if (!snapshot) return;
     const timer = window.setTimeout(() => {
@@ -1058,7 +1261,40 @@ export function App() {
         .catch(() => {});
     }, 500);
     return () => window.clearTimeout(timer);
-  }, [workspaces, projectId]);
+  }, [workspaces, projectId, workspaceReady]);
+
+  // A workflow-created session is a notification surface in its own right.
+  // Once its turn settles, materialize it as a minimized dock bubble without
+  // stealing focus. One bubble is created per attention revision; closing it
+  // does not hide the matching pulsing row in the sidebar.
+  const surfacedAttentionRef = useRef(new Map<string, number>());
+  useEffect(() => {
+    if (!projectId || !workspaceReady) return;
+    const attentionSessions = (sessionsQuery.data?.items ?? []).filter(
+      (session) => session.attentionRequired,
+    );
+    if (attentionSessions.length === 0) return;
+    updateWorkspace((ws) => {
+      const additions: ChatDockEntry[] = [];
+      for (const session of attentionSessions) {
+        const key = `${projectId}:${session.id}`;
+        const surfaced = surfacedAttentionRef.current.get(key) ?? 0;
+        if (ws.chats.some((chat) => chat.sessionId === session.id)) {
+          surfacedAttentionRef.current.set(key, session.attentionRevision);
+          continue;
+        }
+        if (surfaced >= session.attentionRevision) continue;
+        surfacedAttentionRef.current.set(key, session.attentionRevision);
+        additions.push({
+          ...newChatEntry("min"),
+          sessionId: session.id,
+        });
+      }
+      return additions.length > 0
+        ? { ...ws, chats: [...ws.chats, ...additions] }
+        : ws;
+    });
+  }, [projectId, sessionsQuery.data, updateWorkspace, workspaceReady]);
 
   const openTab = (tab: WorkspaceTab, mode?: "side") =>
     updateWorkspace((ws) => {
@@ -1115,6 +1351,7 @@ export function App() {
           // pencil for an unsent draft, "?" for a waiting question.
           working: signalsByChat[chat.localId]?.working ?? false,
           unread: unreadByChat[chat.localId] ?? false,
+          attention: attentionByChat[chat.localId] ?? false,
           draft: signalsByChat[chat.localId]?.draft ?? false,
           awaitingInput: signalsByChat[chat.localId]?.awaitingInput ?? false,
         }),
@@ -1349,6 +1586,7 @@ export function App() {
   // (skill palette rows, post-auth continuations) speaks into an already
   // open chat. Sends queue behind an in-flight turn like composer sends.
   const chatSendersRef = useRef(new Map<string, (message: string) => void>());
+  const editorShareHandlersRef = useRef(new Map<string, () => Promise<void>>());
 
   // Webview guest WebContents ids per browser tab — the agent bridge
   // drives pages from the main process by guest id.
@@ -1779,7 +2017,7 @@ export function App() {
   };
 
   // Cmd+T and the tab-strip + always open a full chat tab (Chrome muscle
-  // memory); the sidebar +, bubble +, and Cmd+E open the floating aside.
+  // memory); the sidebar +, bubble +, and Cmd+N open the floating aside.
   const addChat = (forceMode?: "tab", opts?: { incognito?: boolean }) => {
     if (!requireAgents()) return;
     updateWorkspace((ws) => {
@@ -1838,12 +2076,17 @@ export function App() {
 
   // Palette "Send to agent": a new chat born with its first message
   // attached; ChatDock auto-sends it on mount.
-  const sendToAgent = (message: string, mode: "float" | "tab") => {
+  const sendToAgent = (
+    message: string,
+    mode: "float" | "tab",
+    agentId?: string,
+  ) => {
     if (!requireAgents()) return;
     updateWorkspace((ws) => {
       const entry: ChatDockEntry = {
         ...newChatEntry(mode === "tab" ? "tab" : "partial"),
         pendingMessage: message,
+        ...(agentId ? { agentId } : {}),
       };
       return {
         ...ws,
@@ -2015,7 +2258,9 @@ export function App() {
       // Response landed while the chat was hidden (minimized bubble or a
       // background tab) → unread dot.
       if (before.working && !next.working && chat && !chatVisible(ws, chat)) {
-        setUnreadByChat((unread) => ({ ...unread, [localId]: true }));
+        if (chat.sessionId) {
+          setSessionListPreference("unreadSessionIds", [chat.sessionId], true);
+        }
       }
       // Notify only on live transitions — the first report for a chat is
       // its mount snapshot (a reopened session with an old question must
@@ -2026,22 +2271,47 @@ export function App() {
         notifySettled(localId, "question");
       }
     },
-    [notifySettled],
+    [notifySettled, setSessionListPreference],
   );
 
-  // Bringing a chat's surface on screen marks it read.
+  // A hidden -> visible transition marks a session read. A manual "Mark as
+  // unread" while the chat is already visible therefore sticks until the
+  // user leaves and opens it again.
+  const visibleSessionIdsRef = useRef(new Set<string>());
   useEffect(() => {
-    const readIds = workspace.chats
-      .filter((chat) => chatVisible(workspace, chat))
-      .map((chat) => chat.localId);
-    if (readIds.some((id) => unreadByChat[id])) {
-      setUnreadByChat((current) => {
-        const next = { ...current };
-        for (const id of readIds) delete next[id];
-        return next;
+    const visibleIds = new Set(
+      workspace.chats
+        .filter((chat) => chatVisible(workspace, chat))
+        .flatMap((chat) => (chat.sessionId ? [chat.sessionId] : [])),
+    );
+    const newlyVisible = [...visibleIds].filter(
+      (id) => !visibleSessionIdsRef.current.has(id),
+    );
+    visibleSessionIdsRef.current = visibleIds;
+    setSessionListPreference("unreadSessionIds", newlyVisible, false);
+  }, [workspace, setSessionListPreference]);
+
+  const acknowledgingAttentionRef = useRef(new Set<string>());
+  useEffect(() => {
+    for (const chat of workspace.chats.filter((candidate) =>
+      chatVisible(workspace, candidate),
+    )) {
+      const sessionId = chat.sessionId;
+      if (
+        !sessionId ||
+        !sessionsById.get(sessionId)?.attentionRequired ||
+        acknowledgingAttentionRef.current.has(sessionId)
+      ) {
+        continue;
+      }
+      acknowledgingAttentionRef.current.add(sessionId);
+      acknowledgeSessionAttention.mutate(sessionId, {
+        onSettled: () => {
+          acknowledgingAttentionRef.current.delete(sessionId);
+        },
       });
     }
-  }, [workspace, unreadByChat]);
+  }, [workspace, sessionsById, acknowledgeSessionAttention]);
 
   // Cmd+W (via the app menu) closes the most specific surface in focus:
   // the floating chat if one is open, else the active workspace tab.
@@ -2184,13 +2454,16 @@ export function App() {
 
   const updateSession = useUpdateAgentSession(projectId);
   const forkSession = useForkAgentSession(projectId);
+  const [sessionInspectRequests, setSessionInspectRequests] = useState<
+    Record<string, number>
+  >({});
 
   /**
    * Fork a chat from one of its assistant messages: the server copies the
    * transcript into a new session (same agent, parent recorded); the fork
    * opens tiled beside the current view and chips onto the parent's rail.
    */
-  const forkChat = (parent: ChatDockEntry, messageId: string) => {
+  const forkChat = (parent: ChatDockEntry, messageId?: string) => {
     if (!parent.sessionId || forkSession.isPending) return;
     forkSession.mutate(
       { sessionId: parent.sessionId, messageId },
@@ -2930,6 +3203,15 @@ export function App() {
     "close-tab": closeActiveSurface,
     "setup-agent": () => setWizardModalOpen(true),
     "default-agent": () => openPalettePicker("default-agent"),
+    "session-status": () => {
+      const chat = actionChat(workspaceRef.current);
+      if (!chat) return;
+      revealChat(chat.localId);
+      setSessionInspectRequests((current) => ({
+        ...current,
+        [chat.localId]: (current[chat.localId] ?? 0) + 1,
+      }));
+    },
     "switch-agent": () => openPalettePicker("switch-agent"),
     "configure-agent": () => openPalettePicker("configure-agent"),
     "change-effort": () => openPalettePicker("effort"),
@@ -4066,6 +4348,7 @@ export function App() {
       Object.keys(projectAgentNames).length > 0,
     "switch-agent":
       focusedChat !== undefined && paletteSwitchableAgentIds.size > 0,
+    "session-status": focusedChat !== undefined,
     // Project-agent models are committed in their project definition, so
     // the mutable model picker only applies to configured profile agents.
     "switch-model":
@@ -4088,6 +4371,7 @@ export function App() {
         onSelectProject: selectProject,
         onSwitchProfile: switchProfile,
         onSendToAgent: sendToAgent,
+        startingActions,
         onRunSkill: runSkill,
         actionHandlers,
         actionAvailability: paletteActionAvailability,
@@ -4115,6 +4399,12 @@ export function App() {
       }
     : null;
 
+  const hasActiveWork =
+    Object.values(signalsByChat).some((signals) => signals.working) ||
+    Object.values(workspaces).some((candidate) =>
+      candidate.terminals.some((terminal) => terminal.busy),
+    );
+
   return (
     <div className="flex h-full">
       {/* Agent pointers: glow + scroll on data-point-key elements. The
@@ -4134,6 +4424,10 @@ export function App() {
       <ToolPermissionModal
         pending={toolPermissions[0] ?? null}
         queued={Math.max(0, toolPermissions.length - 1)}
+      />
+      <UpdateBanner
+        hasActiveWork={hasActiveWork}
+        onOpenRelease={(url) => openBrowserTab(url)}
       />
       <MobilePairingModal
         open={mobilePairing.open}
@@ -4177,39 +4471,49 @@ export function App() {
 
           <div className="min-h-0 flex-1 overflow-y-auto px-2">
             {projectId &&
-              (sidebarConfig?.sections ?? []).map((section, index) => (
-                <ConfiguredSection
-                  // biome-ignore lint/suspicious/noArrayIndexKey: sections have no id; the same type may appear twice, and order IS identity here
-                  key={`${section.type}:${index}`}
-                  section={section}
-                  projectId={projectId}
-                  profileId={activeProfile?.id}
-                  activeTab={activeTab}
-                  activeChatSessionId={
-                    workspace.chats.find(
-                      (chat) => chat.localId === workspace.activeChatId,
-                    )?.sessionId
-                  }
-                  keybindingLabel={formatBinding(
-                    keybindings["new-floating-chat"],
-                  )}
-                  agentsData={agentsData}
-                  defaultAgentId={effectiveDefaultAgentId}
-                  projectAgentNames={projectAgentNames}
-                  onOpenTab={openTab}
-                  onNewChat={() => addChat()}
-                  onOpenSession={openSession}
-                  onOpenUrl={openUrl}
-                  onOpenFile={(filePath) => openEditorTab({ filePath })}
-                  onOpenHistory={setRemoteHistoryPath}
-                  onPublish={(path, features) =>
-                    setRemotePublish({ path, features })
-                  }
-                  onPropose={(files, features) =>
-                    setRemotePropose({ files, features })
-                  }
-                />
-              ))}
+              (sidebarConfig?.sections ?? [])
+                .filter(
+                  (section) =>
+                    !memberShell ||
+                    !["git", "prs", "remote"].includes(section.type),
+                )
+                .map((section, index) => (
+                  <ConfiguredSection
+                    // biome-ignore lint/suspicious/noArrayIndexKey: sections have no id; the same type may appear twice, and order IS identity here
+                    key={`${section.type}:${index}`}
+                    section={section}
+                    memberShell={memberShell}
+                    projectId={projectId}
+                    profileId={activeProfile?.id}
+                    activeTab={activeTab}
+                    activeChatSessionId={
+                      workspace.chats.find(
+                        (chat) => chat.localId === workspace.activeChatId,
+                      )?.sessionId
+                    }
+                    keybindingLabel={formatBinding(
+                      keybindings["new-floating-chat"],
+                    )}
+                    agentsData={agentsData}
+                    defaultAgentId={effectiveDefaultAgentId}
+                    projectAgentNames={projectAgentNames}
+                    archivedSessionIds={archivedSessionIds}
+                    unreadSessionIds={unreadSessionIds}
+                    onOpenTab={openTab}
+                    onNewChat={() => addChat()}
+                    onOpenSession={openSession}
+                    onSessionAction={applySessionAction}
+                    onOpenUrl={openUrl}
+                    onOpenFile={(filePath) => openEditorTab({ filePath })}
+                    onOpenHistory={setRemoteHistoryPath}
+                    onPublish={(path, features) =>
+                      setRemotePublish({ path, features })
+                    }
+                    onPropose={(files, features) =>
+                      setRemotePropose({ files, features })
+                    }
+                  />
+                ))}
           </div>
 
           <footer className="border-t border-border p-2">
@@ -4303,7 +4607,7 @@ export function App() {
               </button>
             </ShortcutHint>
           </span>
-          {projectId && (
+          {(projectId || workspace.browsers.length > 0) && (
             <WorkspaceTabBar
               tabs={allTabs}
               activeKey={workspace.activeTabKey}
@@ -4321,6 +4625,41 @@ export function App() {
               }}
             />
           )}
+          {(() => {
+            const editorId = workspace.activeTabKey?.startsWith("editor:")
+              ? workspace.activeTabKey.slice("editor:".length)
+              : undefined;
+            const editor = editorId
+              ? workspace.editors.find(
+                  (candidate) => candidate.localId === editorId,
+                )
+              : undefined;
+            if (
+              !editor?.filePath?.startsWith("store/") ||
+              !remoteSurfaceStatus ||
+              remoteSurfaceStatus.capabilities?.features.publications === false
+            ) {
+              return null;
+            }
+            return (
+              <ShortcutHint label="Share this file">
+                <button
+                  type="button"
+                  onClick={() => {
+                    const share = editorShareHandlersRef.current.get(
+                      editor.localId,
+                    );
+                    if (share) void share().catch(() => undefined);
+                  }}
+                  className="app-no-drag grid size-7 shrink-0 cursor-pointer place-items-center rounded-md text-fg-muted transition-colors hover:bg-bg-overlay hover:text-fg"
+                  aria-label="Share this file"
+                  data-testid="surface-share"
+                >
+                  <Share2 className="size-3.5" />
+                </button>
+              </ShortcutHint>
+            );
+          })()}
         </div>
 
         {projectId ? (
@@ -4584,6 +4923,26 @@ export function App() {
                       onDirtyChange={(dirty) =>
                         onEditorState(editor.localId, { dirty })
                       }
+                      registerShare={(share) => {
+                        editorShareHandlersRef.current.set(
+                          editor.localId,
+                          share,
+                        );
+                      }}
+                      onShare={(path) =>
+                        setRemotePublish({
+                          path,
+                          features: remoteSurfaceStatus?.capabilities?.features,
+                        })
+                      }
+                      onSaved={async (path) => {
+                        if (
+                          path.startsWith("store/") &&
+                          remoteSurfaceStatus?.connection.state === "connected"
+                        ) {
+                          await desktopApi.remoteShip(projectId);
+                        }
+                      }}
                     />
                   </Suspense>
                 </div>
@@ -4756,6 +5115,22 @@ export function App() {
                   });
                 }}
                 onFork={(messageId) => forkChat(entry, messageId)}
+                onForkCurrent={() => forkChat(entry)}
+                archived={Boolean(
+                  entry.sessionId && archivedSessionIds.has(entry.sessionId),
+                )}
+                onArchive={
+                  entry.sessionId
+                    ? () =>
+                        applySessionAction(
+                          entry.sessionId!,
+                          archivedSessionIds.has(entry.sessionId!)
+                            ? "unarchive"
+                            : "archive",
+                        )
+                    : undefined
+                }
+                inspectRequestNonce={sessionInspectRequests[entry.localId]}
                 onOpenParent={
                   chatForks[entry.localId]
                     ? () => openParentChat(entry)
@@ -4824,14 +5199,60 @@ export function App() {
               forks={chatForks}
               signals={signalsByChat}
               unread={unreadByChat}
+              attention={attentionByChat}
+              menus={chatMenus}
               activeLocalId={workspace.activeChatId}
               autoCollapse={activeChatTabId !== undefined}
               onCollapsedChange={setBubblesCollapsed}
               onToggle={toggleChat}
               onClose={closeChat}
+              onMenuAction={(localId, entry) => {
+                const sessionId = workspace.chats.find(
+                  (chat) => chat.localId === localId,
+                )?.sessionId;
+                if (sessionId) applySessionAction(sessionId, entry.action);
+              }}
               onNewChat={() => addChat()}
               onCollapse={minimizeFloatingChats}
             />
+          </div>
+        ) : workspace.browsers.length > 0 ? (
+          <div className="relative flex min-h-0 flex-1 flex-col">
+            {workspace.browsers.map((browser) => (
+              <div
+                key={browser.localId}
+                className={paneClass(browserTabKey(browser.localId))}
+                style={paneStyle(browserTabKey(browser.localId))}
+                {...paneFocusProps(browserTabKey(browser.localId))}
+              >
+                <BrowserScreen
+                  profileId={browser.profileId}
+                  projectId={null}
+                  initialUrl={browser.url || browser.initialUrl}
+                  active={browser.localId === activeBrowserTabId}
+                  visible={Boolean(viewSlots[browserTabKey(browser.localId)])}
+                  onStateChange={(state) =>
+                    onBrowserState(browser.localId, state)
+                  }
+                  registerNavigate={(navigate) =>
+                    browserNavigatorsRef.current.set(browser.localId, navigate)
+                  }
+                  registerHistoryNavigate={(navigate) =>
+                    browserHistoryNavigatorsRef.current.set(
+                      browser.localId,
+                      navigate,
+                    )
+                  }
+                  registerGuest={(guestId) => {
+                    if (guestId === null) {
+                      browserGuestIdsRef.current.delete(browser.localId);
+                    } else {
+                      browserGuestIdsRef.current.set(browser.localId, guestId);
+                    }
+                  }}
+                />
+              </div>
+            ))}
           </div>
         ) : (
           <EmptyState
@@ -4989,6 +5410,7 @@ export function App() {
 /** One sidebar section, shaped by the user's sidebar.js config. */
 function ConfiguredSection({
   section,
+  memberShell,
   projectId,
   profileId,
   activeTab,
@@ -4997,9 +5419,12 @@ function ConfiguredSection({
   agentsData,
   defaultAgentId,
   projectAgentNames,
+  archivedSessionIds,
+  unreadSessionIds,
   onOpenTab,
   onNewChat,
   onOpenSession,
+  onSessionAction,
   onOpenUrl,
   onOpenFile,
   onOpenHistory,
@@ -5007,6 +5432,7 @@ function ConfiguredSection({
   onPropose,
 }: {
   section: SidebarSectionConfig;
+  memberShell: boolean;
   projectId: string;
   profileId?: string;
   activeTab?: WorkspaceTab;
@@ -5015,9 +5441,12 @@ function ConfiguredSection({
   agentsData: AgentsData | null;
   defaultAgentId: string | null;
   projectAgentNames: Record<string, string>;
+  archivedSessionIds: ReadonlySet<string>;
+  unreadSessionIds: ReadonlySet<string>;
   onOpenTab: (tab: WorkspaceTab) => void;
   onNewChat: () => void;
   onOpenSession: (session: AgentSession) => void;
+  onSessionAction: (sessionId: string, action: ChatSessionAction) => void;
   onOpenUrl: (url: string, mode: "tab" | "replace") => void;
   onOpenFile: (filePath: string) => void;
   onOpenHistory: (filePath: string) => void;
@@ -5074,6 +5503,23 @@ function ConfiguredSection({
             />
           </SidebarSection>
         );
+      case "files":
+        return (
+          <SidebarSection
+            title={section.title ?? "Files"}
+            defaultOpen={defaultOpen}
+          >
+            <FilesNav
+              projectId={projectId}
+              contentOnly={memberShell}
+              activePath={
+                activeTab?.kind === "editor" ? activeTab.name : undefined
+              }
+              onEmptyChange={setEmpty}
+              onOpen={onOpenFile}
+            />
+          </SidebarSection>
+        );
       case "chats":
         return (
           <SidebarSection
@@ -5098,8 +5544,11 @@ function ConfiguredSection({
               agentsData={agentsData}
               defaultAgentId={defaultAgentId}
               projectAgentNames={projectAgentNames}
+              archivedSessionIds={archivedSessionIds}
+              unreadSessionIds={unreadSessionIds}
               onEmptyChange={setEmpty}
               onSelect={onOpenSession}
+              onSessionAction={onSessionAction}
             />
           </SidebarSection>
         );
@@ -5460,19 +5909,27 @@ function SessionsNav({
   agentsData,
   defaultAgentId,
   projectAgentNames,
+  archivedSessionIds,
+  unreadSessionIds,
   onEmptyChange,
   onSelect,
+  onSessionAction,
 }: {
   projectId: string;
   activeSessionId?: string;
   agentsData: AgentsData | null;
   defaultAgentId: string | null;
   projectAgentNames: Record<string, string>;
+  archivedSessionIds: ReadonlySet<string>;
+  unreadSessionIds: ReadonlySet<string>;
   onEmptyChange?: (empty: boolean) => void;
   onSelect: (session: AgentSession) => void;
+  onSessionAction: (sessionId: string, action: ChatSessionAction) => void;
 }) {
   const sessionsQuery = useAgentSessions(projectId);
-  const sessions = sessionsQuery.data?.items ?? [];
+  const sessions = (sessionsQuery.data?.items ?? []).filter(
+    (session) => !archivedSessionIds.has(session.id),
+  );
   const [checkouts, setCheckouts] = useState<SessionCheckoutInfo[]>([]);
   useEffect(() => {
     const load = () => {
@@ -5508,7 +5965,7 @@ function SessionsNav({
             : (checkout.branch ?? "Worktree")
           : undefined;
         return (
-          <li key={session.id}>
+          <li key={session.id} data-session-id={session.id}>
             <SidebarItemRow
               label={sessionLabel(session)}
               icon={
@@ -5519,7 +5976,20 @@ function SessionsNav({
                 />
               }
               active={session.id === activeSessionId}
-              labelContent={<AnimatedTitle text={sessionLabel(session)} />}
+              labelContent={
+                <>
+                  <AnimatedTitle text={sessionLabel(session)} />
+                  {session.attentionRequired ? (
+                    <span className="sr-only">Ready for you</span>
+                  ) : unreadSessionIds.has(session.id) ? (
+                    <span className="sr-only">Unread</span>
+                  ) : null}
+                </>
+              }
+              menu={chatSessionMenu({
+                unread: unreadSessionIds.has(session.id),
+                archived: false,
+              })}
               preview={{
                 title: sessionLabel(session),
                 description: session.activity ?? undefined,
@@ -5542,16 +6012,47 @@ function SessionsNav({
                     : []),
                 ],
               }}
+              previewContent={
+                <SessionInspectorContent
+                  session={session}
+                  fallbackTitle={sessionLabel(session)}
+                  agentName={agentName}
+                  checkout={checkout ?? null}
+                  incognito={false}
+                />
+              }
               end={
-                checkoutLabel ? (
-                  <span className="ml-auto flex max-w-28 shrink-0 items-center gap-1 truncate rounded bg-bg-inset px-1.5 py-0.5 text-[10px] text-fg-faint">
-                    <GitBranch className="size-2.5 shrink-0" />
-                    <span className="truncate">{checkoutLabel}</span>
-                  </span>
-                ) : null
+                <>
+                  {(session.attentionRequired ||
+                    unreadSessionIds.has(session.id)) && (
+                    <span
+                      data-testid={
+                        session.attentionRequired
+                          ? "session-attention"
+                          : "session-unread"
+                      }
+                      className="grid size-3 shrink-0 place-items-center"
+                      aria-hidden="true"
+                    >
+                      <SignalBadge
+                        signals={{
+                          attention: session.attentionRequired,
+                          unread: unreadSessionIds.has(session.id),
+                        }}
+                        size="sm"
+                      />
+                    </span>
+                  )}
+                  {checkoutLabel ? (
+                    <span className="ml-auto flex max-w-28 shrink-0 items-center gap-1 truncate rounded bg-bg-inset px-1.5 py-0.5 text-[10px] text-fg-faint">
+                      <GitBranch className="size-2.5 shrink-0" />
+                      <span className="truncate">{checkoutLabel}</span>
+                    </span>
+                  ) : null}
+                </>
               }
               onOpen={() => onSelect(session)}
-              onAction={() => {}}
+              onAction={(entry) => onSessionAction(session.id, entry.action)}
             />
           </li>
         );

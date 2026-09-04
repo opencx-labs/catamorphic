@@ -1,10 +1,12 @@
 import { ChevronsRight, MessageSquare, Plus, X } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
+import type { ChatSessionMenuEntry } from "../lib/chat-session-actions.js";
 import { formatBinding, useKeybindings } from "../lib/keybindings";
 import type { ChatDockEntry } from "./chat-dock";
 import { ChatGlyph } from "./chat-icon";
 import { type ChatSignals, SignalBadge, SignalGlyph } from "./chat-signals";
 import { ShortcutHint } from "./shortcut-hint";
+import { MenuPortal } from "./sidebar-item-row.js";
 
 /** Bubbles identify themselves on hover without delay (unlike buttons,
     whose labels are usually inferable — a bubble is just an icon). */
@@ -22,6 +24,10 @@ export interface ChatBubblesProps {
   signals: Record<string, ChatSignals>;
   /** Response arrived while the chat was minimized; shown as a dot. */
   unread: Record<string, boolean>;
+  /** A workflow asked the user to open this session; shown as a pulse. */
+  attention: Record<string, boolean>;
+  /** Session actions shared verbatim with the matching sidebar row. */
+  menus: Record<string, ChatSessionMenuEntry[]>;
   activeLocalId?: string;
   /**
    * The focused workspace tab wants the bottom edge clear (e.g. a chat tab):
@@ -33,6 +39,7 @@ export interface ChatBubblesProps {
   onCollapsedChange?: (collapsed: boolean) => void;
   onToggle: (localId: string) => void;
   onClose: (localId: string) => void;
+  onMenuAction: (localId: string, action: ChatSessionMenuEntry) => void;
   onNewChat: () => void;
   /** Manual strip collapse (>>) also minimizes any open floating chat. */
   onCollapse?: () => void;
@@ -64,6 +71,8 @@ function Bubble({
   expanded,
   onToggle,
   onClose,
+  menu,
+  onMenuAction,
   onExited,
 }: {
   entry: ChatDockEntry;
@@ -76,16 +85,47 @@ function Bubble({
   expanded: boolean;
   onToggle: (localId: string) => void;
   onClose: (localId: string) => void;
+  menu?: ChatSessionMenuEntry[];
+  onMenuAction: (localId: string, action: ChatSessionMenuEntry) => void;
   onExited: (localId: string) => void;
 }) {
   const [asking, setAsking] = useState(false);
+  const [menuAt, setMenuAt] = useState<{ x: number; y: number } | null>(null);
+  const [menuOpen, setMenuOpen] = useState(false);
   const prevAwaitingRef = useRef(signals.awaitingInput ?? false);
   if (prevAwaitingRef.current !== (signals.awaitingInput ?? false)) {
     prevAwaitingRef.current = signals.awaitingInput ?? false;
     if (signals.awaitingInput) setAsking(true);
   }
+  useEffect(() => {
+    if (!menuOpen) return;
+    const dismiss = (event: Event) => {
+      if (
+        event.target instanceof Element &&
+        event.target.closest("[data-sidebar-menu]")
+      ) {
+        return;
+      }
+      setMenuOpen(false);
+    };
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        setMenuOpen(false);
+      }
+    };
+    window.addEventListener("pointerdown", dismiss);
+    window.addEventListener("keydown", onKeyDown);
+    window.addEventListener("scroll", dismiss, true);
+    return () => {
+      window.removeEventListener("pointerdown", dismiss);
+      window.removeEventListener("keydown", onKeyDown);
+      window.removeEventListener("scroll", dismiss, true);
+    };
+  }, [menuOpen]);
   return (
     <div
+      data-session-id={entry.sessionId}
       className={`group relative ${
         exiting
           ? "animate-bubble-out pointer-events-none"
@@ -102,6 +142,15 @@ function Bubble({
         <button
           type="button"
           onClick={() => onToggle(entry.localId)}
+          onContextMenu={
+            menu && menu.length > 0
+              ? (event) => {
+                  event.preventDefault();
+                  setMenuAt({ x: event.clientX, y: event.clientY });
+                  setMenuOpen(true);
+                }
+              : undefined
+          }
           className={`relative grid size-9 cursor-pointer place-items-center rounded-full border transition-[background-color,border-color,scale] duration-150 ease-[cubic-bezier(0.2,0,0,1)] active:scale-95 ${
             asking ? "animate-bubble-ask " : ""
           }${
@@ -130,6 +179,18 @@ function Bubble({
           <X className="size-2.5" />
         </button>
       )}
+      {menuAt && menu && (
+        <MenuPortal
+          open={menuOpen}
+          position={menuAt}
+          entries={menu}
+          onPick={(action) => {
+            setMenuOpen(false);
+            onMenuAction(entry.localId, action);
+          }}
+          onExited={() => setMenuAt(null)}
+        />
+      )}
     </div>
   );
 }
@@ -147,11 +208,14 @@ export function ChatBubbles({
   forks,
   signals,
   unread,
+  attention,
+  menus,
   activeLocalId,
   autoCollapse,
   onCollapsedChange,
   onToggle,
   onClose,
+  onMenuAction,
   onNewChat,
   onCollapse,
 }: ChatBubblesProps) {
@@ -249,10 +313,12 @@ export function ChatBubbles({
   const signalsFor = (localId: string): ChatSignals => ({
     ...(signals[localId] ?? {}),
     unread: unread[localId] ?? false,
+    attention: attention[localId] ?? false,
   });
   const aggregate: ChatSignals = {
     working: entries.some((entry) => signals[entry.localId]?.working),
     unread: entries.some((entry) => unread[entry.localId]),
+    attention: entries.some((entry) => attention[entry.localId]),
     draft: entries.some((entry) => signals[entry.localId]?.draft),
     awaitingInput: entries.some(
       (entry) => signals[entry.localId]?.awaitingInput,
@@ -293,6 +359,8 @@ export function ChatBubbles({
               expanded={entry.mode !== "min" && entry.localId === activeLocalId}
               onToggle={onToggle}
               onClose={onClose}
+              menu={menus[entry.localId]}
+              onMenuAction={onMenuAction}
               onExited={removeExited}
             />
           ))}

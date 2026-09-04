@@ -4,6 +4,7 @@ import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   projectDefaultAgentSlug,
+  projectStartingActions,
   setProjectDefaultAgentSlug,
 } from "./project-manifest.js";
 
@@ -18,6 +19,51 @@ afterEach(() => {
   for (const dir of tmpdirs.splice(0)) {
     fs.rmSync(dir, { recursive: true, force: true });
   }
+});
+
+describe("project manifest startingActions", () => {
+  it("returns no trace for an unconfigured project", () => {
+    expect(projectStartingActions(projectRoot(), "member")).toEqual([]);
+  });
+
+  it("filters actions for the resolved member segment", () => {
+    const root = projectRoot();
+    fs.mkdirSync(path.dirname(manifestPath(root)), { recursive: true });
+    fs.writeFileSync(
+      manifestPath(root),
+      `${JSON.stringify({
+        startingActions: [
+          { label: "Draft follow-up", prompt: "Draft the follow-up" },
+          {
+            label: "Prepare QBR",
+            prompt: "Prepare the QBR",
+            agent: "csm",
+            segments: ["member"],
+          },
+          {
+            label: "Review changes",
+            prompt: "Review the working tree",
+            segments: ["builder"],
+          },
+          {
+            label: "Malformed targeting",
+            prompt: "This must not leak into every segment",
+            segments: "member",
+          },
+          { label: "Broken" },
+        ],
+      })}\n`,
+    );
+
+    expect(projectStartingActions(root, "member")).toEqual([
+      { label: "Draft follow-up", prompt: "Draft the follow-up" },
+      { label: "Prepare QBR", prompt: "Prepare the QBR", agent: "csm" },
+    ]);
+    expect(projectStartingActions(root, "builder")).toEqual([
+      { label: "Draft follow-up", prompt: "Draft the follow-up" },
+      { label: "Review changes", prompt: "Review the working tree" },
+    ]);
+  });
 });
 
 const manifestPath = (root: string) =>

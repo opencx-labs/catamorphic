@@ -236,7 +236,8 @@ receive brokered actions or short-lived Catamorphic MCP grants, never
 
 ## Database schema
 
-Migration `packages/db/migrations/007_plugins_and_secrets.sql`:
+The first-release baseline in `packages/db/migrations/001_initial.sql`
+includes:
 
 ```sql
 CREATE TABLE project_plugins (
@@ -697,8 +698,8 @@ interface is the hook for upcoming backends:
 
 When we add either:
 
-1. Widen the `chk_plugin_source` CHECK constraint in migration
-   `007_plugins_and_secrets.sql`.
+1. Add a forward migration that widens the `chk_plugin_source` CHECK
+   constraint.
 2. Update the `source` column on `project_plugins` write paths
    (`PluginsService.attach`).
 3. Pick the right resolver in the host's boot code based on env
@@ -738,7 +739,7 @@ Quick index — every file that participates in the plugin subsystem.
 - `packages/cloudflare/src/__tests__/sandbox-provider.test.ts` — `@` encoding test.
 
 **Database:**
-- `packages/db/migrations/007_plugins_and_secrets.sql` — tables.
+- `packages/db/migrations/001_initial.sql` — first-release tables.
 - `packages/db/src/generated/db.ts` — generated Kysely types.
 
 **Host UI (shadcn registry items):**

@@ -105,20 +105,30 @@ function PrRow({
   // far slower than the expand/collapse toggle.
   const [files, setFiles] = useState<PullRequestFile[] | null>(null);
   const [menuAt, setMenuAt] = useState<{ x: number; y: number } | null>(null);
+  const [menuOpen, setMenuOpen] = useState(false);
   const menuButtonRef = useRef<HTMLButtonElement>(null);
 
   useEffect(() => {
-    if (!menuAt) return;
+    if (!menuOpen) return;
     const dismiss = (event: Event) => {
-      if ((event.target as HTMLElement)?.closest?.("[data-sidebar-menu]")) {
+      if (
+        event.target instanceof Element &&
+        event.target.closest("[data-sidebar-menu]")
+      ) {
         return;
       }
-      setMenuAt(null);
+      if (
+        event.target instanceof Node &&
+        menuButtonRef.current?.contains(event.target)
+      ) {
+        return;
+      }
+      setMenuOpen(false);
     };
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key === "Escape") {
         event.preventDefault();
-        setMenuAt(null);
+        setMenuOpen(false);
       }
     };
     window.addEventListener("pointerdown", dismiss);
@@ -129,7 +139,7 @@ function PrRow({
       window.removeEventListener("keydown", onKeyDown);
       window.removeEventListener("scroll", dismiss, true);
     };
-  }, [menuAt]);
+  }, [menuOpen]);
 
   const toggle = () => {
     setExpanded((value) => !value);
@@ -164,6 +174,7 @@ function PrRow({
         onContextMenu={(event) => {
           event.preventDefault();
           setMenuAt({ x: event.clientX, y: event.clientY });
+          setMenuOpen(true);
         }}
       >
         <ShortcutHint label={`${pr.author} · ${pr.head} → ${pr.base}`}>
@@ -188,26 +199,35 @@ function PrRow({
           ref={menuButtonRef}
           type="button"
           onClick={() => {
+            if (menuOpen) {
+              setMenuOpen(false);
+              return;
+            }
             const rect = menuButtonRef.current?.getBoundingClientRect();
-            if (rect) setMenuAt({ x: rect.right, y: rect.bottom + 4 });
+            if (rect) {
+              setMenuAt({ x: rect.right, y: rect.bottom + 4 });
+              setMenuOpen(true);
+            }
           }}
           className={`mr-1 grid size-6 shrink-0 cursor-pointer place-items-center rounded text-fg-faint transition-colors duration-150 hover:text-fg ${
-            menuAt ? "" : "opacity-0 group-hover:opacity-100"
+            menuOpen ? "" : "opacity-0 group-hover:opacity-100"
           }`}
           aria-label={`More actions for #${pr.number}`}
           aria-haspopup="menu"
-          aria-expanded={menuAt !== null}
+          aria-expanded={menuOpen}
         >
           <MoreHorizontal className="size-3.5" />
         </button>
         {menuAt && (
           <MenuPortal
+            open={menuOpen}
             position={menuAt}
             entries={PR_MENU}
             onPick={() => {
-              setMenuAt(null);
+              setMenuOpen(false);
               onOpenUrl(pr.url, "tab");
             }}
+            onExited={() => setMenuAt(null)}
           />
         )}
       </div>

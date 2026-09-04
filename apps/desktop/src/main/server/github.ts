@@ -24,7 +24,7 @@ interface StoredFile {
 
 /**
  * Desktop implementation of the host-owned GitHub token store: one
- * connection in a safeStorage-encrypted file beside settings.json. The
+ * connection in a safeStorage-encrypted file in the desktop user data. The
  * desktop is single-tenant, so the tenant/user keys are ignored.
  */
 export class FileGithubTokenStore implements GithubTokenStore {

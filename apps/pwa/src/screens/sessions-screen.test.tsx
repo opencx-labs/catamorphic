@@ -8,6 +8,7 @@ import { SessionsScreen } from "./sessions-screen.js";
 Reflect.set(globalThis, "IS_REACT_ACT_ENVIRONMENT", true);
 
 const mocks = vi.hoisted(() => ({
+  acknowledge: vi.fn(async () => undefined),
   refetch: vi.fn(async () => undefined),
   request: vi.fn(async () => new Response("{}", { status: 200 })),
   navigate: vi.fn(),
@@ -26,6 +27,9 @@ vi.mock("@catamorphic/react", () => ({
           parentSessionId: null,
           status: "active",
           resumable: true,
+          attentionRequired: true,
+          attentionRevision: 1,
+          attentionSeenRevision: 0,
           authorityRevision: 4,
           createdAt: "2026-08-29T10:00:00.000Z",
           updatedAt: "2026-08-29T10:00:00.000Z",
@@ -36,6 +40,9 @@ vi.mock("@catamorphic/react", () => ({
     isError: false,
     isSuccess: true,
     refetch: mocks.refetch,
+  }),
+  useAcknowledgeAgentSessionAttention: () => ({
+    mutateAsync: mocks.acknowledge,
   }),
 }));
 
@@ -84,6 +91,9 @@ describe("SessionsScreen", () => {
     });
 
     expect(container.textContent).toContain("Paused · Tap to resume");
+    expect(
+      container.querySelector('[data-testid="session-attention"]'),
+    ).not.toBeNull();
     const row = container.querySelector<HTMLButtonElement>(
       '[data-testid="session-row"]',
     );
@@ -99,6 +109,9 @@ describe("SessionsScreen", () => {
       }),
     );
     expect(mocks.refetch).toHaveBeenCalled();
+    expect(mocks.acknowledge).toHaveBeenCalledWith(
+      "11111111-1111-4111-8111-111111111111",
+    );
     expect(mocks.navigate).toHaveBeenCalledWith(
       expect.objectContaining({
         kind: "chat",

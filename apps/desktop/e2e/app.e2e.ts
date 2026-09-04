@@ -574,6 +574,111 @@ describe("chat flows", () => {
       },
     );
   });
+
+  it("shares archive and unread actions between the sidebar and dock", async () => {
+    await run(`pressKey('n', { metaKey: true }); return true;`);
+    await runWait(`return !!floatingDock();`, { label: "chat dock open" });
+    await run(`
+      const input = floatingDock().querySelector('[data-composer-input]');
+      setReactValue(input, 'exercise the session menu');
+      input.closest('form').requestSubmit();
+      return true;
+    `);
+    await runWait(
+      `return !![...document.querySelectorAll('aside li[data-session-id]')]
+        .find((row) => row.textContent.includes('Session menu'));`,
+      { timeoutMs: 30_000, label: "session menu row in the sidebar" },
+    );
+
+    // The dock bubble opens the same menu and can mark the session unread.
+    await run(`
+      const bubble = [...document.querySelectorAll('div[data-session-id]')]
+        .find((row) => !row.closest('aside') && row.querySelector('button[aria-label*="Session menu"]'));
+      bubble.querySelector('button[aria-label*="Session menu"]').dispatchEvent(
+        new MouseEvent('contextmenu', { bubbles: true, cancelable: true, clientX: 420, clientY: 500 }),
+      );
+      return true;
+    `);
+    await runWait(
+      `const labels = $$('[role="menuitem"]').map((item) => item.textContent.trim());
+       return labels.join('|') === 'Mark as unread|Archive';`,
+      { label: "dock session menu" },
+    );
+    await run(
+      `byText('[role="menuitem"]', 'Mark as unread').click(); return true;`,
+    );
+    await runWait(
+      `const row = [...document.querySelectorAll('aside li[data-session-id]')]
+         .find((item) => item.textContent.includes('Session menu'));
+       return !!row?.querySelector('[data-testid="session-unread"]');`,
+      { label: "manual unread dot in the sidebar" },
+    );
+
+    // Right-clicking the matching sidebar row exposes the same current-state
+    // actions. Marking it read removes the shared dot.
+    await run(`
+      const row = [...document.querySelectorAll('aside li[data-session-id]')]
+        .find((item) => item.textContent.includes('Session menu'));
+      row.firstElementChild.dispatchEvent(
+        new MouseEvent('contextmenu', { bubbles: true, cancelable: true, clientX: 210, clientY: 360 }),
+      );
+      return true;
+    `);
+    await runWait(
+      `const labels = $$('[role="menuitem"]').map((item) => item.textContent.trim());
+       return labels.join('|') === 'Mark as read|Archive';`,
+      { label: "sidebar session menu matches the dock" },
+    );
+    await run(
+      `byText('[role="menuitem"]', 'Mark as read').click(); return true;`,
+    );
+    await runWait(
+      `const row = [...document.querySelectorAll('aside li[data-session-id]')]
+         .find((item) => item.textContent.includes('Session menu'));
+       return !!row && !row.querySelector('[data-testid="session-unread"]');`,
+      { label: "session marked read" },
+    );
+
+    // Archive hides the sidebar entry without closing the open dock. The
+    // surviving dock menu provides the way to unarchive it.
+    await run(`
+      const bubble = [...document.querySelectorAll('div[data-session-id]')]
+        .find((row) => !row.closest('aside') && row.querySelector('button[aria-label*="Session menu"]'));
+      bubble.querySelector('button[aria-label*="Session menu"]').dispatchEvent(
+        new MouseEvent('contextmenu', { bubbles: true, cancelable: true, clientX: 420, clientY: 500 }),
+      );
+      return true;
+    `);
+    await runWait(`return !!byText('[role="menuitem"]', 'Archive');`, {
+      label: "archive action available from the dock",
+    });
+    await run(`byText('[role="menuitem"]', 'Archive').click(); return true;`);
+    await runWait(
+      `return ![...document.querySelectorAll('aside li[data-session-id]')]
+        .some((row) => row.textContent.includes('Session menu')) &&
+        !![...document.querySelectorAll('div[data-session-id]')]
+          .find((row) => !row.closest('aside') && row.querySelector('button[aria-label*="Session menu"]'));`,
+      { label: "archived chat hidden from the sidebar but still open" },
+    );
+
+    await run(`
+      const bubble = [...document.querySelectorAll('div[data-session-id]')]
+        .find((row) => !row.closest('aside') && row.querySelector('button[aria-label*="Session menu"]'));
+      bubble.querySelector('button[aria-label*="Session menu"]').dispatchEvent(
+        new MouseEvent('contextmenu', { bubbles: true, cancelable: true, clientX: 420, clientY: 500 }),
+      );
+      return true;
+    `);
+    await runWait(`return !!byText('[role="menuitem"]', 'Unarchive');`, {
+      label: "unarchive action available from the dock",
+    });
+    await run(`byText('[role="menuitem"]', 'Unarchive').click(); return true;`);
+    await runWait(
+      `return !![...document.querySelectorAll('aside li[data-session-id]')]
+        .find((row) => row.textContent.includes('Session menu'));`,
+      { label: "unarchived chat restored to the sidebar" },
+    );
+  });
 });
 
 describe("palette intent", () => {
@@ -772,19 +877,20 @@ describe("chat tab activity indicators", () => {
     await runWait(`return spinnersOn() > 0;`, {
       label: "spinner during the turn",
     });
-    const mountedChatCount = await run<number>(`
-      return $$('section[aria-label]')
-        .filter((el) => el.querySelector('[data-composer-input]')).length;
+    const closingChatId = await run<string>(`
+      const dock = visibleDock();
+      const composer = dock.querySelector('[data-composer-input]');
+      composer.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true }));
+      composer.focus();
+      return dock.dataset.chatLocalId;
     `);
     // Close the chat while the agent is still working: no orphaned
     // activity indicator may stay behind anywhere.
     await run(`pressKey('w', { metaKey: true }); return true;`);
-    await runWait(
-      `return $$('section[aria-label]')
-        .filter((el) => el.querySelector('[data-composer-input]')).length
-        === ${mountedChatCount - 1};`,
-      { timeoutMs: 10_000, label: "chat unmounted after the close animation" },
-    );
+    await runWait(`return !$('[data-chat-local-id="${closingChatId}"]');`, {
+      timeoutMs: 10_000,
+      label: "chat unmounted after the close animation",
+    });
     // A hidden renderer pauses the exiting bubble's CSS animation, so its
     // snapshot can remain until the window is visible again. It is not live
     // activity; every live chat/tab/aggregate spinner must already be gone.
@@ -1009,12 +1115,21 @@ describe("chat surface shortcuts", () => {
       ta.focus(); return true;
     `);
     await run(`pressKey('w', { metaKey: true }); return true;`);
-    await runWait(`return !floatingDock();`, { label: "floating chat closed" });
+    await runWait(`return !$('[data-floating-chat]');`, {
+      label: "floating chat unmounted",
+    });
   });
 });
 
 describe("navigation shortcuts", () => {
   it("Cmd+. / Cmd+, cycle the floating dock through chats", async () => {
+    // Establish the surface behind the floating dock explicitly. Cmd+N opens
+    // a full chat tab when the workspace is empty, so inheriting the prior
+    // test's last open tab made this test depend on unrelated teardown timing.
+    await run(`pressKey('t', { metaKey: true }); return true;`);
+    await runWait(`return !!$('textarea[placeholder*="Search or ask"]');`, {
+      label: "background New Tab open",
+    });
     // Fresh empty chat ("New chat") joins the titled chats from earlier
     // groups — cycling must swap which chat the dock shows.
     await run(`pressKey('n', { metaKey: true }); return true;`);

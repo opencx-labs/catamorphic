@@ -17,13 +17,28 @@ export interface AppPrefs {
   sidebarOpen: boolean;
   /** The project the profile last worked in — where a relaunch lands. */
   lastProjectId?: string;
+  /** Sessions hidden from this profile's sidebar without changing execution. */
+  archivedSessionIds: string[];
+  /** Sessions this profile has explicitly or implicitly marked unread. */
+  unreadSessionIds: string[];
 }
 
 export const DEFAULT_PREFS: AppPrefs = {
   notificationSounds: true,
   desktopNotifications: true,
   sidebarOpen: true,
+  archivedSessionIds: [],
+  unreadSessionIds: [],
 };
+
+function stringList(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  return [
+    ...new Set(
+      value.filter((item): item is string => typeof item === "string"),
+    ),
+  ];
+}
 
 export function normalizePrefs(raw: unknown): AppPrefs {
   const record =
@@ -46,6 +61,8 @@ export function normalizePrefs(raw: unknown): AppPrefs {
     ...(typeof record.lastProjectId === "string"
       ? { lastProjectId: record.lastProjectId }
       : {}),
+    archivedSessionIds: stringList(record.archivedSessionIds),
+    unreadSessionIds: stringList(record.unreadSessionIds),
   };
 }
 

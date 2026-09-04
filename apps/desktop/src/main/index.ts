@@ -5,10 +5,12 @@ import {
   dialog,
   ipcMain,
   Menu,
+  nativeTheme,
   powerMonitor,
   safeStorage,
   type WebContents,
 } from "electron";
+import type { DesktopUpdateChannel } from "../shared/update.js";
 import { registerAgentBridge } from "./agent-bridge.js";
 import { registerBrowserSupport } from "./browser.js";
 import { toPublicConnection } from "./connections-store.js";
@@ -23,13 +25,19 @@ import { registerIpcHandlers, type ServerState } from "./ipc.js";
 import { type Keybindings, toAccelerator } from "./keybindings.js";
 import { McpAppsService } from "./mcp-apps.js";
 import { MobilePairingService } from "./mobile-pairing.js";
+import { prepareVersionBackup } from "./pre-migration-backup.js";
 import { ProfileConfigManager } from "./profile-config.js";
 import { ProfilesStore } from "./profiles.js";
 import { type EmbeddedServer, startEmbeddedServer } from "./server/boot.js";
 import { resolveDataPaths } from "./server/paths.js";
 import { registerTerminalSupport } from "./terminal.js";
 import { windowBackgroundColor } from "./theme.js";
+import {
+  type DesktopUpdaterService,
+  registerDesktopUpdater,
+} from "./updater.js";
 import { WindowStateStore } from "./window-state.js";
+import { desktopProfileMcpProvider } from "./workflow-mcp-connections.js";
 
 // macOS 26.x + Apple Silicon: V8's background compiler threads race the
 // OS's MAP_JIT write-protection and SIGTRAP in ThreadIsolation::
@@ -119,7 +127,9 @@ const paths = resolveDataPaths();
 const profilesStore = new ProfilesStore(paths.profilesFile);
 // Per-profile config (theme, keybindings, sidebar, agents) — one manager
 // shared by IPC, the window layer, and the chat agent's config mirror.
-const profileConfig = new ProfileConfigManager(paths, profilesStore);
+const profileConfig = new ProfileConfigManager(paths, profilesStore, () =>
+  nativeTheme.shouldUseDarkColors ? "dark" : "light",
+);
 
 let server: EmbeddedServer | null = null;
 
@@ -228,6 +238,15 @@ function createWindow(profileId?: string): BrowserWindow {
       backgroundThrottling: e2eDataDir === undefined,
     },
   });
+  // Renderer links must stay inside the workspace. Feature-specific flows can
+  // open tabs through IPC, while this boundary catches plain window.open calls
+  // from current and future renderer components.
+  window.webContents.setWindowOpenHandler(({ url }) => {
+    if (/^https?:/.test(url)) {
+      window.webContents.send("catamorphic:browser-open-url", { url });
+    }
+    return { action: "deny" };
+  });
   if (saved.maximized) window.maximize();
   // A connect link that arrived before any window could take it (cold
   // launch from the link) is delivered once the renderer is up.
@@ -275,6 +294,12 @@ function createWindow(profileId?: string): BrowserWindow {
 // the command palette, and toggle-sidebar are window-level shortcuts handled
 // in the renderer.
 function buildMenu(bindings: Keybindings): Menu {
+  const selectedUpdateChannel = desktopUpdater?.channel() ?? "stable";
+  const chooseUpdateChannel = (channel: DesktopUpdateChannel) => {
+    void desktopUpdater?.setChannel(channel).finally(() => {
+      applyMenuForFocusedWindow();
+    });
+  };
   return Menu.buildFromTemplate([
     ...(process.platform === "darwin" ? [{ role: "appMenu" } as const] : []),
     {
@@ -330,6 +355,33 @@ function buildMenu(bindings: Keybindings): Menu {
           : [{ role: "close" } as const]),
       ],
     },
+    {
+      role: "help",
+      submenu: [
+        {
+          label: "Check for Updates…",
+          click: () => void desktopUpdater?.check(true),
+        },
+        { type: "separator" },
+        {
+          label: "Update Channel",
+          submenu: [
+            {
+              label: "Stable",
+              type: "radio",
+              checked: selectedUpdateChannel === "stable",
+              click: () => chooseUpdateChannel("stable"),
+            },
+            {
+              label: "Preview",
+              type: "radio",
+              checked: selectedUpdateChannel === "preview",
+              click: () => chooseUpdateChannel("preview"),
+            },
+          ],
+        },
+      ],
+    },
   ]);
 }
 
@@ -357,10 +409,13 @@ app.whenReady().then(async () => {
   ) {
     safeStorage.setUsePlainTextEncryption(true);
   }
-  // Legacy config migration first: it seeds the default profile's agent
-  // roster from the old settings.json, whose key needs safeStorage (only
-  // usable once the app is ready).
-  profileConfig.migrate();
+  desktopUpdater = registerDesktopUpdater({
+    broadcast: state.broadcast,
+    beforeInstall: async () => {
+      await server?.shutdown();
+      quitting = true;
+    },
+  });
   applyMenuForFocusedWindow();
   // Live-reload: agents and users edit the per-profile config files
   // directly. Changes fan out only to that profile's windows.
@@ -374,6 +429,7 @@ app.whenReady().then(async () => {
       window.webContents.send("catamorphic:theme-changed", theme);
     }
   });
+  nativeTheme.on("updated", () => profileConfig.systemAppearanceChanged());
   profileConfig.onSidebarChanged((profileId) => {
     // No payload: the resolved config depends on each window's active
     // project (layered resolution), so the renderer refetches instead.
@@ -474,6 +530,17 @@ app.whenReady().then(async () => {
   const window = createWindow();
 
   try {
+    const versionBackup = prepareVersionBackup({
+      appVersion: app.getVersion(),
+      packaged: app.isPackaged,
+      dataRoot: paths.root,
+      dbDir: paths.db,
+    });
+    if (versionBackup.backupPath) {
+      console.log(
+        `[desktop] Backed up the pre-migration database to ${versionBackup.backupPath}`,
+      );
+    }
     server = await startEmbeddedServer(
       paths,
       profilesStore,
@@ -482,7 +549,9 @@ app.whenReady().then(async () => {
       connectors,
       mcpApps,
       incognitoSessions,
+      [desktopProfileMcpProvider],
     );
+    versionBackup.markBootSuccessful();
     state.broadcast("catamorphic:server-changed", {
       url: server.url,
       hasCodingAgent: server.hasCodingAgent,
@@ -533,6 +602,7 @@ app.whenReady().then(async () => {
 let browserSupport: ReturnType<typeof registerBrowserSupport> | null = null;
 let terminalSupport: ReturnType<typeof registerTerminalSupport> | null = null;
 let agentBridge: ReturnType<typeof registerAgentBridge> | null = null;
+let desktopUpdater: DesktopUpdaterService | null = null;
 
 let quitting = false;
 app.on("before-quit", (event) => {
@@ -540,6 +610,7 @@ app.on("before-quit", (event) => {
   browserSupport?.dispose();
   terminalSupport?.dispose();
   agentBridge?.dispose();
+  desktopUpdater?.dispose();
   if (quitting || !server) return;
   event.preventDefault();
   quitting = true;

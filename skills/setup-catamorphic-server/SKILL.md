@@ -47,6 +47,18 @@ current source when documentation and the installed version differ.
   framework contracts.
 - Authentication identifies a person. Committed project roles and
   memberships authorize them.
+- Roles grant provider-neutral workflow, project-agent, Environment, and
+  connection references. Each member separately enables unattended workflows
+  after reviewing the deployed commit and authenticating every required
+  member connection. Never make this Google Workspace-specific.
+- MCP authorization is sufficient for a workflow or project agent when its
+  server exposes the declared connection actions. Configure providers through
+  the host-injected connection registry and credential vault.
+- A member-owned workflow may call `catamorphic.sessions.wake` to create or
+  reuse a stable agent session and request attention after the turn settles.
+  Clients poll the ordinary session list, pulse rows with
+  `attentionRequired`, and acknowledge on open. Web Push is an optional
+  transport to that session, not a second notification inbox.
 - A deployment operator is not a server-owner or super-admin user.
 - A project has at most one Catamorphic remote. Execution targets beneath it
   are Environments.
@@ -61,5 +73,8 @@ current source when documentation and the installed version differ.
 - Inventing provider environment variables, routes, or commands without
   checking the installed version.
 - Treating login as project access or assigning a silent default role.
+- Treating account authentication as consent to enable every compatible
+  workflow, or allowing a service-owned enablement to target a personal
+  session.
 - Writing Better Auth password hashes or rows directly.
 - Turning setup guidance into a rigid stack recipe.

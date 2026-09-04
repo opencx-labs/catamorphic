@@ -104,6 +104,17 @@
   seam, ADR 0045) invoking a read-only-mode agent whose persona is the
   review doctrine, posting via the PR-review surface. Both are
   consumers of ADR 0056; neither needs new agent-side schema.
+- **Claude plugin for Catamorphic project connections.** Ship a general
+  Catamorphic plugin for Claude so someone invited to a project can use the
+  project without installing Catamorphic Desktop. During installation or
+  first authorization, ask for the credential-free project or invitation
+  link, complete the server's ordinary OAuth flow, and configure that
+  project's MCP endpoint automatically. Project choice and authentication
+  belong to the invitation/onboarding path outside the desktop; the desktop
+  should not permanently advertise "Use in Claude" to someone already using
+  Catamorphic. Preserve the same scoped identity and durable session model so
+  agent conversations begun through Claude appear in the project's ordinary
+  session history with their source attributed.
 - **TS `defineAgent` layer over project agent JSON.** The committed
   `agents/<slug>.json` files are the substrate (ADR 0050); add the
   authoring layer: `defineAgent({...})` in project code, discovered by
@@ -130,8 +141,8 @@
   + scoped agent sessions; roles/memberships/`identityFromBearer`; project
   store + documents surface + `context.caller/documents/host`; project MCP
   endpoint; desktop remote projects; proposals + publications). Left for
-  later, in rough priority: (a) desktop remote projects — auto-sync on focus
-  / interval, a per-version "restore" button in the history modal, revoking
+  later, in rough priority: (a) desktop remote projects — periodic auto-sync,
+  a per-version "restore" button in the history modal, revoking
   publications from the desktop, and surfacing the project MCP endpoint's
   skills/agents in the connect flow;
   (b) `context.host` typed through the generated projections (ADR 0041) so

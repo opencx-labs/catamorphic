@@ -477,7 +477,12 @@ export function surfaceTools(
         const agentId = projectAgentId(projectId, agent);
         const sessionId =
           str(args.sessionId) ??
-          (await sessions.create(identity, projectId, { agentId })).id;
+          (
+            await sessions.create(identity, projectId, {
+              agentId,
+              source: "mcp",
+            })
+          ).id;
         const reply = await sessions.sendMessage(
           identity,
           projectId,

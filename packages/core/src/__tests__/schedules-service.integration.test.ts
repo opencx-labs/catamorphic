@@ -6,7 +6,7 @@ import { pgcrypto } from "@electric-sql/pglite/contrib/pgcrypto";
 import { Kysely, PGliteDialect, sql, WithSchemaPlugin } from "kysely";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { SchedulesService } from "../services/schedules-service.js";
-import type { StoredTriggerBinding } from "../services/triggers-service.js";
+import type { StoredTriggerActivation } from "../services/triggers-service.js";
 
 const pglite = new PGlite({ extensions: { pgcrypto } });
 const schema = "catamorphic_schedules";
@@ -17,9 +17,14 @@ const db = new Kysely<DB>({
 const tenantId = crypto.randomUUID();
 const projectId = crypto.randomUUID();
 const bindingId = crypto.randomUUID();
+const activationId = crypto.randomUUID();
+const enablementId = crypto.randomUUID();
+const artifactId = crypto.randomUUID();
 const identity = { tenantId, externalUserId: "scheduler" };
-const binding: StoredTriggerBinding = {
+const binding: StoredTriggerActivation = {
   id: bindingId,
+  activationId,
+  enablementId,
   commitSha: "a".repeat(40),
   environment: "production",
   workflowName: "dailyBrief",
@@ -32,7 +37,7 @@ const binding: StoredTriggerBinding = {
 };
 const fired: Json[] = [];
 const dispatcher = {
-  storedProductionBindings: vi.fn(async () => [binding]),
+  storedProductionActivations: vi.fn(async () => [binding]),
   fire: vi.fn(async (args: { payload: Json }) => {
     fired.push(args.payload);
     return {
@@ -62,11 +67,11 @@ describe("schedule trigger dispatcher", () => {
       .values({ id: projectId, tenant_id: tenantId, name: "P" })
       .execute();
     await db
-      .insertInto("trigger_binding_scans")
+      .insertInto("trigger_definition_scans")
       .values({ project_id: projectId, commit_sha: binding.commitSha })
       .execute();
     await db
-      .insertInto("trigger_bindings")
+      .insertInto("trigger_definitions")
       .values({
         id: bindingId,
         project_id: projectId,
@@ -76,6 +81,43 @@ describe("schedule trigger dispatcher", () => {
         config: binding.config,
         can_suspend: false,
         input_parameters: [],
+      })
+      .execute();
+    await db
+      .insertInto("deployment_artifacts")
+      .values({
+        id: artifactId,
+        project_id: projectId,
+        commit_sha: binding.commitSha,
+        artifact_digest: "b".repeat(64),
+        plugin_digest: "c".repeat(64),
+        transform_version: "test",
+        runtime_version: "test",
+      })
+      .execute();
+    await db
+      .insertInto("workflow_enablements")
+      .values({
+        id: enablementId,
+        tenant_id: tenantId,
+        project_id: projectId,
+        workflow_name: binding.workflowName,
+        deployment_artifact_id: artifactId,
+        commit_sha: binding.commitSha,
+        environment_name: binding.environment,
+        owner_kind: "member",
+        owner_external_user_id: identity.externalUserId,
+        owner_identity: identity,
+        consent_digest: "d".repeat(64),
+        created_by_external_user_id: identity.externalUserId,
+      })
+      .execute();
+    await db
+      .insertInto("workflow_enablement_triggers")
+      .values({
+        id: activationId,
+        enablement_id: enablementId,
+        trigger_definition_id: bindingId,
       })
       .execute();
   }, 30_000);
@@ -95,7 +137,7 @@ describe("schedule trigger dispatcher", () => {
     await db
       .updateTable("schedule_bindings")
       .set({ next_fire_at: new Date("2026-08-29T10:01:00.000Z") })
-      .where("binding_id", "=", bindingId)
+      .where("activation_id", "=", activationId)
       .execute();
 
     expect(
@@ -107,7 +149,7 @@ describe("schedule trigger dispatcher", () => {
     ).toEqual({ enrolled: 1 });
     expect(fired).toHaveLength(1);
     expect(fired[0]).toMatchObject({
-      bindingId,
+      activationId,
       scheduledFor: "2026-08-29T10:01:00.000Z",
       firedAt: "2026-08-29T10:05:00.000Z",
     });
@@ -115,7 +157,7 @@ describe("schedule trigger dispatcher", () => {
       await db
         .selectFrom("schedule_bindings")
         .select("next_fire_at")
-        .where("binding_id", "=", bindingId)
+        .where("activation_id", "=", activationId)
         .executeTakeFirstOrThrow(),
     ).toEqual({ next_fire_at: new Date("2026-08-29T10:06:00.000Z") });
 
@@ -131,7 +173,7 @@ describe("schedule trigger dispatcher", () => {
       await db
         .selectFrom("schedule_occurrences")
         .select(["status", "attempt_count"])
-        .where("binding_id", "=", bindingId)
+        .where("activation_id", "=", activationId)
         .where("scheduled_for", "=", new Date("2026-08-29T10:06:00.000Z"))
         .executeTakeFirstOrThrow(),
     ).toEqual({ status: "pending", attempt_count: 1 });

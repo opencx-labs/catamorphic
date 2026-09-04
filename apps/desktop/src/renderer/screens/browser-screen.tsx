@@ -112,7 +112,8 @@ export function BrowserScreen({
   onUnsplit,
 }: {
   profileId: string;
-  projectId: string;
+  /** Null only for a temporary profile browser before its first project. */
+  projectId: string | null;
   initialUrl: string;
   /** This browser tab is the focused workspace tab. */
   active: boolean;
@@ -574,6 +575,10 @@ export function BrowserScreen({
   // Follow bookmark changes from anywhere (this star, another tab's star,
   // the sidebar's delete/pin) so the star never drifts from the sidebar.
   useEffect(() => {
+    if (!projectId) {
+      setBookmarks(null);
+      return;
+    }
     let cancelled = false;
     void desktopApi.bookmarksGet({ projectId, profileId }).then((loaded) => {
       if (!cancelled) setBookmarks(loaded);
@@ -610,6 +615,7 @@ export function BrowserScreen({
   })();
 
   const toggleBookmark = () => {
+    if (!projectId) return;
     if (!currentBookmark) {
       void desktopApi.bookmarksAdd({
         projectId,
@@ -874,7 +880,7 @@ export function BrowserScreen({
         </div>
 
         {/* Bookmark star, Chrome-style: filled means saved, click toggles. */}
-        {firstUrl && (
+        {firstUrl && projectId && (
           <ShortcutHint
             label={currentBookmark ? "Remove bookmark" : "Bookmark this page"}
           >

@@ -11,6 +11,7 @@ import type { ProjectEventMonitorsService } from "./project-event-monitors-servi
 import type { ProjectEventsService } from "./project-events-service.js";
 import type { RunsService } from "./runs-service.js";
 import type { TriggersService } from "./triggers-service.js";
+import type { WorkflowEnablementsService } from "./workflow-enablements-service.js";
 
 type WatcherRow = Selectable<DB["watchers"]>;
 
@@ -37,6 +38,7 @@ interface WatchersDeps {
   projectManager: ProjectManager;
   runs: RunsService;
   triggers: TriggersService;
+  workflowEnablements: WorkflowEnablementsService;
   events: ProjectEventsService;
   monitors: ProjectEventMonitorsService;
   sessions: AgentSessionsService;
@@ -249,6 +251,26 @@ export class WatchersService {
       Math.max(input.expiresInSeconds ?? 86_400, 60),
       30 * 86_400,
     );
+    const expiresAt = new Date(Date.now() + expiresInSeconds * 1_000);
+    const preview = await this.deps.workflowEnablements.preview({
+      identity: input.identity,
+      projectId: input.projectId,
+      workflowName: input.workflowName,
+      commitSha,
+      remoteBranch,
+      environment: input.environment,
+    });
+    const enablement = await this.deps.workflowEnablements.create({
+      identity: input.identity,
+      projectId: input.projectId,
+      workflowName: input.workflowName,
+      commitSha,
+      remoteBranch,
+      environment: input.environment,
+      consentDigest: preview.consentDigest,
+      temporary: true,
+      expiresAt,
+    });
     const row = await this.db
       .insertInto("watchers")
       .values({
@@ -263,9 +285,10 @@ export class WatchersService {
         remote_branch: remoteBranch,
         commit_sha: commitSha,
         deployment_artifact_id: artifact.id,
+        workflow_enablement_id: enablement.id,
         environment_name: input.environment ?? null,
         cursor_sequence: String(input.cursorSequence),
-        expires_at: new Date(Date.now() + expiresInSeconds * 1_000),
+        expires_at: expiresAt,
       })
       .returningAll()
       .executeTakeFirstOrThrow();
@@ -324,6 +347,17 @@ export class WatchersService {
       .where("session_id", "=", input.sessionId)
       .where("status", "in", ["active", "paused"])
       .executeTakeFirst();
+    const watcher = await this.db
+      .selectFrom("watchers")
+      .select("workflow_enablement_id")
+      .where("id", "=", input.watcherId)
+      .executeTakeFirst();
+    if (watcher?.workflow_enablement_id) {
+      await this.deps.workflowEnablements.disable({
+        identity: input.identity,
+        enablementId: watcher.workflow_enablement_id,
+      });
+    }
     return result.numUpdatedRows === 1n;
   }
 
@@ -385,6 +419,9 @@ export class WatchersService {
             kind: event.kind,
             payload: JSON.parse(JSON.stringify(event)),
             workflows: [row.workflow_name],
+            enablementIds: row.workflow_enablement_id
+              ? [row.workflow_enablement_id]
+              : [],
             mode: "async",
             correlationKey: `watcher:${row.id}:event:${event.id}`,
             onConflict: "ignore",

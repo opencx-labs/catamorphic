@@ -56,6 +56,7 @@ import { jsonColumn, jsonRecord, toJson } from "./run-coordinator.js";
 import type { RunPluginsLoader } from "./run-plugins-loader.js";
 import type { RuntimeEventsService } from "./runtime-events-service.js";
 import type { TenantPoliciesService } from "./tenant-policies-service.js";
+import type { WorkflowEnablementsService } from "./workflow-enablements-service.js";
 import { WorkflowNotFoundError } from "./workflows-service.js";
 
 type RunRow = Selectable<DB["workflow_runs"]>;
@@ -141,6 +142,7 @@ export interface Run {
   correlationKey: string | null;
   environment: string | null;
   allocationId: string | null;
+  workflowEnablementId: string | null;
   capabilities: RunCapabilities;
   status: RunStatus;
   phase: RunPhase;
@@ -484,6 +486,7 @@ interface RunsServiceDeps {
   runtimeEvents: RuntimeEventsService;
   coordinator: RunCoordinator;
   tenantPolicies: TenantPoliciesService;
+  workflowEnablements?: () => WorkflowEnablementsService;
 }
 
 interface PreparedSource {
@@ -873,6 +876,39 @@ export class RunsService {
     return this.trigger({ ...args, unattended: true });
   }
 
+  /** Enroll unattended work under an explicitly consented owner. */
+  async triggerWithEnablement(
+    args: TriggerProductionRunInput & {
+      enablementId: string;
+    },
+  ): Promise<Run> {
+    const service = this.deps.workflowEnablements?.();
+    if (!service) throw new Error("Workflow enablements are not configured");
+    const validated = await service.revalidate({
+      identity: args.identity,
+      enablementId: args.enablementId,
+    });
+    const enablement = validated.enablement;
+    if (
+      enablement.projectId !== args.projectId ||
+      enablement.workflowName !== args.workflowName
+    ) {
+      throw new Error(
+        "Workflow enablement does not match the requested workflow",
+      );
+    }
+    return this.trigger({
+      ...args,
+      identity: validated.ownerIdentity,
+      environment: enablement.environment,
+      commitSha: enablement.commitSha,
+      remoteBranch: enablement.remoteBranch,
+      connectionAuthorizationSnapshot: enablement.connections,
+      workflowEnablementId: enablement.id,
+      unattended: true,
+    });
+  }
+
   /**
    * Triggers a run and drives it inline until it settles or would wait: the
    * request-path shape of execution. Same authorization, same durable run
@@ -1212,6 +1248,40 @@ export class RunsService {
     });
   }
 
+  /** Resolve the immutable deployment and static connection contract. */
+  async resolveEnablementTarget(args: {
+    identity: Identity;
+    projectId: string;
+    workflowName: string;
+    commitSha?: string;
+    remoteBranch?: string;
+  }): Promise<{
+    artifact: DeploymentArtifact;
+    requirements: WorkflowGraph["connections"];
+  }> {
+    await this.requireProject(args.identity, args.projectId);
+    const source = await this.prepareProductionSource(args);
+    if (!source.commitSha) {
+      throw new ProductionDeploymentNotFoundError(args.projectId);
+    }
+    const plugins = await this.loadPlugins(
+      args.identity,
+      args.projectId,
+      args.workflowName,
+    );
+    const artifact = await this.deps.deploymentArtifacts.ensure({
+      tenantId: args.identity.tenantId,
+      projectId: args.projectId,
+      commitSha: source.commitSha,
+      files: source.files,
+      plugins: runtimePackages({
+        plugins: plugins?.plugins,
+        workflowPackage: source.workflowPackage,
+      }),
+    });
+    return { artifact, requirements: source.graph.connections };
+  }
+
   async resolveArtifactAtCommit(args: {
     identity: Identity;
     projectId: string;
@@ -1501,6 +1571,7 @@ export class RunsService {
     onConflict?: EnrollmentConflictPolicy;
     unattended?: boolean;
     connectionAuthorizationSnapshot?: readonly ResolvedConnectionBinding[];
+    workflowEnablementId?: string;
     commitSha?: string;
     remoteBranch?: string;
   }): Promise<Run> {
@@ -1543,6 +1614,7 @@ export class RunsService {
     onConflict?: EnrollmentConflictPolicy;
     unattended?: boolean;
     connectionAuthorizationSnapshot?: readonly ResolvedConnectionBinding[];
+    workflowEnablementId?: string;
     commitSha?: string;
     remoteBranch?: string;
   }): Promise<Run> {
@@ -1653,6 +1725,7 @@ export class RunsService {
               binding: admission.binding,
               requirements: admission.effectiveRequirements,
               connections,
+              workflowEnablementId: args.workflowEnablementId,
             },
             transaction: trx,
           });
@@ -1670,6 +1743,7 @@ export class RunsService {
                 capabilities: source.graph.capabilities,
               }),
               deployment_artifact_id: artifact.id,
+              workflow_enablement_id: args.workflowEnablementId ?? null,
               external_user_id: args.identity.externalUserId,
               // Who triggered the run, as verified by the host (ADR 0055):
               // the caller's scope, or null for builders/root.
@@ -2000,6 +2074,7 @@ function mapRun(args: {
     correlationKey: args.row.correlation_key,
     environment: args.row.environment_name,
     allocationId: args.row.allocation_id,
+    workflowEnablementId: args.row.workflow_enablement_id,
     capabilities: {
       cancel: active,
       pauseProcessing:

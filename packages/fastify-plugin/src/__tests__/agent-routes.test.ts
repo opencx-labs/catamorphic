@@ -36,6 +36,17 @@ describe("agent routes", () => {
       expect(res.statusCode).toBe(400);
       await app.close();
     });
+
+    it("rejects an unknown session source", async () => {
+      const app = await buildApp();
+      const res = await app.inject({
+        method: "POST",
+        url: `/api/projects/${PROJECT_ID}/agent/sessions`,
+        payload: { source: "untrusted-widget" },
+      });
+      expect(res.statusCode).toBe(400);
+      await app.close();
+    });
   });
 
   describe("GET /api/projects/:projectId/agent/sessions", () => {
@@ -59,6 +70,19 @@ describe("agent routes", () => {
         url: `/api/projects/${PROJECT_ID}/agent/sessions/${SESSION_ID}`,
       });
       expect(res.statusCode).toBe(503);
+      await app.close();
+    });
+  });
+
+  describe("POST /api/projects/:projectId/agent/sessions/:sessionId/attention/acknowledge", () => {
+    it("registers the acknowledgement route", async () => {
+      const app = await buildApp();
+      const res = await app.inject({
+        method: "POST",
+        url: `/api/projects/${PROJECT_ID}/agent/sessions/${SESSION_ID}/attention/acknowledge`,
+      });
+      expect(res.statusCode).toBe(503);
+      expect(res.json()).toEqual({ error: "Coding agent not configured" });
       await app.close();
     });
   });

@@ -39,6 +39,15 @@ In the SDK this is bound via `cat.forTenant({ tenantId }).forUser({ externalUser
 
 Identities are **full** (a builder: whole project surface) or **scoped** (a viewer: `scope: [{ kind: "app", projectId, name }, { kind: "workflow", projectId, name }]` — exactly those artifacts, nothing else). Which users get which is host policy; catamorphic enforces it. Never hardcode ids; always derive from the host's auth context.
 
+For company-brain hosts, commit reusable access policy as
+`roles/<slug>.json`. A role grants workflow names, project-agent slugs,
+Environment names, and provider-neutral connection aliases. The host owns
+membership assignment. Unattended triggers do not run from those grants alone:
+each member creates a consent-bound workflow enablement, usually through the
+desktop's **Automate** and **Enable for me** flow. The final connection auth may
+complete an already-started enablement; account connection by itself never
+bulk-enables workflows.
+
 ## Backend Path A — Library-Direct SDK
 
 Install (workspace/local — see `Local Dev Linking` below for file: installs):
@@ -166,6 +175,15 @@ There is one Workflow model and one Run model:
 
 Workflow and Run capabilities determine available controls. Do not add a public
 stage concept or separate API, SDK, hook, or UI families for these mechanics.
+
+A member-owned workflow can call
+`context.host["catamorphic.sessions"].wake({ key, agentSlug, content, title?,
+notification? })`. Core reuses one active session per member, workflow, and
+stable key, queues the normal agent turn, and requests durable attention when
+it settles. Clients poll the ordinary session list, render
+`attentionRequired`, and acknowledge it through the generated API. Web Push
+is optional transport to the same session, not a separate notification inbox.
+Service-owned enablements cannot infer a human recipient and fail closed.
 
 ## Backend Path B — HTTP via the Fastify plugin
 

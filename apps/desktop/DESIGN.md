@@ -25,8 +25,9 @@ entry for how this rule was recovered.
 
 ## Principles
 
-1. **Dark-first.** `:root` *is* the dark theme. Light mode is an override behind
-   `[data-theme="light"]`, never the default.
+1. **System-first.** New profiles follow the operating system, resolving to
+   Catamorphic Light or Catamorphic Dark. An explicit theme selection stays
+   fixed until the user changes it.
 2. **Flat depth.** Hierarchy comes from surface steps and 1px borders, not drop
    shadows. Shadows are reserved for true overlays (menus, dialogs).
 3. **One accent.** A single Catamorphic orange. If something needs to stand
@@ -208,16 +209,19 @@ that friction is intentional.
 ## Theming rules
 
 - New colors enter as a semantic token in **every preset** in
-  `src/main/theme.ts` (the source of truth for palettes), in the `:root` +
-  `[data-theme=light]` blocks in `styles.css` (the pre-JS first paint), and
+  `src/main/theme.ts` (the source of truth for palettes), in the paired
+  `light-dark()` values in `styles.css` (the pre-JS first paint), and
   documented here — then used via Tailwind (`bg-bg-raised`, `text-fg-muted`, …).
-- The active theme lives in `<userData>/theme.json`
-  (`{ preset, overrides }`) — user-global, file-watched, agent-editable.
+- The active theme lives in `<userData>/profiles/<id>/theme.json`
+  (`{ selection, overrides }`) — profile-local, file-watched, agent-editable.
+  `selection: "system"` resolves to the Catamorphic Light or Dark preset and
+  follows operating-system changes live.
   ThemeProvider writes each resolved color as an inline CSS variable on
   `<html>`, sets `color-scheme`, and mirrors the appearance to
   `data-theme` for anything keyed on it.
-- The `dark` preset in `theme.ts` and the `:root` block in `styles.css`
-  must stay identical — `:root` is what paints before JS runs.
+- The Catamorphic Light and Dark presets in `theme.ts` and the paired
+  `light-dark()` values in `styles.css` must stay identical. `:root` follows
+  the operating system for the pre-JS first paint.
 - Tokens are mapped into Tailwind 4 via `@theme inline` so utilities and
   registry components pick them up without a config file.
 
@@ -378,8 +382,8 @@ memory of *why* the app is the way it is.
   (main + renderer mirror) and a label in the Settings map.
 
 ### 2026-07-31 — User-global keybindings + agent-configurable app settings
-- Keyboard shortcuts live in `<userData>/keybindings.json` — plain JSON,
-  user-global (not per project), file-watched: edits from the Settings
+- Keyboard shortcuts live in `<userData>/profiles/<id>/keybindings.json` — plain JSON,
+  profile-level (not per project), file-watched: edits from the Settings
   UI, a text editor, or an agent all apply live (menu rebuild + broadcast
   to renderers). Actions: new-chat, toggle-sidebar, close-tab. Binding
   format "Cmd+Shift+T"; invalid entries fall back to defaults.
@@ -465,7 +469,7 @@ memory of *why* the app is the way it is.
   crosses, over the guest's isolated IPC.
 
 ### 2026-08-01 — Customizable sidebar (sidebar.js) + bookmarks
-- The sidebar layout is user-owned: **`<userData>/sidebar.js`**, a real
+- The sidebar layout is user-owned: **`<userData>/profiles/<id>/sidebar.js`**, a real
   JS file (same philosophy as keybindings.json — plain, agent-editable,
   file-watched, applies live). It evaluates in an isolated `vm` context
   (no require/fs, 250ms timeout) and exports ordered sections. Types:
@@ -620,9 +624,9 @@ memory of *why* the app is the way it is.
   CDP target to see real pixels.
 
 ### 2026-08-01 — Themes: every color is a user decision
-- The palette became data: **`<userData>/theme.json`** holds
+- The palette became data: **`<userData>/profiles/<id>/theme.json`** holds
   `{ preset, overrides }`, following the keybindings/sidebar pattern —
-  plain JSON, user-global, file-watched, applies live, and staged as an
+  plain JSON, profile-local, file-watched, applies live, and staged as an
   agent mirror file (`.catamorphic/desktop/theme.json`) so "make the
   accent purple" is a chat request.
 - Four presets ship in `src/main/theme.ts`: **Catamorphic Dark**
@@ -2506,7 +2510,7 @@ Patterned on what best-in-class palettes converged on (Chrome omnibox
   subtrees read/write. `Connect to a server…` lives beside `New project`
   (empty state, project switcher, palette); it takes a credential-free
   `catamorphic://connect?server=…&project=…&name=…` locator (deep link or
-  pasted, with fields filled automatically) plus a location. OAuth discovery
+  pasted, with its details resolved automatically) plus a location. OAuth discovery
   and S256 PKCE authenticate the person before Connect creates the local
   project, ignores `store/` and the sync manifest, and performs the first
   sync. Refreshable credentials live in profile-local protected storage.
@@ -3039,6 +3043,18 @@ paths, deliberately independent:
   icons; descriptions are collapsed by default so the list scans quickly and
   reveals important task detail on demand.
 
+### The public app wears the canonical mark (2026-08-29)
+
+- The installed app icon uses the banana-bracket C without adding a second
+  logo treatment. Catamorphic orange sits on the standard raised dark surface,
+  with the existing strong border as the only depth cue.
+- The macOS installer is the familiar drag-to-Applications DMG. Its job is to
+  make installation obvious, not to introduce a marketing surface that drifts
+  from the desktop or website.
+- Packaged identity is a product contract. The Catamorphic name, icon, bundle
+  id, and connect-link scheme stay consistent across the DMG, Applications,
+  Homebrew, Gatekeeper, and remote invitations.
+
 ### Profile passwords and browser import (2026-08-29)
 
 - Passwords are profile resources. Profile settings owns their searchable list
@@ -3131,4 +3147,157 @@ paths, deliberately independent:
   app payload. First use installs the app-release-pinned npm artifact after
   integrity verification, then reuses it offline. Catamorphic's adapters and
   the SDK JavaScript remain inside the signed app; the main process never
-  imports remotely downloaded JavaScript (ADR 0082).
+  imports remotely downloaded JavaScript (ADR 0090).
+
+### Updates wait for the user's work (2026-09-02)
+
+- Update checks are quiet until there is a useful action. An available release
+  appears as a compact card inside the workspace, not an operating-system
+  modal that interrupts the current task.
+- Download and restart are separate user decisions. Work can continue during
+  download, and restart stays unavailable while an agent or terminal is
+  active so an update never cuts through live work.
+- GitHub Releases owns the signed artifacts. The Homebrew tap carries the cask
+  and update-channel pointer, keeping direct and Homebrew installs on one
+  release line without duplicating binaries.
+- Before a new packaged version starts migrations, the desktop makes a bounded
+  local database copy. Upgrade convenience does not remove the recovery point.
+
+### Stable and Preview are a trust choice (2026-09-02)
+
+- Stable and Preview describe how much release risk a user wants to accept.
+  Stable receives only normal releases. Preview receives intentional alpha
+  releases and the next newer Stable release.
+- The choice lives in a native **Help > Update Channel** radio menu. Stable
+  builds default to Stable and alpha builds default to Preview, while the
+  user's later choice persists for the whole desktop installation.
+- A channel change checks immediately but never downgrades the application.
+  Someone leaving Preview may need to wait until Stable passes their installed
+  alpha version.
+- Nightly is reserved for a future unattended build of main. It should not be
+  used as a friendlier name for releases that are deliberately prepared,
+  signed, notarized, and published.
+
+### Profiles start profile-first (2026-09-02)
+
+- The desktop has no pre-profile configuration format. Theme, keybindings,
+  sidebar configuration, agents, and their credentials begin in the active
+  profile's directory.
+- Startup does not inspect or move root-level configuration from an earlier
+  development model. Catamorphic is greenfield, so obsolete local formats are
+  removed together with the tests that preserve them.
+
+### Chat archive and unread are one profile-local menu (2026-09-02)
+
+- A session's right-click menu is identical in the Chats sidebar and on its
+  dock bubble. It offers Mark as unread or Mark as read plus Archive or
+  Unarchive; both entry points use the existing viewport-safe menu portal.
+- The shared menu uses the app's pop-in/pop-out vocabulary. It stays mounted
+  with a frozen action snapshot through its reverse exit, and reduced-motion
+  profiles get the same fade without translate or scale.
+- Archive is presentation state, not execution state. It hides the session
+  from this profile's sidebar without closing the conversation or changing the
+  server-owned session, so an already-open chat keeps working and palette
+  search remains a path back to it.
+- Unread state is keyed by session rather than by an open dock instance and is
+  persisted with the profile. Automatic background replies and manual marks
+  use the same accent dot. A hidden-to-visible transition clears it; manually
+  marking the chat already on screen unread sticks until the user leaves and
+  opens it again.
+
+### Member workflow enablement (2026-09-03)
+
+- A deployed workflow's toolbar exposes one **Automate** surface. It reviews
+  the exact Environment, revision, connections, actions, and trigger count
+  before storing consent for unattended execution.
+- Enablements belong to the individual member by default. Missing connections
+  reuse the standard authentication card, suspended access can be checked
+  again, and a newer deployment remains opt-in through a fresh review.
+- Connection language stays provider-neutral. Enabled profile MCP servers are
+  adopted into the encrypted workflow connection broker under their existing
+  aliases, so the same authenticated MCP account can power agent tools and
+  workflow steps without exposing its credentials to renderer code.
+
+### Workflow-woken session attention (2026-09-03)
+
+- A workflow result returns as a real conversation, not a separate
+  notification object. A stable workflow key reuses the member's session so
+  recurring summaries keep their context and do not flood the Chats list.
+- A settled workflow-woken turn gives the session a server-owned attention
+  revision. Its pulsing dot is deliberately distinct from the solid,
+  profile-local unread dot. Opening the conversation acknowledges the latest
+  revision on every client.
+- The desktop adds an unacknowledged session to the dock as a minimized bubble
+  and to the ordinary sidebar list without moving focus. The PWA shows the
+  same pulse, and Web Push is only a delivery path back to that session.
+
+### One invitation, one connection input (2026-09-03)
+
+- Connecting a remote project asks for the invitation link once. The link is
+  the credential-free locator for the server and project, so exposing those
+  parsed values as editable inputs creates ambiguity without adding capability.
+- The desktop shows the resolved project and server as confirmation, derives
+  the local project name from the link, and only leaves the local folder
+  location as a separate choice. A deep link uses the exact same path as a
+  pasted invitation.
+
+### Authentication stays in the workspace (2026-09-04)
+
+- A web destination initiated by the desktop opens as a workspace browser tab,
+  including remote-server sign-in, agent OAuth, and GitHub authorization. The
+  system browser is no longer a second navigation surface for desktop work.
+- Authorization callbacks close their temporary workspace tab when the flow is
+  complete. Remote-project connection steps aside while authentication is in
+  progress and returns with an actionable error if the flow fails.
+- The stock server's sign-in and consent pages use the desktop's canonical dark
+  tokens, banana-bracket mark, compact typography, and orange focus and action
+  language. They remain semantic HTML forms with password-manager metadata,
+  visible keyboard focus, responsive layout, reduced-motion handling, and a
+  restrictive per-response content security policy.
+
+### System appearance is the theme default (2026-09-04)
+
+- A new profile stores `selection: "system"` and resolves it through Electron's
+  native appearance to Catamorphic Light or Catamorphic Dark. Operating-system
+  changes re-resolve every system-following profile and update all of its open
+  windows without changing the stored selection.
+- Settings presents System default as a first-class choice above the explicit
+  preset cards. Choosing Light, Dark, Midnight, or Paper pins that selection;
+  choosing System default resumes following the device.
+- The renderer declares both supported color schemes before JavaScript runs.
+  Its paired `light-dark()` fallback tokens keep the first paint aligned with
+  the operating system, while the resolved profile palette remains the source
+  of truth after startup.
+
+### Project-shaped navigation and one session inspector (2026-09-04)
+
+- **Projects ship their default sidebar.** The shared
+  `.catamorphic/sidebar.js` remains the project's authored navigation for its
+  members, including builder surfaces such as Changes and Pull Requests when
+  the project wants them. The renderer narrows that presentation to the
+  current caller's capabilities. A profile or per-project personal override
+  remains the user's layer above the shared default.
+- **The palette remains everyone's front door.** Connecting to a project lands
+  on the ordinary New Tab palette rather than silently starting an agent. A
+  project may contribute a very small set of resolved starting actions for the
+  current user segment. They sit inside the palette, use the project's agents,
+  and render no heading, placeholder, or empty state when none are configured.
+- **One top-right surface-control location.** Contextual actions live in the
+  compact top-right cluster used for workspace controls. Share gets a visible
+  slot whenever the active surface has a real sharing contract. Remote
+  documents and presentations use it now; customer-facing apps join it when
+  app publications land. Lower-frequency actions live in the relevant
+  inspector or overflow rather than a permanent button row.
+- **Every chat has one always-present session inspector.** It sits beside the
+  temporary todo control and opens on hover, keyboard focus, or click. It
+  contains the title, agent, source surface, run state, environment, checkout,
+  privacy and sync state, lineage, recent activity, and contextual actions
+  such as fork, archive, and move.
+- **The inspector is one component.** Sidebar session hover uses the same
+  inspector content. The palette's `Status` command and composer `/status`
+  open and pin that control. Todos remain an independent temporary progress
+  surface; the session inspector is stable chrome.
+- **External surfaces create ordinary sessions.** Slack, Claude MCP, mobile,
+  API, and desktop conversations share the durable session model and normal
+  Chats list with source attribution. MCP installation and project choice
+  belong to invitation/onboarding outside the desktop.

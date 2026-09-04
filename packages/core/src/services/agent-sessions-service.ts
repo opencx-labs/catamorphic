@@ -73,11 +73,21 @@ import {
 type SessionRow = Selectable<DB["agent_sessions"]>;
 type MessageRow = Selectable<DB["agent_messages"]>;
 
+export type AgentSessionSource =
+  | "desktop"
+  | "mobile"
+  | "slack"
+  | "claude"
+  | "mcp"
+  | "api";
+
 export interface AgentSession {
   id: string;
   projectId: string;
   externalUserId: string;
   provider: string;
+  /** Surface that first created this conversation; informational, not auth. */
+  source: AgentSessionSource;
   providerSessionId: string | null;
   sandboxId: string | null;
   environment: string | null;
@@ -112,10 +122,21 @@ export interface AgentSession {
   pausedAt: string | null;
   /** Runtime state in this host process; never persisted. */
   running: boolean;
+  /** Monotonic server-owned request for the user to open this session. */
+  attentionRevision: number;
+  /** Latest attention request the user has acknowledged by opening it. */
+  attentionSeenRevision: number;
+  /** True when this session should pulse in the user's clients. */
+  attentionRequired: boolean;
   status: "active" | "closed";
   baseCommitSha: string | null;
   createdAt: string;
   updatedAt: string;
+}
+
+export interface AgentSessionWakeReceipt extends SessionDeliveryReceipt {
+  sessionId: string;
+  sessionCreated: boolean;
 }
 
 export type AgentTodoStatus = "pending" | "in_progress" | "completed";
@@ -281,7 +302,7 @@ function checkpointMessage(userMessage: string): string {
  * replace it (or drop it) with `CatamorphicCoreConfig.standingAgentPrompt`
  * (ADR 0049).
  */
-const WORKFLOW_AUTHORING_SYSTEM_PROMPT = `A Catamorphic project is a folder that can hold any kind of work — documents, notes, data, code, automations (workflows), and apps, in any mix. Read what is actually in the project before assuming what it is about; many projects contain no workflows at all. The rules below apply only when you create or edit workflows: Every workflow is an exported defineWorkflow(({ defineBoundary, defineBatch }) => ({ steps })) value; runs execute ordered boundary and batch scopes against an immutable deployment, with continuation state persisted in Postgres. There is no "use workflow" directive — IO and business operations live in "use step" functions called from boundary run bodies. Cancellation is a host-issued terminal control declared with controls: { cancel: true }, never a BoundaryContext transition. A workflow may subscribe to host-defined trigger kinds with triggers: [trigger("kind", config)] — the kind name must be a string literal, the config a constant expression, both typed by the generated workflows/src/catamorphic-triggers.d.ts; the fired payload becomes the first step's input. Only exported defineBatchStep calls inside defineBatch.process are physically coalesced. For authoring primitives, use the project's established SaaS wrapper when present; otherwise use @catamorphic/workflow. Never create local copies. Consult .agents/skills/writing-workflows/SKILL.md, .agents/skills/durable-workflows/SKILL.md, and .agents/skills/batch-workflows/SKILL.md, when present, before creating or restructuring workflows.`;
+const WORKFLOW_AUTHORING_SYSTEM_PROMPT = `A Catamorphic project is a folder that can hold any kind of work — documents, notes, data, code, automations (workflows), and apps, in any mix. Read what is actually in the project before assuming what it is about; many projects contain no workflows at all. The rules below apply only when you create or edit workflows: Every workflow is an exported defineWorkflow(({ defineBoundary, defineBatch }) => ({ steps })) value; runs execute ordered boundary and batch scopes against an immutable deployment, with continuation state persisted in Postgres. There is no "use workflow" directive — IO and business operations live in "use step" functions called from boundary run bodies. Cancellation is a host-issued terminal control declared with controls: { cancel: true }, never a BoundaryContext transition. A workflow may subscribe to host-defined trigger kinds with triggers: [trigger("kind", config)] — the kind name must be a string literal, the config a constant expression, both typed by the generated workflows/src/catamorphic-triggers.d.ts; the fired payload becomes the first step's input. Declare provider-neutral connections at workflow definition level; roles separately grant workflow, agent, Environment, and connection aliases, and each member explicitly enables unattended execution. Use context.host["catamorphic.sessions"].wake with a stable key and project-agent slug when a member-owned workflow should run an agent and surface its reusable session in desktop and PWA; service-owned enablements cannot create personal notifications. Only exported defineBatchStep calls inside defineBatch.process are physically coalesced. For authoring primitives, use the project's established SaaS wrapper when present; otherwise use @catamorphic/workflow. Never create local copies. Consult .agents/skills/writing-workflows/SKILL.md, .agents/skills/durable-workflows/SKILL.md, and .agents/skills/batch-workflows/SKILL.md, when present, before creating or restructuring workflows.`;
 
 export function buildAgentSystemPrompt({
   systemPrompt,
@@ -397,6 +418,8 @@ export interface AgentTurnSettledEvent {
   sessionId: string;
   messageId: string;
   status: "completed" | "failed" | "awaiting_input";
+  /** Present only when a workflow asked the host to surface this turn. */
+  notification?: { title?: string; body?: string };
   changedFiles: string[];
   /** Checkout in which this turn ran. Host-local and never persisted. */
   workingDirectory: string;
@@ -889,6 +912,7 @@ export class AgentSessionsService {
       agentId?: string;
       effort?: AgentEffort;
       environment?: string;
+      source?: AgentSessionSource;
     } = {},
   ): Promise<AgentSession> {
     return withSpan(
@@ -913,6 +937,9 @@ export class AgentSessionsService {
       agentId?: string;
       effort?: AgentEffort;
       environment?: string;
+      title?: string;
+      wakeKey?: string;
+      source?: AgentSessionSource;
     },
   ): Promise<AgentSession> {
     await this.requireProject(identity, projectId);
@@ -967,6 +994,7 @@ export class AgentSessionsService {
           project_id: projectId,
           external_user_id: identity.externalUserId,
           provider: agent.provider.name,
+          source: input.source ?? "api",
           provider_session_id: null,
           agent_id: input.agentId ?? null,
           model_effort: input.effort ?? null,
@@ -975,6 +1003,8 @@ export class AgentSessionsService {
           allocation_id: allocation.id,
           environment_name: admitted.environmentName,
           status: "active",
+          title: input.title ?? null,
+          wake_key: input.wakeKey ?? null,
           base_commit_sha: null,
           authority_host_id: this.hostId,
           authority_revision: 1,
@@ -984,6 +1014,116 @@ export class AgentSessionsService {
     });
 
     return mapSession(row, false, this.hostId, this.authorityLeaseMs);
+  }
+
+  /**
+   * Create or reuse one stable session for a workflow and queue a turn in it.
+   * The queued message asks clients to surface the session only after the turn
+   * settles, so a scheduled agent never steals focus while it is working.
+   */
+  async wake(
+    identity: Identity,
+    projectId: string,
+    input: {
+      wakeKey: string;
+      content: string;
+      workflowName: string;
+      runId: string;
+      agentSlug?: string;
+      environment?: string;
+      title?: string;
+      mode?: "next_turn" | "interrupt";
+      notification?: { title?: string; body?: string };
+    },
+  ): Promise<AgentSessionWakeReceipt> {
+    await this.requireProject(identity, projectId);
+    const agentId = input.agentSlug
+      ? formatProjectAgentId(projectId, input.agentSlug)
+      : null;
+    const findExisting = () =>
+      this.db
+        .selectFrom("agent_sessions")
+        .selectAll()
+        .where("project_id", "=", projectId)
+        .where("external_user_id", "=", identity.externalUserId)
+        .where("wake_key", "=", input.wakeKey)
+        .where("status", "=", "active")
+        .executeTakeFirst();
+
+    let row = await findExisting();
+    let sessionCreated = false;
+    if (!row) {
+      try {
+        const created = await this.createInner(identity, projectId, {
+          ...(agentId ? { agentId } : {}),
+          ...(input.environment ? { environment: input.environment } : {}),
+          ...(input.title ? { title: input.title } : {}),
+          wakeKey: input.wakeKey,
+        });
+        row = await this.db
+          .selectFrom("agent_sessions")
+          .selectAll()
+          .where("id", "=", created.id)
+          .executeTakeFirstOrThrow();
+        sessionCreated = true;
+      } catch (error) {
+        // Concurrent retries may race the partial unique wake-key index. The
+        // winning session is the one both calls must use; any other failure
+        // remains visible.
+        row = await findExisting();
+        if (!row) throw error;
+      }
+    }
+    await this.requireSession(identity, projectId, row.id);
+    if (agentId && row.agent_id !== agentId) {
+      throw new Error(
+        `Wake key '${input.wakeKey}' already belongs to a different agent`,
+      );
+    }
+    const receipt = await this.deliver(identity, projectId, row.id, {
+      content: input.content,
+      author: {
+        kind: "workflow",
+        runId: input.runId,
+        workflowName: input.workflowName,
+      },
+      mode: input.mode ?? "next_turn",
+      idempotencyKey: `workflow-wake:${input.runId}:${input.wakeKey}`,
+      metadata: {
+        workflowNotification: {
+          ...(input.notification?.title
+            ? { title: input.notification.title }
+            : {}),
+          ...(input.notification?.body
+            ? { body: input.notification.body }
+            : {}),
+        },
+      },
+    });
+    return { ...receipt, sessionId: row.id, sessionCreated };
+  }
+
+  /** Acknowledgement-by-interaction shared by desktop and PWA clients. */
+  async acknowledgeAttention(
+    identity: Identity,
+    projectId: string,
+    sessionId: string,
+  ): Promise<AgentSession> {
+    await this.requireSession(identity, projectId, sessionId);
+    const row = await this.db
+      .updateTable("agent_sessions")
+      .set(({ ref }) => ({
+        attention_seen_revision: ref("attention_revision"),
+      }))
+      .where("id", "=", sessionId)
+      .returningAll()
+      .executeTakeFirstOrThrow();
+    return mapSession(
+      row,
+      this.runningTurns.has(sessionId),
+      this.hostId,
+      this.authorityLeaseMs,
+    );
   }
 
   /**
@@ -1006,6 +1146,7 @@ export class AgentSessionsService {
       title?: string | null;
       icon?: string | null;
       provider?: string;
+      source?: AgentSessionSource;
       /**
        * The source session's PROJECT-agent slug, when it ran one: project
        * agent definitions are committed files that sync between backends,
@@ -1180,6 +1321,7 @@ export class AgentSessionsService {
                   project_id: projectId,
                   external_user_id: identity.externalUserId,
                   provider: input.provider ?? "mirror",
+                  source: input.source ?? "api",
                   provider_session_id: null,
                   agent_id: agentId,
                   model_effort: null,
@@ -1552,6 +1694,7 @@ export class AgentSessionsService {
           project_id: projectId,
           external_user_id: identity.externalUserId,
           provider: session.provider,
+          source: session.source,
           provider_session_id: null,
           agent_id: session.agent_id,
           model_effort: session.model_effort,
@@ -2042,6 +2185,7 @@ export class AgentSessionsService {
             session,
             attachments,
             persistedUserMessageId: turn.messageId,
+            requestMetadata: message.metadata,
           },
         );
         await this.turns.complete({
@@ -2112,6 +2256,7 @@ export class AgentSessionsService {
           attachments: (userMetadata?.attachments ??
             undefined) as unknown as AgentAttachment[],
           retryOfAssistantId: failed.id,
+          requestMetadata: userMetadata,
           sanitizeReasoning: failedMetadata?.errorKind === "model_incompat",
           autoAttempt: opts.autoAttempt,
         },
@@ -2204,6 +2349,8 @@ export class AgentSessionsService {
       autoAttempt?: number;
       /** Durable inbox message already persisted by AgentTurnsService. */
       persistedUserMessageId?: string;
+      /** Metadata on the request that caused this turn. */
+      requestMetadata?: JsonObject | null;
     },
   ): Promise<AgentMessage> {
     // Note: no stale-flag clearing needed here — interrupt() only sets the
@@ -2606,6 +2753,28 @@ export class AgentSessionsService {
         .returningAll()
         .executeTakeFirstOrThrow();
 
+      const requestedNotification = workflowNotification(
+        extras.requestMetadata,
+      );
+      const shouldRequestAttention =
+        requestedNotification !== undefined &&
+        (metadata.status === "completed" ||
+          metadata.status === "awaiting_input" ||
+          (metadata.status === "failed" &&
+            errorKind !== "rate_limit" &&
+            errorKind !== "unavailable" &&
+            !interrupted));
+      if (shouldRequestAttention) {
+        await this.db
+          .updateTable("agent_sessions")
+          .set(({ ref }) => ({
+            attention_revision: sql`${ref("attention_revision")} + 1`,
+            updated_at: new Date(),
+          }))
+          .where("id", "=", sessionId)
+          .execute();
+      }
+
       if (this.onTurnSettled) {
         const settled: AgentTurnSettledEvent = {
           identity,
@@ -2613,6 +2782,9 @@ export class AgentSessionsService {
           sessionId,
           messageId: assistantMessageId,
           status: metadata.status as AgentTurnSettledEvent["status"],
+          ...(shouldRequestAttention
+            ? { notification: requestedNotification }
+            : {}),
           changedFiles: changedFiles.map((change) => change.path),
           workingDirectory: settledWorkingDirectory,
         };
@@ -3589,6 +3761,7 @@ function mapSession(
     projectId: row.project_id,
     externalUserId: row.external_user_id,
     provider: row.provider,
+    source: parseSessionSource(row.source),
     providerSessionId: row.provider_session_id,
     sandboxId: row.sandbox_id,
     environment: row.environment_name,
@@ -3609,11 +3782,50 @@ function mapSession(
     resumable,
     pausedAt: resumable ? leaseExpiresAt.toISOString() : null,
     running,
+    attentionRevision: Number(row.attention_revision),
+    attentionSeenRevision: Number(row.attention_seen_revision),
+    attentionRequired:
+      Number(row.attention_revision) > Number(row.attention_seen_revision),
     status: row.status as "active" | "closed",
     baseCommitSha: row.base_commit_sha,
     createdAt: row.created_at.toISOString(),
     updatedAt: row.updated_at.toISOString(),
   };
+}
+
+function workflowNotification(
+  metadata: JsonObject | null | undefined,
+): { title?: string; body?: string } | undefined {
+  const value = metadata?.workflowNotification;
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return undefined;
+  }
+  const title =
+    typeof value.title === "string" && value.title.trim()
+      ? value.title.trim()
+      : undefined;
+  const body =
+    typeof value.body === "string" && value.body.trim()
+      ? value.body.trim()
+      : undefined;
+  return {
+    ...(title ? { title } : {}),
+    ...(body ? { body } : {}),
+  };
+}
+
+function parseSessionSource(value: string): AgentSessionSource {
+  switch (value) {
+    case "desktop":
+    case "mobile":
+    case "slack":
+    case "claude":
+    case "mcp":
+    case "api":
+      return value;
+    default:
+      return "api";
+  }
 }
 
 function parseHandoffStatus(value: string): AgentSession["handoffStatus"] {

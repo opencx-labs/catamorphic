@@ -32,6 +32,8 @@ export interface UseAgentChatOptions {
   agentId?: string;
   /** Logical Environment for a lazily created session. */
   environment?: string;
+  /** Surface creating a lazy session. Informational provenance only. */
+  source?: AgentSessionDetail["source"];
   /**
    * Optional quiet polling cadence while the session is idle. Hosts should
    * enable this only for a visible chat that can be changed by another client.
@@ -272,6 +274,7 @@ export function useAgentChat(
         .mutateAsync({
           ...(agentIdRef.current ? { agentId: agentIdRef.current } : {}),
           ...(options.environment ? { environment: options.environment } : {}),
+          ...(options.source ? { source: options.source } : {}),
         })
         .then((created) => {
           activeSessionRef.current = {

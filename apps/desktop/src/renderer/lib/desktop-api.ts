@@ -1,6 +1,7 @@
+import type { DesktopUpdateState } from "../../shared/update.js";
 import type { UsageSummary } from "../../shared/usage.js";
 
-export type { UsageSummary };
+export type { DesktopUpdateState, UsageSummary };
 
 export interface ServerInfo {
   url: string | null;
@@ -622,6 +623,7 @@ export interface SidebarSectionConfig {
   type:
     | "workflows"
     | "apps"
+    | "files"
     | "chats"
     | "bookmarks"
     | "git"
@@ -684,7 +686,7 @@ export interface ThemePreset {
 }
 
 export interface ThemeConfig {
-  preset: string;
+  selection: string;
   overrides: Partial<ThemeColors>;
 }
 
@@ -694,9 +696,12 @@ export interface AppPrefs {
   desktopNotifications: boolean;
   sidebarOpen: boolean;
   lastProjectId?: string;
+  archivedSessionIds: string[];
+  unreadSessionIds: string[];
 }
 
 export interface ResolvedTheme extends ThemeConfig {
+  preset: string;
   colors: ThemeColors;
   appearance: "dark" | "light";
 }
@@ -733,6 +738,10 @@ export interface CatamorphicDesktopApi {
   sessionSetIncognito: (sessionId: string, incognito: boolean) => Promise<void>;
   /** Project policy (ADR 0062): may members open incognito chats here? */
   projectAllowIncognito: (projectId: string) => Promise<boolean>;
+  /** Caller-resolved project starters; absent config returns an empty list. */
+  projectStartingActions: (
+    projectId: string,
+  ) => Promise<Array<{ label: string; prompt: string; agentId?: string }>>;
   sessionMoveEligibility: (
     projectId: string,
     sessionId: string,
@@ -824,6 +833,13 @@ export interface CatamorphicDesktopApi {
   onConnectLink: (listener: (link: string) => void) => () => void;
   getServerState: () => Promise<ServerInfo>;
   onServerChanged: (listener: (info: ServerInfo) => void) => () => void;
+  updateState: () => Promise<DesktopUpdateState>;
+  updateCheck: () => Promise<void>;
+  updateDownload: () => Promise<void>;
+  updateInstall: () => Promise<void>;
+  onUpdateStateChanged: (
+    listener: (state: DesktopUpdateState) => void,
+  ) => () => void;
 
   windowProfile: () => Promise<string>;
   windowSetProfile: (profileId: string) => Promise<string>;
@@ -974,6 +990,7 @@ export interface CatamorphicDesktopApi {
   }) => Promise<void>;
   projectRoot: (projectId: string) => Promise<string | null>;
   revealFolder: (folderPath: string) => Promise<void>;
+  projectOpenFile: (projectId: string, filePath: string) => Promise<void>;
 
   terminalCreate: (input: {
     projectId?: string;

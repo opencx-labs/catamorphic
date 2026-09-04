@@ -38,6 +38,8 @@ interface TabIndicators {
   working?: boolean;
   /** Response landed while the tab was hidden → dot on the icon. */
   unread?: boolean;
+  /** A workflow requested user attention → pulsing dot on the icon. */
+  attention?: boolean;
   /** Unsent draft (chat composer, editor changes) → pencil badge. */
   draft?: boolean;
   /** The agent asked and is waiting → pulsing "?" badge. */
@@ -52,6 +54,7 @@ interface TabIndicators {
 function tabStatusLine(tab: WorkspaceTab): string | null {
   if (tab.working) return "Agent is working…";
   if (tab.awaitingInput) return "The agent is waiting for your answer";
+  if (tab.attention) return "Ready for you";
   if (tab.unread) return "New reply";
   if (tab.draft) {
     return tab.kind === "editor" ? "Unsaved changes" : "Unsent draft";
@@ -84,6 +87,7 @@ function TabHoverCard({
   return createPortal(
     <div
       role="tooltip"
+      data-testid="tab-hover-card"
       style={{ left, top: anchor.y }}
       onAnimationEnd={(event) => {
         if (event.animationName === "fade-out" && exiting) onExited();
@@ -547,6 +551,7 @@ export function WorkspaceTabBar({
                       signals={{
                         working: tab.working,
                         unread: tab.unread,
+                        attention: tab.attention,
                         draft: tab.draft,
                         awaitingInput: tab.awaitingInput,
                       }}

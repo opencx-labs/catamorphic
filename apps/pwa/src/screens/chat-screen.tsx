@@ -1,12 +1,13 @@
 import {
   CatamorphicProvider,
+  useAcknowledgeAgentSessionAttention,
   useAgentChat,
   useToolPermissions,
 } from "@catamorphic/react";
 import type { QueryClient } from "@tanstack/react-query";
 import { useQuery } from "@tanstack/react-query";
 import { ArrowUp, GitFork, ListPlus, Square, X, Zap } from "lucide-react";
-import { type FormEvent, useState } from "react";
+import { type FormEvent, useEffect, useRef, useState } from "react";
 import {
   AgentQuestionPanel,
   QUESTIONS_DISMISSED_MESSAGE,
@@ -75,6 +76,7 @@ function Chat({
     ? undefined
     : me.data?.projects.find((p) => p.projectId === projectId)?.agents[0];
   const chat = useAgentChat(projectId, {
+    source: "mobile",
     sessionId: sessionId ?? undefined,
     idleRefetchIntervalMs: 3_000,
     ...(scopedAgent ? { agentId: `project:${projectId}:${scopedAgent}` } : {}),
@@ -92,6 +94,21 @@ function Chat({
         { replace: true },
       ),
   });
+  const acknowledgeAttention = useAcknowledgeAgentSessionAttention(projectId);
+  const acknowledgedRevisionRef = useRef(0);
+  useEffect(() => {
+    const session = chat.session;
+    if (
+      !session?.attentionRequired ||
+      session.attentionRevision <= acknowledgedRevisionRef.current
+    ) {
+      return;
+    }
+    acknowledgedRevisionRef.current = session.attentionRevision;
+    void acknowledgeAttention.mutateAsync(session.id).catch(() => {
+      acknowledgedRevisionRef.current = session.attentionSeenRevision;
+    });
+  }, [chat.session, acknowledgeAttention]);
   const permissions = useToolPermissions(
     projectId,
     chat.sessionId ?? undefined,

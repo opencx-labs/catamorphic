@@ -3,41 +3,64 @@ name: CI
 on:
   push:
     branches: [main]
+  pull_request:
+    branches: [main]
+    types: [opened, reopened, synchronize, ready_for_review]
   workflow_dispatch:
 
 permissions:
   contents: read
 
 concurrency:
-  group: ci-${{ github.ref }}
+  group: ci-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
 jobs:
+  access:
+    name: Repository write access
+    runs-on: ubuntu-latest
+    outputs:
+      allowed: ${{ steps.permission.outputs.allowed }}
+    steps:
+      - name: Check contributor permission
+        id: permission
+        uses: actions/github-script@v9
+        with:
+          script: |
+            if (context.eventName !== "pull_request") {
+              core.setOutput("allowed", "true");
+              return;
+            }
+
+            const username = context.payload.pull_request.user.login;
+            let permission = "none";
+            try {
+              const response = await github.rest.repos.getCollaboratorPermissionLevel({
+                ...context.repo,
+                username,
+              });
+              permission = response.data.permission;
+            } catch (error) {
+              if (error.status !== 404) throw error;
+            }
+
+            const allowed = ["admin", "maintain", "write"].includes(permission);
+            core.info(`${username} has ${permission} permission; full CI allowed: ${allowed}`);
+            core.setOutput("allowed", String(allowed));
+
   checks:
+    needs: access
+    if: needs.access.outputs.allowed == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 90
     env:
-      ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
-      OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
-      DAYTONA_API_KEY: ${{ secrets.DAYTONA_API_KEY }}
-      S3_ENDPOINT: ${{ secrets.S3_ENDPOINT }}
-      S3_BUCKET: ${{ secrets.S3_BUCKET }}
-      S3_ACCESS_KEY_ID: ${{ secrets.S3_ACCESS_KEY_ID }}
-      S3_SECRET_ACCESS_KEY: ${{ secrets.S3_SECRET_ACCESS_KEY }}
-      S3_REGION: ${{ secrets.S3_REGION }}
-      S3_FORCE_PATH_STYLE: ${{ secrets.S3_FORCE_PATH_STYLE }}
-      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-      CLOUDFLARE_ARTIFACTS_NAMESPACE: ${{ secrets.CLOUDFLARE_ARTIFACTS_NAMESPACE }}
-      CLOUDFLARE_SANDBOX_API_URL: ${{ secrets.CLOUDFLARE_SANDBOX_API_URL }}
-      CLOUDFLARE_SANDBOX_API_KEY: ${{ secrets.CLOUDFLARE_SANDBOX_API_KEY }}
-      CF_SANDBOX_INTEGRATION: ${{ secrets.CLOUDFLARE_SANDBOX_API_URL != '' && '1' || '' }}
+      MODEL_EVAL_AVAILABLE: ${{ (secrets.ANTHROPIC_API_KEY != '' || secrets.OPENAI_API_KEY != '') && '1' || '' }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version: 1.3.14
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: 24.13.0
       - run: bun install --frozen-lockfile
@@ -50,10 +73,25 @@ jobs:
           xvfb-run -a --server-args="-screen 0 1440x900x24"
           bash -c 'openbox >/dev/null 2>&1 & exec bun run check'
       - name: Publish packages to the local eval registry
-        if: ${{ env.ANTHROPIC_API_KEY != '' || env.OPENAI_API_KEY != '' }}
+        if: github.event_name != 'pull_request' && env.MODEL_EVAL_AVAILABLE == '1'
         run: ./infra/local-registry/publish.sh
       - name: Model-in-the-loop desktop eval
-        if: ${{ env.ANTHROPIC_API_KEY != '' || env.OPENAI_API_KEY != '' }}
+        if: github.event_name != 'pull_request' && env.MODEL_EVAL_AVAILABLE == '1'
         env:
           CATAMORPHIC_EVAL: "1"
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          DAYTONA_API_KEY: ${{ secrets.DAYTONA_API_KEY }}
+          S3_ENDPOINT: ${{ secrets.S3_ENDPOINT }}
+          S3_BUCKET: ${{ secrets.S3_BUCKET }}
+          S3_ACCESS_KEY_ID: ${{ secrets.S3_ACCESS_KEY_ID }}
+          S3_SECRET_ACCESS_KEY: ${{ secrets.S3_SECRET_ACCESS_KEY }}
+          S3_REGION: ${{ secrets.S3_REGION }}
+          S3_FORCE_PATH_STYLE: ${{ secrets.S3_FORCE_PATH_STYLE }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ARTIFACTS_NAMESPACE: ${{ secrets.CLOUDFLARE_ARTIFACTS_NAMESPACE }}
+          CLOUDFLARE_SANDBOX_API_URL: ${{ secrets.CLOUDFLARE_SANDBOX_API_URL }}
+          CLOUDFLARE_SANDBOX_API_KEY: ${{ secrets.CLOUDFLARE_SANDBOX_API_KEY }}
+          CF_SANDBOX_INTEGRATION: ${{ secrets.CLOUDFLARE_SANDBOX_API_URL != '' && '1' || '' }}
         run: xvfb-run -a --server-args="-screen 0 1440x900x24" bun run --cwd apps/desktop test:eval

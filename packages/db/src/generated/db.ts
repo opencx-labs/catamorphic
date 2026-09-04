@@ -90,6 +90,8 @@ export interface AgentSessions {
   activity: string | null;
   agent_id: string | null;
   allocation_id: string | null;
+  attention_revision: Generated<Int8>;
+  attention_seen_revision: Generated<Int8>;
   authority_host_id: Generated<string>;
   authority_revision: Generated<Int8>;
   authority_seen_at: Generated<Timestamp>;
@@ -108,11 +110,13 @@ export interface AgentSessions {
   provider: string;
   provider_session_id: string | null;
   sandbox_id: string | null;
+  source: Generated<string>;
   status: Generated<string>;
   system_prompt: string | null;
   title: string | null;
   todos: Generated<Json>;
   updated_at: Generated<Timestamp>;
+  wake_key: string | null;
 }
 
 export interface AgentTurns {
@@ -603,7 +607,7 @@ export interface RateReservationBuckets {
 }
 
 export interface ScheduleBindings {
-  binding_id: string;
+  activation_id: string;
   created_at: Generated<Timestamp>;
   cron_expression: string;
   last_scheduled_for: Timestamp | null;
@@ -613,8 +617,8 @@ export interface ScheduleBindings {
 }
 
 export interface ScheduleOccurrences {
+  activation_id: string;
   attempt_count: Generated<number>;
-  binding_id: string;
   completed_at: Timestamp | null;
   created_at: Generated<Timestamp>;
   error: string | null;
@@ -759,14 +763,12 @@ export interface Tenants {
   name: string;
 }
 
-export interface TriggerBindings {
+export interface TriggerDefinitions {
   can_suspend: boolean;
   commit_sha: string;
   config: Json;
-  connection_authorization_snapshot: Json | null;
   connection_requirements: Generated<Json>;
   created_at: Generated<Timestamp>;
-  environment_name: string | null;
   id: Generated<string>;
   input_parameters: Json;
   input_schema: Generated<Json>;
@@ -776,7 +778,7 @@ export interface TriggerBindings {
   workflow_name: string;
 }
 
-export interface TriggerBindingScans {
+export interface TriggerDefinitionScans {
   commit_sha: string;
   project_id: string;
   scanned_at: Generated<Timestamp>;
@@ -821,7 +823,67 @@ export interface Watchers {
   source_path: string;
   status: Generated<string>;
   updated_at: Generated<Timestamp>;
+  workflow_enablement_id: string | null;
   workflow_name: string;
+}
+
+export interface WorkflowEnablementConnections {
+  alias: string;
+  binding_id: string;
+  capabilities: Generated<Json>;
+  connection_id: string;
+  created_at: Generated<Timestamp>;
+  enablement_id: string;
+  principal_kind: string;
+  provider_kind: string;
+}
+
+export interface WorkflowEnablementEvents {
+  actor_external_user_id: string | null;
+  created_at: Generated<Timestamp>;
+  enablement_id: string;
+  event_type: string;
+  id: Generated<Int8>;
+  metadata: Generated<Json>;
+  reason: string | null;
+}
+
+export interface WorkflowEnablements {
+  capabilities: Generated<Json>;
+  commit_sha: string;
+  consent_digest: string;
+  created_at: Generated<Timestamp>;
+  created_by_external_user_id: string;
+  deployment_artifact_id: string;
+  environment_name: string;
+  expires_at: Timestamp | null;
+  id: Generated<string>;
+  owner_connection_id: string | null;
+  owner_external_user_id: string | null;
+  owner_identity: Json;
+  owner_kind: string;
+  owner_principal_kind: string | null;
+  project_id: string;
+  remote_branch: Generated<string>;
+  revision: Generated<number>;
+  status: Generated<string>;
+  suspension_reason: string | null;
+  temporary: Generated<boolean>;
+  tenant_id: string;
+  update_available: Generated<boolean>;
+  updated_at: Generated<Timestamp>;
+  workflow_name: string;
+}
+
+export interface WorkflowEnablementTriggers {
+  config_overlay: Generated<Json>;
+  created_at: Generated<Timestamp>;
+  enablement_id: string;
+  host_trigger_key: string | null;
+  id: Generated<string>;
+  status: Generated<string>;
+  trigger_definition_id: string;
+  updated_at: Generated<Timestamp>;
 }
 
 export interface WorkflowPauses {
@@ -878,6 +940,7 @@ export interface WorkflowRuns {
   state_version: Generated<Int8>;
   status: Generated<string>;
   updated_at: Generated<Timestamp>;
+  workflow_enablement_id: string | null;
   workflow_name: string;
 }
 
@@ -978,11 +1041,15 @@ export interface DB {
   tenant_app_policies: TenantAppPolicies;
   tenant_execution_policies: TenantExecutionPolicies;
   tenants: Tenants;
-  trigger_binding_scans: TriggerBindingScans;
-  trigger_bindings: TriggerBindings;
+  trigger_definition_scans: TriggerDefinitionScans;
+  trigger_definitions: TriggerDefinitions;
   user_notification_events: UserNotificationEvents;
   watcher_runs: WatcherRuns;
   watchers: Watchers;
+  workflow_enablement_connections: WorkflowEnablementConnections;
+  workflow_enablement_events: WorkflowEnablementEvents;
+  workflow_enablement_triggers: WorkflowEnablementTriggers;
+  workflow_enablements: WorkflowEnablements;
   workflow_pauses: WorkflowPauses;
   workflow_run_events: WorkflowRunEvents;
   workflow_run_states: WorkflowRunStates;

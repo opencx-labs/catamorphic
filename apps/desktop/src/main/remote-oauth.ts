@@ -65,7 +65,8 @@ export async function refreshRemoteCredentials(options: {
 export async function authorizeRemoteServer(options: {
   serverUrl: string;
   fetch?: typeof fetch;
-  openExternal(url: string): Promise<void>;
+  openUrl(url: string): Promise<void>;
+  onCallbackServed?(origin: string): void;
   timeoutMs?: number;
 }): Promise<RemoteOAuthCredentials> {
   const fetchImpl = options.fetch ?? fetch;
@@ -145,8 +146,9 @@ export async function authorizeRemoteServer(options: {
     authorize.searchParams.set("state", state);
     authorize.searchParams.set("code_challenge", challenge);
     authorize.searchParams.set("code_challenge_method", "S256");
-    await options.openExternal(authorize.toString());
+    await options.openUrl(authorize.toString());
     const result = await callback.result;
+    options.onCallbackServed?.(new URL(callback.url).origin);
     if (!constantTimeTextEqual(result.state, state)) {
       throw new Error("Remote authorization returned an invalid state");
     }

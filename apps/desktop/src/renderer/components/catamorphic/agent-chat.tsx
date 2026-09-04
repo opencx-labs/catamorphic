@@ -33,7 +33,11 @@ export function AgentChat({
   onSessionCreated,
   variant = "dock",
 }: AgentChatProps) {
-  const chat = useAgentChat(projectId, { sessionId, onSessionCreated });
+  const chat = useAgentChat(projectId, {
+    sessionId,
+    onSessionCreated,
+    source: "desktop",
+  });
   const isFull = variant === "full";
   const [dockExpanded, setDockExpanded] = useState(false);
   const expanded = isFull || dockExpanded;

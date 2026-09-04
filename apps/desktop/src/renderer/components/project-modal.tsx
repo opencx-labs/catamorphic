@@ -351,8 +351,7 @@ function GithubPanel({
               {userCode}
             </p>
             <p className="text-xs text-fg-faint">
-              Waiting for authorization… the browser window opened
-              automatically.
+              Waiting for authorization… the browser tab opened automatically.
             </p>
           </>
         ) : (
