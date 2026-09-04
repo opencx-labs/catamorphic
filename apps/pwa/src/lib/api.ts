@@ -102,7 +102,7 @@ export interface RemoteMe {
     projectId: string;
     builder: boolean;
     source: { remoteUrl: string; defaultBranch: string } | null;
-    permissions: Array<"memberships:manage" | "roles:manage">;
+    permissions: string[];
     agents: string[];
     workflows: string[];
     apps: string[];

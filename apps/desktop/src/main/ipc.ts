@@ -273,11 +273,12 @@ export function registerIpcHandlers(
       const root = await state.current?.projectRoots.get(projectId);
       if (!root) return [];
       const remote = storesFor(event).remoteProjects.inspect(projectId);
-      const segment =
-        remote && remote.link.capabilities?.builder !== true
-          ? "member"
-          : "builder";
-      return projectStartingActions(root, segment).map((action) => ({
+      const capabilities = remote?.link.capabilities;
+      return projectStartingActions(root, {
+        root: !remote,
+        builder: !remote || capabilities?.builder === true,
+        permissions: capabilities?.permissions ?? [],
+      }).map((action) => ({
         label: action.label,
         prompt: action.prompt,
         ...(action.agent

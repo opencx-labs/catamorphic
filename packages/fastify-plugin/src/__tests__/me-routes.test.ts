@@ -1,6 +1,7 @@
 import type { Identity } from "@catamorphic/core";
 import { afterEach, describe, expect, it } from "vitest";
 import { createApp } from "../app.js";
+import { MeSchema } from "../schemas.js";
 import { createTestApp } from "./test-app.js";
 
 const PROJECT_ID = "a1b2c3d4-e5f6-4890-abcd-ef1234567890";
@@ -27,6 +28,9 @@ describe("GET /me (ADR 0055 introspection)", () => {
         },
         { kind: "project", projectId: "other" },
       ],
+      projectPermissions: [
+        { projectId: PROJECT_ID, permission: "brain:maintain" },
+      ],
     };
     const app = createApp({
       identity: () => alice,
@@ -48,7 +52,7 @@ describe("GET /me (ADR 0055 introspection)", () => {
           projectId: PROJECT_ID,
           builder: false,
           source: null,
-          permissions: [],
+          permissions: ["brain:maintain"],
           agents: ["csm"],
           workflows: ["crm.lookup"],
           apps: [],
@@ -115,6 +119,42 @@ describe("GET /me (ADR 0055 introspection)", () => {
       proposals: false,
       mcp: true,
     });
+  });
+
+  it("enforces namespaced project permissions in the public contract", () => {
+    const response = {
+      version: 1,
+      identity: { externalUserId: "alice", root: false },
+      projects: [
+        {
+          projectId: PROJECT_ID,
+          builder: false,
+          source: null,
+          permissions: ["not-namespaced"],
+          agents: [],
+          workflows: [],
+          apps: [],
+          documents: [],
+        },
+      ],
+      features: {
+        publications: false,
+        proposals: false,
+        proposalsOpenPullRequests: false,
+        mcp: true,
+        agentSessions: true,
+        storeUploadMaxBytes: 64 * 1024 * 1024,
+      },
+    };
+    expect(MeSchema.safeParse(response).success).toBe(false);
+    expect(
+      MeSchema.safeParse({
+        ...response,
+        projects: [
+          { ...response.projects[0], permissions: ["brain:maintain"] },
+        ],
+      }).success,
+    ).toBe(true);
   });
 
   it("features are enforced, not just advertised", async () => {

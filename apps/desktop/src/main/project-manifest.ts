@@ -1,6 +1,11 @@
 import fs from "node:fs";
 import path from "node:path";
 import { PROJECT_MANIFEST_PATH } from "@catamorphic/git";
+import {
+  matchesProjectExperience,
+  type ProjectExperienceContext,
+  sanitizeProjectExperienceWhen,
+} from "../shared/project-experience.js";
 
 /**
  * The project manifest (`.catamorphic/project.json`) is the committed home
@@ -37,12 +42,12 @@ export interface ProjectStartingAction {
 }
 
 /**
- * Minimal, project-authored New Tab starters for the current member segment.
+ * Minimal, project-authored New Tab starters for the caller's capabilities.
  * Invalid entries disappear individually and an absent list leaves no UI.
  */
 export function projectStartingActions(
   rootPath: string,
-  segment: "member" | "builder",
+  context: ProjectExperienceContext,
 ): ProjectStartingAction[] {
   const value = readManifest(rootPath).startingActions;
   if (!Array.isArray(value)) return [];
@@ -58,25 +63,8 @@ export function projectStartingActions(
       ) {
         return [];
       }
-      if (
-        action.segments !== undefined &&
-        (!Array.isArray(action.segments) ||
-          action.segments.some(
-            (candidate) =>
-              candidate !== "member" &&
-              candidate !== "builder" &&
-              candidate !== "all",
-          ))
-      ) {
-        return [];
-      }
-      if (
-        Array.isArray(action.segments) &&
-        !action.segments.includes(segment) &&
-        !action.segments.includes("all")
-      ) {
-        return [];
-      }
+      const when = sanitizeProjectExperienceWhen(action.when);
+      if (when === null || !matchesProjectExperience(when, context)) return [];
       return [
         {
           label: action.label.trim().slice(0, 80),

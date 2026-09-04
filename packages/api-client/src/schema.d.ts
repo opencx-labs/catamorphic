@@ -40,7 +40,7 @@ export interface paths {
                                     remoteUrl: string;
                                     defaultBranch: string;
                                 } | null;
-                                permissions: ("memberships:manage" | "roles:manage")[];
+                                permissions: string[];
                                 agents: string[];
                                 workflows: string[];
                                 apps: string[];
@@ -9789,7 +9789,7 @@ export interface paths {
                                 name: string;
                                 description?: string;
                                 builder?: boolean;
-                                permissions?: ("memberships:manage" | "roles:manage")[];
+                                permissions?: string[];
                                 agents?: (string | {
                                     name: string;
                                     toolPolicies?: {

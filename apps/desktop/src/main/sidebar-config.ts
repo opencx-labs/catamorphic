@@ -1,6 +1,10 @@
 import fs from "node:fs";
 import path from "node:path";
 import vm from "node:vm";
+import {
+  type ProjectExperienceWhen,
+  sanitizeProjectExperienceWhen,
+} from "../shared/project-experience.js";
 
 /**
  * User-customizable sidebar. The config is a real JS file at
@@ -60,6 +64,8 @@ export interface SidebarItem {
   items?: SidebarItem[];
   /** Start this item's children collapsed (default open). */
   collapsed?: boolean;
+  /** Project-authorized visibility; invalid predicates fail closed. */
+  when?: ProjectExperienceWhen;
 }
 
 export interface SidebarSectionConfig {
@@ -89,6 +95,8 @@ export interface SidebarSectionConfig {
   open?: "tab" | "replace";
   /** Override the per-item hover menu for the whole section. */
   menu?: SidebarMenuEntry[];
+  /** Project-authorized visibility; invalid predicates fail closed. */
+  when?: ProjectExperienceWhen;
 }
 
 export interface SidebarConfig {
@@ -158,12 +166,14 @@ export const DEFAULT_SIDEBAR_FILE = `// Catamorphic sidebar configuration.
 //   collapsed: start collapsed
 //   hideEmpty: hide the whole section while it has nothing to list
 //              (default: true for workflows and apps, false elsewhere)
+//   when:       optional capability targeting, e.g.
+//               { permissions: ["brain:maintain"] } or { builder: true }
 //   open:      "tab"     — always open in a new browser tab
 //              "replace" — reuse the focused browser tab (falls back to a
 //                          new tab when the focused tab isn't a browser)
 //
 // CUSTOM ITEMS
-//   { label, url?, icon?, open?, menu?, preview?, items?, collapsed? }
+//   { label, url?, icon?, open?, menu?, preview?, items?, collapsed?, when? }
 //   icon: any lucide-react name, e.g. "Globe", "FileText", "Github".
 //   items: nested items using this same shape. Omit url for a folder-only
 //          item, or include it to make a collapsible link.
@@ -299,6 +309,8 @@ function sanitizeItems(raw: unknown, depth = 0): SidebarItem[] | undefined {
   return raw.flatMap((entry): SidebarItem[] => {
     if (typeof entry !== "object" || entry === null) return [];
     const record = entry as Record<string, unknown>;
+    const when = sanitizeProjectExperienceWhen(record.when);
+    if (when === null) return [];
     const url = typeof record.url === "string" ? record.url : undefined;
     const items = sanitizeItems(record.items, depth + 1);
     if (!url && (!items || items.length === 0)) return [];
@@ -315,6 +327,7 @@ function sanitizeItems(raw: unknown, depth = 0): SidebarItem[] | undefined {
         preview: sanitizePreview(record.preview),
         items,
         collapsed: record.collapsed === true,
+        when,
       },
     ];
   });
@@ -333,6 +346,8 @@ function sanitize(raw: unknown): SidebarConfig {
     if (typeof section.type !== "string" || !VALID_TYPES.has(section.type)) {
       continue;
     }
+    const when = sanitizeProjectExperienceWhen(section.when);
+    if (when === null) continue;
     sections.push({
       type: section.type as SidebarSectionConfig["type"],
       title: typeof section.title === "string" ? section.title : undefined,
@@ -344,6 +359,7 @@ function sanitize(raw: unknown): SidebarConfig {
       items: sanitizeItems(section.items),
       open: asOpenMode(section.open),
       menu: sanitizeMenu(section.menu),
+      when,
     });
   }
   // An empty/invalid config would leave the user with no sidebar and no

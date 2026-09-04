@@ -96,7 +96,7 @@
                             "type": "array",
                             "items": {
                               "type": "string",
-                              "enum": ["memberships:manage", "roles:manage"]
+                              "pattern": "^[a-z][a-z0-9._-]*:[a-z][a-z0-9._-]*$"
                             }
                           },
                           "agents": {
@@ -21630,7 +21630,7 @@
                             "type": "array",
                             "items": {
                               "type": "string",
-                              "enum": ["memberships:manage", "roles:manage"]
+                              "pattern": "^[a-z][a-z0-9._-]*:[a-z][a-z0-9._-]*$"
                             }
                           },
                           "agents": {

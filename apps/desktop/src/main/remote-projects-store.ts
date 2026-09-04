@@ -13,7 +13,7 @@ import type { RemoteOAuthCredentials } from "./remote-oauth.js";
 export interface RemoteCapabilities {
   builder: boolean;
   source: { remoteUrl: string; defaultBranch: string } | null;
-  permissions: Array<"memberships:manage" | "roles:manage">;
+  permissions: string[];
   agents: string[];
   documents: Array<{ path: string; access: "read" | "write" }>;
   features: {

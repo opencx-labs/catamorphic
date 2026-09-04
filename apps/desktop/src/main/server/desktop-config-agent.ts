@@ -103,7 +103,7 @@ project" belongs in \`sidebar.local.js\`.
 Built-in section types: \`workflows\`, \`apps\`, \`chats\`, \`files\`,
 \`bookmarks\`, \`git\` (uncommitted changes per git worktree; clicking a
 file opens its diff), \`prs\` (the project's open pull requests), and the
-legacy manual \`remote\` controls. Member views automatically omit
+legacy manual \`remote\` controls. Views without a builder checkout omit
 \`git\`, \`prs\`, and \`remote\`; builder views retain them.
 Bookmarks are real browser bookmarks: the user creates them with the
 star in the address bar; you never hand-write bookmark data here, you
@@ -132,6 +132,10 @@ Your own section:
 - \`hideEmpty\`: hide the whole section (header included) while it has
   nothing to list. Defaults to true for \`workflows\` and \`apps\`, false
   for every other section; set it explicitly to override either way.
+- \`when\`: on a section or custom item, target resolved project authority
+  with optional \`builder: true|false\` and/or
+  \`permissions: ["namespace:capability"]\`. Every condition must match;
+  omit it to show the entry to everyone. Invalid targeting fails closed.
 
 Hover menu (the ⋯ button on an item): set on a section (applies to all
 its items) or on a single item:
@@ -167,16 +171,20 @@ project does not configure them. Preserve the rest of the manifest:
       "label": "Prepare customer briefing",
       "prompt": "Prepare the customer briefing from the company context.",
       "agent": "csm",
-      "segments": ["member"]
+      "when": {
+        "builder": false,
+        "permissions": ["briefings:prepare"]
+      }
     }
   ]
 }
 \`\`\`
 
-\`agent\` is an optional project-agent slug. \`segments\` is optional and
-may contain \`"member"\`, \`"builder"\`, or \`"all"\`; omitting it shows the
-action to both roles. Keep labels short and prompts complete enough to run
-without another setup step.
+\`agent\` is an optional project-agent slug. \`when\` is optional; it may match
+\`builder: true|false\` and require a list of namespaced project role
+permissions. Every condition must match. Omitting it shows the action to
+everyone. Invalid targeting fails closed. Keep labels short and prompts
+complete enough to run without another setup step.
 
 ## Color theme
 

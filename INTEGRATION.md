@@ -246,6 +246,8 @@ Most hosts do not want to hand-write scopes. Commit roles into the project — `
 }
 // roles/admin.json
 { "version": 1, "name": "Admin", "builder": true, "documents": ["store/**"] }
+// roles/brain-maintainer.json
+{ "version": 1, "name": "Brain Maintainer", "permissions": ["brain:maintain"], "agents": ["brain-maintainer"] }
 ```
 
 `{param}` placeholders are filled from per-user **grants** (`{ customer: ["acme", "globex"] }`), one ref per value; an entry whose placeholder has no grant yields nothing. `builder: true` emits the `project` ref; an admin who may not see the whole store simply lists less. Role files are read from the shared origin `main` (a project without a remote reads its working tree), cached briefly (`rolesCacheTtlMs`, default 10s), and never throw: a broken file is reported by `GET /projects/:id/roles` and contributes nothing.
@@ -268,6 +270,16 @@ await catamorphic.core.memberships.grant({ identity: adminIdentity, projectId: B
 ```
 
 The plugin serves the same as HTTP for project administration: `GET /projects/:id/roles`, `GET|PUT|DELETE /projects/:id/memberships[/:externalUserId]` (`PUT` body `{ roles, grants? }`). Members arriving with a bearer credential from the host's login flow use `identityFromBearer(verify)`: the host's `verify(token)` returns the identity (typically via `memberships.identityFor`) or `null`. Every request re-resolves membership, so revocation is immediate.
+
+Role `permissions` are an extensible, namespaced capability vocabulary. Core
+reserves and enforces the documented names (`memberships:manage` and
+`roles:manage`); an embedder may define and enforce names such as
+`acme:approve_deals`. Unknown names do not grant framework authority by
+themselves, but are preserved in identity and `GET /me` for host services and
+project-owned presentation. Desktop projects can target sidebar sections,
+custom items, and New Tab starting actions with
+`when: { builder?: boolean, permissions?: string[] }`; all declared conditions
+must match. Omit `when` to show an item to everyone.
 
 ### Feature switches and introspection
 

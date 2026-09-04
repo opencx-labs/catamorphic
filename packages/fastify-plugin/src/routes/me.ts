@@ -1,4 +1,8 @@
-import { isBuilder, type ProjectPermission } from "@catamorphic/core";
+import {
+  CORE_PROJECT_PERMISSIONS,
+  isBuilder,
+  type ProjectPermission,
+} from "@catamorphic/core";
 import type { FastifyInstance } from "fastify";
 import type { ZodTypeProvider } from "fastify-type-provider-zod";
 import type { RouteContext } from "../app.js";
@@ -6,8 +10,7 @@ import { resolveIdentity } from "../http-identity.js";
 import { MeSchema } from "../schemas.js";
 
 const ROOT_PROJECT_PERMISSIONS: ProjectPermission[] = [
-  "memberships:manage",
-  "roles:manage",
+  ...CORE_PROJECT_PERMISSIONS,
 ];
 
 /**

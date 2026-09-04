@@ -188,6 +188,45 @@ describe("resolveSidebarConfig", () => {
     });
   });
 
+  it("preserves valid capability predicates and drops invalid ones", () => {
+    const { profileDir, projectRoot, projectId } = makeLayers({
+      project: `module.exports = { sections: [
+        {
+          type: "custom",
+          title: "Brain",
+          when: { permissions: ["brain:maintain"] },
+          items: [
+            {
+              label: "Changes",
+              url: "https://example.test/changes",
+              when: { builder: false, permissions: ["changes:author"] },
+            },
+            {
+              label: "Leaky",
+              url: "https://example.test/leaky",
+              when: { permissions: ["not-namespaced"] },
+            },
+          ],
+        },
+      ] };`,
+    });
+    const section = resolveSidebarConfig({
+      profileDir,
+      projectId,
+      projectRoot,
+    }).config.sections[0];
+    expect(section?.when).toEqual({ permissions: ["brain:maintain"] });
+    expect(section?.items).toEqual([
+      expect.objectContaining({
+        label: "Changes",
+        when: {
+          builder: false,
+          permissions: ["changes:author"],
+        },
+      }),
+    ]);
+  });
+
   it("retains recursive custom items and folder-only nodes", () => {
     const { profileDir, projectRoot, projectId } = makeLayers({
       project: `module.exports = { sections: [{
