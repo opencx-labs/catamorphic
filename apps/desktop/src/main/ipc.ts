@@ -1,6 +1,5 @@
 import { execFile, spawn } from "node:child_process";
 import fs from "node:fs";
-import { createRequire } from "node:module";
 import path from "node:path";
 import { promisify } from "node:util";
 import type { ClaudeSlashCommand } from "@catamorphic/claude-code";
@@ -47,6 +46,10 @@ import {
   listWorktreePaths,
 } from "./git-view.js";
 import { githubCliToken } from "./github-cli.js";
+import {
+  type HarnessExecutable,
+  harnessPathEnvironment,
+} from "./harness-components.js";
 import type { IncognitoSessionsStore } from "./incognito-sessions.js";
 import type { WindowProfileRegistry } from "./index.js";
 import { type Keybindings, normalizeKeybindings } from "./keybindings.js";
@@ -843,7 +846,12 @@ export function registerIpcHandlers(
       return {
         models: await listAgentModels(agent, {
           agentHome,
-          codexBinary: resolveCodexBinary,
+          harnessExecutable: async (harness) =>
+            (
+              await state.current?.agentRegistry.ensureHarnessExecutable(
+                harness,
+              )
+            )?.executablePath ?? null,
         }),
       };
     } catch (cause) {
@@ -1062,8 +1070,14 @@ export function registerIpcHandlers(
       const { listClaudeSlashCommands } = await import(
         "@catamorphic/claude-code"
       );
+      const component =
+        await state.current?.agentRegistry.ensureHarnessExecutable(
+          "claude-code",
+        );
+      if (!component) return [];
       const probe = listClaudeSlashCommands({
         workingDirectory: root,
+        pathToClaudeCodeExecutable: component.executablePath,
         ...(agent.auth === "account"
           ? { env: { CLAUDE_CONFIG_DIR: agentHome(agentId) } }
           : {}),
@@ -1182,16 +1196,27 @@ export function registerIpcHandlers(
     if (agent.harness === "codex") {
       // The Codex CLI runs the whole OAuth dance itself: local callback
       // server + browser hand-off; the process exits when login completes.
-      const binary = resolveCodexBinary();
-      if (!binary) {
-        return { started: false, error: "Codex CLI binary not found" };
+      let component: HarnessExecutable | undefined;
+      try {
+        component =
+          await state.current?.agentRegistry.ensureHarnessExecutable("codex");
+      } catch (cause) {
+        return {
+          started: false,
+          error: cause instanceof Error ? cause.message : String(cause),
+        };
       }
-      const child = spawn(binary, ["login"], {
+      if (!component) return { started: false, error: "Server not running" };
+      const child = spawn(component.executablePath, ["login"], {
         // `local` signs into ~/.codex — shared with the user's own CLI.
         env:
           agent.auth === "account"
-            ? { ...process.env, CODEX_HOME: home }
-            : { ...process.env },
+            ? {
+                ...process.env,
+                ...harnessPathEnvironment(component),
+                CODEX_HOME: home,
+              }
+            : { ...process.env, ...harnessPathEnvironment(component) },
         stdio: ["ignore", "pipe", "pipe"],
       });
       let opened = false;
@@ -1218,10 +1243,24 @@ export function registerIpcHandlers(
     // Terminal.app: AppleScript automation would demand a macOS Automation
     // permission (attributed to whatever launched us), and asking for that
     // to run a sign-in is a terrible first impression.
+    let component: HarnessExecutable | undefined;
+    try {
+      component =
+        await state.current?.agentRegistry.ensureHarnessExecutable(
+          "claude-code",
+        );
+    } catch (cause) {
+      return {
+        started: false,
+        error: cause instanceof Error ? cause.message : String(cause),
+      };
+    }
+    if (!component) return { started: false, error: "Server not running" };
+    const claudeCommand = shellQuote(component.executablePath);
     const command =
       agent.auth === "account"
-        ? `CLAUDE_CONFIG_DIR='${home}' claude /login`
-        : "claude /login";
+        ? `CLAUDE_CONFIG_DIR=${shellQuote(home)} ${claudeCommand} /login`
+        : `${claudeCommand} /login`;
     if (process.platform === "darwin") {
       try {
         const script = path.join(agentHome(id), "sign-in.command");
@@ -2120,35 +2159,8 @@ export function registerIpcHandlers(
   );
 }
 
-/**
- * The Codex SDK vendors the native CLI per platform under
- * `@openai/codex/vendor/<rust-target>/bin/codex` — resolve it so login runs
- * the exact binary the agent will use, with no PATH assumptions.
- */
-function resolveCodexBinary(): string | null {
-  const targets: Record<string, string> = {
-    "darwin-arm64": "aarch64-apple-darwin",
-    "darwin-x64": "x86_64-apple-darwin",
-    "linux-x64": "x86_64-unknown-linux-musl",
-    "linux-arm64": "aarch64-unknown-linux-musl",
-    "win32-x64": "x86_64-pc-windows-msvc",
-  };
-  const target = targets[`${process.platform}-${process.arch}`];
-  if (!target) return null;
-  try {
-    const require = createRequire(import.meta.url);
-    const pkg = require.resolve("@openai/codex/package.json");
-    const binary = path.join(
-      path.dirname(pkg),
-      "vendor",
-      target,
-      "bin",
-      process.platform === "win32" ? "codex.exe" : "codex",
-    );
-    return fs.existsSync(binary) ? binary : null;
-  } catch {
-    return null;
-  }
+function shellQuote(value: string): string {
+  return `'${value.replaceAll("'", `'"'"'`)}'`;
 }
 
 /** Add lines to the folder's .gitignore when missing (idempotent). */

@@ -26,7 +26,9 @@ export async function listAgentModels(
   config: AgentConfig,
   deps: {
     agentHome: (agentId: string) => string;
-    codexBinary: () => string | null;
+    harnessExecutable: (
+      harness: "claude-code" | "codex",
+    ) => Promise<string | null>;
   },
 ): Promise<HarnessModel[]> {
   // E2E: deterministic stub, no CLIs or network.
@@ -58,13 +60,18 @@ async function fetchModels(
   config: AgentConfig,
   deps: {
     agentHome: (agentId: string) => string;
-    codexBinary: () => string | null;
+    harnessExecutable: (
+      harness: "claude-code" | "codex",
+    ) => Promise<string | null>;
   },
 ): Promise<HarnessModel[]> {
   switch (config.harness) {
     case "claude-code": {
+      const executable = await deps.harnessExecutable("claude-code");
+      if (!executable) return [];
       const { listClaudeCodeModels } = await import("@catamorphic/claude-code");
       return listClaudeCodeModels({
+        pathToClaudeCodeExecutable: executable,
         env: {
           ...(config.auth === "account"
             ? { CLAUDE_CONFIG_DIR: deps.agentHome(config.id) }
@@ -88,10 +95,12 @@ async function codexModels(
   config: AgentConfig,
   deps: {
     agentHome: (agentId: string) => string;
-    codexBinary: () => string | null;
+    harnessExecutable: (
+      harness: "claude-code" | "codex",
+    ) => Promise<string | null>;
   },
 ): Promise<HarnessModel[]> {
-  const binary = deps.codexBinary();
+  const binary = await deps.harnessExecutable("codex");
   if (!binary) return [];
   const { stdout } = await execFileAsync(binary, ["debug", "models"], {
     env: {

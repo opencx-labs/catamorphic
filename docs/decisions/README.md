@@ -94,3 +94,4 @@ Settled design decisions live here as short Architecture Decision Records. They 
 | [0079](0079-desktop-browser-credential-broker.md) | Desktop browser credential broker | Accepted |
 | [0080](0080-installed-pairing-bootstrap.md) | Installed pairing uses a one-time start URL bootstrap | Accepted |
 | [0081](0081-recursive-agent-configurable-sidebar-trees.md) | Recursive, agent-configurable sidebar trees | Accepted |
+| [0082](0082-on-demand-desktop-harness-components.md) | Desktop coding harnesses use verified on-demand components | Accepted |

@@ -54,6 +54,7 @@ function makeService({
     themeFile: path.join(root, "theme.json"),
     profilesDir: path.join(root, "profiles"),
     agentHomesDir: path.join(root, "agent-homes"),
+    harnessComponentsDir: path.join(root, "harness-components"),
     hostSkillsDir: path.join(root, "host-skills"),
   };
   const profileConfig = new ProfileConfigManager(

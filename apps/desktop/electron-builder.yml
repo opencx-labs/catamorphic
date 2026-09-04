@@ -5,6 +5,14 @@ directories:
 files:
   - out/**
   - package.json
+  # The small SDK adapters stay in the app. Their platform executables are
+  # integrity-pinned optional components downloaded on first harness use.
+  - "!**/node_modules/@anthropic-ai/claude-agent-sdk-darwin-*/**"
+  - "!**/node_modules/@anthropic-ai/claude-agent-sdk-linux-*/**"
+  - "!**/node_modules/@anthropic-ai/claude-agent-sdk-win32-*/**"
+  - "!**/node_modules/@openai/codex-darwin-*/**"
+  - "!**/node_modules/@openai/codex-linux-*/**"
+  - "!**/node_modules/@openai/codex-win32-*/**"
 extraResources:
   - from: ../pwa/dist
     to: pwa

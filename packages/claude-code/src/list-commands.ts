@@ -23,6 +23,8 @@ export async function listClaudeSlashCommands(opts: {
   workingDirectory: string;
   /** Extra env for the spawned CLI (e.g. CLAUDE_CONFIG_DIR). */
   env?: Record<string, string>;
+  /** Host-provided CLI path, including an on-demand desktop component. */
+  pathToClaudeCodeExecutable?: string;
   /** Give up after this long (default 15s) — a probe is never worth a wait. */
   timeoutMs?: number;
 }): Promise<ClaudeSlashCommand[]> {
@@ -39,6 +41,7 @@ export async function listClaudeSlashCommands(opts: {
       cwd: opts.workingDirectory,
       abortController: abort,
       env: { ...process.env, ...opts.env },
+      pathToClaudeCodeExecutable: opts.pathToClaudeCodeExecutable,
       // The probe needs no tools and must never prompt.
       permissionMode: "bypassPermissions",
       allowedTools: [],

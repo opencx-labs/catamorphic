@@ -3127,3 +3127,8 @@ paths, deliberately independent:
 - Live discovery also follows demand. Provider catalogs and CLI metadata are
   fetched only after a configured agent or picker needs them, not as ambient
   launch work.
+- Claude Code and Codex platform executables are optional components, not base
+  app payload. First use installs the app-release-pinned npm artifact after
+  integrity verification, then reuses it offline. Catamorphic's adapters and
+  the SDK JavaScript remain inside the signed app; the main process never
+  imports remotely downloaded JavaScript (ADR 0082).

@@ -33,6 +33,12 @@ import {
   toAgentMcpServer,
 } from "../connections-store.js";
 import type { ConnectorsService } from "../connectors.js";
+import {
+  type DownloadableHarness,
+  HarnessComponentStore,
+  type HarnessExecutable,
+  harnessPathEnvironment,
+} from "../harness-components.js";
 import { bestFreeModelId, fetchOpenRouterModels } from "../openrouter.js";
 import type { ProfileConfigManager } from "../profile-config.js";
 import type { ProfilesStore } from "../profiles.js";
@@ -60,6 +66,8 @@ export interface DesktopAgentRegistryDeps {
   sandboxProvider: SandboxProvider;
   /** `agent-homes/` root; each account-auth agent gets a private home. */
   agentHomesDir: string;
+  /** App-owned cache for integrity-pinned native harness components. */
+  harnessComponentsDir: string;
   /** Agents' window into the user's workspace (tabs, browser, terminals). */
   workspaceBridge?: WorkspaceBridge;
   /**
@@ -216,8 +224,12 @@ export class DesktopAgentRegistry implements CodingAgentRegistry {
 
   /** Workspace tools shared by every harness that can mount them. */
   readonly workspaceToolkit: WorkspaceToolkit | undefined;
+  private readonly harnessComponents: HarnessComponentStore;
 
   constructor(private readonly deps: DesktopAgentRegistryDeps) {
+    this.harnessComponents = new HarnessComponentStore({
+      rootDir: deps.harnessComponentsDir,
+    });
     this.workspaceToolkit = deps.workspaceBridge
       ? buildWorkspaceToolkit(deps.workspaceBridge)
       : undefined;
@@ -235,6 +247,13 @@ export class DesktopAgentRegistry implements CodingAgentRegistry {
           ),
       );
     if (needsOpenRouterDefault) void this.refreshOpenRouterDefault();
+  }
+
+  /** Resolve a packaged or one-time-downloaded native harness executable. */
+  ensureHarnessExecutable(
+    harness: DownloadableHarness,
+  ): Promise<HarnessExecutable> {
+    return this.harnessComponents.ensure(harness);
   }
 
   async refreshOpenRouterDefault(): Promise<void> {
@@ -975,6 +994,7 @@ export class DesktopAgentRegistry implements CodingAgentRegistry {
         const provider = new AsyncInitCodingAgent(
           config.harness,
           async () => {
+            const component = await this.ensureHarnessExecutable("claude-code");
             const { ClaudeCodeAgent } = await import(
               "@catamorphic/claude-code"
             );
@@ -987,6 +1007,7 @@ export class DesktopAgentRegistry implements CodingAgentRegistry {
                     CLAUDE_PERMISSION_MODES[config.mode ?? "edit"],
                   memory: config.memory === true,
                   ...(Object.keys(env).length > 0 ? { env } : {}),
+                  pathToClaudeCodeExecutable: component.executablePath,
                   extraTools: this.workspaceTools(config, "native"),
                   disableBash: this.workspaceToolkit !== undefined,
                   mcpServers: () => this.liveServers(config, profileId),
@@ -1023,7 +1044,9 @@ export class DesktopAgentRegistry implements CodingAgentRegistry {
         const provider = new AsyncInitCodingAgent(
           config.harness,
           async () => {
+            const component = await this.ensureHarnessExecutable("codex");
             const { CodexAgent } = await import("@catamorphic/codex");
+            const componentEnv = harnessPathEnvironment(component);
             return this.wrapErrors(
               this.withWorkspace(
                 new CodexAgent({
@@ -1034,8 +1057,16 @@ export class DesktopAgentRegistry implements CodingAgentRegistry {
                     ? { apiKey: config.apiKey }
                     : {}),
                   ...(config.auth === "account"
-                    ? { env: { CODEX_HOME: this.agentHome(config.id) } }
-                    : {}),
+                    ? {
+                        env: {
+                          ...componentEnv,
+                          CODEX_HOME: this.agentHome(config.id),
+                        },
+                      }
+                    : Object.keys(componentEnv).length > 0
+                      ? { env: componentEnv }
+                      : {}),
+                  codexPathOverride: component.executablePath,
                   mcpServers: () => this.liveServers(config, profileId),
                   mcpServersForSession: (context) => {
                     const workspaceServer = context.sessionId

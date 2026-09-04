@@ -35,6 +35,8 @@ export interface DataPaths {
    * agents on the same harness can sign into different accounts.
    */
   agentHomesDir: string;
+  /** Integrity-pinned native coding-harness components installed on demand. */
+  harnessComponentsDir: string;
   /**
    * Host-tier skills (ADR 0049) materialized as a Claude Code plugin
    * (`.claude-plugin/plugin.json` + `skills/<name>/SKILL.md`), so the
@@ -60,6 +62,7 @@ export function resolveDataPaths(): DataPaths {
     themeFile: path.join(userData, "theme.json"),
     profilesDir: path.join(userData, "profiles"),
     agentHomesDir: path.join(userData, "agent-homes"),
+    harnessComponentsDir: path.join(userData, "harness-components"),
     hostSkillsDir: path.join(userData, "host-skills"),
   };
 }
