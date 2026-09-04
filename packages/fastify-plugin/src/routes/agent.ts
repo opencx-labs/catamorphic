@@ -532,6 +532,7 @@ export function registerAgentRoutes(app: FastifyInstance, ctx: RouteContext) {
       body: CreateAgentSubsessionSchema,
       response: {
         201: AgentSubsessionSchema,
+        400: ErrorSchema,
         403: ErrorSchema,
         404: ErrorSchema,
         409: ErrorSchema,
@@ -560,6 +561,9 @@ export function registerAgentRoutes(app: FastifyInstance, ctx: RouteContext) {
         }
         if (error instanceof AgentDelegationDeniedError) {
           return reply.status(403).send({ error: error.message });
+        }
+        if (error instanceof AgentNotConfiguredError) {
+          return reply.status(400).send({ error: error.message });
         }
         if (error instanceof AgentSessionClosedError) {
           return reply.status(409).send({ error: error.message });

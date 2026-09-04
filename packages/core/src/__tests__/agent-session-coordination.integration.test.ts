@@ -550,6 +550,44 @@ describe("agent session coordination", () => {
       impact: async () => ({ activeProcessCount: 0 }),
       stop: async () => {},
     });
+    const artifact = await db
+      .insertInto("deployment_artifacts")
+      .values({
+        project_id: project.id,
+        commit_sha: "a".repeat(40),
+        artifact_digest: "b".repeat(64),
+        plugin_digest: "c".repeat(64),
+        transform_version: "test",
+        runtime_version: "test",
+      })
+      .returning("id")
+      .executeTakeFirstOrThrow();
+    const pausedWatcher = await db
+      .insertInto("watchers")
+      .values({
+        project_id: project.id,
+        session_id: parent.id,
+        owner_external_user_id: identity.externalUserId,
+        owner_identity: {
+          tenantId: identity.tenantId,
+          externalUserId: identity.externalUserId,
+        },
+        workflow_name: "pausedWatcher",
+        source_path: "workflows/src/watchers/paused.ts",
+        remote_branch: "catamorphic/watchers/paused",
+        commit_sha: "a".repeat(40),
+        deployment_artifact_id: artifact.id,
+        status: "paused",
+      })
+      .returning("id")
+      .executeTakeFirstOrThrow();
+    expect(
+      await sessions.archiveImpact(identity, project.id, parent.id),
+    ).toMatchObject({ activeWatcherCount: 0, requiresConfirmation: false });
+    await db
+      .deleteFrom("watchers")
+      .where("id", "=", pausedWatcher.id)
+      .execute();
     const idleArchive = await sessions.archive(identity, project.id, parent.id);
     expect(idleArchive.impact.requiresConfirmation).toBe(false);
 

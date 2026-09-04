@@ -3464,7 +3464,7 @@ export class AgentSessionsService {
       .selectFrom("watchers")
       .select(({ fn }) => fn.countAll<number>().as("count"))
       .where("session_id", "in", sessionIds)
-      .where("status", "in", ["active", "paused"])
+      .where("status", "=", "active")
       .executeTakeFirstOrThrow();
     const activeWatcherCount = Number(watchers.count);
     const { activeProcessCount } = (await this.archiveResources?.impact({
