@@ -129,4 +129,54 @@ describe("ProjectInspectorView", () => {
     expect(container.textContent).toContain("Working");
     expect(container.textContent).not.toContain("Closed chat");
   });
+
+  it("hides repository mechanics for a project member", async () => {
+    await act(async () => {
+      root.render(
+        <ProjectInspectorView
+          project={project}
+          current
+          snapshot={{
+            ...snapshot,
+            remote: {
+              serverUrl: "https://catamorphic.example.test/api",
+              remoteProjectId: "remote-alpha",
+              remoteProjectName: "Alpha",
+              lastSyncAt: null,
+              capabilities: {
+                builder: false,
+                source: null,
+                permissions: [],
+                agents: ["csm"],
+                documents: [{ path: "store/**", access: "write" }],
+                features: {
+                  publications: "members",
+                  proposals: false,
+                  proposalsOpenPullRequests: false,
+                  mcp: true,
+                  agentSessions: true,
+                  storeUploadMaxBytes: 10_000_000,
+                },
+              },
+              connection: {
+                state: "connected",
+                checkedAt: "2026-09-04T00:00:00.000Z",
+                message: "Connected",
+              },
+              local: { modified: [], deleted: [], programEdits: [] },
+            },
+          }}
+          sessions={[]}
+          sessionsLoading={false}
+          loading={false}
+          onDelete={() => undefined}
+        />,
+      );
+    });
+
+    expect(container.textContent).toContain("Team project");
+    expect(container.textContent).not.toContain("/projects/alpha");
+    expect(container.textContent).not.toContain("Worktrees");
+    expect(container.textContent).not.toContain("Open pull requests");
+  });
 });

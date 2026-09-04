@@ -508,6 +508,7 @@ describe("project MCP surface (ADR 0055): documents, skills, ask_agent", () => {
       args: expect.arrayContaining([
         expect.objectContaining({
           agentId: `project:${PROJECT_ID}:csm-assistant`,
+          source: "mcp",
         }),
       ]),
     });

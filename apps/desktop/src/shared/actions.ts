@@ -223,6 +223,22 @@ export const BUILTIN_ACTIONS = [
     ],
   },
   {
+    id: "session-status",
+    label: "Status",
+    description:
+      "open the focused chat's session details and contextual actions",
+    defaultBinding: null,
+    keywords: [
+      "status",
+      "session",
+      "source",
+      "agent",
+      "archive",
+      "fork",
+      "environment",
+    ],
+  },
+  {
     id: "switch-agent",
     label: "Switch agent for this chat…",
     description:

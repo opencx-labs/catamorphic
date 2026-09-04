@@ -66,6 +66,7 @@ export interface SidebarSectionConfig {
   type:
     | "workflows"
     | "apps"
+    | "files"
     | "chats"
     | "bookmarks"
     | "git"
@@ -120,11 +121,11 @@ export const DEFAULT_CUSTOM_MENU: SidebarMenuEntry[] = [
 
 export const DEFAULT_SIDEBAR_CONFIG: SidebarConfig = {
   sections: [
-    { type: "workflows" },
-    { type: "apps" },
     { type: "chats" },
+    { type: "files" },
+    { type: "apps" },
+    { type: "workflows" },
     { type: "bookmarks" },
-    { type: "remote", title: "Server" },
     { type: "git", title: "Changes" },
     { type: "prs", title: "Pull Requests", collapsed: true },
   ],
@@ -139,13 +140,14 @@ export const DEFAULT_SIDEBAR_FILE = `// Catamorphic sidebar configuration.
 // SECTIONS — the list below is the sidebar, in order.
 //   Remove a section to hide it. Reorder freely. Add your own.
 //
-//   { type: "workflows" }   built-in: this project's workflows
-//   { type: "apps" }        built-in: this project's apps
 //   { type: "chats" }       built-in: this project's chats
+//   { type: "files" }       built-in: this project's files and folders
+//   { type: "apps" }        built-in: this project's apps
+//   { type: "workflows" }   built-in: this project's workflows
 //   { type: "bookmarks" }   built-in: browser bookmarks (the address-bar
 //                           star writes these; stored in bookmarks.json)
-//   { type: "remote" }      built-in: for projects connected to a server —
-//                           sync/ship and local store changes (ADR 0055)
+//   { type: "remote" }      legacy server controls (normally unnecessary;
+//                           sync is automatic and sharing is contextual)
 //   { type: "git" }         built-in: uncommitted changes per git worktree
 //                           (click a file to open its diff)
 //   { type: "prs" }         built-in: the project's open pull requests
@@ -179,11 +181,11 @@ export const DEFAULT_SIDEBAR_FILE = `// Catamorphic sidebar configuration.
 
 module.exports = {
   sections: [
-    { type: "workflows" },
-    { type: "apps" },
     { type: "chats" },
+    { type: "files" },
+    { type: "apps" },
+    { type: "workflows" },
     { type: "bookmarks" },
-    { type: "remote", title: "Server" },
     { type: "git", title: "Changes" },
     { type: "prs", title: "Pull Requests", collapsed: true },
 
@@ -209,6 +211,7 @@ module.exports = {
 const VALID_TYPES = new Set([
   "workflows",
   "apps",
+  "files",
   "chats",
   "bookmarks",
   "git",

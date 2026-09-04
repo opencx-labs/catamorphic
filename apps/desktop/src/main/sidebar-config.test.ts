@@ -159,6 +159,7 @@ describe("resolveSidebarConfig", () => {
     const { profileDir, projectRoot, projectId } = makeLayers({
       project: `module.exports = { sections: [
         { type: "workflows", collapsed: true },
+        { type: "files", title: "Customer work" },
         { type: "not-a-type" },
         { type: "custom", title: "Docs", items: [
           { label: "MDN", url: "https://developer.mozilla.org" },
@@ -171,13 +172,17 @@ describe("resolveSidebarConfig", () => {
       projectId,
       projectRoot,
     });
-    expect(resolved.config.sections).toHaveLength(2);
+    expect(resolved.config.sections).toHaveLength(3);
     expect(resolved.config.sections[0]).toMatchObject({
       type: "workflows",
       collapsed: true,
     });
-    expect(resolved.config.sections[1]?.items).toHaveLength(1);
-    expect(resolved.config.sections[1]?.items?.[0]).toMatchObject({
+    expect(resolved.config.sections[1]).toMatchObject({
+      type: "files",
+      title: "Customer work",
+    });
+    expect(resolved.config.sections[2]?.items).toHaveLength(1);
+    expect(resolved.config.sections[2]?.items?.[0]).toMatchObject({
       label: "MDN",
       url: "https://developer.mozilla.org",
     });

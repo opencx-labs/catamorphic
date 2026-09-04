@@ -41,6 +41,7 @@ describe("PGlite migrations", () => {
       "001_initial.sql",
       "002_workflow_enablements.sql",
       "003_agent_session_attention.sql",
+      "004_agent_session_source.sql",
     ]);
 
     const rerun = await migrateToLatest({ db });

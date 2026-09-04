@@ -5,10 +5,11 @@ import {
 } from "@catamorphic/react";
 import Editor, { type OnMount } from "@monaco-editor/react";
 import "../lib/monaco-setup.js";
-import { FileCode, Search } from "lucide-react";
+import { ExternalLink, FileCode, FileText, Search } from "lucide-react";
 import { lazy, Suspense, useEffect, useMemo, useRef, useState } from "react";
 import { ShortcutHint } from "../components/shortcut-hint.js";
 import { commandScore } from "../lib/command-score.js";
+import { desktopApi } from "../lib/desktop-api.js";
 import {
   registerSelectionReader,
   stampSelectionOnClipboard,
@@ -26,6 +27,8 @@ const MarkdownEditor = lazy(
 );
 
 const isMarkdownPath = (path: string) => /\.(md|markdown)$/i.test(path);
+const isOfficePath = (path: string) => /\.(docx?|pptx?|xlsx?)$/i.test(path);
+const isPdfPath = (path: string) => /\.pdf$/i.test(path);
 
 /**
  * A code editor tab: quick-open over the project's files, Monaco on the
@@ -41,6 +44,11 @@ export interface EditorScreenProps {
   onFileChange: (filePath: string | null) => void;
   /** Any unsaved draft in this tab — surfaces as a dot on the tab icon. */
   onDirtyChange: (dirty: boolean) => void;
+  /** Register the surface-level Share action in the window's top bar. */
+  registerShare?: (share: () => Promise<void>) => void;
+  onShare?: (filePath: string) => void;
+  /** Called after a durable local save so a linked host can sync it. */
+  onSaved?: (filePath: string) => void | Promise<void>;
 }
 
 export function EditorScreen({
@@ -48,10 +56,35 @@ export function EditorScreen({
   filePath,
   onFileChange,
   onDirtyChange,
+  registerShare,
+  onShare,
+  onSaved,
 }: EditorScreenProps) {
   const theme = useTheme();
-  const fileQuery = useProjectFile(projectId, filePath ?? undefined);
+  const officeFile = filePath ? isOfficePath(filePath) : false;
+  const pdfFile = filePath ? isPdfPath(filePath) : false;
+  const fileQuery = useProjectFile(
+    projectId,
+    filePath && !officeFile && !pdfFile ? filePath : undefined,
+  );
   const writeFile = useWriteProjectFile(projectId);
+  const [pdfUrl, setPdfUrl] = useState<string | null>(null);
+  useEffect(() => {
+    if (!pdfFile || !filePath) {
+      setPdfUrl(null);
+      return;
+    }
+    let cancelled = false;
+    void desktopApi.projectRoot(projectId).then((root) => {
+      if (cancelled || !root) return;
+      const url = new URL("file:///");
+      url.pathname = `${root.replace(/\/$/, "")}/${filePath}`;
+      setPdfUrl(url.href);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [filePath, pdfFile, projectId]);
 
   // Unsaved edits, kept per path so switching files within the tab never
   // drops work. A draft equal to the saved content is removed.
@@ -93,10 +126,28 @@ export function EditorScreen({
     writeFile.mutate(
       { path: filePath, content },
       {
-        onSuccess: () => setDrafts(({ [filePath]: _saved, ...rest }) => rest),
+        onSuccess: () => {
+          setDrafts(({ [filePath]: _saved, ...rest }) => rest);
+          void onSaved?.(filePath);
+        },
       },
     );
   };
+
+  const shareRef = useRef(async () => {});
+  shareRef.current = async () => {
+    if (!filePath || writeFile.isPending) return;
+    const content = draftsRef.current[filePath];
+    if (content !== undefined) {
+      await writeFile.mutateAsync({ path: filePath, content });
+      setDrafts(({ [filePath]: _saved, ...rest }) => rest);
+      await onSaved?.(filePath);
+    }
+    onShare?.(filePath);
+  };
+  useEffect(() => {
+    registerShare?.(() => shareRef.current());
+  }, [registerShare]);
 
   // Selection channel: while this pane's editor has focus, chats can pull
   // "what's selected" to build a selection pill (see lib/editor-selection).
@@ -181,7 +232,46 @@ export function EditorScreen({
         )}
       </div>
       <div className="flex min-h-0 flex-1 flex-col">
-        {savedContent !== undefined && isMarkdownPath(filePath) ? (
+        {pdfFile ? (
+          pdfUrl ? (
+            <iframe
+              src={pdfUrl}
+              title={filePath}
+              className="size-full border-0 bg-bg"
+            />
+          ) : (
+            <div className="grid flex-1 place-items-center text-sm text-fg-muted">
+              Loading…
+            </div>
+          )
+        ) : officeFile ? (
+          <div className="grid flex-1 place-items-center p-8">
+            <div className="max-w-sm text-center">
+              <span className="mx-auto grid size-14 place-items-center rounded-2xl border border-border bg-bg-raised text-accent">
+                <FileText className="size-6" />
+              </span>
+              <h2 className="mt-4 truncate text-sm font-semibold text-fg">
+                {filePath.split("/").at(-1)}
+              </h2>
+              <p className="mt-1 text-xs leading-5 text-fg-muted">
+                Open this document in its native app. Sharing stays available in
+                the window's top bar.
+              </p>
+              <button
+                type="button"
+                onClick={() => {
+                  void desktopApi
+                    .projectOpenFile(projectId, filePath)
+                    .catch(() => undefined);
+                }}
+                className="mt-4 inline-flex h-8 cursor-pointer items-center gap-2 rounded-md bg-accent px-3 text-xs font-medium text-accent-fg hover:opacity-90"
+              >
+                <ExternalLink className="size-3.5" />
+                Open document
+              </button>
+            </div>
+          </div>
+        ) : savedContent !== undefined && isMarkdownPath(filePath) ? (
           <Suspense fallback={<div className="flex-1 bg-bg" />}>
             <MarkdownEditor
               key={filePath}

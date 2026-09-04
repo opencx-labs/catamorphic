@@ -967,11 +967,21 @@ export const AgentTodoSchema = z.object({
   status: AgentTodoStatusSchema,
 });
 
+export const AgentSessionSourceSchema = z.enum([
+  "desktop",
+  "mobile",
+  "slack",
+  "claude",
+  "mcp",
+  "api",
+]);
+
 export const AgentSessionSchema = z.object({
   id: z.string().uuid(),
   projectId: z.string().uuid(),
   externalUserId: z.string(),
   provider: z.string(),
+  source: AgentSessionSourceSchema,
   providerSessionId: z.string().nullable(),
   sandboxId: z.string().uuid().nullable(),
   environment: z.string().nullable(),
@@ -1026,6 +1036,8 @@ export const CreateAgentSessionSchema = z.object({
   agentId: z.string().optional(),
   effort: AgentEffortSchema.optional(),
   environment: z.string().min(1).optional(),
+  /** Surface creating the session. Provenance only; never grants access. */
+  source: AgentSessionSourceSchema.optional(),
 });
 
 export const UpdateAgentSessionSchema = z.object({
@@ -1077,6 +1089,8 @@ export const MirrorAgentSessionSchema = z.object({
   icon: z.string().max(100).nullable().optional(),
   /** The source's provider name, kept for provenance. */
   provider: z.string().max(100).optional(),
+  /** The surface that originally created the conversation. */
+  source: AgentSessionSourceSchema.optional(),
   todos: z.array(AgentTodoSchema).max(50),
   /** The source session's project-agent slug: same agent here when
    * available and covered (ADR 0062), else the registry default. */

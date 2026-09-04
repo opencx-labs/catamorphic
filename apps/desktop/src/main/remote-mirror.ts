@@ -434,6 +434,7 @@ export class RemoteSessionMirror {
             title: detail.title,
             icon: detail.icon,
             provider: detail.provider,
+            source: detail.source,
             todos: detail.todos,
             ...(projectAgent ? { agentSlug: projectAgent.slug } : {}),
             messages: detail.messages.map((message) => ({

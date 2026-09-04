@@ -3248,3 +3248,36 @@ paths, deliberately independent:
   Its paired `light-dark()` fallback tokens keep the first paint aligned with
   the operating system, while the resolved profile palette remains the source
   of truth after startup.
+
+### Project-shaped navigation and one session inspector (2026-09-04)
+
+- **Projects ship their default sidebar.** The shared
+  `.catamorphic/sidebar.js` remains the project's authored navigation for its
+  members, including builder surfaces such as Changes and Pull Requests when
+  the project wants them. The renderer narrows that presentation to the
+  current caller's capabilities. A profile or per-project personal override
+  remains the user's layer above the shared default.
+- **The palette remains everyone's front door.** Connecting to a project lands
+  on the ordinary New Tab palette rather than silently starting an agent. A
+  project may contribute a very small set of resolved starting actions for the
+  current user segment. They sit inside the palette, use the project's agents,
+  and render no heading, placeholder, or empty state when none are configured.
+- **One top-right surface-control location.** Contextual actions live in the
+  compact top-right cluster used for workspace controls. Share gets a visible
+  slot whenever the active surface has a real sharing contract. Remote
+  documents and presentations use it now; customer-facing apps join it when
+  app publications land. Lower-frequency actions live in the relevant
+  inspector or overflow rather than a permanent button row.
+- **Every chat has one always-present session inspector.** It sits beside the
+  temporary todo control and opens on hover, keyboard focus, or click. It
+  contains the title, agent, source surface, run state, environment, checkout,
+  privacy and sync state, lineage, recent activity, and contextual actions
+  such as fork, archive, and move.
+- **The inspector is one component.** Sidebar session hover uses the same
+  inspector content. The palette's `Status` command and composer `/status`
+  open and pin that control. Todos remain an independent temporary progress
+  surface; the session inspector is stable chrome.
+- **External surfaces create ordinary sessions.** Slack, Claude MCP, mobile,
+  API, and desktop conversations share the durable session model and normal
+  Chats list with source attribution. MCP installation and project choice
+  belong to invitation/onboarding outside the desktop.

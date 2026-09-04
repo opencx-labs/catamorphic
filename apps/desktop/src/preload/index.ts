@@ -255,6 +255,8 @@ const api = {
     ipcRenderer.invoke("catamorphic:project-root", projectId),
   revealFolder: (folderPath: string): Promise<void> =>
     ipcRenderer.invoke("catamorphic:reveal-folder", folderPath),
+  projectOpenFile: (projectId: string, filePath: string): Promise<void> =>
+    ipcRenderer.invoke("catamorphic:project-open-file", projectId, filePath),
   githubConnectStart: (): Promise<{
     userCode: string;
     verificationUri: string;
@@ -289,6 +291,8 @@ const api = {
     ),
   projectAllowIncognito: (projectId: string): Promise<unknown> =>
     ipcRenderer.invoke("catamorphic:project-allow-incognito", projectId),
+  projectStartingActions: (projectId: string): Promise<unknown> =>
+    ipcRenderer.invoke("catamorphic:project-starting-actions", projectId),
   sessionMoveEligibility: (
     projectId: string,
     sessionId: string,

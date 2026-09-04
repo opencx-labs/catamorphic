@@ -73,11 +73,21 @@ import {
 type SessionRow = Selectable<DB["agent_sessions"]>;
 type MessageRow = Selectable<DB["agent_messages"]>;
 
+export type AgentSessionSource =
+  | "desktop"
+  | "mobile"
+  | "slack"
+  | "claude"
+  | "mcp"
+  | "api";
+
 export interface AgentSession {
   id: string;
   projectId: string;
   externalUserId: string;
   provider: string;
+  /** Surface that first created this conversation; informational, not auth. */
+  source: AgentSessionSource;
   providerSessionId: string | null;
   sandboxId: string | null;
   environment: string | null;
@@ -902,6 +912,7 @@ export class AgentSessionsService {
       agentId?: string;
       effort?: AgentEffort;
       environment?: string;
+      source?: AgentSessionSource;
     } = {},
   ): Promise<AgentSession> {
     return withSpan(
@@ -928,6 +939,7 @@ export class AgentSessionsService {
       environment?: string;
       title?: string;
       wakeKey?: string;
+      source?: AgentSessionSource;
     },
   ): Promise<AgentSession> {
     await this.requireProject(identity, projectId);
@@ -982,6 +994,7 @@ export class AgentSessionsService {
           project_id: projectId,
           external_user_id: identity.externalUserId,
           provider: agent.provider.name,
+          source: input.source ?? "api",
           provider_session_id: null,
           agent_id: input.agentId ?? null,
           model_effort: input.effort ?? null,
@@ -1133,6 +1146,7 @@ export class AgentSessionsService {
       title?: string | null;
       icon?: string | null;
       provider?: string;
+      source?: AgentSessionSource;
       /**
        * The source session's PROJECT-agent slug, when it ran one: project
        * agent definitions are committed files that sync between backends,
@@ -1307,6 +1321,7 @@ export class AgentSessionsService {
                   project_id: projectId,
                   external_user_id: identity.externalUserId,
                   provider: input.provider ?? "mirror",
+                  source: input.source ?? "api",
                   provider_session_id: null,
                   agent_id: agentId,
                   model_effort: null,
@@ -1679,6 +1694,7 @@ export class AgentSessionsService {
           project_id: projectId,
           external_user_id: identity.externalUserId,
           provider: session.provider,
+          source: session.source,
           provider_session_id: null,
           agent_id: session.agent_id,
           model_effort: session.model_effort,
@@ -3745,6 +3761,7 @@ function mapSession(
     projectId: row.project_id,
     externalUserId: row.external_user_id,
     provider: row.provider,
+    source: parseSessionSource(row.source),
     providerSessionId: row.provider_session_id,
     sandboxId: row.sandbox_id,
     environment: row.environment_name,
@@ -3795,6 +3812,20 @@ function workflowNotification(
     ...(title ? { title } : {}),
     ...(body ? { body } : {}),
   };
+}
+
+function parseSessionSource(value: string): AgentSessionSource {
+  switch (value) {
+    case "desktop":
+    case "mobile":
+    case "slack":
+    case "claude":
+    case "mcp":
+    case "api":
+      return value;
+    default:
+      return "api";
+  }
 }
 
 function parseHandoffStatus(value: string): AgentSession["handoffStatus"] {

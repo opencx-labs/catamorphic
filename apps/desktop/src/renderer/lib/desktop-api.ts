@@ -623,6 +623,7 @@ export interface SidebarSectionConfig {
   type:
     | "workflows"
     | "apps"
+    | "files"
     | "chats"
     | "bookmarks"
     | "git"
@@ -737,6 +738,10 @@ export interface CatamorphicDesktopApi {
   sessionSetIncognito: (sessionId: string, incognito: boolean) => Promise<void>;
   /** Project policy (ADR 0062): may members open incognito chats here? */
   projectAllowIncognito: (projectId: string) => Promise<boolean>;
+  /** Caller-resolved project starters; absent config returns an empty list. */
+  projectStartingActions: (
+    projectId: string,
+  ) => Promise<Array<{ label: string; prompt: string; agentId?: string }>>;
   sessionMoveEligibility: (
     projectId: string,
     sessionId: string,
@@ -985,6 +990,7 @@ export interface CatamorphicDesktopApi {
   }) => Promise<void>;
   projectRoot: (projectId: string) => Promise<string | null>;
   revealFolder: (folderPath: string) => Promise<void>;
+  projectOpenFile: (projectId: string, filePath: string) => Promise<void>;
 
   terminalCreate: (input: {
     projectId?: string;

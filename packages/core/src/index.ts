@@ -89,6 +89,7 @@ export {
   AgentSessionHandoffPendingError,
   AgentSessionNotFoundError,
   type AgentSessionPeer,
+  type AgentSessionSource,
   AgentSessionsService,
   type AgentSessionWakeReceipt,
   type AgentTodo,

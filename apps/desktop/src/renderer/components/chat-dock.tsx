@@ -14,7 +14,6 @@ import {
   Columns2,
   FileCode,
   Ghost,
-  GitBranch,
   GitFork,
   Globe,
   KeyRound,
@@ -25,7 +24,6 @@ import {
   Paperclip,
   PictureInPicture2,
   Radio,
-  Server,
   SquareTerminal,
   X,
 } from "lucide-react";
@@ -36,7 +34,6 @@ import {
   type ReactNode,
   useCallback,
   useEffect,
-  useId,
   useLayoutEffect,
   useMemo,
   useRef,
@@ -81,6 +78,7 @@ import { ContextMeter } from "./context-meter.js";
 import { EnvironmentConnections } from "./environment-connections.js";
 import { Modal } from "./modal.js";
 import { RemoteMessageConnectionGuard } from "./remote-message-connection-guard.js";
+import { SessionInspector } from "./session-inspector.js";
 import { ShortcutHint } from "./shortcut-hint";
 
 export type ChatMode = "min" | "partial" | "tab";
@@ -206,6 +204,7 @@ type SlashEntry = {
   description: string;
 } & (
   | { kind: "skill"; skill: SkillInfo }
+  | { kind: "status" }
   | {
       kind: "command";
       command: { name: string; description: string; argumentHint: string };
@@ -597,13 +596,13 @@ function SlashMenu({
               <span className="shrink-0 font-mono text-[11px] text-fg-faint">
                 /{entry.name}
               </span>
-            ) : (
+            ) : entry.kind === "command" ? (
               entry.command.argumentHint && (
                 <span className="shrink-0 font-mono text-[11px] text-fg-faint">
                   {entry.command.argumentHint}
                 </span>
               )
-            )}
+            ) : null}
             {entry.description && (
               <span className="min-w-0 truncate text-xs text-fg-faint">
                 {entry.description}
@@ -1214,6 +1213,14 @@ export interface ChatDockProps {
   onFileClick?: (path: string) => void;
   /** Fork the conversation from this assistant message (hover action). */
   onFork?: (messageId: string) => void;
+  /** Fork at the latest settled message from the session inspector. */
+  onForkCurrent?: () => void;
+  /** Archive this conversation while preserving its transcript. */
+  onArchive?: () => void;
+  /** Profile-local presentation state for the inspector's toggle label. */
+  archived?: boolean;
+  /** Changing this opens and pins the shared session inspector. */
+  inspectRequestNonce?: number;
   /** Set on forked chats: reveal the parent conversation. */
   onOpenParent?: () => void;
   onEntryChange: (entry: ChatDockEntry) => void;
@@ -1280,6 +1287,10 @@ export function ChatDock({
   onLinkClick,
   onFileClick,
   onFork,
+  onForkCurrent,
+  onArchive,
+  archived = false,
+  inspectRequestNonce,
   onOpenParent,
   onEntryChange,
   onEscapeToFloating,
@@ -1321,6 +1332,7 @@ export function ChatDock({
     sessionId: entry.sessionId,
     agentId: entry.agentId ?? defaultAgentId,
     environment: selectedEnvironment,
+    source: "desktop",
     idleRefetchIntervalMs: refreshWhileIdle ? 3_000 : false,
     onSessionCreated: (sessionId) => {
       // Desktop-local privacy flag (ADR 0062): recorded the moment the
@@ -1358,14 +1370,7 @@ export function ChatDock({
     reason: "Start the session before moving it",
     moving: false,
   });
-  const moveDescriptionId = useId();
-  const moveHintLabel = moveState.moving
-    ? "Moving session to server…"
-    : moveState.canMove
-      ? moveState.reason
-        ? `${moveState.reason}. Try again`
-        : "Move to server"
-      : (moveState.reason ?? "Session cannot move to a server");
+  const [localInspectorNonce, setLocalInspectorNonce] = useState(0);
   useEffect(() => {
     if (chat.isSending) {
       setMoveState({
@@ -1462,7 +1467,13 @@ export function ChatDock({
   const slashMatches = useMemo<SlashEntry[]>(() => {
     if (slashToken === undefined) return [];
     const skillNames = new Set(skills.map((skill) => skill.name));
+    const statusEntry: SlashEntry = {
+      kind: "status",
+      name: "status",
+      description: "Show this session's status and actions",
+    };
     const all: SlashEntry[] = [
+      statusEntry,
       ...skills.map((skill) => ({
         kind: "skill" as const,
         name: skill.name,
@@ -1505,6 +1516,10 @@ export function ChatDock({
     setRecall(null);
     // Skills send their harness-neutral invocation; harness commands go
     // as the literal "/name" — the CLI executes those natively.
+    if (entry.kind === "status") {
+      setLocalInspectorNonce((value) => value + 1);
+      return;
+    }
     void chat.send(
       entry.kind === "skill" ? skillInvocation(entry.name) : `/${entry.name}`,
       files,
@@ -2053,6 +2068,10 @@ export function ChatDock({
     event?.preventDefault();
     const composed = takeComposer();
     if (!composed) return;
+    if (composed.message.trim() === "/status" && composed.files.length === 0) {
+      setLocalInspectorNonce((value) => value + 1);
+      return;
+    }
     void chat.send(resolveSlashMessage(composed.message), composed.files);
   };
 
@@ -2060,6 +2079,10 @@ export function ChatDock({
   const submitNow = () => {
     const composed = takeComposer();
     if (!composed) return;
+    if (composed.message.trim() === "/status" && composed.files.length === 0) {
+      setLocalInspectorNonce((value) => value + 1);
+      return;
+    }
     void chat.sendNow(resolveSlashMessage(composed.message), composed.files);
   };
 
@@ -2656,89 +2679,51 @@ export function ChatDock({
         <div className="absolute right-2 top-2 z-10 flex items-start gap-1">
           <TodoProgress todos={chat.session?.todos ?? []} />
           <span className="flex items-center gap-0.5 rounded-lg border border-border bg-bg-raised/95 p-0.5 backdrop-blur-sm">
-            {checkout ? (
-              <span
-                className="flex max-w-32 items-center gap-1 truncate rounded-md bg-bg-inset px-1.5 py-1 text-[10px] font-medium text-fg-muted"
-                data-testid="chat-checkout-badge"
-                title={checkout.branch ?? "External worktree"}
-              >
-                <GitBranch className="size-3 shrink-0" />
-                <span className="truncate">
-                  {checkout.kind === "external"
-                    ? "External"
-                    : (checkout.branch ?? "Worktree")}
-                </span>
-              </span>
-            ) : null}
-            <span id={moveDescriptionId} className="sr-only">
-              {moveHintLabel}
-            </span>
-            <ShortcutHint label={moveHintLabel}>
-              <button
-                type="button"
-                aria-label="Move to server"
-                aria-describedby={
-                  moveState.reason || moveState.moving
-                    ? moveDescriptionId
-                    : undefined
-                }
-                aria-disabled={!moveState.canMove || moveState.moving}
-                data-testid="chat-move-to-server"
-                className={`grid size-7 place-items-center rounded-md transition-colors duration-150 ${
-                  moveState.canMove && !moveState.moving
-                    ? "cursor-pointer text-fg-muted hover:bg-bg-overlay hover:text-fg"
-                    : "cursor-not-allowed text-fg-faint opacity-45"
-                }`}
-                onClick={() => {
-                  if (
-                    !activeSessionId ||
-                    !moveState.canMove ||
-                    moveState.moving
-                  ) {
-                    return;
-                  }
-                  setMoveState((current) => ({ ...current, moving: true }));
-                  void desktopApi
-                    .sessionMoveToServer(projectId, activeSessionId)
-                    .then(() =>
-                      setMoveState({
-                        canMove: false,
-                        reason: "This session now runs on the server",
-                        moving: false,
-                      }),
-                    )
-                    .catch((error) =>
-                      setMoveState({
-                        canMove: true,
-                        reason:
-                          error instanceof Error
-                            ? error.message
-                            : "The session could not be moved",
-                        moving: false,
-                      }),
-                    );
-                }}
-              >
-                {moveState.moving ? (
-                  <LoaderCircle className="size-3.5 animate-spin" />
-                ) : (
-                  <Server className="size-3.5" />
-                )}
-              </button>
-            </ShortcutHint>
-            {onOpenParent && (
-              <ShortcutHint label="Go to the original chat">
-                <button
-                  type="button"
-                  className="grid size-7 cursor-pointer place-items-center rounded-md text-fg-muted transition-colors duration-150 hover:bg-bg-overlay hover:text-fg"
-                  onClick={onOpenParent}
-                  aria-label="Go to the original chat"
-                  data-testid="chat-open-parent"
-                >
-                  <GitFork className="size-3.5" />
-                </button>
-              </ShortcutHint>
-            )}
+            <SessionInspector
+              session={chat.session}
+              fallbackTitle={title}
+              agentName={activeAgent?.name ?? "Default agent"}
+              checkout={checkout}
+              incognito={isIncognito}
+              openRequest={(inspectRequestNonce ?? 0) + localInspectorNonce}
+              moving={moveState.moving}
+              moveDisabledReason={
+                moveState.canMove
+                  ? null
+                  : (moveState.reason ?? "Session cannot move to a server")
+              }
+              onMove={
+                activeSessionId
+                  ? () => {
+                      if (!moveState.canMove || moveState.moving) return;
+                      setMoveState((current) => ({ ...current, moving: true }));
+                      void desktopApi
+                        .sessionMoveToServer(projectId, activeSessionId)
+                        .then(() =>
+                          setMoveState({
+                            canMove: false,
+                            reason: "This session now runs on the server",
+                            moving: false,
+                          }),
+                        )
+                        .catch((error) =>
+                          setMoveState({
+                            canMove: true,
+                            reason:
+                              error instanceof Error
+                                ? error.message
+                                : "The session could not be moved",
+                            moving: false,
+                          }),
+                        );
+                    }
+                  : undefined
+              }
+              onFork={activeSessionId ? onForkCurrent : undefined}
+              onArchive={activeSessionId ? onArchive : undefined}
+              archived={archived}
+              onOpenParent={onOpenParent}
+            />
             {isTab && onUnsplit && (
               <ShortcutHint label="Full width">
                 <button
