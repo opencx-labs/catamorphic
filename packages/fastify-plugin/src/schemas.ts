@@ -169,6 +169,64 @@ export const TriggerBindingInfoSchema = z.object({
   outputSchema: JsonOutSchema,
 });
 
+export const WorkflowEnablementOwnerSchema = z.discriminatedUnion("type", [
+  z.object({ type: z.literal("member"), externalUserId: z.string().min(1) }),
+  z.object({
+    type: z.literal("service"),
+    principalKind: z.enum(["project_service", "tenant_service"]),
+    connectionId: z.string().uuid(),
+  }),
+]);
+
+export const WorkflowEnablementConnectionSchema = z.object({
+  alias: z.string(),
+  bindingId: z.string().uuid(),
+  connectionId: z.string().uuid(),
+  providerKind: z.string(),
+  principalKind: z.enum(["member", "project_service", "tenant_service"]),
+  capabilities: z.array(z.string()),
+});
+
+export const WorkflowEnablementTriggerSchema = z.object({
+  id: z.string().uuid(),
+  definitionId: z.string().uuid(),
+  kind: z.string(),
+  config: JsonOutSchema,
+  status: z.enum(["active", "paused"]),
+});
+
+const WorkflowEnablementTargetSchema = z.object({
+  projectId: z.string().uuid(),
+  workflowName: z.string(),
+  deploymentArtifactId: z.string().uuid(),
+  commitSha: z.string(),
+  remoteBranch: z.string(),
+  environment: z.string(),
+  owner: WorkflowEnablementOwnerSchema,
+  connections: z.array(WorkflowEnablementConnectionSchema),
+  capabilities: z.array(z.string()),
+  consentDigest: z.string().length(64),
+});
+
+export const WorkflowEnablementPreviewSchema =
+  WorkflowEnablementTargetSchema.extend({
+    deploymentArtifactDigest: z.string(),
+    triggerCount: z.number().int().nonnegative(),
+  });
+
+export const WorkflowEnablementSchema = WorkflowEnablementTargetSchema.extend({
+  id: z.string().uuid(),
+  status: z.enum(["active", "suspended", "disabled"]),
+  suspensionReason: z.string().nullable(),
+  updateAvailable: z.boolean(),
+  temporary: z.boolean(),
+  expiresAt: z.string().datetime().nullable(),
+  revision: z.number().int().positive(),
+  triggers: z.array(WorkflowEnablementTriggerSchema),
+  createdAt: z.string().datetime(),
+  updatedAt: z.string().datetime(),
+});
+
 export const WorkflowSummarySchema = z.object({
   name: z.string(),
   capabilities: WorkflowCapabilitiesSchema,
@@ -935,6 +993,9 @@ export const AgentSessionSchema = z.object({
   resumable: z.boolean(),
   pausedAt: z.string().datetime().nullable(),
   running: z.boolean(),
+  attentionRevision: z.number().int().nonnegative(),
+  attentionSeenRevision: z.number().int().nonnegative(),
+  attentionRequired: z.boolean(),
   baseCommitSha: z.string().length(40).nullable(),
   createdAt: z.string().datetime(),
   updatedAt: z.string().datetime(),

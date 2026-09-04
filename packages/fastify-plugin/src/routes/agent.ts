@@ -434,6 +434,43 @@ export function registerAgentRoutes(app: FastifyInstance, ctx: RouteContext) {
   });
 
   typed.route({
+    method: "POST",
+    url: "/projects/:projectId/agent/sessions/:sessionId/attention/acknowledge",
+    schema: {
+      params: AgentSessionIdParamsSchema,
+      response: {
+        200: AgentSessionSchema,
+        404: ErrorSchema,
+        503: ErrorSchema,
+      },
+    },
+    handler: async (request, reply) => {
+      const agentSessions = ctx.core?.agentSessions;
+      if (!agentSessions) {
+        return reply.status(503).send({ error: "Coding agent not configured" });
+      }
+      const identity = resolveIdentity(request);
+      try {
+        return reply.send(
+          await agentSessions.acknowledgeAttention(
+            identity,
+            request.params.projectId,
+            request.params.sessionId,
+          ),
+        );
+      } catch (err) {
+        if (
+          err instanceof ProjectNotFoundError ||
+          err instanceof AgentSessionNotFoundError
+        ) {
+          return reply.status(404).send({ error: "Session not found" });
+        }
+        throw err;
+      }
+    },
+  });
+
+  typed.route({
     method: "GET",
     url: "/projects/:projectId/agent/sessions/:sessionId/peers",
     schema: {

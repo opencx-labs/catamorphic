@@ -19,6 +19,7 @@ import type { TriggerKindRuntime } from "../services/trigger-kinds.js";
 import {
   TriggerBindingsInvalidError,
   TriggerKindNotRegisteredError,
+  TriggerNotEnabledError,
   TriggerPayloadInvalidError,
 } from "../services/triggers-service.js";
 import { testEnvironmentProvider } from "./test-environment.js";
@@ -247,6 +248,23 @@ describeIf("TriggersService end to end", () => {
       { message: "deploy triggered workflows" },
     );
     expect(deployed.status).toBe("deployed");
+    for (const workflowName of [
+      "escalateTicket",
+      "awaitApproval",
+      "flakyTicket",
+    ]) {
+      const preview = await core.workflowEnablements.preview({
+        identity,
+        projectId,
+        workflowName,
+      });
+      await core.workflowEnablements.create({
+        identity,
+        projectId,
+        workflowName,
+        consentDigest: preview.consentDigest,
+      });
+    }
   }, 120_000);
 
   afterAll(async () => {
@@ -275,7 +293,7 @@ describeIf("TriggersService end to end", () => {
 
     // The scan is recorded, so later lists and fires read the table.
     const scans = await db
-      .selectFrom("trigger_binding_scans")
+      .selectFrom("trigger_definition_scans")
       .selectAll()
       .where("project_id", "=", projectId)
       .execute();
@@ -323,6 +341,7 @@ describeIf("TriggersService end to end", () => {
     const run = await core.runs.get({ identity, runId });
     expect(run.input).toEqual({ ticketId: "T-100" });
     expect(run.correlationKey).toBe("T-100");
+    expect(run.workflowEnablementId).toMatch(/^[0-9a-f-]{36}$/);
 
     // Redelivery with the same correlation key is a no-op (default ignore).
     const again = await core.triggers.fire({
@@ -524,5 +543,121 @@ export const bad = defineWorkflow(({ defineBoundary }) => ({
       projectId: project.id,
     });
     expect(bindings).toEqual([]);
+  });
+
+  it("keeps trigger definitions inert without an enablement", async () => {
+    const project = await core.projects.create(identity, {
+      name: "inert-trigger",
+    });
+    await core.projects.writeFile(
+      identity,
+      project.id,
+      "workflows/src/inert.ts",
+      {
+        content: `
+export const inert = defineWorkflow(({ defineBoundary }) => ({
+  triggers: [trigger("ticket.created")],
+  steps: [defineBoundary({ run: async ({ input }) => input })],
+}));
+`,
+        commitMessage: "Add inert trigger definition",
+      },
+    );
+    await core.deployment.deploy(
+      identity.tenantId,
+      project.id,
+      identity.externalUserId,
+      { message: "Deploy inert trigger" },
+    );
+
+    await expect(
+      core.triggers.fire({
+        identity,
+        projectId: project.id,
+        kind: "ticket.created",
+        payload: { ticketId: "T-inert" },
+      }),
+    ).rejects.toBeInstanceOf(TriggerNotEnabledError);
+  });
+
+  it("keeps a consented revision active until its owner approves an update", async () => {
+    const [before] = await core.workflowEnablements.list({
+      identity,
+      projectId,
+      workflowName: "escalateTicket",
+    });
+    expect(before).toBeDefined();
+    await core.projects.writeFile(
+      identity,
+      projectId,
+      "workflows/src/tickets.ts",
+      {
+        content: `${TRIGGERED_WORKFLOWS}\n// A newer production revision.\n`,
+        commitMessage: "Revise triggered workflows",
+      },
+    );
+    const deployed = await core.deployment.deploy(
+      identity.tenantId,
+      projectId,
+      identity.externalUserId,
+      { message: "Deploy revised triggered workflows" },
+    );
+    expect(deployed.status).toBe("deployed");
+
+    await core.triggers.list({ identity, projectId });
+    const [pendingUpdate] = await core.workflowEnablements.list({
+      identity,
+      projectId,
+      workflowName: "escalateTicket",
+    });
+    expect(pendingUpdate).toMatchObject({
+      commitSha: before?.commitSha,
+      updateAvailable: true,
+    });
+
+    const result = await core.triggers.fire({
+      identity,
+      projectId,
+      kind: "ticket.created",
+      payload: { ticketId: "T-pinned" },
+      workflows: ["escalateTicket"],
+    });
+    const run = await core.runs.get({
+      identity,
+      runId: result.runs[0]?.runId ?? "",
+    });
+    expect(run.provenance.commitSha).toBe(before?.commitSha);
+    expect(run.provenance.commitSha).not.toBe(deployed.commitSha);
+  });
+
+  it("isolates an invalid owner enablement during trigger fan-out", async () => {
+    const preview = await core.workflowEnablements.preview({
+      identity,
+      projectId,
+      workflowName: "escalateTicket",
+    });
+    const expired = await core.workflowEnablements.create({
+      identity,
+      projectId,
+      workflowName: "escalateTicket",
+      consentDigest: preview.consentDigest,
+      temporary: true,
+      expiresAt: new Date(Date.now() - 1_000),
+    });
+
+    const result = await core.triggers.fire({
+      identity,
+      projectId,
+      kind: "ticket.created",
+      payload: { ticketId: "T-isolated" },
+      workflows: ["escalateTicket"],
+    });
+    expect(result.runs).toHaveLength(1);
+    expect(
+      await core.workflowEnablements.get({
+        identity,
+        enablementId: expired.id,
+      }),
+    ).toMatchObject({ status: "suspended", suspensionReason: "expired" });
   });
 });

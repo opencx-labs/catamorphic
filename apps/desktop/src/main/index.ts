@@ -5,6 +5,7 @@ import {
   dialog,
   ipcMain,
   Menu,
+  nativeTheme,
   powerMonitor,
   safeStorage,
   type WebContents,
@@ -36,6 +37,7 @@ import {
   registerDesktopUpdater,
 } from "./updater.js";
 import { WindowStateStore } from "./window-state.js";
+import { desktopProfileMcpProvider } from "./workflow-mcp-connections.js";
 
 // macOS 26.x + Apple Silicon: V8's background compiler threads race the
 // OS's MAP_JIT write-protection and SIGTRAP in ThreadIsolation::
@@ -125,7 +127,9 @@ const paths = resolveDataPaths();
 const profilesStore = new ProfilesStore(paths.profilesFile);
 // Per-profile config (theme, keybindings, sidebar, agents) — one manager
 // shared by IPC, the window layer, and the chat agent's config mirror.
-const profileConfig = new ProfileConfigManager(paths, profilesStore);
+const profileConfig = new ProfileConfigManager(paths, profilesStore, () =>
+  nativeTheme.shouldUseDarkColors ? "dark" : "light",
+);
 
 let server: EmbeddedServer | null = null;
 
@@ -233,6 +237,15 @@ function createWindow(profileId?: string): BrowserWindow {
       // reads phantom zombies. Real usage keeps normal throttling.
       backgroundThrottling: e2eDataDir === undefined,
     },
+  });
+  // Renderer links must stay inside the workspace. Feature-specific flows can
+  // open tabs through IPC, while this boundary catches plain window.open calls
+  // from current and future renderer components.
+  window.webContents.setWindowOpenHandler(({ url }) => {
+    if (/^https?:/.test(url)) {
+      window.webContents.send("catamorphic:browser-open-url", { url });
+    }
+    return { action: "deny" };
   });
   if (saved.maximized) window.maximize();
   // A connect link that arrived before any window could take it (cold
@@ -416,6 +429,7 @@ app.whenReady().then(async () => {
       window.webContents.send("catamorphic:theme-changed", theme);
     }
   });
+  nativeTheme.on("updated", () => profileConfig.systemAppearanceChanged());
   profileConfig.onSidebarChanged((profileId) => {
     // No payload: the resolved config depends on each window's active
     // project (layered resolution), so the renderer refetches instead.
@@ -535,6 +549,7 @@ app.whenReady().then(async () => {
       connectors,
       mcpApps,
       incognitoSessions,
+      [desktopProfileMcpProvider],
     );
     versionBackup.markBootSuccessful();
     state.broadcast("catamorphic:server-changed", {

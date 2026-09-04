@@ -63,6 +63,19 @@ describe("agent routes", () => {
     });
   });
 
+  describe("POST /api/projects/:projectId/agent/sessions/:sessionId/attention/acknowledge", () => {
+    it("registers the acknowledgement route", async () => {
+      const app = await buildApp();
+      const res = await app.inject({
+        method: "POST",
+        url: `/api/projects/${PROJECT_ID}/agent/sessions/${SESSION_ID}/attention/acknowledge`,
+      });
+      expect(res.statusCode).toBe(503);
+      expect(res.json()).toEqual({ error: "Coding agent not configured" });
+      await app.close();
+    });
+  });
+
   describe("agent session coordination", () => {
     it("registers peer listing and activity routes", async () => {
       const app = await buildApp();

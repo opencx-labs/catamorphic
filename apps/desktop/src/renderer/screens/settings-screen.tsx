@@ -1,6 +1,7 @@
 import {
   Check,
   Copy,
+  Monitor,
   Pencil,
   Plug,
   Plus,
@@ -483,6 +484,9 @@ function ThemeSection() {
   if (!theme) return null;
 
   const overridden = Object.keys(theme.overrides).length > 0;
+  const dark = presets.find((preset) => preset.id === "dark");
+  const light = presets.find((preset) => preset.id === "light");
+  const systemSelected = theme.selection === "system";
 
   return (
     <section className="mt-8 border-t border-border pt-6">
@@ -492,7 +496,10 @@ function ThemeSection() {
           <button
             type="button"
             onClick={() =>
-              void desktopApi.setTheme({ preset: theme.preset, overrides: {} })
+              void desktopApi.setTheme({
+                selection: theme.selection,
+                overrides: {},
+              })
             }
             className="flex cursor-pointer items-center gap-1 text-xs text-fg-muted hover:text-fg"
           >
@@ -502,16 +509,53 @@ function ThemeSection() {
         )}
       </div>
 
+      <button
+        type="button"
+        onClick={() =>
+          void desktopApi.setTheme({ selection: "system", overrides: {} })
+        }
+        aria-pressed={systemSelected}
+        className={`mb-2 flex w-full cursor-pointer items-center gap-2.5 rounded-lg border p-2.5 text-left transition-colors duration-150 ${
+          systemSelected
+            ? "border-accent bg-accent/10"
+            : "border-border bg-bg-raised/40 hover:border-border-strong"
+        }`}
+      >
+        <span className="relative grid size-9 shrink-0 place-items-center overflow-hidden rounded-md border border-border">
+          <span
+            className="absolute inset-y-0 left-0 w-1/2"
+            style={{ background: dark?.colors.bg }}
+          />
+          <span
+            className="absolute inset-y-0 right-0 w-1/2"
+            style={{ background: light?.colors.bg }}
+          />
+          <Monitor className="relative size-4 text-fg" />
+        </span>
+        <span className="min-w-0 flex-1">
+          <span className="block text-[13px]">System default</span>
+          <span className="block text-[11px] text-fg-faint">
+            {systemSelected
+              ? `Following your device · ${theme.appearance === "dark" ? "Dark" : "Light"}`
+              : "Uses Catamorphic Light or Dark automatically"}
+          </span>
+        </span>
+      </button>
+
       <div className="grid grid-cols-2 gap-2">
         {presets.map((preset) => {
-          const active = preset.id === theme.preset;
+          const active = preset.id === theme.selection;
           return (
             <button
               key={preset.id}
               type="button"
               onClick={() =>
-                void desktopApi.setTheme({ preset: preset.id, overrides: {} })
+                void desktopApi.setTheme({
+                  selection: preset.id,
+                  overrides: {},
+                })
               }
+              aria-pressed={active}
               className={`flex cursor-pointer items-center gap-2.5 rounded-lg border p-2.5 text-left transition-colors duration-150 ${
                 active
                   ? "border-accent bg-accent/10"
@@ -574,7 +618,7 @@ function ThemeSection() {
                   value={toHex6(theme.colors[token])}
                   onChange={(event) =>
                     void desktopApi.setTheme({
-                      preset: theme.preset,
+                      selection: theme.selection,
                       overrides: {
                         ...theme.overrides,
                         [token]: event.target.value,

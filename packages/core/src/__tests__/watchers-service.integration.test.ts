@@ -11,13 +11,13 @@ import { Kysely, PGliteDialect, sql, WithSchemaPlugin } from "kysely";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import type { Identity } from "../identity.js";
 import type { AgentSessionsService } from "../services/agent-sessions-service.js";
-import type { ExecutionEnvironmentsService } from "../services/execution-environments-service.js";
 import type { ProjectEventMonitorsService } from "../services/project-event-monitors-service.js";
 import { ProjectEventsService } from "../services/project-events-service.js";
 import type { RunsService } from "../services/runs-service.js";
 import type { TriggerKindRuntime } from "../services/trigger-kinds.js";
 import { TriggersService } from "../services/triggers-service.js";
 import { WatchersService } from "../services/watchers-service.js";
+import type { WorkflowEnablementsService } from "../services/workflow-enablements-service.js";
 
 const pglite = new PGlite({ extensions: { pgcrypto } });
 const schema = "catamorphic_watchers";
@@ -130,17 +130,32 @@ describe("temporary watchers", () => {
           return { id };
         },
       ),
+      triggerWithEnablement: vi.fn(async (input: Record<string, unknown>) => {
+        triggered.push(input);
+        const eventId = String(
+          (input.input as { id?: string } | undefined)?.id,
+        );
+        attemptedEventIds.push(eventId);
+        if (eventId === failingEventId) throw new Error("temporary failure");
+        const id = crypto.randomUUID();
+        await db
+          .insertInto("workflow_runs")
+          .values({
+            id,
+            project_id: projectId,
+            workflow_name: String(input.workflowName),
+            external_user_id: identity.externalUserId,
+            workflow_enablement_id: String(input.enablementId),
+            provenance: {},
+          })
+          .execute();
+        return { id };
+      }),
     } as unknown as RunsService;
-    const executionEnvironments = {
-      admit: vi.fn(async (input: { environment?: string }) => ({
-        environmentName: input.environment ?? "local",
-      })),
-    } as unknown as ExecutionEnvironmentsService;
     const triggers = new TriggersService(db, {
       kinds: triggerKinds,
       projectManager,
       runs,
-      executionEnvironments,
     });
     const sessions = {
       assertSession: vi.fn(async () => undefined),
@@ -153,6 +168,58 @@ describe("temporary watchers", () => {
       events,
       monitors,
       sessions,
+      workflowEnablements: {
+        preview: vi.fn(async () => ({ consentDigest: "d".repeat(64) })),
+        create: vi.fn(async (input: Record<string, unknown>) => {
+          const id = crypto.randomUUID();
+          const artifact = await db
+            .selectFrom("deployment_artifacts")
+            .selectAll()
+            .where("project_id", "=", projectId)
+            .where("commit_sha", "=", String(input.commitSha))
+            .executeTakeFirstOrThrow();
+          await db
+            .insertInto("workflow_enablements")
+            .values({
+              id,
+              tenant_id: tenantId,
+              project_id: projectId,
+              workflow_name: String(input.workflowName),
+              deployment_artifact_id: artifact.id,
+              commit_sha: String(input.commitSha),
+              remote_branch: String(input.remoteBranch),
+              environment_name: String(input.environment ?? "local"),
+              owner_kind: "member",
+              owner_external_user_id: identity.externalUserId,
+              owner_identity: {
+                tenantId: identity.tenantId,
+                externalUserId: identity.externalUserId,
+              },
+              capabilities: [],
+              consent_digest: "d".repeat(64),
+              temporary: true,
+              created_by_external_user_id: identity.externalUserId,
+            })
+            .execute();
+          await db
+            .insertInto("workflow_enablement_triggers")
+            .columns(["enablement_id", "trigger_definition_id"])
+            .expression((eb) =>
+              eb
+                .selectFrom("trigger_definitions")
+                .select([
+                  eb.val(id).as("enablement_id"),
+                  "id as trigger_definition_id",
+                ])
+                .where("project_id", "=", projectId)
+                .where("commit_sha", "=", String(input.commitSha))
+                .where("workflow_name", "=", String(input.workflowName)),
+            )
+            .execute();
+          return { id };
+        }),
+        disable: vi.fn(async () => undefined),
+      } as unknown as WorkflowEnablementsService,
     });
   }, 30_000);
 
@@ -214,8 +281,7 @@ describe("temporary watchers", () => {
     expect(await watchers.dispatchPending()).toBe(0);
     expect(triggered).toEqual([
       expect.objectContaining({
-        commitSha: watcher.commitSha,
-        remoteBranch: watcher.remoteBranch,
+        enablementId: expect.stringMatching(/^[0-9a-f-]{36}$/),
         correlationKey: `watcher:${watcher.id}:event:${appended.event.id}`,
         input: appended.event,
         workflowName: "watchIssue",

@@ -115,6 +115,44 @@ boundary or batch scope at a time against an immutable production deployment.
 Postgres persists retries, pauses, child links, collection items, continuation
 state, and cancellation between invocations.
 
+## Availability, connections, and unattended execution
+
+Workflow code and access policy have separate jobs:
+
+- The exported workflow name is the value a committed `roles/<slug>.json`
+  lists under `workflows`. A member cannot see or run it without that grant.
+- The workflow's top-level `connections` array declares provider-neutral
+  aliases, member/service principal policy, and required actions. An MCP
+  connection satisfies the requirement when it exposes those actions.
+- The role must separately grant each connection alias under `connections`
+  and an allowed Environment under `environments`.
+- Trigger declarations are inert until each member explicitly chooses
+  **Automate** then **Enable for me** and reviews the pinned revision,
+  Environment, connections, actions, and triggers. Authentication may finish
+  that user-initiated enablement, but connecting an account alone never opts a
+  user into workflows.
+
+Use `trigger("schedule", { cron, timezone })` for cron schedules. Use
+`context.host["catamorphic.sessions"].wake(...)` when a member-owned workflow
+should create or reuse a stable project-agent session, queue a turn, and
+surface the settled result in desktop and PWA:
+
+```typescript
+return context.host["catamorphic.sessions"].wake({
+  key: "daily-inbox-summary",
+  agentSlug: "inbox-assistant",
+  title: "Daily inbox summary",
+  content: "Read my connected inbox and summarize what needs attention.",
+  notification: { title: "Your inbox summary is ready" },
+});
+```
+
+The role must grant both the workflow and `inbox-assistant`. The stable key is
+scoped to the workflow, retries are idempotent, and later schedule occurrences
+reuse the same conversation. `wake` is member-only because service enablements
+have no personal recipient. Use `catamorphic.sessions.deliver` when an exact
+session id is already available.
+
 ## JSDoc Tags
 
 - `@displayname` — label shown in the UI node

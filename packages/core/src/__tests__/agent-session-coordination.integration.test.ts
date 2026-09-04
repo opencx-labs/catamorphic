@@ -119,6 +119,7 @@ describe("agent session coordination", () => {
     sessionId: string;
     workingDirectory: string;
     changedFiles: string[];
+    notification?: { title?: string; body?: string };
   }> = [];
   const checkoutBySession = new Map<string, string>();
 
@@ -164,6 +165,7 @@ describe("agent session coordination", () => {
           sessionId: event.sessionId,
           workingDirectory: event.workingDirectory,
           changedFiles: event.changedFiles,
+          ...(event.notification ? { notification: event.notification } : {}),
         });
       },
     });
@@ -251,5 +253,62 @@ describe("agent session coordination", () => {
       });
     });
     provider.switchCheckout = undefined;
+  });
+
+  it("reuses a workflow wake session and requests attention when its turn settles", async () => {
+    const project = await projects.create(identity, { name: "Daily brief" });
+    const first = await sessions.wake(identity, project.id, {
+      wakeKey: '["gmail-summary","daily"]',
+      content: "Summarize my inbox",
+      workflowName: "gmail-summary",
+      runId: crypto.randomUUID(),
+      title: "Daily inbox summary",
+      notification: {
+        title: "Your inbox summary is ready",
+        body: "Open the chat to read it.",
+      },
+    });
+    expect(first.sessionCreated).toBe(true);
+
+    await vi.waitFor(async () => {
+      const item = (await sessions.list(identity, project.id)).items[0];
+      expect(item).toMatchObject({
+        id: first.sessionId,
+        title: "Daily inbox summary",
+        attentionRevision: 1,
+        attentionSeenRevision: 0,
+        attentionRequired: true,
+      });
+    });
+    expect(settledTurns.at(-1)?.notification).toEqual({
+      title: "Your inbox summary is ready",
+      body: "Open the chat to read it.",
+    });
+
+    const acknowledged = await sessions.acknowledgeAttention(
+      identity,
+      project.id,
+      first.sessionId,
+    );
+    expect(acknowledged.attentionRequired).toBe(false);
+
+    const second = await sessions.wake(identity, project.id, {
+      wakeKey: '["gmail-summary","daily"]',
+      content: "Summarize my inbox again",
+      workflowName: "gmail-summary",
+      runId: crypto.randomUUID(),
+    });
+    expect(second).toMatchObject({
+      sessionId: first.sessionId,
+      sessionCreated: false,
+    });
+    await vi.waitFor(async () => {
+      const item = (await sessions.list(identity, project.id)).items[0];
+      expect(item).toMatchObject({
+        attentionRevision: 2,
+        attentionSeenRevision: 1,
+        attentionRequired: true,
+      });
+    });
   });
 });

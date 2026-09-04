@@ -455,24 +455,24 @@ describe("animate-before-unmount", () => {
 
   it("tab hover cards fade out before unmounting", async () => {
     await run(`
-      const tab = $('[data-point-key]');
+      const tab = $('.animate-tab-in[data-point-key]');
       const body = [...tab.querySelectorAll('button')]
         .find((button) => !button.getAttribute('aria-label')?.startsWith('Close'));
       body.dispatchEvent(new MouseEvent('mouseover', { bubbles: true }));
       return true;
     `);
     await runWait(
-      `const card = $('[role="tooltip"].animate-fade-in');
+      `const card = $('[data-testid="tab-hover-card"].animate-fade-in');
        return !!card && getComputedStyle(card).opacity === '1';`,
       { label: "tab hover card entered" },
     );
     const samples = await run<
       { t: number; exiting?: boolean; gone?: boolean }[]
     >(`
-      const tab = $('[data-point-key]');
+      const tab = $('.animate-tab-in[data-point-key]');
       const body = [...tab.querySelectorAll('button')]
         .find((button) => !button.getAttribute('aria-label')?.startsWith('Close'));
-      const card = $('[role="tooltip"]');
+      const card = $('[data-testid="tab-hover-card"]');
       body.dispatchEvent(new MouseEvent('mouseout', {
         bubbles: true,
         relatedTarget: document.body,

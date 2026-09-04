@@ -5,7 +5,7 @@ import { Cron } from "croner";
 import type { Kysely } from "kysely";
 import type { Identity } from "../identity.js";
 import type {
-  StoredTriggerBinding,
+  StoredTriggerActivation,
   TriggerFireResult,
 } from "./triggers-service.js";
 
@@ -17,11 +17,11 @@ interface ScheduleConfig {
 }
 
 interface ScheduleTriggerDispatcher {
-  storedProductionBindings(args: {
+  storedProductionActivations(args: {
     identity: Identity;
     projectId: string;
     kind: string;
-  }): Promise<StoredTriggerBinding[]>;
+  }): Promise<StoredTriggerActivation[]>;
   fire(args: {
     identity: Identity;
     projectId: string;
@@ -30,16 +30,18 @@ interface ScheduleTriggerDispatcher {
     environment?: string;
     mode?: "async" | "sync";
     workflows?: readonly string[];
+    enablementIds?: readonly string[];
     correlationKey?: string;
     onConflict?: "ignore" | "error" | "restart";
   }): Promise<TriggerFireResult>;
 }
 
 interface ClaimedOccurrence {
-  bindingId: string;
+  activationId: string;
+  enablementId: string;
   scheduledFor: Date;
   workflowName: string;
-  environment: string | null;
+  environment: string;
   attemptCount: number;
 }
 
@@ -83,7 +85,7 @@ export class SchedulesService {
     projectId: string,
     now: Date,
   ): Promise<void> {
-    const bindings = await this.triggers.storedProductionBindings({
+    const bindings = await this.triggers.storedProductionActivations({
       identity,
       projectId,
       kind: "schedule",
@@ -93,7 +95,7 @@ export class SchedulesService {
       const existing = await this.db
         .selectFrom("schedule_bindings")
         .selectAll()
-        .where("binding_id", "=", binding.id)
+        .where("activation_id", "=", binding.activationId)
         .executeTakeFirst();
       const changed =
         !existing ||
@@ -103,13 +105,13 @@ export class SchedulesService {
       await this.db
         .insertInto("schedule_bindings")
         .values({
-          binding_id: binding.id,
+          activation_id: binding.activationId,
           cron_expression: config.cron,
           timezone: config.timezone,
           next_fire_at: nextFireAt,
         })
         .onConflict((conflict) =>
-          conflict.column("binding_id").doUpdateSet({
+          conflict.column("activation_id").doUpdateSet({
             cron_expression: config.cron,
             timezone: config.timezone,
             next_fire_at: nextFireAt,
@@ -118,18 +120,23 @@ export class SchedulesService {
         )
         .execute();
     }
-    const ids = bindings.map((binding) => binding.id);
+    const ids = bindings.map((binding) => binding.activationId);
     let stale = this.db
       .deleteFrom("schedule_bindings")
       .where(
-        "binding_id",
+        "activation_id",
         "in",
         this.db
-          .selectFrom("trigger_bindings")
-          .select("id")
-          .where("project_id", "=", projectId),
+          .selectFrom("workflow_enablement_triggers as activation")
+          .innerJoin(
+            "workflow_enablements as enablement",
+            "enablement.id",
+            "activation.enablement_id",
+          )
+          .select("activation.id")
+          .where("enablement.project_id", "=", projectId),
       );
-    if (ids.length > 0) stale = stale.where("binding_id", "not in", ids);
+    if (ids.length > 0) stale = stale.where("activation_id", "not in", ids);
     await stale.execute();
   }
 
@@ -138,12 +145,17 @@ export class SchedulesService {
       const due = await transaction
         .selectFrom("schedule_bindings")
         .innerJoin(
-          "trigger_bindings",
-          "trigger_bindings.id",
-          "schedule_bindings.binding_id",
+          "workflow_enablement_triggers as activation",
+          "activation.id",
+          "schedule_bindings.activation_id",
+        )
+        .innerJoin(
+          "workflow_enablements as enablement",
+          "enablement.id",
+          "activation.enablement_id",
         )
         .selectAll("schedule_bindings")
-        .where("trigger_bindings.project_id", "=", projectId)
+        .where("enablement.project_id", "=", projectId)
         .where("schedule_bindings.next_fire_at", "<=", now)
         .forUpdate("schedule_bindings")
         .skipLocked()
@@ -153,7 +165,7 @@ export class SchedulesService {
         await transaction
           .insertInto("schedule_occurrences")
           .values({
-            binding_id: row.binding_id,
+            activation_id: row.activation_id,
             scheduled_for: scheduledFor,
             next_attempt_at: now,
           })
@@ -173,7 +185,7 @@ export class SchedulesService {
             next_fire_at: nextRun(config, now),
             updated_at: now,
           })
-          .where("binding_id", "=", row.binding_id)
+          .where("activation_id", "=", row.activation_id)
           .execute();
       }
     });
@@ -187,7 +199,7 @@ export class SchedulesService {
     const occurrences = await this.claimPending(projectId, now);
     let enrolled = 0;
     for (const occurrence of occurrences) {
-      const correlationKey = `${occurrence.bindingId}:${occurrence.scheduledFor.toISOString()}`;
+      const correlationKey = `${occurrence.activationId}:${occurrence.scheduledFor.toISOString()}`;
       try {
         // A process can die after TriggersService durably inserts the run but
         // before this occurrence records the receipt. Look for that exact
@@ -211,11 +223,12 @@ export class SchedulesService {
           kind: "schedule",
           mode: "async",
           workflows: [occurrence.workflowName],
-          environment: occurrence.environment ?? undefined,
+          enablementIds: [occurrence.enablementId],
+          environment: occurrence.environment,
           correlationKey,
           onConflict: "ignore",
           payload: {
-            bindingId: occurrence.bindingId,
+            activationId: occurrence.activationId,
             scheduledFor: occurrence.scheduledFor.toISOString(),
             firedAt: now.toISOString(),
           },
@@ -240,7 +253,7 @@ export class SchedulesService {
             error: error instanceof Error ? error.message : String(error),
             updated_at: now,
           })
-          .where("binding_id", "=", occurrence.bindingId)
+          .where("activation_id", "=", occurrence.activationId)
           .where("scheduled_for", "=", occurrence.scheduledFor)
           .where("status", "=", "leased")
           .where("lease_owner", "=", this.workerId)
@@ -258,18 +271,29 @@ export class SchedulesService {
       const rows = await transaction
         .selectFrom("schedule_occurrences")
         .innerJoin(
-          "trigger_bindings",
-          "trigger_bindings.id",
-          "schedule_occurrences.binding_id",
+          "workflow_enablement_triggers as activation",
+          "activation.id",
+          "schedule_occurrences.activation_id",
+        )
+        .innerJoin(
+          "workflow_enablements as enablement",
+          "enablement.id",
+          "activation.enablement_id",
+        )
+        .innerJoin(
+          "trigger_definitions as definition",
+          "definition.id",
+          "activation.trigger_definition_id",
         )
         .select([
-          "schedule_occurrences.binding_id",
+          "schedule_occurrences.activation_id",
           "schedule_occurrences.scheduled_for",
           "schedule_occurrences.attempt_count",
-          "trigger_bindings.workflow_name",
-          "trigger_bindings.environment_name",
+          "activation.enablement_id",
+          "definition.workflow_name",
+          "enablement.environment_name",
         ])
-        .where("trigger_bindings.project_id", "=", projectId)
+        .where("enablement.project_id", "=", projectId)
         .where((expression) =>
           expression.or([
             expression.and([
@@ -298,12 +322,13 @@ export class SchedulesService {
             lease_expires_at: leaseExpiresAt,
             updated_at: now,
           })
-          .where("binding_id", "=", row.binding_id)
+          .where("activation_id", "=", row.activation_id)
           .where("scheduled_for", "=", row.scheduled_for)
           .execute();
       }
       return rows.map((row) => ({
-        bindingId: row.binding_id,
+        activationId: row.activation_id,
+        enablementId: row.enablement_id,
         scheduledFor: row.scheduled_for,
         workflowName: row.workflow_name,
         environment: row.environment_name,
@@ -328,7 +353,7 @@ export class SchedulesService {
         error: null,
         updated_at: now,
       })
-      .where("binding_id", "=", occurrence.bindingId)
+      .where("activation_id", "=", occurrence.activationId)
       .where("scheduled_for", "=", occurrence.scheduledFor)
       .where("status", "=", "leased")
       .where("lease_owner", "=", this.workerId)

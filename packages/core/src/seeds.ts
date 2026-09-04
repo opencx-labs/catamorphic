@@ -398,6 +398,8 @@ Access is enforced by the host from **roles you commit** as
   "description": "Customer success: their own customers, the handbook, the CSM assistant.",
   "agents": ["csm-assistant"],                 // or { "name": "…", "toolPolicies": { "slack": { "default": "ask" } } }
   "workflows": ["crm.lookup", "docs.search"],
+  "environments": ["local"],
+  "connections": ["gmail"],
   "apps": ["customer-tracker"],
   "documents": [
     "docs/**",                                                       // read the handbook
@@ -421,8 +423,21 @@ Rules of thumb when authoring roles:
   their exported name, apps by \`apps/<name>\`. A role may narrow an agent's
   tools with \`toolPolicies\` (allow / ask / deny per tool, per connector
   server key, or \`catamorphic\` for the project's own workflow tools).
+- A member sees a workflow only when a role grants its exported name. An
+  unattended workflow also needs role grants for its chosen Environment and
+  every declared connection alias. Grant the project agent too when the
+  workflow wakes that agent.
 - Keep roles few and readable; membership (who has which role and grants)
   is the host's, not a file here.
+
+Workflow code declares provider-neutral requirements in its top-level
+\`connections\` array. Roles decide who may use those aliases; the host decides
+which concrete providers satisfy them. Each member opens **Automate**, chooses
+**Enable for me**, reviews the pinned revision, Environment, actions, and
+triggers, then authenticates anything missing. When the member initiated that
+flow, the host may finish enabling automatically after the final required
+connection succeeds. Merely connecting an account never opts the member into
+every eligible workflow.
 
 Two more things members do without commit rights:
 
@@ -558,6 +573,64 @@ workflow to apps or editing \`workflows/src/app-api.ts\`. Key rules:
 The embedding host can define custom trigger kinds — "Ticket Created",
 "AI Tool Call", "Chat Turn" — and fire them with a payload; every
 workflow subscribed to that kind runs with the payload as input.
+
+Schedules use the built-in provider-neutral trigger kind:
+
+\`\`\`typescript
+trigger("schedule", { cron: "0 8 * * 1-5", timezone: "Asia/Amman" })
+\`\`\`
+
+The schedule is inert until a member enables the workflow. It then runs as
+that member with the exact Environment and connections they reviewed.
+
+## Required connections and agent notifications
+
+Declare every account an unattended workflow needs, even when a woken agent
+rather than a direct workflow step will use it. Aliases are provider-neutral;
+an authenticated MCP server is sufficient when it supplies the required
+actions.
+
+\`\`\`typescript
+type SchedulePayload = {
+  bindingId: string;
+  scheduledFor: string;
+  firedAt: string;
+};
+
+export const inboxSummary = defineWorkflow(({ defineBoundary }) => ({
+  connections: [
+    { alias: "gmail", principal: "member", capabilities: ["search", "read"] },
+  ],
+  triggers: [
+    trigger("schedule", { cron: "0 8 * * 1-5", timezone: "Asia/Amman" }),
+  ],
+  steps: [
+    defineBoundary({
+      run: async ({ input, host }: BoundaryContext<SchedulePayload>) =>
+        host["catamorphic.sessions"].wake({
+          key: "daily-inbox-summary",
+          agentSlug: "inbox-assistant",
+          title: "Daily inbox summary",
+          content:
+            "Review my Gmail inbox since the previous summary. Summarize what matters, call out anything urgent, and include useful links.",
+          notification: {
+            title: "Your inbox summary is ready",
+            body: "Open the chat to review it.",
+          },
+        }),
+    }),
+  ],
+}));
+\`\`\`
+
+\`wake\` creates or reuses one member-owned session for the stable \`key\`
+scoped to this workflow, queues the agent turn, and returns immediately. When
+the turn settles, desktop and PWA show a pulsing attention dot and push can
+deep-link to the same conversation. Opening it acknowledges the attention.
+The role must grant the workflow, \`inbox-assistant\`, its Environment, and
+\`gmail\`. Service-owned enablements cannot call \`wake\`; use an explicit
+member enablement for personal notifications. Use \`deliver\` instead when a
+workflow already has the exact session id.
 
 ## Temporary watchers
 

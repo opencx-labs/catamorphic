@@ -3689,6 +3689,945 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/projects/{projectId}/workflow-enablements": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: {
+            parameters: {
+                query?: {
+                    workflowName?: string;
+                };
+                header?: never;
+                path: {
+                    projectId: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Default Response */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            /** Format: uuid */
+                            projectId: string;
+                            workflowName: string;
+                            /** Format: uuid */
+                            deploymentArtifactId: string;
+                            commitSha: string;
+                            remoteBranch: string;
+                            environment: string;
+                            owner: {
+                                /** @enum {string} */
+                                type: "member";
+                                externalUserId: string;
+                            } | {
+                                /** @enum {string} */
+                                type: "service";
+                                /** @enum {string} */
+                                principalKind: "project_service" | "tenant_service";
+                                /** Format: uuid */
+                                connectionId: string;
+                            };
+                            connections: {
+                                alias: string;
+                                /** Format: uuid */
+                                bindingId: string;
+                                /** Format: uuid */
+                                connectionId: string;
+                                providerKind: string;
+                                /** @enum {string} */
+                                principalKind: "member" | "project_service" | "tenant_service";
+                                capabilities: string[];
+                            }[];
+                            capabilities: string[];
+                            consentDigest: string;
+                            /** Format: uuid */
+                            id: string;
+                            /** @enum {string} */
+                            status: "active" | "suspended" | "disabled";
+                            suspensionReason: string | null;
+                            updateAvailable: boolean;
+                            temporary: boolean;
+                            /** Format: date-time */
+                            expiresAt: string | null;
+                            revision: number;
+                            triggers: {
+                                /** Format: uuid */
+                                id: string;
+                                /** Format: uuid */
+                                definitionId: string;
+                                kind: string;
+                                config: unknown;
+                                /** @enum {string} */
+                                status: "active" | "paused";
+                            }[];
+                            /** Format: date-time */
+                            createdAt: string;
+                            /** Format: date-time */
+                            updatedAt: string;
+                        }[];
+                    };
+                };
+                /** @description Default Response */
+                503: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                        };
+                    };
+                };
+            };
+        };
+        put?: never;
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    projectId: string;
+                };
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": {
+                        workflowName: string;
+                        environment?: string;
+                        owner?: {
+                            /** @enum {string} */
+                            type: "member";
+                            externalUserId: string;
+                        } | {
+                            /** @enum {string} */
+                            type: "service";
+                            /** @enum {string} */
+                            principalKind: "project_service" | "tenant_service";
+                            /** Format: uuid */
+                            connectionId: string;
+                        };
+                        connectionSelections?: {
+                            [key: string]: string;
+                        };
+                        consentDigest: string;
+                    };
+                };
+            };
+            responses: {
+                /** @description Default Response */
+                201: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            /** Format: uuid */
+                            projectId: string;
+                            workflowName: string;
+                            /** Format: uuid */
+                            deploymentArtifactId: string;
+                            commitSha: string;
+                            remoteBranch: string;
+                            environment: string;
+                            owner: {
+                                /** @enum {string} */
+                                type: "member";
+                                externalUserId: string;
+                            } | {
+                                /** @enum {string} */
+                                type: "service";
+                                /** @enum {string} */
+                                principalKind: "project_service" | "tenant_service";
+                                /** Format: uuid */
+                                connectionId: string;
+                            };
+                            connections: {
+                                alias: string;
+                                /** Format: uuid */
+                                bindingId: string;
+                                /** Format: uuid */
+                                connectionId: string;
+                                providerKind: string;
+                                /** @enum {string} */
+                                principalKind: "member" | "project_service" | "tenant_service";
+                                capabilities: string[];
+                            }[];
+                            capabilities: string[];
+                            consentDigest: string;
+                            /** Format: uuid */
+                            id: string;
+                            /** @enum {string} */
+                            status: "active" | "suspended" | "disabled";
+                            suspensionReason: string | null;
+                            updateAvailable: boolean;
+                            temporary: boolean;
+                            /** Format: date-time */
+                            expiresAt: string | null;
+                            revision: number;
+                            triggers: {
+                                /** Format: uuid */
+                                id: string;
+                                /** Format: uuid */
+                                definitionId: string;
+                                kind: string;
+                                config: unknown;
+                                /** @enum {string} */
+                                status: "active" | "paused";
+                            }[];
+                            /** Format: date-time */
+                            createdAt: string;
+                            /** Format: date-time */
+                            updatedAt: string;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                409: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                428: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                            /** @enum {string} */
+                            code: "authentication_required";
+                            environment: string;
+                            requirements: {
+                                alias: string;
+                                providerKind: string;
+                                principalKinds: ("member" | "project_service" | "tenant_service")[];
+                            }[];
+                        };
+                    };
+                };
+                /** @description Default Response */
+                503: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                        };
+                    };
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/projects/{projectId}/workflow-enablement-preview": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    projectId: string;
+                };
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": {
+                        workflowName: string;
+                        environment?: string;
+                        owner?: {
+                            /** @enum {string} */
+                            type: "member";
+                            externalUserId: string;
+                        } | {
+                            /** @enum {string} */
+                            type: "service";
+                            /** @enum {string} */
+                            principalKind: "project_service" | "tenant_service";
+                            /** Format: uuid */
+                            connectionId: string;
+                        };
+                        connectionSelections?: {
+                            [key: string]: string;
+                        };
+                    };
+                };
+            };
+            responses: {
+                /** @description Default Response */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            /** Format: uuid */
+                            projectId: string;
+                            workflowName: string;
+                            /** Format: uuid */
+                            deploymentArtifactId: string;
+                            commitSha: string;
+                            remoteBranch: string;
+                            environment: string;
+                            owner: {
+                                /** @enum {string} */
+                                type: "member";
+                                externalUserId: string;
+                            } | {
+                                /** @enum {string} */
+                                type: "service";
+                                /** @enum {string} */
+                                principalKind: "project_service" | "tenant_service";
+                                /** Format: uuid */
+                                connectionId: string;
+                            };
+                            connections: {
+                                alias: string;
+                                /** Format: uuid */
+                                bindingId: string;
+                                /** Format: uuid */
+                                connectionId: string;
+                                providerKind: string;
+                                /** @enum {string} */
+                                principalKind: "member" | "project_service" | "tenant_service";
+                                capabilities: string[];
+                            }[];
+                            capabilities: string[];
+                            consentDigest: string;
+                            deploymentArtifactDigest: string;
+                            triggerCount: number;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                409: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                428: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                            /** @enum {string} */
+                            code: "authentication_required";
+                            environment: string;
+                            requirements: {
+                                alias: string;
+                                providerKind: string;
+                                principalKinds: ("member" | "project_service" | "tenant_service")[];
+                            }[];
+                        };
+                    };
+                };
+                /** @description Default Response */
+                503: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                        };
+                    };
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/projects/{projectId}/workflow-enablements/{enablementId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    projectId: string;
+                    enablementId: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Default Response */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            /** Format: uuid */
+                            projectId: string;
+                            workflowName: string;
+                            /** Format: uuid */
+                            deploymentArtifactId: string;
+                            commitSha: string;
+                            remoteBranch: string;
+                            environment: string;
+                            owner: {
+                                /** @enum {string} */
+                                type: "member";
+                                externalUserId: string;
+                            } | {
+                                /** @enum {string} */
+                                type: "service";
+                                /** @enum {string} */
+                                principalKind: "project_service" | "tenant_service";
+                                /** Format: uuid */
+                                connectionId: string;
+                            };
+                            connections: {
+                                alias: string;
+                                /** Format: uuid */
+                                bindingId: string;
+                                /** Format: uuid */
+                                connectionId: string;
+                                providerKind: string;
+                                /** @enum {string} */
+                                principalKind: "member" | "project_service" | "tenant_service";
+                                capabilities: string[];
+                            }[];
+                            capabilities: string[];
+                            consentDigest: string;
+                            /** Format: uuid */
+                            id: string;
+                            /** @enum {string} */
+                            status: "active" | "suspended" | "disabled";
+                            suspensionReason: string | null;
+                            updateAvailable: boolean;
+                            temporary: boolean;
+                            /** Format: date-time */
+                            expiresAt: string | null;
+                            revision: number;
+                            triggers: {
+                                /** Format: uuid */
+                                id: string;
+                                /** Format: uuid */
+                                definitionId: string;
+                                kind: string;
+                                config: unknown;
+                                /** @enum {string} */
+                                status: "active" | "paused";
+                            }[];
+                            /** Format: date-time */
+                            createdAt: string;
+                            /** Format: date-time */
+                            updatedAt: string;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                        };
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/projects/{projectId}/workflow-enablements/{enablementId}/disable": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    projectId: string;
+                    enablementId: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Default Response */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            /** Format: uuid */
+                            projectId: string;
+                            workflowName: string;
+                            /** Format: uuid */
+                            deploymentArtifactId: string;
+                            commitSha: string;
+                            remoteBranch: string;
+                            environment: string;
+                            owner: {
+                                /** @enum {string} */
+                                type: "member";
+                                externalUserId: string;
+                            } | {
+                                /** @enum {string} */
+                                type: "service";
+                                /** @enum {string} */
+                                principalKind: "project_service" | "tenant_service";
+                                /** Format: uuid */
+                                connectionId: string;
+                            };
+                            connections: {
+                                alias: string;
+                                /** Format: uuid */
+                                bindingId: string;
+                                /** Format: uuid */
+                                connectionId: string;
+                                providerKind: string;
+                                /** @enum {string} */
+                                principalKind: "member" | "project_service" | "tenant_service";
+                                capabilities: string[];
+                            }[];
+                            capabilities: string[];
+                            consentDigest: string;
+                            /** Format: uuid */
+                            id: string;
+                            /** @enum {string} */
+                            status: "active" | "suspended" | "disabled";
+                            suspensionReason: string | null;
+                            updateAvailable: boolean;
+                            temporary: boolean;
+                            /** Format: date-time */
+                            expiresAt: string | null;
+                            revision: number;
+                            triggers: {
+                                /** Format: uuid */
+                                id: string;
+                                /** Format: uuid */
+                                definitionId: string;
+                                kind: string;
+                                config: unknown;
+                                /** @enum {string} */
+                                status: "active" | "paused";
+                            }[];
+                            /** Format: date-time */
+                            createdAt: string;
+                            /** Format: date-time */
+                            updatedAt: string;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                409: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                        };
+                    };
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/projects/{projectId}/workflow-enablements/{enablementId}/reenable": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    projectId: string;
+                    enablementId: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Default Response */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            /** Format: uuid */
+                            projectId: string;
+                            workflowName: string;
+                            /** Format: uuid */
+                            deploymentArtifactId: string;
+                            commitSha: string;
+                            remoteBranch: string;
+                            environment: string;
+                            owner: {
+                                /** @enum {string} */
+                                type: "member";
+                                externalUserId: string;
+                            } | {
+                                /** @enum {string} */
+                                type: "service";
+                                /** @enum {string} */
+                                principalKind: "project_service" | "tenant_service";
+                                /** Format: uuid */
+                                connectionId: string;
+                            };
+                            connections: {
+                                alias: string;
+                                /** Format: uuid */
+                                bindingId: string;
+                                /** Format: uuid */
+                                connectionId: string;
+                                providerKind: string;
+                                /** @enum {string} */
+                                principalKind: "member" | "project_service" | "tenant_service";
+                                capabilities: string[];
+                            }[];
+                            capabilities: string[];
+                            consentDigest: string;
+                            /** Format: uuid */
+                            id: string;
+                            /** @enum {string} */
+                            status: "active" | "suspended" | "disabled";
+                            suspensionReason: string | null;
+                            updateAvailable: boolean;
+                            temporary: boolean;
+                            /** Format: date-time */
+                            expiresAt: string | null;
+                            revision: number;
+                            triggers: {
+                                /** Format: uuid */
+                                id: string;
+                                /** Format: uuid */
+                                definitionId: string;
+                                kind: string;
+                                config: unknown;
+                                /** @enum {string} */
+                                status: "active" | "paused";
+                            }[];
+                            /** Format: date-time */
+                            createdAt: string;
+                            /** Format: date-time */
+                            updatedAt: string;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                409: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                        };
+                    };
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/projects/{projectId}/workflow-enablements/{enablementId}/update-deployment": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    projectId: string;
+                    enablementId: string;
+                };
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": {
+                        consentDigest: string;
+                    };
+                };
+            };
+            responses: {
+                /** @description Default Response */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            /** Format: uuid */
+                            projectId: string;
+                            workflowName: string;
+                            /** Format: uuid */
+                            deploymentArtifactId: string;
+                            commitSha: string;
+                            remoteBranch: string;
+                            environment: string;
+                            owner: {
+                                /** @enum {string} */
+                                type: "member";
+                                externalUserId: string;
+                            } | {
+                                /** @enum {string} */
+                                type: "service";
+                                /** @enum {string} */
+                                principalKind: "project_service" | "tenant_service";
+                                /** Format: uuid */
+                                connectionId: string;
+                            };
+                            connections: {
+                                alias: string;
+                                /** Format: uuid */
+                                bindingId: string;
+                                /** Format: uuid */
+                                connectionId: string;
+                                providerKind: string;
+                                /** @enum {string} */
+                                principalKind: "member" | "project_service" | "tenant_service";
+                                capabilities: string[];
+                            }[];
+                            capabilities: string[];
+                            consentDigest: string;
+                            /** Format: uuid */
+                            id: string;
+                            /** @enum {string} */
+                            status: "active" | "suspended" | "disabled";
+                            suspensionReason: string | null;
+                            updateAvailable: boolean;
+                            temporary: boolean;
+                            /** Format: date-time */
+                            expiresAt: string | null;
+                            revision: number;
+                            triggers: {
+                                /** Format: uuid */
+                                id: string;
+                                /** Format: uuid */
+                                definitionId: string;
+                                kind: string;
+                                config: unknown;
+                                /** @enum {string} */
+                                status: "active" | "paused";
+                            }[];
+                            /** Format: date-time */
+                            createdAt: string;
+                            /** Format: date-time */
+                            updatedAt: string;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                409: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                428: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                            /** @enum {string} */
+                            code: "authentication_required";
+                            environment: string;
+                            requirements: {
+                                alias: string;
+                                providerKind: string;
+                                principalKinds: ("member" | "project_service" | "tenant_service")[];
+                            }[];
+                        };
+                    };
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/trigger-kinds": {
         parameters: {
             query?: never;
@@ -5105,6 +6044,9 @@ export interface paths {
                                 /** Format: date-time */
                                 pausedAt: string | null;
                                 running: boolean;
+                                attentionRevision: number;
+                                attentionSeenRevision: number;
+                                attentionRequired: boolean;
                                 baseCommitSha: string | null;
                                 /** Format: date-time */
                                 createdAt: string;
@@ -5199,6 +6141,9 @@ export interface paths {
                             /** Format: date-time */
                             pausedAt: string | null;
                             running: boolean;
+                            attentionRevision: number;
+                            attentionSeenRevision: number;
+                            attentionRequired: boolean;
                             baseCommitSha: string | null;
                             /** Format: date-time */
                             createdAt: string;
@@ -5441,6 +6386,9 @@ export interface paths {
                             /** Format: date-time */
                             pausedAt: string | null;
                             running: boolean;
+                            attentionRevision: number;
+                            attentionSeenRevision: number;
+                            attentionRequired: boolean;
                             baseCommitSha: string | null;
                             /** Format: date-time */
                             createdAt: string;
@@ -5619,6 +6567,9 @@ export interface paths {
                             /** Format: date-time */
                             pausedAt: string | null;
                             running: boolean;
+                            attentionRevision: number;
+                            attentionSeenRevision: number;
+                            attentionRequired: boolean;
                             baseCommitSha: string | null;
                             /** Format: date-time */
                             createdAt: string;
@@ -5736,6 +6687,9 @@ export interface paths {
                             /** Format: date-time */
                             pausedAt: string | null;
                             running: boolean;
+                            attentionRevision: number;
+                            attentionSeenRevision: number;
+                            attentionRequired: boolean;
                             baseCommitSha: string | null;
                             /** Format: date-time */
                             createdAt: string;
@@ -5893,6 +6847,9 @@ export interface paths {
                             /** Format: date-time */
                             pausedAt: string | null;
                             running: boolean;
+                            attentionRevision: number;
+                            attentionSeenRevision: number;
+                            attentionRequired: boolean;
                             baseCommitSha: string | null;
                             /** Format: date-time */
                             createdAt: string;
@@ -5997,6 +6954,9 @@ export interface paths {
                             /** Format: date-time */
                             pausedAt: string | null;
                             running: boolean;
+                            attentionRevision: number;
+                            attentionSeenRevision: number;
+                            attentionRequired: boolean;
                             baseCommitSha: string | null;
                             /** Format: date-time */
                             createdAt: string;
@@ -6098,6 +7058,117 @@ export interface paths {
                 };
             };
         };
+        trace?: never;
+    };
+    "/api/projects/{projectId}/agent/sessions/{sessionId}/attention/acknowledge": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    projectId: string;
+                    sessionId: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Default Response */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            /** Format: uuid */
+                            id: string;
+                            /** Format: uuid */
+                            projectId: string;
+                            externalUserId: string;
+                            provider: string;
+                            providerSessionId: string | null;
+                            /** Format: uuid */
+                            sandboxId: string | null;
+                            environment: string | null;
+                            /** Format: uuid */
+                            allocationId: string | null;
+                            agentId: string | null;
+                            /** @enum {string|null} */
+                            modelEffort: "low" | "medium" | "high" | "xhigh" | "max" | null;
+                            title: string | null;
+                            icon: string | null;
+                            /** Format: uuid */
+                            parentSessionId: string | null;
+                            /** @enum {string} */
+                            status: "active" | "closed";
+                            activity: string | null;
+                            todos: {
+                                /** Format: uuid */
+                                id: string;
+                                title: string;
+                                description: string;
+                                /** @enum {string} */
+                                status: "pending" | "in_progress" | "completed";
+                            }[];
+                            authorityHostId: string;
+                            authorityRevision: number;
+                            /** Format: date-time */
+                            authoritySeenAt: string | null;
+                            mirrorMessageCount: number;
+                            /** @enum {string} */
+                            handoffStatus: "none" | "pending";
+                            handoffDestinationHostId: string | null;
+                            resumable: boolean;
+                            /** Format: date-time */
+                            pausedAt: string | null;
+                            running: boolean;
+                            attentionRevision: number;
+                            attentionSeenRevision: number;
+                            attentionRequired: boolean;
+                            baseCommitSha: string | null;
+                            /** Format: date-time */
+                            createdAt: string;
+                            /** Format: date-time */
+                            updatedAt: string;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                503: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                        };
+                    };
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
         trace?: never;
     };
     "/api/projects/{projectId}/agent/sessions/{sessionId}/peers": {
@@ -6729,6 +7800,9 @@ export interface paths {
                             /** Format: date-time */
                             pausedAt: string | null;
                             running: boolean;
+                            attentionRevision: number;
+                            attentionSeenRevision: number;
+                            attentionRequired: boolean;
                             baseCommitSha: string | null;
                             /** Format: date-time */
                             createdAt: string;

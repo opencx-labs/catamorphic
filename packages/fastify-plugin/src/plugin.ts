@@ -30,6 +30,7 @@ import { registerRunRoutes } from "./routes/runs.js";
 import { registerSessionMailboxRoutes } from "./routes/session-mailboxes.js";
 import { registerTriggerRoutes } from "./routes/triggers.js";
 import { registerWatcherRoutes } from "./routes/watchers.js";
+import { registerWorkflowEnablementRoutes } from "./routes/workflow-enablements.js";
 import { registerWorkflowRoutes } from "./routes/workflows.js";
 
 export interface CatamorphicPluginOptions {
@@ -170,6 +171,7 @@ export const catamorphicPlugin: FastifyPluginAsync<
   registerConnectionRoutes(app, ctx);
   registerConnectionMcpRoutes(app, ctx);
   registerWorkflowRoutes(app, ctx);
+  registerWorkflowEnablementRoutes(app, ctx);
   registerTriggerRoutes(app, ctx);
   registerRunRoutes(app, ctx);
   registerAgentRoutes(app, ctx);

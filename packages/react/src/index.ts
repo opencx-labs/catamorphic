@@ -19,6 +19,7 @@ export {
   selectedNodeIdAtom,
   showRunDialogAtom,
 } from "./atoms.js";
+export { useAcknowledgeAgentSessionAttention } from "./hooks/use-acknowledge-agent-session-attention.js";
 export {
   type AgentAuthenticationRequired,
   type OptimisticAgentMessage,
@@ -201,6 +202,16 @@ export {
   type UseWorkflowOptions,
   useWorkflow,
 } from "./hooks/use-workflow.js";
+export {
+  useCreateWorkflowEnablement,
+  usePreviewWorkflowEnablement,
+  useUpdateWorkflowEnablement,
+  useWorkflowEnablements,
+  type WorkflowEnablement,
+  type WorkflowEnablementInput,
+  type WorkflowEnablementPreview,
+  workflowEnablementKeys,
+} from "./hooks/use-workflow-enablements.js";
 // Canvas / graph state
 export type {
   OnParseCallback,

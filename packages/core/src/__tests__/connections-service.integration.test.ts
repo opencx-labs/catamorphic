@@ -3,7 +3,7 @@ import { type DB, DEFAULT_SCHEMA, migrateToLatest } from "@catamorphic/db";
 import { PGlite } from "@electric-sql/pglite";
 import { pgcrypto } from "@electric-sql/pglite/contrib/pgcrypto";
 import { Kysely, PGliteDialect, WithSchemaPlugin } from "kysely";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import type { Identity } from "../identity.js";
 import { ConnectionBroker } from "../services/connection-broker.js";
 import { ConnectionCapabilityGrantsService } from "../services/connection-capability-grants.js";
@@ -17,6 +17,7 @@ import {
 } from "../services/connections-service.js";
 import { MemoryCredentialVault } from "../services/credential-vault.js";
 import { ExecutionAllocationsService } from "../services/execution-allocations-service.js";
+import type { WorkflowEnablementsService } from "../services/workflow-enablements-service.js";
 
 const pglite = new PGlite({ extensions: { pgcrypto } });
 const db = new Kysely<DB>({
@@ -352,6 +353,61 @@ describe("credential connections", () => {
     expect(deniedInvocation).not.toHaveProperty("input");
     expect(allowedInvocation).not.toHaveProperty("arguments");
     expect(deniedInvocation).not.toHaveProperty("arguments");
+  });
+
+  it("revalidates an enablement before every brokered action", async () => {
+    const [resolved] = await connections.resolve({
+      identity: member,
+      projectId,
+      environment: "company",
+      aliases: ["directory"],
+      principalsByAlias: { directory: "service" },
+    });
+    const enablementId = crypto.randomUUID();
+    const allocation = await allocations.create({
+      identity: member,
+      projectId,
+      environmentName: "company",
+      workloadKind: "workflow",
+      rootWorkloadId: crypto.randomUUID(),
+      policy: {
+        binding: {
+          id: "managed",
+          label: "Managed",
+          trust: "managed",
+          isolation: "sandbox",
+          workloads: ["workflow"],
+          agentTopologies: [],
+          capabilities: ["network.egress"],
+          resources: {},
+        },
+        requirements: { workload: "workflow" },
+        connections: [resolved!],
+        workflowEnablementId: enablementId,
+      },
+    });
+    const revalidate = vi.fn(async () => {
+      throw new Error("connection revoked");
+    });
+    const guardedBroker = new ConnectionBroker(
+      connections,
+      providers,
+      allocations,
+      () => ({ revalidate }) as unknown as WorkflowEnablementsService,
+    );
+    const invocationsBefore = decodedMaterials.length;
+
+    await expect(
+      guardedBroker.invoke({
+        identity: member,
+        allocationId: allocation.id,
+        alias: "directory",
+        action: "users.list",
+        input: {},
+      }),
+    ).rejects.toThrow("Workflow enablement authority is unavailable");
+    expect(revalidate).toHaveBeenCalledWith({ identity: member, enablementId });
+    expect(decodedMaterials).toHaveLength(invocationsBefore);
   });
 
   it("refreshes with compare-and-swap and revokes locally when upstream fails", async () => {

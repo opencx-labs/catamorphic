@@ -190,7 +190,7 @@ describe.skipIf(!chromeBinary())("pwa against the stock server", () => {
     await app.eval(
       TYPE_INPUT("input[name=password]", "member password for browser test"),
     );
-    await app.eval(CLICK("form#local button"));
+    await app.eval(CLICK('form#local button[type="submit"]'));
     try {
       await app.waitFor("!!document.querySelector('[data-testid=new-chat]')", {
         timeoutMs: 30_000,

@@ -33,6 +33,9 @@ import type {
   TriggerMode,
   TriggerProductionRunInput,
   UpdateProjectInput,
+  WorkflowEnablement,
+  WorkflowEnablementOwner,
+  WorkflowEnablementPreview,
   WriteFileInput,
 } from "@catamorphic/core";
 import type { Json } from "@catamorphic/db";
@@ -82,6 +85,42 @@ export interface WorkflowsResource {
     workflowName: string;
     ref?: string;
   }): Promise<WorkflowDetail>;
+}
+
+export interface WorkflowEnablementsResource {
+  preview(args: {
+    projectId: string;
+    workflowName: string;
+    environment?: string;
+    owner?: WorkflowEnablementOwner;
+    connectionSelections?: Readonly<Record<string, string>>;
+    commitSha?: string;
+    remoteBranch?: string;
+  }): Promise<WorkflowEnablementPreview>;
+  create(args: {
+    projectId: string;
+    workflowName: string;
+    environment?: string;
+    owner?: WorkflowEnablementOwner;
+    connectionSelections?: Readonly<Record<string, string>>;
+    commitSha?: string;
+    remoteBranch?: string;
+    consentDigest: string;
+    temporary?: boolean;
+    expiresAt?: Date;
+  }): Promise<WorkflowEnablement>;
+  list(args: {
+    projectId: string;
+    workflowName?: string;
+    includeAll?: boolean;
+  }): Promise<WorkflowEnablement[]>;
+  get(args: { enablementId: string }): Promise<WorkflowEnablement>;
+  disable(args: { enablementId: string }): Promise<WorkflowEnablement>;
+  reenable(args: { enablementId: string }): Promise<WorkflowEnablement>;
+  updateDeployment(args: {
+    enablementId: string;
+    consentDigest: string;
+  }): Promise<WorkflowEnablement>;
 }
 
 export interface FilesResource {
@@ -304,6 +343,23 @@ function buildRuns(core: CatamorphicCore, identity: Identity): RunsResource {
   };
 }
 
+function buildWorkflowEnablements(
+  core: CatamorphicCore,
+  identity: Identity,
+): WorkflowEnablementsResource {
+  return {
+    preview: (args) => core.workflowEnablements.preview({ ...args, identity }),
+    create: (args) => core.workflowEnablements.create({ ...args, identity }),
+    list: (args) => core.workflowEnablements.list({ ...args, identity }),
+    get: (args) => core.workflowEnablements.get({ ...args, identity }),
+    disable: (args) => core.workflowEnablements.disable({ ...args, identity }),
+    reenable: (args) =>
+      core.workflowEnablements.reenable({ ...args, identity }),
+    updateDeployment: (args) =>
+      core.workflowEnablements.updateDeployment({ ...args, identity }),
+  };
+}
+
 /**
  * Catamorphic client bound to a specific host org + host user. Produced by
  * `Catamorphic#forTenant({ tenantId }).forUser({ externalUserId })`. Every call
@@ -313,6 +369,7 @@ function buildRuns(core: CatamorphicCore, identity: Identity): RunsResource {
 export class ScopedClient {
   readonly projects: ProjectsResource;
   readonly workflows: WorkflowsResource;
+  readonly workflowEnablements: WorkflowEnablementsResource;
   readonly files: FilesResource;
   readonly runs: RunsResource;
   readonly triggers: TriggersResource;
@@ -324,6 +381,7 @@ export class ScopedClient {
   ) {
     this.projects = buildProjects(core, identity);
     this.workflows = buildWorkflows(core, identity);
+    this.workflowEnablements = buildWorkflowEnablements(core, identity);
     this.files = buildFiles(core, identity);
     this.runs = buildRuns(core, identity);
     this.triggers = buildTriggers(core, identity);

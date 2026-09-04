@@ -96,8 +96,12 @@ function startFakeServer(): Promise<void> {
       const redirect = new URL(url.searchParams.get("redirect_uri") ?? "");
       redirect.searchParams.set("code", "desktop-e2e-code");
       redirect.searchParams.set("state", url.searchParams.get("state") ?? "");
-      res.writeHead(302, { location: redirect.toString() });
-      res.end();
+      // Leave the authorization URL visible long enough to prove that the
+      // desktop opened its own browser tab before completing the callback.
+      setTimeout(() => {
+        res.writeHead(302, { location: redirect.toString() });
+        res.end();
+      }, 500);
       return;
     }
     if (req.method === "POST" && url.pathname === "/api/auth/mcp/token") {
@@ -289,9 +293,7 @@ describe("remote projects (ADR 0055)", () => {
 
   beforeAll(async () => {
     await startFakeServer();
-    app = await launchApp({
-      env: { CATAMORPHIC_E2E_FOLLOW_REMOTE_AUTH: "1" },
-    });
+    app = await launchApp();
   }, 120_000);
 
   afterAll(async () => {
@@ -317,9 +319,9 @@ describe("remote projects (ADR 0055)", () => {
       `setReactValue($('[data-testid="remote-link-input"]'), ${JSON.stringify(link)}); return true;`,
     );
     await runWait(
-      `return $('[data-testid="remote-server-input"]').value.length > 0 && $('[data-testid="remote-name-input"]').value === 'Acme brain';`,
+      `return $('[data-testid="remote-link-summary"]')?.innerText.includes('Acme brain') && !document.querySelector('[data-testid="remote-server-input"]') && !document.querySelector('[data-testid="remote-project-input"]');`,
       {
-        label: "link parsed into fields",
+        label: "link parsed without duplicate fields",
       },
     );
     await runWait(
@@ -327,6 +329,10 @@ describe("remote projects (ADR 0055)", () => {
       {
         label: "connect submit",
       },
+    );
+    await runWait(
+      `return $$('webview').some((view) => (view.src ?? '').includes('/api/auth/mcp/authorize'));`,
+      { timeoutMs: 30_000, label: "remote sign-in in workspace browser tab" },
     );
 
     // The Server section shows for the connected project.
