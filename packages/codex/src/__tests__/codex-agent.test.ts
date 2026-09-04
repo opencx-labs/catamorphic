@@ -254,6 +254,41 @@ describe("CodexAgent", () => {
     );
   });
 
+  it("aborts an in-flight SDK turn when the host interrupts it", async () => {
+    let turnSignal: AbortSignal | undefined;
+    startThread.mockReturnValueOnce({
+      runStreamed: async (
+        _input: unknown,
+        options?: { signal?: AbortSignal },
+      ) => {
+        turnSignal = options?.signal;
+        return {
+          events: (async function* () {
+            await new Promise<void>((_resolve, reject) => {
+              options?.signal?.addEventListener("abort", () => {
+                reject(new Error("Turn aborted"));
+              });
+            });
+          })(),
+        };
+      },
+    });
+    const agent = new CodexAgent();
+
+    const collecting = collect(agent, "Keep working", {
+      ...session,
+      providerSessionId: null,
+    });
+    await vi.waitFor(() => expect(turnSignal).toBeDefined());
+    agent.interrupt("chat-1");
+
+    await expect(collecting).resolves.toEqual([
+      { type: "error", content: "Turn aborted" },
+      { type: "done" },
+    ]);
+    expect(turnSignal?.aborted).toBe(true);
+  });
+
   it("reads a live server source at every spawn (rotated token, no rebuild)", async () => {
     let token = "Bearer old";
     const agent = new CodexAgent({

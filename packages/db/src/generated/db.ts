@@ -143,7 +143,6 @@ export interface AgentSessionViews {
   previous_visibility: Generated<string>;
   session_id: string;
   tenant_id: string;
-  unread: Generated<boolean>;
   updated_at: Generated<Timestamp>;
   visibility: Generated<string>;
 }

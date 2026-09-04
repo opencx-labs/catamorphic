@@ -29,6 +29,7 @@ import { testEnvironmentProvider } from "./test-environment.js";
 class DeferredProvider implements CodingAgentProvider {
   readonly name = "deferred";
   private releaseSlow: (() => void) | undefined;
+  private transientAttempts = 0;
   slowStarted: Promise<void> = Promise.resolve();
   private markSlowStarted: (() => void) | undefined;
   switchCheckout?: (session: ProviderSession) => string;
@@ -51,6 +52,18 @@ class DeferredProvider implements CodingAgentProvider {
     session: ProviderSession,
     message: string,
   ): AsyncIterable<AgentEvent> {
+    if (message.includes("Recover delegated work")) {
+      this.transientAttempts += 1;
+      if (this.transientAttempts === 1) {
+        yield {
+          type: "error",
+          content: "Temporarily unavailable",
+          errorKind: "unavailable",
+        };
+        yield { type: "done" };
+        return;
+      }
+    }
     if (message.includes("Prepare the Globex renewal deck")) {
       this.markSlowStarted?.();
       await new Promise<void>((resolve) => {
@@ -73,6 +86,10 @@ class DeferredProvider implements CodingAgentProvider {
   release(): void {
     this.releaseSlow?.();
     this.resetSlow();
+  }
+
+  interrupt(): void {
+    this.release();
   }
 
   async dispose(): Promise<void> {}
@@ -314,6 +331,20 @@ describe("agent session coordination", () => {
     ).toMatchObject({ visibility: "promoted" });
   });
 
+  it("inherits the parent agent for a manually created subsession", async () => {
+    const project = await projects.create(identity, {
+      name: "Manual subsession agent",
+    });
+    const parent = await sessions.create(identity, project.id, {
+      agentId: "small",
+    });
+    const child = await sessions.create(identity, project.id, {
+      parentSessionId: parent.id,
+    });
+
+    expect(child.agentId).toBe("small");
+  });
+
   it("enforces delegation routes, concurrency, onward grants, and privilege ceilings", async () => {
     const project = await projects.create(identity, {
       name: "Delegation policy",
@@ -321,23 +352,39 @@ describe("agent session coordination", () => {
     const parent = await sessions.create(identity, project.id, {
       agentId: "orchestrator",
     });
-    const child = await sessions.createSubsession(
-      identity,
-      project.id,
-      parent.id,
-      {
-        routeId: "small-only",
-        task: "Prepare the Globex renewal deck",
-      },
-    );
-    await provider.slowStarted;
-
-    await expect(
+    const attempts = await Promise.allSettled([
       sessions.createSubsession(identity, project.id, parent.id, {
         routeId: "small-only",
-        task: "Second concurrent task",
+        task: "Prepare the Globex renewal deck A",
       }),
-    ).rejects.toThrow(/already has 1 active subsessions/);
+      sessions.createSubsession(identity, project.id, parent.id, {
+        routeId: "small-only",
+        task: "Prepare the Globex renewal deck B",
+      }),
+    ]);
+    const accepted = attempts.filter(
+      (
+        result,
+      ): result is PromiseFulfilledResult<
+        Awaited<ReturnType<typeof sessions.createSubsession>>
+      > => result.status === "fulfilled",
+    );
+    const rejected = attempts.filter((result) => result.status === "rejected");
+    expect(accepted).toHaveLength(1);
+    expect(rejected).toHaveLength(1);
+    expect(rejected[0]).toMatchObject({
+      reason: expect.objectContaining({
+        message: expect.stringMatching(/already has 1 active subsessions/),
+      }),
+    });
+    const child = accepted[0]!.value;
+    await provider.slowStarted;
+    const parentRow = await db
+      .selectFrom("agent_sessions")
+      .select("system_prompt")
+      .where("id", "=", parent.id)
+      .executeTakeFirstOrThrow();
+    expect(parentRow.system_prompt).toContain("small-only: small");
     await expect(
       sessions.createSubsession(identity, project.id, parent.id, {
         routeId: "any-lower",
@@ -358,6 +405,14 @@ describe("agent session coordination", () => {
         task: "Delegate again",
       }),
     ).rejects.toThrow(/not allowed to delegate further/);
+    const childRow = await db
+      .selectFrom("agent_sessions")
+      .select("system_prompt")
+      .where("id", "=", child.session.id)
+      .executeTakeFirstOrThrow();
+    expect(childRow.system_prompt).toContain(
+      "Delegation is disabled for this subsession",
+    );
 
     const trusted = await sessions.createSubsession(
       identity,
@@ -371,12 +426,65 @@ describe("agent session coordination", () => {
     expect(trusted.session.agentId).toBe("builder");
   });
 
+  it("keeps a delegation active across a transient child failure", async () => {
+    const project = await projects.create(identity, {
+      name: "Delegation retry",
+    });
+    const parent = await sessions.create(identity, project.id);
+    const child = await sessions.createSubsession(
+      identity,
+      project.id,
+      parent.id,
+      { task: "Recover delegated work" },
+    );
+    try {
+      await vi.waitFor(async () => {
+        const detail = await sessions.get(
+          identity,
+          project.id,
+          child.session.id,
+        );
+        expect(detail.running).toBe(false);
+        expect(detail.messages.at(-1)?.metadata).toMatchObject({
+          status: "failed",
+          errorKind: "unavailable",
+        });
+      });
+      expect(
+        (await sessions.listSubsessions(identity, project.id, parent.id))[0]
+          ?.status,
+      ).toBe("running");
+
+      await sessions.retry(identity, project.id, child.session.id);
+      await vi.waitFor(async () => {
+        expect(
+          (await sessions.listSubsessions(identity, project.id, parent.id))[0]
+            ?.status,
+        ).toBe("completed");
+        expect(
+          (await sessions.get(identity, project.id, parent.id)).running,
+        ).toBe(false);
+      });
+    } finally {
+      await sessions.interrupt(identity, project.id, child.session.id, {
+        notifyParent: false,
+      });
+    }
+  });
+
   it("archives a whole session tree and confirms only when live resources stop", async () => {
     const project = await projects.create(identity, { name: "Archive tree" });
     const parent = await sessions.create(identity, project.id);
     const child = await sessions.create(identity, project.id, {
       parentSessionId: parent.id,
     });
+    const runningChild = await sessions.createSubsession(
+      identity,
+      project.id,
+      parent.id,
+      { task: "Prepare the Globex renewal deck before archiving" },
+    );
+    await provider.slowStarted;
     const stop = vi.fn(async () => {});
     sessions.setArchiveResourcesHandler({
       impact: async () => ({ activeProcessCount: 1 }),
@@ -387,7 +495,12 @@ describe("agent session coordination", () => {
       sessions.archive(identity, project.id, parent.id),
     ).rejects.toMatchObject({
       impact: expect.objectContaining({
-        sessionIds: expect.arrayContaining([parent.id, child.id]),
+        sessionIds: expect.arrayContaining([
+          parent.id,
+          child.id,
+          runningChild.session.id,
+        ]),
+        runningSessionIds: [runningChild.session.id],
         activeProcessCount: 1,
         requiresConfirmation: true,
       }),
@@ -409,14 +522,28 @@ describe("agent session coordination", () => {
           status: "active",
           visibility: "archived",
         }),
+        expect.objectContaining({
+          id: runningChild.session.id,
+          status: "active",
+          visibility: "archived",
+        }),
       ]),
     );
+    expect(
+      (
+        await sessions.get(identity, project.id, runningChild.session.id)
+      ).messages.at(-1)?.metadata,
+    ).toMatchObject({ status: "failed", interrupted: true });
 
     const restored = await sessions.unarchive(identity, project.id, parent.id);
     expect(restored).toEqual(
       expect.arrayContaining([
         expect.objectContaining({ id: parent.id, visibility: "promoted" }),
         expect.objectContaining({ id: child.id, visibility: "promoted" }),
+        expect.objectContaining({
+          id: runningChild.session.id,
+          visibility: "latent",
+        }),
       ]),
     );
     sessions.setArchiveResourcesHandler({
@@ -425,6 +552,39 @@ describe("agent session coordination", () => {
     });
     const idleArchive = await sessions.archive(identity, project.id, parent.id);
     expect(idleArchive.impact.requiresConfirmation).toBe(false);
+
+    const notifyProject = await projects.create(identity, {
+      name: "Archive child notification",
+    });
+    const notifyParent = await sessions.create(identity, notifyProject.id);
+    const notifyChild = await sessions.createSubsession(
+      identity,
+      notifyProject.id,
+      notifyParent.id,
+      { task: "Prepare the Globex renewal deck until archived" },
+    );
+    await provider.slowStarted;
+    await sessions.archive(identity, notifyProject.id, notifyChild.session.id, {
+      confirmStop: true,
+    });
+    await vi.waitFor(async () => {
+      const detail = await sessions.get(
+        identity,
+        notifyProject.id,
+        notifyParent.id,
+      );
+      expect(detail.running).toBe(false);
+      expect(
+        detail.messages.some(
+          (message) =>
+            message.content ===
+            `Subsession ${notifyChild.session.id} was archived by the user.`,
+        ),
+      ).toBe(true);
+      expect(detail.messages.at(-1)?.metadata).toMatchObject({
+        status: "completed",
+      });
+    });
   });
 
   it("settles and checkpoints a checkout selected during the turn", async () => {

@@ -19,7 +19,6 @@ CREATE TABLE agent_session_views (
   external_user_id varchar(255) NOT NULL,
   visibility varchar(20) NOT NULL DEFAULT 'promoted',
   previous_visibility varchar(20) NOT NULL DEFAULT 'promoted',
-  unread boolean NOT NULL DEFAULT false,
   archived_at timestamptz,
   updated_at timestamptz NOT NULL DEFAULT now(),
   PRIMARY KEY (session_id, tenant_id, external_user_id),

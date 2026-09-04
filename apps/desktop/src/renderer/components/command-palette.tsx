@@ -961,14 +961,17 @@ export function CommandPalette({
     }
     for (const session of sessions) {
       if (session.visibility === "latent") continue;
-      if (!session.title) continue;
+      const created = new Date(session.createdAt);
+      const label =
+        session.title ??
+        `Chat ${created.toLocaleDateString()} ${created.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}`;
       items.push({
         id: `session:${session.id}`,
         icon: MessageSquare,
-        label: session.title,
+        label,
         detail: session.visibility === "archived" ? "Archived chat" : "Chat",
         keywords: [
-          session.title,
+          label,
           "chat",
           "session",
           "conversation",

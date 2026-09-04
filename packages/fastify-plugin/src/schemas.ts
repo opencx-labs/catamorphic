@@ -994,7 +994,6 @@ export const AgentSessionSchema = z.object({
   parentSessionId: z.string().uuid().nullable(),
   visibility: z.enum(["latent", "promoted", "archived"]),
   archivedAt: z.string().datetime().nullable(),
-  unread: z.boolean(),
   status: z.enum(["active", "closed"]),
   activity: z.string().nullable(),
   todos: z.array(AgentTodoSchema).max(50),
