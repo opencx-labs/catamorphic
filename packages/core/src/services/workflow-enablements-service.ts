@@ -392,6 +392,7 @@ export class WorkflowEnablementsService {
       workflowName: current.workflowName,
       environment: current.environment,
       owner: current.owner,
+      remoteBranch: current.remoteBranch,
       connectionSelections: Object.fromEntries(
         current.connections.map((connection) => [
           connection.alias,

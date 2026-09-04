@@ -107,12 +107,14 @@ describe("WorkflowEnablementsService", () => {
       identity: memberA,
       projectId,
       workflowName: "watchInbox",
+      remoteBranch: "release",
     });
     await expect(
       service.create({
         identity: memberA,
         projectId,
         workflowName: "watchInbox",
+        remoteBranch: "release",
         consentDigest: "0".repeat(64),
       }),
     ).rejects.toBeInstanceOf(WorkflowEnablementConsentRequiredError);
@@ -121,6 +123,7 @@ describe("WorkflowEnablementsService", () => {
       identity: memberA,
       projectId,
       workflowName: "watchInbox",
+      remoteBranch: "release",
       consentDigest: preview.consentDigest,
     });
     expect(created.owner).toEqual({
@@ -132,6 +135,7 @@ describe("WorkflowEnablementsService", () => {
         identity: memberA,
         projectId,
         workflowName: "watchInbox",
+        remoteBranch: "release",
         consentDigest: preview.consentDigest,
       }),
     ).rejects.toBeInstanceOf(WorkflowEnablementConflictError);
@@ -176,6 +180,7 @@ describe("WorkflowEnablementsService", () => {
       identity: memberA,
       projectId,
       workflowName: "watchInbox",
+      remoteBranch: "release",
     });
     const updated = await service.updateDeployment({
       identity: memberA,
@@ -184,6 +189,7 @@ describe("WorkflowEnablementsService", () => {
     });
     expect(updated).toMatchObject({
       commitSha: "b".repeat(40),
+      remoteBranch: "release",
       updateAvailable: false,
       revision: 2,
     });

@@ -221,6 +221,7 @@ export function registerWorkflowEnablementRoutes(
         403: ErrorSchema,
         404: ErrorSchema,
         409: ErrorSchema,
+        428: AuthenticationRequiredSchema,
       },
     },
     handler: async (request, reply) => {

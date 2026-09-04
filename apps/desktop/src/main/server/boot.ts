@@ -202,6 +202,7 @@ export async function startEmbeddedServer(
   ) => Promise<string[]> = async () => [];
   let syncWorkflowConnections: (profileId?: string) => Promise<void> =
     async () => {};
+  let workflowConnectionSync = Promise.resolve();
   // Tool-permission asks (ADR 0054) park on this broker so REMOTE clients
   // (the companion app) can list and answer them over HTTP; the registry
   // races it against the desktop's own consent modal — first answer wins.
@@ -502,20 +503,29 @@ export async function startEmbeddedServer(
     tenantId: DESKTOP_TENANT_ID,
     externalUserId: DESKTOP_USER_ID,
   };
-  syncWorkflowConnections = (profileId?: string) =>
-    syncProfileMcpWorkflowConnections({
-      core: catamorphic.core,
-      profiles,
-      profileConfig,
-      identity: desktopIdentity,
-      profileId,
-    }).catch((error) =>
-      console.warn(
-        `[desktop] workflow connection sync failed: ${
-          error instanceof Error ? error.message : String(error)
-        }`,
-      ),
-    );
+  syncWorkflowConnections = (profileId?: string) => {
+    // OAuth discovery, registration, token exchange, and tool probing can
+    // each update the profile store. Serialize their projections so two
+    // snapshots never race the connection service's compare-and-swap.
+    workflowConnectionSync = workflowConnectionSync
+      .then(() =>
+        syncProfileMcpWorkflowConnections({
+          core: catamorphic.core,
+          profiles,
+          profileConfig,
+          identity: desktopIdentity,
+          profileId,
+        }),
+      )
+      .catch((error) =>
+        console.warn(
+          `[desktop] workflow connection sync failed: ${
+            error instanceof Error ? error.message : String(error)
+          }`,
+        ),
+      );
+    return workflowConnectionSync;
+  };
   await syncWorkflowConnections();
   profileConfig.onConnectionsChanged((profileId) => {
     void syncWorkflowConnections(profileId);

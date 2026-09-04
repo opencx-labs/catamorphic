@@ -6,7 +6,11 @@ import type {
 import type { Json } from "@catamorphic/db";
 import { connectMcpServer } from "@catamorphic/mcp";
 import type { AgentMcpServerConfig } from "@catamorphic/sandbox";
-import { connectionServerKey, toAgentMcpServer } from "./connections-store.js";
+import {
+  connectionServerKeys,
+  type McpConnection,
+  toAgentMcpServer,
+} from "./connections-store.js";
 import type { ProfileConfigManager } from "./profile-config.js";
 import type { ProfilesStore } from "./profiles.js";
 
@@ -60,6 +64,24 @@ export const desktopProfileMcpProvider: ConnectionProvider = {
   },
 };
 
+export function workflowMcpConnectionEntries(
+  connections: readonly McpConnection[],
+): Array<{
+  alias: string;
+  connection: McpConnection;
+  server: AgentMcpServerConfig;
+}> {
+  const configured = connections.filter(
+    (connection) => connection.enabled && toAgentMcpServer(connection),
+  );
+  return [...connectionServerKeys(configured)].flatMap(
+    ([alias, connection]) => {
+      const server = toAgentMcpServer(connection);
+      return server ? [{ alias, connection, server }] : [];
+    },
+  );
+}
+
 /**
  * Adopt profile MCP authorization into the ordinary connection broker. The
  * secret is copied only between two encrypted main-process stores; workflow
@@ -80,23 +102,18 @@ export async function syncProfileMcpWorkflowConnections(input: {
   for (const project of projects.items) {
     const profile = input.profiles.profileForProject(project.id);
     if (input.profileId && profile.id !== input.profileId) continue;
-    const configured = input.profileConfig
-      .forProfile(profile.id)
-      .connections.list()
-      .filter(
-        (connection) => connection.enabled && toAgentMcpServer(connection),
-      );
+    const configured = workflowMcpConnectionEntries(
+      input.profileConfig.forProfile(profile.id).connections.list(),
+    );
     const existing = await service.list({
       identity: input.identity,
       projectId: project.id,
     });
-    for (const connection of configured) {
-      const server = toAgentMcpServer(connection);
-      if (!server) continue;
+    for (const { alias, connection, server } of configured) {
       const account = {
         desktopProfileId: profile.id,
         desktopMcpConnectionId: connection.id,
-        desktopMcpAlias: connectionServerKey(connection),
+        desktopMcpAlias: alias,
       };
       const current = existing.find(
         (candidate) =>
@@ -105,7 +122,6 @@ export async function syncProfileMcpWorkflowConnections(input: {
           accountMarker(candidate.account, "desktopMcpConnectionId") ===
             connection.id,
       );
-      const alias = connectionServerKey(connection);
       const previousAlias = current
         ? accountMarker(current.account, "desktopMcpAlias")
         : undefined;
@@ -155,7 +171,7 @@ export async function syncProfileMcpWorkflowConnections(input: {
       });
     }
     const configuredIds = new Set(
-      configured.map((connection) => connection.id),
+      configured.map(({ connection }) => connection.id),
     );
     for (const connection of existing) {
       if (

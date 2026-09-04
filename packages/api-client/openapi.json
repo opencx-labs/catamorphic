@@ -9591,6 +9591,57 @@
                 }
               }
             }
+          },
+          "428": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "code": {
+                      "type": "string",
+                      "enum": ["authentication_required"]
+                    },
+                    "environment": {
+                      "type": "string"
+                    },
+                    "requirements": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "alias": {
+                            "type": "string"
+                          },
+                          "providerKind": {
+                            "type": "string"
+                          },
+                          "principalKinds": {
+                            "type": "array",
+                            "items": {
+                              "type": "string",
+                              "enum": [
+                                "member",
+                                "project_service",
+                                "tenant_service"
+                              ]
+                            }
+                          }
+                        },
+                        "required": ["alias", "providerKind", "principalKinds"],
+                        "additionalProperties": false
+                      }
+                    }
+                  },
+                  "required": ["error", "code", "environment", "requirements"],
+                  "additionalProperties": false
+                }
+              }
+            }
           }
         }
       }
