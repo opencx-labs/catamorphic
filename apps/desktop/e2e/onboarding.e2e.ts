@@ -48,11 +48,22 @@ const until = async (
   label: string,
 ): Promise<void> => {
   const deadline = Date.now() + timeoutMs;
+  let lastError: unknown;
   while (Date.now() < deadline) {
-    if (fn()) return;
+    try {
+      if (fn()) return;
+      lastError = undefined;
+    } catch (error) {
+      // The app may be replacing the git index while this test observes it.
+      // Treat read failures like any other unsettled condition, but preserve
+      // the last error so a persistent failure remains actionable.
+      lastError = error;
+    }
     await new Promise((resolve) => setTimeout(resolve, 250));
   }
-  throw new Error(`Timed out (${timeoutMs}ms) waiting for ${label}`);
+  const detail =
+    lastError instanceof Error ? `; last error: ${lastError.message}` : "";
+  throw new Error(`Timed out (${timeoutMs}ms) waiting for ${label}${detail}`);
 };
 
 /** Drive the New-project modal to submission and wait for the workspace. */
