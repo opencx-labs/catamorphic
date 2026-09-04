@@ -82,9 +82,19 @@ describe("interrupted turn recovery", () => {
       ta.closest('form').requestSubmit();
       return true;
     `);
-    await runWait(`return spinnersOn() > 0;`, {
-      label: "turn in flight before the kill",
-    });
+    await runWait(
+      `return window.catamorphicDesktop.getServerState().then(async ({ url }) => {
+        if (!url) return false;
+        const projects = await fetch(url + '/api/projects').then((response) => response.json());
+        const project = projects.items.find((item) => item.name === 'e2e-recovery');
+        if (!project) return false;
+        const sessions = await fetch(
+          url + '/api/projects/' + project.id + '/agent/sessions',
+        ).then((response) => response.json());
+        return sessions.items.some((session) => session.running);
+      });`,
+      { timeoutMs: 30_000, label: "persisted running turn before the kill" },
+    );
     const { userDataDir } = app;
     await app.kill();
 
