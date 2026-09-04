@@ -78,7 +78,7 @@ describe("interrupted turn recovery", () => {
     await runWait(`return !!visibleDock();`);
     await run(`
       const ta = visibleDock().querySelector('[data-composer-input]');
-      setReactValue(ta, 'work slowly please');
+      setReactValue(ta, 'work slowly and wait for interruption');
       ta.closest('form').requestSubmit();
       return true;
     `);
