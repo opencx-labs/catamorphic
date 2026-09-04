@@ -110,6 +110,14 @@ export interface WorkspaceBridge {
     controlled: boolean,
   ): Promise<void>;
   closeSurface(projectId: string, key: string): Promise<void>;
+  sessionProcessCount(
+    projectId: string,
+    sessionIds: readonly string[],
+  ): Promise<number>;
+  stopSessionProcesses(
+    projectId: string,
+    sessionIds: readonly string[],
+  ): Promise<number>;
   /**
    * Open (or focus) something tab-shaped: an existing tab by key, a
    * project app ("app:<name>"), a file ("file:<path>"), or a URL. If the
@@ -610,6 +618,7 @@ export function registerAgentBridge(agentTerminals: AgentTerminals): {
       } else {
         const created = await agentTerminals.create(
           projectId,
+          sessionId,
           workingDirectory,
         );
         terminalId = created.sessionId;
@@ -872,6 +881,12 @@ export function registerAgentBridge(agentTerminals: AgentTerminals): {
         }
       }
       await rpc("closeSurface", { projectId, key });
+    },
+    async sessionProcessCount(projectId, sessionIds) {
+      return agentTerminals.countForOwners(projectId, sessionIds);
+    },
+    async stopSessionProcesses(projectId, sessionIds) {
+      return agentTerminals.killForOwners(projectId, sessionIds);
     },
   };
 

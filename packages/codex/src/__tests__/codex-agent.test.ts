@@ -240,6 +240,20 @@ describe("CodexAgent", () => {
     );
   });
 
+  it("can replace private multi-agent tools with host subsessions", async () => {
+    resumeThread.mockReturnValueOnce(turnDone());
+    await collect(
+      new CodexAgent({ disableNativeSubagents: true }),
+      "Delegate this review",
+    );
+
+    expect(codexCtor).toHaveBeenCalledWith(
+      expect.objectContaining({
+        config: { features: { multi_agent: false } },
+      }),
+    );
+  });
+
   it("reads a live server source at every spawn (rotated token, no rebuild)", async () => {
     let token = "Bearer old";
     const agent = new CodexAgent({

@@ -393,7 +393,11 @@ export function useAgentChat(
     return performSend({
       content,
       attachments: attachments ?? [],
-      deliveryMode: "next_turn",
+      // Taking over a live child is an interruption, not another item for
+      // the delegated queue. Core records the takeover and notifies its
+      // parent, which may have been waiting on the original assignment.
+      deliveryMode:
+        session.data?.parentSessionId && isWorking ? "interrupt" : "next_turn",
     });
   };
 

@@ -26,6 +26,58 @@ const session = {
 };
 
 describe("useAgentChat", () => {
+  it("interrupts a running subsession when the user takes it over", async () => {
+    let deliveryMode: string | undefined;
+    server.use(
+      http.get(
+        apiUrl(`/api/projects/${PROJECT_ID}/agent/sessions/${SESSION_ID}`),
+        () =>
+          HttpResponse.json({
+            ...session,
+            parentSessionId: "00000000-0000-4000-8000-000000000099",
+            messages: [],
+            pendingTurns: [
+              {
+                id: "00000000-0000-4000-8000-000000000010",
+                messageId: "00000000-0000-4000-8000-000000000011",
+                content: "Delegated work",
+                metadata: null,
+                deliveryMode: "next_turn",
+                status: "running",
+                createdAt: new Date().toISOString(),
+              },
+            ],
+          }),
+      ),
+      http.post(
+        apiUrl(
+          `/api/projects/${PROJECT_ID}/agent/sessions/${SESSION_ID}/messages`,
+        ),
+        async ({ request }) => {
+          deliveryMode = ((await request.json()) as { deliveryMode: string })
+            .deliveryMode;
+          return HttpResponse.json(
+            {
+              messageId: "00000000-0000-4000-8000-000000000012",
+              turnId: "00000000-0000-4000-8000-000000000013",
+              mode: "interrupt",
+              created: true,
+            },
+            { status: 202 },
+          );
+        },
+      ),
+    );
+    const { result } = renderHookWithProviders(() =>
+      useAgentChat(PROJECT_ID, { sessionId: SESSION_ID }),
+    );
+    await waitFor(() => expect(result.current.isWorking).toBe(true));
+
+    await act(() => result.current.send("Let me clarify"));
+
+    expect(deliveryMode).toBe("interrupt");
+  });
+
   it("refreshes an idle open chat after another client writes to it", async () => {
     let externalMessage = false;
     let requests = 0;

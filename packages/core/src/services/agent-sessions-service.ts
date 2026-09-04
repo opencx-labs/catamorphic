@@ -32,6 +32,7 @@ import {
   SEED_SKILLS,
 } from "../seeds.js";
 import {
+  type AgentDelegationPolicy,
   formatProjectAgentId,
   parseProjectAgentId,
 } from "./agent-definitions-service.js";
@@ -72,6 +73,13 @@ import {
 
 type SessionRow = Selectable<DB["agent_sessions"]>;
 type MessageRow = Selectable<DB["agent_messages"]>;
+type SessionVisibility = "latent" | "promoted" | "archived";
+
+interface SessionPresentation {
+  visibility: SessionVisibility;
+  unread: boolean;
+  archivedAt: Date | null;
+}
 
 export type AgentSessionSource =
   | "desktop"
@@ -100,7 +108,13 @@ export interface AgentSession {
   /** Agent-chosen conversation icon ("<name>:<color>"); null = default. */
   icon: string | null;
   /** Session this one was forked from, if any. */
+  forkedFromSessionId: string | null;
+  /** Immediate parent in the visible session hierarchy, if any. */
   parentSessionId: string | null;
+  /** Per-user navigation state. Archived sessions remain readable. */
+  visibility: SessionVisibility;
+  archivedAt: string | null;
+  unread: boolean;
   /** Short agent-published description used to coordinate project peers. */
   activity: string | null;
   /** Current agent-owned progress list for this conversation. */
@@ -182,10 +196,32 @@ export interface AgentSessionPeer {
   projectId: string;
   title: string | null;
   agentId: string | null;
+  parentSessionId: string | null;
+  forkedFromSessionId: string | null;
+  visibility: SessionVisibility;
+  status: "active" | "closed";
   running: boolean;
   task: string | null;
   activity: string | null;
   updatedAt: string;
+}
+
+export interface AgentSubsession {
+  delegationId: string;
+  routeId: string;
+  task: string;
+  contextMode: "fresh" | "inherit";
+  allowFurtherDelegation: boolean;
+  status: "running" | "completed" | "failed" | "interrupted" | "archived";
+  session: AgentSession;
+}
+
+export interface AgentSessionArchiveImpact {
+  sessionIds: string[];
+  runningSessionIds: string[];
+  activeWatcherCount: number;
+  activeProcessCount: number;
+  requiresConfirmation: boolean;
 }
 
 export class AgentSessionNotFoundError extends Error {
@@ -217,6 +253,20 @@ export class AgentSessionHandoffPendingError extends Error {
   constructor(readonly sessionId: string) {
     super(`Agent session '${sessionId}' is moving to another server`);
     this.name = "AgentSessionHandoffPendingError";
+  }
+}
+
+export class AgentSessionArchiveConfirmationRequiredError extends Error {
+  constructor(readonly impact: AgentSessionArchiveImpact) {
+    super("Archiving this session would stop active work");
+    this.name = "AgentSessionArchiveConfirmationRequiredError";
+  }
+}
+
+export class AgentDelegationDeniedError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "AgentDelegationDeniedError";
   }
 }
 
@@ -279,7 +329,6 @@ const CHECKPOINT_AUTHOR = {
 };
 
 const SESSION_TASK_SUMMARY_LIMIT = 240;
-const PEER_RECENT_WINDOW_MS = 30 * 60 * 1000;
 
 /** Compact, bounded peer context derived from a session's latest request. */
 export function summarizeSessionTask(message: string): string | null {
@@ -502,6 +551,19 @@ interface AgentSessionsDeps {
   storeSync?: { documents: DocumentsService };
 }
 
+export interface ArchiveSessionResourcesHandler {
+  impact(input: {
+    identity: Identity;
+    projectId: string;
+    sessionIds: readonly string[];
+  }): Promise<{ activeProcessCount: number }>;
+  stop(input: {
+    identity: Identity;
+    projectId: string;
+    sessionIds: readonly string[];
+  }): Promise<void>;
+}
+
 /**
  * Orchestrates coding-agent sessions across the host's registry of agents:
  *
@@ -554,6 +616,7 @@ export class AgentSessionsService {
   >();
   private readonly drainers = new Map<string, Promise<void>>();
   private readonly turnWorkerId = `agent-sessions:${randomUUID()}`;
+  private archiveResources?: ArchiveSessionResourcesHandler;
 
   constructor(
     private readonly db: Kysely<DB>,
@@ -581,6 +644,11 @@ export class AgentSessionsService {
     this.mcpToolNames = deps.mcpToolNames;
     this.appPolicies = deps.appPolicies;
     this.storeSync = deps.storeSync;
+  }
+
+  /** Late-bound because WatchersService itself depends on this service. */
+  setArchiveResourcesHandler(handler: ArchiveSessionResourcesHandler): void {
+    this.archiveResources = handler;
   }
 
   async list(
@@ -617,6 +685,11 @@ export class AgentSessionsService {
       .executeTakeFirstOrThrow()
       .then((r) => Number(r.count));
 
+    const presentations = await this.presentations(
+      identity,
+      rows.map((row) => row.id),
+    );
+
     return {
       items: rows.map((row) =>
         mapSession(
@@ -624,6 +697,7 @@ export class AgentSessionsService {
           this.runningTurns.has(row.id),
           this.hostId,
           this.authorityLeaseMs,
+          presentations.get(row.id),
         ),
       ),
       total,
@@ -645,29 +719,22 @@ export class AgentSessionsService {
     let query = this.db
       .selectFrom("agent_sessions")
       .where("project_id", "=", projectId)
-      .where("id", "!=", ownSessionId)
-      .where("status", "=", "active");
+      .where("id", "!=", ownSessionId);
     if (!isBuilder(identity, projectId)) {
       const agentIds = this.coveredAgentIds(identity, projectId);
       if (agentIds.length === 0) return [];
       query = query.where("agent_id", "in", agentIds);
     }
-    const runningIds = [...this.runningTurns.keys()];
-    const recentSince = new Date(Date.now() - PEER_RECENT_WINDOW_MS);
-    query = query.where((expression) =>
-      runningIds.length > 0
-        ? expression.or([
-            expression("updated_at", ">=", recentSince),
-            expression("id", "in", runningIds),
-          ])
-        : expression("updated_at", ">=", recentSince),
-    );
     const rows = await query
       .selectAll()
       .orderBy("updated_at", "desc")
-      .limit(20)
+      .limit(50)
       .execute();
     if (rows.length === 0) return [];
+    const presentations = await this.presentations(
+      identity,
+      rows.map((row) => row.id),
+    );
 
     const latestRequests = await this.db
       .selectFrom("agent_messages")
@@ -697,6 +764,10 @@ export class AgentSessionsService {
       projectId: row.project_id,
       title: row.title,
       agentId: row.agent_id,
+      parentSessionId: row.parent_session_id,
+      forkedFromSessionId: row.forked_from_session_id,
+      visibility: presentations.get(row.id)?.visibility ?? "promoted",
+      status: row.status as "active" | "closed",
       running: this.runningTurns.has(row.id),
       task: taskBySession.get(row.id) ?? null,
       activity: row.activity,
@@ -791,12 +862,16 @@ export class AgentSessionsService {
       .orderBy("seq", "asc")
       .execute();
     const settled = await this.settleOrphanedTurns(sessionId, messages);
+    const presentation = (await this.presentations(identity, [sessionId])).get(
+      sessionId,
+    );
     return {
       ...mapSession(
         row,
         this.runningTurns.has(row.id),
         this.hostId,
         this.authorityLeaseMs,
+        presentation,
       ),
       messages: settled.map(mapMessage),
       pendingTurns: await this.turns.listPendingMessages({ sessionId }),
@@ -913,6 +988,8 @@ export class AgentSessionsService {
       effort?: AgentEffort;
       environment?: string;
       source?: AgentSessionSource;
+      parentSessionId?: string;
+      title?: string;
     } = {},
   ): Promise<AgentSession> {
     return withSpan(
@@ -940,13 +1017,36 @@ export class AgentSessionsService {
       title?: string;
       wakeKey?: string;
       source?: AgentSessionSource;
+      parentSessionId?: string;
+      forkedFromSessionId?: string;
+      visibility?: Exclude<SessionVisibility, "archived">;
     },
   ): Promise<AgentSession> {
     await this.requireProject(identity, projectId);
+    if (input.parentSessionId) {
+      const parent = await this.requireSession(
+        identity,
+        projectId,
+        input.parentSessionId,
+      );
+      if (parent.status !== "active") {
+        throw new AgentSessionClosedError(input.parentSessionId);
+      }
+    }
     this.assertAgentAccess(identity, projectId, input.agentId ?? null);
     // Validate up front so a bad agent id fails at create, not first send.
     const agent = this.resolveAgent(input.agentId ?? null, projectId);
     const sessionId = randomUUID();
+    const relationshipPrompt = input.parentSessionId
+      ? [
+          `You are working in Catamorphic subsession ${sessionId}.`,
+          `Your immediate parent is session ${input.parentSessionId}.`,
+          "Use the ordinary project-session tools to list, read, and message related sessions.",
+        ].join("\n")
+      : null;
+    const systemPrompt = [relationshipPrompt, input.systemPrompt]
+      .filter((part): part is string => Boolean(part))
+      .join("\n\n");
     const admitted = await this.executionEnvironments.admit({
       identity,
       projectId,
@@ -987,7 +1087,7 @@ export class AgentSessionsService {
         },
         transaction,
       });
-      return transaction
+      const session = await transaction
         .insertInto("agent_sessions")
         .values({
           id: sessionId,
@@ -998,22 +1098,39 @@ export class AgentSessionsService {
           provider_session_id: null,
           agent_id: input.agentId ?? null,
           model_effort: input.effort ?? null,
-          system_prompt: input.systemPrompt ?? null,
+          system_prompt: systemPrompt || null,
           sandbox_id: null,
           allocation_id: allocation.id,
           environment_name: admitted.environmentName,
           status: "active",
           title: input.title ?? null,
           wake_key: input.wakeKey ?? null,
+          parent_session_id: input.parentSessionId ?? null,
+          forked_from_session_id: input.forkedFromSessionId ?? null,
           base_commit_sha: null,
           authority_host_id: this.hostId,
           authority_revision: 1,
         })
         .returningAll()
         .executeTakeFirstOrThrow();
+      await transaction
+        .insertInto("agent_session_views")
+        .values({
+          session_id: sessionId,
+          tenant_id: identity.tenantId,
+          external_user_id: identity.externalUserId,
+          visibility: input.visibility ?? "promoted",
+          previous_visibility: input.visibility ?? "promoted",
+        })
+        .execute();
+      return session;
     });
 
-    return mapSession(row, false, this.hostId, this.authorityLeaseMs);
+    return mapSession(row, false, this.hostId, this.authorityLeaseMs, {
+      visibility: input.visibility ?? "promoted",
+      unread: false,
+      archivedAt: null,
+    });
   }
 
   /**
@@ -1683,7 +1800,7 @@ export class AgentSessionsService {
       session.title
         ? `the conversation "${session.title}"`
         : "another conversation"
-    }: it starts from a copy of that transcript up to the fork point. The user is exploring a tangent here — the original conversation continues separately, so don't refer to this one as if it were the original.`;
+    }: it starts from a copy of that transcript up to the fork point. Its immediate parent is Catamorphic session ${sessionId}; use the ordinary project-session tools to read or message it. The user is exploring a tangent here; the original conversation continues separately, so don't refer to this one as if it were the original.`;
     const forkSystemPrompt = [session.system_prompt, forkNote]
       .filter((part): part is string => Boolean(part))
       .join("\n\n");
@@ -1704,12 +1821,23 @@ export class AgentSessionsService {
           base_commit_sha: session.base_commit_sha,
           icon: session.icon,
           parent_session_id: sessionId,
+          forked_from_session_id: sessionId,
           title: forkTitle,
           authority_host_id: this.hostId,
           authority_revision: 1,
         })
         .returningAll()
         .executeTakeFirstOrThrow();
+      await trx
+        .insertInto("agent_session_views")
+        .values({
+          session_id: fork.id,
+          tenant_id: identity.tenantId,
+          external_user_id: identity.externalUserId,
+          visibility: "promoted",
+          previous_visibility: "promoted",
+        })
+        .execute();
       for (const message of copied) {
         await trx
           .insertInto("agent_messages")
@@ -1747,6 +1875,272 @@ export class AgentSessionsService {
       return fork;
     });
     return mapSession(row, false, this.hostId, this.authorityLeaseMs);
+  }
+
+  /** Create a durable child session through one of the source agent's grants. */
+  async createSubsession(
+    identity: Identity,
+    projectId: string,
+    sourceSessionId: string,
+    input: {
+      routeId?: string;
+      agentId?: string;
+      task: string;
+      contextMode?: "fresh" | "inherit";
+      title?: string;
+    },
+  ): Promise<AgentSubsession> {
+    const source = await this.requireSession(
+      identity,
+      projectId,
+      sourceSessionId,
+    );
+    if (source.status !== "active") {
+      throw new AgentSessionClosedError(sourceSessionId);
+    }
+    const incoming = await this.db
+      .selectFrom("agent_delegations")
+      .select("allow_further_delegation")
+      .where("target_session_id", "=", sourceSessionId)
+      .executeTakeFirst();
+    if (incoming && !incoming.allow_further_delegation) {
+      throw new AgentDelegationDeniedError(
+        "This subsession is not allowed to delegate further",
+      );
+    }
+
+    const sourceAgentId =
+      source.agent_id ?? this.codingAgents.defaultAgentId(projectId);
+    const sourceAgent = this.resolveAgent(sourceAgentId ?? null, projectId);
+    const policy = delegationPolicy(sourceAgent.delegation);
+    if (!policy.enabled) {
+      throw new AgentDelegationDeniedError(
+        "This agent is not allowed to create subsessions",
+      );
+    }
+    const routeId = input.routeId ?? policy.routes[0]?.id;
+    const route = policy.routes.find((candidate) => candidate.id === routeId);
+    if (!route) {
+      throw new AgentDelegationDeniedError(
+        routeId
+          ? `Delegation route '${routeId}' is not allowed`
+          : "This agent has no delegation routes",
+      );
+    }
+    const targetAgentId = resolveDelegationTarget({
+      target: route.target,
+      requestedAgentId: input.agentId,
+      sourceAgentId,
+      projectId,
+    });
+    this.assertAgentAccess(identity, projectId, targetAgentId);
+    const targetAgent = this.resolveAgent(targetAgentId, projectId);
+    if (
+      route.target === "*" &&
+      privilegeRank(targetAgent.privilege) >
+        privilegeRank(sourceAgent.privilege)
+    ) {
+      throw new AgentDelegationDeniedError(
+        "A wildcard delegation route cannot grant a more privileged agent",
+      );
+    }
+
+    const active = await this.db
+      .selectFrom("agent_delegations")
+      .select(({ fn }) => fn.countAll<number>().as("count"))
+      .where("source_session_id", "=", sourceSessionId)
+      .where("status", "=", "running")
+      .executeTakeFirstOrThrow();
+    if (Number(active.count) >= policy.maxConcurrentChildren) {
+      throw new AgentDelegationDeniedError(
+        `This agent already has ${policy.maxConcurrentChildren} active subsessions`,
+      );
+    }
+
+    const task = input.task.trim();
+    if (!task) throw new Error("A subsession task is required");
+    const contextMode = input.contextMode ?? "fresh";
+    const childNote = [
+      "Complete the delegated task independently. Your settled result is delivered to the parent automatically.",
+    ].join("\n");
+    const child = await this.createInner(identity, projectId, {
+      agentId: targetAgentId,
+      parentSessionId: sourceSessionId,
+      visibility: "latent",
+      title: input.title ?? summarizeSessionTask(task) ?? "Subsession",
+      systemPrompt: childNote,
+    });
+    if (contextMode === "inherit") {
+      const history = await this.db
+        .selectFrom("agent_messages")
+        .selectAll()
+        .where("session_id", "=", sourceSessionId)
+        .where(sql`coalesce(metadata ->> 'status', '')`, "!=", "in_progress")
+        .orderBy("seq", "asc")
+        .execute();
+      for (const message of history) {
+        await this.db
+          .insertInto("agent_messages")
+          .values({
+            session_id: child.id,
+            role: message.role,
+            content: message.content,
+            commit_sha: message.commit_sha,
+            metadata: message.metadata,
+            author_kind: message.author_kind,
+            author_payload: message.author_payload,
+            delivery_mode: message.delivery_mode,
+            idempotency_key: null,
+          })
+          .execute();
+      }
+    }
+
+    const delegation = await this.db
+      .insertInto("agent_delegations")
+      .values({
+        tenant_id: identity.tenantId,
+        project_id: projectId,
+        source_session_id: sourceSessionId,
+        target_session_id: child.id,
+        route_id: route.id,
+        task,
+        context_mode: contextMode,
+        allow_further_delegation: route.allowFurtherDelegation,
+      })
+      .returningAll()
+      .executeTakeFirstOrThrow();
+
+    await this.deliver(identity, projectId, child.id, {
+      content: task,
+      author: {
+        kind: "agent",
+        sessionId: sourceSessionId,
+        agentId: sourceAgentId ?? null,
+      },
+      mode: "next_turn",
+      idempotencyKey: `delegation:${delegation.id}:task`,
+    });
+    return {
+      delegationId: delegation.id,
+      routeId: delegation.route_id,
+      task: delegation.task,
+      contextMode,
+      allowFurtherDelegation: delegation.allow_further_delegation,
+      status: "running",
+      session: child,
+    };
+  }
+
+  async listSubsessions(
+    identity: Identity,
+    projectId: string,
+    sourceSessionId: string,
+  ): Promise<AgentSubsession[]> {
+    await this.requireSession(identity, projectId, sourceSessionId);
+    const delegations = await this.db
+      .selectFrom("agent_delegations")
+      .selectAll()
+      .where("agent_delegations.source_session_id", "=", sourceSessionId)
+      .orderBy("agent_delegations.created_at", "desc")
+      .execute();
+    if (delegations.length === 0) return [];
+    const sessions = await this.db
+      .selectFrom("agent_sessions")
+      .selectAll()
+      .where(
+        "id",
+        "in",
+        delegations.map((delegation) => delegation.target_session_id),
+      )
+      .execute();
+    const sessionsById = new Map(
+      sessions.map((session) => [session.id, session]),
+    );
+    const presentations = await this.presentations(
+      identity,
+      sessions.map((session) => session.id),
+    );
+    return delegations.flatMap((delegation) => {
+      const session = sessionsById.get(delegation.target_session_id);
+      if (!session) return [];
+      return [
+        {
+          delegationId: delegation.id,
+          routeId: delegation.route_id,
+          task: delegation.task,
+          contextMode: delegation.context_mode as "fresh" | "inherit",
+          allowFurtherDelegation: delegation.allow_further_delegation,
+          status: delegation.status as AgentSubsession["status"],
+          session: mapSession(
+            session,
+            this.runningTurns.has(session.id),
+            this.hostId,
+            this.authorityLeaseMs,
+            presentations.get(session.id),
+          ),
+        },
+      ];
+    });
+  }
+
+  async waitForSubsessions(
+    identity: Identity,
+    projectId: string,
+    sourceSessionId: string,
+    input: { sessionIds?: string[]; timeoutMs?: number } = {},
+  ): Promise<AgentSubsession[]> {
+    const timeoutMs = Math.min(Math.max(input.timeoutMs ?? 30_000, 0), 60_000);
+    const deadline = Date.now() + timeoutMs;
+    while (true) {
+      const children = await this.listSubsessions(
+        identity,
+        projectId,
+        sourceSessionId,
+      );
+      const selected = input.sessionIds?.length
+        ? children.filter((child) =>
+            input.sessionIds?.includes(child.session.id),
+          )
+        : children;
+      if (
+        selected.length === 0 ||
+        selected.some((child) => child.status !== "running") ||
+        Date.now() >= deadline
+      ) {
+        return selected;
+      }
+      await new Promise((resolve) => setTimeout(resolve, 100));
+    }
+  }
+
+  async interruptSubsession(
+    identity: Identity,
+    projectId: string,
+    sourceSessionId: string,
+    targetSessionId: string,
+  ): Promise<void> {
+    await this.requireSession(identity, projectId, sourceSessionId);
+    const delegation = await this.db
+      .selectFrom("agent_delegations")
+      .select("id")
+      .where("source_session_id", "=", sourceSessionId)
+      .where("target_session_id", "=", targetSessionId)
+      .executeTakeFirst();
+    if (!delegation) {
+      throw new AgentDelegationDeniedError(
+        "That session is not a direct subsession of this session",
+      );
+    }
+    await this.interrupt(identity, projectId, targetSessionId, {
+      notifyParent: false,
+    });
+    await this.db
+      .updateTable("agent_delegations")
+      .set({ status: "interrupted", completed_at: new Date() })
+      .where("id", "=", delegation.id)
+      .where("status", "=", "running")
+      .execute();
   }
 
   async sendMessage(
@@ -1840,8 +2234,18 @@ export class AgentSessionsService {
     }
     await this.claimLocalAuthority(session);
     this.cancelAutoRetry(sessionId);
-    if (input.deliveryMode === "interrupt") {
-      await this.interrupt(identity, projectId, sessionId);
+    if (session.parent_session_id) {
+      await this.promoteSession(identity, sessionId);
+    }
+    const deliveryMode =
+      input.deliveryMode ??
+      (session.parent_session_id && this.runningTurns.has(sessionId)
+        ? "interrupt"
+        : "next_turn");
+    if (deliveryMode === "interrupt") {
+      await this.interrupt(identity, projectId, sessionId, {
+        byExternalUserId: identity.externalUserId,
+      });
     }
     const receipt = await this.db.transaction().execute(async (transaction) => {
       const current = await transaction
@@ -1867,7 +2271,7 @@ export class AgentSessionsService {
         sessionId,
         content: message,
         author: { kind: "user", externalUserId: identity.externalUserId },
-        mode: input.deliveryMode ?? "next_turn",
+        mode: deliveryMode,
         idempotencyKey: input.idempotencyKey,
         metadata: input.attachments?.length
           ? {
@@ -2275,6 +2679,10 @@ export class AgentSessionsService {
     identity: Identity,
     projectId: string,
     sessionId: string,
+    opts: {
+      notifyParent?: boolean;
+      byExternalUserId?: string;
+    } = {},
   ): Promise<void> {
     const session = await this.requireSession(identity, projectId, sessionId);
     this.cancelAutoRetry(sessionId);
@@ -2286,6 +2694,33 @@ export class AgentSessionsService {
         agent.provider.interrupt?.(session.provider_session_id);
       } catch {
         // No resolvable agent — nothing to signal; the turn settles alone.
+      }
+    }
+    const delegation = await this.db
+      .selectFrom("agent_delegations")
+      .selectAll()
+      .where("target_session_id", "=", sessionId)
+      .where("status", "=", "running")
+      .executeTakeFirst();
+    if (delegation) {
+      await this.db
+        .updateTable("agent_delegations")
+        .set({
+          status: "interrupted",
+          interrupted_by_external_user_id: opts.byExternalUserId ?? null,
+          completed_at: new Date(),
+        })
+        .where("id", "=", delegation.id)
+        .execute();
+      if (opts.notifyParent !== false) {
+        await this.deliver(identity, projectId, delegation.source_session_id, {
+          content: opts.byExternalUserId
+            ? `Subsession ${sessionId} was interrupted because the user took over that conversation.`
+            : `Subsession ${sessionId} was interrupted.`,
+          author: { kind: "system", code: "subsession_interrupted" },
+          mode: "next_turn",
+          idempotencyKey: `delegation:${delegation.id}:interrupted`,
+        });
       }
     }
   }
@@ -2775,6 +3210,15 @@ export class AgentSessionsService {
           .execute();
       }
 
+      await this.settleDelegation({
+        identity,
+        projectId,
+        sessionId,
+        resultMessageId: assistantMessageId,
+        status: metadata.status as AgentTurnSettledEvent["status"],
+        content: row.content,
+      });
+
       if (this.onTurnSettled) {
         const settled: AgentTurnSettledEvent = {
           identity,
@@ -2903,6 +3347,236 @@ export class AgentSessionsService {
     });
 
     return mapSession(row, false, this.hostId, this.authorityLeaseMs);
+  }
+
+  async archiveImpact(
+    identity: Identity,
+    projectId: string,
+    sessionId: string,
+  ): Promise<AgentSessionArchiveImpact> {
+    await this.requireSession(identity, projectId, sessionId);
+    const sessionIds = await this.descendantSessionIds(projectId, sessionId);
+    const activeTurns = await this.db
+      .selectFrom("agent_turns")
+      .select("session_id")
+      .distinct()
+      .where("session_id", "in", sessionIds)
+      .where("status", "in", ["queued", "held", "running"])
+      .execute();
+    const runningSessionIds = [
+      ...new Set([
+        ...sessionIds.filter((id) => this.runningTurns.has(id)),
+        ...activeTurns.map((turn) => turn.session_id),
+      ]),
+    ];
+    const watchers = await this.db
+      .selectFrom("watchers")
+      .select(({ fn }) => fn.countAll<number>().as("count"))
+      .where("session_id", "in", sessionIds)
+      .where("status", "in", ["active", "paused"])
+      .executeTakeFirstOrThrow();
+    const activeWatcherCount = Number(watchers.count);
+    const { activeProcessCount } = (await this.archiveResources?.impact({
+      identity,
+      projectId,
+      sessionIds,
+    })) ?? { activeProcessCount: 0 };
+    return {
+      sessionIds,
+      runningSessionIds,
+      activeWatcherCount,
+      activeProcessCount,
+      requiresConfirmation:
+        runningSessionIds.length > 0 ||
+        activeWatcherCount > 0 ||
+        activeProcessCount > 0,
+    };
+  }
+
+  /** Stop and hide one session tree. The caller confirms only live work. */
+  async archive(
+    identity: Identity,
+    projectId: string,
+    sessionId: string,
+    input: { confirmStop?: boolean } = {},
+  ): Promise<{ impact: AgentSessionArchiveImpact; sessions: AgentSession[] }> {
+    const impact = await this.archiveImpact(identity, projectId, sessionId);
+    if (impact.requiresConfirmation && !input.confirmStop) {
+      throw new AgentSessionArchiveConfirmationRequiredError(impact);
+    }
+
+    for (const id of impact.sessionIds) {
+      this.cancelAutoRetry(id);
+      await this.interrupt(identity, projectId, id, { notifyParent: false });
+    }
+    await this.archiveResources?.stop({
+      identity,
+      projectId,
+      sessionIds: impact.sessionIds,
+    });
+
+    const { archivedRows, resourceRows } = await this.db
+      .transaction()
+      .execute(async (transaction) => {
+        await transaction
+          .updateTable("agent_turns")
+          .set({
+            status: "cancelled",
+            error: "Session archived",
+            completed_at: new Date(),
+            lease_owner: null,
+            lease_token: null,
+            lease_expires_at: null,
+            updated_at: new Date(),
+          })
+          .where("session_id", "in", impact.sessionIds)
+          .where("status", "in", ["queued", "held"])
+          .execute();
+        await transaction
+          .updateTable("agent_delegations")
+          .set({ status: "archived", completed_at: new Date() })
+          .where("target_session_id", "in", impact.sessionIds)
+          .where("status", "=", "running")
+          .execute();
+        const resources = await transaction
+          .selectFrom("agent_sessions")
+          .selectAll()
+          .where("id", "in", impact.sessionIds)
+          .execute();
+        const archived = await transaction
+          .updateTable("agent_sessions")
+          .set({
+            provider_session_id: null,
+            sandbox_id: null,
+            activity: null,
+            updated_at: new Date(),
+          })
+          .where("id", "in", impact.sessionIds)
+          .returningAll()
+          .execute();
+        const now = new Date();
+        for (const row of archived) {
+          await transaction
+            .insertInto("agent_session_views")
+            .values({
+              session_id: row.id,
+              tenant_id: identity.tenantId,
+              external_user_id: identity.externalUserId,
+              visibility: "archived",
+              previous_visibility: row.id === sessionId ? "promoted" : "latent",
+              archived_at: now,
+            })
+            .onConflict((conflict) =>
+              conflict
+                .columns(["session_id", "tenant_id", "external_user_id"])
+                .doUpdateSet(({ ref }) => ({
+                  previous_visibility: sql`CASE WHEN ${ref("agent_session_views.visibility")} = 'archived' THEN ${ref("agent_session_views.previous_visibility")} ELSE ${ref("agent_session_views.visibility")} END`,
+                  visibility: "archived",
+                  archived_at: now,
+                  updated_at: now,
+                })),
+            )
+            .execute();
+        }
+        return { archivedRows: archived, resourceRows: resources };
+      });
+
+    for (const row of resourceRows) {
+      if (row.provider_session_id) {
+        const agent = this.codingAgents.get(
+          row.agent_id ?? this.codingAgents.defaultAgentId(projectId) ?? "",
+        );
+        await agent?.provider
+          .dispose({
+            providerSessionId: row.provider_session_id,
+            sessionId: row.id,
+            projectId,
+            sandboxId: row.sandbox_id ?? "",
+            workingDirectory: "",
+          })
+          .catch(() => {});
+      }
+      if (row.allocation_id) {
+        await this.connectionGrants
+          ?.revokeAllocation({ allocationId: row.allocation_id })
+          .catch(() => {});
+      }
+    }
+
+    return {
+      impact,
+      sessions: archivedRows.map((row) =>
+        mapSession(row, false, this.hostId, this.authorityLeaseMs, {
+          visibility: "archived",
+          unread: false,
+          archivedAt: new Date(),
+        }),
+      ),
+    };
+  }
+
+  async unarchive(
+    identity: Identity,
+    projectId: string,
+    sessionId: string,
+  ): Promise<AgentSession[]> {
+    await this.requireSession(identity, projectId, sessionId);
+    const sessionIds = await this.descendantSessionIds(projectId, sessionId);
+    await this.db
+      .updateTable("agent_session_views")
+      .set(({ ref }) => ({
+        visibility: ref("previous_visibility"),
+        archived_at: null,
+        updated_at: new Date(),
+      }))
+      .where("tenant_id", "=", identity.tenantId)
+      .where("external_user_id", "=", identity.externalUserId)
+      .where("session_id", "in", sessionIds)
+      .execute();
+    const rows = await this.db
+      .selectFrom("agent_sessions")
+      .selectAll()
+      .where("id", "in", sessionIds)
+      .execute();
+    const presentations = await this.presentations(identity, sessionIds);
+    return rows.map((row) =>
+      mapSession(
+        row,
+        false,
+        this.hostId,
+        this.authorityLeaseMs,
+        presentations.get(row.id),
+      ),
+    );
+  }
+
+  private async descendantSessionIds(
+    projectId: string,
+    sessionId: string,
+  ): Promise<string[]> {
+    const rows = await this.db
+      .withRecursive("session_tree", (db) =>
+        db
+          .selectFrom("agent_sessions")
+          .select("id")
+          .where("id", "=", sessionId)
+          .where("project_id", "=", projectId)
+          .unionAll((union) =>
+            union
+              .selectFrom("agent_sessions as child")
+              .innerJoin(
+                "session_tree as parent",
+                "child.parent_session_id",
+                "parent.id",
+              )
+              .select("child.id")
+              .where("child.project_id", "=", projectId),
+          ),
+      )
+      .selectFrom("session_tree")
+      .select("id")
+      .execute();
+    return rows.map((row) => row.id);
   }
 
   // --- Agent resolution & anchoring ---
@@ -3460,6 +4134,10 @@ export class AgentSessionsService {
     projectId: string,
     agentId: string | null,
   ): void {
+    const projectAgent = agentId ? parseProjectAgentId(agentId) : undefined;
+    if (projectAgent && projectAgent.projectId !== projectId) {
+      throw new AccessDeniedError();
+    }
     if (isBuilder(identity, projectId)) return;
     if (!this.coveringAgentRef(identity, projectId, agentId)) {
       throw new AccessDeniedError();
@@ -3560,6 +4238,137 @@ export class AgentSessionsService {
     await this.requireSession(identity, projectId, sessionId);
   }
 
+  /** Promote a latent session and create durable user attention. */
+  async requestAttention(
+    identity: Identity,
+    projectId: string,
+    sessionId: string,
+  ): Promise<AgentSession> {
+    await this.requireSession(identity, projectId, sessionId);
+    await this.db.transaction().execute(async (transaction) => {
+      await transaction
+        .updateTable("agent_sessions")
+        .set(({ ref }) => ({
+          attention_revision: sql`${ref("attention_revision")} + 1`,
+          updated_at: new Date(),
+        }))
+        .where("id", "=", sessionId)
+        .execute();
+      await transaction
+        .insertInto("agent_session_views")
+        .values({
+          session_id: sessionId,
+          tenant_id: identity.tenantId,
+          external_user_id: identity.externalUserId,
+          visibility: "promoted",
+          previous_visibility: "promoted",
+        })
+        .onConflict((conflict) =>
+          conflict
+            .columns(["session_id", "tenant_id", "external_user_id"])
+            .doUpdateSet(({ ref }) => ({
+              visibility: sql`CASE WHEN ${ref("agent_session_views.visibility")} = 'archived' THEN 'archived' ELSE 'promoted' END`,
+              previous_visibility: "promoted",
+              updated_at: new Date(),
+            })),
+        )
+        .execute();
+    });
+    const row = await this.db
+      .selectFrom("agent_sessions")
+      .selectAll()
+      .where("id", "=", sessionId)
+      .executeTakeFirstOrThrow();
+    const presentation = (await this.presentations(identity, [sessionId])).get(
+      sessionId,
+    );
+    return mapSession(
+      row,
+      this.runningTurns.has(sessionId),
+      this.hostId,
+      this.authorityLeaseMs,
+      presentation,
+    );
+  }
+
+  private async settleDelegation(input: {
+    identity: Identity;
+    projectId: string;
+    sessionId: string;
+    resultMessageId: string;
+    status: AgentTurnSettledEvent["status"];
+    content: string;
+  }): Promise<void> {
+    const delegation = await this.db
+      .selectFrom("agent_delegations")
+      .selectAll()
+      .where("target_session_id", "=", input.sessionId)
+      .where("status", "=", "running")
+      .executeTakeFirst();
+    if (!delegation) return;
+
+    if (input.status === "awaiting_input") {
+      await this.requestAttention(
+        input.identity,
+        input.projectId,
+        input.sessionId,
+      );
+      await this.deliver(
+        input.identity,
+        input.projectId,
+        delegation.source_session_id,
+        {
+          content: `Subsession ${input.sessionId} needs user input.`,
+          author: {
+            kind: "agent",
+            sessionId: input.sessionId,
+            agentId: null,
+          },
+          mode: "next_turn",
+          idempotencyKey: `delegation:${delegation.id}:awaiting-input`,
+        },
+      );
+      return;
+    }
+
+    const status = input.status === "completed" ? "completed" : "failed";
+    const updated = await this.db
+      .updateTable("agent_delegations")
+      .set({
+        status,
+        result_message_id: input.resultMessageId,
+        completed_at: new Date(),
+      })
+      .where("id", "=", delegation.id)
+      .where("status", "=", "running")
+      .executeTakeFirst();
+    if (updated.numUpdatedRows !== 1n) return;
+    const result =
+      input.content.trim() || `Subsession ${input.sessionId} ${status}.`;
+    await this.deliver(
+      input.identity,
+      input.projectId,
+      delegation.source_session_id,
+      {
+        content: result,
+        author: {
+          kind: "agent",
+          sessionId: input.sessionId,
+          agentId: null,
+        },
+        mode: "next_turn",
+        idempotencyKey: `delegation:${delegation.id}:result`,
+        metadata: {
+          delegation: {
+            id: delegation.id,
+            childSessionId: input.sessionId,
+            status,
+          },
+        },
+      },
+    );
+  }
+
   private async requireSession(
     identity: Identity,
     projectId: string,
@@ -3580,6 +4389,55 @@ export class AgentSessionsService {
       agentId: row.agent_id,
     });
     return row;
+  }
+
+  private async presentations(
+    identity: Identity,
+    sessionIds: readonly string[],
+  ): Promise<Map<string, SessionPresentation>> {
+    if (sessionIds.length === 0) return new Map();
+    const rows = await this.db
+      .selectFrom("agent_session_views")
+      .select(["session_id", "visibility", "unread", "archived_at"])
+      .where("tenant_id", "=", identity.tenantId)
+      .where("external_user_id", "=", identity.externalUserId)
+      .where("session_id", "in", [...sessionIds])
+      .execute();
+    return new Map(
+      rows.map((row) => [
+        row.session_id,
+        {
+          visibility: sessionVisibility(row.visibility),
+          unread: row.unread,
+          archivedAt: row.archived_at,
+        },
+      ]),
+    );
+  }
+
+  private async promoteSession(
+    identity: Identity,
+    sessionId: string,
+  ): Promise<void> {
+    await this.db
+      .insertInto("agent_session_views")
+      .values({
+        session_id: sessionId,
+        tenant_id: identity.tenantId,
+        external_user_id: identity.externalUserId,
+        visibility: "promoted",
+        previous_visibility: "promoted",
+      })
+      .onConflict((conflict) =>
+        conflict
+          .columns(["session_id", "tenant_id", "external_user_id"])
+          .doUpdateSet(({ ref }) => ({
+            visibility: sql`CASE WHEN ${ref("agent_session_views.visibility")} = 'archived' THEN 'archived' ELSE 'promoted' END`,
+            previous_visibility: "promoted",
+            updated_at: new Date(),
+          })),
+      )
+      .execute();
   }
 }
 
@@ -3744,6 +4602,7 @@ function mapSession(
   running = false,
   hostId?: string,
   authorityLeaseMs = 90_000,
+  presentation?: SessionPresentation,
 ): AgentSession {
   const leaseExpiresAt = new Date(
     row.authority_seen_at.getTime() + authorityLeaseMs,
@@ -3770,7 +4629,11 @@ function mapSession(
     modelEffort: (row.model_effort as AgentEffort | null) ?? null,
     title: row.title,
     icon: row.icon,
+    forkedFromSessionId: row.forked_from_session_id,
     parentSessionId: row.parent_session_id,
+    visibility: presentation?.visibility ?? "promoted",
+    archivedAt: presentation?.archivedAt?.toISOString() ?? null,
+    unread: presentation?.unread ?? false,
     activity: row.activity,
     todos: agentTodos(row.todos),
     authorityHostId: row.authority_host_id,
@@ -3791,6 +4654,79 @@ function mapSession(
     createdAt: row.created_at.toISOString(),
     updatedAt: row.updated_at.toISOString(),
   };
+}
+
+function sessionVisibility(value: string): SessionVisibility {
+  if (value === "latent" || value === "promoted" || value === "archived") {
+    return value;
+  }
+  throw new Error(`Invalid session visibility '${value}'`);
+}
+
+const DEFAULT_DELEGATION_POLICY: AgentDelegationPolicy = {
+  enabled: true,
+  maxConcurrentChildren: 10,
+  routes: [
+    {
+      id: "same-agent",
+      target: "self",
+      allowFurtherDelegation: true,
+    },
+  ],
+};
+
+function delegationPolicy(
+  policy: AgentDelegationPolicy | undefined,
+): AgentDelegationPolicy {
+  return policy ?? DEFAULT_DELEGATION_POLICY;
+}
+
+function privilegeRank(
+  privilege: "read-only" | "edit" | "full-access" | undefined,
+): number {
+  if (privilege === "full-access") return 2;
+  if (privilege === "edit") return 1;
+  return 0;
+}
+
+function resolveDelegationTarget(input: {
+  target: string;
+  requestedAgentId?: string;
+  sourceAgentId: string | undefined;
+  projectId: string;
+}): string {
+  if (input.target === "self") {
+    if (!input.sourceAgentId) {
+      throw new AgentNotConfiguredError(undefined);
+    }
+    if (
+      input.requestedAgentId &&
+      input.requestedAgentId !== input.sourceAgentId
+    ) {
+      throw new AgentDelegationDeniedError(
+        "The selected route only permits the source agent",
+      );
+    }
+    return input.sourceAgentId;
+  }
+  if (input.target === "*") {
+    if (!input.requestedAgentId) {
+      throw new AgentDelegationDeniedError(
+        "This route requires an explicit target agent",
+      );
+    }
+    return input.requestedAgentId;
+  }
+  const relativeProject = input.target.match(/^project:([^:]+)$/);
+  const resolved = relativeProject
+    ? formatProjectAgentId(input.projectId, relativeProject[1] ?? "")
+    : input.target;
+  if (input.requestedAgentId && input.requestedAgentId !== resolved) {
+    throw new AgentDelegationDeniedError(
+      `The selected route only permits agent '${resolved}'`,
+    );
+  }
+  return resolved;
 }
 
 function workflowNotification(

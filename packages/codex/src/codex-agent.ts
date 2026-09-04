@@ -55,6 +55,8 @@ export interface CodexAgentOpts {
   sandboxMode?: "read-only" | "workspace-write" | "danger-full-access";
   /** Allow network access inside the workspace-write sandbox (default true). */
   networkAccessEnabled?: boolean;
+  /** Use the host's first-class subsessions instead of Codex's private agents. */
+  disableNativeSubagents?: boolean;
   /**
    * External MCP servers for this agent. Codex has no programmatic MCP
    * option, but its CLI accepts arbitrary `--config` overrides — the SDK
@@ -168,7 +170,7 @@ export class CodexAgent implements CodingAgentProvider {
     // Host checkout assignments can change between turns. Preserve the
     // caller captured at start while refreshing the live session fields.
     this.sessionContexts.set(session.sessionId, context);
-    const config = mcpServersConfig(
+    const mcpConfig = mcpServersConfig(
       {
         ...resolveMcpServers(this.opts.mcpServers),
         ...this.opts.mcpServersForSession?.(context),
@@ -177,6 +179,9 @@ export class CodexAgent implements CodingAgentProvider {
       mergePolicyLayers(own, this.callerPolicies.get(session.sessionId)),
       annotations,
     );
+    const config = this.opts.disableNativeSubagents
+      ? { ...mcpConfig, features: { multi_agent: false } }
+      : mcpConfig;
     return this.buildClient(config);
   }
 

@@ -36,6 +36,12 @@ export {
   useAgentSessions,
 } from "./hooks/use-agent-sessions.js";
 export {
+  type ArchiveAgentSessionInput,
+  type ArchiveAgentSessionResult,
+  useArchiveAgentSession,
+  useUnarchiveAgentSession,
+} from "./hooks/use-archive-agent-session.js";
+export {
   type AttachPluginInput,
   useAttachPlugin,
 } from "./hooks/use-attach-plugin.js";

@@ -62,9 +62,9 @@ function SessionsList({
     message: string;
   } | null>(null);
   const title = project.data?.name ?? projectName;
-  const items = [...(sessions.data?.items ?? [])].sort((a, b) =>
-    b.updatedAt.localeCompare(a.updatedAt),
-  );
+  const items = [...(sessions.data?.items ?? [])]
+    .filter((session) => session.visibility === "promoted")
+    .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
 
   const openChat = (sessionId: string | null) =>
     navigate({

@@ -503,6 +503,22 @@ export async function startEmbeddedServer(
     tenantId: DESKTOP_TENANT_ID,
     externalUserId: DESKTOP_USER_ID,
   };
+  catamorphic.core.agentSessions?.setArchiveResourcesHandler({
+    impact: async ({ projectId, sessionIds }) => ({
+      activeProcessCount: workspaceBridge
+        ? await workspaceBridge.sessionProcessCount(projectId, sessionIds)
+        : 0,
+    }),
+    stop: async (input) => {
+      await catamorphic.core.watchers?.stopForSessions(input);
+      if (workspaceBridge) {
+        await workspaceBridge.stopSessionProcesses(
+          input.projectId,
+          input.sessionIds,
+        );
+      }
+    },
+  });
   syncWorkflowConnections = (profileId?: string) => {
     // OAuth discovery, registration, token exchange, and tool probing can
     // each update the profile store. Serialize their projections so two
@@ -606,6 +622,68 @@ export async function startEmbeddedServer(
           content: message.content,
         })),
       };
+    },
+    send: async (projectId, ownSessionId, peerSessionId, content, mode) => {
+      const service = catamorphic.core.agentSessions;
+      if (!service) throw new Error("Agent sessions are not configured");
+      const peers = await sessionPeersResolver?.(projectId, ownSessionId);
+      if (!peers?.some((peer) => peer.id === peerSessionId)) {
+        throw new Error("That project session is not visible.");
+      }
+      const ownSession = await service.get(
+        desktopIdentity,
+        projectId,
+        ownSessionId,
+      );
+      return service.deliver(desktopIdentity, projectId, peerSessionId, {
+        content,
+        author: {
+          kind: "agent",
+          sessionId: ownSessionId,
+          agentId: ownSession.agentId,
+        },
+        mode,
+      });
+    },
+    spawn: async (projectId, sessionId, input) => {
+      const service = catamorphic.core.agentSessions;
+      if (!service) throw new Error("Agent sessions are not configured");
+      return service.createSubsession(
+        desktopIdentity,
+        projectId,
+        sessionId,
+        input,
+      );
+    },
+    listSubsessions: async (projectId, sessionId) => {
+      const service = catamorphic.core.agentSessions;
+      if (!service) throw new Error("Agent sessions are not configured");
+      return service.listSubsessions(desktopIdentity, projectId, sessionId);
+    },
+    waitForSubsessions: async (projectId, sessionId, input) => {
+      const service = catamorphic.core.agentSessions;
+      if (!service) throw new Error("Agent sessions are not configured");
+      return service.waitForSubsessions(
+        desktopIdentity,
+        projectId,
+        sessionId,
+        input,
+      );
+    },
+    interruptSubsession: async (projectId, sessionId, childSessionId) => {
+      const service = catamorphic.core.agentSessions;
+      if (!service) throw new Error("Agent sessions are not configured");
+      await service.interruptSubsession(
+        desktopIdentity,
+        projectId,
+        sessionId,
+        childSessionId,
+      );
+    },
+    requestAttention: async (projectId, sessionId) => {
+      const service = catamorphic.core.agentSessions;
+      if (!service) throw new Error("Agent sessions are not configured");
+      return service.requestAttention(desktopIdentity, projectId, sessionId);
     },
     setActivity: async (projectId, sessionId, activity) => {
       await catamorphic.core.agentSessions?.setActivity(

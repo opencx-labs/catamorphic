@@ -990,7 +990,11 @@ export const AgentSessionSchema = z.object({
   modelEffort: AgentEffortSchema.nullable(),
   title: z.string().nullable(),
   icon: z.string().nullable(),
+  forkedFromSessionId: z.string().uuid().nullable(),
   parentSessionId: z.string().uuid().nullable(),
+  visibility: z.enum(["latent", "promoted", "archived"]),
+  archivedAt: z.string().datetime().nullable(),
+  unread: z.boolean(),
   status: z.enum(["active", "closed"]),
   activity: z.string().nullable(),
   todos: z.array(AgentTodoSchema).max(50),
@@ -1020,6 +1024,10 @@ export const AgentSessionPeerSchema = z.object({
   projectId: z.string().uuid(),
   title: z.string().nullable(),
   agentId: z.string().nullable(),
+  parentSessionId: z.string().uuid().nullable(),
+  forkedFromSessionId: z.string().uuid().nullable(),
+  visibility: z.enum(["latent", "promoted", "archived"]),
+  status: z.enum(["active", "closed"]),
   running: z.boolean(),
   task: z.string().max(240).nullable(),
   activity: z.string().max(500).nullable(),
@@ -1038,6 +1046,58 @@ export const CreateAgentSessionSchema = z.object({
   environment: z.string().min(1).optional(),
   /** Surface creating the session. Provenance only; never grants access. */
   source: AgentSessionSourceSchema.optional(),
+  parentSessionId: z.string().uuid().optional(),
+  title: z.string().min(1).max(500).optional(),
+});
+
+export const CreateAgentSubsessionSchema = z.object({
+  routeId: z.string().min(1).max(100).optional(),
+  agentId: z.string().min(1).optional(),
+  task: z.string().min(1).max(100_000),
+  contextMode: z.enum(["fresh", "inherit"]).optional(),
+  title: z.string().min(1).max(500).optional(),
+});
+
+export const AgentSubsessionSchema = z.object({
+  delegationId: z.string().uuid(),
+  routeId: z.string(),
+  task: z.string(),
+  contextMode: z.enum(["fresh", "inherit"]),
+  allowFurtherDelegation: z.boolean(),
+  status: z.enum(["running", "completed", "failed", "interrupted", "archived"]),
+  session: AgentSessionSchema,
+});
+
+export const WaitForAgentSubsessionsSchema = z.object({
+  sessionIds: z.array(z.string().uuid()).max(100).optional(),
+  timeoutMs: z.number().int().min(0).max(60_000).optional(),
+});
+
+export const ArchiveAgentSessionSchema = z.object({
+  confirmStop: z.boolean().optional(),
+});
+
+export const AgentSessionArchiveImpactSchema = z.object({
+  sessionIds: z.array(z.string().uuid()),
+  runningSessionIds: z.array(z.string().uuid()),
+  activeWatcherCount: z.number().int().nonnegative(),
+  activeProcessCount: z.number().int().nonnegative(),
+  requiresConfirmation: z.boolean(),
+});
+
+export const AgentSessionArchiveResultSchema = z.object({
+  impact: AgentSessionArchiveImpactSchema,
+  sessions: z.array(AgentSessionSchema),
+});
+
+export const AgentSessionArchiveConfirmationSchema = z.object({
+  error: z.string(),
+  code: z.literal("archive_confirmation_required"),
+  impact: AgentSessionArchiveImpactSchema,
+});
+
+export const AgentSubsessionIdParamsSchema = AgentSessionIdParamsSchema.extend({
+  childSessionId: z.string().uuid(),
 });
 
 export const UpdateAgentSessionSchema = z.object({

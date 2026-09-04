@@ -45,7 +45,7 @@ interface TerminalSession {
   /** The project this terminal belongs to; home terminals have none. */
   projectId?: string;
   /** Set for agent-owned sessions. */
-  agent?: { projectId: string };
+  agent?: { projectId: string; sessionId: string };
   /**
    * OSC 133 semantic-prompt state (agent sessions spawn with shell
    * integration; see shell-integration.ts). Once markers are `seen`,
@@ -91,6 +91,7 @@ function defaultShell(): string {
 export interface AgentTerminals {
   create(
     projectId: string,
+    ownerSessionId: string,
     workingDirectory?: string,
   ): Promise<{ sessionId: string; cwd: string }>;
   /** Write to an agent-owned session only (the default input path). */
@@ -117,6 +118,8 @@ export interface AgentTerminals {
   commandTracking(sessionId: string): CommandTracking | null;
   /** Whether the session is agent-owned (vs. a user's terminal tab). */
   isAgentOwned(sessionId: string): boolean;
+  countForOwners(projectId: string, ownerSessionIds: readonly string[]): number;
+  killForOwners(projectId: string, ownerSessionIds: readonly string[]): number;
   kill(sessionId: string): boolean;
 }
 
@@ -214,7 +217,7 @@ export function registerTerminalSupport(
     cols?: number;
     rows?: number;
     sender: WebContents | null;
-    agent?: { projectId: string };
+    agent?: { projectId: string; sessionId: string };
   }): Promise<{ sessionId: string; cwd: string }> => {
     const rootPath = input.projectId
       ? await state.current?.projectRoots.get(input.projectId)
@@ -426,14 +429,14 @@ export function registerTerminalSupport(
   }, 500);
 
   const agentTerminals: AgentTerminals = {
-    create: (projectId, workingDirectory) =>
+    create: (projectId, ownerSessionId, workingDirectory) =>
       spawnSession({
         projectId,
         workingDirectory,
         cols: 100,
         rows: 30,
         sender: null,
-        agent: { projectId },
+        agent: { projectId, sessionId: ownerSessionId },
       }),
     write: (sessionId, data) => {
       const session = sessions.get(sessionId);
@@ -483,6 +486,29 @@ export function registerTerminalSupport(
       };
     },
     isAgentOwned: (sessionId) => Boolean(sessions.get(sessionId)?.agent),
+    countForOwners: (projectId, ownerSessionIds) => {
+      const owners = new Set(ownerSessionIds);
+      return [...sessions.values()].filter(
+        (session) =>
+          session.running &&
+          session.agent?.projectId === projectId &&
+          owners.has(session.agent.sessionId),
+      ).length;
+    },
+    killForOwners: (projectId, ownerSessionIds) => {
+      const owners = new Set(ownerSessionIds);
+      const matches = [...sessions.entries()].filter(
+        ([, session]) =>
+          session.agent?.projectId === projectId &&
+          owners.has(session.agent.sessionId),
+      );
+      for (const [sessionId, session] of matches) {
+        sessions.delete(sessionId);
+        if (session.running) session.pty.kill();
+        broadcast("catamorphic:terminal-exit", { sessionId, exitCode: 0 });
+      }
+      return matches.length;
+    },
     kill: (sessionId) => {
       const session = sessions.get(sessionId);
       if (!session?.agent) return false;
