@@ -68,12 +68,11 @@ export function renderHomebrewCask(input: {
   name "Catamorphic"
   desc "Local-first workspace for projects, agents, workflows, and apps"
   homepage "https://github.com/opencx-labs/catamorphic"
+
   auto_updates true
-
   conflicts_with cask: "${conflictingToken}"
-
   depends_on arch: :arm64
-  depends_on macos: ">= :monterey"
+  depends_on macos: :monterey
 
   app "Catamorphic.app"
 
