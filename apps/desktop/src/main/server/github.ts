@@ -28,14 +28,19 @@ interface StoredFile {
  * desktop is single-tenant, so the tenant/user keys are ignored.
  */
 export class FileGithubTokenStore implements GithubTokenStore {
+  private cached: StoredGithubConnection | null | undefined;
+
   constructor(private readonly file: string) {}
 
   async get(): Promise<StoredGithubConnection | null> {
+    if (this.cached !== undefined) return this.cached;
+
     let stored: StoredFile;
     try {
       stored = JSON.parse(fs.readFileSync(this.file, "utf-8"));
     } catch {
-      return null;
+      this.cached = null;
+      return this.cached;
     }
     let raw: string | null = null;
     if (stored.connectionEncrypted) {
@@ -44,17 +49,24 @@ export class FileGithubTokenStore implements GithubTokenStore {
           Buffer.from(stored.connectionEncrypted, "base64"),
         );
       } catch {
-        return null;
+        this.cached = null;
+        return this.cached;
       }
     } else {
       raw = stored.connectionPlaintext ?? null;
     }
-    if (!raw) return null;
+    if (!raw) {
+      this.cached = null;
+      return this.cached;
+    }
     try {
       const parsed = JSON.parse(raw) as StoredGithubConnection;
-      return typeof parsed.tokens?.accessToken === "string" ? parsed : null;
+      this.cached =
+        typeof parsed.tokens?.accessToken === "string" ? parsed : null;
+      return this.cached;
     } catch {
-      return null;
+      this.cached = null;
+      return this.cached;
     }
   }
 
@@ -78,9 +90,11 @@ export class FileGithubTokenStore implements GithubTokenStore {
     fs.writeFileSync(this.file, `${JSON.stringify(stored, null, 2)}\n`, {
       mode: 0o600,
     });
+    this.cached = connection;
   }
 
   async delete(): Promise<void> {
     fs.rmSync(this.file, { force: true });
+    this.cached = null;
   }
 }

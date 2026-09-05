@@ -743,6 +743,7 @@ export interface CatamorphicDesktopApi {
     userCode: string;
     verificationUri: string;
   }>;
+  githubConnectCancel: () => Promise<void>;
   githubDisconnect: () => Promise<void>;
   githubManageRepos: () => Promise<void>;
   githubImport: (input: {

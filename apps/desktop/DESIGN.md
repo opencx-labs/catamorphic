@@ -3336,3 +3336,16 @@ paths, deliberately independent:
   assembled from several roles and still receive one coherent project-owned
   experience. Root users can preview every experience while ordinary builders
   receive only permissions their role actually grants.
+
+### GitHub authorization steps aside (2026-09-05)
+
+- Starting GitHub authorization from project setup replaces the blocking
+  project dialog with a compact bottom tray. The GitHub workspace tab stays
+  visible and fully interactive while the tray keeps the device code, copy,
+  reopen, and cancel actions within reach. Success or failure restores the
+  project dialog in place instead of discarding its setup context.
+- Keychain access is ordinary app infrastructure, not a recurring consent
+  surface. Consistently signed production builds own the Catamorphic
+  `safeStorage` identity; development and isolated test builds use a separate
+  application name, and concurrent vault unlocks coalesce into one request.
+  We do not weaken the Keychain item or make it accessible to other apps.

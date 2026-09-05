@@ -1,8 +1,30 @@
 import { describe, expect, it } from "vitest";
 import {
   defaultDesktopProjectsDir,
+  desktopApplicationName,
   desktopDataDirFromEnvironment,
 } from "./development-paths.js";
+
+describe("desktopApplicationName", () => {
+  it("keeps development Keychain storage separate from production", () => {
+    expect(
+      desktopApplicationName({
+        isPackaged: false,
+      }),
+    ).toBe("Catamorphic Development");
+    expect(
+      desktopApplicationName({
+        isPackaged: true,
+        isolatedDataDir: "/tmp/catamorphic-dev",
+      }),
+    ).toBe("Catamorphic Development");
+    expect(
+      desktopApplicationName({
+        isPackaged: true,
+      }),
+    ).toBe("Catamorphic");
+  });
+});
 
 describe("desktopDataDirFromEnvironment", () => {
   it("uses the worktree-scoped development data directory", () => {

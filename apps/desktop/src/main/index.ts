@@ -15,7 +15,10 @@ import { registerAgentBridge } from "./agent-bridge.js";
 import { registerBrowserSupport } from "./browser.js";
 import { toPublicConnection } from "./connections-store.js";
 import { ConnectorsService } from "./connectors.js";
-import { desktopDataDirFromEnvironment } from "./development-paths.js";
+import {
+  desktopApplicationName,
+  desktopDataDirFromEnvironment,
+} from "./development-paths.js";
 import {
   shouldShowWindow,
   shouldUseE2ePlainTextEncryption,
@@ -38,6 +41,18 @@ import {
 } from "./updater.js";
 import { WindowStateStore } from "./window-state.js";
 import { desktopProfileMcpProvider } from "./workflow-mcp-connections.js";
+
+// Electron derives the macOS safeStorage Keychain service from the app name.
+// Keep unsigned development and E2E builds away from the consistently signed
+// production identity so local testing cannot poison the production item's
+// access control list and cause prompts after an update.
+const isolatedDataDir = desktopDataDirFromEnvironment(process.env);
+app.setName(
+  desktopApplicationName({
+    isPackaged: app.isPackaged,
+    isolatedDataDir,
+  }),
+);
 
 // macOS 26.x + Apple Silicon: V8's background compiler threads race the
 // OS's MAP_JIT write-protection and SIGTRAP in ThreadIsolation::
@@ -66,7 +81,6 @@ app.userAgentFallback = app.userAgentFallback
 // E2E runs point userData at a throwaway dir so tests never touch real
 // settings/projects/DB, and may run beside a normally-running app.
 const e2eDataDir = process.env.CATAMORPHIC_E2E_DATA_DIR;
-const isolatedDataDir = desktopDataDirFromEnvironment(process.env);
 const showWindow = shouldShowWindow({
   e2eDataDir,
   e2eWindowMode: process.env.CATAMORPHIC_E2E_WINDOW_MODE,

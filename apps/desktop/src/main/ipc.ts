@@ -2193,6 +2193,10 @@ export function registerIpcHandlers(
     };
   });
 
+  ipcMain.handle("catamorphic:github-connect-cancel", () => {
+    deviceFlowGeneration += 1;
+  });
+
   // Repo access is granted by *installing* the GitHub App, not by the OAuth
   // authorization itself — send users to the installation page where GitHub
   // shows the repository picker.

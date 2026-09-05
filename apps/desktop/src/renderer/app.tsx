@@ -5626,6 +5626,7 @@ export function App() {
       <ProjectModal
         open={projectModalOpen}
         onClose={() => setProjectModalOpen(false)}
+        onOpenUrl={(url) => openBrowserTab(url)}
         onCreated={(project) => {
           setProjectModalOpen(false);
           // New projects belong to the profile they were created in.
