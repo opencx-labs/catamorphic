@@ -2,12 +2,13 @@ import type { DB } from "@catamorphic/db";
 import type { ProjectManager } from "@catamorphic/git";
 import type { Kysely } from "kysely";
 import { z } from "zod";
-import type {
-  ArtifactRef,
-  ConnectionUseRef,
-  ExecutionEnvironmentRef,
-  Identity,
-  ProjectPermissionRef,
+import {
+  type ArtifactRef,
+  type ConnectionUseRef,
+  type ExecutionEnvironmentRef,
+  type Identity,
+  PROJECT_PERMISSION_PATTERN,
+  type ProjectPermissionRef,
 } from "../identity.js";
 import { assertBuilder } from "./artifact-scope.js";
 import {
@@ -63,7 +64,16 @@ const ConnectionEntrySchema = z.object({
   capabilities: z.array(z.string().min(1)).optional(),
 });
 
-const ProjectPermissionSchema = z.enum(["memberships:manage", "roles:manage"]);
+/**
+ * Core reserves the names it enforces, while embedders and projects may add
+ * namespaced capabilities for their own services and presentation rules.
+ */
+const ProjectPermissionSchema = z
+  .string()
+  .regex(
+    PROJECT_PERMISSION_PATTERN,
+    "Expected a namespaced capability such as memberships:manage",
+  );
 
 /** The committed `roles/<name>.json` schema, version 1. */
 export const RoleDefinitionSchema = z.object({
@@ -73,7 +83,7 @@ export const RoleDefinitionSchema = z.object({
   description: z.string().optional(),
   /** Full program access to the project (a `project` ref). */
   builder: z.boolean().optional(),
-  /** Project administration, intentionally independent from builder access. */
+  /** Namespaced project capabilities, independent from builder access. */
   permissions: z.array(ProjectPermissionSchema).optional(),
   agents: z.array(AgentEntrySchema).optional(),
   workflows: z.array(z.string().min(1)).optional(),

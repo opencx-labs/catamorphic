@@ -1,3 +1,4 @@
+import type { ProjectExperienceWhen } from "../../shared/project-experience.js";
 import type { DesktopUpdateState } from "../../shared/update.js";
 import type { UsageSummary } from "../../shared/usage.js";
 
@@ -403,7 +404,7 @@ export interface ConnectLink {
 export interface RemoteCapabilities {
   builder: boolean;
   source: { remoteUrl: string; defaultBranch: string } | null;
-  permissions: Array<"memberships:manage" | "roles:manage">;
+  permissions: string[];
   agents: string[];
   documents: Array<{ path: string; access: "read" | "write" }>;
   features: {
@@ -645,6 +646,7 @@ export interface SidebarItem {
   preview?: SidebarPreview | false;
   items?: SidebarItem[];
   collapsed?: boolean;
+  when?: ProjectExperienceWhen;
 }
 
 export interface SidebarSectionConfig {
@@ -668,6 +670,7 @@ export interface SidebarSectionConfig {
   items?: SidebarItem[];
   open?: "tab" | "replace";
   menu?: SidebarMenuEntry[];
+  when?: ProjectExperienceWhen;
 }
 
 export interface SidebarConfig {

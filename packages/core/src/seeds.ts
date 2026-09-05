@@ -408,6 +408,8 @@ Access is enforced by the host from **roles you commit** as
 }
 // roles/admin.json
 { "version": 1, "name": "Admin", "builder": true, "documents": ["store/**"] }
+// roles/brain-maintainer.json
+{ "version": 1, "name": "Brain Maintainer", "permissions": ["brain:maintain"], "agents": ["brain-maintainer"] }
 \`\`\`
 
 Rules of thumb when authoring roles:
@@ -423,6 +425,11 @@ Rules of thumb when authoring roles:
   their exported name, apps by \`apps/<name>\`. A role may narrow an agent's
   tools with \`toolPolicies\` (allow / ask / deny per tool, per connector
   server key, or \`catamorphic\` for the project's own workflow tools).
+- \`permissions\` is an extensible namespaced capability list. Catamorphic
+  enforces its documented names (\`memberships:manage\` and \`roles:manage\`);
+  hosts may enforce their own names, such as \`brain:maintain\`. A custom
+  permission does not grant framework authority unless the host implements it.
+  The desktop may use these capabilities in project-authored \`when\` rules.
 - A member sees a workflow only when a role grants its exported name. An
   unattended workflow also needs role grants for its chosen Environment and
   every declared connection alias. Grant the project agent too when the

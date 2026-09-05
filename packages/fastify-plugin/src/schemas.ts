@@ -1,4 +1,7 @@
-import { RoleDefinitionSchema as CoreRoleDefinitionSchema } from "@catamorphic/core";
+import {
+  RoleDefinitionSchema as CoreRoleDefinitionSchema,
+  PROJECT_PERMISSION_PATTERN,
+} from "@catamorphic/core";
 import { z } from "zod";
 
 // --- Params ---
@@ -1582,7 +1585,14 @@ export const MeSchema = z.object({
           defaultBranch: z.string(),
         })
         .nullable(),
-      permissions: z.array(z.enum(["memberships:manage", "roles:manage"])),
+      permissions: z.array(
+        z
+          .string()
+          .regex(
+            PROJECT_PERMISSION_PATTERN,
+            "Expected a namespaced project capability",
+          ),
+      ),
       agents: z.array(z.string()),
       workflows: z.array(z.string()),
       apps: z.array(z.string()),

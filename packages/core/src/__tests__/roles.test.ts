@@ -105,13 +105,14 @@ describe("roles as files (ADR 0055): expansion", () => {
     const teamAdmin = validateRoleDefinition({
       version: 1,
       name: "Team admin",
-      permissions: ["memberships:manage", "roles:manage"],
+      permissions: ["memberships:manage", "roles:manage", "brain:maintain"],
     });
     if ("error" in teamAdmin) throw new Error(teamAdmin.error);
     expect(expandRole(teamAdmin.definition, "p1", {})).toEqual([]);
     expect(expandRolePermissions(teamAdmin.definition, "p1")).toEqual([
       { projectId: "p1", permission: "memberships:manage" },
       { projectId: "p1", permission: "roles:manage" },
+      { projectId: "p1", permission: "brain:maintain" },
     ]);
 
     const builder = validateRoleDefinition({
@@ -137,5 +138,12 @@ describe("roles as files (ADR 0055): expansion", () => {
         documents: [{ path: "a", access: "admin" }],
       }),
     ).toMatchObject({ error: expect.stringMatching(/documents\.0/) });
+    expect(
+      validateRoleDefinition({
+        version: 1,
+        name: "x",
+        permissions: ["not-namespaced"],
+      }),
+    ).toMatchObject({ error: expect.stringMatching(/permissions\.0/) });
   });
 });

@@ -44,11 +44,29 @@ export interface Identity {
   connectionScope?: readonly ConnectionUseRef[];
   /** Host-issued administrative permissions, never sourced from project code. */
   controlPlanePermissions?: readonly ControlPlanePermission[];
-  /** Ordinary project administration granted by committed project roles. */
+  /**
+   * Project capabilities granted by committed project roles. Catamorphic
+   * services reserve and enforce their documented names; embedders may use
+   * additional namespaced capabilities in their own services and UI.
+   */
   projectPermissions?: readonly ProjectPermissionRef[];
 }
 
-export type ProjectPermission = "memberships:manage" | "roles:manage";
+/**
+ * A namespaced project capability, for example `memberships:manage` or an
+ * embedder-owned `acme:approve_deals`. The open string surface is deliberate:
+ * roles are project-owned and embedders may add enforcement outside core.
+ */
+export type ProjectPermission = string;
+
+/** Shared syntax for project capabilities at every public boundary. */
+export const PROJECT_PERMISSION_PATTERN =
+  /^[a-z][a-z0-9._-]*:[a-z][a-z0-9._-]*$/;
+
+export const CORE_PROJECT_PERMISSIONS = [
+  "memberships:manage",
+  "roles:manage",
+] as const satisfies readonly ProjectPermission[];
 
 export interface ProjectPermissionRef {
   projectId: string;

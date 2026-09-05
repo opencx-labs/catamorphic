@@ -3321,3 +3321,18 @@ paths, deliberately independent:
   API, and desktop conversations share the durable session model and normal
   Chats list with source attribution. MCP installation and project choice
   belong to invitation/onboarding outside the desktop.
+
+### Project capability targeting, not product personas (2026-09-04)
+
+- Member and builder remain useful checkout facts, not the desktop's complete
+  persona model. Project role permissions are namespaced and flow through
+  identity introspection; embedders may add their own without changing the
+  shell.
+- Shared sidebar sections and custom items, plus project New Tab actions, may
+  use `when: { builder?, permissions? }`. Every condition must match. Missing
+  targeting leaves the item universal; malformed targeting removes it rather
+  than exposing it broadly.
+- Configuration names authority, never role slugs. A Brain Maintainer can be
+  assembled from several roles and still receive one coherent project-owned
+  experience. Root users can preview every experience while ordinary builders
+  receive only permissions their role actually grants.

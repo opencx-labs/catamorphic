@@ -3,6 +3,7 @@
 - **Status:** Accepted
 - **Date:** 2026-09-04
 - **Refines:** 0043, 0045, 0050, 0055, 0058, 0061, 0081
+- **Starting-action targeting refined by:** 0092
 
 ## Context
 
@@ -16,9 +17,9 @@ another MCP client must remain recognizable in the same history.
 ## Decision
 
 Projects own their shared sidebar and may declare up to six starting actions
-in `.catamorphic/project.json`. The desktop resolves each action for the
-caller's `member` or `builder` capability segment before rendering it in the
-ordinary New Tab palette. An absent or empty list creates no UI.
+in `.catamorphic/project.json`. The desktop resolves each action against the
+caller's project authority before rendering it in the ordinary New Tab
+palette. An absent or empty list creates no UI.
 
 The built-in sidebar centers Chats, Files, Apps, and content. Changes and Pull
 Requests remain configurable builder surfaces. Remote document transfer is

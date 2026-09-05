@@ -40,6 +40,10 @@ import {
 } from "react";
 import { type ActionId, KEYBINDING_ACTIONS } from "../shared/actions.js";
 import {
+  matchesProjectExperience,
+  type ProjectExperienceContext,
+} from "../shared/project-experience.js";
+import {
   type AgentPointer,
   AgentPointers,
 } from "./components/agent-pointers.js";
@@ -940,6 +944,11 @@ export function App() {
     ? true
     : remoteSurfaceStatus !== null &&
       remoteSurfaceStatus.capabilities?.builder !== true;
+  const projectExperienceContext: ProjectExperienceContext = {
+    root: remoteSurfaceResolved && remoteSurfaceStatus === null,
+    builder: !memberShell,
+    permissions: remoteSurfaceStatus?.capabilities?.permissions ?? [],
+  };
 
   useEffect(() => {
     if (!projectId) {
@@ -4732,14 +4741,19 @@ export function App() {
               (sidebarConfig?.sections ?? [])
                 .filter(
                   (section) =>
-                    !memberShell ||
-                    !["git", "prs", "remote"].includes(section.type),
+                    matchesProjectExperience(
+                      section.when,
+                      projectExperienceContext,
+                    ) &&
+                    (!memberShell ||
+                      !["git", "prs", "remote"].includes(section.type)),
                 )
                 .map((section, index) => (
                   <ConfiguredSection
                     // biome-ignore lint/suspicious/noArrayIndexKey: sections have no id; the same type may appear twice, and order IS identity here
                     key={`${section.type}:${index}`}
                     section={section}
+                    experienceContext={projectExperienceContext}
                     memberShell={memberShell}
                     projectId={projectId}
                     profileId={activeProfile?.id}
@@ -5667,6 +5681,7 @@ export function App() {
 /** One sidebar section, shaped by the user's sidebar.js config. */
 function ConfiguredSection({
   section,
+  experienceContext,
   memberShell,
   projectId,
   profileId,
@@ -5688,6 +5703,7 @@ function ConfiguredSection({
   onPropose,
 }: {
   section: SidebarSectionConfig;
+  experienceContext: ProjectExperienceContext;
   memberShell: boolean;
   projectId: string;
   profileId?: string;
@@ -5875,6 +5891,7 @@ function ConfiguredSection({
           >
             <CustomItems
               section={section}
+              experienceContext={experienceContext}
               onOpenUrl={onOpenUrl}
               onEmptyChange={setEmpty}
             />
@@ -5896,14 +5913,18 @@ function ConfiguredSection({
  */
 function CustomItems({
   section,
+  experienceContext,
   onOpenUrl,
   onEmptyChange,
 }: {
   section: SidebarSectionConfig;
+  experienceContext: ProjectExperienceContext;
   onOpenUrl: (url: string, mode: "tab" | "replace") => void;
   onEmptyChange?: (empty: boolean) => void;
 }) {
-  const items = section.items ?? [];
+  const items = (section.items ?? []).filter((item) =>
+    sidebarItemVisible(item, experienceContext),
+  );
   const isEmpty = items.length === 0;
   useEffect(() => {
     onEmptyChange?.(isEmpty);
@@ -5922,6 +5943,7 @@ function CustomItems({
           key={JSON.stringify(item)}
           item={item}
           section={section}
+          experienceContext={experienceContext}
           onOpenUrl={onOpenUrl}
         />
       ))}
@@ -5932,14 +5954,18 @@ function CustomItems({
 function CustomItem({
   item,
   section,
+  experienceContext,
   onOpenUrl,
 }: {
   item: SidebarItem;
   section: SidebarSectionConfig;
+  experienceContext: ProjectExperienceContext;
   onOpenUrl: (url: string, mode: "tab" | "replace") => void;
 }) {
   const [open, setOpen] = useState(item.collapsed !== true);
-  const children = item.items ?? [];
+  const children = (item.items ?? []).filter((child) =>
+    sidebarItemVisible(child, experienceContext),
+  );
   const mode = item.open ?? section.open ?? "replace";
   const openItem = () => {
     if (item.url) onOpenUrl(item.url, mode);
@@ -6005,6 +6031,7 @@ function CustomItem({
                   key={JSON.stringify(child)}
                   item={child}
                   section={section}
+                  experienceContext={experienceContext}
                   onOpenUrl={onOpenUrl}
                 />
               ))}
@@ -6014,6 +6041,15 @@ function CustomItem({
       )}
     </li>
   );
+}
+
+function sidebarItemVisible(
+  item: SidebarItem,
+  context: ProjectExperienceContext,
+): boolean {
+  if (!matchesProjectExperience(item.when, context)) return false;
+  if (item.url) return true;
+  return (item.items ?? []).some((child) => sidebarItemVisible(child, context));
 }
 
 function SidebarSection({
