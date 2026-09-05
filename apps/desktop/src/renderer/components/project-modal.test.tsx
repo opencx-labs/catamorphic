@@ -14,6 +14,7 @@ const desktop = vi.hoisted(() => ({
     verificationUri: "https://github.com/login/device",
   }),
   githubConnectCancel: vi.fn().mockResolvedValue(undefined),
+  githubManageRepos: vi.fn().mockResolvedValue(undefined),
   onGithubConnected: vi.fn((listener: (result: unknown) => void) => {
     desktop.connectedListener = listener;
     return () => {
@@ -22,17 +23,33 @@ const desktop = vi.hoisted(() => ({
   }),
 }));
 
+const github = vi.hoisted(() => ({
+  connected: false,
+  login: undefined as string | undefined,
+  repos: [] as Array<{
+    id: number;
+    name: string;
+    fullName: string;
+    private: boolean;
+    defaultBranch: string;
+    cloneUrl: string;
+  }>,
+}));
+
 vi.mock("../lib/desktop-api.js", () => ({
   desktopApi: desktop,
 }));
 
 vi.mock("@catamorphic/react", () => ({
   useGithubStatus: () => ({
-    data: { connected: false },
+    data: {
+      connected: github.connected,
+      ...(github.login ? { login: github.login } : {}),
+    },
     isLoading: false,
   }),
   useGithubRepos: () => ({
-    data: [],
+    data: github.repos,
     error: null,
     isError: false,
     isLoading: false,
@@ -57,6 +74,9 @@ afterEach(() => {
   });
   document.body.replaceChildren();
   desktop.connectedListener = null;
+  github.connected = false;
+  github.login = undefined;
+  github.repos = [];
   vi.clearAllMocks();
 });
 
@@ -68,7 +88,6 @@ describe("GithubAuthorizationTray", () => {
       value: { writeText },
     });
     const onCancel = vi.fn();
-    const onOpenUrl = vi.fn();
     const container = document.createElement("div");
     document.body.append(container);
     const root = createRoot(container);
@@ -82,7 +101,6 @@ describe("GithubAuthorizationTray", () => {
             verificationUri: "https://github.com/login/device",
           }}
           onCancel={onCancel}
-          onOpenUrl={onOpenUrl}
         />,
       );
     });
@@ -92,15 +110,22 @@ describe("GithubAuthorizationTray", () => {
     expect(container.textContent).toContain("061F-9C19");
     const buttons = Array.from(container.querySelectorAll("button"));
     await act(async () =>
-      buttons.find((button) => button.textContent === "Copy code")?.click(),
+      container
+        .querySelector<HTMLButtonElement>('button[aria-label="Copy code"]')
+        ?.click(),
     );
     expect(writeText).toHaveBeenCalledWith("061F-9C19");
     expect(container.textContent).toContain("Copied");
-
-    act(() =>
-      buttons.find((button) => button.textContent === "Open GitHub")?.click(),
+    expect(container.textContent).not.toContain("Open GitHub");
+    expect(
+      container.querySelector('button[aria-label="Code copied"]'),
+    ).not.toBeNull();
+    const copyStates = container.querySelectorAll(
+      'button[aria-label="Code copied"] > span > span',
     );
-    expect(onOpenUrl).toHaveBeenCalledWith("https://github.com/login/device");
+    expect(copyStates).toHaveLength(2);
+    expect(copyStates[0]?.className).toContain("invisible");
+    expect(copyStates[1]?.className).not.toContain("invisible");
     act(() =>
       buttons.find((button) => button.textContent === "Cancel")?.click(),
     );
@@ -119,12 +144,7 @@ describe("GithubAuthorizationTray", () => {
     await act(async () => {
       root.render(
         <QueryClientProvider client={queryClient}>
-          <ProjectModal
-            open
-            onClose={() => {}}
-            onCreated={() => {}}
-            onOpenUrl={() => {}}
-          />
+          <ProjectModal open onClose={() => {}} onCreated={() => {}} />
         </QueryClientProvider>,
       );
     });
@@ -149,5 +169,62 @@ describe("GithubAuthorizationTray", () => {
       document.querySelector('[data-testid="github-authorization-tray"]'),
     ).toBeNull();
     expect(container.querySelector('[aria-hidden="false"]')).not.toBeNull();
+  });
+
+  it("explains missing grants and steps aside while repository access changes", async () => {
+    github.connected = true;
+    github.login = "octocat";
+    github.repos = [
+      {
+        id: 1,
+        name: "visible",
+        fullName: "octocat/visible",
+        private: true,
+        defaultBranch: "main",
+        cloneUrl: "https://github.com/octocat/visible.git",
+      },
+    ];
+    const container = document.createElement("div");
+    document.body.append(container);
+    const root = createRoot(container);
+    roots.push(root);
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false } },
+    });
+
+    await act(async () => {
+      root.render(
+        <QueryClientProvider client={queryClient}>
+          <ProjectModal open onClose={() => {}} onCreated={() => {}} />
+        </QueryClientProvider>,
+      );
+    });
+    act(() => {
+      Array.from(container.querySelectorAll("button"))
+        .find((button) => button.textContent === "GitHub")
+        ?.click();
+    });
+    const input = container.querySelector<HTMLInputElement>(
+      '[data-testid="github-repo-search"]',
+    );
+    act(() => {
+      const setter = Object.getOwnPropertyDescriptor(
+        HTMLInputElement.prototype,
+        "value",
+      )?.set;
+      setter?.call(input, "missing");
+      input?.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    expect(container.textContent).toContain("No granted repositories match.");
+    act(() => {
+      Array.from(container.querySelectorAll("button"))
+        .find((button) => button.textContent === "Manage repository access")
+        ?.click();
+    });
+    expect(desktop.githubManageRepos).toHaveBeenCalledOnce();
+    expect(
+      document.querySelector('[data-testid="github-repository-access-tray"]'),
+    ).not.toBeNull();
+    expect(container.querySelector('[aria-hidden="true"]')).not.toBeNull();
   });
 });

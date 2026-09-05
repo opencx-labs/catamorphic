@@ -1388,13 +1388,34 @@ export function registerIpcHandlers(
     externalUserId: DESKTOP_USER_ID,
   };
 
+  const registerProjectForWindow = async ({
+    event,
+    project,
+    rootPath,
+  }: {
+    event: Electron.IpcMainInvokeEvent;
+    project: { id: string; name: string };
+    rootPath: string;
+  }) => {
+    const server = state.current;
+    if (!server) throw new Error("Server not running");
+    await server.projectRoots.set(project.id, rootPath);
+    const profileId = windows.profileFor(event.sender);
+    profiles.claimProject(profileId, project.id);
+    profileConfig.forProfile(profileId).prefs.save({
+      lastProjectId: project.id,
+    });
+    state.broadcast("catamorphic:profiles-changed", profiles.list());
+    return { id: project.id, name: project.name };
+  };
+
   // Project create/import runs through IPC (not HTTP): explicit filesystem
   // locations are a desktop capability, and the projectId → folder mapping is
   // desktop-owned state the shared API never sees.
   ipcMain.handle(
     "catamorphic:project-create",
     async (
-      _event,
+      event,
       input: {
         name: string;
         rootPath: string;
@@ -1411,8 +1432,11 @@ export function registerIpcHandlers(
         rootPath: input.rootPath,
         importExisting: input.importExisting,
       });
-      await server.projectRoots.set(project.id, input.rootPath);
-      return { id: project.id, name: project.name };
+      return registerProjectForWindow({
+        event,
+        project,
+        rootPath: input.rootPath,
+      });
     },
   );
 
@@ -2216,7 +2240,7 @@ export function registerIpcHandlers(
   ipcMain.handle(
     "catamorphic:github-import",
     async (
-      _event,
+      event,
       input: { fullName: string; name?: string; rootPath: string },
     ) => {
       const server = state.current;
@@ -2235,8 +2259,11 @@ export function registerIpcHandlers(
           rootPath: input.rootPath,
         },
       );
-      await server.projectRoots.set(project.id, input.rootPath);
-      return { id: project.id, name: project.name };
+      return registerProjectForWindow({
+        event,
+        project,
+        rootPath: input.rootPath,
+      });
     },
   );
 }

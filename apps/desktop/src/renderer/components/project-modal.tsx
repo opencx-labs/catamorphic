@@ -8,7 +8,6 @@ import {
   Check,
   CheckCircle2,
   Copy,
-  ExternalLink,
   FolderOpen,
   FolderPlus,
   Import,
@@ -54,12 +53,10 @@ export function ProjectModal({
   open,
   onClose,
   onCreated,
-  onOpenUrl,
 }: {
   open: boolean;
   onClose: () => void;
   onCreated: (project: { id: string; name: string }) => void;
-  onOpenUrl: (url: string) => void;
 }) {
   const [mode, setMode] = useState<Mode>("create");
   const [name, setName] = useState("");
@@ -72,6 +69,7 @@ export function ProjectModal({
   const [error, setError] = useState<string | null>(null);
   const [githubGrant, setGithubGrant] =
     useState<GithubAuthorizationGrant | null>(null);
+  const [managingGithubAccess, setManagingGithubAccess] = useState(false);
   const queryClient = useQueryClient();
   const finishGithubAuthorization = useCallback(() => {
     setGithubGrant(null);
@@ -86,6 +84,7 @@ export function ProjectModal({
     setPending(false);
     setError(null);
     setGithubGrant(null);
+    setManagingGithubAccess(false);
     void desktopApi.defaultProjectsDir().then(setParentDir);
   }, [open]);
 
@@ -159,7 +158,10 @@ export function ProjectModal({
   };
 
   return (
-    <Modal open={open && githubGrant === null} onClose={onClose}>
+    <Modal
+      open={open && githubGrant === null && !managingGithubAccess}
+      onClose={onClose}
+    >
       <form onSubmit={submit}>
         <div className="px-5 pt-5 pb-1">
           <div
@@ -223,6 +225,15 @@ export function ProjectModal({
                 selected={selectedRepo}
                 onAuthorizationStarted={setGithubGrant}
                 onAuthorizationFinished={finishGithubAuthorization}
+                onManageAccess={() => {
+                  setManagingGithubAccess(true);
+                  void desktopApi.githubManageRepos().catch((cause) => {
+                    setManagingGithubAccess(false);
+                    setError(
+                      cause instanceof Error ? cause.message : String(cause),
+                    );
+                  });
+                }}
                 onSelect={(repo) => {
                   setSelectedRepo(repo);
                   if (repo && !name.trim()) setName(repo.name);
@@ -317,7 +328,19 @@ export function ProjectModal({
           <GithubAuthorizationTray
             grant={githubGrant}
             onCancel={() => void cancelGithubAuthorization()}
-            onOpenUrl={onOpenUrl}
+          />,
+          document.body,
+        )}
+      {open &&
+        managingGithubAccess &&
+        createPortal(
+          <GithubRepositoryAccessTray
+            onDone={() => {
+              setManagingGithubAccess(false);
+              void queryClient.invalidateQueries({
+                queryKey: ["cat", "github"],
+              });
+            }}
           />,
           document.body,
         )}
@@ -328,11 +351,9 @@ export function ProjectModal({
 export function GithubAuthorizationTray({
   grant,
   onCancel,
-  onOpenUrl,
 }: {
   grant: GithubAuthorizationGrant;
   onCancel: () => void;
-  onOpenUrl: (url: string) => void;
 }) {
   const [copied, setCopied] = useState(false);
 
@@ -366,21 +387,24 @@ export function GithubAuthorizationTray({
           type="button"
           onClick={() => void copyCode()}
           className="flex h-8 shrink-0 cursor-pointer items-center gap-1.5 rounded-md px-2.5 text-xs text-fg-muted transition-colors duration-150 hover:bg-bg-overlay hover:text-fg"
+          aria-label={copied ? "Code copied" : "Copy code"}
         >
-          {copied ? (
-            <CheckCircle2 className="size-3.5 text-success" />
-          ) : (
-            <Copy className="size-3.5" />
-          )}
-          {copied ? "Copied" : "Copy code"}
-        </button>
-        <button
-          type="button"
-          onClick={() => onOpenUrl(grant.verificationUri)}
-          className="flex h-8 shrink-0 cursor-pointer items-center gap-1.5 rounded-md bg-accent px-2.5 text-xs font-medium text-accent-fg transition-opacity duration-150 hover:opacity-90"
-        >
-          <ExternalLink className="size-3.5" />
-          Open GitHub
+          <span className="grid min-w-max shrink-0 place-items-center whitespace-nowrap">
+            <span
+              aria-hidden={copied}
+              className={`col-start-1 row-start-1 flex items-center gap-1.5 whitespace-nowrap ${copied ? "invisible" : ""}`}
+            >
+              <Copy className="size-3.5" />
+              Copy code
+            </span>
+            <span
+              aria-hidden={!copied}
+              className={`col-start-1 row-start-1 flex items-center gap-1.5 whitespace-nowrap ${copied ? "" : "invisible"}`}
+            >
+              <CheckCircle2 className="size-3.5 text-success" />
+              Copied
+            </span>
+          </span>
         </button>
         <button
           type="button"
@@ -388,6 +412,38 @@ export function GithubAuthorizationTray({
           className="h-8 shrink-0 cursor-pointer rounded-md px-2 text-xs text-fg-faint transition-colors duration-150 hover:bg-bg-overlay hover:text-fg"
         >
           Cancel
+        </button>
+      </div>
+    </aside>
+  );
+}
+
+function GithubRepositoryAccessTray({ onDone }: { onDone: () => void }) {
+  return (
+    <aside
+      aria-labelledby="github-repository-access-title"
+      className="fixed inset-x-0 bottom-5 z-[110] flex justify-center px-5"
+      data-testid="github-repository-access-tray"
+    >
+      <div className="flex w-full max-w-[520px] items-center gap-3 rounded-xl border border-border bg-bg-raised px-3.5 py-3 shadow-2xl">
+        <GithubIcon className="size-5 shrink-0 text-fg-muted" />
+        <div className="min-w-0 flex-1">
+          <p
+            id="github-repository-access-title"
+            className="text-[13px] font-medium text-fg"
+          >
+            Choose repositories on GitHub
+          </p>
+          <p className="mt-0.5 text-xs text-fg-muted">
+            Save the repository selection in the GitHub tab, then return here.
+          </p>
+        </div>
+        <button
+          type="button"
+          onClick={onDone}
+          className="h-8 shrink-0 cursor-pointer rounded-md bg-accent px-3 text-xs font-medium text-accent-fg transition-opacity duration-150 hover:opacity-90"
+        >
+          Done
         </button>
       </div>
     </aside>
@@ -404,11 +460,13 @@ function GithubPanel({
   onSelect,
   onAuthorizationStarted,
   onAuthorizationFinished,
+  onManageAccess,
 }: {
   selected: GithubRepoSummary | null;
   onSelect: (repo: GithubRepoSummary | null) => void;
   onAuthorizationStarted: (grant: GithubAuthorizationGrant) => void;
   onAuthorizationFinished: () => void;
+  onManageAccess: () => void;
 }) {
   const statusQuery = useGithubStatus();
   const connected = statusQuery.data?.connected === true;
@@ -520,7 +578,7 @@ function GithubPanel({
               </p>
               <button
                 type="button"
-                onClick={() => void desktopApi.githubManageRepos()}
+                onClick={onManageAccess}
                 data-testid="github-grant-access"
                 className="cursor-pointer text-xs text-accent hover:underline"
               >
@@ -528,9 +586,18 @@ function GithubPanel({
               </button>
             </div>
           ) : (
-            <p className="px-3 py-4 text-center text-xs text-fg-faint">
-              No repositories match.
-            </p>
+            <div className="flex flex-col items-center gap-2 px-3 py-4 text-center">
+              <p className="text-xs text-fg-faint">
+                No granted repositories match.
+              </p>
+              <button
+                type="button"
+                onClick={onManageAccess}
+                className="cursor-pointer text-xs text-accent hover:underline"
+              >
+                Manage repository access
+              </button>
+            </div>
           )
         ) : (
           visible.map((repo) => (
@@ -556,6 +623,15 @@ function GithubPanel({
           ))
         )}
       </div>
+      {repos.length > 0 && visible.length > 0 && (
+        <button
+          type="button"
+          onClick={onManageAccess}
+          className="self-start cursor-pointer text-xs text-fg-faint transition-colors duration-150 hover:text-accent"
+        >
+          Manage repository access
+        </button>
+      )}
     </div>
   );
 }
