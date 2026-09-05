@@ -2,6 +2,7 @@
 
 - **Status:** Accepted
 - **Date:** 2026-09-04
+- **Supersedes:** Claude Code and Codex bundling portion of 0082
 
 ## Context
 

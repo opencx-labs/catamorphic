@@ -64,7 +64,7 @@ function MyApp({ projectId, workflowName, files }) {
 
 The host app boots catamorphic in-process via one of two paths:
 
-- **`@catamorphic/server-sdk`** (recommended) — call `createCatamorphic({ database, storage, sandboxProvider?, pluginResolver? })` once at startup, run `await catamorphic.migrate()`, explicitly start `catamorphic.startExecutionWorker(...)` in worker processes, then use `catamorphic.forTenant(orgId).forUser(userId)` per request. Public methods take keyed objects and Runs live on `scoped.runs`.
+- **`@catamorphic/server-sdk`** (recommended): call `createCatamorphic({ database, storage, environmentProvider, sandboxProvider?, pluginResolver? })` once at startup, run `await catamorphic.migrate()`, explicitly start `catamorphic.startExecutionWorker(...)` in worker processes, then use `catamorphic.forTenant({ tenantId }).forUser({ externalUserId, scope? })` per request. `environmentProvider` is required even when a host uses the static single-node helper. Missing `scope` is host-root authority, not ordinary builder access. Public methods take keyed objects and Runs live on `scoped.runs`.
 - **`@catamorphic/fastify-plugin`** — register `catamorphicPlugin` on the host's Fastify server with `{ core, prefix: "/api", identity }` (or run `createApp({ core, identity })` as a sidecar). `identity` is the required resolver that turns each request into `{ tenantId, externalUserId, scope? }` from the host's own session (or `identityFromHeaders()` behind a trusted gateway). The frontend talks to it through `@catamorphic/api-client`.
 
 ## Workflow and Run model
@@ -92,5 +92,26 @@ from any client-local unread marker. When the user opens it, call
 deep-links to the same session and must not create a parallel notification
 inbox. Desktop-like hosts may also add the session to a dock without moving
 focus.
+
+## Session hierarchy and archive
+
+Treat delegated work as ordinary durable sessions. `parentSessionId` is the
+immediate hierarchy; `forkedFromSessionId` is transcript lineage and must not
+be reused for delegation. Latent children can stay in a compact parent rail;
+promoted children join navigation. Archive is a recursive server operation,
+not a client-local filter: call `useArchiveAgentSession`, show its typed impact
+when confirmation is required, and retry with `confirmStop` only after user
+confirmation. `useUnarchiveAgentSession` restores navigation, while a later
+message re-anchors execution.
+
+## Workflow enablement
+
+Role access is not unattended-run consent. Use
+`usePreviewWorkflowEnablement` to show the exact deployed commit, trigger,
+agent, Environment, and connection requirements; create the enablement with
+the returned consent digest only after confirmation. Use
+`useWorkflowEnablements` and `useUpdateWorkflowEnablement` for disable,
+reenable, and deployment-update flows. Connecting an account may complete a
+pending enablement but must never enable every compatible workflow by itself.
 
 See [`INTEGRATION.md`](../../../INTEGRATION.md) for the end-to-end wiring example.

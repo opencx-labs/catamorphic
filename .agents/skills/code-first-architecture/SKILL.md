@@ -36,7 +36,8 @@ and the parser never executes author code.
 Top-level `connections` and inline `triggers` are also authored in the
 TypeScript definition and parsed as constant metadata. They describe what a
 workflow needs and what can wake it, not who is authorized. Committed
-`roles/*.json` grant workflow, agent, Environment, and connection refs;
+`roles/*.json` grant workflow, app, agent, document, Environment, connection,
+and namespaced project-permission refs;
 server-owned workflow enablements record each member's consent to an exact
 deployment. Do not encode either policy layer into a generated graph or a new
 workflow DSL.

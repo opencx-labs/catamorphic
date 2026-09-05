@@ -1,11 +1,14 @@
 ---
 name: using-catamorphic
-description: Embed Catamorphic (code-first workflow builder) inside a host app. Use when integrating the @catamorphic/server-sdk, @catamorphic/fastify-plugin, @catamorphic/db, @catamorphic/api-client, @catamorphic/react, or @catamorphic/ui packages, wiring the CatamorphicProvider, mounting the WorkflowEditor canvas, booting the SDK with Postgres + git + sandbox, or when the user mentions catamorphic, workflow editor, workflow canvas, tenant id, external user id, or embedding catamorphic.
+description: Embed Catamorphic's agentic work environment libraries inside a host app. Use when integrating its server SDK, Fastify plugin, database, generated API client, headless React bindings, composable UI, projects, agents, apps, or workflows.
 ---
 
 # Using Catamorphic
 
-Catamorphic is an **embeddable** code-first workflow builder. The host app owns auth, users, orgs, and the Postgres database. Catamorphic supplies:
+Catamorphic is an **embeddable framework for agentic work environments**. The
+host app owns auth, users, organizations, database, deployment, and product
+identity. Catamorphic supplies co-equal project, git, agent, workflow, app,
+API, and UI primitives:
 
 - a **backend SDK** (`@catamorphic/server-sdk`) for in-process project/workflow/file CRUD + execution
 - a **mountable Fastify plugin** (`@catamorphic/fastify-plugin`) exposing the HTTP API
@@ -33,20 +36,38 @@ Frontend is always `@catamorphic/react` (+ optionally `@catamorphic/ui`) talking
 Every scoped call needs two ids:
 
 - **`tenantId`** — host's org id. Auto-upserts `catamorphic.tenants(id)` on first use. Host can safely `JOIN host.orgs.id = catamorphic.projects.tenant_id`.
-- **`externalUserId`** — host's user id. Never persisted; used only for per-user git working dirs + git commit authorship.
+- **`externalUserId`**: host's stable user id. Catamorphic persists it where
+  durable ownership, membership, or audit attribution requires it, but never
+  references the host's user table.
 
 In the SDK this is bound via `cat.forTenant({ tenantId }).forUser({ externalUserId, scope? })`. Over HTTP the fastify-plugin's **required `identity` resolver** turns each request (your session cookie, JWT, …) into an identity — there is no default and no headers are read unless you pass the stock `identityFromHeaders()` behind your own gateway.
 
-Identities are **full** (a builder: whole project surface) or **scoped** (a viewer: `scope: [{ kind: "app", projectId, name }, { kind: "workflow", projectId, name }]` — exactly those artifacts, nothing else). Which users get which is host policy; catamorphic enforces it. Never hardcode ids; always derive from the host's auth context.
+An identity with no `scope` is **root** host authority across the tenant. A
+project builder is scoped with `{ kind: "project", projectId }`; members get
+only exact app, workflow, agent, and document refs. Builder access does not
+implicitly grant project-store paths, managed Environments, connection
+aliases, or administrative permissions. Which users receive those refs is
+host policy; Catamorphic enforces the resolved result. Never hardcode ids or
+use missing scope as an ordinary builder shortcut.
 
 For company-brain hosts, commit reusable access policy as
 `roles/<slug>.json`. A role grants workflow names, project-agent slugs,
-Environment names, and provider-neutral connection aliases. The host owns
-membership assignment. Unattended triggers do not run from those grants alone:
+Environment names, provider-neutral connection aliases, document paths, and
+namespaced project permissions. Catamorphic reserves `memberships:manage` and
+`roles:manage`; embedders may interpret additional names in their own services
+and presentation. The host owns membership assignment. Unattended triggers do
+not run from those grants alone:
 each member creates a consent-bound workflow enablement, usually through the
 desktop's **Automate** and **Enable for me** flow. The final connection auth may
 complete an already-started enablement; account connection by itself never
 bulk-enables workflows.
+
+Project-authored presentation targets resolved authority, never role names.
+The desktop understands `when: { builder?, permissions? }` on shared sidebar
+sections/items and on up to six `.catamorphic/project.json` `startingActions`.
+Every condition must match; invalid conditions fail closed; absent config
+leaves no trace. Treat this as reference-host behavior, not a framework JSON
+contract that embedders must adopt.
 
 ## Backend Path A — Library-Direct SDK
 
@@ -60,7 +81,31 @@ pnpm add @catamorphic/server-sdk
 
 ```ts
 import { CloudflareSandboxProvider } from "@catamorphic/cloudflare";
-import { createCatamorphic, LocalPluginResolver } from "@catamorphic/server-sdk";
+import {
+  createCatamorphic,
+  defineStaticEnvironments,
+  LocalPluginResolver,
+} from "@catamorphic/server-sdk";
+
+const sandboxProvider = new CloudflareSandboxProvider({
+  apiUrl: process.env.CLOUDFLARE_SANDBOX_API_URL!,
+  apiKey: process.env.CLOUDFLARE_SANDBOX_API_KEY,
+});
+const environmentProvider = defineStaticEnvironments([
+  {
+    descriptor: {
+      id: "local",
+      label: "Managed execution",
+      trust: "managed",
+      isolation: "sandbox",
+      workloads: ["agent", "workflow"],
+      agentTopologies: ["controller"],
+      capabilities: ["network.egress"],
+      resources: {},
+    },
+    sandboxProvider,
+  },
+]);
 
 export const catamorphic = createCatamorphic({
   // { pool } (host-owned), { connectionString } (catamorphic-owned), or { db }.
@@ -72,10 +117,10 @@ export const catamorphic = createCatamorphic({
   },
   // Optional — only needed for run execution. Backends are vendor plugin
   // packages: @catamorphic/cloudflare (default) or @catamorphic/daytona.
-  sandboxProvider: new CloudflareSandboxProvider({
-    apiUrl: process.env.CLOUDFLARE_SANDBOX_API_URL!,
-    apiKey: process.env.CLOUDFLARE_SANDBOX_API_KEY,
-  }),
+  sandboxProvider,
+  // Required. This binding matches the default project environment.
+  // Multi-pool hosts can inject a dynamic EnvironmentProvider instead.
+  environmentProvider,
   // Optional — only needed for plugin attachment + secrets.
   pluginResolver: process.env.CATAMORPHIC_LOCAL_PLUGINS_DIR
     ? new LocalPluginResolver(process.env.CATAMORPHIC_LOCAL_PLUGINS_DIR)
@@ -84,6 +129,13 @@ export const catamorphic = createCatamorphic({
 ```
 
 Catamorphic never destroys host-owned pools/Kysely instances; `catamorphic.close()` only closes what it created.
+
+For agent sessions, `codingAgent` accepts either one
+`CodingAgentProvider` or a `CodingAgentRegistry`. A registry is the normal
+shape for multiple named agents: each entry owns its provider, execution
+topology, privilege ceiling, defaults, connection requirements, and delegation
+routes. Agent sessions also require `hostId` and `sandboxProvider`; entries
+with `topology: "native"` additionally require `nativeAgentCheckout`.
 
 ### 2) Run migrations
 
@@ -112,7 +164,9 @@ pnpm exec catamorphic-db migrate
 ### 3) Per-request: bind identity, call resources
 
 ```ts
-const scoped = catamorphic.forTenant(req.org.id).forUser(req.user.id);
+const scoped = catamorphic
+  .forTenant({ tenantId: req.org.id })
+  .forUser({ externalUserId: req.user.id, scope: entitlements });
 
 // Projects
 await scoped.projects.create({ name: "onboarding" });
@@ -185,6 +239,15 @@ it settles. Clients poll the ordinary session list, render
 is optional transport to the same session, not a separate notification inbox.
 Service-owned enablements cannot infer a human recipient and fail closed.
 
+Delegated work is represented by ordinary durable child sessions. Keep
+`parentSessionId` (hierarchy), `forkedFromSessionId` (transcript lineage), and
+delegation records distinct. Archive is recursive durable state: it can stop
+live turns, queued work, Watchers, and processes, and therefore returns a typed
+confirmation impact before destructive interruption. Use the generated
+subsession, archive, and unarchive routes or the corresponding React hooks;
+do not recreate child work as harness-private UI state or store archive only
+in browser preferences.
+
 ## Backend Path B — HTTP via the Fastify plugin
 
 Register `catamorphicPlugin` on the host's own Fastify server with the exact same `CatamorphicCore`:
@@ -195,10 +258,11 @@ import { catamorphicPlugin } from "@catamorphic/fastify-plugin";
 app.register(catamorphicPlugin, {
   core: catamorphic.core,
   prefix: "/api", // the generated api-client expects /api
+  identity: async (request) => identityFromVerifiedSession(request),
 });
 ```
 
-The plugin is encapsulated (its Zod compilers + error handler don't leak) and registers no CORS — the host owns cross-origin policy. For a sidecar process, `createApp({ core })` returns a complete Fastify app (CORS + Swagger UI at `/docs`, plugin at `/api`):
+The plugin is encapsulated (its Zod compilers + error handler don't leak) and registers no CORS; the host owns cross-origin policy. For a sidecar process, `createApp({ core, identity })` returns a complete Fastify app (CORS + Swagger UI at `/docs`, plugin at `/api`):
 
 ```ts
 import { createApp } from "@catamorphic/fastify-plugin";
@@ -210,7 +274,7 @@ const app = createApp({
     if (!session) return null; // 401
     const base = { tenantId: session.orgId, externalUserId: session.userId };
     return session.isEmployee
-      ? base
+      ? { ...base, scope: [{ kind: "project", projectId: BRAIN_PROJECT_ID }] }
       : { ...base, scope: await entitlementsFor(session.userId) };
   },
 });
@@ -232,7 +296,7 @@ export const apiClient = createApiClient({
 
 **Important**: if you wrap `fetch` to add headers, seed the `Headers` from `input.headers` when `input` is a `Request` (as produced by openapi-fetch) — otherwise `Content-Type: application/json` is dropped and Fastify returns 415.
 
-Type-safe calls go through `apiClient.GET("/projects", …)` etc. For paths openapi-fetch can't template (Fastify wildcards), use `apiClient.fetch(apiClient.baseUrl + "/…")`.
+Type-safe calls go through `apiClient.GET("/api/projects", …)` etc. For paths openapi-fetch can't template (Fastify wildcards), use `apiClient.fetch(apiClient.baseUrl + "/…")`.
 
 ## Frontend — `@catamorphic/react` + `@catamorphic/ui`
 
@@ -321,6 +385,14 @@ import {
   useAgentSession,
   useCreateAgentSession,
   useSendAgentMessage,
+  useAcknowledgeAgentSessionAttention,
+  useArchiveAgentSession,
+  useUnarchiveAgentSession,
+  // Per-member unattended workflow consent
+  useWorkflowEnablements,
+  usePreviewWorkflowEnablement,
+  useCreateWorkflowEnablement,
+  useUpdateWorkflowEnablement,
   // Parsing (for `<WorkflowEditor onParse={...}>`)
   useOnParse, // ready-made onParse callback — prefer this
   useParseWorkflow, // raw mutation over POST /api/playground/parse, for custom assembly
@@ -388,9 +460,9 @@ import {
   codeAtom,
   graphAtom,
   executionStateAtom,
-  historySidebarOpenAtom,
   panelVisibilityAtom,
-  runsAtom,
+  rightPanelOpenAtom,
+  showRunDialogAtom,
   selectedNodeAtom,
   selectedNodeIdAtom,
   useSelectedNode,
@@ -465,14 +537,12 @@ Key props (see `WorkflowEditorProps` in `@catamorphic/ui`):
 - `renderCodeEditor` — slot for the Code tab's editor. Install the `monaco-editor` registry item for a ready-made TypeScript Monaco editor with line numbers, TS diagnostics/completion, and bidirectional code ↔ canvas linking, or plug in your own (Monaco, CodeMirror, …) and wire linking through `useCodeEditorLink` from `@catamorphic/react`. Without this prop the Code tab falls back to a plain `<textarea>`.
 - `nodeRenderers` — partial map of `WorkflowNodeType` → component, overrides node visuals
 - `executionState` — `Record<nodeId, "running" | "completed" | "failed">` overlay
-- `onRun(triggerData) => Promise<{ runId, status, steps, startedAt, completedAt, … }>` — wires the Run dialog + history sidebar
+- `onRun(triggerData) => Promise<Run>`: wires the Run dialog and active Run state
 - `triggerParameters` — `ParameterInfo[]` from `@catamorphic/parser` for the Run dialog form
-- `onLoadMoreRuns`, `initialRuns` — history pagination
-- `renderVersionsPanel`, `renderBanner`, `renderToolbarCenter` — slots for host-owned chrome
+- `renderRunsPanel`, `renderBanner`, `renderToolbarCenter`: slots for host-owned chrome
 - `readOnly` — disables the code editor
-- `runDialogRequestKey` — **deprecated**. Bumping a number used to be the only way to open the Run dialog from outside the editor; now wrap your chrome in `<WorkflowEditorScope>` and call `useSetAtom(showRunDialogAtom)(true)` (or the `openDialog` from `useWorkflowRunController`) directly. The prop is still honored for backwards compatibility.
 
-Atoms (`codeAtom`, `graphAtom`, `selectedNodeIdAtom`, `selectedNodeAtom`, `panelVisibilityAtom`, `runsAtom`, `showRunDialogAtom`, …) live in `@catamorphic/react`. The editor's store is scoped by `<WorkflowEditorScope>` — to read or write atoms from host chrome, wrap the editor + your chrome in a shared scope:
+Atoms (`codeAtom`, `graphAtom`, `selectedNodeIdAtom`, `selectedNodeAtom`, `panelVisibilityAtom`, `rightPanelOpenAtom`, `showRunDialogAtom`, and others) live in `@catamorphic/react`. The editor's store is scoped by `<WorkflowEditorScope>`. To read or write atoms from host chrome, wrap the editor and your chrome in a shared scope:
 
 ```tsx
 import { WorkflowEditor, WorkflowEditorScope } from "@catamorphic/ui";
@@ -490,22 +560,23 @@ function Inspector() {
 </WorkflowEditorScope>
 ```
 
-Lower-level pieces — `WorkflowCanvas`, `DetailPanel`, `HistorySidebar`, `Toolbar`, `AIBar`, plus `WorkflowEditorChrome` (the inner editor without the scope wrapper) — are exported too if you want to assemble a custom layout.
+Lower-level pieces such as `WorkflowCanvas`, `DetailPanel`, `RunsPanel`, `Toolbar`,
+`AIBar`, plus `WorkflowEditorChrome` (the inner editor without the scope
+wrapper), are exported too if you want to assemble a custom layout.
 
 ### 6) Component registry — `@catamorphic/registry` (copy-paste UI)
 
-Pre-wired React components (file tree, git panel, runs panel, plugins/secrets settings, projects list, project editor, diff drawer, plus a `CatamorphicAppProvider` wrapper) ship as a shadcn-compatible registry. Items are JSON manifests that inline a single `.tsx` file; the component lands in `components/catamorphic/` once installed, and from there imports from `@catamorphic/react` + `@catamorphic/ui` only — there's no runtime dependency on `@catamorphic/registry` itself.
+Pre-wired React components (file explorer, git panel, runs panel, plugins/secrets settings, project editor, chat timeline, sessions list, todo progress, tool-permission card, diff drawer, plus a `CatamorphicAppProvider` wrapper) ship as a shadcn-compatible registry. Items are JSON manifests that inline a single `.tsx` file; the component lands in `components/catamorphic/` once installed, and from there imports from `@catamorphic/react` and `@catamorphic/ui` only. There is no runtime dependency on `@catamorphic/registry` itself.
 
 The registry is **served by the host**, not by catamorphic. The built JSON manifests live at `packages/registry/dist/r/<item>.json` after `bun run --filter @catamorphic/registry build`. Install options:
 
-- **Direct file path** (simplest for local dev): `npx shadcn add /abs/path/to/catamorphic/packages/registry/dist/r/projects-list.json`.
-- **From `node_modules`** (once the host has `@catamorphic/registry` installed via `file:` or npm): `npx shadcn add ./node_modules/@catamorphic/registry/dist/r/projects-list.json`, or wire the directory as a named registry in the host's `components.json`.
+- **Direct file path** (simplest for local dev): `npx shadcn add /abs/path/to/catamorphic/packages/registry/dist/r/project-editor.json`.
+- **From `node_modules`** (once the host has `@catamorphic/registry` installed via `file:` or npm): `npx shadcn add ./node_modules/@catamorphic/registry/dist/r/project-editor.json`, or wire the directory as a named registry in the host's `components.json`.
 - **Host-served URL** (production): the host serves `packages/registry/dist/r/` from its own static-asset pipeline and points shadcn at that URL.
 
 Items currently shipped:
 
 - `catamorphic-provider` — `<CatamorphicAppProvider baseUrl getTenantId getExternalUserId>` that wires `CatamorphicProvider` + `QueryClientProvider`. Always install this first.
-- `projects-list` — table + create-project dialog (`useProjects` + `useCreateProject`).
 - `project-editor` — three-pane scaffold with `renderEditor` (plug in monaco/codemirror), `renderSidebar`, and `renderGitPanel` slots.
 - `file-explorer` — pure file tree.
 - `git-panel` — branch / dirty / commits / deploy panel (`useProjectGit` + `useProjectCommits` + `useDeployProject`).
@@ -514,6 +585,10 @@ Items currently shipped:
 - `plugins-settings` — attach/detach plugins + edit secrets.
 - `monaco-editor` — `MonacoCodeEditor` for `WorkflowEditor`'s `renderCodeEditor` slot: TypeScript highlighting/diagnostics/completion, line numbers, and code ↔ canvas linking via `useCodeEditorLink` (ADR 0011). Pulls `@monaco-editor/react` into the host, not into catamorphic packages.
 - `agent-chat` — bottom-docked coding-agent conversation with optimistic activity and changed-file state.
+- `chat-timeline`: message timeline shared by agent chat surfaces.
+- `sessions-list`: project session navigation with durable attention state.
+- `todo-progress`: compact rendering for an agent-owned session todo list.
+- `tool-permission-card`: answer parked tool-consent requests.
 
 Pick what you want, drop it into your repo, then customize the JSX/tailwind freely — they're meant to be edited.
 
@@ -545,18 +620,19 @@ Use cases:
 | `@catamorphic/s3` | Backend (plugin) | `S3RemoteBackend`, `S3ObjectStore` for R2, S3, MinIO, and compatible stores |
 | `@catamorphic/daytona` | Backend (plugin) | `DaytonaSandboxProvider`, `DaytonaBackend`, `DaytonaProjectRepo` |
 | `@catamorphic/ai-sdk` | Backend (plugin) | `AiSdkCodingAgent` (flagship coding agent, in-process AI SDK `ToolLoopAgent` with remote sandbox tools) |
+| `@catamorphic/claude-code` | Backend (plugin) | `ClaudeCodeAgent` with Claude Code settings-source fidelity and per-session MCP servers |
 | `@catamorphic/codex` | Backend (plugin) | `CodexAgent` (Codex SDK coding agent) |
 | `@catamorphic/plugins` | Backend (optional) | `LocalPluginResolver`, `PluginManifestSchema`, `PluginResolver` |
-| `@catamorphic/fastify-plugin` | Backend (HTTP path) | `catamorphicPlugin` (mountable, encapsulated), `createApp({ core })` app factory |
+| `@catamorphic/fastify-plugin` | Backend (HTTP path) | `catamorphicPlugin` (mountable, encapsulated), `createApp({ core, identity })` app factory |
 | `@catamorphic/otel` | Backend libraries | `getTracer`, `withSpan` — `@opentelemetry/api` helpers; host owns the OTel SDK |
 | `@catamorphic/workflow` | Workflow projects | `defineWorkflow`, builder-scoped `defineBoundary`/`defineBatch`, `defineBatchStep`, pause and child-workflow types |
 | `@catamorphic/runtime` | Sandbox runtime | Workflow harness and deployment supervisor protocol; not an author dependency |
 | `@catamorphic/api-client` | Frontend or non-Node backend | `createApiClient`, `CatamorphicApiClient`, `paths` (OpenAPI) |
-| `@catamorphic/react` | Frontend | `CatamorphicProvider`, `useCatamorphic`, data hooks (projects/runs/git/plugins/secrets/agent), atoms, `useWorkflowGraph`, `useSelectedNode`, `useProjectGitState`, `useOnParse`/`useParseWorkflow`, `CatamorphicError`, `isCatamorphicError` |
+| `@catamorphic/react` | Frontend | `CatamorphicProvider`, project/run/git/agent/workflow-enablement hooks, archive and attention mutations, atoms, `useWorkflowGraph`, `useProjectGitState`, `CatamorphicError` |
 | `@catamorphic/react/types` | Frontend | OpenAPI-derived domain types (`Project`, `Run`, `RepoStatus`, `BranchInfo`, `ConflictEntry`, `PluginInfo`, `Secret`, `AgentSession`, …) |
 | `@catamorphic/react/workflow-helpers` | Frontend (server-safe) | Pure authoring helpers, no React |
-| `@catamorphic/ui` | Frontend | `WorkflowEditor`, `WorkflowEditorChrome`, `WorkflowEditorScope`, `WorkflowCanvas`, `DetailPanel`, `HistorySidebar`, `Toolbar`, `AIBar`, plus `@catamorphic/ui/styles.css` |
-| `@catamorphic/registry` | Frontend (copy-paste) | shadcn-style registry of pre-wired components (`catamorphic-provider`, `projects-list`, `project-editor`, `file-explorer`, `git-panel`, `diff-drawer`, `runs-panel`, `plugins-settings`, `monaco-editor`, `agent-chat`) — install with `npx shadcn add <registry-host>/r/<item>.json` |
+| `@catamorphic/ui` | Frontend | `WorkflowEditor`, `WorkflowEditorChrome`, `WorkflowEditorScope`, `WorkflowCanvas`, `DetailPanel`, `RunsPanel`, `Toolbar`, `AIBar`, `AppMount`, plus `@catamorphic/ui/styles.css` |
+| `@catamorphic/registry` | Frontend (copy-paste) | shadcn-style registry of pre-wired project, run, git, agent-chat, timeline, session-list, and tool-permission components |
 | `@catamorphic/parser` | Either | `parseWorkflow`, `parseProject`, `layoutGraph`, `WorkflowGraph` types |
 
 ## Environment Variables

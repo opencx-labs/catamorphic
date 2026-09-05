@@ -18,8 +18,9 @@ Backends are **vendor plugin packages** that the host chooses to install:
 
 - `@catamorphic/sandbox` keeps only vendor-neutral code: the
   `SandboxProvider` / `SandboxManager` / `RunExecutor` contracts and
-  implementations, OpenTelemetry instrumentation (`instrumentSandboxProvider`),
-  and the Codex coding agent.
+  implementations, coding-agent contracts, OpenTelemetry instrumentation
+  (`instrumentSandboxProvider`), and agent file-staging helpers. Concrete
+  coding agents live in their own packages per later ADRs.
 - `@catamorphic/git` keeps only vendor-neutral storage: `StorageBackend` /
   `RemoteBackend` / `OriginRepo` contracts, `ProjectManager`, git-sync, and
   the filesystem backends.
@@ -28,13 +29,18 @@ Backends are **vendor plugin packages** that the host chooses to install:
   code storage). The default, recommended stack (ADR 0004).
 - `@catamorphic/daytona` — `DaytonaSandboxProvider` + the experimental
   Daytona git storage backend.
+- Later packages follow the same seam: `@catamorphic/microsandbox` for local
+  sandbox execution, `@catamorphic/local-process` for trusted single-tenant
+  subprocess execution, and `@catamorphic/s3` for S3-compatible git origins.
 
 `createSandboxProviderFromEnv()` was removed: an env-sniffing helper would
 force the core package (or the server-sdk) to depend on every vendor plugin,
-defeating the split. Hosts construct their chosen provider explicitly and pass
-it to `createCatamorphic({ sandboxProvider })`. Environment-based selection is
-host boot code (see `apps/playground/src/server/boot.ts` for the reference
-pattern, including the Artifacts feature-gate fallback).
+defeating the split. Hosts construct their chosen provider explicitly, expose
+it through the required `environmentProvider`, and pass `sandboxProvider` when
+execution or controller agents need the default provider directly.
+Environment-based selection is host boot code; see
+`apps/desktop/src/main/server/boot.ts` and `apps/server/src/server.ts` for the
+current reference patterns.
 
 ## Consequences
 

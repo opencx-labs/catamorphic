@@ -64,18 +64,18 @@ Big desktop design/philosophy choices are additionally logged in
 
 Public developer surface:
 
-- `packages/server-sdk` — **`@catamorphic/server-sdk`**: core backend SDK. `createCatamorphic({ database, storage, sandboxProvider?, github?, triggerKinds?, mcpToolKinds?, plugins?, projectSeeds?, standingAgentPrompt?, ... })`; identity binds per request via `forTenant({ tenantId }).forUser({ externalUserId })`.
+- `packages/server-sdk`: **`@catamorphic/server-sdk`**, the core backend SDK. `createCatamorphic({ database, storage, environmentProvider, sandboxProvider?, github?, triggerKinds?, mcpToolKinds?, plugins?, projectSeeds?, standingAgentPrompt?, ... })`; identity binds per request via `forTenant({ tenantId }).forUser({ externalUserId, scope? })`.
 - `packages/fastify-plugin` — **`@catamorphic/fastify-plugin`**: mountable Fastify plugin (`catamorphicPlugin`) + standalone `createApp` factory with Zod schemas and OpenAPI spec. Also serves the per-project MCP endpoints (`/projects/:id/mcp` — workflow tools + documents + skills + `ask_agent`, narrowed by identity (ADR 0055); `/projects/:id/apps-mcp` MCP Apps) and app guest documents.
 - `packages/react` — headless React bindings (provider, TanStack Query hooks, jotai atoms).
 - `packages/ui` — React Flow editor components (canvas, panels, AI bar) + `AppMount` (sandboxed app iframe host); all opt-in/composable.
-- `packages/registry` — shadcn-style copy-paste component registry (projects list, git panel, runs panel, agent chat, Monaco editor, …).
+- `packages/registry`: shadcn-style copy-paste component registry (project editor, file explorer, git panel, runs panel, agent chat, Monaco editor, and more).
 - `packages/api-client` — generated OpenAPI types + openapi-fetch client.
 - `packages/workflow` — **`@catamorphic/workflow`**: dependency-light `defineWorkflow`, boundary, batch-scope, pause, child-workflow, trigger-subscription, and physical batch-step authoring primitives; hosts may wrap and selectively re-export this surface.
 - `packages/app` — **`@catamorphic/app`**: the guest runtime bundled into every user-built app (typed workflow client, persistent app-local storage shim, dual-dialect MCP Apps probe, `buildAppGuestDocument`) plus the **`@catamorphic/app/ui`** component kit, styled entirely by host theme tokens (ADR 0048).
 
 Internal packages:
 
-- `packages/core` — framework-agnostic service layer (the kernel behind server-sdk and fastify-plugin). Services include projects, workflows, runs, deployments, triggers (+ codegen), apps, app policies, **app storage**, plugins, secrets, agent sessions, agent context, **agent definitions** (ADR 0050), the coding-agent registry, **remote sync**, the **CodeHost seam** + `GithubService`, skills/seeds, and tenant policies. Seeds/doctrine hooks resolve once in the core constructor (ADR 0049).
+- `packages/core`: framework-agnostic service layer (the kernel behind server-sdk and fastify-plugin). Services include projects, workflows, runs, deployments, triggers (+ codegen), apps, app policies, **app storage**, plugins, secrets, agent sessions, agent context, **agent definitions** (ADR 0050), the coding-agent registry, committed roles and memberships, workflow enablements, session attention/mailboxes/subsessions/archive, **remote sync**, the **CodeHost seam** + `GithubService`, skills/seeds, and tenant policies. Seeds/doctrine hooks resolve once in the core constructor (ADR 0049).
 - `packages/db` — Kysely instance, schema-scoped raw SQL migrations, programmatic `migrateToLatest`, codegen types.
 - `packages/git` — vendor-neutral git-backed project storage (isomorphic-git): `StorageBackend`/`RemoteBackend` contracts, `ProjectManager`, the remote sync engine (`syncWithNetworkRemote` — fetch/merge/push/rescue branches, ADR 0044), filesystem backends.
 - `packages/github` — **`@catamorphic/github`**: GitHub OAuth + device-flow helpers, REST API client, token stores. Consumed by core's `GithubService` (which implements `CodeHost`).
@@ -117,7 +117,7 @@ How the three connect (setting up / troubleshooting, read in this order):
   [Agent Skills](https://agentskills.io) layout. `.cursor/skills` is a
   compatibility symlink to this directory.
 - `.agents/skills/plugin-e2e-integration/SKILL.md` — business-agnostic end-to-end plugin integration flow
-- `.agents/skills/desktop-release/SKILL.md` — prepare, dry-run, publish, recover, and verify Stable and Preview macOS desktop releases
+- `.agents/skills/desktop-release/SKILL.md`: prepare, dry-run, publish, recover, and verify Stable and Preview macOS desktop releases, including integrity-pinned on-demand harness components
 - `.agents/skills/using-catamorphic/SKILL.md` — embedding catamorphic in a host app (local dev linking)
 - `.agents/skills/embedding-guide/SKILL.md`, `.agents/skills/api-type-safety/SKILL.md`, `.agents/skills/code-first-architecture/SKILL.md`, `.agents/skills/database-conventions/SKILL.md`, `.agents/skills/sandbox-agent-integration/SKILL.md`, `.agents/skills/workflow-code-conventions/SKILL.md`
 
@@ -233,7 +233,7 @@ Settled decisions — do not deviate without explicit user approval. ADRs in `do
 
 - **Project model, git versioning, DB types** → `project-model.mdc`
 - **Sandbox execution, providers, run lifecycle, instrumentation** → `sandbox-execution.mdc`
-- **Editor UI: history sidebar, run panel, state management** → `playground-ui.mdc`
+- **Editor UI: Runs panel and state management** → `playground-ui.mdc`
 - **Canvas layout, nodes, edges, read-only behavior** → `graph-design.mdc`
 - **Parser node types, containers, source ranges, provenance** → `parser-conventions.mdc`
 - **Detail panel, code editor, bidirectional linking** → `panel-editor.mdc`

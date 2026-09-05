@@ -30,7 +30,7 @@ Settled design decisions live here as short Architecture Decision Records. They 
 | [0015](0015-first-class-batch-workflows.md) | First-class batch workflows | Superseded by 0026 |
 | [0016](0016-durable-runtime-event-reporting.md) | Persisted runtime event reporting | Accepted (updated by 0024, 0026) |
 | [0017](0017-public-workflow-authoring-package.md) | Public workflow authoring package | Accepted (expanded by 0020, 0026) |
-| [0018](0018-ai-sdk-coding-agent.md) | AI SDK ToolLoopAgent is the flagship coding agent | Accepted |
+| [0018](0018-ai-sdk-coding-agent.md) | AI SDK ToolLoopAgent is the built-in in-process coding agent | Accepted; registry/runtime behavior refined by 0038, 0067, and 0090 |
 | [0019](0019-headless-agent-chat-and-dock.md) | Agent chat is headless state plus a controlled dock | Accepted |
 | [0020](0020-typed-durable-workflow-boundaries.md) | Typed persisted workflow boundaries | Accepted (updated by 0026) |
 | [0021](0021-durable-workflow-visualization.md) | Persisted workflow visualization | Accepted (updated by 0026) |
@@ -94,7 +94,7 @@ Settled design decisions live here as short Architecture Decision Records. They 
 | [0079](0079-desktop-browser-credential-broker.md) | Desktop browser credential broker | Accepted |
 | [0080](0080-installed-pairing-bootstrap.md) | Installed pairing uses a one-time start URL bootstrap | Accepted |
 | [0081](0081-recursive-agent-configurable-sidebar-trees.md) | Recursive, agent-configurable sidebar trees | Accepted |
-| [0082](0082-desktop-prerelease-distribution.md) | Desktop prerelease distribution | Accepted; update policy superseded by 0083 |
+| [0082](0082-desktop-prerelease-distribution.md) | Desktop prerelease distribution | Accepted; update policy superseded by 0083, harness bundling superseded by 0091 |
 | [0083](0083-desktop-updates-and-migration-backups.md) | Desktop updates and migration backups | Accepted; channel policy updated by 0085 |
 | [0084](0084-first-release-database-baseline.md) | First-release database schema baseline | Accepted |
 | [0085](0085-desktop-stable-and-preview-channels.md) | Desktop Stable and Preview release channels | Accepted |

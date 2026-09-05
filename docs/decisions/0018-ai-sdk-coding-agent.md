@@ -1,6 +1,6 @@
 # 0018 - AI SDK ToolLoopAgent is the flagship coding agent
 
-- **Status**: accepted
+- **Status**: accepted; registry/runtime behavior refined by 0038, 0067, and 0090
 - **Date**: 2026-07-21
 - **Supersedes**: 0009's choice of Flue as the flagship implementation
 
@@ -14,10 +14,10 @@ the host-provided development sandbox.
 
 ## Decision
 
-`@catamorphic/ai-sdk` is the flagship coding-agent plugin and the playground's
-default implementation. `AiSdkCodingAgent` implements `CodingAgentProvider`
-with Vercel AI SDK's in-process `ToolLoopAgent` and accepts a host-constructed
-AI SDK `LanguageModel`.
+`@catamorphic/ai-sdk` is the built-in in-process coding-agent plugin used by
+the reference hosts. `AiSdkCodingAgent` implements `CodingAgentProvider` with
+Vercel AI SDK's in-process `ToolLoopAgent` and accepts a host-constructed AI
+SDK `LanguageModel`.
 
 The package stays deliberately small:
 
@@ -28,8 +28,9 @@ The package stays deliberately small:
 - existing shared helpers stage attached plugin documentation;
 - the agent reads project skills from `.agents/skills/` through its normal
   filesystem tools rather than adding a separate skill runtime;
-- no custom compaction, subagent, permission, or durable harness layer is
-  introduced.
+- the provider itself adds no parallel compaction, permission, or durable
+  subagent model. Later first-class delegation remains core-owned session
+  state.
 
 Flue and `@catamorphic/flue` are removed. `@catamorphic/codex` remains an
 optional alternate provider. The vendor-neutral contracts and session
@@ -40,8 +41,8 @@ orchestration established by ADR 0009 remain in force.
 - Hosts choose model providers and credentials by injecting an AI SDK model;
   Catamorphic does not own provider configuration.
 - Model calls stay in the host and project commands stay in the sandbox.
-- Agent sessions remain in-process. A host restart requires a new session,
-  matching the practical behavior of the previous implementation.
+- Provider anchors remain in-process. After a host restart, core re-anchors the
+  same durable Catamorphic session with its persisted transcript.
 - Migration 018 closes active persisted Flue sessions because their provider
   state cannot be resumed by the new implementation.
 - More advanced harness behavior can be added later only when concrete needs

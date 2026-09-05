@@ -5,8 +5,9 @@
  * - `tenantId` — the host's org / workspace id. Becomes the UUID stored in
  *   `catamorphic.tenants.id` + referenced by `catamorphic.projects.tenant_id`.
  *   Auto-upserted on first use.
- * - `externalUserId` — the host's user id. Not persisted in any catamorphic
- *   table; used only for per-user git working directories and commit authorship.
+ * - `externalUserId`: the host's stable user id. Persisted where Catamorphic
+ *   needs durable ownership, membership, or audit attribution, but never joined
+ *   to or constrained by a host user table.
  *
  * Services defined in this package accept {@link Identity} explicitly. They
  * intentionally do NOT fall back to any default — catamorphic is embed-only,

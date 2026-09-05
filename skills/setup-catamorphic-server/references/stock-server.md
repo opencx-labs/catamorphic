@@ -17,6 +17,12 @@ before proposing commands.
 4. Confirm how invited members will reach the server: desktop, PWA, MCP, or a
    combination.
 
+The credential-free invitation is the common onboarding object. Desktop and
+PWA clients use it to discover OAuth, sign in, and redeem project admission.
+An MCP client uses the same protected-resource discovery and member identity;
+do not mint a separate token or add permanent "Use in Claude" chrome inside
+the desktop.
+
 ## Local agent operation
 
 The running server owns its Better Auth connection and exposes small,
@@ -39,6 +45,11 @@ agent should:
    that stable auth user to an explicit project role.
 5. Verify sign-in, OAuth discovery, project membership, and revocation through
    the normal application paths.
+
+After that first provisioning, change roles, project agents,
+`.catamorphic/sidebar.js`, and `.catamorphic/project.json` through the ordinary
+reviewed project change loop. The stock server has no second bootstrap JSON
+file whose policy can drift from the project.
 
 Adapt the transport to the deployment. An agent in a source checkout may call
 the loopback operations directly. An agent managing a container must execute a

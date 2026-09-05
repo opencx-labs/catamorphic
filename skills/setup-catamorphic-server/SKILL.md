@@ -48,9 +48,12 @@ current source when documentation and the installed version differ.
 - Authentication identifies a person. Committed project roles and
   memberships authorize them.
 - Roles grant provider-neutral workflow, project-agent, Environment, and
-  connection references. Each member separately enables unattended workflows
-  after reviewing the deployed commit and authenticating every required
-  member connection. Never make this Google Workspace-specific.
+  connection references, document paths, and namespaced project permissions.
+  Catamorphic reserves `memberships:manage` and `roles:manage`; host-specific
+  permissions remain inert unless that host or its UI explicitly interprets
+  them. Each member separately enables unattended workflows after reviewing
+  the deployed commit and authenticating every required member connection.
+  Never make this Google Workspace-specific.
 - MCP authorization is sufficient for a workflow or project agent when its
   server exposes the declared connection actions. Configure providers through
   the host-injected connection registry and credential vault.
@@ -62,6 +65,9 @@ current source when documentation and the installed version differ.
 - A deployment operator is not a server-owner or super-admin user.
 - A project has at most one Catamorphic remote. Execution targets beneath it
   are Environments.
+- Initial machine provisioning is an operator operation. Ongoing role, agent,
+  sidebar, and starting-action configuration belongs in normal reviewed
+  project files; do not create a parallel stock-server bootstrap config.
 - Keep one behavioral path after credentials are acquired. For example, a
   GitHub CLI token may feed the regular GitHub service; it does not create a
   second `gh api` or clone implementation.
@@ -76,5 +82,7 @@ current source when documentation and the installed version differ.
 - Treating account authentication as consent to enable every compatible
   workflow, or allowing a service-owned enablement to target a personal
   session.
+- Targeting project presentation by role slug instead of resolved builder
+  state and namespaced permissions.
 - Writing Better Auth password hashes or rows directly.
 - Turning setup guidance into a rigid stack recipe.

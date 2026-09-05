@@ -26,8 +26,12 @@ registry, project agents ADR 0050, workspace tools, triggers, e2e fakes);
 `terminal.ts` + `terminal-text.ts` + `shell-integration.ts` are the PTY
 stack; `git-view.ts` is the system-git read surface (worktrees, status,
 diffs); `browser*.ts`, `profiles.ts`, `connections-store.ts`,
-`mcp-apps.ts`, `sidebar-config.ts` cover browser, profiles, connectors,
-MCP apps, and sidebar layers; `mobile-pairing.ts` is "Continue on
+`mcp-apps.ts`, `sidebar-config.ts`, `project-manifest.ts`, and
+`shared/project-experience.ts` cover browser, profiles, connectors, MCP apps,
+sidebar layers, project starting actions, and capability targeting.
+`harness-components.ts` installs the exact integrity-pinned Claude Code and
+Codex platform executable on first use; never import downloaded JavaScript
+into Electron or float those release pins. `mobile-pairing.ts` is "Continue on
 mobile" (ADR 0060) — the QR palette action's LAN listener that serves
 the built `apps/pwa` bundle, exchanges single-use codes for device
 tokens (SHA-256 hashes + persisted port in
@@ -107,7 +111,9 @@ streamed preamble messages, and the ask_user question panel.
   contract from `DESIGN.md` — easing/duration bounds, enter/exit pairing,
   animate-before-unmount), `e2e/onboarding.e2e.ts`, `e2e/agents.e2e.ts`,
   `e2e/project-agents.e2e.ts` (committed agent definitions + consent), and
-  `e2e/recovery.e2e.ts`. Harness:
+  `e2e/recovery.e2e.ts`. `e2e/app.e2e.ts` also covers session source,
+  subsession promotion, recursive archive confirmation, and project-shaped
+  member navigation. Harness:
   `e2e/harness.ts`, config: `vitest.e2e.config.ts`. A separate
   model-in-the-loop eval (`bun run test:eval`, `e2e/agent-build.eval.ts`)
   exercises real agent app-building and is not part of the required

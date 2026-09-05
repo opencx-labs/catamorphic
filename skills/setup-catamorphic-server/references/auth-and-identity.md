@@ -34,6 +34,13 @@ bind a stable external user id to those roles and grants. Builder access,
 membership management, and protected role-policy management are separate
 capabilities; do not make every builder an administrator by accident.
 
+Role `permissions` use the namespaced `domain:capability` form. Core enforces
+`memberships:manage` and `roles:manage`; other valid names survive identity
+resolution for an embedder's services and project-authored presentation but
+grant no framework authority on their own. Desktop presentation may match
+resolved `builder` and `permissions` on shared sidebar items and project
+starting actions. It must not branch on role names.
+
 Machine/database authority is outside this model. There is no server-owner or
 super-admin user. A setup agent with deployment access may provision the first
 ordinary user and membership through maintained host operations.

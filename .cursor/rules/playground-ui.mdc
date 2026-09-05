@@ -1,55 +1,68 @@
 ---
-description: Editor UI conventions — run panel, history sidebar, state management (consumed by the host app)
-globs: ["packages/ui/src/runs-panel.tsx", "packages/ui/src/history-sidebar.tsx", "packages/ui/src/run-trigger-dialog.tsx", "packages/ui/src/toolbar.tsx", "packages/ui/src/atoms.ts", "packages/react/src/**", "packages/registry/src/**"]
+description: Editor UI conventions for the Runs panel and shared state
+globs: ["packages/ui/src/runs-panel.tsx", "packages/ui/src/run-trigger-dialog.tsx", "packages/ui/src/toolbar.tsx", "packages/ui/src/workflow-editor.tsx", "packages/react/src/**", "packages/registry/src/**"]
 alwaysApply: false
 ---
 
 # Editor UI Conventions
 
-These conventions apply to the embeddable editor shipped from `@catamorphic/ui` / `@catamorphic/react` / `@catamorphic/registry`. There is no standalone playground app — the host mounts the editor and wires data through its own API layer.
+These conventions apply to the embeddable editor shipped from
+`@catamorphic/ui`, `@catamorphic/react`, and `@catamorphic/registry`. There is
+no standalone playground app. The host mounts the editor and wires data
+through its API layer.
 
-## Data access rule
+## Data access
 
-Editor components **must only communicate with the embed server** (either `@catamorphic/fastify-plugin` mounted by the host, or via `@catamorphic/server-sdk`). They never import from `@catamorphic/db` or talk to the database directly. All data flows through `@catamorphic/api-client` or the host's own proxy.
+Editor components communicate only with the mounted Fastify API or a
+host-owned adapter over `@catamorphic/server-sdk`. They never import
+`@catamorphic/db` or query the database directly. Server-backed React state
+flows through the generated `@catamorphic/api-client` and TanStack Query.
 
-## Run Execution Flow
+## Run execution
 
-1. User clicks **▶ Run** → `RunTriggerDialog` opens with a form built from `triggerParameters`.
-2. On submit, a local pending run is added to `runsAtom` (status `running`).
-3. The **History sidebar** opens automatically and the running run is expanded.
-4. `onRun(triggerData)` fires the host-provided callback → `POST /api/projects/:projectId/workflows/:name/runs` on the embed server.
-5. On completion, the local run is updated with the server's `runId`, result, and status.
-6. If the server persisted the run to the DB, `runId` is the DB-assigned UUID (replaces the local temp ID).
+1. The Run button opens `RunTriggerDialog`, whose form comes from
+   `triggerParameters` or the parsed graph input.
+2. The host-provided `onRun(input)` starts one immutable production Run and
+   returns its canonical `Run` DTO. There is no mutable-source test mode.
+3. The editor remembers the submitted values in `lastTriggerDataAtom`, closes
+   the dialog, stores the returned Run as local `activeRun`, and opens the
+   Runs panel.
+4. `renderRunsPanel({ activeRun })` lets the host mount its chosen Runs UI.
+   The default empty slot does not fetch data by itself.
+5. The exported `RunsPanel` fetches list/detail data with React hooks, selects
+   the active Run when supplied, and exposes controls from current Run
+   capabilities.
 
-## History Sidebar
+## Runs panel
 
-- Opened by the **⏱ History** toolbar button (not a tab inside the right panel).
-- Has two tabs: **Runs** and **Versions** (code history).
-- The run count is **not** shown on the button.
-- Closed by: clicking the button again, clicking ✕ inside the sidebar, or pressing **Escape** (Escape closes history sidebar first; pressing again closes the right detail panel).
+- One Runs panel serves every Workflow. Capabilities decide whether cancel,
+  processing pause/resume, input submission, batch progress, and item
+  inspection appear.
+- `RunsPanel` owns its selected Run locally. Server list/detail state remains
+  in TanStack Query; do not restore removed `runsAtom`, `activeRunIdAtom`, or
+  pagination callback atoms.
+- Batch item pagination uses explicit Previous/Next controls. The selected
+  batch scope is identified by `workflowStepAttemptId`, including prior failed
+  or canceled attempts.
+- The panel is controlled by `panelVisibilityAtom.runsPanel`. Escape behavior
+  comes from `useEditorKeyboard` and closes the Runs panel before the detail
+  panel.
 
-## Runs Panel Behavior
+## Shared editor state
 
-- One Runs panel renders every Workflow. Run capabilities determine whether
-  cancel, processing pause/resume, input submission, progress, and item
-  inspection controls appear; never add capability-specific panel families.
-- Runs start **collapsed by default** — DB-loaded history is never auto-expanded.
-- Only the run triggered in the **current session** (`activeRunIdAtom`) auto-expands.
-- Runs are paginated: 20 per page. An `IntersectionObserver` sentinel at the bottom triggers `onLoadMoreRuns(offset)` when scrolled into view, appending more items to `runsAtom`.
+Jotai holds only local canvas and panel state: source, parsed graph, selection,
+React Flow nodes/edges, collapsed nodes, execution overlay, detail-panel state,
+Run-dialog visibility, last trigger input, read-only state, and AI loading.
+These atoms live inside `WorkflowEditorScope`; host chrome must share that
+scope to read or change them.
 
-## State Management Rules
+Do not add server records, Run history, or session lifecycle to Jotai or
+browser storage. Those remain generated API and TanStack Query state.
 
-- `runsAtom` — plain Jotai atom, **in-memory only** (no sessionStorage, no localStorage). Seeded from DB on page load via `initialRuns` prop.
-- `lastTriggerDataAtom` — plain Jotai atom, **in-memory only**. Remembers the last trigger data values to pre-fill the dialog on next run. Never persist to storage.
-- `loadMoreRunsAtom` — holds the `onLoadMoreRuns` callback, set from `WorkflowEditorProps`. Allows `RunsPanel` to fetch additional pages without knowing the API URL.
+## Canvas and detail panel
 
-## Canvas Interaction Rules
-
-- Edge interaction paths (`react-flow__edge-interaction`) have `pointer-events: none` — dragging on an edge pans the canvas instead of initiating an edge interaction.
-- The graph is read-only; users cannot drag, connect, or delete nodes or edges.
-
-## Detail Panel (Right Panel)
-
-- Shows **Details** and **Code** tabs.
-- **Node count is not shown** on the workflow overview (trigger details). Only trigger parameters and description are shown.
-- See `panel-editor.mdc` for full bidirectional code ↔ canvas linking conventions.
+- Edge interaction paths have `pointer-events: none`; dragging an edge pans
+  rather than editing it.
+- The graph is read-only. Users do not drag, connect, or delete nodes or edges.
+- The detail panel exposes Details and Code. See `panel-editor.mdc` for
+  bidirectional code and canvas linking.

@@ -14,12 +14,38 @@ server-side agent is [`@catamorphic/ai-sdk`](../ai-sdk/README.md). See
 
 ```ts
 import { CodexAgent } from "@catamorphic/codex";
-import { createCatamorphic } from "@catamorphic/server-sdk";
+import {
+  createCatamorphic,
+  defineStaticEnvironments,
+} from "@catamorphic/server-sdk";
+
+const environmentProvider = defineStaticEnvironments([
+  {
+    descriptor: {
+      id: "local",
+      label: "Managed execution",
+      trust: "managed",
+      isolation: "sandbox",
+      workloads: ["agent", "workflow"],
+      agentTopologies: ["controller"],
+      capabilities: ["network.egress"],
+      resources: {},
+    },
+    sandboxProvider,
+  },
+]);
 
 const catamorphic = createCatamorphic({
+  hostId: "my-host",
   database: { connectionString: process.env.DATABASE_URL! },
   storage: { projectManager },
   sandboxProvider,
+  environmentProvider,
   codingAgent: new CodexAgent(),
 });
 ```
+
+This one-provider form is wrapped as a controller registry entry. A host that
+wants Codex to operate directly on a local checkout should register it with
+`topology: "native"` in a `CodingAgentRegistry` and provide
+`nativeAgentCheckout`.

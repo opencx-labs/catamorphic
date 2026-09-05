@@ -43,7 +43,7 @@ authorization.
 6. [REST API](#rest-api)
 7. [Sandbox runtime integration](#sandbox-runtime-integration)
 8. [Agent context injection](#agent-context-injection)
-9. [Playground UI](#playground-ui)
+9. [Host UI](#host-ui)
 10. [Setup — local dev walkthrough](#setup--local-dev-walkthrough)
 11. [Known issues & fixes](#known-issues--fixes)
 12. [Future sources (npm / git)](#future-sources-npm--git)
@@ -252,11 +252,12 @@ CREATE INDEX idx_project_plugins_project ON project_plugins(project_id);
 
 CREATE TABLE project_secrets (
   project_id    uuid NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  stage         varchar(20) NOT NULL DEFAULT 'production',
   name          varchar(255) NOT NULL,
   value         text NOT NULL,
   created_at    timestamptz NOT NULL DEFAULT now(),
   updated_at    timestamptz NOT NULL DEFAULT now(),
-  PRIMARY KEY (project_id, name)
+  PRIMARY KEY (project_id, stage, name)
 );
 CREATE INDEX idx_project_secrets_project ON project_secrets(project_id);
 ```
@@ -300,16 +301,17 @@ table.
 
 Owns `project_secrets`.
 
-- `list(projectId)` — returns `SecretStatus[]`:
-  `{ name, declaredBy, label, description, required, default, hasValue }`.
+- `list({ identity, projectId, stage })`: returns `SecretStatus[]`:
+  `{ name, source, label, description, required, hasValue, updatedAt }`.
   Never returns the plaintext value.
-- `upsert(projectId, name, value)` — validates `name` is declared by at least
-  one attached plugin, then `ON CONFLICT (project_id, name) DO UPDATE`.
-- `delete(projectId, name)` — drops the row.
-- `loadForRun(projectId)` — resolves every declared secret, applying
+- `upsert({ identity, projectId, stage, name, value })`: validates builder
+  authority and that `name` is declared by project code or an attached plugin,
+  then upserts that stage's value.
+- `delete({ identity, projectId, stage, name })`: drops one stage's row.
+- `loadForRun({ identity, projectId, stage })`: resolves every declared secret, applying
   `default` when the row is missing. Returns
-  `{ values: Record<string, string>, missingRequired: string[] }`. The
-  playground route 400s on any missing required.
+  `{ values: Record<string, string>, missingRequired: string[] }`. Run
+  enrollment rejects missing required values before execution.
 
 ### `RunPluginsLoader`
 
@@ -317,7 +319,12 @@ Produces the payload snapshot for a single run.
 
 ```ts
 class RunPluginsLoader {
-  async load(projectId: string): Promise<{
+  async load(args: {
+    identity: Identity;
+    projectId: string;
+    stage: "test" | "production";
+    workflowName?: string;
+  }): Promise<{
     plugins: RunPluginPayload[];       // packageName + files map
     secrets: Record<string, string>;
     missingRequiredSecrets: string[];
@@ -397,7 +404,7 @@ interface RunPluginPayload {
 }
 ```
 
-`uploadPluginPayloads()` in `packages/sandbox/src/run-executor.ts` mirrors
+`uploadPluginPayloads()` in `packages/sandbox/src/plugin-upload.ts` mirrors
 each payload under:
 
 ```
@@ -414,8 +421,9 @@ unusable; building on the host before attach is the operator's job.
 
 ### Secret injection
 
-`ExecuteRunOpts.secrets` is merged with the built-in `CATAMORPHIC_*` env vars
-and passed through `SandboxProvider.executeCommand` environment options:
+`RunPluginsLoader` resolves production values for each invocation. They travel
+in the deployment-runtime invocation envelope and the runtime merges them with
+its built-in `CATAMORPHIC_*` variables:
 
 ```ts
 const env = {
@@ -423,25 +431,23 @@ const env = {
   CATAMORPHIC_WORKFLOW_NAME,
   CATAMORPHIC_WORKFLOW_FILE,
   CATAMORPHIC_TRIGGER_DATA,
-  ...opts.secrets,          // EXAMPLE_API_KEY, EXAMPLE_API_URL, …
+  ...invocation.env,        // EXAMPLE_API_KEY, EXAMPLE_API_URL, …
 };
 ```
 
-Secret declarations may not use the reserved `CATAMORPHIC_` prefix. Test and
-production secret values are stored separately and the executor receives only
-the values for the run's mode.
+Secret declarations may not use the reserved `CATAMORPHIC_` prefix. The API
+still keeps stage-specific records, but immutable deployed Runs consume only
+the production stage.
 
 ### Execution flow
 
-`RunExecutorImpl.executeRun()`:
-
-1. Receives a prepared production sandbox or disposable test directory.
-2. Uploads the canonical runtime harness.
-3. `uploadPluginPayloads()` writes individual plugin files under
-   `node_modules/<pkg>/`.
-4. Calls `executeCommand("bun run harness.ts", { cwd, env, timeout })`.
-5. Parses the `CATAMORPHIC_REPORT:` marker from stdout.
-6. Core transactionally persists terminal state and awaits cleanup.
+At deployment, core snapshots attached plugin payloads into the immutable
+deployment artifact. `DeploymentRuntimeService` materializes that exact
+artifact in the selected Environment, installs dependencies, writes plugin
+files under `node_modules/<pkg>/`, and protects the tree from mutation. The
+execution worker leases queued Runs to the warm deployment runtime and
+persists events and terminal state. Every Run executes a deployed commit;
+there is no mutable-source test execution path.
 
 ---
 
@@ -462,7 +468,7 @@ The host app owns the workflow-builder prompt. Its flow:
 Before this wiring the builder was a pure OpenAI call with a hardcoded
 system prompt, which is exactly why early demos hallucinated SDK calls.
 
-### 2. Coding agent (`CodingAgentProvider` implementations - `@catamorphic/ai-sdk`, `@catamorphic/codex`)
+### 2. Coding agent (`CodingAgentProvider` implementations)
 
 `startSession({ attachedPlugins })` on every provider:
 
@@ -473,7 +479,8 @@ system prompt, which is exactly why early demos hallucinated SDK calls.
 - `buildPluginsPreamble()` generates a Markdown block listing each plugin
   and the absolute on-disk path of its staged docs.
 - The preamble is prepended to the first message passed to
-  `thread.runStreamed()`.
+  the selected `@catamorphic/ai-sdk`, `@catamorphic/claude-code`, or
+  `@catamorphic/codex` provider.
 
 ---
 
@@ -499,7 +506,7 @@ Mounted inside the host's project page.
 
 End-to-end steps to go from zero to a workflow that calls a host API.
 
-### 1. Env vars (root `.env` of catamorphic)
+### 1. Host environment
 
 ```bash
 # Enables the local plugin resolver. Point at any directory whose immediate
@@ -675,12 +682,13 @@ env matters.
 **Symptom.** AI-generated workflow invented functions like
 `acme.getRecordByUUID()` that don't exist.
 
-**Root cause.** `generateWorkflowCode` was a standalone OpenAI call from the host server action, completely bypassing `CodexAgent`'s plugin
+**Root cause.** A legacy host authoring call bypassed the shared attached-plugin
 context. The model had never seen the SDK's d.ts.
 
-**Fix.** New `AgentContextService` + `GET /api/projects/:id/agent-context`
-endpoint. Server action fetches the suffix and prepends it to the system
-prompt. See [Agent context injection](#agent-context-injection).
+**Fix.** `AgentContextService` plus
+`GET /api/projects/:id/agent-context` supplies the exact attached-package
+suffix to any host-owned authoring agent. See
+[Agent context injection](#agent-context-injection).
 
 ---
 
@@ -724,18 +732,25 @@ Quick index — every file that participates in the plugin subsystem.
 - `packages/core/src/services/run-plugins-loader.ts` — per-run snapshot.
 - `packages/core/src/services/agent-context-service.ts` — LLM prompt builder.
 - `packages/fastify-plugin/src/routes/plugins.ts` — REST routes.
-- `packages/fastify-plugin/src/routes/playground.ts` — calls `RunPluginsLoader`.
+- `packages/core/src/services/deployment-artifacts-service.ts`: immutable
+  plugin payload snapshot.
+- `packages/core/src/services/deployment-runtime-service.ts`: runtime
+  materialization and plugin upload.
 - `packages/fastify-plugin/src/app.ts` — CORS + route registration.
 - `packages/fastify-plugin/src/schemas.ts` — shared Zod DTOs.
 - Host boot code (e.g. `backend/src/catamorphic/boot.ts`) — wires resolver + services from env.
 
-**Sandbox:**
-- `packages/sandbox/src/run-executor.ts` — `uploadPluginPayloads`, env merge.
+**Sandbox and coding agents:**
+- `packages/sandbox/src/plugin-upload.ts`: `uploadPluginPayloads`.
 - `packages/cloudflare/src/sandbox-provider.ts` — scoped-package upload fix.
-- `packages/sandbox/src/coding-agent/codex-agent.ts` — staging + preamble.
+- `packages/sandbox/src/coding-agent/plugin-staging.ts`: shared staging and
+  preamble helpers.
 - `packages/sandbox/src/coding-agent/types.ts` — `AttachedPluginForAgent`.
-- `packages/sandbox/src/__tests__/run-executor.test.ts` — upload + env tests.
-- `packages/sandbox/src/__tests__/codex-agent-plugins.test.ts` — preamble tests.
+- `packages/sandbox/src/__tests__/plugin-staging.test.ts`: staging and
+  preamble tests.
+- `packages/ai-sdk/src/ai-sdk-agent.ts`,
+  `packages/claude-code/src/claude-code-agent.ts`, and
+  `packages/codex/src/codex-agent.ts`: provider integrations.
 - `packages/cloudflare/src/__tests__/sandbox-provider.test.ts` — `@` encoding test.
 
 **Database:**

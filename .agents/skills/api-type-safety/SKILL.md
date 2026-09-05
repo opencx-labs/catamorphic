@@ -42,6 +42,21 @@ Session notification state is part of the ordinary `AgentSessionSchema`:
 React clients should use `useAcknowledgeAgentSessionAttention` rather than
 hand-writing a fetch.
 
+Keep all other session lifecycle state in that same generated contract.
+Session provenance is `source`; delegation uses `parentSessionId` plus the
+subsession routes; navigation state is `visibility`; and durable archive uses
+the archive and unarchive routes. Archive can return a typed 409
+`archive_confirmation_required` payload with the exact running sessions and
+counts of Watchers and processes that would be stopped. React clients should use
+`useArchiveAgentSession` and `useUnarchiveAgentSession` so query invalidation
+and that confirmation contract stay centralized.
+
+`GET /api/me` is the client capability document. Its project permissions must
+use the shared `PROJECT_PERMISSION_PATTERN` from `@catamorphic/core`; do not
+weaken the OpenAPI response to arbitrary strings when committed role files
+reject non-namespaced values. When an identity or feature field changes,
+update `/me`, its route tests, the OpenAPI artifact, and consumers together.
+
 ## Key Packages
 
 - **zod** — schema definition (single source of truth)

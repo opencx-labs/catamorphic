@@ -34,11 +34,6 @@
   `git-panel`/`useCommitChanges` in packages/registry still assume the
   dirty-tree model. Rework them (and discardDraft semantics) onto the
   checkpoint model.
-- **Claude Code persona parity.** The claude-code harness passes a
-  raw-string systemPrompt (replacing the SDK preset), so those sessions
-  get the core paragraph + workspace playbook but none of the desktop
-  persona (tone, task guidance) the built-in agent has. Decide: preset
-  + append, or share the desktop INSTRUCTIONS across harnesses.
 - **Chat: git-changes tree view.** The per-turn "touched files" chips were
   removed from chat replies (most users don't care; the app chip already
   jumps to the result). Replace them with a proper git-style changed-files
@@ -74,17 +69,12 @@
   a self-scoped store subtree (`store/users/{user}/**` via a role grant,
   0055 machinery) — the stock server's member role (ADR 0059) already
   grants exactly that subtree.
-- **Personal agents and agent-to-agent communication.** Give personal and
-  project agents a durable, policy-controlled way to send attributed messages
-  to other visible sessions. Messages must remain distinguishable from user
-  messages and support message-only delivery, queueing the next turn (waking
-  an idle or older session), or interrupting the current turn before delivery.
-  Move queue authority out of the React client into a persisted session inbox
-  with idempotency, provenance, per-agent send/receive and delivery-mode
-  policy, privacy/incognito enforcement, and explicit cross-project limits.
-  Cross-host delivery must follow the authoritative session through a durable
-  mailbox rather than treating transcript mirroring or a direct desktop
-  callback as message transport.
+- **Cross-project agent messaging.** Durable attributed delivery within a
+  project is shipped: message-only, next-turn, and interrupt modes use the
+  persisted mailbox and follow cross-host session authority. First-class
+  subsessions use the same path. What remains is an explicit policy for a
+  personal agent to address sessions in another project, including source and
+  destination scope, incognito boundaries, and auditable cross-project grants.
 - **Profile-scoped agent workflows.** After per-agent, per-project workflows
   are established, add private workflows owned by a profile-scoped personal
   agent and usable across projects without entering project git history.
@@ -123,20 +113,14 @@
   consent hashing, and HTTP surface stay unchanged. Gives authors types,
   autocomplete, and refactors; the check script should flag drift between
   source and generated JSON.
-- **Stock self-hostable server: SHIPPED 2026-08-21 (ADR 0059,
-  `apps/server`)** — docker-run-able, zero external services (PGlite +
-  bare git origins + local-process execution + `auth.json` tokens),
-  invites over `POST /admin/invites` (deploys `roles/member.json`,
-  grants membership, returns connect links), unique mDNS hostname for
-  LAN reach, `DATABASE_URL` opt-in for real Postgres. The mobile PWA
-  (`apps/pwa`, ADR 0058) is its first-class client, and desktop QR
-  pairing (ADR 0060) covers the personal-server case. Remaining
-  follow-ups: **passkeys** for self-serve token renewal (the `renew=`
-  slot on connect links is still empty), **OIDC + email-domain
-  auto-membership** (the company-brain door), an **admin/membership UI**
-  (today: curl + the printed admin token), and remote MCP for the desktop (calling a remote
-  server's workflow tools instead of local ones — the original
-  motivating case: per-customer apps with customers as scoped viewers).
+- **Stock-server administration UI.** The stock host now ships Better Auth,
+  OAuth/OIDC and local sign-in, credential-free invitations, all four admission
+  modes, membership-derived scope, and agent-driven machine-local setup. The
+  remaining product surface is calm role, membership, admission, access-request,
+  and publication management for authorized project managers. Keep it on the
+  ordinary project-permission APIs; do not revive printed admin tokens,
+  token-bearing links, or a server-owner account. Passkeys remain an optional
+  future login method, not an authorization model.
 - **ADR 0055 follow-ups (company brain).** The six steps landed (scope kinds
   + scoped agent sessions; roles/memberships/`identityFromBearer`; project
   store + documents surface + `context.caller/documents/host`; project MCP

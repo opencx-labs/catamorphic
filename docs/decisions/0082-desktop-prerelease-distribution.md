@@ -1,6 +1,6 @@
 # 0082: Desktop prerelease distribution
 
-- **Status:** Accepted; update policy superseded by [0083](0083-desktop-updates-and-migration-backups.md)
+- **Status:** Accepted; update policy superseded by [0083](0083-desktop-updates-and-migration-backups.md), bundled harness packaging superseded by [0091](0091-on-demand-desktop-harness-components.md)
 - **Date:** 2026-08-29
 
 ## Context
@@ -43,10 +43,10 @@ DMG users install a newer release over the existing application. The ZIP keeps
 the release shape compatible with a later electron-updater channel without
 committing to that channel now.
 
-The bundled Claude Code, Codex, and local sandbox binaries remain in the first
-alpha so the installed app preserves its local-first and multi-harness
-behavior. Reducing download size through on-demand harness installation is a
-separate product and licensing decision.
+The original release kept Claude Code, Codex, and local sandbox binaries in the
+application artifact. ADR 0091 supersedes the Claude Code and Codex packaging
+portion with verified on-demand platform components; the local sandbox remains
+part of the signed application.
 
 ## Consequences
 

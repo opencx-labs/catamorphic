@@ -20,13 +20,19 @@ This guide is intentionally domain-neutral. It applies to any plugin package tha
 
 ## Quick E2E Checklist
 
-1. Ensure plugin resolver is configured (`CATAMORPHIC_LOCAL_PLUGINS_DIR`).
+1. Ensure the host explicitly configures a `PluginResolver`
+   (`CATAMORPHIC_LOCAL_PLUGINS_DIR` is one reference-host input, not a
+   framework switch).
 2. Ensure plugin package has valid `catamorphic` manifest and built artifacts.
 3. Attach plugin to project.
-4. Save required project secrets.
-5. Run workflow (host app UI or run API).
-6. Verify plugin files exist in sandbox `node_modules/<packageName>/`.
-7. Verify run result/report is persisted without missing-secret or resolution errors.
+4. Save every required declared project secret for the production stage, or
+   configure a host capability provider that supplies it.
+5. Deploy the exact project commit, then trigger the workflow through the host
+   UI or Run API.
+6. Verify the immutable deployment artifact contains the plugin payload and
+   its runtime materializes files under `node_modules/<packageName>/`.
+7. Verify Run events and terminal state persist without missing-secret,
+   capability-resolution, or module-resolution errors.
 
 ## First Debug Stops
 
@@ -39,7 +45,8 @@ This guide is intentionally domain-neutral. It applies to any plugin package tha
 4. Sandbox module resolution failures:
    - plugin not built or upload path mismatch.
 5. AI usage mismatch:
-   - plugin docs/types not staged into agent context.
+   - plugin docs/types are absent from `AgentContextService` or the selected
+     coding-agent provider's staged plugin context.
 
 ## Files To Read Before Changing Integration
 
@@ -47,11 +54,15 @@ This guide is intentionally domain-neutral. It applies to any plugin package tha
 - `packages/plugins/src/resolver.ts`
 - `packages/plugins/README.md`
 - `packages/fastify-plugin/src/routes/plugins.ts`
-- `packages/fastify-plugin/src/routes/playground.ts`
 - `packages/core/src/services/plugins-service.ts`
 - `packages/core/src/services/secrets-service.ts`
 - `packages/core/src/services/run-plugins-loader.ts`
 - `packages/core/src/services/agent-context-service.ts`
-- `packages/sandbox/src/run-executor.ts`
-- `packages/sandbox/src/coding-agent/codex-agent.ts`
+- `packages/core/src/services/deployment-artifacts-service.ts`
+- `packages/core/src/services/deployment-runtime-service.ts`
+- `packages/core/src/services/execution-worker-service.ts`
+- `packages/sandbox/src/plugin-upload.ts`
+- `packages/sandbox/src/coding-agent/plugin-staging.ts`
+- The selected provider adapter in `packages/ai-sdk`, `packages/claude-code`,
+  or `packages/codex`
 - `INTEGRATION.md`

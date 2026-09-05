@@ -23,7 +23,8 @@ Workflow authoring or execution capabilities.
 
 Items currently shipped: `catamorphic-provider`, `project-editor`,
 `file-explorer`, `git-panel`, `diff-drawer`, `runs-panel`,
-`plugins-settings`, `monaco-editor`, and `agent-chat`.
+`plugins-settings`, `monaco-editor`, `agent-chat`, `chat-timeline`,
+`sessions-list`, `todo-progress`, and `tool-permission-card`.
 
 The `agent-chat` item is a complete bottom-docked coding-agent conversation.
 It needs only a `projectId` inside `CatamorphicAppProvider`; optimistic queued

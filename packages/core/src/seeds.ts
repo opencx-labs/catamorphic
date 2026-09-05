@@ -342,7 +342,7 @@ const appSupportFiles = (): Record<string, string> => ({
 export const SEED_SKILLS: Record<string, string> = {
   [`${SCAFFOLD_SKILL_DIR}/SKILL.md`]: `---
 name: catamorphic-projects
-description: What a Catamorphic project can hold — documents, code, automations, apps, committed agents and roles, the project store — and how to add the automations/apps workspace to a project that has none. Use when the user asks for their first workflow, automation, or app, asks what this project is, or asks about who may see or do what (roles, members, the store, sharing).
+description: What a Catamorphic project can hold, including documents, code, automations, apps, committed agents and roles, and the project store, and how to add the automations/apps workspace to a project that has none. Use when the user asks for their first workflow, automation, or app, asks what this project is, asks about who may see or do what (roles, members, the store, sharing), or wants to configure the project's shared sidebar or starting actions.
 ---
 
 # Catamorphic projects
@@ -436,6 +436,50 @@ Rules of thumb when authoring roles:
   workflow wakes that agent.
 - Keep roles few and readable; membership (who has which role and grants)
   is the host's, not a file here.
+
+## Shape the project experience from capabilities
+
+In the Catamorphic desktop reference host, a project may ship a shared
+\`.catamorphic/sidebar.js\` and up to six New Tab starters in the ordinary
+\`.catamorphic/project.json\` manifest. Both may target resolved authority with
+\`when: { builder?, permissions? }\`; never branch on a role slug. Every declared
+condition must match, invalid conditions fail closed, and omitted configuration
+leaves no empty UI behind.
+
+\`\`\`jsonc
+// .catamorphic/project.json
+{
+  "startingActions": [
+    {
+      "label": "Review onboarding",
+      "prompt": "Review our onboarding system and propose improvements.",
+      "agent": "brain-maintainer",
+      "when": { "permissions": ["brain:maintain"] }
+    }
+  ]
+}
+\`\`\`
+
+\`\`\`javascript
+// .catamorphic/sidebar.js
+module.exports = {
+  sections: [
+    { type: "chats" },
+    { type: "files" },
+    {
+      type: "custom",
+      title: "Company brain",
+      when: { permissions: ["brain:maintain"] },
+      items: [{ label: "Handbook", url: "https://handbook.example.com" }],
+    },
+    { type: "git", title: "Changes", when: { builder: true } },
+  ],
+};
+\`\`\`
+
+These are project-owned presentation files, not a stock-server bootstrap
+format and not workflow logic. Embedders may provide a different presentation
+contract while using the same resolved permission vocabulary.
 
 Workflow code declares provider-neutral requirements in its top-level
 \`connections\` array. Roles decide who may use those aliases; the host decides

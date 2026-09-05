@@ -60,8 +60,16 @@ bun run db:codegen
 
 ## Current table groups
 
-- Project/host integration: `tenants`, `projects`, `project_plugins`,
-  `project_secrets`, `project_sandboxes`, `agent_sessions`, `agent_messages`.
+- Project/host integration: `tenants`, `projects`, `memberships`, project
+  plugins/secrets/sandboxes, store documents/versions, apps/versions/storage,
+  publications, and stock admission policy/invitation/request tables.
+- Agent sessions: `agent_sessions`, `agent_turns`, `agent_messages`,
+  `agent_session_views`, `agent_delegations`, `session_mailbox_items`, runtime
+  events/requests, sync intents, notification events/deliveries, and push
+  subscriptions.
+- Workflow enablement and host activity: `workflow_enablements` plus its
+  connection/trigger/event tables, `watchers`, `watcher_runs`, schedule
+  bindings/occurrences, and project events/monitors.
 - Deployment/runtime: `deployment_artifacts`, `deployment_runtimes`,
   `execution_jobs`, `rate_reservation_buckets`.
 - Canonical Runs: `workflow_runs`, `workflow_run_states`,
@@ -82,6 +90,13 @@ Attention is a monotonic revision pair on that same session, not a notification
 inbox table: settlement increments `attention_revision`; opening copies it to
 `attention_seen_revision`. Preserve the check that seen never exceeds current
 and do both mutations atomically in SQL.
+
+Session hierarchy (`parent_session_id`), fork lineage
+(`forked_from_session_id`), and delegation (`agent_delegations`) are separate
+relationships. Archive is durable recursive presentation/lifecycle state, not
+a client preference. Cross-host and cross-session delivery goes through the
+persisted mailbox and authority fencing; do not bypass it with direct callbacks
+or transcript mirroring.
 
 ## Querying
 

@@ -9,16 +9,22 @@ description: Use when changing Catamorphic sandbox providers, workflow execution
 
 `@catamorphic/sandbox` provides two core capabilities:
 
-1. **Workflow Execution** — Runs workflow code inside sandboxes (Cloudflare Sandbox by default, Daytona as alternate) with persisted Run state and step-level observability
-2. **Coding Agent contract** — the vendor-neutral `CodingAgentProvider` interface. Implementations are plugin packages: `@catamorphic/ai-sdk` (flagship — AI SDK tool loop runs on the host server and edits the dev sandbox remotely) and `@catamorphic/codex` (Codex SDK). See `docs/decisions/0009` and `0018`.
+1. **Workflow execution**: runs workflow code through an injected sandbox or
+   trusted local-process provider with persisted Run state and step-level
+   observability.
+2. **Coding-agent contract**: the vendor-neutral `CodingAgentProvider`
+   interface. Implementations include `@catamorphic/ai-sdk`,
+   `@catamorphic/claude-code`, and `@catamorphic/codex`. Hosts expose one
+   provider or a dynamic `CodingAgentRegistry`.
 
 ## Provider Selection
 
 Providers live in vendor plugin packages (see `docs/decisions/0004`, `0008`, and `CLOUDFLARE.md`); the host constructs its chosen backend explicitly at boot:
 
 ```typescript
-import { CloudflareSandboxProvider } from "@catamorphic/cloudflare"; // default
-// or: import { DaytonaSandboxProvider } from "@catamorphic/daytona";
+import { CloudflareSandboxProvider } from "@catamorphic/cloudflare";
+// Alternatives: @catamorphic/microsandbox, @catamorphic/daytona, or
+// @catamorphic/local-process for a trusted single-tenant host.
 
 const provider = new CloudflareSandboxProvider({
   apiUrl: process.env.CLOUDFLARE_SANDBOX_API_URL!,
@@ -30,31 +36,46 @@ Providers handed to `CatamorphicCore` are automatically wrapped with `instrument
 
 ## Sandbox Model
 
-Each project uses two distinct sandbox types:
+Execution has two distinct purposes, but not every agent uses a sandbox:
 
 - **Production deployment runtime** — Immutable code pinned to deployed
   `origin/main`; a warm supervisor accepts queued invocations for the artifact.
-- **Dev sandbox** — Per-user, mutable code for coding agents. Keyed by
-  `(project_id, user_id)`. Runs never execute dev files; every run executes a
-  deployed commit.
+- **Agent checkout**: mutable project code selected per session. Controller
+  agents edit a dev sandbox; native Claude Code or Codex agents can use a
+  host-resolved local checkout through `nativeAgentCheckout`. Runs never
+  execute these mutable files; every Run executes a deployed commit.
+
+Logical project Environments and immutable Allocations select the execution
+provider, resources, and connection grants. Project builder scope does not
+imply Environment or connection authority.
 
 ## Package Structure
 
 ```
 packages/sandbox/src/               -- vendor-neutral, no vendor SDKs
-  types.ts                 -- SandboxProvider, SandboxManager, RunExecutor, CloneSource interfaces
+  types.ts                 -- provider, runtime, and coding-agent shared types
   instrumented-provider.ts -- instrumentSandboxProvider (OTel wrapper)
-  sandbox-manager.ts       -- SandboxManagerImpl (two-sandbox lifecycle)
-  run-executor.ts          -- RunExecutorImpl (execute workflows via sandbox; clone or upload)
+  sandbox-manager.ts       -- dev-sandbox lifecycle helper
+  plugin-upload.ts         -- attached plugin materialization helper
   coding-agent/
     types.ts               -- CodingAgentProvider interface (extensible)
     plugin-staging.ts      -- stagedPluginFiles / buildPluginsPreamble helpers
 
+packages/core/src/services/
+  deployment-runtime-service.ts -- immutable warm execution runtimes
+  execution-worker-service.ts   -- queued Run leasing and dispatch
+
 packages/ai-sdk/src/                -- @catamorphic/ai-sdk coding-agent plugin (flagship)
   ai-sdk-agent.ts          -- AiSdkCodingAgent + sandbox-backed tools
 
+packages/claude-code/src/            -- @catamorphic/claude-code harness
+  claude-code-agent.ts      -- Claude Agent SDK adapter
+
 packages/codex/src/                 -- @catamorphic/codex coding-agent plugin
   codex-agent.ts           -- CodexAgent (Codex SDK implementation)
+
+packages/microsandbox/src/           -- local sandbox provider
+packages/local-process/src/          -- trusted sandboxless subprocess provider
 
 packages/cloudflare/src/            -- @catamorphic/cloudflare plugin
   sandbox-provider.ts      -- CloudflareSandboxProvider (HTTP client to the Bridge Worker)
@@ -97,7 +118,13 @@ const devSandbox = await manager.ensureDevSandbox({
 
 ## Coding Agent
 
-The host picks an agent at boot and passes it to `createCatamorphic({ codingAgent })`. Session orchestration (dev sandbox lifecycle, persistence, sync-back of agent edits into the user's draft) is vendor-neutral in `core.agentSessions` (`AgentSessionsService`).
+The host passes one provider or a `CodingAgentRegistry` to
+`createCatamorphic({ hostId, codingAgent, sandboxProvider,
+environmentProvider, nativeAgentCheckout? })`. A registry entry owns a stable
+id, provider, topology, privilege ceiling, defaults, connection requirements,
+and explicit delegation policy. Session orchestration, persistence, checkout
+selection, serialized delivery, and checkpointing remain vendor-neutral in
+`AgentSessionsService`.
 
 ```typescript
 import { anthropic } from "@ai-sdk/anthropic";
@@ -109,6 +136,13 @@ const agent = new AiSdkCodingAgent({
   sandboxProvider: provider, // tool loop runs on the host, edits happen in the sandbox
 });
 ```
+
+Do not model first-class delegated work with provider-only subagent events.
+Agent definitions declare exact or constrained delegation routes and a child
+concurrency limit. Core creates ordinary child sessions, keeps hierarchy
+separate from fork lineage, and exposes spawn/list/wait/interrupt/attention
+operations. Native provider delegation is only an adapter optimization when it
+preserves that contract.
 
 Per-project skills live in the project repo under `.agents/skills/<name>/SKILL.md` (Agent Skills layout, `docs/decisions/0010`); the agent reads relevant skills from the sandbox checkout with its filesystem tools. `core.skills.list(...)` / `GET /api/projects/:id/skills` enumerate them.
 
@@ -154,9 +188,10 @@ Environment variables:
 Every invocation persists one canonical `workflow_runs` row. Supporting tables
 include `workflow_run_states`, `workflow_step_attempts`, `workflow_pauses`,
 `workflow_run_steps`, `workflow_run_events`, `execution_jobs`, and batch-scope
-item/sink tables keyed by Run and workflow-step attempt. Migration `008`
-introduced `project_sandboxes`, `agent_sessions`, and `agent_messages`, keyed by
-host `external_user_id`; there is no Catamorphic users table.
+item/sink tables keyed by Run and workflow-step attempt. Agent sessions,
+messages, hierarchy, delegation, archive visibility, attention, and ownership
+are durable database state keyed by the host's stable `external_user_id`;
+there is no Catamorphic users table or foreign key to a host user table.
 
 ## API Routes
 
@@ -166,6 +201,8 @@ host `external_user_id`; there is no Catamorphic users table.
 - `/api/runs/:runId/*` — Capability-driven cancel, processing pause/resume,
   input submission, and batch-scope item inspection
 - `POST/GET/DELETE /api/projects/:projectId/agent/sessions[...]` — Agent sessions + messages (503 when no `codingAgent` configured)
+- `POST|GET /api/projects/:projectId/agent/sessions/:sessionId/subsessions[...]`: Create, list, wait for, and interrupt first-class delegated sessions
+- `POST /api/projects/:projectId/agent/sessions/:sessionId/archive|unarchive`: Recursively archive or restore a session tree; archive returns typed impact and may require confirmation
 - `POST /api/projects/:projectId/agent/sessions/:sessionId/attention/acknowledge` — Clear the current workflow-requested attention revision
 - `GET /api/projects/:projectId/skills` — List per-project agent skills
 
@@ -177,8 +214,17 @@ Implement the `CodingAgentProvider` interface:
 interface CodingAgentProvider {
   readonly name: string;
   startSession(opts: StartSessionOpts): Promise<ProviderSession>;
-  resumeSession(providerSessionId: string): Promise<ProviderSession>;
-  sendMessage(session: ProviderSession, message: string): AsyncIterable<AgentEvent>;
+  sendMessage(
+    session: ProviderSession,
+    message: string,
+    opts?: TurnOptions,
+  ): AsyncIterable<AgentEvent>;
+  interrupt?(providerSessionId: string): void;
+  hasSession?(providerSessionId: string): boolean;
+  retryTurn?(
+    session: ProviderSession,
+    opts?: TurnOptions & { sanitizeReasoning?: boolean },
+  ): AsyncIterable<AgentEvent>;
   dispose(session: ProviderSession): Promise<void>;
 }
 ```

@@ -2,9 +2,11 @@
 
 Phone-sized client for a Catamorphic server (ADR 0058): projects →
 sessions → chat. Reply, nudge (queue / send-now + interrupt), answer
-agent questions and tool-permission asks, start simple chats. Remote auth uses
+agent questions and tool-permission asks, start simple chats. The session list
+shows promoted sessions only; latent delegated children remain with their
+parent and archived trees stay out of ordinary mobile navigation. Remote auth uses
 OAuth authorization code with S256 PKCE (ADR 0072); profiles are local people
-on this device, each holding refreshable server connections. Read `docs/decisions/0058-pwa-pwa.md`
+on this device, each holding refreshable server connections. Read `docs/decisions/0058-mobile-pwa.md`
 before changing architecture.
 
 ## Run

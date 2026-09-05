@@ -15,6 +15,25 @@ local user when requested. There is no human setup command or first-run UI.
 The owner-only operational credential under `CATAMORPHIC_DATA_DIR` is machine
 authority, not a Catamorphic identity or super-admin account.
 
+After initial provisioning, the company brain is configured through its
+ordinary reviewed project files. `roles/*.json` grants artifacts,
+Environments, connection aliases, document paths, and namespaced permissions;
+`agents/*` defines the project agents; `.catamorphic/sidebar.js` and
+`.catamorphic/project.json` can shape the desktop sidebar and starting actions
+from resolved builder state and permissions. There is no parallel stock-server
+bootstrap config.
+
+Invitations are credential-free project locators. Desktop, PWA, and MCP clients
+discover the server's OAuth endpoints, sign in as the same user, and redeem the
+same admission policy. Access tokens identify the person and carry no role or
+project grant. Each request resolves current membership, so revocation and role
+changes apply immediately.
+
+Workflow access is not unattended-run consent. Members preview and enable an
+exact deployed workflow with its trigger, Environment, agent, and connection
+requirements. Account authorization can finish that selected flow but never
+enables every compatible workflow automatically.
+
 ## Credential vault and provider setup
 
 The stock server creates an AES-256-GCM credential vault under

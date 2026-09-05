@@ -19,9 +19,10 @@ completely:
 - `scripts/desktop-release.ts`
 - `apps/desktop/package.json`
 
-Read ADRs 0082, 0083, and 0085 when changing distribution or update behavior. If the
-release includes database changes, also use the `database-conventions` skill
-and read ADR 0084 plus the new migrations.
+Read ADRs 0082, 0083, 0085, and 0091 when changing distribution, update
+behavior, or coding-harness packaging. If the release includes database
+changes, also use the `database-conventions` skill and read ADR 0084 plus the
+new migrations.
 
 The current workflow supports Apple silicon macOS Stable and Preview releases.
 Stable versions are `x.y.z`; Preview versions are `x.y.z-alpha.n`. Do not
@@ -64,9 +65,14 @@ Stop before tagging when any of these is true:
    `codex/` branch. Keep `apps/desktop/package.json` and `bun.lock` in sync.
 4. Validate the tag/version pair with `scripts/desktop-release.ts`, run its
    focused tests, then run the complete `bun run check` gate.
-5. Commit and push the release preparation, open or update a PR, wait for its
+5. If Claude Code or Codex dependencies changed, inspect
+   `apps/desktop/src/main/harness-components.ts`. The platform package version,
+   exact npm tarball URL, and SHA-512 integrity for every supported platform
+   are one release contract. Update and test them together; never publish a
+   floating component version or integrity gap.
+6. Commit and push the release preparation, open or update a PR, wait for its
    checks, and respect the required human review. Do not merge by bypass.
-6. After merge, fetch again and verify the merged `main` SHA contains exactly
+7. After merge, fetch again and verify the merged `main` SHA contains exactly
    the intended version and has successful CI. If `main` moved, repeat the
    exact-commit checks.
 
@@ -123,6 +129,9 @@ Verify all of the following before reporting success:
 - the tap commit is newer than the release publication and all applicable tap
   files advanced together;
 - the release and tagged workflow URLs are recorded for the user.
+- on a clean account without system Claude Code or Codex, each intended
+  harness performs its one-time verified component download, starts, and then
+  starts again from the cached component without network access.
 
 Use a temporary directory for downloads and tap inspection. Do not run
 `brew install`, replace `/Applications/Catamorphic.app`, or exercise an updater

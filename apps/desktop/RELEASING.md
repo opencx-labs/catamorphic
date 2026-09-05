@@ -4,7 +4,9 @@ The desktop release contract is recorded in
 [ADR 0082](../../docs/decisions/0082-desktop-prerelease-distribution.md) and
 [ADR 0083](../../docs/decisions/0083-desktop-updates-and-migration-backups.md),
 with Stable and Preview channels defined by
-[ADR 0085](../../docs/decisions/0085-desktop-stable-and-preview-channels.md).
+[ADR 0085](../../docs/decisions/0085-desktop-stable-and-preview-channels.md)
+and integrity-pinned, on-demand harness components defined by
+[ADR 0091](../../docs/decisions/0091-on-demand-desktop-harness-components.md).
 GitHub Releases is the canonical binary source. The Homebrew casks install the
 same notarized DMG, and the tap carries the small metadata files packaged apps
 use to discover updates.
@@ -56,8 +58,10 @@ account. Verify:
 - Applications shows the Catamorphic icon and bundle identity.
 - A `catamorphic://connect` invitation opens the installed app.
 - A local project can be created, reopened, and edited.
-- Claude Code, Codex, the built-in API harness, terminal, and local sandbox
-  paths that are intended for the release all start successfully.
+- Claude Code and Codex each perform their one-time verified component
+  download, start successfully, and start again from the cached component
+  while offline. The built-in API harness, terminal, and local sandbox paths
+  intended for the release also start successfully.
 - A remote project can sign in, sync, mirror a conversation, and continue in
   the hosted PWA.
 - `LICENSE.txt`, `NOTICE.txt`, and the bundled PWA are present in the app
@@ -91,6 +95,12 @@ not match the desktop package version. It then:
 The publication steps are rerunnable. Existing release assets are replaced,
 and an unchanged cask and feed produce no tap commit. GitHub assets are always
 published before the feed points clients to them.
+
+The packaged app includes the audited Claude Code and Codex TypeScript
+adapters but excludes their large platform packages. If either dependency is
+updated, update the matching platform version, tarball URL, and SHA-512 pins in
+`src/main/harness-components.ts` for every supported platform, run its focused
+tests, and repeat the clean-account first-use checks above.
 
 ## User install and upgrade
 

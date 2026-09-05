@@ -122,6 +122,13 @@ agent. If someone continues remotely, the server owns that conversation fork
 instead of pretending two writers have one history. Incognito desktop chats
 stay local and are never mirrored.
 
+Projects can shape the shared experience without hard-coding company personas
+into the app. Committed role files grant scoped artifacts and namespaced
+capabilities; the shared sidebar and up to six New Tab starting actions can
+target the caller's resolved builder state and permissions. If a project does
+not configure an action, the desktop adds no placeholder or empty surface.
+(ADR [0092](docs/decisions/0092-project-owned-capability-experiences.md))
+
 **Code is the source of truth.** Everything is stored as plain files
 (TypeScript, markdown, whatever the work is) in a git repository, never a
 proprietary DSL or an opaque store. When a project holds workflows, the
@@ -196,6 +203,15 @@ consent, and consent is bound to a hash of what you approved; definitions
 using a project secret need no personal consent and work headlessly.
 (ADR [0050](docs/decisions/0050-project-agent-definitions.md))
 
+Delegation is also first-class. A subagent works in an ordinary durable child
+session with explicit delegation authority, its own transcript, and the same
+message, interrupt, attention, and policy machinery as any other session.
+Archive recursively stops active work only after reporting its impact, while
+keeping the session tree restorable and searchable. Session source records
+whether a conversation began on desktop, mobile, Slack, Claude, MCP, or API.
+(ADRs [0089](docs/decisions/0089-project-shaped-member-shell.md),
+[0090](docs/decisions/0090-first-class-subsessions-and-delegation.md))
+
 ## Durable workflows
 
 TypeScript automations in git, rendered as a visual graph for
@@ -205,6 +221,11 @@ deployed commit. Boundaries (atomic retry scopes), batch scopes, pauses
 and signals, correlation keys, shared rate budgets, retention, and
 triggers, including host-defined trigger kinds with typed payloads and
 sync-until-first-wait firing. Full authoring model below.
+
+Role access is separate from unattended consent. Each member previews and
+enables an exact deployed workflow with its trigger, Environment, agent, and
+connection requirements. Connecting an account may complete that chosen flow;
+it never silently enables every compatible automation.
 
 ## Apps
 
@@ -236,6 +257,12 @@ integration (OSC 133); the embedded browser and the command palette round
 out the shell. All of it degrades quietly for non-technical users.
 (ADRs [0045](docs/decisions/0045-desktop-as-dev-shell.md),
 [0063](docs/decisions/0063-agent-checkout-coordination.md))
+
+The signed app ships the audited Claude Code and Codex adapters, then downloads
+each large, platform-specific executable only on first use. Every component is
+versioned and SHA-512 pinned by the app release, installed atomically, and
+reused offline. (ADR
+[0091](docs/decisions/0091-on-demand-desktop-harness-components.md))
 
 ## Your product, your feel and doctrine (embedding)
 
@@ -307,7 +334,7 @@ Also worth knowing, because it's easy to miss from the package list:
 | `@catamorphic/server-sdk` | The core SDK for your Node/Bun backend. Takes a Postgres connection (or `pg.Pool`), manages its own schema-scoped tables and migrations, and exposes projects, workflows, files, runs, triggers, agent sessions, and GitHub. |
 | `@catamorphic/fastify-plugin` | A mountable Fastify plugin (`app.register(catamorphicPlugin, { core, prefix: "/api" })`) exposing the standard HTTP API for frontends, plus the per-project MCP endpoints. Also exports a standalone `createApp` factory for sidecar deployments. |
 | `@catamorphic/react` | Headless React bindings: `CatamorphicProvider`, TanStack Query hooks, and jotai atoms. Build a fully custom UI on top of these. |
-| `@catamorphic/ui` | Ready-made components: the React Flow workflow canvas, detail panel, history sidebar, AI bar, and `AppMount` (the sandboxed app iframe host). Every piece is opt-in. |
+| `@catamorphic/ui` | Ready-made components: the React Flow workflow canvas, detail panel, Runs panel, AI bar, and `AppMount` (the sandboxed app iframe host). Every piece is opt-in. |
 | `@catamorphic/registry` | shadcn-style copy-paste components for hosts that want to own and customize the component source (project browser, git panel, runs panel, agent chat, Monaco editor). |
 | `@catamorphic/api-client` | Generated OpenAPI types + `openapi-fetch` client for the HTTP API. |
 | `@catamorphic/workflow` | Typed workflow-authoring primitives. Projects opt in directly, or a SaaS can wrap it and re-export only its approved surface. |
@@ -353,7 +380,30 @@ Settled design decisions are recorded as ADRs in [`docs/decisions/`](docs/decisi
 
 ```ts
 import { CloudflareSandboxProvider } from "@catamorphic/cloudflare";
-import { createCatamorphic } from "@catamorphic/server-sdk";
+import {
+  createCatamorphic,
+  defineStaticEnvironments,
+} from "@catamorphic/server-sdk";
+
+const sandboxProvider = new CloudflareSandboxProvider({
+  apiUrl: process.env.CLOUDFLARE_SANDBOX_API_URL!,
+  apiKey: process.env.CLOUDFLARE_SANDBOX_API_KEY,
+});
+const environmentProvider = defineStaticEnvironments([
+  {
+    descriptor: {
+      id: "local",
+      label: "Managed execution",
+      trust: "managed",
+      isolation: "sandbox",
+      workloads: ["agent", "workflow"],
+      agentTopologies: ["controller"],
+      capabilities: ["network.egress"],
+      resources: {},
+    },
+    sandboxProvider,
+  },
+]);
 
 // Boot once per process
 const catamorphic = createCatamorphic({
@@ -364,10 +414,8 @@ const catamorphic = createCatamorphic({
   },
   // Backend plugins: @catamorphic/cloudflare, @catamorphic/daytona,
   // @catamorphic/microsandbox, or @catamorphic/local-process
-  sandboxProvider: new CloudflareSandboxProvider({
-    apiUrl: process.env.CLOUDFLARE_SANDBOX_API_URL!,
-    apiKey: process.env.CLOUDFLARE_SANDBOX_API_KEY,
-  }),
+  sandboxProvider,
+  environmentProvider,
 });
 await catamorphic.migrate(); // idempotent, schema-scoped
 
@@ -585,6 +633,7 @@ window, or turn it off entirely, at construction:
 const catamorphic = createCatamorphic({
   database,
   storage,
+  environmentProvider,
   retention: { runRetentionDays: 30 }, // or { enabled: false } to keep forever
 });
 ```

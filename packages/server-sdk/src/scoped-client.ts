@@ -409,9 +409,9 @@ export class TenantScopedClient {
   ) {}
 
   /**
-   * Binds the user. Omit `scope` for a builder (full project surface); pass
-   * the artifacts a viewer is entitled to — an app, a workflow — for a
-   * scoped identity that can reach exactly those (ADR 0053).
+   * Binds the user. Omit `scope` only for a host-root identity; pass a project
+   * ref for builder access or exact artifact refs for a scoped member
+   * (ADRs 0053 and 0055).
    */
   forUser(args: {
     externalUserId: string;
