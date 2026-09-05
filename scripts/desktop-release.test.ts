@@ -63,6 +63,10 @@ describe("renderHomebrewCask", () => {
       "releases/download/desktop-v#{version}/Catamorphic-#{version}-arm64.dmg",
     );
     expect(cask).toContain("depends_on arch: :arm64");
+    expect(cask).toContain("depends_on macos: :monterey");
+    expect(cask).toContain(
+      'homepage "https://github.com/opencx-labs/catamorphic"\n\n  auto_updates true\n  conflicts_with cask: "catamorphic"\n  depends_on arch: :arm64',
+    );
     expect(cask).toContain("auto_updates true");
     expect(cask).toContain('conflicts_with cask: "catamorphic"');
     expect(cask).toContain('app "Catamorphic.app"');
