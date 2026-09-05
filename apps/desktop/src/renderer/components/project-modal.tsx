@@ -6,19 +6,28 @@ import {
 import { useQueryClient } from "@tanstack/react-query";
 import {
   Check,
+  CheckCircle2,
+  Copy,
+  ExternalLink,
   FolderOpen,
   FolderPlus,
   Import,
   Lock,
   Search,
 } from "lucide-react";
-import { type FormEvent, useEffect, useState } from "react";
+import { type FormEvent, useCallback, useEffect, useState } from "react";
+import { createPortal } from "react-dom";
 import { desktopApi } from "../lib/desktop-api.js";
 import { Modal } from "./modal.js";
 import { AnimatedHeight, ModalTab } from "./modal-tabs.js";
 import { PendingButton } from "./pending-button.js";
 
 type Mode = "create" | "import" | "github";
+
+interface GithubAuthorizationGrant {
+  userCode: string;
+  verificationUri: string;
+}
 
 /** GitHub mark (lucide dropped brand icons). */
 function GithubIcon({ className }: { className?: string }) {
@@ -45,10 +54,12 @@ export function ProjectModal({
   open,
   onClose,
   onCreated,
+  onOpenUrl,
 }: {
   open: boolean;
   onClose: () => void;
   onCreated: (project: { id: string; name: string }) => void;
+  onOpenUrl: (url: string) => void;
 }) {
   const [mode, setMode] = useState<Mode>("create");
   const [name, setName] = useState("");
@@ -59,7 +70,12 @@ export function ProjectModal({
   );
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [githubGrant, setGithubGrant] =
+    useState<GithubAuthorizationGrant | null>(null);
   const queryClient = useQueryClient();
+  const finishGithubAuthorization = useCallback(() => {
+    setGithubGrant(null);
+  }, []);
 
   useEffect(() => {
     if (!open) return;
@@ -69,6 +85,7 @@ export function ProjectModal({
     setSelectedRepo(null);
     setPending(false);
     setError(null);
+    setGithubGrant(null);
     void desktopApi.defaultProjectsDir().then(setParentDir);
   }, [open]);
 
@@ -133,8 +150,16 @@ export function ProjectModal({
     }
   };
 
+  const cancelGithubAuthorization = async () => {
+    try {
+      await desktopApi.githubConnectCancel();
+    } finally {
+      setGithubGrant(null);
+    }
+  };
+
   return (
-    <Modal open={open} onClose={onClose}>
+    <Modal open={open && githubGrant === null} onClose={onClose}>
       <form onSubmit={submit}>
         <div className="px-5 pt-5 pb-1">
           <div
@@ -196,6 +221,8 @@ export function ProjectModal({
             {mode === "github" && (
               <GithubPanel
                 selected={selectedRepo}
+                onAuthorizationStarted={setGithubGrant}
+                onAuthorizationFinished={finishGithubAuthorization}
                 onSelect={(repo) => {
                   setSelectedRepo(repo);
                   if (repo && !name.trim()) setName(repo.name);
@@ -284,7 +311,86 @@ export function ProjectModal({
           </PendingButton>
         </footer>
       </form>
+      {open &&
+        githubGrant &&
+        createPortal(
+          <GithubAuthorizationTray
+            grant={githubGrant}
+            onCancel={() => void cancelGithubAuthorization()}
+            onOpenUrl={onOpenUrl}
+          />,
+          document.body,
+        )}
     </Modal>
+  );
+}
+
+export function GithubAuthorizationTray({
+  grant,
+  onCancel,
+  onOpenUrl,
+}: {
+  grant: GithubAuthorizationGrant;
+  onCancel: () => void;
+  onOpenUrl: (url: string) => void;
+}) {
+  const [copied, setCopied] = useState(false);
+
+  const copyCode = async () => {
+    await navigator.clipboard.writeText(grant.userCode);
+    setCopied(true);
+  };
+
+  return (
+    <aside
+      aria-labelledby="github-authorization-title"
+      className="fixed inset-x-0 bottom-5 z-[110] flex justify-center px-5"
+      data-testid="github-authorization-tray"
+    >
+      <div className="flex w-full max-w-[560px] items-center gap-3 rounded-xl border border-border bg-bg-raised px-3.5 py-3 shadow-2xl">
+        <GithubIcon className="size-5 shrink-0 text-fg-muted" />
+        <div className="min-w-0 flex-1">
+          <p
+            id="github-authorization-title"
+            className="text-[13px] font-medium text-fg"
+          >
+            Authorize Catamorphic on GitHub
+          </p>
+          <p className="mt-0.5 text-xs text-fg-muted" aria-live="polite">
+            Enter code{" "}
+            <span className="font-mono text-fg">{grant.userCode}</span> in the
+            GitHub tab. Waiting for authorization.
+          </p>
+        </div>
+        <button
+          type="button"
+          onClick={() => void copyCode()}
+          className="flex h-8 shrink-0 cursor-pointer items-center gap-1.5 rounded-md px-2.5 text-xs text-fg-muted transition-colors duration-150 hover:bg-bg-overlay hover:text-fg"
+        >
+          {copied ? (
+            <CheckCircle2 className="size-3.5 text-success" />
+          ) : (
+            <Copy className="size-3.5" />
+          )}
+          {copied ? "Copied" : "Copy code"}
+        </button>
+        <button
+          type="button"
+          onClick={() => onOpenUrl(grant.verificationUri)}
+          className="flex h-8 shrink-0 cursor-pointer items-center gap-1.5 rounded-md bg-accent px-2.5 text-xs font-medium text-accent-fg transition-opacity duration-150 hover:opacity-90"
+        >
+          <ExternalLink className="size-3.5" />
+          Open GitHub
+        </button>
+        <button
+          type="button"
+          onClick={onCancel}
+          className="h-8 shrink-0 cursor-pointer rounded-md px-2 text-xs text-fg-faint transition-colors duration-150 hover:bg-bg-overlay hover:text-fg"
+        >
+          Cancel
+        </button>
+      </div>
+    </aside>
   );
 }
 
@@ -296,21 +402,25 @@ export function ProjectModal({
 function GithubPanel({
   selected,
   onSelect,
+  onAuthorizationStarted,
+  onAuthorizationFinished,
 }: {
   selected: GithubRepoSummary | null;
   onSelect: (repo: GithubRepoSummary | null) => void;
+  onAuthorizationStarted: (grant: GithubAuthorizationGrant) => void;
+  onAuthorizationFinished: () => void;
 }) {
   const statusQuery = useGithubStatus();
   const connected = statusQuery.data?.connected === true;
   const reposQuery = useGithubRepos({ enabled: connected });
   const queryClient = useQueryClient();
-  const [userCode, setUserCode] = useState<string | null>(null);
   const [authError, setAuthError] = useState<string | null>(null);
+  const [authPending, setAuthPending] = useState(false);
   const [filter, setFilter] = useState("");
 
   useEffect(() => {
     return desktopApi.onGithubConnected((result) => {
-      setUserCode(null);
+      onAuthorizationFinished();
       if (result && "error" in result) {
         setAuthError(result.error);
         return;
@@ -320,15 +430,19 @@ function GithubPanel({
         queryKey: ["cat", "github"],
       });
     });
-  }, [queryClient]);
+  }, [onAuthorizationFinished, queryClient]);
 
   const startConnect = async () => {
+    if (authPending) return;
     setAuthError(null);
+    setAuthPending(true);
     try {
       const grant = await desktopApi.githubConnectStart();
-      setUserCode(grant.userCode);
+      onAuthorizationStarted(grant);
     } catch (cause) {
       setAuthError(cause instanceof Error ? cause.message : String(cause));
+    } finally {
+      setAuthPending(false);
     }
   };
 
@@ -339,37 +453,19 @@ function GithubPanel({
   if (!connected) {
     return (
       <div className="flex flex-col items-center gap-3 py-2 text-center">
-        {userCode ? (
-          <>
-            <p className="text-xs text-fg-muted">
-              Enter this code on GitHub to authorize:
-            </p>
-            <p
-              className="select-all font-mono text-xl font-semibold tracking-[0.25em] text-fg"
-              data-testid="github-user-code"
-            >
-              {userCode}
-            </p>
-            <p className="text-xs text-fg-faint">
-              Waiting for authorization… the browser tab opened automatically.
-            </p>
-          </>
-        ) : (
-          <>
-            <GithubIcon className="size-6 text-fg-faint" />
-            <p className="text-xs text-fg-muted">
-              Connect your GitHub account to import a repository.
-            </p>
-            <button
-              type="button"
-              onClick={startConnect}
-              data-testid="github-connect"
-              className="h-8 cursor-pointer rounded-md bg-accent px-3 text-[13px] font-medium text-accent-fg transition-opacity duration-150 hover:opacity-90"
-            >
-              Connect GitHub
-            </button>
-          </>
-        )}
+        <GithubIcon className="size-6 text-fg-faint" />
+        <p className="text-xs text-fg-muted">
+          Connect your GitHub account to import a repository.
+        </p>
+        <button
+          type="button"
+          onClick={startConnect}
+          disabled={authPending}
+          data-testid="github-connect"
+          className="h-8 cursor-pointer rounded-md bg-accent px-3 text-[13px] font-medium text-accent-fg transition-opacity duration-150 hover:opacity-90 disabled:cursor-wait disabled:opacity-60"
+        >
+          {authPending ? "Opening GitHub…" : "Connect GitHub"}
+        </button>
         {authError && <p className="text-xs text-danger">{authError}</p>}
       </div>
     );

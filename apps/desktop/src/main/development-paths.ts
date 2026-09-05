@@ -6,6 +6,15 @@ export function desktopDataDirFromEnvironment(
   return env.CATAMORPHIC_E2E_DATA_DIR ?? env.CATAMORPHIC_DESKTOP_DATA_DIR;
 }
 
+export function desktopApplicationName(input: {
+  isPackaged: boolean;
+  isolatedDataDir?: string;
+}): "Catamorphic" | "Catamorphic Development" {
+  return !input.isPackaged || input.isolatedDataDir
+    ? "Catamorphic Development"
+    : "Catamorphic";
+}
+
 export function defaultDesktopProjectsDir(input: {
   env: NodeJS.ProcessEnv;
   homeDir: string;

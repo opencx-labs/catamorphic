@@ -261,6 +261,8 @@ const api = {
     userCode: string;
     verificationUri: string;
   }> => ipcRenderer.invoke("catamorphic:github-connect-start"),
+  githubConnectCancel: (): Promise<void> =>
+    ipcRenderer.invoke("catamorphic:github-connect-cancel"),
   githubDisconnect: (): Promise<void> =>
     ipcRenderer.invoke("catamorphic:github-disconnect"),
   githubManageRepos: (): Promise<void> =>

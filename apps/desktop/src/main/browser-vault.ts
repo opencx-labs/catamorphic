@@ -72,6 +72,7 @@ export function normalizeCredentialOrigin(raw: string): string {
 
 export class PasswordVault {
   private open = new Map<string, OpenVault>();
+  private opening = new Map<string, Promise<OpenVault>>();
 
   constructor(private readonly profilesDir: string) {}
 
@@ -88,6 +89,21 @@ export class PasswordVault {
     const opened = this.open.get(profileId);
     if (opened) return opened;
 
+    const opening = this.opening.get(profileId);
+    if (opening) return opening;
+
+    const unlockPromise = this.openVault(profileId);
+    this.opening.set(profileId, unlockPromise);
+    try {
+      return await unlockPromise;
+    } finally {
+      if (this.opening.get(profileId) === unlockPromise) {
+        this.opening.delete(profileId);
+      }
+    }
+  }
+
+  private async openVault(profileId: string): Promise<OpenVault> {
     const dir = path.join(this.profilesDir, profileId);
     fs.mkdirSync(dir, { recursive: true });
     const keyFile = this.keyFile(profileId);

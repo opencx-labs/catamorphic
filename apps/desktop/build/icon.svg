@@ -1,7 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024" fill="none">
   <title>Catamorphic</title>
   <rect x="64" y="64" width="896" height="896" rx="208" fill="#101012"/>
-  <rect x="70" y="70" width="884" height="884" rx="202" stroke="#232329" stroke-width="12"/>
   <g transform="translate(128 128) scale(12)">
     <path d="M46 15.5 C42 12.6 37.2 11 32 11 C20.4 11 11 20.4 11 32 C11 43.6 20.4 53 32 53 C37.2 53 42 51.4 46 48.5" stroke="#f95225" stroke-width="6" stroke-linecap="round"/>
     <line x1="24" y1="14.5" x2="24" y2="49.5" stroke="#f95225" stroke-width="6" stroke-linecap="round"/>
