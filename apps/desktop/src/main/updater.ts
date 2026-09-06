@@ -23,7 +23,6 @@ export interface DesktopUpdaterService {
 
 export function registerDesktopUpdater(options: {
   broadcast: (channel: string, payload: unknown) => void;
-  beforeInstall: () => Promise<void>;
 }): DesktopUpdaterService {
   const { autoUpdater } = electronUpdater;
   autoUpdater.logger = console;
@@ -40,7 +39,6 @@ export function registerDesktopUpdater(options: {
     updater: autoUpdater,
     broadcast: (state) =>
       options.broadcast("catamorphic:update-state-changed", state),
-    beforeInstall: options.beforeInstall,
   });
 
   ipcMain.handle("catamorphic:update-state", () => controller.current());

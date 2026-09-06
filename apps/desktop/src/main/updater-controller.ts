@@ -45,7 +45,6 @@ export interface DesktopUpdaterControllerOptions {
   supported: boolean;
   updater: UpdaterAdapter | null;
   broadcast: (state: DesktopUpdateState) => void;
-  beforeInstall: () => Promise<void>;
   logger?: Pick<Console, "error" | "info" | "warn">;
 }
 
@@ -118,8 +117,10 @@ export class DesktopUpdaterController {
 
   setChannel(channel: DesktopUpdateChannel): boolean {
     if (
+      this.checking ||
       this.state.phase === "downloading" ||
-      this.state.phase === "downloaded"
+      this.state.phase === "downloaded" ||
+      this.state.phase === "installing"
     ) {
       return false;
     }
@@ -146,11 +147,12 @@ export class DesktopUpdaterController {
       return;
     }
     if (
-      !manual &&
-      (this.state.phase === "available" ||
-        this.state.phase === "downloading" ||
-        this.state.phase === "downloaded")
+      this.state.phase === "downloading" ||
+      this.state.phase === "downloaded" ||
+      this.state.phase === "installing" ||
+      (!manual && this.state.phase === "available")
     ) {
+      if (manual) this.setState({ ...this.state, manual: true });
       return;
     }
     if (this.checking) {
@@ -196,8 +198,11 @@ export class DesktopUpdaterController {
 
   async install(): Promise<void> {
     if (!this.options.updater || this.state.phase !== "downloaded") return;
+    this.setState({ ...this.state, phase: "installing", manual: true });
     try {
-      await this.options.beforeInstall();
+      // On macOS this may first ask Squirrel to prepare the downloaded ZIP.
+      // That can fail or take time without quitting. Only the app's final
+      // will-quit handler may dispose services or close the database.
       this.options.updater.quitAndInstall(false, true);
     } catch (error) {
       this.handleError(error);

@@ -29,6 +29,13 @@ export interface ActionDefinition {
 
 export const BUILTIN_ACTIONS = [
   {
+    id: "check-for-updates",
+    label: "Check for updates",
+    description: "check for a newer Catamorphic desktop version",
+    defaultBinding: null,
+    keywords: ["update", "upgrade", "version", "release"],
+  },
+  {
     id: "new-tab",
     label: "New tab",
     description: "open a new tab (the command palette)",

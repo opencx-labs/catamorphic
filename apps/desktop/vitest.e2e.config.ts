@@ -6,6 +6,9 @@ const visibleSuites = [
   "e2e/skills.e2e.ts",
   "e2e/tool-permissions.e2e.ts",
   "e2e/window-state.e2e.ts",
+  // Query retries pause while the native window is hidden. Exercise the
+  // user-facing failure/retry flow with the same focus state as the app.
+  "e2e/project-reopen.e2e.ts",
 ];
 
 /**

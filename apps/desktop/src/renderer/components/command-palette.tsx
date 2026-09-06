@@ -26,6 +26,7 @@ import {
   Minimize2,
   PanelLeft,
   Plug,
+  RefreshCw,
   Search,
   Settings2,
   Settings as SettingsIcon,
@@ -103,6 +104,7 @@ type CommitMode = "replace" | "tab" | "side";
  * to Zap.
  */
 const ACTION_ICONS: Partial<Record<ActionId, LucideIcon>> = {
+  "check-for-updates": RefreshCw,
   "session-status": CircleDot,
   "continue-on-mobile": Smartphone,
   "new-incognito-chat": Ghost,
@@ -492,7 +494,7 @@ export function CommandPalette({
   open?: boolean;
   /** Overlay: hide the palette. Tab: close/consume the palette tab. */
   onClose: () => void;
-  projectId: string;
+  projectId: string | undefined;
   profileId?: string;
   projects: ProjectSummary[];
   activeProjectId?: string;
@@ -623,6 +625,7 @@ export function CommandPalette({
   // changes with approvals; a stale snapshot would show the wrong rows.
   const [projectAgents, setProjectAgents] = useState<ProjectAgentInfo[]>([]);
   useEffect(() => {
+    if (!projectId) return;
     if (
       picker !== "default-agent" &&
       picker !== "switch-agent" &&
@@ -720,7 +723,7 @@ export function CommandPalette({
 
   const [bookmarks, setBookmarks] = useState<Bookmark[]>([]);
   useEffect(() => {
-    if (!profileId) return;
+    if (!profileId || !projectId) return;
     let cancelled = false;
     void desktopApi.bookmarksGet({ projectId, profileId }).then((data) => {
       if (!cancelled) {
@@ -1487,8 +1490,10 @@ export function CommandPalette({
     // @-shortcut pills). Narrows as the trigger is typed.
     if (trimmed.startsWith("@")) {
       const partial = trimmed.slice(1).toLowerCase();
-      const modeRows = PALETTE_MODES.filter((candidate) =>
-        modeNames(candidate).some((name) => name.startsWith(partial)),
+      const modeRows = PALETTE_MODES.filter(
+        (candidate) =>
+          (projectId || candidate.id !== "agent") &&
+          modeNames(candidate).some((name) => name.startsWith(partial)),
       ).map(
         (candidate): PaletteItem => ({
           id: `mode-row:${candidate.id}`,
@@ -1568,6 +1573,7 @@ export function CommandPalette({
       run: (mode) => onSendToAgent(query, mode === "tab" ? "tab" : "float"),
     };
     const urlish = URLISH.test(trimmed);
+    const sendItems = projectId ? [sendItem] : [];
     const webItem: PaletteItem | null = multiline
       ? null
       : {
@@ -1583,14 +1589,15 @@ export function CommandPalette({
     // A pasted/typed URL is an unambiguous intent: open it. Everything
     // else (fuzzy matches on the URL's characters) is noise below it.
     if (urlish && webItem) {
-      return [webItem, ...scored, sendItem];
+      return [webItem, ...scored, ...sendItems];
     }
     if (scored.length === 0 || multiline || query.length > LONG_QUERY) {
-      return [sendItem, ...scored, ...(webItem ? [webItem] : [])];
+      return [...sendItems, ...scored, ...(webItem ? [webItem] : [])];
     }
-    return [...scored, ...(webItem ? [webItem] : []), sendItem];
+    return [...scored, ...(webItem ? [webItem] : []), ...sendItems];
   }, [
     trimmed,
+    projectId,
     query,
     mode,
     picker,
@@ -1743,7 +1750,7 @@ export function CommandPalette({
       (trimmed.startsWith("@") || isFullModeName(trimmed))
     ) {
       const candidate = matchMode(trimmed);
-      if (candidate) {
+      if (candidate && (projectId || candidate.id !== "agent")) {
         event.preventDefault();
         enterMode(candidate);
         return;
