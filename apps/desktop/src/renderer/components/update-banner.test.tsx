@@ -44,6 +44,42 @@ async function mount(state: DesktopUpdateState, hasActiveWork = false) {
 }
 
 describe("UpdateBanner", () => {
+  it("shows preparation without offering a second restart", async () => {
+    const container = await mount({
+      phase: "installing",
+      currentVersion: "0.1.0-alpha.1",
+      channel: "preview",
+      manual: true,
+      version: "0.1.0-alpha.2",
+    });
+    expect(container.textContent).toContain("Preparing to restart");
+    expect(container.textContent).not.toContain("Restart to update");
+  });
+
+  it("does not overwrite an update event with a stale initial snapshot", async () => {
+    const initial: DesktopUpdateState = {
+      phase: "idle",
+      currentVersion: "0.1.0-alpha.1",
+      channel: "preview",
+      manual: false,
+    };
+    vi.mocked(desktopApi.onUpdateStateChanged).mockImplementationOnce(
+      (receive) => {
+        receive({
+          ...initial,
+          phase: "available",
+          version: "0.1.0-alpha.2",
+          manual: true,
+        });
+        return () => {};
+      },
+    );
+    const container = await mount(initial);
+    expect(container.textContent).toContain(
+      "Catamorphic 0.1.0-alpha.2 is available",
+    );
+  });
+
   it("offers an explicit download for an available update", async () => {
     const container = await mount({
       phase: "available",

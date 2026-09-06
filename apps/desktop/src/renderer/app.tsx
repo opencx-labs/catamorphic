@@ -38,7 +38,11 @@ import {
   useRef,
   useState,
 } from "react";
-import { type ActionId, KEYBINDING_ACTIONS } from "../shared/actions.js";
+import {
+  type ActionId,
+  BUILTIN_ACTIONS,
+  KEYBINDING_ACTIONS,
+} from "../shared/actions.js";
 import {
   matchesProjectExperience,
   type ProjectExperienceContext,
@@ -710,6 +714,15 @@ function focusedChatSurfaceId(): string | undefined {
 
 export function App() {
   const projectsQuery = useProjects();
+  // Subscribe to loading/error changes even while the workspace branch is
+  // rendered. Query observers track property reads; recovery cannot depend
+  // on whether the empty-state branch happened to read them last render.
+  const {
+    // A background retry can pause fetching without settling the first load.
+    isPending: projectsLoading,
+    isError: projectsLoadError,
+    isFetching: projectsFetching,
+  } = projectsQuery;
 
   // Boot veil: the window shows nothing but the themed backdrop until the
   // workspace's first paint is complete — profiles, agents, sidebar, and
@@ -3389,6 +3402,7 @@ export function App() {
   const actionHandlers: Record<ActionId, (mode?: "side") => void> = {
     "new-tab": openPaletteTab,
     "command-palette": () => setPaletteOpen((value) => !value),
+    "check-for-updates": () => void desktopApi.updateCheck(),
     "new-floating-chat": () => addChat(),
     // Policy-gated (ADR 0062): hidden from the palette when the project
     // committed allowIncognito: false; the handler double-checks.
@@ -3534,7 +3548,7 @@ export function App() {
     profilesData !== null &&
     agentsData !== null &&
     sidebarConfig !== null &&
-    !projectsQuery.isLoading;
+    !projectsLoading;
   useEffect(() => {
     if (bootRevealed) return;
     if (bootReady) {
@@ -4586,49 +4600,61 @@ export function App() {
       true,
     "change-effort": paletteTargetAgentId != null,
   };
-  const paletteProps = projectId
-    ? {
-        projectId,
-        profileId: activeProfile?.id,
-        projects,
-        activeProjectId: projectId,
-        profiles: profilesData?.profiles ?? [],
-        activeProfileId: activeProfile?.id,
-        sidebarConfig,
-        onOpenUrl: openUrl,
-        onOpenTab: openTab,
-        onOpenSession: openSession,
-        onSelectProject: selectProject,
-        onSwitchProfile: switchProfile,
-        onSendToAgent: sendToAgent,
-        startingActions,
-        onRunSkill: runSkill,
-        actionHandlers,
-        actionAvailability: paletteActionAvailability,
-        agents: agentsData?.agents ?? [],
-        defaultAgentId: effectiveDefaultAgentId,
-        focusedChat: focusedChat
-          ? {
-              agentId: focusedSession?.agentId ?? focusedChat.agentId ?? null,
-              model: focusedSession?.model ?? null,
-              effort: focusedSession?.modelEffort ?? null,
-            }
-          : null,
-        onPickDefaultAgent: pickDefaultAgent,
-        onPickSessionAgent: pickSessionAgent,
-        onPickProjectAgent: pickProjectAgent,
-        onConfigureAgent: openConfigureAgent,
-        defaultAgentOverridden: projectOverrideAgentId !== null,
-        onClearDefaultOverride: () => {
-          if (projectId) {
-            void desktopApi.agentsSetProjectDefault(projectId, null);
-          }
-        },
-        onPickEffort: pickEffort,
-        onPickModel: pickModel,
-        onHighlightTarget: setPaletteTarget,
+  const paletteProps = {
+    projectId,
+    profileId: activeProfile?.id,
+    projects,
+    activeProjectId: projectId,
+    profiles: profilesData?.profiles ?? [],
+    activeProfileId: activeProfile?.id,
+    sidebarConfig,
+    onOpenUrl: openUrl,
+    onOpenTab: openTab,
+    onOpenSession: openSession,
+    onSelectProject: selectProject,
+    onSwitchProfile: switchProfile,
+    onSendToAgent: sendToAgent,
+    startingActions,
+    onRunSkill: runSkill,
+    actionHandlers,
+    actionAvailability: projectId
+      ? paletteActionAvailability
+      : Object.fromEntries(
+          BUILTIN_ACTIONS.map((action) => [
+            action.id,
+            [
+              "check-for-updates",
+              "setup-agent",
+              "manage-connectors",
+              "connect-remote-project",
+              "new-browser-tab",
+              "toggle-sidebar",
+            ].includes(action.id),
+          ]),
+        ),
+    agents: agentsData?.agents ?? [],
+    defaultAgentId: effectiveDefaultAgentId,
+    focusedChat: focusedChat
+      ? {
+          agentId: focusedSession?.agentId ?? focusedChat.agentId ?? null,
+          model: focusedSession?.model ?? null,
+          effort: focusedSession?.modelEffort ?? null,
+        }
+      : null,
+    onPickDefaultAgent: pickDefaultAgent,
+    onPickSessionAgent: pickSessionAgent,
+    onPickProjectAgent: pickProjectAgent,
+    onConfigureAgent: openConfigureAgent,
+    defaultAgentOverridden: projectOverrideAgentId !== null,
+    onClearDefaultOverride: () => {
+      if (projectId) {
+        void desktopApi.agentsSetProjectDefault(projectId, null);
       }
-    : null;
+    },
+    onPickEffort: pickEffort,
+    onPickModel: pickModel,
+    onHighlightTarget: setPaletteTarget,
+  };
 
   const hasActiveWork =
     Object.values(signalsByChat).some((signals) => signals.working) ||
@@ -5552,7 +5578,10 @@ export function App() {
           </div>
         ) : (
           <EmptyState
-            loading={projectsQuery.isLoading}
+            loading={projectsLoading}
+            loadError={projectsLoadError}
+            retrying={projectsFetching}
+            onRetry={() => void projectsQuery.refetch()}
             onNewProject={() => setProjectModalOpen(true)}
             onConnectRemote={() => setRemoteConnect({ open: true, link: null })}
             onStartWithAgent={startWithAgent}
@@ -6461,11 +6490,17 @@ function sessionLabel(session: AgentSession): string {
 
 function EmptyState({
   loading,
+  loadError,
+  retrying,
+  onRetry,
   onNewProject,
   onConnectRemote,
   onStartWithAgent,
 }: {
   loading: boolean;
+  loadError: boolean;
+  retrying: boolean;
+  onRetry: () => void;
   onNewProject: () => void;
   onConnectRemote: () => void;
   onStartWithAgent: () => Promise<void>;
@@ -6488,7 +6523,24 @@ function EmptyState({
   return (
     <div className="grid flex-1 place-items-center">
       <div className="max-w-sm text-center">
-        {loading ? (
+        {loadError ? (
+          <div role="alert" data-testid="project-load-error">
+            <h1 className="text-sm font-medium text-fg">
+              Could not load your projects
+            </h1>
+            <p className="mt-2 text-sm text-fg-muted">
+              Try again. If the problem continues, quit and reopen Catamorphic.
+            </p>
+            <PendingButton
+              type="button"
+              pending={retrying}
+              onClick={onRetry}
+              className="mt-4 h-8 cursor-pointer rounded-md border border-border px-3 text-[13px] text-fg transition-colors duration-150 hover:bg-bg-overlay disabled:cursor-not-allowed disabled:opacity-60"
+            >
+              Retry loading projects
+            </PendingButton>
+          </div>
+        ) : loading ? (
           <p className="animate-pulse text-sm text-fg-muted">Loading…</p>
         ) : (
           <>

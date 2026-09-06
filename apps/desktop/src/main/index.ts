@@ -12,6 +12,7 @@ import {
 } from "electron";
 import type { DesktopUpdateChannel } from "../shared/update.js";
 import { registerAgentBridge } from "./agent-bridge.js";
+import { macApplicationMenu } from "./app-menu.js";
 import { registerBrowserSupport } from "./browser.js";
 import { toPublicConnection } from "./connections-store.js";
 import { ConnectorsService } from "./connectors.js";
@@ -33,6 +34,7 @@ import { ProfileConfigManager } from "./profile-config.js";
 import { ProfilesStore } from "./profiles.js";
 import { type EmbeddedServer, startEmbeddedServer } from "./server/boot.js";
 import { resolveDataPaths } from "./server/paths.js";
+import { registerDesktopShutdown } from "./shutdown.js";
 import { registerTerminalSupport } from "./terminal.js";
 import { windowBackgroundColor } from "./theme.js";
 import {
@@ -308,6 +310,12 @@ function createWindow(profileId?: string): BrowserWindow {
 // the command palette, and toggle-sidebar are window-level shortcuts handled
 // in the renderer.
 function buildMenu(bindings: Keybindings): Menu {
+  const checkForUpdates = () => {
+    // A macOS app can have no windows while its menu is still reachable.
+    // The new renderer reads the latest updater state after loading.
+    if (BrowserWindow.getAllWindows().length === 0) createWindow();
+    void desktopUpdater?.check(true);
+  };
   const selectedUpdateChannel = desktopUpdater?.channel() ?? "stable";
   const chooseUpdateChannel = (channel: DesktopUpdateChannel) => {
     void desktopUpdater?.setChannel(channel).finally(() => {
@@ -315,7 +323,9 @@ function buildMenu(bindings: Keybindings): Menu {
     });
   };
   return Menu.buildFromTemplate([
-    ...(process.platform === "darwin" ? [{ role: "appMenu" } as const] : []),
+    ...(process.platform === "darwin"
+      ? [macApplicationMenu({ appName: app.name, checkForUpdates })]
+      : []),
     {
       label: "File",
       submenu: [
@@ -374,7 +384,7 @@ function buildMenu(bindings: Keybindings): Menu {
       submenu: [
         {
           label: "Check for Updates…",
-          click: () => void desktopUpdater?.check(true),
+          click: checkForUpdates,
         },
         { type: "separator" },
         {
@@ -425,10 +435,6 @@ app.whenReady().then(async () => {
   }
   desktopUpdater = registerDesktopUpdater({
     broadcast: state.broadcast,
-    beforeInstall: async () => {
-      await server?.shutdown();
-      quitting = true;
-    },
   });
   applyMenuForFocusedWindow();
   // Live-reload: agents and users edit the per-profile config files
@@ -618,17 +624,18 @@ let terminalSupport: ReturnType<typeof registerTerminalSupport> | null = null;
 let agentBridge: ReturnType<typeof registerAgentBridge> | null = null;
 let desktopUpdater: DesktopUpdaterService | null = null;
 
-let quitting = false;
-app.on("before-quit", (event) => {
-  profileConfig.dispose();
-  browserSupport?.dispose();
-  terminalSupport?.dispose();
-  agentBridge?.dispose();
-  desktopUpdater?.dispose();
-  if (quitting || !server) return;
-  event.preventDefault();
-  quitting = true;
-  void server.shutdown().finally(() => app.quit());
+registerDesktopShutdown({
+  app,
+  shutdown: async () => {
+    profileConfig.dispose();
+    browserSupport?.dispose();
+    terminalSupport?.dispose();
+    agentBridge?.dispose();
+    desktopUpdater?.dispose();
+    await server?.shutdown();
+    server = null;
+  },
+  onError: (error) => console.error("[desktop] shutdown failed:", error),
 });
 
 app.on("window-all-closed", () => {

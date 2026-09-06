@@ -13,12 +13,24 @@ export function UpdateBanner({
   const [dismissed, setDismissed] = useState<string | null>(null);
 
   useEffect(() => {
+    let active = true;
+    let receivedEvent = false;
     const receive = (nextState: DesktopUpdateState) => {
+      if (!active) return;
       setDismissed(null);
       setState(nextState);
     };
-    void desktopApi.updateState().then(receive);
-    return desktopApi.onUpdateStateChanged(receive);
+    const unsubscribe = desktopApi.onUpdateStateChanged((nextState) => {
+      receivedEvent = true;
+      receive(nextState);
+    });
+    void desktopApi.updateState().then((initialState) => {
+      if (!receivedEvent) receive(initialState);
+    });
+    return () => {
+      active = false;
+      unsubscribe();
+    };
   }, []);
 
   const stateKey = state
@@ -48,7 +60,9 @@ export function UpdateBanner({
     >
       <div className="flex items-start gap-3">
         <div className="mt-0.5 grid size-8 shrink-0 place-items-center rounded-lg bg-accent/15 text-accent">
-          {state.phase === "checking" || state.phase === "downloading" ? (
+          {state.phase === "checking" ||
+          state.phase === "downloading" ||
+          state.phase === "installing" ? (
             <RefreshCw className="size-4 animate-spin" aria-hidden="true" />
           ) : state.phase === "downloaded" ? (
             <RotateCw className="size-4" aria-hidden="true" />
@@ -156,6 +170,12 @@ function updateContent(
           ? "Finish active agents and terminals before restarting."
           : `Restart to install Catamorphic ${state.version ?? "the update"}.`,
       };
+    case "installing":
+      return {
+        title: "Preparing to restart",
+        description:
+          "macOS is preparing the update. Catamorphic will restart when it is ready.",
+      };
     case "up-to-date":
       return {
         title: "Catamorphic is up to date",
@@ -163,7 +183,7 @@ function updateContent(
       };
     case "error":
       return {
-        title: "Could not check for updates",
+        title: "Could not complete the update",
         description: state.message ?? "Try again when you are back online.",
       };
     case "unsupported":

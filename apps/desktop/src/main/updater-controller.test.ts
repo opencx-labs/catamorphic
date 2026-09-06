@@ -87,17 +87,15 @@ class FakeUpdater implements UpdaterAdapter {
 function setup() {
   const updater = new FakeUpdater();
   const states: DesktopUpdateState[] = [];
-  const beforeInstall = vi.fn(async () => undefined);
   const controller = new DesktopUpdaterController({
     currentVersion: "0.1.0-alpha.1",
     channel: "preview",
     supported: true,
     updater,
     broadcast: (state) => states.push(state),
-    beforeInstall,
     logger: { error: vi.fn(), info: vi.fn(), warn: vi.fn() },
   });
-  return { updater, states, beforeInstall, controller };
+  return { updater, states, controller };
 }
 
 describe("DesktopUpdaterController", () => {
@@ -192,7 +190,7 @@ describe("DesktopUpdaterController", () => {
   });
 
   it("downloads and installs only after explicit actions", async () => {
-    const { controller, updater, beforeInstall } = setup();
+    const { controller, updater } = setup();
 
     const checking = controller.check(true);
     updater.available("0.1.0-alpha.2");
@@ -213,7 +211,6 @@ describe("DesktopUpdaterController", () => {
     await downloading;
 
     await controller.install();
-    expect(beforeInstall).toHaveBeenCalledOnce();
     expect(updater.quitAndInstall).toHaveBeenCalledWith(false, true);
   });
 
@@ -233,5 +230,56 @@ describe("DesktopUpdaterController", () => {
       manual: true,
       message: "still offline",
     });
+  });
+
+  it("does not let manual checks replace a download or pending installation", async () => {
+    const { controller, updater } = setup();
+    updater.available("0.1.0-alpha.2");
+    await controller.download();
+    await controller.check(true);
+    expect(controller.current().phase).toBe("downloading");
+    updater.downloaded("0.1.0-alpha.2");
+    await controller.check(true);
+    expect(controller.current().phase).toBe("downloaded");
+    await controller.install();
+    await controller.install();
+    await controller.check(true);
+    expect(controller.current().phase).toBe("installing");
+    expect(controller.setChannel("stable")).toBe(false);
+    expect(updater.quitAndInstall).toHaveBeenCalledOnce();
+    expect(updater.checkForUpdates).not.toHaveBeenCalled();
+  });
+
+  it("surfaces a native updater preparation failure without shutting down the host", async () => {
+    const { controller, updater } = setup();
+    updater.downloaded("0.1.0-alpha.2");
+    await controller.install();
+    // Squirrel prepares the ZIP asynchronously after quitAndInstall returns.
+    expect(controller.current().phase).toBe("installing");
+    updater.fail("macOS could not prepare the update");
+    expect(controller.current()).toMatchObject({
+      phase: "error",
+      manual: true,
+    });
+    await controller.check(true);
+    updater.downloaded("0.1.0-alpha.2");
+    await controller.install();
+    expect(updater.quitAndInstall).toHaveBeenCalledTimes(2);
+  });
+
+  it("holds channel selection while the current feed is being checked", async () => {
+    const { controller, updater } = setup();
+    let finish = () => {};
+    updater.checkForUpdates.mockReturnValueOnce(
+      new Promise<undefined>((resolve) => {
+        finish = () => resolve(undefined);
+      }),
+    );
+    const checking = controller.check(true);
+    expect(controller.setChannel("stable")).toBe(false);
+    expect(updater.channel).toBe("alpha");
+    finish();
+    await checking;
+    expect(controller.setChannel("stable")).toBe(true);
   });
 });
