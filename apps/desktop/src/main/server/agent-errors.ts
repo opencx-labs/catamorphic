@@ -86,12 +86,12 @@ export function rewriteAgentError(
     case "rate_limit":
       return (
         `${providerLabel} is rate-limiting the "${agentName}" agent ${said}. ` +
-        `I'll keep retrying automatically, or switch this chat to another agent.`
+        `If a retry is safe, it will be scheduled below. Otherwise, check the last actions before retrying.`
       );
     case "unavailable":
       return (
         `${providerLabel} seems to be having trouble right now ${said}. ` +
-        `I'll keep retrying automatically, or switch this chat to another agent.`
+        `If a retry is safe, it will be scheduled below. Otherwise, check the last actions before retrying.`
       );
     case "model_incompat":
       return (

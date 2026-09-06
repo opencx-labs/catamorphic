@@ -560,42 +560,21 @@ function StepRow({ step, iconUrl }: { step: TurnStep; iconUrl?: string }) {
 
 /**
  * Derive the visible timeline from raw agent-session messages: hides
- * in-progress assistant placeholders and surfaces them as an activity line.
+ * in-progress assistant placeholders. Activity comes from execution state.
  * When the latest assistant message is awaiting user input, its parsed
  * questions are exposed so hosts can render an answer UI.
  */
 export function toTimeline(
   persisted: AgentMessage[],
   optimistic: ChatTimelineMessage[],
-  isSending: boolean,
+  activity: string | undefined,
 ): {
   messages: ChatTimelineMessage[];
   activity: string | undefined;
   questions: AgentQuestion[] | undefined;
 } {
   const messages = [...persisted, ...optimistic].filter(isConversationMessage);
-  const pending = latestPendingAssistant(persisted);
-  const activity =
-    pending !== undefined
-      ? calmActivity(pending.content)
-      : isSending && optimistic.length > 0
-        ? "Thinking..."
-        : undefined;
   return { messages, activity, questions: pendingQuestions(persisted) };
-}
-
-/**
- * The live activity line shows only calm verbs ("Working...", "Editing
- * files..."). If a host streams the upcoming message's body into the
- * in-progress row, echoing it here would show the same words twice — once
- * faded beside the spinner, then again as the message itself — so
- * message-shaped content falls back to a generic verb.
- */
-function calmActivity(content: string | null | undefined): string {
-  const text = (content ?? "").trim();
-  if (!text) return "Thinking...";
-  if (text.includes("\n") || text.length > 80) return "Working...";
-  return text;
 }
 
 /**
@@ -643,20 +622,6 @@ function pendingQuestions(
     ];
   });
   return questions.length > 0 ? questions : undefined;
-}
-
-function latestPendingAssistant(
-  messages: AgentMessage[],
-): AgentMessage | undefined {
-  for (let index = messages.length - 1; index >= 0; index -= 1) {
-    const message = messages[index];
-    if (message?.role === "assistant") {
-      return asRecord(message.metadata)?.status === "in_progress"
-        ? message
-        : undefined;
-    }
-  }
-  return undefined;
 }
 
 function isConversationMessage(message: ChatTimelineMessage): boolean {

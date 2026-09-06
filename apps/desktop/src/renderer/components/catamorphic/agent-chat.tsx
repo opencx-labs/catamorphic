@@ -48,7 +48,7 @@ export function AgentChat({
   const { messages, activity } = toTimeline(
     chat.messages,
     chat.optimisticMessages,
-    chat.isSending,
+    chat.activity,
   );
 
   const submit = (event?: FormEvent) => {

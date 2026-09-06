@@ -6,7 +6,7 @@ import {
 } from "@catamorphic/react";
 import type { QueryClient } from "@tanstack/react-query";
 import { useQuery } from "@tanstack/react-query";
-import { ArrowUp, GitFork, ListPlus, Square, X, Zap } from "lucide-react";
+import { ArrowUp, Bot, GitFork, ListPlus, Square, X, Zap } from "lucide-react";
 import { type FormEvent, useEffect, useRef, useState } from "react";
 import {
   AgentQuestionPanel,
@@ -95,6 +95,37 @@ function Chat({
       ),
   });
   const acknowledgeAttention = useAcknowledgeAgentSessionAttention(projectId);
+  const relatedSessions = useQuery({
+    queryKey: ["pwa", "subsessions", connection.id, projectId, chat.sessionId],
+    enabled: Boolean(chat.sessionId),
+    queryFn: async ({ signal }) => {
+      const { data, error } = await clientFor(connection).GET(
+        "/api/projects/{projectId}/agent/sessions/{sessionId}/subsessions",
+        {
+          signal,
+          params: { path: { projectId, sessionId: chat.sessionId ?? "" } },
+        },
+      );
+      if (error) throw new Error(error.error);
+      return data ?? [];
+    },
+    refetchInterval: 3_000,
+  });
+  const children =
+    relatedSessions.data
+      ?.map((child) => child.session)
+      .filter(
+        (session) =>
+          session.parentSessionId === chat.sessionId &&
+          session.visibility !== "archived",
+      ) ?? [];
+  const openRelated = (id: string) =>
+    navigate({
+      kind: "chat",
+      connectionId: connection.id,
+      projectId,
+      sessionId: id,
+    });
   const acknowledgedRevisionRef = useRef(0);
   useEffect(() => {
     const session = chat.session;
@@ -123,7 +154,7 @@ function Chat({
   const { messages, activity, questions } = toTimeline(
     chat.messages,
     chat.optimisticMessages,
-    chat.isSending,
+    chat.activity,
   );
 
   const lastFailed = failedTurn(chat.messages);
@@ -176,12 +207,57 @@ function Chat({
       }
     >
       <div className="flex h-full min-h-0 flex-col">
+        {chat.session?.parentSessionId ? (
+          <button
+            type="button"
+            onClick={() =>
+              chat.session?.parentSessionId &&
+              openRelated(chat.session.parentSessionId)
+            }
+            className="flex shrink-0 items-center gap-2 border-b border-border px-4 py-2 text-xs text-fg-muted active:bg-bg-overlay"
+            data-testid="parent-chat"
+          >
+            <GitFork className="size-3.5" aria-hidden="true" />
+            Back to parent chat
+          </button>
+        ) : null}
+        {children.length > 0 ? (
+          <nav
+            aria-label="Subsessions"
+            className="flex shrink-0 gap-2 overflow-x-auto border-b border-border px-3 py-2"
+          >
+            {children.map((child) => (
+              <button
+                key={child.id}
+                type="button"
+                onClick={() => openRelated(child.id)}
+                className="flex h-9 max-w-56 shrink-0 items-center gap-2 rounded-md border border-border bg-bg-raised px-3 text-xs text-fg-muted active:bg-bg-overlay"
+              >
+                <Bot className="size-3.5 shrink-0" aria-hidden="true" />
+                <span className="truncate">{child.title ?? "Subsession"}</span>
+                <span
+                  className={
+                    child.attentionRequired
+                      ? "shrink-0 text-accent"
+                      : "shrink-0 text-fg-faint"
+                  }
+                >
+                  {child.attentionRequired
+                    ? "Needs attention"
+                    : child.running
+                      ? "Working"
+                      : "Idle"}
+                </span>
+              </button>
+            ))}
+          </nav>
+        ) : null}
         <ChatTimeline
           className="min-h-0 flex-1"
           messages={messages.filter(
             (message) => message.content !== QUESTIONS_DISMISSED_MESSAGE,
           )}
-          activity={activity}
+          activity={chat.connectionLost ? undefined : activity}
           queuedCount={chat.queuedMessageCount}
           error={null}
           emptyState="Ask the agent anything about this project."
@@ -244,10 +320,22 @@ function Chat({
               {lastFailed && !chat.isWorking && (
                 <div className="flex items-center justify-between gap-2 rounded-lg border border-danger/40 bg-danger/10 px-3 py-2 text-[13px]">
                   <span className="min-w-0 truncate text-danger">
-                    {lastFailed.interrupted
-                      ? "The turn was interrupted."
-                      : "The last turn failed."}
+                    {lastFailed.retrying
+                      ? "Connection interrupted. Retrying automatically."
+                      : lastFailed.interrupted
+                        ? "The turn was interrupted."
+                        : "The last turn failed."}
                   </span>
+                  {lastFailed.retrying ? (
+                    <button
+                      type="button"
+                      onClick={() => void chat.interrupt()}
+                      className="shrink-0 rounded-md border border-border-strong px-2.5 py-1 text-fg"
+                      data-testid="stop-retrying"
+                    >
+                      Stop
+                    </button>
+                  ) : null}
                   <button
                     type="button"
                     onClick={() => void chat.retry()}
@@ -262,7 +350,11 @@ function Chat({
                 <ConnectionTrouble
                   connection={connection}
                   projectId={projectId}
-                  message={chat.error.message}
+                  message={
+                    chat.connectionLost
+                      ? "Connection lost. Reconnecting to check your agent's progress. It may still be running."
+                      : chat.error.message
+                  }
                 />
               )}
               {chat.queue.length > 0 && (
@@ -359,18 +451,14 @@ function hostOf(serverUrl: string): string {
 
 function failedTurn(
   messages: ReturnType<typeof useAgentChat>["messages"],
-): { interrupted: boolean } | null {
+): { interrupted: boolean; retrying: boolean } | null {
   const last = messages.at(-1);
   if (last?.role !== "assistant") return null;
   const metadata = last.metadata as Record<string, unknown> | null;
   if (metadata?.status !== "failed") return null;
-  // A scheduled auto-retry runs by itself; no manual affordance needed.
   const autoRetry = metadata.autoRetry as { nextAtMs?: number } | undefined;
-  if (
-    typeof autoRetry?.nextAtMs === "number" &&
-    Date.now() < autoRetry.nextAtMs + 30_000
-  ) {
-    return null;
-  }
-  return { interrupted: metadata.interrupted === true };
+  return {
+    interrupted: metadata.interrupted === true,
+    retrying: typeof autoRetry?.nextAtMs === "number",
+  };
 }

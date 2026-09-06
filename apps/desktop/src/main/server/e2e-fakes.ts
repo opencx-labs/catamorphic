@@ -441,6 +441,8 @@ export class E2eFakeCodingAgent implements CodingAgentProvider {
         subagentType: "code-reviewer",
         content: "Review the changes",
       };
+      // Split the subagent's start and its later activity across preambles.
+      yield { type: "text", content: "The reviewer is checking the details." };
       yield {
         type: "tool_call",
         toolName: "Grep",
@@ -842,7 +844,11 @@ export class E2eFakeCodingAgent implements CodingAgentProvider {
     if (prompt.includes("rate limit")) {
       if (!oneShotFailures.has(prompt)) {
         oneShotFailures.add(prompt);
-        yield { type: "error", content: "429 rate limit exceeded" };
+        yield {
+          type: "error",
+          content: "429 rate limit exceeded",
+          retrySafe: true,
+        };
         yield { type: "done" };
         return;
       }

@@ -20,7 +20,7 @@
   },
   "dependencies": {
     "@catamorphic/sandbox": "workspace:*",
-    "ai": "^7.0.34",
+    "ai": "^7.0.93",
     "zod": "^4.1.8",
     "@catamorphic/mcp": "workspace:*"
   },

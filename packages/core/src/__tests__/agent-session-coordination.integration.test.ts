@@ -30,6 +30,7 @@ class DeferredProvider implements CodingAgentProvider {
   readonly name = "deferred";
   private releaseSlow: (() => void) | undefined;
   private transientAttempts = 0;
+  private connectionAttempts = 0;
   slowStarted: Promise<void> = Promise.resolve();
   private markSlowStarted: (() => void) | undefined;
   switchCheckout?: (session: ProviderSession) => string;
@@ -52,6 +53,50 @@ class DeferredProvider implements CodingAgentProvider {
     session: ProviderSession,
     message: string,
   ): AsyncIterable<AgentEvent> {
+    if (message === "Run command with progress") {
+      for (const toolUseId of ["first", "second"]) {
+        yield {
+          type: "command",
+          toolUseId,
+          status: "started",
+          content: "bun test",
+        };
+        yield {
+          type: "command",
+          toolUseId,
+          status: "ended",
+          content: "bun test\nok",
+        };
+      }
+      yield { type: "text", content: "Tests passed" };
+    }
+    if (message.includes("Reconnect durable turn")) {
+      this.connectionAttempts += 1;
+      if (this.connectionAttempts === 1) {
+        yield {
+          type: "error",
+          content: "Request rejected before execution",
+          errorKind: "unavailable",
+          retrySafe: true,
+        };
+        yield { type: "done" };
+        return;
+      }
+      yield { type: "text", content: "Connection restored" };
+    }
+    if (message.includes("Truncated stream")) {
+      yield { type: "text", content: "Partial work" };
+      return;
+    }
+    if (message.includes("Permanent delegated failure")) {
+      yield {
+        type: "error",
+        content: "Credentials revoked",
+        errorKind: "auth",
+      };
+      yield { type: "done" };
+      return;
+    }
     if (message.includes("Recover delegated work")) {
       this.transientAttempts += 1;
       if (this.transientAttempts === 1) {
@@ -59,6 +104,7 @@ class DeferredProvider implements CodingAgentProvider {
           type: "error",
           content: "Temporarily unavailable",
           errorKind: "unavailable",
+          retrySafe: true,
         };
         yield { type: "done" };
         return;
@@ -233,6 +279,503 @@ describe("agent session coordination", () => {
     await sql`drop schema if exists ${sql.id(schema)} cascade`.execute(db);
     await db.destroy();
     await fs.rm(tmpDir, { recursive: true, force: true });
+  });
+
+  it("recovers a persisted reconnect through the worker without duplicating the user message", async () => {
+    const project = await projects.create(identity, {
+      name: "Durable reconnect",
+    });
+    const session = await sessions.create(identity, project.id);
+    const failed = await sessions.sendMessage(
+      identity,
+      project.id,
+      session.id,
+      "Reconnect durable turn",
+    );
+    expect(failed.metadata).toMatchObject({
+      status: "failed",
+      errorKind: "unavailable",
+    });
+    const pending = await sessions.turns.listPending({ sessionId: session.id });
+    expect(pending).toHaveLength(1);
+    expect(pending[0]).toMatchObject({
+      status: "queued",
+      attempt: 1,
+      resultMessageId: failed.id,
+    });
+    await db
+      .updateTable("agent_turns")
+      .set({ available_at: new Date(0) })
+      .where("session_id", "=", session.id)
+      .execute();
+    const worker = sessions.startWorker({
+      resolveIdentity: async () => identity,
+      pollIntervalMs: 10,
+    });
+    try {
+      await vi.waitFor(async () => {
+        const detail = await sessions.get(identity, project.id, session.id);
+        expect(detail.messages.at(-1)?.content).toBe("Connection restored");
+        expect(
+          detail.messages.filter((message) => message.role === "user"),
+        ).toHaveLength(1);
+        expect(
+          await sessions.turns.listPending({ sessionId: session.id }),
+        ).toEqual([]);
+      });
+    } finally {
+      await worker.stop();
+    }
+  });
+
+  it("enriches started command rows without duplicating completed steps", async () => {
+    const project = await projects.create(identity, {
+      name: "Command progress",
+    });
+    const session = await sessions.create(identity, project.id);
+    const reply = await sessions.sendMessage(
+      identity,
+      project.id,
+      session.id,
+      "Run command with progress",
+    );
+    expect(reply.metadata?.events).toEqual([
+      {
+        type: "command",
+        toolUseId: "first",
+        status: "ended",
+        content: "bun test\nok",
+      },
+      {
+        type: "command",
+        toolUseId: "second",
+        status: "ended",
+        content: "bun test\nok",
+      },
+      { type: "text", content: "Tests passed" },
+      { type: "done" },
+    ]);
+  });
+
+  it("marks a truncated stream failed instead of treating its preamble as success", async () => {
+    const project = await projects.create(identity, {
+      name: "Truncated response",
+    });
+    const session = await sessions.create(identity, project.id);
+    const failed = await sessions.sendMessage(
+      identity,
+      project.id,
+      session.id,
+      "Truncated stream",
+    );
+    expect(failed.metadata).toMatchObject({
+      status: "failed",
+      errorKind: "unavailable",
+    });
+    expect(await sessions.turns.listPending({ sessionId: session.id })).toEqual(
+      [],
+    );
+    await sessions.interrupt(identity, project.id, session.id);
+    expect(await sessions.turns.listPending({ sessionId: session.id })).toEqual(
+      [],
+    );
+  });
+
+  it("replays a send-now receipt without interrupting the accepted turn", async () => {
+    const project = await projects.create(identity, {
+      name: "Lost acknowledgement",
+    });
+    const session = await sessions.create(identity, project.id);
+    const input = {
+      deliveryMode: "interrupt" as const,
+      idempotencyKey: crypto.randomUUID(),
+    };
+    const accepted = await sessions.enqueueMessage(
+      identity,
+      project.id,
+      session.id,
+      "Prepare the Globex renewal deck",
+      input,
+    );
+    await provider.slowStarted;
+    try {
+      const replay = await sessions.enqueueMessage(
+        identity,
+        project.id,
+        session.id,
+        "Prepare the Globex renewal deck",
+        input,
+      );
+      expect(replay).toMatchObject({
+        messageId: accepted.messageId,
+        turnId: accepted.turnId,
+        created: false,
+      });
+      const detail = await sessions.get(identity, project.id, session.id);
+      expect(detail.execution).toMatchObject({
+        status: "running",
+        cancellationRequested: false,
+      });
+      expect(
+        detail.messages.filter((message) => message.role === "user"),
+      ).toHaveLength(1);
+    } finally {
+      provider.release();
+    }
+    await vi.waitFor(async () =>
+      expect(
+        (await sessions.get(identity, project.id, session.id)).execution
+          ?.status,
+      ).toBe("completed"),
+    );
+  });
+
+  it.each(["direct", "mailbox"])(
+    "does not interrupt accepted work when %s delivery is replayed",
+    async (transport) => {
+      const project = await projects.create(identity, {
+        name: "Replayed delivery",
+      });
+      const session = await sessions.create(identity, project.id);
+      const key = crypto.randomUUID();
+      const content = "Prepare the Globex renewal deck";
+      const deliver = () =>
+        transport === "direct"
+          ? sessions.deliver(identity, project.id, session.id, {
+              content,
+              author: { kind: "user", externalUserId: identity.externalUserId },
+              mode: "interrupt",
+              idempotencyKey: key,
+            })
+          : sessions.importMailbox(identity, project.id, {
+              id: key,
+              projectId: project.id,
+              sessionId: session.id,
+              sourceHostId: "remote",
+              destinationHostId: "coordination-test-host",
+              authorityRevision: session.authorityRevision,
+              messageId: crypto.randomUUID(),
+              content,
+              author: { kind: "user", externalUserId: identity.externalUserId },
+              mode: "interrupt",
+              idempotencyKey: key,
+              metadata: null,
+              createdAt: new Date().toISOString(),
+            });
+      const interrupted = vi.spyOn(provider, "interrupt");
+      try {
+        const accepted = await deliver();
+        await provider.slowStarted;
+        expect(await deliver()).toMatchObject({
+          messageId: accepted.messageId,
+          turnId: accepted.turnId,
+          created: false,
+        });
+        expect(interrupted).not.toHaveBeenCalled();
+        expect(
+          (await sessions.get(identity, project.id, session.id)).execution,
+        ).toMatchObject({ status: "running", cancellationRequested: false });
+      } finally {
+        interrupted.mockRestore();
+        provider.release();
+      }
+      await vi.waitFor(async () =>
+        expect(
+          (await sessions.get(identity, project.id, session.id)).execution
+            ?.status,
+        ).toBe("completed"),
+      );
+    },
+  );
+
+  it("recovers expired execution even when its local provider has not returned", async () => {
+    const project = await projects.create(identity, {
+      name: "Stalled executor",
+    });
+    const session = await sessions.create(identity, project.id);
+    const outcome = sessions
+      .sendMessage(
+        identity,
+        project.id,
+        session.id,
+        "Prepare the Globex renewal deck",
+      )
+      .catch(() => null);
+    await provider.slowStarted;
+    await db
+      .updateTable("agent_turns")
+      .set({ lease_expires_at: new Date(0) })
+      .where("session_id", "=", session.id)
+      .execute();
+    const worker = sessions.startWorker({
+      resolveIdentity: async () => identity,
+      pollIntervalMs: 10,
+    });
+    try {
+      await vi.waitFor(async () => {
+        const detail = await sessions.get(identity, project.id, session.id);
+        expect(detail.execution?.status).toBe("failed");
+        expect(detail.messages.at(-1)?.metadata).toMatchObject({
+          status: "failed",
+          unexpectedStop: true,
+        });
+      });
+    } finally {
+      await worker.stop();
+      provider.release();
+      await outcome;
+    }
+  });
+
+  it("promotes failed delegated work and informs its parent", async () => {
+    const project = await projects.create(identity, {
+      name: "Failed child visibility",
+    });
+    const parent = await sessions.create(identity, project.id);
+    const child = await sessions.createSubsession(
+      identity,
+      project.id,
+      parent.id,
+      { task: "Permanent delegated failure" },
+    );
+    await vi.waitFor(async () => {
+      const detail = await sessions.get(identity, project.id, child.session.id);
+      expect(detail.visibility).toBe("promoted");
+      expect(detail.attentionRequired).toBe(true);
+      expect(
+        (await sessions.listSubsessions(identity, project.id, parent.id))[0]
+          ?.status,
+      ).toBe("failed");
+    });
+  });
+
+  it("recovers child result delivery without replaying completed work", async () => {
+    const project = await projects.create(identity, {
+      name: "Durable child result",
+    });
+    const parent = await sessions.create(identity, project.id);
+    const delivery = vi
+      .spyOn(sessions, "deliver")
+      .mockRejectedValue(new Error("fetch failed: ECONNRESET"));
+    let worker: ReturnType<AgentSessionsService["startWorker"]> | undefined;
+    try {
+      const child = await sessions.createSubsession(
+        identity,
+        project.id,
+        parent.id,
+        { task: "Publish this result reliably" },
+      );
+      await vi.waitFor(async () => {
+        const turns = await db
+          .selectFrom("agent_turns")
+          .selectAll()
+          .where("session_id", "=", child.session.id)
+          .execute();
+        expect(turns).toEqual([
+          expect.objectContaining({ status: "completed", attempt: 1 }),
+        ]);
+        expect(delivery).toHaveBeenCalled();
+      });
+      delivery.mockRestore();
+      worker = sessions.startWorker({
+        resolveIdentity: async () => identity,
+        pollIntervalMs: 10,
+      });
+      await vi.waitFor(async () => {
+        expect(
+          (await sessions.listSubsessions(identity, project.id, parent.id))[0]
+            ?.status,
+        ).toBe("completed");
+        const parentDetail = await sessions.get(
+          identity,
+          project.id,
+          parent.id,
+        );
+        expect(
+          parentDetail.messages.filter(
+            (message) =>
+              message.author.kind === "agent" &&
+              message.author.sessionId === child.session.id,
+          ),
+        ).toHaveLength(1);
+      });
+      expect(
+        await db
+          .selectFrom("agent_turns")
+          .select(["status", "attempt"])
+          .where("session_id", "=", child.session.id)
+          .execute(),
+      ).toEqual([{ status: "completed", attempt: 1 }]);
+    } finally {
+      delivery.mockRestore();
+      await worker?.stop();
+    }
+  });
+
+  it.each(["expired", "recovered"])(
+    "fences a late provider result after execution ownership is %s",
+    async (state) => {
+      const project = await projects.create(identity, {
+        name: "Late executor",
+      });
+      const session = await sessions.create(identity, project.id);
+      const settledBefore = settledTurns.length;
+      const outcome = sessions
+        .sendMessage(
+          identity,
+          project.id,
+          session.id,
+          "Prepare the Globex renewal deck",
+        )
+        .then(
+          () => null,
+          (error: unknown) => error,
+        );
+      await provider.slowStarted;
+      try {
+        const turn = await db
+          .selectFrom("agent_turns")
+          .selectAll()
+          .where("session_id", "=", session.id)
+          .executeTakeFirstOrThrow();
+        if (!turn.result_message_id) throw new Error("Missing live reply");
+        await db.transaction().execute(async (trx) => {
+          await trx
+            .updateTable("agent_turns")
+            .set({
+              lease_expires_at: new Date(0),
+              ...(state === "recovered"
+                ? { status: "failed", lease_token: null }
+                : {}),
+            })
+            .where("id", "=", turn.id)
+            .execute();
+          await trx
+            .updateTable("agent_messages")
+            .set({
+              content: "Recovery owns this outcome",
+              metadata: { status: "failed", unexpectedStop: true },
+            })
+            .where("id", "=", turn.result_message_id)
+            .execute();
+        });
+      } finally {
+        provider.release();
+      }
+      await outcome;
+      const detail = await sessions.get(identity, project.id, session.id);
+      expect(detail.messages.at(-1)).toMatchObject({
+        content: "Recovery owns this outcome",
+        metadata: { status: "failed", unexpectedStop: true },
+      });
+      expect(settledTurns).toHaveLength(settledBefore);
+    },
+  );
+
+  it("makes a crash before the first reply visible without rerunning the request", async () => {
+    const project = await projects.create(identity, {
+      name: "Pre-reply crash",
+    });
+    const session = await sessions.create(identity, project.id);
+    const receipt = await sessions.turns.deliver({
+      sessionId: session.id,
+      content: "Accepted before crash",
+      author: { kind: "user", externalUserId: identity.externalUserId },
+      mode: "next_turn",
+    });
+    await sessions.turns.claimNextForSession({
+      sessionId: session.id,
+      workerId: "dead",
+    });
+    await db
+      .updateTable("agent_turns")
+      .set({ lease_expires_at: new Date(0) })
+      .where("id", "=", receipt.turnId)
+      .execute();
+    const worker = sessions.startWorker({
+      resolveIdentity: async () => identity,
+      pollIntervalMs: 10,
+    });
+    try {
+      await vi.waitFor(async () => {
+        const detail = await sessions.get(identity, project.id, session.id);
+        expect(detail.execution).toMatchObject({
+          status: "failed",
+          attempt: 1,
+        });
+        expect(detail.messages).toHaveLength(2);
+        expect(detail.messages.at(-1)?.metadata).toMatchObject({
+          status: "failed",
+          unexpectedStop: true,
+        });
+      });
+    } finally {
+      await worker.stop();
+    }
+  });
+
+  it("does not settle another executor's live lease when reading its session", async () => {
+    const project = await projects.create(identity, { name: "Live lease" });
+    const session = await sessions.create(identity, project.id);
+    await sessions.turns.deliver({
+      sessionId: session.id,
+      content: "Pending",
+      author: { kind: "user", externalUserId: identity.externalUserId },
+      mode: "next_turn",
+    });
+    await sessions.turns.claimNextForSession({
+      sessionId: session.id,
+      workerId: "other-process",
+    });
+    const reply = await db
+      .insertInto("agent_messages")
+      .values({
+        session_id: session.id,
+        role: "assistant",
+        content: "Working",
+        author_kind: "agent",
+        author_payload: { kind: "agent", sessionId: session.id, agentId: null },
+        metadata: {
+          status: "in_progress",
+          partialContent: "Actual partial answer",
+        },
+      })
+      .returning("id")
+      .executeTakeFirstOrThrow();
+    expect(
+      (await sessions.get(identity, project.id, session.id)).messages.at(-1)
+        ?.metadata?.status,
+    ).toBe("in_progress");
+    await db
+      .updateTable("agent_turns")
+      .set({ lease_expires_at: new Date(0), result_message_id: reply.id })
+      .where("session_id", "=", session.id)
+      .execute();
+    // Even an expired lease cannot make a read mutate execution.
+    const expired = await sessions.get(identity, project.id, session.id);
+    expect(expired.messages.at(-1)?.metadata?.status).toBe("in_progress");
+    expect(expired.execution).toMatchObject({
+      status: "running",
+      executorHealthy: false,
+    });
+    const worker = sessions.startWorker({
+      resolveIdentity: async () => identity,
+      pollIntervalMs: 10,
+    });
+    try {
+      await vi.waitFor(async () => {
+        expect(
+          (await sessions.get(identity, project.id, session.id)).messages.at(-1)
+            ?.metadata,
+        ).toMatchObject({
+          status: "failed",
+          unexpectedStop: true,
+          partialContent: "Actual partial answer",
+        });
+      });
+    } finally {
+      await worker.stop();
+    }
   });
 
   it("shows same-project peers with hierarchy, visibility, and live running state", async () => {

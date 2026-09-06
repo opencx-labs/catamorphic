@@ -35,6 +35,26 @@ export interface AgentTurn {
   createdAt: string;
 }
 
+export type AgentExecutionPhase =
+  | "preparing"
+  | "working"
+  | "waiting"
+  | "saving";
+
+/** Read-only execution truth. Activity and executor health are independent. */
+export interface AgentExecution {
+  turnId: string;
+  status: AgentTurnStatus;
+  phase: AgentExecutionPhase;
+  activity: string | null;
+  activityAt: string | null;
+  startedAt: string | null;
+  retryAt: string | null;
+  attempt: number;
+  executorHealthy: boolean;
+  cancellationRequested: boolean;
+}
+
 export interface SessionDeliveryReceipt {
   messageId: string;
   turnId: string | null;
@@ -115,6 +135,80 @@ function mapTurn(row: {
 /** Durable inbox and serialized turn queue for agent sessions (ADR 0074). */
 export class AgentTurnsService {
   constructor(private readonly db: Kysely<DB>) {}
+
+  async execution(input: {
+    sessionId: string;
+  }): Promise<AgentExecution | null> {
+    const row = await this.db
+      .selectFrom("agent_turns")
+      .selectAll()
+      .select(
+        sql<boolean>`coalesce(lease_expires_at > now(), false)`.as(
+          "lease_live",
+        ),
+      )
+      .where("session_id", "=", input.sessionId)
+      .orderBy(
+        sql`case status when 'running' then 0 when 'queued' then 1 when 'held' then 2 else 3 end`,
+      )
+      .orderBy(
+        sql`case when status in ('queued', 'held') then priority end`,
+        "desc",
+      )
+      .orderBy(
+        sql`case when status in ('queued', 'held') then created_at end`,
+        "asc",
+      )
+      .orderBy("created_at", "desc")
+      .orderBy("id")
+      .limit(1)
+      .executeTakeFirst();
+    if (!row) return null;
+    const phase = row.phase;
+    if (
+      phase !== "preparing" &&
+      phase !== "working" &&
+      phase !== "waiting" &&
+      phase !== "saving"
+    )
+      throw new Error(`Invalid agent execution phase '${phase}'`);
+    return {
+      turnId: row.id,
+      status: mapTurn(row).status,
+      phase,
+      activity: row.activity,
+      activityAt: row.activity_at?.toISOString() ?? null,
+      startedAt: row.started_at?.toISOString() ?? null,
+      retryAt:
+        row.status === "queued" && row.attempt > 0
+          ? row.available_at.toISOString()
+          : null,
+      attempt: row.attempt,
+      executorHealthy: row.status === "running" && row.lease_live,
+      cancellationRequested: row.cancellation_requested_at !== null,
+    };
+  }
+
+  async progress(input: {
+    turnId: string;
+    leaseToken: string;
+    phase: AgentExecutionPhase;
+    activity: string;
+  }): Promise<boolean> {
+    const result = await this.db
+      .updateTable("agent_turns")
+      .set({
+        phase: input.phase,
+        activity: input.activity,
+        activity_at: sql`now()`,
+      })
+      .where("id", "=", input.turnId)
+      .where("status", "=", "running")
+      .where("lease_token", "=", input.leaseToken)
+      .where("lease_expires_at", ">", sql<Date>`now()`)
+      .executeTakeFirst();
+    return result.numUpdatedRows === 1n;
+  }
 
   async deliver(input: {
     sessionId: string;
@@ -290,6 +384,12 @@ export class AgentTurnsService {
       ])
       .where("agent_turns.session_id", "=", input.sessionId)
       .where("agent_turns.status", "in", ["queued", "held", "running"])
+      .where(({ or, eb }) =>
+        or([
+          eb("agent_turns.result_message_id", "is", null),
+          eb("agent_turns.status", "=", "running"),
+        ]),
+      )
       .orderBy("agent_turns.priority", "desc")
       .orderBy("agent_turns.created_at")
       .execute();
@@ -435,7 +535,7 @@ export class AgentTurnsService {
         .selectFrom("agent_turns as turn")
         .selectAll("turn")
         .where("turn.status", "=", "queued")
-        .where("turn.available_at", "<=", new Date())
+        .where("turn.available_at", "<=", sql<Date>`now()`)
         .$if(input.sessionId !== undefined, (query) =>
           query.where("turn.session_id", "=", input.sessionId ?? ""),
         )
@@ -456,7 +556,6 @@ export class AgentTurnsService {
                 .select("ahead.id")
                 .whereRef("ahead.session_id", "=", "turn.session_id")
                 .where("ahead.status", "=", "queued")
-                .where("ahead.available_at", "<=", new Date())
                 .where(
                   or([
                     sql<boolean>`ahead.priority > turn.priority`,
@@ -480,6 +579,10 @@ export class AgentTurnsService {
         .updateTable("agent_turns")
         .set(({ ref }) => ({
           status: "running",
+          cancellation_requested_at: null,
+          phase: "preparing",
+          activity: "Preparing agent",
+          activity_at: sql`now()`,
           lease_owner: input.workerId,
           lease_token: leaseToken,
           lease_expires_at: sql`now() + (${leaseSeconds} * interval '1 second')`,
@@ -514,8 +617,117 @@ export class AgentTurnsService {
       .where("id", "=", input.turnId)
       .where("status", "=", "running")
       .where("lease_token", "=", input.leaseToken)
+      .where("lease_expires_at", ">", sql<Date>`now()`)
       .executeTakeFirst();
     return result.numUpdatedRows === 1n;
+  }
+
+  /** A lease belongs to a live executor, not to the duration of an API call. */
+  async renew(input: { turnId: string; leaseToken: string }): Promise<boolean> {
+    const result = await this.db
+      .updateTable("agent_turns")
+      .set({
+        lease_expires_at: sql`now() + interval '60 seconds'`,
+        updated_at: new Date(),
+      })
+      .where("id", "=", input.turnId)
+      .where("status", "=", "running")
+      .where("lease_token", "=", input.leaseToken)
+      .where("lease_expires_at", ">", sql<Date>`now()`)
+      .executeTakeFirst();
+    return result.numUpdatedRows === 1n;
+  }
+
+  /** Persist the outcome and retry deadline together; never rely on a timer. */
+  async settle(input: {
+    turnId: string;
+    leaseToken: string;
+    resultMessageId: string;
+    error?: string;
+    retryAt?: Date;
+    attempt: number;
+  }): Promise<boolean> {
+    return this.db.transaction().execute(async (trx) => {
+      const result = await trx
+        .updateTable("agent_turns")
+        .set({
+          status: input.retryAt
+            ? "queued"
+            : input.error
+              ? "failed"
+              : "completed",
+          result_message_id: input.resultMessageId,
+          error: input.error ?? null,
+          completed_at: input.retryAt ? null : new Date(),
+          ...(input.retryAt ? { available_at: input.retryAt } : {}),
+          lease_owner: null,
+          lease_token: null,
+          lease_expires_at: null,
+          updated_at: new Date(),
+        })
+        .where("id", "=", input.turnId)
+        .where("status", "=", "running")
+        .where("lease_token", "=", input.leaseToken)
+        .where("lease_expires_at", ">", sql<Date>`now()`)
+        .executeTakeFirst();
+      if (result.numUpdatedRows !== 1n) return false;
+      if (input.retryAt) {
+        await trx
+          .updateTable("agent_messages")
+          .set(({ ref }) => ({
+            metadata: sql`${ref("metadata")} || ${JSON.stringify({ autoRetry: { attempt: input.attempt, nextAtMs: input.retryAt?.getTime() } })}::jsonb`,
+          }))
+          .where("id", "=", input.resultMessageId)
+          .execute();
+      }
+      return true;
+    });
+  }
+
+  async retry(input: {
+    sessionId: string;
+    resultMessageId: string;
+  }): Promise<boolean> {
+    const result = await this.db
+      .updateTable("agent_turns")
+      .set({
+        status: "queued",
+        available_at: new Date(),
+        completed_at: null,
+        updated_at: new Date(),
+      })
+      .where("session_id", "=", input.sessionId)
+      .where("result_message_id", "=", input.resultMessageId)
+      .where("status", "in", ["failed", "queued"])
+      .executeTakeFirst();
+    return result.numUpdatedRows === 1n;
+  }
+
+  async cancelRetries(input: { sessionId: string }): Promise<void> {
+    await this.db.transaction().execute(async (trx) => {
+      const cancelled = await trx
+        .updateTable("agent_turns")
+        .set({
+          status: "failed",
+          completed_at: new Date(),
+          updated_at: new Date(),
+        })
+        .where("session_id", "=", input.sessionId)
+        .where("status", "=", "queued")
+        .where("result_message_id", "is not", null)
+        .returning("result_message_id")
+        .execute();
+      for (const row of cancelled) {
+        if (!row.result_message_id) continue;
+        await trx
+          .updateTable("agent_messages")
+          .set(({ ref }) => ({
+            metadata: sql`(${ref("metadata")} - 'autoRetry') || '{"interrupted":true}'::jsonb`,
+          }))
+          .where("id", "=", row.result_message_id)
+          .execute();
+      }
+    });
   }
 
   async fail(input: {
@@ -537,25 +749,9 @@ export class AgentTurnsService {
       .where("id", "=", input.turnId)
       .where("status", "=", "running")
       .where("lease_token", "=", input.leaseToken)
+      .where("lease_expires_at", ">", sql<Date>`now()`)
       .executeTakeFirst();
     return result.numUpdatedRows === 1n;
-  }
-
-  async requeueExpired(): Promise<number> {
-    const result = await this.db
-      .updateTable("agent_turns")
-      .set({
-        status: "queued",
-        lease_owner: null,
-        lease_token: null,
-        lease_expires_at: null,
-        available_at: new Date(),
-        updated_at: new Date(),
-      })
-      .where("status", "=", "running")
-      .where("lease_expires_at", "<", new Date())
-      .executeTakeFirst();
-    return Number(result.numUpdatedRows);
   }
 
   async messageForTurn(input: { turnId: string }): Promise<{

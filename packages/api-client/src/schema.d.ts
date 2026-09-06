@@ -6747,6 +6747,20 @@ export interface paths {
                             createdAt: string;
                             /** Format: date-time */
                             updatedAt: string;
+                            execution: {
+                                turnId: string;
+                                /** @enum {string} */
+                                status: "queued" | "held" | "running" | "completed" | "failed" | "cancelled";
+                                /** @enum {string} */
+                                phase: "preparing" | "working" | "waiting" | "saving";
+                                activity: string | null;
+                                activityAt: string | null;
+                                startedAt: string | null;
+                                retryAt: string | null;
+                                attempt: number;
+                                executorHealthy: boolean;
+                                cancellationRequested: boolean;
+                            } | null;
                             messages: {
                                 /** Format: uuid */
                                 id: string;
@@ -8046,6 +8060,7 @@ export interface paths {
                 content: {
                     "application/json": {
                         message: string;
+                        idempotencyKey?: string;
                         attachments?: ({
                             /** @enum {string} */
                             kind: "image" | "document";
@@ -8340,56 +8355,19 @@ export interface paths {
             requestBody?: never;
             responses: {
                 /** @description Default Response */
-                201: {
+                202: {
                     headers: {
                         [name: string]: unknown;
                     };
                     content: {
                         "application/json": {
                             /** Format: uuid */
-                            id: string;
+                            messageId: string;
                             /** Format: uuid */
-                            sessionId: string;
+                            turnId: string | null;
                             /** @enum {string} */
-                            role: "user" | "assistant" | "system";
-                            content: string;
-                            commitSha: string | null;
-                            metadata: {
-                                [key: string]: unknown;
-                            } | null;
-                            author: {
-                                /** @enum {string} */
-                                kind: "user";
-                                externalUserId: string;
-                            } | {
-                                /** @enum {string} */
-                                kind: "agent";
-                                /** Format: uuid */
-                                sessionId: string;
-                                agentId: string | null;
-                            } | {
-                                /** @enum {string} */
-                                kind: "workflow";
-                                /** Format: uuid */
-                                runId: string;
-                                workflowName: string;
-                            } | {
-                                /** @enum {string} */
-                                kind: "watcher";
-                                /** Format: uuid */
-                                watcherId: string;
-                                /** Format: uuid */
-                                runId?: string;
-                            } | {
-                                /** @enum {string} */
-                                kind: "system";
-                                code: string;
-                            };
-                            /** @enum {string} */
-                            deliveryMode: "message_only" | "next_turn" | "interrupt";
-                            idempotencyKey: string | null;
-                            /** Format: date-time */
-                            createdAt: string;
+                            mode: "message_only" | "next_turn" | "interrupt";
+                            created: boolean;
                         };
                     };
                 };

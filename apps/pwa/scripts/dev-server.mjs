@@ -49,14 +49,17 @@ function newSession(body) {
     sandboxId: null,
     agentId: body.agentId ?? null,
     modelEffort: body.effort ?? null,
-    title: null,
+    title: body.title ?? null,
     icon: null,
-    parentSessionId: null,
+    parentSessionId: body.parentSessionId ?? null,
+    visibility: body.parentSessionId ? "latent" : "promoted",
     status: "active",
     baseCommitSha: null,
     createdAt: now(),
     updatedAt: now(),
     messages: [],
+    execution: null,
+    pendingTurns: [],
   };
   sessions.set(id, session);
   return session;
@@ -80,6 +83,18 @@ function pushMessage(session, role, content, metadata) {
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 async function runTurn(session, text) {
+  session.execution = {
+    turnId: randomUUID(),
+    status: "running",
+    phase: "working",
+    activity: "Working",
+    activityAt: now(),
+    startedAt: now(),
+    retryAt: null,
+    attempt: 1,
+    executorHealthy: true,
+    cancellationRequested: false,
+  };
   const assistant = pushMessage(session, "assistant", "Thinking...", {
     status: "in_progress",
     events: [],
@@ -87,6 +102,13 @@ async function runTurn(session, text) {
   const update = (content, metadata) => {
     assistant.content = content;
     assistant.metadata = { ...assistant.metadata, ...metadata };
+    session.execution.activity = content;
+    session.execution.activityAt = now();
+    if (metadata?.status && metadata.status !== "in_progress") {
+      session.execution.status =
+        metadata.status === "failed" ? "failed" : "completed";
+      session.execution.executorHealthy = false;
+    }
     session.updatedAt = now();
   };
   await sleep(400);
@@ -304,10 +326,15 @@ const server = http.createServer(async (req, res) => {
 
   const sessionsBase = `/api/projects/${PROJECT.id}/agent/sessions`;
   if (path === sessionsBase && req.method === "GET") {
-    const items = [...sessions.values()].map(
-      ({ messages: _messages, ...session }) => session,
-    );
-    return json(res, 200, { items, total: items.length });
+    const all = [...sessions.values()]
+      .reverse()
+      .map(({ messages: _messages, ...session }) => session);
+    const offset = Number(url.searchParams.get("offset") ?? 0);
+    const limit = Number(url.searchParams.get("limit") ?? 50);
+    return json(res, 200, {
+      items: all.slice(offset, offset + limit),
+      total: all.length,
+    });
   }
   if (path === sessionsBase && req.method === "POST") {
     const body = await readBody(req);
@@ -323,6 +350,23 @@ const server = http.createServer(async (req, res) => {
     if (!session) return json(res, 404, { error: "No such session" });
     if (match.length === 1 && req.method === "GET") {
       return json(res, 200, session);
+    }
+    if (match[1] === "subsessions" && req.method === "GET") {
+      return json(
+        res,
+        200,
+        [...sessions.values()]
+          .filter((child) => child.parentSessionId === session.id)
+          .map(({ messages: _messages, ...child }) => ({
+            delegationId: child.id,
+            routeId: "fake",
+            task: child.title ?? "Review",
+            contextMode: "fresh",
+            allowFurtherDelegation: false,
+            status: child.running ? "running" : "completed",
+            session: child,
+          })),
+      );
     }
     if (match[1] === "messages" && req.method === "POST") {
       const body = await readBody(req);

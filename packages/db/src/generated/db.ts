@@ -149,8 +149,11 @@ export interface AgentSessionViews {
 }
 
 export interface AgentTurns {
+  activity: string | null;
+  activity_at: Timestamp | null;
   attempt: Generated<number>;
   available_at: Generated<Timestamp>;
+  cancellation_requested_at: Timestamp | null;
   completed_at: Timestamp | null;
   created_at: Generated<Timestamp>;
   delivery_mode: string;
@@ -160,6 +163,7 @@ export interface AgentTurns {
   lease_owner: string | null;
   lease_token: string | null;
   message_id: string;
+  phase: Generated<string>;
   priority: Generated<number>;
   result_message_id: string | null;
   session_id: string;

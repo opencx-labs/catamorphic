@@ -85,6 +85,7 @@ export class AgentRuntimeEventsService {
     identity: Identity;
     sessionId: string;
     afterSequence: number;
+    limit?: number;
   }): Promise<AgentRuntimeEvent[]> {
     await requireRuntimeSession({
       db: this.db,
@@ -98,49 +99,43 @@ export class AgentRuntimeEventsService {
       .where("session_id", "=", args.sessionId)
       .where("sequence", ">", String(args.afterSequence))
       .orderBy("sequence", "asc")
+      .limit(Math.min(500, Math.max(1, args.limit ?? 100)))
       .execute();
     return events.map((event) => eventFromPayload(event.payload));
   }
-
   async *subscribe(args: {
     identity: Identity;
     sessionId: string;
     after?: AgentEventCursor;
+    signal?: AbortSignal;
   }): AsyncIterable<AgentRuntimeEvent> {
-    const queue: AgentRuntimeEvent[] = [];
+    // Local notifications are only wake-ups. The database is the single
+    // ordered source, including when another server appends an earlier event.
+    let revision = 0;
     let wake: (() => void) | undefined;
-    const listener: EventListener = (event) => {
-      queue.push(event);
+    const listener: EventListener = () => {
+      revision += 1;
       wake?.();
     };
+    const abort = () => wake?.();
     this.addListener(args.sessionId, listener);
+    args.signal?.addEventListener("abort", abort, { once: true });
     let sequence = args.after?.sequence ?? 0;
     try {
-      for (const event of await this.list({
-        identity: args.identity,
-        sessionId: args.sessionId,
-        afterSequence: sequence,
-      })) {
-        sequence = event.sequence;
-        yield event;
-      }
-      while (true) {
-        const next = queue.shift();
-        if (next) {
-          if (next.sequence > sequence) {
-            sequence = next.sequence;
-            yield next;
-          }
-          continue;
-        }
-        for (const event of await this.list({
+      while (!args.signal?.aborted) {
+        const observed = revision;
+        const events = await this.list({
           identity: args.identity,
           sessionId: args.sessionId,
           afterSequence: sequence,
-        })) {
+        });
+        for (const event of events) {
+          if (args.signal?.aborted) return;
           sequence = event.sequence;
           yield event;
         }
+        if (events.length || observed !== revision || args.signal?.aborted)
+          continue;
         await new Promise<void>((resolve) => {
           const timer = setTimeout(() => {
             wake = undefined;
@@ -151,11 +146,12 @@ export class AgentRuntimeEventsService {
             wake = undefined;
             resolve();
           };
+          if (args.signal?.aborted || observed !== revision) wake();
         });
       }
     } finally {
+      args.signal?.removeEventListener("abort", abort);
       wake?.();
-      wake = undefined;
       this.removeListener(args.sessionId, listener);
     }
   }

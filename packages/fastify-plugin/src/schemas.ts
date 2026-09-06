@@ -1382,6 +1382,7 @@ export const SendMessageSchema = z
     // Empty prose is fine when attachments carry the message ("look at
     // this" with just a pill); rejected only when BOTH are empty.
     message: z.string().max(200_000),
+    idempotencyKey: z.string().min(1).max(200).optional(),
     attachments: z.array(AgentAttachmentSchema).max(32).optional(),
     deliveryMode: z.enum(["next_turn", "interrupt"]).optional(),
   })
@@ -1391,7 +1392,28 @@ export const SendMessageSchema = z
     { message: "A message needs text or at least one attachment." },
   );
 
+export const AgentExecutionSchema = z.object({
+  turnId: z.string(),
+  status: z.enum([
+    "queued",
+    "held",
+    "running",
+    "completed",
+    "failed",
+    "cancelled",
+  ]),
+  phase: z.enum(["preparing", "working", "waiting", "saving"]),
+  activity: z.string().nullable(),
+  activityAt: z.string().nullable(),
+  startedAt: z.string().nullable(),
+  retryAt: z.string().nullable(),
+  attempt: z.number(),
+  executorHealthy: z.boolean(),
+  cancellationRequested: z.boolean(),
+});
+
 export const AgentSessionDetailSchema = AgentSessionSchema.extend({
+  execution: AgentExecutionSchema.nullable(),
   messages: z.array(AgentMessageSchema),
   pendingTurns: z.array(PendingSessionTurnSchema),
 });

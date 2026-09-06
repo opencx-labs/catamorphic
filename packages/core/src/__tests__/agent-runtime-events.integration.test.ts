@@ -262,4 +262,38 @@ describeIf("agent runtime event persistence", () => {
     expect(delivered.value).toEqual(published);
     await subscription.return?.();
   });
+
+  it("does not skip a remote event when a later local event wakes the subscriber", async () => {
+    const sharedSession = await createSession();
+    const reader = new AgentRuntimeEventsService(db, { pollIntervalMs: 10 });
+    const writer = new AgentRuntimeEventsService(db);
+    const first = eventFor({
+      eventId: crypto.randomUUID(),
+      sequence: 1,
+      sessionId: sharedSession,
+    });
+    await reader.append({ identity, event: first });
+    const signal = new AbortController();
+    const subscription = reader
+      .subscribe({ identity, sessionId: sharedSession, signal: signal.signal })
+      [Symbol.asyncIterator]();
+    expect((await subscription.next()).value).toEqual(first);
+    const second = eventFor({
+      eventId: crypto.randomUUID(),
+      sequence: 2,
+      sessionId: sharedSession,
+    });
+    const third = eventFor({
+      eventId: crypto.randomUUID(),
+      sequence: 3,
+      sessionId: sharedSession,
+    });
+    await writer.append({ identity, event: second });
+    await reader.append({ identity, event: third });
+    expect((await subscription.next()).value).toEqual(second);
+    expect((await subscription.next()).value).toEqual(third);
+    const waiting = subscription.next();
+    signal.abort();
+    expect((await waiting).done).toBe(true);
+  });
 });

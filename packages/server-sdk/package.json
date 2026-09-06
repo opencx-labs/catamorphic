@@ -6,6 +6,11 @@
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
   "exports": {
+    "./web-push": {
+      "bun": "./src/web-push.ts",
+      "import": "./dist/web-push.js",
+      "types": "./dist/web-push.d.ts"
+    },
     ".": {
       "bun": "./src/index.ts",
       "import": "./dist/index.js",
@@ -28,10 +33,12 @@
     "croner": "^10.0.1",
     "kysely": "^0.29.3",
     "pg": "^8.22.0",
+    "web-push": "^3.6.7",
     "zod": "^4.4.3"
   },
   "devDependencies": {
     "@types/node": "^26.1.1",
-    "@types/pg": "^8.20.0"
+    "@types/pg": "^8.20.0",
+    "@types/web-push": "^3.6.4"
   }
 }

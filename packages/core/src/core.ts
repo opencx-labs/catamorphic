@@ -825,6 +825,7 @@ export class CatamorphicCore {
           if (
             event.status === "completed" ||
             event.status === "awaiting_input" ||
+            (event.status === "failed" && !event.interrupted) ||
             event.notification
           ) {
             await this.notifications
@@ -832,27 +833,30 @@ export class CatamorphicCore {
                 identity: event.identity,
                 projectId: event.projectId,
                 sessionId: event.sessionId,
-                kind:
-                  event.status === "awaiting_input"
+                kind: event.retrying
+                  ? "agent_reconnecting"
+                  : event.status === "awaiting_input"
                     ? "agent_question"
                     : event.status === "failed"
                       ? "agent_failed"
                       : "agent_completed",
-                title:
-                  event.status === "awaiting_input"
+                title: event.retrying
+                  ? "An agent lost its connection"
+                  : event.status === "awaiting_input"
                     ? "An agent needs your input"
                     : event.status === "failed"
                       ? "An agent run failed"
                       : (event.notification?.title ?? "An agent finished"),
-                body:
-                  event.status === "awaiting_input"
+                body: event.retrying
+                  ? "Retrying automatically. Open the chat to check progress."
+                  : event.status === "awaiting_input"
                     ? "Open the chat to answer the question."
                     : event.status === "failed"
                       ? "Open the chat to see what went wrong."
                       : (event.notification?.body ??
                         "Open the chat to see the result."),
                 route: `/?project=${encodeURIComponent(event.projectId)}&session=${encodeURIComponent(event.sessionId)}`,
-                collapseKey: `agent-turn:${event.messageId}`,
+                collapseKey: `agent-turn:${event.turnId ?? event.messageId}:${event.retrying ? "reconnecting" : event.status}`,
               })
               .catch(() => {
                 // Notification delivery is additive. A transient failure must

@@ -27,11 +27,12 @@ export function useAgentSession(
   const { apiClient } = useCatamorphic();
   return useQuery<AgentSessionDetail, CatamorphicError>({
     queryKey: ["cat", "project", projectId, "agent", "session", sessionId],
-    queryFn: () =>
+    queryFn: ({ signal }) =>
       runWithCatamorphicError(async () => {
         const result = await apiClient.GET(
           "/api/projects/{projectId}/agent/sessions/{sessionId}",
           {
+            signal: AbortSignal.any([signal, AbortSignal.timeout(15_000)]),
             params: {
               path: {
                 projectId: projectId as string,
@@ -44,6 +45,7 @@ export function useAgentSession(
       }),
     enabled: Boolean(projectId && sessionId),
     refetchInterval: (query) => {
+      if (query.state.error) return 3_000;
       const interval = options.refetchInterval;
       return typeof interval === "function"
         ? interval(query.state.data)

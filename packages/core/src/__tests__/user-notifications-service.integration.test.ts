@@ -121,4 +121,71 @@ describe("durable user notifications", () => {
       }),
     ).toBe(0);
   });
+
+  it("recovers missed failure alerts, deduplicates reconnects, and ignores intentional stops", async () => {
+    await db
+      .updateTable("agent_sessions")
+      .set({
+        authority_host_id: "server-1",
+        attention_revision: 1,
+        attention_seen_revision: 0,
+      })
+      .where("id", "=", sessionId)
+      .execute();
+    const request = await db
+      .insertInto("agent_messages")
+      .values({ session_id: sessionId, role: "user", content: "Work" })
+      .returning("id")
+      .executeTakeFirstOrThrow();
+    const response = await db
+      .insertInto("agent_messages")
+      .values({
+        session_id: sessionId,
+        role: "assistant",
+        content: "Disconnected",
+        metadata: { status: "failed" },
+      })
+      .returning("id")
+      .executeTakeFirstOrThrow();
+    const turn = await db
+      .insertInto("agent_turns")
+      .values({
+        session_id: sessionId,
+        message_id: request.id,
+        result_message_id: response.id,
+        status: "queued",
+        delivery_mode: "next_turn",
+      })
+      .returning("id")
+      .executeTakeFirstOrThrow();
+    await notifications.publishFailedAgentTurns({
+      authorityHostId: "other-host",
+    });
+    expect(await notifications.drain("worker")).toBe(0);
+    await notifications.publishFailedAgentTurns({
+      authorityHostId: "server-1",
+    });
+    await notifications.publishFailedAgentTurns({
+      authorityHostId: "server-1",
+    });
+    expect(await notifications.drain("worker")).toBe(1);
+    expect(JSON.parse(sent[0] ?? "{}")).toMatchObject({
+      kind: "agent_reconnecting",
+      route: `/?project=${projectId}&session=${sessionId}`,
+    });
+    await db
+      .updateTable("agent_messages")
+      .set({ metadata: { status: "failed", interrupted: true } })
+      .where("id", "=", response.id)
+      .execute();
+    await db
+      .updateTable("agent_turns")
+      .set({ status: "failed" })
+      .where("id", "=", turn.id)
+      .execute();
+    await notifications.publishFailedAgentTurns({
+      authorityHostId: "server-1",
+    });
+    expect(await notifications.drain("worker")).toBe(0);
+  });
 });

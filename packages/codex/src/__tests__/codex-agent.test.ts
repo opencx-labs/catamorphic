@@ -155,6 +155,13 @@ describe("CodexAgent", () => {
     );
     const events = await collect(new CodexAgent(), "watch the build");
 
+    expect(events[0]).toEqual({
+      type: "command",
+      content: "npm run watch",
+      status: "started",
+      toolUseId: "item_2",
+    });
+
     expect(events).toContainEqual({
       type: "background",
       status: "detected",
@@ -445,6 +452,7 @@ function dummyUsage() {
   return {
     input_tokens: 0,
     cached_input_tokens: 0,
+    cache_write_input_tokens: 0,
     output_tokens: 0,
     reasoning_output_tokens: 0,
   };

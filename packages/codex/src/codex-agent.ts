@@ -513,6 +513,28 @@ function turnUsageFromCodex(
 
 function mapEvent(event: ThreadEvent, model?: string): AgentEvent[] {
   switch (event.type) {
+    case "item.started":
+      if (event.item.type === "command_execution")
+        return [
+          {
+            type: "command",
+            content: event.item.command,
+            status: "started",
+            toolUseId: event.item.id,
+          },
+        ];
+      if (event.item.type === "mcp_tool_call")
+        return [
+          {
+            type: "tool_call",
+            toolName: `${event.item.server}/${event.item.tool}`,
+            toolUseId: event.item.id,
+            toolInput: event.item.arguments,
+            content: event.item.tool,
+            status: "started",
+          },
+        ];
+      return [];
     case "item.completed":
       return mapItemEvent(event.item);
     case "turn.completed": {
@@ -537,6 +559,8 @@ function mapItemEvent(item: ThreadItem): AgentEvent[] {
         {
           type: "command",
           content: `${item.command}\n${item.aggregated_output}`,
+          toolUseId: item.id,
+          status: "ended",
         },
       ];
       // A command that succeeded by daemonizing something left a process
@@ -577,6 +601,7 @@ function mapItemEvent(item: ThreadItem): AgentEvent[] {
           toolName: `${item.server}/${item.tool}`,
           toolInput: item.arguments,
           toolUseId: item.id,
+          status: "ended",
           ...(structured !== undefined || text
             ? { toolResult: structured ?? text }
             : {}),

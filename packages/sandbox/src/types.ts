@@ -284,8 +284,8 @@ export interface AgentQuestion {
 
 /**
  * Classified failure category on "error" events. Drives recovery UX:
- * `auth` offers a re-connect path, `rate_limit`/`unavailable` auto-retry
- * with backoff, `model_incompat` (e.g. reasoning blocks signed by another
+ * `auth` offers a re-connect path, `rate_limit`/`unavailable` explain a
+ * provider outage (retry requires a separate safety signal), `model_incompat` (e.g. reasoning blocks signed by another
  * model after a mid-conversation switch) retries with sanitized history.
  * Unclassified errors just offer a manual retry.
  */
@@ -366,6 +366,8 @@ export interface AgentEvent {
   providerSessionId?: string;
   /** Set on classified "error" events (see {@link AgentErrorKind}). */
   errorKind?: AgentErrorKind;
+  /** True only when the provider confirms rejection before any work started. */
+  retrySafe?: boolean;
   /**
    * On "subagent" events: the harness's id for the delegated agent (Claude
    * Code uses the Task tool-use id). Also set on nested activity events

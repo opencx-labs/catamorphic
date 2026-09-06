@@ -4,7 +4,9 @@ export interface CheckCommand {
   args: readonly string[];
 }
 
-export function checkCommands(): readonly CheckCommand[] {
+export function checkCommands(input: {
+  generatedTypesBaseline: string;
+}): readonly CheckCommand[] {
   return [
     { label: "lint", command: "bun", args: ["run", "lint"] },
     {
@@ -31,7 +33,14 @@ export function checkCommands(): readonly CheckCommand[] {
     {
       label: "generated-type diff check",
       command: "git",
-      args: ["diff", "--exit-code", "--", "packages/db/src/generated/db.ts"],
+      args: [
+        "diff",
+        "--no-index",
+        "--exit-code",
+        "--",
+        input.generatedTypesBaseline,
+        "packages/db/src/generated/db.ts",
+      ],
     },
     {
       label: "root orchestration tests",

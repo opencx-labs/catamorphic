@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { rm } from "node:fs/promises";
+import { copyFile, rm } from "node:fs/promises";
 import path from "node:path";
 import { checkCommands } from "./check-plan.js";
 import { writeCliError } from "./cli-error.js";
@@ -30,6 +30,15 @@ async function main(): Promise<void> {
   let succeeded = false;
   let exitCode = 1;
   try {
+    const generatedTypesBaseline = path.join(
+      resources.rootPath,
+      "db-types-before.ts",
+    );
+    await copyFile(
+      path.join(repositoryRoot, "packages/db/src/generated/db.ts"),
+      generatedTypesBaseline,
+    );
+    const phases = checkCommands({ generatedTypesBaseline });
     await withDisposablePostgres({
       driver: dockerTestPostgresDriver(),
       pid: process.pid,
@@ -39,10 +48,8 @@ async function main(): Promise<void> {
           source: deterministicTestEnvironment(runtime.env, databaseUrl),
           resources,
         });
-        for (const [index, phase] of checkCommands().entries()) {
-          console.log(
-            `\n[check ${index + 1}/${checkCommands().length}] ${phase.label}`,
-          );
+        for (const [index, phase] of phases.entries()) {
+          console.log(`\n[check ${index + 1}/${phases.length}] ${phase.label}`);
           const result = await runLoggedProcess({
             command: phase.command,
             args: phase.args,

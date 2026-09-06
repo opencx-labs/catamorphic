@@ -17,6 +17,7 @@ import {
   defineStaticEnvironments,
   FsBundleStore,
 } from "@catamorphic/server-sdk";
+import { createPushTransport } from "@catamorphic/server-sdk/web-push";
 import { PGlite } from "@electric-sql/pglite";
 import { pgcrypto } from "@electric-sql/pglite/contrib/pgcrypto";
 import cors from "@fastify/cors";
@@ -419,6 +420,7 @@ export async function startEmbeddedServer(
       checkpoint: (input) => sessionCheckouts.checkpoint(input),
     },
     appBundleStore: new FsBundleStore(paths.appBundles),
+    pushNotifications: createPushTransport({ dataDir: paths.root }),
     // Local projects: the folder IS the store; remote projects sync their
     // store/ explicitly (Ship). No per-turn pull/ship into the local store.
     storeSyncAroundTurns: false,
@@ -1029,6 +1031,29 @@ export async function startEmbeddedServer(
   const startWorker = () =>
     catamorphic.startExecutionWorker({ name: "desktop", concurrency: 1 });
   let worker: ReturnType<typeof startWorker> | null = startWorker();
+  catamorphic.startAgentWorker({
+    resolveIdentity: async ({ tenantId, externalUserId }) =>
+      tenantId === DESKTOP_TENANT_ID && externalUserId === DESKTOP_USER_ID
+        ? { tenantId, externalUserId }
+        : null,
+  });
+  let deliveringNotifications = false;
+  const notificationTimer = setInterval(() => {
+    if (deliveringNotifications) return;
+    deliveringNotifications = true;
+    void catamorphic.core.notifications
+      .publishFailedAgentTurns({ authorityHostId: hostId })
+      .then(() =>
+        catamorphic.core.notifications.drain(`desktop-notifications:${hostId}`),
+      )
+      .catch((error) =>
+        console.warn("[catamorphic] Notification delivery failed", error),
+      )
+      .finally(() => {
+        deliveringNotifications = false;
+      });
+  }, 5_000);
+  notificationTimer.unref();
   const projectEventWorker = startProjectEventMonitorWorker({
     monitors: catamorphic.core.projectEventMonitors,
     providers: catamorphic.core.projectEventSources,
@@ -1108,6 +1133,7 @@ export async function startEmbeddedServer(
   const shutdown = () => {
     shutdownDone ??= (async () => {
       clearInterval(remoteSyncTimer);
+      clearInterval(notificationTimer);
       clearInterval(sessionMailboxTimer);
       clearInterval(sessionMirrorTimer);
       clearInterval(scheduleTimer);

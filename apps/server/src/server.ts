@@ -20,6 +20,7 @@ import {
   FsBundleStore,
   schedule,
 } from "@catamorphic/server-sdk";
+import { createPushTransport } from "@catamorphic/server-sdk/web-push";
 import { PGlite } from "@electric-sql/pglite";
 import { pgcrypto } from "@electric-sql/pglite/contrib/pgcrypto";
 import Fastify, { type FastifyInstance } from "fastify";
@@ -36,7 +37,6 @@ import {
   type StockAuth,
 } from "./auth/stock-auth.js";
 import { EncryptedFileCredentialVault } from "./credential-vault.js";
-import { createPushTransport } from "./push-notifications.js";
 import {
   loadStockOperatorSecret,
   verifyStockOperatorSecret,
@@ -212,6 +212,7 @@ export async function buildStockServer(
     concurrency: workerConcurrency,
   });
   const core = catamorphic.core;
+  catamorphic.startAgentWorker();
   const rootIdentity: Identity = {
     tenantId: SERVER_TENANT_ID,
     externalUserId: SETUP_AGENT_USER,
@@ -219,7 +220,10 @@ export async function buildStockServer(
   const notificationWorkerId = `stock-notifications:${hostId}`;
   const notificationTimer = setInterval(() => {
     void core.notifications
-      .publishPausedSessions({ authorityHostId: hostId })
+      .publishFailedAgentTurns({ authorityHostId: hostId })
+      .then(() =>
+        core.notifications.publishPausedSessions({ authorityHostId: hostId }),
+      )
       .then(() => core.notifications.drain(notificationWorkerId))
       .catch((error) => {
         log(

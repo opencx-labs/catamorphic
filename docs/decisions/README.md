@@ -106,3 +106,5 @@ Settled design decisions live here as short Architecture Decision Records. They 
 | [0091](0091-on-demand-desktop-harness-components.md) | Desktop coding harnesses use verified on-demand components | Accepted |
 | [0092](0092-project-owned-capability-experiences.md) | Project-owned capability experiences | Accepted |
 | [0093](0093-session-model-overrides-and-desktop-toolchain.md) | Session model overrides and the desktop toolchain | Accepted |
+| [0094](0094-durable-agent-reconnects.md) | Durable agent reconnects and unexpected-stop visibility | Accepted |
+| [0095](0095-authoritative-agent-execution.md) | Authoritative agent execution and independent connections | Accepted |

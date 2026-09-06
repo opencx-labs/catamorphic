@@ -198,6 +198,8 @@ Every service call and sandbox operation is instrumented with `@opentelemetry/ap
 
 - `catamorphic.migrate()` - apply pending schema-scoped migrations.
 - `catamorphic.startExecutionWorker(options)` - explicitly start run processing when the host is ready. The returned handle exposes `done` and `stop()`; no worker starts implicitly.
+- `catamorphic.startAgentWorker({ resolveIdentity? })` - recover queued agent turns and persisted safe retries on this authoritative host. The default resolves current project memberships. Inject your host's identity resolver when using external authorization. Returns a `stop()` handle; `catamorphic.close()` also stops it. This does not yet reconnect an ambiguous native provider attempt (ADR 0067).
+- `createPushTransport({ dataDir, subject? })` from `@catamorphic/server-sdk/web-push` - optional host-owned Web Push transport with persistent, owner-only VAPID keys. Pass it as `pushNotifications`, and periodically call `core.notifications.publishFailedAgentTurns({ authorityHostId })` followed by `core.notifications.drain(workerId)`. Mobile push requires user permission and a supported secure installation.
 - `catamorphic.redriveExecutionJob({ tenantId, jobId, availableAt? })` - explicitly redrive a failed run job.
 - `catamorphic.close()` - stop workers started through this SDK instance and release resources catamorphic created (the pool, when booted from a connection string). Host-owned pools/Kysely instances are never touched.
 

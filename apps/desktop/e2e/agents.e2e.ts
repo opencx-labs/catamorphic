@@ -24,8 +24,13 @@ const helpers = `
   const $$ = (selector) => [...document.querySelectorAll(selector)];
   const byText = (selector, text) =>
     $$(selector).find((el) => el.textContent.trim().includes(text));
-  const visibleDock = () =>
-    $$('section[aria-label]').find((el) => !el.inert && el.querySelector('[data-composer-input]'));
+  const visibleDock = () => {
+    const docks = $$('section[data-chat-local-id]').filter((el) =>
+      !el.closest('[inert]') && el.getBoundingClientRect().width > 0 &&
+      el.querySelector('[data-composer-input]'));
+    return docks.find((el) => el.dataset.floatingChat === 'true') ??
+      docks.find((el) => el.contains(document.activeElement)) ?? docks[0];
+  };
   ${setReactValueJs}
   const pressKey = (key, mods = {}) =>
     window.dispatchEvent(new KeyboardEvent('keydown',
@@ -1158,7 +1163,7 @@ describe("agents and profiles", () => {
       return true;
     `);
     await runWait(
-      `return $$('[role="log"] article')
+      `return [...visibleDock().querySelectorAll('[role="log"] article')]
         .some((el) => el.textContent.includes('Working on it, give me a moment.'));`,
       { timeoutMs: 30_000, label: "first host agent running" },
     );
@@ -1232,7 +1237,7 @@ describe("agents and profiles", () => {
       return true;
     `);
     await runWait(
-      `return $$('[role="log"] article')
+      `return [...visibleDock().querySelectorAll('[role="log"] article')]
         .some((el) => el.textContent.includes('Working on it, give me a moment.'));`,
       { timeoutMs: 30_000, label: "incognito agent running" },
     );

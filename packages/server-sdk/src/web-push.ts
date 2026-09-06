@@ -21,6 +21,7 @@ export function createPushTransport(args: {
       try {
         await webPush.sendNotification(subscription, payload, {
           TTL: 300,
+          timeout: 10_000,
           vapidDetails: {
             subject,
             publicKey: keys.publicKey,
@@ -53,6 +54,7 @@ function loadOrCreateKeys(file: string): PersistedVapidKeys {
     ) {
       return { publicKey: parsed.publicKey, privateKey: parsed.privateKey };
     }
+    throw new Error("Stored Web Push signing keys are invalid");
   } catch (error) {
     if (!isMissingFile(error)) throw error;
   }

@@ -11,11 +11,24 @@ const PROJECT_ID = "00000000-0000-4000-8000-000000000001";
 const OTHER_PROJECT_ID = "00000000-0000-4000-8000-000000000002";
 const SESSION_ID = "00000000-0000-4000-8000-000000000003";
 
+const execution = {
+  turnId: "turn-1",
+  status: "running",
+  phase: "working",
+  activity: "Running tests",
+  activityAt: new Date().toISOString(),
+  startedAt: new Date().toISOString(),
+  retryAt: null,
+  attempt: 1,
+  executorHealthy: true,
+};
+
 const session = {
   id: SESSION_ID,
   projectId: PROJECT_ID,
   externalUserId: "test-user",
   provider: "ai-sdk",
+  execution: null,
   providerSessionId: "provider-session",
   sandboxId: null,
   title: null,
@@ -26,6 +39,121 @@ const session = {
 };
 
 describe("useAgentChat", () => {
+  it("retries a lost send acknowledgement with the same delivery key", async () => {
+    const keys: string[] = [];
+    server.use(
+      http.get(
+        apiUrl(`/api/projects/${PROJECT_ID}/agent/sessions/${SESSION_ID}`),
+        () => HttpResponse.json({ ...session, messages: [], pendingTurns: [] }),
+      ),
+      http.post(
+        apiUrl(
+          `/api/projects/${PROJECT_ID}/agent/sessions/${SESSION_ID}/messages`,
+        ),
+        async ({ request }) => {
+          const body = (await request.json()) as { idempotencyKey: string };
+          keys.push(body.idempotencyKey);
+          if (keys.length === 1) return HttpResponse.error();
+          return HttpResponse.json(
+            {
+              messageId: "accepted-message",
+              turnId: "accepted-turn",
+              mode: "next_turn",
+              created: false,
+            },
+            { status: 202 },
+          );
+        },
+      ),
+    );
+    const { result } = renderHookWithProviders(() =>
+      useAgentChat(PROJECT_ID, { sessionId: SESSION_ID }),
+    );
+    await act(() => result.current.send("Build this"));
+    expect(keys).toHaveLength(2);
+    expect(keys[0]).toBeTruthy();
+    expect(keys[0]).toBe(keys[1]);
+    expect(result.current.isWorking).toBe(false);
+  });
+
+  it("does not infer execution from a stale Thinking placeholder", async () => {
+    server.use(
+      http.get(
+        apiUrl(`/api/projects/${PROJECT_ID}/agent/sessions/${SESSION_ID}`),
+        () =>
+          HttpResponse.json({
+            ...session,
+            execution: { ...execution, status: "completed" },
+            pendingTurns: [],
+            messages: [
+              {
+                id: "stale-placeholder",
+                role: "assistant",
+                content: "Thinking...",
+                metadata: { status: "in_progress" },
+              },
+            ],
+          }),
+      ),
+    );
+    const { result } = renderHookWithProviders(() =>
+      useAgentChat(PROJECT_ID, { sessionId: SESSION_ID }),
+    );
+    await waitFor(() => expect(result.current.session).not.toBeNull());
+    expect(result.current.isWorking).toBe(false);
+    expect(result.current.activity).toBeUndefined();
+  });
+  it("keeps the transcript and exposes lost connectivity until the host answers again", async () => {
+    let offline = false;
+    server.use(
+      http.get(
+        apiUrl(`/api/projects/${PROJECT_ID}/agent/sessions/${SESSION_ID}`),
+        () =>
+          offline
+            ? HttpResponse.error()
+            : HttpResponse.json({ ...session, messages: [], pendingTurns: [] }),
+      ),
+    );
+    const { result, queryClient } = renderHookWithProviders(() =>
+      useAgentChat(PROJECT_ID, { sessionId: SESSION_ID }),
+    );
+    await waitFor(() => expect(result.current.session?.id).toBe(SESSION_ID));
+    offline = true;
+    await act(() => queryClient.invalidateQueries());
+    await waitFor(() => expect(result.current.connectionLost).toBe(true));
+    expect(result.current.session?.id).toBe(SESSION_ID);
+    offline = false;
+    await act(() => queryClient.invalidateQueries());
+    await waitFor(() => expect(result.current.connectionLost).toBe(false));
+  });
+
+  it("surfaces a rejected retry instead of silently swallowing it", async () => {
+    server.use(
+      http.get(
+        apiUrl(`/api/projects/${PROJECT_ID}/agent/sessions/${SESSION_ID}`),
+        () => HttpResponse.json({ ...session, messages: [], pendingTurns: [] }),
+      ),
+      http.post(
+        apiUrl(
+          `/api/projects/${PROJECT_ID}/agent/sessions/${SESSION_ID}/retry`,
+        ),
+        () =>
+          HttpResponse.json(
+            { message: "This host no longer owns the session" },
+            { status: 409 },
+          ),
+      ),
+    );
+    const { result } = renderHookWithProviders(() =>
+      useAgentChat(PROJECT_ID, { sessionId: SESSION_ID }),
+    );
+    await waitFor(() => expect(result.current.session?.id).toBe(SESSION_ID));
+    await act(() => result.current.retry());
+    expect(result.current.error?.message).toBe(
+      "This host no longer owns the session",
+    );
+    expect(result.current.isWorking).toBe(false);
+  });
   it("interrupts a running subsession when the user takes it over", async () => {
     let deliveryMode: string | undefined;
     server.use(
@@ -35,6 +163,7 @@ describe("useAgentChat", () => {
           HttpResponse.json({
             ...session,
             parentSessionId: "00000000-0000-4000-8000-000000000099",
+            execution,
             messages: [],
             pendingTurns: [
               {
@@ -646,6 +775,10 @@ describe("useAgentChat", () => {
             ...session,
             title,
             running,
+            execution: {
+              ...execution,
+              status: running ? "running" : "completed",
+            },
             messages: [
               {
                 id: "00000000-0000-4000-8000-00000000000a",

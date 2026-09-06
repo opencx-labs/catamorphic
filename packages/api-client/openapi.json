@@ -15462,6 +15462,68 @@
                       "format": "date-time",
                       "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z))$"
                     },
+                    "execution": {
+                      "nullable": true,
+                      "type": "object",
+                      "properties": {
+                        "turnId": {
+                          "type": "string"
+                        },
+                        "status": {
+                          "type": "string",
+                          "enum": [
+                            "queued",
+                            "held",
+                            "running",
+                            "completed",
+                            "failed",
+                            "cancelled"
+                          ]
+                        },
+                        "phase": {
+                          "type": "string",
+                          "enum": ["preparing", "working", "waiting", "saving"]
+                        },
+                        "activity": {
+                          "nullable": true,
+                          "type": "string"
+                        },
+                        "activityAt": {
+                          "nullable": true,
+                          "type": "string"
+                        },
+                        "startedAt": {
+                          "nullable": true,
+                          "type": "string"
+                        },
+                        "retryAt": {
+                          "nullable": true,
+                          "type": "string"
+                        },
+                        "attempt": {
+                          "type": "number"
+                        },
+                        "executorHealthy": {
+                          "type": "boolean"
+                        },
+                        "cancellationRequested": {
+                          "type": "boolean"
+                        }
+                      },
+                      "required": [
+                        "turnId",
+                        "status",
+                        "phase",
+                        "activity",
+                        "activityAt",
+                        "startedAt",
+                        "retryAt",
+                        "attempt",
+                        "executorHealthy",
+                        "cancellationRequested"
+                      ],
+                      "additionalProperties": false
+                    },
                     "messages": {
                       "type": "array",
                       "items": {
@@ -15703,6 +15765,7 @@
                     "baseCommitSha",
                     "createdAt",
                     "updatedAt",
+                    "execution",
                     "messages",
                     "pendingTurns"
                   ],
@@ -18247,6 +18310,11 @@
                     "type": "string",
                     "maxLength": 200000
                   },
+                  "idempotencyKey": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 200
+                  },
                   "attachments": {
                     "maxItems": 32,
                     "type": "array",
@@ -18841,159 +18909,33 @@
           }
         ],
         "responses": {
-          "201": {
+          "202": {
             "description": "Default Response",
             "content": {
               "application/json": {
                 "schema": {
                   "type": "object",
                   "properties": {
-                    "id": {
+                    "messageId": {
                       "type": "string",
                       "format": "uuid",
                       "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
                     },
-                    "sessionId": {
+                    "turnId": {
+                      "nullable": true,
                       "type": "string",
                       "format": "uuid",
                       "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
                     },
-                    "role": {
-                      "type": "string",
-                      "enum": ["user", "assistant", "system"]
-                    },
-                    "content": {
-                      "type": "string"
-                    },
-                    "commitSha": {
-                      "nullable": true,
-                      "type": "string",
-                      "minLength": 40,
-                      "maxLength": 40
-                    },
-                    "metadata": {
-                      "nullable": true,
-                      "type": "object",
-                      "additionalProperties": {}
-                    },
-                    "author": {
-                      "oneOf": [
-                        {
-                          "type": "object",
-                          "properties": {
-                            "kind": {
-                              "type": "string",
-                              "enum": ["user"]
-                            },
-                            "externalUserId": {
-                              "type": "string"
-                            }
-                          },
-                          "required": ["kind", "externalUserId"],
-                          "additionalProperties": false
-                        },
-                        {
-                          "type": "object",
-                          "properties": {
-                            "kind": {
-                              "type": "string",
-                              "enum": ["agent"]
-                            },
-                            "sessionId": {
-                              "type": "string",
-                              "format": "uuid",
-                              "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
-                            },
-                            "agentId": {
-                              "nullable": true,
-                              "type": "string"
-                            }
-                          },
-                          "required": ["kind", "sessionId", "agentId"],
-                          "additionalProperties": false
-                        },
-                        {
-                          "type": "object",
-                          "properties": {
-                            "kind": {
-                              "type": "string",
-                              "enum": ["workflow"]
-                            },
-                            "runId": {
-                              "type": "string",
-                              "format": "uuid",
-                              "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
-                            },
-                            "workflowName": {
-                              "type": "string"
-                            }
-                          },
-                          "required": ["kind", "runId", "workflowName"],
-                          "additionalProperties": false
-                        },
-                        {
-                          "type": "object",
-                          "properties": {
-                            "kind": {
-                              "type": "string",
-                              "enum": ["watcher"]
-                            },
-                            "watcherId": {
-                              "type": "string",
-                              "format": "uuid",
-                              "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
-                            },
-                            "runId": {
-                              "type": "string",
-                              "format": "uuid",
-                              "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
-                            }
-                          },
-                          "required": ["kind", "watcherId"],
-                          "additionalProperties": false
-                        },
-                        {
-                          "type": "object",
-                          "properties": {
-                            "kind": {
-                              "type": "string",
-                              "enum": ["system"]
-                            },
-                            "code": {
-                              "type": "string"
-                            }
-                          },
-                          "required": ["kind", "code"],
-                          "additionalProperties": false
-                        }
-                      ]
-                    },
-                    "deliveryMode": {
+                    "mode": {
                       "type": "string",
                       "enum": ["message_only", "next_turn", "interrupt"]
                     },
-                    "idempotencyKey": {
-                      "nullable": true,
-                      "type": "string"
-                    },
-                    "createdAt": {
-                      "type": "string",
-                      "format": "date-time",
-                      "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z))$"
+                    "created": {
+                      "type": "boolean"
                     }
                   },
-                  "required": [
-                    "id",
-                    "sessionId",
-                    "role",
-                    "content",
-                    "commitSha",
-                    "metadata",
-                    "author",
-                    "deliveryMode",
-                    "idempotencyKey",
-                    "createdAt"
-                  ],
+                  "required": ["messageId", "turnId", "mode", "created"],
                   "additionalProperties": false
                 }
               }

@@ -22,7 +22,6 @@ import { z } from "zod";
 import type { RouteContext } from "../app.js";
 import { resolveIdentity } from "../http-identity.js";
 import {
-  AgentMessageSchema,
   AgentSessionArchiveConfirmationSchema,
   AgentSessionArchiveResultSchema,
   AgentSessionDetailSchema,
@@ -787,6 +786,9 @@ export function registerAgentRoutes(app: FastifyInstance, ctx: RouteContext) {
           {
             attachments: request.body.attachments,
             deliveryMode: request.body.deliveryMode,
+            idempotencyKey: request.body.idempotencyKey
+              ? `user:${identity.externalUserId}:${request.body.idempotencyKey}`
+              : undefined,
           },
         );
         return reply.status(202).send(receipt);
@@ -910,7 +912,7 @@ export function registerAgentRoutes(app: FastifyInstance, ctx: RouteContext) {
     schema: {
       params: AgentSessionIdParamsSchema,
       response: {
-        201: AgentMessageSchema,
+        202: SessionDeliveryReceiptSchema,
         404: ErrorSchema,
         409: ErrorSchema,
         503: ErrorSchema,
@@ -922,12 +924,12 @@ export function registerAgentRoutes(app: FastifyInstance, ctx: RouteContext) {
         return reply.status(503).send({ error: "Coding agent not configured" });
       const identity = resolveIdentity(request);
       try {
-        const message = await agentSessions.retry(
+        const receipt = await agentSessions.retry(
           identity,
           request.params.projectId,
           request.params.sessionId,
         );
-        return reply.status(201).send(message);
+        return reply.status(202).send(receipt);
       } catch (err) {
         if (
           err instanceof ProjectNotFoundError ||

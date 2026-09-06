@@ -227,6 +227,16 @@ that friction is intentional.
 
 ## Design log
 
+### 2026-09-06: Connection loss is not agent activity
+
+Keep the transcript visible when the host cannot be reached, but replace the
+live activity claim with explicit reconnect feedback. An interrupted provider
+turn keeps its partial output and offers a persisted retry. Unexpected failures
+request attention and a deduplicated mobile push; intentional Stop does not.
+Failed subsessions become visible instead of remaining hidden behind a parent.
+Mobile offers direct parent/child navigation using the same ordinary sessions.
+See ADR 0094.
+
 Big product/design decisions and their reasoning, newest last. Add an entry
 whenever a decision shapes how a surface works or feels — this file is the
 memory of *why* the app is the way it is.

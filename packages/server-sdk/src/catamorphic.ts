@@ -287,6 +287,7 @@ function resolveStorage(config: StorageConfig): ProjectManager {
  */
 export class Catamorphic {
   private readonly workerHandles = new Set<ExecutionWorkerHandle>();
+  private readonly agentWorkerHandles = new Set<{ stop(): Promise<void> }>();
   readonly core: CatamorphicCore;
 
   private readonly schema: string;
@@ -384,6 +385,29 @@ export class Catamorphic {
     return handle;
   }
 
+  /** Recover queued agent work with freshly resolved host identity. */
+  startAgentWorker(
+    options: {
+      resolveIdentity?: (args: {
+        tenantId: string;
+        projectId: string;
+        externalUserId: string;
+      }) => Promise<Identity | null>;
+      pollIntervalMs?: number;
+    } = {},
+  ): { stop(): Promise<void> } {
+    if (!this.core.agentSessions)
+      throw new Error("Coding agent required to start an agent worker");
+    const handle = this.core.agentSessions.startWorker({
+      ...options,
+      resolveIdentity:
+        options.resolveIdentity ??
+        ((args) => this.core.memberships.identityFor(args)),
+    });
+    this.agentWorkerHandles.add(handle);
+    return handle;
+  }
+
   redriveExecutionJob(args: {
     tenantId: string;
     jobId: string;
@@ -457,6 +481,9 @@ export class Catamorphic {
    * are left untouched.
    */
   async close(): Promise<void> {
+    await Promise.allSettled(
+      [...this.agentWorkerHandles].map((handle) => handle.stop()),
+    );
     await Promise.allSettled(
       [...this.workerHandles].map((handle) => handle.stop()),
     );

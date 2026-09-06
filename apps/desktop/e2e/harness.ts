@@ -56,6 +56,8 @@ export interface AppHandle {
     opts?: { timeoutMs?: number; label?: string },
   ) => Promise<T>;
   screenshot: (filePath: string) => Promise<void>;
+  /** Simulate failed requests inside this isolated renderer only. */
+  blockRequests: (patterns: string[]) => Promise<void>;
   /**
    * Press a real key through CDP (Chromium performs its default editing —
    * a synthetic KeyboardEvent can't delete text in a contenteditable).
@@ -351,7 +353,11 @@ async function createClient(ws: WebSocket, opts: { page?: boolean } = {}) {
     await send("Input.dispatchKeyEvent", { type: "keyUp", ...params });
   };
 
-  return { eval: evaluate, waitFor, screenshot, press };
+  const blockRequests = async (patterns: string[]) => {
+    await send("Network.enable");
+    await send("Network.setBlockedURLs", { urls: patterns });
+  };
+  return { eval: evaluate, waitFor, screenshot, press, blockRequests };
 }
 
 export type KeyName = keyof typeof KEY_CODES;

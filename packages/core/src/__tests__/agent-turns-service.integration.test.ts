@@ -93,6 +93,63 @@ describe("agent turn persistence", () => {
     expect(row.delivery_mode).toBe("message_only");
   });
 
+  it("persists progress independently of heartbeats and fences an expired executor", async () => {
+    await turns.deliver({
+      sessionId: firstSessionId,
+      content: "Build",
+      author: watcherAuthor,
+      mode: "next_turn",
+    });
+    const turn = await turns.claimNext({ workerId: "remote-server" });
+    if (!turn?.leaseToken) throw new Error("Expected a lease");
+    const progress = {
+      turnId: turn.id,
+      leaseToken: turn.leaseToken,
+      phase: "working" as const,
+      activity: "Running tests",
+    };
+    expect(await turns.progress(progress)).toBe(true);
+    const before = await turns.execution({ sessionId: firstSessionId });
+    await turns.renew({ turnId: turn.id, leaseToken: turn.leaseToken });
+    const otherClient = new AgentTurnsService(db);
+    expect(await otherClient.execution({ sessionId: firstSessionId })).toEqual(
+      before,
+    );
+    expect(before).toMatchObject({
+      status: "running",
+      phase: "working",
+      activity: "Running tests",
+      executorHealthy: true,
+    });
+    await db
+      .updateTable("agent_turns")
+      .set({ lease_expires_at: new Date(0) })
+      .where("id", "=", turn.id)
+      .execute();
+    expect(await turns.progress({ ...progress, phase: "saving" })).toBe(false);
+    expect(
+      await turns.complete({
+        turnId: turn.id,
+        leaseToken: turn.leaseToken,
+        resultMessageId: turn.messageId,
+      }),
+    ).toBe(false);
+    expect(
+      await turns.fail({
+        turnId: turn.id,
+        leaseToken: turn.leaseToken,
+        error: "late failure",
+      }),
+    ).toBe(false);
+    expect(
+      await otherClient.execution({ sessionId: firstSessionId }),
+    ).toMatchObject({
+      status: "running",
+      phase: "working",
+      executorHealthy: false,
+    });
+  });
+
   it("deduplicates delivery atomically by session and idempotency key", async () => {
     const input = {
       sessionId: firstSessionId,
@@ -192,5 +249,114 @@ describe("agent turn persistence", () => {
     expect(
       await turns.listPendingMessages({ sessionId: firstSessionId }),
     ).toEqual([]);
+  });
+
+  it("renews only the current lease and persists retry deadlines across service restarts", async () => {
+    await turns.deliver({
+      sessionId: firstSessionId,
+      content: "Do the work",
+      author: watcherAuthor,
+      mode: "next_turn",
+    });
+    const turn = await turns.claimNext({ workerId: "first-process" });
+    if (!turn?.leaseToken) throw new Error("Missing lease");
+    expect(
+      await turns.renew({ turnId: turn.id, leaseToken: crypto.randomUUID() }),
+    ).toBe(false);
+    expect(
+      await turns.renew({ turnId: turn.id, leaseToken: turn.leaseToken }),
+    ).toBe(true);
+    const reply = await db
+      .insertInto("agent_messages")
+      .values({
+        session_id: firstSessionId,
+        role: "assistant",
+        content: "Connection lost",
+        metadata: { status: "failed" },
+      })
+      .returning("id")
+      .executeTakeFirstOrThrow();
+    const retryAt = new Date(Date.now() + 60_000);
+    expect(
+      await turns.settle({
+        turnId: turn.id,
+        leaseToken: turn.leaseToken,
+        resultMessageId: reply.id,
+        error: "Connection lost",
+        retryAt,
+        attempt: 1,
+      }),
+    ).toBe(true);
+    const restarted = new AgentTurnsService(db);
+    // Later work must not jump ahead of a delayed reconnect of this turn.
+    const later = await restarted.deliver({
+      sessionId: firstSessionId,
+      content: "Later work",
+      author: watcherAuthor,
+      mode: "next_turn",
+    });
+    expect(
+      await restarted.claimNext({ workerId: "second-process" }),
+    ).toBeNull();
+    expect(
+      await restarted.listPendingMessages({ sessionId: firstSessionId }),
+    ).toHaveLength(1);
+    if (!later.turnId) throw new Error("Missing later turn");
+    await restarted.cancelQueued({
+      sessionId: firstSessionId,
+      turnId: later.turnId,
+    });
+    expect(
+      await restarted.renew({ turnId: turn.id, leaseToken: turn.leaseToken }),
+    ).toBe(false);
+    await db
+      .updateTable("agent_turns")
+      .set({ available_at: new Date(0) })
+      .where("id", "=", turn.id)
+      .execute();
+    expect(
+      await restarted.claimNext({ workerId: "second-process" }),
+    ).toMatchObject({ id: turn.id, resultMessageId: reply.id, attempt: 2 });
+  });
+
+  it("cancels a pending reconnect without deleting the failed response", async () => {
+    await turns.deliver({
+      sessionId: firstSessionId,
+      content: "Do the work",
+      author: watcherAuthor,
+      mode: "next_turn",
+    });
+    const turn = await turns.claimNext({ workerId: "worker" });
+    if (!turn?.leaseToken) throw new Error("Missing lease");
+    const reply = await db
+      .insertInto("agent_messages")
+      .values({
+        session_id: firstSessionId,
+        role: "assistant",
+        content: "Connection lost",
+        metadata: { status: "failed" },
+      })
+      .returning("id")
+      .executeTakeFirstOrThrow();
+    await turns.settle({
+      turnId: turn.id,
+      leaseToken: turn.leaseToken,
+      resultMessageId: reply.id,
+      error: "Connection lost",
+      retryAt: new Date(Date.now() + 60_000),
+      attempt: 1,
+    });
+    await turns.cancelRetries({ sessionId: firstSessionId });
+    expect(await turns.listPending({ sessionId: firstSessionId })).toEqual([]);
+    expect(
+      await db
+        .selectFrom("agent_messages")
+        .selectAll()
+        .where("id", "=", reply.id)
+        .executeTakeFirstOrThrow(),
+    ).toMatchObject({
+      content: "Connection lost",
+      metadata: { status: "failed", interrupted: true },
+    });
   });
 });

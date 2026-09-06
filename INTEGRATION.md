@@ -109,6 +109,9 @@ await catamorphic.migrate();
 // Worker startup is explicit. Start it once when this host process should
 // process queued production runs.
 const executionWorker = catamorphic.startExecutionWorker({ concurrency: 4 });
+// When coding agents are configured, recover queued turns and retries too.
+// Defaults to current project memberships; inject resolveIdentity for host auth.
+const agentWorker = catamorphic.startAgentWorker();
 
 // Per request
 const scoped = catamorphic
@@ -690,6 +693,8 @@ retry, rate limit, batch, or child call settles inline) and `.start(input)`
 - Catamorphic uses strict schema scoping on its own DB access: connection strings get `search_path = "catamorphic"`, host-provided pools get Kysely's `WithSchemaPlugin`. Unqualified names cannot fall through to `public`.
 - Host-owned pools and Kysely instances are never destroyed by catamorphic; `catamorphic.close()` only closes what catamorphic created.
 - Stop handles returned by `catamorphic.startExecutionWorker(...)` during host shutdown. Constructing the SDK or Fastify plugin never starts workers implicitly.
+- Start `catamorphic.startAgentWorker({ resolveIdentity? })` after migrations when using coding agents. It restores due queue entries and persisted retries only for this host. Resolve current user authority through your auth model; the default uses Catamorphic memberships. `catamorphic.close()` stops both kinds of worker. Expired agent executions with uncertain outcomes require an explicit retry, not automatic side-effect replay (ADR 0094).
+- Client reconnection does not restart execution. Automatic turn retries require a provider-confirmed rejection before execution began. Reconnecting to the same native provider attempt after an ambiguous disconnect is not yet implemented; the long-lived runtime cutover in ADR 0067 remains separate from this durable queue and progress model.
 
 ## Execution Environments and credential connections
 

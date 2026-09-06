@@ -1415,6 +1415,11 @@ describe("subagents and background watchers", () => {
          m.text.includes('nothing alarming'));`,
       { timeoutMs: 30_000, label: "turn finished" },
     );
+    expect(
+      await run(
+        `return floatingDock()?.querySelector('[data-testid="surface-chip"][data-kind="subagent"]')?.textContent;`,
+      ),
+    ).toContain("Review the changes");
     await run(`
       floatingDock()
         .querySelector('[data-testid="surface-chip"][data-kind="subagent"] button')

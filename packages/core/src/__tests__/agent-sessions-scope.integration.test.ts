@@ -13,9 +13,10 @@ import type {
   TurnOptions,
 } from "@catamorphic/sandbox";
 import { sql } from "kysely";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import type { Identity } from "../identity.js";
 import { AgentSessionsService } from "../services/agent-sessions-service.js";
+import { AgentTurnsService } from "../services/agent-turns-service.js";
 import { AccessDeniedError } from "../services/artifact-scope.js";
 import type { CodingAgentRegistry } from "../services/coding-agent-registry.js";
 import { DbSandboxStore } from "../services/db-sandbox-store.js";
@@ -194,6 +195,68 @@ describeIf("scoped agent sessions (ADR 0055)", () => {
       await db.destroy();
     }
     await fs.rm(tmpDir, { recursive: true, force: true });
+  });
+
+  it("reads transcript and execution from one snapshot while another connection settles", async () => {
+    if (!db) throw new Error("unreachable");
+    const database = db;
+    const session = await sessions.create(root, projectId);
+    const receipt = await sessions.turns.deliver({
+      sessionId: session.id,
+      content: "Work",
+      author: { kind: "user", externalUserId: root.externalUserId },
+      mode: "next_turn",
+    });
+    await sessions.turns.claimNextForSession({
+      sessionId: session.id,
+      workerId: "snapshot-test",
+    });
+    const reply = await database
+      .insertInto("agent_messages")
+      .values({
+        session_id: session.id,
+        role: "assistant",
+        content: "Working",
+        author_kind: "agent",
+        author_payload: { kind: "agent", sessionId: session.id, agentId: null },
+        metadata: { status: "in_progress" },
+      })
+      .returning("id")
+      .executeTakeFirstOrThrow();
+    const execution = AgentTurnsService.prototype.execution;
+    const spy = vi
+      .spyOn(AgentTurnsService.prototype, "execution")
+      .mockImplementationOnce(async function (this: AgentTurnsService, input) {
+        await database.transaction().execute(async (trx) => {
+          await trx
+            .updateTable("agent_messages")
+            .set({ content: "Finished", metadata: { status: "completed" } })
+            .where("id", "=", reply.id)
+            .execute();
+          await trx
+            .updateTable("agent_turns")
+            .set({
+              status: "completed",
+              result_message_id: reply.id,
+              lease_token: null,
+              lease_owner: null,
+              lease_expires_at: null,
+            })
+            .where("id", "=", receipt.turnId)
+            .execute();
+        });
+        return execution.call(this, input);
+      });
+    try {
+      const snapshot = await sessions.get(root, projectId, session.id);
+      expect(snapshot.execution?.status).toBe("running");
+      expect(snapshot.messages.at(-1)?.content).toBe("Working");
+      const fresh = await sessions.get(root, projectId, session.id);
+      expect(fresh.execution?.status).toBe("completed");
+      expect(fresh.messages.at(-1)?.content).toBe("Finished");
+    } finally {
+      spy.mockRestore();
+    }
   });
 
   it("a viewer opens sessions only on the agents its scope names", async () => {

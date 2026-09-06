@@ -355,6 +355,8 @@ function activityChips(
   uiTools: Record<string, string>,
 ): ChatSurface[] {
   let lastSubagentEvents: TurnEvent[] | undefined;
+  let currentTurnEvents: TurnEvent[] = [];
+  let currentTurnHasSubagents = false;
   const watchers = new Map<string, { label: string; ended: boolean }>();
   // Apps the agent worked on (file edits under apps/<name>/); active while
   // the CURRENT turn touches them.
@@ -363,6 +365,10 @@ function activityChips(
   // same toolUseId merge in the result.
   const mcpApps = new Map<string, McpAppRef>();
   for (const message of messages) {
+    if (message.role === "user") {
+      currentTurnEvents = [];
+      currentTurnHasSubagents = false;
+    }
     if (message.role !== "assistant") continue;
     const metadata = message.metadata as {
       events?: TurnEvent[];
@@ -371,9 +377,13 @@ function activityChips(
     const events = metadata?.events;
     if (!Array.isArray(events)) continue;
     const inProgress = metadata?.status === "in_progress";
+    currentTurnEvents.push(...events);
     if (events.some((event) => event.type === "subagent")) {
-      lastSubagentEvents = events;
+      currentTurnHasSubagents = true;
     }
+    // Preambles split a turn into several persisted assistant messages.
+    // Keep the start, nested activity, and end together across those segments.
+    if (currentTurnHasSubagents) lastSubagentEvents = [...currentTurnEvents];
     for (const event of events) {
       if (event.type === "file_edit") {
         const appName = appNameFromPath(event.filePath);
@@ -442,7 +452,7 @@ function activityChips(
         key: `subagent:${id}`,
         kind: "subagent",
         label: entry.label,
-        active: !entry.ended && working,
+        active: !entry.ended && working && currentTurnHasSubagents,
         info:
           entry.info.length > 0
             ? entry.info.slice(-20)
@@ -1546,7 +1556,7 @@ export function ChatDock({
   const { messages, activity, questions } = toTimeline(
     chat.messages,
     chat.optimisticMessages,
-    chat.isSending,
+    chat.activity,
   );
 
   // Which connection tools carry an MCP Apps view — chips for those tool
@@ -1592,8 +1602,13 @@ export function ChatDock({
   // common event model); workspace-tab chips arrive via the surfaces
   // prop. One rail, all of them.
   const chatActivityChips = useMemo(
-    () => activityChips(chat.messages, chat.isWorking, uiTools),
-    [chat.messages, chat.isWorking, uiTools],
+    () =>
+      activityChips(
+        chat.messages,
+        chat.isWorking && !chat.connectionLost,
+        uiTools,
+      ),
+    [chat.messages, chat.isWorking, chat.connectionLost, uiTools],
   );
   const railSurfaces = useMemo(() => {
     // One chip per key: a surface known to both the host and the turn
@@ -2864,7 +2879,7 @@ export function ChatDock({
             className="min-h-0 flex-1"
             contentClassName={isTab ? "mx-auto w-full max-w-4xl" : ""}
             messages={messages}
-            activity={activity}
+            activity={chat.connectionLost ? undefined : activity}
             queue={chat.queue}
             onUpdateQueued={chat.updateQueued}
             onRemoveQueued={chat.removeQueued}
@@ -2876,7 +2891,11 @@ export function ChatDock({
             resolveAgentName={(agentId) =>
               roster.agents.find((agent) => agent.id === agentId)?.name
             }
-            error={chat.error?.message ?? null}
+            error={
+              chat.connectionLost
+                ? "Connection lost. Reconnecting to check your agent's progress. It may still be running."
+                : (chat.error?.message ?? null)
+            }
             emptyState={emptyPrompt.empty}
             onLinkClick={onLinkClick}
             onFileClick={onFileClick}

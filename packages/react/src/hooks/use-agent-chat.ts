@@ -3,7 +3,12 @@
 import { ATTACHMENT_MARKER } from "@catamorphic/sandbox/attachments";
 import { useQueryClient } from "@tanstack/react-query";
 import { useEffect, useRef, useState } from "react";
-import { CatamorphicError } from "../lib/errors.js";
+import {
+  assertApiOk,
+  CatamorphicError,
+  runWithCatamorphicError,
+  toCatamorphicError,
+} from "../lib/errors.js";
 import { randomId } from "../lib/random-id.js";
 import { useCatamorphic } from "../provider.js";
 import type { AgentMessage, AgentSessionDetail } from "../types.js";
@@ -60,12 +65,14 @@ export interface UseAgentChatResult {
   isLoading: boolean;
   isSending: boolean;
   /**
-   * The agent is working on this chat: a send is in flight from this client
-   * OR the server reports an in-progress assistant turn. Prefer this over
-   * {@link isSending} for activity indicators — it stays accurate when the
-   * request and the turn don't line up (reloads, other clients).
+   * The server's durable execution record reports a running turn.
+   * A pending HTTP request is sending, not proof of agent execution.
    */
   isWorking: boolean;
+  /** Honest, compact activity from execution state; absent while disconnected. */
+  activity: string | undefined;
+  /** The host cannot currently confirm the agent's status. */
+  connectionLost: boolean;
   error: CatamorphicError | null;
   /** Missing member credentials that blocked admission before execution. */
   authenticationRequired: AgentAuthenticationRequired | null;
@@ -194,9 +201,8 @@ export function useAgentChat(
   const session = useAgentSession(projectId, sessionId ?? undefined, {
     refetchInterval: (data) =>
       sendInProgress > 0 ||
-      hasPendingAssistant(data?.messages) ||
-      (data?.pendingTurns?.length ?? 0) > 0 ||
-      hasScheduledAutoRetry(data?.messages)
+      data?.execution?.status === "running" ||
+      data?.execution?.status === "queued"
         ? 500
         : (options.idleRefetchIntervalMs ?? false),
   });
@@ -249,21 +255,7 @@ export function useAgentChat(
       return pending.length === messages.length ? messages : pending;
     });
   }, [optimisticMessages, persistedMessages]);
-  // Server truth beats local request state: the turn runs inside the send
-  // request, and if that response stalls after the turn's messages are
-  // already persisted, `isSending` would spin forever. Once the server
-  // shows the turn settled — last message is a completed assistant reply,
-  // nothing optimistic or queued left — the indicator stops.
-  const turnSettled =
-    persistedMessages.at(-1)?.role === "assistant" &&
-    !hasPendingAssistant(persistedMessages) &&
-    reconciledOptimistic.length === 0 &&
-    queuedTurns.length === 0;
-  const isWorking =
-    hasPendingAssistant(persistedMessages) ||
-    (session.data?.pendingTurns?.some((turn) => turn.status === "running") ??
-      false) ||
-    (isSending && !turnSettled);
+  const isWorking = session.data?.execution?.status === "running";
 
   const ensureSessionId = async (): Promise<string | null> => {
     if (!projectId) return null;
@@ -318,6 +310,7 @@ export function useAgentChat(
       const targetSessionId = await ensureSessionId();
       if (!targetSessionId) return;
       const receipt = await sendMessage.mutateAsync({
+        idempotencyKey: optimistic.id,
         sessionId: targetSessionId,
         message: input.content,
         attachments: input.attachments,
@@ -354,14 +347,35 @@ export function useAgentChat(
     }
   };
 
+  const [actionError, setActionError] = useState<CatamorphicError | null>(null);
+  // biome-ignore lint/correctness/useExhaustiveDependencies: a different active chat must not inherit this action's error.
+  useEffect(() => {
+    setActionError(null);
+  }, [projectId, sessionId]);
   const interrupt = async () => {
     const target = activeSessionRef.current.sessionId;
     if (!projectId || !target) return;
-    await apiClient
-      .POST("/api/projects/{projectId}/agent/sessions/{sessionId}/interrupt", {
-        params: { path: { projectId, sessionId: target } },
-      })
-      .catch(() => {});
+    setActionError(null);
+    try {
+      await runWithCatamorphicError(async () =>
+        assertApiOk(
+          await apiClient.POST(
+            "/api/projects/{projectId}/agent/sessions/{sessionId}/interrupt",
+            {
+              params: { path: { projectId, sessionId: target } },
+              signal: AbortSignal.timeout(15_000),
+            },
+          ),
+          "Stop was not confirmed",
+        ),
+      );
+    } catch (error) {
+      setActionError(
+        error instanceof CatamorphicError
+          ? error
+          : toCatamorphicError({ cause: error }),
+      );
+    }
     await queryClient.invalidateQueries({
       queryKey: ["cat", "project", projectId, "agent", "session", target],
     });
@@ -372,10 +386,22 @@ export function useAgentChat(
     const target = activeSessionRef.current.sessionId;
     if (!projectId || !target || retryInProgress) return;
     setRetryInProgress(true);
+    setActionError(null);
     try {
-      await apiClient.POST(
-        "/api/projects/{projectId}/agent/sessions/{sessionId}/retry",
-        { params: { path: { projectId, sessionId: target } } },
+      await runWithCatamorphicError(async () =>
+        assertApiOk(
+          await apiClient.POST(
+            "/api/projects/{projectId}/agent/sessions/{sessionId}/retry",
+            { params: { path: { projectId, sessionId: target } } },
+          ),
+          "Retry was not confirmed",
+        ),
+      );
+    } catch (error) {
+      setActionError(
+        error instanceof CatamorphicError
+          ? error
+          : toCatamorphicError({ cause: error }),
       );
     } finally {
       setRetryInProgress(false);
@@ -402,7 +428,11 @@ export function useAgentChat(
   };
 
   const error =
-    createSession.error ?? sendMessage.error ?? session.error ?? null;
+    actionError ??
+    createSession.error ??
+    sendMessage.error ??
+    session.error ??
+    null;
 
   return {
     sessionId,
@@ -413,7 +443,20 @@ export function useAgentChat(
     queuedMessageCount: queue.length,
     isLoading: session.isLoading,
     isSending: isSending || retryInProgress,
-    isWorking: isWorking || retryInProgress,
+    isWorking,
+    activity:
+      session.error?.code === "network"
+        ? undefined
+        : isWorking
+          ? !session.data?.execution?.executorHealthy
+            ? "Checking agent status"
+            : session.data.execution.cancellationRequested
+              ? "Stopping agent"
+              : (session.data.execution.activity ?? "Waiting for agent")
+          : isSending
+            ? "Sending message"
+            : undefined,
+    connectionLost: session.error?.code === "network",
     error,
     authenticationRequired: authenticationRequiredFrom(error),
     send,
@@ -588,27 +631,6 @@ function attachmentsFromMetadata(
       typeof record.source === "object"
     );
   });
-}
-
-function hasPendingAssistant(messages: AgentMessage[] | undefined): boolean {
-  const last = messages?.at(-1);
-  if (last?.role !== "assistant") return false;
-  const metadata = last.metadata as Record<string, unknown> | null;
-  return metadata?.status === "in_progress";
-}
-
-/** A failed turn with a scheduled auto-retry still needs the poll. */
-function hasScheduledAutoRetry(messages: AgentMessage[] | undefined): boolean {
-  const last = messages?.at(-1);
-  if (last?.role !== "assistant") return false;
-  const metadata = last.metadata as Record<string, unknown> | null;
-  if (metadata?.status !== "failed") return false;
-  const autoRetry = metadata?.autoRetry as { nextAtMs?: number } | undefined;
-  // Poll through the scheduled window (plus slack for the retry itself).
-  return (
-    typeof autoRetry?.nextAtMs === "number" &&
-    Date.now() < autoRetry.nextAtMs + 30_000
-  );
 }
 
 function reconcileOptimisticMessages(

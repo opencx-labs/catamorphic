@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import type { DB } from "@catamorphic/db";
-import type { Kysely } from "kysely";
+import { type Kysely, sql } from "kysely";
 import type { Identity } from "../identity.js";
 
 export interface PushSubscriptionInput {
@@ -153,6 +153,67 @@ export class UserNotificationsService {
         .onConflict((conflict) => conflict.doNothing())
         .execute();
     });
+  }
+
+  /** Recover missed failure alerts from durable turn results, without duplicates. */
+  async publishFailedAgentTurns(args: {
+    authorityHostId: string;
+  }): Promise<void> {
+    const rows = await this.db
+      .selectFrom("agent_turns")
+      .innerJoin(
+        "agent_messages",
+        "agent_messages.id",
+        "agent_turns.result_message_id",
+      )
+      .innerJoin(
+        "agent_sessions",
+        "agent_sessions.id",
+        "agent_turns.session_id",
+      )
+      .innerJoin("projects", "projects.id", "agent_sessions.project_id")
+      .select([
+        "agent_turns.id",
+        "agent_turns.status",
+        "agent_sessions.id as session_id",
+        "agent_sessions.project_id",
+        "agent_sessions.external_user_id",
+        "projects.tenant_id",
+      ])
+      .where("agent_sessions.authority_host_id", "=", args.authorityHostId)
+      .whereRef(
+        "agent_sessions.attention_revision",
+        ">",
+        "agent_sessions.attention_seen_revision",
+      )
+      .where("agent_turns.status", "in", ["queued", "failed"])
+      .where(sql`agent_messages.metadata ->> 'status'`, "=", "failed")
+      .where(
+        sql`coalesce(agent_messages.metadata ->> 'interrupted', 'false')`,
+        "!=",
+        "true",
+      )
+      .execute();
+    for (const row of rows) {
+      const retrying = row.status === "queued";
+      await this.publish({
+        identity: {
+          tenantId: row.tenant_id,
+          externalUserId: row.external_user_id,
+        },
+        projectId: row.project_id,
+        sessionId: row.session_id,
+        kind: retrying ? "agent_reconnecting" : "agent_failed",
+        title: retrying
+          ? "An agent lost its connection"
+          : "An agent run failed",
+        body: retrying
+          ? "Retrying automatically. Open the chat to check progress."
+          : "Open the chat to see what went wrong.",
+        route: `/?project=${encodeURIComponent(row.project_id)}&session=${encodeURIComponent(row.session_id)}`,
+        collapseKey: `agent-turn:${row.id}:${retrying ? "reconnecting" : "failed"}`,
+      });
+    }
   }
 
   /** Emit one collapsed alert when mirrored sessions lose their source lease. */
