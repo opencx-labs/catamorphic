@@ -2,6 +2,7 @@ import type { AgentSession } from "@catamorphic/react/types";
 import {
   Archive,
   Bot,
+  ChevronDown,
   CircleDot,
   Ghost,
   GitBranch,
@@ -29,7 +30,13 @@ export function SessionInspector({
   checkout,
   incognito,
   openRequest,
+  onInspect,
   moving,
+  model = "Automatic",
+  reportedModel,
+  effort = "Default",
+  onEditModel,
+  onEditEffort,
   moveDisabledReason,
   onMove,
   onFork,
@@ -43,7 +50,13 @@ export function SessionInspector({
   checkout: SessionCheckoutInfo | null;
   incognito: boolean;
   openRequest?: number;
+  onInspect?: () => void;
   moving: boolean;
+  model?: string;
+  reportedModel?: string | null;
+  effort?: string;
+  onEditModel?: () => void;
+  onEditEffort?: () => void;
   moveDisabledReason?: string | null;
   onMove?: () => void;
   onFork?: () => void;
@@ -74,6 +87,7 @@ export function SessionInspector({
       label="Session status and actions"
       pinOnClick
       openRequest={openRequest}
+      onOpen={onInspect}
       content={
         <SessionInspectorContent
           session={session}
@@ -82,6 +96,11 @@ export function SessionInspector({
           checkout={checkout}
           incognito={incognito}
           moving={moving}
+          model={model}
+          reportedModel={reportedModel}
+          effort={effort}
+          onEditModel={onEditModel}
+          onEditEffort={onEditEffort}
           moveDisabledReason={moveDisabledReason}
           onMove={onMove}
           onFork={onFork}
@@ -124,6 +143,11 @@ export function SessionInspectorContent({
   checkout,
   incognito,
   moving = false,
+  model = "Automatic",
+  reportedModel,
+  effort = "Default",
+  onEditModel,
+  onEditEffort,
   moveDisabledReason,
   onMove,
   onFork,
@@ -137,6 +161,11 @@ export function SessionInspectorContent({
   checkout: SessionCheckoutInfo | null;
   incognito: boolean;
   moving?: boolean;
+  model?: string;
+  reportedModel?: string | null;
+  effort?: string;
+  onEditModel?: () => void;
+  onEditEffort?: () => void;
   moveDisabledReason?: string | null;
   onMove?: () => void;
   onFork?: () => void;
@@ -190,6 +219,19 @@ export function SessionInspectorContent({
 
       <dl className="grid grid-cols-[5.5rem_1fr] gap-x-3 gap-y-2 py-3 text-[11px]">
         <InspectorRow label="Agent" value={agentName} />
+        <InspectorRow label="Model" value={model} onEdit={onEditModel} />
+        {reportedModel && reportedModel !== model ? (
+          <InspectorRow label="Last reply" value={reportedModel} />
+        ) : null}
+        <InspectorRow
+          label="Reasoning"
+          value={
+            effort === "Unavailable"
+              ? effort
+              : effort.charAt(0).toUpperCase() + effort.slice(1)
+          }
+          onEdit={onEditEffort}
+        />
         <InspectorRow label="Source" value={source} />
         <InspectorRow label="Status" value={state} />
         <InspectorRow
@@ -255,12 +297,35 @@ export function SessionInspectorContent({
   );
 }
 
-function InspectorRow({ label, value }: { label: string; value: string }) {
+function InspectorRow({
+  label,
+  value,
+  onEdit,
+}: {
+  label: string;
+  value: string;
+  onEdit?: () => void;
+}) {
   return (
     <>
       <dt className="text-fg-faint">{label}</dt>
-      <dd className="min-w-0 truncate text-fg" title={value}>
-        {value}
+      <dd className="min-w-0 text-fg" title={value}>
+        {onEdit ? (
+          <button
+            type="button"
+            aria-label={`Change ${label.toLowerCase()}`}
+            onClick={onEdit}
+            className="group -mx-1.5 flex w-[calc(100%+0.75rem)] min-w-0 cursor-pointer items-center gap-2 rounded-md px-1.5 py-0.5 text-left transition-colors duration-150 ease-[cubic-bezier(0.2,0,0,1)] hover:bg-bg-raised focus-visible:outline-2 focus-visible:outline-accent"
+          >
+            <span className="min-w-0 flex-1 truncate">{value}</span>
+            <ChevronDown
+              aria-hidden="true"
+              className="size-3 shrink-0 text-fg-faint group-hover:text-fg-muted"
+            />
+          </button>
+        ) : (
+          <span className="block truncate">{value}</span>
+        )}
       </dd>
     </>
   );

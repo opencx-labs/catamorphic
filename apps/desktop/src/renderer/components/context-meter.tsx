@@ -41,6 +41,34 @@ export function latestContextSnapshot(
   return null;
 }
 
+/** Last model id a harness reported as actually serving this conversation. */
+export function latestReportedModel(messages: MessageLike[]): string | null {
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const message = messages[index];
+    // Replies preceding a selection change belong to a different model.
+    const marker = message?.metadata?.marker;
+    if (
+      marker &&
+      typeof marker === "object" &&
+      "kind" in marker &&
+      (marker.kind === "agent_change" || marker.kind === "model_change")
+    )
+      return null;
+    if (message?.role !== "assistant") continue;
+    const usage = message.metadata?.usage;
+    if (
+      usage &&
+      typeof usage === "object" &&
+      "model" in usage &&
+      typeof usage.model === "string" &&
+      usage.model.length > 0
+    ) {
+      return usage.model;
+    }
+  }
+  return null;
+}
+
 export function ContextMeter({ messages }: { messages: MessageLike[] }) {
   const snapshot = latestContextSnapshot(messages);
   if (!snapshot) return null;

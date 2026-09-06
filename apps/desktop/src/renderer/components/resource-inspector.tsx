@@ -73,6 +73,7 @@ export function ResourceInspector({
   delayMs = RESOURCE_INSPECTOR_DELAY_MS,
   pinOnClick = false,
   openRequest,
+  onOpen,
 }: {
   label: string;
   children: (props: ResourceInspectorTriggerProps) => ReactNode;
@@ -82,6 +83,7 @@ export function ResourceInspector({
   pinOnClick?: boolean;
   /** Changing this value opens and pins the inspector (palette/status use). */
   openRequest?: number;
+  onOpen?: () => void;
 }) {
   const id = useId();
   const triggerRef = useRef<HTMLButtonElement>(null);
@@ -98,6 +100,9 @@ export function ResourceInspector({
   const [anchor, setAnchor] = useState<InspectorAnchor | null>(null);
   const [open, setOpen] = useState(false);
   const [mounted, setMounted] = useState(false);
+  useEffect(() => {
+    if (open) onOpen?.();
+  }, [open, onOpen]);
 
   const show = useCallback(() => {
     const rect = triggerRef.current?.getBoundingClientRect();
@@ -338,9 +343,14 @@ function InspectorPortal({
         onLeave();
       }}
       onAnimationEnd={(event) => {
-        if (event.animationName === "pop-out" && !open) onExited();
+        if (
+          event.target === event.currentTarget &&
+          event.animationName.startsWith("inspector-out-") &&
+          !open
+        )
+          onExited();
       }}
-      className={`fixed z-[130] max-h-[calc(100vh-1rem)] w-80 overflow-y-auto overscroll-contain rounded-lg border border-border bg-bg-overlay p-3 shadow-2xl [scrollbar-gutter:stable] ${open ? "animate-pop-in" : "pointer-events-none animate-pop-out"}`}
+      className={`fixed z-[130] max-h-[calc(100vh-1rem)] w-80 overflow-y-auto overscroll-contain rounded-lg border border-border bg-bg-overlay p-3 shadow-2xl [scrollbar-gutter:stable] ${open ? `animate-inspector-in-${position.side}` : `pointer-events-none animate-inspector-out-${position.side}`}`}
     >
       {children}
     </div>,

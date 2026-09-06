@@ -12985,6 +12985,10 @@
                       "nullable": true,
                       "type": "string"
                     },
+                    "model": {
+                      "nullable": true,
+                      "type": "string"
+                    },
                     "modelEffort": {
                       "nullable": true,
                       "type": "string",
@@ -13140,6 +13144,7 @@
                     "environment",
                     "allocationId",
                     "agentId",
+                    "model",
                     "modelEffort",
                     "title",
                     "icon",
@@ -13466,6 +13471,10 @@
                             "nullable": true,
                             "type": "string"
                           },
+                          "model": {
+                            "nullable": true,
+                            "type": "string"
+                          },
                           "modelEffort": {
                             "nullable": true,
                             "type": "string",
@@ -13630,6 +13639,7 @@
                           "environment",
                           "allocationId",
                           "agentId",
+                          "model",
                           "modelEffort",
                           "title",
                           "icon",
@@ -13997,6 +14007,10 @@
                       "nullable": true,
                       "type": "string"
                     },
+                    "model": {
+                      "nullable": true,
+                      "type": "string"
+                    },
                     "modelEffort": {
                       "nullable": true,
                       "type": "string",
@@ -14152,6 +14166,7 @@
                     "environment",
                     "allocationId",
                     "agentId",
+                    "model",
                     "modelEffort",
                     "title",
                     "icon",
@@ -14482,6 +14497,10 @@
                       "nullable": true,
                       "type": "string"
                     },
+                    "model": {
+                      "nullable": true,
+                      "type": "string"
+                    },
                     "modelEffort": {
                       "nullable": true,
                       "type": "string",
@@ -14637,6 +14656,7 @@
                     "environment",
                     "allocationId",
                     "agentId",
+                    "model",
                     "modelEffort",
                     "title",
                     "icon",
@@ -14734,6 +14754,12 @@
                   "agentId": {
                     "type": "string"
                   },
+                  "model": {
+                    "nullable": true,
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 500
+                  },
                   "effort": {
                     "nullable": true,
                     "type": "string",
@@ -14826,6 +14852,10 @@
                       "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
                     },
                     "agentId": {
+                      "nullable": true,
+                      "type": "string"
+                    },
+                    "model": {
                       "nullable": true,
                       "type": "string"
                     },
@@ -14984,6 +15014,7 @@
                     "environment",
                     "allocationId",
                     "agentId",
+                    "model",
                     "modelEffort",
                     "title",
                     "icon",
@@ -15281,6 +15312,10 @@
                       "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
                     },
                     "agentId": {
+                      "nullable": true,
+                      "type": "string"
+                    },
+                    "model": {
                       "nullable": true,
                       "type": "string"
                     },
@@ -15642,6 +15677,7 @@
                     "environment",
                     "allocationId",
                     "agentId",
+                    "model",
                     "modelEffort",
                     "title",
                     "icon",
@@ -15793,6 +15829,10 @@
                       "nullable": true,
                       "type": "string"
                     },
+                    "model": {
+                      "nullable": true,
+                      "type": "string"
+                    },
                     "modelEffort": {
                       "nullable": true,
                       "type": "string",
@@ -15948,6 +15988,7 @@
                     "environment",
                     "allocationId",
                     "agentId",
+                    "model",
                     "modelEffort",
                     "title",
                     "icon",
@@ -16099,6 +16140,10 @@
                       "nullable": true,
                       "type": "string"
                     },
+                    "model": {
+                      "nullable": true,
+                      "type": "string"
+                    },
                     "modelEffort": {
                       "nullable": true,
                       "type": "string",
@@ -16254,6 +16299,7 @@
                     "environment",
                     "allocationId",
                     "agentId",
+                    "model",
                     "modelEffort",
                     "title",
                     "icon",
@@ -16620,6 +16666,10 @@
                           "nullable": true,
                           "type": "string"
                         },
+                        "model": {
+                          "nullable": true,
+                          "type": "string"
+                        },
                         "modelEffort": {
                           "nullable": true,
                           "type": "string",
@@ -16780,6 +16830,7 @@
                         "environment",
                         "allocationId",
                         "agentId",
+                        "model",
                         "modelEffort",
                         "title",
                         "icon",
@@ -17025,6 +17076,10 @@
                             "nullable": true,
                             "type": "string"
                           },
+                          "model": {
+                            "nullable": true,
+                            "type": "string"
+                          },
                           "modelEffort": {
                             "nullable": true,
                             "type": "string",
@@ -17189,6 +17244,7 @@
                           "environment",
                           "allocationId",
                           "agentId",
+                          "model",
                           "modelEffort",
                           "title",
                           "icon",
@@ -17412,6 +17468,10 @@
                             "nullable": true,
                             "type": "string"
                           },
+                          "model": {
+                            "nullable": true,
+                            "type": "string"
+                          },
                           "modelEffort": {
                             "nullable": true,
                             "type": "string",
@@ -17576,6 +17636,7 @@
                           "environment",
                           "allocationId",
                           "agentId",
+                          "model",
                           "modelEffort",
                           "title",
                           "icon",
@@ -17847,6 +17908,10 @@
                       "nullable": true,
                       "type": "string"
                     },
+                    "model": {
+                      "nullable": true,
+                      "type": "string"
+                    },
                     "modelEffort": {
                       "nullable": true,
                       "type": "string",
@@ -18002,6 +18067,7 @@
                     "environment",
                     "allocationId",
                     "agentId",
+                    "model",
                     "modelEffort",
                     "title",
                     "icon",
@@ -19087,6 +19153,10 @@
                       "nullable": true,
                       "type": "string"
                     },
+                    "model": {
+                      "nullable": true,
+                      "type": "string"
+                    },
                     "modelEffort": {
                       "nullable": true,
                       "type": "string",
@@ -19242,6 +19312,7 @@
                     "environment",
                     "allocationId",
                     "agentId",
+                    "model",
                     "modelEffort",
                     "title",
                     "icon",
@@ -19878,6 +19949,10 @@
                             "nullable": true,
                             "type": "string"
                           },
+                          "model": {
+                            "nullable": true,
+                            "type": "string"
+                          },
                           "modelEffort": {
                             "nullable": true,
                             "type": "string",
@@ -20042,6 +20117,7 @@
                           "environment",
                           "allocationId",
                           "agentId",
+                          "model",
                           "modelEffort",
                           "title",
                           "icon",
@@ -20263,6 +20339,10 @@
                         "nullable": true,
                         "type": "string"
                       },
+                      "model": {
+                        "nullable": true,
+                        "type": "string"
+                      },
                       "modelEffort": {
                         "nullable": true,
                         "type": "string",
@@ -20418,6 +20498,7 @@
                       "environment",
                       "allocationId",
                       "agentId",
+                      "model",
                       "modelEffort",
                       "title",
                       "icon",

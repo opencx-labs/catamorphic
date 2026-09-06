@@ -17,6 +17,7 @@ const session: AgentSession = {
   environment: "customer-success",
   allocationId: null,
   agentId: "project:alpha:csm",
+  model: null,
   modelEffort: null,
   title: "Prepare Acme QBR",
   icon: null,
@@ -64,12 +65,18 @@ describe("SessionInspectorContent", () => {
   it("shows durable provenance and contextual session actions", async () => {
     const onFork = vi.fn();
     const onArchive = vi.fn();
+    const onEditModel = vi.fn();
+    const onEditEffort = vi.fn();
     await act(async () => {
       root.render(
         <SessionInspectorContent
           session={session}
           fallbackTitle="Chat"
           agentName="Customer success"
+          model="claude-sonnet-5"
+          effort="high"
+          onEditModel={onEditModel}
+          onEditEffort={onEditEffort}
           checkout={null}
           incognito={false}
           onFork={onFork}
@@ -81,7 +88,17 @@ describe("SessionInspectorContent", () => {
     expect(container.textContent).toContain("Prepare Acme QBR");
     expect(container.textContent).toContain("Slack");
     expect(container.textContent).toContain("customer-success");
+    expect(container.textContent).toContain("claude-sonnet-5");
+    expect(container.textContent).toContain("High");
     const buttons = [...container.querySelectorAll("button")];
+    await act(async () =>
+      buttons
+        .find((button) => button.textContent === "claude-sonnet-5")
+        ?.click(),
+    );
+    await act(async () =>
+      buttons.find((button) => button.textContent === "High")?.click(),
+    );
     await act(async () =>
       buttons.find((button) => button.textContent === "Fork")?.click(),
     );
@@ -90,5 +107,7 @@ describe("SessionInspectorContent", () => {
     );
     expect(onFork).toHaveBeenCalledOnce();
     expect(onArchive).toHaveBeenCalledOnce();
+    expect(onEditModel).toHaveBeenCalledOnce();
+    expect(onEditEffort).toHaveBeenCalledOnce();
   });
 });

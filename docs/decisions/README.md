@@ -105,3 +105,4 @@ Settled design decisions live here as short Architecture Decision Records. They 
 | [0090](0090-first-class-subsessions-and-delegation.md) | First-class subsessions and explicit delegation grants | Accepted |
 | [0091](0091-on-demand-desktop-harness-components.md) | Desktop coding harnesses use verified on-demand components | Accepted |
 | [0092](0092-project-owned-capability-experiences.md) | Project-owned capability experiences | Accepted |
+| [0093](0093-session-model-overrides-and-desktop-toolchain.md) | Session model overrides and the desktop toolchain | Accepted |

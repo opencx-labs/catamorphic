@@ -353,6 +353,65 @@ kbd {
   animation: pop-out 140ms cubic-bezier(0.2, 0, 0, 1) forwards;
 }
 
+/* Resource inspectors enter from and return to their trigger. Keeping the
+   axis side-aware makes the top-right chat inspector read as one object. */
+@keyframes inspector-in-left {
+  from {
+    opacity: 0;
+    transform: translateX(4px) scale(0.98);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0) scale(1);
+  }
+}
+
+@keyframes inspector-out-left {
+  from {
+    opacity: 1;
+    transform: translateX(0) scale(1);
+  }
+  to {
+    opacity: 0;
+    transform: translateX(4px) scale(0.98);
+  }
+}
+
+@keyframes inspector-in-right {
+  from {
+    opacity: 0;
+    transform: translateX(-4px) scale(0.98);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0) scale(1);
+  }
+}
+
+@keyframes inspector-out-right {
+  from {
+    opacity: 1;
+    transform: translateX(0) scale(1);
+  }
+  to {
+    opacity: 0;
+    transform: translateX(-4px) scale(0.98);
+  }
+}
+
+.animate-inspector-in-left {
+  animation: inspector-in-left 160ms cubic-bezier(0.2, 0, 0, 1);
+}
+.animate-inspector-out-left {
+  animation: inspector-out-left 160ms cubic-bezier(0.2, 0, 0, 1) forwards;
+}
+.animate-inspector-in-right {
+  animation: inspector-in-right 160ms cubic-bezier(0.2, 0, 0, 1);
+}
+.animate-inspector-out-right {
+  animation: inspector-out-right 160ms cubic-bezier(0.2, 0, 0, 1) forwards;
+}
+
 /* Pairing readiness keeps a fixed QR stage, then resolves the code from a
    soft optical blur. Layout never participates in this transition. */
 @keyframes pairing-qr-in {
@@ -405,7 +464,11 @@ kbd {
   }
 
   .animate-pop-in,
-  .animate-pop-out {
+  .animate-pop-out,
+  .animate-inspector-in-left,
+  .animate-inspector-out-left,
+  .animate-inspector-in-right,
+  .animate-inspector-out-right {
     animation-duration: 100ms;
   }
 

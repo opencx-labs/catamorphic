@@ -352,6 +352,8 @@ export interface HarnessModelInfo {
   description?: string;
   /** Versioned model id an alias resolves to (e.g. "sonnet" → "claude-sonnet-5"). */
   resolvedId?: string;
+  supportsEffort?: boolean;
+  supportedEffortLevels?: AgentEffort[];
 }
 
 export interface OpenRouterModelInfo {

@@ -79,6 +79,20 @@ describe("HarnessComponentStore", () => {
       ),
     ).rejects.toThrow();
   });
+
+  it("installs the managed Bun runtime through the same verified store", async () => {
+    const fixture = await componentFixture();
+    const store = new HarnessComponentStore({
+      rootDir: fixture.installRoot,
+      artifacts: { bun: { ...fixture.artifact, displayName: "Bun" } },
+      fetchImpl: async () => new Response(await fs.readFile(fixture.archive)),
+      preferInstalled: false,
+    });
+
+    const bun = await store.ensure("bun");
+    expect(bun.executablePath).toContain(`${path.sep}bun${path.sep}`);
+    expect(bun.pathEntries).toHaveLength(1);
+  });
 });
 
 async function componentFixture(): Promise<{

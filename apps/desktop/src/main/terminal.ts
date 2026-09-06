@@ -133,7 +133,9 @@ export function registerTerminalSupport(
    * agent bridge that provides it registers after terminal support).
    * Today: the `open`-shim hook URL + shim bin dir.
    */
-  agentEnv?: (projectId: string) => Record<string, string>,
+  agentEnv?: (
+    projectId: string,
+  ) => Record<string, string> | Promise<Record<string, string>>,
 ): {
   dispose(): void;
   agentTerminals: AgentTerminals;
@@ -242,7 +244,7 @@ export function registerTerminalSupport(
     // PATH after the user's profiles ran.
     const shimBin = input.agent ? await shellBinShimDir() : null;
     const agentExtraEnv = input.agent
-      ? (agentEnv?.(input.agent.projectId) ?? {})
+      ? ((await agentEnv?.(input.agent.projectId)) ?? {})
       : {};
     const pty = spawnPty(
       shell,

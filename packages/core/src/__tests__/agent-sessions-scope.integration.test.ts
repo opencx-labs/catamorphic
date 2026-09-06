@@ -362,6 +362,27 @@ describeIf("scoped agent sessions (ADR 0055)", () => {
     expect(sales.turns.at(-1)?.toolPolicies).toEqual({});
   });
 
+  it("applies per-session model and effort overrides to the harness", async () => {
+    const created = await sessions.create(admin, projectId, {
+      agentId: salesAgentId,
+    });
+    const configured = await sessions.update(admin, projectId, created.id, {
+      model: "test/model-v2",
+      effort: "high",
+    });
+    expect(configured.model).toBe("test/model-v2");
+    expect(configured.modelEffort).toBe("high");
+
+    await sessions.sendMessage(admin, projectId, created.id, "configured");
+    expect(sales.turns.at(-1)?.model).toBe("test/model-v2");
+    expect(sales.turns.at(-1)?.effort).toBe("high");
+
+    const switched = await sessions.update(admin, projectId, created.id, {
+      agentId: csmAgentId,
+    });
+    expect(switched.model).toBeNull();
+  });
+
   it("keeps partial assistant prose separate from a fatal provider error", async () => {
     const session = await sessions.create(admin, projectId, {
       agentId: salesAgentId,

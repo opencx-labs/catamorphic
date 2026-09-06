@@ -6,6 +6,8 @@ export interface ClaudeCodeModel {
   description?: string;
   /** Versioned model id an alias resolves to (e.g. "sonnet" → "claude-sonnet-5"). */
   resolvedId?: string;
+  supportsEffort?: boolean;
+  supportedEffortLevels?: ("low" | "medium" | "high" | "xhigh" | "max")[];
 }
 
 /**
@@ -47,6 +49,8 @@ export async function listClaudeCodeModels(opts?: {
       name: model.displayName,
       description: model.description,
       resolvedId: model.resolvedModel,
+      supportsEffort: model.supportsEffort,
+      supportedEffortLevels: model.supportedEffortLevels,
     }));
   } finally {
     release();

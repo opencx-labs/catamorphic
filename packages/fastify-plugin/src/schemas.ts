@@ -990,6 +990,7 @@ export const AgentSessionSchema = z.object({
   environment: z.string().nullable(),
   allocationId: z.string().uuid().nullable(),
   agentId: z.string().nullable(),
+  model: z.string().nullable(),
   modelEffort: AgentEffortSchema.nullable(),
   title: z.string().nullable(),
   icon: z.string().nullable(),
@@ -1104,6 +1105,8 @@ export const AgentSubsessionIdParamsSchema = AgentSessionIdParamsSchema.extend({
 
 export const UpdateAgentSessionSchema = z.object({
   agentId: z.string().optional(),
+  /** `null` clears the override back to the agent harness's default. */
+  model: z.string().min(1).max(500).nullable().optional(),
   /** `null` clears the override back to the agent's default. */
   effort: AgentEffortSchema.nullable().optional(),
   environment: z.string().min(1).optional(),

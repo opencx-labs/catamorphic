@@ -24,8 +24,8 @@ import path from "node:path";
  * Emit `133;C` when a command is accepted, `133;D;<exit>` at the prompt —
  * and, when the spawn provided a shim bin, put it FIRST on PATH here,
  * after the user's profiles ran (macOS path_helper and profile exports
- * would demote a PATH set at spawn time). The shim's `open` sends URLs to
- * the app instead of the system browser.
+ * would demote a PATH set at spawn time). The shim keeps URL opens inside
+ * the app.
  */
 const ZSHRC_HOOKS = `
 # --- Catamorphic shell integration (OSC 133 semantic prompts) ---
@@ -37,6 +37,9 @@ autoload -Uz add-zsh-hook 2>/dev/null && {
 }
 if [[ -n "$CATAMORPHIC_BIN" && -d "$CATAMORPHIC_BIN" ]]; then
   export PATH="$CATAMORPHIC_BIN:$PATH"
+fi
+if [[ -n "$CATAMORPHIC_TOOLCHAIN_BIN" && -d "$CATAMORPHIC_TOOLCHAIN_BIN" ]]; then
+  export PATH="$CATAMORPHIC_TOOLCHAIN_BIN:$PATH"
 fi
 `;
 
@@ -70,7 +73,7 @@ ZDOTDIR="\${USER_ZDOTDIR:-$HOME}"
 ${ZSHRC_HOOKS}`;
 
 /**
- * The `open` shim: URLs an agent (or the user) opens from a Catamorphic
+ * Agent command shims: URLs an agent (or the user) opens from a Catamorphic
  * terminal land as in-app browser tabs — the chat steps aside exactly as
  * for open_surface — instead of popping the system browser. Anything
  * that isn't purely http(s) URLs falls through to the real /usr/bin/open

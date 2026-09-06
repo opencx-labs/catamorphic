@@ -6,6 +6,7 @@ import {
   useEnvironments,
   useWatchers,
 } from "@catamorphic/react";
+import { useQuery } from "@tanstack/react-query";
 import {
   AppWindow,
   ArrowUp,
@@ -39,6 +40,7 @@ import {
   useRef,
   useState,
 } from "react";
+import { effectiveEffort, supportedEfforts } from "../lib/agent-effort.js";
 import { commandScore } from "../lib/command-score";
 import {
   type AgentInfo,
@@ -74,7 +76,7 @@ import {
   ComposerInput,
   type ComposerInputHandle,
 } from "./composer-input";
-import { ContextMeter } from "./context-meter.js";
+import { ContextMeter, latestReportedModel } from "./context-meter.js";
 import { EnvironmentConnections } from "./environment-connections.js";
 import { Modal } from "./modal.js";
 import { RemoteMessageConnectionGuard } from "./remote-message-connection-guard.js";
@@ -1223,6 +1225,11 @@ export interface ChatDockProps {
   inspectRequestNonce?: number;
   /** Set on forked chats: reveal the parent conversation. */
   onOpenParent?: () => void;
+  /** Open the harness-backed picker for this session's model override. */
+  onEditModel?: () => void;
+  /** Open the session reasoning-effort picker. */
+  onEditEffort?: () => void;
+  runtimeSettingsError?: string | null;
   onEntryChange: (entry: ChatDockEntry) => void;
   /** Records the tab → floating Escape handoff for an immediate Cmd+W. */
   onEscapeToFloating?: (localId: string) => void;
@@ -1292,6 +1299,9 @@ export function ChatDock({
   archived = false,
   inspectRequestNonce,
   onOpenParent,
+  onEditModel,
+  onEditEffort,
+  runtimeSettingsError,
   onEntryChange,
   onEscapeToFloating,
   onClose,
@@ -1732,6 +1742,23 @@ export function ChatDock({
   // Unknown roster (fetch pending/failed): stay permissive; the server
   // answers with a friendly error if the harness really can't take it.
   const accepts = activeAgent?.accepts ?? ["image", "document"];
+  const [inspected, setInspected] = useState(false);
+  const modelCatalog = useQuery({
+    queryKey: ["desktop", "agent-models", activeAgent?.id],
+    queryFn: () =>
+      activeAgent
+        ? desktopApi.agentModels(activeAgent.id)
+        : Promise.resolve({ models: [] }),
+    enabled: inspected && !!activeAgent,
+    staleTime: 600_000,
+  });
+  const selectedModel = chat.session?.model || activeAgent?.model;
+  const reportedModel = latestReportedModel(chat.messages);
+  const effortModel = modelCatalog.data?.models.find(
+    (model) =>
+      model.id === (selectedModel || reportedModel) ||
+      model.resolvedId === (selectedModel || reportedModel),
+  );
   // Auth failures offer a one-click re-login only for account-auth agents
   // (OpenRouter PKCE, Claude Code / Codex logins); API-key agents are
   // pointed at Settings by the error text itself. A successful reconnect
@@ -2683,6 +2710,28 @@ export function ChatDock({
               session={chat.session}
               fallbackTitle={title}
               agentName={activeAgent?.name ?? "Default agent"}
+              model={chat.session?.model || activeAgent?.model || "Automatic"}
+              reportedModel={reportedModel}
+              onInspect={() => setInspected(true)}
+              effort={
+                effectiveEffort(
+                  activeAgent,
+                  chat.session?.modelEffort ?? activeAgent?.effort,
+                  effortModel,
+                ) ?? "Unavailable"
+              }
+              onEditModel={
+                !chat.session || chat.session.running || !activeAgent
+                  ? undefined
+                  : onEditModel
+              }
+              onEditEffort={
+                !chat.session ||
+                chat.session.running ||
+                supportedEfforts(activeAgent, effortModel).length === 0
+                  ? undefined
+                  : onEditEffort
+              }
               checkout={checkout}
               incognito={isIncognito}
               openRequest={(inspectRequestNonce ?? 0) + localInspectorNonce}
@@ -2837,6 +2886,14 @@ export function ChatDock({
               jumpToPreviousRef.current = jump;
             }}
           />
+          {runtimeSettingsError ? (
+            <p
+              role="alert"
+              className="mx-4 mb-2 rounded-md border border-danger/20 bg-danger/5 px-3 py-2 text-xs text-danger"
+            >
+              Could not update chat settings: {runtimeSettingsError}
+            </p>
+          ) : null}
           {/* Keep the composer clear of the bubble UI: bottom padding for
               the expanded strip, side padding for the corner bubble. */}
           <div
