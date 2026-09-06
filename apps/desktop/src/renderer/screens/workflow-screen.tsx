@@ -34,17 +34,37 @@ export function WorkflowScreen({
   const filePath = summary?.filePath;
   const fileQuery = useProjectFile(projectId, filePath);
 
-  if (!summary || !filePath || fileQuery.isLoading) {
+  if (
+    workflows.isPending ||
+    (!summary && workflows.isFetching) ||
+    (filePath && fileQuery.isPending)
+  ) {
     return (
       <div className="grid flex-1 place-items-center">
         <p className="animate-pulse text-sm text-fg-muted">Loading workflow…</p>
       </div>
     );
   }
-  if (fileQuery.error) {
+  if (workflows.error || fileQuery.error || !filePath) {
     return (
       <div className="grid flex-1 place-items-center">
-        <p className="text-sm text-danger">{fileQuery.error.message}</p>
+        <div className="flex flex-col items-center gap-3">
+          <p className="text-sm text-fg-muted">
+            {workflows.error?.message ??
+              fileQuery.error?.message ??
+              `Workflow “${workflowName}” was not found in this project.`}
+          </p>
+          <button
+            type="button"
+            className="cursor-pointer rounded-md border border-border px-3 py-1.5 text-sm hover:bg-bg-overlay"
+            onClick={() => {
+              void workflows.refetch();
+              if (filePath) void fileQuery.refetch();
+            }}
+          >
+            Try again
+          </button>
+        </div>
       </div>
     );
   }
@@ -146,6 +166,7 @@ function WorkflowScreenInner({
             className="h-7 cursor-pointer rounded-md bg-accent px-3 text-xs font-medium text-accent-fg transition-opacity duration-150 hover:opacity-90 disabled:opacity-50"
             onClick={() => void handleSave()}
             disabled={code === initialCode}
+            data-disabled-reason="No unsaved changes"
           >
             {saveState === "saved" ? "Saved" : "Save"}
           </PendingButton>

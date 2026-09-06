@@ -600,6 +600,7 @@ export function CommandPalette({
   const [harnessModels, setHarnessModels] = useState<{
     agentId: string;
     models: HarnessModelInfo[];
+    error?: string;
   } | null>(null);
 
   const enterPicker = useCallback((next: PaletteInPicker) => {
@@ -672,11 +673,25 @@ export function CommandPalette({
         });
       }
     } else if (harnessModels?.agentId !== targetAgent.id) {
-      void desktopApi.agentModels(targetAgent.id).then((data) => {
-        if (!cancelled) {
-          setHarnessModels({ agentId: targetAgent.id, models: data.models });
-        }
-      });
+      void desktopApi
+        .agentModels(targetAgent.id)
+        .then((data) => {
+          if (!cancelled) {
+            setHarnessModels({
+              agentId: targetAgent.id,
+              models: data.models,
+              error: data.error,
+            });
+          }
+        })
+        .catch(() => {
+          if (!cancelled)
+            setHarnessModels({
+              agentId: targetAgent.id,
+              models: [],
+              error: "Could not load models. Try again.",
+            });
+        });
     }
     return () => {
       cancelled = true;
@@ -1216,9 +1231,31 @@ export function CommandPalette({
         });
       }
       // Supported values straight from the harness (Claude Code's own
-      // catalog, `codex debug models`, or the provider's /v1/models).
+      // catalog, Codex app-server `model/list`, or the provider's /v1/models).
       const supported =
         harnessModels?.agentId === agent.id ? harnessModels.models : [];
+      if (
+        harnessModels?.agentId !== agent.id ||
+        harnessModels.error ||
+        supported.length === 0
+      ) {
+        rows.push({
+          id: "pick:model:catalog-status",
+          icon: Cpu,
+          label:
+            harnessModels?.agentId !== agent.id
+              ? "Loading models…"
+              : harnessModels.error
+                ? "Could not load models"
+                : "No models returned",
+          detail: harnessModels?.error ?? "Refresh the model list",
+          keywords: [],
+          kind: "action",
+          run: () => {
+            setHarnessModels(null);
+          },
+        });
+      }
       const supportedRow = (model: HarnessModelInfo) =>
         ({
           id: `pick:model:${model.id}`,
@@ -1693,6 +1730,10 @@ export function CommandPalette({
   const commit = (item: PaletteItem, withCmd: boolean, withShift = false) => {
     // Disabled rows (invalid project agents) are informational only.
     if (item.disabled) return;
+    if (item.id === "pick:model:catalog-status") {
+      item.run("replace");
+      return;
+    }
     // Entering a chip mode swaps palette state — the palette stays open.
     if (item.id.startsWith("mode-row:")) {
       item.run("replace");
@@ -1896,6 +1937,7 @@ export function CommandPalette({
                   role="option"
                   aria-selected={isSelected}
                   aria-disabled={item.disabled || undefined}
+                  data-disabled-reason={item.disabled ? item.detail : undefined}
                   // mousedown so the textarea's focus never flickers away.
                   onMouseDown={(event) => {
                     event.preventDefault();

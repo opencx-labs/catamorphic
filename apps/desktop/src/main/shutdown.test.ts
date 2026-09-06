@@ -57,5 +57,38 @@ describe("desktop shutdown", () => {
     app.quit();
     await vi.waitFor(() => expect(finalQuit).toHaveBeenCalledOnce());
     expect(onError).toHaveBeenCalledWith(error);
+    expect(finalQuit).toHaveBeenCalledWith(1);
   });
+});
+
+it("attempts every cleanup and waits for storage after a producer fails", async () => {
+  const { shutdownDesktopServices } = await import("./shutdown.js");
+  const calls: string[] = [];
+  await expect(
+    shutdownDesktopServices({
+      steps: [
+        {
+          name: "first",
+          dispose: () => {
+            calls.push("first");
+            throw new Error("broken");
+          },
+        },
+        {
+          name: "second",
+          dispose: () => {
+            calls.push("second");
+          },
+        },
+        {
+          name: "storage",
+          dispose: async () => {
+            await Promise.resolve();
+            calls.push("storage");
+          },
+        },
+      ],
+    }),
+  ).rejects.toThrow("did not complete cleanly");
+  expect(calls).toEqual(["first", "second", "storage"]);
 });

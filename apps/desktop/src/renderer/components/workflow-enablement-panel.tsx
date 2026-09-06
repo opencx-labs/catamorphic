@@ -169,6 +169,7 @@ export function WorkflowEnablementPanel({
                   key={item.name}
                   value={item.name}
                   disabled={!item.compatible}
+                  data-disabled-reason="This connection is incompatible with the workflow"
                 >
                   {item.label}
                 </option>
@@ -184,6 +185,7 @@ export function WorkflowEnablementPanel({
               pending={preview.isPending}
               pendingLabel="Checking…"
               disabled={!environment}
+              data-disabled-reason="Choose an environment first"
               onClick={() => {
                 setUpdatingId(null);
                 void prepare({

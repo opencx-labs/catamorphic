@@ -138,6 +138,7 @@ export function registerTerminalSupport(
   ) => Record<string, string> | Promise<Record<string, string>>,
 ): {
   dispose(): void;
+  hasActiveWork(): boolean;
   agentTerminals: AgentTerminals;
 } {
   const sessions = new Map<string, TerminalSession>();
@@ -522,6 +523,11 @@ export function registerTerminalSupport(
   };
 
   return {
+    hasActiveWork: () =>
+      [...sessions.values()].some(
+        (session) =>
+          session.running && (Boolean(session.agent) || computeBusy(session)),
+      ),
     dispose() {
       clearInterval(busyPoll);
       for (const session of sessions.values()) {

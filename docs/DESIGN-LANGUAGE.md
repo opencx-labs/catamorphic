@@ -26,7 +26,7 @@ existing palette and patterns.
 
 ## Foundations
 
-- **Dark-first.** Dark is the default everywhere; light is an override.
+- **System appearance by default.** New desktop profiles follow the operating system; explicit themes stay pinned. The website uses the canonical dark palette.
 - **Surfaces** (dark anchors): bg `#0a0a0b`, raised `#101012`, overlay
   `#16161a`, inset `#060607` (code, wells, terminals).
 - **Text**: fg `#e6e6e9`, muted `#9a9aa3`, faint `#5c5c66`.

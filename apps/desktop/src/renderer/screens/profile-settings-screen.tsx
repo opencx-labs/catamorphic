@@ -160,6 +160,7 @@ function ProfileSettingsForm({
                 pending={saving}
                 pendingLabel="Saving…"
                 disabled={!name.trim() || name.trim() === profile.name}
+                data-disabled-reason="Enter a different profile name"
                 onClick={() => void update({ name: name.trim() })}
                 className="h-8 rounded-md bg-accent px-3 text-xs font-medium text-accent-fg"
               >
@@ -223,6 +224,7 @@ function ProfileSettingsForm({
             <button
               type="button"
               disabled={isDefault}
+              data-disabled-reason="This is already the default profile"
               onClick={() => void desktopApi.profilesSetDefault(profile.id)}
               className="flex h-8 cursor-pointer items-center gap-1.5 rounded-md border border-border px-2.5 text-xs text-fg disabled:cursor-default disabled:opacity-60"
             >
@@ -248,6 +250,7 @@ function ProfileSettingsForm({
             <button
               type="button"
               disabled={!canDelete}
+              data-disabled-reason="Keep at least one profile and switch away before deleting this one"
               onClick={() => setConfirmDelete(true)}
               className="mt-3 flex h-8 cursor-pointer items-center gap-1.5 rounded-md border border-danger/40 px-2.5 text-xs text-danger disabled:cursor-default disabled:opacity-50"
             >

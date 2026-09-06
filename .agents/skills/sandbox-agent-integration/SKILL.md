@@ -238,3 +238,14 @@ interface CodingAgentProvider {
   MinIO, and compatible stores until Artifacts is generally available
 
 The host chooses by constructing the backend it wants and passing it via `createCatamorphic({ storage })` — there is no env-var switch.
+
+## Native harness model catalogs
+
+The desktop discovers models on demand through the selected harness and its
+credential context. Claude Code uses `supportedModels`; Codex uses
+`@catamorphic/codex`'s `listCodexModels` over the installed executable's
+app-server `initialize` / `model/list` protocol. The TypeScript turn SDK has no
+model-list method. Do not invoke the unsupported `codex debug models` command
+or maintain a hardcoded model catalog. Discovery must bound process lifetime,
+follow pagination, filter hidden models, clean up listeners/processes, and
+report errors in the picker without starting a turn.

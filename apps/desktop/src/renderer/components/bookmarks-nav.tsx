@@ -7,6 +7,7 @@ import {
   type ProjectBookmarks,
   type SidebarMenuEntry,
 } from "../lib/desktop-api.js";
+import { Collapsible } from "./collapsible.js";
 import { SidebarItemRow } from "./sidebar-item-row.js";
 import { SiteFavicon } from "./site-favicon.js";
 
@@ -219,17 +220,9 @@ function BookmarkFolderRow({
         <Folder className="size-3.5 shrink-0 text-fg-faint" />
         <span className="truncate">{label}</span>
       </button>
-      <div
-        className="grid transition-[grid-template-rows,opacity] duration-150"
-        style={{
-          gridTemplateRows: open ? "1fr" : "0fr",
-          opacity: open ? 1 : 0,
-        }}
-      >
-        <div className="overflow-hidden">
-          <ul className="ml-5 flex flex-col gap-0.5">{children}</ul>
-        </div>
-      </div>
+      <Collapsible open={open}>
+        <ul className="ml-5 flex flex-col gap-0.5">{children}</ul>
+      </Collapsible>
     </li>
   );
 }

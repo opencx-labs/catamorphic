@@ -1,5 +1,10 @@
 import path from "node:path";
-import { app, ipcMain, powerMonitor } from "electron";
+import {
+  app,
+  ipcMain,
+  autoUpdater as nativeUpdater,
+  powerMonitor,
+} from "electron";
 import electronUpdater from "electron-updater";
 import type {
   DesktopUpdateChannel,
@@ -9,6 +14,7 @@ import {
   defaultDesktopUpdateChannel,
   UpdatePreferencesStore,
 } from "./update-preferences.js";
+import { createUpdatePreparation } from "./update-preparation.js";
 import { DesktopUpdaterController } from "./updater-controller.js";
 
 const INITIAL_CHECK_DELAY_MS = 30_000;
@@ -23,6 +29,7 @@ export interface DesktopUpdaterService {
 
 export function registerDesktopUpdater(options: {
   broadcast: (channel: string, payload: unknown) => void;
+  canInstall: () => Promise<boolean>;
 }): DesktopUpdaterService {
   const { autoUpdater } = electronUpdater;
   autoUpdater.logger = console;
@@ -32,7 +39,10 @@ export function registerDesktopUpdater(options: {
   const channel = preferences.load(
     defaultDesktopUpdateChannel(app.getVersion()),
   );
+  const preparation = createUpdatePreparation({ updater: nativeUpdater });
   const controller = new DesktopUpdaterController({
+    prepareInstall: () => preparation.prepare(),
+    canInstall: options.canInstall,
     currentVersion: app.getVersion(),
     channel,
     supported: app.isPackaged && process.platform === "darwin",
@@ -68,6 +78,7 @@ export function registerDesktopUpdater(options: {
       return true;
     },
     dispose() {
+      preparation.dispose();
       if (initialTimer) clearTimeout(initialTimer);
       if (interval) clearInterval(interval);
       if (supported) powerMonitor.removeListener("resume", onResume);

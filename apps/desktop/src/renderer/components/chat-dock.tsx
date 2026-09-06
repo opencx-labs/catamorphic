@@ -15,6 +15,7 @@ import {
   Columns2,
   FileCode,
   Ghost,
+  GitBranch,
   GitFork,
   Globe,
   KeyRound,
@@ -102,6 +103,7 @@ export interface ChatSurface {
     | "subagent"
     | "watcher"
     | "app"
+    | "workflow"
     | "mcpapp";
   label: string;
   faviconUrl?: string | null;
@@ -147,6 +149,7 @@ const SURFACE_GROUP_LABELS = {
   subagent: "subagents",
   watcher: "watchers",
   app: "apps",
+  workflow: "workflows",
   mcpapp: "app views",
 } as const;
 
@@ -158,6 +161,7 @@ const SURFACE_ICONS = {
   subagent: Bot,
   watcher: Radio,
   app: LayoutGrid,
+  workflow: GitBranch,
   mcpapp: AppWindow,
 } as const;
 
@@ -1391,6 +1395,8 @@ export function ChatDock({
     moving: false,
   });
   const [localInspectorNonce, setLocalInspectorNonce] = useState(0);
+  const [moveCheckNonce, setMoveCheckNonce] = useState(0);
+  // biome-ignore lint/correctness/useExhaustiveDependencies: inspector opening refreshes remote eligibility
   useEffect(() => {
     if (chat.isSending) {
       setMoveState({
@@ -1426,7 +1432,7 @@ export function ChatDock({
     return () => {
       cancelled = true;
     };
-  }, [activeSessionId, chat.isSending, projectId]);
+  }, [activeSessionId, chat.isSending, projectId, moveCheckNonce]);
   useEffect(() => {
     const load = () => {
       if (!entry.sessionId) {
@@ -2727,7 +2733,10 @@ export function ChatDock({
               agentName={activeAgent?.name ?? "Default agent"}
               model={chat.session?.model || activeAgent?.model || "Automatic"}
               reportedModel={reportedModel}
-              onInspect={() => setInspected(true)}
+              onInspect={() => {
+                setInspected(true);
+                setMoveCheckNonce((value) => value + 1);
+              }}
               effort={
                 effectiveEffort(
                   activeAgent,
@@ -2751,6 +2760,7 @@ export function ChatDock({
               incognito={isIncognito}
               openRequest={(inspectRequestNonce ?? 0) + localInspectorNonce}
               moving={moveState.moving}
+              moveError={moveState.canMove ? moveState.reason : undefined}
               moveDisabledReason={
                 moveState.canMove
                   ? null
@@ -2866,6 +2876,7 @@ export function ChatDock({
                       className="ml-0.5 grid size-4 cursor-pointer place-items-center rounded text-fg-faint hover:bg-bg-muted hover:text-fg"
                       aria-label={`Stop watcher ${watcher.workflowName}`}
                       disabled={watcherQuery.stop.isPending}
+                      data-disabled-reason="Stopping this watcher"
                       onClick={() => watcherQuery.stop.mutate(watcher.id)}
                     >
                       <X className="size-3" />
@@ -3109,6 +3120,7 @@ export function ChatDock({
                     type="submit"
                     className="grid size-8 shrink-0 place-items-center rounded-lg bg-accent text-accent-fg transition-opacity duration-150 disabled:opacity-35"
                     disabled={!draft.trim() && pillCount === 0}
+                    data-disabled-reason="Write a message or attach a file first"
                     aria-label="Send message"
                   >
                     <ArrowUp className="size-4" />

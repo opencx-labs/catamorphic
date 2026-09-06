@@ -2,9 +2,9 @@ import { describe, expect, it } from "vitest";
 import { effectiveEffort, supportedEfforts } from "./agent-effort.js";
 
 describe("harness effort controls", () => {
-  it("shows Codex's actual xhigh value for a stored max setting", () => {
-    expect(effectiveEffort({ harness: "codex" }, "max")).toBe("xhigh");
-    expect(supportedEfforts({ harness: "codex" })).not.toContain("max");
+  it("preserves max supported by the shipped Codex SDK", () => {
+    expect(effectiveEffort({ harness: "codex" }, "max")).toBe("max");
+    expect(supportedEfforts({ harness: "codex" })).toContain("max");
   });
   it("reflects the built-in OpenAI adapter's high ceiling", () => {
     expect(

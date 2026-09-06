@@ -8,8 +8,10 @@ import {
   useUnarchiveAgentSession,
   useUpdateAgentSession,
   useWorkflows,
+  workflowKeys,
 } from "@catamorphic/react";
 import type { AgentSession, ProjectSummary } from "@catamorphic/react/types";
+import { useQueryClient } from "@tanstack/react-query";
 import {
   ChevronRight,
   Columns2,
@@ -62,6 +64,7 @@ import {
 } from "./components/chat-dock.js";
 import { ChatGlyph } from "./components/chat-icon.js";
 import { SignalBadge } from "./components/chat-signals.js";
+import { Collapsible } from "./components/collapsible.js";
 import { CommandPalette } from "./components/command-palette.js";
 import { ConfigureAgentModal } from "./components/configure-agent-modal.js";
 import { ConnectorsModal } from "./components/connectors-modal.js";
@@ -87,13 +90,19 @@ import { RemoteConnectModal } from "./components/remote-connect-modal.js";
 import { RemoteConnectionIndicator } from "./components/remote-connection-indicator.js";
 import { RemoteHistoryModal } from "./components/remote-history-modal.js";
 import { type RemoteFeatures, RemoteNav } from "./components/remote-nav.js";
-import { SessionInspectorContent } from "./components/session-inspector.js";
 import {
   ArchiveSessionDialog,
   CreateSubsessionDialog,
 } from "./components/session-lifecycle-dialogs.js";
-import { ShortcutHint } from "./components/shortcut-hint.js";
+import {
+  DisabledControlHints,
+  ShortcutHint,
+} from "./components/shortcut-hint.js";
 import { SidebarItemRow } from "./components/sidebar-item-row.js";
+import {
+  type SessionCommand,
+  SidebarSessionInspector,
+} from "./components/sidebar-session-inspector.js";
 import { SiteFavicon } from "./components/site-favicon.js";
 import {
   type PendingToolPermission,
@@ -134,6 +143,12 @@ import {
 } from "./lib/keybindings.js";
 import { notifyDesktop, playChime } from "./lib/notify.js";
 import { skillInvocation } from "./lib/skills.js";
+import {
+  isBrowserFile,
+  localFileUrl,
+  parseSurfaceLink,
+  resolveProjectFileLocation,
+} from "./lib/surface-link.js";
 import { AppScreen, useApps } from "./screens/app-screen.js";
 import {
   type BrowserPageState,
@@ -224,6 +239,9 @@ interface TerminalEntry {
 }
 
 interface EditorEntry {
+  line?: number;
+  column?: number;
+  navigation?: string;
   localId: string;
   /** Open file (project-relative), or null while the picker shows. */
   filePath: string | null;
@@ -353,36 +371,8 @@ const browserTabKey = (localId: string) => `browser:${localId}`;
 const terminalTabKey = (localId: string) => `terminal:${localId}`;
 const editorTabKey = (localId: string) => `editor:${localId}`;
 
-const isPdfPath = (filePath: string) => /\.pdf$/i.test(filePath);
-
 const fileNameFromPath = (filePath: string) =>
   filePath.split(/[\\/]/).at(-1) || filePath;
-
-/** Resolve either an absolute agent path or a project-relative file path. */
-const resolveProjectFileLocation = (
-  projectRoot: string,
-  filePath: string,
-): { absolutePath: string; relativePath: string } => {
-  const slashPath = filePath.replaceAll("\\", "/");
-  const slashRoot = projectRoot.replaceAll("\\", "/").replace(/\/$/, "");
-  const absolute =
-    slashPath.startsWith("/") || /^[A-Za-z]:\//.test(slashPath)
-      ? slashPath
-      : `${slashRoot}/${slashPath}`;
-  return {
-    absolutePath: absolute,
-    relativePath: absolute.startsWith(`${slashRoot}/`)
-      ? absolute.slice(slashRoot.length + 1)
-      : slashPath,
-  };
-};
-
-/** A safely encoded local URL for Chromium's built-in PDF viewer. */
-const localFileUrl = (absolutePath: string): string => {
-  const url = new URL("file:///");
-  url.pathname = absolutePath;
-  return url.href;
-};
 
 /**
  * The restart-surviving projection of a workspace, persisted per project
@@ -508,6 +498,7 @@ const chatVisible = (ws: Workspace, chat: ChatDockEntry) =>
 
 /** Tab keys attached to a chat, in per-kind order. */
 const attachedTabKeys = (ws: Workspace, chatLocalId: string) => [
+  ...ws.tabs.filter((tab) => tab.chatLocalId === chatLocalId).map(tabKey),
   ...tabbedBrowsers(ws)
     .filter((browser) => browser.chatLocalId === chatLocalId)
     .map((browser) => browserTabKey(browser.localId)),
@@ -713,6 +704,19 @@ function focusedChatSurfaceId(): string | undefined {
 }
 
 export function App() {
+  const queryClient = useQueryClient();
+  useEffect(
+    () =>
+      desktopApi.onGitChanged(({ projectId }) => {
+        void queryClient.invalidateQueries({
+          queryKey: workflowKeys.project({ projectId }),
+        });
+        void queryClient.invalidateQueries({
+          queryKey: ["cat", "project", projectId, "apps"],
+        });
+      }),
+    [queryClient],
+  );
   const projectsQuery = useProjects();
   // Subscribe to loading/error changes even while the workspace branch is
   // rendered. Query observers track property reads; recovery cannot depend
@@ -1707,6 +1711,172 @@ export function App() {
             : null,
       };
     });
+  };
+
+  const [linkError, setLinkError] = useState<string | null>(null);
+  /** One resolver for clicked links, file chips, sidebar files, and agent tools. */
+  const openLinkedSurface = async (
+    value: string,
+    opts: {
+      chatLocalId?: string;
+      side?: boolean;
+      background?: boolean;
+      newTab?: boolean;
+    } = {},
+  ): Promise<string> => {
+    const target = parseSurfaceLink(value);
+    if (!target)
+      throw new Error("This link is not a supported workspace target");
+    const originProject = projectIdRef.current;
+    const root =
+      target.kind === "file" && originProject
+        ? await desktopApi.projectRoot(originProject)
+        : null;
+    if (projectIdRef.current !== originProject)
+      throw new Error(
+        "The project changed. Open this link from its original chat.",
+      );
+    if (target.kind === "workflow") {
+      void queryClient.invalidateQueries({
+        queryKey: workflowKeys.project({ projectId: originProject }),
+      });
+    }
+    const localId = crypto.randomUUID();
+    const location =
+      target.kind === "file"
+        ? resolveProjectFileLocation(root ?? "", target.path)
+        : null;
+    const browserUrl =
+      target.kind === "browser"
+        ? target.url
+        : target.kind === "file" && location && isBrowserFile(target.path)
+          ? localFileUrl(location.absolutePath)
+          : null;
+    if (browserUrl && !activeProfileRef.current)
+      throw new Error("Choose a profile before opening this link");
+    const existingEditor =
+      target.kind === "file" && !browserUrl && !opts.newTab
+        ? workspaceRef.current.editors.find(
+            (editor) => editor.filePath === location?.relativePath,
+          )
+        : undefined;
+    const key = browserUrl
+      ? browserTabKey(localId)
+      : target.kind === "file"
+        ? editorTabKey(existingEditor?.localId ?? localId)
+        : target.kind === "tab"
+          ? target.key
+          : target.kind === "workflow" || target.kind === "app"
+            ? `${target.kind}:${target.name}`
+            : browserTabKey(localId);
+    if (
+      target.kind === "tab" &&
+      !orderedTabKeys(workspaceRef.current, {
+        includeCollapsed: true,
+      }).includes(key)
+    )
+      throw new Error("This tab is no longer open");
+    updateWorkspace((ws) => ({
+      ...ws,
+      ...(browserUrl
+        ? {
+            browsers: [
+              ...ws.browsers,
+              {
+                localId,
+                profileId: activeProfileRef.current?.id ?? "",
+                initialUrl: browserUrl,
+                url: browserUrl,
+                title:
+                  target.kind === "file"
+                    ? fileNameFromPath(target.path)
+                    : browserUrl,
+                faviconUrl: null,
+                chatLocalId: opts.chatLocalId,
+              },
+            ],
+          }
+        : target.kind === "file" && location
+          ? {
+              editors: existingEditor
+                ? ws.editors.map((editor) =>
+                    editor.localId === existingEditor.localId
+                      ? {
+                          ...editor,
+                          background: false,
+                          line: target.line,
+                          column: target.column,
+                          navigation: localId,
+                        }
+                      : editor,
+                  )
+                : [
+                    ...ws.editors,
+                    {
+                      localId,
+                      filePath: location.relativePath,
+                      dirty: false,
+                      chatLocalId: opts.chatLocalId,
+                      line: target.line,
+                      column: target.column,
+                      navigation: localId,
+                    },
+                  ],
+            }
+          : target.kind === "workflow" || target.kind === "app"
+            ? {
+                tabs: ws.tabs.some((tab) => tabKey(tab) === key)
+                  ? ws.tabs
+                  : [
+                      ...ws.tabs,
+                      {
+                        kind: target.kind,
+                        name: target.name,
+                        chatLocalId: opts.chatLocalId,
+                      },
+                    ],
+              }
+            : {}),
+      activeTabKey: opts.background ? ws.activeTabKey : key,
+      split: opts.background
+        ? ws.split
+        : opts.side && ws.activeTabKey && ws.activeTabKey !== key
+          ? { leftKey: ws.activeTabKey, rightKey: key, ratio: 0.5 }
+          : null,
+    }));
+    return key;
+  };
+  const openLinkedSurfaceRef = useRef(openLinkedSurface);
+  openLinkedSurfaceRef.current = openLinkedSurface;
+  const openMessageLink = (
+    value: string,
+    entry: ChatDockEntry,
+    modifiers: { metaKey: boolean; shiftKey: boolean },
+  ) => {
+    void openLinkedSurface(value, {
+      chatLocalId: entry.localId,
+      side: modifiers.metaKey && modifiers.shiftKey,
+      newTab: modifiers.metaKey,
+    })
+      .then(() => {
+        if (modifiers.metaKey || entry.mode !== "tab") return;
+        updateWorkspace((ws) => ({
+          ...ws,
+          activeChatId: entry.localId,
+          chats: ws.chats.map((chat) =>
+            chat.localId === entry.localId
+              ? { ...chat, mode: "partial" }
+              : chat.mode === "partial"
+                ? { ...chat, mode: "min" }
+                : chat,
+          ),
+        }));
+      })
+      .catch((cause: unknown) =>
+        setLinkError(
+          cause instanceof Error ? cause.message : "Could not open this link",
+        ),
+      );
   };
 
   const onTerminalTitle = useCallback(
@@ -3905,134 +4075,29 @@ export function App() {
               ),
             }));
           };
-          if (target.startsWith("app:")) {
-            const name = target.slice("app:".length);
-            const key = `app:${name}`;
-            if (openInBackground(key)) {
-              updateWorkspace((current) => ({
-                ...current,
-                tabs: current.tabs.some((tab) => tabKey(tab) === key)
-                  ? current.tabs
-                  : [...current.tabs, { kind: "app", name }],
-              }));
-              return background(key);
-            }
-            updateWorkspace((current) => {
-              const exists = current.tabs.some((tab) => tabKey(tab) === key);
-              return {
-                ...current,
-                tabs: exists
-                  ? current.tabs
-                  : [...current.tabs, { kind: "app", name }],
-                activeTabKey: key,
-                split: null,
-              };
-            });
-            stepChatAside();
-            return { key, opened: "focused" };
-          }
-          if (target.startsWith("file:")) {
-            const filePath = target.slice("file:".length);
-            const localId = crypto.randomUUID();
-            const root = projectIdRef.current
-              ? await desktopApi.projectRoot(projectIdRef.current)
-              : null;
-            const location = root
-              ? resolveProjectFileLocation(root, filePath)
-              : null;
-            if (location && isPdfPath(location.relativePath)) {
-              if (!activeProfileRef.current) return { error: "No profile" };
-              const entry: BrowserEntry = {
-                localId,
-                profileId: activeProfileRef.current.id,
-                initialUrl: localFileUrl(location.absolutePath),
-                url: localFileUrl(location.absolutePath),
-                title: fileNameFromPath(location.relativePath),
-                faviconUrl: null,
-                chatLocalId: requester?.localId,
-              };
-              if (openInBackground(browserTabKey(localId)) && requester) {
-                updateWorkspace((current) => ({
-                  ...current,
-                  browsers: [...current.browsers, entry],
-                }));
-                return background(browserTabKey(localId));
-              }
-              updateWorkspace((current) => ({
-                ...current,
-                browsers: [...current.browsers, entry],
-                activeTabKey: browserTabKey(localId),
-                split: null,
-              }));
+          const linked = parseSurfaceLink(target);
+          if (linked && linked.kind !== "tab") {
+            const backgroundOpen = openInBackground(
+              linked.kind === "app" || linked.kind === "workflow"
+                ? `${linked.kind}:${linked.name}`
+                : "",
+            );
+            try {
+              const key = await openLinkedSurfaceRef.current(target, {
+                chatLocalId: requesterId,
+                background: backgroundOpen,
+              });
+              if (backgroundOpen) return background(key);
               stepChatAside();
-              return { key: browserTabKey(localId), opened: "focused" };
+              return { key, opened: "focused" };
+            } catch (cause) {
+              return {
+                error:
+                  cause instanceof Error
+                    ? cause.message
+                    : "Could not open the target",
+              };
             }
-            const relativePath = location?.relativePath ?? filePath;
-            if (openInBackground(editorTabKey(localId)) && requester) {
-              updateWorkspace((current) => ({
-                ...current,
-                editors: [
-                  ...current.editors,
-                  // Attached to the asking chat, so the chip carrying
-                  // the attention dot has a rail to ride.
-                  {
-                    localId,
-                    filePath: relativePath,
-                    dirty: false,
-                    chatLocalId: requester.localId,
-                  },
-                ],
-              }));
-              return background(editorTabKey(localId));
-            }
-            updateWorkspace((current) => ({
-              ...current,
-              editors: [
-                ...current.editors,
-                // Attached to the asking chat even when focused, so "show
-                // the user this file" always leaves a chip on the rail.
-                {
-                  localId,
-                  filePath: relativePath,
-                  dirty: false,
-                  chatLocalId: requester?.localId,
-                },
-              ],
-              activeTabKey: editorTabKey(localId),
-              split: null,
-            }));
-            stepChatAside();
-            return { key: editorTabKey(localId), opened: "focused" };
-          }
-          if (/^https?:\/\//.test(target)) {
-            if (!activeProfileRef.current) return { error: "No profile" };
-            const localId = crypto.randomUUID();
-            const entry: BrowserEntry = {
-              localId,
-              profileId: activeProfileRef.current?.id ?? "",
-              initialUrl: target,
-              url: target,
-              title: target,
-              faviconUrl: null,
-              chatLocalId: requesterId,
-            };
-            if (openInBackground(browserTabKey(localId))) {
-              // The hidden pane keeps webviews alive, so the page
-              // loads while the user finishes what they're doing.
-              updateWorkspace((current) => ({
-                ...current,
-                browsers: [...current.browsers, entry],
-              }));
-              return background(browserTabKey(localId));
-            }
-            updateWorkspace((current) => ({
-              ...current,
-              browsers: [...current.browsers, entry],
-              activeTabKey: browserTabKey(localId),
-              split: null,
-            }));
-            stepChatAside();
-            return { key: browserTabKey(localId), opened: "focused" };
           }
           // A background agent terminal: open_surface is the agent
           // explicitly SHOWING it — materialize the tab (focused only
@@ -4499,6 +4564,15 @@ export function App() {
             attention: session.attentionRequired,
           };
         }),
+      ...workspace.tabs
+        .filter((tab) => tab.chatLocalId === chat.localId)
+        .map((tab) => ({
+          key: tabKey(tab),
+          kind:
+            tab.kind === "workflow" ? ("workflow" as const) : ("app" as const),
+          label: tab.label ?? tab.name,
+          attention: attentionKeys.includes(tabKey(tab)),
+        })),
       ...workspace.browsers
         .filter((browser) => browser.chatLocalId === chat.localId)
         .map((browser) => ({
@@ -4686,6 +4760,22 @@ export function App() {
         hasActiveWork={hasActiveWork}
         onOpenRelease={(url) => openBrowserTab(url)}
       />
+      {linkError && (
+        <div
+          role="alert"
+          className="fixed right-4 top-12 z-[250] flex max-w-sm items-center gap-3 rounded-lg border border-border bg-bg-overlay p-3 text-xs text-fg shadow-lg"
+        >
+          <span>{linkError}</span>
+          <button
+            type="button"
+            onClick={() => setLinkError(null)}
+            className="text-accent"
+          >
+            Dismiss
+          </button>
+        </div>
+      )}
+      <DisabledControlHints />
       <MobilePairingModal
         open={mobilePairing.open}
         context={mobilePairing.context}
@@ -4796,6 +4886,13 @@ export function App() {
                     projectId={projectId}
                     profileId={activeProfile?.id}
                     activeTab={activeTab}
+                    activeFilePath={
+                      workspace.editors.find(
+                        (editor) =>
+                          editorTabKey(editor.localId) ===
+                          workspace.activeTabKey,
+                      )?.filePath ?? undefined
+                    }
                     activeChatSessionId={
                       workspace.chats.find(
                         (chat) => chat.localId === workspace.activeChatId,
@@ -4810,10 +4907,38 @@ export function App() {
                     unreadSessionIds={unreadSessionIds}
                     onOpenTab={openTab}
                     onNewChat={() => addChat()}
+                    onSessionCommand={(session, command) => {
+                      const entry = workspace.chats.find(
+                        (chat) => chat.sessionId === session.id,
+                      ) ?? { ...newChatEntry("tab"), sessionId: session.id };
+                      if (command === "fork") {
+                        void desktopApi
+                          .sessionIsIncognito(session.id)
+                          .then((incognito) =>
+                            forkChat({ ...entry, incognito }),
+                          );
+                        return;
+                      }
+                      if (command === "parent") {
+                        openParentChat(entry);
+                        return;
+                      }
+                      openSession(session);
+                      openPalettePicker(command);
+                    }}
                     onOpenSession={openSession}
                     onSessionAction={applySessionAction}
                     onOpenUrl={openUrl}
-                    onOpenFile={(filePath) => openEditorTab({ filePath })}
+                    onOpenFile={(filePath) => {
+                      void openLinkedSurface(`file:${filePath}`).catch(
+                        (cause: unknown) =>
+                          setLinkError(
+                            cause instanceof Error
+                              ? cause.message
+                              : "Could not open this file",
+                          ),
+                      );
+                    }}
                     onOpenHistory={setRemoteHistoryPath}
                     onPublish={(path, features) =>
                       setRemotePublish({ path, features })
@@ -5224,6 +5349,9 @@ export function App() {
                     )}
                   <Suspense fallback={<div className="flex-1 bg-bg" />}>
                     <EditorScreen
+                      line={editor.line}
+                      column={editor.column}
+                      navigation={editor.navigation}
                       projectId={projectId}
                       filePath={editor.filePath}
                       onFileChange={(filePath) =>
@@ -5362,67 +5490,15 @@ export function App() {
                     mode === "split" ? "side" : undefined,
                   );
                 }}
-                onLinkClick={(url, modifiers) => {
-                  // The palette's grammar, applied to links: plain =
-                  // open (the page takes the view, a fullscreen chat
-                  // steps down to the floating dock), ⌘ = new tab (the
-                  // chat keeps its place), ⌘⇧ = open to the side.
-                  if (modifiers.metaKey && modifiers.shiftKey) {
-                    openBrowserTab(url, {
-                      side: true,
-                      chatLocalId: entry.localId,
-                    });
-                    return;
-                  }
-                  if (modifiers.metaKey) {
-                    openBrowserTab(url, { chatLocalId: entry.localId });
-                    return;
-                  }
-                  openBrowserTab(url, { chatLocalId: entry.localId });
-                  if (entry.mode === "tab") {
-                    updateWorkspace((ws) => ({
-                      ...ws,
-                      activeChatId: entry.localId,
-                      chats: ws.chats.map((chat) =>
-                        chat.localId === entry.localId
-                          ? { ...chat, mode: "partial" }
-                          : chat.mode === "partial"
-                            ? { ...chat, mode: "min" }
-                            : chat,
-                      ),
-                    }));
-                  }
-                }}
-                onFileClick={(path) => {
-                  if (!projectId) {
-                    openEditorTab({
-                      filePath: path,
-                      chatLocalId: entry.localId,
-                    });
-                    return;
-                  }
-                  void desktopApi.projectRoot(projectId).then((root) => {
-                    if (!root) {
-                      openEditorTab({
-                        filePath: path,
-                        chatLocalId: entry.localId,
-                      });
-                      return;
-                    }
-                    const location = resolveProjectFileLocation(root, path);
-                    if (isPdfPath(location.relativePath)) {
-                      openBrowserTab(localFileUrl(location.absolutePath), {
-                        chatLocalId: entry.localId,
-                        title: fileNameFromPath(location.relativePath),
-                      });
-                      return;
-                    }
-                    openEditorTab({
-                      filePath: location.relativePath,
-                      chatLocalId: entry.localId,
-                    });
-                  });
-                }}
+                onLinkClick={(url, modifiers) =>
+                  openMessageLink(url, entry, modifiers)
+                }
+                onFileClick={(path) =>
+                  openMessageLink(`file:${path}`, entry, {
+                    metaKey: false,
+                    shiftKey: false,
+                  })
+                }
                 onFork={(messageId) => forkChat(entry, messageId)}
                 onForkCurrent={() => forkChat(entry)}
                 archived={Boolean(
@@ -5737,6 +5813,7 @@ function ConfiguredSection({
   profileId,
   activeTab,
   activeChatSessionId,
+  activeFilePath,
   keybindingLabel,
   agentsData,
   defaultAgentId,
@@ -5745,6 +5822,7 @@ function ConfiguredSection({
   onOpenTab,
   onNewChat,
   onOpenSession,
+  onSessionCommand,
   onSessionAction,
   onOpenUrl,
   onOpenFile,
@@ -5759,6 +5837,7 @@ function ConfiguredSection({
   profileId?: string;
   activeTab?: WorkspaceTab;
   activeChatSessionId?: string;
+  activeFilePath?: string;
   keybindingLabel: string;
   agentsData: AgentsData | null;
   defaultAgentId: string | null;
@@ -5767,6 +5846,7 @@ function ConfiguredSection({
   onOpenTab: (tab: WorkspaceTab) => void;
   onNewChat: () => void;
   onOpenSession: (session: AgentSession) => void;
+  onSessionCommand: (session: AgentSession, command: SessionCommand) => void;
   onSessionAction: (sessionId: string, action: ChatSessionAction) => void;
   onOpenUrl: (url: string, mode: "tab" | "replace") => void;
   onOpenFile: (filePath: string) => void;
@@ -5833,9 +5913,7 @@ function ConfiguredSection({
             <FilesNav
               projectId={projectId}
               contentOnly={memberShell}
-              activePath={
-                activeTab?.kind === "editor" ? activeTab.name : undefined
-              }
+              activePath={activeFilePath}
               onEmptyChange={setEmpty}
               onOpen={onOpenFile}
             />
@@ -5867,6 +5945,7 @@ function ConfiguredSection({
               projectAgentNames={projectAgentNames}
               unreadSessionIds={unreadSessionIds}
               onEmptyChange={setEmpty}
+              onCommand={onSessionCommand}
               onSelect={onOpenSession}
               onSessionAction={onSessionAction}
             />
@@ -6067,27 +6146,19 @@ function CustomItem({
         }}
       />
       {children.length > 0 && (
-        <div
-          className="grid transition-[grid-template-rows,opacity] duration-150"
-          style={{
-            gridTemplateRows: open ? "1fr" : "0fr",
-            opacity: open ? 1 : 0,
-          }}
-        >
-          <div className="overflow-hidden">
-            <ul className="ml-5 flex flex-col gap-0.5">
-              {children.map((child) => (
-                <CustomItem
-                  key={JSON.stringify(child)}
-                  item={child}
-                  section={section}
-                  experienceContext={experienceContext}
-                  onOpenUrl={onOpenUrl}
-                />
-              ))}
-            </ul>
-          </div>
-        </div>
+        <Collapsible open={open}>
+          <ul className="ml-5 flex flex-col gap-0.5">
+            {children.map((child) => (
+              <CustomItem
+                key={JSON.stringify(child)}
+                item={child}
+                section={section}
+                experienceContext={experienceContext}
+                onOpenUrl={onOpenUrl}
+              />
+            ))}
+          </ul>
+        </Collapsible>
       )}
     </li>
   );
@@ -6132,13 +6203,7 @@ function SidebarSection({
         </button>
         {action}
       </div>
-      <div
-        className={`grid transition-[grid-template-rows] duration-200 ease-[cubic-bezier(0.2,0,0,1)] ${
-          open ? "grid-rows-[1fr]" : "grid-rows-[0fr]"
-        }`}
-      >
-        <div className="overflow-hidden">{children}</div>
-      </div>
+      <Collapsible open={open}>{children}</Collapsible>
     </section>
   );
 }
@@ -6251,6 +6316,7 @@ function SessionsNav({
   projectAgentNames,
   unreadSessionIds,
   onEmptyChange,
+  onCommand,
   onSelect,
   onSessionAction,
 }: {
@@ -6261,6 +6327,7 @@ function SessionsNav({
   projectAgentNames: Record<string, string>;
   unreadSessionIds: ReadonlySet<string>;
   onEmptyChange?: (empty: boolean) => void;
+  onCommand: (session: AgentSession, command: SessionCommand) => void;
   onSelect: (session: AgentSession) => void;
   onSessionAction: (sessionId: string, action: ChatSessionAction) => void;
 }) {
@@ -6361,38 +6428,26 @@ function SessionsNav({
           <SidebarItemRow
             style={{ marginLeft: depth * 14 }}
             label={sessionLabel(session)}
-            icon={
-              <span className="flex items-center gap-0.5">
-                {children.length > 0 ? (
-                  <button
-                    type="button"
-                    aria-label={
-                      collapsed ? "Expand subsessions" : "Collapse subsessions"
-                    }
-                    onClick={(event) => {
-                      event.stopPropagation();
+            disclosure={
+              children.length > 0
+                ? {
+                    open: !collapsed,
+                    onToggle: () =>
                       setCollapsedParents((current) => {
                         const next = new Set(current);
                         if (next.has(session.id)) next.delete(session.id);
                         else next.add(session.id);
                         return next;
-                      });
-                    }}
-                    className="grid size-3.5 place-items-center rounded hover:bg-bg-overlay"
-                  >
-                    <ChevronRight
-                      className={`size-3 transition-transform duration-150 motion-reduce:transition-none ${collapsed ? "" : "rotate-90"}`}
-                    />
-                  </button>
-                ) : (
-                  <span className="size-3.5" />
-                )}
-                <ChatGlyph
-                  icon={session.icon}
-                  fork={Boolean(session.forkedFromSessionId)}
-                  className="size-3.5 shrink-0"
-                />
-              </span>
+                      }),
+                  }
+                : undefined
+            }
+            icon={
+              <ChatGlyph
+                icon={session.icon}
+                fork={Boolean(session.parentSessionId)}
+                className="size-3.5 shrink-0"
+              />
             }
             active={session.id === activeSessionId}
             labelContent={
@@ -6432,12 +6487,14 @@ function SessionsNav({
               ],
             }}
             previewContent={
-              <SessionInspectorContent
+              <SidebarSessionInspector
+                projectId={projectId}
                 session={session}
-                fallbackTitle={sessionLabel(session)}
+                agent={agentsData?.agents.find((agent) => agent.id === agentId)}
                 agentName={agentName}
                 checkout={checkout ?? null}
-                incognito={false}
+                onCommand={(command) => onCommand(session, command)}
+                onArchive={() => onSessionAction(session.id, "archive")}
               />
             }
             end={
@@ -6473,9 +6530,11 @@ function SessionsNav({
             onOpen={() => onSelect(session)}
             onAction={(entry) => onSessionAction(session.id, entry.action)}
           />
-          {!collapsed && children.length > 0 ? (
-            <ul>{renderBranch(session.id, depth + 1)}</ul>
-          ) : null}
+          {children.length > 0 && (
+            <Collapsible open={!collapsed}>
+              <ul>{renderBranch(session.id, depth + 1)}</ul>
+            </Collapsible>
+          )}
         </li>
       );
     });
@@ -6565,6 +6624,7 @@ function EmptyState({
                 type="button"
                 onClick={onNewProject}
                 disabled={startingAgent}
+                data-disabled-reason="Starting the agent"
                 className="inline-flex h-8 cursor-pointer items-center gap-2 rounded-md border border-border px-3 text-[13px] text-fg-muted transition-colors duration-150 hover:bg-bg-overlay hover:text-fg disabled:cursor-not-allowed disabled:opacity-60"
               >
                 <FolderPlus className="size-3.5" />
@@ -6574,6 +6634,7 @@ function EmptyState({
                 type="button"
                 onClick={onConnectRemote}
                 disabled={startingAgent}
+                data-disabled-reason="Starting the agent"
                 data-testid="empty-connect-remote"
                 className="inline-flex h-8 cursor-pointer items-center gap-2 rounded-md border border-border px-3 text-[13px] text-fg-muted transition-colors duration-150 hover:bg-bg-overlay hover:text-fg disabled:cursor-not-allowed disabled:opacity-60"
               >

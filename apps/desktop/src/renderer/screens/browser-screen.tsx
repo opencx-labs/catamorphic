@@ -780,6 +780,7 @@ export function BrowserScreen({
             type="button"
             onClick={() => webviewRef.current?.goBack()}
             disabled={!canGoBack}
+            data-disabled-reason="No previous page in this tab"
             className="grid size-7 shrink-0 cursor-pointer place-items-center rounded-md text-fg-muted transition-colors duration-150 hover:bg-bg-overlay hover:text-fg disabled:cursor-default disabled:opacity-35 disabled:hover:bg-transparent"
             aria-label="Back"
           >
@@ -794,6 +795,7 @@ export function BrowserScreen({
             type="button"
             onClick={() => webviewRef.current?.goForward()}
             disabled={!canGoForward}
+            data-disabled-reason="No next page in this tab"
             className="grid size-7 shrink-0 cursor-pointer place-items-center rounded-md text-fg-muted transition-colors duration-150 hover:bg-bg-overlay hover:text-fg disabled:cursor-default disabled:opacity-35 disabled:hover:bg-transparent"
             aria-label="Forward"
           >

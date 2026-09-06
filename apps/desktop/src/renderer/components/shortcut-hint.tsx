@@ -46,6 +46,12 @@ export function ShortcutHint({
   useEffect(() => () => clearTimeout(timerRef.current), []);
 
   const show = () => {
+    if (
+      anchorRef.current?.querySelector(
+        "[disabled][data-disabled-reason], [aria-disabled=true][data-disabled-reason]",
+      )
+    )
+      return;
     clearTimeout(timerRef.current);
     timerRef.current = setTimeout(() => {
       const anchor = anchorRef.current;
@@ -106,7 +112,7 @@ export function ShortcutHint({
             onTransitionEnd={() => {
               if (!visible) setPosition(null);
             }}
-            className={`pointer-events-none fixed z-50 -translate-x-1/2 whitespace-nowrap rounded-md bg-bg-overlay px-2 py-1 text-[11px] text-fg-muted shadow-lg ring-1 ring-border transition-[opacity,translate] duration-200 ease-[cubic-bezier(0.2,0,0,1)] ${
+            className={`pointer-events-none fixed z-[400] -translate-x-1/2 whitespace-nowrap rounded-md bg-bg-overlay px-2 py-1 text-[11px] text-fg-muted shadow-lg ring-1 ring-border transition-[opacity,translate] duration-200 ease-[cubic-bezier(0.2,0,0,1)] ${
               visible
                 ? "translate-y-0 opacity-100"
                 : side === "bottom"
@@ -123,4 +129,94 @@ export function ShortcutHint({
         )}
     </span>
   );
+}
+
+/** Native disabled controls do not reliably dispatch React mouse events.
+ * Capture pointer interest once at the document boundary; reasons live next
+ * to each disabled condition, and the hint uses the same portal vocabulary.
+ */
+export function DisabledControlHints() {
+  const [hint, setHint] = useState<{
+    label: string;
+    x: number;
+    y: number;
+  } | null>(null);
+  const [visible, setVisible] = useState(false);
+  useEffect(() => {
+    let target: HTMLElement | null = null;
+    let showTimer: ReturnType<typeof setTimeout> | undefined;
+    let exitTimer: ReturnType<typeof setTimeout> | undefined;
+    const hide = () => {
+      clearTimeout(showTimer);
+      setVisible(false);
+      clearTimeout(exitTimer);
+      exitTimer = setTimeout(() => setHint(null), 200);
+      target = null;
+    };
+    const move = (event: Event) => {
+      const next =
+        event.target instanceof Element
+          ? event.target.closest<HTMLElement>(
+              "[disabled][data-disabled-reason], [aria-disabled=true][data-disabled-reason]",
+            )
+          : null;
+      if (next === target) return;
+      hide();
+      if (!next?.dataset.disabledReason) return;
+      target = next;
+      const anchor = next;
+      showTimer = setTimeout(() => {
+        if (
+          !anchor.isConnected ||
+          !anchor.matches("[disabled], [aria-disabled=true]")
+        )
+          return;
+        clearTimeout(exitTimer);
+        const rect = anchor.getBoundingClientRect();
+        setHint({
+          label: anchor.dataset.disabledReason ?? "",
+          x: Math.max(
+            148,
+            Math.min(window.innerWidth - 148, rect.x + rect.width / 2),
+          ),
+          y:
+            rect.bottom + 40 > window.innerHeight
+              ? Math.max(8, rect.top - 44)
+              : rect.bottom + 7,
+        });
+        setVisible(true);
+      }, SHOW_DELAY_MS);
+    };
+    const key = (event: KeyboardEvent) => {
+      if (event.key === "Escape") hide();
+    };
+    document.addEventListener("pointerover", move, true);
+    document.addEventListener("focusin", move, true);
+    document.addEventListener("pointerdown", hide, true);
+    document.addEventListener("scroll", hide, true);
+    window.addEventListener("blur", hide);
+    document.addEventListener("keydown", key);
+    return () => {
+      clearTimeout(showTimer);
+      clearTimeout(exitTimer);
+      document.removeEventListener("pointerover", move, true);
+      document.removeEventListener("focusin", move, true);
+      document.removeEventListener("pointerdown", hide, true);
+      document.removeEventListener("scroll", hide, true);
+      window.removeEventListener("blur", hide);
+      document.removeEventListener("keydown", key);
+    };
+  }, []);
+  return hint
+    ? createPortal(
+        <span
+          role="tooltip"
+          style={{ left: hint.x, top: hint.y }}
+          className={`pointer-events-none fixed z-[400] w-max max-w-72 -translate-x-1/2 rounded-md bg-bg-overlay px-2 py-1 text-[11px] text-fg-muted shadow-lg ring-1 ring-border transition-opacity duration-200 ${visible ? "animate-fade-in opacity-100" : "opacity-0"}`}
+        >
+          {hint.label}
+        </span>,
+        document.body,
+      )
+    : null;
 }

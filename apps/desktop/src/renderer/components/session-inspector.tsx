@@ -38,6 +38,7 @@ export function SessionInspector({
   onEditModel,
   onEditEffort,
   moveDisabledReason,
+  moveError,
   onMove,
   onFork,
   onArchive,
@@ -58,6 +59,7 @@ export function SessionInspector({
   onEditModel?: () => void;
   onEditEffort?: () => void;
   moveDisabledReason?: string | null;
+  moveError?: string | null;
   onMove?: () => void;
   onFork?: () => void;
   onArchive?: () => void;
@@ -102,6 +104,7 @@ export function SessionInspector({
           onEditModel={onEditModel}
           onEditEffort={onEditEffort}
           moveDisabledReason={moveDisabledReason}
+          moveError={moveError}
           onMove={onMove}
           onFork={onFork}
           onArchive={onArchive}
@@ -118,13 +121,23 @@ export function SessionInspector({
           className="flex h-7 max-w-56 cursor-pointer items-center gap-1.5 rounded-md px-2 text-[11px] font-medium text-fg-muted transition-colors hover:bg-bg-overlay hover:text-fg"
           data-testid="session-inspector-trigger"
         >
-          {session?.running ? (
-            <LoaderCircle className="size-3 animate-spin text-accent" />
-          ) : incognito ? (
-            <Ghost className="size-3" />
-          ) : (
-            <CircleDot className="size-3 text-accent" />
-          )}
+          <span
+            className="grid size-3 shrink-0 place-items-center"
+            aria-hidden="true"
+          >
+            <LoaderCircle
+              className={`col-start-1 row-start-1 size-3 text-accent transition-opacity duration-200 ${session?.running ? "animate-spin opacity-100" : "opacity-0"}`}
+            />
+            <span
+              className={`col-start-1 row-start-1 transition-[opacity,transform] duration-200 ${session?.running ? "scale-75 opacity-0" : "scale-100 opacity-100"}`}
+            >
+              {incognito ? (
+                <Ghost className="size-3" />
+              ) : (
+                <CircleDot className="size-3 text-accent" />
+              )}
+            </span>
+          </span>
           <Bot className="size-3" />
           <span className="truncate">{agentName}</span>
           <span className="shrink-0 rounded bg-bg-inset px-1.5 py-0.5 text-[9px] font-medium text-fg-faint">
@@ -149,6 +162,7 @@ export function SessionInspectorContent({
   onEditModel,
   onEditEffort,
   moveDisabledReason,
+  moveError,
   onMove,
   onFork,
   onArchive,
@@ -167,6 +181,7 @@ export function SessionInspectorContent({
   onEditModel?: () => void;
   onEditEffort?: () => void;
   moveDisabledReason?: string | null;
+  moveError?: string | null;
   onMove?: () => void;
   onFork?: () => void;
   onArchive?: () => void;
@@ -261,6 +276,11 @@ export function SessionInspectorContent({
         ) : null}
       </dl>
 
+      {moveError && (
+        <p role="alert" className="mb-2 text-xs text-danger">
+          {moveError}
+        </p>
+      )}
       {(onFork || onArchive || onMove || onOpenParent) && (
         <div className="grid grid-cols-2 gap-1 border-t border-border pt-2">
           {onFork ? (
@@ -279,7 +299,11 @@ export function SessionInspectorContent({
               label={moving ? "Moving" : "Move to server"}
               onClick={onMove}
               disabled={Boolean(moveDisabledReason) || moving}
-              title={moveDisabledReason ?? undefined}
+              title={
+                moving
+                  ? "Moving this session to the server"
+                  : (moveDisabledReason ?? undefined)
+              }
               spinning={moving}
             />
           ) : null}
@@ -348,13 +372,16 @@ function InspectorAction({
   danger?: boolean;
   spinning?: boolean;
 }) {
-  return (
+  const button = (
     <button
       type="button"
-      onClick={onClick}
-      disabled={disabled}
-      title={title}
-      className={`flex h-8 cursor-pointer items-center gap-2 rounded-md px-2 text-left text-[11px] transition-colors disabled:cursor-not-allowed disabled:opacity-45 ${
+      onClick={() => {
+        if (!disabled) onClick();
+      }}
+      aria-disabled={disabled}
+      aria-description={disabled ? title : undefined}
+      data-disabled-reason={disabled ? title : undefined}
+      className={`flex h-8 w-full cursor-pointer items-center gap-2 rounded-md px-2 text-left text-[11px] transition-colors aria-disabled:cursor-not-allowed aria-disabled:opacity-45 ${
         danger
           ? "text-danger hover:bg-danger/10"
           : "text-fg-muted hover:bg-bg-raised hover:text-fg"
@@ -364,4 +391,5 @@ function InspectorAction({
       {label}
     </button>
   );
+  return button;
 }

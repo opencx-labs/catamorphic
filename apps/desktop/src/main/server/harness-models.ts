@@ -1,8 +1,5 @@
-import { execFile } from "node:child_process";
-import { promisify } from "node:util";
 import type { AgentConfig } from "../agents-store.js";
 
-const execFileAsync = promisify(execFile);
 export type ModelCatalogAgent = Pick<
   AgentConfig,
   "id" | "harness" | "auth" | "apiKey" | "provider"
@@ -23,7 +20,7 @@ export interface HarnessModel {
  * harness has — never a hardcoded list:
  *  - claude-code: the CLI's own catalog (`supportedModels` via the SDK),
  *    account-aware through the agent's env.
- *  - codex: the vendored CLI's `debug models` JSON catalog.
+ *  - codex: the installed CLI's app-server `model/list` catalog.
  *  - built-in on Anthropic/OpenAI keys: the provider's public /v1/models.
  *  - built-in on OpenRouter: not handled here — the palette searches the
  *    OpenRouter catalog directly (see `catamorphic:openrouter-models`).
@@ -51,16 +48,38 @@ export async function listAgentModels(
   }
 
   const cached = cache.get(config.id);
-  if (cached && Date.now() - cached.fetchedAt < CACHE_TTL_MS) {
+  const signature = JSON.stringify(config);
+  if (
+    cached &&
+    cached.signature === signature &&
+    Date.now() - cached.fetchedAt < CACHE_TTL_MS
+  ) {
     return cached.models;
   }
-  const models = await fetchModels(config, deps);
-  cache.set(config.id, { models, fetchedAt: Date.now() });
-  return models;
+  const active = inFlight.get(config.id);
+  if (active?.signature === signature) return active.promise;
+  const promise = fetchModels(config, deps)
+    .then((models) => {
+      cache.set(config.id, { models, signature, fetchedAt: Date.now() });
+      return models;
+    })
+    .finally(() => {
+      if (inFlight.get(config.id)?.promise === promise)
+        inFlight.delete(config.id);
+    });
+  inFlight.set(config.id, { signature, promise });
+  return promise;
 }
 
 const CACHE_TTL_MS = 10 * 60 * 1000;
-const cache = new Map<string, { models: HarnessModel[]; fetchedAt: number }>();
+const cache = new Map<
+  string,
+  { models: HarnessModel[]; fetchedAt: number; signature: string }
+>();
+const inFlight = new Map<
+  string,
+  { signature: string; promise: Promise<HarnessModel[]> }
+>();
 
 async function fetchModels(
   config: ModelCatalogAgent,
@@ -108,28 +127,18 @@ async function codexModels(
 ): Promise<HarnessModel[]> {
   const binary = await deps.harnessExecutable("codex");
   if (!binary) return [];
-  const { stdout } = await execFileAsync(binary, ["debug", "models"], {
+  const { listCodexModels } = await import("@catamorphic/codex");
+  return listCodexModels({
+    executable: binary,
     env: {
-      ...process.env,
       ...(config.auth === "account"
         ? { CODEX_HOME: deps.agentHome(config.id) }
         : {}),
+      ...(config.auth === "api-key" && config.apiKey
+        ? { CODEX_API_KEY: config.apiKey, OPENAI_API_KEY: config.apiKey }
+        : {}),
     },
-    timeout: 15_000,
-    maxBuffer: 4 * 1024 * 1024,
   });
-  const raw = JSON.parse(stdout) as Array<{
-    slug?: string;
-    display_name?: string;
-    description?: string;
-  }>;
-  return raw
-    .filter((model) => typeof model.slug === "string")
-    .map((model) => ({
-      id: model.slug as string,
-      name: model.display_name ?? (model.slug as string),
-      description: model.description,
-    }));
 }
 
 async function anthropicModels(

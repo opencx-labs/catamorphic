@@ -4,6 +4,7 @@ import {
   useWriteProjectFile,
 } from "@catamorphic/react";
 import Editor, { type OnMount } from "@monaco-editor/react";
+import { useMutation, useQuery } from "@tanstack/react-query";
 import "../lib/monaco-setup.js";
 import { ExternalLink, FileCode, FileText, Search } from "lucide-react";
 import { lazy, Suspense, useEffect, useMemo, useRef, useState } from "react";
@@ -39,6 +40,9 @@ const isPdfPath = (path: string) => /\.pdf$/i.test(path);
 
 export interface EditorScreenProps {
   projectId: string;
+  line?: number;
+  column?: number;
+  navigation?: string;
   /** Path of the open file (project-relative), or null → the picker. */
   filePath: string | null;
   onFileChange: (filePath: string | null) => void;
@@ -53,6 +57,9 @@ export interface EditorScreenProps {
 
 export function EditorScreen({
   projectId,
+  line,
+  column,
+  navigation,
   filePath,
   onFileChange,
   onDirtyChange,
@@ -63,11 +70,38 @@ export function EditorScreen({
   const theme = useTheme();
   const officeFile = filePath ? isOfficePath(filePath) : false;
   const pdfFile = filePath ? isPdfPath(filePath) : false;
-  const fileQuery = useProjectFile(
+  const localFile = Boolean(filePath?.startsWith("/"));
+  const projectFileQuery = useProjectFile(
     projectId,
-    filePath && !officeFile && !pdfFile ? filePath : undefined,
+    filePath && !localFile && !officeFile && !pdfFile ? filePath : undefined,
   );
-  const writeFile = useWriteProjectFile(projectId);
+  const localFileQuery = useQuery({
+    queryKey: ["desktop-editor-file", filePath],
+    enabled: localFile && !officeFile && !pdfFile,
+    queryFn: () => desktopApi.editorFileRead({ filePath: filePath ?? "" }),
+    retry: false,
+  });
+  const fileQuery = localFile ? localFileQuery : projectFileQuery;
+  const projectWriteFile = useWriteProjectFile(projectId);
+  const localWriteFile = useMutation({
+    mutationFn: ({ path, content }: { path: string; content: string }) =>
+      desktopApi.editorFileWrite({
+        filePath: path,
+        content,
+        expectedContent: localFileQuery.data?.content ?? "",
+      }),
+    onSuccess: () => {
+      void localFileQuery.refetch();
+    },
+  });
+  const writeFile = localFile ? localWriteFile : projectWriteFile;
+  const editorRef = useRef<EditorInstance | null>(null);
+  // biome-ignore lint/correctness/useExhaustiveDependencies: repeated navigation to the same line must reveal it again
+  useEffect(() => {
+    if (!line || !editorRef.current) return;
+    editorRef.current.setPosition({ lineNumber: line, column: column ?? 1 });
+    editorRef.current.revealLineInCenter(line);
+  }, [line, column, navigation]);
   const [pdfUrl, setPdfUrl] = useState<string | null>(null);
   useEffect(() => {
     if (!pdfFile || !filePath) {
@@ -128,7 +162,7 @@ export function EditorScreen({
       {
         onSuccess: () => {
           setDrafts(({ [filePath]: _saved, ...rest }) => rest);
-          void onSaved?.(filePath);
+          if (!localFile) void onSaved?.(filePath);
         },
       },
     );
@@ -141,7 +175,7 @@ export function EditorScreen({
     if (content !== undefined) {
       await writeFile.mutateAsync({ path: filePath, content });
       setDrafts(({ [filePath]: _saved, ...rest }) => rest);
-      await onSaved?.(filePath);
+      if (!localFile) await onSaved?.(filePath);
     }
     onShare?.(filePath);
   };
@@ -171,6 +205,11 @@ export function EditorScreen({
     editor: EditorInstance,
     monaco: MonacoInstance,
   ) => {
+    editorRef.current = editor;
+    if (line) {
+      editor.setPosition({ lineNumber: line, column: column ?? 1 });
+      editor.revealLineInCenter(line);
+    }
     editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyS, () =>
       saveRef.current(),
     );
@@ -225,12 +264,18 @@ export function EditorScreen({
             type="button"
             onClick={() => saveRef.current()}
             disabled={writeFile.isPending}
+            data-disabled-reason="Saving this file"
             className="ml-auto h-6 shrink-0 cursor-pointer rounded border border-border-strong bg-bg-overlay px-2 text-xs text-fg transition-colors duration-150 hover:border-accent disabled:opacity-50"
           >
             {writeFile.isPending ? "Saving…" : "Save"}
           </button>
         )}
       </div>
+      {(fileQuery.error || writeFile.error) && (
+        <p role="alert" className="p-3 text-xs text-danger">
+          {fileQuery.error?.message ?? writeFile.error?.message}
+        </p>
+      )}
       <div className="flex min-h-0 flex-1 flex-col">
         {pdfFile ? (
           pdfUrl ? (
@@ -325,6 +370,14 @@ function FilePicker({
   onPick: (path: string) => void;
 }) {
   const filesQuery = useProjectFiles(projectId);
+  const refetchFiles = filesQuery.refetch;
+  useEffect(
+    () =>
+      desktopApi.onGitChanged((event) => {
+        if (event.projectId === projectId) void refetchFiles();
+      }),
+    [projectId, refetchFiles],
+  );
   const [query, setQuery] = useState("");
   const [highlighted, setHighlighted] = useState(0);
   const inputRef = useRef<HTMLInputElement>(null);
@@ -350,7 +403,15 @@ function FilePicker({
   const clampedHighlight = Math.min(highlighted, matches.length - 1);
 
   return (
-    <div className="flex min-h-0 flex-1 flex-col items-center overflow-y-auto px-6 pt-[18vh]">
+    <div
+      data-testid="editor-file-picker"
+      data-project-id={projectId}
+      data-query-status={filesQuery.status}
+      data-fetch-status={filesQuery.fetchStatus}
+      data-file-count={files.length}
+      data-match-count={matches.length}
+      className="flex min-h-0 flex-1 flex-col items-center overflow-y-auto px-6 pt-[18vh]"
+    >
       <div className="w-full max-w-xl">
         <div className="flex items-center gap-2 rounded-lg border border-border bg-bg-inset px-3">
           <Search className="size-4 shrink-0 text-fg-faint" />
@@ -379,6 +440,23 @@ function FilePicker({
             className="h-10 w-full bg-transparent text-sm text-fg outline-none placeholder:text-fg-faint"
           />
         </div>
+        {filesQuery.error && (
+          <div role="alert" className="mt-3 text-xs text-danger">
+            {filesQuery.error.message}
+            <button
+              type="button"
+              onClick={() => void filesQuery.refetch()}
+              className="ml-2 text-accent"
+            >
+              Retry loading files
+            </button>
+          </div>
+        )}
+        {filesQuery.isLoading && (
+          <p role="status" className="mt-3 text-xs text-fg-muted">
+            Loading files…
+          </p>
+        )}
         <ul className="mt-2 pb-8">
           {matches.map((file, index) => (
             <li key={file.path}>
@@ -397,11 +475,13 @@ function FilePicker({
               </button>
             </li>
           ))}
-          {!filesQuery.isLoading && matches.length === 0 && (
-            <li className="px-2 py-6 text-center text-sm text-fg-muted">
-              No files match “{query}”.
-            </li>
-          )}
+          {!filesQuery.isLoading &&
+            !filesQuery.error &&
+            matches.length === 0 && (
+              <li className="px-2 py-6 text-center text-sm text-fg-muted">
+                No files match “{query}”.
+              </li>
+            )}
         </ul>
       </div>
     </div>

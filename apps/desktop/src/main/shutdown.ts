@@ -24,11 +24,38 @@ export function registerDesktopShutdown({
     started = true;
     void Promise.resolve()
       .then(shutdown)
-      .catch(onError)
-      .finally(() => {
-        // All windows have already accepted closing and storage is flushed.
-        // Do not start another cancellable quit cycle against disposed services.
-        app.exit(0);
-      });
+      .then(
+        () => app.exit(0),
+        (error: unknown) => {
+          // Windows have accepted closing. Do not begin another cancellable
+          // quit cycle against disposed services, or claim that storage flushed.
+          try {
+            onError(error);
+          } finally {
+            app.exit(1);
+          }
+        },
+      );
   });
+}
+
+/** Stop producers in order, then storage, attempting every cleanup on failure. */
+export async function shutdownDesktopServices({
+  steps,
+}: {
+  steps: Array<{ name: string; dispose: () => void | Promise<void> }>;
+}) {
+  const errors: Error[] = [];
+  for (const step of steps) {
+    try {
+      await step.dispose();
+    } catch (cause) {
+      errors.push(new Error(`Could not close ${step.name}`, { cause }));
+    }
+  }
+  if (errors.length)
+    throw new AggregateError(
+      errors,
+      "Desktop shutdown did not complete cleanly",
+    );
 }

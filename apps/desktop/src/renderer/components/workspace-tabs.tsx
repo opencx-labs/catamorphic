@@ -177,7 +177,7 @@ export type WorkspaceTab = (
       toolResult?: unknown;
     }
 ) &
-  TabIndicators;
+  TabIndicators & { chatLocalId?: string };
 
 export const tabKey = (tab: WorkspaceTab) => `${tab.kind}:${tab.name}`;
 

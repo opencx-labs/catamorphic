@@ -47,6 +47,7 @@ import {
 } from "./connections-store.js";
 import type { ConnectorsService } from "./connectors.js";
 import { defaultDesktopProjectsDir } from "./development-paths.js";
+import { readEditorFile, writeEditorFile } from "./editor-files.js";
 import {
   type GitDiffMode,
   gitFileDiff,
@@ -255,6 +256,10 @@ export function registerIpcHandlers(
   );
 
   // Incognito sessions (ADR 0062): desktop-local, marked at creation.
+  ipcMain.handle(
+    "catamorphic:session-is-incognito",
+    (_event, sessionId: string) => incognitoSessions?.has(sessionId) ?? false,
+  );
   ipcMain.handle(
     "catamorphic:session-set-incognito",
     (_event, sessionId: string, incognito: boolean) => {
@@ -893,7 +898,7 @@ export function registerIpcHandlers(
   });
 
   // Supported models for one agent, resolved live per harness (Claude
-  // Code's own catalog, `codex debug models`, provider /v1/models).
+  // Code's own catalog, Codex app-server `model/list`, provider /v1/models).
   ipcMain.handle("catamorphic:agent-models", async (event, id: string) => {
     try {
       let agent: ModelCatalogAgent | undefined =
@@ -938,7 +943,11 @@ export function registerIpcHandlers(
       };
     } catch (cause) {
       console.warn("[desktop] model listing failed:", cause);
-      return { models: [] };
+      return {
+        models: [],
+        error:
+          "Could not load models. Check the agent’s sign-in and try again.",
+      };
     }
   });
 
@@ -2094,6 +2103,18 @@ export function registerIpcHandlers(
   ipcMain.handle("catamorphic:reveal-folder", (_event, folderPath: string) => {
     if (path.isAbsolute(folderPath)) shell.openPath(folderPath);
   });
+
+  ipcMain.handle(
+    "catamorphic:editor-file-read",
+    (_event, input: { filePath: string }) => readEditorFile(input),
+  );
+  ipcMain.handle(
+    "catamorphic:editor-file-write",
+    (
+      _event,
+      input: { filePath: string; content: string; expectedContent: string },
+    ) => writeEditorFile(input),
+  );
 
   ipcMain.handle(
     "catamorphic:project-open-file",

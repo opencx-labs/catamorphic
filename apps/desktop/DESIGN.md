@@ -3382,3 +3382,32 @@ paths, deliberately independent:
   app should request or explain away with extra entitlements.
 - Bounded discovery is agent guidance, not filesystem isolation. We do not
   override `find` or claim to prevent all native macOS privacy prompts.
+
+### Resource links and inspectable controls (2026-09-07)
+
+- Agent replies use ordinary Markdown links with the workspace's existing
+  `file:`, `workflow:`, and `app:` targets. The destination chooses the viewer:
+  code in Monaco, Markdown in Tiptap, and PDFs, HTML, images, and media in browser
+  tabs. Workflow source links open code; `workflow:<exportName>` opens the graph.
+  Absolute paths preserve the actual native checkout or external artifact.
+- Reply links, file chips, sidebar files, and `open_surface` share routing.
+  Click opens, Command-click opens a tab, and Command-Shift-click opens to the
+  right. Agent opens continue to respect whether the user is watching that chat.
+- Sidebar session previews use the same inspector portal, dimensions, motion,
+  runtime settings, and actions as the top-right chat control. Hover cards keep
+  keyboard focus and pointer interest while the user moves into their actions.
+- Every disabled control explains the actual disabling condition on hover.
+  Put `data-disabled-reason` beside the condition; `DisabledControlHints` handles
+  native disabled controls that do not reliably emit React mouse events.
+  PendingButton supplies its in-progress/completed reason. Hints clear all
+  workspace inspectors and modal layers. Icon-only controls still use ShortcutHint.
+- Every sidebar nesting level uses the shared 200ms Collapsible. Closed content
+  stays mounted for reverse motion but is inert and hidden from assistive tools.
+  File folders and nested chats follow the same rule as sections and bookmarks.
+- Session activity crossfades within a fixed icon footprint. Update cards have
+  paired entry/exit, smoothly changing progress, explicit restart blockers, and
+  stay dismissed through download progress events until the phase changes.
+- Update preparation is bounded and does not arm a future quit. A late native
+  preparation callback only records readiness. A failed preparation requires a
+  fresh restart click, and main checks active work both before and after it.
+  Final shutdown attempts every service cleanup and reports storage failures.

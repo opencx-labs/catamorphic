@@ -149,9 +149,14 @@ CDP driver at `scripts/drive.mjs`):
 ```bash
 bun run dev:desktop
 # Read the `CDP:` URL printed by the development orchestrator, then:
-CDP_PORT="<printed CDP port>" node apps/desktop/scripts/drive.mjs window maximize
-CDP_PORT="<printed CDP port>" node apps/desktop/scripts/drive.mjs shot /tmp/app.png
+CDP_PORT="<printed CDP port>" bun apps/desktop/scripts/drive.mjs window maximize
+CDP_PORT="<printed CDP port>" bun apps/desktop/scripts/drive.mjs shot /tmp/app.png
 ```
+
+For deterministic visual checks without provider calls, start with
+`CATAMORPHIC_E2E_FAKE_AGENT=1 bun run dev:desktop`. It uses the worktree
+data paths and fake agents. Run the CDP driver with Bun, which supplies
+the WebSocket API even when the system Node version is older.
 
 The shared development runner unsets `ELECTRON_RUN_AS_NODE`. Main-process
 changes need a full relaunch; renderer changes hot-reload. Maximize the window
@@ -163,3 +168,16 @@ resolves them via `dist/`.
 When you and the user settle a significant desktop design or philosophy
 choice, record it as a dated entry in `DESIGN.md` → "Design log" in the
 same change (the desktop counterpart of the ADR rule).
+
+## Resource links and unavailable actions
+
+Use the shared `surface-link.ts` resolver for agent-visible destinations. Keep
+workflow/app targets aligned with `open_surface` and the workspace tab keys.
+Changes to chat Markdown link handling belong in the registry source and both
+installed consumers. Preserve the sanitizer for image URLs and protocols the
+host does not handle. Test clicked links in the real Electron renderer.
+
+Use Collapsible for sidebar nesting, the shared InspectorPortal for rich hover
+cards, and `data-disabled-reason` beside each disabled condition. Do not rely on
+native title tooltips. When editing a failure-prone picker, preserve an actionable
+error/retry state and diagnostics that distinguish request failure from no matches.

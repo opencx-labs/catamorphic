@@ -1320,6 +1320,16 @@
     background 0.2s;
 }
 
+/* Our custom input renderer owns its box. React Flow also uses "input" for
+   a built-in node, whose default padding and white surface otherwise leak
+   behind it. Scope the reset to our renderer so host nodes stay untouched. */
+.react-flow__node-input:has(> .catamorphic-input-node) {
+  padding: 0;
+  border: 0;
+  background: transparent;
+  box-shadow: none;
+}
+
 .react-flow__node {
   transition:
     transform 280ms cubic-bezier(0.22, 1, 0.36, 1),
